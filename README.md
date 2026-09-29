@@ -1,6 +1,6 @@
 # Desktop World
 
-独立 Go library：把桌面作为一个按需观察、带生命周期与不确定性的对象世界。根包不依赖 Agent Runtime、LLM、Wails、浏览器插件或网络服务。
+独立 Go library：把桌面作为一个按需观察、带生命周期与不确定性的对象世界。根包不依赖 Agent Runtime、LLM、Wails、浏览器插件或网络服务。通用 Agent 接入见 [stdio helper](docs/helper.md)，真实任务成本见 [可用性评估](docs/usability-evaluation.md)，字段选择和后台隔离见 [设计说明](docs/observation-and-seats.md)。
 
 **当前状态：实验性实现，尚未达到 SPEC 的双平台正式发布门槛。** macOS 原生键鼠、语义操作、截图和生命周期路径已在 AppKit fixture 上运行，并通过 Chrome 原生输入与 Canvas 负面验收；Windows 后端已有实现、交叉编译与静态检查，仍需 Windows 交互式桌面验收。原始设计保留在 [SPEC.md](SPEC.md)，实现边界见 [docs/implementation.md](docs/implementation.md)，实际运行证据见 [docs/validation.md](docs/validation.md)。
 
@@ -74,7 +74,7 @@ Actor 的操作名为 `observe`、`read`、`sync`、`resolve_anchor`、`capture`
 
 协议固定为 `desktop-world/0.1`；版本和 revision 是十进制字符串，时长字段为 `*_ms`。拒绝重复 JSON key、未知字段、未知操作、非法 target 联合类型和超限参数。UI 文本始终是不可信数据。
 
-[examples/protocol](examples/protocol) 包含设计中原始请求。`protocol.Tools()` 提供工具描述与 envelope schema；操作参数见公共 Go 类型和这些例子，最终由 Handler 严格验证。
+[examples/protocol](examples/protocol) 包含设计中原始请求。`protocol.Tools()` 提供工具描述、envelope 和完整参数 schema；最终由 Handler 严格验证。`desktop-world schema act` 可查看参数、大小写、取值和上限。
 
 观察输出计入完整成功 envelope 的 UTF-8 字节预算，默认 16 KiB。多页观察固定在同一采样批次；每页 cursor 只描述这一页，需分别同步或重新获取完整观察。`Changes` 重新读取声明范围并比较物化视图，超预算或历史/权限/拓扑失效返回 `reset_required`。`Watch.Next` 是轮询式消费，不依赖原生事件无遗漏。
 

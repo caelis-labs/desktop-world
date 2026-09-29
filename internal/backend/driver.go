@@ -26,7 +26,11 @@ type Page struct {
 	Seat        Seat
 }
 type Seat struct {
-	Foreground, Focused  Key
+	Foreground, Focused Key
+	Application         Key
+	// Fresh native facts for references newly introduced by this seat sample.
+	// The engine registers them, but normal query/scope filtering still governs output.
+	Nodes                []Node
 	Pointer              dw.Fact[dw.Point]
 	Health, Intervention string
 }

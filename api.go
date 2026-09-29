@@ -106,6 +106,7 @@ type Display struct {
 	RotationDegrees int
 }
 type SeatState struct {
+	ForegroundApplication Fact[Ref]
 	Pointer               Fact[Point]
 	ForegroundWindow      Fact[Ref]
 	FocusedObject         Fact[Ref]

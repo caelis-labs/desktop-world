@@ -98,6 +98,63 @@ func TestLinearPlanAndDedup(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestSummaryFocusedRefUsableWithoutFullOutline(t *testing.T) {
+	w, f, err := dwtest.New(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close(ctx)
+	f.Form()
+	f.Focus("field")
+	reader, _ := w.NewActor(ctx, dw.ActorConfig{ID: "inventory", ReadScopes: []dw.Scope{{Desktop: true}}, Operations: []string{"observe"}})
+	ob, err := reader.Observe(ctx, dw.ObserveRequest{Scope: dw.Scope{Desktop: true}, Projection: dw.ProjectionSummary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var window dw.Ref
+	for _, o := range ob.Objects {
+		if o.Kind == dw.KindWindow {
+			window = o.Ref
+		}
+	}
+	if ob.Seat.FocusedObject.Value == nil {
+		t.Fatal("missing focus")
+	}
+	scoped, _ := w.NewActor(ctx, dw.ActorConfig{ID: "scoped", ReadScopes: []dw.Scope{{Refs: []dw.Ref{window}}}, WriteScopes: []dw.Scope{{Refs: []dw.Ref{window}}}, Operations: []string{"observe", "keyboard.press"}})
+	env, _ := w.Environment(ctx)
+	receipt, err := scoped.Execute(ctx, dw.Plan{Epoch: env.Epoch, RequestID: dw.RequestID(string(env.Epoch) + ":focused-ref"), Steps: []dw.Step{{ID: "enter", Op: "keyboard.press", Target: target(*ob.Seat.FocusedObject.Value), Press: &dw.KeyChord{Key: "Enter"}}}})
+	if err != nil || receipt.Outcome != "completed" {
+		t.Fatalf("%+v %v", receipt, err)
+	}
+}
+
+func TestWindowlessFocusedEditorRequiresAppAuthority(t *testing.T) {
+	h := setup(t)
+	h.f.Add(dwtest.Node{ID: "inline", App: "app", Parent: "app", Object: dw.Object{Kind: dw.KindUI, Role: "text_field", Name: dw.Known("inline editor"), States: map[string]dw.Fact[bool]{"enabled": dw.Known(true), "focused": dw.Known(true)}}})
+	h.f.Focus("inline")
+	ob, err := h.a.Observe(ctx, dw.ObserveRequest{Scope: dw.Scope{Desktop: true}, Projection: dw.ProjectionSummary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := *ob.Seat.FocusedObject.Value
+	if ob.Seat.ForegroundWindow.Status != dw.FactUnknown {
+		t.Fatal("invented window")
+	}
+	a, _ := h.w.NewActor(ctx, dw.ActorConfig{ID: "window-only", ReadScopes: []dw.Scope{{Refs: []dw.Ref{h.refs["Desktop World Fixture"]}}}, WriteScopes: []dw.Scope{{Refs: []dw.Ref{h.refs["Desktop World Fixture"]}}}, Operations: []string{"keyboard.press"}})
+	step := dw.Step{ID: "enter", Op: "keyboard.press", Target: target(ref), Press: &dw.KeyChord{Key: "Enter"}}
+	if _, err := a.Execute(ctx, h.plan("denied-inline", step)); code(err) != "permission_denied" {
+		t.Fatalf("escaped window: %v", err)
+	}
+	b, _ := h.w.NewActor(ctx, dw.ActorConfig{ID: "app-only", ReadScopes: []dw.Scope{{Refs: []dw.Ref{h.refs["Fixture"]}}}, WriteScopes: []dw.Scope{{Refs: []dw.Ref{h.refs["Fixture"]}}}, Operations: []string{"keyboard.press"}})
+	if _, err := b.Execute(ctx, h.plan("allowed-inline", step)); err != nil {
+		t.Fatal(err)
+	}
+	h.f.Focus("field")
+	if _, err := b.Execute(ctx, h.plan("lost-inline-focus", step)); err == nil {
+		t.Fatal("typed into a different focus")
+	}
+}
 func TestReplacementStopsBoundAlias(t *testing.T) {
 	h := setup(t)
 	h.f.Enqueue("focus", dwtest.Behavior{Apply: true, Before: func(f *dwtest.Fixture) {
@@ -167,9 +224,11 @@ func TestVerificationUnknownAfterDelivery(t *testing.T) {
 	}
 }
 func TestKnownNotMetIsPartial(t *testing.T) {
-	h := setup(t)
+	// Take one known sample then expire while waiting, not during another native
+	// read (which correctly makes the latest verification unknown).
+	h := setup(t, dwtest.Options{VerificationPollInterval: time.Second})
 	no := false
-	r, e := h.a.Execute(ctx, h.plan("notmet", dw.Step{ID: "invoke", Op: "invoke", Target: target(h.refs["提交"]), Completion: "verify", Timeout: 25 * time.Millisecond, After: []dw.Predicate{{Target: target(h.refs["提交"]), Property: "enabled", EqualsBool: &no}}}))
+	r, e := h.a.Execute(ctx, h.plan("notmet", dw.Step{ID: "invoke", Op: "invoke", Target: target(h.refs["提交"]), Completion: "verify", Timeout: 250 * time.Millisecond, After: []dw.Predicate{{Target: target(h.refs["提交"]), Property: "enabled", EqualsBool: &no}}}))
 	if e == nil || r.Outcome != "partial" || r.Steps[0].Verification != dw.VerifyNotMet {
 		t.Fatalf("%+v %v", r, e)
 	}

@@ -22,7 +22,7 @@ func Tools() []Tool {
 	}
 	out := make([]Tool, 0, len(descriptions))
 	for _, name := range Operations() {
-		out = append(out, Tool{Name: name, Description: descriptions[name], InputSchema: map[string]any{"type": "object", "additionalProperties": false, "required": []string{"protocol", "world", "op", "args"}, "properties": map[string]any{"protocol": map[string]any{"const": Version}, "world": map[string]any{"type": "string", "description": "Current world epoch supplied by the host."}, "op": map[string]any{"const": name}, "args": map[string]any{"type": "object", "description": "Operation-specific v0.1 arguments; strict server validation rejects unknown fields and invalid unions. See the bundled protocol examples."}}}})
+		out = append(out, Tool{Name: name, Description: descriptions[name], InputSchema: map[string]any{"type": "object", "additionalProperties": false, "required": []string{"protocol", "world", "op", "args"}, "properties": map[string]any{"protocol": map[string]any{"const": Version}, "world": map[string]any{"type": "string", "description": "Current world epoch supplied by the host."}, "op": map[string]any{"const": name}, "args": ArgumentsSchema(name)}}})
 	}
 	return out
 }

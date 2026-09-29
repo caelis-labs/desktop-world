@@ -18,6 +18,7 @@ import (
 type Options struct {
 	HistoryLimit, RequestLimit, ObjectLimit, ViewLimit int
 	HistoryTTL, ReceiptTTL, AssetTTL, PollInterval     time.Duration
+	VerificationPollInterval                           time.Duration
 	SeatID                                             string
 }
 type record struct {
@@ -139,6 +140,9 @@ func Open(ctx context.Context, d backend.Driver, o Options) (dw.World, error) {
 	}
 	if o.PollInterval <= 0 {
 		o.PollInterval = 500 * time.Millisecond
+	}
+	if o.VerificationPollInterval <= 0 {
+		o.VerificationPollInterval = 20 * time.Millisecond
 	}
 	if o.SeatID == "" {
 		o.SeatID = "native-desktop"
@@ -404,7 +408,13 @@ func (w *World) commitLocked(n backend.Node) dw.Ref {
 	return r
 }
 func (w *World) commitSeatLocked(s backend.Seat) {
-	next := dw.SeatState{ForegroundWindow: dw.Unknown[dw.Ref](), FocusedObject: dw.Unknown[dw.Ref](), Pointer: s.Pointer, Health: s.Health, InterventionDetection: s.Intervention}
+	for _, n := range s.Nodes {
+		w.commitLocked(n)
+	}
+	next := dw.SeatState{ForegroundApplication: dw.Unknown[dw.Ref](), ForegroundWindow: dw.Unknown[dw.Ref](), FocusedObject: dw.Unknown[dw.Ref](), Pointer: s.Pointer, Health: s.Health, InterventionDetection: s.Intervention}
+	if s.Application != "" {
+		next.ForegroundApplication = dw.Known(w.refLocked(s.Application))
+	}
 	if s.Foreground != "" {
 		next.ForegroundWindow = dw.Known(w.refLocked(s.Foreground))
 	}
@@ -412,6 +422,8 @@ func (w *World) commitSeatLocked(s backend.Seat) {
 		next.FocusedObject = dw.Known(w.refLocked(s.Focused))
 	}
 	a, b := copyOf(next), copyOf(w.seat)
+	a.ForegroundApplication.SampledAt = time.Time{}
+	b.ForegroundApplication.SampledAt = time.Time{}
 	a.ForegroundWindow.SampledAt = time.Time{}
 	a.FocusedObject.SampledAt = time.Time{}
 	a.Pointer.SampledAt = time.Time{}

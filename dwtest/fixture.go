@@ -39,6 +39,7 @@ type Behavior struct {
 type Options struct {
 	HistoryLimit, RequestLimit, ViewLimit int
 	HistoryTTL, ReceiptTTL, PollInterval  time.Duration
+	VerificationPollInterval              time.Duration
 	SeatID                                string
 }
 type Fixture struct {
@@ -60,7 +61,7 @@ func NewWithOptions(ctx context.Context, o Options) (dw.World, *Fixture, error) 
 	if o.SeatID == "" {
 		o.SeatID = "fixture-" + time.Now().Format("150405.000000000")
 	}
-	w, e := engine.Open(ctx, f, engine.Options{HistoryLimit: o.HistoryLimit, RequestLimit: o.RequestLimit, ViewLimit: o.ViewLimit, HistoryTTL: o.HistoryTTL, ReceiptTTL: o.ReceiptTTL, PollInterval: o.PollInterval, SeatID: o.SeatID})
+	w, e := engine.Open(ctx, f, engine.Options{HistoryLimit: o.HistoryLimit, RequestLimit: o.RequestLimit, ViewLimit: o.ViewLimit, HistoryTTL: o.HistoryTTL, ReceiptTTL: o.ReceiptTTL, PollInterval: o.PollInterval, VerificationPollInterval: o.VerificationPollInterval, SeatID: o.SeatID})
 	return w, f, e
 }
 func (f *Fixture) Add(n Node) {
@@ -170,7 +171,7 @@ func (f *Fixture) Query(ctx context.Context, q backend.Query) (backend.Page, err
 	if f.readFault != nil {
 		return backend.Page{}, f.readFault
 	}
-	p := backend.Page{Complete: !f.incomplete, Seat: f.seat}
+	p := backend.Page{Complete: !f.incomplete, Seat: f.seatSnapshot()}
 	keys := make([]backend.Key, 0, len(f.nodes))
 	for k := range f.nodes {
 		keys = append(keys, k)
@@ -225,8 +226,21 @@ func (f *Fixture) Read(ctx context.Context, k backend.Key) (backend.Node, backen
 	if _, ok := f.nodes[k]; !ok {
 		return backend.Node{}, f.seat, dw.NewFault("ref_gone", "fixture instance destroyed", "reobserve")
 	}
-	return f.native(k), f.seat, ctx.Err()
+	return f.native(k), f.seatSnapshot(), ctx.Err()
 }
+func (f *Fixture) seatSnapshot() backend.Seat {
+	s := f.seat
+	s.Nodes = nil
+	for _, key := range []backend.Key{s.Foreground, s.Focused} {
+		if _, ok := f.nodes[key]; ok {
+			s.Nodes = append(s.Nodes, f.native(key))
+		}
+	}
+	return s
+}
+
+// Focus simulates an external focus change before the next observation.
+func (f *Fixture) Focus(id string) { f.mu.Lock(); defer f.mu.Unlock(); f.focus(f.ids[id]) }
 func (f *Fixture) ReadText(ctx context.Context, k backend.Key) (backend.Text, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -242,6 +256,7 @@ func (f *Fixture) ReadText(ctx context.Context, k backend.Key) (backend.Text, er
 }
 func (f *Fixture) focus(k backend.Key) {
 	n := f.nodes[k]
+	f.seat.Application = f.ids[n.App]
 	if n.Object.Kind == dw.KindWindow {
 		f.seat.Foreground = k
 	} else {

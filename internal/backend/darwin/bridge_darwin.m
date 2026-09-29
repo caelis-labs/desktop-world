@@ -169,6 +169,42 @@ static NSString *roleName(NSString *r) {
   };
   return m[r] ?: @"unknown";
 }
+// Remote AppKit panels and inline Finder editors may omit AXWindow. Recover
+// only from fresh native parent/focus evidence, never a cached title or geometry.
+static id frontmostAXApplication(void) {
+  NSRunningApplication *front = NSWorkspace.sharedWorkspace.frontmostApplication;
+  if (!front || front.terminated)
+    return nil;
+  AXUIElementRef app = AXUIElementCreateApplication(front.processIdentifier);
+  AXUIElementSetMessagingTimeout(app, 0.25);
+  return CFBridgingRelease(app);
+}
+static id owningWindow(AXUIElementRef e) {
+  id direct = attr(e, kAXWindowAttribute);
+  if (direct && CFGetTypeID((__bridge CFTypeRef)direct) == AXUIElementGetTypeID())
+    return direct;
+  id app = frontmostAXApplication();
+  id focused = app ? attr((__bridge AXUIElementRef)app, kAXFocusedUIElementAttribute) : nil;
+  id window = nil;
+  if (focused && CFEqual((__bridge CFTypeRef)focused, e)) {
+    if (app)
+      window = attr((__bridge AXUIElementRef)app, kAXFocusedWindowAttribute);
+  }
+  if (window)
+    return window;
+  id current = (__bridge id)e;
+  NSMutableSet *seen = [NSMutableSet set];
+  for (int depth = 0; current && depth < 32; depth++) {
+    if ([seen containsObject:current])
+      break;
+    [seen addObject:current];
+    AXUIElementRef a = (__bridge AXUIElementRef)current;
+    if ([attr(a, kAXRoleAttribute) isEqual:@"AXWindow"])
+      return current;
+    current = attr(a, kAXParentAttribute);
+  }
+  return nil;
+}
 static NSDictionary *node(DWContext *c, NSString *k) {
   AXUIElementRef e = element(c, k);
   if (!e || !alive(c, k))
@@ -254,7 +290,7 @@ static NSDictionary *node(DWContext *c, NSString *k) {
   NSString *app = meta[@"App"], *win = meta[@"Window"];
   NSString *parent = meta[@"Parent"];
   if ([kind isEqual:@"ui"]) {
-    id actualWindow = attr(e, kAXWindowAttribute);
+    id actualWindow = owningWindow(e);
     win = actualWindow
               ? key(c, (__bridge AXUIElementRef)actualWindow, app, nil, app)
               : @"";
@@ -289,9 +325,13 @@ static NSDictionary *node(DWContext *c, NSString *k) {
   };
 }
 static NSDictionary *seat(DWContext *c) {
-  AXUIElementRef sys = AXUIElementCreateSystemWide();
-  id app = attr(sys, kAXFocusedApplicationAttribute),
-     focused = attr(sys, kAXFocusedUIElementAttribute);
+  // Some macOS hosts return AXCannotComplete for system-wide focus attributes
+  // while the same foreground application's attributes work. Obtain the
+  // foreground process from NSWorkspace and read its AX window/focus directly.
+  id app = frontmostAXApplication();
+  pid_t sampledPID = 0;
+  if (app) AXUIElementGetPid((__bridge AXUIElementRef)app, &sampledPID);
+  id focused = app ? attr((__bridge AXUIElementRef)app, kAXFocusedUIElementAttribute) : nil;
   id win =
       app ? attr((__bridge AXUIElementRef)app, kAXFocusedWindowAttribute) : nil;
   NSString *ak =
@@ -299,14 +339,26 @@ static NSDictionary *seat(DWContext *c) {
   NSString *wk = win ? key(c, (__bridge AXUIElementRef)win, ak, nil, ak) : @"";
   NSString *fk =
       focused ? key(c, (__bridge AXUIElementRef)focused, ak, wk, wk) : @"";
-  CFRelease(sys);
+  if (sampledPID != NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier) {
+    ak = @"";
+    wk = @"";
+    fk = @"";
+  }
+  NSMutableArray *nodes = [NSMutableArray array];
+  for (NSString *k in @[ wk, fk ]) {
+    NSDictionary *n = k.length ? node(c, k) : nil;
+    if (n)
+      [nodes addObject:n];
+  }
   CGEventRef ev = CGEventCreate(NULL);
   CGPoint p = ev ? CGEventGetLocation(ev) : CGPointZero;
   if (ev)
     CFRelease(ev);
   return @{
     @"Foreground" : wk,
+    @"Application" : ak,
     @"Focused" : fk,
+    @"Nodes" : nodes,
     @"Pointer" : known(@{
       @"Frame" : @"desktop",
       @"Topology" : @(c.topology),
@@ -899,7 +951,22 @@ char *dw_call(void *p, const char *opstr, const char *json, void *cancel) {
                                                    [p[@"Y"] floatValue],
                                                    &hit) == kAXErrorSuccess;
         AXUIElementRef wanted = element(c, r[@"Key"]);
-        ok = ok && wanted && CFEqual(hit, wanted);
+        // A container/window anchor is hittable through a native descendant;
+        // an unrelated occluding window still fails this ancestry check.
+        BOOL descendant = NO;
+        id current = hit ? (__bridge id)hit : nil;
+        NSMutableSet *seen = [NSMutableSet set];
+        for (int depth = 0; ok && wanted && current && depth < 64; depth++) {
+          if (CFEqual((__bridge CFTypeRef)current, wanted)) {
+            descendant = YES;
+            break;
+          }
+          if ([seen containsObject:current])
+            break;
+          [seen addObject:current];
+          current = attr((__bridge AXUIElementRef)current, kAXParentAttribute);
+        }
+        ok = ok && descendant;
         if (hit)
           CFRelease(hit);
         CFRelease(sys);

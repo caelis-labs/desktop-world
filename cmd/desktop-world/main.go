@@ -1,0 +1,161 @@
+// desktop-world exposes discovery and a persistent, host-owned stdio helper.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"os/signal"
+	"time"
+
+	"github.com/caelis-labs/desktop-world/internal/helper"
+	"github.com/caelis-labs/desktop-world/local"
+	"github.com/caelis-labs/desktop-world/protocol"
+)
+
+const usage = `Desktop World — native desktop operations, persistent JSON sessions.
+
+desktop-world doctor                 Read-only permission/environment probe; never prompts.
+desktop-world schema [operation]     JSON request schema; no native desktop access.
+desktop-world serve [host options]   New World for the lifetime of this stdio process.
+
+serve host options:
+  --write-app NAME       Grant writes to one exact live application name; repeatable.
+  --write-app-window TITLE  Grant its owning app; resolves duplicate app names by exact window title.
+  --desktop-write        Explicitly grant desktop-wide writes instead of named apps.
+  --raw-input            Permit absolute Point input; requires --desktop-write.
+  --assets-dir PATH      Enable capture and save PNG files in this host-chosen directory.
+  --audit PATH           Create a new metadata-only JSONL audit (no UI text/input payloads).
+  --full-output          Typed wire facts and exact timestamps; default is compact UI facts.
+
+Send one JSON object per line; receive hello, then {id,protocol,world,result,error}.
+Supported verbs: observe, read, sync, act, capture, get, cancel.
+Example read:
+{"id":"inventory-1","op":"observe","args":{"scope":{"desktop":true},"projection":"summary","fields":["name","role"],"budget":{"max_results":64}}}
+
+For writes, get schema act first. args contains steps and optional timeout_ms.
+Helper supplies epoch and request_id from the stable envelope id. Reuse that id
+and the SAME body after transport uncertainty; never blindly replay effects.
+New process = new epoch, invalid old Refs, no persisted exactly-once guarantee.
+No network listener, login, API key, automatic permission prompts, or auto-rebinding.
+Stdout is JSON only except --help; diagnostics go to stderr. --json is accepted.
+`
+
+type names []string
+
+func (n *names) String() string     { return fmt.Sprint([]string(*n)) }
+func (n *names) Set(v string) error { *n = append(*n, v); return nil }
+
+func main() {
+	if err := run(); err != nil {
+		b, _ := json.Marshal(map[string]any{"error": map[string]string{"code": "command_failed", "message": err.Error()}})
+		fmt.Println(string(b))
+		os.Exit(1)
+	}
+}
+func run() error {
+	args := os.Args[1:]
+	if len(args) > 0 && args[0] == "--json" {
+		args = args[1:]
+	}
+	if len(args) == 0 || args[0] == "--help" || args[0] == "help" {
+		fmt.Print(usage)
+		return nil
+	}
+	if args[0] == "schema" {
+		var s any = helper.Schemas()
+		if len(args) > 2 {
+			return fmt.Errorf("schema accepts at most one operation")
+		}
+		if len(args) == 2 {
+			operationSchema := helper.Schema(args[1])
+			if operationSchema == nil {
+				return fmt.Errorf("unknown operation")
+			}
+			s = operationSchema
+		}
+		return json.NewEncoder(os.Stdout).Encode(s)
+	}
+	if args[0] != "doctor" && args[0] != "serve" {
+		return fmt.Errorf("unknown command; use --help")
+	}
+	var c helper.Config
+	var apps, appWindows names
+	var auditPath string
+	f := flag.NewFlagSet(args[0], flag.ContinueOnError)
+	f.SetOutput(os.Stderr)
+	f.Var(&apps, "write-app", "allow exact live application name")
+	f.Var(&appWindows, "write-app-window", "allow the application owning an exact window title")
+	f.BoolVar(&c.DesktopWrite, "desktop-write", false, "allow desktop writes")
+	f.BoolVar(&c.RawInput, "raw-input", false, "allow absolute Point input")
+	f.StringVar(&c.AssetsDir, "assets-dir", "", "capture destination")
+	f.StringVar(&auditPath, "audit", "", "new audit file")
+	f.BoolVar(&c.FullOutput, "full-output", false, "retain typed wire facts and per-object timestamps")
+	if err := f.Parse(args[1:]); err != nil {
+		return err
+	}
+	if f.NArg() != 0 {
+		return fmt.Errorf("unexpected positional arguments")
+	}
+	if args[0] == "doctor" && len(args) > 1 {
+		return fmt.Errorf("doctor takes no host permission flags")
+	}
+	c.WriteApps = apps
+	c.WriteAppWindows = appWindows
+	c.Capture = c.AssetsDir != ""
+	if c.DesktopWrite && len(apps)+len(appWindows) > 0 {
+		return fmt.Errorf("choose write-app scopes or desktop-write, not both")
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	openCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	w, err := local.Open(openCtx, local.Options{})
+	cancel()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := w.Close(closeCtx); err != nil {
+			fmt.Fprintln(os.Stderr, "close:", err)
+		}
+	}()
+	if args[0] == "doctor" {
+		probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		env, err := w.Environment(probeCtx)
+		if err != nil {
+			return err
+		}
+		b, err := protocol.Marshal(struct {
+			Protocol, Auth string
+			Environment    any
+		}{helper.Version, "OS permissions; no API credential", env})
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(b))
+		return nil
+	}
+	if auditPath != "" {
+		f, err := os.OpenFile(auditPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		c.Audit = f
+	}
+	initCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	server, err := helper.New(initCtx, w, c)
+	cancel()
+	if err != nil {
+		return err
+	}
+	// Closing stdin on a signal unblocks the scanner, then Serve cancels calls
+	// and the World gets a bounded opportunity to release owned input.
+	go func() { <-ctx.Done(); _ = os.Stdin.Close() }()
+	return server.Serve(ctx, os.Stdin, os.Stdout)
+}

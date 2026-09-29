@@ -91,7 +91,14 @@ func (h Handler) Handle(ctx context.Context, data []byte) ([]byte, error) {
 	}
 	var f *dw.Fault
 	if err != nil && !errors.As(err, &f) {
-		f = dw.NewFault("request_failed", "request failed", "reobserve")
+		switch {
+		case errors.Is(err, context.DeadlineExceeded):
+			f = dw.NewFault("deadline_exceeded", "operation exceeded its deadline; for observe, narrow scope or increase budget.read_deadline_ms (max 10000); inspect any receipt before retrying a write", "reobserve")
+		case errors.Is(err, context.Canceled):
+			f = dw.NewFault("cancelled", "caller cancelled the operation; inspect any receipt before retrying a write", "never_automatically")
+		default:
+			f = dw.NewFault("request_failed", "provider request failed; inspect permission/environment and retry a narrower read; do not replay uncertain writes", "reobserve")
+		}
 	}
 	return Marshal(Response{Protocol: Version, World: h.Epoch, Result: result, Error: f})
 }

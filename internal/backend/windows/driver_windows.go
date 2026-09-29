@@ -375,6 +375,16 @@ func (d *Driver) seat() backend.Seat {
 	if hwnd == 0 {
 		s.Health = "unavailable"
 	}
+	for _, key := range []backend.Key{s.Foreground, s.Focused} {
+		if key != "" {
+			if n, err := d.node(context.Background(), key); err == nil {
+				s.Nodes = append(s.Nodes, n)
+			}
+		}
+	}
+	if e := d.byKey[s.Foreground]; e != nil {
+		s.Application = e.app
+	}
 	return s
 }
 func (d *Driver) Read(ctx context.Context, k backend.Key) (backend.Node, backend.Seat, error) {
@@ -437,10 +447,28 @@ func (d *Driver) HitTest(ctx context.Context, p dw.Point, k backend.Key) (bool, 
 	if err = d.uia.call(7, uintptr(packed), ptr(&hit)); err != nil {
 		return false, err
 	}
-	defer hit.release()
-	var same int32
-	err = d.uia.call(3, ptr(hit), ptr(e.el), ptr(&same))
-	return same != 0, err
+	current := hit
+	defer func() { current.release() }()
+	for depth := 0; current != nil && depth < 64; depth++ {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		var same int32
+		if err := d.uia.call(3, ptr(current), ptr(e.el), ptr(&same)); err != nil {
+			return false, err
+		}
+		if same != 0 {
+			return true, nil
+		}
+		var parent *com
+		if err := d.walker.call(3, ptr(current), ptr(&parent)); err != nil {
+			parent.release()
+			return false, err
+		}
+		current.release()
+		current = parent
+	}
+	return false, nil
 }
 
 type monitorCollection struct{ displays []dw.Display }

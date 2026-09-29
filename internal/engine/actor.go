@@ -181,10 +181,16 @@ func defaults(r dw.ObserveRequest) dw.ObserveRequest {
 		b.MaxTextRunes = 192
 	}
 	if b.ReadDeadline == 0 {
-		b.ReadDeadline = 500 * time.Millisecond
+		b.ReadDeadline = 2 * time.Second
+		if r.Scope.Desktop {
+			b.ReadDeadline = 5 * time.Second
+		}
 	}
 	if len(r.Fields) == 0 {
 		r.Fields = []string{"role", "name", "states", "bounds", "capabilities", "app", "window", "parent", "lifecycle"}
+		if r.Projection == dw.ProjectionSummary {
+			r.Fields = []string{"role", "name", "app", "window"}
+		}
 	}
 	if r.Freshness.Mode == "" {
 		r.Freshness.Mode = "refresh"
@@ -388,7 +394,7 @@ func (a *actor) selectObjectsLocked(all []dw.Object, r dw.ObserveRequest) []dw.O
 }
 func (a *actor) seatLocked() dw.SeatState {
 	s := copyOf(a.w.seat)
-	for _, f := range []*dw.Fact[dw.Ref]{&s.ForegroundWindow, &s.FocusedObject} {
+	for _, f := range []*dw.Fact[dw.Ref]{&s.ForegroundApplication, &s.ForegroundWindow, &s.FocusedObject} {
 		if f.Value != nil && !a.inScopeLocked(*f.Value, a.config.ReadScopes) {
 			*f = dw.Fact[dw.Ref]{Status: dw.FactRedacted}
 		}

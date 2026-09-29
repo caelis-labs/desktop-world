@@ -445,12 +445,16 @@ func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string
 		if object.Kind == dw.KindWindow {
 			expected = object.Ref
 		}
-		if expected == "" || seat.ForegroundWindow.Value == nil || *seat.ForegroundWindow.Value != expected {
-			fail(fault("needs_user_focus"))
+		// Finder's inline editor is a real focused application child with no AX
+		// window. Require exact live focus AND foreground app evidence; never
+		// invent a window. a.check still rejects actors scoped to another window.
+		windowlessKeyboard := strings.HasPrefix(s.Op, "keyboard.") && object.Kind == dw.KindUI && expected == "" && object.App != "" && seat.ForegroundApplication.Status == dw.FactKnown && seat.ForegroundApplication.Value != nil && *seat.ForegroundApplication.Value == object.App && seat.FocusedObject.Status == dw.FactKnown && seat.FocusedObject.Value != nil && *seat.FocusedObject.Value == object.Ref
+		if !windowlessKeyboard && (expected == "" || seat.ForegroundWindow.Value == nil || *seat.ForegroundWindow.Value != expected) {
+			fail(dw.NewFault("needs_user_focus", "target has no verified foreground window; observe target detail and seat, then explicitly focus the intended window", "reobserve"))
 			return
 		}
 		if strings.HasPrefix(s.Op, "keyboard.") && (seat.FocusedObject.Value == nil || *seat.FocusedObject.Value != object.Ref) {
-			fail(fault("user_interrupted"))
+			fail(dw.NewFault("user_interrupted", "keyboard target must be the currently focused UI object, not its window; observe seat.focused_object and its detail before building a new action", "reobserve"))
 			return
 		}
 	}
@@ -678,6 +682,9 @@ func (a *actor) predicates(ctx context.Context, ps []dw.Predicate, b map[string]
 func (a *actor) poll(ctx context.Context, ps []dw.Predicate, b map[string]dw.Ref, op string) (dw.Verification, error) {
 	last := dw.VerifyUnknown
 	for {
+		if ctx.Err() != nil {
+			return last, fault("verification_timeout")
+		}
 		e := a.predicates(ctx, ps, b, op)
 		if e == nil {
 			return dw.VerifyVerified, nil
@@ -691,7 +698,7 @@ func (a *actor) poll(ctx context.Context, ps []dw.Predicate, b map[string]dw.Ref
 				return last, e
 			}
 		}
-		timer := time.NewTimer(20 * time.Millisecond)
+		timer := time.NewTimer(a.w.opts.VerificationPollInterval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()

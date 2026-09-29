@@ -80,6 +80,30 @@ func TestHandlerBoundToActor(t *testing.T) {
 		t.Fatal("accepted arbitrary op")
 	}
 }
+
+func TestHandlerPreservesDeadlineCause(t *testing.T) {
+	w, f, err := dwtest.New(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close(context.Background())
+	f.Form()
+	a, _ := w.NewActor(context.Background(), dw.ActorConfig{ID: "deadline", ReadScopes: []dw.Scope{{Desktop: true}}, Operations: []string{"observe"}})
+	env, _ := w.Environment(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	b, _ := protocol.Marshal(protocol.Request{Protocol: protocol.Version, World: env.Epoch, Op: "world.observe", Args: json.RawMessage(`{"scope":{"desktop":true}}`)})
+	out, err := (protocol.Handler{Actor: a, Epoch: env.Epoch}).Handle(ctx, b)
+	if err != nil || !strings.Contains(string(out), `"code":"cancelled"`) {
+		t.Fatalf("%s %v", out, err)
+	}
+	ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	out, err = (protocol.Handler{Actor: a, Epoch: env.Epoch}).Handle(ctx, b)
+	if err != nil || !strings.Contains(string(out), `"code":"deadline_exceeded"`) || !strings.Contains(string(out), "read_deadline_ms") {
+		t.Fatalf("%s %v", out, err)
+	}
+}
 func FuzzDecodePlan(f *testing.F) {
 	f.Add([]byte(`{"epoch":"e","request_id":"e:r","steps":[]}`))
 	f.Add([]byte(`{"steps":[{"target":{"ref":"x","bound":"y"}}]}`))
