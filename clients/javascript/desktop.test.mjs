@@ -1,0 +1,113 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createSession } from './desktop.mjs';
+
+const observed = { objects: [{ ref: 'r1', role: 'AXButton', name: { known: 'Save' }, value_preview: { known: '' }, states: { enabled: { known: false }, focused: { status: 'unknown' } } }], coverage: { complete: true, truncated: false }, seat: { focused_object: { known: 'r1' } } };
+const completed = { run_id: 'run1', outcome: 'completed', state: 'terminal', steps: [{ id: 's1', delivery: 'complete', verification: 'not_requested' }] };
+
+test('one script composes observations and effects; only selected output leaves local memory', async () => {
+  const requests = [];
+  const session = createSession(async request => {
+    requests.push(request);
+    return { result: request.op === 'act' ? completed : observed };
+  }, { epoch: 'epoch1' });
+  const result = await session.execute(`
+    const ob = await dw.observe();
+    state.button = dw.one(ob, {name:'Save'}).ref;
+    await dw.invoke(state.button);
+    print(dw.rows(await dw.outline(state.button), ['name','states.enabled','states.focused']));
+  `);
+  assert.equal(result.error, undefined);
+  assert.equal(requests.length, 3);
+  assert.equal(result.metrics.calls, 3);
+  assert.deepEqual(result.outputs[0], [{ ref: 'r1', name: 'Save', 'states.enabled': false, 'states.focused': { status: 'unknown' } }]);
+  assert.equal(result.actions[0].delivery_verification['complete/not_requested'], 1);
+  assert.equal(result.observations.length, 2);
+  const next = await session.execute('print(state.button)');
+  assert.equal(next.outputs[0], 'r1');
+});
+
+test('partial receipt is always surfaced and cannot be caught to continue input', async () => {
+  let calls = 0;
+  const session = createSession(async () => {
+    calls++;
+    return { result: { ...completed, outcome: 'partial', steps: [{ id: 's1', delivery: 'unknown', verification: 'unknown', fault: { code: 'lost_focus' } }] } };
+  });
+  const result = await session.execute(`
+    try { await dw.press('r1','Enter'); } catch {}
+    try { await dw.type('r1','must not be sent'); } catch {}
+  `);
+  assert.equal(calls, 1);
+  assert.equal(result.error.code, 'action_not_completed');
+  assert.equal(result.actions[0].problems[0].delivery, 'unknown');
+});
+
+test('top-level faults stop the chain and no automatic retries occur', async () => {
+  let calls = 0;
+  const session = createSession(async () => { calls++; return { error: { code: 'expired_reference', message: 'Observe again' } }; });
+  const result = await session.execute(`await dw.observe(); await dw.observe();`);
+  assert.equal(calls, 1);
+  assert.equal(result.error.code, 'expired_reference');
+});
+
+test('bounded output and incomplete coverage are never silent successful discovery', async () => {
+  const session = createSession(async () => ({ result: { ...observed, coverage: { complete: false, truncated: true, continuation: 'page2' } } }), { printBytes: 100 });
+  const incomplete = await session.execute(`dw.one(await dw.observe(), {name:'Save'});`);
+  assert.match(incomplete.error.message, /incomplete/);
+  assert.equal(incomplete.observations[0].continuation, 'page2');
+  const large = await session.execute(`print('x'.repeat(101));`);
+  assert.equal(large.error.code, 'print_budget_exceeded');
+  assert.deepEqual(large.outputs, []);
+});
+
+test('concurrent calls serialize and calls after an error are not dispatched', async () => {
+  const order = [];
+  let active = 0;
+  const session = createSession(async request => {
+    assert.equal(active++, 0);
+    order.push(request.id);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    active--;
+    return { result: completed };
+  });
+  const result = await session.execute(`await Promise.all([dw.invoke('r1'), dw.invoke('r1')]);`);
+  assert.equal(result.error, undefined);
+  assert.equal(order.length, 2);
+  assert.notEqual(order[0], order[1]);
+});
+
+test('script call budget and deadline do not continue to later effects', async () => {
+  let calls = 0;
+  const budgeted = createSession(async () => { calls++; return { result: observed }; }, { maxCalls: 2 });
+  const budget = await budgeted.execute(`for (let i=0;i<5;i++) await dw.observe();`);
+  assert.equal(budget.error.code, 'call_budget_exceeded');
+  assert.equal(calls, 2);
+  const timed = createSession(async () => { await new Promise(resolve => setTimeout(resolve, 30)); return { result: observed }; }, { timeoutMs: 5 });
+  const timeout = await timed.execute(`await dw.observe(); await dw.invoke('r1');`);
+  assert.equal(timeout.error.code, 'script_timeout');
+  assert.equal(timeout.actions, undefined);
+  timed.close();
+  assert.equal((await timed.execute('print(1)')).error.code, 'session_closed');
+});
+
+test('read polling handles transitioning dialogs without replaying effects', async () => {
+  let reads = 0;
+  const session = createSession(async request => {
+    assert.equal(request.op, 'observe');
+    return { result: ++reads === 1 ? { ...observed, objects: [] } : observed };
+  });
+  const result = await session.execute(`const ob=await dw.waitFor({}, ob=>ob.objects.length===1, {interval_ms:50}); print(dw.rows(ob));`);
+  assert.equal(result.error, undefined);
+  assert.equal(reads, 2);
+  assert.equal(result.outputs[0][0].name, 'Save');
+});
+
+test('disconnect stops later effects and retains in-flight outcome', async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const session = createSession(async () => { calls++; controller.abort(); return { result: completed }; });
+  const result = await session.execute(`await dw.invoke('r1'); await dw.invoke('r1');`, { signal: controller.signal });
+  assert.equal(calls, 1);
+  assert.equal(result.error.code, 'caller_disconnected');
+  assert.equal(result.actions[0].outcome, 'completed');
+});

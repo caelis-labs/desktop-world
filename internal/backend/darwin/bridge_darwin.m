@@ -563,6 +563,14 @@ static NSDictionary *perform(DWContext *c, NSDictionary *o, DWCancel *cancel) {
         AXUIElementGetPid(e, &pid);
         [[NSRunningApplication runningApplicationWithProcessIdentifier:pid]
             activateWithOptions:0];
+        // AppKit activation is a cooperative request on modern macOS. An
+        // explicit accessibility focus operation also requests AXFrontmost;
+        // AXRaise alone may succeed while the application stays in background.
+        // The engine still verifies the exact foreground window afterwards.
+        AXUIElementRef app = AXUIElementCreateApplication(pid);
+        AXUIElementSetMessagingTimeout(app, 0.25);
+        AXUIElementSetAttributeValue(app, kAXFrontmostAttribute, kCFBooleanTrue);
+        CFRelease(app);
         rc = AXUIElementPerformAction(e, kAXRaiseAction);
       } else
         rc = AXUIElementSetAttributeValue(e, kAXFocusedAttribute,

@@ -17,7 +17,7 @@ root = Path(__file__).resolve().parent.parent
 out = a.output.resolve()
 out.mkdir(parents=True, exist_ok=False)
 participant, evaluator = out/"participant", out/"evaluator"
-for d in [participant/"workspace", participant/"harness", participant/"bin", participant/"docs", participant/"skills/desktop-world", evaluator]:
+for d in [participant/"workspace", participant/"harness", participant/"bin", participant/"docs", participant/"clients/javascript", participant/"skills/desktop-world", evaluator]:
     d.mkdir(parents=True)
 workspace = participant/"workspace"
 for name, source in [("SPEC.md","SPEC.md"),("README.md","README.md"),("api.go","api.go"),("implementation.md","docs/implementation.md"),("validation.md","docs/validation.md")]:
@@ -32,6 +32,8 @@ write(evaluator/"task.json",dict(task,workspace="../participant/workspace"))
 write(evaluator/"oracle.json",{"expected_note":expected,"original_hashes":{f.name:hashlib.sha256(f.read_bytes()).hexdigest() for f in workspace.iterdir()}})
 for src,dst in [(root/"tests/usability/PROMPT.md",participant/"PROMPT.md"),(root/"tests/usability/RUBRIC.md",evaluator/"RUBRIC.md"),(root/"scripts/verify-usability.py",evaluator/"verify-usability.py"),(root/"docs/helper.md",participant/"docs/helper.md"),(root/"skills/desktop-world/SKILL.md",participant/"skills/desktop-world/SKILL.md"),(a.helper.resolve(),participant/"bin/desktop-world")]:
     shutil.copy2(src,dst)
+for name in ["docs/scripting.md", "clients/javascript/desktop.mjs"]:
+    shutil.copy2(root/name, participant/name)
 write(participant/"host.json",{"helper":"bin/desktop-world","args":["serve","--write-app","访达","--write-app","文本编辑","--audit","harness/audit.jsonl"],"host_setup_required":"Before the run, trusted host must authorize the selected Chrome instance with --write-app or --write-app-window; see evaluator/RUBRIC.md. Do not let the participant enlarge scope."})
 write(participant/"result-template.json",{"status":"not_run","agent":None,"model":None,"host_version":None,"started_utc":None,"stopped_utc":None,"first_observe_seconds":None,"first_action_seconds":None,"tasks":{},"calls":None,"request_bytes":None,"response_bytes":None,"model_input_tokens":None,"model_output_tokens":None,"compactions":None,"human_hints":None,"adapter_lines":None,"builds":None,"restarts":None,"remaining_processes":None,"notes":[]})
 manifest={"platform":"darwin-arm64 local development build; unsigned distribution","baseline":a.baseline,"source_head":subprocess.check_output(["git","rev-parse","HEAD"],cwd=root,text=True).strip(),"source_dirty":bool(subprocess.check_output(["git","status","--porcelain"],cwd=root,text=True).strip()),"files":{str(f.relative_to(participant)):hashlib.sha256(f.read_bytes()).hexdigest() for f in participant.rglob("*") if f.is_file()}}

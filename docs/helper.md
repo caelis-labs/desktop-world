@@ -2,6 +2,8 @@
 
 `desktop-world` 是 SDK 的 stdio 宿主，复用 `local.Open`、Actor、执行器和协议。它不是另一个实现，也不是 MCP 服务；MCP/Agent 工具宿主可在其外层映射调用。当前用于验证分发与接入成本，尚未签名、公证或正式发布。
 
+通用 Agent 优先使用随包的 [JavaScript 调用链入口](scripting.md)：持久会话、跨回合 state、观察与动作组合、选择性 print 和自动计量。下面的 NDJSON 是底层协议，不要求每个 Agent 自行编写桥接器。
+
 ## 构建与启动
 
 ```sh

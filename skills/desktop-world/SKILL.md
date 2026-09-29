@@ -6,6 +6,31 @@ description: Operate authorized desktop applications through a persistent Deskto
 Use the helper supplied by the host. Its process must stay alive across calls: a
 fresh process means a new epoch, new Refs and no memory of previous execution.
 
+Prefer the supplied JavaScript entry point when available. The host starts it
+once using host.json. Read `node clients/javascript/desktop.mjs help`, then:
+
+```sh
+node clients/javascript/desktop.mjs exec <<'JS'
+const ob = await dw.observe();
+state.inventory = ob;
+print(dw.rows(ob, ['kind','name','app']));
+JS
+```
+
+Use await, local variables, loops and conditionals to compose calls in one script.
+Keep results in `state` across exec calls; print only what the next decision needs.
+Scope observations to a known app/window and request only needed fields. Use
+`dw.rows(ob, ['name','states.focused'])` for nested-field presentation. Full trees
+remain local. Mandatory coverage, pagination, action outcomes and errors are
+returned even when not printed. Partial/unknown/error stops subsequent calls in
+that script; never replay an uncertain script. All native calls are serialized.
+Capture returns local image paths; inspect images only as needed. The generic
+methods and signatures in help avoid loading the full act schema at startup.
+Finish with `node clients/javascript/desktop.mjs stop`.
+
+The following is the lower-level stdio alternative; JavaScript users only need
+schema for operations not covered by its convenience methods.
+
 Discover setup and argument schemas before assembling actions:
 
 ```sh

@@ -1,8 +1,8 @@
 你是第一次使用 Desktop World 的独立受试 Agent。请完成真实桌面任务并记录使用成本。
 
-你的工作目录是这个测试包的 participant 目录。先记录开始 UTC、Agent/模型名称、宿主版本和是否继承了其他上下文；从此开始计时。不要读父目录的 evaluator、项目仓库、实现源码、其他 Agent 的报告或历史对话。只可读本 prompt、task.json、docs/helper.md、skills/desktop-world/SKILL.md 和 helper 的 help/schema/doctor。
+你的工作目录是这个测试包的 participant 目录。先记录开始 UTC、Agent/模型名称、宿主版本和是否继承了其他上下文；从此开始计时。不要读父目录的 evaluator、项目仓库、实现源码、其他 Agent 的报告或历史对话。只可读本 prompt、task.json、host.json、result-template.json、docs/helper.md、docs/scripting.md、skills/desktop-world/SKILL.md 和工具的 help/schema/doctor。
 
-工具入口是 bin/desktop-world。使用可信宿主预先写在 host.json 的启动参数运行持久 helper；不要扩大授权。没有预编译 SDK 接入工作需要完成。若你的宿主不支持持久 stdio，可在 harness 内编写通用传输桥，记录代码量和耗时；不要编写任务专用的直接文件操作或其他自动化后门。
+工具入口是 `node clients/javascript/desktop.mjs`，宿主已按 host.json 启动持久会话。先运行 `node clients/javascript/desktop.mjs help`，然后用 `exec` 从 stdin 提交 async JavaScript 调用链；用 state 跨回合保留对象，print 仅输出决策需要的信息。无需写传输桥或编译。不要读取会话文件内容、修改客户端、扩大授权或启动另一个 helper。结束时用 `stop` 关闭会话。
 
 完成 task.json 的三项任务：
 
@@ -12,7 +12,7 @@
 
 所有任务资料的读取、编辑、改名、目录操作、网页阅读和保存都必须通过 Desktop World。禁止 shell/Python 文件 API 直接完成任务，禁止 HTTP 抓取、浏览器 DOM/插件、AppleScript、其他 Computer Use。Shell 可用于运行 helper、读通用指南、写 harness 日志或通用传输桥。可以查看 helper 导出的截图。不要操作其他文档、标签页、账号或系统设置。
 
-helper 是唯一桌面执行通道。保留原始 stdout 和审计日志到 harness。只输出你当前决策需要的信息，但日志必须保存完整证据。任何打印过滤和传输桥都需记录；不要把接口返回 bytes 当成模型实际 tokens。
+helper 是唯一桌面执行通道。脚本入口自动将完整调用记录到 harness/wire.jsonl、计量到 scripts.jsonl。不要读取原始日志来额外获取未经选择的桌面内容；需要恢复时可查询原 run_id 收据。记录使用的脚本数、原生调用数和输出筛选方式；不要把接口返回 bytes 当成模型实际 tokens。用 exec 的 stdin 提交代码；不得通过脚本运行时逃逸读取文件、网络或调用其他自动化。
 
 体验目标：首次有效观察 30 秒内、首次动作 60 秒内、全部任务 10 分钟内；这些是目标，未达到须如实报告。硬截止为开始后 25 分钟，包含接入和恢复。到时停止输入、正常结束 helper、保留部分产物。不得等待人工指导后重新计算起点，不得把不知道或仅发送成功记作任务完成。
 

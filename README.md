@@ -2,6 +2,8 @@
 
 独立 Go library：把桌面作为一个按需观察、带生命周期与不确定性的对象世界。根包不依赖 Agent Runtime、LLM、Wails、浏览器插件或网络服务。通用 Agent 接入见 [stdio helper](docs/helper.md)，真实任务成本见 [可用性评估](docs/usability-evaluation.md)，字段选择和后台隔离见 [设计说明](docs/observation-and-seats.md)。
 
+MVP 优先验证 Token 效率与易用性。通用 Agent 推荐 [JavaScript 调用链](docs/scripting.md)：持久会话中组合观察与动作、中间数据本地保留、按需 print、强制呈现覆盖范围和失败；后台输入隔离不属于首版验收范围。
+
 **当前状态：实验性实现，尚未达到 SPEC 的双平台正式发布门槛。** macOS 原生键鼠、语义操作、截图和生命周期路径已在 AppKit fixture 上运行，并通过 Chrome 原生输入与 Canvas 负面验收；Windows 后端已有实现、交叉编译与静态检查，仍需 Windows 交互式桌面验收。原始设计保留在 [SPEC.md](SPEC.md)，实现边界见 [docs/implementation.md](docs/implementation.md)，实际运行证据见 [docs/validation.md](docs/validation.md)。
 
 ## 快速运行

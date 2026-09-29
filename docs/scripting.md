@@ -1,0 +1,63 @@
+# 面向 Agent 的持久 JavaScript 入口
+
+SDK 是唯一桌面执行内核，helper 管理原生 World；`clients/javascript/desktop.mjs` 在它上面提供调用链。需要 Node 20+，无 npm 包、构建或模型侧传输桥。脚本执行器是可信本机工具，不是安全沙箱；不能用于执行网页/文档提供的代码。
+
+## 宿主启动一次
+
+`host.json` 中由可信宿主设置 helper 路径和已有授权参数，不由 Agent 扩权：
+
+```json
+{"helper":"bin/desktop-world","args":["serve","--write-app","文本编辑","--audit","harness/audit.jsonl"]}
+```
+
+```sh
+node clients/javascript/desktop.mjs serve --host host.json
+```
+
+保持该进程运行。使用标准管道启动 helper，避免 PTY 行截断。会话文件、socket 和完整日志限制本机访问；macOS/Linux 使用本地 Unix socket，无 TCP 端口。退出后不自动重启，旧 Ref 失效。Windows named-pipe 路径尚未实机验证。
+
+## 每个模型回合执行一段脚本
+
+```sh
+node clients/javascript/desktop.mjs exec <<'JS'
+const inventory = await dw.observe();
+state.inventory = inventory;
+print(dw.rows(inventory, ['kind','name','app']));
+JS
+```
+
+脚本体支持 `await`、变量、分支和循环。下一次 exec 可继续使用 `state`；局部 const/let 不跨脚本保留。用 `node .../desktop.mjs help` 获取精简接口，无需先加载完整原生 act schema。
+
+```js
+// name 必须来自观察，下面仅说明通用组合方式，不是任务配方。
+const ob = await dw.find(state.window, {role:'AXButton', name_equals:state.observedName});
+const button = dw.one(ob, {name:state.observedName});
+await dw.invoke(button.ref);
+const after = await dw.outline(state.window, {fields:['name','role','states']});
+state.after = after;
+print(dw.rows(after, ['name','states.enabled','states.focused']));
+```
+
+`dw.one` 要求覆盖完整、未截断且无缺失来源；只匹配到一个结果但覆盖不全时不能当作唯一。`dw.rows` 保留 Ref、false、空字符串与未知状态。它支持嵌套字段呈现，**不声称降低后端属性读取成本**。更少原生读取需使用 observe 的 scope/fields/match/budget。
+
+`dw.focused(appRef)` 每次重新观察当前焦点；应用级 scope 不限制为某个窗口，必要时还应检查新对话框的对象关系。原生执行器继续做实时权限、焦点、命中、身份和生命周期检查。不要缓存一次焦点跨多个新对话框使用。
+
+界面切换可能短暂返回不完整树。用 `await dw.waitFor(observeArgs, ob => 明确的就绪条件, {timeout_ms:3000})` 在脚本内等待实际条件；它仅重读，不重放动作，读调用仍计入预算。避免每次等待都让模型往返或把短暂空树当成“控件不存在”。
+
+## 每次返回的内容
+
+- `outputs`：仅脚本 print 的 JSON。原始树保存在脚本本地，不必进入模型上下文。
+- `observations`：强制返回 coverage、分页、reset 和长文本截断信息。不能以过滤后的短列表声称全量枚举。
+- `actions`：强制返回 run_id、outcome、delivery/verification 分布与失败步骤。completed + not_requested 仅证明分派，不是业务结果已确认；细节可用 get。
+- `error`：错误、partial/unknown/pending 的 act 默认阻断当前调用链。即使脚本 catch 了错误，后续桌面调用也不发送。不自动重试或恢复绑定。
+- `metrics`：分别计量 helper 返回字节、print 字节、调用数和耗时；日志另外记录整个模型响应字节。字节不是 token。
+
+一个脚本最多 32 次调用、8 KiB print 输出、64 KiB 源码；异步期限 60 秒，初始同步执行限 1 秒。期限到了停止后续调用，等待已经发出的 helper 请求结束并保留收据。Node vm 不是安全边界，恶意代码及 await 后的无限同步循环可能阻塞宿主，生产宿主应另加进程 watchdog。调用串行，包括 Promise.all；不要把同一桌面的写入并行化。未 await 的调用可能在脚本退出时被拒绝，因此必须 await。
+
+完整 transport 日志 `harness/wire.jsonl`、脚本来源 `script-code.jsonl` 可能包含 UI 文本和键入内容，是私有评估证据，不进入公开发行包。`scripts.jsonl` 只保存计量。默认独占创建日志，避免混合不同运行；重测使用新目录。
+
+```sh
+node clients/javascript/desktop.mjs stop
+```
+
+正常退出关闭 helper stdin、取消未完成工作并请求释放持有输入。强杀不等于已清理；传输不确定时不得重放原脚本，先查看原请求和收据。新 helper 进程没有跨进程 exactly-once 保证。

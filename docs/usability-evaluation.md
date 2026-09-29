@@ -88,6 +88,14 @@ go run ./cmd/dw-analyze -input artifacts/usability/sdk-baseline-01/harness/calls
 
 ### 下一轮外部 Agent
 
-由用户安排 Antigravity 等外部 Agent。提供冻结 helper、通用指南、相同实际任务、prompt 和结果模板；验收 oracle 与脚本由评估者另行保管。下一轮结果尚未产生。
+已获用户授权在本机 Antigravity App 发起新上下文验证，必须通过 Computer Use 操作 App，不使用 CLI/ACP。提供冻结 helper、JavaScript 调用链、通用指南、相同实际任务、prompt 和结果模板；验收 oracle 与脚本由评估者另行保管。外部 App 轮结果尚未产生。
 
 预先登记的体验目标：首次有效观察 ≤30 秒、首次动作 ≤60 秒、全部任务 ≤10 分钟、无上下文压缩、无人工操作提示、无自行编写 Go adapter；必须同时保留正确性、错误恢复和输出体积。超过阈值仍记录真实结果，不降低门槛或将热回归替代。不同模型/宿主带来的差异单独披露，不将单样本差值全归因于 helper。
+
+### 脚本入口开发者回归
+
+MVP 聚焦调用返回成本与易用性，后台输入隔离延期。JavaScript 脚本在持久会话里组合观察、筛选、动作和条件等待，中间结果保存在 state；模型只接收 print、强制 coverage/分页/执行结果和计量。错误、partial/unknown 停止后续调用，不自动重放。
+
+`artifacts/usability/script-warm-01` 留有前台激活失败证据：AppKit 激活请求加 AXRaise 返回已分派，但 TextEdit 没成为前台；链停止，没有继续发按键。补充应用 AXFrontmost 请求后，`script-warm-02` 的两段脚本完成 8 次调用：观察、聚焦既有验证文档、取得实时焦点、打开面板、确认并关闭。耗时之和 2,989 ms；helper 返回 27,042 B；完整脚本回复 3,209 B（含强制元数据），print 内容 1,020 B。任务未修改文档。这是已知目标的热回归，不是陌生 Agent 的完整任务成绩，也不是实测模型 token 降幅。
+
+8 项 JavaScript 契约测试覆盖组合/跨回合状态、局部输出、未知/partial 收据、禁止错误后继续输入、唯一性与覆盖、调用与打印预算、超时、只读条件等待、断连后的后续输入阻止。Go race/vet、Windows 交叉构建/vet、协议示例通过；Windows JavaScript IPC 和桌面输入仍未实机验收。
