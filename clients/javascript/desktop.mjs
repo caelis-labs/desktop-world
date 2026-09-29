@@ -17,22 +17,30 @@ Agent:        node desktop.mjs exec [--session harness/session.json] <<'JS'
 state.inventory = await dw.observe();
 print(dw.list(state.inventory));
 JS
+Status:       node desktop.mjs status    (doctor is an alias; startup permissions only)
+Version:      node desktop.mjs --version
 Stop:         node desktop.mjs stop [--session harness/session.json]
 
 Each exec is an async JavaScript body. Use await, variables, loops and conditionals.
 state survives exec calls; local const/let do not. Only print(...) enters the model
 response, together with mandatory coverage, action outcomes, failures and metrics.
 Errors/partial/unknown effects stop further calls in that script; never auto-retry.
+seat_health=fenced blocks input. Inspect original get receipt; reads/cancel cannot
+reset it. Terminal unknown still fenced: stop and report to host, never restart/replay.
 
-dw.observe(args={})                 desktop summary by default
+dw.observe(argsOrRef={})            desktop summary; pass app/window Ref to scope
+  args: {scope:{refs:[ref]}, projection:"summary"|"outline"|"detail", fields, match, budget}
+  budget: max_depth,max_results,max_text_runes,max_output_bytes,read_deadline_ms
+  match: role,name_equals,name_contains; scope uses refs, not apps/windows
 dw.outline(ref, options={})         bounded subtree; options override fields/budget
-dw.find(within, locator, options)   bounded exact/substring discovery, returns observation
+dw.find(within, locator, options)   bounded exact/substring discovery, depth 12 default
+dw.next(ob)                        native next page, preserves original query automatically
 dw.waitFor(observeArgs, predicate, options={})  poll reads until predicate(ob)===true
 dw.one(ob, {role, name, kind})      require one match AND complete, untruncated coverage
-dw.list(ob, fields=['role','name','value_preview'], options={})  bounded rows + next_offset
+dw.list(ob, fields=['role','name','value_preview','uri'], options={})  bounded rows + next_offset
 dw.rows(ob, fields)                full row array for local filtering, can exceed print limit
 dw.value(field)                    unwrap known facts or primitive fields; throws for unknown/redacted
-dw.focused(scopeRef)               fresh focused UI Ref, scoped observation
+dw.focused(appOrWindowRef)         fresh focused UI Ref; rejects focus outside scope
 dw.focus(windowOrFocusableUIRef) / dw.invoke(ref) / dw.set(ref, text)
 dw.press(ref, key, modifiers=[]) / dw.type(ref, text)
 dw.click(ref, options={})           left single click by default
@@ -44,11 +52,17 @@ dw.call(op,args,id?)                underlying seven verbs; stable id for receip
 Keys: A-Z,0-9,Enter,Tab,Escape,Backspace,Delete,Space,Left,Right,Up,Down,
 Home,End,PageUp,PageDown. Modifiers: primary,meta,control,alt,shift (lowercase).
 primary = Command on macOS, Control on Windows. Target is always an observed Ref.
-Roles are normalized: application,window,button,text_field,text,container (not AX names).
+Roles are normalized: application,window,button,text_field,text,document,image,container (not AX names).
+uri is the native document/link URL when exposed; confirm it before editing same-named documents.
+Do not assume an already-open document belongs to the task workspace.
 Focus a WINDOW before input; application Refs are discovery scopes, not focus targets.
 list defaults to 20 rows/4 KiB; use next_offset on the SAME saved observation for more.
+If ob.coverage.continuation exists, use state.ob=await dw.next(state.ob) for native pages.
+outline defaults to name/role/value_preview; states/capabilities are opt-in fields.
 Use rows for local filtering before print; value works on role/name/state alike.
-After opening a dialog, observe its actual objects/focus before the next input.
+Keyboard example: await dw.focus(windowRef); await dw.press(await dw.focused(windowRef),'O',['primary']);
+After a dialog opens, inspect dw.observe(appRef), then use dw.focused(appRef).
+Keyboard target must be focused UI, never the window Ref itself.
 An action completed with verification=not_requested proves dispatch, not task success.
 read uses limit_runes<=4096 and continuation=result.next for more text.
 
@@ -68,7 +82,7 @@ const errorInfo = error => ({ code: error?.code ?? 'script_failed', message: Str
 const bytes = value => Buffer.byteLength(JSON.stringify(value));
 const pick = (value, keys) => Object.fromEntries(keys.filter(k => value?.[k] !== undefined).map(k => [k, value[k]]));
 const smallCoverage = value => pick(value, ['scope', 'fields', 'max_depth', 'complete', 'truncated', 'dirty', 'continuation', 'unavailable_sources']);
-const rows = (ob, fields = ['role', 'name', 'value_preview']) => (ob.objects ?? []).map(object => {
+const rows = (ob, fields = ['role', 'name', 'value_preview', 'uri']) => (ob.objects ?? []).map(object => {
   const row = { ref: object.ref };
   for (const field of fields) {
     let value = field.split('.').reduce((v, key) => v?.[key], object);
@@ -94,6 +108,7 @@ function receiptSummary(id, op, receipt) {
 // transport receives a helper Request and returns its full helper Response.
 export function createSession(transport, { epoch = '', maxCalls = 32, timeoutMs = 60000, printBytes = 8192 } = {}) {
   const state = Object.create(null);
+  const queries = new WeakMap();
   let sequence = 0;
   let busy = false;
   let closed = false;
@@ -139,8 +154,13 @@ export function createSession(transport, { epoch = '', maxCalls = 32, timeoutMs 
       return { ref };
     };
     const act = (steps, options = {}) => call('act', { ...options, steps: steps.map((step, i) => ({ id: `s${i + 1}`, ...step })) });
-    const observe = (args = {}) => call('observe', { scope: { desktop: true }, projection: 'summary', fields: ['name', 'role', 'app', 'window'], budget: { max_results: 256, max_output_bytes: 131072 }, ...args });
-    const outline = (ref, options = {}) => observe({ scope: { refs: [ref] }, projection: 'outline', fields: ['name', 'role', 'value_preview', 'states', 'capabilities'], ...options, budget: { max_depth: 6, max_results: 60, max_text_runes: 400, max_output_bytes: 16000, ...options.budget } });
+    const observe = async (args = {}) => {
+      const request = JSON.parse(JSON.stringify({ scope: { desktop: true }, projection: 'summary', fields: ['name', 'role', 'app', 'window', 'uri'], budget: { max_results: 256, max_output_bytes: 131072 }, ...(typeof args === 'string' ? {scope:{refs:[args]}} : args) }));
+      const result = await call('observe', request);
+      queries.set(result, request);
+      return result;
+    };
+    const outline = (ref, options = {}) => observe({ scope: { refs: [ref] }, projection: 'outline', fields: ['name', 'role', 'value_preview'], ...options, budget: { max_depth: 6, max_results: 60, max_text_runes: 400, max_output_bytes: 16000, ...options.budget } });
     const api = Object.freeze({
       call, observe, outline, act, value: known,
       async waitFor(args, predicate, { timeout_ms = 3000, interval_ms = 100 } = {}) {
@@ -154,7 +174,13 @@ export function createSession(transport, { epoch = '', maxCalls = 32, timeoutMs 
         } while (Date.now() < end);
         throw Object.assign(new Error('Observation condition did not become true; no action was retried.'), { code: 'condition_timeout' });
       },
-      find: (within, locator, options = {}) => outline(within, { ...options, match: { ...locator, within } }),
+      find: (within, locator, options = {}) => outline(within, { ...options, budget: {max_depth:12, ...options.budget}, match: { ...locator, within } }),
+      next(ob) {
+        const request = queries.get(ob);
+        if (!request) throw new Error('next requires an unmodified observation from this session, optionally kept in state.');
+        if (!ob.coverage?.continuation) throw new Error('Observation has no next page.');
+        return observe({...request, continuation:ob.coverage.continuation});
+      },
       one(ob, filter = {}) {
         const coverage = ob?.coverage;
         if (!coverage?.complete || coverage.truncated || coverage.dirty || coverage.unavailable_sources?.length) throw new Error('Cannot prove uniqueness from incomplete/dirty coverage; narrow scope/filter or continue observation.');
@@ -182,8 +208,12 @@ export function createSession(transport, { epoch = '', maxCalls = 32, timeoutMs 
         return page;
       },
       async focused(scopeRef) {
-        const ob = await observe({ scope: { refs: [scopeRef] }, projection: 'detail', fields: ['name', 'role', 'app', 'window'], budget: { max_results: 4 } });
-        return known(ob.seat?.focused_object);
+        const ob = await observe({ scope: { refs: [scopeRef] }, projection: 'detail', fields: ['name', 'role', 'app', 'window', 'uri'], budget: { max_results: 4 } });
+        const ref = known(ob.seat?.focused_object);
+        const root = (ob.objects ?? []).find(o => o.ref === scopeRef);
+        const inside = root && (root.kind === 'application' ? known(ob.seat?.foreground_application) === scopeRef : root.kind === 'window' ? known(ob.seat?.foreground_window) === scopeRef : ref === scopeRef);
+        if (!inside) throw Object.assign(new Error('Focused object is outside the requested app/window; inspect current seat and explicitly focus the intended window.'), {code:'focus_outside_scope'});
+        return ref;
       },
       focus: ref => act([{ op: 'focus', target: target(ref) }]),
       invoke: ref => act([{ op: 'invoke', target: target(ref) }]),
@@ -260,6 +290,7 @@ async function connectHelper(host, directory) {
   catch (error) { child.kill(); closeSync(wire); throw error; }
   return {
     hello: startup,
+    health() { return broken ? {ready:false,error:errorInfo(broken)} : {ready:true}; },
     call(request) {
       if (broken) return Promise.reject(broken);
       if (pending.has(request.id)) return Promise.reject(new Error('Request ID is already in flight.'));
@@ -281,7 +312,9 @@ async function connectHelper(host, directory) {
 }
 
 export async function main(argv) {
-  const command = argv.shift();
+  let command = argv.shift();
+  if (['version', '--version', '-v'].includes(command)) { console.log(JSON.stringify({adapter:'desktop-world/javascript-v0.1',node:process.version,platform:process.platform,arch:process.arch})); return; }
+  if (command === 'doctor') command = 'status';
   if (!command || command === 'help' || command === '--help') { console.log(HELP); return; }
   const options = {};
   while (argv.length) {
@@ -339,7 +372,8 @@ export async function main(argv) {
         try {
           const request = JSON.parse(content.slice(0, content.indexOf('\n')));
           if (request.op === 'stop') { await stop(); socket.end(JSON.stringify({ stopped: true }) + '\n'); return; }
-          if (request.op !== 'exec') throw new Error('Expected exec or stop');
+          if (request.op === 'status') { socket.end(JSON.stringify({...helper.health(), adapter:'desktop-world/javascript-v0.1', node:process.version, protocol:helper.hello.protocol, environment_at_startup:helper.hello.environment, write_apps:helper.hello.write_apps, write_app_windows:helper.hello.write_app_windows})+'\n'); return; }
+          if (request.op !== 'exec') throw new Error('Expected exec, status or stop');
           writeSync(sources, JSON.stringify({ at: new Date().toISOString(), code: request.code }) + '\n');
           const work = session.execute(request.code, { signal: controller.signal });
           executions.add(work);
@@ -363,7 +397,7 @@ export async function main(argv) {
     } catch (error) { await stop(); throw error; }
     return;
   }
-  if (command !== 'exec' && command !== 'stop') throw new Error('Expected serve, exec, stop or help.');
+  if (!['exec','stop','status'].includes(command)) throw new Error('Expected serve, exec, status, version, stop or help.');
   const connection = JSON.parse(await readFile(sessionPath, 'utf8'));
   let code = '';
   process.stdin.setEncoding('utf8');

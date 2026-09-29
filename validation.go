@@ -347,11 +347,11 @@ func (r ObserveRequest) Validate() error {
 	if b.MaxResults < 0 || b.MaxResults > 1024 || b.MaxDepth < 0 || b.MaxDepth > 32 || b.MaxVisitedNodes < 0 || b.MaxVisitedNodes > 10000 || b.MaxOutputBytes < 0 || b.MaxOutputBytes > 1<<20 || b.MaxTextRunes < 0 || b.MaxTextRunes > 4096 || b.ReadDeadline < 0 || b.ReadDeadline > 10*time.Second {
 		return Invalid("budget out of range: max_results<=1024, max_depth<=32, max_visited_nodes<=10000, max_output_bytes<=1048576, max_text_runes<=4096, read_deadline_ms<=10000; all must be nonnegative")
 	}
-	allowed := map[string]bool{"role": true, "kind": true, "app": true, "window": true, "parent": true, "relations": true, "name": true, "value_preview": true, "states": true, "bounds": true, "capabilities": true, "lifecycle": true}
+	allowed := map[string]bool{"role": true, "kind": true, "app": true, "window": true, "parent": true, "relations": true, "name": true, "value_preview": true, "uri": true, "states": true, "bounds": true, "capabilities": true, "lifecycle": true}
 	seen := map[string]bool{}
 	for _, f := range r.Fields {
 		if !allowed[f] || seen[f] {
-			return Invalid(fmt.Sprintf("invalid or duplicate field %q; use kind, role, name, value_preview, states, bounds, capabilities, app, window, parent, relations, lifecycle; use read for long text", f))
+			return Invalid(fmt.Sprintf("invalid or duplicate field %q; use kind, role, name, value_preview, uri, states, bounds, capabilities, app, window, parent, relations, lifecycle; use read for long text", f))
 		}
 		seen[f] = true
 	}

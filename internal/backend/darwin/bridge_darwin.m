@@ -200,6 +200,12 @@ static NSString *roleName(NSString *r) {
     @"AXList" : @"list",
     @"AXRow" : @"list_item",
     @"AXTabGroup" : @"tab",
+    @"AXWebArea" : @"document",
+    @"AXImage" : @"image",
+    @"AXOutline" : @"list",
+    @"AXSheet" : @"container",
+    @"AXToolbar" : @"container",
+    @"AXSplitGroup" : @"container",
     @"AXGroup" : @"container",
     @"AXScrollArea" : @"container"
   };
@@ -254,6 +260,8 @@ static NSDictionary *node(DWContext *c, NSString *k) {
   NSString *title = attr(e, kAXTitleAttribute);
   if (![title isKindOfClass:NSString.class] || !title.length)
     title = attr(e, kAXDescriptionAttribute);
+  id nativeURI = attr(e, kAXDocumentAttribute) ?: attr(e, kAXURLAttribute);
+  if ([nativeURI isKindOfClass:NSURL.class]) nativeURI = [nativeURI absoluteString];
   NSString *sub = attr(e, kAXSubroleAttribute);
   BOOL protected = [sub isEqual:@"AXSecureTextField"];
   NSMutableDictionary *states = [NSMutableDictionary dictionary];
@@ -352,6 +360,7 @@ static NSDictionary *node(DWContext *c, NSString *k) {
           : (valueText ? known([valueText
                              substringToIndex:MIN(valueText.length, 384)])
                        : unknown()),
+      @"URI" : protected ? @{@"Status" : @"redacted"} : ([nativeURI isKindOfClass:NSString.class] && [nativeURI length] ? known(nativeURI) : unknown()),
       @"States" : states,
       @"Bounds" : bounds,
       @"Capabilities" : caps,
@@ -581,6 +590,10 @@ static NSDictionary *perform(DWContext *c, NSDictionary *o, DWCancel *cancel) {
     return outcome(@"none", @"permission_denied");
   if ([op isEqual:@"focus"] || [op isEqual:@"invoke"] ||
       [op isEqual:@"set_value"]) {
+    // Writes such as TextEdit Save/Replace need longer than the 250 ms read
+    // budget. A timeout is still unknown and fenced; never replay it. Keep the
+    // native action allowance below the default 2 s engine step deadline.
+    AXUIElementSetMessagingTimeout(e, 1.0);
     AXError rc = kAXErrorFailure;
     if ([op isEqual:@"invoke"])
       rc = AXUIElementPerformAction(e, kAXPressAction);
@@ -607,6 +620,7 @@ static NSDictionary *perform(DWContext *c, NSDictionary *o, DWCancel *cancel) {
         rc = AXUIElementSetAttributeValue(e, kAXFocusedAttribute,
                                           kCFBooleanTrue);
     }
+    AXUIElementSetMessagingTimeout(e, 0.25);
     if (rc == kAXErrorSuccess)
       return outcome(@"complete", nil);
     if (rc == kAXErrorCannotComplete || rc == kAXErrorFailure)

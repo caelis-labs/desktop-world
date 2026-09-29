@@ -125,7 +125,7 @@ func typeSchema(t reflect.Type) schema {
 		require("scope")
 		enum("projection", "summary", "outline", "detail")
 		field("projection")["description"] = "Start summary with fields [name,role]; inspect one returned window using outline. Increase depth only as needed."
-		field("fields")["items"] = schema{"type": "string", "enum": []string{"kind", "role", "name", "value_preview", "states", "bounds", "capabilities", "app", "window", "parent", "relations", "lifecycle"}}
+		field("fields")["items"] = schema{"type": "string", "enum": []string{"kind", "role", "name", "value_preview", "uri", "states", "bounds", "capabilities", "app", "window", "parent", "relations", "lifecycle"}}
 		field("fields")["uniqueItems"] = true
 	case reflect.TypeOf(dw.TextRequest{}):
 		require("target")

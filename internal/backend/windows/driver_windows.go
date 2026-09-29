@@ -205,7 +205,7 @@ func (d *Driver) node(ctx context.Context, k backend.Key) (backend.Node, error) 
 	defer cached.release()
 	control, _ := intProp(cached, 53)
 	name, nameErr := stringProp(cached, 55)
-	o := dw.Object{Kind: dw.KindUI, Role: role(control), Lifecycle: dw.LifeLive, Name: dw.Unknown[string](), States: map[string]dw.Fact[bool]{"focused": boolProp(cached, 58), "enabled": boolProp(cached, 60), "protected": boolProp(cached, 67), "offscreen": boolProp(cached, 70)}}
+	o := dw.Object{Kind: dw.KindUI, Role: role(control), URI: dw.Fact[string]{Status: dw.FactUnsupported}, Lifecycle: dw.LifeLive, Name: dw.Unknown[string](), States: map[string]dw.Fact[bool]{"focused": boolProp(cached, 58), "enabled": boolProp(cached, 60), "protected": boolProp(cached, 67), "offscreen": boolProp(cached, 70)}}
 	if e.hwnd != 0 {
 		o.Kind = dw.KindWindow
 	}

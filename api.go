@@ -88,6 +88,7 @@ type Object struct {
 	Relations              []Relation
 	Name                   Fact[string]
 	ValuePreview           Fact[string]
+	URI                    Fact[string] // Native document/link URL when exposed; not inferred from title.
 	States                 map[string]Fact[bool]
 	Bounds                 Fact[Bounds]
 	Capabilities           []Capability

@@ -267,6 +267,7 @@ func (a *actor) cached(r dw.ObserveRequest) ([]dw.Object, dw.Coverage) {
 			out = append(out, copyOf(rec.object))
 		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Ref < out[j].Ref })
 	return out, dw.Coverage{Scope: r.Scope, Fields: r.Fields, MaxDepth: r.Budget.MaxDepth, Complete: false, Dirty: true}
 }
 func (a *actor) objectInQueryLocked(o dw.Object, r dw.ObserveRequest) bool {
@@ -328,6 +329,8 @@ func project(o dw.Object, r dw.ObserveRequest) dw.Object {
 			out.Name = o.Name
 		case "value_preview":
 			out.ValuePreview = o.ValuePreview
+		case "uri":
+			out.URI = o.URI
 		case "states":
 			out.States = o.States
 		case "bounds":
@@ -389,7 +392,13 @@ func (a *actor) selectObjectsLocked(all []dw.Object, r dw.ObserveRequest) []dw.O
 		}
 		out = append(out, p)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Ref < out[j].Ref })
+	// Put explicitly requested roots first, then retain provider traversal order.
+	// Lexicographic sorting of opaque Refs used to hide the root on later pages.
+	roots := map[dw.Ref]bool{}
+	for _, ref := range r.Scope.Refs {
+		roots[ref] = true
+	}
+	sort.SliceStable(out, func(i, j int) bool { return roots[out[i].Ref] && !roots[out[j].Ref] })
 	return out
 }
 func (a *actor) seatLocked() dw.SeatState {

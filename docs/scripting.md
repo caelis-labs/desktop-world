@@ -14,6 +14,8 @@ SDK 是唯一桌面执行内核，helper 管理原生 World；`clients/javascrip
 node clients/javascript/desktop.mjs serve --host host.json
 ```
 
+`node clients/javascript/desktop.mjs status`（或 doctor）读取现有会话健康和**启动时**权限，不新建 World；环境变化后不能把启动信息当成实时权限。`--version` 读取 adapter/Node 版本，helper 的 `version` 还给出可获得的构建 revision。
+
 保持该进程运行。使用标准管道启动 helper，避免 PTY 行截断。会话文件、socket 和完整日志限制本机访问；macOS/Linux 使用本地 Unix socket，无 TCP 端口。退出后不自动重启，旧 Ref 失效。Windows named-pipe 路径尚未实机验证。
 
 ## 每个模型回合执行一段脚本
@@ -25,6 +27,10 @@ state.inventory = inventory;
 print(dw.list(inventory, ['kind','name','app']));
 JS
 ```
+
+`uri` 可按 fields 请求原生文档/链接 URL，用于区分同名文档；缺失时为 unknown，Windows 当前为 unsupported。完整 URI 不按文本预览长度截断，但仍受总输出字节预算约束。它不能替代 Ref 身份或成为任意原生调用入口。
+
+`dw.observe(appOrWindowRef)` 是 `scope:{refs:[ref]}` 的 summary 简写；不使用 `scope.apps` 或 `scope.windows`。
 
 脚本体支持 `await`、变量、分支和循环。下一次 exec 可继续使用 `state`；局部 const/let 不跨脚本保留。用 `node .../desktop.mjs help` 获取精简接口，无需先加载完整原生 act schema。
 
@@ -42,9 +48,11 @@ print(dw.rows(after, ['name','states.enabled','states.focused']));
 
 `dw.focus` 的目标是 window 或支持 focus 的 UI，不接受 application；先选择实际窗口。
 
+`dw.next(ob)` 使用保存的原查询获取原生下一页，避免手抄 continuation 或修改 budget 引发 query mismatch；检查 `ob.coverage.continuation`。这与 `dw.list` 本地展示翻页不同。outline 默认只请求 name/role/value_preview；需要 states/capabilities 时显式加 fields。find 默认搜索深度 12，仍受原生访问预算限制。
+
 `dw.one` 要求覆盖完整、未截断且无缺失来源；只匹配到一个结果但覆盖不全时不能当作唯一。`dw.rows` 保留 Ref、false、空字符串与未知状态。它支持嵌套字段呈现，**不声称降低后端属性读取成本**。更少原生读取需使用 observe 的 scope/fields/match/budget。
 
-`dw.focused(appRef)` 每次重新观察当前焦点；应用级 scope 不限制为某个窗口，必要时还应检查新对话框的对象关系。原生执行器继续做实时权限、焦点、命中、身份和生命周期检查。不要缓存一次焦点跨多个新对话框使用。
+`dw.focused(appRef)` 每次重新观察当前焦点，并验证它属于指定前台应用；窗口 scope 则要求前台窗口完全匹配，避免把另一个已授权窗口的焦点误当目标。应用级 scope 不限制为某个窗口，必要时还应检查新对话框的对象关系。原生执行器继续做实时权限、焦点、命中、身份和生命周期检查。不要缓存一次焦点跨多个新对话框使用。
 
 界面切换可能短暂返回不完整树。用 `await dw.waitFor(observeArgs, ob => 明确的就绪条件, {timeout_ms:3000})` 在脚本内等待实际条件；它仅重读，不重放动作，读调用仍计入预算。避免每次等待都让模型往返或把短暂空树当成“控件不存在”。
 
@@ -55,6 +63,8 @@ print(dw.rows(after, ['name','states.enabled','states.focused']));
 - `actions`：强制返回 run_id、outcome、delivery/verification 分布与失败步骤。completed + not_requested 仅证明分派，不是业务结果已确认；细节可用 get。
 - `error`：错误、partial/unknown/pending 的 act 默认阻断当前调用链。即使脚本 catch 了错误，后续桌面调用也不发送。不自动重试或恢复绑定。
 - `metrics`：分别计量 helper 返回字节、print 字节、调用数和耗时；日志另外记录整个模型响应字节。字节不是 token。
+
+若收据 `seat_health=fenced`，输入已阻断。可查询原 run_id 并进行只读观察；observe/cancel/wait 不能手动解除 fence。迟到的原生调用若被确认安全结束，内核可能自行恢复；若仍是 terminal unknown，应停止、保留收据并让宿主核对实际副作用。不要通过重启或新请求 ID 绕过。
 
 一个脚本最多 32 次调用、8 KiB print 输出、64 KiB 源码；异步期限 60 秒，初始同步执行限 1 秒。期限到了停止后续调用，等待已经发出的 helper 请求结束并保留收据。Node vm 不是安全边界，恶意代码及 await 后的无限同步循环可能阻塞宿主，生产宿主应另加进程 watchdog。调用串行，包括 Promise.all；不要把同一桌面的写入并行化。未 await 的调用可能在脚本退出时被拒绝，因此必须 await。
 

@@ -93,7 +93,12 @@ func token(prefix string) string {
 	}
 	return prefix + hex.EncodeToString(b[:])
 }
-func fault(code string) *dw.Fault { return dw.NewFault(code, code, "reobserve") }
+func fault(code string) *dw.Fault {
+	if code == "seat_fenced" {
+		return dw.NewFault(code, "Native delivery remains unresolved; input is disabled. Inspect the original receipt. Observation/cancel cannot reset the fence. If the receipt remains terminal unknown, stop and let the host reconcile effects; do not restart or replay automatically.", "never_automatically")
+	}
+	return dw.NewFault(code, code, "reobserve")
+}
 func asFault(e error) *dw.Fault {
 	if e == nil {
 		return nil
@@ -227,6 +232,7 @@ func (w *World) updateEnvironment(e dw.Environment) {
 			}
 			for _, r := range w.objects {
 				r.object.ValuePreview = dw.Fact[string]{Status: dw.FactRedacted}
+				r.object.URI = dw.Fact[string]{Status: dw.FactRedacted}
 				r.object.Name = dw.Fact[string]{Status: dw.FactRedacted}
 			}
 		}
@@ -362,6 +368,7 @@ func material(o dw.Object) dw.Object {
 	o.GeometryVersion = 0
 	o.Name.SampledAt = time.Time{}
 	o.ValuePreview.SampledAt = time.Time{}
+	o.URI.SampledAt = time.Time{}
 	o.Bounds.SampledAt = time.Time{}
 	states := map[string]dw.Fact[bool]{}
 	for k, v := range o.States {
@@ -390,6 +397,7 @@ func (w *World) commitLocked(n backend.Node) dw.Ref {
 	}
 	if v := o.States["protected"]; v.Status == dw.FactKnown && v.Value != nil && *v.Value {
 		o.ValuePreview = dw.Fact[string]{Status: dw.FactRedacted}
+		o.URI = dw.Fact[string]{Status: dw.FactRedacted}
 	}
 	o.Version = old.Version
 	o.GeometryVersion = old.GeometryVersion

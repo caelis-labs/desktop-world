@@ -108,3 +108,18 @@ MVP 聚焦调用返回成本与易用性，后台输入隔离延期。JavaScript
 24 段脚本、27 次原生调用，执行耗时之和 11.608 秒；helper 回复 168,507 B，整个脚本回复 31,886 B。11 段脚本发生错误：打印超限 3、Fact 类型误用 2、能力不支持 1、焦点验证超时 3、需要用户焦点 1、目标不可命中 1。实际模型 token 未取得。准备阶段的 clipboard/Dock 故障发生于发送任务之前，单独记录，不混入 Agent 任务耗时。
 
 修复：实时前台/GUI 进程与生命周期查询不依赖主 RunLoop；`dw.list` 对已保存观察按行和字节分页，保留 next_offset，避免打印超限后重新观察；`dw.value` 接受普通字段且仍拒绝未知事实；help 明确标准角色与窗口焦点，prompt 改为通用文档按需读取。10 项 JavaScript 契约测试通过。真实持续 helper 在 Finder 回归窗口与 TextEdit 测试文档间连续 4 次切换，9 次调用的焦点验证均通过。原始证据在 `artifacts/usability/antigravity-app-01/` 与 `native-focus-live-03.jsonl`，首轮保持原冻结工具与失败结果。
+
+
+### Antigravity App 第二轮（冻结 09d471e）
+
+仍通过 App 的新项目/新对话运行，模型相同；首次有效观察 79.462 秒、首次完成动作 84.346 秒（评估者发送起点）。Agent 自报起点晚约 5 秒，报告数值因此略低。61 段脚本、75 次 helper 请求（包含收据查询和同 ID 去重恢复，不能理解为 75 个原生输入）；14 段脚本报错。helper 响应 263,094 B，print 66,825 B，**完整脚本响应 100,175 B**。后者才是包含强制覆盖/收据元数据的模型工具输出；仍不包含宿主包装、提示词、推理，也不是实际 token。API 耗时约 13.6 秒，其他壁钟时间不能全部归为模型推理。
+
+约 9 分钟后评估者终止：TextEdit 的“替换” AXPress 在约 294ms 返回 native_timeout，未知结果正确阻断了后续输入，但只读查询与尝试恢复又消耗数分钟。任务 0/3、独立文件断言 2/13，仅保留项通过。Agent 自报无压缩、零接入代码、零构建、零重启；实际 token 不可得。追加一次仅写报告的 App 消息发生在 helper 停止之后，没有提供任务操作提示。
+
+环境问题也计入失败分析：初始 TextEdit 残留基线同名文档，Agent 使用了旧目录的已完成文档，未确认实际任务路径。外部报告把它列为 partial，但 evaluator 不认可为本轮完成；旧基线文档正文仍保留。下一轮须清理已经确认保存的旧测试窗口。正式桌面会有重名文件，故同时新增按需 `uri` 字段：macOS 从原生 AXDocument/AXURL 读取，不按标题猜路径；Windows 当前报告 unsupported。
+
+本轮后修复：`dw.next` 保留原查询进行原生分页；outline 默认减少 states/capabilities，find 深度增至 12；显式根节点放在第一页，其余保留原生遍历顺序；聚焦助手拒绝请求范围外焦点；status/doctor 与 version 消除入口猜测，help 给出 scope/键盘/分页/终止 fence 的完整最小约定。错误提示明确终止未知状态不能靠重新观察恢复；不自动解除 fence 或重放。
+
+AX 写动作不再套用 250ms 读超时，独立设为 1 秒（仍在默认 2 秒 step 限额内）。隔离 TextEdit 回归以两个新文件执行另存为和真实“替换”，该调用耗时 **314ms**，收据 completed、seat ready，独立读文件确认目标与源逐字相同。开发者回归不能替代下一轮冷启动成绩。
+
+证据：`artifacts/usability/antigravity-app-02/{participant/harness,evaluator}`，`artifacts/usability/save-replace-regression/verification.json`。运行 `python3 scripts/analyze-script-eval.py <run>` 可重算每层字节、调用与时序，不输出 UI 内容或代码。

@@ -142,3 +142,41 @@ test('value accepts primitive metadata but unknown and redacted facts still fail
     assert.equal((await session.execute(`print(dw.value({status:'${status}'}));`)).error.code,'fact_not_known');
   }
 });
+
+
+test('summary shorthand scopes the observed Ref without guessing an app field', async () => {
+  const session = createSession(async request => {
+    assert.deepEqual(request.args.scope,{refs:['app-ref']});
+    assert.equal(request.args.projection,'summary');
+    return {result:observed};
+  });
+  assert.equal((await session.execute("print(dw.list(await dw.observe('app-ref')));")).error,undefined);
+});
+
+
+test('focused convenience never retargets keyboard into another authorized window or app', async () => {
+  for (const kind of ['application','window']) {
+    const session = createSession(async()=>({result:{objects:[{ref:'scope',kind}],seat:{focused_object:{known:'other-field'},foreground_application:{known:'other-app'},foreground_window:{known:'other-window'}}}}));
+    const result=await session.execute("await dw.press(await dw.focused('scope'),'A',['primary']);");
+    assert.equal(result.error.code,'focus_outside_scope');
+    assert.equal(result.metrics.calls,1);
+    assert.equal(result.actions,undefined);
+  }
+  const session=createSession(async()=>({result:{objects:[{ref:'scope',kind:'window'}],seat:{focused_object:{known:'field'},foreground_window:{known:'scope'}}}}));
+  assert.deepEqual((await session.execute("print(await dw.focused('scope'));")).outputs,['field']);
+});
+
+
+test('next retains native query across scripts and never guesses continuation arguments', async () => {
+  const requests=[];
+  const session=createSession(async req=>{
+    requests.push(req.args);
+    return {result:{...observed, coverage:{complete:requests.length>1,truncated:requests.length===1,...(requests.length===1?{continuation:'page2'}:{})}}};
+  });
+  await session.execute("state.ob=await dw.outline('win',{budget:{max_depth:9},fields:['name']});");
+  const next=await session.execute("state.ob=await dw.next(state.ob);print(dw.list(state.ob));");
+  assert.equal(next.error,undefined);
+  assert.deepEqual(requests[1],{...requests[0],continuation:'page2'});
+  assert.ok((await session.execute('await dw.next(state.ob);')).error);
+  assert.equal(requests.length,2);
+});

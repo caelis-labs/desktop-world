@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
+	"runtime/debug"
 	"time"
 
 	"github.com/caelis-labs/desktop-world/internal/helper"
@@ -17,6 +19,7 @@ import (
 
 const usage = `Desktop World — native desktop operations, persistent JSON sessions.
 
+desktop-world version                Protocol, build revision and platform; no desktop access.
 desktop-world doctor                 Read-only permission/environment probe; never prompts.
 desktop-world schema [operation]     JSON request schema; no native desktop access.
 desktop-world serve [host options]   New World for the lifetime of this stdio process.
@@ -63,6 +66,17 @@ func run() error {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "help" {
 		fmt.Print(usage)
 		return nil
+	}
+	if args[0] == "version" || args[0] == "--version" || args[0] == "-v" {
+		v := map[string]any{"protocol": helper.Version, "go": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH}
+		if info, ok := debug.ReadBuildInfo(); ok {
+			for _, setting := range info.Settings {
+				if setting.Key == "vcs.revision" || setting.Key == "vcs.modified" || setting.Key == "vcs.time" {
+					v[setting.Key] = setting.Value
+				}
+			}
+		}
+		return json.NewEncoder(os.Stdout).Encode(v)
 	}
 	if args[0] == "schema" {
 		var s any = helper.Schemas()

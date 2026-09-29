@@ -2,7 +2,7 @@
 
 不要把本文件、oracle 或基线盲测报告交给受试 Agent。只打开 participant 目录作为其工作区，粘贴 participant/PROMPT.md。两包分离是实验约束，不是 OS 安全沙箱。
 
-在新鲜副本上开始。宿主预先打开 Finder 到 participant/workspace、启动 TextEdit，并在 Chrome 新开一个本轮标签页（SendInput 文档）。不预先整理文件、修改文本或填写输出。记录准备耗时但不计 Agent 接入耗时。原生 UI 语言、屏幕布局和权限宿主应与基线一致；差异必须注明。Antigravity 的 OS 授权与 Codex 不一定相同，单独记为环境成本。
+在新鲜副本上开始。关闭已确认保存的旧评测同名 TextEdit 文档；保留用户其他工作，不丢弃任何未保存改动。若存在不可关闭的同名文档，将干扰作为环境条件记录。宿主预先打开 Finder 到 participant/workspace、启动 TextEdit，并在 Chrome 新开一个本轮标签页（SendInput 文档）。不预先整理文件、修改文本或填写输出。记录准备耗时但不计 Agent 接入耗时。原生 UI 语言、屏幕布局和权限宿主应与基线一致；差异必须注明。Antigravity 的 OS 授权与 Codex 不一定相同，单独记为环境成本。
 
 host.json 默认仅授权本机观察到的“访达”和“文本编辑”。若 Chrome 名称唯一，可加入 --write-app Chrome；存在多个同名实例时，由可信宿主只读 observe summary 后，加入 --write-app-window 和测试窗口精确标题。它授权该窗口所属应用，不是单标签页沙箱。需要截图时由宿主给 --assets-dir harness/captures。不要让 Agent 为恢复方便自行选择 desktop-write/raw-input。
 

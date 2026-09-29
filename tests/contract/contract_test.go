@@ -199,7 +199,7 @@ func TestUnknownNativeCallFencesAndNeverReplays(t *testing.T) {
 		t.Fatalf("%+v %v", r, e)
 	}
 	r2, e := h.a.Execute(ctx, h.plan("blocked", dw.Step{ID: "invoke", Op: "invoke", Target: target(h.refs["提交"])}))
-	if code(e) != "seat_fenced" || r2.Outcome != "stopped" {
+	if code(e) != "seat_fenced" || r2.Outcome != "stopped" || r2.Fault.RetryClass != "never_automatically" {
 		t.Fatalf("%+v %v", r2, e)
 	}
 	close(block)
@@ -532,5 +532,45 @@ func TestTextVersionDoesNotExposeContentHash(t *testing.T) {
 	two, e := h.a.ReadText(ctx, dw.TextRequest{Target: h.refs["内容"]})
 	if e != nil || two.TextVersion != 2 {
 		t.Fatalf("%+v %v", two, e)
+	}
+}
+
+func TestNativeTraversalRootSurvivesFirstPageAndURIIsOptIn(t *testing.T) {
+	h := setup(t)
+	for i := 0; i < 30; i++ {
+		h.f.Add(dwtest.Node{ID: fmt.Sprintf("extra-%d", i), Parent: "window", App: "app", Window: "window", Object: dw.Object{Kind: dw.KindUI, Role: "text", Name: dw.Known(fmt.Sprint(i))}})
+	}
+	u := "file:///isolated/workspace/" + strings.Repeat("long-name-", 30) + ".txt"
+	h.f.Update("window", func(n *dwtest.Node) { n.Object.URI = dw.Known(u) })
+	r := dw.ObserveRequest{Scope: dw.Scope{Refs: []dw.Ref{h.refs["Desktop World Fixture"]}}, Projection: dw.ProjectionOutline, Fields: []string{"name", "uri"}, Budget: dw.Budget{MaxResults: 1, MaxTextRunes: 10}}
+	ob, err := h.a.Observe(ctx, r)
+	if err != nil || len(ob.Objects) != 1 || ob.Objects[0].Ref != h.refs["Desktop World Fixture"] {
+		t.Fatalf("root must be first: %+v %v", ob, err)
+	}
+	if ob.Objects[0].URI.Value == nil || *ob.Objects[0].URI.Value != u {
+		t.Fatal("URI was cropped or lost")
+	}
+	seen := map[dw.Ref]bool{ob.Objects[0].Ref: true}
+	for ob.Coverage.Continuation != "" {
+		r.Continuation = ob.Coverage.Continuation
+		ob, err = h.a.Observe(ctx, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, o := range ob.Objects {
+			if seen[o.Ref] {
+				t.Fatal("duplicate page ref")
+			}
+			seen[o.Ref] = true
+		}
+	}
+	if len(seen) < 31 {
+		t.Fatal("lost descendants", len(seen))
+	}
+	r.Continuation = ""
+	r.Fields = []string{"name"}
+	ob, err = h.a.Observe(ctx, r)
+	if err != nil || ob.Objects[0].URI.Status != dw.FactUnrequested {
+		t.Fatal("URI must be opt-in", err)
 	}
 }

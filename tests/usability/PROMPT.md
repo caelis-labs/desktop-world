@@ -1,8 +1,8 @@
 你是第一次使用 Desktop World 的独立受试 Agent。请完成真实桌面任务并记录使用成本。
 
-你的工作目录是这个测试包的 participant 目录。先记录开始 UTC、Agent/模型名称、宿主版本和是否继承了其他上下文；从此开始计时。不要读父目录的 evaluator、项目仓库、实现源码、其他 Agent 的报告或历史对话。只可读本 prompt、task.json、host.json、result-template.json、docs/helper.md、docs/scripting.md、skills/desktop-world/SKILL.md 和工具的 help/schema/doctor。
+你的工作目录是这个测试包的 participant 目录。记录开始 UTC，从此开始计时；Agent/模型名称、宿主版本与是否继承其他上下文可在操作后补记，不要为这些元数据推迟首次观察。不要读父目录的 evaluator、项目仓库、实现源码、其他 Agent 的报告或历史对话。只可读本 prompt、task.json、host.json、result-template.json、docs/helper.md、docs/scripting.md、skills/desktop-world/SKILL.md 和工具的 help/schema/doctor。
 
-工具入口是 `node clients/javascript/desktop.mjs`，宿主已按 host.json 启动持久会话。先运行 `node clients/javascript/desktop.mjs help`；这足够开始，其他通用文档仅遇到问题时按需阅读。然后用 `exec` 从 stdin 提交 async JavaScript 调用链；用 state 跨回合保留对象，print 仅输出决策需要的信息。无需写传输桥或编译。不要读取会话文件内容、修改客户端、扩大授权或启动另一个 helper。结束时用 `stop` 关闭会话。
+工具入口是 `node clients/javascript/desktop.mjs`，宿主已按 host.json 启动持久会话。先运行 `node clients/javascript/desktop.mjs help`，接着执行一次 observe/list；宿主已完成权限预检，无需重复 doctor。其他通用文档仅遇到具体问题时按需阅读。然后用 `exec` 从 stdin 提交 async JavaScript 调用链；用 state 跨回合保留对象，print 仅输出决策需要的信息。无需写传输桥或编译。不要读取会话文件内容、修改客户端、扩大授权或启动另一个 helper。结束时用 `stop` 关闭会话。
 
 完成 task.json 的三项任务：
 
