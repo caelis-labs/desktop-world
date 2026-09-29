@@ -10,12 +10,15 @@ import (
 	"os/signal"
 	"runtime"
 	"runtime/debug"
+	"syscall"
 	"time"
 
 	"github.com/caelis-labs/desktop-world/internal/helper"
 	"github.com/caelis-labs/desktop-world/local"
 	"github.com/caelis-labs/desktop-world/protocol"
 )
+
+var releaseVersion = "dev"
 
 const usage = `Desktop World — native desktop operations, persistent JSON sessions.
 
@@ -32,6 +35,8 @@ serve host options:
   --assets-dir PATH      Enable capture and save PNG files in this host-chosen directory.
   --audit PATH           Create a new metadata-only JSONL audit (no UI text/input payloads).
   --full-output          Typed wire facts and exact timestamps; default is compact UI facts.
+  --host-control         Bot-managed mode: private inherited request/reply pipes on FD 3/4.
+                         No startup write flags. Host controls application grants per turn.
 
 Send one JSON object per line; receive hello, then {id,protocol,world,result,error}.
 Supported verbs: observe, read, sync, act, capture, get, cancel.
@@ -68,7 +73,7 @@ func run() error {
 		return nil
 	}
 	if args[0] == "version" || args[0] == "--version" || args[0] == "-v" {
-		v := map[string]any{"protocol": helper.Version, "go": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH}
+		v := map[string]any{"version": releaseVersion, "protocol": helper.Version, "host_control": helper.ControlVersion, "go": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH}
 		if info, ok := debug.ReadBuildInfo(); ok {
 			for _, setting := range info.Settings {
 				if setting.Key == "vcs.revision" || setting.Key == "vcs.modified" || setting.Key == "vcs.time" {
@@ -107,6 +112,7 @@ func run() error {
 	f.StringVar(&c.AssetsDir, "assets-dir", "", "capture destination")
 	f.StringVar(&auditPath, "audit", "", "new audit file")
 	f.BoolVar(&c.FullOutput, "full-output", false, "retain typed wire facts and per-object timestamps")
+	f.BoolVar(&c.Managed, "host-control", false, "trusted host control pipes on inherited FD 3/4")
 	if err := f.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -122,8 +128,25 @@ func run() error {
 	if c.DesktopWrite && len(apps)+len(appWindows) > 0 {
 		return fmt.Errorf("choose write-app scopes or desktop-write, not both")
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	var controlIn, controlOut *os.File
+	if c.Managed {
+		if runtime.GOOS == "windows" {
+			return fmt.Errorf("inherited host-control pipes currently require Unix")
+		}
+		controlIn, controlOut = os.NewFile(3, "host-control-in"), os.NewFile(4, "host-control-out")
+		for _, f := range []*os.File{controlIn, controlOut} {
+			if f == nil {
+				return fmt.Errorf("host-control requires inherited pipes")
+			}
+			info, err := f.Stat()
+			if err != nil || info.Mode()&os.ModeNamedPipe == 0 {
+				return fmt.Errorf("host-control requires inherited pipes on FD 3 and 4")
+			}
+			defer f.Close()
+		}
+	}
 	openCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	w, err := local.Open(openCtx, local.Options{})
 	cancel()
@@ -171,5 +194,13 @@ func run() error {
 	// Closing stdin on a signal unblocks the scanner, then Serve cancels calls
 	// and the World gets a bounded opportunity to release owned input.
 	go func() { <-ctx.Done(); _ = os.Stdin.Close() }()
+	if c.Managed {
+		go func() {
+			if err := server.ServeControl(ctx, controlIn, controlOut); err != nil {
+				fmt.Fprintln(os.Stderr, "host control:", err)
+			}
+			stop() // Loss of the private owner channel stops the data server too.
+		}()
+	}
 	return server.Serve(ctx, os.Stdin, os.Stdout)
 }

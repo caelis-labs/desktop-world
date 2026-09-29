@@ -1,6 +1,6 @@
-# Helper 发行实验
+# Helper 预发布
 
-`desktop-world` 是 SDK 的 stdio 宿主，复用 `local.Open`、Actor、执行器和协议。它不是另一个实现，也不是 MCP 服务；MCP/Agent 工具宿主可在其外层映射调用。当前用于验证分发与接入成本，尚未签名、公证或正式发布。
+`desktop-world` 是 SDK 的 stdio 宿主，复用 `local.Open`、Actor、执行器和协议。它不是另一个实现，也不是 MCP 服务；MCP/Agent 工具宿主可在其外层映射调用。当前发布 macOS arm64 开发联调 alpha，采用 ad-hoc 签名，未经 Developer ID 签名或公证。Bot 使用 [managed host 接入](bot-integration.md)；下面的启动授权方式仍供通用 Agent 开发验证使用。
 
 通用 Agent 优先使用随包的 [JavaScript 调用链入口](scripting.md)：持久会话、跨回合 state、观察与动作组合、选择性 print 和自动计量。下面的 NDJSON 是底层协议，不要求每个 Agent 自行编写桥接器。
 

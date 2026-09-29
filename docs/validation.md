@@ -64,3 +64,13 @@ fixture 日志总计：ready 1、text_changed 20、key_down 21、submit 2、poin
 Windows UIA / SendInput / GDI 后端和独立 Win32 fixture 已实现并通过交叉构建及静态检查，但没有 Windows 交互式桌面运行证据。macOS 的本轮证据覆盖当前 arm64 主机上的 AppKit 与 Chrome fixture，不能推导最低系统版本、多屏混合缩放、其他浏览器 / Electron 或 Wails 宿主均已通过。
 
 原生变化通知目前采用刷新和 Watch 轮询；AXObserver / UIA event invalidation 及其余正式发布条件见 [实现边界](implementation.md#尚未完成的正式发布条件)。
+
+## 2026-09-30：Bot managed helper 收尾验证
+
+在同一台 macOS arm64 主机上，`examples/bot-host` 通过独立 Go host → 私有控制管道 → helper → AppKit 原生应用完成 Unicode 设值和 Enter 提交。活动回合先观察精确应用 Ref，再通过宿主 Grant 授权；相同请求返回相同 RunID，结束回合后的新输入返回 `turn_expired`，原回复仍可 Reconcile。
+
+应用自身日志 `alpha-native-a.jsonl` 记录 ready 1、text_changed 1、key_down 1、submit 1；提交内容为 `Caelis Bot alpha 联调 🌍 20260930-A`。另用 Computer Use 独立读取界面，确认相同文本和 `submitted:1`。日志保留在本机忽略的 artifacts，公开发布不包含桌面原始日志。
+
+新增回归覆盖：跨应用拒绝、模型数据通道不能扩权、回合结束撤销/取消、控制 EOF 撤销、不同回合请求隔离、原回复去重与恢复、输出预算及未知副作用保留。Go host 保留 typed wire，模型输出另行 compact。完整检查通过 `scripts/check.sh`（race、vet、Windows 交叉构建/静态检查、9 个协议例子及 13 个 JavaScript 测试）。
+
+这证明 helper/Go host 接入边界可用于 alpha 联调，不等于实际 caelis-bot/Wails 进程、Windows 真实桌面或易用性目标已经验收。上一轮 Antigravity App 盲测的任务结果、成本和未达目标继续以 [可用性记录](usability-evaluation.md) 为准。

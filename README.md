@@ -4,7 +4,7 @@
 
 MVP 优先验证 Token 效率与易用性。通用 Agent 推荐 [JavaScript 调用链](docs/scripting.md)：持久会话中组合观察与动作、中间数据本地保留、按需 print、强制呈现覆盖范围和失败；后台输入隔离不属于首版验收范围。
 
-**当前状态：实验性实现，尚未达到 SPEC 的双平台正式发布门槛。** macOS 原生键鼠、语义操作、截图和生命周期路径已在 AppKit fixture 上运行，并通过 Chrome 原生输入与 Canvas 负面验收；Windows 后端已有实现、交叉编译与静态检查，仍需 Windows 交互式桌面验收。原始设计保留在 [SPEC.md](SPEC.md)，实现边界见 [docs/implementation.md](docs/implementation.md)，实际运行证据见 [docs/validation.md](docs/validation.md)。
+**当前状态：`v0.1.0-alpha.1`，供 caelis-bot 开发联调的首个预发布，尚未达到 SPEC 的双平台正式发布门槛。** macOS 原生键鼠、语义操作、截图和生命周期路径已在 AppKit fixture 上运行，并通过 Chrome 原生输入与 Canvas 负面验收；Windows 后端已有实现、交叉编译与静态检查，仍需 Windows 交互式桌面验收。原始设计保留在 [SPEC.md](SPEC.md)，实现边界见 [docs/implementation.md](docs/implementation.md)，实际运行证据见 [docs/validation.md](docs/validation.md)。
 
 ## 快速运行
 
@@ -31,9 +31,11 @@ go run ./cmd/dw-inspect
 - Windows 11 amd64，纯 Go 原生绑定，无 CGO 依赖。COM 在固定 MTA 工作线程中初始化和释放；不会修改进程全局 DPI 模式。
 - 其他平台可运行协议和 fixture；`local.Open` 明确返回 `platform_unsupported`。
 
-模块路径：`github.com/caelis-labs/desktop-world`。当前只是本地仓库，未发布远程版本。
+模块路径：`github.com/caelis-labs/desktop-world`。版本固定为 `v0.1.0-alpha.1`；下载与校验见 [Release](https://github.com/caelis-labs/desktop-world/releases/tag/v0.1.0-alpha.1)。公开预发布暂不授予开源许可，见 [NOTICE](NOTICE)。
 
 ## 接入
+
+caelis-bot 推荐使用 **Go `host` SDK + 独立 helper**：支持独立控制通道、按回合应用授权、停止、原收据恢复和 32 KiB 模型输出。先读 [简短交接](HANDOFF.md) 和 [Bot 接入说明](docs/bot-integration.md)。下面是直接嵌入 Go library 的方式。
 
 ```go
 ctx := context.Background()

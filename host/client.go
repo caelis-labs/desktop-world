@@ -1,0 +1,382 @@
+// Package host supervises the private Desktop World helper. Only trusted Bot
+// host code gets this client; model tool arguments must never select a turn,
+// authorize an app, choose an executable, or receive the control pipe.
+package host
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"sync"
+	"time"
+
+	dw "github.com/caelis-labs/desktop-world"
+	"github.com/caelis-labs/desktop-world/internal/helper"
+	"github.com/caelis-labs/desktop-world/protocol"
+)
+
+type Options struct {
+	Executable string
+	AssetsDir  string
+	AuditPath  string
+	Stderr     io.Writer
+}
+
+type Reply struct {
+	ID       string          `json:"id"`
+	Protocol string          `json:"protocol"`
+	World    dw.Epoch        `json:"world"`
+	Result   json.RawMessage `json:"result,omitempty"`
+	Error    *dw.Fault       `json:"error,omitempty"`
+}
+
+type Hello struct {
+	Type        string         `json:"type"`
+	Protocol    string         `json:"protocol"`
+	Environment dw.Environment `json:"environment"`
+	Managed     bool           `json:"managed"`
+}
+
+type exchange struct {
+	body     []byte
+	done     chan struct{}
+	reply    Reply
+	err      error
+	complete bool
+}
+
+type peer struct {
+	mu      sync.Mutex
+	writeMu sync.Mutex
+	input   io.ReadCloser
+	output  io.WriteCloser
+	records map[string]*exchange
+	broken  error
+}
+
+func newPeer(in io.ReadCloser, out io.WriteCloser) *peer {
+	return &peer{input: in, output: out, records: map[string]*exchange{}}
+}
+func (p *peer) finish(id string, reply Reply, err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if x := p.records[id]; x != nil && !x.complete {
+		x.reply, x.err, x.complete = reply, err, true
+		close(x.done)
+	}
+}
+func (p *peer) fail(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.broken == nil {
+		p.broken = err
+	}
+	for _, x := range p.records {
+		if !x.complete {
+			x.err, x.complete = p.broken, true
+			close(x.done)
+		}
+	}
+}
+func (p *peer) read(scan *bufio.Scanner) {
+	for scan.Scan() {
+		var reply Reply
+		if err := protocol.Decode(scan.Bytes(), &reply); err != nil || reply.ID == "" {
+			p.fail(errors.New("invalid helper frame; effects may be unknown"))
+			return
+		}
+		p.finish(reply.ID, reply, nil)
+	}
+	err := scan.Err()
+	if err == nil {
+		err = io.EOF
+	}
+	p.fail(fmt.Errorf("helper disconnected; effects may be unknown: %w", err))
+}
+func (p *peer) submit(id string, request any) (*exchange, error) {
+	body, err := protocol.Marshal(request)
+	if err != nil {
+		return nil, err
+	}
+	p.mu.Lock()
+	if x := p.records[id]; x != nil {
+		p.mu.Unlock()
+		if string(x.body) != string(body) {
+			return nil, errors.New("request conflict: reuse ID only with identical arguments")
+		}
+		return x, nil
+	}
+	if p.broken != nil {
+		err = p.broken
+		p.mu.Unlock()
+		return nil, err
+	}
+	if len(p.records) >= 4096 {
+		p.mu.Unlock()
+		return nil, errors.New("host session record limit reached")
+	}
+	x := &exchange{body: body, done: make(chan struct{})}
+	p.records[id] = x
+	p.mu.Unlock()
+	// A separate writer keeps cancellation available even if the child stops
+	// reading its data pipe. Closing the pipe releases this goroutine.
+	go func() {
+		p.writeMu.Lock()
+		defer p.writeMu.Unlock()
+		_, err := p.output.Write(append(body, '\n'))
+		if err != nil {
+			p.fail(err)
+		}
+	}()
+	return x, nil
+}
+func wait(ctx context.Context, x *exchange) (Reply, error) {
+	select {
+	case <-x.done:
+		return x.reply, x.err
+	case <-ctx.Done():
+		return Reply{}, ctx.Err()
+	}
+}
+
+// Client keeps original replies for reconciliation until Close. It never
+// restarts a helper or automatically replays a mutation.
+type Client struct {
+	Hello         Hello
+	cmd           *exec.Cmd
+	data, control *peer
+	exited        chan struct{}
+	closeOnce     sync.Once
+	mu            sync.Mutex
+	sequence      uint64
+	requests      map[string]string
+}
+
+func Start(ctx context.Context, o Options) (*Client, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if runtime.GOOS == "windows" {
+		return nil, errors.New("host-control client is Unix-only in this alpha")
+	}
+	if !filepath.IsAbs(o.Executable) {
+		return nil, errors.New("helper executable must be an absolute trusted path")
+	}
+	cr, cw, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	rr, rw, err := os.Pipe()
+	if err != nil {
+		cr.Close()
+		cw.Close()
+		return nil, err
+	}
+	args := []string{"serve", "--host-control", "--full-output"}
+	if o.AssetsDir != "" {
+		args = append(args, "--assets-dir", o.AssetsDir)
+	}
+	if o.AuditPath != "" {
+		args = append(args, "--audit", o.AuditPath)
+	}
+	cmd := exec.Command(o.Executable, args...)
+	cmd.ExtraFiles = []*os.File{cr, rw}
+	cmd.Stderr = o.Stderr
+	for _, k := range []string{"HOME", "PATH", "TMPDIR", "LANG", "LC_CTYPE"} {
+		if v, ok := os.LookupEnv(k); ok {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		cr.Close()
+		cw.Close()
+		rr.Close()
+		rw.Close()
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		stdin.Close()
+		cr.Close()
+		cw.Close()
+		rr.Close()
+		rw.Close()
+		return nil, err
+	}
+	if err = cmd.Start(); err != nil {
+		stdin.Close()
+		stdout.Close()
+		cr.Close()
+		cw.Close()
+		rr.Close()
+		rw.Close()
+		return nil, err
+	}
+	cr.Close()
+	rw.Close()
+	c := &Client{cmd: cmd, data: newPeer(stdout, stdin), control: newPeer(rr, cw), exited: make(chan struct{}), requests: map[string]string{}}
+	go func() { _ = cmd.Wait(); close(c.exited) }()
+	controlScan := bufio.NewScanner(rr)
+	controlScan.Buffer(make([]byte, 4096), 2<<20)
+	go c.control.read(controlScan)
+	ready := make(chan error, 1)
+	go func() {
+		scan := bufio.NewScanner(stdout)
+		scan.Buffer(make([]byte, 4096), 2<<20)
+		if !scan.Scan() {
+			ready <- errors.New("missing helper hello")
+			return
+		}
+		// Hello has extension fields; its stable consumed subset is deliberately decoded here.
+		var raw struct {
+			Type, Protocol string
+			Environment    json.RawMessage
+			Managed        bool
+		}
+		if err := json.Unmarshal(scan.Bytes(), &raw); err != nil {
+			ready <- err
+			return
+		}
+		c.Hello.Type, c.Hello.Protocol, c.Hello.Managed = raw.Type, raw.Protocol, raw.Managed
+		if err := protocol.Decode(raw.Environment, &c.Hello.Environment); err != nil {
+			ready <- err
+			return
+		}
+		if raw.Type != "hello" || raw.Protocol != helper.Version || !raw.Managed {
+			ready <- errors.New("incompatible or unmanaged helper")
+			return
+		}
+		ready <- nil
+		c.data.read(scan)
+	}()
+	select {
+	case err = <-ready:
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
+	if err != nil {
+		c.Close()
+		return nil, err
+	}
+	return c, nil
+}
+
+func (c *Client) controlCall(ctx context.Context, op, turn string, app dw.Ref) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.sequence++
+	id := fmt.Sprintf("host-%d", c.sequence)
+	c.mu.Unlock()
+	x, err := c.control.submit(id, helper.ControlRequest{ID: id, Op: op, Turn: turn, Application: app})
+	if err != nil {
+		return err
+	}
+	reply, err := wait(ctx, x)
+	if err != nil {
+		c.Close() // An uncertain control mutation must never leave live grants behind.
+		return err
+	}
+	if reply.Error != nil {
+		return reply.Error
+	}
+	return nil
+}
+func (c *Client) BeginTurn(ctx context.Context, turn string) error {
+	return c.controlCall(ctx, "begin_turn", turn, "")
+}
+
+// Grant must follow Runtime approval of this exact observed application instance.
+func (c *Client) Grant(ctx context.Context, turn string, app dw.Ref) error {
+	return c.controlCall(ctx, "grant", turn, app)
+}
+
+// EndTurn revokes authority and cancels work; it does not prove no effect occurred.
+func (c *Client) EndTurn(ctx context.Context, turn string) error {
+	err := c.controlCall(ctx, "end_turn", turn, "")
+	if err != nil {
+		c.Close() // Also fail closed if the caller passes an expired context.
+	}
+	return err
+}
+
+func (c *Client) Call(ctx context.Context, turn, id, op string, args any) (Reply, error) {
+	if err := ctx.Err(); err != nil {
+		return Reply{}, err
+	}
+	if id == "" || len(id) > 128 || turn == "" {
+		return Reply{}, errors.New("host supplies turn and stable request ID")
+	}
+	key := turn + "\x00" + id
+	c.mu.Lock()
+	wireID := c.requests[key]
+	if wireID == "" {
+		if len(c.requests) >= 4096 {
+			c.mu.Unlock()
+			return Reply{}, errors.New("host session record limit reached")
+		}
+		c.sequence++
+		wireID = fmt.Sprintf("data-%d", c.sequence)
+		c.requests[key] = wireID
+	}
+	c.mu.Unlock()
+	body, err := protocol.Marshal(args)
+	if err != nil {
+		return Reply{}, err
+	}
+	x, err := c.data.submit(wireID, helper.Request{ID: wireID, Op: op, Turn: turn, Args: body})
+	if err != nil {
+		return Reply{}, err
+	}
+	reply, err := wait(ctx, x)
+	if err != nil {
+		stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		stopErr := c.EndTurn(stopCtx, turn)
+		cancel()
+		if stopErr != nil {
+			c.Close()
+		}
+		return Reply{}, fmt.Errorf("call cancelled; turn stopped, effects may be unknown; reconcile original request: %w", err)
+	}
+	return reply, err
+}
+
+// Reconcile waits for the original reply without sending input, including after
+// EndTurn. Helper errors retain their result/receipt in Reply and are not Go errors.
+func (c *Client) Reconcile(ctx context.Context, turn, id string) (Reply, error) {
+	c.mu.Lock()
+	wireID := c.requests[turn+"\x00"+id]
+	c.mu.Unlock()
+	c.data.mu.Lock()
+	x := c.data.records[wireID]
+	c.data.mu.Unlock()
+	if x == nil {
+		return Reply{}, errors.New("unknown original request")
+	}
+	return wait(ctx, x)
+}
+func (c *Client) Close() {
+	c.closeOnce.Do(func() {
+		// Closing the owner pipe revokes grants, then EOF requests bounded native cleanup.
+		c.control.output.Close()
+		c.data.output.Close()
+		select {
+		case <-c.exited:
+		case <-time.After(2 * time.Second):
+			_ = c.cmd.Process.Kill()
+			<-c.exited
+		}
+		c.control.input.Close()
+		c.data.input.Close()
+		c.data.fail(errors.New("host closed; no automatic restart or replay"))
+		c.control.fail(errors.New("host closed"))
+	})
+}

@@ -18,6 +18,11 @@ jobs:
       - run: go vet ./...
       - run: go run ./examples/headless
       - run: go run ./examples/embodied
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node --test clients/javascript/desktop.test.mjs
+      - run: python3 verify_examples.py
   native-build:
     runs-on: macos-14
     steps:

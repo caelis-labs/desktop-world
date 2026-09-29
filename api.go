@@ -403,6 +403,7 @@ type Intent struct {
 	Actor               ActorID
 	Operation           string
 	Targets             []Ref
+	Applications        []Ref // Engine-resolved target owners; empty Ref means unresolved. Never caller-supplied.
 	Scope               Scope
 	HasSensitivePayload bool
 	PlanDigest          string
