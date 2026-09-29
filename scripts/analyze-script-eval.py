@@ -26,6 +26,9 @@ requests = {}
 operations = Counter()
 faults = Counter()
 action_outcomes = Counter()
+response_bytes_by_operation = Counter()
+observe_projections = Counter()
+observed_objects = 0
 first_observe = first_action = None
 native_ms = 0
 for row in wire:
@@ -37,6 +40,11 @@ for row in wire:
         req = requests[data['id']]
         native_ms += 1000*(instant(row['at'])-instant(req['at'])).total_seconds()
         result = data.get('result', {})
+        # Match the adapter's compact JSON accounting; excludes NDJSON newlines.
+        response_bytes_by_operation[req['data']['op']] += len(json.dumps(data,ensure_ascii=False,separators=(',', ':')).encode())
+        if req['data']['op']=='observe':
+            observe_projections[req['data'].get('args',{}).get('projection','unspecified')] += 1
+            observed_objects += len(result.get('objects',[]))
         if data.get('error'): faults[data['error']['code']] += 1
         if req['data']['op']=='observe' and result.get('objects') and not data.get('error'):
             first_observe = first_observe or row['at']
@@ -49,6 +57,11 @@ result = {
     'script_count':len(scripts), 'helper_operations':dict(operations),
     'script_errors':dict(Counter(s['error'] for s in scripts if s.get('error'))),
     'helper_faults':dict(faults), 'action_outcomes':dict(action_outcomes),
+    'response_bytes_by_operation':dict(response_bytes_by_operation),
+    'observe_projections':dict(observe_projections), 'observed_objects':observed_objects,
+    'script_call_distribution':dict(sorted(Counter(s.get('calls',0) for s in scripts).items())),
+    'chained_scripts':sum(s.get('calls',0)>1 for s in scripts),
+    'non_print_response_bytes':sum(s.get('model_response_bytes',0)-s.get('printed_bytes',0) for s in scripts),
     'first_native_observe_seconds':seconds(first_observe),
     'first_successful_print_seconds':seconds(visible),
     'first_completed_action_seconds':seconds(first_action),

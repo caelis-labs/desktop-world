@@ -31,7 +31,8 @@ reset it. Terminal unknown still fenced: stop and report to host, never restart/
 dw.observe(argsOrRef={})            desktop summary; pass app/window Ref to scope
   args: {scope:{refs:[ref]}, projection:"summary"|"outline"|"detail", fields, match, budget}
   budget: max_depth,max_results,max_text_runes,max_output_bytes,read_deadline_ms
-  match: role,name_equals,name_contains; scope uses refs, not apps/windows
+  match: {within:ref, role?, name_equals?, name_contains?}; within is required
+  scope uses refs, not apps/windows; prefer find(ref, locator) for UI discovery
 dw.outline(ref, options={})         bounded subtree; options override fields/budget
 dw.find(within, locator, options)   bounded exact/substring discovery, depth 12 default
 dw.next(ob)                        native next page, preserves original query automatically
@@ -59,6 +60,12 @@ Focus a WINDOW before input; application Refs are discovery scopes, not focus ta
 list defaults to 20 rows/4 KiB; use next_offset on the SAME saved observation for more.
 If ob.coverage.continuation exists, use state.ob=await dw.next(state.ob) for native pages.
 outline defaults to name/role/value_preview; states/capabilities are opt-in fields.
+rows/list select already-fetched fields; request uri/states in observe/find options first.
+name filters do not search body text. Native text nodes often use value_preview:
+state.text = await dw.find(documentRef,{role:'text'},{fields:['role','value_preview']});
+print(dw.list(state.text)); // page saved results; read a text Ref for untruncated text
+read(documentRef) does not aggregate descendant text. Inspect coverage and native pages.
+There is no setTimeout in scripts. Use waitFor with a readiness predicate after transitions.
 Use rows for local filtering before print; value works on role/name/state alike.
 Keyboard example: await dw.focus(windowRef); await dw.press(await dw.focused(windowRef),'O',['primary']);
 After a dialog opens, inspect dw.observe(appRef), then use dw.focused(appRef).

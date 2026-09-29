@@ -52,6 +52,10 @@ print(dw.rows(after, ['name','states.enabled','states.focused']));
 
 `dw.one` 要求覆盖完整、未截断且无缺失来源；只匹配到一个结果但覆盖不全时不能当作唯一。`dw.rows` 保留 Ref、false、空字符串与未知状态。它支持嵌套字段呈现，**不声称降低后端属性读取成本**。更少原生读取需使用 observe 的 scope/fields/match/budget。
 
+`match` 是合法 observe 参数，但必须含 `within`；`dw.find(ref, locator)` 自动补齐该范围并选择 outline。`rows/list` 只能选择已经获取的字段：要读取链接地址，应在 `find` 的 options 中指定 `fields:['name','role','uri']`，仅向 rows 传入 uri 不会补查。
+
+原生网页正文常在 `role:'text'` 对象的 `value_preview` 中，`name_contains` 不搜索正文；`read(documentRef)` 也不聚合后代节点。可用 `state.text=await dw.find(documentRef,{role:'text'},{fields:['role','value_preview']})`，在本地筛选、分页呈现并保留 coverage；预览不足时读取具体文本 Ref。取后续原生页用 `dw.next(state.text)`，避免为输出另一批已读取的行重新扫描同一子树。脚本不暴露 `setTimeout`，界面切换用已有的 `waitFor` 和明确就绪条件。
+
 `dw.focused(appRef)` 每次重新观察当前焦点，并验证它属于指定前台应用；窗口 scope 则要求前台窗口完全匹配，避免把另一个已授权窗口的焦点误当目标。应用级 scope 不限制为某个窗口，必要时还应检查新对话框的对象关系。原生执行器继续做实时权限、焦点、命中、身份和生命周期检查。不要缓存一次焦点跨多个新对话框使用。
 
 界面切换可能短暂返回不完整树。用 `await dw.waitFor(observeArgs, ob => 明确的就绪条件, {timeout_ms:3000})` 在脚本内等待实际条件；它仅重读，不重放动作，读调用仍计入预算。避免每次等待都让模型往返或把短暂空树当成“控件不存在”。

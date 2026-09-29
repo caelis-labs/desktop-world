@@ -88,7 +88,7 @@ go run ./cmd/dw-analyze -input artifacts/usability/sdk-baseline-01/harness/calls
 
 ### 下一轮外部 Agent
 
-已获用户授权在本机 Antigravity App 发起新上下文验证，必须通过 Computer Use 操作 App，不使用 CLI/ACP。提供冻结 helper、JavaScript 调用链、通用指南、相同实际任务、prompt 和结果模板；验收 oracle 与脚本由评估者另行保管。已产生首轮失败证据，见下文。
+已通过 Computer Use 在本机 Antigravity App 创建三个独立项目/新对话，未使用 CLI/ACP 执行评测。提供冻结 helper、JavaScript 调用链、通用指南、相同实际任务、prompt 和结果模板；验收 oracle 与脚本由评估者另行保管。前两轮失败、第三轮完成文件工作流；完整结果见下文。早期 CLI 就绪探测不属于这些评测，也不提供其计时或 token 数据。
 
 预先登记的体验目标：首次有效观察 ≤30 秒、首次动作 ≤60 秒、全部任务 ≤10 分钟、无上下文压缩、无人工操作提示、无自行编写 Go adapter；必须同时保留正确性、错误恢复和输出体积。超过阈值仍记录真实结果，不降低门槛或将热回归替代。不同模型/宿主带来的差异单独披露，不将单样本差值全归因于 helper。
 
@@ -123,3 +123,48 @@ MVP 聚焦调用返回成本与易用性，后台输入隔离延期。JavaScript
 AX 写动作不再套用 250ms 读超时，独立设为 1 秒（仍在默认 2 秒 step 限额内）。隔离 TextEdit 回归以两个新文件执行另存为和真实“替换”，该调用耗时 **314ms**，收据 completed、seat ready，独立读文件确认目标与源逐字相同。开发者回归不能替代下一轮冷启动成绩。
 
 证据：`artifacts/usability/antigravity-app-02/{participant/harness,evaluator}`，`artifacts/usability/save-replace-regression/verification.json`。运行 `python3 scripts/analyze-script-eval.py <run>` 可重算每层字节、调用与时序，不输出 UI 内容或代码。
+
+### Antigravity App 第三轮（冻结 8408d94）
+
+**文件工作流通过，整体易用性门槛未通过。** 通过原生 Computer Use 在 Antigravity App 的 Desktop World App 03 项目提交新对话，仍为 Gemini 3.8 Flash High。发送起点 2026-09-29 16:46:21.007 UTC；Agent 自报起点晚约 5 秒。本表统一按发送时间计算，未计宿主预启动 helper、准备窗口与授权的时间。
+
+| 指标 | SDK 基线 | App 第三轮 |
+| --- | --- | --- |
+| 首次有效观察 | 174 秒 | **21.393 秒**，达到 ≤30 秒目标 |
+| 首次完成动作 | 219 秒 | **50.513 秒**，达到 ≤60 秒目标 |
+| 最终 UI 自检 | 23 分 21 秒 | **10 分 42.362 秒**，未达到 ≤10 分钟目标 |
+| 会话终止 | 预算内 | 16:57:31 UTC，约 11 分 10 秒；helper 正常退出 |
+| 文件断言 | 13/13 | **13/13**；原稿、API 和移动资料 SHA-256 正确 |
+| 平台研究 | UIA 引用间接 | 2 个核查项通过，UIA 项部分通过 |
+| 接入 | 61 行 Go adapter、6 次构建、3 次启动 | 0 行 adapter、0 次构建/重启 |
+| helper 请求 | 129 | 212：145 observe、62 act、5 read |
+| 脚本与错误 | 无同构脚本统计 | 97 段，8 段报错；无 unknown/fence |
+| helper 返回 | 747,316 B | 394,431 B |
+| 完整模型工具回复 | 没有同口径计量 | **135,479 B**，其中 print 65,480 B |
+| API 耗时之和 | 26.44 秒 | 56.886 秒；脚本耗时之和 57.036 秒 |
+| 上下文压缩 | 用户报告 1 次 | Agent 自报 0 次；宿主未提供独立计量 |
+
+独立 verifier 在 helper 退出后运行：两项文件任务正确，研究文件也确已通过 TextEdit 保存；不是以动作 completed 代替文件验收。二进制、脚本入口、通用文档、prompt 和任务描述均与冻结 manifest 的 SHA-256 一致。记录中可以看到桌面读写与落盘过程，所检查的脚本未发现文件/网络旁路；App 显示已结束，helper 启动会话返回退出码 0。Agent 自报无人工提示，评估者也未在运行中输入任务提示。该实验约束不等于 OS 安全沙箱，不能证明所有未记录行为不存在。
+
+研究核验：SendInput 的返回值与 UIPI 限制符合[官方说明](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput)，业务完成的否定结论明确标作推论。“静默失败”表述应理解为不能识别 UIPI 根因，不是函数不报告失败。UIA 的结论方向正确，但只引用[事件概览](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-eventsoverview)：无订阅时可不发布事件、事件不一定意味着状态改变，并不足以推出已订阅时所有属性变化的覆盖情况；报告中“合并事件”的说法也未得到该来源支撑。[直接依据](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-eventsforclients)明确说明部分标准代理的属性变化不产生事件。Agent 找到了这个链接，但点击因屏幕外命中失败后结束检索，没有完成该页核查，因此研究项只计部分通过。没有替 Agent 修改产物再记成功。
+
+Agent 报告将 10 分 37 秒称为“达标”，混淆了 25 分钟硬截止与 10 分钟体验目标；评估者明确否决该判定。报告还把一次错误归为“不支持顶层 match”，实际错误是 `locator requires within`，match 本身合法。上述自报与评估者结论分别保留，不能只转述受试 Agent 的成功声明。
+
+### 第三轮的成本与下一步门槛
+
+同一轮完整 helper 回复经脚本呈现后由 394,431 B 变成 135,479 B，减少 **65.7% 返回字节**；这是两层传输计量，不是模型实际 token 降幅。模型输入/输出 tokens 仍为 null。与 SDK 基线的壁钟时间不能做单因素因果比较：宿主、模型与预启动方式不同，调用次数甚至增加。首次接入改善与无需编写 adapter 有直接证据，但不足以证明所有任务已顺滑。
+
+| 阶段（按实际脚本序列） | 脚本数 | helper 请求 | 完整模型工具回复 | 脚本耗时之和 |
+| --- | --- | --- | --- | --- |
+| Finder，1–37 | 37 | 89 | 45,539 B | 16.822 秒 |
+| TextEdit，38–55 | 18 | 50 | 27,750 B | 11.968 秒 |
+| 研究与落盘，56–97 | 42 | 73 | 62,190 B | 28.246 秒 |
+
+- **多次调用可以组合，但仍有大量模型往返。** 33 段脚本含多次调用，最多一段 24 次；另有 63 段只做一次调用、1 段未调用即报错。97 个 exec 加宿主工具包装、推理和报告写作共同消耗 wall time；不能将约 585 秒剩余时间全归为模型推理。没有 `dw.act` 多步骤计划的使用，单个 action helper 都生成一项原生步骤。
+- **观察仍是主要返回来源。** 145 次 observe 返回 999 个对象、339,586 B，占 helper 返回约 86.1%。网页正文处于 value_preview，Agent 先多次按 name 查找，再逐层调深度，最后才按 text 角色取值；研究阶段重复观察后在本地切片，虽可直接保留 observation，却再次扫描。预览读取与后代全文读取的边界不够好学。
+- **强制元数据已有可观成本。** 完整工具回复扣除 print 后为 69,999 B，占 51.7%，包含 coverage、动作结果、计量和 JSON 包装。下一轮应评估按相同查询合并只读等待的覆盖摘要、按需展开成功收据；必须保留 dirty、截断/continuation、失败/unknown 与可追溯 ID，不能直接丢弃影响决策的证据。
+- **恢复与约定仍有摩擦。** Finder 无窗口编辑焦点导致两次 fact_not_known；错误 Chrome app Ref 被正确拒绝；窗口关闭后的旧 Ref、非前台点击、屏幕外链接点击均被阻止且未扩大授权。setTimeout 未暴露造成一次脚本错误。修订 help/通用指南，补齐 within、name 与正文值的区别、fields 必须在读取阶段请求、waitFor 替代定时器。这些文档调整发生于冻结评测结束后，尚未再次冷测。
+
+因此当前发行入口选择 **预编译 helper + 薄 JavaScript 脚本层**，Go SDK 保留为嵌入式执行内核。该选择解决本轮可观察的接入负担；尚不宣称正式发行完成：Windows 原生输入/IPC、签名公证/更新、多个独立模型与更长任务的验收仍缺失。下一轮仍使用预登记目标，并加入长列表、重复检索和屏幕外控件任务，要求实际模型 token 计量可得时一并提供，不能以本轮单样本替代。
+
+可复核证据：`artifacts/usability/antigravity-app-03/participant/harness/{report.md,result.json,wire.jsonl,scripts.jsonl,script-code.jsonl}`、`evaluator/{submission.json,metrics.json,verification.json,judgment.json}`。原始日志包含 UI 内容，继续保留为私有本地产物。
