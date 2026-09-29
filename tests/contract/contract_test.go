@@ -412,9 +412,25 @@ func TestAuthorizationCheckedBeforeEachWrite(t *testing.T) {
 	}
 }
 func TestReceiptTombstoneSurvivesExpiry(t *testing.T) {
-	h := setup(t, dwtest.Options{ReceiptTTL: time.Nanosecond, RequestLimit: 1})
+	h := setup(t, dwtest.Options{ReceiptTTL: time.Millisecond, RequestLimit: 1})
 	p := h.plan("expire", dw.Step{ID: "invoke", Op: "invoke", Target: target(h.refs["提交"])})
-	_, _ = h.a.Execute(ctx, p)
+	r, firstErr := h.a.Execute(ctx, p)
+	if firstErr != nil && code(firstErr) != "receipt_expired" {
+		t.Fatal(firstErr)
+	}
+	// Clock resolution differs across platforms. Wait for the read-only expiry
+	// condition before proving that a duplicate cannot replay the native input.
+	deadline := time.Now().Add(time.Second)
+	for {
+		_, err := h.a.GetReceipt(ctx, r.RunID)
+		if code(err) == "receipt_expired" {
+			break
+		}
+		if err != nil || time.Now().After(deadline) {
+			t.Fatalf("receipt did not expire: %v", err)
+		}
+		time.Sleep(time.Millisecond)
+	}
 	_, e := h.a.Execute(ctx, p)
 	if code(e) != "receipt_expired" || len(h.f.Events()) != 1 {
 		t.Fatal(e)
