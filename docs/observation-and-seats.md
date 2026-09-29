@@ -57,6 +57,8 @@ UIA Invoke 是调用 provider 的动作，不等同于合成点击，其副作�
 
 ## 本轮对焦点模型的修正
 
-macOS 的系统级 AX 焦点属性在本机出现 `AXCannotComplete`，前台应用的 AX 属性却成功。现从 NSWorkspace 获得前台进程，读取该应用焦点，并检查采样前后前台 PID 一致；焦点引用同时注册其原生关系。
+macOS 的系统级 AX 焦点属性在本机出现 `AXCannotComplete`，前台应用的 AX 属性却成功。持久 helper 的外部盲测随后证明 NSWorkspace 会停留在旧值：该 API 依赖主 RunLoop 刷新，而 Go 宿主并不保证运行它。现在用公开 Process Manager 的 GetFrontProcess/GetProcessPID 即时采样，读取该应用 AX 焦点，并检查采样前后 PID 一致。GUI 进程枚举也改用即时查询，生命周期以 libproc 的 PID + 启动时间校验。焦点引用同时注册其原生关系。
+
+Process Manager API 已被 Apple 标记弃用，但当前 SDK 与本机仍支持；替代的 AppKit 缓存语义不满足此无主 RunLoop 的嵌入场景。未接管宿主事件循环，也未使用私有 API。未来发行须在支持的 macOS 版本矩阵验证这些查询；查询失败返回未知/不完整，不能使用旧前台值。
 
 Finder 的内联改名框直接挂在应用下，AXWindow 和 AXFocusedWindow 都返回无值。实现保留“窗口未知”，在 **键盘目标 Ref 等于实时焦点、目标 App 等于实时前台 App、Actor 确实获授权** 时支持该无窗口编辑器；窗口范围不会因此扩大。窗口不明确的鼠标输入仍被拒绝。此为对原 SPEC 假设“所有键盘目标都有窗口”的有证据修正，不是独立后台焦点。

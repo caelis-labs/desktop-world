@@ -22,7 +22,7 @@ node clients/javascript/desktop.mjs serve --host host.json
 node clients/javascript/desktop.mjs exec <<'JS'
 const inventory = await dw.observe();
 state.inventory = inventory;
-print(dw.rows(inventory, ['kind','name','app']));
+print(dw.list(inventory, ['kind','name','app']));
 JS
 ```
 
@@ -30,13 +30,17 @@ JS
 
 ```js
 // name 必须来自观察，下面仅说明通用组合方式，不是任务配方。
-const ob = await dw.find(state.window, {role:'AXButton', name_equals:state.observedName});
+const ob = await dw.find(state.window, {role:'button', name_equals:state.observedName});
 const button = dw.one(ob, {name:state.observedName});
 await dw.invoke(button.ref);
 const after = await dw.outline(state.window, {fields:['name','role','states']});
 state.after = after;
 print(dw.rows(after, ['name','states.enabled','states.focused']));
 ```
+
+`dw.list(ob, fields, {offset, limit, max_bytes})` 默认输出最多 20 行 / 4 KiB，返回 total 和 next_offset；翻页使用同一个保存在 state 的 observation，无需重新调用原生接口。它只是展示分页，原生 coverage 仍必须检查。`dw.rows` 返回全部行，适合本地筛选；直接 print 大树可能超过预算。角色使用 button、text_field 等规范名，不是 AXButton。`dw.value` 同时接受已知 Fact 和 role 等原始字段，未知或脱敏 Fact 仍报错。
+
+`dw.focus` 的目标是 window 或支持 focus 的 UI，不接受 application；先选择实际窗口。
 
 `dw.one` 要求覆盖完整、未截断且无缺失来源；只匹配到一个结果但覆盖不全时不能当作唯一。`dw.rows` 保留 Ref、false、空字符串与未知状态。它支持嵌套字段呈现，**不声称降低后端属性读取成本**。更少原生读取需使用 observe 的 scope/fields/match/budget。
 

@@ -88,7 +88,7 @@ go run ./cmd/dw-analyze -input artifacts/usability/sdk-baseline-01/harness/calls
 
 ### 下一轮外部 Agent
 
-已获用户授权在本机 Antigravity App 发起新上下文验证，必须通过 Computer Use 操作 App，不使用 CLI/ACP。提供冻结 helper、JavaScript 调用链、通用指南、相同实际任务、prompt 和结果模板；验收 oracle 与脚本由评估者另行保管。外部 App 轮结果尚未产生。
+已获用户授权在本机 Antigravity App 发起新上下文验证，必须通过 Computer Use 操作 App，不使用 CLI/ACP。提供冻结 helper、JavaScript 调用链、通用指南、相同实际任务、prompt 和结果模板；验收 oracle 与脚本由评估者另行保管。已产生首轮失败证据，见下文。
 
 预先登记的体验目标：首次有效观察 ≤30 秒、首次动作 ≤60 秒、全部任务 ≤10 分钟、无上下文压缩、无人工操作提示、无自行编写 Go adapter；必须同时保留正确性、错误恢复和输出体积。超过阈值仍记录真实结果，不降低门槛或将热回归替代。不同模型/宿主带来的差异单独披露，不将单样本差值全归因于 helper。
 
@@ -99,3 +99,12 @@ MVP 聚焦调用返回成本与易用性，后台输入隔离延期。JavaScript
 `artifacts/usability/script-warm-01` 留有前台激活失败证据：AppKit 激活请求加 AXRaise 返回已分派，但 TextEdit 没成为前台；链停止，没有继续发按键。补充应用 AXFrontmost 请求后，`script-warm-02` 的两段脚本完成 8 次调用：观察、聚焦既有验证文档、取得实时焦点、打开面板、确认并关闭。耗时之和 2,989 ms；helper 返回 27,042 B；完整脚本回复 3,209 B（含强制元数据），print 内容 1,020 B。任务未修改文档。这是已知目标的热回归，不是陌生 Agent 的完整任务成绩，也不是实测模型 token 降幅。
 
 8 项 JavaScript 契约测试覆盖组合/跨回合状态、局部输出、未知/partial 收据、禁止错误后继续输入、唯一性与覆盖、调用与打印预算、超时、只读条件等待、断连后的后续输入阻止。Go race/vet、Windows 交叉构建/vet、协议示例通过；Windows JavaScript IPC 和桌面输入仍未实机验收。
+
+
+### Antigravity App 首轮（2026-09-30 本地时间）
+
+通过原生 Computer Use 创建项目并发送任务，模型界面为 Gemini 3.8 Flash High。冻结版本 d2039f9；没有使用 CLI/ACP 执行评测。实际发送时间 2026-09-29 16:04:07 UTC，Agent 记录起点 16:04:29 UTC。约 4 分钟后评估者提前终止：helper 自身截图已显示 Finder 为前台，但连续观察仍报告启动时的 ChatGPT；无法可靠聚焦和键入。没有完成三项任务，文件断言 2/13 仅证明保留项未变化，不能视为完成成绩。
+
+24 段脚本、27 次原生调用，执行耗时之和 11.608 秒；helper 回复 168,507 B，整个脚本回复 31,886 B。11 段脚本发生错误：打印超限 3、Fact 类型误用 2、能力不支持 1、焦点验证超时 3、需要用户焦点 1、目标不可命中 1。实际模型 token 未取得。准备阶段的 clipboard/Dock 故障发生于发送任务之前，单独记录，不混入 Agent 任务耗时。
+
+修复：实时前台/GUI 进程与生命周期查询不依赖主 RunLoop；`dw.list` 对已保存观察按行和字节分页，保留 next_offset，避免打印超限后重新观察；`dw.value` 接受普通字段且仍拒绝未知事实；help 明确标准角色与窗口焦点，prompt 改为通用文档按需读取。10 项 JavaScript 契约测试通过。真实持续 helper 在 Finder 回归窗口与 TextEdit 测试文档间连续 4 次切换，9 次调用的焦点验证均通过。原始证据在 `artifacts/usability/antigravity-app-01/` 与 `native-focus-live-03.jsonl`，首轮保持原冻结工具与失败结果。

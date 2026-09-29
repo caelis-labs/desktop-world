@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createSession } from './desktop.mjs';
 
-const observed = { objects: [{ ref: 'r1', role: 'AXButton', name: { known: 'Save' }, value_preview: { known: '' }, states: { enabled: { known: false }, focused: { status: 'unknown' } } }], coverage: { complete: true, truncated: false }, seat: { focused_object: { known: 'r1' } } };
+const observed = { objects: [{ ref: 'r1', role: 'button', name: { known: 'Save' }, value_preview: { known: '' }, states: { enabled: { known: false }, focused: { status: 'unknown' } } }], coverage: { complete: true, truncated: false }, seat: { focused_object: { known: 'r1' } } };
 const completed = { run_id: 'run1', outcome: 'completed', state: 'terminal', steps: [{ id: 's1', delivery: 'complete', verification: 'not_requested' }] };
 
 test('one script composes observations and effects; only selected output leaves local memory', async () => {
@@ -110,4 +110,35 @@ test('disconnect stops later effects and retains in-flight outcome', async () =>
   assert.equal(calls, 1);
   assert.equal(result.error.code, 'caller_disconnected');
   assert.equal(result.actions[0].outcome, 'completed');
+});
+
+
+test('presentation pages preserve every ref without native re-observation or silent clipping', async () => {
+  const objects = Array.from({length:100}, (_,i)=>({ref:`r${i}`, role:'window', name:{known:'Window '+i}, value_preview:{known:'x'.repeat(150)}}));
+  let calls = 0;
+  const session = createSession(async()=>{calls++;return {result:{objects,coverage:{complete:true}}}});
+  const first = await session.execute('state.ob=await dw.observe(); print(dw.list(state.ob));');
+  assert.equal(first.error, undefined);
+  let refs = first.outputs[0].rows.map(o=>o.ref);
+  let offset = first.outputs[0].next_offset;
+  assert.ok(offset > 0 && offset < 100);
+  while (offset !== null) {
+    const result = await session.execute(`print(dw.list(state.ob, undefined, {offset:${offset}}));`);
+    assert.equal(result.error, undefined);
+    refs.push(...result.outputs[0].rows.map(o=>o.ref));
+    offset = result.outputs[0].next_offset;
+  }
+  assert.deepEqual(refs, objects.map(o=>o.ref));
+  assert.equal(calls,1);
+  const oversize = await session.execute("print(dw.list({objects:[{ref:'x',name:{known:'z'.repeat(5000)}}]}));");
+  assert.equal(oversize.error.code,'row_budget_exceeded');
+});
+
+test('value accepts primitive metadata but unknown and redacted facts still fail closed', async () => {
+  const session = createSession(async()=>({result:observed}));
+  const result = await session.execute("const ob=await dw.observe();print([dw.value(ob.objects[0].role),dw.value({known:false}),dw.value({known:''}),dw.value(0)]);");
+  assert.deepEqual(result.outputs[0],['button',false,'',0]);
+  for (const status of ['unknown','redacted','unsupported']) {
+    assert.equal((await session.execute(`print(dw.value({status:'${status}'}));`)).error.code,'fact_not_known');
+  }
 });

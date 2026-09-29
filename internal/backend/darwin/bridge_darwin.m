@@ -7,6 +7,7 @@
 #import <ImageIO/ImageIO.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#include <libproc.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,6 +53,43 @@ static id attr(AXUIElementRef e, CFStringRef k) {
     return nil;
   return CFBridgingRelease(v);
 }
+// AppKit's process properties refresh on the main RunLoop. A Go caller may
+// never run it. Use live OS queries without taking over the embedding host loop.
+static NSArray *processIdentity(pid_t pid) {
+  struct proc_bsdinfo info = {0};
+  if (pid <= 0 || proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) != sizeof(info))
+    return nil;
+  return @[@(info.pbi_start_tvsec), @(info.pbi_start_tvusec)];
+}
+// Public Process Manager APIs remain available, though deprecated since 10.9.
+// NSWorkspace is not a correct substitute in a headless persistent library.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+static pid_t frontmostPID(void) {
+  ProcessSerialNumber psn = {0, kNoProcess};
+  pid_t pid = 0;
+  return GetFrontProcess(&psn) == noErr && GetProcessPID(&psn, &pid) == noErr ? pid : 0;
+}
+static NSArray *applicationPIDs(BOOL *complete, DWCancel *cancel) {
+  NSMutableArray *pids = [NSMutableArray array];
+  ProcessSerialNumber psn = {0, kNoProcess};
+  OSErr status;
+  while ((status = GetNextProcess(&psn)) == noErr) {
+    if (cancelled(cancel) || pids.count >= 1024) { *complete = NO; break; }
+    ProcessInfoRec info = {0};
+    info.processInfoLength = sizeof(info);
+    if (GetProcessInformation(&psn, &info) != noErr) { *complete = NO; continue; }
+    if (info.processMode & modeOnlyBackground) continue;
+    pid_t pid = 0;
+    if (GetProcessPID(&psn, &pid) == noErr && pid > 0)
+      [pids addObject:@(pid)];
+    else
+      *complete = NO;
+  }
+  if (status != procNotFound && status != noErr) *complete = NO;
+  return pids;
+}
+#pragma clang diagnostic pop
 static BOOL alive(DWContext *c, NSString *k);
 static NSString *key(DWContext *c, AXUIElementRef e, NSString *app,
                      NSString *win, NSString *parent) {
@@ -74,17 +112,17 @@ static NSString *key(DWContext *c, AXUIElementRef e, NSString *app,
   }
   if (c.elements.count >= 10000)
     return @"";
-  [c.elements addObject:(__bridge id)e];
   pid_t pid = 0;
   AXUIElementGetPid(e, &pid);
-  NSRunningApplication *ra =
-      [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+  NSArray *identity = processIdentity(pid);
+  if (!identity) return @"";
+  [c.elements addObject:(__bridge id)e];
   [c.meta addObject:@{
     @"App" : app ?: @"",
     @"Window" : win ?: @"",
     @"Parent" : parent ?: @"",
     @"PID" : @(pid),
-    @"Launch" : ra.launchDate ?: [NSDate distantPast]
+    @"ProcessIdentity" : identity
   }];
   return [NSString stringWithFormat:@"%lu", (unsigned long)c.elements.count];
 }
@@ -99,10 +137,8 @@ static BOOL alive(DWContext *c, NSString *k) {
   if (i < 0 || i >= (NSInteger)c.meta.count)
     return NO;
   NSDictionary *m = c.meta[i];
-  NSRunningApplication *ra = [NSRunningApplication
-      runningApplicationWithProcessIdentifier:[m[@"PID"] intValue]];
-  return ra && !ra.terminated &&
-         [m[@"Launch"] isEqual:ra.launchDate ?: [NSDate distantPast]];
+  NSArray *identity = processIdentity([m[@"PID"] intValue]);
+  return identity && [m[@"ProcessIdentity"] isEqual:identity];
 }
 static NSArray *displays(DWContext *c) {
   CGDirectDisplayID ids[32];
@@ -172,10 +208,9 @@ static NSString *roleName(NSString *r) {
 // Remote AppKit panels and inline Finder editors may omit AXWindow. Recover
 // only from fresh native parent/focus evidence, never a cached title or geometry.
 static id frontmostAXApplication(void) {
-  NSRunningApplication *front = NSWorkspace.sharedWorkspace.frontmostApplication;
-  if (!front || front.terminated)
-    return nil;
-  AXUIElementRef app = AXUIElementCreateApplication(front.processIdentifier);
+  pid_t pid = frontmostPID();
+  if (!pid) return nil;
+  AXUIElementRef app = AXUIElementCreateApplication(pid);
   AXUIElementSetMessagingTimeout(app, 0.25);
   return CFBridgingRelease(app);
 }
@@ -327,7 +362,7 @@ static NSDictionary *node(DWContext *c, NSString *k) {
 static NSDictionary *seat(DWContext *c) {
   // Some macOS hosts return AXCannotComplete for system-wide focus attributes
   // while the same foreground application's attributes work. Obtain the
-  // foreground process from NSWorkspace and read its AX window/focus directly.
+  // foreground process with a live OS query and read its AX window/focus directly.
   id app = frontmostAXApplication();
   pid_t sampledPID = 0;
   if (app) AXUIElementGetPid((__bridge AXUIElementRef)app, &sampledPID);
@@ -339,7 +374,7 @@ static NSDictionary *seat(DWContext *c) {
   NSString *wk = win ? key(c, (__bridge AXUIElementRef)win, ak, nil, ak) : @"";
   NSString *fk =
       focused ? key(c, (__bridge AXUIElementRef)focused, ak, wk, wk) : @"";
-  if (sampledPID != NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier) {
+  if (!sampledPID || sampledPID != frontmostPID()) {
     ak = @"";
     wk = @"";
     fk = @"";
@@ -378,12 +413,8 @@ static NSDictionary *query(DWContext *c, NSDictionary *q, DWCancel *cancel) {
             max = [q[@"MaxNodes"] integerValue];
   BOOL summary = [q[@"Summary"] boolValue], detail = [q[@"Detail"] boolValue];
   if ([q[@"Desktop"] boolValue]) {
-    for (NSRunningApplication *app in NSWorkspace.sharedWorkspace
-             .runningApplications) {
-      if (app.terminated ||
-          app.activationPolicy == NSApplicationActivationPolicyProhibited)
-        continue;
-      AXUIElementRef e = AXUIElementCreateApplication(app.processIdentifier);
+    for (NSNumber *pid in applicationPIDs(&complete, cancel)) {
+      AXUIElementRef e = AXUIElementCreateApplication(pid.intValue);
       AXUIElementSetMessagingTimeout(e, 0.25);
       NSString *k = key(c, e, nil, nil, nil);
       CFRelease(e);

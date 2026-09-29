@@ -2,7 +2,7 @@
 
 你的工作目录是这个测试包的 participant 目录。先记录开始 UTC、Agent/模型名称、宿主版本和是否继承了其他上下文；从此开始计时。不要读父目录的 evaluator、项目仓库、实现源码、其他 Agent 的报告或历史对话。只可读本 prompt、task.json、host.json、result-template.json、docs/helper.md、docs/scripting.md、skills/desktop-world/SKILL.md 和工具的 help/schema/doctor。
 
-工具入口是 `node clients/javascript/desktop.mjs`，宿主已按 host.json 启动持久会话。先运行 `node clients/javascript/desktop.mjs help`，然后用 `exec` 从 stdin 提交 async JavaScript 调用链；用 state 跨回合保留对象，print 仅输出决策需要的信息。无需写传输桥或编译。不要读取会话文件内容、修改客户端、扩大授权或启动另一个 helper。结束时用 `stop` 关闭会话。
+工具入口是 `node clients/javascript/desktop.mjs`，宿主已按 host.json 启动持久会话。先运行 `node clients/javascript/desktop.mjs help`；这足够开始，其他通用文档仅遇到问题时按需阅读。然后用 `exec` 从 stdin 提交 async JavaScript 调用链；用 state 跨回合保留对象，print 仅输出决策需要的信息。无需写传输桥或编译。不要读取会话文件内容、修改客户端、扩大授权或启动另一个 helper。结束时用 `stop` 关闭会话。
 
 完成 task.json 的三项任务：
 

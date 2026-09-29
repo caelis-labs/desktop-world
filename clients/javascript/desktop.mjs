@@ -14,8 +14,8 @@ import { randomUUID } from 'node:crypto';
 const HELP = `Desktop World JavaScript — Node 20+, no packages, persistent native session.
 Trusted host: node desktop.mjs serve --host host.json [--session harness/session.json]
 Agent:        node desktop.mjs exec [--session harness/session.json] <<'JS'
-const ob = await dw.observe();
-print(dw.rows(ob));
+state.inventory = await dw.observe();
+print(dw.list(state.inventory));
 JS
 Stop:         node desktop.mjs stop [--session harness/session.json]
 
@@ -29,10 +29,11 @@ dw.outline(ref, options={})         bounded subtree; options override fields/bud
 dw.find(within, locator, options)   bounded exact/substring discovery, returns observation
 dw.waitFor(observeArgs, predicate, options={})  poll reads until predicate(ob)===true
 dw.one(ob, {role, name, kind})      require one match AND complete, untruncated coverage
-dw.rows(ob, fields=['role','name','value_preview'])  short rows, Ref always retained
-dw.value(fact)                     unwrap known facts; throws for unknown/redacted
+dw.list(ob, fields=['role','name','value_preview'], options={})  bounded rows + next_offset
+dw.rows(ob, fields)                full row array for local filtering, can exceed print limit
+dw.value(field)                    unwrap known facts or primitive fields; throws for unknown/redacted
 dw.focused(scopeRef)               fresh focused UI Ref, scoped observation
-dw.focus(ref) / dw.invoke(ref) / dw.set(ref, text)
+dw.focus(windowOrFocusableUIRef) / dw.invoke(ref) / dw.set(ref, text)
 dw.press(ref, key, modifiers=[]) / dw.type(ref, text)
 dw.click(ref, options={})           left single click by default
 dw.act(steps, options={})           one ordered native plan, max 16 steps
@@ -43,6 +44,10 @@ dw.call(op,args,id?)                underlying seven verbs; stable id for receip
 Keys: A-Z,0-9,Enter,Tab,Escape,Backspace,Delete,Space,Left,Right,Up,Down,
 Home,End,PageUp,PageDown. Modifiers: primary,meta,control,alt,shift (lowercase).
 primary = Command on macOS, Control on Windows. Target is always an observed Ref.
+Roles are normalized: application,window,button,text_field,text,container (not AX names).
+Focus a WINDOW before input; application Refs are discovery scopes, not focus targets.
+list defaults to 20 rows/4 KiB; use next_offset on the SAME saved observation for more.
+Use rows for local filtering before print; value works on role/name/state alike.
 After opening a dialog, observe its actual objects/focus before the next input.
 An action completed with verification=not_requested proves dispatch, not task success.
 read uses limit_runes<=4096 and continuation=result.next for more text.
@@ -54,6 +59,7 @@ Do not read task files or use other automation when an evaluation requires UI on
 `;
 
 const known = fact => {
+  if (['string', 'number', 'boolean'].includes(typeof fact)) return fact;
   if (fact && Object.hasOwn(fact, 'known')) return fact.known;
   if (fact?.status === 'known' && Object.hasOwn(fact, 'value')) return fact.value;
   throw Object.assign(new Error(`Expected a known fact, got ${JSON.stringify(fact)}`), { code: 'fact_not_known' });
@@ -62,6 +68,17 @@ const errorInfo = error => ({ code: error?.code ?? 'script_failed', message: Str
 const bytes = value => Buffer.byteLength(JSON.stringify(value));
 const pick = (value, keys) => Object.fromEntries(keys.filter(k => value?.[k] !== undefined).map(k => [k, value[k]]));
 const smallCoverage = value => pick(value, ['scope', 'fields', 'max_depth', 'complete', 'truncated', 'dirty', 'continuation', 'unavailable_sources']);
+const rows = (ob, fields = ['role', 'name', 'value_preview']) => (ob.objects ?? []).map(object => {
+  const row = { ref: object.ref };
+  for (const field of fields) {
+    let value = field.split('.').reduce((v, key) => v?.[key], object);
+    if (value && Object.hasOwn(value, 'known')) value = value.known;
+    else if (value?.status === 'known') value = value.value;
+    if (value !== undefined) row[field] = value;
+  }
+  return row;
+});
+
 
 function receiptSummary(id, op, receipt) {
   const counts = {};
@@ -145,17 +162,24 @@ export function createSession(transport, { epoch = '', maxCalls = 32, timeoutMs 
         if (matches.length !== 1) throw new Error(`Expected exactly one object; found ${matches.length}.`);
         return matches[0];
       },
-      rows(ob, fields = ['role', 'name', 'value_preview']) {
-        return (ob.objects ?? []).map(object => {
-          const row = { ref: object.ref };
-          for (const field of fields) {
-            let value = field.split('.').reduce((v, key) => v?.[key], object);
-            if (value && Object.hasOwn(value, 'known')) value = value.known;
-            else if (value?.status === 'known') value = value.value;
-            if (value !== undefined) row[field] = value;
+      rows,
+      list(ob, fields, { offset = 0, limit = 20, max_bytes = 4096 } = {}) {
+        if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100 || !Number.isInteger(max_bytes) || max_bytes < 512 || max_bytes > 6144) throw new Error('list requires offset>=0, limit 1..100, max_bytes 512..6144.');
+        const all = rows(ob, fields);
+        if (offset > all.length) throw new Error('list offset exceeds observation length.');
+        const page = { rows: [], total: all.length, next_offset: null };
+        let i = offset;
+        for (; i < all.length && page.rows.length < limit; i++) {
+          page.rows.push(all[i]);
+          page.next_offset = i + 1 < all.length ? i + 1 : null;
+          if (bytes(page) > max_bytes) {
+            page.rows.pop();
+            if (!page.rows.length) throw Object.assign(new Error('One row exceeds list max_bytes; choose fewer fields or locally shorten text.'), { code: 'row_budget_exceeded' });
+            break;
           }
-          return row;
-        });
+        }
+        page.next_offset = i < all.length ? i : null;
+        return page;
       },
       async focused(scopeRef) {
         const ob = await observe({ scope: { refs: [scopeRef] }, projection: 'detail', fields: ['name', 'role', 'app', 'window'], budget: { max_results: 4 } });

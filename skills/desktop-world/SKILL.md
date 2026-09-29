@@ -13,7 +13,7 @@ once using host.json. Read `node clients/javascript/desktop.mjs help`, then:
 node clients/javascript/desktop.mjs exec <<'JS'
 const ob = await dw.observe();
 state.inventory = ob;
-print(dw.rows(ob, ['kind','name','app']));
+print(dw.list(ob, ['kind','name','app']));
 JS
 ```
 
