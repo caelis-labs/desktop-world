@@ -1,0 +1,12 @@
+{
+  "protocol": "desktop-world/0.1",
+  "world": "e-demo",
+  "op": "world.read",
+  "args": {
+    "target": "r-body",
+    "limit_runes": 4096,
+    "freshness": {
+      "mode": "refresh"
+    }
+  }
+}

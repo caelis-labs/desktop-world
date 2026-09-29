@@ -1,0 +1,47 @@
+{
+  "run_id": "run-001",
+  "request_id": "e-demo:request-001",
+  "epoch": "e-demo",
+  "state": "terminal",
+  "outcome": "partial",
+  "bindings": {
+    "field": "r-input-old"
+  },
+  "steps": [
+    {
+      "id": "focus-window",
+      "state": "satisfied",
+      "delivery": "complete",
+      "verification": "verified"
+    },
+    {
+      "id": "find-field",
+      "state": "satisfied",
+      "delivery": "not_applicable",
+      "verification": "verified"
+    },
+    {
+      "id": "focus-field",
+      "state": "satisfied",
+      "delivery": "complete",
+      "verification": "verified"
+    },
+    {
+      "id": "fill",
+      "state": "failed",
+      "delivery": "none",
+      "verification": "not_requested",
+      "fault": {
+        "code": "ref_gone",
+        "retry_class": "reobserve"
+      }
+    },
+    {
+      "id": "submit",
+      "state": "skipped",
+      "delivery": "none",
+      "verification": "not_requested"
+    }
+  ],
+  "seat_health": "ready"
+}

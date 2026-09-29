@@ -1,0 +1,10 @@
+{
+  "id": "submit",
+  "state": "unknown",
+  "delivery": "complete",
+  "verification": "unknown",
+  "fault": {
+    "code": "verification_timeout",
+    "retry_class": "never_automatically"
+  }
+}

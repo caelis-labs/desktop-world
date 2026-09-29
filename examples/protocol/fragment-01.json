@@ -1,0 +1,6 @@
+{
+  "name": "set_value",
+  "support": "supported",
+  "availability": "blocked",
+  "reason": "read_only"
+}

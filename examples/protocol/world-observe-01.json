@@ -1,0 +1,15 @@
+{
+  "protocol": "desktop-world/0.1",
+  "world": "e-demo",
+  "op": "world.observe",
+  "args": {
+    "scope": {
+      "desktop": true
+    },
+    "projection": "summary",
+    "budget": {
+      "max_results": 32,
+      "max_output_bytes": 16384
+    }
+  }
+}

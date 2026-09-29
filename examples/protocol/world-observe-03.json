@@ -1,0 +1,25 @@
+{
+  "protocol": "desktop-world/0.1",
+  "world": "e-demo",
+  "op": "world.observe",
+  "args": {
+    "scope": {
+      "refs": [
+        "r-window"
+      ]
+    },
+    "projection": "outline",
+    "fields": [
+      "role",
+      "name",
+      "states",
+      "capabilities"
+    ],
+    "budget": {
+      "max_depth": 3,
+      "max_results": 64,
+      "max_visited_nodes": 512,
+      "max_output_bytes": 16384
+    }
+  }
+}

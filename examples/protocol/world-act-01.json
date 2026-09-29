@@ -1,0 +1,89 @@
+{
+  "protocol": "desktop-world/0.1",
+  "world": "e-demo",
+  "op": "world.act",
+  "args": {
+    "epoch": "e-demo",
+    "request_id": "e-demo:request-001",
+    "timeout_ms": 10000,
+    "steps": [
+      {
+        "id": "focus-window",
+        "op": "focus",
+        "target": {
+          "ref": "r-window"
+        },
+        "completion": "verify",
+        "timeout_ms": 2000
+      },
+      {
+        "id": "find-field",
+        "op": "bind",
+        "bind": {
+          "name": "field",
+          "require_unique": true,
+          "locator": {
+            "within": "r-window",
+            "role": "text_field",
+            "name_equals": "内容",
+            "required_capability": "set_value",
+            "max_depth": 3
+          }
+        },
+        "timeout_ms": 2000
+      },
+      {
+        "id": "focus-field",
+        "op": "focus",
+        "target": {
+          "bound": "field"
+        },
+        "completion": "verify",
+        "timeout_ms": 2000
+      },
+      {
+        "id": "fill",
+        "op": "set_value",
+        "target": {
+          "bound": "field"
+        },
+        "set_value": {
+          "text": "Hello Desktop World"
+        },
+        "after": [
+          {
+            "target": {
+              "bound": "field"
+            },
+            "property": "value",
+            "equals_string": "Hello Desktop World"
+          }
+        ],
+        "completion": "verify",
+        "timeout_ms": 2000
+      },
+      {
+        "id": "submit",
+        "op": "keyboard.press",
+        "target": {
+          "bound": "field"
+        },
+        "press": {
+          "key": "Enter",
+          "modifiers": []
+        },
+        "after": [
+          {
+            "target": {
+              "ref": "r-status"
+            },
+            "property": "value",
+            "equals_string": "已提交"
+          }
+        ],
+        "completion": "verify",
+        "timeout_ms": 2000
+      }
+    ]
+  }
+}

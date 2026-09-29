@@ -1,0 +1,31 @@
+name: contracts
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  contracts:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - run: go test -race ./...
+      - run: go vet ./...
+      - run: go run ./examples/headless
+      - run: go run ./examples/embodied
+  native-build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - run: ./script/build_and_run.sh --build-only
+# Hosted CI is deliberately not counted as interactive desktop acceptance.
+# Run tests/acceptance on logged-in, authorized macOS and Windows machines.

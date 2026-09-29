@@ -1,0 +1,45 @@
+# 实现边界与设计映射
+
+原始 `SPEC.md` 和交付 zip 保留不动。本文件记录代码的现状，不修改设计文档中的发布标准。
+
+| 设计契约 | 实现 |
+| --- | --- |
+| 根包 World / Actor / Fact / Ref / Receipt | `api.go`、`validation.go` |
+| registry、revision、scope、snapshot/delta | `internal/engine/world.go`、`actor.go` |
+| bind / wait / 前后条件 / 去重 / 取消 / fence | `internal/engine/execute.go` |
+| Unicode 分页、Anchor、Capture、Asset | `internal/engine/content.go` |
+| 平台边界与固定原生线程 | `internal/backend/driver.go`、engine worker |
+| macOS AX / CGEvent / ScreenCaptureKit | `internal/backend/darwin` |
+| Windows UIA2 / SendInput / GDI | `internal/backend/windows` |
+| 严格 wire 编码与上下文预算 | `internal/wire`、`protocol` |
+| 可注入故障与独立事件记录 | `dwtest`、`tests/contract` |
+| 原生 fixture 与真实输入验收 | `tests/native-fixtures`、`tests/acceptance` |
+
+## 本地实现选择
+
+1. 原生所有权由固定工作线程管理。macOS 使用 ARC retain 的 AX 对象，Windows 使用同一 MTA apartment 的 COM 引用；World 关闭时等待实际调用退出后释放。超时不能催生无限原生工作线程。
+2. 查询按声明 scope / depth / node budget 遍历。原生 registry 与 Go registry 均有上限；达到上限报不完整或资源耗尽，不复用公共 Ref。
+3. 当前采用拉取式物化视图。每个 cursor 保存已交付投影，Changes 做有界校对并生成 upsert/remove；超过 revision 距离或 TTL 则 reset。尚无原生 observer 或后台全桌面扫描。
+4. 输出分页来自固定采样批次；分页之间不重新扫描桌面。每页可独立同步，不把未交付的对象放入该页 cursor 的基线。
+5. 属性刷新时间不推进 material revision。字段变化、生命周期、Seat、环境/权限/拓扑变化推进 revision。拓扑改变使旧 cursor 需要重建，旧 Point 不可执行。
+6. 只允许内建键名与有限谓词。`primary` 在 macOS 映射 meta，在 Windows 映射 control；不是“所有应用都有相同快捷键”的保证。
+7. 原生 target 参数只来自引擎校验结果。Agent 不能传原生 handle、函数名或任意属性名，也不能选择 Actor。
+8. 文本版本是单调分配的序号；用于内部比较的摘要不会输出为 text version，避免公开低熵文本的内容哈希。保护字段不导出 value。
+9. 资产留在本地，绑定 Actor 与当前权限 generation，提供 PNG 字节和桌面坐标变换。没有自动上传或 OCR。
+10. Go API 默认零值表示采用预算默认值；错误由结构化 Fault 给出。对尚未使用的 control-step 参数也应保持严格校验，不能退化为任意脚本。
+
+## 尚未完成的正式发布条件
+
+- Windows 11 交互式桌面验收；Windows arm64 尚不支持。
+- macOS amd64 实机运行（当前有交叉构建）；最低 macOS 14 实机运行。
+- AXObserver / UIA event invalidation；更完整的人类输入监测及权限矩阵。
+- 多显示器混合缩放、旋转、负原点、锁屏 / RDP / 用户切换实测。
+- 独立签名宿主与 Wails 集成 smoke，以及原生 / Electron / 浏览器 / Canvas 对照矩阵。
+- provider hang 的 helper 隔离评估。嵌入式 native 调用若永久不退出，Close 返回 close_incomplete；不承诺硬取消。
+- 大型真实 provider 的性能测量和输入竞争压力测试。没有发布 token 节约率或通用成功率。
+
+## 原生依据
+
+Windows COM apartment / worker 生命周期按 [Microsoft Threading Issues](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-threading) 实现；SendInput 的返回计数与 UIPI 限制按 [Microsoft SendInput](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput) 区分 delivery。COM vtable 与 IID 核对了微软的 `UIAutomationClient.h`，不依赖猜测接口布局。
+
+macOS SDK 的 AX、CGEvent、ScreenCaptureKit 公开头文件参与本机构建；不调用私有 AX→CGWindow ID API。截图只声明 visible_region，因此不需要把 AXWindow 与独立 capture window 进行不可靠关联。
