@@ -180,3 +180,38 @@ test('next retains native query across scripts and never guesses continuation ar
   assert.ok((await session.execute('await dw.next(state.ob);')).error);
   assert.equal(requests.length,2);
 });
+
+test('fragmented subtree recipe preserves Ref order, native blocks, redaction and clipping uncertainty', async () => {
+  const {readFile}=await import('node:fs/promises');
+  const recipe=await readFile(new URL('../../scripts/read-fragmented-text.js',import.meta.url),'utf8');
+  const sample={sample_start:'2026-09-30T00:00:00Z',sample_end:'2026-09-30T00:00:00.1Z',visited_nodes:9};
+  const pages=[
+    {objects:[{ref:'doc',role:'document'},{ref:'p',parent:'doc',role:'container'},{ref:'q',parent:'doc',role:'container'},{ref:'a',parent:'p',role:'text',value_preview:{known:'Repeat'}}],coverage:{...sample,complete:false,continuation:'next'}},
+    {objects:[{ref:'space',parent:'p',role:'text',value_preview:{known:' '}},{ref:'b',parent:'p',role:'text',value_preview:{known:'Repeat'}},{ref:'unicode',parent:'q',role:'text',value_preview:{known:'中文 🌍'}},{ref:'long',parent:'q',role:'text',value_preview:{known:'x'.repeat(383)}},{ref:'secret',parent:'doc',role:'text_field',value_preview:{status:'redacted'}}],coverage:{...sample,complete:true}}
+  ];
+  const session=createSession(async request=>{assert.equal(request.op,'observe');return {result:pages.shift()}});
+  await session.execute("state.document='doc'");
+  const result=await session.execute(recipe);
+  assert.equal(result.error,undefined);
+  assert.equal(result.metrics.calls,2);
+  const output=result.outputs[0];
+  assert.deepEqual(output.blocks.map(b=>b.fragments.map(f=>f.ref)),[['a','space','b'],['unicode','long']]);
+  assert.equal(output.blocks[0].fragments.map(f=>f.text).join(''),'Repeat Repeat');
+  assert.equal(output.blocks[1].fragments[0].text,'中文 🌍');
+  assert.equal(output.blocks[1].fragments[1].possibly_clipped,true);
+  assert.deepEqual(output.redacted,[{ref:'secret',status:'redacted'}]);
+  assert.equal(output.incomplete,true);
+  assert.equal(result.observations.length,2);
+});
+
+test('fragmented subtree recipe reports native incomplete sample without expanding scope', async () => {
+  const {readFile}=await import('node:fs/promises');
+  const recipe=await readFile(new URL('../../scripts/read-fragmented-text.js',import.meta.url),'utf8');
+  const session=createSession(async request=>{assert.deepEqual(request.args.scope,{refs:['doc']});return {result:{objects:[{ref:'doc',role:'document'},{ref:'unknown',role:'text',parent:'doc',value_preview:{status:'unknown'}}],coverage:{complete:false,unavailable_sources:['ax_timeout']}}}});
+  await session.execute("state.document='doc'");
+  const result=await session.execute(recipe);
+  assert.equal(result.metrics.calls,1);
+  assert.equal(result.outputs[0].incomplete,true);
+  assert.deepEqual(result.outputs[0].blocks[0].fragments,[{ref:'unknown',status:'unknown'}]);
+  assert.deepEqual(result.observations[0].unavailable_sources,['ax_timeout']);
+});

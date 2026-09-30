@@ -22,7 +22,7 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
 </dict></plist>
 PLIST
 codesign --force --sign - "$APP_BUNDLE"
-launch() { /usr/bin/open -n "$APP_BUNDLE" --args --title "${DW_FIXTURE_TITLE:-Desktop World Native Fixture}" --log "${DW_FIXTURE_LOG:-$ROOT_DIR/artifacts/native-fixture.jsonl}"; }
+launch() { /usr/bin/open -n "$APP_BUNDLE" --args --title "${DW_FIXTURE_TITLE:-Desktop World Native Fixture}" --log "${DW_FIXTURE_LOG:-$ROOT_DIR/artifacts/native-fixture.jsonl}" --slow-count "${DW_FIXTURE_SLOW_COUNT:-0}"; }
 case "$MODE" in
  --build-only) ;;
  --debug) lldb -- "$APP_BINARY" ;;

@@ -1,0 +1,18 @@
+=== RUN   TestNativeValueFixture
+    value_test.go:81: Value checkbox text="0" source=value preview_status=known
+    value_test.go:82: Mixed checkbox text="2" source=value preview_status=known
+    value_test.go:83: Numeric slider text="37" source=value preview_status=known
+    value_test.go:84: 内容 text="" source=value preview_status=known
+    value_test.go:85: Unicode boundary full value retained (388 runes); preview does not split emoji
+    value_test.go:131: 内容 text="Value 联调 🌍" source=value preview_status=known
+    value_test.go:139: numeric slider37 and mixed checkbox2 value predicates verified
+    value_test.go:140: checkbox-on delivery=complete verification=verified outcome=completed fault=<nil>
+    value_test.go:141: Value checkbox text="1" source=value preview_status=known
+    value_test.go:142: checkbox-off delivery=complete verification=verified outcome=completed fault=<nil>
+    value_test.go:143: Value checkbox text="0" source=value preview_status=known
+    value_test.go:144: checkbox-failed-condition delivery=complete verification=not_met outcome=partial fault=verification_timeout: verification_timeout
+    value_test.go:145: Value checkbox text="1" source=value preview_status=known
+    value_test.go:146: label-is-not-value delivery=complete verification=unknown outcome=unknown fault=verification_timeout: verification_timeout
+    value_test.go:167: independent app events checkbox=[1 0 1] label_action=1; recovery sent no input
+--- PASS: TestNativeValueFixture (2.06s)
+PASS

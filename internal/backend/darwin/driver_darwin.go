@@ -20,6 +20,7 @@ import (
 	"fmt"
 	dw "github.com/caelis-labs/desktop-world"
 	"github.com/caelis-labs/desktop-world/internal/backend"
+	"time"
 	"unsafe"
 )
 
@@ -88,6 +89,11 @@ func (d *Driver) Permissions(c context.Context, r dw.PermissionRequest) (v []dw.
 	return
 }
 func (d *Driver) Query(c context.Context, q backend.Query) (v backend.Page, e error) {
+	// Leave time for JSON encoding, registry commit and authorization checks.
+	// Cancellation is still bounded by the native messaging timeout.
+	if deadline, ok := c.Deadline(); ok {
+		q.ReadTimeoutMS = max(1, time.Until(deadline).Milliseconds()*3/4)
+	}
 	e = d.call(c, "query", q, &v)
 	return
 }

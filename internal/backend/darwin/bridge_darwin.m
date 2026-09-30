@@ -47,7 +47,46 @@ static NSDictionary *err(NSString *code) {
         @{@"Code" : code, @"Message" : code, @"RetryClass" : @"reobserve"}
   };
 }
+// Keep previews, full reads and predicates on the same AX scalar contract.
+// Unsupported values stay unknown; labels are a separately identified source.
+static NSString *scalarText(id value) {
+  if ([value isKindOfClass:NSString.class]) return value;
+  if ([value isKindOfClass:NSNumber.class]) return [value stringValue];
+  return nil;
+}
+// Bound previews in UTF-16 without cutting a surrogate pair. Full scalar reads
+// retain the entire value; preview-boundary hits must not prove full text.
+static NSString *scalarPreview(NSString *value) {
+  NSUInteger end = MIN(value.length, 384);
+  if (end < value.length && end > 0 &&
+      CFStringIsSurrogateHighCharacter([value characterAtIndex:end - 1]) &&
+      CFStringIsSurrogateLowCharacter([value characterAtIndex:end])) end--;
+  return [value substringToIndex:end];
+}
+// Query-local read budget on the engine's fixed native worker. Do not alter
+// write semantics or carry a cancelled query's deadline into a subsequent read.
+static _Thread_local DWCancel *queryCancel;
+static _Thread_local double queryDeadline;
+static _Thread_local BOOL queryTimedOut;
+static double monotonicSeconds(void) { return NSProcessInfo.processInfo.systemUptime; }
+static BOOL queryStopped(void) {
+  if (!queryDeadline) return NO;
+  if (cancelled(queryCancel) || monotonicSeconds() >= queryDeadline) {
+    queryTimedOut = YES;
+    return YES;
+  }
+  return NO;
+}
+static BOOL prepareRead(AXUIElementRef e) {
+  if (queryStopped()) return NO;
+  if (queryDeadline)
+    AXUIElementSetMessagingTimeout(e, (float)MIN(0.05, MAX(0.001, queryDeadline - monotonicSeconds())));
+  else
+    AXUIElementSetMessagingTimeout(e, 0.25);
+  return YES;
+}
 static id attr(AXUIElementRef e, CFStringRef k) {
+  if (!prepareRead(e)) return nil;
   CFTypeRef v = NULL;
   if (AXUIElementCopyAttributeValue(e, k, &v) != kAXErrorSuccess)
     return nil;
@@ -201,6 +240,9 @@ static NSString *roleName(NSString *r) {
     @"AXRow" : @"list_item",
     @"AXTabGroup" : @"tab",
     @"AXWebArea" : @"document",
+    @"AXParagraph" : @"paragraph",
+    @"AXHeading" : @"heading",
+    @"AXLink" : @"link",
     @"AXImage" : @"image",
     @"AXOutline" : @"list",
     @"AXSheet" : @"container",
@@ -277,16 +319,14 @@ static NSDictionary *node(DWContext *c, NSString *k) {
         [v isKindOfClass:NSNumber.class] ? known(@([v boolValue])) : unknown();
   };
   states[@"protected"] = known(@(protected));
+  if (queryStopped()) return nil;
   Boolean writable = false;
   AXError writableError =
       AXUIElementIsAttributeSettable(e, kAXValueAttribute, &writable);
   states[@"read_only"] =
       writableError == kAXErrorSuccess ? known(@((BOOL)!writable)) : unknown();
   id value = protected ? nil : attr(e, kAXValueAttribute);
-  NSString *valueText = [value isKindOfClass:NSString.class] ? value
-                        : [value isKindOfClass:NSNumber.class]
-                            ? [value stringValue]
-                            : nil;
+  NSString *valueText = scalarText(value);
   id pos = attr(e, kAXPositionAttribute), sz = attr(e, kAXSizeAttribute);
   CGPoint pt;
   CGSize size;
@@ -306,6 +346,7 @@ static NSDictionary *node(DWContext *c, NSString *k) {
       }
     });
   }
+  if (queryStopped()) return nil;
   CFArrayRef rawActions = NULL;
   AXUIElementCopyActionNames(e, &rawActions);
   NSArray *actions = CFBridgingRelease(rawActions);
@@ -357,8 +398,7 @@ static NSDictionary *node(DWContext *c, NSString *k) {
       @"Name" : [title isKindOfClass:NSString.class] ? known(title) : unknown(),
       @"ValuePreview" : protected
           ? @{@"Status" : @"redacted"}
-          : (valueText ? known([valueText
-                             substringToIndex:MIN(valueText.length, 384)])
+          : (valueText ? known(scalarPreview(valueText))
                        : unknown()),
       @"URI" : protected ? @{@"Status" : @"redacted"} : ([nativeURI isKindOfClass:NSString.class] && [nativeURI length] ? known(nativeURI) : unknown()),
       @"States" : states,
@@ -413,7 +453,7 @@ static NSDictionary *seat(DWContext *c) {
     @"Intervention" : @"best_effort"
   };
 }
-static NSDictionary *query(DWContext *c, NSDictionary *q, DWCancel *cancel) {
+static NSDictionary *queryPage(DWContext *c, NSDictionary *q, DWCancel *cancel) {
   if (!AXIsProcessTrusted())
     return err(@"permission_denied");
   NSMutableArray *queue = [NSMutableArray array];
@@ -439,7 +479,7 @@ static NSDictionary *query(DWContext *c, NSDictionary *q, DWCancel *cancel) {
   NSMutableSet *seen = [NSMutableSet set];
   NSInteger visited = 0;
   while (queue.count) {
-    if (cancelled(cancel) || visited >= max) {
+    if (queryStopped() || cancelled(cancel) || visited >= max) {
       complete = NO;
       break;
     };
@@ -464,6 +504,7 @@ static NSDictionary *query(DWContext *c, NSDictionary *q, DWCancel *cancel) {
     AXUIElementRef e = element(c, k);
     CFStringRef field = summary ? kAXWindowsAttribute : kAXChildrenAttribute;
     CFIndex count = 0;
+    if (!prepareRead(e)) { complete = NO; break; }
     AXError rc = AXUIElementGetAttributeValueCount(e, field, &count);
     if (rc == kAXErrorAttributeUnsupported)
       continue;
@@ -477,6 +518,7 @@ static NSDictionary *query(DWContext *c, NSDictionary *q, DWCancel *cancel) {
     if (take <= 0)
       continue;
     CFArrayRef raw = NULL;
+    if (!prepareRead(e)) { complete = NO; break; }
     rc = AXUIElementCopyAttributeValues(e, field, 0, take, &raw);
     if (rc != kAXErrorSuccess) {
       complete = NO;
@@ -499,10 +541,22 @@ static NSDictionary *query(DWContext *c, NSDictionary *q, DWCancel *cancel) {
       @"Nodes" : nodes,
       @"Complete" : @(complete),
       @"Visited" : @(visited),
-      @"Seat" : seat(c),
-      @"Unavailable" : complete ? @[] : @[ @"ax_partial" ]
+      @"Seat" : queryStopped() ? @{@"Pointer": unknown(), @"Health": @"ready", @"Intervention": @"best_effort"} : seat(c),
+      @"Unavailable" : complete ? @[] : (queryTimedOut ? @[ @"ax_timeout" ] : (visited >= max || queue.count ? @[ @"ax_node_budget" ] : @[ @"ax_partial" ]))
     }
   };
+}
+static NSDictionary *query(DWContext *c, NSDictionary *q, DWCancel *cancel) {
+  queryCancel = cancel;
+  queryTimedOut = NO;
+  long long allowance = [q[@"ReadTimeoutMS"] longLongValue];
+  queryDeadline = monotonicSeconds() + (allowance > 0 ? allowance : 2000) / 1000.0;
+  @try {
+    return queryPage(c, q, cancel);
+  } @finally {
+    queryCancel = NULL;
+    queryDeadline = 0;
+  }
 }
 static NSDictionary *outcome(NSString *d, NSString *f) {
   NSMutableDictionary *r = [@{@"Delivery" : d} mutableCopy];
@@ -602,6 +656,9 @@ static NSDictionary *perform(DWContext *c, NSDictionary *o, DWCancel *cancel) {
           e, kAXValueAttribute, (__bridge CFTypeRef)s[@"SetValue"][@"Text"]);
     if ([op isEqual:@"focus"]) {
       NSString *role = attr(e, kAXRoleAttribute);
+      // Attribute reads restore the ordinary read allowance; focus dispatch
+      // retains the existing longer write allowance.
+      AXUIElementSetMessagingTimeout(e, 1.0);
       if ([role isEqual:@"AXWindow"]) {
         pid_t pid = 0;
         AXUIElementGetPid(e, &pid);
@@ -982,8 +1039,8 @@ char *dw_call(void *p, const char *opstr, const char *json, void *cancel) {
           };
         else {
           NSString *source = @"value";
-          id v = attr(e, kAXValueAttribute);
-          if (![v isKindOfClass:NSString.class]) {
+          id v = scalarText(attr(e, kAXValueAttribute));
+          if (!v) {
             v = attr(e, kAXTitleAttribute);
             source = @"label";
           }

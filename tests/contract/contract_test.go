@@ -590,3 +590,31 @@ func TestNativeTraversalRootSurvivesFirstPageAndURIIsOptIn(t *testing.T) {
 		t.Fatal("URI must be opt-in", err)
 	}
 }
+
+func TestValuePredicateDoesNotVerifyLabel(t *testing.T) {
+	h := setup(t)
+	h.f.Update("submit", func(n *dwtest.Node) { n.Text = "提交"; n.TextSource = "label" })
+	want := "提交"
+	p := h.plan("label-is-not-value", dw.Step{ID: "label", Op: "invoke", Target: target(h.refs["提交"]), Completion: "verify", Timeout: 80 * time.Millisecond, After: []dw.Predicate{{Target: target(h.refs["提交"]), Property: "value", EqualsString: &want}}})
+	r, e := h.a.Execute(ctx, p)
+	if code(e) != "verification_timeout" || r.Steps[0].Verification != dw.VerifyUnknown || r.Steps[0].Delivery != dw.DeliveryComplete {
+		t.Fatalf("label proved value: %+v %v", r, e)
+	}
+	again, _ := h.a.Execute(ctx, p)
+	if again.RunID != r.RunID || len(h.f.Events()) != 1 {
+		t.Fatal("failed verification replayed input")
+	}
+}
+func TestIncompleteChangesDoNotInferRemovals(t *testing.T) {
+	h := setup(t)
+	ob, e := h.a.Observe(ctx, dw.ObserveRequest{Scope: dw.Scope{Desktop: true}, Projection: dw.ProjectionOutline})
+	if e != nil {
+		t.Fatal(e)
+	}
+	h.f.Remove("field")
+	h.f.SetIncomplete(true)
+	delta, e := h.a.Changes(ctx, dw.ChangeRequest{Cursor: ob.Cursor})
+	if e != nil || !delta.ResetRequired || delta.Coverage.Complete || len(delta.Removed) != 0 {
+		t.Fatalf("partial query inferred removal: %+v %v", delta, e)
+	}
+}

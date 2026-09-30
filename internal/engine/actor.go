@@ -475,7 +475,7 @@ func (a *actor) Observe(ctx context.Context, req dw.ObserveRequest) (dw.Observat
 	} else {
 		all, cov, e = a.query(ctx, r)
 		if e != nil {
-			return dw.Observation{}, e
+			return dw.Observation{Epoch: a.w.epoch, Coverage: cov}, e
 		}
 	}
 	if e = a.check(ctx, in, false); e != nil {
@@ -671,6 +671,8 @@ func (a *actor) changes(ctx context.Context, r dw.ChangeRequest) (dw.ChangeSet, 
 		out.Seat = &s
 	}
 	if !cov.Complete {
+		// Absence from a partial traversal is not evidence of removal.
+		out.Removed = nil
 		out.InvalidatedScopes = []dw.Scope{v.request.Scope}
 		out.ResetRequired = true
 		out.ResetReason = "coverage_incomplete"
