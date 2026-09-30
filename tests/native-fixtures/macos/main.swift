@@ -23,12 +23,21 @@ func record(_ event: String, _ value: String = "") {
   file.seekToEndOfFile()
   file.write(data)
 }
+final class SlowField: NSTextField {
+  override func accessibilityValue() -> String? {
+    Thread.sleep(forTimeInterval: 0.025)
+    return super.accessibilityValue()
+  }
+}
 typealias Field = NSTextField
 final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
   var window: NSWindow!
   var field = Field(frame: NSRect(x: 24, y: 210, width: 430, height: 30))
   var status = NSTextField(labelWithString: "ready")
   var count = 0
+  var checkbox: NSButton!
+  var mixed: NSButton!
+  var slider: NSSlider!
   var monitor: Any?
   func applicationDidFinishLaunching(_ notification: Notification) {
     let menu = NSMenu()
@@ -48,7 +57,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     menu.addItem(editItem)
     NSApp.mainMenu = menu
     window = NSWindow(
-      contentRect: NSRect(x: 180, y: 200, width: 500, height: 310),
+      contentRect: NSRect(x: 180, y: 200, width: 500, height: 460),
       styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false
     )
     window.title = fixtureTitle
@@ -77,6 +86,36 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     popup.addItems(withTitles: ["第一项", "第二项", "第三项"])
     popup.setAccessibilityLabel("选择")
     window.contentView?.addSubview(popup)
+    checkbox = NSButton(checkboxWithTitle: "Value checkbox", target: self, action: #selector(toggleValue))
+    checkbox.frame = NSRect(x: 24, y: 320, width: 210, height: 28)
+    window.contentView?.addSubview(checkbox)
+    mixed = NSButton(checkboxWithTitle: "Mixed checkbox", target: self, action: #selector(toggleMixed))
+    mixed.allowsMixedState = true
+    mixed.state = .mixed
+    mixed.frame = NSRect(x: 250, y: 320, width: 210, height: 28)
+    window.contentView?.addSubview(mixed)
+    slider = NSSlider(value: 37, minValue: 0, maxValue: 100, target: nil, action: nil)
+    slider.setAccessibilityLabel("Numeric slider")
+    slider.frame = NSRect(x: 24, y: 360, width: 200, height: 28)
+    window.contentView?.addSubview(slider)
+    let labelOnly = NSButton(title: "Label only", target: self, action: #selector(labelAction))
+    labelOnly.frame = NSRect(x: 250, y: 360, width: 160, height: 28)
+    window.contentView?.addSubview(labelOnly)
+    let secret = NSSecureTextField(frame: NSRect(x: 24, y: 400, width: 200, height: 28))
+    secret.setAccessibilityLabel("Protected field")
+    secret.stringValue = "fixture-secret"
+    window.contentView?.addSubview(secret)
+    let boundary = NSTextField(labelWithString: String(repeating: "x", count: 383) + "🌍tail")
+    boundary.frame = NSRect(x: 250, y: 400, width: 200, height: 28)
+    boundary.setAccessibilityLabel("Unicode preview boundary")
+    window.contentView?.addSubview(boundary)
+    let slowCount = Int(argument("--slow-count", "0")) ?? 0
+    for i in 0..<slowCount {
+      let slow = SlowField(labelWithString: "Slow row \(i)")
+      slow.frame = NSRect(x: 24, y: 10, width: 200, height: 20)
+      slow.setAccessibilityLabel("Slow row \(i)")
+      window.contentView?.addSubview(slow)
+    }
     monitor = NSEvent.addLocalMonitorForEvents(matching: [
       .keyDown, .leftMouseDown, .leftMouseUp, .leftMouseDragged, .scrollWheel,
     ]) { event in
@@ -91,6 +130,9 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     NSApp.activate(ignoringOtherApps: true)
     record("ready", fixtureTitle)
   }
+  @objc func toggleValue() { record("checkbox", String(checkbox.state.rawValue)) }
+  @objc func toggleMixed() { record("mixed", String(mixed.state.rawValue)) }
+  @objc func labelAction() { record("label_action") }
   @objc func submit() {
     count += 1
     status.stringValue = "submitted:\(count)"

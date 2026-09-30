@@ -648,7 +648,10 @@ func (a *actor) predicates(ctx context.Context, ps []dw.Predicate, b map[string]
 			if e != nil {
 				return e
 			}
-			ok = v.Value.Status == dw.FactKnown && v.Value.Value != nil && reflect.DeepEqual(v.Value.Value, p.EqualsString)
+			if v.Source != "value" || v.Value.Status != dw.FactKnown || v.Value.Value == nil {
+				return fault("fact_unknown")
+			}
+			ok = reflect.DeepEqual(v.Value.Value, p.EqualsString)
 		case "role":
 			ok = p.EqualsString != nil && o.Role == *p.EqualsString
 		case "lifecycle":

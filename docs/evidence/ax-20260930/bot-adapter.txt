@@ -1,0 +1,31 @@
+Caelis Bot adapter validation — 2026-09-30
+Repository: $BOT_REPO
+Baseline: e8a6a1138892c3c01fcdf82a2d504c4767ef230d
+Go: go1.26.8 darwin/arm64
+
+Temporary modfile copies Bot's go.mod/go.sum and replaces Desktop World with:
+$DW_REPO
+No Bot tracked files, dependency pins, or installed application were changed.
+
+Command:
+GOWORK=off GOCACHE=$VALIDATION_DIR/go-cache go test -modfile=$VALIDATION_DIR/go.mod -race ./internal/desktopcontrol
+Observed result:
+ok github.com/caelis-labs/caelis-bot/internal/desktopcontrol 8.225s
+
+Command:
+GOWORK=off GOCACHE=$VALIDATION_DIR/go-cache CAELIS_BOT_TEST_DESKTOP_WORLD=$DW_REPO/bin/desktop-world go test -modfile=$VALIDATION_DIR/go.mod ./internal/desktopcontrol -run TestPackagedHelperReadAndDeniedInput -count=1 -v
+Observed result:
+PASS TestPackagedHelperReadAndDeniedInput (0.41s)
+ok github.com/caelis-labs/caelis-bot/internal/desktopcontrol 1.193s
+The real child helper handshook, returned a bounded read response, refused empty
+input steps, and recovered the original refusal after EndTurn. It did not receive
+any application grant or UI input. This was a rebuilt local helper, not a released
+Bot payload. The sandboxed transport test does not establish successful AX reads.
+
+These are adapter regression and transport checks, not real Bot/Wails/model E2E.
+Native AppKit and Chrome AX E2E evidence is recorded separately by the repair agent.
+
+Final rerun against the final rebuilt helper/source:
+GOWORK=off GOCACHE=$VALIDATION_DIR/go-cache CAELIS_BOT_TEST_DESKTOP_WORLD=$DW_REPO/bin/desktop-world go test -modfile=$VALIDATION_DIR/go.mod -race ./internal/desktopcontrol -count=1 -v
+PASS: package 6.405s; real child helper read/refusal/reconcile 0.29s;
+private control pending-data EndTurn/reconcile fixture 1.02s.

@@ -17,6 +17,8 @@ type Query struct {
 	Desktop         bool
 	Depth, MaxNodes int
 	Summary, Detail bool
+	// Native traversal allowance; output pagination is independently budgeted.
+	ReadTimeoutMS int64
 }
 type Page struct {
 	Nodes       []Node

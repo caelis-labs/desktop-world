@@ -79,3 +79,12 @@ node clients/javascript/desktop.mjs stop
 ```
 
 正常退出关闭 helper stdin、取消未完成工作并请求释放持有输入。强杀不等于已清理；传输不确定时不得重放原脚本，先查看原请求和收据。新 helper 进程没有跨进程 exactly-once 保证。
+
+## Fragmented text recipe
+
+For many short AX leaves, execute [scripts/read-fragmented-text.js](../scripts/read-fragmented-text.js)
+after storing an observed document/container Ref in `state.document`. The
+[workflow](../skills/desktop-world/references/fragmented-text.md) preserves source
+Refs, depth-first native order, block boundaries, Unicode and duplicate visible
+text. It has explicit page/node/deadline/output bounds and reports redaction,
+unknown values and possible preview clipping. It never captures or expands scope.

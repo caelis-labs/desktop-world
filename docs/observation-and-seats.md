@@ -62,3 +62,11 @@ macOS 的系统级 AX 焦点属性在本机出现 `AXCannotComplete`，前台应
 Process Manager API 已被 Apple 标记弃用，但当前 SDK 与本机仍支持；替代的 AppKit 缓存语义不满足此无主 RunLoop 的嵌入场景。未接管宿主事件循环，也未使用私有 API。未来发行须在支持的 macOS 版本矩阵验证这些查询；查询失败返回未知/不完整，不能使用旧前台值。
 
 Finder 的内联改名框直接挂在应用下，AXWindow 和 AXFocusedWindow 都返回无值。实现保留“窗口未知”，在 **键盘目标 Ref 等于实时焦点、目标 App 等于实时前台 App、Actor 确实获授权** 时支持该无窗口编辑器；窗口范围不会因此扩大。窗口不明确的鼠标输入仍被拒绝。此为对原 SPEC 假设“所有键盘目标都有窗口”的有证据修正，不是独立后台焦点。
+
+## Bounded native recovery and fragmented text
+
+The [AX regression evidence](ax-regressions.md) documents numeric value
+verification, partial timeout coverage, independent traversal/output budgets and
+recovery without input replay. For fragmented browser text, use the [bounded
+subtree recipe](../skills/desktop-world/references/fragmented-text.md), retaining
+source Refs, native block order and explicit preview uncertainty.

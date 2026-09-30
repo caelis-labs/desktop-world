@@ -250,3 +250,23 @@ func TestControlCapacityDuringNativeWrite(t *testing.T) {
 	go io.Copy(io.Discard, outR)
 	<-done
 }
+
+func TestHelperQueryFaultRetainsDiagnosticsOnlyCoverage(t *testing.T) {
+	s, f := setup(t, Config{})
+	r := refs(t, s)
+	f.SetReadFault(dw.NewFault("provider_unavailable", "fixture provider unavailable", "reobserve"))
+	reply := call(s, "query-fault", "observe", map[string]any{"scope": map[string]any{"refs": []dw.Ref{r["Desktop World Fixture"]}}, "projection": "outline", "fields": []string{"name"}, "budget": map[string]int{"max_output_bytes": 4096}})
+	if reply.Error == nil || reply.Error.Code != "provider_unavailable" {
+		t.Fatalf("fault lost: %+v", reply)
+	}
+	var ob dw.Observation
+	if e := protocol.Decode(reply.Result.(json.RawMessage), &ob); e != nil {
+		t.Fatal(e)
+	}
+	if len(ob.Objects) != 0 || ob.Coverage.Complete || !ob.Coverage.Dirty || ob.Coverage.SampleStart.IsZero() || ob.Coverage.SampleEnd.Before(ob.Coverage.SampleStart) || len(ob.Coverage.UnavailableSources) != 1 || ob.Coverage.UnavailableSources[0] != "provider_unavailable" {
+		t.Fatalf("diagnostics lost or leaked objects: %+v", ob)
+	}
+	if len(ob.Coverage.Scope.Refs) != 1 || ob.Coverage.Scope.Refs[0] != r["Desktop World Fixture"] {
+		t.Fatal("fault coverage changed scope")
+	}
+}

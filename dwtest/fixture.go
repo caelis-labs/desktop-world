@@ -22,6 +22,7 @@ type Node struct {
 	ID, Parent, App, Window string
 	Object                  dw.Object
 	Text                    string
+	TextSource              string
 }
 type Event struct {
 	Operation, Target, Text string
@@ -252,7 +253,11 @@ func (f *Fixture) ReadText(ctx context.Context, k backend.Key) (backend.Text, er
 	if n.Object.ValuePreview.Value != nil && v == "" {
 		v = *n.Object.ValuePreview.Value
 	}
-	return backend.Text{Value: dw.Known(v), Source: "value"}, ctx.Err()
+	source := n.TextSource
+	if source == "" {
+		source = "value"
+	}
+	return backend.Text{Value: dw.Known(v), Source: source}, ctx.Err()
 }
 func (f *Fixture) focus(k backend.Key) {
 	n := f.nodes[k]
