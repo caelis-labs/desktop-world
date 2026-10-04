@@ -108,7 +108,13 @@ replace a stale Ref with a similarly named object.
 
 Use `schema read`, `schema sync`, `schema capture`, `schema get`, or `schema cancel`
 only as needed. Capture, if granted, returns local image paths from the host's
-chosen assets directory. View those images as separate evidence. `get` retrieves
+chosen assets directory. For window pixels, explicitly call `dw.captureWindows(appRef)`
+(or observe projection `capture_windows`) before capturing that returned Ref.
+macOS capture Refs are separate native identities; do not join an AX window by
+title/bounds. Request modest pixel dimensions. Window images have target-local
+coordinates and cannot authorize desktop clicks. Hidden/minimized/unavailable
+windows fail; never substitute an old image or silently capture the desktop.
+View those images as separate evidence. `get` retrieves
 the existing receipt; `cancel` stops future steps and requests cleanup but cannot
 undo input already sent. Save receipts even when `error` is present, and preserve
 partial/unknown results in your report. Do not replay an uncertain prefix.

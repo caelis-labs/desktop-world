@@ -84,8 +84,19 @@ final class OrderRow: NSView {
     super.draw(rect)
   }
 }
+final class CaptureCanvas: NSView {
+  var green = false
+  override func draw(_ rect: NSRect) {
+    (green ? NSColor(srgbRed: 0, green: 0.85, blue: 0, alpha: 1) : NSColor(srgbRed: 0.9, green: 0, blue: 0, alpha: 1)).setFill()
+    rect.fill()
+  }
+}
 final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, WKScriptMessageHandler, WKNavigationDelegate {
   var window: NSWindow!
+  var canvasWindow: NSWindow!
+  var canvas: CaptureCanvas!
+  var capturePopup: NSWindow?
+  var captureSheet: NSWindow?
   var field = Field(frame: NSRect(x: 24, y: 210, width: 430, height: 30))
   var status = NSTextField(labelWithString: "ready")
   var count = 0
@@ -213,6 +224,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, WKSc
   }
   func setupSemanticCase() {
     window.contentView?.subviews.forEach { $0.removeFromSuperview() }
+    if semanticCase == "capture" { setupCapture(); return }
     if semanticCase == "selection" {
       orders = [OrderRow("Order A", y: 370), OrderRow("Order B", y: 310)]
       orders[1].selected = true // Existing unrelated choice must survive A's changes.
@@ -248,6 +260,55 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, WKSc
     let unsupported = NSButton(title: "Label only", target: self, action: #selector(labelAction))
     unsupported.frame = NSRect(x: 160, y: 160, width: 140, height: 32)
     window.contentView?.addSubview(unsupported)
+  }
+  func createCanvas() {
+    canvasWindow = NSWindow(contentRect: NSRect(x: 180, y: 200, width: 500, height: 530), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+    canvasWindow.title = fixtureTitle + " Canvas"
+    canvasWindow.isReleasedWhenClosed = false
+    canvas = CaptureCanvas(frame: canvasWindow.contentView!.bounds)
+    canvas.autoresizingMask = [.width, .height]
+    canvasWindow.contentView = canvas
+    canvasWindow.orderBack(nil)
+    record("canvas_created", String(canvasWindow.windowNumber))
+  }
+  func setupCapture() {
+    createCanvas()
+    let actions: [(String, Selector)] = [("更新画布", #selector(updateCanvas)), ("移动缩放", #selector(moveCanvas)), ("最小化画布", #selector(minimizeCanvas)), ("隐藏画布", #selector(hideCanvas)), ("恢复画布", #selector(restoreCanvas)), ("重建画布", #selector(recreateCanvas)), ("打开弹窗", #selector(openCapturePopup)), ("打开Sheet", #selector(openCaptureSheet)), ("关闭Sheet", #selector(closeCaptureSheet))]
+    for (i, action) in actions.enumerated() {
+      let button = NSButton(title: action.0, target: self, action: action.1)
+      button.frame = NSRect(x: 24, y: 470 - i * 44, width: 190, height: 32)
+      window.contentView?.addSubview(button)
+    }
+  }
+  @objc func updateCanvas() {
+    canvas.green = true; canvas.needsDisplay = true; canvas.displayIfNeeded()
+    record("canvas_updated", "green")
+  }
+  @objc func moveCanvas() {
+    canvasWindow.setFrame(NSRect(x: 220, y: 240, width: 410, height: 390), display: true)
+    record("canvas_moved_resized", NSStringFromRect(canvasWindow.frame))
+  }
+  @objc func minimizeCanvas() { canvasWindow.miniaturize(nil); record("canvas_minimized") }
+  @objc func hideCanvas() { canvasWindow.orderOut(nil); record("canvas_hidden") }
+  @objc func restoreCanvas() { canvasWindow.deminiaturize(nil); canvasWindow.orderBack(nil); record("canvas_restored") }
+  @objc func recreateCanvas() { canvasWindow.close(); createCanvas(); record("canvas_recreated") }
+  @objc func openCapturePopup() {
+    capturePopup = NSWindow(contentRect: NSRect(x: 230, y: 270, width: 160, height: 150), styleMask: [.titled], backing: .buffered, defer: false)
+    capturePopup!.title = fixtureTitle + " Popup"; capturePopup!.isReleasedWhenClosed = false
+    let view = NSView(); view.wantsLayer = true; view.layer?.backgroundColor = NSColor.blue.cgColor
+    capturePopup!.contentView = view; capturePopup!.orderBack(nil)
+    record("popup_opened", String(capturePopup!.windowNumber))
+  }
+  @objc func openCaptureSheet() {
+    captureSheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 180, height: 130), styleMask: [.titled], backing: .buffered, defer: false)
+    captureSheet!.title = fixtureTitle + " Sheet"; captureSheet!.isReleasedWhenClosed = false
+    let view = NSView(); view.wantsLayer = true; view.layer?.backgroundColor = NSColor.blue.cgColor
+    captureSheet!.contentView = view
+    canvasWindow.beginSheet(captureSheet!) { _ in }
+    record("sheet_opened", String(captureSheet!.windowNumber))
+  }
+  @objc func closeCaptureSheet() {
+    if let sheet = captureSheet { canvasWindow.endSheet(sheet); sheet.orderOut(nil); captureSheet = nil; record("sheet_closed") }
   }
   func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
     guard let row = message.body as? [String: String], let event = row["event"], let value = row["value"] else { return }

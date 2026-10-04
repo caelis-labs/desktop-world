@@ -1,0 +1,60 @@
+?   	github.com/caelis-labs/desktop-world	[no test files]
+?   	github.com/caelis-labs/desktop-world/artifacts/release/v0.1.0-alpha.1/desktop-world-v0.1.0-alpha.1-darwin-arm64/examples/bot-host	[no test files]
+?   	github.com/caelis-labs/desktop-world/artifacts/release/v0.1.0-alpha.1/desktop-world-v0.1.0-alpha.1-darwin-arm64/examples/embodied	[no test files]
+?   	github.com/caelis-labs/desktop-world/artifacts/release/v0.1.0-alpha.1/desktop-world-v0.1.0-alpha.1-darwin-arm64/examples/headless	[no test files]
+?   	github.com/caelis-labs/desktop-world/artifacts/release/v0.1.0-alpha.1-b52d91e-candidate/desktop-world-v0.1.0-alpha.1-darwin-arm64/examples/bot-host	[no test files]
+?   	github.com/caelis-labs/desktop-world/artifacts/release/v0.1.0-alpha.1-b52d91e-candidate/desktop-world-v0.1.0-alpha.1-darwin-arm64/examples/embodied	[no test files]
+?   	github.com/caelis-labs/desktop-world/artifacts/release/v0.1.0-alpha.1-b52d91e-candidate/desktop-world-v0.1.0-alpha.1-darwin-arm64/examples/headless	[no test files]
+?   	github.com/caelis-labs/desktop-world/artifacts/usability/antigravity-app-01/participant/workspace	[no test files]
+?   	github.com/caelis-labs/desktop-world/artifacts/usability/antigravity-app-02/participant/workspace	[no test files]
+?   	github.com/caelis-labs/desktop-world/artifacts/usability/antigravity-app-03/participant/workspace	[no test files]
+?   	github.com/caelis-labs/desktop-world/artifacts/usability/external-helper-01/participant/workspace	[no test files]
+?   	github.com/caelis-labs/desktop-world/artifacts/usability/helper-cold-01/helper-workspace	[no test files]
+?   	github.com/caelis-labs/desktop-world/artifacts/usability/sdk-baseline-01/workspace	[no test files]
+?   	github.com/caelis-labs/desktop-world/cmd/dtw	[no test files]
+?   	github.com/caelis-labs/desktop-world/cmd/dw-analyze	[no test files]
+?   	github.com/caelis-labs/desktop-world/cmd/dw-inspect	[no test files]
+?   	github.com/caelis-labs/desktop-world/dwtest	[no test files]
+?   	github.com/caelis-labs/desktop-world/examples/bot-host	[no test files]
+?   	github.com/caelis-labs/desktop-world/examples/embodied	[no test files]
+?   	github.com/caelis-labs/desktop-world/examples/headless	[no test files]
+ok  	github.com/caelis-labs/desktop-world/host	(cached)
+?   	github.com/caelis-labs/desktop-world/internal/backend	[no test files]
+?   	github.com/caelis-labs/desktop-world/internal/backend/darwin	[no test files]
+?   	github.com/caelis-labs/desktop-world/internal/engine	[no test files]
+ok  	github.com/caelis-labs/desktop-world/internal/helper	(cached)
+?   	github.com/caelis-labs/desktop-world/internal/wire	[no test files]
+?   	github.com/caelis-labs/desktop-world/local	[no test files]
+ok  	github.com/caelis-labs/desktop-world/protocol	(cached)
+ok  	github.com/caelis-labs/desktop-world/tests/acceptance	1.965s
+ok  	github.com/caelis-labs/desktop-world/tests/contract	(cached)
+?   	github.com/caelis-labs/desktop-world/tests/native-fixtures/browser	[no test files]
+OK: 9 JSON examples, 1 plan(s), 1 partial receipt(s).
+These checks do not validate native desktop behavior or implement the full wire schema.
+✔ discovery starts narrow and expands fields only on demand, with bounded output (1.937875ms)
+✔ desired collapse keeps explicit false and semantic delivery evidence (0.502708ms)
+✔ typed semantic conveniences keep false and reject omitted booleans before dispatch (1.045583ms)
+✔ one script composes observations and effects; only selected output leaves local memory (0.800417ms)
+✔ partial receipt is always surfaced and cannot be caught to continue input (0.444542ms)
+✔ top-level faults stop the chain and no automatic retries occur (0.523417ms)
+✔ bounded output and incomplete coverage are never silent successful discovery (0.602709ms)
+✔ concurrent calls serialize and calls after an error are not dispatched (11.9555ms)
+✔ script call budget and deadline do not continue to later effects (31.963875ms)
+✔ read polling handles transitioning dialogs without replaying effects (51.932292ms)
+✔ disconnect stops later effects and retains in-flight outcome (0.729584ms)
+✔ presentation pages preserve every ref without native re-observation or silent clipping (4.364584ms)
+✔ value accepts primitive metadata but unknown and redacted facts still fail closed (1.436792ms)
+✔ summary shorthand scopes the observed Ref without guessing an app field (0.408167ms)
+✔ focused convenience never retargets keyboard into another authorized window or app (1.14475ms)
+✔ next retains native query across scripts and never guesses continuation arguments (1.121209ms)
+✔ fragmented subtree recipe preserves Ref order, native blocks, redaction and clipping uncertainty (2.171792ms)
+✔ fragmented subtree recipe reports native incomplete sample without expanding scope (0.950791ms)
+✔ window discovery is explicit and small; it never requests pixels implicitly (0.4125ms)
+ℹ tests 19
+ℹ suites 0
+ℹ pass 19
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 152.015666

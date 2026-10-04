@@ -90,3 +90,7 @@ after storing an observed document/container Ref in `state.document`. The
 Refs, depth-first native order, block boundaries, Unicode and duplicate visible
 text. It has explicit page/node/deadline/output bounds and reports redaction,
 unknown values and possible preview clipping. It never captures or expands scope.
+
+## 按需窗口图像
+
+先调用 `dw.captureWindows(appRef)` 取 32 条 / 8 KiB 的原生窗口目录，只有显式 `dw.capture({kind:'window_content', target:ref, max_pixel_width:1024, max_pixel_height:768})` 才生成图片。macOS 专用捕获 Ref 不与 AX 窗口按标题/位置关联，不提供 AX outline 或桌面点击映射；普通 summary 不自动披露该目录。宿主单独启用 capture。接口与平台验证限制见 [窗口捕获](window-capture.md)。

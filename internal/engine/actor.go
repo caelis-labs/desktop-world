@@ -187,7 +187,7 @@ func defaults(r dw.ObserveRequest) dw.ObserveRequest {
 	b := &r.Budget
 	if b.MaxResults == 0 {
 		b.MaxResults = 64
-		if r.Projection == dw.ProjectionSummary {
+		if r.Projection == dw.ProjectionSummary || r.Projection == dw.ProjectionCaptureWindows {
 			b.MaxResults = 32
 		}
 	}
@@ -211,7 +211,7 @@ func defaults(r dw.ObserveRequest) dw.ObserveRequest {
 	}
 	if len(r.Fields) == 0 {
 		r.Fields = []string{"role", "name", "states", "bounds", "capabilities", "app", "window", "parent", "lifecycle"}
-		if r.Projection == dw.ProjectionSummary {
+		if r.Projection == dw.ProjectionSummary || r.Projection == dw.ProjectionCaptureWindows {
 			r.Fields = []string{"role", "name", "app", "window"}
 		}
 	}
@@ -223,7 +223,7 @@ func defaults(r dw.ObserveRequest) dw.ObserveRequest {
 func (a *actor) query(ctx context.Context, r dw.ObserveRequest, resume string, noContinuation bool) ([]dw.Object, dw.Coverage, string, error) {
 	w := a.w
 	cov := dw.Coverage{Scope: r.Scope, Fields: r.Fields, MaxDepth: r.Budget.MaxDepth, SampleStart: time.Now().UTC()}
-	q := backend.Query{Fields: readFields(r), Desktop: r.Scope.Desktop, Depth: r.Budget.MaxDepth, MaxNodes: r.Budget.MaxVisitedNodes, Summary: r.Projection == dw.ProjectionSummary, Detail: r.Projection == dw.ProjectionDetail, Resume: resume, NoContinuation: noContinuation}
+	q := backend.Query{Fields: readFields(r), Desktop: r.Scope.Desktop, Depth: r.Budget.MaxDepth, MaxNodes: r.Budget.MaxVisitedNodes, Summary: r.Projection == dw.ProjectionSummary, CaptureWindows: r.Projection == dw.ProjectionCaptureWindows, Detail: r.Projection == dw.ProjectionDetail, Resume: resume, NoContinuation: noContinuation}
 	w.mu.Lock()
 	for _, ref := range r.Scope.Refs {
 		rec := w.objects[ref]
@@ -299,6 +299,12 @@ func (a *actor) objectInQueryLocked(o dw.Object, r dw.ObserveRequest) bool {
 		return false
 	}
 	if !a.inScopeLocked(o.Ref, []dw.Scope{r.Scope}) {
+		return false
+	}
+	if r.Projection == dw.ProjectionCaptureWindows && o.Kind != dw.KindWindow {
+		return false
+	}
+	if r.Projection != dw.ProjectionCaptureWindows && r.Projection != dw.ProjectionDetail && o.Role == "capture_window" {
 		return false
 	}
 	if r.Projection == dw.ProjectionSummary && o.Kind == dw.KindUI {

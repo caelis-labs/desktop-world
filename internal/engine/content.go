@@ -173,6 +173,9 @@ func (a *actor) Capture(ctx context.Context, r dw.CaptureRequest) (dw.CaptureRes
 	if r.MaxPixelHeight == 0 {
 		r.MaxPixelHeight = 1080
 	}
+	if r.Kind == "window_content" && (r.Region != nil || r.IncludeCursor) {
+		return dw.CaptureResult{}, dw.Invalid("window_content uses the full target window, without region or cursor")
+	}
 	in := dw.Intent{Operation: "capture", CaptureKind: r.Kind}
 	if r.Kind == "visible_region" {
 		in.Scope = dw.Scope{Desktop: true}
@@ -189,6 +192,7 @@ func (a *actor) Capture(ctx context.Context, r dw.CaptureRequest) (dw.CaptureRes
 	if e != nil {
 		return dw.CaptureResult{}, e
 	}
+	native := backend.CaptureRequest{CaptureRequest: r}
 	if r.Target != "" {
 		if e = a.check(ctx, dw.Intent{Operation: "capture", Targets: []dw.Ref{r.Target}, CaptureKind: r.Kind}, false); e != nil {
 			return dw.CaptureResult{}, e
@@ -197,7 +201,13 @@ func (a *actor) Capture(ctx context.Context, r dw.CaptureRequest) (dw.CaptureRes
 		if e != nil {
 			return dw.CaptureResult{}, e
 		}
-		if r.Region == nil && o.Bounds.Value != nil {
+		if r.Kind == "window_content" && o.Kind != dw.KindWindow {
+			return dw.CaptureResult{}, dw.Invalid("window_content target must be a window")
+		}
+		a.w.mu.Lock()
+		native.Key = a.w.objects[r.Target].key
+		a.w.mu.Unlock()
+		if r.Kind == "visible_region" && r.Region == nil && o.Bounds.Value != nil {
 			b := *o.Bounds.Value
 			r.Region = &b
 		}
@@ -208,7 +218,8 @@ func (a *actor) Capture(ctx context.Context, r dw.CaptureRequest) (dw.CaptureRes
 			return dw.CaptureResult{}, dw.Invalid("invalid capture region")
 		}
 	}
-	v, e := a.w.call(ctx, func() (any, error) { return a.w.driver.Capture(ctx, r) })
+	native.CaptureRequest = r
+	v, e := a.w.call(ctx, func() (any, error) { return a.w.driver.Capture(ctx, native) })
 	if e != nil {
 		return dw.CaptureResult{}, e
 	}
@@ -216,13 +227,16 @@ func (a *actor) Capture(ctx context.Context, r dw.CaptureRequest) (dw.CaptureRes
 		return dw.CaptureResult{}, e
 	}
 	images := v.([]backend.Image)
+	if len(images) == 0 || (r.Kind == "window_content" && len(images) != 1) {
+		return dw.CaptureResult{}, fault("invalid_capture")
+	}
 	if len(images) > 16 {
 		return dw.CaptureResult{}, fault("resource_exhausted")
 	}
 	total := 0
 	for _, img := range images {
 		total += len(img.Bytes)
-		if img.Width <= 0 || img.Height <= 0 || img.Width > r.MaxPixelWidth || img.Height > r.MaxPixelHeight || img.Bounds.Topology != env.Topology || total > 32<<20 {
+		if img.Width <= 0 || img.Height <= 0 || img.Width > r.MaxPixelWidth || img.Height > r.MaxPixelHeight || img.Bounds.Topology != env.Topology || len(img.Bytes) == 0 || !dw.Finite(img.Bounds.Rect.Width) || !dw.Finite(img.Bounds.Rect.Height) || img.Bounds.Rect.Width <= 0 || img.Bounds.Rect.Height <= 0 || total > 32<<20 {
 			return dw.CaptureResult{}, fault("invalid_capture")
 		}
 	}
@@ -237,7 +251,14 @@ func (a *actor) Capture(ctx context.Context, r dw.CaptureRequest) (dw.CaptureRes
 		id := dw.AssetID(token("asset-"))
 		asset := dw.Asset{ContentType: img.ContentType, Bytes: append([]byte{}, img.Bytes...), ExpiresAt: out.ExpiresAt}
 		a.assets[id] = assetRecord{asset, in, a.w.permissionVersion}
-		out.Tiles = append(out.Tiles, dw.CaptureTile{Asset: id, ImageFrame: dw.FrameID(token("image-")), DesktopFrame: img.Bounds.Frame, PixelWidth: img.Width, PixelHeight: img.Height, ImageToDesktop: dw.Transform2D{A: img.Bounds.Rect.Width / float64(img.Width), D: img.Bounds.Rect.Height / float64(img.Height), TX: img.Bounds.Rect.X, TY: img.Bounds.Rect.Y}, Topology: img.Bounds.Topology, CapturedAt: time.Now().UTC(), Kind: r.Kind})
+		tile := dw.CaptureTile{Asset: id, ImageFrame: dw.FrameID(token("image-")), DesktopFrame: img.Bounds.Frame, PixelWidth: img.Width, PixelHeight: img.Height, ImageToDesktop: dw.Transform2D{A: img.Bounds.Rect.Width / float64(img.Width), D: img.Bounds.Rect.Height / float64(img.Height), TX: img.Bounds.Rect.X, TY: img.Bounds.Rect.Y}, Topology: img.Bounds.Topology, CapturedAt: time.Now().UTC(), Kind: r.Kind}
+		if r.Kind == "window_content" {
+			tile.Target = r.Target
+			tile.DesktopFrame = ""
+			tile.ImageToDesktop = dw.Transform2D{}
+			tile.ImageToTarget = dw.Transform2D{A: img.Bounds.Rect.Width / float64(img.Width), D: img.Bounds.Rect.Height / float64(img.Height)}
+		}
+		out.Tiles = append(out.Tiles, tile)
 	}
 	return out, nil
 }

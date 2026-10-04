@@ -1,0 +1,5 @@
+=== RUN   TestNativeWindowCapture
+    window_capture_test.go:241: F9 human simulator: calls=21 projected_text_bytes=23067; separate disabled-capture host probe=1
+    window_capture_test.go:242: F9 independent real-desktop evidence: calls=41 projected_text_bytes=39654 images=10 png_bytes=302373 pixels=3248160; foreground Unicode input/pointer stable; native identity, covered fresh pixels, resize, popup/sheet, minimize/hide/recreate, host capture authority passed
+--- PASS: TestNativeWindowCapture (10.42s)
+PASS

@@ -1,0 +1,13 @@
+{"pid":59823,"value":"22873","at":"2026-10-04T07:45:10Z","time":1791099910.875663,"event":"canvas_created"}
+{"at":"2026-10-04T07:45:10Z","time":1791099910.883388,"pid":59823,"value":"DTW F9-background 20261004T074444Z-3d1d57","event":"ready"}
+{"at":"2026-10-04T07:45:13Z","time":1791099913.8659701,"value":"green","pid":59823,"event":"canvas_updated"}
+{"event":"canvas_moved_resized","pid":59823,"time":1791099914.447139,"value":"{{220, 240}, {410, 390}}","at":"2026-10-04T07:45:14Z"}
+{"event":"popup_opened","value":"22879","time":1791099915.5108919,"at":"2026-10-04T07:45:15Z","pid":59823}
+{"value":"22880","at":"2026-10-04T07:45:16Z","time":1791099916.762094,"event":"sheet_opened","pid":59823}
+{"at":"2026-10-04T07:45:17Z","value":"","event":"sheet_closed","pid":59823,"time":1791099917.9056129}
+{"value":"","at":"2026-10-04T07:45:18Z","event":"canvas_minimized","time":1791099918.110101,"pid":59823}
+{"event":"canvas_restored","pid":59823,"time":1791099919.045897,"value":"","at":"2026-10-04T07:45:19Z"}
+{"event":"canvas_hidden","pid":59823,"time":1791099919.53582,"at":"2026-10-04T07:45:19Z","value":""}
+{"value":"","event":"canvas_restored","pid":59823,"at":"2026-10-04T07:45:19Z","time":1791099919.91747}
+{"event":"canvas_created","pid":59823,"time":1791099920.537554,"at":"2026-10-04T07:45:20Z","value":"22881"}
+{"event":"canvas_recreated","pid":59823,"time":1791099920.53847,"at":"2026-10-04T07:45:20Z","value":""}

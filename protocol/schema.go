@@ -123,8 +123,8 @@ func typeSchema(t reflect.Type) schema {
 		field("name_contains")["description"] = "Explicit substring discovery, not identity."
 	case reflect.TypeOf(dw.ObserveRequest{}):
 		require("scope")
-		enum("projection", "summary", "outline", "detail")
-		field("projection")["description"] = "Start summary with fields [name,role]; inspect one returned window using outline. Increase depth only as needed."
+		enum("projection", "summary", "outline", "detail", "capture_windows")
+		field("projection")["description"] = "Start summary with fields [name,role]; inspect one returned window using outline. Increase depth only as needed. For pixels, opt into capture_windows within an application Ref; capture returned window Refs explicitly."
 		field("fields")["items"] = schema{"type": "string", "enum": []string{"kind", "role", "name", "value_preview", "uri", "states", "bounds", "capabilities", "app", "window", "parent", "relations", "lifecycle"}}
 		field("fields")["uniqueItems"] = true
 	case reflect.TypeOf(dw.TextRequest{}):
@@ -137,7 +137,9 @@ func typeSchema(t reflect.Type) schema {
 		bound("wait_ms", 0, 10000)
 	case reflect.TypeOf(dw.CaptureRequest{}):
 		enum("kind", "visible_region", "window_content")
-		s["description"] = "Capture is separately authorized; visible_region may include occluding apps. window_content may be unsupported."
+		bound("max_pixel_width", 0, 8192)
+		bound("max_pixel_height", 0, 8192)
+		s["description"] = "Capture is separately authorized; visible_region may include occluding apps. window_content requires an observed capture window, full target only, no cursor/region; coordinates are target-local, never desktop input authority."
 	case reflect.TypeOf(dw.Plan{}):
 		require("epoch", "request_id", "steps")
 		field("request_id")["description"] = "Current epoch + ':' + caller-generated stable ID. Preserve the same ID and body for retry; never replay unknown effects with a new ID."

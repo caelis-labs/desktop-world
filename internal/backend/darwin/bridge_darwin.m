@@ -5,6 +5,7 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import <Carbon/Carbon.h>
 #import <ImageIO/ImageIO.h>
+#import <CoreImage/CoreImage.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <libproc.h>
@@ -28,7 +29,17 @@ void dw_cancel_signal(void *p) {
 static BOOL cancelled(DWCancel *c) {
   return c && atomic_load_explicit(&c->stopped, memory_order_acquire);
 }
+@interface DWCaptureWindow : NSObject
+@property SCWindow *window;
+@property NSArray *identity;
+@property NSString *app;
+@property pid_t pid;
+@property BOOL gone;
+@end
+@implementation DWCaptureWindow
+@end
 @interface DWContext : NSObject
+@property NSMutableDictionary *captureWindows;
 @property NSMutableArray *elements;
 @property NSMutableArray *meta;
 @property NSMutableDictionary *scans;
@@ -178,6 +189,7 @@ static NSArray *applicationPIDs(BOOL *complete, DWCancel *cancel) {
   return pids;
 }
 #pragma clang diagnostic pop
+static NSDictionary *captureNode(DWContext *c, NSString *k, NSArray *fields);
 static BOOL alive(DWContext *c, NSString *k);
 static NSString *key(DWContext *c, AXUIElementRef e, NSString *app,
                      NSString *win, NSString *parent) {
@@ -198,7 +210,7 @@ static NSString *key(DWContext *c, AXUIElementRef e, NSString *app,
       return existing;
     }
   }
-  if (c.elements.count >= 10000)
+  if (c.elements.count + c.captureWindows.count >= 10000)
     return @"";
   pid_t pid = 0;
   AXUIElementGetPid(e, &pid);
@@ -221,6 +233,8 @@ static AXUIElementRef element(DWContext *c, NSString *k) {
              : NULL;
 }
 static BOOL alive(DWContext *c, NSString *k) {
+  DWCaptureWindow *r = c.captureWindows[k];
+  if (r) return !r.gone && [r.identity isEqual:processIdentity(r.pid)];
   NSInteger i = k.integerValue - 1;
   if (i < 0 || i >= (NSInteger)c.meta.count)
     return NO;
@@ -383,6 +397,7 @@ static NSDictionary *checkedState(id value) {
   return unknown(); // Mixed/indeterminate is not false.
 }
 static NSDictionary *node(DWContext *c, NSString *k, NSArray *fields) {
+  if (c.captureWindows[k]) return captureNode(c, k, fields);
   AXUIElementRef e = element(c, k);
   if (!e || !alive(c, k))
     return nil;
@@ -572,6 +587,7 @@ static NSDictionary *seat(DWContext *c) {
     @"Intervention" : @"best_effort"
   };
 }
+#include "capture_darwin.h"
 static NSDictionary *queryPage(DWContext *c, NSDictionary *q, DWCancel *cancel) {
   if (!AXIsProcessTrusted())
     return err(@"permission_denied");
@@ -719,7 +735,19 @@ static NSDictionary *query(DWContext *c, NSDictionary *q, DWCancel *cancel) {
   long long allowance = [q[@"ReadTimeoutMS"] longLongValue];
   queryDeadline = monotonicSeconds() + (allowance > 0 ? allowance : 2000) / 1000.0;
   @try {
-    return queryPage(c, q, cancel);
+    NSArray *roots = [q[@"Roots"] isKindOfClass:NSArray.class] ? q[@"Roots"] : @[];
+    BOOL hasCaptureRoot = NO;
+    for (NSString *root in roots) if (c.captureWindows[root]) hasCaptureRoot = YES;
+    if (hasCaptureRoot && ![q[@"CaptureWindows"] boolValue]) {
+      if (![q[@"Detail"] boolValue]) return err(@"capability_unavailable");
+      SCShareableContent *content = shareable(cancel, queryDeadline);
+      if (!content) return err(@"provider_unavailable");
+      for (NSString *root in roots) if (c.captureWindows[root]) {
+        NSString *failure = refreshCaptureWindow(c, root, content);
+        if (failure) return err(failure);
+      }
+    }
+    return [q[@"CaptureWindows"] boolValue] ? captureWindowsQuery(c, q, cancel) : queryPage(c, q, cancel);
   } @finally {
     queryCancel = NULL;
     queryDeadline = 0;
@@ -1050,110 +1078,12 @@ static NSDictionary *perform(DWContext *c, NSDictionary *o, DWCancel *cancel) {
     return outcome(@"none", @"capability_unavailable");
   return outcome(@"complete", nil);
 }
-static NSDictionary *capture(DWContext *c, NSDictionary *r) {
-  if (![r[@"Kind"] isEqual:@"visible_region"])
-    return err(@"capability_unavailable");
-  if (!CGPreflightScreenCaptureAccess())
-    return err(@"permission_denied");
-  if (@available(macOS 14.0, *)) {
-    __block SCShareableContent *content = nil;
-    __block NSError *error = nil;
-    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-    [SCShareableContent
-        getShareableContentExcludingDesktopWindows:NO
-                               onScreenWindowsOnly:YES
-                                 completionHandler:^(SCShareableContent *v,
-                                                     NSError *e) {
-                                   content = v;
-                                   error = e;
-                                   dispatch_semaphore_signal(sem);
-                                 }];
-    dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
-    if (error || !content)
-      return err(@"provider_unavailable");
-    NSMutableArray *images = [NSMutableArray array];
-    NSDictionary *region = r[@"Region"];
-    if ((id)region == NSNull.null)
-      region = nil;
-    for (SCDisplay *d in content.displays) {
-      CGRect frame = CGDisplayBounds(d.displayID);
-      CGRect clipped = frame;
-      if (region) {
-        NSDictionary *b = region[@"Rect"];
-        clipped = CGRectIntersection(
-            frame,
-            CGRectMake([b[@"X"] doubleValue], [b[@"Y"] doubleValue],
-                       [b[@"Width"] doubleValue], [b[@"Height"] doubleValue]));
-      }
-      if (CGRectIsEmpty(clipped) || CGRectIsNull(clipped))
-        continue;
-      SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:d
-                                                        excludingWindows:@[]];
-      SCStreamConfiguration *config = [SCStreamConfiguration new];
-      CGFloat scale =
-          MIN(CGDisplayPixelsWide(d.displayID) / frame.size.width,
-              MIN([r[@"MaxPixelWidth"] doubleValue] / clipped.size.width,
-                  [r[@"MaxPixelHeight"] doubleValue] / clipped.size.height));
-      config.width = MAX(1, (size_t)(clipped.size.width * scale));
-      config.height = MAX(1, (size_t)(clipped.size.height * scale));
-      config.sourceRect = CGRectMake(clipped.origin.x - frame.origin.x,
-                                     clipped.origin.y - frame.origin.y,
-                                     clipped.size.width, clipped.size.height);
-      config.showsCursor = [r[@"IncludeCursor"] boolValue];
-      __block CGImageRef img = NULL;
-      error = nil;
-      [SCScreenshotManager
-          captureImageWithFilter:filter
-                   configuration:config
-               completionHandler:^(CGImageRef image, NSError *e) {
-                 if (image)
-                   img = CGImageRetain(image);
-                 error = e;
-                 dispatch_semaphore_signal(sem);
-               }];
-      dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
-      if (error || !img)
-        return err(@"provider_unavailable");
-      NSMutableData *data = [NSMutableData data];
-      CGImageDestinationRef dest = CGImageDestinationCreateWithData(
-          (__bridge CFMutableDataRef)data,
-          (__bridge CFStringRef)UTTypePNG.identifier, 1, NULL);
-      if (!dest) {
-        CGImageRelease(img);
-        return err(@"provider_unavailable");
-      }
-      CGImageDestinationAddImage(dest, img, NULL);
-      BOOL ok = CGImageDestinationFinalize(dest);
-      CFRelease(dest);
-      CGImageRelease(img);
-      if (!ok)
-        return err(@"provider_unavailable");
-      [images addObject:@{
-        @"Bytes" : [data base64EncodedStringWithOptions:0],
-        @"ContentType" : @"image/png",
-        @"Width" : @(config.width),
-        @"Height" : @(config.height),
-        @"Bounds" : @{
-          @"Frame" : @"desktop",
-          @"Topology" : @(c.topology),
-          @"Rect" : @{
-            @"X" : @(clipped.origin.x),
-            @"Y" : @(clipped.origin.y),
-            @"Width" : @(clipped.size.width),
-            @"Height" : @(clipped.size.height)
-          }
-        }
-      }];
-    }
-    return @{@"Result" : images};
-  }
-  return err(@"platform_unsupported");
-}
 void *dw_open(void) {
   @autoreleasepool {
     DWContext *c = [DWContext new];
     c.elements = [NSMutableArray array];
     c.scans = [NSMutableDictionary dictionary];
+    c.captureWindows = [NSMutableDictionary dictionary];
     c.meta = [NSMutableArray array];
     c.topology = 0;
     displays(c);
@@ -1196,8 +1126,8 @@ char *dw_call(void *p, const char *opstr, const char *json, void *cancel) {
               },
               @{
                 @"Name" : @"window_content",
-                @"Support" : @"unsupported",
-                @"Availability" : @"blocked"
+                @"Support" : @"supported",
+                @"Availability" : CGPreflightScreenCaptureAccess() ? @"available" : @"blocked"
               }
             ]
           }
@@ -1217,10 +1147,18 @@ char *dw_call(void *p, const char *opstr, const char *json, void *cancel) {
       } else if ([op isEqual:@"query"])
         out = query(c, r, (DWCancel *)cancel);
       else if ([op isEqual:@"read"]) {
-        NSDictionary *n = node(c, r[@"Key"], nil);
+        NSString *captureFailure = nil;
+        if (c.captureWindows[r[@"Key"]]) {
+          if (!CGPreflightScreenCaptureAccess()) captureFailure = @"permission_denied";
+          else {
+            SCShareableContent *content = shareable((DWCancel *)cancel, monotonicSeconds()+2);
+            captureFailure = content ? refreshCaptureWindow(c, r[@"Key"], content) : @"provider_unavailable";
+          }
+        }
+        NSDictionary *n = captureFailure ? nil : node(c, r[@"Key"], nil);
         out = n
                   ? @{@"Result" : @{@"Node" : n, @"Seat" : seat(c)}}
-                  : err(alive(c, r[@"Key"]) ? @"provider_unavailable"
+                  : captureFailure ? err(captureFailure) : err(alive(c, r[@"Key"]) ? @"provider_unavailable"
                                             : @"ref_gone");
       } else if ([op isEqual:@"text"]) {
         AXUIElementRef e = element(c, r[@"Key"]);
@@ -1276,7 +1214,7 @@ char *dw_call(void *p, const char *opstr, const char *json, void *cancel) {
         CFRelease(sys);
         out = @{@"Result" : @(ok)};
       } else if ([op isEqual:@"capture"])
-        out = capture(c, r);
+        out = capture(c, r, (DWCancel *)cancel);
       else
         out = err(@"capability_unavailable");
       NSData *data =

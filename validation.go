@@ -346,7 +346,7 @@ func (r ObserveRequest) Validate() error {
 		return e
 	}
 	switch r.Projection {
-	case "", ProjectionSummary, ProjectionOutline, ProjectionDetail:
+	case "", ProjectionSummary, ProjectionOutline, ProjectionDetail, ProjectionCaptureWindows:
 	default:
 		return Invalid("unknown projection")
 	}
@@ -354,6 +354,9 @@ func (r ObserveRequest) Validate() error {
 	case "", "cached", "max_age", "refresh":
 	default:
 		return Invalid("unknown freshness")
+	}
+	if r.Projection == ProjectionCaptureWindows && r.Freshness.Mode != "" && r.Freshness.Mode != "refresh" {
+		return Invalid("capture_windows requires refresh")
 	}
 	if r.Freshness.MaxAge < 0 || r.Freshness.MaxAge > time.Hour {
 		return Invalid("invalid max age")

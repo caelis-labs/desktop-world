@@ -1,0 +1,4 @@
+=== RUN   TestNativeSetExpanded
+    features_test.go:280: F2 native desired states verified, already-expanded no-op; model calls=6 bytes=11987
+--- PASS: TestNativeSetExpanded (0.73s)
+PASS

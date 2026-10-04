@@ -20,6 +20,7 @@ type Query struct {
 	Desktop         bool
 	Depth, MaxNodes int
 	Summary, Detail bool
+	CaptureWindows  bool
 	// Resume is a private, helper-local native traversal cursor.
 	Resume string
 	// NoContinuation makes an internal one-shot query release unfinished native
@@ -57,6 +58,13 @@ type Outcome struct {
 	Fault               *dw.Fault
 	Unsafe              bool
 }
+
+// CaptureRequest carries the resolved native key only inside the trusted helper.
+type CaptureRequest struct {
+	dw.CaptureRequest
+	Key           Key
+	ReadTimeoutMS int64
+}
 type Image struct {
 	Bytes         []byte
 	ContentType   string
@@ -76,6 +84,6 @@ type Driver interface {
 	ReadText(context.Context, Key) (Text, error)
 	Perform(context.Context, Operation) Outcome
 	HitTest(context.Context, dw.Point, Key) (bool, error)
-	Capture(context.Context, dw.CaptureRequest) ([]Image, error)
+	Capture(context.Context, CaptureRequest) ([]Image, error)
 	Close(context.Context) error
 }

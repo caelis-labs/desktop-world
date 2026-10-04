@@ -10,10 +10,14 @@ import (
 	"image"
 	"image/png"
 	"math"
+	"syscall"
 	"unsafe"
 )
 
-func (d *Driver) Capture(ctx context.Context, r dw.CaptureRequest) ([]backend.Image, error) {
+func (d *Driver) Capture(ctx context.Context, r backend.CaptureRequest) ([]backend.Image, error) {
+	if r.Kind == "window_content" {
+		return d.captureWindow(ctx, r)
+	}
 	if r.Kind != "visible_region" || r.IncludeCursor {
 		return nil, dw.NewFault("capability_unavailable", "visible region without cursor is supported", "reobserve")
 	}
@@ -54,6 +58,16 @@ func (d *Driver) Capture(ctx context.Context, r dw.CaptureRequest) ([]backend.Im
 	return images, nil
 }
 func captureTile(dc uintptr, b dw.Rect, w, h int) (*image.RGBA, error) {
+	return renderBitmap(dc, w, h, func(mem uintptr) error {
+		proc(gdi32, "SetStretchBltMode").Call(mem, 4)
+		ok, _, _ := proc(gdi32, "StretchBlt").Call(mem, 0, 0, uintptr(w), uintptr(h), dc, uintptr(int32(b.X)), uintptr(int32(b.Y)), uintptr(int32(b.Width)), uintptr(int32(b.Height)), 0x00CC0020|0x40000000)
+		if ok == 0 {
+			return nativeFault(0x80004005)
+		}
+		return nil
+	})
+}
+func renderBitmap(dc uintptr, w, h int, render func(uintptr) error) (*image.RGBA, error) {
 	mem, _, _ := proc(gdi32, "CreateCompatibleDC").Call(dc)
 	if mem == 0 {
 		return nil, nativeFault(0x80004005)
@@ -81,10 +95,8 @@ func captureTile(dc uintptr, b dw.Rect, w, h int) (*image.RGBA, error) {
 	defer proc(gdi32, "DeleteObject").Call(bitmap)
 	old, _, _ := proc(gdi32, "SelectObject").Call(mem, bitmap)
 	defer proc(gdi32, "SelectObject").Call(mem, old)
-	proc(gdi32, "SetStretchBltMode").Call(mem, 4)
-	ok, _, _ := proc(gdi32, "StretchBlt").Call(mem, 0, 0, uintptr(w), uintptr(h), dc, uintptr(int32(b.X)), uintptr(int32(b.Y)), uintptr(int32(b.Width)), uintptr(int32(b.Height)), 0x00CC0020|0x40000000)
-	if ok == 0 {
-		return nil, nativeFault(0x80004005)
+	if err := render(mem); err != nil {
+		return nil, err
 	}
 	raw := unsafe.Slice((*byte)(bits), w*h*4)
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
@@ -92,4 +104,108 @@ func captureTile(dc uintptr, b dw.Rect, w, h int) (*image.RGBA, error) {
 		img.Pix[i], img.Pix[i+1], img.Pix[i+2], img.Pix[i+3] = raw[i+2], raw[i+1], raw[i], 255
 	}
 	return img, nil
+}
+
+// Experimental provider rendering. PrintWindow is synchronous and provider-owned;
+// the managed helper bounds caller waits and can terminate a stuck worker. There
+// is deliberately no shared-desktop blit fallback or Windows availability claim.
+func (d *Driver) captureWindow(ctx context.Context, r backend.CaptureRequest) ([]backend.Image, error) {
+	restore := dpiScope()
+	defer restore()
+	e, err := d.lookup(r.Key)
+	if err != nil {
+		return nil, err
+	}
+	if e.hwnd == 0 || e.application || r.IncludeCursor || r.Region != nil {
+		return nil, dw.NewFault("capability_unavailable", "a native top-level window is required", "reobserve")
+	}
+	// A locked/disconnected interactive desktop must never serve old pixels.
+	desktop, _, _ := proc(user32, "OpenInputDesktop").Call(0, 0, 1)
+	if desktop == 0 {
+		return nil, dw.NewFault("seat_unavailable", "input desktop unavailable", "reobserve")
+	}
+	defer proc(user32, "CloseDesktop").Call(desktop)
+	var name [256]uint16
+	var needed uint32
+	ok, _, _ := proc(user32, "GetUserObjectInformationW").Call(desktop, 2, ptr(&name), uintptr(len(name)*2), ptr(&needed))
+	if ok == 0 || syscall.UTF16ToString(name[:]) != "Default" {
+		return nil, dw.NewFault("seat_unavailable", "interactive desktop is not active", "reobserve")
+	}
+	before, err := windowCaptureRect(e.hwnd)
+	if err != nil {
+		return nil, err
+	}
+	w, h := int(before[2]-before[0]), int(before[3]-before[1])
+	if w <= 0 || h <= 0 || w > 8192 || h > 8192 || w*h > 16<<20 {
+		return nil, dw.NewFault("resource_exhausted", "window surface too large", "reobserve")
+	}
+	dc, _, _ := proc(user32, "GetDC").Call(e.hwnd)
+	if dc == 0 {
+		return nil, nativeFault(0x80004005)
+	}
+	defer proc(user32, "ReleaseDC").Call(e.hwnd, dc)
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
+	img, err := renderBitmap(dc, w, h, func(mem uintptr) error {
+		ok, _, _ := proc(user32, "PrintWindow").Call(e.hwnd, mem, 0)
+		if ok == 0 {
+			return dw.NewFault("capture_frame_unavailable", "provider did not render the window", "reobserve")
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
+	if _, err = d.lookup(r.Key); err != nil {
+		return nil, err
+	}
+	// UIA instance identity must still be readable even if a HWND was recycled.
+	if _, err = intProp(e.el, 20); err != nil {
+		return nil, err
+	}
+	after, err := windowCaptureRect(e.hwnd)
+	if err != nil {
+		return nil, err
+	}
+	if before != after {
+		return nil, dw.NewFault("capture_geometry_changed", "window moved while capturing", "reobserve")
+	}
+	scale := math.Min(1, math.Min(float64(r.MaxPixelWidth)/float64(w), float64(r.MaxPixelHeight)/float64(h)))
+	outW, outH := max(1, int(float64(w)*scale)), max(1, int(float64(h)*scale))
+	if outW != w || outH != h {
+		small := image.NewRGBA(image.Rect(0, 0, outW, outH))
+		for y := 0; y < outH; y++ {
+			for x := 0; x < outW; x++ {
+				small.SetRGBA(x, y, img.RGBAAt(x*w/outW, y*h/outH))
+			}
+		}
+		img = small
+	}
+	var data bytes.Buffer
+	if err = png.Encode(&data, img); err != nil {
+		return nil, err
+	}
+	return []backend.Image{{Bytes: data.Bytes(), ContentType: "image/png", Width: outW, Height: outH, Bounds: dw.Bounds{Frame: "window", Topology: d.env.Topology, Rect: dw.Rect{Width: float64(w), Height: float64(h)}}}}, nil
+}
+func windowCaptureRect(hwnd uintptr) ([4]int32, error) {
+	var rect [4]int32
+	visible, _, _ := isVisible.Call(hwnd)
+	minimized, _, _ := proc(user32, "IsIconic").Call(hwnd)
+	var cloaked uint32
+	hr, _, _ := proc(syscall.NewLazyDLL("dwmapi.dll"), "DwmGetWindowAttribute").Call(hwnd, 14, ptr(&cloaked), 4)
+	if visible == 0 || minimized != 0 || cloaked != 0 {
+		return rect, dw.NewFault("window_not_visible", "window is hidden, minimized or cloaked", "reobserve")
+	}
+	if int32(hr) < 0 {
+		return rect, nativeFault(hr)
+	}
+	ok, _, _ := proc(user32, "GetWindowRect").Call(hwnd, ptr(&rect))
+	if ok == 0 {
+		return rect, dw.NewFault("ref_gone", "window is gone", "reobserve")
+	}
+	return rect, nil
 }
