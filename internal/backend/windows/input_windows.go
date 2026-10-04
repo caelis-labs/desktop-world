@@ -81,7 +81,7 @@ func (d *Driver) Perform(ctx context.Context, o backend.Operation) backend.Outco
 		return result(dw.DeliveryNone, "cancelled")
 	}
 	s := o.Step
-	if s.Op == "focus" || s.Op == "invoke" || s.Op == "set_value" || s.Op == "set_expanded" {
+	if dw.ActionChannel(s.Op) == "semantic" || s.Op == "focus" {
 		e, err := d.lookup(o.Key)
 		if err != nil {
 			return result(dw.DeliveryNone, "ref_gone")
@@ -106,6 +106,14 @@ func (d *Driver) Perform(ctx context.Context, o backend.Operation) backend.Outco
 			if s.Op == "set_expanded" {
 				patternID = 10005
 			}
+			switch s.Op {
+			case "set_checked":
+				patternID = 10015
+			case "set_selected":
+				patternID = 10010
+			case "scroll_into_view":
+				patternID = 10017
+			}
 			var p *com
 			if er := e.el.call(16, patternID, ptr(&p)); er != nil || p == nil {
 				return result(dw.DeliveryNone, "capability_unavailable")
@@ -119,6 +127,32 @@ func (d *Driver) Perform(ctx context.Context, o backend.Operation) backend.Outco
 					method = 3
 				}
 				err = p.call(method)
+			} else if s.Op == "set_checked" {
+				state, er := intProp(p, 4)
+				// A tri-state cycle is not a boolean setter. Never blindly toggle
+				// an indeterminate state or repeat a toggle after uncertain delivery.
+				if er != nil || (state != 0 && state != 1) {
+					return result(dw.DeliveryNone, "state_unknown")
+				}
+				if (state == 1) == *s.SetChecked.Checked {
+					return result(dw.DeliveryNA, "")
+				}
+				err = p.call(3)
+			} else if s.Op == "set_selected" {
+				selected := boolProp(p, 6)
+				if selected.Status != dw.FactKnown || selected.Value == nil {
+					return result(dw.DeliveryNone, "state_unknown")
+				}
+				if *selected.Value == *s.SetSelected.Selected {
+					return result(dw.DeliveryNA, "")
+				}
+				method := 5 // RemoveFromSelection
+				if *s.SetSelected.Selected {
+					method = 4 // AddToSelection preserves other selections; never Select.
+				}
+				err = p.call(method)
+			} else if s.Op == "scroll_into_view" {
+				err = p.call(3)
 			} else {
 				v, er := syscall.UTF16FromString(s.SetValue.Text)
 				if er != nil {

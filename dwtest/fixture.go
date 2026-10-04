@@ -408,6 +408,15 @@ func (f *Fixture) Perform(ctx context.Context, op backend.Operation) backend.Out
 		case "set_expanded":
 			n.Object.States["expanded"] = dw.Known(*op.Step.SetExpanded.Expanded)
 			f.nodes[op.Key] = n
+		case "set_checked":
+			n.Object.States["checked"] = dw.Known(*op.Step.SetChecked.Checked)
+			f.nodes[op.Key] = n
+		case "set_selected":
+			n.Object.States["selected"] = dw.Known(*op.Step.SetSelected.Selected)
+			f.nodes[op.Key] = n
+		case "scroll_into_view":
+			n.Object.States["offscreen"] = dw.Known(false)
+			f.nodes[op.Key] = n
 		case "keyboard.type_text":
 			n.Text += op.Step.TypeText.Text
 			n.Object.ValuePreview = dw.Known(n.Text)

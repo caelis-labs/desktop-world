@@ -34,6 +34,21 @@ test('desired collapse keeps explicit false and semantic delivery evidence', asy
   assert.deepEqual(result.actions[0].delivery_verification, {'not_applicable/verified':1});
 });
 
+test('typed semantic conveniences keep false and reject omitted booleans before dispatch', async () => {
+  const requests=[];
+  const session=createSession(async request=>{requests.push(request);return {result:completed};});
+  const result=await session.execute("await dw.check('r1',false); await dw.select('r2',false); await dw.scrollIntoView('r3');");
+  assert.equal(result.error,undefined);
+  assert.deepEqual(requests.map(r=>r.args.steps[0].op),['set_checked','set_selected','scroll_into_view']);
+  assert.deepEqual(requests[0].args.steps[0].set_checked,{checked:false});
+  assert.deepEqual(requests[1].args.steps[0].set_selected,{selected:false});
+  assert.equal(requests[2].args.steps[0].scroll,undefined);
+  for (const script of ["await dw.check('r1');","await dw.select('r1',0);"]) {
+    assert.match((await session.execute(script)).error.message,/explicit boolean/);
+    assert.equal(requests.length,3);
+  }
+});
+
 test('one script composes observations and effects; only selected output leaves local memory', async () => {
   const requests = [];
   const session = createSession(async request => {

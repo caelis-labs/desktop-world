@@ -8,7 +8,7 @@ APP_BINARY="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 case "$MODE" in run|--verify|--debug|--logs|--telemetry|--build-only) ;; *) echo "usage: $0 [--build-only|--verify|--debug|--logs|--telemetry]" >&2; exit 2;; esac
 if [[ "$MODE" != --build-only ]]; then pkill -x "$APP_NAME" >/dev/null 2>&1 || true; fi
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$ROOT_DIR/artifacts"
-swiftc -module-cache-path "$ROOT_DIR/bin/swift-module-cache" -framework AppKit "$ROOT_DIR/tests/native-fixtures/macos/main.swift" -o "$APP_BINARY"
+swiftc -module-cache-path "$ROOT_DIR/bin/swift-module-cache" -framework AppKit -framework WebKit "$ROOT_DIR/tests/native-fixtures/macos/main.swift" -o "$APP_BINARY"
 cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

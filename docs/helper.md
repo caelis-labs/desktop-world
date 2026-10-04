@@ -42,11 +42,11 @@ dtw serve --write-app '访达' --write-app '文本编辑' \
 
 使用 `schema <operation>` 查看确切结构，不从例子的占位值猜参数。
 
-`dtw schema act ACTION` 保留该动作的 target、前后条件、明确的联合参数和预算上限，省略其他动作参数。`dtw schema act` 显式加载完整 act schema。`set_expanded` 必须提供 `expanded:true/false`，始终验证目标状态；已经达到状态时不再调用原生 setter。没有语义能力时明确停止，不改用点击或键盘 toggle。
+`dtw schema act ACTION` 保留该动作的 target、前后条件、明确的联合参数和预算上限，省略其他动作参数。`dtw schema act` 显式加载完整 act schema。`set_expanded`、`set_checked`、`set_selected` 分别要求显式的 expanded/checked/selected 布尔值；`scroll_into_view` 只需目标。它们始终验证目标状态，已经达到时不再调用 provider。没有语义能力时明确停止。逐 provider 的支持边界见 [语义动作](semantic-actions.md)。
 
 后台任务可由可信宿主启动 `dtw serve --input-policy no_shared_input ...`，或通过 `host.Options.InputPolicy` / `ActorConfig.InputPolicy` 设置。默认 `shared_input` 保持原有行为，授权仍由 scope / Operations / Grant 决定。`no_shared_input` 在整个计划执行前拒绝 focus、共享键鼠和 raw Point 权限，返回 `requires_shared_input` 与原收据；前面的语义步骤也不会发送。Agent 参数不能更改策略。它承诺不主动使用共享输入，应用 provider 自身仍可能打开窗口或激活应用。
 
-收据的 `channel` 为 semantic、focus 或 shared_input；这是动作通道声明，需结合 delivery / verification 判断是否实际发送和验证。已满足展开状态的步骤为 semantic + not_applicable + verified。
+收据的 `channel` 为 semantic、focus 或 shared_input；这是动作通道声明，需结合 delivery / verification 判断是否实际发送和验证。已满足期望状态的步骤为 semantic + not_applicable + verified。
 
 | 操作 | 参数与用途 |
 | --- | --- |

@@ -43,6 +43,8 @@ dw.rows(ob, fields)                full row array for local filtering, can excee
 dw.value(field)                    unwrap known facts or primitive fields; throws for unknown/redacted
 dw.focused(appOrWindowRef)         fresh focused UI Ref; rejects focus outside scope
 dw.focus(windowOrFocusableUIRef) / dw.invoke(ref) / dw.set(ref, text) / dw.expand(ref, trueOrFalse)
+dw.check(ref, trueOrFalse) / dw.select(ref, trueOrFalse) / dw.scrollIntoView(ref)
+  semantic desired states; always verified; unsupported stops without shared-input fallback
 dw.press(ref, key, modifiers=[]) / dw.type(ref, text)
 dw.click(ref, options={})           left single click by default
 dw.act(steps, options={})           one ordered native plan, max 16 steps
@@ -228,6 +230,9 @@ export function createSession(transport, { epoch = '', maxCalls = 32, timeoutMs 
       focus: ref => act([{ op: 'focus', target: target(ref) }]),
       invoke: ref => act([{ op: 'invoke', target: target(ref) }]),
       expand: (ref, expanded) => { if (typeof expanded !== 'boolean') throw new Error('expand requires an explicit boolean'); return act([{ op: 'set_expanded', target: target(ref), set_expanded: { expanded } }]); },
+      check: (ref, checked) => { if (typeof checked !== 'boolean') throw new Error('check requires an explicit boolean'); return act([{ op: 'set_checked', target: target(ref), set_checked: { checked } }]); },
+      select: (ref, selected) => { if (typeof selected !== 'boolean') throw new Error('select requires an explicit boolean'); return act([{ op: 'set_selected', target: target(ref), set_selected: { selected } }]); },
+      scrollIntoView: (ref) => act([{ op: 'scroll_into_view', target: target(ref) }]),
       set: (ref, text) => act([{ op: 'set_value', target: target(ref), set_value: { text } }]),
       press: (ref, key, modifiers = []) => act([{ op: 'keyboard.press', target: target(ref), press: { key, modifiers } }]),
       type: (ref, text) => act([{ op: 'keyboard.type_text', target: target(ref), type_text: { text } }]),

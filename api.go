@@ -65,7 +65,7 @@ const (
 // ActionChannel is fixed by the operation, never selected by the provider.
 func ActionChannel(op string) string {
 	switch op {
-	case "invoke", "set_value", "set_expanded":
+	case "invoke", "set_value", "set_expanded", "set_checked", "set_selected", "scroll_into_view":
 		return "semantic"
 	case "focus":
 		return "focus"
@@ -85,7 +85,7 @@ func (p InputPolicy) Allows(op string) bool {
 		return true
 	}
 	switch op {
-	case "observe", "read", "sync", "bind", "wait", "resolve_anchor", "capture", "read_asset", "invoke", "set_value", "set_expanded":
+	case "observe", "read", "sync", "bind", "wait", "resolve_anchor", "capture", "read_asset", "invoke", "set_value", "set_expanded", "set_checked", "set_selected", "scroll_into_view":
 		return true
 	}
 	return false
@@ -337,6 +337,12 @@ type SetValue struct{ Text string }
 
 // Expanded must be supplied, including an explicit false for collapse.
 type SetExpanded struct{ Expanded *bool }
+
+// SetChecked requires an explicit boolean, including false for unchecking.
+type SetChecked struct{ Checked *bool }
+
+// SetSelected requires an explicit boolean. Provider selection rules still apply.
+type SetSelected struct{ Selected *bool }
 type TypeText struct{ Text string }
 type KeyChord struct {
 	Modifiers []string
@@ -356,11 +362,13 @@ type Scroll struct {
 }
 type Step struct {
 	ID          string
-	Op          string // bind | wait | focus | invoke | set_value | set_expanded | pointer.* | keyboard.*
+	Op          string // bind | wait | focus | invoke | set_* | scroll_into_view | pointer.* | keyboard.*
 	Target      Target
 	Bind        *Bind
 	SetValue    *SetValue
 	SetExpanded *SetExpanded
+	SetChecked  *SetChecked
+	SetSelected *SetSelected
 	TypeText    *TypeText
 	Press       *KeyChord
 	Click       *Click

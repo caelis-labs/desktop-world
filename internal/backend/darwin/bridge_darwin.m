@@ -337,6 +337,51 @@ static id owningWindow(AXUIElementRef e) {
   }
   return nil;
 }
+// AXScrollToVisible is a provider-advertised semantic action. Its new AppKit
+// constant is macOS 26+, so use the documented wire name without raising our
+// deployment target. Providers without this action do not expose the capability.
+static CFStringRef scrollToVisibleAction(void) { return CFSTR("AXScrollToVisible"); }
+static BOOL elementRect(AXUIElementRef e, CGRect *rect) {
+  id pos = attr(e, kAXPositionAttribute), size = attr(e, kAXSizeAttribute);
+  CGPoint p; CGSize s;
+  if (!pos || !size || CFGetTypeID((__bridge CFTypeRef)pos) != AXValueGetTypeID() ||
+      CFGetTypeID((__bridge CFTypeRef)size) != AXValueGetTypeID() ||
+      !AXValueGetValue((__bridge AXValueRef)pos, kAXValueCGPointType, &p) ||
+      !AXValueGetValue((__bridge AXValueRef)size, kAXValueCGSizeType, &s) ||
+      !isfinite(p.x) || !isfinite(p.y) || !isfinite(s.width) || !isfinite(s.height) ||
+      s.width <= 0 || s.height <= 0) return NO;
+  *rect = CGRectMake(p.x, p.y, s.width, s.height);
+  return YES;
+}
+// Viewport presence is independent of occlusion by other applications. Walk
+// only the fresh native parent chain; incomplete ancestry stays unknown.
+static NSDictionary *offscreenState(AXUIElementRef e) {
+  CGRect visible;
+  if (!elementRect(e, &visible)) return unknown();
+  id current = attr(e, kAXParentAttribute);
+  NSMutableSet *seen = [NSMutableSet set];
+  for (int depth = 0; current && depth < 32 && !queryStopped(); depth++) {
+    if (CFGetTypeID((__bridge CFTypeRef)current) != AXUIElementGetTypeID()) return unknown();
+    if ([seen containsObject:current]) return unknown();
+    [seen addObject:current];
+    AXUIElementRef parent = (__bridge AXUIElementRef)current;
+    NSString *role = attr(parent, kAXRoleAttribute);
+    if (![role isKindOfClass:NSString.class]) return unknown();
+    if ([role isEqual:@"AXScrollArea"] || [role isEqual:@"AXWindow"]) {
+      CGRect clip;
+      if (!elementRect(parent, &clip)) return unknown();
+      visible = CGRectIntersection(visible, clip);
+      if ([role isEqual:@"AXWindow"]) return known(@((BOOL)(CGRectIsNull(visible) || CGRectIsEmpty(visible))));
+    }
+    current = attr(parent, kAXParentAttribute);
+  }
+  return unknown();
+}
+static NSDictionary *checkedState(id value) {
+  if ([value isKindOfClass:NSNumber.class] && ([value doubleValue] == 0 || [value doubleValue] == 1))
+    return known(@([value boolValue]));
+  return unknown(); // Mixed/indeterminate is not false.
+}
 static NSDictionary *node(DWContext *c, NSString *k, NSArray *fields) {
   AXUIElementRef e = element(c, k);
   if (!e || !alive(c, k))
@@ -380,6 +425,11 @@ static NSDictionary *node(DWContext *c, NSString *k, NSArray *fields) {
   // Never ask a protected field for its value, even inside a batch.
   id value = protected || !wantField(fields, @"value_preview") ? nil : attr(e, kAXValueAttribute);
   NSString *valueText = scalarText(value);
+  BOOL checkable = [role isEqual:@"AXCheckBox"] && !protected;
+  if (checkable && (wantField(fields, @"states") || wantField(fields, @"capabilities"))) {
+    id checkedValue = value ?: attr(e, kAXValueAttribute);
+    states[@"checked"] = checkedState(checkedValue);
+  }
   id pos = nodeAttr(batch, e, kAXPositionAttribute), sz = nodeAttr(batch, e, kAXSizeAttribute);
   CGPoint pt;
   CGSize size;
@@ -401,8 +451,10 @@ static NSDictionary *node(DWContext *c, NSString *k, NSArray *fields) {
   }
   if (queryStopped()) return nil;
   CFArrayRef rawActions = NULL;
-  if (wantField(fields, @"capabilities")) AXUIElementCopyActionNames(e, &rawActions);
+  if (wantField(fields, @"capabilities") || wantField(fields, @"states")) AXUIElementCopyActionNames(e, &rawActions);
   NSArray *actions = CFBridgingRelease(rawActions);
+  BOOL scrollable = [actions containsObject:(__bridge NSString *)scrollToVisibleAction()];
+  if (scrollable) states[@"offscreen"] = offscreenState(e);
   Boolean focusable = false;
   if (wantField(fields, @"capabilities")) AXUIElementIsAttributeSettable(e, kAXFocusedAttribute, &focusable);
   BOOL enabled = ![states[@"enabled"][@"Value"] isEqual:@NO];
@@ -410,19 +462,26 @@ static NSDictionary *node(DWContext *c, NSString *k, NSArray *fields) {
   Boolean expandable = false;
  AXError expandError = kAXErrorAttributeUnsupported;
  if (wantField(fields, @"capabilities")) expandError = AXUIElementIsAttributeSettable(e, kAXExpandedAttribute, &expandable);
+  Boolean selectable = false;
+  AXError selectError = kAXErrorAttributeUnsupported;
+  if (wantField(fields, @"capabilities")) selectError = AXUIElementIsAttributeSettable(e, kAXSelectedAttribute, &selectable);
   NSDictionary *supported = @{
  @"set_expanded": @(expandError == kAXErrorSuccess && expandable),
+    @"set_selected": @(selectError == kAXErrorSuccess && selectable),
+    @"set_checked": @(checkable && (writable || ([states[@"checked"][@"Status"] isEqual:@"known"] && [actions containsObject:(__bridge NSString *)kAXPressAction]))),
+    @"scroll_into_view": @(scrollable),
     @"focus" : @([kind isEqual:@"window"] || focusable),
     @"invoke" : @([actions containsObject:(__bridge NSString *)kAXPressAction]),
     @"set_value" : @(writable && !protected)
   };
   for (NSString *op in supported) {
     BOOL yes = [supported[op] boolValue];
-    if ([op isEqual:@"set_expanded"] && !yes) continue;
+    if (([op isEqual:@"set_expanded"] || [op isEqual:@"set_checked"] || [op isEqual:@"set_selected"] || [op isEqual:@"scroll_into_view"]) && !yes) continue;
+    BOOL stateKnown = ![op isEqual:@"scroll_into_view"] || [states[@"offscreen"][@"Status"] isEqual:@"known"];
     [caps addObject:@{
       @"Name" : op,
       @"Support" : yes ? @"supported" : @"unsupported",
-      @"Availability" : yes && enabled ? @"available" : @"blocked"
+      @"Availability" : yes && enabled && stateKnown ? @"available" : @"blocked"
     }];
   }
   [caps sortUsingComparator:^NSComparisonResult(NSDictionary *a,
@@ -749,7 +808,8 @@ static NSDictionary *perform(DWContext *c, NSDictionary *o, DWCancel *cancel) {
   if (k.length && (!e || !alive(c, k)))
     return outcome(@"none", @"ref_gone");
   if ([op isEqual:@"focus"] || [op isEqual:@"invoke"] ||
-      [op isEqual:@"set_value"] || [op isEqual:@"set_expanded"]) {
+      [op isEqual:@"set_value"] || [op isEqual:@"set_expanded"] ||
+      [op isEqual:@"set_checked"] || [op isEqual:@"set_selected"] || [op isEqual:@"scroll_into_view"]) {
  if (!AXIsProcessTrusted()) return outcome(@"none", @"permission_denied");
     // Writes such as TextEdit Save/Replace need longer than the 250 ms read
     // budget. A timeout is still unknown and fenced; never replay it. Keep the
@@ -763,6 +823,24 @@ static NSDictionary *perform(DWContext *c, NSDictionary *o, DWCancel *cancel) {
           e, kAXValueAttribute, (__bridge CFTypeRef)s[@"SetValue"][@"Text"]);
     if ([op isEqual:@"set_expanded"])
  rc = AXUIElementSetAttributeValue(e, kAXExpandedAttribute, [s[@"SetExpanded"][@"Expanded"] boolValue] ? kCFBooleanTrue : kCFBooleanFalse);
+    if ([op isEqual:@"set_selected"])
+      rc = AXUIElementSetAttributeValue(e, kAXSelectedAttribute, [s[@"SetSelected"][@"Selected"] boolValue] ? kCFBooleanTrue : kCFBooleanFalse);
+    if ([op isEqual:@"scroll_into_view"])
+      rc = AXUIElementPerformAction(e, scrollToVisibleAction());
+    if ([op isEqual:@"set_checked"]) {
+      id value = attr(e, kAXValueAttribute);
+      BOOL desired = [s[@"SetChecked"][@"Checked"] boolValue];
+      NSDictionary *current = checkedState(value);
+      if ([current[@"Status"] isEqual:@"known"] && [current[@"Value"] boolValue] == desired) return outcome(@"not_applicable", nil);
+      Boolean writable = false;
+      AXError support = AXUIElementIsAttributeSettable(e, kAXValueAttribute, &writable);
+      AXUIElementSetMessagingTimeout(e, 1.0);
+      if (support == kAXErrorSuccess && writable)
+        rc = AXUIElementSetAttributeValue(e, kAXValueAttribute, desired ? kCFBooleanTrue : kCFBooleanFalse);
+      else if ([current[@"Status"] isEqual:@"known"])
+        rc = AXUIElementPerformAction(e, kAXPressAction);
+      else return outcome(@"none", @"state_unknown");
+    }
     if ([op isEqual:@"focus"]) {
       NSString *role = attr(e, kAXRoleAttribute);
       // Attribute reads restore the ordinary read allowance; focus dispatch
@@ -791,6 +869,11 @@ static NSDictionary *perform(DWContext *c, NSDictionary *o, DWCancel *cancel) {
       return outcome(@"complete", nil);
     if (rc == kAXErrorCannotComplete || rc == kAXErrorFailure)
       return outcome(@"unknown", @"native_timeout");
+    // These advertised state operations have already entered the provider.
+    // Even an unsupported/error reply can follow a provider-side effect. Do
+    // not invite a second toggle/selection/scroll after uncertain delivery.
+    if ([op isEqual:@"set_checked"] || [op isEqual:@"set_selected"] || [op isEqual:@"scroll_into_view"])
+      return outcome(@"unknown", @"native_action_failed");
     return outcome(@"none", @"capability_unavailable");
   }
   if (!CGPreflightPostEventAccess()) return outcome(@"none", @"permission_denied");

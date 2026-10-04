@@ -125,7 +125,7 @@ func New(ctx context.Context, w dw.World, c Config) (*Server, error) {
 		scopes = []dw.Scope{{Refs: unique}}
 	}
 	if len(scopes) > 0 {
-		ops = append(ops, "focus", "invoke", "set_value", "set_expanded", "pointer.move", "pointer.click", "pointer.drag", "pointer.scroll", "keyboard.type_text", "keyboard.press")
+		ops = append(ops, "focus", "invoke", "set_value", "set_expanded", "set_checked", "set_selected", "scroll_into_view", "pointer.move", "pointer.click", "pointer.drag", "pointer.scroll", "keyboard.type_text", "keyboard.press")
 	}
 	if c.RawInput {
 		if !c.DesktopWrite {
@@ -506,8 +506,8 @@ func ActionSchema(op string) map[string]any {
 	args := out["properties"].(map[string]any)["args"].(map[string]any)
 	item := args["properties"].(map[string]any)["steps"].(map[string]any)["items"].(map[string]any)
 	properties := item["properties"].(map[string]any)
-	arm := map[string]string{"bind": "bind", "set_value": "set_value", "set_expanded": "set_expanded", "keyboard.type_text": "type_text", "keyboard.press": "press", "pointer.click": "click", "pointer.drag": "drag", "pointer.scroll": "scroll"}[op]
-	for _, key := range []string{"bind", "set_value", "set_expanded", "type_text", "press", "click", "drag", "scroll"} {
+	arm := map[string]string{"bind": "bind", "set_value": "set_value", "set_expanded": "set_expanded", "set_checked": "set_checked", "set_selected": "set_selected", "keyboard.type_text": "type_text", "keyboard.press": "press", "pointer.click": "click", "pointer.drag": "drag", "pointer.scroll": "scroll"}[op]
+	for _, key := range []string{"bind", "set_value", "set_expanded", "set_checked", "set_selected", "type_text", "press", "click", "drag", "scroll"} {
 		if key != arm {
 			delete(properties, key)
 		}

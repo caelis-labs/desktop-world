@@ -27,12 +27,14 @@
 8. 文本版本是单调分配的序号；用于内部比较的摘要不会输出为 text version，避免公开低熵文本的内容哈希。保护字段不导出 value。
 9. 资产留在本地，绑定 Actor 与当前权限 generation，提供 PNG 字节和桌面坐标变换。没有自动上传或 OCR。
 10. Go API 默认零值表示采用预算默认值；错误由结构化 Fault 给出。对尚未使用的 control-step 参数也应保持严格校验，不能退化为任意脚本。
-11. InputPolicy 是 Actor 的可信上限：no_shared_input 预先拒绝整份包含焦点/共享键鼠的计划，保留原收据。set_expanded 只使用原生语义 setter/pattern，始终验证期望状态，已达到状态时不重复发送。
+11. InputPolicy 是 Actor 的可信上限：no_shared_input 预先拒绝整份包含焦点/共享键鼠的计划，保留原收据。set_expanded / set_checked / set_selected / scroll_into_view 只使用原生语义 setter/pattern/action，始终验证期望状态，已达到状态时不重复发送。三态 checked 不映射为 false，未知状态不盲目 toggle，选择状态不主动清空其他项，provider 的单/多选规则仍适用。
 12. observe 的输出字段与 match 必需字段共同生成原生读取计划；部分节点只更新采样字段的 Fact 时间。未请求字段保留原缓存，保护状态变化会清除缓存敏感值。写前完整刷新不依赖观察缓存。
 13. Windows UIA continuation 保留有界 DFS 栈和未消费兄弟 COM 引用，最多 16 份、90 秒、每次遵守节点预算、总计 10,000 节点；续扫标记 dirty/incomplete，不以实时树的缺失证明不存在。新扫描不驱逐旧游标。原生引用比较成本仍需 Windows 实机测量。
 14. Windows managed helper 继承两个受限制的私有匿名 pipe 端点，控制通道与数据通道分开；Unix 保持 FD 3/4。当前源代码和交叉构建均覆盖这两条路径，Windows 真实电脑操作仍待验收。逐 feature 的证据和命令见 [features.md](features.md)。
 
 ## 尚未完成的正式发布条件
+
+当前批次按用户决定推进 macOS 实机与跨平台功能实现，全部 Windows 实机适配后置；不承诺 Windows 可用。下列双平台正式发布条件继续保留，但 Windows 实机不是本轮功能交付或 macOS alpha 候选的前置门槛。
 
 - Windows 11 交互式桌面验收；Windows arm64 尚不支持。
 - macOS amd64 实机运行（当前有交叉构建）；最低 macOS 14 实机运行。
