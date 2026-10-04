@@ -1,0 +1,711 @@
+{
+  "provider": "appkit",
+  "status": "passed",
+  "base_commit": "5e5b2bb8f29315e0147c56a24feb8d6aff11c883",
+  "helper_sha256": "7a938b2e439052482d9ea918748586f88d4ca5864be1b325681ead84c2900c25",
+  "platform": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434",
+  "cost": {
+    "agent": {
+      "calls": 53,
+      "wire_bytes": 71543
+    },
+    "human": {
+      "calls": 24,
+      "wire_bytes": 29617
+    },
+    "third": {
+      "calls": 5,
+      "wire_bytes": 15519
+    }
+  },
+  "human_text": "move;single;double;middle;drag;vertical-scroll;horizontal-scroll;unicode-submit;shortcut-replace;multiline;window-key;context-menu;dialog;long-drag-rejected;long-text-rejected;cancel;expiry;",
+  "run": "background-full-20261004T134159Z-58e43c",
+  "features": [
+    {
+      "name": "move",
+      "receipt": {
+        "outcome": "completed",
+        "state": "terminal",
+        "seat_health": "ready",
+        "input": {
+          "foreground_ms": 177,
+          "mode": "cooperative",
+          "restoration": "restored"
+        },
+        "steps": [
+          {
+            "id": "step-0",
+            "channel": "foreground_transaction",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          }
+        ]
+      },
+      "business_evidence": [
+        {
+          "pid": 9478,
+          "time": 1791121324.7070231,
+          "value": "",
+          "event": "move"
+        }
+      ]
+    },
+    {
+      "name": "single",
+      "receipt": {
+        "outcome": "completed",
+        "state": "terminal",
+        "seat_health": "ready",
+        "input": {
+          "foreground_ms": 145,
+          "mode": "cooperative",
+          "restoration": "restored"
+        },
+        "steps": [
+          {
+            "id": "step-0",
+            "channel": "foreground_transaction",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          }
+        ]
+      },
+      "business_evidence": [
+        {
+          "pid": 9478,
+          "time": 1791121324.949764,
+          "value": "1",
+          "event": "click"
+        }
+      ]
+    },
+    {
+      "name": "double",
+      "receipt": {
+        "outcome": "completed",
+        "state": "terminal",
+        "seat_health": "ready",
+        "input": {
+          "foreground_ms": 127,
+          "mode": "cooperative",
+          "restoration": "restored"
+        },
+        "steps": [
+          {
+            "id": "step-0",
+            "channel": "foreground_transaction",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          }
+        ]
+      },
+      "business_evidence": [
+        {
+          "pid": 9478,
+          "time": 1791121325.131954,
+          "value": "",
+          "event": "double"
+        }
+      ]
+    },
+    {
+      "name": "middle",
+      "receipt": {
+        "outcome": "completed",
+        "state": "terminal",
+        "seat_health": "ready",
+        "input": {
+          "foreground_ms": 133,
+          "mode": "cooperative",
+          "restoration": "restored"
+        },
+        "steps": [
+          {
+            "id": "step-0",
+            "channel": "foreground_transaction",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          }
+        ]
+      },
+      "business_evidence": [
+        {
+          "pid": 9478,
+          "time": 1791121325.331715,
+          "value": "2",
+          "event": "middle"
+        }
+      ]
+    },
+    {
+      "name": "drag",
+      "receipt": {
+        "outcome": "completed",
+        "state": "terminal",
+        "seat_health": "ready",
+        "input": {
+          "foreground_ms": 434,
+          "mode": "cooperative",
+          "restoration": "restored"
+        },
+        "steps": [
+          {
+            "id": "step-0",
+            "channel": "foreground_transaction",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          }
+        ]
+      },
+      "business_evidence": [
+        {
+          "event": "drop",
+          "value": "215,0",
+          "pid": 9478,
+          "time": 1791121325.810982
+        }
+      ]
+    },
+    {
+      "name": "vertical-scroll",
+      "receipt": {
+        "outcome": "completed",
+        "state": "terminal",
+        "seat_health": "ready",
+        "input": {
+          "foreground_ms": 112,
+          "mode": "cooperative",
+          "restoration": "restored"
+        },
+        "steps": [
+          {
+            "id": "step-0",
+            "channel": "foreground_transaction",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          }
+        ]
+      },
+      "business_evidence": [
+        {
+          "event": "scroll",
+          "value": "0.0,-3.0",
+          "pid": 9478,
+          "time": 1791121326.024084
+        }
+      ]
+    },
+    {
+      "name": "horizontal-scroll",
+      "receipt": {
+        "outcome": "completed",
+        "state": "terminal",
+        "seat_health": "ready",
+        "input": {
+          "foreground_ms": 135,
+          "mode": "cooperative",
+          "restoration": "restored"
+        },
+        "steps": [
+          {
+            "id": "step-0",
+            "channel": "foreground_transaction",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          }
+        ]
+      },
+      "business_evidence": [
+        {
+          "event": "scroll",
+          "value": "-3.0,0.0",
+          "pid": 9478,
+          "time": 1791121326.194866
+        }
+      ]
+    },
+    {
+      "name": "unicode-submit",
+      "receipt": {
+        "outcome": "completed",
+        "state": "terminal",
+        "seat_health": "ready",
+        "input": {
+          "foreground_ms": 275,
+          "mode": "cooperative",
+          "restoration": "restored"
+        },
+        "steps": [
+          {
+            "id": "step-0",
+            "channel": "foreground_transaction",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          },
+          {
+            "id": "step-1",
+            "channel": "foreground_transaction",
+            "state": "satisfied",
+            "delivery": "complete",
+            "verification": "verified"
+          },
+          {
+            "id": "step-2",
+            "channel": "foreground_transaction",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          }
+        ]
+      },
+      "business_evidence": [
+        {
+          "event": "submit",
+          "value": "Full-中文-🙂",
+          "pid": 9478,
+          "time": 1791121326.532189
+        }
+      ]
+    },
+    {
+      "name": "shortcut-replace",
+      "receipt": {
+        "outcome": "completed",
+        "state": "terminal",
+        "seat_health": "ready",
+        "input": {
+          "foreground_ms": 456,
+          "mode": "cooperative",
+          "restoration": "restored"
+        },
+        "steps": [
+          {
+            "id": "step-0",
+            "channel": "foreground_transaction",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          },
+          {
+            "id": "step-1",
+            "channel": "foreground_transaction",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          },
+          {
+            "id": "step-2",
+            "channel": "foreground_transaction",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          },
+          {
+            "id": "step-3",
+            "channel": "foreground_transaction",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          },
+          {
+            "id": "step-4",
+            "channel": "foreground_transaction",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          }
+        ]
+      },
+      "business_evidence": [
+        {
+          "event": "text",
+          "time": 1791121326.902102,
+          "value": "replace",
+          "pid": 9478
+        },
+        {
+          "event": "text",
+          "value": "replace",
+          "time": 1791121327.04209,
+          "pid": 9478
+        }
+      ]
+    },
+    {
+      "name": "multiline",
+      "receipt": {
+        "outcome": "completed",
+        "state": "terminal",
+        "seat_health": "ready",
+        "input": {
+          "foreground_ms": 220,
+          "mode": "cooperative",
+          "restoration": "restored"
+        },
+        "steps": [
+          {
+            "id": "step-0",
+            "channel": "foreground_transaction",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          },
+          {
+            "id": "step-1",
+            "channel": "foreground_transaction",
+            "state": "satisfied",
+            "delivery": "complete",
+            "verification": "verified"
+          }
+        ]
+      },
+      "business_evidence": [
+        {
+          "event": "multiline",
+          "value": "Line1\n中文🙂\nLine3",
+          "time": 1791121327.373116,
+          "pid": 9478
+        }
+      ]
+    },
+    {
+      "name": "window-key",
+      "receipt": {
+        "outcome": "completed",
+        "state": "terminal",
+        "seat_health": "ready",
+        "input": {
+          "foreground_ms": 172,
+          "mode": "cooperative",
+          "restoration": "restored"
+        },
+        "steps": [
+          {
+            "id": "step-0",
+            "channel": "foreground_transaction",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          }
+        ]
+      },
+      "business_evidence": [
+        {
+          "event": "multiline",
+          "value": "Line1\n中文🙂\nLine3\t",
+          "time": 1791121327.558936,
+          "pid": 9478
+        }
+      ]
+    },
+    {
+      "name": "context-menu",
+      "receipt": {
+        "outcome": "completed",
+        "state": "terminal",
+        "seat_health": "ready",
+        "input": {
+          "foreground_ms": 342,
+          "mode": "cooperative",
+          "restoration": "restored"
+        },
+        "steps": [
+          {
+            "id": "step-0",
+            "channel": "foreground_transaction",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          },
+          {
+            "id": "step-1",
+            "state": "satisfied",
+            "delivery": "not_applicable",
+            "verification": "verified"
+          },
+          {
+            "id": "step-2",
+            "channel": "semantic",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          }
+        ]
+      },
+      "business_evidence": [
+        {
+          "event": "menu_commit",
+          "value": "",
+          "pid": 9478,
+          "time": 1791121328.2986112
+        }
+      ]
+    },
+    {
+      "name": "dialog",
+      "receipt": {
+        "outcome": "completed",
+        "state": "terminal",
+        "seat_health": "ready",
+        "input": {
+          "foreground_ms": 954,
+          "mode": "cooperative",
+          "restoration": "restored"
+        },
+        "steps": [
+          {
+            "id": "step-0",
+            "channel": "foreground_transaction",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          },
+          {
+            "id": "step-1",
+            "state": "satisfied",
+            "delivery": "not_applicable",
+            "verification": "verified"
+          },
+          {
+            "id": "step-2",
+            "channel": "foreground_transaction",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          },
+          {
+            "id": "step-3",
+            "channel": "foreground_transaction",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          },
+          {
+            "id": "step-4",
+            "state": "satisfied",
+            "delivery": "not_applicable",
+            "verification": "verified"
+          },
+          {
+            "id": "step-5",
+            "channel": "semantic",
+            "state": "dispatched",
+            "delivery": "complete",
+            "verification": "not_requested"
+          }
+        ]
+      },
+      "business_evidence": [
+        {
+          "event": "dialog_text",
+          "value": "CONFIRMED-中文",
+          "pid": 9478,
+          "time": 1791121328.981899
+        }
+      ]
+    },
+    {
+      "name": "long-drag-rejected",
+      "receipt": {
+        "outcome": "stopped",
+        "state": "terminal",
+        "seat_health": "ready",
+        "input": {
+          "mode": "cooperative",
+          "restoration": "not_borrowed"
+        },
+        "error": {
+          "code": "input_burst_limit",
+          "message": "input_burst_limit",
+          "retry_class": "never_automatically"
+        },
+        "steps": [
+          {
+            "id": "step-0",
+            "channel": "foreground_transaction",
+            "state": "failed",
+            "delivery": "none",
+            "verification": "not_requested",
+            "fault": {
+              "code": "input_burst_limit",
+              "message": "input_burst_limit",
+              "retry_class": "never_automatically"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "long-text-rejected",
+      "receipt": {
+        "outcome": "stopped",
+        "state": "terminal",
+        "seat_health": "ready",
+        "input": {
+          "mode": "cooperative",
+          "restoration": "not_borrowed"
+        },
+        "error": {
+          "code": "input_burst_limit",
+          "message": "input_burst_limit",
+          "retry_class": "never_automatically"
+        },
+        "steps": [
+          {
+            "id": "step-0",
+            "channel": "foreground_transaction",
+            "state": "failed",
+            "delivery": "none",
+            "verification": "not_requested",
+            "fault": {
+              "code": "input_burst_limit",
+              "message": "input_burst_limit",
+              "retry_class": "never_automatically"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "cancel"
+    },
+    {
+      "name": "expiry"
+    }
+  ],
+  "cancel_drag": {
+    "outcome": "unknown",
+    "state": "terminal",
+    "seat_health": "ready",
+    "input": {
+      "foreground_ms": 297,
+      "mode": "cooperative",
+      "restoration": "restored"
+    },
+    "error": {
+      "code": "native_timeout",
+      "message": "native call may still execute",
+      "retry_class": "never_automatically"
+    },
+    "steps": [
+      {
+        "id": "step-0",
+        "channel": "foreground_transaction",
+        "state": "dispatched",
+        "delivery": "complete",
+        "verification": "not_requested"
+      },
+      {
+        "id": "step-1",
+        "channel": "foreground_transaction",
+        "state": "unknown",
+        "delivery": "unknown",
+        "verification": "unknown",
+        "fault": {
+          "code": "native_timeout",
+          "message": "native call may still execute",
+          "retry_class": "never_automatically"
+        }
+      }
+    ]
+  },
+  "lease_expiry": {
+    "outcome": "unknown",
+    "state": "terminal",
+    "seat_health": "ready",
+    "input": {
+      "foreground_ms": 1065,
+      "mode": "cooperative",
+      "restoration": "restored"
+    },
+    "error": {
+      "code": "input_lease_expired",
+      "message": "input_lease_expired",
+      "retry_class": "reobserve"
+    },
+    "steps": [
+      {
+        "id": "step-0",
+        "channel": "foreground_transaction",
+        "state": "dispatched",
+        "delivery": "complete",
+        "verification": "not_requested"
+      },
+      {
+        "id": "step-1",
+        "state": "failed",
+        "delivery": "not_applicable",
+        "verification": "unknown",
+        "fault": {
+          "code": "input_lease_expired",
+          "message": "input_lease_expired",
+          "retry_class": "reobserve"
+        }
+      }
+    ]
+  },
+  "user_switch": {
+    "outcome": "unknown",
+    "state": "terminal",
+    "seat_health": "ready",
+    "input": {
+      "foreground_ms": 302,
+      "mode": "cooperative",
+      "restoration": "user_superseded"
+    },
+    "error": {
+      "code": "user_interrupted",
+      "message": "user_interrupted",
+      "retry_class": "reobserve"
+    },
+    "steps": [
+      {
+        "id": "step-0",
+        "channel": "foreground_transaction",
+        "state": "dispatched",
+        "delivery": "complete",
+        "verification": "not_requested"
+      },
+      {
+        "id": "step-1",
+        "state": "failed",
+        "delivery": "not_applicable",
+        "verification": "unknown",
+        "fault": {
+          "code": "user_interrupted",
+          "message": "user_interrupted",
+          "retry_class": "reobserve"
+        }
+      }
+    ]
+  },
+  "capture": {
+    "file": "appkit.png",
+    "bytes": 48694,
+    "kind": "window_content",
+    "partial": false
+  },
+  "production_source_sha256": {
+    "api.go": "3762450d647e2f8004f79015dd2e88cffcf2c24719a5e12e34f60f87af189e8d",
+    "cmd/dtw/main.go": "bbc780c413e8442e4a6ba626cd9abc65753373a492fe5be2821620071314a66d",
+    "host/client.go": "b04f635302f3a92e4d1fc4395b20258cb19f539d8176d52a219fe7bde8a8683f",
+    "host/content.go": "591067163d31cfb4a94c583cf5774a4a07c303ef5170492656521c7a05f65120",
+    "internal/backend/driver.go": "27aa85f1e0c8d7361591741028990746bf771d1b5db75bb4a75272e80eeef2ee",
+    "internal/backend/darwin/cooperative.go": "4c82b54438c4c0534d64b755b02e32004851539c0bd31d11f55e2f17fc585417",
+    "internal/backend/darwin/cooperative_darwin.h": "ab71b2d66404b68843c8071b738273d7fc665d37f818f525aaea2647ce3153d3",
+    "internal/backend/darwin/bridge_darwin.m": "6ce514d82f462ba525fc2fccfa1178933a0fbc0667b51405b2e3c6845aebe7ac",
+    "internal/engine/execute.go": "4d9736f61a5881d3fbf4708725582be5b9bb5c68fac1ba65af3475347b9e3d5a",
+    "internal/helper/server.go": "ba2a15ba6005ec72881ac0b3e421c65b57add340d0c9a64b738e06df320db3aa",
+    "local/open.go": "449beedab706a72e24aa75f43bdb22feb9a742989f2328531e1c6750de5ce563",
+    "local/native_darwin.go": "ed29dbfb3d6495e9dd6f72e9dae835c82d63cf1b6ee035029d040b2de9ed8db8",
+    "protocol/schema.go": "77253e182125d977b7ffdef8fc1fae512765ff7def6b6917ae159597fdf930ac"
+  }
+}

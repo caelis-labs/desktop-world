@@ -69,7 +69,7 @@ static BOOL cooperativeFocusedWindow(pid_t pid, AXUIElementRef window) {
 }
 static BOOL cooperativeActivate(pid_t pid, AXUIElementRef window,
                                 double deadline) {
-  if (!window)
+  if (!window || monotonicSeconds() >= deadline)
     return NO;
   typedef AXError (*WindowID)(AXUIElementRef, CGWindowID *);
   typedef OSStatus (*ProcessPSN)(pid_t, ProcessSerialNumber *);
@@ -224,7 +224,7 @@ static NSString *cooperativeGuard(DWContext *c) {
   }
   return nil;
 }
-static BOOL cooperativeHits(AXUIElementRef e, NSDictionary *p) {
+static BOOL cooperativeHitsOnce(AXUIElementRef e, NSDictionary *p) {
   AXUIElementRef sys = AXUIElementCreateSystemWide(), hit = NULL;
   BOOL found = AXUIElementCopyElementAtPosition(sys, [p[@"X"] floatValue],
                                                 [p[@"Y"] floatValue],
@@ -246,6 +246,25 @@ static BOOL cooperativeHits(AXUIElementRef e, NSDictionary *p) {
     CFRelease(hit);
   CFRelease(sys);
   return exact;
+}
+// Focus acknowledgement can precede compositor/AX hit-test convergence. Wait
+// only before dispatch, for the same retained target, under the original lease.
+// This never re-posts input, chooses another target, or reactivates a window.
+static BOOL cooperativeHits(DWContext *c, AXUIElementRef e, NSDictionary *p) {
+  double deadline =
+      MIN(monotonicSeconds() + .12, [c.inputSession[@"deadline"] doubleValue]);
+  do {
+    NSString *fault = cooperativeGuard(c);
+    if (fault) {
+      c.inputFault = fault;
+      return NO;
+    }
+    if (cooperativeHitsOnce(e, p))
+      return YES;
+    if (monotonicSeconds() >= deadline)
+      return NO;
+    usleep(10000);
+  } while (YES);
 }
 static NSDictionary *cooperativePerform(DWContext *c, NSDictionary *o,
                                         DWCancel *cancel) {
@@ -350,13 +369,13 @@ static NSDictionary *cooperativePerform(DWContext *c, NSDictionary *o,
       return outcome(@"complete", nil);
   }
   if ([op hasPrefix:@"pointer."]) {
-    if (!cooperativeHits(e, o[@"Point"]))
-      return outcome(@"none", @"target_not_hittable");
+    if (!cooperativeHits(c, e, o[@"Point"]))
+      return outcome(@"none", c.inputFault ?: @"target_not_hittable");
     if ([op isEqual:@"pointer.drag"]) {
       AXUIElementRef destination = element(c, o[@"ToKey"]);
       if (!destination || !alive(c, o[@"ToKey"]) ||
-          !cooperativeHits(destination, o[@"To"]))
-        return outcome(@"none", @"target_not_hittable");
+          !cooperativeHits(c, destination, o[@"To"]))
+        return outcome(@"none", c.inputFault ?: @"target_not_hittable");
     }
   }
   NSDictionary *result;
