@@ -31,7 +31,7 @@ d.update(signing='ad-hoc', notarized=False, minimum_macos='14.0', license='no-op
 with open(p, 'w') as f: json.dump(d, f, indent=2); f.write('\n')
 PY
 git archive HEAD | tar -x -C "$OUT/$NAME/source"
-cp HANDOFF.md NOTICE "$OUT/$NAME/"
+cp HANDOFF.md NOTICE THIRD_PARTY_NOTICES.md "$OUT/$NAME/"
 cp -R docs clients skills examples "$OUT/$NAME/"
 tar -czf "$OUT/$NAME.tar.gz" -C "$OUT" "$NAME"
 git archive --format=tar.gz --prefix="desktop-world-$VERSION/" -o "$OUT/desktop-world-$VERSION-source.tar.gz" HEAD

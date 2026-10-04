@@ -113,9 +113,10 @@ func run() error {
 	}
 	var c helper.Config
 	var apps, appWindows names
-	var auditPath, inputPolicy string
+	var auditPath, inputPolicy, inputMode string
 	f := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	f.SetOutput(os.Stderr)
+	f.StringVar(&inputMode, "input-mode", "", "trusted delivery mode: shared or cooperative (macOS short foreground transactions)")
 	f.StringVar(&inputPolicy, "input-policy", "", "trusted ceiling: shared_input or no_shared_input")
 	f.Var(&apps, "write-app", "allow exact live application name")
 	f.Var(&appWindows, "write-app-window", "allow the application owning an exact window title")
@@ -134,6 +135,10 @@ func run() error {
 	}
 	if args[0] == "doctor" && len(args) > 1 {
 		return fmt.Errorf("doctor takes no host permission flags")
+	}
+	c.InputMode = dw.InputMode(inputMode)
+	if err := c.InputMode.Validate(); err != nil {
+		return err
 	}
 	c.InputPolicy = dw.InputPolicy(inputPolicy)
 	if err := c.InputPolicy.Validate(); err != nil {
@@ -167,7 +172,7 @@ func run() error {
 		}
 	}
 	openCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-	w, err := openWorld(openCtx, local.Options{})
+	w, err := openWorld(openCtx, local.Options{InputMode: c.InputMode})
 	cancel()
 	if err != nil {
 		return err

@@ -13,6 +13,9 @@ import (
 func backgroundPOCFlag(f *flag.FlagSet) funcOpen {
 	mode := f.String("experimental-background-input", "", "POC only: public_pid, skylight or no_raise; no automatic foreground/HID fallback")
 	return func(ctx context.Context, o local.Options) (dw.World, error) {
+		if *mode != "" && o.InputMode.Effective() != dw.InputModeShared {
+			return nil, fmt.Errorf("choose one input mode")
+		}
 		if *mode == "" {
 			return local.Open(ctx, o)
 		}

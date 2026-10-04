@@ -99,7 +99,7 @@ func (a *actor) Execute(ctx context.Context, p dw.Plan) (dw.Receipt, error) {
 	for _, s := range p.Steps {
 		channel := dw.ActionChannel(s.Op)
 		if w.targetsInput(s.Op) {
-			channel = "targeted_input_poc"
+			channel = w.inputChannel()
 		}
 		r.receipt.Steps = append(r.receipt.Steps, dw.StepResult{ID: s.ID, Channel: channel, State: "skipped", Delivery: dw.DeliveryNone, Verification: dw.VerifyNotRequested})
 	}
@@ -184,6 +184,7 @@ func (a *actor) execute(ctx context.Context, r *run, p dw.Plan) {
 	defer func() {
 		r.cancel()
 		if held && !late {
+			a.endInput(r)
 			w.seatGate.token <- struct{}{}
 		}
 		w.mu.Lock()
@@ -217,6 +218,12 @@ func (a *actor) execute(ctx context.Context, r *run, p dw.Plan) {
 	if w.seatGate.health() == "fenced" {
 		stop(fault("seat_fenced"))
 		return
+	}
+	if d, ok := w.driver.(backend.InputTransaction); ok {
+		if _, err := w.call(ctx, func() (any, error) { return nil, d.BeginInput(ctx) }); err != nil {
+			stop(err)
+			return
+		}
 	}
 	w.mu.Lock()
 	r.receipt.State = "running"
@@ -267,7 +274,7 @@ func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string
 	w := a.w
 	res = dw.StepResult{ID: s.ID, Channel: dw.ActionChannel(s.Op), State: "failed", Delivery: dw.DeliveryNone, Verification: dw.VerifyNotRequested, StartedAt: time.Now().UTC()}
 	if w.targetsInput(s.Op) {
-		res.Channel = "targeted_input_poc"
+		res.Channel = w.inputChannel()
 	}
 	w.mu.Lock()
 	res.StartRevision = w.revision
@@ -432,7 +439,7 @@ func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string
 	}
 	op := backend.Operation{Step: s, Key: key}
 	targeted := w.targetsInput(s.Op)
-	if targeted && (key == "" || object.App == "" || object.Window == "" || target.Point != nil) {
+	if targeted && (key == "" || object.App == "" || (object.Window == "" && object.Kind != dw.KindWindow) || target.Point != nil) {
 		fail(fault("background_unavailable"))
 		return
 	}
@@ -464,16 +471,39 @@ func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string
 				}
 				w.mu.Lock()
 				toRec := w.objects[toRef]
+				var toObj dw.Object
+				if toRec != nil {
+					toObj = copyOf(toRec.object)
+					op.ToKey = toRec.key
+				}
 				w.mu.Unlock()
 				if toRec == nil {
 					fail(fault("ref_expired"))
 					return
 				}
-				v, e := w.call(ctx, func() (any, error) { return w.driver.HitTest(ctx, to, toRec.key) })
-				if e != nil || !v.(bool) {
-					fail(fault("target_not_hittable"))
-					return
+				if targeted {
+					fromWindow, toWindow := object.Window, toObj.Window
+					if object.Kind == dw.KindWindow {
+						fromWindow = object.Ref
+					}
+					if toObj.Kind == dw.KindWindow {
+						toWindow = toObj.Ref
+					}
+					if fromWindow != toWindow || object.App != toObj.App {
+						fail(fault("background_unavailable"))
+						return
+					}
+				} else {
+					v, e := w.call(ctx, func() (any, error) { return w.driver.HitTest(ctx, to, toRec.key) })
+					if e != nil || !v.(bool) {
+						fail(fault("target_not_hittable"))
+						return
+					}
 				}
+			}
+			if targeted && s.Drag.To.Point != nil {
+				fail(fault("background_unavailable"))
+				return
 			}
 		}
 	}
@@ -540,13 +570,14 @@ func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string
 				late = true
 				go func() {
 					ans := <-j.reply
-					unsafe := false
+					unsafe := true
 					if ans.err == nil {
 						unsafe = ans.value.(backend.Outcome).Unsafe
 					}
 					if !unsafe {
 						w.seatGate.fence(false)
 					}
+					a.endInput(r)
 					w.seatGate.token <- struct{}{}
 				}()
 				return
@@ -611,6 +642,37 @@ func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string
 func (w *World) targetsInput(op string) bool {
 	d, ok := w.driver.(backend.TargetedInput)
 	return ok && d.TargetsInput(op)
+}
+
+func (w *World) inputChannel() string {
+	if d, ok := w.driver.(backend.InputTransaction); ok {
+		return d.InputChannel()
+	}
+	return "targeted_input_poc"
+}
+
+func (a *actor) endInput(r *run) {
+	d, ok := a.w.driver.(backend.InputTransaction)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	v, err := a.w.call(ctx, func() (any, error) { return d.EndInput(ctx) })
+	a.w.mu.Lock()
+	defer a.w.mu.Unlock()
+	defer func() { r.receipt.SeatHealth = a.w.seatGate.health() }()
+	if err != nil {
+		a.w.seatGate.fence(true)
+		r.receipt.Outcome, r.receipt.Fault = "unknown", dw.NewFault("input_restoration_failed", "foreground cleanup could not be confirmed", "never_automatically")
+		return
+	}
+	report := v.(dw.InputReport)
+	r.receipt.Input = &report
+	if report.Restoration == "failed" {
+		a.w.seatGate.fence(true)
+		r.receipt.Outcome, r.receipt.Fault = "unknown", dw.NewFault("input_restoration_failed", "foreground cleanup could not be confirmed", "never_automatically")
+	}
 }
 
 // Desired-state actions always verify, including when the provider found the
@@ -765,7 +827,7 @@ func (a *actor) poll(ctx context.Context, ps []dw.Predicate, b map[string]dw.Ref
 			last = dw.VerifyNotMet
 		} else {
 			last = dw.VerifyUnknown
-			if f.Code == "permission_denied" || f.Code == "ref_gone" || f.Code == "ref_expired" {
+			if f.Code == "permission_denied" || f.Code == "ref_gone" || f.Code == "ref_expired" || f.Code == "input_lease_expired" || f.Code == "user_interrupted" || f.Code == "input_transaction_stopped" {
 				return last, e
 			}
 		}

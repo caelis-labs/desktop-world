@@ -23,6 +23,7 @@ import (
 
 type Options struct {
 	InputPolicy dw.InputPolicy
+	InputMode   dw.InputMode
 	Executable  string
 	AssetsDir   string
 	AuditPath   string
@@ -39,6 +40,7 @@ type Reply struct {
 
 type Hello struct {
 	InputPolicy dw.InputPolicy `json:"input_policy"`
+	InputMode   dw.InputMode   `json:"input_mode"`
 	Type        string         `json:"type"`
 	Protocol    string         `json:"protocol"`
 	Environment dw.Environment `json:"environment"`
@@ -163,6 +165,9 @@ type Client struct {
 func Start(ctx context.Context, o Options) (*Client, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
+	if err := o.InputMode.Validate(); err != nil {
+		return nil, err
+	}
 	if err := o.InputPolicy.Validate(); err != nil {
 		return nil, err
 	}
@@ -180,6 +185,9 @@ func Start(ctx context.Context, o Options) (*Client, error) {
 		return nil, err
 	}
 	args := []string{"serve", "--host-control", "--full-output"}
+	if o.InputMode != "" {
+		args = append(args, "--input-mode", string(o.InputMode))
+	}
 	if o.InputPolicy != "" {
 		args = append(args, "--input-policy", string(o.InputPolicy))
 	}
@@ -250,6 +258,7 @@ func Start(ctx context.Context, o Options) (*Client, error) {
 		var raw struct {
 			Type, Protocol string
 			InputPolicy    dw.InputPolicy `json:"input_policy"`
+			InputMode      dw.InputMode   `json:"input_mode"`
 			Environment    json.RawMessage
 			Managed        bool
 		}
@@ -259,6 +268,7 @@ func Start(ctx context.Context, o Options) (*Client, error) {
 		}
 		c.Hello.Type, c.Hello.Protocol, c.Hello.Managed = raw.Type, raw.Protocol, raw.Managed
 		c.Hello.InputPolicy = raw.InputPolicy
+		c.Hello.InputMode = raw.InputMode.Effective()
 		if err := protocol.Decode(raw.Environment, &c.Hello.Environment); err != nil {
 			ready <- err
 			return
@@ -273,6 +283,10 @@ func Start(ctx context.Context, o Options) (*Client, error) {
 		}
 		if raw.InputPolicy != policy {
 			ready <- errors.New("helper input policy does not match trusted host policy")
+			return
+		}
+		if raw.InputMode.Effective() != o.InputMode.Effective() || c.Hello.Environment.InputMode.Effective() != o.InputMode.Effective() {
+			ready <- errors.New("helper input mode does not match trusted host mode")
 			return
 		}
 		ready <- nil

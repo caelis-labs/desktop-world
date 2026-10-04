@@ -2,7 +2,7 @@
 
 2026-10-04。本批源码 helper 命令为 `dtw`，本批最终预发布为 alpha.4（alpha.3 保留），caelis-bot 的 M0 更新与统一联调后置。实现沿用 World / Actor / 原生后端这一条执行路径。
 
-#8 Review 修复和复验见 [修复证据](evidence/review-20261004/README.md)；[剩余功能补全计划](next-stage.md) 的 P1/P2 已补齐。按用户后续决定，全部 Windows 实机验收与适配后置，当前 Windows 仅提供功能实现与编译/CI 检查，**不承诺可用**。下一项为 P3 人类优先协作输入。
+#8 Review 修复和复验见 [修复证据](evidence/review-20261004/README.md)；[剩余功能补全计划](next-stage.md) 的 P1/P2 已补齐。按用户后续决定，全部 Windows 实机验收与适配后置，当前 Windows 仅提供功能实现与编译/CI 检查，**不承诺可用**。用户调整优先级后，P3 改为同一桌面的短前台事务，以降低总占用时间；完整 POC 和实施证据见 [验收记录](../poc/background-input/FULL_ACCEPTANCE.md)。
 
 | Feature | 完成的实现 | 独立真实场景 | 实机状态 |
 | --- | --- | --- | --- |

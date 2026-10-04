@@ -29,6 +29,11 @@ func Content(reply Reply) ToolResult {
 		RunID      string `json:"run_id"`
 		Outcome    string `json:"outcome"`
 		SeatHealth string `json:"seat_health"`
+		Input      *struct {
+			Mode         string `json:"mode"`
+			ForegroundMS int64  `json:"foreground_ms"`
+			Restoration  string `json:"restoration"`
+		} `json:"input"`
 	}
 	_ = json.Unmarshal(reply.Result, &receipt)
 	isError := err != nil || reply.Error != nil || receipt.Outcome != "" && receipt.Outcome != "completed"
@@ -39,10 +44,14 @@ func Content(reply Reply) ToolResult {
 			}
 			return s
 		}
-		body, _ = json.Marshal(map[string]any{
+		recovery := map[string]any{
 			"error":               map[string]string{"code": "model_output_budget", "message": "Full reply retained by host. Use smaller read scope/fields/pages. For actions reconcile the original request; never repeat input to recover output."},
 			"original_request_id": short(reply.ID), "run_id": short(receipt.RunID), "outcome": short(receipt.Outcome), "seat_health": short(receipt.SeatHealth),
-		})
+		}
+		if receipt.Input != nil {
+			recovery["input"] = map[string]any{"mode": short(receipt.Input.Mode), "foreground_ms": receipt.Input.ForegroundMS, "restoration": short(receipt.Input.Restoration)}
+		}
+		body, _ = json.Marshal(recovery)
 		isError = true
 	}
 	return ToolResult{IsError: isError, Content: []TextContent{{Type: "text", Text: string(body)}}, StructuredContent: body}

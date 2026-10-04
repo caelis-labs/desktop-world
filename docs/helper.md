@@ -4,6 +4,8 @@
 
 通用 Agent 优先使用随包的 [JavaScript 调用链入口](scripting.md)：持久会话、跨回合 state、观察与动作组合、选择性 print 和自动计量。下面的 NDJSON 是底层协议，不要求每个 Agent 自行编写桥接器。
 
+同一电脑上减少前台占用可选择 `--input-mode cooperative`，用法、限制和回执见 [短前台事务](cooperative-input.md)。模式由宿主配置，Agent 无新增参数或工具。
+
 ## 构建与启动
 
 ```sh

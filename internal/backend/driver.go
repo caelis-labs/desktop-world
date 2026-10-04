@@ -50,6 +50,7 @@ type Seat struct {
 type Operation struct {
 	Step      dw.Step
 	Key       Key
+	ToKey     Key // Observed drag destination; never exposed to the agent.
 	Point, To *dw.Point
 }
 type Outcome struct {
@@ -88,10 +89,18 @@ type Driver interface {
 	Close(context.Context) error
 }
 
-// TargetedInput is implemented only by the opt-in, build-tagged macOS POC.
-// It changes delivery guards and receipt channels together; ordinary drivers
+// TargetedInput identifies explicitly host-configured window-directed input.
+// It changes delivery guards and receipt channels together; shared-mode drivers
 // retain the physical foreground/hit-test contract. Host policy/authorization,
 // stable native keys, request reconciliation and fencing still apply.
 type TargetedInput interface {
 	TargetsInput(operation string) bool
+}
+
+// InputTransaction releases any borrowed foreground on the native worker after
+// the entire plan, including failure/cancellation. It must be idempotent.
+type InputTransaction interface {
+	InputChannel() string
+	BeginInput(context.Context) error
+	EndInput(context.Context) (dw.InputReport, error)
 }

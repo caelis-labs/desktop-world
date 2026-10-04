@@ -4,7 +4,9 @@ This independent, opt-in macOS experiment tests an agent entering an order note
 in a completely occluded application while a simulated user writes in the
 foreground. Both applications run on the current user's ordinary desktop.
 
-**Viable result: AppKit targeted clicks and Unicode text input.** This is a
+The expanded full-operation POC and graduated `--input-mode cooperative` path are documented in [FULL_ACCEPTANCE.md](FULL_ACCEPTANCE.md). They accept brief foreground borrowing and prioritize total occupancy. The sections below preserve the original zero-foreground probes and their limitations.
+
+**Original viable result: AppKit targeted clicks and Unicode text input.** This is a
 per-provider result, not an independent OS input seat. WebKit's editable field
 did not acquire focus under any of the three tested delivery probes. The
 no-raise focus probe also disturbed the foreground application's key-window
@@ -93,7 +95,7 @@ No independent login session, VM, hidden desktop, display driver, daemon,
 Chromium authentication-record pointer parsing, or Bot integration is included.
 Windows implementation and acceptance are outside this macOS POC.
 
-## Next useful scope
+## Original next scope (superseded by the expanded POC)
 
 Keep the accepted AppKit route behind the experiment gate. Before productizing,
 test real applications (including text views, menus and dialogs), cancellation,

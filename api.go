@@ -62,7 +62,30 @@ const (
 	InputNoShared InputPolicy = "no_shared_input"
 )
 
-// ActionChannel is fixed by the operation, never selected by the provider.
+// InputMode is selected by the trusted host when opening a world. It never
+// relaxes InputPolicy or changes authorization. Cooperative is macOS-only.
+type InputMode string
+
+const (
+	InputModeShared      InputMode = "shared"
+	InputModeCooperative InputMode = "cooperative"
+)
+
+func (m InputMode) Validate() error {
+	if m != "" && m != InputModeShared && m != InputModeCooperative {
+		return Invalid("unknown input mode")
+	}
+	return nil
+}
+func (m InputMode) Effective() InputMode {
+	if m == "" {
+		return InputModeShared
+	}
+	return m
+}
+
+// ActionChannel classifies authorization by operation. Receipts additionally
+// describe the delivery channel selected by the trusted host InputMode.
 func ActionChannel(op string) string {
 	switch op {
 	case "invoke", "set_value", "set_expanded", "set_checked", "set_selected", "scroll_into_view":
@@ -154,6 +177,7 @@ type SeatState struct {
 type Environment struct {
 	Epoch        Epoch
 	Platform     string
+	InputMode    InputMode
 	Topology     Version
 	Displays     []Display
 	Permissions  []Permission
@@ -445,7 +469,16 @@ type Receipt struct {
 	StartRevision, EndRevision Revision
 	Fault                      *Fault
 	SeatHealth                 string
-	ExpiresAt                  time.Time // Detail retention; request tombstone outlives details.
+	Input                      *InputReport // Present only for an explicitly configured input transaction.
+	ExpiresAt                  time.Time    // Detail retention; request tombstone outlives details.
+}
+
+// InputReport describes a temporary foreground transaction, including cleanup.
+// Dispatch and task verification remain separate in the step results.
+type InputReport struct {
+	Mode         string
+	ForegroundMS int64
+	Restoration  string // not_borrowed | restored | user_superseded | failed
 }
 
 type Permission struct {

@@ -21,7 +21,7 @@ type backgroundPOC struct {
 func NewBackgroundPOC(mode string) backend.Driver {
 	return &backgroundPOC{Driver: &Driver{}, mode: mode}
 }
-func (*backgroundPOC) TargetsInput(op string) bool {
+func (d *backgroundPOC) TargetsInput(op string) bool {
 	return op == "pointer.click" || op == "keyboard.type_text"
 }
 func (d *backgroundPOC) Environment(ctx context.Context) (dw.Environment, error) {

@@ -1,0 +1,56 @@
+{
+  "provider": "textedit",
+  "status": "passed",
+  "helper_sha256": "b69605ce6dcc2fad5378ce8c0ddfaa10822027131f0ad8159d22a58f4cdeec0a",
+  "actual": "DTW real textedit 中文🙂\nSaved via scoped keyboard.\n",
+  "expected": "DTW real textedit 中文🙂\nSaved via scoped keyboard.\n",
+  "sha256": "01635af351972eb0d831bc706bb3f8dec435026f61205bcd435e2540f4198979",
+  "cost": {
+    "discovery": {
+      "calls": 3,
+      "wire_bytes": 12784
+    },
+    "editor": {
+      "calls": 6,
+      "wire_bytes": 17863
+    },
+    "human": {
+      "calls": 6,
+      "wire_bytes": 16048
+    }
+  },
+  "receipt": {
+    "outcome": "completed",
+    "state": "terminal",
+    "seat_health": "ready",
+    "input": {
+      "foreground_ms": 327,
+      "mode": "cooperative",
+      "restoration": "restored"
+    },
+    "steps": [
+      {
+        "id": "step-0",
+        "channel": "foreground_transaction",
+        "state": "dispatched",
+        "delivery": "complete",
+        "verification": "not_requested"
+      },
+      {
+        "id": "step-1",
+        "channel": "foreground_transaction",
+        "state": "dispatched",
+        "delivery": "complete",
+        "verification": "not_requested"
+      },
+      {
+        "id": "step-2",
+        "channel": "foreground_transaction",
+        "state": "dispatched",
+        "delivery": "complete",
+        "verification": "not_requested"
+      }
+    ]
+  },
+  "run": "background-editor-textedit-2194307a"
+}

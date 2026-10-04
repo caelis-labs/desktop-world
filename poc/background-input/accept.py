@@ -18,7 +18,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser()
-parser.add_argument('--mode', choices=['public_pid', 'skylight', 'no_raise'], default='public_pid')
+parser.add_argument('--mode', choices=['public_pid', 'skylight', 'no_raise', 'cooperative'], default='public_pid')
 parser.add_argument('--rounds', type=int, default=3)
 parser.add_argument('--case', choices=['appkit', 'webkit'], default='appkit')
 args = parser.parse_args()
@@ -64,9 +64,11 @@ class Client:
         self.label, self.seq, self.calls, self.bytes = label, 0, 0, 0
         self.trace = (out / (label + '-wire.jsonl')).open('w')
         self.stderr = (out / (label + '-native.jsonl')).open('w')
-        binary = 'dtw-background-poc' if mode else 'dtw'
-        command = [str(ROOT / 'bin' / binary), 'serve', '--write-app-window', title, '--input-policy', policy]
-        if mode: command += ['--experimental-background-input', mode]
+        binary = 'dtw-background-poc' if mode and mode != 'cooperative' else 'dtw'
+        executable = os.environ.get('DTW_ACCEPT_HELPER') if binary == 'dtw' else None
+        command = [executable or str(ROOT / 'bin' / binary), 'serve', '--write-app-window', title, '--input-policy', policy]
+        if mode == 'cooperative': command += ['--input-mode', mode]
+        elif mode: command += ['--experimental-background-input', mode]
         self.proc = subprocess.Popen(command, cwd=ROOT, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr, text=True)
         clients.append(self)
         self.hello = self.recv()
@@ -162,7 +164,16 @@ try:
         for index, char in enumerate(human_text):
             try:
                 reply = fg.act([step('keyboard.type_text', human, type_text={'text': char})], identity='human-key-' + str(index), allow_error=True)
-                if reply.get('error'): human_errors.append(reply)
+                if reply.get('error'):
+                    if args.mode == 'cooperative' and reply.get('result', {}).get('steps', [{}])[0].get('delivery') == 'none' and reply['error']['code'] in ('needs_user_focus', 'user_interrupted'):
+                        # A declared short borrow: only a proven no-delivery input
+                        # may be retried as a new user action after restoration.
+                        for attempt in range(100):
+                            time.sleep(.02)
+                            reply = fg.act([step('keyboard.type_text', human, type_text={'text': char})], identity='human-key-' + str(index) + '-wait-' + str(attempt), allow_error=True)
+                            if not reply.get('error'): break
+                            assert reply['result']['steps'][0]['delivery'] == 'none', reply
+                    if reply.get('error'): human_errors.append(reply)
             except Exception as error: human_errors.append(str(error)); break
             human_started.set()
             time.sleep(.10)
@@ -180,11 +191,11 @@ try:
     for i in range(args.rounds):
         text = 'POC-' + str(i) + '-中文-🙂'
         # Semantic reset is disclosed separately; text delivery itself is native.
-        bg.act([step('set_value', editor, set_value={'text': ''})])
+        if args.mode != 'cooperative': bg.act([step('set_value', editor, set_value={'text': ''})])
         text_step = step('keyboard.type_text', editor, type_text={'text': text}, completion='verify', after=[{'target': {'ref': editor['ref']}, 'property': 'value', 'equals_string': text}])
         submit_step = click(submit)
         submit_step['before'] = [{'target': {'ref': editor['ref']}, 'property': 'value', 'equals_string': text}]
-        action = [click(editor), text_step, submit_step]
+        action = [click(editor)] + ([step('keyboard.press', editor, press={'key':'A', 'modifiers':['primary']}), step('keyboard.press', editor, press={'key':'Backspace'})] if args.mode == 'cooperative' else []) + [text_step, submit_step]
         identity = 'background-task-' + str(i)
         r = bg.act(action, identity=identity, allow_error=True)
         summary['rounds'].append({'text': text, 'reply': r})
@@ -215,7 +226,7 @@ try:
     submits = [e for e in summary['background_events'] if e['event'] == ('web_submit' if args.case == 'webkit' else 'submit')]
     assert len(submits) == args.rounds, 'submission was duplicated or missing'
     assert summary['actual_human_text'] == human_text and not human_errors, 'foreground user input interrupted'
-    assert samples and summary['foreground_or_key_loss_samples'] == 0, 'foreground/key focus changed'
+    assert samples and (args.mode == 'cooperative' or summary['foreground_or_key_loss_samples'] == 0), 'foreground/key focus changed'
     summary['status'] = 'passed' if len(summary['rounds']) == args.rounds and all(not r['reply'].get('error') for r in summary['rounds']) else 'failed'
 except Exception as error:
     summary['error'] = str(error)
@@ -228,7 +239,7 @@ finally:
     for pid in active:
         try: os.kill(pid, 15)
         except ProcessLookupError: pass
-    summary['helper_sha256'] = hashlib.sha256((ROOT / 'bin' / 'dtw-background-poc').read_bytes()).hexdigest()
+    summary['helper_sha256'] = hashlib.sha256(Path(os.environ.get('DTW_ACCEPT_HELPER',str(ROOT / 'bin' / 'dtw')) if args.mode == 'cooperative' else str(ROOT/'bin/dtw-background-poc')).read_bytes()).hexdigest()
     summary['native_dispatch'] = [json.loads(line) for line in (out/'background-native.jsonl').read_text().splitlines() if line.startswith('{')] if (out/'background-native.jsonl').exists() else []
     names = run(['git', 'ls-files', '-c', '-o', '--exclude-standard', '-z']).split('\0')
     manifest = {name: hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in sorted(set(names)) if name and (ROOT/name).is_file() and (ROOT/name).suffix in ['.go','.m','.h','.swift','.py','.mod','.sum']}

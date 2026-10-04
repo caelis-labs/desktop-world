@@ -14,12 +14,12 @@
 | --- | --- | --- |
 | P1 | 高价值语义动作，已完成 | set_selected、set_checked、scroll_into_view 保留现有 set_value 文本/标量契约。各有独立 macOS 后台完整业务，前台 Unicode 输入、指针/焦点稳定、false/no-op、未支持拒绝和原收据证据；见 [实现](semantic-actions.md) 与 [实机记录](evidence/semantic-actions-20261004/README.md)。 |
 | P2，已完成 macOS 核心验收 | 独立窗口内容捕获 | 先完成 macOS 实机；Windows 同步实现，实机后置。可靠关联已有窗口 Ref，不能按标题猜测；后台被遮挡且未最小化时返回当前帧并保留前台；最小化/隐藏/锁屏/断连/窗口重建分别返回可解释状态，旧帧不得冒充新帧。移动/缩放/跨屏、sheet/弹窗、捕获权限独立验收。图像坐标不能直接授权共享桌面点击。 |
-| P3，下一项 | 人类优先协作输入 | 用户开始操作或离开目标后，停止后续输入，保留原收据；重新观察后由宿主决定下一步。补同一 OS 会话的合作 helper 输入互斥；不拦截用户输入、不自动抢回焦点。持续输入、切换应用、拖拽、取消和崩溃分别验收。 |
+| P3，按用户新优先级交付 | 同一桌面的短前台事务 | 接受短暂前台占用，优先降低总占用时间。先完成 AppKit / WebKit / Chromium / Electron / 真实文档的独立 POC，再把可行路径作为可信宿主选项；逐项键鼠、菜单/弹窗、恢复、取消、预算到期和用户切换分别验收。见 [实现与边界](cooperative-input.md)、[POC 结论](../poc/background-input/FULL_ACCEPTANCE.md)。更完整的人类输入监听继续低优先级后置。 |
 | P4 | 长会话与有界等待 | 先测注册表/请求/游标容量，再做没有未决副作用时的安全 helper 轮换；Ref 不复用。原生事件只作范围失效提示，合并/去抖后有界刷新，保留周期校对；事件不直接触发 LLM。 |
 
 单独 Windows 阶段在功能达到完备临界点后覆盖 F1–F8 和后续 feature 的真实电脑操作、UIA 属性成本、扫描预算与续扫、游标释放、managed host 停止/授权撤销/原收据恢复；CI 与实机分别标注，通过前不承诺 Windows 可用。P1 滚动第一版仅提供目标级 scroll_into_view；任意方向/页数的语义滚动保持 provider 专项扩展。
 
-应用定向事件与独立座席继续作为独立 PoC，先使用已有交互环境验证输入、捕获、取消和断连；不在这批实现 VM 创建或多机管理。
+应用定向 PID 事件保留实验与逐 provider 证据，不自动 fallback。当前任务按用户要求只使用同一台电脑、同一用户桌面，不实施独立会话、VM 或多机管理。
 
 ## 每项实现的统一边界
 
@@ -30,7 +30,7 @@
 
 ## 下一次 pre-release 的候选门槛
 
-用户后续授权直接合并并产出 pre-release：本批完成 P2 macOS 核心场景与 Windows 功能实现，发布 alpha.3 后，tag CI 暴露已有关闭测试的启动竞态；改为等待 native-entry barrier，最终发布 v0.1.0-alpha.4，已发布 alpha.3/tag 保持不变。后者仅收尾测试与版本指引，无需等 P3/P4 或 Windows 实机。P2 实机证明与未验收边界见 [窗口捕获](window-capture.md)；锁屏/断连/跨屏保留专项验证项，当前 alpha 不承诺这些场景。下一批按 P3 实现人类优先协作输入。
+用户后续授权直接合并并产出 pre-release：本批完成 P2 macOS 核心场景与 Windows 功能实现，发布 alpha.3 后，tag CI 暴露已有关闭测试的启动竞态；改为等待 native-entry barrier，最终发布 v0.1.0-alpha.4，已发布 alpha.3/tag 保持不变。后者仅收尾测试与版本指引，无需等 P3/P4 或 Windows 实机。P2 实机证明与未验收边界见 [窗口捕获](window-capture.md)；锁屏/断连/跨屏保留专项验证项，当前 alpha 不承诺这些场景。用户随后调整 P3：以短前台事务完成完整键鼠任务，优先总占用时间；本批依据扩展 POC 实施 cooperative 模式。最低 macOS / amd64 / IME 与更多真实应用的兼容性扩展保留后续专项，Windows 实机和 Bot M0 继续后置。
 
 候选提交需要三平台 CI 和发布所承诺平台的独立实机任务通过；分发包验证 `dtw` 路径、版本/revision、校验值、权限诊断和 managed host 停止/原收据恢复。若先发 macOS alpha，Windows 明确列为功能实现、实机适配后置、不承诺可用，不声明双平台可用或正式发布。CLI 名称变化与逐 provider 支持矩阵须写入发布说明。
 

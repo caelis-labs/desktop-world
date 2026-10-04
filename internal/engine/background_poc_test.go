@@ -25,6 +25,14 @@ func (*targetedDriver) TargetsInput(op string) bool {
 }
 
 func pocWorld(t *testing.T, targeted bool) (dw.World, *dwtest.Fixture, dw.Epoch, map[string]dw.Ref) {
+	return pocWorldDriver(t, func(f *occludedDriver) backend.Driver {
+		if targeted {
+			return &targetedDriver{f}
+		}
+		return f
+	})
+}
+func pocWorldDriver(t *testing.T, factory func(*occludedDriver) backend.Driver) (dw.World, *dwtest.Fixture, dw.Epoch, map[string]dw.Ref) {
 	t.Helper()
 	ctx := context.Background()
 	w0, f, err := dwtest.New(ctx)
@@ -37,10 +45,7 @@ func pocWorld(t *testing.T, targeted bool) (dw.World, *dwtest.Fixture, dw.Epoch,
 	f.Add(dwtest.Node{ID: "human-window", App: "human-app", Parent: "human-app", Object: dw.Object{Kind: dw.KindWindow, Name: dw.Known("human window")}})
 	f.Add(dwtest.Node{ID: "human-field", App: "human-app", Window: "human-window", Parent: "human-window", Object: dw.Object{Kind: dw.KindUI, Role: "text_field", Name: dw.Known("human field")}})
 	f.Focus("human-field")
-	var driver backend.Driver = &occludedDriver{f}
-	if targeted {
-		driver = &targetedDriver{driver.(*occludedDriver)}
-	}
+	driver := factory(&occludedDriver{f})
 	w, err := engine.Open(ctx, driver, engine.Options{SeatID: t.Name()})
 	if err != nil {
 		t.Fatal(err)

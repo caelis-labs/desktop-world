@@ -11,6 +11,12 @@ import (
 
 // OpenBackgroundPOC is experimental and absent from ordinary builds.
 func OpenBackgroundPOC(ctx context.Context, o Options, mode string) (dw.World, error) {
+	if err := o.InputMode.Validate(); err != nil {
+		return nil, err
+	}
+	if o.InputMode.Effective() != dw.InputModeShared {
+		return nil, dw.Invalid("choose one input mode")
+	}
 	if mode != "public_pid" && mode != "skylight" && mode != "no_raise" {
 		return nil, dw.Invalid("unknown experimental input mode")
 	}
