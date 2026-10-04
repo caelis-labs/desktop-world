@@ -65,6 +65,18 @@ func TestNativeScanCapacityPreservesCursor(t *testing.T) {
 		}
 		if i == 0 {
 			first = ob.Coverage.Continuation
+			// These internal queries expose no continuation. They must release
+			// their unfinished scan rather than consume the remaining slots.
+			for j := range 20 {
+				reply, err := c.Call(ctx, turn, fmt.Sprintf("one-shot-sync-%02d", j), "sync", dw.ChangeRequest{Cursor: ob.Cursor})
+				if err != nil || reply.Error != nil {
+					t.Fatal("internal query failed", reply.Error, err)
+				}
+				var changes dw.ChangeSet
+				if err := protocol.Decode(reply.Result, &changes); err != nil || !changes.ResetRequired || changes.ResetReason != "coverage_incomplete" {
+					t.Fatal("incomplete sync outcome changed", changes, err)
+				}
+			}
 		}
 	}
 	reply, err = c.Call(ctx, turn, "scan-over-capacity", "observe", req)
@@ -86,5 +98,5 @@ func TestNativeScanCapacityPreservesCursor(t *testing.T) {
 	if err := c.EndTurn(ctx, turn); err != nil {
 		t.Fatal(err)
 	}
-	t.Log("16 active native scan cursors retained; seventeenth returned ax_scan_capacity; first cursor resumed from visited=1 to 2")
+	t.Log("20 incomplete one-shot syncs retained no scan slots; 16 caller cursors retained; seventeenth refused; first resumed from visited=1 to 2")
 }

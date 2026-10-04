@@ -1,0 +1,29 @@
+{
+  "date": "2026-10-04",
+  "source_base": "225772c423d9cf285fa973d591bc94bce4b1e3cc",
+  "source_dirty": true,
+  "checks": [
+    {
+      "command": "./scripts/check.sh",
+      "exit_code": 0,
+      "includes": [
+        "Go race tests",
+        "Go vet",
+        "Windows amd64 build/vet",
+        "9 JSON examples",
+        "17 JavaScript tests"
+      ]
+    },
+    {
+      "command": "GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c ./host",
+      "exit_code": 0,
+      "executed": false
+    },
+    {
+      "command": "GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c ./internal/backend/windows",
+      "exit_code": 0,
+      "executed": false
+    }
+  ],
+  "windows_native_acceptance": "pending - no interactive Windows machine supplied"
+}

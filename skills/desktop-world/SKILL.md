@@ -34,12 +34,12 @@ schema for operations not covered by its convenience methods.
 Discover setup and argument schemas before assembling actions:
 
 ```sh
-desktop-world doctor
-desktop-world schema observe
-desktop-world schema act
+dtw doctor
+dtw schema observe
+dtw schema act set_value  # request only the needed action; act alone loads all
 ```
 
-The trusted host starts `desktop-world serve` with authorized application scopes.
+The trusted host starts `dtw serve` with authorized application scopes.
 No API key is needed; operating-system Accessibility/input/capture permissions
 still apply. Do not grant yourself more scope or enable raw input to evade a
 denial. The host may use stdio directly or a terminal with stdin kept open. For a
@@ -54,7 +54,7 @@ commands:
 ```
 
 ```json
-{"id":"window-1","op":"observe","args":{"scope":{"refs":["REF_FROM_INVENTORY"]},"projection":"outline","fields":["name","role","value_preview","states","capabilities"],"budget":{"max_depth":6,"max_results":80}}}
+{"id":"window-1","op":"observe","args":{"scope":{"refs":["REF_FROM_INVENTORY"]},"projection":"outline","fields":["name","role"],"budget":{"max_depth":4,"max_results":32,"max_output_bytes":4096}}}
 ```
 
 ```json
@@ -81,9 +81,10 @@ after a live page changes.
 
 Every outline page series has a 24 KiB cumulative wire-output cap on all
 platforms, including unfiltered, single-call traversals. A terminal
-`ax_output_limit` keeps coverage incomplete. Windows currently has only result
-pagination: its UIA driver has no native `Resume` / `ScanCursor`, so a partial
-zero-match Windows scan cannot advance its traversal through continuation.
+`ax_output_limit` keeps coverage incomplete. Windows now retains its native UIA frontier too. Resume continues sibling traversal
+without rescanning the prefix. `uia_scan_capacity` / `uia_scan_limit` are explicit
+limits; resumed coverage remains incomplete because the provider tree is live.
+Windows native acceptance is required separately from cross-build/CI.
 No continuation means no retained work or an explicit limit, not proof that
 all reachable nodes were read.
 
@@ -97,7 +98,7 @@ one is available. Capture plus anchor is a last resort, never automatic.
 See [large AX discovery](references/large-ax-discovery.md).
 
 `act` owns the epoch/request-ID plumbing. Preserve its envelope `id` and body on
-transport retry; a fresh ID may repeat effects. `focus` and `set_value` verify
+transport retry; a fresh ID may repeat effects. `focus`, `set_value` and `set_expanded` verify
 their own state. Other actions default to dispatch only. Add explicit `after`
 predicates when available, then verify the actual task result independently.
 Batch steps whose targets remain known. If a step opens a new window/dialog or
@@ -129,3 +130,13 @@ A `value` predicate verifies only `source:value`; a label is not a value. Preser
 unknown and redacted values. After a verification failure, the input may already
 be delivered: inspect/reconcile the original receipt and read the current value.
 Never toggle again merely to retry verification.
+
+For background tasks the host may select `--input-policy no_shared_input`.
+This forbids focus and shared keyboard/pointer/raw input for the entire plan before
+any effect. It does not prevent application-owned activation. If a task needs a
+keyboard Enter, stop with `requires_shared_input`; use supported semantic submit
+only when its capability is exposed. Never relax the host ceiling yourself.
+Use `dw.expand(ref, true/false)` to reach an explicit disclosure state; it verifies
+and avoids another provider write when already satisfied. Read its capability and
+state on that Ref only as needed. `dtw schema act set_expanded` discloses only this
+action. Other actions can use the same per-action schema selector.

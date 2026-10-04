@@ -25,15 +25,15 @@
 {"id":"inspect","op":"observe","args":{"scope":{"refs":["OBSERVED_WINDOW_REF"]},"projection":"outline","fields":["name","role","value_preview"],"budget":{"max_depth":5,"max_results":40,"max_output_bytes":12000}}}
 ```
 
-这是有界字段选择，不是 GraphQL。当前 states/capabilities/bounds 是整组选择，基础身份/版本/覆盖元数据仍固定存在。**原生后端目前仍可能读取未返回的属性，减少输出不等于等量减少 AX/UIA 调用。** 已将 summary 默认字段收紧为 role/name/app/window。helper 的 compact 是呈现层：已知 Fact 变为 `{known: value}`，未知/不可用/被遮盖状态明确保留；`--full-output` 可返回原格式。
+这是有界字段选择，不是 GraphQL。当前 states/capabilities/bounds 是整组选择，基础身份/版本/覆盖元数据仍固定存在。**当前源码把输出字段和 match 必需字段下推为 AX 属性批次 / UIA cache request，未请求 value_preview 时不调用 value getter。** 生命周期、原生所有权、保护状态和焦点仍需必要读取，因此字段数与调用数不呈简单比例。部分刷新保留未请求事实及其 sampled_at，写操作仍执行完整 fresh-read。座席附带节点只读取身份字段。macOS 独立慢值 getter 对照见 [F3](features.md)；Windows 属性下推仍待实机测量。summary 默认字段为 role/name/app/window。helper 的 compact 是呈现层：已知 Fact 变为 `{known: value}`，未知/不可用/被遮盖状态明确保留；`--full-output` 可返回原格式。
 
-后续适合增加受限的嵌套选择，例如 `states.enabled`、`states.focused`、`capabilities.invoke`、`bounds.rect`、`diagnostics.sample_time`，并将选择下推到原生读取/缓存请求。无需先引入完整 GraphQL 服务、任意递归或任意表达式。内部存储必须区分未请求和未知，保留每字段新鲜度，不能让一次部分读取覆盖为“所有字段都已刷新”。支持省略 diagnostics，并不允许省略身份、分页、错误、未知结果或权限边界。
+后续可增加受限的嵌套选择，例如 `states.enabled`、`states.focused`、`capabilities.invoke`、`bounds.rect`；本批没有新增这些字段语法。内部存储区分未请求和未知，保留每字段新鲜度，不能让一次部分读取覆盖为“所有字段都已刷新”。支持省略 diagnostics，并不允许省略身份、分页、错误、未知结果或权限边界。
 
 ## 不打扰前台有三个层次
 
 | 层次 | 可以做什么 | 代价与限制 |
 | --- | --- | --- |
-| 语义后台操作 | observe/read、受支持的 set_value/invoke；未来扩展 select/toggle/expand/semantic scroll | 依赖应用 provider，应用自身可能弹窗或激活；不是任意键鼠 |
+| 语义后台操作 | observe/read、受支持的 set_value/invoke/set_expanded；未来扩展 select/toggle/semantic scroll | 依赖应用 provider，应用自身可能弹窗或激活；不是任意键鼠 |
 | 应用定向事件 | 研究进程/窗口定向输入、应用内逻辑位置 | 与真实 HID 语义不同，不能普遍处理菜单、拖拽、IME、全局快捷键；单独报告能力 |
 | 隔离交互座席 | 独立焦点、键盘状态、光标和显示内容 | 独立 OS 会话/VM/远程桌面 backend；应用必须运行在那里 |
 
@@ -41,7 +41,7 @@
 
 Windows 的同一交互 window station 同时只有一个 input desktop，系统 cursor 是共享资源；仅 CreateDesktop 不能承诺用户与 Agent 同时各有一套可用的 SendInput 桌面。[Desktops](https://learn.microsoft.com/en-us/windows/win32/winstation/desktops)、[SetCursorPos](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setcursorpos)。macOS 的 combined session input state 汇集同一登录会话的事件源；私有事件源状态或向进程 post event，不能据此宣称拥有另一套 WindowServer 焦点和光标。[Apple event state](https://developer.apple.com/documentation/coregraphics/cgeventsourcestateid/combinedsessionstate)。
 
-UIA Invoke 是调用 provider 的动作，不等同于合成点击，其副作用和阻塞行为依赖 provider。[Invoke guidelines](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-implementinginvoke)。因此 `background_only` 即便拒绝 focus/物理输入，也只能承诺“不主动使用共享输入”，不能单靠此开关保证应用永不抢前台。
+UIA Invoke 是调用 provider 的动作，不等同于合成点击，其副作用和阻塞行为依赖 provider。[Invoke guidelines](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-implementinginvoke)。当前 `no_shared_input` 策略在计划执行前拒绝 focus/物理输入，只承诺“不主动使用共享输入”，不能单靠此开关保证应用永不抢前台。F1 在两份独立 AppKit 应用上验证后台提交期间前台持续输入完整、前台窗口和系统指针稳定，不能推导所有 provider 都有相同行为。
 
 ## 若实现隔离，需要改变什么
 

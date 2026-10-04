@@ -25,8 +25,28 @@ func record(_ event: String, _ value: String = "") {
 }
 final class SlowField: NSTextField {
   override func accessibilityValue() -> String? {
+    if argument("--trace-reads", "0") == "1" { record("value_read", accessibilityLabel() ?? "slow") }
     Thread.sleep(forTimeInterval: 0.025)
     return super.accessibilityValue()
+  }
+}
+final class Disclosure: NSView {
+  var expanded = false
+  let details = NSTextField(labelWithString: "Shipping details ready")
+  override func isAccessibilityElement() -> Bool { true }
+  override func accessibilityRole() -> NSAccessibility.Role? { .disclosureTriangle }
+  override func accessibilityLabel() -> String? { "Shipping details" }
+  override func isAccessibilityExpanded() -> Bool { expanded }
+  override func setAccessibilityExpanded(_ value: Bool) {
+    expanded = value
+    details.isHidden = !value
+    record("expanded", value ? "true" : "false")
+    record("details_visible", details.isHidden ? "false" : "true")
+    NSAccessibility.post(element: self, notification: .valueChanged)
+  }
+  override func isAccessibilitySelectorAllowed(_ selector: Selector) -> Bool {
+    if selector == #selector(setAccessibilityExpanded(_:)) { return true }
+    return super.isAccessibilitySelectorAllowed(selector)
   }
 }
 typealias Field = NSTextField
@@ -57,7 +77,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     menu.addItem(editItem)
     NSApp.mainMenu = menu
     window = NSWindow(
-      contentRect: NSRect(x: 180, y: 200, width: 500, height: 460),
+      contentRect: NSRect(x: 180, y: 200, width: 500, height: 530),
       styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false
     )
     window.title = fixtureTitle
@@ -109,6 +129,11 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     boundary.frame = NSRect(x: 250, y: 400, width: 200, height: 28)
     boundary.setAccessibilityLabel("Unicode preview boundary")
     window.contentView?.addSubview(boundary)
+    let disclosure = Disclosure(frame: NSRect(x: 24, y: 470, width: 420, height: 28))
+    disclosure.details.frame = NSRect(x: 24, y: 440, width: 420, height: 24)
+    disclosure.details.isHidden = true
+    window.contentView?.addSubview(disclosure)
+    window.contentView?.addSubview(disclosure.details)
     let slowCount = Int(argument("--slow-count", "0")) ?? 0
     for i in 0..<slowCount {
       let slow = SlowField(labelWithString: "Slow row \(i)")
@@ -126,8 +151,12 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
       }
       return event
     }
-    window.makeKeyAndOrderFront(nil)
-    NSApp.activate(ignoringOtherApps: true)
+    if argument("--background", "0") == "1" {
+      window.orderBack(nil)
+    } else {
+      window.makeKeyAndOrderFront(nil)
+      NSApp.activate(ignoringOtherApps: true)
+    }
     record("ready", fixtureTitle)
   }
   @objc func toggleValue() { record("checkbox", String(checkbox.state.rawValue)) }

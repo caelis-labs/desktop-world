@@ -1,0 +1,4 @@
+=== RUN   TestNativeNoSharedInput
+    features_test.go:240: F1 native background completed; foreground text intact; background model calls=6 bytes=12414; original receipt=run-ae05201780f63cb248aa7210
+--- PASS: TestNativeNoSharedInput (2.96s)
+PASS

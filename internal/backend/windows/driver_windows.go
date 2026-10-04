@@ -32,10 +32,11 @@ type Driver struct {
 	apps               map[string]backend.Key
 	env                dw.Environment
 	initialized        bool
+	scans              map[string]*uiaScan
 }
 
 func New() backend.Driver {
-	return &Driver{byKey: map[backend.Key]*entry{}, apps: map[string]backend.Key{}}
+	return &Driver{byKey: map[backend.Key]*entry{}, apps: map[string]backend.Key{}, scans: map[string]*uiaScan{}}
 }
 func (d *Driver) Open(ctx context.Context) error {
 	hr, _, _ := coInit.Call(0, 0)
@@ -56,7 +57,7 @@ func (d *Driver) Open(ctx context.Context) error {
 	if e := d.uia.call(20, ptr(&d.cache)); e != nil {
 		return e
 	}
-	for _, id := range []uintptr{30001, 30002, 30003, 30005, 30008, 30009, 30010, 30019, 30022, 30031, 30043, 30045} {
+	for _, id := range []uintptr{30001, 30002, 30003, 30005, 30008, 30009, 30010, 30019, 30022, 30031, 30043, 30045, 30028} {
 		if e := d.cache.call(3, id); e != nil {
 			return e
 		}
@@ -67,6 +68,10 @@ func (d *Driver) Open(ctx context.Context) error {
 	return e
 }
 func (d *Driver) Close(context.Context) error {
+	for _, scan := range d.scans {
+		scan.release()
+	}
+	d.scans = nil
 	for _, e := range d.entries {
 		e.el.release()
 	}
@@ -151,6 +156,9 @@ func (d *Driver) application(pid uint32, start uint64) backend.Key {
 	if k := d.apps[id]; k != "" {
 		return k
 	}
+	if len(d.entries) >= 10000 {
+		return ""
+	}
 	k := backend.Key(fmt.Sprintf("native-%d", len(d.entries)+1))
 	e := &entry{key: k, pid: pid, start: start, application: true, app: k}
 	d.entries = append(d.entries, e)
@@ -186,12 +194,15 @@ func (d *Driver) lookup(k backend.Key) (*entry, error) {
 	return e, nil
 }
 func (d *Driver) node(ctx context.Context, k backend.Key) (backend.Node, error) {
+	return d.nodeFields(ctx, k, nil, d.cache)
+}
+func (d *Driver) nodeFields(ctx context.Context, k backend.Key, fields []string, cache *com) (backend.Node, error) {
 	e, err := d.lookup(k)
 	if err != nil {
 		return backend.Node{}, err
 	}
 	if e.application {
-		return backend.Node{Key: k, App: k, Object: dw.Object{Kind: dw.KindApplication, Role: "application", Name: dw.Known(fmt.Sprintf("Process %d", e.pid)), Lifecycle: dw.LifeLive}}, nil
+		return backend.Node{Fields: fields, Key: k, App: k, Object: dw.Object{Kind: dw.KindApplication, Role: "application", Name: dw.Known(fmt.Sprintf("Process %d", e.pid)), Lifecycle: dw.LifeLive}}, nil
 	}
 	if e.hwnd == 0 {
 		if err = d.refreshOwnership(e); err != nil {
@@ -199,13 +210,33 @@ func (d *Driver) node(ctx context.Context, k backend.Key) (backend.Node, error) 
 		}
 	}
 	var cached *com
-	if err = e.el.call(9, ptr(d.cache), ptr(&cached)); err != nil {
+	if err = e.el.call(9, ptr(cache), ptr(&cached)); err != nil {
 		return backend.Node{}, err
 	}
 	defer cached.release()
 	control, _ := intProp(cached, 53)
-	name, nameErr := stringProp(cached, 55)
-	o := dw.Object{Kind: dw.KindUI, Role: role(control), URI: dw.Fact[string]{Status: dw.FactUnsupported}, Lifecycle: dw.LifeLive, Name: dw.Unknown[string](), States: map[string]dw.Fact[bool]{"focused": boolProp(cached, 58), "enabled": boolProp(cached, 60), "protected": boolProp(cached, 67), "offscreen": boolProp(cached, 70)}}
+	name, nameErr := "", fmt.Errorf("unrequested")
+	if wants(fields, "name") {
+		name, nameErr = stringProp(cached, 55)
+	}
+	o := dw.Object{Kind: dw.KindUI, Role: role(control), URI: dw.Fact[string]{Status: dw.FactUnsupported}, Lifecycle: dw.LifeLive, States: map[string]dw.Fact[bool]{}}
+	if wants(fields, "value_preview") {
+		o.ValuePreview = dw.Unknown[string]()
+	}
+	if wants(fields, "name") {
+		o.Name = dw.Unknown[string]()
+	}
+	if wants(fields, "states") {
+		o.States = map[string]dw.Fact[bool]{"focused": boolProp(cached, 58), "enabled": boolProp(cached, 60), "protected": boolProp(cached, 67), "offscreen": boolProp(cached, 70)}
+	} else {
+		if wants(fields, "capabilities") {
+			o.States["enabled"] = boolProp(cached, 60)
+		}
+		if wants(fields, "value_preview") || wants(fields, "uri") || wants(fields, "capabilities") {
+			o.States["protected"] = boolProp(cached, 67)
+		}
+	}
+
 	if e.hwnd != 0 {
 		o.Kind = dw.KindWindow
 	}
@@ -213,22 +244,35 @@ func (d *Driver) node(ctx context.Context, k backend.Key) (backend.Node, error) 
 		o.Name = dw.Known(name)
 	}
 	var rect [4]int32
-	if cached.call(75, ptr(&rect)) == nil {
-		o.Bounds = dw.Known(dw.Bounds{Frame: "desktop", Topology: d.env.Topology, Rect: dw.Rect{X: float64(rect[0]), Y: float64(rect[1]), Width: float64(rect[2] - rect[0]), Height: float64(rect[3] - rect[1])}})
-	} else {
-		o.Bounds = dw.Unknown[dw.Bounds]()
+	if wants(fields, "bounds") {
+		if cached.call(75, ptr(&rect)) == nil {
+			o.Bounds = dw.Known(dw.Bounds{Frame: "desktop", Topology: d.env.Topology, Rect: dw.Rect{X: float64(rect[0]), Y: float64(rect[1]), Width: float64(rect[2] - rect[0]), Height: float64(rect[3] - rect[1])}})
+		} else {
+			o.Bounds = dw.Unknown[dw.Bounds]()
+		}
 	}
-	invoke := isTrue(propBool(cached, 30031, true))
-	value := isTrue(propBool(cached, 30043, true))
+	invoke := false
+	if wants(fields, "capabilities") {
+		invoke = isTrue(propBool(cached, 30031, true))
+	}
+	value := false
+	if wants(fields, "value_preview") || wants(fields, "states") || wants(fields, "capabilities") {
+		value = isTrue(propBool(cached, 30043, true))
+	}
 	writable := false
 	o.States["read_only"] = dw.Unknown[bool]()
-	if value && !isTrue(o.States["protected"]) {
+	protected := o.States["protected"]
+	knownUnprotected := protected.Status == dw.FactKnown && protected.Value != nil && !*protected.Value
+	if value && knownUnprotected {
 		var pattern *com
 		if e.el.call(16, 10002, ptr(&pattern)) == nil && pattern != nil {
 			ro := boolProp(pattern, 5)
 			o.States["read_only"] = ro
 			writable = ro.Status == dw.FactKnown && !isTrue(ro)
-			v, er := stringProp(pattern, 4)
+			v, er := "", fmt.Errorf("unrequested")
+			if wants(fields, "value_preview") {
+				v, er = stringProp(pattern, 4)
+			}
 			if er == nil {
 				r := []rune(v)
 				if len(r) > 192 {
@@ -242,20 +286,46 @@ func (d *Driver) node(ctx context.Context, k backend.Key) (backend.Node, error) 
 	if isTrue(o.States["protected"]) {
 		o.ValuePreview = dw.Fact[string]{Status: dw.FactRedacted}
 	}
-	for op, supported := range map[string]bool{"focus": e.hwnd != 0 || isTrue(boolProp(cached, 59)), "invoke": invoke, "set_value": writable} {
-		sup, avail := "unsupported", "blocked"
-		if supported {
-			sup = "supported"
-			if isTrue(o.States["enabled"]) {
-				avail = "available"
+	expandable := false
+	if wants(fields, "states") || wants(fields, "capabilities") {
+		expandable = isTrue(propBool(cached, 30028, true))
+	}
+	if expandable {
+		expandable = false
+		o.States["expanded"] = dw.Unknown[bool]()
+		var pattern *com
+		if e.el.call(16, 10005, ptr(&pattern)) == nil && pattern != nil {
+			state, er := intProp(pattern, 5)
+			pattern.release()
+			expandable = er == nil && state >= 0 && state <= 2
+			if er == nil && (state == 0 || state == 1) {
+				o.States["expanded"] = dw.Known(state == 1)
+			}
+			if er == nil && state == 3 {
+				expandable = false
+				o.States["expanded"] = dw.Fact[bool]{Status: dw.FactUnsupported}
 			}
 		}
-		o.Capabilities = append(o.Capabilities, dw.Capability{Name: op, Support: sup, Availability: avail})
+	}
+	if wants(fields, "capabilities") {
+		for op, supported := range map[string]bool{"set_expanded": expandable, "focus": e.hwnd != 0 || isTrue(boolProp(cached, 59)), "invoke": invoke, "set_value": writable} {
+			if op == "set_expanded" && !supported {
+				continue
+			}
+			sup, avail := "unsupported", "blocked"
+			if supported {
+				sup = "supported"
+				if isTrue(o.States["enabled"]) {
+					avail = "available"
+				}
+			}
+			o.Capabilities = append(o.Capabilities, dw.Capability{Name: op, Support: sup, Availability: avail})
+		}
 	}
 	sort.Slice(o.Capabilities, func(i, j int) bool { return o.Capabilities[i].Name < o.Capabilities[j].Name })
 	o.SampleStart = time.Now().UTC()
 	o.SampleEnd = o.SampleStart
-	return backend.Node{Key: k, App: e.app, Window: e.window, Parent: e.parent, Object: o}, ctx.Err()
+	return backend.Node{Fields: fields, Key: k, App: e.app, Window: e.window, Parent: e.parent, Object: o}, ctx.Err()
 }
 func role(c int32) string {
 	m := map[int32]string{50000: "button", 50002: "checkbox", 50004: "text_field", 50007: "list_item", 50008: "list", 50009: "menu", 50011: "menu_item", 50018: "tab", 50020: "text", 50030: "document", 50032: "window", 50033: "container"}
@@ -267,90 +337,109 @@ func role(c int32) string {
 func (d *Driver) Query(ctx context.Context, q backend.Query) (backend.Page, error) {
 	restore := dpiScope()
 	defer restore()
-	p := backend.Page{Complete: true}
-	type item struct {
-		k     backend.Key
-		depth int
+	deadline := scanDeadline(ctx, q)
+	// Bound one in-flight provider call, and restore the write/read default on
+	// this same MTA worker. These setters are IUIAutomation2 vtable slots.
+	if err := d.uia.call(61, 50); err != nil {
+		return backend.Page{}, err
 	}
-	queue := []item{}
-	if q.Desktop {
-		state := windowCollection{driver: d, ctx: ctx, max: q.MaxNodes, complete: true}
-		id := registerCallback(&state)
-		enumWindows.Call(windowCallback, id)
-		callbackStates.Delete(id)
-		p.Complete = state.complete
-		for _, entry := range state.roots {
-			queue = append(queue, item{entry, 0})
-		}
+	defer d.uia.call(61, 500)
+	if err := d.uia.call(63, 50); err != nil {
+		return backend.Page{}, err
+	}
+	defer d.uia.call(63, 500)
+	cache, err := d.fieldCache(q.Fields)
+	if err != nil {
+		return backend.Page{}, err
+	}
+	defer cache.release()
+	scan, err := d.beginScan(ctx, q)
+	if err != nil {
+		return backend.Page{}, err
+	}
+	return d.scanPage(ctx, q, scan, deadline, func(p *backend.Page) {
+		d.scanStep(ctx, q, scan, cache, p)
+	}, d.seat)
+}
 
-	} else {
-		for _, k := range q.Roots {
-			queue = append(queue, item{k, 0})
-		}
+// One transition preserves the pending sibling reference across budget yields.
+func (d *Driver) scanStep(ctx context.Context, q backend.Query, scan *uiaScan, cache *com, p *backend.Page) {
+	frame := scan.stack[len(scan.stack)-1]
+	entry, er := d.lookup(frame.key)
+	if er != nil {
+		scan.dirty = true
+		scan.pop()
+		return
 	}
-	seen := map[backend.Key]bool{}
-	for len(queue) > 0 {
-		if ctx.Err() != nil || p.Visited >= q.MaxNodes {
-			p.Complete = false
-			break
+	if !frame.visited {
+		if scan.seen[frame.key] {
+			scan.pop()
+			return
 		}
-		cur := queue[0]
-		queue = queue[1:]
-		if seen[cur.k] {
-			continue
+		n, er := d.nodeFields(ctx, frame.key, q.Fields, cache)
+		frame.visited = true
+		scan.seen[frame.key] = true
+		scan.visited++
+		if er != nil {
+			scan.dirty = true
+			scan.pop()
+			return
 		}
-		seen[cur.k] = true
-		p.Visited++
-		n, e := d.node(ctx, cur.k)
-		if e != nil {
-			p.Complete = false
-			continue
+		if !q.Summary || n.Object.Kind != dw.KindUI {
+			p.Nodes = append(p.Nodes, n)
 		}
-		p.Nodes = append(p.Nodes, n)
-		if q.Summary || q.Detail || cur.depth >= q.Depth {
-			continue
-		}
-		entry := d.byKey[cur.k]
-		if entry.application {
-			for _, e := range d.entries {
-				if e.app == cur.k && e.hwnd != 0 && !e.gone {
-					queue = append(queue, item{e.key, cur.depth + 1})
+		return
+	}
+	if q.Detail || frame.depth >= q.Depth || (q.Summary && !entry.application) {
+		scan.pop()
+		return
+	}
+	if entry.application {
+		if !frame.expanded {
+			frame.expanded = true
+			for _, child := range d.entries {
+				if child.app == frame.key && child.hwnd != 0 && !child.gone {
+					frame.windows = append(frame.windows, child.key)
 				}
 			}
-			continue
 		}
-		var child *com
-		if d.walker.call(4, ptr(entry.el), ptr(&child)) != nil {
-			p.Complete = false
-			continue
+		if len(frame.windows) == 0 {
+			scan.pop()
+			return
 		}
-		for child != nil {
-			if p.Visited+len(queue) >= q.MaxNodes {
-				child.release()
-				p.Complete = false
-				break
-			}
-			var next *com
-			nextErr := d.walker.call(6, ptr(child), ptr(&next))
-			k, e := d.retain(child, entry.app, entry.window, entry.key, 0)
-			if e != nil {
-				p.Complete = false
-			} else {
-				queue = append(queue, item{k, cur.depth + 1})
-			}
-			if nextErr != nil {
-				p.Complete = false
-				break
-			}
-			child = next
+		key := frame.windows[0]
+		frame.windows = frame.windows[1:]
+		scan.stack = append(scan.stack, &uiaFrame{key: key, depth: frame.depth + 1})
+		return
+	}
+	if !frame.expanded {
+		frame.expanded = true
+		if er = d.walker.call(4, ptr(entry.el), ptr(&frame.next)); er != nil {
+			scan.dirty = true
+			scan.pop()
+			return
 		}
 	}
-	p.Seat = d.seat()
-	if !p.Complete {
-		p.Unavailable = []string{"uia_partial"}
+	if frame.next == nil {
+		scan.pop()
+		return
 	}
-	return p, nil
+	child := frame.next
+	frame.next = nil
+	er = d.walker.call(6, ptr(child), ptr(&frame.next))
+	if er != nil {
+		scan.dirty = true
+		frame.next.release()
+		frame.next = nil
+	}
+	key, er := d.retain(child, entry.app, entry.window, entry.key, 0) // consumes child's COM reference
+	if er != nil {
+		scan.dirty = true
+		return
+	}
+	scan.stack = append(scan.stack, &uiaFrame{key: key, depth: frame.depth + 1})
 }
+
 func (d *Driver) seat() backend.Seat {
 	s := backend.Seat{Health: "ready", Intervention: "best_effort"}
 	hwnd, _, _ := foreground.Call()
@@ -529,6 +618,11 @@ var windowCallback = syscall.NewCallback(func(hwnd, param uintptr) uintptr {
 		return 1
 	}
 	app := d.application(uint32(pid), start)
+	if app == "" {
+		el.release()
+		state.complete = false
+		return 0
+	}
 	key, e := d.retain(el, app, "", app, hwnd)
 	if e != nil {
 		state.complete = false
@@ -573,4 +667,65 @@ func (d *Driver) refreshOwnership(e *entry) error {
 		cur = parent
 	}
 	return dw.NewFault("ref_stale", "ownership traversal limit reached", "reobserve")
+}
+
+func wants(fields []string, name string) bool {
+	if len(fields) == 0 {
+		return true
+	}
+	for _, f := range fields {
+		if f == name {
+			return true
+		}
+	}
+	return false
+}
+func (d *Driver) fieldCache(fields []string) (*com, error) {
+	var c *com
+	if err := d.uia.call(20, ptr(&c)); err != nil {
+		return nil, err
+	}
+	ids := []uintptr{30003}
+	if wants(fields, "name") {
+		ids = append(ids, 30005)
+	}
+	if wants(fields, "bounds") {
+		ids = append(ids, 30001)
+	}
+	if wants(fields, "states") {
+		ids = append(ids, 30008, 30010, 30019, 30022, 30043, 30028)
+	} else {
+		if wants(fields, "capabilities") {
+			ids = append(ids, 30010)
+		}
+		if wants(fields, "value_preview") || wants(fields, "uri") || wants(fields, "capabilities") {
+			ids = append(ids, 30019)
+		}
+		if wants(fields, "value_preview") || wants(fields, "capabilities") {
+			ids = append(ids, 30043)
+		}
+	}
+	if wants(fields, "capabilities") {
+		ids = append(ids, 30009, 30031, 30028)
+	}
+	seen := map[uintptr]bool{}
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		if err := c.call(3, id); err != nil {
+			c.release()
+			return nil, err
+		}
+	}
+	if err := c.call(7, 1); err != nil {
+		c.release()
+		return nil, err
+	}
+	if err := c.call(11, 0); err != nil {
+		c.release()
+		return nil, err
+	}
+	return c, nil
 }

@@ -210,8 +210,9 @@ func TestNativeFixture(t *testing.T) {
 		}
 		var next dw.Ref
 		deadline = time.Now().Add(time.Second)
+		request := dw.ObserveRequest{Scope: dw.Scope{Refs: []dw.Ref{window}}, Projection: dw.ProjectionOutline, Fields: []string{"role", "name"}, Budget: dw.Budget{MaxDepth: 6, MaxResults: 32, MaxOutputBytes: 4096, ReadDeadline: time.Second}}
 		for next == "" && time.Now().Before(deadline) {
-			fresh, e := scoped.Observe(ctx, dw.ObserveRequest{Scope: dw.Scope{Refs: []dw.Ref{window}}, Projection: dw.ProjectionOutline, Budget: dw.Budget{MaxDepth: 6, ReadDeadline: time.Second}})
+			fresh, e := scoped.Observe(ctx, request)
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -220,6 +221,7 @@ func TestNativeFixture(t *testing.T) {
 					next = o.Ref
 				}
 			}
+			request.Continuation = fresh.Coverage.Continuation
 		}
 		if next == "" {
 			t.Fatal("replacement did not produce a new Ref")

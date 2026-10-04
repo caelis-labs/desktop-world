@@ -152,7 +152,7 @@ func (p Predicate) Validate() error {
 }
 func IsWrite(op string) bool {
 	switch op {
-	case "focus", "invoke", "set_value", "pointer.move", "pointer.click", "pointer.drag", "pointer.scroll", "keyboard.type_text", "keyboard.press":
+	case "focus", "invoke", "set_value", "set_expanded", "pointer.move", "pointer.click", "pointer.drag", "pointer.scroll", "keyboard.type_text", "keyboard.press":
 		return true
 	}
 	return false
@@ -193,7 +193,7 @@ func (p Plan) Validate() error {
 			return Invalid("unknown completion")
 		}
 		arms := 0
-		for _, b := range []bool{s.Bind != nil, s.SetValue != nil, s.TypeText != nil, s.Press != nil, s.Click != nil, s.Drag != nil, s.Scroll != nil} {
+		for _, b := range []bool{s.Bind != nil, s.SetValue != nil, s.SetExpanded != nil, s.TypeText != nil, s.Press != nil, s.Click != nil, s.Drag != nil, s.Scroll != nil} {
 			if b {
 				arms++
 			}
@@ -223,6 +223,11 @@ func (p Plan) Validate() error {
 			need = 1
 			if s.SetValue == nil {
 				return Invalid("set_value arguments required")
+			}
+		case "set_expanded":
+			need = 1
+			if s.SetExpanded == nil || s.SetExpanded.Expanded == nil {
+				return Invalid("set_expanded requires explicit expanded boolean")
 			}
 		case "keyboard.type_text":
 			need = 1
@@ -268,7 +273,7 @@ func (p Plan) Validate() error {
 			if !strings.HasPrefix(s.Op, "pointer.") && (s.Target.Point != nil || s.Target.Anchor != nil) {
 				return Invalid("operation requires object target")
 			}
-			if s.Completion == "verify" && s.Op != "focus" && s.Op != "set_value" && len(s.After) == 0 {
+			if s.Completion == "verify" && s.Op != "focus" && s.Op != "set_value" && s.Op != "set_expanded" && len(s.After) == 0 {
 				return Invalid("verify requires after predicates")
 			}
 		}

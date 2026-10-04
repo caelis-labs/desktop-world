@@ -1,0 +1,5 @@
+{"at": "2026-10-04T04:33:00Z", "event": "ready", "value": "DTW regression TestNativeValueFixture b1e95788"}
+{"value": "1", "event": "checkbox", "at": "2026-10-04T04:33:01Z"}
+{"at": "2026-10-04T04:33:01Z", "value": "0", "event": "checkbox"}
+{"at": "2026-10-04T04:33:01Z", "value": "1", "event": "checkbox"}
+{"at": "2026-10-04T04:33:02Z", "value": "", "event": "label_action"}

@@ -2,6 +2,8 @@
 
 `v0.1.0-alpha.1` 提供 `host` Go 包和 macOS arm64 helper 开发包。推荐 Bot 通过这个 Go client 管理一个持久子进程，不在 Wails 主进程直接执行原生输入。根包仍可嵌入，但使用方需自己承担原生调用阻塞、进程生命周期与权限隔离。
 
+以下示例使用当前源码的 `dtw` 命令。本批增加 Windows managed transport 和 InputPolicy，尚未发布，也未同步进入 caelis-bot 的 M0；Windows 真实操作状态见 [F4/F5](features.md)。公开 alpha 包的旧命令仍为 `desktop-world`。
+
 本仓库提供接入边界与可运行示例，尚未修改或验收 caelis-bot 的实际 Runtime/Wails 集成。不要同时启用两个会竞争同一桌面的写后端，也不要在错误后自动切换后端重放动作。
 
 ## 最小顺序
@@ -9,6 +11,7 @@
 ```go
 client, err := host.Start(ctx, host.Options{
     Executable: trustedAbsoluteHelperPath,
+    InputPolicy: desktopworld.InputNoShared, // 后台语义任务；共享输入任务使用 InputShared。
     Stderr: diagnosticWriter,
 })
 if err != nil { return err }
@@ -38,7 +41,7 @@ if err := client.EndTurn(stopCtx, runtimeTurnID); err != nil { return err }
 DW_FIXTURE_TITLE='Desktop World Bot Alpha unique-run' \
 DW_FIXTURE_LOG="$PWD/artifacts/bot-alpha-unique.jsonl" \
 ./script/build_and_run.sh --verify
-go run ./examples/bot-host --helper "$PWD/bin/desktop-world" \
+go run ./examples/bot-host --helper "$PWD/bin/dtw" \
   --fixture-title 'Desktop World Bot Alpha unique-run' --text '联调 🌍'
 ```
 
@@ -46,7 +49,7 @@ go run ./examples/bot-host --helper "$PWD/bin/desktop-world" \
 
 ## 权限与生命周期
 
-- `Start` 仅接受可信绝对路径；不自动下载、更新或重启 helper。握手最长 15 秒，不自动申请系统权限。进程只继承 HOME/PATH/TMPDIR/LANG/LC_CTYPE，不转发模型 API 凭证。
+- `Start` 仅接受可信绝对路径；不自动下载、更新或重启 helper。握手最长 15 秒，不自动申请系统权限。进程只继承 HOME/PATH/TMPDIR/LANG/LC_CTYPE，以及 Windows 启动所需的 SystemRoot/WINDIR/USERPROFILE/TEMP/TMP，不转发模型 API 凭证。InputPolicy 是可信启动上限，Grant 不能放宽 no_shared_input。
 - `BeginTurn` 创建空写授权。回合 ID 为 1–64 位 ASCII 字母、数字、连字符或下划线；由 Runtime 生成，每次唯一，一个 helper 同时只接纳一个活动回合。结束的 ID 不能重用。
 - `Grant` 只接受刚观察到的存活 application Ref，最多 32 个。不接受应用名、窗口、原生 PID 或模糊匹配。授权限同一应用实例、同一回合，每个输入步骤重新检查。
 - 数据请求的 `turn` 在工具参数之外由 host 注入。模型只获得 observe/read/sync/act/capture/get/cancel，不获得 BeginTurn/Grant/EndTurn。数据流不能扩权，managed 模式禁用启动时写授权和 raw Point 输入。
@@ -69,7 +72,7 @@ Go client 启动 helper 时指定 `--full-output`，保留类型化 Fact、精�
 
 ## 底层控制协议
 
-`serve --host-control --full-output`：stdin/stdout 是数据 NDJSON，继承 FD 3 为 host→helper 控制请求，FD 4 为 helper→host 回应；必须是私有 pipe。控制 EOF 撤销全部授权并停止数据服务。Windows 在此 alpha 明确拒绝 managed 启动。
+`serve --host-control --full-output`：stdin/stdout 是数据 NDJSON。Unix 继承 FD 3 为 host→helper 控制请求，FD 4 为 helper→host 回应。Windows 当前源码由 host 复制两个私有匿名 pipe 端点，并通过 Go 的 AdditionalInheritedHandles 限定句柄继承列表；句柄编号仅经可信启动环境传递，helper 验证为不同 pipe、删除元数据并关闭继续继承标志。模型 schema 不含句柄、turn 或授权入口。控制 EOF 撤销全部授权并停止数据服务。Windows 控制实现已交叉构建，实机验收待完成。
 
 ```json
 {"id":"host-1","op":"begin_turn","turn":"turn-unique"}
@@ -81,6 +84,6 @@ Go client 启动 helper 时指定 `--full-output`，保留类型化 Fact、精�
 
 ## 发行边界
 
-macOS arm64 预编译包，API 目标 macOS 14+，实际桌面仅在 macOS 27 arm64 验证。ad-hoc 签名，未经 Developer ID 签名、公证或 Gatekeeper 分发验收；实际 Bot 应用打包时还需自己的签名、公证和 TCC 流程。Windows 原生后端与 Go library 可编译，但 managed host client、Windows 真机操作不在此包的验收范围。
+公开 alpha 为 macOS arm64 预编译包，API 目标 macOS 14+，实际桌面仅在 macOS 27 arm64 验证。ad-hoc 签名，未经 Developer ID 签名、公证或 Gatekeeper 分发验收；实际 Bot 应用打包时还需自己的签名、公证和 TCC 流程。Windows 当前源码支持 managed host client，但 Windows 真机操作不在公开包或本轮已通过验收的范围。
 
 固定公开 tag 与模块版本，校验 SHA256SUMS 和 `manifest.json` 的 revision。打包脚本 `scripts/package-prerelease.sh` 拒绝脏工作区，打包干净 HEAD，包含同 revision 的 Go 源码。见 [HANDOFF](../HANDOFF.md) 和 [NOTICE](../NOTICE)。

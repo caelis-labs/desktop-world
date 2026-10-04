@@ -17,10 +17,10 @@ export GOWORK=off CGO_ENABLED=1 GOOS=darwin GOARCH=arm64
 export GOCACHE="${GOCACHE:-${TMPDIR:-/tmp}/desktop-world-go-cache}"
 export CGO_CFLAGS='-mmacosx-version-min=14.0'
 export CGO_LDFLAGS='-mmacosx-version-min=14.0'
-go build -trimpath -buildvcs=true -ldflags "-X main.releaseVersion=$VERSION" -o "$OUT/$NAME/bin/desktop-world" ./cmd/desktop-world
-codesign --force --sign - "$OUT/$NAME/bin/desktop-world"
-codesign --verify --strict "$OUT/$NAME/bin/desktop-world"
-"$OUT/$NAME/bin/desktop-world" version > "$OUT/$NAME/manifest.json"
+go build -trimpath -buildvcs=true -ldflags "-X main.releaseVersion=$VERSION" -o "$OUT/$NAME/bin/dtw" ./cmd/dtw
+codesign --force --sign - "$OUT/$NAME/bin/dtw"
+codesign --verify --strict "$OUT/$NAME/bin/dtw"
+"$OUT/$NAME/bin/dtw" version > "$OUT/$NAME/manifest.json"
 python3 - "$OUT/$NAME/manifest.json" "$VERSION" "$REVISION" <<'PY'
 import json, sys
 p, version, revision = sys.argv[1:]

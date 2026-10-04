@@ -5,6 +5,35 @@ import { createSession } from './desktop.mjs';
 const observed = { objects: [{ ref: 'r1', role: 'button', name: { known: 'Save' }, value_preview: { known: '' }, states: { enabled: { known: false }, focused: { status: 'unknown' } } }], coverage: { complete: true, truncated: false }, seat: { focused_object: { known: 'r1' } } };
 const completed = { run_id: 'run1', outcome: 'completed', state: 'terminal', steps: [{ id: 's1', delivery: 'complete', verification: 'not_requested' }] };
 
+test('discovery starts narrow and expands fields only on demand, with bounded output', async () => {
+  const requests = [];
+  const session = createSession(async request => {
+    requests.push(request);
+    return { result: observed };
+  });
+  const result = await session.execute(`await dw.observe(); await dw.outline('r1'); await dw.outline('r1', {fields:['states','capabilities'],budget:{max_results:4}});`);
+  assert.equal(result.error, undefined);
+  assert.deepEqual(requests[0].args.fields, ['name','role','app','window']);
+  assert.deepEqual(requests[1].args.fields, ['name','role']);
+  assert.deepEqual(requests[2].args.fields, ['states','capabilities']);
+  assert.equal(requests[0].args.budget.max_results, 32);
+  for (const request of requests) assert.equal(request.args.budget.max_output_bytes, 8192);
+  assert.equal(requests[2].args.budget.max_results, 4);
+  assert.equal(result.metrics.printed_bytes, 0);
+});
+
+test('desired collapse keeps explicit false and semantic delivery evidence', async () => {
+  const session = createSession(async request => {
+    assert.equal(request.op, 'act');
+    assert.deepEqual(request.args.steps[0].set_expanded, {expanded:false});
+    return {result:{...completed,steps:[{id:'s1',channel:'semantic',delivery:'not_applicable',verification:'verified'}]}};
+  });
+  const result = await session.execute("await dw.expand('r1',false);");
+  assert.equal(result.error, undefined);
+  assert.deepEqual(result.actions[0].channels, {semantic:1});
+  assert.deepEqual(result.actions[0].delivery_verification, {'not_applicable/verified':1});
+});
+
 test('one script composes observations and effects; only selected output leaves local memory', async () => {
   const requests = [];
   const session = createSession(async request => {

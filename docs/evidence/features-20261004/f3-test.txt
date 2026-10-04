@@ -1,0 +1,4 @@
+=== RUN   TestNativeFieldPlan
+    features_test.go:334: F3 native task completed; value getters full=12 narrow=0; task calls=6 projected response bytes=15344; explicit comparison calls=1 bytes=7347
+--- PASS: TestNativeFieldPlan (1.23s)
+PASS

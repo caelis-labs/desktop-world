@@ -9,22 +9,29 @@ import (
 
 type Key string
 type Node struct {
+	// Fields nil means a full read. Nonempty masks certify only those properties.
+	Fields                   []string
 	Key, App, Window, Parent Key
 	Object                   dw.Object
 }
 type Query struct {
+	Fields          []string
 	Roots           []Key
 	Desktop         bool
 	Depth, MaxNodes int
 	Summary, Detail bool
 	// Resume is a private, helper-local native traversal cursor.
 	Resume string
+	// NoContinuation makes an internal one-shot query release unfinished native
+	// traversal state on its owning worker rather than retain an unreachable cursor.
+	NoContinuation bool
 	// Native traversal allowance; output pagination is independently budgeted.
 	ReadTimeoutMS int64
 }
 type Page struct {
 	Nodes       []Node
 	Complete    bool
+	Dirty       bool
 	Visited     int
 	ScanCursor  string
 	Unavailable []string

@@ -54,6 +54,43 @@ const (
 	LifeExpired     Lifecycle = "expired"
 )
 
+// InputPolicy is a trusted host ceiling; agent requests cannot relax it.
+type InputPolicy string
+
+const (
+	InputShared   InputPolicy = "shared_input"
+	InputNoShared InputPolicy = "no_shared_input"
+)
+
+// ActionChannel is fixed by the operation, never selected by the provider.
+func ActionChannel(op string) string {
+	switch op {
+	case "invoke", "set_value", "set_expanded":
+		return "semantic"
+	case "focus":
+		return "focus"
+	case "raw_input", "pointer.move", "pointer.click", "pointer.drag", "pointer.scroll", "keyboard.press", "keyboard.type_text":
+		return "shared_input"
+	}
+	return ""
+}
+func (p InputPolicy) Validate() error {
+	if p != "" && p != InputShared && p != InputNoShared {
+		return Invalid("unknown input policy")
+	}
+	return nil
+}
+func (p InputPolicy) Allows(op string) bool {
+	if p != InputNoShared {
+		return true
+	}
+	switch op {
+	case "observe", "read", "sync", "bind", "wait", "resolve_anchor", "capture", "read_asset", "invoke", "set_value", "set_expanded":
+		return true
+	}
+	return false
+}
+
 type Capability struct {
 	Name         string
 	Support      string // supported | unsupported | unknown
@@ -297,6 +334,9 @@ type Bind struct {
 	RequireUnique bool // MUST be true for a v0.1 execution binding.
 }
 type SetValue struct{ Text string }
+
+// Expanded must be supplied, including an explicit false for collapse.
+type SetExpanded struct{ Expanded *bool }
 type TypeText struct{ Text string }
 type KeyChord struct {
 	Modifiers []string
@@ -315,20 +355,21 @@ type Scroll struct {
 	Unit   string // wheel_step in v0.1; positive right/down viewport direction.
 }
 type Step struct {
-	ID         string
-	Op         string // bind | wait | focus | invoke | set_value | pointer.* | keyboard.*
-	Target     Target
-	Bind       *Bind
-	SetValue   *SetValue
-	TypeText   *TypeText
-	Press      *KeyChord
-	Click      *Click
-	Drag       *Drag
-	Scroll     *Scroll
-	Before     []Predicate
-	After      []Predicate
-	Completion string // dispatch | verify
-	Timeout    time.Duration
+	ID          string
+	Op          string // bind | wait | focus | invoke | set_value | set_expanded | pointer.* | keyboard.*
+	Target      Target
+	Bind        *Bind
+	SetValue    *SetValue
+	SetExpanded *SetExpanded
+	TypeText    *TypeText
+	Press       *KeyChord
+	Click       *Click
+	Drag        *Drag
+	Scroll      *Scroll
+	Before      []Predicate
+	After       []Predicate
+	Completion  string // dispatch | verify
+	Timeout     time.Duration
 }
 type Plan struct {
 	Epoch     Epoch
@@ -367,6 +408,7 @@ type Fault struct {
 func (f *Fault) Error() string { return f.Code + ": " + f.Message }
 
 type StepResult struct {
+	Channel                    string // Operation channel; delivery records whether dispatch occurred.
 	ID                         string
 	Target                     Ref
 	State                      string // skipped | satisfied | dispatched | failed | unknown
@@ -422,6 +464,7 @@ type Authorizer interface {
 	Check(context.Context, Intent) (Decision, error)
 }
 type ActorConfig struct {
+	InputPolicy InputPolicy
 	ID          ActorID
 	ReadScopes  []Scope
 	WriteScopes []Scope
