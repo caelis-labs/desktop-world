@@ -125,6 +125,7 @@ func run() error {
 	f.StringVar(&auditPath, "audit", "", "new audit file")
 	f.BoolVar(&c.FullOutput, "full-output", false, "retain typed wire facts and per-object timestamps")
 	f.BoolVar(&c.Managed, "host-control", false, "trusted host control on private inherited pipes")
+	openWorld := backgroundPOCFlag(f)
 	if err := f.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -166,7 +167,7 @@ func run() error {
 		}
 	}
 	openCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-	w, err := local.Open(openCtx, local.Options{})
+	w, err := openWorld(openCtx, local.Options{})
 	cancel()
 	if err != nil {
 		return err

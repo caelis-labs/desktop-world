@@ -104,6 +104,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, WKSc
   var mixed: NSButton!
   var slider: NSSlider!
   var monitor: Any?
+  var pocSeatTimer: Timer?
   var orders: [OrderRow] = []
   func applicationDidFinishLaunching(_ notification: Notification) {
     let menu = NSMenu()
@@ -195,6 +196,9 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, WKSc
         record("key_down", event.characters ?? "")
       } else {
         record("pointer", String(event.type.rawValue))
+        if argument("--poc-log-input", "0") == "1" {
+          record("pointer_location", "\(event.windowNumber):\(event.locationInWindow.x),\(event.locationInWindow.y)")
+        }
       }
       return event
     }
@@ -204,7 +208,19 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, WKSc
       window.makeKeyAndOrderFront(nil)
       NSApp.activate(ignoringOtherApps: true)
     }
-    if semanticCase != "scroll" { record("ready", fixtureTitle) }
+    if argument("--poc-observe-seat", "0") == "1" {
+      pocSeatTimer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] _ in
+        guard let self = self else { return }
+        let point = CGEvent(source: nil)?.location ?? .zero
+        let sample: [String: Any] = ["front_pid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0,
+                                   "active": NSApp.isActive, "key": self.window.isKeyWindow,
+                                   "x": point.x, "y": point.y]
+        if let data = try? JSONSerialization.data(withJSONObject: sample), let value = String(data: data, encoding: .utf8) {
+          record("seat_sample", value)
+        }
+      }
+    }
+    if semanticCase != "scroll" && semanticCase != "input-poc" { record("ready", fixtureTitle) }
   }
   @objc func toggleValue() { record("checkbox", String(checkbox.state.rawValue)) }
   @objc func toggleMixed() { record("mixed", String(mixed.state.rawValue)) }
@@ -233,6 +249,18 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, WKSc
       checkbox.title = "Approve order"
       window.contentView?.addSubview(checkbox)
       window.contentView?.addSubview(mixed)
+    } else if semanticCase == "input-poc" {
+      let config = WKWebViewConfiguration()
+      config.userContentController.add(self, name: "fixture")
+      let web = WKWebView(frame: NSRect(x: 24, y: 280, width: 430, height: 150), configuration: config)
+      web.navigationDelegate = self
+      window.contentView?.addSubview(web)
+      web.loadHTMLString("""
+        <!doctype html><meta charset="utf-8"><title>POC background form</title>
+        <label>Order note <input id="note" aria-label="POC Web text" style="width:300px" oninput="send('web_input',this.value)"></label>
+        <p><button aria-label="POC Web submit" onclick="send('web_submit',document.getElementById('note').value)">Save order note</button></p>
+        <script>const send=(event,value)=>window.webkit.messageHandlers.fixture.postMessage({event,value});</script>
+        """, baseURL: nil)
     } else if semanticCase == "scroll" {
       // Use the system WebKit provider's real AXScrollToVisible implementation.
       // The fixture supplies business callbacks, never an AX action shim.

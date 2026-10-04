@@ -87,3 +87,11 @@ type Driver interface {
 	Capture(context.Context, CaptureRequest) ([]Image, error)
 	Close(context.Context) error
 }
+
+// TargetedInput is implemented only by the opt-in, build-tagged macOS POC.
+// It changes delivery guards and receipt channels together; ordinary drivers
+// retain the physical foreground/hit-test contract. Host policy/authorization,
+// stable native keys, request reconciliation and fencing still apply.
+type TargetedInput interface {
+	TargetsInput(operation string) bool
+}

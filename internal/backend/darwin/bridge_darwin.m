@@ -827,6 +827,9 @@ static CGKeyCode keycode(NSString *s) {
   };
   return m[s] ? [m[s] unsignedShortValue] : UINT16_MAX;
 }
+#ifdef DTW_BACKGROUND_POC
+#include "background_poc_darwin.h"
+#endif
 static NSDictionary *perform(DWContext *c, NSDictionary *o, DWCancel *cancel) {
   if (cancelled(cancel))
     return outcome(@"none", @"cancelled");
@@ -1184,7 +1187,12 @@ char *dw_call(void *p, const char *opstr, const char *json, void *cancel) {
             }
           };
         }
-      } else if ([op isEqual:@"perform"])
+      }
+#ifdef DTW_BACKGROUND_POC
+      else if ([op isEqual:@"background_poc"])
+        out = backgroundPOC(c, r, (DWCancel *)cancel);
+#endif
+      else if ([op isEqual:@"perform"])
         out = perform(c, r, (DWCancel *)cancel);
       else if ([op isEqual:@"hit"]) {
         AXUIElementRef sys = AXUIElementCreateSystemWide(), hit = NULL;

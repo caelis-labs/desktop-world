@@ -97,7 +97,11 @@ func (a *actor) Execute(ctx context.Context, p dw.Plan) (dw.Receipt, error) {
 	c, cancel := context.WithTimeout(ctx, p.Timeout)
 	r := &run{actor: a, digest: digest, cancel: cancel, done: make(chan struct{}), progress: make(chan dw.Progress, 32), receipt: dw.Receipt{Epoch: w.epoch, RunID: dw.RunID(token("run-")), RequestID: p.RequestID, State: "queued", Outcome: "pending", Bindings: map[string]dw.Ref{}, StartRevision: w.revision, SeatHealth: w.seatGate.health()}}
 	for _, s := range p.Steps {
-		r.receipt.Steps = append(r.receipt.Steps, dw.StepResult{ID: s.ID, Channel: dw.ActionChannel(s.Op), State: "skipped", Delivery: dw.DeliveryNone, Verification: dw.VerifyNotRequested})
+		channel := dw.ActionChannel(s.Op)
+		if w.targetsInput(s.Op) {
+			channel = "targeted_input_poc"
+		}
+		r.receipt.Steps = append(r.receipt.Steps, dw.StepResult{ID: s.ID, Channel: channel, State: "skipped", Delivery: dw.DeliveryNone, Verification: dw.VerifyNotRequested})
 	}
 	w.runs[p.RequestID] = r
 	w.runIDs[r.receipt.RunID] = r
@@ -262,6 +266,9 @@ func resolve(t dw.Target, b map[string]dw.Ref) (dw.Target, error) {
 func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string]dw.Ref) (res dw.StepResult, late bool) {
 	w := a.w
 	res = dw.StepResult{ID: s.ID, Channel: dw.ActionChannel(s.Op), State: "failed", Delivery: dw.DeliveryNone, Verification: dw.VerifyNotRequested, StartedAt: time.Now().UTC()}
+	if w.targetsInput(s.Op) {
+		res.Channel = "targeted_input_poc"
+	}
 	w.mu.Lock()
 	res.StartRevision = w.revision
 	w.mu.Unlock()
@@ -424,6 +431,11 @@ func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string
 		}
 	}
 	op := backend.Operation{Step: s, Key: key}
+	targeted := w.targetsInput(s.Op)
+	if targeted && (key == "" || object.App == "" || object.Window == "" || target.Point != nil) {
+		fail(fault("background_unavailable"))
+		return
+	}
 	if strings.HasPrefix(s.Op, "pointer.") {
 		point, e := a.point(ctx, target)
 		if e != nil {
@@ -431,7 +443,7 @@ func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string
 			return
 		}
 		op.Point = &point
-		if target.Point == nil {
+		if target.Point == nil && !targeted {
 			v, e := w.call(ctx, func() (any, error) { return w.driver.HitTest(ctx, point, key) })
 			if e != nil || !v.(bool) {
 				fail(fault("target_not_hittable"))
@@ -465,7 +477,7 @@ func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string
 			}
 		}
 	}
-	if strings.HasPrefix(s.Op, "keyboard.") || strings.HasPrefix(s.Op, "pointer.") && target.Point == nil {
+	if !targeted && (strings.HasPrefix(s.Op, "keyboard.") || strings.HasPrefix(s.Op, "pointer.") && target.Point == nil) {
 		w.mu.Lock()
 		seat := copyOf(w.seat)
 		w.mu.Unlock()
@@ -594,6 +606,11 @@ func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string
 		res.State = "dispatched"
 	}
 	return
+}
+
+func (w *World) targetsInput(op string) bool {
+	d, ok := w.driver.(backend.TargetedInput)
+	return ok && d.TargetsInput(op)
 }
 
 // Desired-state actions always verify, including when the provider found the
