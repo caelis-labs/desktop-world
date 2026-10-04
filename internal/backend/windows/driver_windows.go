@@ -4,8 +4,6 @@ package windows
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	dw "github.com/caelis-labs/desktop-world"
 	"github.com/caelis-labs/desktop-world/internal/backend"
@@ -339,6 +337,17 @@ func role(c int32) string {
 func (d *Driver) Query(ctx context.Context, q backend.Query) (backend.Page, error) {
 	restore := dpiScope()
 	defer restore()
+	deadline := scanDeadline(ctx, q)
+	// Bound one in-flight provider call, and restore the write/read default on
+	// this same MTA worker. These setters are IUIAutomation2 vtable slots.
+	if err := d.uia.call(61, 50); err != nil {
+		return backend.Page{}, err
+	}
+	defer d.uia.call(61, 500)
+	if err := d.uia.call(63, 50); err != nil {
+		return backend.Page{}, err
+	}
+	defer d.uia.call(63, 500)
 	cache, err := d.fieldCache(q.Fields)
 	if err != nil {
 		return backend.Page{}, err
@@ -348,113 +357,89 @@ func (d *Driver) Query(ctx context.Context, q backend.Query) (backend.Page, erro
 	if err != nil {
 		return backend.Page{}, err
 	}
-	p := backend.Page{}
-	chunk := 0
-	for len(scan.stack) > 0 && chunk < q.MaxNodes && scan.visited < 10000 {
-		if ctx.Err() != nil {
-			scan.dirty = true
-			break
+	return d.scanPage(ctx, q, scan, deadline, func(p *backend.Page) {
+		d.scanStep(ctx, q, scan, cache, p)
+	}, d.seat)
+}
+
+// One transition preserves the pending sibling reference across budget yields.
+func (d *Driver) scanStep(ctx context.Context, q backend.Query, scan *uiaScan, cache *com, p *backend.Page) {
+	frame := scan.stack[len(scan.stack)-1]
+	entry, er := d.lookup(frame.key)
+	if er != nil {
+		scan.dirty = true
+		scan.pop()
+		return
+	}
+	if !frame.visited {
+		if scan.seen[frame.key] {
+			scan.pop()
+			return
 		}
-		frame := scan.stack[len(scan.stack)-1]
-		entry, er := d.lookup(frame.key)
+		n, er := d.nodeFields(ctx, frame.key, q.Fields, cache)
+		frame.visited = true
+		scan.seen[frame.key] = true
+		scan.visited++
 		if er != nil {
 			scan.dirty = true
 			scan.pop()
-			continue
+			return
 		}
-		if !frame.visited {
-			if scan.seen[frame.key] {
-				scan.pop()
-				continue
-			}
-			n, er := d.nodeFields(ctx, frame.key, q.Fields, cache)
-			frame.visited = true
-			scan.seen[frame.key] = true
-			scan.visited++
-			chunk++
-			if er != nil {
-				scan.dirty = true
-				scan.pop()
-				continue
-			}
-			if !q.Summary || n.Object.Kind != dw.KindUI {
-				p.Nodes = append(p.Nodes, n)
-			}
-			continue
+		if !q.Summary || n.Object.Kind != dw.KindUI {
+			p.Nodes = append(p.Nodes, n)
 		}
-		if q.Detail || frame.depth >= q.Depth || (q.Summary && !entry.application) {
-			scan.pop()
-			continue
-		}
-		if entry.application {
-			if !frame.expanded {
-				frame.expanded = true
-				for _, child := range d.entries {
-					if child.app == frame.key && child.hwnd != 0 && !child.gone {
-						frame.windows = append(frame.windows, child.key)
-					}
-				}
-			}
-			if len(frame.windows) == 0 {
-				scan.pop()
-				continue
-			}
-			key := frame.windows[0]
-			frame.windows = frame.windows[1:]
-			scan.stack = append(scan.stack, &uiaFrame{key: key, depth: frame.depth + 1})
-			continue
-		}
+		return
+	}
+	if q.Detail || frame.depth >= q.Depth || (q.Summary && !entry.application) {
+		scan.pop()
+		return
+	}
+	if entry.application {
 		if !frame.expanded {
 			frame.expanded = true
-			if er = d.walker.call(4, ptr(entry.el), ptr(&frame.next)); er != nil {
-				scan.dirty = true
-				scan.pop()
-				continue
+			for _, child := range d.entries {
+				if child.app == frame.key && child.hwnd != 0 && !child.gone {
+					frame.windows = append(frame.windows, child.key)
+				}
 			}
 		}
-		if frame.next == nil {
+		if len(frame.windows) == 0 {
 			scan.pop()
-			continue
+			return
 		}
-		child := frame.next
-		frame.next = nil
-		er = d.walker.call(6, ptr(child), ptr(&frame.next))
-		if er != nil {
-			scan.dirty = true
-			frame.next.release()
-			frame.next = nil
-		}
-		key, er := d.retain(child, entry.app, entry.window, entry.key, 0) // consumes child's COM reference
-		if er != nil {
-			scan.dirty = true
-			continue
-		}
+		key := frame.windows[0]
+		frame.windows = frame.windows[1:]
 		scan.stack = append(scan.stack, &uiaFrame{key: key, depth: frame.depth + 1})
+		return
 	}
-	p.Visited = scan.visited
-	if len(scan.stack) > 0 && scan.visited >= 10000 {
-		p.Unavailable = append(p.Unavailable, "uia_scan_limit")
-		scan.dirty = true
-		scan.release()
-	}
-	if len(scan.stack) > 0 {
-		var id [16]byte
-		if _, er := rand.Read(id[:]); er != nil {
-			scan.release()
-			return backend.Page{}, er
+	if !frame.expanded {
+		frame.expanded = true
+		if er = d.walker.call(4, ptr(entry.el), ptr(&frame.next)); er != nil {
+			scan.dirty = true
+			scan.pop()
+			return
 		}
-		p.ScanCursor = hex.EncodeToString(id[:])
-		d.scans[p.ScanCursor] = scan
-		p.Unavailable = append(p.Unavailable, "uia_node_budget")
 	}
-	p.Complete = len(scan.stack) == 0 && !scan.dirty
-	p.Dirty = scan.dirty
-	if !p.Complete && len(p.Unavailable) == 0 {
-		p.Unavailable = []string{"uia_partial"}
+	if frame.next == nil {
+		scan.pop()
+		return
 	}
-	p.Seat = d.seat()
-	return p, nil
+	child := frame.next
+	frame.next = nil
+	er = d.walker.call(6, ptr(child), ptr(&frame.next))
+	if er != nil {
+		scan.dirty = true
+		frame.next.release()
+		frame.next = nil
+	}
+	key, er := d.retain(child, entry.app, entry.window, entry.key, 0) // consumes child's COM reference
+	if er != nil {
+		scan.dirty = true
+		return
+	}
+	scan.stack = append(scan.stack, &uiaFrame{key: key, depth: frame.depth + 1})
 }
+
 func (d *Driver) seat() backend.Seat {
 	s := backend.Seat{Health: "ready", Intervention: "best_effort"}
 	hwnd, _, _ := foreground.Call()

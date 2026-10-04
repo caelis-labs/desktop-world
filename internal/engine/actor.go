@@ -220,10 +220,10 @@ func defaults(r dw.ObserveRequest) dw.ObserveRequest {
 	}
 	return r
 }
-func (a *actor) query(ctx context.Context, r dw.ObserveRequest, resume string) ([]dw.Object, dw.Coverage, string, error) {
+func (a *actor) query(ctx context.Context, r dw.ObserveRequest, resume string, noContinuation bool) ([]dw.Object, dw.Coverage, string, error) {
 	w := a.w
 	cov := dw.Coverage{Scope: r.Scope, Fields: r.Fields, MaxDepth: r.Budget.MaxDepth, SampleStart: time.Now().UTC()}
-	q := backend.Query{Fields: readFields(r), Desktop: r.Scope.Desktop, Depth: r.Budget.MaxDepth, MaxNodes: r.Budget.MaxVisitedNodes, Summary: r.Projection == dw.ProjectionSummary, Detail: r.Projection == dw.ProjectionDetail, Resume: resume}
+	q := backend.Query{Fields: readFields(r), Desktop: r.Scope.Desktop, Depth: r.Budget.MaxDepth, MaxNodes: r.Budget.MaxVisitedNodes, Summary: r.Projection == dw.ProjectionSummary, Detail: r.Projection == dw.ProjectionDetail, Resume: resume, NoContinuation: noContinuation}
 	w.mu.Lock()
 	for _, ref := range r.Scope.Refs {
 		rec := w.objects[ref]
@@ -485,7 +485,7 @@ func (a *actor) Observe(ctx context.Context, req dw.ObserveRequest) (dw.Observat
 			if p.permissionVersion != permissionVersion {
 				return dw.Observation{}, fault("permission_changed")
 			}
-			all, cov, scanCursor, e := a.query(ctx, r, p.scanCursor)
+			all, cov, scanCursor, e := a.query(ctx, r, p.scanCursor, false)
 			if e != nil {
 				return dw.Observation{Epoch: a.w.epoch, Coverage: cov}, e
 			}
@@ -510,7 +510,7 @@ func (a *actor) Observe(ctx context.Context, req dw.ObserveRequest) (dw.Observat
 	if r.Freshness.Mode == "cached" {
 		all, cov = a.cached(r)
 	} else {
-		all, cov, scanCursor, e = a.query(ctx, r, "")
+		all, cov, scanCursor, e = a.query(ctx, r, "", false)
 		if e != nil {
 			return dw.Observation{Epoch: a.w.epoch, Coverage: cov}, e
 		}
@@ -683,7 +683,7 @@ func (a *actor) changes(ctx context.Context, r dw.ChangeRequest) (dw.ChangeSet, 
 	if _, e := a.w.Environment(rctx); e != nil {
 		return dw.ChangeSet{}, e
 	}
-	all, cov, _, e := a.query(rctx, v.request, "")
+	all, cov, _, e := a.query(rctx, v.request, "", true)
 	if e != nil {
 		return reset("provider_unavailable")
 	}

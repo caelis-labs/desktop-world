@@ -249,7 +249,7 @@ func Start(ctx context.Context, o Options) (*Client, error) {
 		// Hello has extension fields; its stable consumed subset is deliberately decoded here.
 		var raw struct {
 			Type, Protocol string
-			InputPolicy    dw.InputPolicy
+			InputPolicy    dw.InputPolicy `json:"input_policy"`
 			Environment    json.RawMessage
 			Managed        bool
 		}
@@ -265,6 +265,14 @@ func Start(ctx context.Context, o Options) (*Client, error) {
 		}
 		if raw.Type != "hello" || raw.Protocol != helper.Version || !raw.Managed {
 			ready <- errors.New("incompatible or unmanaged helper")
+			return
+		}
+		policy := o.InputPolicy
+		if policy == "" {
+			policy = dw.InputShared
+		}
+		if raw.InputPolicy != policy {
+			ready <- errors.New("helper input policy does not match trusted host policy")
 			return
 		}
 		ready <- nil

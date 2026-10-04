@@ -22,6 +22,9 @@ type Query struct {
 	Summary, Detail bool
 	// Resume is a private, helper-local native traversal cursor.
 	Resume string
+	// NoContinuation makes an internal one-shot query release unfinished native
+	// traversal state on its owning worker rather than retain an unreachable cursor.
+	NoContinuation bool
 	// Native traversal allowance; output pagination is independently budgeted.
 	ReadTimeoutMS int64
 }

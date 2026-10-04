@@ -286,9 +286,11 @@ func (f *Fixture) slowQuery(ctx context.Context, q backend.Query) (backend.Page,
 		if s.visited >= 10000 {
 			p.Unavailable = []string{"ax_scan_limit"}
 		} else {
-			f.slowNext++
-			p.ScanCursor = fmt.Sprintf("fixture-scan-%d", f.slowNext)
-			f.slowScans[p.ScanCursor] = s
+			if !q.NoContinuation && ctx.Err() == nil {
+				f.slowNext++
+				p.ScanCursor = fmt.Sprintf("fixture-scan-%d", f.slowNext)
+				f.slowScans[p.ScanCursor] = s
+			}
 			if ctx.Err() != nil {
 				p.Unavailable = []string{"ax_timeout"}
 			} else {

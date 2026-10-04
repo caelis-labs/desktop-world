@@ -9,6 +9,7 @@ import (
 	"github.com/caelis-labs/desktop-world/internal/helper"
 	"github.com/caelis-labs/desktop-world/protocol"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -37,7 +38,17 @@ func transportChild() int {
 	}
 	f.Form()
 	f.Enqueue("invoke", dwtest.Behavior{Block: make(chan struct{}), Before: func(*dwtest.Fixture) { fmt.Fprintln(os.Stderr, "slow-running") }})
-	server, err := helper.New(ctx, w, helper.Config{Managed: true, FullOutput: true})
+	policy := dw.InputShared
+	for i, arg := range os.Args {
+		if arg == "--input-policy" && i+1 < len(os.Args) {
+			policy = dw.InputPolicy(os.Args[i+1])
+		}
+	}
+	// A controlled wrong-policy child exercises the fail-closed handshake.
+	if strings.Contains(strings.Join(os.Args[1:], " "), "test-wrong-policy") {
+		policy = dw.InputShared
+	}
+	server, err := helper.New(ctx, w, helper.Config{Managed: true, FullOutput: true, InputPolicy: policy})
 	if err != nil {
 		return 2
 	}
@@ -51,6 +62,37 @@ func transportChild() int {
 		return 2
 	}
 	return 0
+}
+
+func TestManagedHandshakeReportsTrustedInputPolicy(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, policy := range []dw.InputPolicy{"", dw.InputShared, dw.InputNoShared} {
+		t.Run(string(policy), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			c, err := Start(ctx, Options{Executable: executable, InputPolicy: policy})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			want := policy
+			if want == "" {
+				want = dw.InputShared
+			}
+			if c.Hello.InputPolicy != want {
+				t.Fatalf("effective policy=%q, want %q", c.Hello.InputPolicy, want)
+			}
+		})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if c, err := Start(ctx, Options{Executable: executable, InputPolicy: dw.InputNoShared, AssetsDir: "test-wrong-policy"}); err == nil {
+		c.Close()
+		t.Fatal("accepted a helper advertising a weaker policy")
+	}
 }
 func TestManagedInheritedTransportCancelsBusyProvider(t *testing.T) {
 	executable, err := os.Executable()

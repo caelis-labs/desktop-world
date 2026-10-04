@@ -2,6 +2,8 @@
 
 2026-10-04。本批源码 helper 命令为 `dtw`，公开 alpha 尚未更新，caelis-bot 的 M0 更新与统一联调后置。实现沿用 World / Actor / 原生后端这一条执行路径。
 
+#8 Review 修复和复验见 [修复证据](evidence/review-20261004/README.md)；下一步选择 [剩余功能补全计划](next-stage.md)，优先完成当前批次 Windows 实机验收。
+
 | Feature | 完成的实现 | 独立真实场景 | 实机状态 |
 | --- | --- | --- | --- |
 | F1 no_shared_input | 可信宿主上限；整份混合计划先拒绝；收据保留动作 channel 和原请求 | 前台持续 Unicode 输入时，后台语义填写并提交订单；验证前台/指针稳定、两端文本与提交次数 | macOS arm64 通过 |

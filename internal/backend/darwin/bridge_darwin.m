@@ -531,7 +531,7 @@ static NSDictionary *queryPage(DWContext *c, NSDictionary *q, DWCancel *cancel) 
   } else {
     // A new scan must not evict any retained continuation. The caller can
     // consume an existing cursor or wait for its 90-second expiry.
-    if (c.scans.count >= 16) return scanCapacityError();
+    if (![q[@"NoContinuation"] boolValue] && c.scans.count >= 16) return scanCapacityError();
     scan = [DWScan new];
     scan.queue = [NSMutableArray array];
     scan.seen = [NSMutableSet set];
@@ -633,7 +633,7 @@ static NSDictionary *queryPage(DWContext *c, NSDictionary *q, DWCancel *cancel) 
   if (scan.visited >= 10000 && scan.head < scan.queue.count) scan.limitHit = YES;
   BOOL pending = scan.head < scan.queue.count && scan.visited < 10000;
   NSString *cursor = @"";
-  if (pending) {
+  if (pending && ![q[@"NoContinuation"] boolValue] && !cancelled(cancel)) {
     if (scan.head > 1024) {
       [scan.queue removeObjectsInRange:NSMakeRange(0, scan.head)];
       scan.head = 0;
