@@ -33,3 +33,7 @@ GOWORK=off python3 scripts/accept-features.py F1 F2 F3 F6 F7 F8 F9
 # 分发包验收（不会重建或替换给定 helper）：
 GOWORK=off python3 scripts/accept-features.py F9 --helper /absolute/path/bin/dtw
 ```
+
+## alpha.4 收尾
+
+alpha.3 的包内 7 项独立 macOS 场景和公开下载后的 F9 均通过。其 tag CI 又暴露了原有 Close 测试的启动竞态：20 ms 步骤期限可能在 native dispatch 前到期，随后 Close 合法返回 nil。alpha.4 用明确的 native-entry barrier 后再检查关闭，并验证解除阻塞后 cleanup 完成；不改 P1/P2 生产实现或原生场景。上述 85 项指纹固定描述 alpha.3/P2 基线；alpha.4 中仅 contract_test.go 的 Close 测试指纹变化，版本指引另行更新。alpha.3 已发布的 tag/assets 不覆写，alpha.4 分发包从新的 clean HEAD 重新验证。

@@ -30,7 +30,7 @@
 
 ## 下一次 pre-release 的候选门槛
 
-用户后续授权直接合并并产出 pre-release：本批完成 P2 macOS 核心场景与 Windows 功能实现，发布 v0.1.0-alpha.3，无需等 P3/P4 或 Windows 实机。P2 实机证明与未验收边界见 [窗口捕获](window-capture.md)；锁屏/断连/跨屏保留专项验证项，当前 alpha 不承诺这些场景。下一批按 P3 实现人类优先协作输入。
+用户后续授权直接合并并产出 pre-release：本批完成 P2 macOS 核心场景与 Windows 功能实现，发布 alpha.3 后，tag CI 暴露已有关闭测试的启动竞态；改为等待 native-entry barrier，最终发布 v0.1.0-alpha.4，已发布 alpha.3/tag 保持不变。后者仅收尾测试与版本指引，无需等 P3/P4 或 Windows 实机。P2 实机证明与未验收边界见 [窗口捕获](window-capture.md)；锁屏/断连/跨屏保留专项验证项，当前 alpha 不承诺这些场景。下一批按 P3 实现人类优先协作输入。
 
 候选提交需要三平台 CI 和发布所承诺平台的独立实机任务通过；分发包验证 `dtw` 路径、版本/revision、校验值、权限诊断和 managed host 停止/原收据恢复。若先发 macOS alpha，Windows 明确列为功能实现、实机适配后置、不承诺可用，不声明双平台可用或正式发布。CLI 名称变化与逐 provider 支持矩阵须写入发布说明。
 

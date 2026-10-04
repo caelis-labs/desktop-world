@@ -34,7 +34,7 @@ go run ./cmd/dw-inspect
 - Windows 11 amd64 实现目标，纯 Go 原生绑定，无 CGO 依赖；当前不承诺可用。COM 在固定 MTA 工作线程中初始化和释放；不会修改进程全局 DPI 模式。
 - 其他平台可运行协议和 fixture；`local.Open` 明确返回 `platform_unsupported`。
 
-模块路径：`github.com/caelis-labs/desktop-world`。本批预发布版本为 `v0.1.0-alpha.3`；下载与校验见 [Release](https://github.com/caelis-labs/desktop-world/releases/tag/v0.1.0-alpha.3)。公开预发布暂不授予开源许可，见 [NOTICE](NOTICE)。
+模块路径：`github.com/caelis-labs/desktop-world`。本批预发布版本为 `v0.1.0-alpha.4`；下载与校验见 [Release](https://github.com/caelis-labs/desktop-world/releases/tag/v0.1.0-alpha.4)。公开预发布暂不授予开源许可，见 [NOTICE](NOTICE)。
 
 ## 接入
 
