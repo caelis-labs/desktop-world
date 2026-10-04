@@ -2,11 +2,11 @@
 
 独立 Go library：把桌面作为一个按需观察、带生命周期与不确定性的对象世界。根包不依赖 Agent Runtime、LLM、Wails、浏览器插件或网络服务。通用 Agent 接入见 [stdio helper](docs/helper.md)，真实任务成本见 [可用性评估](docs/usability-evaluation.md)，字段选择和后台隔离见 [设计说明](docs/observation-and-seats.md)。
 
-MVP 优先验证 Token 效率与易用性。通用 Agent 推荐 [JavaScript 调用链](docs/scripting.md)：持久会话中组合观察与动作、中间数据本地保留、按需 print、强制呈现覆盖范围和失败；后台输入隔离不属于首版验收范围。
+MVP 优先验证 Token 效率与易用性。通用 Agent 推荐 [JavaScript 调用链](docs/scripting.md)：持久会话中组合观察与动作、中间数据本地保留、按需 print、强制呈现覆盖范围和失败。
 
-**当前状态：`v0.1.0-alpha.1`，供 caelis-bot 开发联调的首个预发布，尚未达到 SPEC 的双平台正式发布门槛。** macOS 原生键鼠、语义操作、截图和生命周期路径已在 AppKit fixture 上运行，并通过 Chrome 原生输入与 Canvas 负面验收；Windows 后端已有实现、交叉编译与静态检查，仍需 Windows 交互式桌面验收。原始设计保留在 [SPEC.md](SPEC.md)，实现边界见 [docs/implementation.md](docs/implementation.md)，实际运行证据见 [docs/validation.md](docs/validation.md)。
+**当前公开版本：`v0.1.0-alpha.2`，尚未达到 SPEC 的双平台正式发布门槛。** macOS 原生键鼠、语义操作、截图和生命周期路径已有实机记录。当前源码的 Windows 后端提供功能实现和编译/CI 检查，**不承诺 Windows 可用**；全部 Windows 实机验收与适配后置到功能完备临界点，在单独环境完成。原始设计保留在 [SPEC.md](SPEC.md)，实现边界见 [docs/implementation.md](docs/implementation.md)，实际运行证据见 [docs/validation.md](docs/validation.md)。
 
-当前源码的 helper 命令为 **`dtw`**。本批增加 `no_shared_input` 宿主策略、语义展开/收起、原生字段读取计划、Windows 可续扫 UIA 和私有 managed 控制管道。独立场景与实机状态见 [本批 feature 验收](docs/features.md)；公开 alpha 包仍保留原命令名，本批尚未发布，caelis-bot 的 M0 更新与联调后置。
+当前源码的 helper 命令为 **`dtw`**。已补齐 `no_shared_input`、语义展开/收起、选择状态、勾选状态、滚动到目标、按需字段读取、Windows UIA 续扫和私有 managed 管道。独立场景与实机状态见 [feature 验收](docs/features.md)；这些源码改动尚未发布，caelis-bot 的 M0 更新与联调后置。
 
 ## 快速运行
 
@@ -31,10 +31,10 @@ go run ./cmd/dw-inspect
 原生平台：
 
 - macOS 14+，arm64 / amd64，开启 CGO，安装 Xcode Command Line Tools。桥接使用 AX、CGEvent、ScreenCaptureKit，不创建 NSApplication，不接管宿主主线程。
-- Windows 11 amd64，纯 Go 原生绑定，无 CGO 依赖。COM 在固定 MTA 工作线程中初始化和释放；不会修改进程全局 DPI 模式。
+- Windows 11 amd64 实现目标，纯 Go 原生绑定，无 CGO 依赖；当前不承诺可用。COM 在固定 MTA 工作线程中初始化和释放；不会修改进程全局 DPI 模式。
 - 其他平台可运行协议和 fixture；`local.Open` 明确返回 `platform_unsupported`。
 
-模块路径：`github.com/caelis-labs/desktop-world`。版本固定为 `v0.1.0-alpha.1`；下载与校验见 [Release](https://github.com/caelis-labs/desktop-world/releases/tag/v0.1.0-alpha.1)。公开预发布暂不授予开源许可，见 [NOTICE](NOTICE)。
+模块路径：`github.com/caelis-labs/desktop-world`。当前公开版本为 `v0.1.0-alpha.2`；下载与校验见 [Release](https://github.com/caelis-labs/desktop-world/releases/tag/v0.1.0-alpha.2)。公开预发布暂不授予开源许可，见 [NOTICE](NOTICE)。
 
 ## 接入
 
@@ -66,7 +66,7 @@ Actor 的操作名为 `observe`、`read`、`sync`、`resolve_anchor`、`capture`
 
 ## 执行与恢复
 
-- Plan 最多 16 步、10 秒；默认每步 2 秒。支持 bind / wait、focus / invoke / set_value / set_expanded、pointer move / click / drag / scroll、Unicode type_text、完整 key chord。
+- Plan 最多 16 步、10 秒；默认每步 2 秒。支持 bind / wait、focus / invoke / set_value / set_expanded / set_checked / set_selected / scroll_into_view、pointer move / click / drag / scroll、Unicode type_text、完整 key chord。状态动作始终验证，详见 [语义动作](docs/semantic-actions.md)。
 - Ref 固定指向一次 provider 实例。绑定失效会停止；不会换成同名对象，也不会静默把 invoke 改成 click。
 - 同 Epoch / Actor / RequestID / 规范化内容只执行一次。使用同 ID 查询或恢复，不换新 ID 重放未知动作。
 - **先保存 Receipt，再处理 Execute 的 error。** `delivery` 与 `verification` 是独立结果；`completed` 只表示声明的完成条件满足。

@@ -83,7 +83,7 @@ func (s *featureSession) find(window dw.Ref, name string, fields ...string) dw.O
 	if len(fields) == 0 {
 		fields = []string{"role", "name"}
 	}
-	req := dw.ObserveRequest{Scope: dw.Scope{Refs: []dw.Ref{window}}, Projection: dw.ProjectionOutline, Fields: fields, Match: &dw.Locator{Within: window, NameEquals: &name}, Budget: dw.Budget{MaxDepth: 6, MaxVisitedNodes: 128, MaxResults: 4, MaxOutputBytes: 4096, ReadDeadline: 3 * time.Second}}
+	req := dw.ObserveRequest{Scope: dw.Scope{Refs: []dw.Ref{window}}, Projection: dw.ProjectionOutline, Fields: fields, Match: &dw.Locator{Within: window, NameEquals: &name}, Budget: dw.Budget{MaxDepth: 12, MaxVisitedNodes: 128, MaxResults: 4, MaxOutputBytes: 4096, ReadDeadline: 3 * time.Second}}
 	for i := 0; i < 8; i++ {
 		var ob dw.Observation
 		s.call("observe", req, &ob)
@@ -94,7 +94,9 @@ func (s *featureSession) find(window dw.Ref, name string, fields ...string) dw.O
 			s.t.Fatal("ambiguous fixture name")
 		}
 		if ob.Coverage.Continuation == "" {
-			break
+			// WebKit publishes AX children asynchronously after the first read.
+			// Repeat this same bounded query without widening scope or input.
+			time.Sleep(50 * time.Millisecond)
 		}
 		req.Continuation = ob.Coverage.Continuation
 	}

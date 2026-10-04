@@ -38,3 +38,28 @@ func TestActionSchemaDisclosesOneArmAndPreservesSafetyConstraints(t *testing.T) 
 		t.Fatalf("schema entry point leaked full parameter definitions: %s", index)
 	}
 }
+
+func TestSemanticActionSchemasDiscloseOnlyTheirArgument(t *testing.T) {
+	for op, arm := range map[string]string{"set_checked": "set_checked", "set_selected": "set_selected", "scroll_into_view": ""} {
+		t.Run(op, func(t *testing.T) {
+			args := ActionSchema(op)["properties"].(map[string]any)["args"].(map[string]any)
+			item := args["properties"].(map[string]any)["steps"].(map[string]any)["items"].(map[string]any)
+			p := item["properties"].(map[string]any)
+			if len(item["oneOf"].([]any)) != 1 {
+				t.Fatal("action alternatives leaked", item)
+			}
+			for _, key := range []string{"set_checked", "set_selected", "set_expanded", "set_value", "press", "scroll"} {
+				if (p[key] != nil) != (key == arm) {
+					t.Fatal("wrong argument arm", key, p)
+				}
+			}
+			if arm != "" {
+				arg := p[arm].(map[string]any)
+				property := map[string]string{"set_checked": "checked", "set_selected": "selected"}[arm]
+				if len(arg["required"].([]string)) != 1 || arg["required"].([]string)[0] != property || arg["properties"].(map[string]any)[property].(map[string]any)["type"] != "boolean" {
+					t.Fatal("explicit desired boolean lost", arg)
+				}
+			}
+		})
+	}
+}

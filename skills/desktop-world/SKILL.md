@@ -98,7 +98,8 @@ one is available. Capture plus anchor is a last resort, never automatic.
 See [large AX discovery](references/large-ax-discovery.md).
 
 `act` owns the epoch/request-ID plumbing. Preserve its envelope `id` and body on
-transport retry; a fresh ID may repeat effects. `focus`, `set_value` and `set_expanded` verify
+transport retry; a fresh ID may repeat effects. `focus`, `set_value`, `set_expanded`,
+`set_checked`, `set_selected` and `scroll_into_view` verify
 their own state. Other actions default to dispatch only. Add explicit `after`
 predicates when available, then verify the actual task result independently.
 Batch steps whose targets remain known. If a step opens a new window/dialog or
@@ -140,3 +141,15 @@ Use `dw.expand(ref, true/false)` to reach an explicit disclosure state; it verif
 and avoids another provider write when already satisfied. Read its capability and
 state on that Ref only as needed. `dtw schema act set_expanded` discloses only this
 action. Other actions can use the same per-action schema selector.
+
+Use `dw.check(ref, true/false)` and `dw.select(ref, true/false)` for explicit
+checked/selected states; omitted booleans are invalid. The library never explicitly
+clears other items; provider selection rules may reject or adjust selections. Mixed
+checked state stays unknown, and uncertain toggles must never be repeated.
+Use `dw.scrollIntoView(ref)` only when the provider advertises the semantic
+capability. It verifies viewport presence, not visibility through occluding
+windows or permission to click. Already-satisfied states return verified no-op.
+Request states/capabilities only on the relevant Ref. See
+[semantic action limits](references/semantic-actions.md) only when needed.
+Windows functionality is implemented but availability is not promised; interactive
+acceptance/adaptation is deferred to a separate Windows environment.

@@ -146,13 +146,13 @@ func typeSchema(t reflect.Type) schema {
 		bound("timeout_ms", 0, 10000)
 	case reflect.TypeOf(dw.Step{}):
 		require("id", "op")
-		enum("op", "bind", "wait", "focus", "invoke", "set_value", "set_expanded", "pointer.move", "pointer.click", "pointer.drag", "pointer.scroll", "keyboard.press", "keyboard.type_text")
+		enum("op", "bind", "wait", "focus", "invoke", "set_value", "set_expanded", "set_checked", "set_selected", "scroll_into_view", "pointer.move", "pointer.click", "pointer.drag", "pointer.scroll", "keyboard.press", "keyboard.type_text")
 		enum("completion", "dispatch", "verify")
 		bound("timeout_ms", 0, 10000)
-		s["description"] = "Ordered step. bind uses bind only; wait uses after predicates without target; other ops require exactly one target. set_value uses set_value, set_expanded uses an explicit expanded boolean, keyboard.type_text uses type_text, keyboard.press uses press, pointer.* uses click/drag/scroll as applicable. focus/invoke/pointer.move have no argument arm. verify needs after except focus/set_value/set_expanded. Do not batch an unknown future dialog: observe its new Ref first."
+		s["description"] = "Ordered step. bind uses bind only; wait uses after predicates without target; other ops require exactly one target. set_value uses set_value, set_expanded/set_checked/set_selected use explicit desired booleans; scroll_into_view has no argument arm. keyboard.type_text uses type_text, keyboard.press uses press, pointer.* uses click/drag/scroll as applicable. focus/invoke/pointer.move have no argument arm. verify needs after except focus/set_value/set_expanded/set_checked/set_selected/scroll_into_view (always verified). Do not batch an unknown future dialog: observe its new Ref first."
 		variants := []any{}
-		for _, op := range []string{"bind", "wait", "focus", "invoke", "set_value", "set_expanded", "pointer.move", "pointer.click", "pointer.drag", "pointer.scroll", "keyboard.press", "keyboard.type_text"} {
-			arm := map[string]string{"bind": "bind", "set_value": "set_value", "set_expanded": "set_expanded", "pointer.click": "click", "pointer.drag": "drag", "pointer.scroll": "scroll", "keyboard.press": "press", "keyboard.type_text": "type_text"}[op]
+		for _, op := range []string{"bind", "wait", "focus", "invoke", "set_value", "set_expanded", "set_checked", "set_selected", "scroll_into_view", "pointer.move", "pointer.click", "pointer.drag", "pointer.scroll", "keyboard.press", "keyboard.type_text"} {
+			arm := map[string]string{"bind": "bind", "set_value": "set_value", "set_expanded": "set_expanded", "set_checked": "set_checked", "set_selected": "set_selected", "pointer.click": "click", "pointer.drag": "drag", "pointer.scroll": "scroll", "keyboard.press": "press", "keyboard.type_text": "type_text"}[op]
 			props := schema{"op": schema{"const": op}}
 			required := []string{"op"}
 			if op != "bind" && op != "wait" {
@@ -166,7 +166,7 @@ func typeSchema(t reflect.Type) schema {
 				props["after"] = schema{"minItems": 1}
 			}
 			forbid := []any{}
-			for _, candidate := range []string{"bind", "set_value", "set_expanded", "type_text", "press", "click", "drag", "scroll"} {
+			for _, candidate := range []string{"bind", "set_value", "set_expanded", "set_checked", "set_selected", "type_text", "press", "click", "drag", "scroll"} {
 				if candidate != arm {
 					forbid = append(forbid, schema{"required": []string{candidate}})
 				}
@@ -187,6 +187,12 @@ func typeSchema(t reflect.Type) schema {
 	case reflect.TypeOf(dw.SetExpanded{}):
 		require("expanded")
 		s["description"] = "Reach the explicit expanded state using semantic provider support; always verified, no toggle or physical-input fallback."
+	case reflect.TypeOf(dw.SetChecked{}):
+		require("checked")
+		s["description"] = "Reach explicit checked state using semantic provider support; always verified. No physical-input fallback or replay of an uncertain toggle."
+	case reflect.TypeOf(dw.SetSelected{}):
+		require("selected")
+		s["description"] = "Set this item's selected state; never explicitly clear other items. Provider selection rules may reject or adjust selections. Always verified; no physical-input fallback."
 	case reflect.TypeOf(dw.SetValue{}), reflect.TypeOf(dw.TypeText{}):
 		require("text")
 		field("text")["maxLength"] = 65536

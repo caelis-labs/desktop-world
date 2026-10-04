@@ -33,7 +33,7 @@
 
 | 层次 | 可以做什么 | 代价与限制 |
 | --- | --- | --- |
-| 语义后台操作 | observe/read、受支持的 set_value/invoke/set_expanded；未来扩展 select/toggle/semantic scroll | 依赖应用 provider，应用自身可能弹窗或激活；不是任意键鼠 |
+| 语义后台操作 | observe/read、受支持的 set_value/invoke/set_expanded/set_checked/set_selected/scroll_into_view | 依赖应用 provider，应用自身可能弹窗或激活；逐项状态与业务验收见 [语义动作](semantic-actions.md) |
 | 应用定向事件 | 研究进程/窗口定向输入、应用内逻辑位置 | 与真实 HID 语义不同，不能普遍处理菜单、拖拽、IME、全局快捷键；单独报告能力 |
 | 隔离交互座席 | 独立焦点、键盘状态、光标和显示内容 | 独立 OS 会话/VM/远程桌面 backend；应用必须运行在那里 |
 

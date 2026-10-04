@@ -45,7 +45,7 @@ func normalizePlan(p dw.Plan) dw.Plan {
 		}
 		if s.Completion == "" {
 			s.Completion = "dispatch"
-			if s.Op == "focus" || s.Op == "set_value" || s.Op == "set_expanded" || s.Op == "wait" || s.Op == "bind" {
+			if s.Op == "focus" || s.Op == "set_value" || desiredState(*s) != nil || s.Op == "wait" || s.Op == "bind" {
 				s.Completion = "verify"
 			}
 		}
@@ -402,14 +402,14 @@ func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string
 		fail(e)
 		return
 	}
-	if s.Op == "set_expanded" {
-		f := object.States["expanded"]
-		if f.Status == dw.FactKnown && f.Value != nil && *f.Value == *s.SetExpanded.Expanded {
+	if desired := desiredState(s); desired != nil {
+		f := object.States[desired.Property]
+		if f.Status == dw.FactKnown && f.Value != nil && *f.Value == *desired.EqualsBool {
 			if e = a.check(ctx, in, true); e != nil {
 				fail(e)
 				return
 			}
-			proof := append(copyOf(s.After), dw.Predicate{Target: s.Target, Property: "expanded", EqualsBool: s.SetExpanded.Expanded})
+			proof := append(copyOf(s.After), *desired)
 			v, er := a.poll(ctx, proof, bindings, s.Op)
 			if er != nil {
 				res.Verification = v
@@ -550,7 +550,7 @@ func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string
 	if outcome.Unsafe {
 		w.seatGate.fence(true)
 	}
-	if outcome.Fault != nil || outcome.Delivery != dw.DeliveryComplete {
+	if outcome.Fault != nil || (outcome.Delivery != dw.DeliveryComplete && !(outcome.Delivery == dw.DeliveryNA && desiredState(s) != nil)) {
 		res.Fault = outcome.Fault
 		if res.Fault == nil {
 			res.Fault = fault("input_rejected")
@@ -573,10 +573,10 @@ func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string
 	if s.Op == "set_value" {
 		predicates = append(predicates, dw.Predicate{Target: dw.Target{Ref: object.Ref}, Property: "value", EqualsString: &s.SetValue.Text})
 	}
-	if s.Op == "set_expanded" {
-		predicates = append(predicates, dw.Predicate{Target: s.Target, Property: "expanded", EqualsBool: s.SetExpanded.Expanded})
+	if desired := desiredState(s); desired != nil {
+		predicates = append(predicates, *desired)
 	}
-	if s.Completion == "verify" || s.Op == "focus" || s.Op == "set_value" || s.Op == "set_expanded" {
+	if s.Completion == "verify" || s.Op == "focus" || s.Op == "set_value" || desiredState(s) != nil {
 		a.progress(r, s, res.Target, "verifying")
 		v, e := a.poll(ctx, predicates, bindings, s.Op)
 		res.Verification = v
@@ -595,6 +595,26 @@ func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string
 	}
 	return
 }
+
+// Desired-state actions always verify, including when the provider found the
+// state already satisfied after the engine's fresh prewrite check.
+func desiredState(s dw.Step) *dw.Predicate {
+	p := &dw.Predicate{Target: s.Target}
+	switch s.Op {
+	case "set_expanded":
+		p.Property, p.EqualsBool = "expanded", s.SetExpanded.Expanded
+	case "set_checked":
+		p.Property, p.EqualsBool = "checked", s.SetChecked.Checked
+	case "set_selected":
+		p.Property, p.EqualsBool = "selected", s.SetSelected.Selected
+	case "scroll_into_view":
+		no := false
+		p.Property, p.EqualsBool = "offscreen", &no
+	default:
+		return nil
+	}
+	return p
+}
 func (a *actor) actionable(o dw.Object, op string) error {
 	if o.Lifecycle != dw.LifeLive {
 		return fault("ref_stale")
@@ -611,7 +631,7 @@ func (a *actor) actionable(o dw.Object, op string) error {
 			return fault("capability_unavailable")
 		}
 	}
-	if op == "focus" || op == "invoke" || op == "set_value" || op == "set_expanded" {
+	if op == "focus" || op == "invoke" || op == "set_value" || op == "set_expanded" || op == "set_checked" || op == "set_selected" || op == "scroll_into_view" {
 		for _, c := range o.Capabilities {
 			if c.Name == op && c.Support == "supported" && c.Availability == "available" {
 				return nil

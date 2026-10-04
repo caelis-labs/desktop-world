@@ -1,0 +1,4 @@
+=== RUN   TestNativeScrollIntoView
+    semantic_actions_test.go:235: F8 native business=order-900; human Unicode intact; pointer/focus stable; no-op verified; background SDK calls=11 bytes=16914; original receipt=run-6d34c8dff1020252bc0035ec
+--- PASS: TestNativeScrollIntoView (4.12s)
+PASS

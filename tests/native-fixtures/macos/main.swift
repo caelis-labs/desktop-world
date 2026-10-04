@@ -1,4 +1,5 @@
 import AppKit
+import WebKit
 
 // All evidence is written by the controlled app, independently of AX readback.
 let args = CommandLine.arguments
@@ -7,11 +8,13 @@ func argument(_ name: String, _ fallback: String) -> String {
   return args[i + 1]
 }
 let fixtureTitle = argument("--title", "Desktop World Native Fixture")
+let semanticCase = argument("--semantic-case", "")
 let logPath = argument("--log", NSTemporaryDirectory() + "desktop-world-fixture.jsonl")
 func record(_ event: String, _ value: String = "") {
   let row: [String: Any] = [
     "event": event, "value": value, "pid": ProcessInfo.processInfo.processIdentifier,
     "at": ISO8601DateFormatter().string(from: Date()),
+    "time": Date().timeIntervalSince1970,
   ]
   guard var data = try? JSONSerialization.data(withJSONObject: row) else { return }
   data.append(10)
@@ -50,7 +53,38 @@ final class Disclosure: NSView {
   }
 }
 typealias Field = NSTextField
-final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
+final class OrderRow: NSView {
+  let order: String
+  var selected = false
+  init(_ name: String, y: CGFloat) {
+    order = name
+    super.init(frame: NSRect(x: 24, y: y, width: 430, height: 40))
+    let label = NSTextField(labelWithString: name)
+    label.frame = bounds.insetBy(dx: 8, dy: 8)
+    addSubview(label)
+  }
+  required init?(coder: NSCoder) { fatalError("unused") }
+  override func isAccessibilityElement() -> Bool { true }
+  override func accessibilityRole() -> NSAccessibility.Role? { .row }
+  override func accessibilityLabel() -> String? { order }
+  override func isAccessibilitySelected() -> Bool { selected }
+  override func setAccessibilitySelected(_ value: Bool) {
+    selected = value
+    record("selected", order + ":" + String(value))
+    needsDisplay = true
+    NSAccessibility.post(element: self, notification: .selectedRowsChanged)
+  }
+  override func isAccessibilitySelectorAllowed(_ selector: Selector) -> Bool {
+    if selector == #selector(setAccessibilitySelected(_:)) { return true }
+    return super.isAccessibilitySelectorAllowed(selector)
+  }
+  override func draw(_ rect: NSRect) {
+    (selected ? NSColor.selectedContentBackgroundColor : NSColor.controlBackgroundColor).setFill()
+    rect.fill()
+    super.draw(rect)
+  }
+}
+final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, WKScriptMessageHandler, WKNavigationDelegate {
   var window: NSWindow!
   var field = Field(frame: NSRect(x: 24, y: 210, width: 430, height: 30))
   var status = NSTextField(labelWithString: "ready")
@@ -59,6 +93,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
   var mixed: NSButton!
   var slider: NSSlider!
   var monitor: Any?
+  var orders: [OrderRow] = []
   func applicationDidFinishLaunching(_ notification: Notification) {
     let menu = NSMenu()
     let appItem = NSMenuItem()
@@ -141,6 +176,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
       slow.setAccessibilityLabel("Slow row \(i)")
       window.contentView?.addSubview(slow)
     }
+    if !semanticCase.isEmpty { setupSemanticCase() }
     monitor = NSEvent.addLocalMonitorForEvents(matching: [
       .keyDown, .leftMouseDown, .leftMouseUp, .leftMouseDragged, .scrollWheel,
     ]) { event in
@@ -157,16 +193,67 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
       window.makeKeyAndOrderFront(nil)
       NSApp.activate(ignoringOtherApps: true)
     }
-    record("ready", fixtureTitle)
+    if semanticCase != "scroll" { record("ready", fixtureTitle) }
   }
   @objc func toggleValue() { record("checkbox", String(checkbox.state.rawValue)) }
   @objc func toggleMixed() { record("mixed", String(mixed.state.rawValue)) }
   @objc func labelAction() { record("label_action") }
   @objc func submit() {
+    if semanticCase == "selection" {
+      record("ordered", orders.filter { $0.selected }.map { $0.order }.joined(separator: ","))
+      return
+    }
+    if semanticCase == "check" {
+      record("approved", checkbox.state == .on ? "order-42" : "ERROR:unchecked")
+      return
+    }
     count += 1
     status.stringValue = "submitted:\(count)"
     record("submit", field.stringValue)
   }
+  func setupSemanticCase() {
+    window.contentView?.subviews.forEach { $0.removeFromSuperview() }
+    if semanticCase == "selection" {
+      orders = [OrderRow("Order A", y: 370), OrderRow("Order B", y: 310)]
+      orders[1].selected = true // Existing unrelated choice must survive A's changes.
+      orders.forEach { window.contentView?.addSubview($0) }
+    } else if semanticCase == "check" {
+      checkbox.title = "Approve order"
+      window.contentView?.addSubview(checkbox)
+      window.contentView?.addSubview(mixed)
+    } else if semanticCase == "scroll" {
+      // Use the system WebKit provider's real AXScrollToVisible implementation.
+      // The fixture supplies business callbacks, never an AX action shim.
+      let config = WKWebViewConfiguration()
+      config.userContentController.add(self, name: "fixture")
+      let web = WKWebView(frame: NSRect(x: 24, y: 280, width: 430, height: 150), configuration: config)
+      web.navigationDelegate = self
+      window.contentView?.addSubview(web)
+      web.loadHTMLString("""
+        <!doctype html><meta charset="utf-8"><title>Orders</title>
+        <p>Orders awaiting fulfillment</p><div style="height:900px"></div>
+        <button id="order" onclick="finish()">Fulfill distant order</button><div style="height:100px"></div>
+        <script>
+        const send=(event,value)=>window.webkit.messageHandlers.fixture.postMessage({event,value});
+        const visible=()=>{const r=document.getElementById('order').getBoundingClientRect();return r.bottom>0&&r.top<innerHeight};
+        let logged=false;
+        addEventListener('scroll',()=>{if(!logged&&visible()){logged=true;send('scrolled','true')}});
+        function finish(){send('fulfilled',visible()?'order-900':'ERROR:not-visible')}
+        </script>
+        """, baseURL: nil)
+    }
+    let submitButton = NSButton(title: "提交", target: self, action: #selector(submit))
+    submitButton.frame = NSRect(x: 24, y: 160, width: 100, height: 32)
+    window.contentView?.addSubview(submitButton)
+    let unsupported = NSButton(title: "Label only", target: self, action: #selector(labelAction))
+    unsupported.frame = NSRect(x: 160, y: 160, width: 140, height: 32)
+    window.contentView?.addSubview(unsupported)
+  }
+  func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+    guard let row = message.body as? [String: String], let event = row["event"], let value = row["value"] else { return }
+    record(event, value)
+  }
+  func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { record("ready", fixtureTitle) }
   @objc func replaceField() {
     field.removeFromSuperview()
     field = Field(frame: NSRect(x: 24, y: 210, width: 430, height: 30))

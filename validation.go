@@ -152,7 +152,7 @@ func (p Predicate) Validate() error {
 }
 func IsWrite(op string) bool {
 	switch op {
-	case "focus", "invoke", "set_value", "set_expanded", "pointer.move", "pointer.click", "pointer.drag", "pointer.scroll", "keyboard.type_text", "keyboard.press":
+	case "focus", "invoke", "set_value", "set_expanded", "set_checked", "set_selected", "scroll_into_view", "pointer.move", "pointer.click", "pointer.drag", "pointer.scroll", "keyboard.type_text", "keyboard.press":
 		return true
 	}
 	return false
@@ -193,7 +193,7 @@ func (p Plan) Validate() error {
 			return Invalid("unknown completion")
 		}
 		arms := 0
-		for _, b := range []bool{s.Bind != nil, s.SetValue != nil, s.SetExpanded != nil, s.TypeText != nil, s.Press != nil, s.Click != nil, s.Drag != nil, s.Scroll != nil} {
+		for _, b := range []bool{s.Bind != nil, s.SetValue != nil, s.SetExpanded != nil, s.SetChecked != nil, s.SetSelected != nil, s.TypeText != nil, s.Press != nil, s.Click != nil, s.Drag != nil, s.Scroll != nil} {
 			if b {
 				arms++
 			}
@@ -218,7 +218,7 @@ func (p Plan) Validate() error {
 			if s.Target != (Target{}) {
 				return Invalid("wait uses predicate targets")
 			}
-		case "focus", "invoke", "pointer.move":
+		case "focus", "invoke", "pointer.move", "scroll_into_view":
 		case "set_value":
 			need = 1
 			if s.SetValue == nil {
@@ -228,6 +228,16 @@ func (p Plan) Validate() error {
 			need = 1
 			if s.SetExpanded == nil || s.SetExpanded.Expanded == nil {
 				return Invalid("set_expanded requires explicit expanded boolean")
+			}
+		case "set_checked":
+			need = 1
+			if s.SetChecked == nil || s.SetChecked.Checked == nil {
+				return Invalid("set_checked requires explicit checked boolean")
+			}
+		case "set_selected":
+			need = 1
+			if s.SetSelected == nil || s.SetSelected.Selected == nil {
+				return Invalid("set_selected requires explicit selected boolean")
 			}
 		case "keyboard.type_text":
 			need = 1
@@ -273,7 +283,7 @@ func (p Plan) Validate() error {
 			if !strings.HasPrefix(s.Op, "pointer.") && (s.Target.Point != nil || s.Target.Anchor != nil) {
 				return Invalid("operation requires object target")
 			}
-			if s.Completion == "verify" && s.Op != "focus" && s.Op != "set_value" && s.Op != "set_expanded" && len(s.After) == 0 {
+			if s.Completion == "verify" && s.Op != "focus" && s.Op != "set_value" && s.Op != "set_expanded" && s.Op != "set_checked" && s.Op != "set_selected" && s.Op != "scroll_into_view" && len(s.After) == 0 {
 				return Invalid("verify requires after predicates")
 			}
 		}

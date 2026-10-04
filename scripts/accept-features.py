@@ -18,16 +18,16 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
-parser.add_argument("features", nargs="*", choices=["F1", "F2", "F3", "F4", "F5"])
+parser.add_argument("features", nargs="*", choices=["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8"])
 args = parser.parse_args()
 windows = platform.system() == "Windows"
-features = args.features or (["F4", "F5"] if windows else ["F1", "F2", "F3"])
+features = args.features or (["F4", "F5"] if windows else ["F1", "F2", "F3", "F6", "F7", "F8"])
 if platform.system() not in ["Darwin", "Windows"]:
     parser.error("a real interactive macOS or Windows desktop is required")
 if any(f in ["F4", "F5"] for f in features) and not windows:
     parser.error("F4/F5 require Windows, not cross-build or mocked evidence")
-if any(f in ["F2", "F3"] for f in features) and windows:
-    parser.error("this F2/F3 app-side state/getter fixture is macOS-specific")
+if any(f in ["F2", "F3", "F6", "F7", "F8"] for f in features) and windows:
+    parser.error("these app-side state/getter fixtures are macOS-specific; Windows acceptance is deferred")
 run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:6]
 out = ROOT / "artifacts" / ("feature-acceptance-" + run_id)
 out.mkdir(parents=True)
@@ -71,7 +71,7 @@ summary = {
     "source_manifest": "source-sha256.json", "features": {},
 }
 active = []
-def launch(label, *, front=False, background=False, slow=0, rows=0):
+def launch(label, *, front=False, background=False, slow=0, rows=0, semantic=""):
     title = f"DTW {label} {run_id}"
     log = out / (label.lower() + ".jsonl")
     if windows:
@@ -82,7 +82,7 @@ def launch(label, *, front=False, background=False, slow=0, rows=0):
         command = ["/usr/bin/open", "-n"]
         if background:
             command.append("-g")
-        run(command + [str(bundle), "--args", "--title", title, "--log", str(log), "--slow-count", str(slow), "--trace-reads", "1", "--background", "1" if background else "0"])
+        run(command + [str(bundle), "--args", "--title", title, "--log", str(log), "--slow-count", str(slow), "--trace-reads", "1", "--background", "1" if background else "0", "--semantic-case", semantic])
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         if log.exists() and log.stat().st_size:
@@ -107,12 +107,12 @@ def cleanup():
 try:
     for feature in features:
         case_env = dict(env, DTW_NATIVE_HELPER=str(helper))
-        if feature == "F1":
-            front_title, front_log = launch("F1-human", front=True)
+        if feature in ["F1", "F6", "F7", "F8"]:
+            front_title, front_log = launch(feature + "-human", front=True)
             # Only fixture startup sets up the simulated human's desktop.
-            title, log = launch("F1-background", background=True)
+            title, log = launch(feature + "-background", background=True, semantic={"F6": "selection", "F7": "check", "F8": "scroll"}.get(feature, ""))
             case_env.update(DTW_FOREGROUND_TITLE=front_title, DTW_FOREGROUND_LOG=str(front_log))
-            test_name = "TestNativeNoSharedInput"
+            test_name = {"F1": "TestNativeNoSharedInput", "F6": "TestNativeSetSelected", "F7": "TestNativeSetChecked", "F8": "TestNativeScrollIntoView"}[feature]
         else:
             title, log = launch(feature, slow=12 if feature == "F3" else 0, rows=1000 if feature == "F4" else 0)
             test_name = {"F2": "TestNativeSetExpanded", "F3": "TestNativeFieldPlan", "F4": "TestNativeWindowsContinuation", "F5": "TestNativeWindowsManagedControl"}[feature]

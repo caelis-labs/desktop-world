@@ -57,7 +57,7 @@ func (d *Driver) Open(ctx context.Context) error {
 	if e := d.uia.call(20, ptr(&d.cache)); e != nil {
 		return e
 	}
-	for _, id := range []uintptr{30001, 30002, 30003, 30005, 30008, 30009, 30010, 30019, 30022, 30031, 30043, 30045, 30028} {
+	for _, id := range []uintptr{30001, 30002, 30003, 30005, 30008, 30009, 30010, 30019, 30022, 30031, 30043, 30045, 30028, 30035, 30036, 30041} {
 		if e := d.cache.call(3, id); e != nil {
 			return e
 		}
@@ -307,9 +307,36 @@ func (d *Driver) nodeFields(ctx context.Context, k backend.Key, fields []string,
 			}
 		}
 	}
+	checkable, selectable, scrollable := false, false, false
+	if wants(fields, "states") || wants(fields, "capabilities") {
+		checkable = knownUnprotected && isTrue(propBool(cached, 30041, true))
+		selectable = isTrue(propBool(cached, 30036, true))
+		if checkable {
+			o.States["checked"] = dw.Unknown[bool]()
+			var pattern *com
+			if e.el.call(16, 10015, ptr(&pattern)) == nil && pattern != nil {
+				state, er := intProp(pattern, 4)
+				pattern.release()
+				if er == nil && (state == 0 || state == 1) {
+					o.States["checked"] = dw.Known(state == 1)
+				}
+			}
+		}
+		if selectable {
+			o.States["selected"] = dw.Unknown[bool]()
+			var pattern *com
+			if e.el.call(16, 10010, ptr(&pattern)) == nil && pattern != nil {
+				o.States["selected"] = boolProp(pattern, 6)
+				pattern.release()
+			}
+		}
+	}
 	if wants(fields, "capabilities") {
-		for op, supported := range map[string]bool{"set_expanded": expandable, "focus": e.hwnd != 0 || isTrue(boolProp(cached, 59)), "invoke": invoke, "set_value": writable} {
-			if op == "set_expanded" && !supported {
+		scrollable = isTrue(propBool(cached, 30035, true))
+	}
+	if wants(fields, "capabilities") {
+		for op, supported := range map[string]bool{"set_expanded": expandable, "set_checked": checkable, "set_selected": selectable, "scroll_into_view": scrollable, "focus": e.hwnd != 0 || isTrue(boolProp(cached, 59)), "invoke": invoke, "set_value": writable} {
+			if (op == "set_expanded" || op == "set_checked" || op == "set_selected" || op == "scroll_into_view") && !supported {
 				continue
 			}
 			sup, avail := "unsupported", "blocked"
@@ -317,6 +344,12 @@ func (d *Driver) nodeFields(ctx context.Context, k backend.Key, fields []string,
 				sup = "supported"
 				if isTrue(o.States["enabled"]) {
 					avail = "available"
+				}
+				if op == "set_checked" && o.States["checked"].Status != dw.FactKnown {
+					avail = "blocked"
+				}
+				if op == "set_selected" && o.States["selected"].Status != dw.FactKnown {
+					avail = "blocked"
 				}
 			}
 			o.Capabilities = append(o.Capabilities, dw.Capability{Name: op, Support: sup, Availability: avail})
@@ -693,7 +726,7 @@ func (d *Driver) fieldCache(fields []string) (*com, error) {
 		ids = append(ids, 30001)
 	}
 	if wants(fields, "states") {
-		ids = append(ids, 30008, 30010, 30019, 30022, 30043, 30028)
+		ids = append(ids, 30008, 30010, 30019, 30022, 30043, 30028, 30036, 30041)
 	} else {
 		if wants(fields, "capabilities") {
 			ids = append(ids, 30010)
@@ -706,7 +739,7 @@ func (d *Driver) fieldCache(fields []string) (*com, error) {
 		}
 	}
 	if wants(fields, "capabilities") {
-		ids = append(ids, 30009, 30031, 30028)
+		ids = append(ids, 30009, 30031, 30028, 30035, 30036, 30041)
 	}
 	seen := map[uintptr]bool{}
 	for _, id := range ids {
