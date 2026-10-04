@@ -8,7 +8,7 @@ The graduated path is `dtw serve --input-mode cooperative`, available in ordinar
 
 AppKit, Google Chrome and a standard Electron BrowserWindow application passed each input scenario below in independent requests. System WebKit completed three order-note tasks during simulated foreground typing; all 69 user characters survived. TextEdit saved an owned plain-text document through window-targeted Cmd+A, Unicode/multiline typing and Cmd+S; independently read disk bytes matched exactly. The original AppKit PID-only probe still passes three rounds without foreground/key loss and stays experimental. The earlier WebKit PID/SkyLight/no-raise failures remain in [ACCEPTANCE.md](ACCEPTANCE.md).
 
-The Electron fixture uses the normal [BrowserWindow application lifecycle](https://www.electronjs.org/docs/latest/tutorial/tutorial-first-app), with renderer accessibility enabled. It does not call a DOM/CDP automation interface, inject input handlers or implement target AX actions for the helper. AppKit uses standard text controls and an ordinary canvas that records delivered physical events. Browser form/canvas event handlers record business effects through a loopback HTTP endpoint. Every agent operation runs through persistent dtw. Captures contain only the owned test windows.
+The Electron fixture uses the normal [BrowserWindow application lifecycle](https://www.electronjs.org/docs/latest/tutorial/tutorial-first-app), with renderer accessibility enabled. It does not call a DOM/CDP automation interface, implement target AX actions for the helper. AppKit uses standard text controls and an ordinary canvas that records delivered physical events. Browser form/canvas event handlers record business effects through a loopback HTTP endpoint. Every agent operation runs through persistent dtw. Captures contain only the owned test windows.
 
 ## Independent scenarios
 
@@ -32,7 +32,9 @@ AppKit additionally passes an interrupted 500 ms drag, lease expiry during an un
 
 ## Time and cost
 
-Measured values and source/binary fingerprints are in [the committed evidence](../../docs/evidence/cooperative-20261004/README.md). Foreground duration includes handoff and cleanup. The one-second input budget is not a hard real-time maximum; an in-flight provider call or restoration can run past it. Native dialog binding is scoped to the known window rather than scanning an entire application.
+Packaged Chrome validation subsequently exposed a focus/compositor handoff race, safely refusing input before dispatch. The follow-up waits at most 120 ms for the same retained target under the original lease; it never re-posts events, changes target or activates again. The alpha.5 tag is preserved without public release; the fix ships in alpha.6. See [stabilization evidence](../../docs/evidence/cooperative-stabilization-20261004/README.md).
+
+Initial measured values and source/binary fingerprints are in [the committed evidence](../../docs/evidence/cooperative-20261004/README.md). Foreground duration includes handoff and cleanup. The one-second input budget is not a hard real-time maximum; an in-flight provider call or restoration can run past it. Native dialog binding is scoped to the known window rather than scanning an entire application.
 
 The schema catalog remains 157 bytes. Selected schemas are 5,428 bytes for click, 5,545 for text, and 6,497 for drag. There is no additional model-facing action or input-mode parameter. The trusted host selects the mode. Discovery starts with name/role, narrows to a window/control, then requests required fields/actions/capture explicitly. Individual plans use known steps and bounded unique binds. Screenshots are requested only in the separate capture scenario.
 

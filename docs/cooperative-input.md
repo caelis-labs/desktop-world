@@ -22,7 +22,7 @@ dtw serve --input-mode cooperative --write-app-window '精确的已观察窗口�
 3. 新菜单或弹窗必须使用当前 Ref。可在同一短 Plan 内以精确、唯一 Locator `bind` 一个**已知**的新控件，再使用 bound alias；未知页面应结束事务、观察，再生成下一份计划。将 Locator 限在窗口/子树内，避免扫描整个浏览器应用。
 4. 查看完整 Receipt，并独立验证业务结果。未知/partial 不换 ID 重放；查询原请求或 Run。恢复完成后再开始下一份任务。
 
-坐标操作只接受已观察 UI/Window 的 Ref 或相对 Anchor，不接受绝对 Point。拖拽两端必须属于同一原生窗口与应用；原生输入前再次核对实际命中目标的祖先关系。截图的 capture-window Ref 与 AX Ref 仍独立，截图坐标不授予输入权限。
+坐标操作只接受已观察 UI/Window 的 Ref 或相对 Anchor，不接受绝对 Point。拖拽两端必须属于同一原生窗口与应用；原生输入前再次核对实际命中目标的祖先关系。焦点确认与 compositor/AX 命中可能不同步；输入前最多等待 120 ms，让同一 retained 目标命中稳定，仍受原一秒预算约束，不重投事件、不换目标、不再次激活。截图的 capture-window Ref 与 AX Ref 仍独立，截图坐标不授予输入权限。
 
 ## 时间、回执与清理
 

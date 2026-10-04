@@ -1,6 +1,6 @@
 # macOS cooperative input evidence
 
-2026-10-04. Controlled real-machine scenarios on macOS 27.0.1 arm64. Each feature uses a separate dtw request/receipt and independent application state/events. All three production source snapshots match the committed production implementation. Reconciliation uses the original request ID/body. Raw desktop inventories and full wire transcripts remain local.
+2026-10-04. Controlled real-machine scenarios on macOS 27.0.1 arm64. Each feature uses a separate dtw request/receipt and independent application state/events. All three production source snapshots match the initial implementation merged in #12 (5e5b2bb). Subsequent packaged handoff stabilization has separate [evidence](../cooperative-stabilization-20261004/README.md). Reconciliation uses the original request ID/body. Raw desktop inventories and full wire transcripts remain local.
 
 Chrome 154.0.8037.93; Electron 44.5.1. Existing OS permissions; no DOM/CDP target automation, no VM or separate login session.
 
