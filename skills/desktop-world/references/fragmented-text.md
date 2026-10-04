@@ -37,3 +37,9 @@ only the original query's continuation. Preserve coverage and sample intervals;
 continuation and coverage is incomplete, report the partial sample. Increasing
 output bytes cannot recover unvisited AX nodes. No screenshot or whole-desktop
 fallback is implied by this workflow.
+
+On macOS, a continuation may advance a retained native traversal after its
+current result pages are exhausted. This recipe still stops after eight pages;
+if that bound is reached, report incomplete text and use a narrower document
+scope. For role/name target discovery on large browser pages, follow the
+[large AX guide](large-ax-discovery.md).

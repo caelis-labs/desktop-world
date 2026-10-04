@@ -42,6 +42,8 @@ type page struct {
 	rev               dw.Revision
 	env               dw.Environment
 	offset            int
+	scanCursor        string
+	outputBytes       int
 	expires           time.Time
 }
 
@@ -215,20 +217,20 @@ func defaults(r dw.ObserveRequest) dw.ObserveRequest {
 	}
 	return r
 }
-func (a *actor) query(ctx context.Context, r dw.ObserveRequest) ([]dw.Object, dw.Coverage, error) {
+func (a *actor) query(ctx context.Context, r dw.ObserveRequest, resume string) ([]dw.Object, dw.Coverage, string, error) {
 	w := a.w
 	cov := dw.Coverage{Scope: r.Scope, Fields: r.Fields, MaxDepth: r.Budget.MaxDepth, SampleStart: time.Now().UTC()}
-	q := backend.Query{Desktop: r.Scope.Desktop, Depth: r.Budget.MaxDepth, MaxNodes: r.Budget.MaxVisitedNodes, Summary: r.Projection == dw.ProjectionSummary, Detail: r.Projection == dw.ProjectionDetail}
+	q := backend.Query{Desktop: r.Scope.Desktop, Depth: r.Budget.MaxDepth, MaxNodes: r.Budget.MaxVisitedNodes, Summary: r.Projection == dw.ProjectionSummary, Detail: r.Projection == dw.ProjectionDetail, Resume: resume}
 	w.mu.Lock()
 	for _, ref := range r.Scope.Refs {
 		rec := w.objects[ref]
 		if rec == nil {
 			w.mu.Unlock()
-			return nil, cov, fault("ref_expired")
+			return nil, cov, "", fault("ref_expired")
 		}
 		if rec.object.Lifecycle == dw.LifeGone || rec.object.Lifecycle == dw.LifeExpired {
 			w.mu.Unlock()
-			return nil, cov, fault("ref_" + string(rec.object.Lifecycle))
+			return nil, cov, "", fault("ref_" + string(rec.object.Lifecycle))
 		}
 		q.Roots = append(q.Roots, rec.key)
 	}
@@ -264,7 +266,7 @@ func (a *actor) query(ctx context.Context, r dw.ObserveRequest) ([]dw.Object, dw
 		cov.UnavailableSources = []string{asFault(e).Code}
 		cov.Dirty = true
 		cov.SampleEnd = time.Now().UTC()
-		return nil, cov, e
+		return nil, cov, "", e
 	}
 	result := v.(struct {
 		objects []dw.Object
@@ -274,7 +276,7 @@ func (a *actor) query(ctx context.Context, r dw.ObserveRequest) ([]dw.Object, dw
 	cov.VisitedNodes = result.p.Visited
 	cov.UnavailableSources = result.p.Unavailable
 	cov.SampleEnd = time.Now().UTC()
-	return result.objects, cov, nil
+	return result.objects, cov, result.p.ScanCursor, nil
 }
 func (a *actor) cached(r dw.ObserveRequest) ([]dw.Object, dw.Coverage) {
 	a.w.mu.Lock()
@@ -463,17 +465,47 @@ func (a *actor) Observe(ctx context.Context, req dw.ObserveRequest) (dw.Observat
 		want, got := p.request, r
 		want.Continuation = ""
 		got.Continuation = ""
+		// The managed helper reserves envelope bytes from each wire response.
+		// Its request ID grows over time, so an otherwise identical continuation
+		// can have a slightly smaller presentation budget.
+		want.Budget.MaxOutputBytes = 0
+		got.Budget.MaxOutputBytes = 0
 		if !reflect.DeepEqual(want, got) {
 			return dw.Observation{}, dw.Invalid("continuation query mismatch")
 		}
-		return a.render(ctx, p, in)
+		if p.offset == len(p.objects) && p.scanCursor != "" {
+			a.w.mu.Lock()
+			permissionVersion := a.w.permissionVersion
+			a.w.mu.Unlock()
+			if p.permissionVersion != permissionVersion {
+				return dw.Observation{}, fault("permission_changed")
+			}
+			all, cov, scanCursor, e := a.query(ctx, r, p.scanCursor)
+			if e != nil {
+				return dw.Observation{Epoch: a.w.epoch, Coverage: cov}, e
+			}
+			if e = a.check(ctx, in, false); e != nil {
+				return dw.Observation{}, e
+			}
+			a.w.mu.Lock()
+			objects := a.selectObjectsLocked(all, r)
+			nextRequest := p.request
+			nextRequest.Budget.MaxOutputBytes = r.Budget.MaxOutputBytes
+			next := &page{permissionVersion: a.w.permissionVersion, request: nextRequest, objects: objects, coverage: cov, scanCursor: scanCursor, outputBytes: p.outputBytes, seat: a.seatLocked(), rev: a.w.revision, env: copyOf(a.w.env), expires: p.expires}
+			a.w.mu.Unlock()
+			return a.render(ctx, next, in)
+		}
+		effective := *p
+		effective.request.Budget.MaxOutputBytes = r.Budget.MaxOutputBytes
+		return a.render(ctx, &effective, in)
 	}
 	var all []dw.Object
 	var cov dw.Coverage
+	var scanCursor string
 	if r.Freshness.Mode == "cached" {
 		all, cov = a.cached(r)
 	} else {
-		all, cov, e = a.query(ctx, r)
+		all, cov, scanCursor, e = a.query(ctx, r, "")
 		if e != nil {
 			return dw.Observation{Epoch: a.w.epoch, Coverage: cov}, e
 		}
@@ -483,7 +515,7 @@ func (a *actor) Observe(ctx context.Context, req dw.ObserveRequest) (dw.Observat
 	}
 	a.w.mu.Lock()
 	objects := a.selectObjectsLocked(all, r)
-	p := &page{permissionVersion: a.w.permissionVersion, request: r, objects: objects, coverage: cov, seat: a.seatLocked(), rev: a.w.revision, env: copyOf(a.w.env), expires: time.Now().Add(a.w.opts.HistoryTTL)}
+	p := &page{permissionVersion: a.w.permissionVersion, request: r, objects: objects, coverage: cov, scanCursor: scanCursor, seat: a.seatLocked(), rev: a.w.revision, env: copyOf(a.w.env), expires: time.Now().Add(a.w.opts.HistoryTTL)}
 	a.w.mu.Unlock()
 	return a.render(ctx, p, in)
 }
@@ -501,23 +533,41 @@ func (a *actor) render(ctx context.Context, p *page, in dw.Intent) (dw.Observati
 		end = len(p.objects)
 	}
 	next := token("p-")
+	// A multi-call native scan may expose many matching objects. Cap the
+	// entire traversal's model-facing projection, independently of each page.
+	const scanOutputLimit = 24 * 1024
+	scanCapped := p.scanCursor != "" || p.outputBytes > 0 || (p.env.Platform == "darwin" && r.Match != nil && r.Projection == dw.ProjectionOutline && p.coverage.VisitedNodes > 512)
+	outputLimit := false
 	for {
 		out.Objects = copyOf(p.objects[p.offset:end])
 		out.Coverage.Truncated = end < len(p.objects) || !p.coverage.Complete
 		out.Coverage.Complete = p.coverage.Complete && end == len(p.objects)
 		out.Coverage.Continuation = ""
-		if end < len(p.objects) {
+		if end < len(p.objects) || p.scanCursor != "" {
 			out.Coverage.Continuation = next
 		}
-		if wire.Size(out.Epoch, out) <= r.Budget.MaxOutputBytes {
+		size := wire.Size(out.Epoch, out)
+		if size <= r.Budget.MaxOutputBytes && (!scanCapped || p.outputBytes+size <= scanOutputLimit) {
 			break
 		}
 		if end == p.offset {
-			return dw.Observation{}, fault("budget_too_small")
+			if !scanCapped || p.outputBytes == 0 {
+				return dw.Observation{}, fault("budget_too_small")
+			}
+			out.Objects = nil
+			out.Coverage.Complete = false
+			out.Coverage.Truncated = true
+			out.Coverage.Continuation = ""
+			out.Coverage.UnavailableSources = append(append([]string{}, out.Coverage.UnavailableSources...), "ax_output_limit")
+			if wire.Size(out.Epoch, out) > r.Budget.MaxOutputBytes {
+				return dw.Observation{}, fault("budget_too_small")
+			}
+			outputLimit = true
+			break
 		}
 		end--
 	}
-	if end == p.offset && end < len(p.objects) {
+	if !outputLimit && end == p.offset && end < len(p.objects) {
 		return dw.Observation{}, fault("budget_too_small")
 	}
 	a.w.mu.Lock()
@@ -537,9 +587,12 @@ func (a *actor) render(ctx context.Context, p *page, in dw.Intent) (dw.Observati
 		limit = r.Budget.MaxResults
 	}
 	a.views[out.Cursor] = &view{topology: p.env.Topology, request: r, objects: copyOf(out.Objects), seat: out.Seat, coverage: out.Coverage, rev: out.Revision, at: time.Now(), permissionVersion: a.w.permissionVersion, offset: p.offset, limit: limit}
-	if end < len(p.objects) {
+	if !outputLimit && (end < len(p.objects) || p.scanCursor != "") {
 		np := *p
 		np.offset = end
+		if scanCapped {
+			np.outputBytes += wire.Size(out.Epoch, out)
+		}
 		a.pages[next] = &np
 	}
 	return out, nil
@@ -616,7 +669,7 @@ func (a *actor) changes(ctx context.Context, r dw.ChangeRequest) (dw.ChangeSet, 
 	if _, e := a.w.Environment(rctx); e != nil {
 		return dw.ChangeSet{}, e
 	}
-	all, cov, e := a.query(rctx, v.request)
+	all, cov, _, e := a.query(rctx, v.request, "")
 	if e != nil {
 		return reset("provider_unavailable")
 	}

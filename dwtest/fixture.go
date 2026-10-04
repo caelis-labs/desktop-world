@@ -54,6 +54,14 @@ type Fixture struct {
 	behaviors  map[string][]Behavior
 	incomplete bool
 	readFault  *dw.Fault
+	slowDelay  time.Duration
+	slowScans  map[string]*slowScan
+	slowNext   int
+}
+type slowScan struct {
+	keys    []backend.Key
+	offset  int
+	visited int
 }
 
 func New(ctx context.Context) (dw.World, *Fixture, error) { return NewWithOptions(ctx, Options{}) }
@@ -121,6 +129,15 @@ func (f *Fixture) Events() []Event {
 }
 func (f *Fixture) SetReadFault(e *dw.Fault) { f.mu.Lock(); f.readFault = e; f.mu.Unlock() }
 func (f *Fixture) SetIncomplete(v bool)     { f.mu.Lock(); f.incomplete = v; f.mu.Unlock() }
+
+// SetSlowQuery enables a deterministic delayed traversal for cursor regression
+// tests. It does not change ordinary fixture query behavior.
+func (f *Fixture) SetSlowQuery(delay time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.slowDelay = delay
+	f.slowScans = map[string]*slowScan{}
+}
 func (f *Fixture) SetPermission(name, state string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -172,6 +189,9 @@ func (f *Fixture) Query(ctx context.Context, q backend.Query) (backend.Page, err
 	if f.readFault != nil {
 		return backend.Page{}, f.readFault
 	}
+	if f.slowDelay > 0 {
+		return f.slowQuery(ctx, q)
+	}
 	p := backend.Page{Complete: !f.incomplete, Seat: f.seatSnapshot()}
 	keys := make([]backend.Key, 0, len(f.nodes))
 	for k := range f.nodes {
@@ -214,6 +234,65 @@ func (f *Fixture) Query(ctx context.Context, q backend.Query) (backend.Page, err
 		p.Nodes = append(p.Nodes, f.native(k))
 	}
 	return p, ctx.Err()
+}
+func (f *Fixture) slowQuery(ctx context.Context, q backend.Query) (backend.Page, error) {
+	var s *slowScan
+	if q.Resume != "" {
+		s = f.slowScans[q.Resume]
+		if s == nil {
+			return backend.Page{}, dw.NewFault("continuation_expired", "fixture scan expired", "reobserve")
+		}
+		delete(f.slowScans, q.Resume)
+	} else {
+		s = &slowScan{}
+		for k, n := range f.nodes {
+			if q.Summary && n.Object.Kind == dw.KindUI {
+				continue
+			}
+			include := q.Desktop
+			for _, root := range q.Roots {
+				if k == root || (!q.Detail && q.Depth > 0 && f.ids[n.Parent] == root) {
+					include = true
+				}
+			}
+			if include {
+				s.keys = append(s.keys, k)
+			}
+		}
+		sort.Slice(s.keys, func(i, j int) bool { return f.nodes[s.keys[i]].ID < f.nodes[s.keys[j]].ID })
+	}
+	p := backend.Page{Seat: f.seatSnapshot()}
+	for s.offset < len(s.keys) && p.Visited < q.MaxNodes && s.visited < 10000 {
+		if ctx.Err() != nil {
+			break
+		}
+		time.Sleep(f.slowDelay)
+		if ctx.Err() != nil {
+			break
+		}
+		p.Nodes = append(p.Nodes, f.native(s.keys[s.offset]))
+		s.offset++
+		s.visited++
+		p.Visited++
+	}
+	p.Visited = s.visited
+	p.Complete = s.offset == len(s.keys)
+	if s.offset < len(s.keys) {
+		p.Complete = false
+		if s.visited >= 10000 {
+			p.Unavailable = []string{"ax_scan_limit"}
+		} else {
+			f.slowNext++
+			p.ScanCursor = fmt.Sprintf("fixture-scan-%d", f.slowNext)
+			f.slowScans[p.ScanCursor] = s
+			if ctx.Err() != nil {
+				p.Unavailable = []string{"ax_timeout"}
+			} else {
+				p.Unavailable = []string{"ax_node_budget"}
+			}
+		}
+	}
+	return p, nil
 }
 func (f *Fixture) Read(ctx context.Context, k backend.Key) (backend.Node, backend.Seat, error) {
 	f.mu.Lock()

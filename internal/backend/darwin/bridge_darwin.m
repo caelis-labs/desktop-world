@@ -31,10 +31,22 @@ static BOOL cancelled(DWCancel *c) {
 @interface DWContext : NSObject
 @property NSMutableArray *elements;
 @property NSMutableArray *meta;
+@property NSMutableDictionary *scans;
 @property NSArray *lastDisplays;
 @property NSUInteger topology;
 @end
 @implementation DWContext
+@end
+// A scan is retained only inside this helper process. Its opaque ID is never
+// authority: the engine rechecks turn, scope and request parameters on resume.
+@interface DWScan : NSObject
+@property NSMutableArray *queue;
+@property NSMutableSet *seen;
+@property NSUInteger head, visited;
+@property BOOL incomplete, limitHit;
+@property NSDate *expires;
+@end
+@implementation DWScan
 @end
 static NSDictionary *known(id v) {
   return
@@ -91,6 +103,35 @@ static id attr(AXUIElementRef e, CFStringRef k) {
   if (AXUIElementCopyAttributeValue(e, k, &v) != kAXErrorSuccess)
     return nil;
   return CFBridgingRelease(v);
+}
+// Fetch the common scalar attributes in one provider call. Some AX providers
+// do not implement this API; retain the old per-attribute path for them.
+static NSDictionary *nodeAttributes(AXUIElementRef e) {
+  NSArray *names = @[(id)kAXRoleAttribute, (id)kAXTitleAttribute,
+    (id)kAXDescriptionAttribute, (id)kAXDocumentAttribute, (id)kAXURLAttribute,
+    (id)kAXSubroleAttribute, (id)kAXEnabledAttribute, (id)kAXFocusedAttribute,
+    (id)kAXSelectedAttribute, (id)kAXExpandedAttribute,
+    (id)kAXPositionAttribute, (id)kAXSizeAttribute];
+  if (!prepareRead(e)) return nil;
+  CFArrayRef raw = NULL;
+  AXError rc = AXUIElementCopyMultipleAttributeValues(e, (__bridge CFArrayRef)names, 0, &raw);
+  if (rc != kAXErrorSuccess || !raw) {
+    if (raw) CFRelease(raw);
+    return nil;
+  }
+  NSArray *values = CFBridgingRelease(raw);
+  NSMutableDictionary *out = [NSMutableDictionary dictionary];
+  for (NSUInteger i = 0; i < MIN(names.count, values.count); i++) {
+    id v = values[i];
+    if (v != NSNull.null &&
+        !(CFGetTypeID((__bridge CFTypeRef)v) == AXValueGetTypeID() &&
+          AXValueGetType((__bridge AXValueRef)v) == kAXValueAXErrorType))
+      out[names[i]] = v;
+  }
+  return out;
+}
+static id nodeAttr(NSDictionary *batch, AXUIElementRef e, CFStringRef k) {
+  return batch ? batch[(__bridge NSString *)k] : attr(e, k);
 }
 // AppKit's process properties refresh on the main RunLoop. A Go caller may
 // never run it. Use live OS queries without taking over the embedding host loop.
@@ -292,19 +333,22 @@ static NSDictionary *node(DWContext *c, NSString *k) {
   AXUIElementRef e = element(c, k);
   if (!e || !alive(c, k))
     return nil;
-  NSString *role = attr(e, kAXRoleAttribute);
+  NSDictionary *batch = nodeAttributes(e);
+  NSString *role = nodeAttr(batch, e, kAXRoleAttribute);
+  if (![role isKindOfClass:NSString.class])
+    role = attr(e, kAXRoleAttribute);
   if (![role isKindOfClass:NSString.class])
     return nil;
   NSDictionary *meta = c.meta[k.integerValue - 1];
   NSString *kind = [role isEqual:@"AXApplication"] ? @"application"
                    : [role isEqual:@"AXWindow"]    ? @"window"
                                                    : @"ui";
-  NSString *title = attr(e, kAXTitleAttribute);
+  NSString *title = nodeAttr(batch, e, kAXTitleAttribute);
   if (![title isKindOfClass:NSString.class] || !title.length)
-    title = attr(e, kAXDescriptionAttribute);
-  id nativeURI = attr(e, kAXDocumentAttribute) ?: attr(e, kAXURLAttribute);
+    title = nodeAttr(batch, e, kAXDescriptionAttribute);
+  id nativeURI = nodeAttr(batch, e, kAXDocumentAttribute) ?: nodeAttr(batch, e, kAXURLAttribute);
   if ([nativeURI isKindOfClass:NSURL.class]) nativeURI = [nativeURI absoluteString];
-  NSString *sub = attr(e, kAXSubroleAttribute);
+  NSString *sub = nodeAttr(batch, e, kAXSubroleAttribute);
   BOOL protected = [sub isEqual:@"AXSecureTextField"];
   NSMutableDictionary *states = [NSMutableDictionary dictionary];
   NSDictionary *stateAttrs = @{
@@ -314,7 +358,7 @@ static NSDictionary *node(DWContext *c, NSString *k) {
     @"expanded" : (__bridge NSString *)kAXExpandedAttribute
   };
   for (NSString *name in stateAttrs) {
-    id v = attr(e, (__bridge CFStringRef)stateAttrs[name]);
+    id v = nodeAttr(batch, e, (__bridge CFStringRef)stateAttrs[name]);
     states[name] =
         [v isKindOfClass:NSNumber.class] ? known(@([v boolValue])) : unknown();
   };
@@ -325,9 +369,10 @@ static NSDictionary *node(DWContext *c, NSString *k) {
       AXUIElementIsAttributeSettable(e, kAXValueAttribute, &writable);
   states[@"read_only"] =
       writableError == kAXErrorSuccess ? known(@((BOOL)!writable)) : unknown();
+  // Never ask a protected field for its value, even inside a batch.
   id value = protected ? nil : attr(e, kAXValueAttribute);
   NSString *valueText = scalarText(value);
-  id pos = attr(e, kAXPositionAttribute), sz = attr(e, kAXSizeAttribute);
+  id pos = nodeAttr(batch, e, kAXPositionAttribute), sz = nodeAttr(batch, e, kAXSizeAttribute);
   CGPoint pt;
   CGSize size;
   NSDictionary *bounds = unknown();
@@ -456,93 +501,138 @@ static NSDictionary *seat(DWContext *c) {
 static NSDictionary *queryPage(DWContext *c, NSDictionary *q, DWCancel *cancel) {
   if (!AXIsProcessTrusted())
     return err(@"permission_denied");
-  NSMutableArray *queue = [NSMutableArray array];
-  BOOL complete = YES;
+  DWScan *scan = nil;
+  NSString *resume = q[@"Resume"];
+  for (NSString *cursor in [c.scans allKeys])
+    if ([((DWScan *)c.scans[cursor]).expires timeIntervalSinceNow] <= 0)
+      [c.scans removeObjectForKey:cursor];
+  if (resume.length) {
+    scan = c.scans[resume];
+    if (!scan) return err(@"continuation_expired");
+    [c.scans removeObjectForKey:resume];
+    // The provider tree is live across calls. A resumed scan can discover
+    // targets, but cannot prove that an absent node was never added earlier.
+    scan.incomplete = YES;
+  } else {
+    scan = [DWScan new];
+    scan.queue = [NSMutableArray array];
+    scan.seen = [NSMutableSet set];
+    scan.expires = [NSDate dateWithTimeIntervalSinceNow:90];
+  }
   NSInteger depth = [q[@"Depth"] integerValue],
             max = [q[@"MaxNodes"] integerValue];
   BOOL summary = [q[@"Summary"] boolValue], detail = [q[@"Detail"] boolValue];
-  if ([q[@"Desktop"] boolValue]) {
-    for (NSNumber *pid in applicationPIDs(&complete, cancel)) {
+  if (!resume.length && [q[@"Desktop"] boolValue]) {
+    BOOL appsComplete = YES;
+    for (NSNumber *pid in applicationPIDs(&appsComplete, cancel)) {
       AXUIElementRef e = AXUIElementCreateApplication(pid.intValue);
       AXUIElementSetMessagingTimeout(e, 0.25);
       NSString *k = key(c, e, nil, nil, nil);
       CFRelease(e);
       if (k.length)
-        [queue addObject:@[ k, @0 ]];
+        [scan.queue addObject:@[ k, @0 ]];
       else
-        complete = NO;
+        appsComplete = NO;
     }
-  } else
+    if (!appsComplete) scan.incomplete = YES;
+  } else if (!resume.length)
     for (NSString *k in q[@"Roots"])
-      [queue addObject:@[ k, @0 ]];
+      [scan.queue addObject:@[ k, @0 ]];
   NSMutableArray *nodes = [NSMutableArray array];
-  NSMutableSet *seen = [NSMutableSet set];
-  NSInteger visited = 0;
-  while (queue.count) {
-    if (queryStopped() || cancelled(cancel) || visited >= max) {
-      complete = NO;
-      break;
-    };
-    NSArray *item = queue[0];
-    [queue removeObjectAtIndex:0];
+  NSInteger chunkVisited = 0;
+  while (scan.head < scan.queue.count && chunkVisited < max && scan.visited < 10000) {
+    if (queryStopped() || cancelled(cancel)) break;
+    NSArray *item = scan.queue[scan.head];
     NSString *k = item[0];
-    if ([seen containsObject:k])
+    if ([scan.seen containsObject:k]) {
+      scan.head++;
+      if (scan.head > 1024) {
+        [scan.queue removeObjectsInRange:NSMakeRange(0, scan.head)];
+        scan.head = 0;
+      }
       continue;
-    [seen addObject:k];
-    visited++;
+    }
     NSDictionary *n = node(c, k);
     if (!n) {
-      complete = NO;
+      if (queryStopped()) break;
+      scan.incomplete = YES;
+      [scan.seen addObject:k];
+      scan.head++;
+      scan.visited++;
+      chunkVisited++;
+      if (scan.head > 1024) {
+        [scan.queue removeObjectsInRange:NSMakeRange(0, scan.head)];
+        scan.head = 0;
+      }
       continue;
-    };
+    }
     NSString *kind = n[@"Object"][@"Kind"];
-    if (!summary || ![kind isEqual:@"ui"])
-      [nodes addObject:n];
     NSInteger d = [item[1] integerValue];
-    if (detail || d >= depth || (summary && ![kind isEqual:@"application"]))
-      continue;
-    AXUIElementRef e = element(c, k);
-    CFStringRef field = summary ? kAXWindowsAttribute : kAXChildrenAttribute;
-    CFIndex count = 0;
-    if (!prepareRead(e)) { complete = NO; break; }
-    AXError rc = AXUIElementGetAttributeValueCount(e, field, &count);
-    if (rc == kAXErrorAttributeUnsupported)
-      continue;
-    if (rc != kAXErrorSuccess) {
-      complete = NO;
-      continue;
-    };
-    CFIndex take = MIN(count, MAX(0, max - visited - (NSInteger)queue.count));
-    if (take < count)
-      complete = NO;
-    if (take <= 0)
-      continue;
-    CFArrayRef raw = NULL;
-    if (!prepareRead(e)) { complete = NO; break; }
-    rc = AXUIElementCopyAttributeValues(e, field, 0, take, &raw);
-    if (rc != kAXErrorSuccess) {
-      complete = NO;
-      continue;
-    };
-    NSArray *children = CFBridgingRelease(raw);
-    for (id child in children) {
-      if (CFGetTypeID((__bridge CFTypeRef)child) != AXUIElementGetTypeID())
-        continue;
-      NSString *ck =
-          key(c, (__bridge AXUIElementRef)child, n[@"App"], n[@"Window"], k);
-      if (ck.length)
-        [queue addObject:@[ ck, @(d + 1) ]];
-      else
-        complete = NO;
+    if (!detail && d < depth && (!summary || [kind isEqual:@"application"])) {
+      AXUIElementRef e = element(c, k);
+      CFStringRef field = summary ? kAXWindowsAttribute : kAXChildrenAttribute;
+      CFIndex count = 0;
+      if (!prepareRead(e)) break;
+      AXError rc = AXUIElementGetAttributeValueCount(e, field, &count);
+      if (rc == kAXErrorSuccess) {
+        // Bound both retained keys and pending queue entries, including when
+        // a provider repeats the same child under many parents.
+        NSInteger room = MAX(0, 10000 - (NSInteger)(scan.queue.count - scan.head));
+        CFIndex take = MIN(count, MAX(0, MIN(10000 - (NSInteger)c.elements.count, room)));
+        if (take < count) scan.limitHit = YES;
+        if (take > 0) {
+          CFArrayRef raw = NULL;
+          if (!prepareRead(e)) break;
+          rc = AXUIElementCopyAttributeValues(e, field, 0, take, &raw);
+          if (rc == kAXErrorSuccess) {
+            NSMutableArray *children = [NSMutableArray array];
+            for (id child in CFBridgingRelease(raw)) {
+              if (CFGetTypeID((__bridge CFTypeRef)child) != AXUIElementGetTypeID()) continue;
+              NSString *ck = key(c, (__bridge AXUIElementRef)child, n[@"App"], n[@"Window"], k);
+              if (ck.length) [children addObject:@[ ck, @(d + 1) ]];
+              else scan.limitHit = YES;
+              if (queryStopped()) break;
+            }
+            if (queryStopped()) break;
+            [scan.queue addObjectsFromArray:children];
+          }
+        }
+      }
+      if (queryStopped()) break;
+      if (rc != kAXErrorSuccess && rc != kAXErrorAttributeUnsupported)
+        scan.incomplete = YES;
+    }
+    if (!summary || ![kind isEqual:@"ui"]) [nodes addObject:n];
+    [scan.seen addObject:k];
+    scan.head++;
+    scan.visited++;
+    chunkVisited++;
+    if (scan.head > 1024) {
+      [scan.queue removeObjectsInRange:NSMakeRange(0, scan.head)];
+      scan.head = 0;
     }
   }
+  if (scan.visited >= 10000 && scan.head < scan.queue.count) scan.limitHit = YES;
+  BOOL pending = scan.head < scan.queue.count && scan.visited < 10000;
+  NSString *cursor = @"";
+  if (pending) {
+    if (scan.head > 1024) {
+      [scan.queue removeObjectsInRange:NSMakeRange(0, scan.head)];
+      scan.head = 0;
+    }
+    cursor = NSUUID.UUID.UUIDString;
+    if (c.scans.count >= 16) [c.scans removeObjectForKey:c.scans.allKeys.firstObject];
+    c.scans[cursor] = scan;
+  }
+  BOOL complete = !pending && !scan.incomplete && !scan.limitHit;
   return @{
     @"Result" : @{
       @"Nodes" : nodes,
       @"Complete" : @(complete),
-      @"Visited" : @(visited),
+      @"Visited" : @(scan.visited),
+      @"ScanCursor" : cursor,
       @"Seat" : queryStopped() ? @{@"Pointer": unknown(), @"Health": @"ready", @"Intervention": @"best_effort"} : seat(c),
-      @"Unavailable" : complete ? @[] : (queryTimedOut ? @[ @"ax_timeout" ] : (visited >= max || queue.count ? @[ @"ax_node_budget" ] : @[ @"ax_partial" ]))
+      @"Unavailable" : complete ? @[] : (scan.limitHit ? @[ @"ax_scan_limit" ] : (queryTimedOut ? @[ @"ax_timeout" ] : (pending ? @[ @"ax_node_budget" ] : @[ @"ax_partial" ])))
     }
   };
 }
@@ -960,6 +1050,7 @@ void *dw_open(void) {
   @autoreleasepool {
     DWContext *c = [DWContext new];
     c.elements = [NSMutableArray array];
+    c.scans = [NSMutableDictionary dictionary];
     c.meta = [NSMutableArray array];
     c.topology = 0;
     displays(c);

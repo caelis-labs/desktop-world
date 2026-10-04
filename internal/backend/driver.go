@@ -17,6 +17,8 @@ type Query struct {
 	Desktop         bool
 	Depth, MaxNodes int
 	Summary, Detail bool
+	// Resume is a private, helper-local native traversal cursor.
+	Resume string
 	// Native traversal allowance; output pagination is independently budgeted.
 	ReadTimeoutMS int64
 }
@@ -24,6 +26,7 @@ type Page struct {
 	Nodes       []Node
 	Complete    bool
 	Visited     int
+	ScanCursor  string
 	Unavailable []string
 	Seat        Seat
 }

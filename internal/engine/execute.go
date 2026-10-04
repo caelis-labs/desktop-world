@@ -284,7 +284,7 @@ func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string
 			return
 		}
 		req := defaults(dw.ObserveRequest{Scope: in.Scope, Projection: dw.ProjectionOutline, Match: &s.Bind.Locator, Budget: dw.Budget{MaxDepth: s.Bind.Locator.MaxDepth}})
-		all, cov, e := a.query(ctx, req)
+		all, cov, _, e := a.query(ctx, req, "")
 		if e != nil {
 			fail(e)
 			return

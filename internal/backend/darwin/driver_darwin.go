@@ -92,7 +92,14 @@ func (d *Driver) Query(c context.Context, q backend.Query) (v backend.Page, e er
 	// Leave time for JSON encoding, registry commit and authorization checks.
 	// Cancellation is still bounded by the native messaging timeout.
 	if deadline, ok := c.Deadline(); ok {
-		q.ReadTimeoutMS = max(1, time.Until(deadline).Milliseconds()*3/4)
+		remaining := time.Until(deadline).Milliseconds()
+		q.ReadTimeoutMS = max(1, remaining*3/4)
+		// A short query can overshoot one in-flight 50 ms AX message. Keep a
+		// fixed handoff margin so partial native coverage survives the outer
+		// deadline even for a 200 ms acceptance request.
+		if remaining < 500 {
+			q.ReadTimeoutMS = min(q.ReadTimeoutMS, max(1, remaining-100))
+		}
 	}
 	e = d.call(c, "query", q, &v)
 	return

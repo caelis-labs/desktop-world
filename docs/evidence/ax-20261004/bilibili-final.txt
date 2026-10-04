@@ -1,0 +1,12 @@
+=== RUN   TestNativeLargeSiteDiscovery
+    large_site_test.go:80: bilibili candidate_windows=2 selected_probe_visited=1005
+    large_site_test.go:121: bilibili survey_page=1 visited=100 hits=0 bytes=885 continuation=true sources=[ax_node_budget]
+    large_site_test.go:121: bilibili survey_page=2 visited=200 hits=0 bytes=885 continuation=true sources=[ax_node_budget]
+    large_site_test.go:121: bilibili survey_page=3 visited=300 hits=0 bytes=885 continuation=true sources=[ax_node_budget]
+    large_site_test.go:121: bilibili survey_page=4 visited=400 hits=0 bytes=884 continuation=true sources=[ax_node_budget]
+    large_site_test.go:121: bilibili survey_page=5 visited=500 hits=0 bytes=886 continuation=true sources=[ax_node_budget]
+    large_site_test.go:121: bilibili survey_page=6 visited=600 hits=2 bytes=1339 continuation=true sources=[ax_node_budget]
+    large_site_test.go:151: bilibili survey calls=6 visited=600 hits=2 model_bytes=5764 max_page_bytes=1339 elapsed=533.981ms
+    large_site_test.go:182: bilibili exact calls=6 visited=600 hits=1 model_bytes=5531 elapsed=515.396916ms first_call_visited=100 first_call_hits=0 target_sha256=15179435bc62120cfaef3d5c494746bf0bfced7a11090c9d92bf73c7cb0d32f7
+--- PASS: TestNativeLargeSiteDiscovery (2.75s)
+PASS

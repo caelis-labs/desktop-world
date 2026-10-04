@@ -1,0 +1,4 @@
+=== RUN   TestIssue6Baseline
+    issue6_baseline_test.go:30: old_exact calls=1 visited=2243 hits=0 model_bytes=726 elapsed=7.682943542s complete=false continuation=false sources=[ax_timeout] target_sha256=5ec7520839acbb0d3e6153f0b139119b99c37101092df8d7e533a0384c2f6ef8
+--- PASS: TestIssue6Baseline (8.49s)
+PASS

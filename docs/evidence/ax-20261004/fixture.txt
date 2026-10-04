@@ -1,0 +1,9 @@
+=== RUN   TestLargeSlowAXScanResumesBeyondOldPrefix
+    large_ax_test.go:92: N=20000 delay=1us target_index=3800 calls=7 visited=4200 hits=1 model_bytes=4636 elapsed=336.922333ms complete=false (scan still bounded)
+    large_ax_test.go:116: finite recovery cap visited=10000 complete=false source=ax_scan_limit
+--- PASS: TestLargeSlowAXScanResumesBeyondOldPrefix (0.80s)
+=== RUN   TestLargeAXModelBudgetIsCumulative
+    large_ax_test.go:180: broad scan calls=7 model_bytes=13821 terminal=ax_output_limit complete=false
+--- PASS: TestLargeAXModelBudgetIsCumulative (0.19s)
+PASS
+ok  	github.com/caelis-labs/desktop-world/tests/contract	1.801s

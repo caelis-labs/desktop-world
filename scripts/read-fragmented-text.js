@@ -18,7 +18,7 @@ for (let pages = 0; ; pages++) {
     break;
   }
   if (pages >= 7) { incomplete = true; break; }
-  page = await dw.next(page); // Same query and sample, no fresh traversal.
+  page = await dw.next(page); // Same query; native scan can advance after result pages.
 }
 const byRef = new Map();
 const children = new Map();

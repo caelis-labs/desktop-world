@@ -1,5 +1,9 @@
 # macOS AX regressions and bounded recovery
 
+For issue #6's large-tree traversal cursor, batch reads, total output cap and
+real-site comparison, see [large AX discovery](large-ax-discovery.md). The
+record below describes the earlier `cc50357` baseline.
+
 This branch addresses upstream issues [#1](https://github.com/caelis-labs/desktop-world/issues/1),
 [#2](https://github.com/caelis-labs/desktop-world/issues/2), and
 [#3](https://github.com/caelis-labs/desktop-world/issues/3). Baseline was `5a2ae97`.
