@@ -43,6 +43,10 @@ Windows 的同一交互 window station 同时只有一个 input desktop，系统
 
 UIA Invoke 是调用 provider 的动作，不等同于合成点击，其副作用和阻塞行为依赖 provider。[Invoke guidelines](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-implementinginvoke)。当前 `no_shared_input` 策略在计划执行前拒绝 focus/物理输入，只承诺“不主动使用共享输入”，不能单靠此开关保证应用永不抢前台。F1 在两份独立 AppKit 应用上验证后台提交期间前台持续输入完整、前台窗口和系统指针稳定，不能推导所有 provider 都有相同行为。
 
+## 同一桌面的短事务
+
+当前新增可选 [cooperative 输入](cooperative-input.md)：读取和语义操作沿用后台通道，已知键鼠步骤短暂借用前台，在计划结束后恢复。它使用动态探测的私有 key-focus SPI，属于共享桌面的占用时间优化；不改变下面独立座席路线的定义，当前任务也不引入该路线。
+
 ## 若实现隔离，需要改变什么
 
 建议保留同一 SDK 内核，新增 Session/Seat backend 和薄 helper：
@@ -59,7 +63,7 @@ UIA Invoke 是调用 provider 的动作，不等同于合成点击，其副作�
 
 macOS 的系统级 AX 焦点属性在本机出现 `AXCannotComplete`，前台应用的 AX 属性却成功。持久 helper 的外部盲测随后证明 NSWorkspace 会停留在旧值：该 API 依赖主 RunLoop 刷新，而 Go 宿主并不保证运行它。现在用公开 Process Manager 的 GetFrontProcess/GetProcessPID 即时采样，读取该应用 AX 焦点，并检查采样前后 PID 一致。GUI 进程枚举也改用即时查询，生命周期以 libproc 的 PID + 启动时间校验。焦点引用同时注册其原生关系。
 
-Process Manager API 已被 Apple 标记弃用，但当前 SDK 与本机仍支持；替代的 AppKit 缓存语义不满足此无主 RunLoop 的嵌入场景。未接管宿主事件循环，也未使用私有 API。未来发行须在支持的 macOS 版本矩阵验证这些查询；查询失败返回未知/不完整，不能使用旧前台值。
+Process Manager API 已被 Apple 标记弃用，但当前 SDK 与本机仍支持；替代的 AppKit 缓存语义不满足此无主 RunLoop 的嵌入场景。默认座席查询未接管宿主事件循环，沿用公开 API；可选 cooperative 模式使用上文说明的私有 SPI。未来发行须在支持的 macOS 版本矩阵验证这些查询；查询失败返回未知/不完整，不能使用旧前台值。
 
 Finder 的内联改名框直接挂在应用下，AXWindow 和 AXFocusedWindow 都返回无值。实现保留“窗口未知”，在 **键盘目标 Ref 等于实时焦点、目标 App 等于实时前台 App、Actor 确实获授权** 时支持该无窗口编辑器；窗口范围不会因此扩大。窗口不明确的鼠标输入仍被拒绝。此为对原 SPEC 假设“所有键盘目标都有窗口”的有证据修正，不是独立后台焦点。
 

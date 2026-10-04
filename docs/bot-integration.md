@@ -6,6 +6,8 @@
 
 本仓库提供接入边界与可运行示例，尚未修改或验收 caelis-bot 的实际 Runtime/Wails 集成。不要同时启用两个会竞争同一桌面的写后端，也不要在错误后自动切换后端重放动作。
 
+宿主后续可显式设置 `host.Options.InputMode=desktopworld.InputModeCooperative`；Hello 会核对模式，Agent 不能更改。见 [短前台事务](cooperative-input.md)。当前没有更新 caelis-bot 的固定版本或联调。
+
 ## 最小顺序
 
 ```go

@@ -32,6 +32,8 @@
 13. Windows UIA continuation 保留有界 DFS 栈和未消费兄弟 COM 引用，最多 16 份、90 秒、每次遵守节点预算、总计 10,000 节点；续扫标记 dirty/incomplete，不以实时树的缺失证明不存在。新扫描不驱逐旧游标。原生引用比较成本仍需 Windows 实机测量。
 14. Windows managed helper 继承两个受限制的私有匿名 pipe 端点，控制通道与数据通道分开；Unix 保持 FD 3/4。当前源代码和交叉构建均覆盖这两条路径，Windows 真实电脑操作仍待验收。逐 feature 的证据和命令见 [features.md](features.md)。
 
+15. 同一桌面的 `InputModeCooperative` 由宿主开启，已知键鼠步骤在短 Plan 内借用前台并清理恢复；读取与语义动作保留后台通道。公开动作不增加模型参数，no_shared_input、授权与原收据去重继续适用。原生实现和逐项实机证据见 [cooperative-input.md](cooperative-input.md)。
+
 ## 尚未完成的正式发布条件
 
 当前批次按用户决定推进 macOS 实机与跨平台功能实现，全部 Windows 实机适配后置；不承诺 Windows 可用。下列双平台正式发布条件继续保留，但 Windows 实机不是本轮功能交付或 macOS alpha 候选的前置门槛。
@@ -48,4 +50,4 @@
 
 Windows COM apartment / worker 生命周期按 [Microsoft Threading Issues](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-threading) 实现；SendInput 的返回计数与 UIPI 限制按 [Microsoft SendInput](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput) 区分 delivery。COM vtable 与 IID 核对了微软的 `UIAutomationClient.h`，不依赖猜测接口布局。
 
-macOS SDK 的 AX、CGEvent、ScreenCaptureKit 公开头文件参与本机构建；不调用私有 AX→CGWindow ID API。截图只声明 visible_region，因此不需要把 AXWindow 与独立 capture window 进行不可靠关联。
+默认共享输入、AX 查询和 ScreenCaptureKit 窗口捕获沿用公开框架；capture-window Ref 与 AX Ref 分离。可选 cooperative 模式额外动态探测私有 AX→CGWindow ID、SkyLight 前台与 key-focus SPI，绑定实际窗口后短暂借用前台。缺少符号时拒绝操作，单机验收不能推导所有 macOS 版本兼容。来源与许可见 [第三方通知](../THIRD_PARTY_NOTICES.md)。

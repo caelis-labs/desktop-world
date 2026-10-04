@@ -75,7 +75,7 @@ test('partial receipt is always surfaced and cannot be caught to continue input'
   let calls = 0;
   const session = createSession(async () => {
     calls++;
-    return { result: { ...completed, outcome: 'partial', steps: [{ id: 's1', delivery: 'unknown', verification: 'unknown', fault: { code: 'lost_focus' } }] } };
+    return { result: { ...completed, outcome: 'partial', input: {mode:'cooperative',foreground_ms:214,restoration:'user_superseded'}, steps: [{ id: 's1', delivery: 'unknown', verification: 'unknown', fault: { code: 'lost_focus' } }] } };
   });
   const result = await session.execute(`
     try { await dw.press('r1','Enter'); } catch {}
@@ -84,6 +84,7 @@ test('partial receipt is always surfaced and cannot be caught to continue input'
   assert.equal(calls, 1);
   assert.equal(result.error.code, 'action_not_completed');
   assert.equal(result.actions[0].problems[0].delivery, 'unknown');
+  assert.deepEqual(result.actions[0].input, {mode:'cooperative',foreground_ms:214,restoration:'user_superseded'});
 });
 
 test('top-level faults stop the chain and no automatic retries occur', async () => {

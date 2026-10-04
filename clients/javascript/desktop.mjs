@@ -117,7 +117,7 @@ function receiptSummary(id, op, receipt) {
     if (step.channel) channels[step.channel] = (channels[step.channel] ?? 0) + 1;
     if (step.fault || step.delivery === 'unknown') problems.push(step);
   }
-  return { id, op, ...pick(receipt, ['run_id', 'state', 'outcome', 'fault', 'seat_health']), delivery_verification: counts, ...(Object.keys(channels).length ? { channels } : {}), ...(problems.length ? { problems } : {}) };
+  return { id, op, ...pick(receipt, ['run_id', 'state', 'outcome', 'fault', 'seat_health', 'input']), delivery_verification: counts, ...(Object.keys(channels).length ? { channels } : {}), ...(problems.length ? { problems } : {}) };
 }
 
 // transport receives a helper Request and returns its full helper Response.

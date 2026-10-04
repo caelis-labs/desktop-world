@@ -4,9 +4,11 @@
 
 MVP 优先验证 Token 效率与易用性。通用 Agent 推荐 [JavaScript 调用链](docs/scripting.md)：持久会话中组合观察与动作、中间数据本地保留、按需 print、强制呈现覆盖范围和失败。
 
-**当前公开版本：`v0.1.0-alpha.2`，尚未达到 SPEC 的双平台正式发布门槛。** macOS 原生键鼠、语义操作、截图和生命周期路径已有实机记录。当前源码的 Windows 后端提供功能实现和编译/CI 检查，**不承诺 Windows 可用**；全部 Windows 实机验收与适配后置到功能完备临界点，在单独环境完成。原始设计保留在 [SPEC.md](SPEC.md)，实现边界见 [docs/implementation.md](docs/implementation.md)，实际运行证据见 [docs/validation.md](docs/validation.md)。
+**当前公开版本：`v0.1.0-alpha.5`，尚未达到 SPEC 的双平台正式发布门槛。** macOS 原生键鼠、语义操作、截图和生命周期路径已有实机记录。当前源码的 Windows 后端提供功能实现和编译/CI 检查，**不承诺 Windows 可用**；全部 Windows 实机验收与适配后置到功能完备临界点，在单独环境完成。原始设计保留在 [SPEC.md](SPEC.md)，实现边界见 [docs/implementation.md](docs/implementation.md)，实际运行证据见 [docs/validation.md](docs/validation.md)。
 
-当前源码的 helper 命令为 **`dtw`**。已补齐 `no_shared_input`、语义展开/收起、选择状态、勾选状态、滚动到目标、按需字段读取、Windows UIA 续扫和私有 managed 管道。独立场景与实机状态见 [feature 验收](docs/features.md)；这些源码改动尚未发布，caelis-bot 的 M0 更新与联调后置。
+当前源码的 helper 命令为 **`dtw`**。已补齐 `no_shared_input`、语义展开/收起、选择状态、勾选状态、滚动到目标、按需字段读取、Windows UIA 续扫和私有 managed 管道。独立场景与实机状态见 [feature 验收](docs/features.md)；本批变更按 alpha.5 分发，caelis-bot 的 M0 更新与联调后置。
+
+同一桌面的键鼠任务可由宿主选择 [短前台事务](docs/cooperative-input.md)：`dtw serve --input-mode cooperative`。该 macOS 实现覆盖完整键鼠动作，并在一份短计划结束后恢复用户窗口；默认输入模式保留原契约，Windows 与 Bot M0 联调仍后置。
 
 ## 快速运行
 
@@ -34,7 +36,7 @@ go run ./cmd/dw-inspect
 - Windows 11 amd64 实现目标，纯 Go 原生绑定，无 CGO 依赖；当前不承诺可用。COM 在固定 MTA 工作线程中初始化和释放；不会修改进程全局 DPI 模式。
 - 其他平台可运行协议和 fixture；`local.Open` 明确返回 `platform_unsupported`。
 
-模块路径：`github.com/caelis-labs/desktop-world`。本批预发布版本为 `v0.1.0-alpha.4`；下载与校验见 [Release](https://github.com/caelis-labs/desktop-world/releases/tag/v0.1.0-alpha.4)。公开预发布暂不授予开源许可，见 [NOTICE](NOTICE)。
+模块路径：`github.com/caelis-labs/desktop-world`。本批预发布版本为 `v0.1.0-alpha.5`；下载与校验见 [Release](https://github.com/caelis-labs/desktop-world/releases/tag/v0.1.0-alpha.5)。公开预发布暂不授予开源许可，见 [NOTICE](NOTICE)。
 
 ## 接入
 

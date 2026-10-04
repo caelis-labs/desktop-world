@@ -198,7 +198,7 @@ func typeSchema(t reflect.Type) schema {
 	case reflect.TypeOf(dw.SetValue{}), reflect.TypeOf(dw.TypeText{}):
 		require("text")
 		field("text")["maxLength"] = 65536
-		field("text")["description"] = "UTF-8 without NUL, at most 65536 bytes. type_text requires current verified focus."
+		field("text")["description"] = "UTF-8 without NUL, at most 65536 bytes. type_text requires verified focus; cooperative host mode limits a burst to 256 UTF-16 units (newline/Tab are real keys)."
 	case reflect.TypeOf(dw.KeyChord{}):
 		require("key")
 		field("key")["pattern"] = "^([A-Z0-9]|Enter|Tab|Escape|Backspace|Delete|Space|Left|Right|Up|Down|Home|End|PageUp|PageDown)$"
@@ -212,6 +212,7 @@ func typeSchema(t reflect.Type) schema {
 	case reflect.TypeOf(dw.Drag{}):
 		require("to")
 		bound("duration_ms", 0, 2000)
+		s["description"] = "Cooperative host mode limits a drag to 500 ms and both endpoints to the same observed window; absolute Points are unavailable in that mode."
 	case reflect.TypeOf(dw.Scroll{}):
 		require("unit")
 		field("unit")["const"] = "wheel_step"

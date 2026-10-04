@@ -45,6 +45,10 @@ static BOOL cancelled(DWCancel *c) {
 @property NSMutableDictionary *scans;
 @property NSArray *lastDisplays;
 @property NSUInteger topology;
+@property NSMutableDictionary *inputSession;
+@property NSDictionary *inputReport;
+@property NSString *inputFault;
+@property NSMutableDictionary *inputHeld;
 @end
 @implementation DWContext
 @end
@@ -762,13 +766,82 @@ static NSDictionary *outcome(NSString *d, NSString *f) {
         @{@"Code" : f, @"Message" : f, @"RetryClass" : @"never_automatically"};
   return @{@"Result" : r};
 }
+// The fixed native worker uses this only while a cooperative input call runs.
+// A foreground switch or exhausted lease stops new downs/text. Paired releases
+// remain necessary to avoid leaving synthetic buttons/modifiers held.
+static _Thread_local void *inputPostingContext;
+static pid_t cooperativeFrontPID(void);
+static BOOL postInputEvent(CGEventRef e) {
+  DWContext *c =
+      inputPostingContext ? (__bridge DWContext *)inputPostingContext : nil;
+  NSString *heldKey = nil;
+  BOOL release = NO;
+  if (c && c.inputSession) {
+    CGEventType type = CGEventGetType(e);
+    BOOL mouseUp = type == kCGEventLeftMouseUp ||
+                   type == kCGEventRightMouseUp || type == kCGEventOtherMouseUp;
+    BOOL mouseDown = type == kCGEventLeftMouseDown ||
+                     type == kCGEventRightMouseDown ||
+                     type == kCGEventOtherMouseDown;
+    if (mouseUp || mouseDown) {
+      heldKey = [NSString
+          stringWithFormat:@"b%lld", CGEventGetIntegerValueField(
+                                         e, kCGMouseEventButtonNumber)];
+      release = mouseUp;
+    }
+    if (type == kCGEventKeyDown || type == kCGEventKeyUp ||
+        type == kCGEventFlagsChanged) {
+      CGKeyCode code =
+          (CGKeyCode)CGEventGetIntegerValueField(e, kCGKeyboardEventKeycode);
+      heldKey = [NSString stringWithFormat:@"k%u", code];
+      release = type == kCGEventKeyUp;
+      if (type == kCGEventFlagsChanged) {
+        CGEventFlags mask = code == 55   ? kCGEventFlagMaskCommand
+                            : code == 59 ? kCGEventFlagMaskControl
+                            : code == 58 ? kCGEventFlagMaskAlternate
+                            : code == 56 ? kCGEventFlagMaskShift
+                                         : 0;
+        release = mask && !(CGEventGetFlags(e) & mask);
+      }
+    }
+    NSString *failure = c.inputFault;
+    if (!failure &&
+        cooperativeFrontPID() != [c.inputSession[@"targetPID"] intValue])
+      failure = @"user_interrupted";
+    if (!failure &&
+        monotonicSeconds() >= [c.inputSession[@"deadline"] doubleValue])
+      failure = @"input_lease_expired";
+    if (failure) {
+      c.inputFault = failure;
+      if (!release)
+        return NO;
+      if (heldKey && !c.inputHeld[heldKey])
+        return YES;
+      if (mouseUp) {
+        CGEventRef current = CGEventCreate(NULL);
+        if (current) {
+          CGEventSetLocation(e, CGEventGetLocation(current));
+          CFRelease(current);
+        }
+      }
+    }
+  }
+  CGEventPost(kCGHIDEventTap, e);
+  if (heldKey) {
+    if (release)
+      [c.inputHeld removeObjectForKey:heldKey];
+    else
+      c.inputHeld[heldKey] = @YES;
+  }
+  return YES;
+}
 static BOOL postMouse(CGEventType type, CGPoint p, CGMouseButton b, int count) {
   CGEventRef e = CGEventCreateMouseEvent(NULL, type, p, b);
   if (e) {
     CGEventSetIntegerValueField(e, kCGMouseEventClickState, count);
-    CGEventPost(kCGHIDEventTap, e);
+    BOOL posted = postInputEvent(e);
     CFRelease(e);
-    return YES;
+    return posted;
   }
   return NO;
 }
@@ -827,6 +900,11 @@ static CGKeyCode keycode(NSString *s) {
   };
   return m[s] ? [m[s] unsignedShortValue] : UINT16_MAX;
 }
+static NSDictionary *perform(DWContext *, NSDictionary *, DWCancel *);
+#include "cooperative_darwin.h"
+#ifdef DTW_BACKGROUND_POC
+#include "background_poc_darwin.h"
+#endif
 static NSDictionary *perform(DWContext *c, NSDictionary *o, DWCancel *cancel) {
   if (cancelled(cancel))
     return outcome(@"none", @"cancelled");
@@ -978,8 +1056,13 @@ static NSDictionary *perform(DWContext *c, NSDictionary *o, DWCancel *cancel) {
         -[s[@"Scroll"][@"DX"] intValue]);
     if (!ev)
       return outcome(@"partial", @"input_rejected");
-    CGEventPost(kCGHIDEventTap, ev);
+    // The preceding mouse move is asynchronous. Stamp the intended wheel
+    // location instead of inheriting the cursor's pre-move position.
+    CGEventSetLocation(ev, pt);
+    BOOL posted = postInputEvent(ev);
     CFRelease(ev);
+    if (!posted)
+      return outcome(@"partial", @"input_rejected");
   } else if ([op isEqual:@"keyboard.type_text"]) {
     NSString *text = s[@"TypeText"][@"Text"];
     for (NSUInteger i = 0; i < text.length;) {
@@ -991,8 +1074,12 @@ static NSDictionary *perform(DWContext *c, NSDictionary *o, DWCancel *cancel) {
         count = 2;
       UniChar chars[2];
       [text getCharacters:chars range:NSMakeRange(i, count)];
-      CGEventRef down = CGEventCreateKeyboardEvent(NULL, 0, true),
-                 up = CGEventCreateKeyboardEvent(NULL, 0, false);
+      // Chromium ignores Unicode-only newline/tab events. These characters
+      // represent the corresponding keyboard key, as in native text editors.
+      BOOL special = first == '\n' || first == '\r' || first == '\t';
+      CGKeyCode textKey = first == '\t' ? 48 : special ? 36 : 0;
+      CGEventRef down = CGEventCreateKeyboardEvent(NULL, textKey, true),
+                 up = CGEventCreateKeyboardEvent(NULL, textKey, false);
       if (!down || !up) {
         if (down)
           CFRelease(down);
@@ -1000,13 +1087,19 @@ static NSDictionary *perform(DWContext *c, NSDictionary *o, DWCancel *cancel) {
           CFRelease(up);
         return outcome(i ? @"partial" : @"none", @"input_rejected");
       }
-      CGEventKeyboardSetUnicodeString(down, count, chars);
-      CGEventKeyboardSetUnicodeString(up, count, chars);
-      CGEventPost(kCGHIDEventTap, down);
-      CGEventPost(kCGHIDEventTap, up);
+      if (!special) {
+        CGEventKeyboardSetUnicodeString(down, count, chars);
+        CGEventKeyboardSetUnicodeString(up, count, chars);
+      }
+      BOOL posted = postInputEvent(down);
+      if (posted) postInputEvent(up);
       CFRelease(down);
       CFRelease(up);
+      if (!posted)
+        return outcome(i ? @"partial" : @"none", @"input_rejected");
       i += count;
+      if (first == '\r' && i < text.length && [text characterAtIndex:i] == '\n')
+        i++;
     }
   } else if ([op isEqual:@"keyboard.press"]) {
     CGKeyCode code = keycode(s[@"Press"][@"Key"]);
@@ -1062,15 +1155,20 @@ static NSDictionary *perform(DWContext *c, NSDictionary *o, DWCancel *cancel) {
       events[count++] = ev;
     }
     BOOL stopped = cancelled(cancel);
+    NSUInteger postedCount = 0;
     if (valid && !stopped) {
-      for (NSUInteger i = 0; i < count; i++)
-        CGEventPost(kCGHIDEventTap, events[i]);
+      for (NSUInteger i = 0; i < count; i++) {
+        if (postInputEvent(events[i]))
+          postedCount++;
+        else
+          valid = NO;
+      }
     }
     for (NSUInteger i = 0; i < count; i++)
       if (events[i])
         CFRelease(events[i]);
     if (!valid || stopped)
-      return outcome(@"none", stopped ? @"cancelled" : @"input_rejected");
+      return outcome(postedCount ? @"partial" : @"none", stopped ? @"cancelled" : @"input_rejected");
 
   }
 
@@ -1184,7 +1282,33 @@ char *dw_call(void *p, const char *opstr, const char *json, void *cancel) {
             }
           };
         }
-      } else if ([op isEqual:@"perform"])
+      }
+#ifdef DTW_BACKGROUND_POC
+      else if ([op isEqual:@"background_poc"])
+        out = backgroundPOC(c, r, (DWCancel *)cancel);
+#endif
+      else if ([op isEqual:@"cooperative_perform"])
+        out = cooperativePerform(c, r, (DWCancel *)cancel);
+      else if ([op isEqual:@"input_end"]) {
+        out = cooperativeEnd(c);
+        c.inputFault = nil;
+      }
+      else if ([op isEqual:@"input_begin"]) {
+        if (c.inputSession)
+          out = err(@"seat_fenced");
+        else {
+          c.inputReport = nil;
+          c.inputFault = nil;
+          out = @{@"Result" : @YES};
+        }
+      }
+      else if ([op isEqual:@"input_available"])
+        out = @{@"Result" : @(cooperativeAvailable())};
+      else if ([op isEqual:@"input_guard"]) {
+        NSString *failure = cooperativeGuard(c);
+        out = failure ? err(failure) : @{@"Result" : @YES};
+      }
+      else if ([op isEqual:@"perform"])
         out = perform(c, r, (DWCancel *)cancel);
       else if ([op isEqual:@"hit"]) {
         AXUIElementRef sys = AXUIElementCreateSystemWide(), hit = NULL;

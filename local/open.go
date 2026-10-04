@@ -9,10 +9,16 @@ import (
 )
 
 // Options bounds in-memory retention. Zero values select conservative defaults.
-type Options struct{ HistoryLimit, RequestLimit, ObjectLimit, ViewLimit int }
+type Options struct {
+	HistoryLimit, RequestLimit, ObjectLimit, ViewLimit int
+	InputMode                                          dw.InputMode
+}
 
 func Open(ctx context.Context, o Options) (dw.World, error) {
-	d, e := native()
+	if err := o.InputMode.Validate(); err != nil {
+		return nil, err
+	}
+	d, e := native(o.InputMode.Effective())
 	if e != nil {
 		return nil, e
 	}

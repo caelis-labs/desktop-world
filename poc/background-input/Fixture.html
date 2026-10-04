@@ -1,0 +1,14 @@
+<!doctype html><meta charset="utf-8"><title>__TITLE__</title>
+<style>body{font:16px system-ui;margin:24px}input,textarea{display:block;width:400px;margin:12px}#canvas{width:430px;height:180px;background:#333;color:white;touch-action:none;user-select:none}#menu{position:absolute;background:white;padding:20px;border:1px solid;z-index:2}button{margin:12px}</style>
+<label>Order note<input id="note" aria-label="POC text" oninput="send('text',this.value)"></label>
+<label>Document<textarea id="multi" rows="3" aria-label="POC multiline" oninput="send('multiline',this.value)"></textarea></label>
+<div id="canvas" tabindex="0" role="img" aria-label="POC Canvas">Drag the marker</div>
+<button aria-label="POC submit" onclick="send('submit',note.value)">Save note</button>
+<button aria-label="POC dialog" onclick="modal.showModal();send('dialog_open')">Confirm order</button>
+<div id="menu" role="menu" hidden><button role="menuitem" aria-label="POC menu commit" onclick="send('menu_commit');menu.hidden=true">Commit order</button></div>
+<dialog id="modal"><input id="dialogtext" aria-label="POC dialog text"><button aria-label="POC confirm" onclick="send('dialog_text',dialogtext.value);send('dialog_confirm');modal.close()">Confirm</button></dialog>
+<script>
+function send(event,value=''){fetch('/event',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({event,value:String(value)})})}
+document.addEventListener('focusin',e=>send('focus',e.target.getAttribute('aria-label')||e.target.id));
+let origin=null;canvas.onmousemove=e=>{if(origin)send('drag');else send('move')};canvas.onmousedown=e=>{origin=[e.clientX,e.clientY];send(e.button==1?'middle':e.button==2?'right':'click',e.detail)};canvas.onmouseup=e=>{if(origin)send('drop',Math.round(e.clientX-origin[0])+','+Math.round(e.clientY-origin[1]));origin=null};canvas.ondblclick=()=>send('double');canvas.onwheel=e=>{e.preventDefault();send('scroll',e.deltaX+','+e.deltaY)};canvas.oncontextmenu=e=>{e.preventDefault();menu.hidden=false;menu.style.left=e.clientX+'px';menu.style.top=e.clientY+'px';send('right')};canvas.onkeydown=e=>send('canvas_key',e.key);
+</script>

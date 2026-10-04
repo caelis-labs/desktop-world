@@ -185,3 +185,22 @@ func TestManagedInheritedTransportCancelsBusyProvider(t *testing.T) {
 		t.Fatal(late, err)
 	}
 }
+
+func TestHostRejectsDifferentInputModeBeforeGrants(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// The controlled child intentionally ignores the new option and advertises
+	// the default shared mode. The host cannot mistake it for cooperative input.
+	if c, err := Start(ctx, Options{Executable: executable, InputMode: dw.InputModeCooperative}); err == nil {
+		c.Close()
+		t.Fatal("accepted wrong helper input mode")
+	}
+	if c, err := Start(ctx, Options{Executable: executable, InputMode: "invalid"}); err == nil {
+		c.Close()
+		t.Fatal("accepted invalid input mode")
+	}
+}

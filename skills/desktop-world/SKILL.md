@@ -159,3 +159,20 @@ Request states/capabilities only on the relevant Ref. See
 [semantic action limits](references/semantic-actions.md) only when needed.
 Windows functionality is implemented but availability is not promised; interactive
 acceptance/adaptation is deferred to a separate Windows environment.
+
+
+## Host-selected cooperative input
+
+When Hello/environment declares `input_mode:cooperative`, use the existing
+per-action schemas and a short known Plan. Put click-to-focus, shortcuts, short
+text and the known submission in one transaction; no focus is held between
+calls. Bind an exact, unique known menu/dialog inside that Plan, or observe the
+new control after it ends. Narrow dialog locators to the window/subtree.
+Keyboard targets may be an observed Window in this mode; native focus and
+protected-state checks still apply. Absolute Points and cross-window drags are
+rejected. One-second input budget plus bounded native handoff/cleanup, 256
+UTF-16 units per text and 500 ms per drag; split longer known tasks.
+Read Receipt `input.foreground_ms/restoration` alongside delivery/verification.
+`focus` evidence is from inside the transaction. Restore failure is unknown and
+fenced; reconcile the original request. `no_shared_input` remains strict.
+See [cooperative details](../../docs/cooperative-input.md) only when needed.
