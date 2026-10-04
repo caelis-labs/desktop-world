@@ -461,15 +461,38 @@ func TestAnchorTopologyAndFocusIntervention(t *testing.T) {
 }
 func TestCloseWithPendingNativeCall(t *testing.T) {
 	h := setup(t)
-	block := make(chan struct{})
-	h.f.Enqueue("invoke", dwtest.Behavior{Block: block, IgnoreCancellation: true, Apply: true})
-	_, _ = h.a.Execute(ctx, h.plan("close", dw.Step{ID: "invoke", Op: "invoke", Target: target(h.refs["提交"]), Timeout: 20 * time.Millisecond}))
+	entered, block, returned := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var release sync.Once
+	unblock := func() { release.Do(func() { close(block) }) }
+	defer unblock()
+	h.f.Enqueue("invoke", dwtest.Behavior{Before: func(*dwtest.Fixture) { close(entered) }, Block: block, IgnoreCancellation: true, Apply: true})
+	go func() {
+		defer close(returned)
+		_, _ = h.a.Execute(ctx, h.plan("close", dw.Step{ID: "invoke", Op: "invoke", Target: target(h.refs["提交"])}))
+	}()
+	// Prove the native call has started. A short step deadline can expire before
+	// dispatch on a loaded runner, in which case Close legitimately succeeds.
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("native call did not enter")
+	}
 	c, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	if e := h.w.Close(c); code(e) != "close_incomplete" {
 		t.Fatal(e)
 	}
-	close(block)
+	unblock()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled execution did not return")
+	}
+	complete, finish := context.WithTimeout(ctx, 5*time.Second)
+	defer finish()
+	if e := h.w.Close(complete); e != nil {
+		t.Fatal("native cleanup did not complete", e)
+	}
 }
 
 func TestEmptyViewDiscoversNewObject(t *testing.T) {
