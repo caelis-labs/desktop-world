@@ -119,6 +119,9 @@ func (a *actor) inScopeLocked(r dw.Ref, scopes []dw.Scope) bool {
 	return false
 }
 func (a *actor) check(ctx context.Context, in dw.Intent, write bool) error {
+	if !a.config.InputPolicy.Allows(in.Operation) {
+		return dw.NewFault("requires_shared_input", "host policy forbids focus and shared input", "never_automatically")
+	}
 	if e := ctx.Err(); e != nil {
 		return e
 	}
@@ -220,7 +223,7 @@ func defaults(r dw.ObserveRequest) dw.ObserveRequest {
 func (a *actor) query(ctx context.Context, r dw.ObserveRequest, resume string) ([]dw.Object, dw.Coverage, string, error) {
 	w := a.w
 	cov := dw.Coverage{Scope: r.Scope, Fields: r.Fields, MaxDepth: r.Budget.MaxDepth, SampleStart: time.Now().UTC()}
-	q := backend.Query{Desktop: r.Scope.Desktop, Depth: r.Budget.MaxDepth, MaxNodes: r.Budget.MaxVisitedNodes, Summary: r.Projection == dw.ProjectionSummary, Detail: r.Projection == dw.ProjectionDetail, Resume: resume}
+	q := backend.Query{Fields: readFields(r), Desktop: r.Scope.Desktop, Depth: r.Budget.MaxDepth, MaxNodes: r.Budget.MaxVisitedNodes, Summary: r.Projection == dw.ProjectionSummary, Detail: r.Projection == dw.ProjectionDetail, Resume: resume}
 	w.mu.Lock()
 	for _, ref := range r.Scope.Refs {
 		rec := w.objects[ref]
@@ -273,6 +276,7 @@ func (a *actor) query(ctx context.Context, r dw.ObserveRequest, resume string) (
 		p       backend.Page
 	})
 	cov.Complete = result.p.Complete
+	cov.Dirty = result.p.Dirty
 	cov.VisitedNodes = result.p.Visited
 	cov.UnavailableSources = result.p.Unavailable
 	cov.SampleEnd = time.Now().UTC()
@@ -404,8 +408,9 @@ func (a *actor) selectObjectsLocked(all []dw.Object, r dw.ObserveRequest) []dw.O
 				*ref = ""
 			}
 		}
+		relations := p.Relations
 		p.Relations = nil
-		for _, rel := range o.Relations {
+		for _, rel := range relations {
 			if a.inScopeLocked(rel.Target, a.config.ReadScopes) {
 				p.Relations = append(p.Relations, rel)
 			}
@@ -797,3 +802,27 @@ func (s *stream) Next(ctx context.Context) (dw.ChangeSet, error) {
 	return out, e
 }
 func (s *stream) Close() error { s.cancel(); return nil }
+
+func readFields(r dw.ObserveRequest) []string {
+	fields := append([]string{}, r.Fields...)
+	fields = append(fields, "role") // provider kind and identity must always be known.
+	if m := r.Match; m != nil {
+		if m.NameEquals != nil || m.NameContains != nil {
+			fields = append(fields, "name")
+		}
+		if len(m.RequiredStates) > 0 {
+			fields = append(fields, "states")
+		}
+		if m.RequiredCapability != "" {
+			fields = append(fields, "capabilities")
+		}
+	}
+	sort.Strings(fields)
+	out := fields[:0]
+	for _, f := range fields {
+		if len(out) == 0 || out[len(out)-1] != f {
+			out = append(out, f)
+		}
+	}
+	return out
+}

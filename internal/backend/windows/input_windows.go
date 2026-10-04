@@ -81,7 +81,7 @@ func (d *Driver) Perform(ctx context.Context, o backend.Operation) backend.Outco
 		return result(dw.DeliveryNone, "cancelled")
 	}
 	s := o.Step
-	if s.Op == "focus" || s.Op == "invoke" || s.Op == "set_value" {
+	if s.Op == "focus" || s.Op == "invoke" || s.Op == "set_value" || s.Op == "set_expanded" {
 		e, err := d.lookup(o.Key)
 		if err != nil {
 			return result(dw.DeliveryNone, "ref_gone")
@@ -103,6 +103,9 @@ func (d *Driver) Perform(ctx context.Context, o backend.Operation) backend.Outco
 			if s.Op == "set_value" {
 				patternID = 10002
 			}
+			if s.Op == "set_expanded" {
+				patternID = 10005
+			}
 			var p *com
 			if er := e.el.call(16, patternID, ptr(&p)); er != nil || p == nil {
 				return result(dw.DeliveryNone, "capability_unavailable")
@@ -110,6 +113,12 @@ func (d *Driver) Perform(ctx context.Context, o backend.Operation) backend.Outco
 			defer p.release()
 			if s.Op == "invoke" {
 				err = p.call(3)
+			} else if s.Op == "set_expanded" {
+				method := 4
+				if *s.SetExpanded.Expanded {
+					method = 3
+				}
+				err = p.call(method)
 			} else {
 				v, er := syscall.UTF16FromString(s.SetValue.Text)
 				if er != nil {

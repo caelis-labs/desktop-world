@@ -113,32 +113,33 @@ static id attr(AXUIElementRef e, CFStringRef k) {
 }
 // Fetch the common scalar attributes in one provider call. Some AX providers
 // do not implement this API; retain the old per-attribute path for them.
-static NSDictionary *nodeAttributes(AXUIElementRef e) {
-  NSArray *names = @[(id)kAXRoleAttribute, (id)kAXTitleAttribute,
-    (id)kAXDescriptionAttribute, (id)kAXDocumentAttribute, (id)kAXURLAttribute,
-    (id)kAXSubroleAttribute, (id)kAXEnabledAttribute, (id)kAXFocusedAttribute,
-    (id)kAXSelectedAttribute, (id)kAXExpandedAttribute,
-    (id)kAXPositionAttribute, (id)kAXSizeAttribute];
+static BOOL wantField(NSArray *fields, NSString *name) { return !fields.count || [fields containsObject:name]; }
+static NSDictionary *nodeAttributes(AXUIElementRef e, NSArray *fields) {
+  NSMutableArray *names = [NSMutableArray arrayWithObject:(id)kAXRoleAttribute];
+  if (wantField(fields, @"name")) [names addObjectsFromArray:@[(id)kAXTitleAttribute, (id)kAXDescriptionAttribute]];
+  if (wantField(fields, @"uri")) [names addObjectsFromArray:@[(id)kAXDocumentAttribute, (id)kAXURLAttribute]];
+  if (wantField(fields, @"states") || wantField(fields, @"capabilities") || wantField(fields, @"value_preview") || wantField(fields, @"uri")) [names addObject:(id)kAXSubroleAttribute];
+  if (wantField(fields, @"states")) [names addObjectsFromArray:@[(id)kAXEnabledAttribute, (id)kAXFocusedAttribute, (id)kAXSelectedAttribute, (id)kAXExpandedAttribute]];
+  else if (wantField(fields, @"capabilities")) [names addObject:(id)kAXEnabledAttribute];
+  if (wantField(fields, @"bounds")) [names addObjectsFromArray:@[(id)kAXPositionAttribute, (id)kAXSizeAttribute]];
   if (!prepareRead(e)) return nil;
   CFArrayRef raw = NULL;
   AXError rc = AXUIElementCopyMultipleAttributeValues(e, (__bridge CFArrayRef)names, 0, &raw);
+  NSMutableDictionary *out = [NSMutableDictionary dictionary];
   if (rc != kAXErrorSuccess || !raw) {
     if (raw) CFRelease(raw);
-    return nil;
+    for (NSString *name in names) { id v = attr(e, (__bridge CFStringRef)name); if(v) out[name]=v; }
+    return out;
   }
   NSArray *values = CFBridgingRelease(raw);
-  NSMutableDictionary *out = [NSMutableDictionary dictionary];
   for (NSUInteger i = 0; i < MIN(names.count, values.count); i++) {
     id v = values[i];
-    if (v != NSNull.null &&
-        !(CFGetTypeID((__bridge CFTypeRef)v) == AXValueGetTypeID() &&
-          AXValueGetType((__bridge AXValueRef)v) == kAXValueAXErrorType))
-      out[names[i]] = v;
+    if (v != NSNull.null && !(CFGetTypeID((__bridge CFTypeRef)v) == AXValueGetTypeID() && AXValueGetType((__bridge AXValueRef)v) == kAXValueAXErrorType)) out[names[i]] = v;
   }
   return out;
 }
 static id nodeAttr(NSDictionary *batch, AXUIElementRef e, CFStringRef k) {
-  return batch ? batch[(__bridge NSString *)k] : attr(e, k);
+  return batch[(__bridge NSString *)k];
 }
 // AppKit's process properties refresh on the main RunLoop. A Go caller may
 // never run it. Use live OS queries without taking over the embedding host loop.
@@ -336,11 +337,11 @@ static id owningWindow(AXUIElementRef e) {
   }
   return nil;
 }
-static NSDictionary *node(DWContext *c, NSString *k) {
+static NSDictionary *node(DWContext *c, NSString *k, NSArray *fields) {
   AXUIElementRef e = element(c, k);
   if (!e || !alive(c, k))
     return nil;
-  NSDictionary *batch = nodeAttributes(e);
+  NSDictionary *batch = nodeAttributes(e, fields);
   NSString *role = nodeAttr(batch, e, kAXRoleAttribute);
   if (![role isKindOfClass:NSString.class])
     role = attr(e, kAXRoleAttribute);
@@ -372,12 +373,12 @@ static NSDictionary *node(DWContext *c, NSString *k) {
   states[@"protected"] = known(@(protected));
   if (queryStopped()) return nil;
   Boolean writable = false;
-  AXError writableError =
-      AXUIElementIsAttributeSettable(e, kAXValueAttribute, &writable);
+  AXError writableError = kAXErrorAttributeUnsupported;
+ if (wantField(fields, @"states") || wantField(fields, @"capabilities")) writableError = AXUIElementIsAttributeSettable(e, kAXValueAttribute, &writable);
   states[@"read_only"] =
       writableError == kAXErrorSuccess ? known(@((BOOL)!writable)) : unknown();
   // Never ask a protected field for its value, even inside a batch.
-  id value = protected ? nil : attr(e, kAXValueAttribute);
+  id value = protected || !wantField(fields, @"value_preview") ? nil : attr(e, kAXValueAttribute);
   NSString *valueText = scalarText(value);
   id pos = nodeAttr(batch, e, kAXPositionAttribute), sz = nodeAttr(batch, e, kAXSizeAttribute);
   CGPoint pt;
@@ -400,19 +401,24 @@ static NSDictionary *node(DWContext *c, NSString *k) {
   }
   if (queryStopped()) return nil;
   CFArrayRef rawActions = NULL;
-  AXUIElementCopyActionNames(e, &rawActions);
+  if (wantField(fields, @"capabilities")) AXUIElementCopyActionNames(e, &rawActions);
   NSArray *actions = CFBridgingRelease(rawActions);
   Boolean focusable = false;
-  AXUIElementIsAttributeSettable(e, kAXFocusedAttribute, &focusable);
+  if (wantField(fields, @"capabilities")) AXUIElementIsAttributeSettable(e, kAXFocusedAttribute, &focusable);
   BOOL enabled = ![states[@"enabled"][@"Value"] isEqual:@NO];
   NSMutableArray *caps = [NSMutableArray array];
+  Boolean expandable = false;
+ AXError expandError = kAXErrorAttributeUnsupported;
+ if (wantField(fields, @"capabilities")) expandError = AXUIElementIsAttributeSettable(e, kAXExpandedAttribute, &expandable);
   NSDictionary *supported = @{
+ @"set_expanded": @(expandError == kAXErrorSuccess && expandable),
     @"focus" : @([kind isEqual:@"window"] || focusable),
     @"invoke" : @([actions containsObject:(__bridge NSString *)kAXPressAction]),
     @"set_value" : @(writable && !protected)
   };
   for (NSString *op in supported) {
     BOOL yes = [supported[op] boolValue];
+    if ([op isEqual:@"set_expanded"] && !yes) continue;
     [caps addObject:@{
       @"Name" : op,
       @"Support" : yes ? @"supported" : @"unsupported",
@@ -440,6 +446,7 @@ static NSDictionary *node(DWContext *c, NSString *k) {
   if ([kind isEqual:@"window"])
     win = k;
   return @{
+    @"Fields" : fields ?: @[],
     @"Key" : k,
     @"App" : app,
     @"Window" : win,
@@ -482,7 +489,8 @@ static NSDictionary *seat(DWContext *c) {
   }
   NSMutableArray *nodes = [NSMutableArray array];
   for (NSString *k in @[ wk, fk ]) {
-    NSDictionary *n = k.length ? node(c, k) : nil;
+    // Seat identity does not authorize a hidden value/capability refresh.
+    NSDictionary *n = k.length ? node(c, k, @[@"role"]) : nil;
     if (n)
       [nodes addObject:n];
   }
@@ -562,7 +570,7 @@ static NSDictionary *queryPage(DWContext *c, NSDictionary *q, DWCancel *cancel) 
       }
       continue;
     }
-    NSDictionary *n = node(c, k);
+    NSDictionary *n = node(c, k, q[@"Fields"]);
     if (!n) {
       if (queryStopped()) break;
       scan.incomplete = YES;
@@ -638,6 +646,7 @@ static NSDictionary *queryPage(DWContext *c, NSDictionary *q, DWCancel *cancel) 
     @"Result" : @{
       @"Nodes" : nodes,
       @"Complete" : @(complete),
+      @"Dirty" : @(scan.incomplete),
       @"Visited" : @(scan.visited),
       @"ScanCursor" : cursor,
       @"Seat" : queryStopped() ? @{@"Pointer": unknown(), @"Health": @"ready", @"Intervention": @"best_effort"} : seat(c),
@@ -739,10 +748,9 @@ static NSDictionary *perform(DWContext *c, NSDictionary *o, DWCancel *cancel) {
   AXUIElementRef e = element(c, k);
   if (k.length && (!e || !alive(c, k)))
     return outcome(@"none", @"ref_gone");
-  if (!CGPreflightPostEventAccess())
-    return outcome(@"none", @"permission_denied");
   if ([op isEqual:@"focus"] || [op isEqual:@"invoke"] ||
-      [op isEqual:@"set_value"]) {
+      [op isEqual:@"set_value"] || [op isEqual:@"set_expanded"]) {
+ if (!AXIsProcessTrusted()) return outcome(@"none", @"permission_denied");
     // Writes such as TextEdit Save/Replace need longer than the 250 ms read
     // budget. A timeout is still unknown and fenced; never replay it. Keep the
     // native action allowance below the default 2 s engine step deadline.
@@ -753,6 +761,8 @@ static NSDictionary *perform(DWContext *c, NSDictionary *o, DWCancel *cancel) {
     if ([op isEqual:@"set_value"])
       rc = AXUIElementSetAttributeValue(
           e, kAXValueAttribute, (__bridge CFTypeRef)s[@"SetValue"][@"Text"]);
+    if ([op isEqual:@"set_expanded"])
+ rc = AXUIElementSetAttributeValue(e, kAXExpandedAttribute, [s[@"SetExpanded"][@"Expanded"] boolValue] ? kCFBooleanTrue : kCFBooleanFalse);
     if ([op isEqual:@"focus"]) {
       NSString *role = attr(e, kAXRoleAttribute);
       // Attribute reads restore the ordinary read allowance; focus dispatch
@@ -783,6 +793,7 @@ static NSDictionary *perform(DWContext *c, NSDictionary *o, DWCancel *cancel) {
       return outcome(@"unknown", @"native_timeout");
     return outcome(@"none", @"capability_unavailable");
   }
+  if (!CGPreflightPostEventAccess()) return outcome(@"none", @"permission_denied");
   // Reject interference from held physical modifiers/buttons instead of
   // resetting them.
   if (CGEventSourceFlagsState(kCGEventSourceStateCombinedSessionState) &
@@ -1123,7 +1134,7 @@ char *dw_call(void *p, const char *opstr, const char *json, void *cancel) {
       } else if ([op isEqual:@"query"])
         out = query(c, r, (DWCancel *)cancel);
       else if ([op isEqual:@"read"]) {
-        NSDictionary *n = node(c, r[@"Key"]);
+        NSDictionary *n = node(c, r[@"Key"], nil);
         out = n
                   ? @{@"Result" : @{@"Node" : n, @"Seat" : seat(c)}}
                   : err(alive(c, r[@"Key"]) ? @"provider_unavailable"

@@ -99,7 +99,7 @@ Native tests are opt-in, and ordinary `go test` skips real desktop input.
 ```sh
 export GOWORK=off GOCACHE=/tmp/desktop-world-go-cache
 go test -c -o bin/native-regressions.test ./tests/acceptance
-go build -o bin/desktop-world ./cmd/desktop-world
+go build -o bin/dtw ./cmd/dtw
 DW_FIXTURE_TITLE='Desktop World Values unique' \
 DW_FIXTURE_LOG="$PWD/artifacts/values-unique.jsonl" \
 ./script/build_and_run.sh --verify
@@ -111,7 +111,7 @@ DW_FIXTURE_TITLE='Desktop World Slow AX unique' DW_FIXTURE_SLOW_COUNT=200 \
 DW_FIXTURE_LOG="$PWD/artifacts/slow-unique.jsonl" \
 ./script/build_and_run.sh --verify
 DW_NATIVE_FIXTURE_TITLE='Desktop World Slow AX unique' \
-DW_NATIVE_HELPER_PATH="$PWD/bin/desktop-world" \
+DW_NATIVE_HELPER_PATH="$PWD/bin/dtw" \
 ./bin/native-regressions.test -test.v -test.run '^TestNativeObserveTimeoutFixture$'
 
 # Open the fixed local HTML in Chrome, then read only that fixture's document.

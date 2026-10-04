@@ -1,0 +1,36 @@
+{
+  "run": "20261004T042852Z-1343ef",
+  "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "base_commit": "225772c423d9cf285fa973d591bc94bce4b1e3cc",
+  "helper_version": {
+    "arch": "arm64",
+    "go": "go1.26.8",
+    "host_control": "desktop-world/host-control-v0.1",
+    "os": "darwin",
+    "protocol": "desktop-world/helper-v0.1",
+    "vcs.modified": "true",
+    "vcs.revision": "225772c423d9cf285fa973d591bc94bce4b1e3cc",
+    "vcs.time": "2026-10-04T02:55:21Z",
+    "version": "dev"
+  },
+  "helper_sha256": "33e64e1eb76fbc1dd2c518565fe0a5e4ccb7ad24b630c2fd4eaa657a27b38e76",
+  "go_version": "go version go1.26.8 darwin/arm64",
+  "source_manifest": "source-sha256.json",
+  "features": {
+    "F1": {
+      "passed": true,
+      "test": "TestNativeNoSharedInput",
+      "log": "f1-background.jsonl"
+    },
+    "F2": {
+      "passed": true,
+      "test": "TestNativeSetExpanded",
+      "log": "f2.jsonl"
+    },
+    "F3": {
+      "passed": true,
+      "test": "TestNativeFieldPlan",
+      "log": "f3.jsonl"
+    }
+  }
+}

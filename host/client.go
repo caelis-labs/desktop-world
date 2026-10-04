@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"time"
 
@@ -23,10 +22,11 @@ import (
 )
 
 type Options struct {
-	Executable string
-	AssetsDir  string
-	AuditPath  string
-	Stderr     io.Writer
+	InputPolicy dw.InputPolicy
+	Executable  string
+	AssetsDir   string
+	AuditPath   string
+	Stderr      io.Writer
 }
 
 type Reply struct {
@@ -38,6 +38,7 @@ type Reply struct {
 }
 
 type Hello struct {
+	InputPolicy dw.InputPolicy `json:"input_policy"`
 	Type        string         `json:"type"`
 	Protocol    string         `json:"protocol"`
 	Environment dw.Environment `json:"environment"`
@@ -162,8 +163,8 @@ type Client struct {
 func Start(ctx context.Context, o Options) (*Client, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	if runtime.GOOS == "windows" {
-		return nil, errors.New("host-control client is Unix-only in this alpha")
+	if err := o.InputPolicy.Validate(); err != nil {
+		return nil, err
 	}
 	if !filepath.IsAbs(o.Executable) {
 		return nil, errors.New("helper executable must be an absolute trusted path")
@@ -179,6 +180,9 @@ func Start(ctx context.Context, o Options) (*Client, error) {
 		return nil, err
 	}
 	args := []string{"serve", "--host-control", "--full-output"}
+	if o.InputPolicy != "" {
+		args = append(args, "--input-policy", string(o.InputPolicy))
+	}
 	if o.AssetsDir != "" {
 		args = append(args, "--assets-dir", o.AssetsDir)
 	}
@@ -186,13 +190,21 @@ func Start(ctx context.Context, o Options) (*Client, error) {
 		args = append(args, "--audit", o.AuditPath)
 	}
 	cmd := exec.Command(o.Executable, args...)
-	cmd.ExtraFiles = []*os.File{cr, rw}
 	cmd.Stderr = o.Stderr
-	for _, k := range []string{"HOME", "PATH", "TMPDIR", "LANG", "LC_CTYPE"} {
+	for _, k := range []string{"HOME", "PATH", "TMPDIR", "LANG", "LC_CTYPE", "SystemRoot", "WINDIR", "USERPROFILE", "TEMP", "TMP"} {
 		if v, ok := os.LookupEnv(k); ok {
 			cmd.Env = append(cmd.Env, k+"="+v)
 		}
 	}
+	cleanupControl, err := prepareControl(cmd, cr, rw)
+	if err != nil {
+		cr.Close()
+		cw.Close()
+		rr.Close()
+		rw.Close()
+		return nil, err
+	}
+	defer cleanupControl()
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cr.Close()
@@ -237,6 +249,7 @@ func Start(ctx context.Context, o Options) (*Client, error) {
 		// Hello has extension fields; its stable consumed subset is deliberately decoded here.
 		var raw struct {
 			Type, Protocol string
+			InputPolicy    dw.InputPolicy
 			Environment    json.RawMessage
 			Managed        bool
 		}
@@ -245,6 +258,7 @@ func Start(ctx context.Context, o Options) (*Client, error) {
 			return
 		}
 		c.Hello.Type, c.Hello.Protocol, c.Hello.Managed = raw.Type, raw.Protocol, raw.Managed
+		c.Hello.InputPolicy = raw.InputPolicy
 		if err := protocol.Decode(raw.Environment, &c.Hello.Environment); err != nil {
 			ready <- err
 			return

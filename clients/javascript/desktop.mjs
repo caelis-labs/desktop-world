@@ -42,7 +42,7 @@ dw.list(ob, fields=['role','name','value_preview','uri'], options={})  bounded r
 dw.rows(ob, fields)                full row array for local filtering, can exceed print limit
 dw.value(field)                    unwrap known facts or primitive fields; throws for unknown/redacted
 dw.focused(appOrWindowRef)         fresh focused UI Ref; rejects focus outside scope
-dw.focus(windowOrFocusableUIRef) / dw.invoke(ref) / dw.set(ref, text)
+dw.focus(windowOrFocusableUIRef) / dw.invoke(ref) / dw.set(ref, text) / dw.expand(ref, trueOrFalse)
 dw.press(ref, key, modifiers=[]) / dw.type(ref, text)
 dw.click(ref, options={})           left single click by default
 dw.act(steps, options={})           one ordered native plan, max 16 steps
@@ -59,7 +59,8 @@ Do not assume an already-open document belongs to the task workspace.
 Focus a WINDOW before input; application Refs are discovery scopes, not focus targets.
 list defaults to 20 rows/4 KiB; use next_offset on the SAME saved observation for more.
 If ob.coverage.continuation exists, use state.ob=await dw.next(state.ob) for native pages.
-outline defaults to name/role/value_preview; states/capabilities are opt-in fields.
+observe defaults to 32 summary results/8 KiB; outline defaults to name/role.
+value_preview/uri/states/capabilities are opt-in fields.
 rows/list select already-fetched fields; request uri/states in observe/find options first.
 name filters do not search body text. Native text nodes often use value_preview:
 state.text = await dw.find(documentRef,{role:'text'},{fields:['role','value_preview']});
@@ -103,13 +104,15 @@ const rows = (ob, fields = ['role', 'name', 'value_preview', 'uri']) => (ob.obje
 
 function receiptSummary(id, op, receipt) {
   const counts = {};
+  const channels = {};
   const problems = [];
   for (const step of receipt?.steps ?? []) {
     const key = `${step.delivery ?? 'unknown'}/${step.verification ?? 'unknown'}`;
     counts[key] = (counts[key] ?? 0) + 1;
+    if (step.channel) channels[step.channel] = (channels[step.channel] ?? 0) + 1;
     if (step.fault || step.delivery === 'unknown') problems.push(step);
   }
-  return { id, op, ...pick(receipt, ['run_id', 'state', 'outcome', 'fault', 'seat_health']), delivery_verification: counts, ...(problems.length ? { problems } : {}) };
+  return { id, op, ...pick(receipt, ['run_id', 'state', 'outcome', 'fault', 'seat_health']), delivery_verification: counts, ...(Object.keys(channels).length ? { channels } : {}), ...(problems.length ? { problems } : {}) };
 }
 
 // transport receives a helper Request and returns its full helper Response.
@@ -162,12 +165,12 @@ export function createSession(transport, { epoch = '', maxCalls = 32, timeoutMs 
     };
     const act = (steps, options = {}) => call('act', { ...options, steps: steps.map((step, i) => ({ id: `s${i + 1}`, ...step })) });
     const observe = async (args = {}) => {
-      const request = JSON.parse(JSON.stringify({ scope: { desktop: true }, projection: 'summary', fields: ['name', 'role', 'app', 'window', 'uri'], budget: { max_results: 256, max_output_bytes: 131072 }, ...(typeof args === 'string' ? {scope:{refs:[args]}} : args) }));
+      const request = JSON.parse(JSON.stringify({ scope: { desktop: true }, projection: 'summary', fields: ['name', 'role', 'app', 'window'], budget: { max_results: 32, max_output_bytes: 8192 }, ...(typeof args === 'string' ? {scope:{refs:[args]}} : args) }));
       const result = await call('observe', request);
       queries.set(result, request);
       return result;
     };
-    const outline = (ref, options = {}) => observe({ scope: { refs: [ref] }, projection: 'outline', fields: ['name', 'role', 'value_preview'], ...options, budget: { max_depth: 6, max_results: 60, max_text_runes: 400, max_output_bytes: 16000, ...options.budget } });
+    const outline = (ref, options = {}) => observe({ scope: { refs: [ref] }, projection: 'outline', fields: ['name', 'role'], ...options, budget: { max_depth: 4, max_results: 32, max_text_runes: 192, max_output_bytes: 8192, ...options.budget } });
     const api = Object.freeze({
       call, observe, outline, act, value: known,
       async waitFor(args, predicate, { timeout_ms = 3000, interval_ms = 100 } = {}) {
@@ -224,6 +227,7 @@ export function createSession(transport, { epoch = '', maxCalls = 32, timeoutMs 
       },
       focus: ref => act([{ op: 'focus', target: target(ref) }]),
       invoke: ref => act([{ op: 'invoke', target: target(ref) }]),
+      expand: (ref, expanded) => { if (typeof expanded !== 'boolean') throw new Error('expand requires an explicit boolean'); return act([{ op: 'set_expanded', target: target(ref), set_expanded: { expanded } }]); },
       set: (ref, text) => act([{ op: 'set_value', target: target(ref), set_value: { text } }]),
       press: (ref, key, modifiers = []) => act([{ op: 'keyboard.press', target: target(ref), press: { key, modifiers } }]),
       type: (ref, text) => act([{ op: 'keyboard.type_text', target: target(ref), type_text: { text } }]),

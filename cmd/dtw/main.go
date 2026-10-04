@@ -1,4 +1,4 @@
-// desktop-world exposes discovery and a persistent, host-owned stdio helper.
+// dtw exposes discovery and a persistent, host-owned stdio helper.
 package main
 
 import (
@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	dw "github.com/caelis-labs/desktop-world"
 	"github.com/caelis-labs/desktop-world/internal/helper"
 	"github.com/caelis-labs/desktop-world/local"
 	"github.com/caelis-labs/desktop-world/protocol"
@@ -22,12 +23,13 @@ var releaseVersion = "dev"
 
 const usage = `Desktop World — native desktop operations, persistent JSON sessions.
 
-desktop-world version                Protocol, build revision and platform; no desktop access.
-desktop-world doctor                 Read-only permission/environment probe; never prompts.
-desktop-world schema [operation]     JSON request schema; no native desktop access.
-desktop-world serve [host options]   New World for the lifetime of this stdio process.
+dtw version                Protocol, build revision and platform; no desktop access.
+dtw doctor                 Read-only permission/environment probe; never prompts.
+dtw schema [operation] [action]     JSON request schema; no native desktop access.
+dtw serve [host options]   New World for the lifetime of this stdio process.
 
 serve host options:
+  --input-policy POLICY  Host ceiling: shared_input (default) or no_shared_input.
   --write-app NAME       Grant writes to one exact live application name; repeatable.
   --write-app-window TITLE  Grant its owning app; resolves duplicate app names by exact window title.
   --desktop-write        Explicitly grant desktop-wide writes instead of named apps.
@@ -35,7 +37,7 @@ serve host options:
   --assets-dir PATH      Enable capture and save PNG files in this host-chosen directory.
   --audit PATH           Create a new metadata-only JSONL audit (no UI text/input payloads).
   --full-output          Typed wire facts and exact timestamps; default is compact UI facts.
-  --host-control         Bot-managed mode: private inherited request/reply pipes on FD 3/4.
+  --host-control         Managed mode: private inherited request/reply pipes.
                          No startup write flags. Host controls application grants per turn.
 
 Send one JSON object per line; receive hello, then {id,protocol,world,result,error}.
@@ -43,7 +45,7 @@ Supported verbs: observe, read, sync, act, capture, get, cancel.
 Example read:
 {"id":"inventory-1","op":"observe","args":{"scope":{"desktop":true},"projection":"summary","fields":["name","role"],"budget":{"max_results":64}}}
 
-For writes, get schema act first. args contains steps and optional timeout_ms.
+For writes, get schema act ACTION as needed. args contains steps and optional timeout_ms.
 Helper supplies epoch and request_id from the stable envelope id. Reuse that id
 and the SAME body after transport uncertainty; never blindly replay effects.
 New process = new epoch, invalid old Refs, no persisted exactly-once guarantee.
@@ -84,14 +86,23 @@ func run() error {
 		return json.NewEncoder(os.Stdout).Encode(v)
 	}
 	if args[0] == "schema" {
-		var s any = helper.Schemas()
-		if len(args) > 2 {
-			return fmt.Errorf("schema accepts at most one operation")
+		var s any = helper.SchemaIndex()
+		if len(args) > 3 {
+			return fmt.Errorf("use schema [operation] or schema act ACTION")
 		}
-		if len(args) == 2 {
+		if len(args) >= 2 {
 			operationSchema := helper.Schema(args[1])
 			if operationSchema == nil {
 				return fmt.Errorf("unknown operation")
+			}
+			if len(args) == 3 {
+				if args[1] != "act" {
+					return fmt.Errorf("action selector requires schema act")
+				}
+				operationSchema = helper.ActionSchema(args[2])
+				if operationSchema == nil {
+					return fmt.Errorf("unknown action")
+				}
 			}
 			s = operationSchema
 		}
@@ -102,9 +113,10 @@ func run() error {
 	}
 	var c helper.Config
 	var apps, appWindows names
-	var auditPath string
+	var auditPath, inputPolicy string
 	f := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	f.SetOutput(os.Stderr)
+	f.StringVar(&inputPolicy, "input-policy", "", "trusted ceiling: shared_input or no_shared_input")
 	f.Var(&apps, "write-app", "allow exact live application name")
 	f.Var(&appWindows, "write-app-window", "allow the application owning an exact window title")
 	f.BoolVar(&c.DesktopWrite, "desktop-write", false, "allow desktop writes")
@@ -112,7 +124,7 @@ func run() error {
 	f.StringVar(&c.AssetsDir, "assets-dir", "", "capture destination")
 	f.StringVar(&auditPath, "audit", "", "new audit file")
 	f.BoolVar(&c.FullOutput, "full-output", false, "retain typed wire facts and per-object timestamps")
-	f.BoolVar(&c.Managed, "host-control", false, "trusted host control pipes on inherited FD 3/4")
+	f.BoolVar(&c.Managed, "host-control", false, "trusted host control on private inherited pipes")
 	if err := f.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -121,6 +133,10 @@ func run() error {
 	}
 	if args[0] == "doctor" && len(args) > 1 {
 		return fmt.Errorf("doctor takes no host permission flags")
+	}
+	c.InputPolicy = dw.InputPolicy(inputPolicy)
+	if err := c.InputPolicy.Validate(); err != nil {
+		return err
 	}
 	c.WriteApps = apps
 	c.WriteAppWindows = appWindows
@@ -132,17 +148,19 @@ func run() error {
 	defer stop()
 	var controlIn, controlOut *os.File
 	if c.Managed {
-		if runtime.GOOS == "windows" {
-			return fmt.Errorf("inherited host-control pipes currently require Unix")
+		var err error
+		controlIn, controlOut, err = helper.InheritedControlFiles()
+		if err != nil {
+			return err
 		}
-		controlIn, controlOut = os.NewFile(3, "host-control-in"), os.NewFile(4, "host-control-out")
+
 		for _, f := range []*os.File{controlIn, controlOut} {
 			if f == nil {
 				return fmt.Errorf("host-control requires inherited pipes")
 			}
 			info, err := f.Stat()
 			if err != nil || info.Mode()&os.ModeNamedPipe == 0 {
-				return fmt.Errorf("host-control requires inherited pipes on FD 3 and 4")
+				return fmt.Errorf("host-control requires private inherited pipes")
 			}
 			defer f.Close()
 		}

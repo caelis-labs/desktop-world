@@ -231,7 +231,9 @@ func (f *Fixture) Query(ctx context.Context, q backend.Query) (backend.Page, err
 			break
 		}
 		p.Visited++
-		p.Nodes = append(p.Nodes, f.native(k))
+		native := f.native(k)
+		native.Fields = append([]string{}, q.Fields...)
+		p.Nodes = append(p.Nodes, native)
 	}
 	return p, ctx.Err()
 }
@@ -270,7 +272,9 @@ func (f *Fixture) slowQuery(ctx context.Context, q backend.Query) (backend.Page,
 		if ctx.Err() != nil {
 			break
 		}
-		p.Nodes = append(p.Nodes, f.native(s.keys[s.offset]))
+		n := f.native(s.keys[s.offset])
+		n.Fields = append([]string{}, q.Fields...)
+		p.Nodes = append(p.Nodes, n)
 		s.offset++
 		s.visited++
 		p.Visited++
@@ -399,6 +403,9 @@ func (f *Fixture) Perform(ctx context.Context, op backend.Operation) backend.Out
 			n.Object.ValuePreview = dw.Known(n.Text)
 			f.nodes[op.Key] = n
 			ev.Text = n.Text
+		case "set_expanded":
+			n.Object.States["expanded"] = dw.Known(*op.Step.SetExpanded.Expanded)
+			f.nodes[op.Key] = n
 		case "keyboard.type_text":
 			n.Text += op.Step.TypeText.Text
 			n.Object.ValuePreview = dw.Known(n.Text)

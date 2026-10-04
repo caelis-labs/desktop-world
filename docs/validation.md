@@ -65,6 +65,12 @@ Windows UIA / SendInput / GDI 后端和独立 Win32 fixture 已实现并通过�
 
 原生变化通知目前采用刷新和 Watch 轮询；AXObserver / UIA event invalidation 及其余正式发布条件见 [实现边界](implementation.md#尚未完成的正式发布条件)。
 
+## 2026-10-04：独立 feature 批次
+
+当前源码 helper 改名为 `dtw`，F1 无共享输入策略、F2 语义展开/收起、F3 原生字段计划各自通过独立 macOS 场景。F1 的后台填写/提交没有打断另一应用持续 Unicode 输入；F2 的期望状态、可见明细和重复 no-op 均由应用独立日志确认；F3 在同一窗口把 12 次慢值 getter 降为 0 次，并完成后续订单提交。源码指纹、操作日志、成本定义和复跑命令见 [批次记录](features.md) 与 [实机证据](evidence/features-20261004/README.md)。
+
+F4 Windows UIA 续扫和 F5 Windows managed 私有管道已实现并通过交叉构建/静态检查，交互式 Windows 操作验收仍待完成。M0 进入 caelis-bot 的更新与联调继续后置。
+
 ## 2026-09-30：Bot managed helper 收尾验证
 
 在同一台 macOS arm64 主机上，`examples/bot-host` 通过独立 Go host → 私有控制管道 → helper → AppKit 原生应用完成 Unicode 设值和 Enter 提交。活动回合先观察精确应用 Ref，再通过宿主 Grant 授权；相同请求返回相同 RunID，结束回合后的新输入返回 `turn_expired`，原回复仍可 Reconcile。

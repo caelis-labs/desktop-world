@@ -6,11 +6,14 @@ MVP 优先验证 Token 效率与易用性。通用 Agent 推荐 [JavaScript 调�
 
 **当前状态：`v0.1.0-alpha.1`，供 caelis-bot 开发联调的首个预发布，尚未达到 SPEC 的双平台正式发布门槛。** macOS 原生键鼠、语义操作、截图和生命周期路径已在 AppKit fixture 上运行，并通过 Chrome 原生输入与 Canvas 负面验收；Windows 后端已有实现、交叉编译与静态检查，仍需 Windows 交互式桌面验收。原始设计保留在 [SPEC.md](SPEC.md)，实现边界见 [docs/implementation.md](docs/implementation.md)，实际运行证据见 [docs/validation.md](docs/validation.md)。
 
+当前源码的 helper 命令为 **`dtw`**。本批增加 `no_shared_input` 宿主策略、语义展开/收起、原生字段读取计划、Windows 可续扫 UIA 和私有 managed 控制管道。独立场景与实机状态见 [本批 feature 验收](docs/features.md)；公开 alpha 包仍保留原命令名，本批尚未发布，caelis-bot 的 M0 更新与联调后置。
+
 ## 快速运行
 
 需要 Go 1.23+；当前验证工具链为 Go 1.26.8。
 
 ```sh
+export GOWORK=off
 # 完整的五步表单计划，使用内存 fixture，不发送系统输入。
 go run ./examples/headless
 
@@ -63,7 +66,7 @@ Actor 的操作名为 `observe`、`read`、`sync`、`resolve_anchor`、`capture`
 
 ## 执行与恢复
 
-- Plan 最多 16 步、10 秒；默认每步 2 秒。支持 bind / wait、focus / invoke / set_value、pointer move / click / drag / scroll、Unicode type_text、完整 key chord。
+- Plan 最多 16 步、10 秒；默认每步 2 秒。支持 bind / wait、focus / invoke / set_value / set_expanded、pointer move / click / drag / scroll、Unicode type_text、完整 key chord。
 - Ref 固定指向一次 provider 实例。绑定失效会停止；不会换成同名对象，也不会静默把 invoke 改成 click。
 - 同 Epoch / Actor / RequestID / 规范化内容只执行一次。使用同 ID 查询或恢复，不换新 ID 重放未知动作。
 - **先保存 Receipt，再处理 Execute 的 error。** `delivery` 与 `verification` 是独立结果；`completed` 只表示声明的完成条件满足。
@@ -78,7 +81,7 @@ Actor 的操作名为 `observe`、`read`、`sync`、`resolve_anchor`、`capture`
 
 协议固定为 `desktop-world/0.1`；版本和 revision 是十进制字符串，时长字段为 `*_ms`。拒绝重复 JSON key、未知字段、未知操作、非法 target 联合类型和超限参数。UI 文本始终是不可信数据。
 
-[examples/protocol](examples/protocol) 包含设计中原始请求。`protocol.Tools()` 提供工具描述、envelope 和完整参数 schema；最终由 Handler 严格验证。`desktop-world schema act` 可查看参数、大小写、取值和上限。
+[examples/protocol](examples/protocol) 包含设计中原始请求。`protocol.Tools()` 提供工具描述、envelope 和完整参数 schema；最终由 Handler 严格验证。`dtw schema` 只列操作目录，`dtw schema act set_expanded` 按需给出单个动作的参数和上限。
 
 观察输出计入完整成功 envelope 的 UTF-8 字节预算，默认 16 KiB。多页观察固定在同一采样批次；每页 cursor 只描述这一页，需分别同步或重新获取完整观察。`Changes` 重新读取声明范围并比较物化视图，超预算或历史/权限/拓扑失效返回 `reset_required`。`Watch.Next` 是轮询式消费，不依赖原生事件无遗漏。
 

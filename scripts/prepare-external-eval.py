@@ -11,7 +11,7 @@ import zipfile
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument("--output", type=Path, required=True)
 p.add_argument("--baseline", default="6185e89")
-p.add_argument("--helper", type=Path, default=Path("bin/desktop-world"))
+p.add_argument("--helper", type=Path, default=Path("bin/dtw"))
 a = p.parse_args()
 root = Path(__file__).resolve().parent.parent
 out = a.output.resolve()
@@ -30,11 +30,11 @@ task={"run":out.name,"baseline":a.baseline,"workspace":"workspace","sources":["h
 write(participant/"task.json",task)
 write(evaluator/"task.json",dict(task,workspace="../participant/workspace"))
 write(evaluator/"oracle.json",{"expected_note":expected,"original_hashes":{f.name:hashlib.sha256(f.read_bytes()).hexdigest() for f in workspace.iterdir()}})
-for src,dst in [(root/"tests/usability/PROMPT.md",participant/"PROMPT.md"),(root/"tests/usability/RUBRIC.md",evaluator/"RUBRIC.md"),(root/"scripts/verify-usability.py",evaluator/"verify-usability.py"),(root/"docs/helper.md",participant/"docs/helper.md"),(root/"skills/desktop-world/SKILL.md",participant/"skills/desktop-world/SKILL.md"),(a.helper.resolve(),participant/"bin/desktop-world")]:
+for src,dst in [(root/"tests/usability/PROMPT.md",participant/"PROMPT.md"),(root/"tests/usability/RUBRIC.md",evaluator/"RUBRIC.md"),(root/"scripts/verify-usability.py",evaluator/"verify-usability.py"),(root/"docs/helper.md",participant/"docs/helper.md"),(root/"skills/desktop-world/SKILL.md",participant/"skills/desktop-world/SKILL.md"),(a.helper.resolve(),participant/"bin/dtw")]:
     shutil.copy2(src,dst)
 for name in ["docs/scripting.md", "clients/javascript/desktop.mjs"]:
     shutil.copy2(root/name, participant/name)
-write(participant/"host.json",{"helper":"bin/desktop-world","args":["serve","--write-app","访达","--write-app","文本编辑","--audit","harness/audit.jsonl"],"host_setup_required":"Before the run, trusted host must authorize the selected Chrome instance with --write-app or --write-app-window; see evaluator/RUBRIC.md. Do not let the participant enlarge scope."})
+write(participant/"host.json",{"helper":"bin/dtw","args":["serve","--write-app","访达","--write-app","文本编辑","--audit","harness/audit.jsonl"],"host_setup_required":"Before the run, trusted host must authorize the selected Chrome instance with --write-app or --write-app-window; see evaluator/RUBRIC.md. Do not let the participant enlarge scope."})
 write(participant/"result-template.json",{"status":"not_run","agent":None,"model":None,"host_version":None,"started_utc":None,"stopped_utc":None,"first_observe_seconds":None,"first_action_seconds":None,"tasks":{},"script_count":None,"calls":None,"request_bytes":None,"response_bytes":None,"printed_bytes":None,"model_response_bytes":None,"model_input_tokens":None,"model_output_tokens":None,"experience_targets":{"observe_within_30_seconds":None,"action_within_60_seconds":None,"all_tasks_within_600_seconds":None,"stopped_within_1500_seconds":None},"compactions":None,"human_hints":None,"adapter_lines":None,"builds":None,"restarts":None,"remaining_processes":None,"notes":[]})
 manifest={"platform":"darwin-arm64 local development build; unsigned distribution","baseline":a.baseline,"source_head":subprocess.check_output(["git","rev-parse","HEAD"],cwd=root,text=True).strip(),"source_dirty":bool(subprocess.check_output(["git","status","--porcelain"],cwd=root,text=True).strip()),"files":{str(f.relative_to(participant)):hashlib.sha256(f.read_bytes()).hexdigest() for f in participant.rglob("*") if f.is_file()}}
 write(participant/"manifest.json",manifest)

@@ -1,20 +1,21 @@
 # Helper 预发布
 
-`desktop-world` 是 SDK 的 stdio 宿主，复用 `local.Open`、Actor、执行器和协议。它不是另一个实现，也不是 MCP 服务；MCP/Agent 工具宿主可在其外层映射调用。当前发布 macOS arm64 开发联调 alpha，采用 ad-hoc 签名，未经 Developer ID 签名或公证。Bot 使用 [managed host 接入](bot-integration.md)；下面的启动授权方式仍供通用 Agent 开发验证使用。
+`dtw` 是当前源码中 SDK 的 stdio 宿主，复用 `local.Open`、Actor、执行器和协议。MCP/Agent 工具宿主可在其外层映射调用。已发布的 `v0.1.0-alpha.1` macOS arm64 包仍使用 `desktop-world` 命令；本批源码尚未发布。该 alpha 采用 ad-hoc 签名，未经 Developer ID 签名或公证。Bot 使用 [managed host 接入](bot-integration.md)；下面的启动授权方式仍供通用 Agent 开发验证使用。
 
 通用 Agent 优先使用随包的 [JavaScript 调用链入口](scripting.md)：持久会话、跨回合 state、观察与动作组合、选择性 print 和自动计量。下面的 NDJSON 是底层协议，不要求每个 Agent 自行编写桥接器。
 
 ## 构建与启动
 
 ```sh
-go build -o bin/desktop-world ./cmd/desktop-world
+GOWORK=off go build -o bin/dtw ./cmd/dtw
 export PATH="$PWD/bin:$PATH"
-desktop-world doctor
-desktop-world schema observe
-desktop-world schema act
+dtw doctor
+dtw schema observe
+dtw schema                    # 小目录，不加载全部参数
+dtw schema act set_value      # 只加载本次需要的动作
 
 # 由可信宿主选择实际应用名；名称来自桌面 summary。
-desktop-world serve --write-app '访达' --write-app '文本编辑' \
+dtw serve --write-app '访达' --write-app '文本编辑' \
   --write-app 'Chrome' --audit artifacts/session-audit.jsonl \
   --assets-dir artifacts/session-captures
 ```
@@ -40,6 +41,12 @@ desktop-world serve --write-app '访达' --write-app '文本编辑' \
 ```
 
 使用 `schema <operation>` 查看确切结构，不从例子的占位值猜参数。
+
+`dtw schema act ACTION` 保留该动作的 target、前后条件、明确的联合参数和预算上限，省略其他动作参数。`dtw schema act` 显式加载完整 act schema。`set_expanded` 必须提供 `expanded:true/false`，始终验证目标状态；已经达到状态时不再调用原生 setter。没有语义能力时明确停止，不改用点击或键盘 toggle。
+
+后台任务可由可信宿主启动 `dtw serve --input-policy no_shared_input ...`，或通过 `host.Options.InputPolicy` / `ActorConfig.InputPolicy` 设置。默认 `shared_input` 保持原有行为，授权仍由 scope / Operations / Grant 决定。`no_shared_input` 在整个计划执行前拒绝 focus、共享键鼠和 raw Point 权限，返回 `requires_shared_input` 与原收据；前面的语义步骤也不会发送。Agent 参数不能更改策略。它承诺不主动使用共享输入，应用 provider 自身仍可能打开窗口或激活应用。
+
+收据的 `channel` 为 semantic、focus 或 shared_input；这是动作通道声明，需结合 delivery / verification 判断是否实际发送和验证。已满足展开状态的步骤为 semantic + not_applicable + verified。
 
 | 操作 | 参数与用途 |
 | --- | --- |

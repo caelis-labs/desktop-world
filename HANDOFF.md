@@ -2,6 +2,8 @@
 
 建议接入 **Go `host` SDK + 独立 helper**。Go library 保持唯一执行内核；helper 隔离原生阻塞，Bot Runtime 保持应用 × 回合授权、停止和工具输出的最终控制权。
 
+以下下载步骤对应已公开 alpha。当前源码命令已缩短为 `dtw`，新增批次及实机状态见 [feature 记录](docs/features.md)。本批尚未发布；进入 caelis-bot 的 M0 更新与统一联调后置。
+
 1. 从 [GitHub prerelease](https://github.com/caelis-labs/desktop-world/releases/tag/v0.1.0-alpha.1) 下载 macOS arm64 包，核对 `SHA256SUMS`，解压到可信固定路径。运行 `bin/desktop-world version` 和 `doctor`。这是 ad-hoc 签名、未经公证的开发包；首次运行按 macOS 正常安全与权限提示处理，不要求关闭系统保护。
 2. Bot 开发分支固定 Go 模块 `github.com/caelis-labs/desktop-world@v0.1.0-alpha.1`，使用 `host.Start` 启动包内 helper。示例：`go run ./examples/bot-host --helper /absolute/path/bin/desktop-world`，默认只读。
 3. Runtime 调用 `BeginTurn`；观察到精确应用 Ref 且用户批准后才调用 `Grant`。模型仅获得数据操作入口，不获得授权通道、helper 路径或回合选择权。输出经 `host.Content` 紧凑呈现，总预算为 32 KiB，保留原始收据。

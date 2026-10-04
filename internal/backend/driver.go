@@ -9,10 +9,13 @@ import (
 
 type Key string
 type Node struct {
+	// Fields nil means a full read. Nonempty masks certify only those properties.
+	Fields                   []string
 	Key, App, Window, Parent Key
 	Object                   dw.Object
 }
 type Query struct {
+	Fields          []string
 	Roots           []Key
 	Desktop         bool
 	Depth, MaxNodes int
@@ -25,6 +28,7 @@ type Query struct {
 type Page struct {
 	Nodes       []Node
 	Complete    bool
+	Dirty       bool
 	Visited     int
 	ScanCursor  string
 	Unavailable []string

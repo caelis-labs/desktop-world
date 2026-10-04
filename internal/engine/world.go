@@ -284,6 +284,9 @@ func (w *World) NewActor(ctx context.Context, c dw.ActorConfig) (dw.Actor, error
 	if e := ctx.Err(); e != nil {
 		return nil, e
 	}
+	if e := c.InputPolicy.Validate(); e != nil {
+		return nil, e
+	}
 	if c.ID == "" {
 		return nil, dw.Invalid("actor id required")
 	}
@@ -387,7 +390,7 @@ func (w *World) commitLocked(n backend.Node) dw.Ref {
 	if old.Lifecycle == dw.LifeGone || old.Lifecycle == dw.LifeExpired {
 		return r
 	}
-	o := copyOf(n.Object)
+	o := mergeFields(old, n)
 	o.Ref = r
 	o.App = w.refLocked(n.App)
 	o.Window = w.refLocked(n.Window)
@@ -395,7 +398,7 @@ func (w *World) commitLocked(n backend.Node) dw.Ref {
 	if o.Lifecycle == "" {
 		o.Lifecycle = dw.LifeLive
 	}
-	if v := o.States["protected"]; v.Status == dw.FactKnown && v.Value != nil && *v.Value {
+	if protectedFact(o.States["protected"]) || protectedFact(n.Object.States["protected"]) {
 		o.ValuePreview = dw.Fact[string]{Status: dw.FactRedacted}
 		o.URI = dw.Fact[string]{Status: dw.FactRedacted}
 	}
@@ -484,4 +487,70 @@ func (w *World) read(ctx context.Context, r dw.Ref) (dw.Object, error) {
 		return dw.Object{}, e
 	}
 	return v.(dw.Object), nil
+}
+
+// A partial native refresh cannot erase unrequested fields or refresh their times.
+func mergeFields(old dw.Object, n backend.Node) dw.Object {
+	next := copyOf(n.Object)
+	if len(n.Fields) != 0 {
+		next = copyOf(old)
+		next.Kind, next.Role, next.Lifecycle = n.Object.Kind, n.Object.Role, n.Object.Lifecycle
+		next.SampleStart, next.SampleEnd = n.Object.SampleStart, n.Object.SampleEnd
+		for _, f := range n.Fields {
+			switch f {
+			case "name":
+				next.Name = n.Object.Name
+			case "value_preview":
+				next.ValuePreview = n.Object.ValuePreview
+			case "uri":
+				next.URI = n.Object.URI
+			case "states":
+				next.States = copyOf(n.Object.States)
+			case "bounds":
+				next.Bounds = n.Object.Bounds
+			case "capabilities":
+				next.Capabilities = copyOf(n.Object.Capabilities)
+			case "relations":
+				next.Relations = copyOf(n.Object.Relations)
+			}
+		}
+	}
+	at := n.Object.SampleEnd
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	sampled := func(name string) bool {
+		if len(n.Fields) == 0 {
+			return true
+		}
+		for _, f := range n.Fields {
+			if f == name {
+				return true
+			}
+		}
+		return false
+	}
+	if sampled("name") && next.Name.Status != "" {
+		next.Name.SampledAt = at
+	}
+	if sampled("value_preview") && next.ValuePreview.Status != "" {
+		next.ValuePreview.SampledAt = at
+	}
+	if sampled("uri") && next.URI.Status != "" {
+		next.URI.SampledAt = at
+	}
+	if sampled("bounds") && next.Bounds.Status != "" {
+		next.Bounds.SampledAt = at
+	}
+	if sampled("states") {
+		for k, v := range next.States {
+			v.SampledAt = at
+			next.States[k] = v
+		}
+	}
+	return next
+}
+
+func protectedFact(v dw.Fact[bool]) bool {
+	return v.Status == dw.FactKnown && v.Value != nil && *v.Value
 }

@@ -7,7 +7,7 @@ SDK 是唯一桌面执行内核，helper 管理原生 World；`clients/javascrip
 `host.json` 中由可信宿主设置 helper 路径和已有授权参数，不由 Agent 扩权：
 
 ```json
-{"helper":"bin/desktop-world","args":["serve","--write-app","文本编辑","--audit","harness/audit.jsonl"]}
+{"helper":"bin/dtw","args":["serve","--write-app","文本编辑","--audit","harness/audit.jsonl"]}
 ```
 
 ```sh
@@ -48,7 +48,9 @@ print(dw.rows(after, ['name','states.enabled','states.focused']));
 
 `dw.focus` 的目标是 window 或支持 focus 的 UI，不接受 application；先选择实际窗口。
 
-`dw.next(ob)` 使用保存的原查询获取原生下一页，避免手抄 continuation 或修改 budget 引发 query mismatch；检查 `ob.coverage.continuation`。这与 `dw.list` 本地展示翻页不同。outline 默认只请求 name/role/value_preview；需要 states/capabilities 时显式加 fields。find 默认搜索深度 12，仍受原生访问预算限制。
+`dw.next(ob)` 使用保存的原查询获取原生下一页，避免手抄 continuation 或修改 budget 引发 query mismatch；检查 `ob.coverage.continuation`。这与 `dw.list` 本地展示翻页不同。observe 默认 32 条 summary / 8 KiB；outline 默认 name/role、深度 4、32 条 / 8 KiB。value_preview、uri、states、capabilities 均按需请求。find 默认搜索深度 12，仍受原生访问预算限制。
+
+`dw.expand(ref, true/false)` 达到明确的展开/收起状态，始终验证；重复请求已达到的状态不重复发送 setter。动作摘要保留 channel、delivery、verification 和不确定结果。后台宿主可以选择 no_shared_input 策略，脚本遇到 requires_shared_input 应停止，不能自行放宽策略或把语义操作改成物理输入。
 
 `dw.one` 要求覆盖完整、未截断且无缺失来源；只匹配到一个结果但覆盖不全时不能当作唯一。`dw.rows` 保留 Ref、false、空字符串与未知状态。它支持嵌套字段呈现，**不声称降低后端属性读取成本**。更少原生读取需使用 observe 的 scope/fields/match/budget。
 

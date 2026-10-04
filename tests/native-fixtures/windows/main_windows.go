@@ -7,6 +7,7 @@ package main
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"runtime"
 	"syscall"
@@ -78,7 +79,7 @@ func editProc(hwnd, msg, w, l uintptr) uintptr {
 func mainProc(hwnd, msg, w, l uintptr) uintptr {
 	switch msg {
 	case 0x111:
-		if w&0xffff == 2 && w>>16 == 0 {
+		if (w&0xffff == 2 || w&0xffff == 9) && w>>16 == 0 {
 			submit()
 			return 0
 		}
@@ -101,6 +102,7 @@ func createField() {
 }
 func main() {
 	runtime.LockOSThread()
+	rows := flag.Int("rows", 0, "bounded large-tree fixture row count")
 	title := flag.String("title", "Desktop World Native Fixture", "unique fixture title")
 	flag.StringVar(&logPath, "log", "native-fixture.jsonl", "event log")
 	flag.Parse()
@@ -132,6 +134,17 @@ func main() {
 	call("CreateWindowExW", 0, p(wide("BUTTON")), p(wide("提交")), 0x50010000, 24, 110, 110, 32, window, 2, instance, 0)
 	call("CreateWindowExW", 0, p(wide("BUTTON")), p(wide("替换输入框")), 0x50010000, 150, 110, 150, 32, window, 3, instance, 0)
 	status = call("CreateWindowExW", 0, p(wide("STATIC")), p(wide("ready")), 0x50000000, 24, 170, 430, 24, window, 4, instance, 0)
+	if *rows < 0 || *rows > 4096 {
+		panic("rows must be 0..4096")
+	}
+	for i := 0; i < *rows; i++ {
+		row := call("CreateWindowExW", 0, p(wide("STATIC")), p(wide(fmt.Sprintf("Order row %04d", i))), 0x50000000, 24, uintptr(230+i*24), 430, 24, window, uintptr(100+i), instance, 0)
+		call("SetWindowPos", row, 1, 0, 0, 0, 0, 0x13) // bottom, retain geometry, do not activate
+	}
+	if *rows > 0 {
+		deep := call("CreateWindowExW", 0, p(wide("BUTTON")), p(wide("Deep submit")), 0x50010000, 350, 110, 140, 32, window, 9, instance, 0)
+		call("SetWindowPos", deep, 1, 0, 0, 0, 0, 0x13)
+	}
 	call("ShowWindow", window, 5)
 	call("UpdateWindow", window)
 	record("ready", *title)

@@ -45,7 +45,7 @@ func normalizePlan(p dw.Plan) dw.Plan {
 		}
 		if s.Completion == "" {
 			s.Completion = "dispatch"
-			if s.Op == "focus" || s.Op == "set_value" || s.Op == "wait" || s.Op == "bind" {
+			if s.Op == "focus" || s.Op == "set_value" || s.Op == "set_expanded" || s.Op == "wait" || s.Op == "bind" {
 				s.Completion = "verify"
 			}
 		}
@@ -97,7 +97,7 @@ func (a *actor) Execute(ctx context.Context, p dw.Plan) (dw.Receipt, error) {
 	c, cancel := context.WithTimeout(ctx, p.Timeout)
 	r := &run{actor: a, digest: digest, cancel: cancel, done: make(chan struct{}), progress: make(chan dw.Progress, 32), receipt: dw.Receipt{Epoch: w.epoch, RunID: dw.RunID(token("run-")), RequestID: p.RequestID, State: "queued", Outcome: "pending", Bindings: map[string]dw.Ref{}, StartRevision: w.revision, SeatHealth: w.seatGate.health()}}
 	for _, s := range p.Steps {
-		r.receipt.Steps = append(r.receipt.Steps, dw.StepResult{ID: s.ID, State: "skipped", Delivery: dw.DeliveryNone, Verification: dw.VerifyNotRequested})
+		r.receipt.Steps = append(r.receipt.Steps, dw.StepResult{ID: s.ID, Channel: dw.ActionChannel(s.Op), State: "skipped", Delivery: dw.DeliveryNone, Verification: dw.VerifyNotRequested})
 	}
 	w.runs[p.RequestID] = r
 	w.runIDs[r.receipt.RunID] = r
@@ -192,6 +192,13 @@ func (a *actor) execute(ctx context.Context, r *run, p dw.Plan) {
 		close(r.done)
 	}()
 	stop := func(e error) { w.mu.Lock(); r.receipt.Fault = asFault(e); r.receipt.Outcome = "stopped"; w.mu.Unlock() }
+	// Reject the whole mixed plan before any native side effect. Keep its receipt for reconciliation.
+	for _, s := range p.Steps {
+		if !a.config.InputPolicy.Allows(s.Op) {
+			stop(dw.NewFault("requires_shared_input", "plan requires focus or shared input forbidden by the host", "never_automatically"))
+			return
+		}
+	}
 	if w.seatGate.health() == "fenced" {
 		stop(fault("seat_fenced"))
 		return
@@ -254,7 +261,7 @@ func resolve(t dw.Target, b map[string]dw.Ref) (dw.Target, error) {
 }
 func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string]dw.Ref) (res dw.StepResult, late bool) {
 	w := a.w
-	res = dw.StepResult{ID: s.ID, State: "failed", Delivery: dw.DeliveryNone, Verification: dw.VerifyNotRequested, StartedAt: time.Now().UTC()}
+	res = dw.StepResult{ID: s.ID, Channel: dw.ActionChannel(s.Op), State: "failed", Delivery: dw.DeliveryNone, Verification: dw.VerifyNotRequested, StartedAt: time.Now().UTC()}
 	w.mu.Lock()
 	res.StartRevision = w.revision
 	w.mu.Unlock()
@@ -394,6 +401,27 @@ func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string
 	if e = a.predicates(ctx, s.Before, bindings, s.Op); e != nil {
 		fail(e)
 		return
+	}
+	if s.Op == "set_expanded" {
+		f := object.States["expanded"]
+		if f.Status == dw.FactKnown && f.Value != nil && *f.Value == *s.SetExpanded.Expanded {
+			if e = a.check(ctx, in, true); e != nil {
+				fail(e)
+				return
+			}
+			proof := append(copyOf(s.After), dw.Predicate{Target: s.Target, Property: "expanded", EqualsBool: s.SetExpanded.Expanded})
+			v, er := a.poll(ctx, proof, bindings, s.Op)
+			if er != nil {
+				res.Verification = v
+				fail(er)
+				return
+			}
+			res.State = "satisfied"
+			res.Delivery = dw.DeliveryNA
+			res.Verification = dw.VerifyVerified
+			res.Evidence = proof
+			return
+		}
 	}
 	op := backend.Operation{Step: s, Key: key}
 	if strings.HasPrefix(s.Op, "pointer.") {
@@ -545,7 +573,10 @@ func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string
 	if s.Op == "set_value" {
 		predicates = append(predicates, dw.Predicate{Target: dw.Target{Ref: object.Ref}, Property: "value", EqualsString: &s.SetValue.Text})
 	}
-	if s.Completion == "verify" || s.Op == "focus" || s.Op == "set_value" {
+	if s.Op == "set_expanded" {
+		predicates = append(predicates, dw.Predicate{Target: s.Target, Property: "expanded", EqualsBool: s.SetExpanded.Expanded})
+	}
+	if s.Completion == "verify" || s.Op == "focus" || s.Op == "set_value" || s.Op == "set_expanded" {
 		a.progress(r, s, res.Target, "verifying")
 		v, e := a.poll(ctx, predicates, bindings, s.Op)
 		res.Verification = v
@@ -580,7 +611,7 @@ func (a *actor) actionable(o dw.Object, op string) error {
 			return fault("capability_unavailable")
 		}
 	}
-	if op == "focus" || op == "invoke" || op == "set_value" {
+	if op == "focus" || op == "invoke" || op == "set_value" || op == "set_expanded" {
 		for _, c := range o.Capabilities {
 			if c.Name == op && c.Support == "supported" && c.Availability == "available" {
 				return nil
