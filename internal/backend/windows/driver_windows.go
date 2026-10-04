@@ -98,7 +98,7 @@ func (d *Driver) Environment(ctx context.Context) (dw.Environment, error) {
 	d.env.Platform = "windows"
 	d.env.Displays = ds
 	d.env.Permissions = []dw.Permission{{Name: "accessibility", State: "granted", Reason: "limited_by_provider_and_integrity"}, {Name: "input", State: "unknown", Reason: "subject_to_UIPI_and_interactive_desktop"}, {Name: "screen_capture", State: "unknown", Reason: "interactive_desktop_required"}, {Name: "user_input_observation", State: "not_requested"}}
-	d.env.Capabilities = []dw.Capability{{Name: "visible_region", Support: "supported", Availability: "unknown"}, {Name: "window_content", Support: "unsupported", Availability: "blocked"}}
+	d.env.Capabilities = []dw.Capability{{Name: "visible_region", Support: "supported", Availability: "unknown"}, {Name: "window_content", Support: "supported", Availability: "unknown"}}
 	return d.env, ctx.Err()
 }
 func (d *Driver) Permissions(ctx context.Context, _ dw.PermissionRequest) ([]dw.Permission, error) {
@@ -368,6 +368,10 @@ func role(c int32) string {
 	return "unknown"
 }
 func (d *Driver) Query(ctx context.Context, q backend.Query) (backend.Page, error) {
+	if q.CaptureWindows {
+		q.Summary = true
+		q.Depth = 1
+	}
 	restore := dpiScope()
 	defer restore()
 	deadline := scanDeadline(ctx, q)

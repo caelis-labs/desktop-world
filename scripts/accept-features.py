@@ -18,26 +18,28 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
-parser.add_argument("features", nargs="*", choices=["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8"])
+parser.add_argument("features", nargs="*", choices=["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9"])
+parser.add_argument("--helper", type=Path, help="validate an existing packaged dtw instead of rebuilding it")
 args = parser.parse_args()
 windows = platform.system() == "Windows"
-features = args.features or (["F4", "F5"] if windows else ["F1", "F2", "F3", "F6", "F7", "F8"])
+features = args.features or (["F4", "F5"] if windows else ["F1", "F2", "F3", "F6", "F7", "F8", "F9"])
 if platform.system() not in ["Darwin", "Windows"]:
     parser.error("a real interactive macOS or Windows desktop is required")
 if any(f in ["F4", "F5"] for f in features) and not windows:
     parser.error("F4/F5 require Windows, not cross-build or mocked evidence")
-if any(f in ["F2", "F3", "F6", "F7", "F8"] for f in features) and windows:
+if any(f in ["F2", "F3", "F6", "F7", "F8", "F9"] for f in features) and windows:
     parser.error("these app-side state/getter fixtures are macOS-specific; Windows acceptance is deferred")
 run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:6]
 out = ROOT / "artifacts" / ("feature-acceptance-" + run_id)
 out.mkdir(parents=True)
 env = dict(os.environ, GOWORK="off")
 exe = ".exe" if windows else ""
-helper = ROOT / "bin" / ("dtw" + exe)
+helper = args.helper.resolve() if args.helper else ROOT / "bin" / ("dtw" + exe)
 test = ROOT / "bin" / ("features.test" + exe)
 def run(command, **options):
     return subprocess.run(command, cwd=ROOT, env=env, check=True, **options)
-run(["go", "build", "-o", str(helper), "./cmd/dtw"])
+if not args.helper:
+    run(["go", "build", "-o", str(helper), "./cmd/dtw"])
 run(["go", "test", "-c", "-o", str(test), "./tests/acceptance"])
 if windows:
     fixture = ROOT / "bin" / "DWNativeFixture.exe"
@@ -87,9 +89,9 @@ def launch(label, *, front=False, background=False, slow=0, rows=0, semantic="")
     while time.monotonic() < deadline:
         if log.exists() and log.stat().st_size:
             rows_read = [json.loads(line) for line in log.read_text().splitlines()]
-            if rows_read[0].get("event") == "ready":
-                if not windows:
-                    active.append(rows_read[0]["pid"])
+            if not windows and rows_read[0]["pid"] not in active:
+                active.append(rows_read[0]["pid"])
+            if any(row.get("event") == "ready" for row in rows_read):
                 return title, log
         time.sleep(.05)
     raise RuntimeError("fixture did not become ready")
@@ -107,15 +109,17 @@ def cleanup():
 try:
     for feature in features:
         case_env = dict(env, DTW_NATIVE_HELPER=str(helper))
-        if feature in ["F1", "F6", "F7", "F8"]:
+        if feature in ["F1", "F6", "F7", "F8", "F9"]:
             front_title, front_log = launch(feature + "-human", front=True)
             # Only fixture startup sets up the simulated human's desktop.
-            title, log = launch(feature + "-background", background=True, semantic={"F6": "selection", "F7": "check", "F8": "scroll"}.get(feature, ""))
+            title, log = launch(feature + "-background", background=True, semantic={"F6": "selection", "F7": "check", "F8": "scroll", "F9": "capture"}.get(feature, ""))
             case_env.update(DTW_FOREGROUND_TITLE=front_title, DTW_FOREGROUND_LOG=str(front_log))
-            test_name = {"F1": "TestNativeNoSharedInput", "F6": "TestNativeSetSelected", "F7": "TestNativeSetChecked", "F8": "TestNativeScrollIntoView"}[feature]
+            test_name = {"F1": "TestNativeNoSharedInput", "F6": "TestNativeSetSelected", "F7": "TestNativeSetChecked", "F8": "TestNativeScrollIntoView", "F9": "TestNativeWindowCapture"}[feature]
         else:
             title, log = launch(feature, slow=12 if feature == "F3" else 0, rows=1000 if feature == "F4" else 0)
             test_name = {"F2": "TestNativeSetExpanded", "F3": "TestNativeFieldPlan", "F4": "TestNativeWindowsContinuation", "F5": "TestNativeWindowsManagedControl"}[feature]
+        if feature == "F9":
+            case_env["DTW_CAPTURE_ASSETS"] = str(out / "f9-images")
         case_env.update({f"DTW_{feature}_TITLE": title, f"DTW_{feature}_LOG": str(log)})
         completed = subprocess.run([str(test), "-test.v", "-test.run", f"^{test_name}$"], cwd=ROOT, env=case_env, capture_output=True, text=True, timeout=75)
         (out / (feature.lower() + "-test.txt")).write_text(completed.stdout + completed.stderr)

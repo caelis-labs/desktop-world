@@ -1,0 +1,32 @@
+/Users/xueyongzhi/WorkDir/caelis-labs/desktop-world/bin/DWNativeFixture.app: replacing existing signature
+/Users/xueyongzhi/WorkDir/caelis-labs/desktop-world/bin/DTWHumanFixture.app: replacing existing signature
+=== RUN   TestNativeNoSharedInput
+    features_test.go:242: F1 native background completed; foreground text intact; background model calls=6 bytes=12397; original receipt=run-23449b9620a29881a5c48ed2
+--- PASS: TestNativeNoSharedInput (3.16s)
+PASS
+=== RUN   TestNativeSetExpanded
+    features_test.go:280: F2 native desired states verified, already-expanded no-op; model calls=6 bytes=11987
+--- PASS: TestNativeSetExpanded (0.73s)
+PASS
+=== RUN   TestNativeFieldPlan
+    features_test.go:336: F3 native task completed; value getters full=12 narrow=0; task calls=6 projected response bytes=15035; explicit comparison calls=1 bytes=7362
+--- PASS: TestNativeFieldPlan (1.19s)
+PASS
+=== RUN   TestNativeSetSelected
+    semantic_actions_test.go:225: F6 native business=Order A,Order B; human Unicode intact; pointer/focus stable; no-op verified; background SDK calls=12 bytes=17680; original receipt=run-08f99f632eee3751048ead46
+--- PASS: TestNativeSetSelected (4.53s)
+PASS
+=== RUN   TestNativeSetChecked
+    semantic_actions_test.go:230: F7 native business=order-42; human Unicode intact; pointer/focus stable; no-op verified; background SDK calls=14 bytes=20266; original receipt=run-095ec6879345fcbc6c8db129
+--- PASS: TestNativeSetChecked (4.49s)
+PASS
+=== RUN   TestNativeScrollIntoView
+    semantic_actions_test.go:235: F8 native business=order-900; human Unicode intact; pointer/focus stable; no-op verified; background SDK calls=11 bytes=16883; original receipt=run-dc95a55ad0623caa22dfac5d
+--- PASS: TestNativeScrollIntoView (4.43s)
+PASS
+=== RUN   TestNativeWindowCapture
+    window_capture_test.go:241: F9 human simulator: calls=21 projected_text_bytes=23067; separate disabled-capture host probe=1
+    window_capture_test.go:242: F9 independent real-desktop evidence: calls=41 projected_text_bytes=39654 images=10 png_bytes=302373 pixels=3248160; foreground Unicode input/pointer stable; native identity, covered fresh pixels, resize, popup/sheet, minimize/hide/recreate, host capture authority passed
+--- PASS: TestNativeWindowCapture (10.42s)
+PASS
+/Users/xueyongzhi/WorkDir/caelis-labs/desktop-world/artifacts/feature-acceptance-20261004T074444Z-3d1d57

@@ -1,8 +1,8 @@
 # 独立 feature 实现与操作验收
 
-2026-10-04。本批源码 helper 命令为 `dtw`，公开 alpha 尚未更新，caelis-bot 的 M0 更新与统一联调后置。实现沿用 World / Actor / 原生后端这一条执行路径。
+2026-10-04。本批源码 helper 命令为 `dtw`，本批预发布为 alpha.3，caelis-bot 的 M0 更新与统一联调后置。实现沿用 World / Actor / 原生后端这一条执行路径。
 
-#8 Review 修复和复验见 [修复证据](evidence/review-20261004/README.md)；[剩余功能补全计划](next-stage.md) 的 P1 已补齐。按用户后续决定，全部 Windows 实机验收与适配后置，当前 Windows 仅提供功能实现与编译/CI 检查，**不承诺可用**。下一项为 macOS 独立窗口内容捕获。
+#8 Review 修复和复验见 [修复证据](evidence/review-20261004/README.md)；[剩余功能补全计划](next-stage.md) 的 P1/P2 已补齐。按用户后续决定，全部 Windows 实机验收与适配后置，当前 Windows 仅提供功能实现与编译/CI 检查，**不承诺可用**。下一项为 P3 人类优先协作输入。
 
 | Feature | 完成的实现 | 独立真实场景 | 实机状态 |
 | --- | --- | --- | --- |
@@ -14,6 +14,7 @@
 | F6 set_selected | 显式布尔状态；AXSelected / UIA SelectionItem Add/Remove；自动验证、已满足 no-op | 前台输入时，选择/重复选择/取消/再选 Order A，后台提交 A+B，证明原有 B 保留 | macOS arm64 通过；Windows 实机后置、不承诺可用 |
 | F7 set_checked | 显式布尔状态；AXValue setter 或已知状态的单次 AXPress / UIA Toggle；mixed 保持 unknown | 前台输入时，勾选/重复勾选/取消/再勾选，后台批准订单；mixed 拒绝且无回调 | macOS arm64 通过；Windows 实机后置、不承诺可用 |
 | F8 scroll_into_view | 目标级原生滚动；自动验证视口交集；无 wheel fallback | 前台输入时，后台系统 WebKit 将远处订单滚入视口，再执行实际订单回调，重复滚动 no-op | macOS arm64 WebKit 通过；Windows 实机后置、不承诺可用 |
+| F9 独立窗口捕获 | 按需原生目录、专用窗口 Ref、SCK screenshot / 实验性 Windows provider render、局部坐标、授权和取消 | 前台输入时，被遮挡画布更新；移动缩放、popup/sheet、隐藏/最小化恢复、同名重建与拒绝旧 Ref | macOS arm64 通过；锁屏/断连/跨屏未实机验收；Windows 全部实机后置 |
 
 F1 承诺不主动发送共享键鼠或切换焦点。应用自身的语义动作可能弹窗或激活应用，不能从 AppKit fixture 推导所有应用都无干扰。F4 的 live UIA 树续扫只可发现目标，dirty / incomplete 不能证明不存在。游标容量不足会拒绝新扫描，保留原 frontier；错误和未知 delivery 不会自动重放。
 
@@ -51,3 +52,5 @@ python scripts/accept-features.py F4 F5
 本批最终证据位于 [2026-10-04 独立 feature 记录](evidence/features-20261004/README.md)。包含 F1/F2/F3 的独立实机成功记录和合成测试应用的日志，不保存其他桌面应用内容。另补跑原生键鼠/生命周期、值/保护字段、超时及恢复、16 游标容量回归。旧生命周期验收此前只消费大字段首个页，新增明细后无法发现排在后页的新控件；现按 name/role 和 continuation 发现替换控件，仍验证旧 Ref 被拒绝、替换值保持为空。
 
 P1 新证据见 [语义动作独立验收](evidence/semantic-actions-20261004/README.md)；同轮复跑 F1–F3。`scripts/check.sh` 覆盖 Go race、vet、Windows 交叉构建/vet、协议示例及 18 个 JavaScript 测试。继承子进程控制测试已在 macOS 运行；全部 Windows 实机验收后置，不能据此标记 Windows 功能可用或宣称 Bot 联调通过。
+
+P2 的接口、原生身份、图片预算和平台限制见 [窗口捕获](window-capture.md)。

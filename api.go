@@ -170,6 +170,8 @@ const (
 	ProjectionSummary Projection = "summary"
 	ProjectionOutline Projection = "outline"
 	ProjectionDetail  Projection = "detail"
+	// CaptureWindows discovers native capture identities without joining AX by title/bounds.
+	ProjectionCaptureWindows Projection = "capture_windows"
 )
 
 type Budget struct {
@@ -296,9 +298,12 @@ type CaptureTile struct {
 	DesktopFrame            FrameID
 	PixelWidth, PixelHeight int
 	ImageToDesktop          Transform2D
-	Topology                Version
-	CapturedAt              time.Time
-	Kind                    string
+	// Window content is target-local; it never grants a desktop input mapping.
+	Target        Ref
+	ImageToTarget Transform2D
+	Topology      Version
+	CapturedAt    time.Time
+	Kind          string
 }
 type CaptureResult struct {
 	Tiles           []CaptureTile

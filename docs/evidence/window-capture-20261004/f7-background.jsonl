@@ -1,0 +1,5 @@
+{"at":"2026-10-04T07:45:00Z","time":1791099900.942363,"value":"DTW F7-background 20261004T074444Z-3d1d57","event":"ready","pid":59782}
+{"time":1791099903.720799,"at":"2026-10-04T07:45:03Z","event":"checkbox","pid":59782,"value":"1"}
+{"event":"checkbox","pid":59782,"at":"2026-10-04T07:45:03Z","value":"0","time":1791099903.88568}
+{"event":"checkbox","pid":59782,"at":"2026-10-04T07:45:04Z","value":"1","time":1791099904.020906}
+{"event":"approved","pid":59782,"at":"2026-10-04T07:45:04Z","value":"order-42","time":1791099904.1567159}

@@ -29,7 +29,7 @@ func featureStart(t *testing.T, policy dw.InputPolicy) *featureSession {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	t.Cleanup(cancel)
-	c, err := host.Start(ctx, host.Options{Executable: path, InputPolicy: policy, Stderr: os.Stderr})
+	c, err := host.Start(ctx, host.Options{Executable: path, InputPolicy: policy, AssetsDir: os.Getenv("DTW_CAPTURE_ASSETS"), Stderr: os.Stderr})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -44,19 +44,20 @@ type Options struct {
 	SeatID                                string
 }
 type Fixture struct {
-	mu         sync.Mutex
-	nodes      map[backend.Key]Node
-	ids        map[string]backend.Key
-	next       int
-	env        dw.Environment
-	seat       backend.Seat
-	events     []Event
-	behaviors  map[string][]Behavior
-	incomplete bool
-	readFault  *dw.Fault
-	slowDelay  time.Duration
-	slowScans  map[string]*slowScan
-	slowNext   int
+	mu           sync.Mutex
+	nodes        map[backend.Key]Node
+	ids          map[string]backend.Key
+	next         int
+	env          dw.Environment
+	seat         backend.Seat
+	events       []Event
+	behaviors    map[string][]Behavior
+	incomplete   bool
+	readFault    *dw.Fault
+	captureFault *dw.Fault
+	slowDelay    time.Duration
+	slowScans    map[string]*slowScan
+	slowNext     int
 }
 type slowScan struct {
 	keys    []backend.Key
@@ -201,7 +202,7 @@ func (f *Fixture) Query(ctx context.Context, q backend.Query) (backend.Page, err
 	for _, k := range keys {
 		n := f.nodes[k]
 		include := q.Desktop
-		if q.Summary && n.Object.Kind == dw.KindUI {
+		if (q.Summary || q.CaptureWindows) && n.Object.Kind == dw.KindUI {
 			continue
 		}
 		if !q.Desktop {
@@ -248,7 +249,7 @@ func (f *Fixture) slowQuery(ctx context.Context, q backend.Query) (backend.Page,
 	} else {
 		s = &slowScan{}
 		for k, n := range f.nodes {
-			if q.Summary && n.Object.Kind == dw.KindUI {
+			if (q.Summary || q.CaptureWindows) && n.Object.Kind == dw.KindUI {
 				continue
 			}
 			include := q.Desktop
@@ -439,20 +440,39 @@ func (f *Fixture) HitTest(ctx context.Context, p dw.Point, k backend.Key) (bool,
 	r := n.Object.Bounds.Value.Rect
 	return p.X >= r.X && p.Y >= r.Y && p.X <= r.X+r.Width && p.Y <= r.Y+r.Height, ctx.Err()
 }
-func (f *Fixture) Capture(ctx context.Context, r dw.CaptureRequest) ([]backend.Image, error) {
+func (f *Fixture) SetCaptureFault(fault *dw.Fault) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.captureFault = fault
+}
+func (f *Fixture) Capture(ctx context.Context, r backend.CaptureRequest) ([]backend.Image, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.captureFault != nil {
+		return nil, f.captureFault
+	}
 	if !f.allowed("screen_capture") {
 		return nil, dw.NewFault("permission_denied", "capture denied", "reobserve")
 	}
-	if r.Kind != "visible_region" {
-		return nil, dw.NewFault("capability_unavailable", "window content unsupported", "reobserve")
+	if r.Kind == "window_content" {
+		n, ok := f.nodes[r.Key]
+		if !ok {
+			return nil, dw.NewFault("ref_gone", "window gone", "reobserve")
+		}
+		if n.Object.Kind != dw.KindWindow {
+			return nil, dw.Invalid("window required")
+		}
+	} else if r.Kind != "visible_region" {
+		return nil, dw.Invalid("unknown kind")
 	}
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 	img.Set(0, 0, color.RGBA{R: 255, A: 255})
 	var b bytes.Buffer
 	_ = png.Encode(&b, img)
 	bounds := dw.Bounds{Frame: "desktop", Topology: f.env.Topology, Rect: dw.Rect{Width: 2, Height: 2}}
+	if r.Kind == "window_content" {
+		bounds.Frame = "window"
+	}
 	if r.Region != nil {
 		bounds = *r.Region
 	}

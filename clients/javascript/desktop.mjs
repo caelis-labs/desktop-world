@@ -49,6 +49,9 @@ dw.press(ref, key, modifiers=[]) / dw.type(ref, text)
 dw.click(ref, options={})           left single click by default
 dw.act(steps, options={})           one ordered native plan, max 16 steps
 dw.read(ref, options={}) / dw.sync(cursor, options={})
+dw.captureWindows(appRef)           small on-demand native window inventory
+  then dw.capture({kind:"window_content",target:ref,max_pixel_width:1024,max_pixel_height:768})
+  target-local image; no desktop click mapping; hidden/minimized windows refuse
 dw.capture(args) / dw.get(runId) / dw.cancel(runId)
 dw.call(op,args,id?)                underlying seven verbs; stable id for receipt recovery
 
@@ -175,6 +178,7 @@ export function createSession(transport, { epoch = '', maxCalls = 32, timeoutMs 
     const outline = (ref, options = {}) => observe({ scope: { refs: [ref] }, projection: 'outline', fields: ['name', 'role'], ...options, budget: { max_depth: 4, max_results: 32, max_text_runes: 192, max_output_bytes: 8192, ...options.budget } });
     const api = Object.freeze({
       call, observe, outline, act, value: known,
+      captureWindows: (appRef, options = {}) => observe({ ...options, scope: { refs: [appRef] }, projection: 'capture_windows', freshness: { mode: 'refresh' }, fields: options.fields ?? ['name', 'role', 'app'], budget: { max_results: 32, max_output_bytes: 8192, ...options.budget } }),
       async waitFor(args, predicate, { timeout_ms = 3000, interval_ms = 100 } = {}) {
         if (typeof predicate !== 'function' || !Number.isFinite(timeout_ms) || timeout_ms < 1 || timeout_ms > 10000 || !Number.isFinite(interval_ms) || interval_ms < 50 || interval_ms > 1000) throw new Error('waitFor requires a predicate, timeout_ms 1..10000 and interval_ms 50..1000.');
         const end = Date.now() + timeout_ms;

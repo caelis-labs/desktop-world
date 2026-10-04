@@ -259,3 +259,18 @@ test('fragmented subtree recipe reports native incomplete sample without expandi
   assert.deepEqual(result.outputs[0].blocks[0].fragments,[{ref:'unknown',status:'unknown'}]);
   assert.deepEqual(result.observations[0].unavailable_sources,['ax_timeout']);
 });
+
+test('window discovery is explicit and small; it never requests pixels implicitly', async () => {
+  const requests=[];
+  const session=createSession(async request=>{requests.push(request);return {result:observed};});
+  const result=await session.execute("await dw.observe(); await dw.captureWindows('app-ref');");
+  assert.equal(result.error,undefined);
+  assert.deepEqual(requests.map(r=>r.op),['observe','observe']);
+  assert.equal(requests[0].args.projection,'summary');
+  assert.equal(requests[1].args.projection,'capture_windows');
+  assert.deepEqual(requests[1].args.scope,{refs:['app-ref']});
+  assert.deepEqual(requests[1].args.fields,['name','role','app']);
+  assert.equal(requests[1].args.budget.max_results,32);
+  assert.equal(requests[1].args.budget.max_output_bytes,8192);
+  assert.equal(requests[1].args.freshness.mode,'refresh');
+});

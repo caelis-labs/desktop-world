@@ -4,7 +4,7 @@ package darwin
 
 /*
 #cgo CFLAGS: -mmacosx-version-min=14.0
-#cgo LDFLAGS: -framework AppKit -framework ApplicationServices -framework ScreenCaptureKit -framework ImageIO -framework UniformTypeIdentifiers
+#cgo LDFLAGS: -framework AppKit -framework ApplicationServices -framework ScreenCaptureKit -framework CoreImage -framework CoreMedia -framework CoreVideo -framework ImageIO -framework UniformTypeIdentifiers
 #include <stdlib.h>
 void *dw_open(void);
 char *dw_call(void *,const char *,const char *,void *);
@@ -135,7 +135,11 @@ func (d *Driver) HitTest(c context.Context, p dw.Point, k backend.Key) (v bool, 
 	e = d.call(c, "hit", map[string]any{"Point": p, "Key": k}, &v)
 	return
 }
-func (d *Driver) Capture(c context.Context, r dw.CaptureRequest) (v []backend.Image, e error) {
+func (d *Driver) Capture(c context.Context, r backend.CaptureRequest) (v []backend.Image, e error) {
+	r.ReadTimeoutMS = 5000
+	if deadline, ok := c.Deadline(); ok {
+		r.ReadTimeoutMS = min(r.ReadTimeoutMS, max(1, time.Until(deadline).Milliseconds()*3/4))
+	}
 	e = d.call(c, "capture", r, &v)
 	return
 }

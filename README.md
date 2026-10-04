@@ -34,7 +34,7 @@ go run ./cmd/dw-inspect
 - Windows 11 amd64 实现目标，纯 Go 原生绑定，无 CGO 依赖；当前不承诺可用。COM 在固定 MTA 工作线程中初始化和释放；不会修改进程全局 DPI 模式。
 - 其他平台可运行协议和 fixture；`local.Open` 明确返回 `platform_unsupported`。
 
-模块路径：`github.com/caelis-labs/desktop-world`。当前公开版本为 `v0.1.0-alpha.2`；下载与校验见 [Release](https://github.com/caelis-labs/desktop-world/releases/tag/v0.1.0-alpha.2)。公开预发布暂不授予开源许可，见 [NOTICE](NOTICE)。
+模块路径：`github.com/caelis-labs/desktop-world`。本批预发布版本为 `v0.1.0-alpha.3`；下载与校验见 [Release](https://github.com/caelis-labs/desktop-world/releases/tag/v0.1.0-alpha.3)。公开预发布暂不授予开源许可，见 [NOTICE](NOTICE)。
 
 ## 接入
 
@@ -113,6 +113,6 @@ Windows 的构建和运行步骤见 [tests/native-fixtures/windows/README.md](te
 
 - 原生变化同步使用显式刷新与 Watch 轮询，尚未接入 AXObserver / UIA 事件加速；普通 provider 漏事件不会被误当成完整变化日志。
 - 用户干预检测为 `best_effort`：执行前焦点、持有按键/按钮和目标命中检查，不是系统级输入隔离。
-- 仅实现 `visible_region`，不把屏幕裁图声称为独立 `window_content`。Windows 暂不包含鼠标光标。
+- macOS 提供独立 `window_content`，通过应用范围的 `capture_windows` 目录按需发现专用 Ref；图像为窗口局部坐标。见 [窗口捕获与验收边界](docs/window-capture.md)。Windows provider 渲染仅实现/编译检查，不承诺可用；暂不包含鼠标光标。
 - 无 OCR、视觉定位、工作流 DSL、自动重绑、剪贴板后备、持久 exactly-once、角色动画或高帧率捕获。
 - 双屏混合缩放、Windows 真实桌面、更多浏览器 / Electron 兼容性和打包 Wails 宿主仍需验证；不能从当前 AppKit / Chrome fixture 推导全部应用兼容性。
