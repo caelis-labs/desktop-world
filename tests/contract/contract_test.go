@@ -306,7 +306,9 @@ func TestSnapshotDeltaAndMaterialVersions(t *testing.T) {
 }
 func TestPaginationStableAndEnvelopeBounded(t *testing.T) {
 	h := setup(t)
-	for i := 0; i < 80; i++ {
+	// Stay below the cumulative outline cap; the large one-shot outline
+	// regression separately checks explicit output-limit behavior.
+	for i := 0; i < 20; i++ {
 		h.f.Add(dwtest.Node{ID: fmt.Sprintf("extra-%03d", i), Parent: "window", App: "app", Window: "window", Object: dw.Object{Kind: dw.KindUI, Role: "text", Name: dw.Known(strings.Repeat("语", 100))}})
 	}
 	req := dw.ObserveRequest{Scope: dw.Scope{Refs: []dw.Ref{h.refs["Desktop World Fixture"]}}, Projection: dw.ProjectionOutline, Budget: dw.Budget{MaxResults: 10, MaxOutputBytes: 3000}, Fields: []string{"name", "role"}}
@@ -331,7 +333,7 @@ func TestPaginationStableAndEnvelopeBounded(t *testing.T) {
 		}
 		req.Continuation = ob.Coverage.Continuation
 	}
-	if len(seen) != 83 {
+	if len(seen) != 23 {
 		t.Fatalf("lost objects: %d", len(seen))
 	}
 }
@@ -553,7 +555,9 @@ func TestTextVersionDoesNotExposeContentHash(t *testing.T) {
 
 func TestNativeTraversalRootSurvivesFirstPageAndURIIsOptIn(t *testing.T) {
 	h := setup(t)
-	for i := 0; i < 30; i++ {
+	// Keep this root/order test below the cumulative outline-output cap.
+	// The large unfiltered outline test covers an explicit terminal limit.
+	for i := 0; i < 10; i++ {
 		h.f.Add(dwtest.Node{ID: fmt.Sprintf("extra-%d", i), Parent: "window", App: "app", Window: "window", Object: dw.Object{Kind: dw.KindUI, Role: "text", Name: dw.Known(fmt.Sprint(i))}})
 	}
 	u := "file:///isolated/workspace/" + strings.Repeat("long-name-", 30) + ".txt"
@@ -580,7 +584,7 @@ func TestNativeTraversalRootSurvivesFirstPageAndURIIsOptIn(t *testing.T) {
 			seen[o.Ref] = true
 		}
 	}
-	if len(seen) < 31 {
+	if len(seen) < 11 {
 		t.Fatal("lost descendants", len(seen))
 	}
 	r.Continuation = ""
