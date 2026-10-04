@@ -15,14 +15,14 @@ wire envelope growth; that does not invalidate continuation.
 | --- | --- |
 | [AXUIElementCopyMultipleAttributeValues](https://developer.apple.com/documentation/applicationservices/1462051-axuielementcopymultipleattribute) | **Used.** Common node attributes are fetched in one provider call, with the previous individual-read path when a provider does not implement batching. Value is read separately only after checking for a protected field. This reduces IPC work without changing redaction semantics. |
 | Role/subtree frontier pruning | Kept only for known scope, depth, summary and detail boundaries. A nonmatching parent role can contain the requested child, so pruning it by role would hide valid targets. Match remains a result filter. |
-| Persistent queue, visited set, cursor | **Used.** Opaque helper-local scan state survives output pages and calls for up to 90 seconds. A scan holds at most 10,000 retained native keys and 10,000 pending queue entries, at most 16 active cursors, and obeys each call's node and deadline budgets. `visited_nodes` is cumulative on resume. At a cap, `ax_scan_limit` is explicit. |
+| Persistent queue, visited set, cursor | **Used on macOS.** Opaque helper-local scan state survives output pages and calls for up to 90 seconds. A scan holds at most 10,000 retained native keys and 10,000 pending queue entries, at most 16 active cursors, and obeys each call's node and deadline budgets. `visited_nodes` is cumulative on resume. At a cap, `ax_scan_limit` is explicit. A seventeenth new scan returns `ax_scan_capacity`; it cannot evict an existing cursor. |
 | Per-node messaging timeout | Existing 50 ms maximum remains. Increasing it or the 10 s public read deadline cannot escape a fixed-prefix walk; they are safety bounds, not discovery. |
 | Two-stage child count, then details | A count can estimate breadth and choose a scope, but cannot identify a named target. Extra provider messages may cost more than batching; it is not the recovery path. |
 | [CDP `Accessibility.queryAXTree`](https://chromedevtools.github.io/devtools-protocol/tot/Accessibility/#method-queryAXTree) | Good browser-specific server-side role/name query. It requires a separate debugger connection and trust/authority design, so it is a recommended separately authorized browser path, not silently added to this OS helper. Returned ignored nodes need explicit handling. |
 | [CDP `getFullAXTree`](https://chromedevtools.github.io/devtools-protocol/tot/Accessibility/#method-getFullAXTree) | Useful for local diagnostics/counts, but a full page tree is too large for model output. The real Wikipedia page in this run had 35,247 CDP AX nodes. |
 | [Playwright `ariaSnapshot`](https://playwright.dev/docs/aria-snapshots) / older `accessibility.snapshot({interestingOnly})` | A scoped ARIA text view is compact, but a whole-page snapshot still needs a byte limit. The older snapshot API and its `interestingOnly` heuristic are version-dependent; neither grants native Ref authority. |
 | [WebDriver BiDi accessibility locator](https://www.w3.org/TR/webdriver-bidi/#command-browsingContext-locateNodes) | The draft supports role/name location within a browsing context. Its `getTree` is a browsing-context tree, not a replacement for native AX enumeration. A browser transport would need its own binding and authorization. |
-| Compact ARIA text with a byte budget | **Used as presentation policy.** Ask for `role,name`, short names, and exact role/name matches. The helper compacts facts; `max_output_bytes` bounds each page and a native multi-call scan has a 24 KiB wire-output cap plus a terminal `ax_output_limit` marker. No full tree is returned to the model. |
+| Compact ARIA text with a byte budget | **Used as presentation policy.** Ask for `role,name`, short names, and exact role/name matches. The helper compacts facts; `max_output_bytes` bounds each page and every outline page series has a 24 KiB cumulative wire-output cap plus a terminal `ax_output_limit` marker, regardless of platform, match or native cursor. No full tree is returned to the model. |
 
 The existing [fragmented-text recipe](../scripts/read-fragmented-text.js)
 and [reference](../skills/desktop-world/references/fragmented-text.md) solve
@@ -40,7 +40,8 @@ browser page use `fields:["role","name"]`, `max_results:8`,
 `max_text_runes:64`, `max_output_bytes:4096`, a finite visited-node budget
 and `read_deadline_ms <= 10000`. Follow the same continuation for a bounded
 number of calls; stop and report the limit on `ax_scan_limit`,
-`ax_output_limit`, expiry or incomplete coverage with no continuation.
+`ax_output_limit`, `ax_scan_capacity`, expiry or incomplete coverage with no
+continuation.
 Use a separately authorized browser role/name locator when available. A
 screenshot plus anchor is the last resort and is never automatic.
 
@@ -56,11 +57,35 @@ counts progress since the scan began. For sub-500 ms reads, the native driver
 reserves 100 ms for encoding and authorization after a possible in-flight AX
 message; the public deadline maximum is unchanged.
 
+`complete:false` intentionally covers both an unfinished frontier and a
+retained frontier that has drained after a live, cross-call sample. A
+continuation means more retained work or result pages remain. No continuation
+means there is no further retained work, or an explicit limit ended it; check
+`unavailable_sources` for `ax_scan_limit`, `ax_output_limit`, `ax_partial` and
+provider errors. `ax_partial` can also include failed native reads, so a
+separate “queue drained” bit would not certify that every reachable node was
+read. Keep the existing conservative coverage meaning and choose a narrower
+scope or an authorized browser locator for the next attempt.
+
+## Platform behavior
+
+The macOS AX driver implements the private `Resume` / `ScanCursor` exchange:
+the public continuation can advance native traversal after presentation pages.
+The Windows UIA driver currently ignores `Resume` and never returns a
+`ScanCursor`. Its continuation only pages results already collected; a partial
+zero-match Windows traversal has no cross-call recovery through this feature.
+Windows cross-build/vet and contract fixtures check compatibility, not Windows
+native traversal behavior. The cumulative 24 KiB outline output cap runs in
+the shared engine on both platforms, including one-call, unfiltered outlines.
+
 ## Evidence and comparison
 
 All numbers below are from the real GUI with the repository's managed helper
 and native acceptance binary, except the explicitly marked deterministic
-fixture. The Chrome work used new test windows/tabs; no screenshot or anchor
+fixture. These Chrome measurements are from PR #7's initial implementation;
+the review follow-up was validated with contract tests and a real AppKit
+provider, not a new public-site timing run. The Chrome work used new test
+windows/tabs; no screenshot or anchor
 was requested. "Model bytes" is the UTF-8 byte length of the compact
 `host.Content(...).Content[0].Text` field. Token counts are **rough**
 byte/4 estimates, not a tokenizer measurement. Exact target names are kept
@@ -88,17 +113,18 @@ Raw sanitized logs and exact commands are under
 [`evidence/ax-20261004`](evidence/ax-20261004/README.md). The baseline and
 current runs used the same Wikipedia window and SHA-256 target. The public
 site can change, so node rates and selected names are not stable benchmarks.
+The review follow-up's focused contract, full check and native fixture logs
+are under [`evidence/ax-20261004-review`](evidence/ax-20261004-review/README.md).
 
 ## Remaining limits
 
 - Native provider keys and the engine registry both cap at 10,000. A target
   beyond that bound needs a narrower scope or an authorized browser locator.
-- The private cursor expires with its helper and after 90 seconds. A page
+- The macOS private cursor expires with its helper and after 90 seconds. A page
   mutation between calls prevents absence proof; resume intentionally keeps
   coverage incomplete even when the retained queue drains.
 - The internal native query still reads nonmatching nodes to discover their
   role and descendants. Batching and cursor progress lower cost and remove the
   fixed-prefix wall, but do not provide CDP-style server filtering.
 - Native Windows desktop behavior and other browser engines were not exercised
-  in this real-site run. Their compile and contract paths are covered by the
-  repository checks.
+  in this real-site run. The Windows fixed-prefix limitation is described above.

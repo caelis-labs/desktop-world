@@ -533,10 +533,11 @@ func (a *actor) render(ctx context.Context, p *page, in dw.Intent) (dw.Observati
 		end = len(p.objects)
 	}
 	next := token("p-")
-	// A multi-call native scan may expose many matching objects. Cap the
-	// entire traversal's model-facing projection, independently of each page.
+	// An outline can span many presentation pages even if the native driver
+	// finishes its scan in one call (or does not support scan cursors). Bound
+	// the whole model-facing page series on every platform.
 	const scanOutputLimit = 24 * 1024
-	scanCapped := p.scanCursor != "" || p.outputBytes > 0 || (p.env.Platform == "darwin" && r.Match != nil && r.Projection == dw.ProjectionOutline && p.coverage.VisitedNodes > 512)
+	outputCapped := r.Projection == dw.ProjectionOutline
 	outputLimit := false
 	for {
 		out.Objects = copyOf(p.objects[p.offset:end])
@@ -547,19 +548,11 @@ func (a *actor) render(ctx context.Context, p *page, in dw.Intent) (dw.Observati
 			out.Coverage.Continuation = next
 		}
 		size := wire.Size(out.Epoch, out)
-		if size <= r.Budget.MaxOutputBytes && (!scanCapped || p.outputBytes+size <= scanOutputLimit) {
+		if size <= r.Budget.MaxOutputBytes && (!outputCapped || p.outputBytes+size <= scanOutputLimit) {
 			break
 		}
 		if end == p.offset {
-			if !scanCapped || p.outputBytes == 0 {
-				return dw.Observation{}, fault("budget_too_small")
-			}
-			out.Objects = nil
-			out.Coverage.Complete = false
-			out.Coverage.Truncated = true
-			out.Coverage.Continuation = ""
-			out.Coverage.UnavailableSources = append(append([]string{}, out.Coverage.UnavailableSources...), "ax_output_limit")
-			if wire.Size(out.Epoch, out) > r.Budget.MaxOutputBytes {
+			if !outputCapped || p.outputBytes == 0 {
 				return dw.Observation{}, fault("budget_too_small")
 			}
 			outputLimit = true
@@ -567,8 +560,24 @@ func (a *actor) render(ctx context.Context, p *page, in dw.Intent) (dw.Observati
 		}
 		end--
 	}
+	// An empty page can still fit the remaining total budget when the next
+	// object does not. Report the cumulative limit instead of a small-page
+	// fault or an empty continuation loop.
 	if !outputLimit && end == p.offset && end < len(p.objects) {
-		return dw.Observation{}, fault("budget_too_small")
+		if !outputCapped || p.outputBytes == 0 {
+			return dw.Observation{}, fault("budget_too_small")
+		}
+		outputLimit = true
+	}
+	if outputLimit {
+		out.Objects = nil
+		out.Coverage.Complete = false
+		out.Coverage.Truncated = true
+		out.Coverage.Continuation = ""
+		out.Coverage.UnavailableSources = append(append([]string{}, out.Coverage.UnavailableSources...), "ax_output_limit")
+		if wire.Size(out.Epoch, out) > r.Budget.MaxOutputBytes {
+			return dw.Observation{}, fault("budget_too_small")
+		}
 	}
 	a.w.mu.Lock()
 	defer a.w.mu.Unlock()
@@ -590,7 +599,7 @@ func (a *actor) render(ctx context.Context, p *page, in dw.Intent) (dw.Observati
 	if !outputLimit && (end < len(p.objects) || p.scanCursor != "") {
 		np := *p
 		np.offset = end
-		if scanCapped {
+		if outputCapped {
 			np.outputBytes += wire.Size(out.Epoch, out)
 		}
 		a.pages[next] = &np

@@ -1,0 +1,4 @@
+=== RUN   TestNativeScanCapacityPreservesCursor
+    scan_capacity_test.go:89: 16 active native scan cursors retained; seventeenth returned ax_scan_capacity; first cursor resumed from visited=1 to 2
+--- PASS: TestNativeScanCapacityPreservesCursor (1.52s)
+PASS

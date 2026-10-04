@@ -59,6 +59,13 @@ static NSDictionary *err(NSString *code) {
         @{@"Code" : code, @"Message" : code, @"RetryClass" : @"reobserve"}
   };
 }
+static NSDictionary *scanCapacityError(void) {
+  return @{ @"Fault" : @{
+    @"Code" : @"ax_scan_capacity",
+    @"Message" : @"16 native scan cursors are active; resume one or wait for expiry",
+    @"RetryClass" : @"never_automatically"
+  }};
+}
 // Keep previews, full reads and predicates on the same AX scalar contract.
 // Unsupported values stay unknown; labels are a separately identified source.
 static NSString *scalarText(id value) {
@@ -514,6 +521,9 @@ static NSDictionary *queryPage(DWContext *c, NSDictionary *q, DWCancel *cancel) 
     // targets, but cannot prove that an absent node was never added earlier.
     scan.incomplete = YES;
   } else {
+    // A new scan must not evict any retained continuation. The caller can
+    // consume an existing cursor or wait for its 90-second expiry.
+    if (c.scans.count >= 16) return scanCapacityError();
     scan = [DWScan new];
     scan.queue = [NSMutableArray array];
     scan.seen = [NSMutableSet set];
@@ -621,7 +631,6 @@ static NSDictionary *queryPage(DWContext *c, NSDictionary *q, DWCancel *cancel) 
       scan.head = 0;
     }
     cursor = NSUUID.UUID.UUIDString;
-    if (c.scans.count >= 16) [c.scans removeObjectForKey:c.scans.allKeys.firstObject];
     c.scans[cursor] = scan;
   }
   BOOL complete = !pending && !scan.incomplete && !scan.limitHit;

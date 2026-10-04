@@ -40,6 +40,9 @@ fallback is implied by this workflow.
 
 On macOS, a continuation may advance a retained native traversal after its
 current result pages are exhausted. This recipe still stops after eight pages;
-if that bound is reached, report incomplete text and use a narrower document
-scope. For role/name target discovery on large browser pages, follow the
+the shared 24 KiB cumulative outline cap may end it earlier with
+`ax_output_limit`. If either bound is reached, report incomplete text and use
+a narrower document scope. Windows continuation only pages collected results;
+it does not resume a partial native walk. For role/name target discovery on
+large browser pages, follow the
 [large AX guide](large-ax-discovery.md).

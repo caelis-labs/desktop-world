@@ -73,10 +73,19 @@ Zero matches with `coverage.complete:false` means the target is **unknown**, not
 absent. On macOS, a continuation now emits remaining result pages and then
 resumes the bounded native scan; `visited_nodes` should increase on scan pages.
 An output page may repeat the same visited count. Stop when the continuation
-ends or `ax_scan_limit` / `ax_output_limit` is reported. Do not restart an
+ends or `ax_scan_limit` / `ax_output_limit` is reported. `ax_scan_capacity`
+rejects a seventeenth new macOS scan while retaining existing cursors. Do not restart an
 incomplete scan with larger depth, nodes or timeout and infer absence from the
 same prefix. The cursor is helper-local, expires, and cannot prove absence
 after a live page changes.
+
+Every outline page series has a 24 KiB cumulative wire-output cap on all
+platforms, including unfiltered, single-call traversals. A terminal
+`ax_output_limit` keeps coverage incomplete. Windows currently has only result
+pagination: its UIA driver has no native `Resume` / `ScanCursor`, so a partial
+zero-match Windows scan cannot advance its traversal through continuation.
+No continuation means no retained work or an explicit limit, not proof that
+all reachable nodes were read.
 
 For cheap discovery, inspect `seat.focused_object` and
 `seat.foreground_window` first. Follow the focused object's `parent` path with

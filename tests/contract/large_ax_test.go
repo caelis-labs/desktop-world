@@ -179,3 +179,74 @@ func TestLargeAXModelBudgetIsCumulative(t *testing.T) {
 	}
 	t.Logf("broad scan calls=%d model_bytes=%d terminal=ax_output_limit complete=false", calls+1, bytes)
 }
+
+func TestOutlineWithoutNativeCursorHasCumulativeOutputLimit(t *testing.T) {
+	ctx := context.Background()
+	w, f, err := dwtest.New(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close(ctx)
+	f.Add(dwtest.Node{ID: "app", Object: dw.Object{Kind: dw.KindApplication, Name: dw.Known("Outline fixture")}})
+	f.Add(dwtest.Node{ID: "window", App: "app", Parent: "app", Object: dw.Object{Kind: dw.KindWindow, Name: dw.Known("Large window")}})
+	for i := 0; i < 160; i++ {
+		f.Add(dwtest.Node{ID: fmt.Sprintf("item-%03d", i), App: "app", Window: "window", Parent: "window", Object: dw.Object{Kind: dw.KindUI, Role: "text", Name: dw.Known(fmt.Sprintf("%03d %s", i, strings.Repeat("wide outline ", 10)))}})
+	}
+	a, err := w.NewActor(ctx, dw.ActorConfig{ID: "one-shot-outline", ReadScopes: []dw.Scope{{Desktop: true}}, Operations: []string{"observe"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, err := a.Observe(ctx, dw.ObserveRequest{Scope: dw.Scope{Desktop: true}, Projection: dw.ProjectionSummary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var window dw.Ref
+	for _, o := range inv.Objects {
+		if o.Kind == dw.KindWindow {
+			window = o.Ref
+		}
+	}
+	if window == "" {
+		t.Fatal("window absent")
+	}
+	// The ordinary fixture completes this native query in one call and never
+	// returns a scan cursor. No match predicate is supplied.
+	for _, pageSize := range []int{1, 20} {
+		req := dw.ObserveRequest{Scope: dw.Scope{Refs: []dw.Ref{window}}, Projection: dw.ProjectionOutline, Fields: []string{"role", "name"}, Budget: dw.Budget{MaxDepth: 2, MaxVisitedNodes: 500, MaxResults: pageSize, MaxOutputBytes: 4096}}
+		bytes, calls, lastVisited, limited := 0, 0, 0, false
+		for ; calls < 80; calls++ {
+			ob, err := a.Observe(ctx, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := protocol.Marshal(ob)
+			if err != nil {
+				t.Fatal(err)
+			}
+			compact, err := protocol.CompactJSON(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bytes += len(compact)
+			if len(compact) > 4096 || (lastVisited != 0 && ob.Coverage.VisitedNodes != lastVisited) {
+				t.Fatalf("presentation page escaped budget or rescanned: bytes=%d visited=%d previous=%d", len(compact), ob.Coverage.VisitedNodes, lastVisited)
+			}
+			lastVisited = ob.Coverage.VisitedNodes
+			if strings.Contains(strings.Join(ob.Coverage.UnavailableSources, ","), "ax_output_limit") {
+				if ob.Coverage.Complete || ob.Coverage.Continuation != "" {
+					t.Fatalf("output limit claimed complete coverage: %+v", ob.Coverage)
+				}
+				limited = true
+				break
+			}
+			if ob.Coverage.Continuation == "" {
+				t.Fatal("large one-shot outline ended without an explicit output limit")
+			}
+			req.Continuation = ob.Coverage.Continuation
+		}
+		if !limited || bytes > 30*1024 || lastVisited != 161 {
+			t.Fatalf("one-shot outline was not bounded: page_size=%d calls=%d bytes=%d visited=%d limited=%t", pageSize, calls+1, bytes, lastVisited, limited)
+		}
+		t.Logf("one-shot unfiltered outline page_size=%d calls=%d visited=%d model_bytes=%d terminal=ax_output_limit", pageSize, calls+1, lastVisited, bytes)
+	}
+}
