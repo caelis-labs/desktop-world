@@ -23,6 +23,12 @@ test('CLI runs through directory aliases and preserved main symlinks', () => {
   }
 });
 
+test('adapter can be imported from eval with a non-file argv entry', () => {
+  const code = `import(${JSON.stringify(new URL('./desktop.mjs',import.meta.url).href)}).then(module=>console.log(typeof module.createSession));`;
+  const output = execFileSync(process.execPath, ['--input-type=module','--eval',code,'not-a-file-argv'], {encoding:'utf8',timeout:5000});
+  assert.equal(output.trim(), 'function');
+});
+
 const observed = { objects: [{ ref: 'r1', role: 'button', name: { known: 'Save' }, value_preview: { known: '' }, states: { enabled: { known: false }, focused: { status: 'unknown' } } }], coverage: { complete: true, truncated: false }, seat: { focused_object: { known: 'r1' } } };
 const completed = { run_id: 'run1', outcome: 'completed', state: 'terminal', steps: [{ id: 's1', delivery: 'complete', verification: 'not_requested' }] };
 

@@ -434,6 +434,11 @@ export async function main(argv) {
   });
 }
 
-if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
+let invokedAsMain = false;
+if (process.argv[1]) {
+  try { invokedAsMain = realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { /* Importing the adapter need not supply a filesystem argv entry. */ }
+}
+if (invokedAsMain) {
   main(process.argv.slice(2)).catch(error => { console.error(JSON.stringify({ error: errorInfo(error) })); process.exitCode = 1; });
 }
