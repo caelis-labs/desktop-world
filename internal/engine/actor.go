@@ -599,15 +599,17 @@ func (a *actor) render(ctx context.Context, p *page, in dw.Intent) (dw.Observati
 		return dw.Observation{}, fault("permission_changed")
 	}
 	a.pruneLocked()
-	if len(a.views) >= a.w.opts.ViewLimit || len(a.pages) >= a.w.opts.ViewLimit {
+	continues := !outputLimit && (end < len(p.objects) || p.scanCursor != "")
+	if continues && len(a.pages) >= a.w.opts.ViewLimit {
 		return dw.Observation{}, fault("resource_exhausted")
 	}
+	a.makeViewRoomLocked()
 	limit := end - p.offset
 	if end == len(p.objects) {
 		limit = r.Budget.MaxResults
 	}
 	a.views[out.Cursor] = &view{topology: p.env.Topology, request: r, objects: copyOf(out.Objects), seat: out.Seat, coverage: out.Coverage, rev: out.Revision, at: time.Now(), permissionVersion: a.w.permissionVersion, offset: p.offset, limit: limit}
-	if !outputLimit && (end < len(p.objects) || p.scanCursor != "") {
+	if continues {
 		np := *p
 		np.offset = end
 		if outputCapped {
@@ -616,6 +618,24 @@ func (a *actor) render(ctx context.Context, p *page, in dw.Intent) (dw.Observati
 		a.pages[next] = &np
 	}
 	return out, nil
+}
+
+// Completed observation baselines are a bounded cache, not authority or input
+// deduplication records. Evict the oldest baseline so rapid local observations
+// can continue; Changes on it explicitly requires a fresh snapshot. Pending
+// continuation pages retain their separate limit and are never evicted here.
+func (a *actor) makeViewRoomLocked() {
+	if len(a.views) < a.w.opts.ViewLimit {
+		return
+	}
+	var oldest dw.Cursor
+	var sampled time.Time
+	for cursor, v := range a.views {
+		if oldest == "" || v.at.Before(sampled) {
+			oldest, sampled = cursor, v.at
+		}
+	}
+	delete(a.views, oldest)
 }
 func (a *actor) pruneLocked() {
 	now := time.Now()
@@ -757,9 +777,7 @@ func (a *actor) changes(ctx context.Context, r dw.ChangeRequest) (dw.ChangeSet, 
 		return reset("delta_budget_exceeded")
 	}
 	a.pruneLocked()
-	if len(a.views) >= a.w.opts.ViewLimit {
-		delete(a.views, r.Cursor)
-	}
+	a.makeViewRoomLocked()
 	nv := *v
 	nv.objects = copyOf(now)
 	nv.seat = s

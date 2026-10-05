@@ -488,7 +488,7 @@ func (d *Driver) scanStep(ctx context.Context, q backend.Query, scan *uiaScan, c
 
 func (d *Driver) seat() backend.Seat {
 	s := backend.Seat{Health: "ready", Intervention: "best_effort"}
-	hwnd, _, _ := foreground.Call()
+	hwnd := foregroundRoot()
 	for _, e := range d.entries {
 		if !e.gone && e.hwnd == hwnd {
 			s.Foreground = e.key
@@ -578,6 +578,23 @@ func (d *Driver) HitTest(ctx context.Context, p dw.Point, k backend.Key) (bool, 
 		return false, err
 	}
 	packed := uint64(uint32(int32(p.X))) | uint64(uint32(int32(p.Y)))<<32
+	// Some Chromium providers return their own element even while another
+	// native window covers the point. Confirm the physical HWND before trusting
+	// UIA ancestry; SendInput uses the actual desktop z-order.
+	win := e
+	if e.hwnd == 0 {
+		if err = d.refreshOwnership(e); err != nil {
+			return false, err
+		}
+		if win, err = d.lookup(e.window); err != nil {
+			return false, err
+		}
+	}
+	hwnd, _, _ := proc(user32, "WindowFromPoint").Call(uintptr(packed))
+	root, _, _ := proc(user32, "GetAncestor").Call(hwnd, 2)
+	if root == 0 || root != win.hwnd {
+		return false, nil
+	}
 	var hit *com
 	if err = d.uia.call(7, uintptr(packed), ptr(&hit)); err != nil {
 		return false, err

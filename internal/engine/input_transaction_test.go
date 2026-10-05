@@ -137,3 +137,46 @@ func TestCooperativeDragCannotCrossWindow(t *testing.T) {
 		t.Fatal(err, f.Events())
 	}
 }
+
+type expiredTransaction struct {
+	*transactionDriver
+	dispatched atomic.Bool
+	guardReads atomic.Int32
+}
+
+func (d *expiredTransaction) Perform(ctx context.Context, op backend.Operation) backend.Outcome {
+	out := d.transactionDriver.Perform(ctx, op)
+	d.dispatched.Store(true)
+	return out
+}
+func (d *expiredTransaction) Read(ctx context.Context, key backend.Key) (backend.Node, backend.Seat, error) {
+	if d.dispatched.Load() {
+		d.guardReads.Add(1)
+		return backend.Node{}, backend.Seat{}, dw.NewFault("input_lease_expired", "input budget exhausted", "reobserve")
+	}
+	return d.transactionDriver.Read(ctx, key)
+}
+
+// A native input guard must terminate verification and run cleanup promptly;
+// treating lease expiry as an unknown predicate would retain the foreground
+// until the much longer verification timeout and could delay user resumption.
+func TestVerificationLeaseExpiryCleansUpAndSkipsLaterInput(t *testing.T) {
+	var driver *expiredTransaction
+	w, f, epoch, refs := pocWorldDriver(t, func(base *occludedDriver) backend.Driver {
+		driver = &expiredTransaction{transactionDriver: &transactionDriver{occludedDriver: base, restore: "restored"}}
+		return driver
+	})
+	ctx := context.Background()
+	a, _ := w.NewActor(ctx, dw.ActorConfig{ID: "expiry", ReadScopes: []dw.Scope{{Desktop: true}}, WriteScopes: []dw.Scope{{Desktop: true}}, Operations: []string{"pointer.click", "wait", "invoke"}})
+	never := "NEVER"
+	p := dw.Plan{Epoch: epoch, RequestID: dw.RequestID(string(epoch) + ":expiry"), Steps: []dw.Step{
+		{ID: "click", Op: "pointer.click", Target: dw.Target{Ref: refs["提交"]}, Click: &dw.Click{Button: "left", Count: 1}},
+		{ID: "wait", Op: "wait", Timeout: 2 * time.Second, After: []dw.Predicate{{Target: dw.Target{Ref: refs["内容"]}, Property: "value", EqualsString: &never}}},
+		{ID: "later", Op: "invoke", Target: dw.Target{Ref: refs["提交"]}},
+	}}
+	r, err := a.Execute(ctx, p)
+	if faultCode(err) != "input_lease_expired" || driver.guardReads.Load() != 1 || driver.ends.Load() != 1 ||
+		r.Input == nil || r.Input.Restoration != "restored" || r.SeatHealth != "ready" || r.Steps[2].State != "skipped" || len(f.Events()) != 1 {
+		t.Fatal(r, err, driver.guardReads.Load(), f.Events())
+	}
+}

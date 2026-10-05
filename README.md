@@ -6,7 +6,7 @@ Desktop World 将应用、窗口和 UI 控件转换为可观察、可授权的�
 
 提供 `dtw` 命令行、持久 JavaScript 会话、Go SDK 和宿主管理接口。桌面操作使用 macOS Accessibility / CGEvent / ScreenCaptureKit，以及 Windows UI Automation / SendInput / Win32；运行核心无需 LLM、API Key、浏览器扩展或云服务。
 
-> 当前为预发布产品。本分支已完成 Windows 11 x64 的真实桌面适配验收，包括 Chrome、记事本、计算器及 Win32 测试应用。Windows 适配变更需从当前源码构建；本次没有发布新的版本。验证范围和复现证据见 [Windows 验收报告](docs/windows-validation.md)。
+> 当前处于 RC 验收阶段。Windows 11 x64 已完成 Chrome、记事本、计算器、Win32 和 Electron 的真实操作及稳定性验证；macOS 需在同一提交上复验后才能完成跨平台 RC 验收。发布范围、打包及验收步骤见 [RC 验收指南](docs/rc-validation.md)，实测结果见 [Windows 验收报告](docs/windows-validation.md)。
 
 ## 功能
 
@@ -27,7 +27,7 @@ Desktop World 将应用、窗口和 UI 控件转换为可观察、可授权的�
 
 | 平台 | 构建要求 | 已有实机覆盖 |
 | --- | --- | --- |
-| Windows 11 x64 | Go 1.23+，原生后端无需 CGO | Chrome、Windows 记事本、计算器、Win32 fixture |
+| Windows 11 x64 | Go 1.23+，原生后端无需 CGO | Chrome、Windows 记事本、计算器、Win32、Electron |
 | macOS 14+，arm64 / amd64 | Go 1.23+、CGO、Xcode Command Line Tools | arm64 上的 AppKit、Chrome、WebKit、Electron、TextEdit；最低系统版本与 amd64 实机仍待扩展 |
 
 真实操作需要已登录的交互式桌面。macOS 需授予宿主 Accessibility、输入及屏幕捕获权限；`dtw doctor` 只检查状态，不弹出权限申请。Windows 受 UIPI、前台切换规则和应用 provider 限制，建议以普通用户权限运行，并操作相同或更低权限的应用。
@@ -182,13 +182,24 @@ Windows 真实任务验收需要打开 Chrome，并传入其当前精确窗口�
 ```powershell
 python scripts/accept-windows.py --browser-window '当前 Chrome 窗口标题 - Google Chrome'
 python scripts/accept-features.py F4 F5
+python scripts/accept-windows-stability.py --electron 'C:\path\to\electron.exe' --rounds 32
 ```
 
-检查结果保存在新的 `artifacts/windows-acceptance-*` 目录，包括请求/响应、回执、浏览器可信事件、磁盘文件、PNG 和源码/二进制哈希。计算器及记事本标签因语言而异，参数和覆盖范围见 [Windows 验收报告](docs/windows-validation.md)。macOS 使用 [原生 fixture](docs/validation.md) 和 `scripts/check.sh`。普通 `go test ./...` 默认跳过真实桌面操作。
+检查结果保存在新的 `artifacts/windows-acceptance-*`、`windows-stability-*` 和 `feature-acceptance-*` 目录，包括回执、应用事件、磁盘文件、PNG 和源码/二进制哈希。Electron 验收需要独立的 Electron runtime，本轮使用 44.5.1。计算器及记事本标签因语言而异，参数和覆盖范围见 [Windows 验收报告](docs/windows-validation.md)。macOS 使用 [原生 fixture](docs/validation.md) 和 `scripts/check.sh`。普通 `go test ./...` 默认跳过真实桌面操作。
+
+从干净提交生成包含 helper、源码、文档、许可和 SHA256SUMS 的本地预发布包：
+
+```powershell
+# Windows amd64，PowerShell 7
+.\scripts\package-prerelease.ps1 -Version v0.1.0-rc.1
+```
+
+macOS arm64 使用 `./scripts/package-prerelease.sh v0.1.0-rc.1`。脚本不创建 tag 或发布 Release；包的 manifest 必须与待验收提交一致。包及源码使用 MPL-2.0，Windows 包未签名，macOS 包使用 ad-hoc 签名且未经公证。
 
 遇到错误时保留原回执：
 
 - `coverage.complete=false`：缩小范围、减少字段或消费 continuation；不能从零匹配推断目标不存在。
+- `sync` 返回 `reset_required`：重新取得对应范围的 snapshot；过期或被基线缓存淘汰的游标不再返回差量。
 - `ref_gone` / `ref_stale`：重新观察，确认新对象身份后再制定新计划。
 - `requires_shared_input`：当前宿主只允许后台语义操作，需要由宿主选择合适的任务或输入策略。
 - `partial` / `unknown`：查询原 RunID，核对业务结果；相同请求重试必须保持 ID 和正文不变。
@@ -198,10 +209,10 @@ python scripts/accept-features.py F4 F5
 
 ## 兼容性边界
 
-原生控件、浏览器及 Electron 的能力取决于应用自身的 Accessibility / UIA provider。Windows 独立窗口截图使用 `PrintWindow`，已验证 Chrome、记事本和计算器；Win32 已验证可见区域截图。其他 GPU、受保护或无响应窗口仍可能不能正确渲染。截图不包含鼠标光标。
+原生控件、浏览器及 Electron 的能力取决于应用自身的 Accessibility / UIA provider。Windows 独立窗口截图使用 `PrintWindow`，已验证 Chrome、记事本、计算器、Win32 和 Electron；隐藏或最小化窗口明确拒绝。旧版 Common Controls TreeView 的 ScrollItem provider 出现过超时，不会自动改成键鼠重试。其他 GPU、受保护或无响应窗口仍可能不能正确渲染。截图不包含鼠标光标。
 
 当前未提供 OCR、视觉定位、自动重绑、剪贴板输入后备、独立物理键鼠或系统级输入隔离。变化同步使用刷新与轮询。多屏混合缩放、RDP、锁屏/用户切换、更多 IME、Windows arm64 及全部 macOS 机型尚未形成完整实机矩阵。详细边界见 [实现说明](docs/implementation.md)。
 
 ## 许可
 
-Copyright © 2026 Caelis Labs. 当前公开预发布未授予开源许可；使用、修改或分发所需授权见 [NOTICE](NOTICE)。第三方组件声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+Copyright © 2026 Caelis Labs. 本项目采用 [Mozilla Public License 2.0](LICENSE)，许可通知见 [NOTICE](NOTICE)。第三方组件的原许可和声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

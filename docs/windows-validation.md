@@ -1,8 +1,8 @@
 # Windows 适配与实机验收
 
-2026-10-05，在本机 Windows 11 x64 的已登录桌面完成。当前源码已通过 Chrome 表单、记事本编辑保存、计算器、Win32 原生键鼠与生命周期、UIA 大树续扫及 managed helper 授权验证；新增 Windows cooperative 短前台事务。README 已按产品使用指南重写。本次没有发布新版本，不能把历史下载包当作本次构建。
+2026-10-05，在本机 Windows 11 x64 已登录桌面完成 Chrome、记事本、计算器、Win32 和 Electron 的真实 dtw 操作。稳定性收敛补齐状态语义、后台短事务、取消/预算/用户切换、遮挡拒绝后的恢复、窗口捕获、应用退出及 helper Epoch 隔离。当前为 RC 验收候选；跨平台确认仍需 [同提交 Mac 复验](rc-validation.md)。本轮生成本地验收包，不自动发布版本。
 
-## 环境与构建
+## 环境与证据
 
 | 项目 | 实测值 |
 | --- | --- |
@@ -10,77 +10,81 @@
 | 显示器 | 单屏，2560 × 1440 物理像素 |
 | 工具链 | Go 1.26.8、Node.js 26.2.0、Python 3.11.9；GOWORK=off |
 | 浏览器 | Google Chrome 154.0.8037.93 |
-| 日常应用 | Windows Notepad 11.2607.14.0、Calculator 11.2607.0.0；本机两者提供英文 UIA 标签 |
-| 基础提交 | `887b863809f2ba532675668e37e91bde4dac758d`，在其上修改的源码，vcs.modified=true |
-| 验收 helper | dev / windows-amd64；SHA256 `c76e3fd6bc62c200f1b603e2b8f464f35e9f35d3d3c7f9dfc5bc8b1794dee76a` |
+| 日常应用 | Notepad 11.2607.14.0、Calculator 11.2607.0.0；本机提供英文 UIA 标签 |
+| Electron | 44.5.1 / Chromium 152.0.7977.130，独立测试 profile |
+| 稳定性源码基础 | `1e43d86161f06060db9d47cb053cce163d31515f` 上的工作树，dev / vcs.modified=true |
+| 稳定性 helper SHA256 | `de58aca2d0103a0ad6f39ef72d9fc286389ced96675b4f50fae6237df31af2dd` |
 
-日常任务轮次为 `20261005T095545Z-d22052`（北京时间 17:55）；F4/F5 为 `20261005T095624Z-d9e9cc`。构建版本、源码指纹、任务回执及独立业务日志见 [可审查证据](evidence/windows-20261005/README.md)。
+首次适配的证据保留在 [Windows 初始记录](evidence/windows-20261005/README.md)，本轮补充见 [稳定性记录](evidence/windows-stability-20261005/README.md)。源码指纹及二进制哈希明确区分每轮构建；最终干净提交包的实际 `version`、manifest 和复验记录位于本机 `artifacts/release` 及新验收目录，不把旧 dev 二进制当成 RC 包。
 
-## 真实任务结果
+## 日常真实任务
 
-桌面操作通过持续运行的 dtw helper、Go SDK 或其 JavaScript 入口执行。浏览器没有使用 WebDriver/CDP、DOM 填值或剪贴板；页面自身的监听器只记录收到的事件。应用启动、测试文件准备及构建由宿主执行。初始 Chrome 窗口通过浏览器工具打开，之后的新标签、导航、填写、提交和键鼠恢复均由 dtw 操作。
+所有桌面效果经持久 dtw helper、Go SDK 或 JavaScript 入口完成。未使用 WebDriver/CDP、DOM 填值或剪贴板；页面监听器仅作事件 oracle。启动 fixture、准备文件、构建和读取业务日志由宿主完成。
 
-| 场景 | dtw 实际操作 | 独立验收与结果 |
-| --- | --- | --- |
-| 浏览器表单，必选 | Ctrl+T → 本地 URL → 原生 UIA 查找 → 聚焦/全选 → 中文与 emoji 输入 → Enter | 输入 `Windows 日常表单验收 🌍`；DOM keydown/input/submit 均为 trusted，submit 恰好一次；相同 ID/正文返回同一 RunID，get 可恢复原回执；PNG 可见 submitted:1 |
-| 浏览器前台事务稳定性 | 12 轮点击输入框、Ctrl+A、Unicode 输入；每轮结束后读取 Seat | 12/12 restored；原前台窗口、焦点 Ref、指针 x/y 均一致；每轮前台占用 249–274 ms。这是固定单机场景的测量，不是通用性能保证 |
-| 输入预算 | 请求 129 个 emoji，即 258 个 UTF-16 单元 | 激活/投递前拒绝，input_burst_limit，delivery=none；没有换通道重发 |
-| Canvas 边界 | 尝试绑定像素文字对应的语义按钮 | 返回 ambiguous_target，无按钮绑定与点击；零匹配不是对像素的识别 |
-| 记事本编辑保存 | 已创建测试文件 → 原生编辑器聚焦/全选 → 两行中文及 emoji → Ctrl+S | 输入全文和修改状态先完成 verify，再验证保存后的标题；独立读取磁盘文本精确一致，UTF-8 / CRLF；文件及 SHA256 保留 |
-| 计算器 | UIA invoke 清除及数字/运算按钮，计算 `128 + 256` | 原生显示 `Display is 384`、PNG 显示 384；channel=semantic，not_borrowed |
-| Win32 标准控件 | 真实 Unicode、组合键、Enter、点击、拖拽、滚轮；取消拖拽后继续操作；替换 EDIT 后访问旧 Ref | TestNativeFixture 通过；独立消息日志确认键盘提交一次、指针提交一次；取消释放已持有按钮，旧 Ref 写入拒绝，新控件为空；可见区域 PNG 留存 |
-| F4 大树续扫 | 每次 64 节点，跨 1,000 行发现 Deep submit，语义填写并提交 | 16 页 / 1013 节点，19 次 SDK 数据调用 / 21655 文本投影 bytes；业务提交一次，保留 dirty coverage |
-| F5 宿主管道 | host.Start → Grant → 填写/提交 → EndTurn → 后续写入/原回执查询 | 私有控制/数据管道实际运行；业务提交一次，结束回合拒绝新写入，原回执保留；4 次数据调用 / 7725 bytes |
-| JavaScript 持久会话 | named pipe 上两次 exec，第二次沿用第一次的窗口 Ref/state，原生读取 Chrome document URI | 同一 Epoch 保持状态，局部观察 complete=true；得到实际 loopback URL；stop 正常结束。全桌面扫描出现 uia_partial 时保持 incomplete，并缩小到已观察 Ref，没有伪装为完整扫描 |
+| 场景 | 实际操作与独立验收 |
+| --- | --- |
+| Chrome，必选浏览器 | Ctrl+T → loopback URL → 原生 UIA 定位 → 全选/Unicode 输入 → Enter；DOM keydown/input/submit 均为 trusted，提交恰好一次，相同请求返回同一 RunID，get 可恢复原回执 |
+| Chrome 稳定性 | 最新日常轮次 `20261005T112104Z-53b834`，20/20 短计划恢复原窗口、焦点与指针；12 轮初始证据另保留 |
+| 记事本保存 | 两行中文和 emoji，值及修改状态 verify → Ctrl+S → 标题验证；独立读取磁盘精确一致，UTF-8 / CRLF，并保存 SHA256 |
+| 计算器 | UIA invoke 计算 `128 + 256`；原生显示 `Display is 384`，PNG 显示 384；semantic / not_borrowed |
+| Win32 键鼠与生命周期 | Unicode、组合键、Enter、点击、拖拽、滚轮；取消后继续操作；重建 EDIT 后旧 Ref 写入拒绝，新控件为空。独立消息日志判定 |
+| F4 大树续扫 | 1,000 行后定位 Deep submit，64 节点/次；16 页 / 1013 节点、19 次 SDK 调用；dirty coverage 与独立提交次数核对 |
+| F5 managed helper | 私有数据/控制管道授权 → 实际填写/提交 → EndTurn；后续写入拒绝，原回执保留；独立提交一次 |
+| JavaScript 会话 | named pipe 两次 exec 沿用 state/Ref，同一 Epoch；原生读取 Chrome URI，局部 complete=true，stop 正常结束；全桌面 uia_partial 不冒充完整扫描 |
 
-另通过 dtw 在 Chrome 打开并观察了 Go 安装文档、读取原生页面 URL 和捕获图像，作为探索性真实网页验证。该导航发生于修复前的一轮，恢复故障回执仍保留；正式通过结果以上表的新轮次为准。
+## 稳定性与 provider 专项
 
-## 平台功能对齐
+| 场景 | 独立结果 |
+| --- | --- |
+| 勾选及 no-op | 标准 checkbox 打开/关闭；再次设置已达状态为 verified / not_applicable，应用勾选回调不增加 |
+| 多选 | Shanghai 加入/移除时保留 Beijing；应用用 LB_GETSEL 读取真实选择 |
+| 树展开/收起、滚动 | Common Controls v6 的树状态和 Invoice 79 滚动 verified；TVM_GETITEM/GETITEMRECT 确认展开及目标在视口中 |
+| 列表滚动 | Destination 79 的 ScrollItem verified；LB_GETITEMRECT 与视口相交，非从 UIA 回执推断结果 |
+| 遮挡拒绝与恢复 | 自有覆盖层挡住 EDIT，target_not_hittable / delivery=none；独立 donor helper 观察到原顶层窗口和焦点，前后均一致、Seat ready；移除遮挡后的新样本实际收到一次鼠标消息 |
+| Electron 键鼠 | 左/右/中键、双击、移动、250 ms 拖拽、双轴滚轮；DOM 回调验证，鼠标/拖拽/滚轮为 trusted |
+| Electron Unicode、多行 | 原生 UIA 定位后短事务输入中文/emoji及 Enter 换行；值 verify 与 DOM 精确文本双重核对 |
+| 菜单/弹窗 | 网页上下文菜单和 HTML dialog 在同计划内唯一 bind；Electron 原生菜单快捷键触发真实 native_menu，原生对话框 Confirm 触发 response=1 |
+| 32 轮后台事务与去重 | 另一应用保持原前台，每轮填写并提交中文/emoji；32/32 restored，原窗口/焦点一致；相同 ID/正文保持同一 RunID，DOM 总提交次数精确为 33 |
+| 预算和取消 | 258 UTF-16 文本及 501 ms 拖拽在激活/投递前拒绝；取消拖拽查询原 RunID 至清理完成，重复请求不重投；2500 ms 验证等待在一秒输入预算后停止并恢复，input_lease_expired |
+| 用户切换 | 第二 helper 在事务内将第三应用置前台；原任务 user_interrupted / user_superseded，第三应用继续收到 THIRD-KEPT，未强行恢复旧应用 |
+| 应用退出/旧对象 | 自有 Electron 退出后原任务终止、Seat ready；旧窗口的新写入 ref_gone / delivery=none |
+| helper 重启 | 仅在无持有输入的终态后终止自有 helper；新进程 Epoch 不同，旧 Ref 拒绝。不宣称强杀能清理尚持有键鼠或恢复跨进程去重 |
+| 窗口 PNG | Chrome、Notepad、Calculator、Win32 和 Electron 图像实际查看；Win32 调整尺寸更新 geometry_version，隐藏/最小化明确拒绝，应用恢复并完成重绘后重新捕获正确内容 |
 
-| 功能 | Windows 当前状态 | 与 macOS 的关系 |
-| --- | --- | --- |
-| World/Actor、授权、回合撤销、回执/去重 | 共享实现；Windows 原生 managed task 通过 | 相同契约，Windows 私有匿名管道对应 Unix FD |
-| 原生发现、字段/状态、Ref 生命周期 | UIA 原生实现，Chrome/Notepad/UWP/Win32 实测 | AX 对应 UIA；不同应用的原生树结构和支持能力仍不同 |
-| 有界观察与 continuation | Windows F4 实测通过 | 使用真实 UIA frontier；live 树续扫明确标记 dirty |
-| set_value / invoke | 浏览器、计算器与 Win32 实测通过 | 相同语义接口，不自动转为物理输入 |
-| set_expanded / set_checked / set_selected / scroll_into_view | UIA pattern 已实现，契约测试通过；各自 Windows 业务专项尚未验收 | macOS 已有对应独立业务证据；本次不据此声明 Windows 全部状态场景通过 |
-| 键鼠与 primary、Unicode、多行文本 | 真实操作通过；primary=Ctrl，CRLF 单个 Enter，Tab 为实际按键 | 与 macOS 对齐动作参数及完成条件；应用可能将 Enter/Tab 用作提交或跳转 |
-| cooperative | 新增并通过 Chrome/Notepad 短计划及 12 轮恢复 | 相同预算、channel 和恢复回执；Windows 采用公开前台 API，macOS 使用其平台机制 |
-| 保护字段及输入限制 | 沿共享契约，Windows 重新核对归属、进程实例与保护状态 | 保留 unknown/redacted；UIPI 与 OS 前台限制不能绕过 |
-| visible_region / window_content | Win32 可见区域、Chrome/Notepad/Calculator 窗口图像实际查看通过 | Windows PrintWindow，macOS SCK；窗口局部图像不能授权桌面点击 |
-| URI 与标准控件角色 | 补齐 UIA 角色；Chrome document URI 实测 | 按需读取 provider 暴露的只读 URL，缺失保留 unsupported/unknown |
+固定单机的 32 轮测量为每轮约 300–338 ms，验证等待预算耗尽的一轮约 1064 ms；这不是通用实时上限或性能保证。原生调用与恢复可能超过输入预算。详细回执记录各轮实际时长。
 
-## 修复内容
+## 收敛修复
 
-- 为 Windows 增加前台事务：保存原窗口、焦点及指针；目标进程生命周期、归属、焦点与命中检查；一秒输入预算；取消/恢复清理；恢复失败仍 fence。
-- 输入与清理统一采用线程 DPI awareness，修复恢复指针时的一像素偏差。焦点只在实际变化时请求，并有界等待 UIA 更新，修复 Notepad 的异步焦点与重复 SetFocus 故障。
-- Unicode 以完整键对及完整 surrogate pair 投递，在事件边界检查取消/前台变化；仅清理由本次已接受输入持有的键/按钮。CRLF 不重复按 Enter。
-- 应用名称改为实际进程名称；UWP 控件绑定到真实顶层 HWND，并分别检查内容进程与宿主窗口生命周期，修复 Calculator 的 ref_stale。
-- 窗口渲染使用 PW_RENDERFULLCONTENT，修复 Chrome 黑图；继续拒绝隐藏/最小化/非交互桌面等不可捕获状态，不用桌面 blit 代替窗口图像。
-- 验收定位加入角色以区分同名 STATIC/EDIT；Win32 fixture 明确支持 Ctrl+A，替换 EDIT 时保留原标签顺序；记事本验收使用不带末尾换行的种子，避免旧末尾段落干扰精确覆盖判定。
+- 前台 HWND 规范化到顶层窗口，修复 UIA SetFocus 后子 HWND 导致 Seat 归属未知、共享键盘误拒绝的问题。
+- SetForegroundWindow 的实际窗口确认优先于返回值；必要时请求已验证对象的公开 UIA SetFocus，允许短暂空前台完成交接。保留 Windows 前台限制，不注入 Alt、AttachThreadInput 或修改全局设置。
+- 借用前保留原 UIA 焦点，无法保留则预先拒绝；恢复先短暂等待自然焦点确认，再按需请求，并保留具体 restoration_reason。输出压缩仍保留恢复诊断。
+- 一秒预算统一为 input_lease_expired，验证等待立即停止与清理；契约回归确认后续输入 skipped，而非等待整个较长验证期限。
+- UIA 命中外增加实际 WindowFromPoint 顶层 HWND 检查，避免 Chromium provider 在其他窗口覆盖时仍返回自己的节点。
+- 语义调用失败保留 native HRESULT；不将语义失败变为键鼠重试。测试日志使用互斥保护并发追加，避免 oracle 自身丢事件。
+- 窗口捕获按目标窗口自身的 DPI 上下文渲染，再映射到物理窗口尺寸；本机 125% 缩放下 DPI-unaware Win32 图像不再出现因渲染尺寸不一致产生的多余黑边，保留几何与像素预算检查。
+- 快速观察曾达到 128 个同步基线容量并中断持续任务。完成基线改为有界缓存，最旧游标明确要求 reset，新的观察可继续；回归验证 160 次快速 snapshot、旧游标 reset、新游标差量及未消费分页仍有效。Ref、授权和输入 RequestID 去重记录不因此淘汰。
 
-Windows 前台限制依据 [SetForegroundWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow)，线程 DPI 切换依据 [SetThreadDpiAwarenessContext](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setthreaddpiawarenesscontext)。[PrintWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-printwindow) 是同步、由应用渲染的调用；不能从三个应用成功推导任意 GPU/provider 都支持。
+## 兼容性边界
 
-## 复现
+旧版 Common Controls v5 TreeView 曾在公开 ScrollItem 能力后返回超时（`native_action_failed` / `0x80131505`）。基线 helper 同样复现；增大 timeout 未解决，未保留该变更。fixture 通过本进程 manifest activation context 使用 v6 后，树滚动和独立状态检查通过。该设置只属于测试应用，不给 dtw 建立自动 provider 后备机制；旧 provider 的原失败回执保留。
 
-打开 Chrome 并取得当前精确窗口标题，在已登录的 Windows 11 amd64 桌面运行：
+Electron 原生应用菜单在本机 UIA 中没有 menu_item；菜单命令通过其实际快捷键验证，不能称为原生菜单项 UIA 点击通过。网页上下文菜单是另一项已验证场景。模态过渡可能重建 Chromium 节点，应结束后重新观察，再制定新的计划；脚本 bind 限制 enabled/offscreen 和唯一性。某轮旧节点导致 ambiguous_target，另一次连续任务复用旧 Ref 返回 ref_stale / delivery=none，均恢复前台并保留原回执，没有重放；后续独立任务每轮先重新观察。
+
+初始阶段 Chrome 标签直点出现过 target_not_hittable 且前台恢复未确认，原 unknown/fenced 回执仍在本机 `artifacts/windows-owned-cleanup-2`。本轮受控遮挡专项验证新的恢复路径通过；任意浏览器标签几何、同一应用内部用户切换和 provider 树仍需逐任务观察，不能从恢复成功推导所有目标都可点击。
+
+图像复核曾发现 fixture 从隐藏状态恢复后，过早发布恢复事件会得到仅标题栏的 PNG；应用现先完成 [RedrawWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-redrawwindow) 重绘，再发布该事件，复验图像内容正确。dtw 不根据任意黑色像素猜测是否为合法画布，也不替应用强制重绘。同步 [PrintWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-printwindow) 仍依赖 provider，不保证任意 GPU/保护窗口产生有效新帧。
+
+## 复现和发布范围
 
 ```powershell
 $env:GOWORK = 'off'
 $env:PYTHONUTF8 = '1'
 .\scripts\check.ps1
-python scripts/accept-windows.py --browser-window '当前窗口标题 - Google Chrome'
+python scripts/accept-windows.py --browser-window '当前 Chrome 窗口标题 - Google Chrome' --rounds 20
 python scripts/accept-features.py F4 F5
+python scripts/accept-windows-stability.py --electron 'C:\path\to\electron.exe' --rounds 32
 ```
 
-`accept-windows.py` 默认从当前源码构建 dtw 和 fixture。每轮新建文件、标题、日志及随机 loopback 端口，不覆盖旧证据；`--helper` 可指定现有二进制，`--rounds` 选择 1–20 轮，默认 12。脚本会编辑新建的记事本文件、改变计算器当前计算，并打开一个测试浏览器标签；最后停止自己的 fixture/helper，文件与页面结果保留供检查。应用的英文标签与本机相符；其他语言可通过 `--editor-name` / `--calculator-window` 调整名称，计算器按钮及显示文本须先观察后适配脚本中的准确标签。
+脚本默认构建当前源码，`--helper` 指定现有包内二进制。每轮使用新标题、文件、日志与 loopback 端口，不覆盖旧证据；完整 wire/桌面截图只保留本机忽略目录，仓库保存合成应用日志、回执摘要及自有 fixture 图像。日常脚本编辑新建文档、改变计算器计算并打开自己的表单标签；语义/稳定性脚本只结束本轮创建的 fixture/helper。失败轮次同样保留，不重放未知业务操作。
 
-完整产物在 `artifacts/windows-acceptance-*`、`artifacts/feature-acceptance-*`。wire 和截图可能包含桌面应用信息，留在本机忽略目录；仓库只保存合成任务日志与摘要，不公开整桌面观察及用户浏览器截图。失败轮次也保留，未知效果通过原回执和只读观察核对；没有重放不确定动作，新复验使用新的任务样本。
-
-验收后清理失败样本时，直接点击 Chrome 标签还出现了一次 `target_not_hittable`，该次前台恢复也未能确认。回执保持 unknown/fenced，点击 delivery=none、关闭步骤 skipped，完整日志在本机 `artifacts/windows-owned-cleanup-2`；没有重放这份计划。确认当前窗口后，新的标题前置条件和键盘计划成功关闭 8 个已知失败标签。成功表单、记事本文件及计算器结果保留；本轮创建的 Win32/loopback 服务进程已停止。这项额外结果说明复杂标签命中与前台恢复仍需更多 provider/用户介入验证。
-
-## 自动检查与剩余范围
-
-最终 `scripts/check.ps1` 通过：Go race、vet、Windows 原生 build、headless/embodied 示例、9 个 JSON 协议示例及计划/部分投递示例、19 个 JavaScript 测试。真实操作通过独立 opt-in 脚本验证，普通 go test 默认不发送桌面输入。
-
-本次未在 macOS 主机复跑。更多 Windows 浏览器/Electron、语义状态业务、多屏混合缩放、IME、用户介入压力、锁屏/RDP/用户切换、捕获完整 F9 环境矩阵、Windows arm64 和实际 caelis-bot/Wails 集成仍未形成完整验收。本机只验证单屏、当前普通权限及上述应用。Windows 受 SetForegroundWindow 与 UIPI 限制，拒绝时明确返回 needs_user_focus；系统级独立输入设备、OCR、自动视觉定位和事件推送不属于当前能力。
+`check.ps1` 已通过 Go race/vet/build、headless/embodied 示例、9 个 JSON 协议示例和 19 个 JavaScript 测试。发布范围限 Windows 11 amd64、普通权限、当前单屏及上述 provider；更多机型、多屏缩放、RDP/锁屏/用户切换、复杂 IME 和实际 Bot/Wails 联调未形成实机矩阵。Mac 必须基于最终同一 commit 复验，不能用历史成功直接确认跨平台 RC。最终打包、Mac 命令和验收条件见 [rc-validation.md](rc-validation.md)。

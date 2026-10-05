@@ -191,7 +191,11 @@ func (d *Driver) Perform(ctx context.Context, o backend.Operation) backend.Outco
 			}
 		}
 		if err != nil {
-			return result(dw.DeliveryUnknown, "native_action_failed")
+			o := result(dw.DeliveryUnknown, "native_action_failed")
+			if native, ok := err.(*dw.Fault); ok {
+				o.Fault.NativeCode = native.NativeCode
+			}
+			return o
 		}
 		return result(dw.DeliveryComplete, "")
 	}

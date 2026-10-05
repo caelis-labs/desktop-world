@@ -1,20 +1,16 @@
-# caelis-bot 联调交接 · v0.1.0-alpha.6
+# Desktop World 接入与 RC 交接
 
-建议接入 **Go `host` SDK + 独立 helper**。Go library 保持唯一执行内核；helper 隔离原生阻塞，Bot Runtime 保持应用 × 回合授权、停止和工具输出的最终控制权。
+建议接入 **Go `host` SDK + 独立 helper**。Go library 是执行内核；helper 隔离原生 provider 阻塞，Bot Runtime 保持应用/回合授权、停止和工具输出的最终控制权。
 
-以下下载步骤对应已公开 alpha。当前源码命令已缩短为 `dtw`，新增批次及实机状态见 [feature 记录](docs/features.md)。本批按 alpha.6 分发；进入 caelis-bot 的 M0 更新与统一联调后置，以下是后续接入指引，并未修改 Bot 固定版本。
+当前源码处于 `v0.1.0-rc.1` 验收阶段，许可为 [MPL-2.0](LICENSE)。Windows 11 amd64 日常任务、状态语义、Electron 及短前台事务已通过真实操作验证。下一步是从最终同一提交完成 macOS arm64 复验，步骤见 [RC 验收指南](docs/rc-validation.md)。本轮不自动更新实际 Bot 固定版本、创建 tag 或上传 Release；历史 alpha.6 下载包不包含这些 Windows 变更。
 
-1. 从 [GitHub prerelease](https://github.com/caelis-labs/desktop-world/releases/tag/v0.1.0-alpha.6) 下载 macOS arm64 包，核对 `SHA256SUMS`，解压到可信固定路径。运行 `bin/dtw version` 和 `doctor`。这是 ad-hoc 签名、未经公证的开发包；首次运行按 macOS 正常安全与权限提示处理，不要求关闭系统保护。
-2. Bot 开发分支固定 Go 模块 `github.com/caelis-labs/desktop-world@v0.1.0-alpha.6`，使用 `host.Start` 启动包内 helper。示例：`go run ./examples/bot-host --helper /absolute/path/bin/dtw`，默认只读。
-3. Runtime 调用 `BeginTurn`；观察到精确应用 Ref 且用户批准后才调用 `Grant`。模型仅获得数据操作入口，不获得授权通道、helper 路径或回合选择权。输出经 `host.Content` 紧凑呈现，总预算为 32 KiB，保留原始收据。
-4. 用户停止、会话结束或审批失效时调用 `EndTurn`。不确定结果用同一请求的 `Reconcile`，不换 ID 重发输入。宿主退出 `Close`；未知副作用和强杀后的输入状态仍需核对。
+1. 从待验收的干净提交构建包，核对 `SHA256SUMS` 并解压到可信固定路径。运行包内 `dtw version` 和 `doctor`，确认平台、协议与 `vcs.revision`。包包含对应完整源码、客户端、文档和许可。Windows 包未签名；Mac 包 ad-hoc 签名且未经公证，按系统正常安全与权限流程处理。
+2. 将宿主 Go 模块和 helper 固定为同一提交/版本。使用 `host.Start` 启动 helper。示例：`go run ./examples/bot-host --helper /absolute/path/bin/dtw`，默认只读。
+3. Runtime 调用 `BeginTurn`，依据用户授权向精确目标应用 `Grant`。模型只获得数据入口，不获得授权通道、helper 路径或回合选择权。`host.Content` 总预算 32 KiB，保留原回执及恢复失败原因。
+4. 用户停止、会话结束或审批失效时调用 `EndTurn`。不确定结果使用同一请求的 `Reconcile`，不换 ID 重发。退出时 `Close`；先等待取消与清理，再考虑终止 helper。强杀后尚持有的系统键鼠不能假设已自动释放。
 
-详见 [接入说明](docs/bot-integration.md)、[可执行示例](examples/bot-host/main.go)、[Agent 脚本调用链](docs/scripting.md)。发布包也包含整个 Go 源码模块。
+macOS / Windows amd64 可通过 `host.Options{InputMode: desktopworld.InputModeCooperative}` 使用后台语义和短前台事务。默认 `shared` 及 `no_shared_input` 权限上限保持原契约。Windows 采用公开的 SetForegroundWindow / UIA / SendInput，Mac 动态探测 SkyLight 私有 SPI；两者共享用户桌面，无法保证任意 provider 和系统版本无干扰。
 
-本轮真实 AppKit 验证已完成：Unicode 设值与 Enter 提交、相同请求不重复提交、结束回合后新输入被拒绝、原收据仍可恢复。独立应用日志和界面均确认只提交一次。自动检查覆盖 race、vet、Windows 交叉构建、协议和 JavaScript 调用链。
+接入详情见 [宿主管理](docs/bot-integration.md)、[示例](examples/bot-host/main.go)、[JavaScript 调用链](docs/scripting.md) 和 [输入事务](docs/cooperative-input.md)。逐项证据见 [Windows 报告](docs/windows-validation.md) 及 [Mac 历史实机报告](poc/background-input/FULL_ACCEPTANCE.md)。
 
-边界：尚未接入实际 caelis-bot/Wails 打包进程；macOS amd64/最低系统版本未验收。Windows 11 真实输入和日常任务于 2026-10-05 通过，范围见 [Windows 验收报告](docs/windows-validation.md)。共享前台焦点与系统鼠标，无后台独立座席。Antigravity 真实任务能完成主要文件任务，但上一轮总耗时 10分42秒，仍超过 10 分钟目标；不能称为易用性验收全部通过。
-
-当前仅公开预发布，**不授予开源许可**，见 [NOTICE](NOTICE)。
-
-macOS / Windows amd64 宿主可显式配置 `host.Options{InputMode: desktopworld.InputModeCooperative}` 开启同一桌面的短前台事务；默认 shared 和 no_shared_input 权限上限保持原契约。先阅读 [输入模式、预算与恢复](docs/cooperative-input.md) 及 [macOS 实机验收](poc/background-input/FULL_ACCEPTANCE.md)、[Windows 实机验收](docs/windows-validation.md)。macOS 动态探测私有 key-focus SPI，Windows 使用 SetForegroundWindow / UIA / SendInput。任意应用与系统版本仍需专项验证；本次未发布 Windows 新包。Bot 的固定版本与 M0 联调未更新。
+当前未接入实际 caelis-bot/Wails 打包进程；更多机型、最低系统版本、多屏/RDP/复杂 IME 尚未形成完整实机矩阵。历史独立 Agent 文件任务仍有超过十分钟的记录，本轮脚本验收没有运行 LLM，不能据此宣布通用易用性标准全部通过。

@@ -54,13 +54,13 @@ func TestPeerKeepsOriginalResultAndNeverReplays(t *testing.T) {
 
 func TestContentBudgetCountsBothCopiesAndPreservesUnknownEffect(t *testing.T) {
 	for _, text := range []string{strings.Repeat("<&>\u2028🌍", 500), strings.Repeat("<&>\u2028🌍", 10000)} {
-		body, _ := json.Marshal(map[string]any{"outcome": "unknown", "run_id": "original-run", "seat_health": "fenced", "input": map[string]any{"mode": "cooperative", "foreground_ms": 240, "restoration": "failed"}, "evidence": text})
+		body, _ := json.Marshal(map[string]any{"outcome": "unknown", "run_id": "original-run", "seat_health": "fenced", "input": map[string]any{"mode": "cooperative", "foreground_ms": 240, "restoration": "failed", "restoration_reason": "previous_focus_not_acknowledged"}, "evidence": text})
 		r := Content(Reply{ID: "original-request", Result: body})
 		structured, _ := json.Marshal(r.StructuredContent)
 		if len(r.Content[0].Text)+len(structured)+1024 > 32*1024 {
 			t.Fatal("exceeded Runtime budget")
 		}
-		if !r.IsError || !strings.Contains(r.Content[0].Text, "original-run") || !strings.Contains(r.Content[0].Text, "unknown") || !strings.Contains(r.Content[0].Text, `"restoration":"failed"`) {
+		if !r.IsError || !strings.Contains(r.Content[0].Text, "original-run") || !strings.Contains(r.Content[0].Text, "unknown") || !strings.Contains(r.Content[0].Text, `"restoration":"failed"`) || !strings.Contains(r.Content[0].Text, `"restoration_reason":"previous_focus_not_acknowledged"`) {
 			t.Fatal("lost uncertain effect")
 		}
 	}

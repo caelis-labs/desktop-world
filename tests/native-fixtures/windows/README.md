@@ -1,5 +1,13 @@
 # Windows native fixture
 
+`-semantics` 另创建勾选框、多选列表、TreeView、输入遮挡层及窗口状态按钮。此模式通过本进程 activation context 启用系统 Common Controls v6，不修改系统设置。应用用 BM_GETCHECK、LB_GETSEL、TVM_GETITEM/GETITEMRECT 等原生消息记录真实状态，不使用 UIA 作为业务判定。
+
+```powershell
+python scripts/accept-windows-stability.py --electron 'C:\path\to\electron.exe' --rounds 32
+```
+
+脚本检查状态操作与 no-op、保留其他选择项、列表/树滚动、遮挡拒绝后的前台恢复、窗口尺寸/最小化/隐藏与 PNG；Electron 检查真实键鼠、表单、菜单、弹窗、取消、预算、用户切换、32 轮恢复、原回执去重、应用退出与 helper Epoch 隔离。日志及完整 wire 写入新的本机 artifacts 目录。未指定 `--electron` 时只验证原生部分，不能据此认定完整专项通过。旧版 Common Controls 的 TreeView provider 曾发生滚动超时，保留在兼容性报告中。
+
 在 Windows 11 amd64 的已登录桌面中，用标准 Go 工具链构建：
 
 ```powershell

@@ -19,7 +19,7 @@
 
 1. 原生所有权由固定工作线程管理。macOS 使用 ARC retain 的 AX 对象，Windows 使用同一 MTA apartment 的 COM 引用；World 关闭时等待实际调用退出后释放。超时不能催生无限原生工作线程。
 2. 查询按声明 scope / depth / node budget 遍历。原生 registry 与 Go registry 均有上限；达到上限报不完整或资源耗尽，不复用公共 Ref。
-3. 当前采用拉取式物化视图。每个 cursor 保存已交付投影，Changes 做有界校对并生成 upsert/remove；超过 revision 距离或 TTL 则 reset。尚无原生 observer 或后台全桌面扫描。
+3. 当前采用拉取式物化视图。每个 cursor 保存已交付投影，Changes 做有界校对并生成 upsert/remove；超过 revision 距离、TTL 或基线容量则 reset。每个 Actor 默认最多保留 128 个同步基线，新观察淘汰最旧基线，旧游标明确 cursor_expired；未消费的 continuation 页面独立保留及限额，不为新观察淘汰。尚无原生 observer 或后台全桌面扫描。
 4. 输出分页来自固定采样批次；分页之间不重新扫描桌面。每页可独立同步，不把未交付的对象放入该页 cursor 的基线。
 5. 属性刷新时间不推进 material revision。字段变化、生命周期、Seat、环境/权限/拓扑变化推进 revision。拓扑改变使旧 cursor 需要重建，旧 Point 不可执行。
 6. 只允许内建键名与有限谓词。`primary` 在 macOS 映射 meta，在 Windows 映射 control；不是“所有应用都有相同快捷键”的保证。
@@ -34,15 +34,15 @@
 
 15. 同一桌面的 `InputModeCooperative` 由宿主开启，已知键鼠步骤在短 Plan 内借用前台并清理恢复；读取与语义动作保留后台通道。公开动作不增加模型参数，no_shared_input、授权与原收据去重继续适用。原生实现和逐项实机证据见 [cooperative-input.md](cooperative-input.md)。
 
-## 尚未完成的正式发布条件
+## 发布范围与未覆盖矩阵
 
-2026-10-05 已完成 Windows 11 x64 的 Chrome 表单、记事本保存、计算器、Win32 键鼠及 managed host 实机验证，并补齐 cooperative 输入。验证针对当前源码与这台电脑；下面的扩展矩阵仍是正式发布需要明确处理的条件。
+2026-10-05 已完成 Windows 11 x64 的 Chrome、记事本、计算器、Win32 和 Electron 实机验证，补齐状态语义、窗口捕获及 cooperative 的取消/预算/用户切换场景。当前 RC 范围和同提交 Mac 复验门槛见 [rc-validation.md](rc-validation.md)；以下矩阵尚未覆盖，不能据此声明通用平台兼容。
 
-- Windows 更多 UIA provider、语义状态动作专项与输入竞争场景；Windows arm64 尚不支持。
+- Windows 更多 UIA provider、复杂 IME 及同一应用内部的输入竞争；Windows arm64 尚不支持。旧 Common Controls TreeView 滚动超时保留明确错误，不作自动后备输入。
 - macOS amd64 实机运行（当前有交叉构建）；最低 macOS 14 实机运行。
 - AXObserver / UIA event invalidation；更完整的人类输入监测及权限矩阵。
 - 多显示器混合缩放、旋转、负原点、锁屏 / RDP / 用户切换实测。
-- 独立签名宿主与 Wails 集成 smoke，以及原生 / Electron / 浏览器 / Canvas 对照矩阵。
+- 独立签名宿主、实际 Bot/Wails 集成与产品安装器；当前 Windows 包未签名、Mac 包 ad-hoc 签名且未经公证。
 - provider hang 的 helper 隔离评估。嵌入式 native 调用若永久不退出，Close 返回 close_incomplete；不承诺硬取消。
 - 大型真实 provider 的性能测量和输入竞争压力测试。没有发布 token 节约率或通用成功率。
 

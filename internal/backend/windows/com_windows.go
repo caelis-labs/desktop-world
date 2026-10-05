@@ -63,6 +63,19 @@ var isVisible = proc(user32, "IsWindowVisible")
 var isWindow = proc(user32, "IsWindow")
 var foreground = proc(user32, "GetForegroundWindow")
 var setForeground = proc(user32, "SetForegroundWindow")
+
+// Standard UIA/MSAA SetFocus can make a child HWND the active foreground
+// handle. Public Window refs identify the owning top-level window.
+func foregroundRoot() uintptr {
+	hwnd, _, _ := foreground.Call()
+	if hwnd != 0 {
+		if root, _, _ := proc(user32, "GetAncestor").Call(hwnd, 2); root != 0 {
+			return root
+		}
+	}
+	return hwnd
+}
+
 var windowPID = proc(user32, "GetWindowThreadProcessId")
 var metrics = proc(user32, "GetSystemMetrics")
 var cursorPos = proc(user32, "GetCursorPos")

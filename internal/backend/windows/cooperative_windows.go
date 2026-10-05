@@ -65,12 +65,12 @@ func (d *cooperative) guard(ctx context.Context) error {
 	if !d.active || d.started.IsZero() {
 		return nil
 	}
-	hwnd, _, _ := foreground.Call()
+	hwnd := foregroundRoot()
 	pid, start := currentWindowIdentity(hwnd)
 	if pid != d.targetPID || start != d.targetStart {
 		d.fault = dw.NewFault("user_interrupted", "foreground application changed during input", "reobserve")
 	} else if time.Since(d.started) >= time.Second {
-		d.fault = dw.NewFault("input_burst_limit", "one-second foreground input budget exhausted", "reobserve")
+		d.fault = dw.NewFault("input_lease_expired", "one-second foreground input budget exhausted", "reobserve")
 	}
 	return d.fault
 }
@@ -108,22 +108,37 @@ func inputBurstError(s dw.Step) error {
 	}
 	return nil
 }
-func (d *cooperative) activate(ctx context.Context, hwnd uintptr) error {
+func (d *cooperative) activate(ctx context.Context, hwnd uintptr, focus *com) error {
 	if _, err := windowCaptureRect(hwnd); err != nil {
 		return err
 	}
-	current, _, _ := foreground.Call()
+	current := foregroundRoot()
 	if current == hwnd {
 		return nil
 	}
-	if ok, _, _ := setForeground.Call(hwnd); ok == 0 {
-		return dw.NewFault("needs_user_focus", "Windows denied foreground activation; focus the target explicitly", "reobserve")
+	original := current
+	// The foreground queue acknowledges asynchronously. Its actual HWND is the
+	// authority, including when the API's return value is zero during handoff.
+	allowed, _, _ := setForeground.Call(hwnd)
+	if allowed == 0 && focus != nil {
+		current = foregroundRoot()
+		if current == original && ctx.Err() == nil {
+			// UIA's public SetFocus delegates focus to the validated provider.
+			// It does not inject input or change the OS foreground lock policy.
+			_ = focus.call(3)
+		}
 	}
 	deadline := time.Now().Add(200 * time.Millisecond)
 	for {
-		current, _, _ = foreground.Call()
+		current = foregroundRoot()
 		if current == hwnd {
 			return nil
+		}
+		// GetForegroundWindow can briefly be NULL while the old window loses
+		// activation. That is a handoff, not evidence of a third application's
+		// intervention. Do not dispatch until the exact requested HWND wins.
+		if current != 0 && current != original {
+			return dw.NewFault("user_interrupted", "foreground changed during activation", "reobserve")
 		}
 		if err := ctx.Err(); err != nil {
 			return err
@@ -146,9 +161,9 @@ func (d *cooperative) borrow(ctx context.Context, win *entry) error {
 			return dw.NewFault("input_transaction_scope", "one input plan cannot change application", "reobserve")
 		}
 		d.target = win.hwnd
-		return d.activate(ctx, win.hwnd)
+		return d.activate(ctx, win.hwnd, win.el)
 	}
-	d.previous, _, _ = foreground.Call()
+	d.previous = foregroundRoot()
 	d.previousPID, d.previousStart = currentWindowIdentity(d.previous)
 	if d.previous == 0 || d.previousStart == 0 {
 		return dw.NewFault("seat_unavailable", "no live foreground window", "reobserve")
@@ -156,11 +171,13 @@ func (d *cooperative) borrow(ctx context.Context, win *entry) error {
 	if ok, _, _ := cursorPos.Call(ptr(&d.pointer)); ok == 0 {
 		return dw.NewFault("seat_unavailable", "pointer position unavailable", "reobserve")
 	}
-	_ = d.uia.call(8, ptr(&d.previousFocus))
+	if err := d.uia.call(8, ptr(&d.previousFocus)); err != nil || d.previousFocus == nil {
+		return dw.NewFault("seat_unavailable", "previous UIA focus cannot be retained for cleanup", "reobserve")
+	}
 	d.started = time.Now()
 	d.target, d.targetPID, d.targetStart = win.hwnd, win.pid, win.start
-	err := d.activate(ctx, win.hwnd)
-	current, _, _ := foreground.Call()
+	err := d.activate(ctx, win.hwnd, win.el)
+	current := foregroundRoot()
 	d.borrowed = d.previous != win.hwnd && current == win.hwnd
 	return err
 }
@@ -365,7 +382,7 @@ func (d *cooperative) EndInput(ctx context.Context) (dw.InputReport, error) {
 	if d.started.IsZero() {
 		return d.report, nil
 	}
-	current, _, _ := foreground.Call()
+	current := foregroundRoot()
 	pid, start := currentWindowIdentity(current)
 	if !d.borrowed && current == d.previous {
 		d.report.Restoration = "not_borrowed"
@@ -373,26 +390,42 @@ func (d *cooperative) EndInput(ctx context.Context) (dw.InputReport, error) {
 		d.report.Restoration = "user_superseded"
 	} else if d.borrowed {
 		p, s := currentWindowIdentity(d.previous)
-		if p != d.previousPID || s != d.previousStart || d.activate(ctx, d.previous) != nil {
+		if p != d.previousPID || s != d.previousStart {
 			d.report.Restoration = "failed"
+			d.report.RestorationReason = "previous_window_gone"
+		} else if err := d.activate(ctx, d.previous, d.previousFocus); err != nil {
+			d.report.Restoration = "failed"
+			if f, ok := err.(*dw.Fault); ok {
+				d.report.RestorationReason = f.Code
+			} else {
+				d.report.RestorationReason = "cleanup_cancelled"
+			}
+			// A user's new foreground wins even if it races the acknowledgement.
+			current = foregroundRoot()
+			pid, start = currentWindowIdentity(current)
+			if pid != d.targetPID || start != d.targetStart {
+				d.report.Restoration = "user_superseded"
+				d.report.RestorationReason = ""
+			}
 		} else {
 			d.report.Restoration = "restored"
 			if d.previousFocus != nil {
 				// Windows normally restores a window's last focus itself. Some
 				// providers reject SetFocus on that already-focused element. First
 				// confirm the actual focus; only request focus if it differs.
-				if !d.focusRestored(ctx) {
-					current, _, _ = foreground.Call()
+				if !d.focusRestored(ctx, 40*time.Millisecond) {
+					current = foregroundRoot()
 					if current == d.previous && ctx.Err() == nil {
 						_ = d.previousFocus.call(3)
 					}
 				}
-				if !d.focusRestored(ctx) {
-					current, _, _ = foreground.Call()
+				if !d.focusRestored(ctx, 200*time.Millisecond) {
+					current = foregroundRoot()
 					if current != d.previous {
 						d.report.Restoration = "user_superseded"
 					} else {
 						d.report.Restoration = "failed"
+						d.report.RestorationReason = "previous_focus_not_acknowledged"
 					}
 				}
 			}
@@ -403,6 +436,7 @@ func (d *cooperative) EndInput(ctx context.Context) (dw.InputReport, error) {
 		if ok, _, _ := cursorPos.Call(ptr(&p)); ok != 0 && p == *d.lastPointer {
 			if ok, _, _ := proc(user32, "SetCursorPos").Call(uintptr(d.pointer[0]), uintptr(d.pointer[1])); ok == 0 {
 				d.report.Restoration = "failed"
+				d.report.RestorationReason = "pointer_restore_denied"
 			}
 		}
 	}
@@ -415,10 +449,10 @@ func (d *cooperative) EndInput(ctx context.Context) (dw.InputReport, error) {
 // Foreground acknowledgement can precede UIA's focused-element update. Poll
 // the retained identity for a bounded interval without reactivating or retrying
 // any task input; a user's new foreground always wins.
-func (d *cooperative) focusRestored(ctx context.Context) bool {
-	deadline := time.Now().Add(200 * time.Millisecond)
+func (d *cooperative) focusRestored(ctx context.Context, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
 	for {
-		hwnd, _, _ := foreground.Call()
+		hwnd := foregroundRoot()
 		if hwnd != d.previous || ctx.Err() != nil {
 			return false
 		}

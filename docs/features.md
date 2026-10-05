@@ -38,11 +38,12 @@ python3 scripts/accept-features.py F6 F7 F8 F1 F2 F3
 ./scripts/check.sh
 ```
 
-Windows 11 amd64 已登录桌面可复跑 F4/F5；其他语义状态场景仍需各自扩展：
+Windows 11 amd64 已登录桌面可复跑 F4/F5；原生状态、Electron 及事务中断另由 Windows 专项脚本验证：
 
 ```powershell
 $env:GOWORK = "off"
 python scripts/accept-features.py F4 F5
+python scripts/accept-windows-stability.py --electron 'C:\path\to\electron.exe' --rounds 32
 ```
 
 结果写入新的 `artifacts/feature-acceptance-*` 目录，包括 per-feature 测试输出、应用日志、helper 版本/哈希、base commit、源码 SHA256 清单。F1 使用第二份 helper 模拟人的共享键盘输入，后台任务费用单独计量。F3 显式值读取对照单独计量，其余费用包含实际发现与提交路线。计量是 SDK 请求数及 host.Content 文本投影 bytes；没有运行 LLM，未计启动 hello、私有授权控制、MCP structuredContent 重复内容或额外 Runtime 元数据。

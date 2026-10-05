@@ -30,9 +30,10 @@ func Content(reply Reply) ToolResult {
 		Outcome    string `json:"outcome"`
 		SeatHealth string `json:"seat_health"`
 		Input      *struct {
-			Mode         string `json:"mode"`
-			ForegroundMS int64  `json:"foreground_ms"`
-			Restoration  string `json:"restoration"`
+			Mode              string `json:"mode"`
+			ForegroundMS      int64  `json:"foreground_ms"`
+			Restoration       string `json:"restoration"`
+			RestorationReason string `json:"restoration_reason"`
 		} `json:"input"`
 	}
 	_ = json.Unmarshal(reply.Result, &receipt)
@@ -50,6 +51,9 @@ func Content(reply Reply) ToolResult {
 		}
 		if receipt.Input != nil {
 			recovery["input"] = map[string]any{"mode": short(receipt.Input.Mode), "foreground_ms": receipt.Input.ForegroundMS, "restoration": short(receipt.Input.Restoration)}
+			if receipt.Input.RestorationReason != "" {
+				recovery["input"].(map[string]any)["restoration_reason"] = short(receipt.Input.RestorationReason)
+			}
 		}
 		body, _ = json.Marshal(recovery)
 		isError = true

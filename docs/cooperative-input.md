@@ -35,6 +35,7 @@ dtw serve --input-mode cooperative --write-app-window '精确的已观察窗口�
 | `mode` | 宿主选定的 `cooperative` |
 | `foreground_ms` | 本事务借用前台至清理结束的时长；未借用时为零/省略 |
 | `restoration` | `not_borrowed`、`restored`、`user_superseded` 或 `failed` |
+| `restoration_reason` | 恢复失败时的可选原因，例如原窗口已退出或原焦点未确认；输出压缩保留此字段 |
 
 `focus` 的自动验证发生在事务内，事务结束后原用户窗口会恢复。恢复失败返回 unknown 并 fence；晚到的原生结果必须先清理再释放执行令牌。取消会释放本库尚持有的键/按钮。用户切换到另一应用时停止新输入，保留其新前台；只在鼠标仍位于库的最后位置时恢复原指针。已进入系统事件流的输入不可撤回。
 
@@ -42,7 +43,9 @@ dtw serve --input-mode cooperative --write-app-window '精确的已观察窗口�
 
 macOS 原生 key-focus 与前台采样使用动态探测的 SkyLight 私有 SPI，精确绑定 AX 窗口和进程生命周期；只接受当前桌面上实际可见的 WindowServer 窗口，不自动跨 Space、恢复最小化窗口或改写系统权限。缺少 SPI/权限时明确不可用。最低 macOS 版本、其他机器、复杂 IME、系统级快捷键及任意应用的兼容性不能从单机通过推导。
 
-Windows 使用公开的 SetForegroundWindow、UIA 焦点确认与 SendInput，在原生 MTA 线程中保留前台窗口、进程实例、焦点对象和物理像素指针。整份输入事务及清理使用一致的 DPI awareness；焦点更新有界等待，已经聚焦的编辑器不重复请求 SetFocus。系统拒绝激活时返回 `needs_user_focus`，不注入 Alt、不 AttachThreadInput、不调整全局前台锁。恢复时先确认 Windows 已恢复的焦点，再按需请求；用户的新前台优先。窗口级键盘目标会解析实际焦点并检查归属及保护状态。
+Windows 使用公开的 SetForegroundWindow、UIA 焦点确认与 SendInput，在原生 MTA 线程中保留前台窗口、进程实例、焦点对象和物理像素指针。Seat 将子 HWND 规范化为所属顶层窗口。SetForegroundWindow 未完成激活时，可请求已验证对象的公开 UIA SetFocus，并等待确切目标窗口确认；短暂的空前台不视为用户切换。系统仍拒绝时返回 `needs_user_focus`，不注入 Alt、不 AttachThreadInput、不调整全局前台锁。无法保留原焦点时，在激活前拒绝借用。指针投递前同时检查实际 WindowFromPoint 所属窗口和 UIA 祖先，防止被遮挡的 Chromium 控件被误判为可命中。
+
+整份输入事务及清理使用一致的 DPI awareness；已经聚焦的编辑器不重复请求 SetFocus。预算耗尽统一返回 `input_lease_expired`，验证等待立即停止并清理，避免继续持有前台至整个等待超时。恢复时先确认 Windows 已恢复的焦点，再按需请求；用户的新前台优先。窗口级键盘目标会解析实际焦点并检查归属及保护状态。强杀 helper 时不能依赖已退出进程释放尚持有的系统输入；应先取消并等待原回执清理，未知状态交由宿主核对。
 
 用户输入干预检测是 best effort，尤其不能完整区分同一应用内部的用户/应用窗口变化；不承诺无干扰。物理输入回执的 delivery 不能替代应用处理结果；需要等待时显式设置 `completion:verify` 与 `after`，并核对独立业务结果。
 

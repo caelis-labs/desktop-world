@@ -477,9 +477,10 @@ type Receipt struct {
 // InputReport describes a temporary foreground transaction, including cleanup.
 // Dispatch and task verification remain separate in the step results.
 type InputReport struct {
-	Mode         string
-	ForegroundMS int64
-	Restoration  string // not_borrowed | restored | user_superseded | failed
+	Mode              string
+	ForegroundMS      int64
+	Restoration       string // not_borrowed | restored | user_superseded | failed
+	RestorationReason string // Optional diagnostic when cleanup cannot be confirmed.
 }
 
 type Permission struct {
