@@ -79,7 +79,7 @@ func TestNativeWindowCapture(t *testing.T) {
 		t.Fatal("foreground setup")
 	}
 	images, pngBytes, pixels := 0, 0, 0
-	capture := func(ref dw.Ref, want string) dw.CaptureTile {
+	capture := func(ref dw.Ref, want string, sheetAttached ...bool) dw.CaptureTile {
 		var out struct {
 			Capture dw.CaptureResult
 			Files   []struct {
@@ -106,7 +106,14 @@ func TestNativeWindowCapture(t *testing.T) {
 			t.Fatal(err)
 		}
 		r, g, b, _ := image.At(image.Bounds().Dx()/2, image.Bounds().Dy()/2).RGBA()
-		if (want == "red" && !(r > 40000 && g < 12000 && b < 12000)) || (want == "green" && !(g > 40000 && g > r*8/5 && g > b*8/5)) || (want == "blue" && !(b > 40000 && r < 12000 && g < 12000)) {
+		greenMinimum := uint32(40000)
+		if len(sheetAttached) != 0 && sheetAttached[0] {
+			// AppKit may dim the parent surface while a sheet is attached.
+			// Excluding the child pixels does not undo that native dimming.
+			// Keep the green dominance and child-exclusion checks below.
+			greenMinimum = 16000
+		}
+		if (want == "red" && !(r > 40000 && g < 12000 && b < 12000)) || (want == "green" && !(g > greenMinimum && g > r*8/5 && g > b*8/5)) || (want == "blue" && !(b > 40000 && r < 12000 && g < 12000)) {
 			t.Fatalf("%s expected %s, got %d %d %d", out.Files[0].Path, want, r, g, b)
 		}
 		if want == "green" {
@@ -175,7 +182,7 @@ func TestNativeWindowCapture(t *testing.T) {
 	// A sheet has its own native Ref and is excluded from the parent's pixels.
 	sheet := findCapture(" Sheet")
 	capture(sheet, "blue")
-	capture(canvas, "green")
+	capture(canvas, "green", true)
 	invoke("关闭Sheet")
 	invoke("最小化画布")
 	refuse(canvas, "window_not_visible", "window_unavailable")
