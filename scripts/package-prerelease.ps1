@@ -31,7 +31,7 @@ try {
         $packageManifest.os -ne 'windows' -or $packageManifest.arch -ne 'amd64') { throw 'binary version/commit mismatch' }
     $packageManifest.license = 'MPL-2.0'
     $packageManifest.signing = 'unsigned'
-    $packageManifest.validated_windows = 'Windows 11 amd64, interactive desktop, single display'
+    $packageManifest.acceptance_required = 'Exact-commit Windows 11 interactive desktop validation; packaging does not certify acceptance'
     $packageManifest.requirements = 'Application UIA support; same or lower integrity level; OS foreground restrictions apply'
     $packageManifest.binary_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath "$packagePayload/bin/dtw.exe").Hash.ToLowerInvariant()
     $packageManifest | ConvertTo-Json | Set-Content -Encoding utf8NoBOM -LiteralPath "$packagePayload/manifest.json"
@@ -42,7 +42,7 @@ try {
         Copy-Item -LiteralPath (Join-Path $packageRoot $file) -Destination $packagePayload
     }
     foreach ($folder in @('docs', 'clients', 'skills', 'examples')) {
-        Copy-Item -LiteralPath (Join-Path $packageRoot $folder) -Destination $packagePayload -Recurse
+        Copy-Item -LiteralPath (Join-Path "$packagePayload/source" $folder) -Destination $packagePayload -Recurse
     }
     $packageZip = Join-Path $packageOut "$packageName.zip"
     Compress-Archive -LiteralPath $packagePayload -DestinationPath $packageZip -CompressionLevel Optimal

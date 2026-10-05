@@ -109,7 +109,7 @@ func (p InputPolicy) Allows(op string) bool {
 		return true
 	}
 	switch op {
-	case "observe", "read", "sync", "bind", "wait", "resolve_anchor", "capture", "read_asset", "invoke", "set_value", "set_expanded", "set_checked", "set_selected", "scroll_into_view":
+	case "observe", "read", "sync", "bind", "bind_focus", "wait", "resolve_anchor", "capture", "read_asset", "invoke", "set_value", "set_expanded", "set_checked", "set_selected", "scroll_into_view":
 		return true
 	}
 	return false
@@ -363,6 +363,14 @@ type Bind struct {
 	Locator       Locator
 	RequireUnique bool // MUST be true for a v0.1 execution binding.
 }
+
+// BindFocus resolves focused UI inside an observed scope during execution.
+// It neither activates nor heals a stale scope.
+type BindFocus struct {
+	Name   string
+	Within Ref
+}
+
 type SetValue struct{ Text string }
 
 // Expanded must be supplied, including an explicit false for collapse.
@@ -395,6 +403,7 @@ type Step struct {
 	Op          string // bind | wait | focus | invoke | set_* | scroll_into_view | pointer.* | keyboard.*
 	Target      Target
 	Bind        *Bind
+	BindFocus   *BindFocus
 	SetValue    *SetValue
 	SetExpanded *SetExpanded
 	SetChecked  *SetChecked

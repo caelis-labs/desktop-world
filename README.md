@@ -4,9 +4,9 @@
 
 Desktop World 将应用、窗口和 UI 控件转换为可观察、可授权的对象。Agent 可以查找控件、读取文本、填写表单、操作键鼠和获取截图；每次执行返回包含投递结果、验证结果和错误的回执。
 
-提供 `dtw` 命令行、持久 JavaScript 会话、Go SDK 和宿主管理接口。桌面操作使用 macOS Accessibility / CGEvent / ScreenCaptureKit，以及 Windows UI Automation / SendInput / Win32；运行核心无需 LLM、API Key、浏览器扩展或云服务。
+提供 `dtw` 命令行、持久 JavaScript 会话、Go / TypeScript / Python / Rust SDK 和动态宿主管理接口。桌面操作使用 macOS Accessibility / CGEvent / ScreenCaptureKit，以及 Windows UI Automation / SendInput / Win32；运行核心无需 LLM、API Key、浏览器扩展或云服务。
 
-> 当前处于 RC 验收阶段。Windows 11 x64 已完成 Chrome、记事本、计算器、Win32 和 Electron 的真实操作及稳定性验证；macOS 需在同一提交上复验后才能完成跨平台 RC 验收。发布范围、打包及验收步骤见 [RC 验收指南](docs/rc-validation.md)，实测结果见 [Windows 验收报告](docs/windows-validation.md)。
+当前版本为 **v0.1.0-rc.2**，供集成测试使用。提供 Windows x64 与 macOS arm64 安装包、对应源码及 SHA256 校验文件；下载和验收记录见 [Releases](https://github.com/caelis-labs/desktop-world/releases) 与 [rc.2 验收 Issue](https://github.com/caelis-labs/desktop-world/issues/20)。版本的实际覆盖以该提交的验收记录为准。
 
 ## 功能
 
@@ -36,6 +36,8 @@ JavaScript 入口另需 Node.js 20+，无 npm 依赖。其他平台可运行协�
 
 ## 安装与检查
 
+从 [Releases](https://github.com/caelis-labs/desktop-world/releases) 下载对应平台的归档和 `SHA256SUMS`，校验后解压到可信目录。直接运行包内 `bin/dtw.exe`（Windows）或 `bin/dtw`（macOS）的 `version`、`doctor` 和 `schema`；使用预编译 helper 无需安装 Go。Python / Rust 客户端无需 Node，TypeScript 与 JavaScript 客户端需要 Node.js 20+。包内 `clients`、`docs` 与 `source` 对应 manifest 中的同一提交。
+
 从源码构建 Windows 版本：
 
 ```powershell
@@ -57,9 +59,15 @@ go build -o bin/dtw ./cmd/dtw
 
 `version` 显示构建版本、平台和协议；源码构建默认标记为 `dev`。历史预发布及校验文件见 [Releases](https://github.com/caelis-labs/desktop-world/releases)。
 
+## 外部 Agent 接入
+
+按编排语言选择 [TypeScript](clients/typescript/README.md)、[Python](clients/python/README.md)、[Rust](clients/rust/README.md) 或 [Go host](docs/bot-integration.md)。完整接入契约、动态授权和停止/恢复流程见 [Agent 接入指南](docs/agent-integration.md)。Python/Rust 直接启动原生 helper，无需 Node。
+
+`--write-app` 可声明未启动 APP；可信宿主在运行期间追加/撤销授权。使用 `dtw session --session harness/owner.json`，通过 `dtw auth list|add|revoke` 管理同一会话。声明只有在完整发现证明唯一时才绑定一个 APP 实例，APP 重启需重新授权。
+
 ## 快速开始：持久 JavaScript 会话
 
-推荐 Agent 使用 JavaScript 入口：一个原生 helper 跨调用保留对象 Ref、观察和回执，脚本中间结果留在本地，只输出需要的信息。
+需要持久脚本工具的 Agent 可使用 JavaScript 入口：一个原生 helper 跨调用保留对象 Ref、观察和回执，脚本中间结果留在本地，只输出需要的信息。
 
 创建 `host.json`，将 helper 路径及窗口标题替换为本机实际值。宿主通过精确窗口标题授权其所属应用：
 
@@ -183,6 +191,8 @@ Windows 真实任务验收需要打开 Chrome，并传入其当前精确窗口�
 python scripts/accept-windows.py --browser-window '当前 Chrome 窗口标题 - Google Chrome'
 python scripts/accept-features.py F4 F5
 python scripts/accept-windows-stability.py --electron 'C:\path\to\electron.exe' --rounds 32
+python scripts/accept-rc2.py --helper 'C:\path\to\package\bin\dtw.exe'
+python scripts/accept-rc2-package.py --package 'C:\path\to\package'
 ```
 
 检查结果保存在新的 `artifacts/windows-acceptance-*`、`windows-stability-*` 和 `feature-acceptance-*` 目录，包括回执、应用事件、磁盘文件、PNG 和源码/二进制哈希。Electron 验收需要独立的 Electron runtime，本轮使用 44.5.1。计算器及记事本标签因语言而异，参数和覆盖范围见 [Windows 验收报告](docs/windows-validation.md)。macOS 使用 [原生 fixture](docs/validation.md) 和 `scripts/check.sh`。普通 `go test ./...` 默认跳过真实桌面操作。
@@ -191,10 +201,10 @@ python scripts/accept-windows-stability.py --electron 'C:\path\to\electron.exe' 
 
 ```powershell
 # Windows amd64，PowerShell 7
-.\scripts\package-prerelease.ps1 -Version v0.1.0-rc.1
+.\scripts\package-prerelease.ps1 -Version v0.1.0-rc.2
 ```
 
-macOS arm64 使用 `./scripts/package-prerelease.sh v0.1.0-rc.1`。脚本不创建 tag 或发布 Release；包的 manifest 必须与待验收提交一致。包及源码使用 MPL-2.0，Windows 包未签名，macOS 包使用 ad-hoc 签名且未经公证。
+macOS arm64 使用 `./scripts/package-prerelease.sh v0.1.0-rc.2`。脚本不创建 tag 或发布 Release；包的 manifest 必须与待验收提交一致。包及源码使用 MPL-2.0，Windows 包未签名，macOS 包使用 ad-hoc 签名且未经公证。
 
 遇到错误时保留原回执：
 
@@ -207,9 +217,11 @@ macOS arm64 使用 `./scripts/package-prerelease.sh v0.1.0-rc.1`。脚本不创�
 
 同一进程中的相同 Epoch / Actor / RequestID / 计划只执行一次。新 helper 意味着新 Epoch、旧 Ref 失效；去重记录不跨进程持久化。UI 文本始终作为不可信数据处理。
 
+正常结束回合时先撤权，再核对原回执和应用结果，最后关闭会话。在途请求遇到 stdin/控制断开可能返回 `session_unknown`，关闭后的 helper 无法再查询原 run；应保留原请求及审计，用应用结果确认已发生的效果，不能通过新会话重放。
+
 ## 兼容性边界
 
-原生控件、浏览器及 Electron 的能力取决于应用自身的 Accessibility / UIA provider。Windows 独立窗口截图使用 `PrintWindow`，已验证 Chrome、记事本、计算器、Win32 和 Electron；隐藏或最小化窗口明确拒绝。旧版 Common Controls TreeView 的 ScrollItem provider 出现过超时，不会自动改成键鼠重试。其他 GPU、受保护或无响应窗口仍可能不能正确渲染。截图不包含鼠标光标。
+原生控件、浏览器及 Electron 的能力取决于应用自身的 Accessibility / UIA provider。Windows 独立窗口截图使用 `PrintWindow`，已验证 Chrome、记事本、计算器、Win32 和 Electron；隐藏或最小化窗口明确拒绝。支持原生复选框、多选列表、树节点展开/收起及列表项、树节点的语义滚动，具体能力以观察结果为准。动作结果不确定时不会自动改成键鼠重试。其他 GPU、受保护或无响应窗口仍可能不能正确渲染。截图不包含鼠标光标。
 
 当前未提供 OCR、视觉定位、自动重绑、剪贴板输入后备、独立物理键鼠或系统级输入隔离。变化同步使用刷新与轮询。多屏混合缩放、RDP、锁屏/用户切换、更多 IME、Windows arm64 及全部 macOS 机型尚未形成完整实机矩阵。详细边界见 [实现说明](docs/implementation.md)。
 

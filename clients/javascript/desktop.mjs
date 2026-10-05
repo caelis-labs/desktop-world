@@ -7,9 +7,13 @@ import { mkdtemp, mkdir, readFile, writeFile, chmod, unlink, rmdir } from 'node:
 import { openSync, writeSync, closeSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import { randomUUID } from 'node:crypto';
+
+const runtimeRoot=pathToFileURL(realpathSync(fileURLToPath(import.meta.url)));
+const {SessionTransport}=await import(new URL('../typescript/runtime/transport.mjs',runtimeRoot));
+const {PlanBuilder}=await import(new URL('../typescript/runtime/plan.mjs',runtimeRoot));
 
 const HELP = `Desktop World JavaScript — Node 20+, no packages, persistent native session.
 Trusted host: node desktop.mjs serve --host host.json [--session harness/session.json]
@@ -17,7 +21,7 @@ Agent:        node desktop.mjs exec [--session harness/session.json] <<'JS'
 state.inventory = await dw.observe();
 print(dw.list(state.inventory));
 JS
-Status:       node desktop.mjs status    (doctor is an alias; startup permissions only)
+Status:       node desktop.mjs status    (doctor is an alias; current authorization)
 Version:      node desktop.mjs --version
 Stop:         node desktop.mjs stop [--session harness/session.json]
 
@@ -73,14 +77,16 @@ print(dw.list(state.text)); // page saved results; read a text Ref for untruncat
 read(documentRef) does not aggregate descendant text. Inspect coverage and native pages.
 There is no setTimeout in scripts. Use waitFor with a readiness predicate after transitions.
 Use rows for local filtering before print; value works on role/name/state alike.
-Keyboard example: await dw.focus(windowRef); await dw.press(await dw.focused(windowRef),'O',['primary']);
+Keyboard example: await dw.transaction(tx => { tx.focus(windowRef); tx.press(tx.bindFocus('editor',windowRef),'O',['primary']); });
 After a dialog opens, inspect dw.observe(appRef), then use dw.focused(appRef).
 Keyboard target must be focused UI, never the window Ref itself.
 An action completed with verification=not_requested proves dispatch, not task success.
 read uses limit_runes<=4096 and continuation=result.next for more text.
 
 Limits: 32 calls, 60 seconds, 8 KiB printed JSON per exec; 64 KiB source.
-Full transport evidence stays in harness/wire.jsonl; script metrics in scripts.jsonl.
+Metadata stays in unique harness/runs directories. Full wire and script content require host debug:true.
+Trusted owner can use dtw auth list|add|revoke --session OWNER_FILE printed at startup.
+dw.plan() / dw.transaction(tx=>{...}) gather steps locally and submit one act; no rollback.
 No TCP listener. This is a trusted local code runner, NOT a security sandbox.
 Do not read task files or use other automation when an evaluation requires UI only.
 `;
@@ -128,6 +134,7 @@ export function createSession(transport, { epoch = '', maxCalls = 32, timeoutMs 
   let busy = false;
   let closed = false;
   let current;
+ let building=false;
   const close = () => { closed = true; if (current) current.active = false; };
   async function execute(code, { signal } = {}) {
     if (busy) return { error: { code: 'script_busy', message: 'One script at a time; do not overlap desktop tasks.' } };
@@ -143,6 +150,7 @@ export function createSession(transport, { epoch = '', maxCalls = 32, timeoutMs 
     signal?.addEventListener('abort', disconnected, { once: true });
     if (signal?.aborted) disconnected();
     function call(op, args = {}, id) {
+ if(building)throw new Error("Build locally with tx; desktop calls occur after submission.");
       const invoke = async () => {
         if (!run.active || closed || run.failed) throw Object.assign(new Error('Script stopped; inspect its recorded error before a new script.'), { code: 'chain_stopped' });
         if (++run.calls > maxCalls) throw fail(Object.assign(new Error(`At most ${maxCalls} calls per script.`), { code: 'call_budget_exceeded' }));
@@ -168,7 +176,7 @@ export function createSession(transport, { epoch = '', maxCalls = 32, timeoutMs 
       if (typeof ref !== 'string' || !ref) throw new Error('Target must be an observed Ref string.');
       return { ref };
     };
-    const act = (steps, options = {}) => call('act', { ...options, steps: steps.map((step, i) => ({ id: `s${i + 1}`, ...step })) });
+    const act = (steps, options = {}) => call('act', { ...options, steps: (steps instanceof PlanBuilder ? steps.steps : steps).map((step, i) => ({...step, id: step.id ?? `s${i + 1}`})) });
     const observe = async (args = {}) => {
       const request = JSON.parse(JSON.stringify({ scope: { desktop: true }, projection: 'summary', fields: ['name', 'role', 'app', 'window'], budget: { max_results: 32, max_output_bytes: 8192 }, ...(typeof args === 'string' ? {scope:{refs:[args]}} : args) }));
       const result = await call('observe', request);
@@ -178,6 +186,8 @@ export function createSession(transport, { epoch = '', maxCalls = 32, timeoutMs 
     const outline = (ref, options = {}) => observe({ scope: { refs: [ref] }, projection: 'outline', fields: ['name', 'role'], ...options, budget: { max_depth: 4, max_results: 32, max_text_runes: 192, max_output_bytes: 8192, ...options.budget } });
     const api = Object.freeze({
       call, observe, outline, act, value: known,
+ plan:()=>new PlanBuilder(),
+ async transaction(build,options={}) { if(building)throw new Error("Nested transactions unsupported.");const tx=new PlanBuilder();building=true;try{await build(tx);}finally{building=false;}return act(tx,options); },
       captureWindows: (appRef, options = {}) => observe({ ...options, scope: { refs: [appRef] }, projection: 'capture_windows', freshness: { mode: 'refresh' }, fields: options.fields ?? ['name', 'role', 'app'], budget: { max_results: 32, max_output_bytes: 8192, ...options.budget } }),
       async waitFor(args, predicate, { timeout_ms = 3000, interval_ms = 100 } = {}) {
         if (typeof predicate !== 'function' || !Number.isFinite(timeout_ms) || timeout_ms < 1 || timeout_ms > 10000 || !Number.isFinite(interval_ms) || interval_ms < 50 || interval_ms > 1000) throw new Error('waitFor requires a predicate, timeout_ms 1..10000 and interval_ms 50..1000.');
@@ -275,9 +285,9 @@ export function createSession(transport, { epoch = '', maxCalls = 32, timeoutMs 
   return { execute, close };
 }
 
-async function connectHelper(host, directory) {
+async function connectLegacyHelper(host, directory) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  const wire = openSync(join(directory, 'wire.jsonl'), 'wx', 0o600);
+  const wire = host.debug ? openSync(join(directory, 'wire.jsonl'), 'wx', 0o600) : undefined;
   const child = spawn(resolve(host.helper), host.args, { stdio: ['pipe', 'pipe', 'inherit'] });
   const pending = new Map();
   let broken;
@@ -289,7 +299,7 @@ async function connectHelper(host, directory) {
     for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(error); }
     pending.clear();
   };
-  const writeLog = row => { writeSync(wire, JSON.stringify({ at: new Date().toISOString(), ...row }) + '\n'); };
+  const writeLog = row => { if(wire!==undefined)writeSync(wire, JSON.stringify({ at: new Date().toISOString(), ...row }) + '\n'); };
   child.once('error', fail);
   child.stdin.on('error', fail);
   const exited = new Promise(resolveExit => child.once('exit', (code, signal) => {
@@ -307,7 +317,7 @@ async function connectHelper(host, directory) {
   });
   let startup;
   try { startup = await Promise.race([ready, new Promise((_, reject) => { const t = setTimeout(() => reject(new Error('Helper startup timed out')), 15000); t.unref(); })]); }
-  catch (error) { child.kill(); closeSync(wire); throw error; }
+  catch (error) { child.kill(); if(wire!==undefined)closeSync(wire); throw error; }
   return {
     hello: startup,
     health() { return broken ? {ready:false,error:errorInfo(broken)} : {ready:true}; },
@@ -326,9 +336,20 @@ async function connectHelper(host, directory) {
       const timer = setTimeout(() => child.kill('SIGTERM'), 2500);
       await exited;
       clearTimeout(timer);
-      closeSync(wire);
+      if(wire!==undefined)closeSync(wire);
     },
   };
+}
+
+async function connectHelper(host,directory) {
+  if(host.args.includes('--desktop-write')||host.args.includes('--raw-input'))return connectLegacyHelper(host,directory);
+  const args=host.args.filter(arg=>arg!=='serve'&&arg!=='--full-output');
+  const ownerFile=join(directory,'owner.json');args.push('--session',ownerFile);
+  const native=await SessionTransport.start(resolve(host.helper),args);
+  const wire=host.debug?openSync(join(directory,'wire.jsonl'),'wx',0o600):undefined;
+  return {hello:native.hello,ownerFile,health:()=>({ready:!native.closed}),owner:(...a)=>native.owner(...a),
+    async call(request){if(wire!==undefined)writeSync(wire,JSON.stringify({direction:'request',data:request})+'\n');const reply=await native.desktop(request);if(wire!==undefined)writeSync(wire,JSON.stringify({direction:'response',data:reply})+'\n');return reply;},
+    async close(){try{await native.close();}finally{if(wire!==undefined)closeSync(wire);}}};
 }
 
 export async function main(argv) {
@@ -345,16 +366,16 @@ export async function main(argv) {
   const sessionPath = resolve(options.session ?? 'harness/session.json');
   if (command === 'serve') {
     const host = JSON.parse(await readFile(options.host ?? 'host.json', 'utf8'));
-    const logDir = dirname(sessionPath);
+    const logDir = join(dirname(sessionPath),'runs',randomUUID());
     await mkdir(logDir, { recursive: true, mode: 0o700 });
     const audit = openSync(join(logDir, 'scripts.jsonl'), 'wx', 0o600);
     let sources, helper;
     try {
-      sources = openSync(join(logDir, 'script-code.jsonl'), 'wx', 0o600);
+      if(host.debug)sources = openSync(join(logDir, 'script-code.jsonl'), 'wx', 0o600);
       helper = await connectHelper(host, logDir);
     } catch (error) {
       closeSync(audit);
-      if (sources !== undefined) closeSync(sources);
+      if (sources !== undefined)closeSync(sources);
       throw error;
     }
     const session = createSession(helper.call, { epoch: helper.hello.environment?.epoch });
@@ -370,7 +391,7 @@ export async function main(argv) {
       await helper.close();
       await Promise.allSettled([...executions]);
       closeSync(audit);
-      closeSync(sources);
+      if(sources!==undefined)closeSync(sources);
       if (ownsSession) await unlink(sessionPath).catch(() => {});
       if (process.platform !== 'win32') await unlink(address).catch(() => {});
       await rmdir(socketDir).catch(() => {});
@@ -392,9 +413,9 @@ export async function main(argv) {
         try {
           const request = JSON.parse(content.slice(0, content.indexOf('\n')));
           if (request.op === 'stop') { await stop(); socket.end(JSON.stringify({ stopped: true }) + '\n'); return; }
-          if (request.op === 'status') { socket.end(JSON.stringify({...helper.health(), adapter:'desktop-world/javascript-v0.1', node:process.version, protocol:helper.hello.protocol, environment_at_startup:helper.hello.environment, write_apps:helper.hello.write_apps, write_app_windows:helper.hello.write_app_windows})+'\n'); return; }
+          if (request.op === 'status') { socket.end(JSON.stringify({...helper.health(), adapter:'desktop-world/javascript-v0.1', node:process.version, protocol:helper.hello.protocol, environment_at_startup:helper.hello.environment, write_apps:helper.hello.write_apps, write_app_windows:helper.hello.write_app_windows,authorization:helper.owner?await helper.owner('grants'):undefined,audit_dir:logDir,owner_file:helper.ownerFile})+'\n'); return; }
           if (request.op !== 'exec') throw new Error('Expected exec, status or stop');
-          writeSync(sources, JSON.stringify({ at: new Date().toISOString(), code: request.code }) + '\n');
+          if(sources!==undefined)writeSync(sources, JSON.stringify({ at: new Date().toISOString(), code: request.code }) + '\n');
           const work = session.execute(request.code, { signal: controller.signal });
           executions.add(work);
           const response = await work;
@@ -413,7 +434,7 @@ export async function main(argv) {
       await writeFile(sessionPath, JSON.stringify({ address, pid: process.pid, epoch: helper.hello.environment?.epoch }) + '\n', { mode: 0o600, flag: 'wx' });
       ownsSession = true;
       process.once('SIGINT', stop); process.once('SIGTERM', stop);
-      console.log(JSON.stringify({ ready: true, session: sessionPath, epoch: helper.hello.environment?.epoch }));
+      console.log(JSON.stringify({ ready: true, session: sessionPath, owner_file:helper.ownerFile, audit_dir:logDir, epoch: helper.hello.environment?.epoch }));
     } catch (error) { await stop(); throw error; }
     return;
   }

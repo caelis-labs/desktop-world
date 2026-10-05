@@ -89,3 +89,7 @@ Go client 启动 helper 时指定 `--full-output`，保留类型化 Fact、精�
 公开 alpha 为 macOS arm64 预编译包，API 目标 macOS 14+，实际桌面仅在 macOS 27 arm64 验证。ad-hoc 签名，未经 Developer ID 签名、公证或 Gatekeeper 分发验收；实际 Bot 应用打包时还需自己的签名、公证和 TCC 流程。Windows 当前源码支持 managed host client，但 Windows 真机操作不在公开包或本轮已通过验收的范围。
 
 固定公开 tag 与模块版本，校验 SHA256SUMS 和 `manifest.json` 的 revision。打包脚本 `scripts/package-prerelease.sh` 拒绝脏工作区，打包干净 HEAD，包含同 revision 的 Go 源码。见 [HANDOFF](../HANDOFF.md) 和 [NOTICE](../NOTICE)。
+
+## rc.2 动态声明
+
+Go `host.Client` 增加 `Declare(ctx,turn,name,windowTitle)`、`Grants(ctx,turn)`、`Revoke(ctx,turn,applicationRef)` 和 `RevokeGrant(ctx,turn,grantID)`。声明 name/windowTitle 二选一，APP 未运行时 pending。模型仍只有数据入口；授权控制不进入七操作 schema。`desktopworld.NewPlan().Focus(fieldRef).BindFocus("input",windowRef).Press(desktopworld.Target{Bound:"input"},"O","primary")` 构造单份计划。TS/Python/Rust 的对应 HostSession/Plan 用法见 [Agent 接入](agent-integration.md)。

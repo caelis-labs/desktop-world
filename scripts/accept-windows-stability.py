@@ -27,6 +27,17 @@ def window(session, title):
     matches = [o for o in objects if o["kind"] == "window" and h.known(o["name"]) == title]
     return matches[0]["ref"] if len(matches) == 1 else None
 
+def ready_find(session, ref, role, name):
+    # Native UIA can briefly expose an incomplete tree after state/visibility
+    # transitions. Repeat only reads and require full coverage before acting.
+    def ready():
+        objects, pages = session.observe(ref, {"role": role, "name_equals": name}, ["name", "role"])
+        coverage = pages[-1]
+        if len(objects) == 1 and coverage.get("complete") and not coverage.get("dirty") and not coverage.get("truncated") and not coverage.get("unavailable_sources"):
+            return objects[0]["ref"]
+        return None
+    return h.await_condition(ready, timeout=5)
+
 def pointer(op, ref, u=.5, v=.5, **args):
     return {"op": op, "target": {"anchor": {"target": ref, "u": u, "v": v}}, **args}
 
@@ -83,15 +94,15 @@ def electron_acceptance(executable, helper, out, children, sessions, human_title
         objects, pages = session.observe(win, {"role": "image", "name_equals": "POC Canvas"}, ["name", "role"])
         return objects[0]["ref"] if len(objects) == 1 and pages[-1].get("complete") else None
     canvas = h.await_condition(canvas_ready, timeout=15)
-    field = session.find(win, "text_field", "POC text")
-    multi = session.find(win, "text_field", "POC multiline")
-    submit = session.find(win, "button", "POC submit")
-    dialog_button = session.find(win, "button", "POC dialog")
-    native_dialog = session.find(win, "button", "POC native dialog")
+    field = ready_find(session, win, "text_field", "POC text")
+    multi = ready_find(session, win, "text_field", "POC multiline")
+    submit = ready_find(session, win, "button", "POC submit")
+    dialog_button = ready_find(session, win, "button", "POC dialog")
+    native_dialog = ready_find(session, win, "button", "POC native dialog")
     human = h.Session(helper, out / "human", ["--write-app-window", human_title])
     sessions.append(human)
     human_win = window(human, human_title)
-    human_field = human.find(human_win, "text_field", "内容")
+    human_field = ready_find(human, human_win, "text_field", "内容")
     human.act([h.step("focus", human_field), h.step("pointer.click", human_field, click={"button": "left", "count": 1})])
     def seat():
         return session.call("observe", {"scope": {"refs": [win]}, "projection": "summary", "fields": ["role"]})["seat"]
@@ -141,8 +152,8 @@ def electron_acceptance(executable, helper, out, children, sessions, human_title
             {"op": "keyboard.type_text", "target": {"bound": "dialog_text"}, "type_text": {"text": "CONFIRMED-中文"}},
             bind("confirm", win, "button", "POC confirm"), {"op": "invoke", "target": {"bound": "confirm"}}], "dialog_text", "CONFIRMED-中文")
         # Chromium may recreate accessibility nodes after modal transitions.
-        canvas = session.find(win, "image", "POC Canvas")
-        field = session.find(win, "text_field", "POC text")
+        canvas = ready_find(session, win, "image", "POC Canvas")
+        field = ready_find(session, win, "text_field", "POC text")
         check("oversize-text", [h.step("keyboard.type_text", field, type_text={"text": "🙂" * 129})], error="input_burst_limit")
         check("oversize-drag", [pointer("pointer.drag", canvas,
             drag={"to": {"ref": canvas}, "duration_ms": 501})], error="input_burst_limit")
@@ -175,7 +186,7 @@ def electron_acceptance(executable, helper, out, children, sessions, human_title
         third = h.Session(helper, out / "third", ["--write-app-window", third_title])
         sessions.append(third)
         third_win = window(third, third_title)
-        third_field = third.find(third_win, "text_field", "内容")
+        third_field = ready_find(third, third_win, "text_field", "内容")
         human.act([h.step("focus", human_field)])
         interrupted = []
         def running():
@@ -198,13 +209,13 @@ def electron_acceptance(executable, helper, out, children, sessions, human_title
         h.await_condition(lambda: any(e["event"] == "text_changed" and e["value"] == "THIRD-KEPT" for e in events(out / "third-events.jsonl")))
         receipts.append({"name": "user-switch", "receipt": result["result"]})
         human.act([h.step("focus", human_field)])
-        field = session.find(win, "text_field", "POC text")
-        submit = session.find(win, "button", "POC submit")
+        field = ready_find(session, win, "text_field", "POC text")
+        submit = ready_find(session, win, "button", "POC submit")
         for i in range(rounds):
             # Observe between independent tasks. Chromium may replace native
             # nodes after a DOM update; never silently rebind a running plan.
-            field = session.find(win, "text_field", "POC text")
-            submit = session.find(win, "button", "POC submit")
+            field = ready_find(session, win, "text_field", "POC text")
+            submit = ready_find(session, win, "button", "POC submit")
             value = f"Round {i:02d} 中文🙂"
             steps = [h.step("pointer.click", field, click={"button": "left", "count": 1}), h.press(field, "A", ["primary"]),
                 h.step("keyboard.type_text", field, type_text={"text": value}, completion="verify",
@@ -219,32 +230,44 @@ def electron_acceptance(executable, helper, out, children, sessions, human_title
         (out / "electron-native-menu-coverage.json").write_text(json.dumps({"objects": menu_objects, "coverage": menu_pages}, indent=2), encoding="utf-8")
         check("native-menu-shortcut", [h.press(win, "M", ["primary", "shift"])])
         h.await_condition(lambda: any(e["event"] == "native_menu" for e in events(native_log)))
-        native_dialog = session.find(win, "button", "POC native dialog")
+        native_dialog = ready_find(session, win, "button", "POC native dialog")
         check("native-dialog-open", [h.step("invoke", native_dialog)])
         dialog_win = h.await_condition(lambda: window(session, dialog_title))
-        confirm = session.find(dialog_win, "button", "Confirm")
+        confirm = ready_find(session, dialog_win, "button", "Confirm")
         check("native-dialog-confirm", [h.step("invoke", confirm)])
         h.await_condition(lambda: any(e["event"] == "native_dialog_result" and e["value"] == "1" for e in events(native_log)))
         image = session.capture(win)
         # Quit only the owned target while a no-input verification wait runs.
-        field = session.find(win, "text_field", "POC text")
-        canvas = session.find(win, "image", "POC Canvas")
+        field = ready_find(session, win, "text_field", "POC text")
+        canvas = ready_find(session, win, "image", "POC Canvas")
         wait_steps = [pointer("pointer.click", canvas, click={"button": "left", "count": 1}),
             {"op": "wait", "timeout_ms": 2500, "after": [{"target": {"ref": field}, "property": "value", "equals_string": "NEVER"}]}]
+        before_quit_clicks = len([e for e in events(log) if e["event"] == "click"])
+        before_quit_drops = len([e for e in events(log) if e["event"] == "drop"])
+        before_quit_submits = len([e for e in events(log) if e["event"] == "submit"])
         quitting = []
         worker = threading.Thread(target=lambda: quitting.append(session.act(wait_steps, request_id="app-quit", allow_error=True)))
         worker.start()
+        h.await_condition(lambda: len([e for e in events(log) if e["event"] == "click"]) == before_quit_clicks + 1 and len([e for e in events(log) if e["event"] == "drop"]) == before_quit_drops + 1)
         time.sleep(.25)
         child.terminate()
         child.wait(timeout=5)
         worker.join(5)
         assert not worker.is_alive() and quitting and quitting[0].get("error"), quitting
         assert quitting[0]["result"]["seat_health"] == "ready", quitting
+        assert quitting[0]["result"]["steps"][0]["delivery"] == "complete" and quitting[0]["result"]["steps"][1]["delivery"] == "not_applicable", quitting
+        assert len([e for e in events(log) if e["event"] == "submit"]) == before_quit_submits
+        assert [e for e in events(log) if e["event"] == "drop"][-1] == {"event": "drop", "value": "0,0", "trusted": True}
+        original_quit = session.call("get", {"run_id": quitting[0]["result"]["run_id"]}, allow_error=True)
+        assert original_quit["result"]["run_id"] == quitting[0]["result"]["run_id"], original_quit
         dead = session.call("observe", {"scope": {"refs": [win]}, "projection": "detail", "fields": ["role"]}, allow_error=True)
         gone = session.act([h.step("focus", win)], request_id="closed-window-write", allow_error=True)
-        assert gone.get("error", {}).get("code") == "ref_gone" and gone["result"]["steps"][0]["delivery"] == "none", gone
+        # rc.2 expires the owning APP grant before input dispatch. Depending
+        # on guard ordering, the original Ref therefore reports either fault.
+        assert gone.get("error", {}).get("code") in {"ref_gone", "permission_denied"} and gone["result"]["steps"][0]["delivery"] == "none", gone
+        assert gone["result"]["outcome"] == "stopped" and gone["result"]["seat_health"] == "ready" and gone["result"]["input"]["restoration"] == "not_borrowed", gone
         assert not dead.get("result", {}).get("objects"), dead
-        receipts.append({"name": "app-quit", "receipt": quitting[0]["result"]})
+        receipts.append({"name": "app-quit", "receipt": quitting[0]["result"], "native_oracle_resolved": True, "late_submit_count": 0})
         # Transport failure after terminal input: a fresh helper has a new Epoch.
         # Old references fail; no receipt or dedup state is invented across exit.
         crashed = h.Session(helper, out / "crashed-helper", ["--write-app-window", human_title])
@@ -302,10 +325,10 @@ def main():
             "--assets-dir", str(out / "images")])
         sessions.append(session)
         win = window(session, title)
-        checkbox = session.find(win, "checkbox", "Receive updates")
-        shanghai = session.find(win, "list_item", "Shanghai")
-        archive = session.find(win, "tree_item", "Order archive")
-        inspect = session.find(win, "button", "Inspect state")
+        checkbox = ready_find(session, win, "checkbox", "Receive updates")
+        shanghai = ready_find(session, win, "list_item", "Shanghai")
+        archive = ready_find(session, win, "tree_item", "Order archive")
+        inspect = ready_find(session, win, "button", "Inspect state")
         def snapshot():
             n = len(events(log))
             session.act([h.step("invoke", inspect)])
@@ -321,7 +344,7 @@ def main():
         assert noop["steps"][0]["verification"] == "verified" and noop["steps"][0]["delivery"] == "not_applicable", noop
         state_action("set_selected", shanghai, "selected", True)
         state_action("set_expanded", archive, "expanded", True)
-        last = session.find(win, "list_item", "Destination 79")
+        last = ready_find(session, win, "list_item", "Destination 79")
         scroll_response = session.act([h.step("scroll_into_view", last)], allow_error=True)
         if scroll_response.get("error"):
             summary["scenarios"]["scroll_failure"] = {"original": scroll_response, "oracle": events(log)[-1]}
@@ -329,10 +352,15 @@ def main():
         scrolled = scroll_response["result"]
         state = snapshot()
         assert state == {"checked": True, "selected": ["Beijing", "Shanghai"], "expanded": True, "last_visible": False, "last_choice_visible": True}, state
-        tree_last = session.find(win, "tree_item", "Invoice 79")
-        tree_scrolled = session.act([h.step("scroll_into_view", tree_last)])
+        tree_last = ready_find(session, win, "tree_item", "Invoice 79")
+        tree_capabilities = session.call("observe", {"scope": {"refs": [tree_last]}, "projection": "detail", "fields": ["capabilities"]})
+        assert any(c["name"] == "scroll_into_view" and c["support"] == "supported" for c in tree_capabilities["objects"][0].get("capabilities", [])), tree_capabilities
+        tree_scrolled = session.act([h.step("scroll_into_view", tree_last)], allow_error=True)
+        summary["scenarios"]["tree_scroll_original"] = tree_scrolled
+        assert not tree_scrolled.get("error"), tree_scrolled
+        assert tree_scrolled["result"]["steps"][0]["delivery"] == "complete" and tree_scrolled["result"]["input"]["restoration"] == "not_borrowed", tree_scrolled
         tree_state = snapshot()
-        assert tree_state["last_visible"] is True and tree_state["expanded"] is True, tree_state
+        assert tree_state == {**state, "last_visible": True}, tree_state
         state_action("set_selected", shanghai, "selected", False)
         state_action("set_checked", checkbox, "checked", False)
         state_action("set_expanded", archive, "expanded", False)
@@ -340,9 +368,9 @@ def main():
         assert final == {"checked": False, "selected": ["Beijing"], "expanded": False, "last_visible": False, "last_choice_visible": False}, final
         summary["scenarios"]["native_semantic_state"] = {"state": state, "final": final,
             "checked_on": on, "checked_noop": noop, "list_scroll": scrolled, "tree_scroll": tree_scrolled, "tree_state": tree_state}
-        field = session.find(win, "text_field", "内容")
-        cover = session.find(win, "button", "Cover input")
-        uncover = session.find(win, "button", "Uncover input")
+        field = ready_find(session, win, "text_field", "内容")
+        cover = ready_find(session, win, "button", "Cover input")
+        uncover = ready_find(session, win, "button", "Uncover input")
         donor_title = "DTW Restoration Donor " + stamp
         donor_child = subprocess.Popen([str(ROOT / "bin/DWNativeFixture.exe"), "-title", donor_title,
             "-log", str(out / "donor-events.jsonl")], creationflags=h.NO_CONSOLE)
@@ -350,7 +378,7 @@ def main():
         donor = h.Session(helper, out / "donor", ["--write-app-window", donor_title])
         sessions.append(donor)
         donor_win = h.await_condition(lambda: window(donor, donor_title))
-        donor_field = donor.find(donor_win, "text_field", "内容")
+        donor_field = ready_find(donor, donor_win, "text_field", "内容")
         session.act([h.step("invoke", cover)])
         donor.act([h.step("focus", donor_field)])
         def native_seat():
@@ -375,7 +403,7 @@ def main():
         h.await_condition(lambda: len([e for e in events(log) if e["event"] == "pointer_down"]) == before_down + 1)
         summary["scenarios"]["refusal_restoration"] = {"refused": refused["result"], "accepted": accepted, "before_seat": before_seat, "after_seat": after_seat}
         normal_image = session.capture(win)
-        resize = session.find(win, "button", "Resize fixture")
+        resize = ready_find(session, win, "button", "Resize fixture")
         before_geometry = session.call("observe", {"scope": {"refs": [win]}, "projection": "detail", "fields": ["bounds"]})["objects"][0]
         session.act([h.step("invoke", resize)])
         after_geometry = session.call("observe", {"scope": {"refs": [win]}, "projection": "detail", "fields": ["bounds"]})["objects"][0]
@@ -383,7 +411,15 @@ def main():
         resized_image = session.capture(win)
         refused_captures = []
         for button_name in ("Minimize briefly", "Hide briefly"):
-            button = session.find(win, "button", button_name)
+            def restored_button():
+                objects, pages = session.observe(win, {"role": "button", "name_equals": button_name}, ["name", "role"])
+                coverage = pages[-1]
+                if len(objects) == 1 and coverage.get("complete") and not coverage.get("dirty") and not coverage.get("unavailable_sources"):
+                    return objects[0]["ref"]
+                return None
+            # A restored HWND can precede UIA readiness. Wait with reads only;
+            # never retry the invoke or capture request.
+            button = h.await_condition(restored_button)
             before_events = len(events(log))
             session.act([h.step("invoke", button)])
             capture = session.call("capture", {"kind": "window_content", "target": win, "max_pixel_width": 800, "max_pixel_height": 700}, allow_error=True)

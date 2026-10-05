@@ -18,8 +18,9 @@ import (
 var u = syscall.NewLazyDLL("user32.dll")
 var k = syscall.NewLazyDLL("kernel32.dll")
 
+// Call-site pointer conversions must remain live across reentrant window procs.
+//go:uintptrescapes
 func call(n string, a ...uintptr) uintptr { r, _, _ := u.NewProc(n).Call(a...); return r }
-func p[T any](v *T) uintptr               { return uintptr(unsafe.Pointer(v)) }
 func wide(s string) *uint16 {
 	v, e := syscall.UTF16PtrFromString(s)
 	if e != nil {
@@ -44,12 +45,12 @@ func record(event, value string) {
 func text(hwnd uintptr) string {
 	n := call("GetWindowTextLengthW", hwnd)
 	b := make([]uint16, n+1)
-	call("GetWindowTextW", hwnd, p(&b[0]), uintptr(len(b)))
+	call("GetWindowTextW", hwnd, uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)))
 	return syscall.UTF16ToString(b)
 }
 func submit() {
 	submits++
-	call("SetWindowTextW", status, p(wide("submitted:"+itoa(submits))))
+	call("SetWindowTextW", status, uintptr(unsafe.Pointer(wide("submitted:"+itoa(submits)))))
 	record("submit", text(field))
 }
 func itoa(n int) string {
@@ -148,7 +149,7 @@ func mainProc(hwnd, msg, w, l uintptr) uintptr {
 }
 func createField() {
 	instance, _, _ := k.NewProc("GetModuleHandleW").Call(0)
-	field = call("CreateWindowExW", 0, p(wide("EDIT")), p(wide("")), 0x50810080, 24, 62, 430, 30, window, 1, instance, 0)
+	field = call("CreateWindowExW", 0, uintptr(unsafe.Pointer(wide("EDIT"))), uintptr(unsafe.Pointer(wide(""))), 0x50810080, 24, 62, 430, 30, window, 1, instance, 0)
 	// Win32 derives the accessible edit name from the preceding static label.
 	// Keep that relationship when the replacement control is created later.
 	call("SetWindowPos", field, label, 0, 0, 0, 0, 0x13)
@@ -183,18 +184,18 @@ func main() {
 	wc.Class = name
 	wc.Background = 6
 	wc.Cursor = call("LoadCursorW", 0, 32512)
-	if call("RegisterClassExW", p(&wc)) == 0 {
+	if call("RegisterClassExW", uintptr(unsafe.Pointer(&wc))) == 0 {
 		panic("RegisterClassExW failed")
 	}
-	window = call("CreateWindowExW", 0, p(name), p(wide(*title)), 0x00CF0000|0x10000000, 180, 180, 520, 320, 0, 0, instance, 0)
+	window = call("CreateWindowExW", 0, uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(wide(*title))), 0x00CF0000|0x10000000, 180, 180, 520, 320, 0, 0, instance, 0)
 	if window == 0 {
 		panic("CreateWindowExW failed")
 	}
-	label = call("CreateWindowExW", 0, p(wide("STATIC")), p(wide("内容")), 0x50000000, 24, 28, 430, 24, window, 0, instance, 0)
+	label = call("CreateWindowExW", 0, uintptr(unsafe.Pointer(wide("STATIC"))), uintptr(unsafe.Pointer(wide("内容"))), 0x50000000, 24, 28, 430, 24, window, 0, instance, 0)
 	createField()
-	call("CreateWindowExW", 0, p(wide("BUTTON")), p(wide("提交")), 0x50010000, 24, 110, 110, 32, window, 2, instance, 0)
-	call("CreateWindowExW", 0, p(wide("BUTTON")), p(wide("替换输入框")), 0x50010000, 150, 110, 150, 32, window, 3, instance, 0)
-	status = call("CreateWindowExW", 0, p(wide("STATIC")), p(wide("ready")), 0x50000000, 24, 170, 430, 24, window, 4, instance, 0)
+	call("CreateWindowExW", 0, uintptr(unsafe.Pointer(wide("BUTTON"))), uintptr(unsafe.Pointer(wide("提交"))), 0x50010000, 24, 110, 110, 32, window, 2, instance, 0)
+	call("CreateWindowExW", 0, uintptr(unsafe.Pointer(wide("BUTTON"))), uintptr(unsafe.Pointer(wide("替换输入框"))), 0x50010000, 150, 110, 150, 32, window, 3, instance, 0)
+	status = call("CreateWindowExW", 0, uintptr(unsafe.Pointer(wide("STATIC"))), uintptr(unsafe.Pointer(wide("ready"))), 0x50000000, 24, 170, 430, 24, window, 4, instance, 0)
 	if *semantics {
 		createSemantics(instance)
 	}
@@ -202,11 +203,11 @@ func main() {
 		panic("rows must be 0..4096")
 	}
 	for i := 0; i < *rows; i++ {
-		row := call("CreateWindowExW", 0, p(wide("STATIC")), p(wide(fmt.Sprintf("Order row %04d", i))), 0x50000000, 24, uintptr(230+i*24), 430, 24, window, uintptr(100+i), instance, 0)
+		row := call("CreateWindowExW", 0, uintptr(unsafe.Pointer(wide("STATIC"))), uintptr(unsafe.Pointer(wide(fmt.Sprintf("Order row %04d", i)))), 0x50000000, 24, uintptr(230+i*24), 430, 24, window, uintptr(100+i), instance, 0)
 		call("SetWindowPos", row, 1, 0, 0, 0, 0, 0x13) // bottom, retain geometry, do not activate
 	}
 	if *rows > 0 {
-		deep := call("CreateWindowExW", 0, p(wide("BUTTON")), p(wide("Deep submit")), 0x50010000, 350, 110, 140, 32, window, 9, instance, 0)
+		deep := call("CreateWindowExW", 0, uintptr(unsafe.Pointer(wide("BUTTON"))), uintptr(unsafe.Pointer(wide("Deep submit"))), 0x50010000, 350, 110, 140, 32, window, 9, instance, 0)
 		call("SetWindowPos", deep, 1, 0, 0, 0, 0, 0x13)
 	}
 	call("ShowWindow", window, 5)
@@ -222,12 +223,12 @@ func main() {
 		Private        uint32
 	}
 	for {
-		r := call("GetMessageW", p(&msg), 0, 0, 0)
+		r := call("GetMessageW", uintptr(unsafe.Pointer(&msg)), 0, 0, 0)
 		if r == 0 || int32(r) == -1 {
 			break
 		}
-		call("TranslateMessage", p(&msg))
-		call("DispatchMessageW", p(&msg))
+		call("TranslateMessage", uintptr(unsafe.Pointer(&msg)))
+		call("DispatchMessageW", uintptr(unsafe.Pointer(&msg)))
 	}
 }
 

@@ -4,3 +4,9 @@
 *.test
 *.exe
 __pycache__/
+
+node_modules/
+/clients/rust/target/
+/clients/python/dist/
+*.egg-info/
+/clients/python/build/

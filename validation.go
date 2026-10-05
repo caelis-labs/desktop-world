@@ -158,7 +158,7 @@ func IsWrite(op string) bool {
 	return false
 }
 func ValidOperation(op string) bool {
-	return IsWrite(op) || op == "observe" || op == "read" || op == "sync" || op == "capture" || op == "read_asset" || op == "resolve_anchor" || op == "bind" || op == "wait" || op == "raw_input"
+	return IsWrite(op) || op == "observe" || op == "read" || op == "sync" || op == "capture" || op == "read_asset" || op == "resolve_anchor" || op == "bind" || op == "bind_focus" || op == "wait" || op == "raw_input"
 }
 func (p Plan) Validate() error {
 	if p.Epoch == "" || !strings.HasPrefix(string(p.RequestID), string(p.Epoch)+":") || len(p.RequestID) > 256 {
@@ -193,7 +193,7 @@ func (p Plan) Validate() error {
 			return Invalid("unknown completion")
 		}
 		arms := 0
-		for _, b := range []bool{s.Bind != nil, s.SetValue != nil, s.SetExpanded != nil, s.SetChecked != nil, s.SetSelected != nil, s.TypeText != nil, s.Press != nil, s.Click != nil, s.Drag != nil, s.Scroll != nil} {
+		for _, b := range []bool{s.BindFocus != nil, s.Bind != nil, s.SetValue != nil, s.SetExpanded != nil, s.SetChecked != nil, s.SetSelected != nil, s.TypeText != nil, s.Press != nil, s.Click != nil, s.Drag != nil, s.Scroll != nil} {
 			if b {
 				arms++
 			}
@@ -210,6 +210,11 @@ func (p Plan) Validate() error {
 			}
 			if s.Target != (Target{}) {
 				return Invalid("bind cannot have target")
+			}
+		case "bind_focus":
+			need = 1
+			if s.BindFocus == nil || s.BindFocus.Name == "" || len(s.BindFocus.Name) > 128 || s.BindFocus.Within == "" || aliases[s.BindFocus.Name] || s.Target != (Target{}) {
+				return Invalid("bind_focus requires unique name and observed within scope")
 			}
 		case "wait":
 			if len(s.After) == 0 {
@@ -315,6 +320,9 @@ func (p Plan) Validate() error {
 		}
 		if s.Bind != nil {
 			aliases[s.Bind.Name] = true
+		}
+		if s.BindFocus != nil {
+			aliases[s.BindFocus.Name] = true
 		}
 	}
 	return nil

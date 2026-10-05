@@ -113,10 +113,13 @@ class Session:
         match = {"role": role}
         if name is not None:
             match["name_equals"] = name
-        objects, pages = self.observe(ref, match, ["name", "role"])
-        if len(objects) != 1 or not pages[-1].get("complete"):
-            raise RuntimeError(f"cannot prove unique target {role}/{name}: {pages}")
-        return objects[0]["ref"]
+        def ready():
+            objects, pages = self.observe(ref, match, ["name", "role"])
+            coverage = pages[-1]
+            if len(objects) == 1 and coverage.get("complete") and not coverage.get("dirty") and not coverage.get("truncated") and not coverage.get("unavailable_sources"):
+                return objects[0]["ref"]
+            return None
+        return await_condition(ready, timeout=5)
 
     def act(self, steps, request_id=None, allow_error=False):
         steps = [{"id": f"s{i}", **step} for i, step in enumerate(steps)]
@@ -265,6 +268,9 @@ def main():
         assert negative.get("error", {}).get("code") in ("ambiguous_target", "search_incomplete")
         reports = []
         for i in range(args.rounds):
+            # Each independent Chromium task discovers its current native
+            # element before creating a new plan; never rebind an in-flight one.
+            field = session.find(browser, "text_field", "DW 网页内容")
             before = session.call("observe", {"scope": {"refs": [notepad]}, "projection": "detail", "fields": ["name", "role"]})["seat"]
             r = session.act([step("pointer.click", field, click={"button": "left", "count": 1}),
                 press(field, "A", ["primary"]), step("keyboard.type_text", field, type_text={"text": f"Windows transaction {i} 🌍"})])

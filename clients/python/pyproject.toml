@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "caelis-desktop-world"
+version = "0.1.0rc2"
+description = "Async native Desktop World client and trusted host session"
+requires-python = ">=3.11"
+license = "MPL-2.0"
+license-files = ["LICENSE"]
+readme = "README.md"
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["desktop_world*"]
+[tool.setuptools.package-data]
+desktop_world = ["py.typed"]

@@ -22,7 +22,12 @@ jobs:
         with:
           node-version: '24'
       - run: node --test clients/javascript/desktop.test.mjs
-      - run: python3 verify_examples.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@stable
+      - run: python verify_examples.py
+      - run: python scripts/check-sdks.py
   native-build:
     runs-on: macos-15
     steps:

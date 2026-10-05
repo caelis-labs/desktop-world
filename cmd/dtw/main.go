@@ -14,6 +14,7 @@ import (
 	"time"
 
 	dw "github.com/caelis-labs/desktop-world"
+	"github.com/caelis-labs/desktop-world/internal/auditlog"
 	"github.com/caelis-labs/desktop-world/internal/helper"
 	"github.com/caelis-labs/desktop-world/local"
 	"github.com/caelis-labs/desktop-world/protocol"
@@ -26,17 +27,20 @@ const usage = `Desktop World — native desktop operations, persistent JSON sess
 dtw version                Protocol, build revision and platform; no desktop access.
 dtw doctor                 Read-only permission/environment probe; never prompts.
 dtw schema [operation] [action]     JSON request schema; no native desktop access.
+dtw session [host options] Trusted owner facade for TS/Python/Rust SDKs.
+dtw auth list|add|revoke --session OWNER_FILE   Dynamic application grants.
 dtw serve [host options]   New World for the lifetime of this stdio process.
 
 serve host options:
   --input-policy POLICY  Host ceiling: shared_input (default) or no_shared_input.
 	--input-mode MODE      shared (default) or cooperative (short foreground transactions).
-  --write-app NAME       Grant writes to one exact live application name; repeatable.
+  --write-app NAME       Approve one exact application name; pending until uniquely observed. Repeatable.
   --write-app-window TITLE  Grant its owning app; resolves duplicate app names by exact window title.
   --desktop-write        Explicitly grant desktop-wide writes instead of named apps.
   --raw-input            Permit absolute Point input; requires --desktop-write.
   --assets-dir PATH      Enable capture and save PNG files in this host-chosen directory.
-  --audit PATH           Create a new metadata-only JSONL audit (no UI text/input payloads).
+  --audit PATH           Metadata-only JSONL; collision selects a new session file.
+  --audit-mode MODE      rotate (default), append (single writer) or create.
   --full-output          Typed wire facts and exact timestamps; default is compact UI facts.
   --host-control         Managed mode: private inherited request/reply pipes.
                          No startup write flags. Host controls application grants per turn.
@@ -50,7 +54,7 @@ For writes, get schema act ACTION as needed. args contains steps and optional ti
 Helper supplies epoch and request_id from the stable envelope id. Reuse that id
 and the SAME body after transport uncertainty; never blindly replay effects.
 New process = new epoch, invalid old Refs, no persisted exactly-once guarantee.
-No network listener, login, API key, automatic permission prompts, or auto-rebinding.
+No network listener, login, API key, automatic permission prompts, or implicit rebinding after an app restart.
 Stdout is JSON only except --help; diagnostics go to stderr. --json is accepted.
 `
 
@@ -66,7 +70,7 @@ func main() {
 		os.Exit(1)
 	}
 }
-func run() error {
+func run() (runErr error) {
 	args := os.Args[1:]
 	if len(args) > 0 && args[0] == "--json" {
 		args = args[1:]
@@ -74,6 +78,12 @@ func run() error {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "help" {
 		fmt.Print(usage)
 		return nil
+	}
+	if args[0] == "session" {
+		return runSession(args[1:])
+	}
+	if args[0] == "auth" {
+		return runAuth(args[1:])
 	}
 	if args[0] == "version" || args[0] == "--version" || args[0] == "-v" {
 		v := map[string]any{"version": releaseVersion, "protocol": helper.Version, "host_control": helper.ControlVersion, "go": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH}
@@ -114,7 +124,7 @@ func run() error {
 	}
 	var c helper.Config
 	var apps, appWindows names
-	var auditPath, inputPolicy, inputMode string
+	var auditPath, auditMode, inputPolicy, inputMode string
 	f := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	f.SetOutput(os.Stderr)
 	f.StringVar(&inputMode, "input-mode", "", "trusted delivery mode: shared or cooperative (short foreground transactions)")
@@ -124,7 +134,8 @@ func run() error {
 	f.BoolVar(&c.DesktopWrite, "desktop-write", false, "allow desktop writes")
 	f.BoolVar(&c.RawInput, "raw-input", false, "allow absolute Point input")
 	f.StringVar(&c.AssetsDir, "assets-dir", "", "capture destination")
-	f.StringVar(&auditPath, "audit", "", "new audit file")
+	f.StringVar(&auditPath, "audit", "", "metadata-only audit file")
+	f.StringVar(&auditMode, "audit-mode", "rotate", "rotate (default), append or create")
 	f.BoolVar(&c.FullOutput, "full-output", false, "retain typed wire facts and per-object timestamps")
 	f.BoolVar(&c.Managed, "host-control", false, "trusted host control on private inherited pipes")
 	openWorld := backgroundPOCFlag(f)
@@ -183,6 +194,9 @@ func run() error {
 		defer cancel()
 		if err := w.Close(closeCtx); err != nil {
 			fmt.Fprintln(os.Stderr, "close:", err)
+			if runErr == nil {
+				runErr = err
+			}
 		}
 	}()
 	if args[0] == "doctor" {
@@ -203,12 +217,13 @@ func run() error {
 		return nil
 	}
 	if auditPath != "" {
-		f, err := os.OpenFile(auditPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		f, err := auditlog.Open(auditPath, auditMode)
 		if err != nil {
 			return err
 		}
 		defer f.Close()
 		c.Audit = f
+		c.AuditPath = f.Path
 	}
 	initCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	server, err := helper.New(initCtx, w, c)
@@ -227,5 +242,9 @@ func run() error {
 			stop() // Loss of the private owner channel stops the data server too.
 		}()
 	}
-	return server.Serve(ctx, os.Stdin, os.Stdout)
+	serveErr := server.Serve(ctx, os.Stdin, os.Stdout)
+	if ctx.Err() != nil {
+		return nil
+	}
+	return serveErr
 }

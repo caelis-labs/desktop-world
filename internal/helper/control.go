@@ -3,6 +3,7 @@ package helper
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"sync"
@@ -16,18 +17,23 @@ const ControlVersion = "desktop-world/host-control-v0.1"
 // ControlRequest belongs to a private inherited pipe owned by the application.
 // It is deliberately absent from agent schemas and the data dispatcher.
 type ControlRequest struct {
-	ID, Op, Turn string
-	Application  dw.Ref
+	ID, Op, Turn               string
+	Application                dw.Ref
+	Name, WindowTitle, GrantID string
 }
 
 type turnKey struct{}
 type turnGrants struct {
-	mu     sync.Mutex
-	turn   string
-	used   map[string]bool
-	apps   map[dw.Ref]bool
-	ctx    context.Context
-	cancel context.CancelFunc
+	mu           sync.Mutex
+	turn         string
+	used         map[string]bool
+	apps         map[dw.Ref]bool
+	ctx          context.Context
+	cancel       context.CancelFunc
+	declarations map[string]*ApplicationGrant
+	appContexts  map[dw.Ref]context.Context
+	appCancels   map[dw.Ref]context.CancelFunc
+	sequence     uint64
 }
 
 func validTurn(s string) bool {
@@ -62,6 +68,9 @@ func (g *turnGrants) begin(turn string) error {
 	}
 	g.turn, g.apps, g.used[turn] = turn, map[dw.Ref]bool{}, true
 	g.ctx, g.cancel = context.WithCancel(context.Background())
+	g.declarations = map[string]*ApplicationGrant{}
+	g.appContexts = map[dw.Ref]context.Context{}
+	g.appCancels = map[dw.Ref]context.CancelFunc{}
 	return nil
 }
 
@@ -95,8 +104,10 @@ func (g *turnGrants) bind(ctx context.Context, turn string) (context.Context, fu
 		return nil, nil, dw.NewFault("turn_expired", "trusted host must supply the active turn", "never_automatically")
 	}
 	c, cancel := context.WithCancel(context.WithValue(ctx, turnKey{}, turn))
+	watch := &grantWatch{cancel: cancel, stops: map[dw.Ref]func() bool{}}
+	c = context.WithValue(c, grantWatchKey{}, watch)
 	stop := context.AfterFunc(g.ctx, cancel)
-	return c, func() { stop(); cancel() }, nil
+	return c, func() { stop(); watch.close(); cancel() }, nil
 }
 
 func (g *turnGrants) Check(ctx context.Context, in dw.Intent) (dw.Decision, error) {
@@ -107,7 +118,7 @@ func (g *turnGrants) Check(ctx context.Context, in dw.Intent) (dw.Decision, erro
 		return dw.Decision{}, nil
 	}
 	switch in.Operation {
-	case "observe", "read", "sync", "bind", "wait", "resolve_anchor", "capture", "read_asset":
+	case "observe", "read", "sync", "bind", "bind_focus", "wait", "resolve_anchor", "capture", "read_asset":
 		return dw.Decision{Allow: true}, nil
 	}
 	if len(in.Targets) == 0 || len(in.Applications) == 0 {
@@ -117,6 +128,9 @@ func (g *turnGrants) Check(ctx context.Context, in dw.Intent) (dw.Decision, erro
 		if !g.apps[app] {
 			return dw.Decision{}, nil
 		}
+		if watch, ok := ctx.Value(grantWatchKey{}).(*grantWatch); ok {
+			watch.add(app, g.appContexts[app])
+		}
 	}
 	return dw.Decision{Allow: true}, nil
 }
@@ -124,32 +138,68 @@ func (g *turnGrants) Check(ctx context.Context, in dw.Intent) (dw.Decision, erro
 func (s *Server) Control(ctx context.Context, r ControlRequest) Response {
 	out := Response{ID: r.ID, Protocol: ControlVersion, World: s.epoch}
 	var err error
+	if !s.config.Managed && r.Turn == "" {
+		r.Turn = "session"
+	}
 	if s.grants == nil || len(r.ID) < 1 || len(r.ID) > 128 || !validTurn(r.Turn) {
 		err = dw.Invalid("control requires managed mode, id and a valid turn")
 	} else {
 		switch r.Op {
 		case "begin_turn":
-			if r.Application != "" {
+			if r.Application != "" || r.Name != "" || r.WindowTitle != "" || r.GrantID != "" {
 				err = dw.Invalid("begin_turn does not accept application")
 			} else {
 				err = s.grants.begin(r.Turn)
 			}
 		case "end_turn":
-			if r.Application != "" {
+			if r.Application != "" || r.Name != "" || r.WindowTitle != "" || r.GrantID != "" {
 				err = dw.Invalid("end_turn does not accept application")
 			} else {
 				err = s.grants.end(r.Turn)
 			}
 		case "grant":
+			if r.Name != "" || r.WindowTitle != "" || r.GrantID != "" {
+				err = dw.Invalid("grant accepts application only")
+				break
+			}
 			err = s.grant(ctx, r.Turn, r.Application)
+		case "declare":
+			err = s.declare(r)
+		case "revoke":
+			err = s.revoke(r)
+		case "grants":
+			if r.Application != "" || r.Name != "" || r.WindowTitle != "" || r.GrantID != "" {
+				err = dw.Invalid("grants accepts turn only")
+				break
+			}
+			s.refreshGrants(ctx, r.Turn)
+			out.Result, err = s.grantStatus(r.Turn)
 		default:
-			err = dw.Invalid("host control supports begin_turn, grant and end_turn")
+			err = dw.Invalid("host control supports begin_turn, grant, declare, revoke, grants and end_turn")
 		}
 	}
 	if err != nil {
 		out.Error = asFault(err)
-	} else {
+	} else if out.Result == nil {
 		out.Result = map[string]any{"turn": r.Turn, "operation": r.Op, "application": r.Application, "acknowledged": true}
+	}
+	if s.config.Audit != nil {
+		var states []map[string]any
+		if snapshot, e := s.grantStatus(r.Turn); e == nil {
+			for _, grant := range snapshot.Grants {
+				states = append(states, map[string]any{"id": grant.ID, "application": grant.Application, "state": grant.State, "reason": grant.Reason})
+			}
+		}
+		s.mu.Lock()
+		row := map[string]any{"event": "authorization", "epoch": s.epoch, "id": r.ID, "op": r.Op, "turn": r.Turn, "application": r.Application, "grants": states}
+		if out.Error != nil {
+			row["error_code"] = out.Error.Code
+		}
+		if e := json.NewEncoder(s.config.Audit).Encode(row); e != nil {
+			s.grants.stop()
+			out.Error = dw.NewFault("audit_failed", "authorization revoked because metadata audit failed", "never_automatically")
+		}
+		s.mu.Unlock()
 	}
 	return out
 }
@@ -163,7 +213,7 @@ func (s *Server) grant(ctx context.Context, turn string, app dw.Ref) error {
 		return err
 	}
 	defer done()
-	ob, err := s.actor.Observe(c, dw.ObserveRequest{Scope: dw.Scope{Refs: []dw.Ref{app}}, Projection: dw.ProjectionDetail, Fields: []string{"kind", "lifecycle"}, Budget: dw.Budget{MaxResults: 1}})
+	ob, err := s.actor.Observe(c, dw.ObserveRequest{Freshness: dw.Freshness{Mode: "refresh"}, Scope: dw.Scope{Refs: []dw.Ref{app}}, Projection: dw.ProjectionDetail, Fields: []string{"kind", "lifecycle"}, Budget: dw.Budget{MaxResults: 1}})
 	if err != nil {
 		return err
 	}
@@ -175,10 +225,15 @@ func (s *Server) grant(ctx context.Context, turn string, app dw.Ref) error {
 	if c.Err() != nil || s.grants.turn != turn {
 		return dw.NewFault("turn_expired", "turn ended during authorization", "never_automatically")
 	}
-	if len(s.grants.apps) >= 32 && !s.grants.apps[app] {
+	key := "ref:" + string(app)
+	if len(s.grants.declarations) >= 32 && s.grants.declarations[key] == nil {
 		return dw.Invalid("at most 32 application grants per turn")
 	}
 	s.grants.apps[app] = true
+	if s.grants.appContexts[app] == nil {
+		s.grants.appContexts[app], s.grants.appCancels[app] = context.WithCancel(s.grants.ctx)
+	}
+	s.grants.declarations[key] = &ApplicationGrant{ID: key, Application: app, State: "active"}
 	return nil
 }
 
