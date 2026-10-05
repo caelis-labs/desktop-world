@@ -118,6 +118,17 @@ func (d *Driver) Perform(ctx context.Context, o backend.Operation) backend.Outco
 		if e.application {
 			return result(dw.DeliveryNone, "capability_unavailable")
 		}
+		if s.Op == "scroll_into_view" {
+			control, err := intProp(e.el, 21)
+			if err != nil {
+				return result(dw.DeliveryNone, "capability_unavailable")
+			}
+			if control == 50024 {
+				if d.legacyTreeScrollBlocked(e) {
+					return result(dw.DeliveryNone, "capability_unavailable")
+				}
+			}
+		}
 		if s.Op == "focus" {
 			if e.hwnd != 0 {
 				ok, _, _ := setForeground.Call(e.hwnd)

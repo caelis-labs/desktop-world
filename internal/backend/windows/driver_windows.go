@@ -363,6 +363,12 @@ func (d *Driver) nodeFields(ctx context.Context, k backend.Key, fields []string,
 	}
 	if wants(fields, "capabilities") {
 		scrollable = isTrue(propBool(cached, 30035, true))
+		if scrollable && control == 50024 {
+			// The legacy Common Controls TreeView proxy advertises ScrollItem
+			// but intermittently times out after dispatch. Do not offer an
+			// unreliable semantic write or replace it with physical scrolling.
+			scrollable = !d.legacyTreeScrollBlocked(e)
+		}
 	}
 	if wants(fields, "capabilities") {
 		for op, supported := range map[string]bool{"set_expanded": expandable, "set_checked": checkable, "set_selected": selectable, "scroll_into_view": scrollable, "focus": e.hwnd != 0 || isTrue(boolProp(cached, 59)), "invoke": invoke, "set_value": writable} {
@@ -407,11 +413,11 @@ func (d *Driver) Query(ctx context.Context, q backend.Query) (backend.Page, erro
 	deadline := scanDeadline(ctx, q)
 	// Bound one in-flight provider call, and restore the write/read default on
 	// this same MTA worker. These setters are IUIAutomation2 vtable slots.
-	if err := d.uia.call(61, 50); err != nil {
+	if err := d.uia.call(61, 200); err != nil {
 		return backend.Page{}, err
 	}
 	defer d.uia.call(61, 500)
-	if err := d.uia.call(63, 50); err != nil {
+	if err := d.uia.call(63, 200); err != nil {
 		return backend.Page{}, err
 	}
 	defer d.uia.call(63, 500)
@@ -758,6 +764,35 @@ func (d *Driver) refreshOwnership(e *entry) error {
 		cur = parent
 	}
 	return dw.NewFault("ref_stale", "ownership traversal limit reached", "reobserve")
+}
+
+// MSAA child items may have an empty ClassName. Check their current ancestors,
+// including Refs obtained directly from focus, rather than cached containment.
+func (d *Driver) legacyTreeScrollBlocked(e *entry) bool {
+	cur, owned := e.el, false
+	defer func() {
+		if owned {
+			cur.release()
+		}
+	}()
+	for i := 0; i < 32; i++ {
+		class, err := stringProp(cur, 30) // get_CurrentClassName
+		if err != nil || class == "SysTreeView32" {
+			return true
+		}
+		var parent *com
+		if d.walker == nil || d.walker.call(3, ptr(cur), ptr(&parent)) != nil {
+			return true
+		}
+		if parent == nil {
+			return false
+		}
+		if owned {
+			cur.release()
+		}
+		cur, owned = parent, true
+	}
+	return true
 }
 
 func wants(fields []string, name string) bool {
