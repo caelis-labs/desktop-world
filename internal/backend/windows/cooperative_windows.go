@@ -22,6 +22,8 @@ type cooperative struct {
 	previous, target           uintptr
 	previousPID, targetPID     uint32
 	previousStart, targetStart uint64
+	targetProviderPID          uint32
+	targetProviderStart        uint64
 	previousFocus              *com
 	pointer                    [2]int32
 	lastPointer                *[2]int32
@@ -157,7 +159,7 @@ func (d *cooperative) borrow(ctx context.Context, win *entry) error {
 		return err
 	}
 	if !d.started.IsZero() {
-		if d.targetPID != win.pid || d.targetStart != win.start {
+		if d.targetProviderPID != win.pid || d.targetProviderStart != win.start {
 			return dw.NewFault("input_transaction_scope", "one input plan cannot change application", "reobserve")
 		}
 		d.target = win.hwnd
@@ -175,7 +177,8 @@ func (d *cooperative) borrow(ctx context.Context, win *entry) error {
 		return dw.NewFault("seat_unavailable", "previous UIA focus cannot be retained for cleanup", "reobserve")
 	}
 	d.started = time.Now()
-	d.target, d.targetPID, d.targetStart = win.hwnd, win.pid, win.start
+	d.target, d.targetPID, d.targetStart = win.hwnd, win.windowPID, win.windowStart
+	d.targetProviderPID, d.targetProviderStart = win.pid, win.start
 	err := d.activate(ctx, win.hwnd, win.el)
 	current := foregroundRoot()
 	d.borrowed = d.previous != win.hwnd && current == win.hwnd

@@ -22,6 +22,8 @@ type entry struct {
 	key, app, window, parent backend.Key
 	pid                      uint32
 	start                    uint64
+	windowPID                uint32
+	windowStart              uint64
 	hwnd                     uintptr
 	gone                     bool
 	application              bool
@@ -121,8 +123,21 @@ func (d *Driver) retain(el *com, app, window, parent backend.Key, hwnd uintptr) 
 		el.release()
 		return "", dw.NewFault("provider_unavailable", "process lifetime unavailable", "reobserve")
 	}
+	var ownerPID uint32
+	var ownerStart uint64
+	if hwnd != 0 {
+		windowPID.Call(hwnd, ptr(&ownerPID))
+		ownerStart = processStart(ownerPID)
+		if ownerStart == 0 {
+			el.release()
+			return "", dw.NewFault("provider_unavailable", "window owner lifetime unavailable", "reobserve")
+		}
+	}
 	for _, old := range d.entries {
 		if old.gone || old.application || old.pid != uint32(pid) || old.start != start {
+			continue
+		}
+		if hwnd != 0 && old.hwnd != 0 && (old.hwnd != hwnd || old.windowPID != ownerPID || old.windowStart != ownerStart) {
 			continue
 		}
 		var same int32
@@ -136,6 +151,10 @@ func (d *Driver) retain(el *com, app, window, parent backend.Key, hwnd uintptr) 
 			if parent != "" {
 				old.parent = parent
 			}
+			if hwnd != 0 {
+				old.hwnd, old.window = hwnd, old.key
+				old.windowPID, old.windowStart = ownerPID, ownerStart
+			}
 			el.release()
 			return old.key, nil
 		}
@@ -145,7 +164,7 @@ func (d *Driver) retain(el *com, app, window, parent backend.Key, hwnd uintptr) 
 		return "", dw.NewFault("resource_exhausted", "native registry full", "reobserve")
 	}
 	k := backend.Key(fmt.Sprintf("native-%d", len(d.entries)+1))
-	entry := &entry{el: el, key: k, app: app, window: window, parent: parent, pid: uint32(pid), start: start, hwnd: hwnd}
+	entry := &entry{el: el, key: k, app: app, window: window, parent: parent, pid: uint32(pid), start: start, hwnd: hwnd, windowPID: ownerPID, windowStart: ownerStart}
 	if hwnd != 0 {
 		entry.window = k
 	}
@@ -184,7 +203,9 @@ func (d *Driver) lookup(k backend.Key) (*entry, error) {
 			} else {
 				var pid uint32
 				windowPID.Call(e.hwnd, ptr(&pid))
-				if pid != e.pid {
+				// UIA can run in another process (for example OpenConsole).
+				// Validate both retained lifetimes rather than equating their PIDs.
+				if pid != e.windowPID || processStart(pid) != e.windowStart {
 					e.gone = true
 				}
 			}
