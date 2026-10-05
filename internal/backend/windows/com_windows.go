@@ -5,6 +5,8 @@ package windows
 import (
 	"fmt"
 	dw "github.com/caelis-labs/desktop-world"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -61,6 +63,19 @@ var isVisible = proc(user32, "IsWindowVisible")
 var isWindow = proc(user32, "IsWindow")
 var foreground = proc(user32, "GetForegroundWindow")
 var setForeground = proc(user32, "SetForegroundWindow")
+
+// Standard UIA/MSAA SetFocus can make a child HWND the active foreground
+// handle. Public Window refs identify the owning top-level window.
+func foregroundRoot() uintptr {
+	hwnd, _, _ := foreground.Call()
+	if hwnd != 0 {
+		if root, _, _ := proc(user32, "GetAncestor").Call(hwnd, 2); root != 0 {
+			return root
+		}
+	}
+	return hwnd
+}
+
 var windowPID = proc(user32, "GetWindowThreadProcessId")
 var metrics = proc(user32, "GetSystemMetrics")
 var cursorPos = proc(user32, "GetCursorPos")
@@ -131,6 +146,20 @@ func processStart(pid uint32) uint64 {
 		return 0
 	}
 	return creation
+}
+func processName(pid uint32) string {
+	h, _, _ := openProcess.Call(0x1000, 0, uintptr(pid))
+	if h == 0 {
+		return fmt.Sprintf("Process %d", pid)
+	}
+	defer closeHandle.Call(h)
+	var path [32768]uint16
+	size := uint32(len(path))
+	if ok, _, _ := proc(kernel32, "QueryFullProcessImageNameW").Call(h, 0, ptr(&path[0]), ptr(&size)); ok == 0 {
+		return fmt.Sprintf("Process %d", pid)
+	}
+	name := filepath.Base(syscall.UTF16ToString(path[:size]))
+	return strings.TrimSuffix(name, filepath.Ext(name))
 }
 func dpiScope() func() {
 	if setDPI.Find() != nil {

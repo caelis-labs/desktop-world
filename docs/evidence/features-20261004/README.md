@@ -1,5 +1,7 @@
 # 2026-10-04 独立 feature 实机证据
 
+后续更新：Windows F4/F5 于 2026-10-05 通过，见 [Windows 证据](../windows-20261005/README.md)。下文保留本轮当时的状态。
+
 最终 F1/F2/F3 轮次：`20261004T042852Z-1343ef`，macOS 27.0.1 arm64、Go 1.26.8，已登录交互桌面。独立 `dtw` managed helper 执行操作，AppKit fixture 通过自己的事件/业务回调记录结果。本轮未申请或修改系统权限。
 
 运行来自 `225772c423d9cf285fa973d591bc94bce4b1e3cc` 的未提交源码，helper 的 vcs.modified=true；这不是该 commit 已发布的二进制。helper SHA256、版本、环境在 [summary.json](summary.json)，本轮编译输入指纹在 [source-sha256.json](source-sha256.json)。保存时逐项校验，均与当时源码一致。后续 Review 修复的验证单独记录在 [review-20261004](../review-20261004/README.md)。

@@ -27,11 +27,11 @@ p, version, revision = sys.argv[1:]
 d = json.load(open(p))
 assert d['version'] == version and d['vcs.revision'] == revision
 assert d['vcs.modified'] == 'false' and d['os'] == 'darwin' and d['arch'] == 'arm64'
-d.update(signing='ad-hoc', notarized=False, minimum_macos='14.0', license='no-open-source-license-granted')
+d.update(signing='ad-hoc', notarized=False, minimum_macos='14.0', license='MPL-2.0')
 with open(p, 'w') as f: json.dump(d, f, indent=2); f.write('\n')
 PY
 git archive HEAD | tar -x -C "$OUT/$NAME/source"
-cp HANDOFF.md NOTICE THIRD_PARTY_NOTICES.md "$OUT/$NAME/"
+cp README.md HANDOFF.md LICENSE NOTICE THIRD_PARTY_NOTICES.md "$OUT/$NAME/"
 cp -R docs clients skills examples "$OUT/$NAME/"
 tar -czf "$OUT/$NAME.tar.gz" -C "$OUT" "$NAME"
 git archive --format=tar.gz --prefix="desktop-world-$VERSION/" -o "$OUT/desktop-world-$VERSION-source.tar.gz" HEAD

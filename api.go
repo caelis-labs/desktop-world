@@ -63,7 +63,8 @@ const (
 )
 
 // InputMode is selected by the trusted host when opening a world. It never
-// relaxes InputPolicy or changes authorization. Cooperative is macOS-only.
+// relaxes InputPolicy or changes authorization. Cooperative uses short native
+// foreground transactions on macOS and Windows.
 type InputMode string
 
 const (
@@ -476,9 +477,10 @@ type Receipt struct {
 // InputReport describes a temporary foreground transaction, including cleanup.
 // Dispatch and task verification remain separate in the step results.
 type InputReport struct {
-	Mode         string
-	ForegroundMS int64
-	Restoration  string // not_borrowed | restored | user_superseded | failed
+	Mode              string
+	ForegroundMS      int64
+	Restoration       string // not_borrowed | restored | user_superseded | failed
+	RestorationReason string // Optional diagnostic when cleanup cannot be confirmed.
 }
 
 type Permission struct {

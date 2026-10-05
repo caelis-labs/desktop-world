@@ -1,0 +1,3 @@
+{"at":"2026-10-05T11:36:42.7472023Z","event":"ready","pid":14704,"value":"DTW F5 20261005T113634Z-3ae56a"}
+{"at":"2026-10-05T11:36:42.9550158Z","event":"set_value","pid":14704,"value":"Windows managed order"}
+{"at":"2026-10-05T11:36:42.9703529Z","event":"submit","pid":14704,"value":"Windows managed order"}

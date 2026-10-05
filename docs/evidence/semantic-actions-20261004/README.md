@@ -1,5 +1,7 @@
 # P1 语义动作独立实机验收
 
+后续 Windows 日常任务见 [初始证据](../windows-20261005/README.md)，勾选、选择、展开和滚动专项见 [2026-10-05 稳定性证据](../windows-stability-20261005/README.md)。下文保留当时 macOS 轮次的状态。
+
 2026-10-04，轮次 `20261004T065658Z-be2049`，macOS 27.0.1 arm64 / Go 1.26.8。每项新受控应用、新前台输入应用、新 `dtw` helper、唯一窗口标题与应用日志。操作全部经过 `dtw` / host SDK，AppKit/WebKit 独立回调证明真实业务；没有 DOM 自动化或 AX action shim。
 
 由本批未提交源码构建，base commit `6e0f06e`、vcs.modified=true。环境/helper 哈希见 [summary.json](summary.json)，[源码 SHA256](source-sha256.json) 保存时逐项与工作区校验一致；它不是 main 的已发布包。保存的 jsonl 只含合成 fixture 内容，去除临时 PID，保留应用时间戳。

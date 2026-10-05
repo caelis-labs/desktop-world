@@ -139,21 +139,7 @@ func (d *Driver) captureWindow(ctx context.Context, r backend.CaptureRequest) ([
 	if w <= 0 || h <= 0 || w > 8192 || h > 8192 || w*h > 16<<20 {
 		return nil, dw.NewFault("resource_exhausted", "window surface too large", "reobserve")
 	}
-	dc, _, _ := proc(user32, "GetDC").Call(e.hwnd)
-	if dc == 0 {
-		return nil, nativeFault(0x80004005)
-	}
-	defer proc(user32, "ReleaseDC").Call(e.hwnd, dc)
-	if err = ctx.Err(); err != nil {
-		return nil, err
-	}
-	img, err := renderBitmap(dc, w, h, func(mem uintptr) error {
-		ok, _, _ := proc(user32, "PrintWindow").Call(e.hwnd, mem, 0)
-		if ok == 0 {
-			return dw.NewFault("capture_frame_unavailable", "provider did not render the window", "reobserve")
-		}
-		return nil
-	})
+	img, err := renderWindow(ctx, e.hwnd)
 	if err != nil {
 		return nil, err
 	}
@@ -176,11 +162,12 @@ func (d *Driver) captureWindow(ctx context.Context, r backend.CaptureRequest) ([
 	}
 	scale := math.Min(1, math.Min(float64(r.MaxPixelWidth)/float64(w), float64(r.MaxPixelHeight)/float64(h)))
 	outW, outH := max(1, int(float64(w)*scale)), max(1, int(float64(h)*scale))
-	if outW != w || outH != h {
+	sampleW, sampleH := img.Bounds().Dx(), img.Bounds().Dy()
+	if outW != sampleW || outH != sampleH {
 		small := image.NewRGBA(image.Rect(0, 0, outW, outH))
 		for y := 0; y < outH; y++ {
 			for x := 0; x < outW; x++ {
-				small.SetRGBA(x, y, img.RGBAAt(x*w/outW, y*h/outH))
+				small.SetRGBA(x, y, img.RGBAAt(x*sampleW/outW, y*sampleH/outH))
 			}
 		}
 		img = small
@@ -190,6 +177,46 @@ func (d *Driver) captureWindow(ctx context.Context, r backend.CaptureRequest) ([
 		return nil, err
 	}
 	return []backend.Image{{Bytes: data.Bytes(), ContentType: "image/png", Width: outW, Height: outH, Bounds: dw.Bounds{Frame: "window", Topology: d.env.Topology, Rect: dw.Rect{Width: float64(w), Height: float64(h)}}}}, nil
+}
+
+// Legacy DPI-unaware providers paint their virtualized dimensions, even when
+// the capture worker observes physical pixels. Render in the window's context,
+// then map that complete surface to the physical window frame above. Restore
+// worker awareness before any UIA/lifetime/geometry checks.
+func renderWindow(ctx context.Context, hwnd uintptr) (*image.RGBA, error) {
+	awareness, _, _ := proc(user32, "GetWindowDpiAwarenessContext").Call(hwnd)
+	if awareness == 0 {
+		return nil, dw.NewFault("ref_gone", "window DPI context unavailable", "reobserve")
+	}
+	previous, _, _ := setDPI.Call(awareness)
+	if previous == 0 {
+		return nil, dw.NewFault("capture_frame_unavailable", "window DPI context cannot be entered", "reobserve")
+	}
+	defer setDPI.Call(previous)
+	var rect [4]int32
+	if ok, _, _ := proc(user32, "GetWindowRect").Call(hwnd, ptr(&rect)); ok == 0 {
+		return nil, dw.NewFault("ref_gone", "window render geometry unavailable", "reobserve")
+	}
+	w, h := int(rect[2]-rect[0]), int(rect[3]-rect[1])
+	if w <= 0 || h <= 0 || w > 8192 || h > 8192 || w*h > 16<<20 {
+		return nil, dw.NewFault("resource_exhausted", "window render surface too large", "reobserve")
+	}
+	dc, _, _ := proc(user32, "GetDC").Call(hwnd)
+	if dc == 0 {
+		return nil, nativeFault(0x80004005)
+	}
+	defer proc(user32, "ReleaseDC").Call(hwnd, dc)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return renderBitmap(dc, w, h, func(mem uintptr) error {
+		// PW_RENDERFULLCONTENT supports compositor-backed providers. There is
+		// no desktop blit, forced repaint or second rendering attempt.
+		if ok, _, _ := proc(user32, "PrintWindow").Call(hwnd, mem, 2); ok == 0 {
+			return dw.NewFault("capture_frame_unavailable", "provider did not render the window", "reobserve")
+		}
+		return nil
+	})
 }
 func windowCaptureRect(hwnd uintptr) ([4]int32, error) {
 	var rect [4]int32

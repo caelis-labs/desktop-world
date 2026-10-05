@@ -1,0 +1,3 @@
+{"at": "2026-10-05T09:56:27.6076234Z", "event": "ready", "value": "DTW F4 20261005T095624Z-d9e9cc"}
+{"at": "2026-10-05T09:56:31.5662415Z", "event": "set_value", "value": "Windows resumed order"}
+{"at": "2026-10-05T09:56:31.5782457Z", "event": "submit", "value": "Windows resumed order"}

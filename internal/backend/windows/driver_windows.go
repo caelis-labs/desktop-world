@@ -7,6 +7,7 @@ import (
 	"fmt"
 	dw "github.com/caelis-labs/desktop-world"
 	"github.com/caelis-labs/desktop-world/internal/backend"
+	"net/url"
 	"reflect"
 	"sort"
 	"sync"
@@ -33,6 +34,7 @@ type Driver struct {
 	env                dw.Environment
 	initialized        bool
 	scans              map[string]*uiaScan
+	inputGuard         func(context.Context) error
 }
 
 func New() backend.Driver {
@@ -202,7 +204,7 @@ func (d *Driver) nodeFields(ctx context.Context, k backend.Key, fields []string,
 		return backend.Node{}, err
 	}
 	if e.application {
-		return backend.Node{Fields: fields, Key: k, App: k, Object: dw.Object{Kind: dw.KindApplication, Role: "application", Name: dw.Known(fmt.Sprintf("Process %d", e.pid)), Lifecycle: dw.LifeLive}}, nil
+		return backend.Node{Fields: fields, Key: k, App: k, Object: dw.Object{Kind: dw.KindApplication, Role: "application", Name: dw.Known(processName(e.pid)), Lifecycle: dw.LifeLive}}, nil
 	}
 	if e.hwnd == 0 {
 		if err = d.refreshOwnership(e); err != nil {
@@ -256,7 +258,7 @@ func (d *Driver) nodeFields(ctx context.Context, k backend.Key, fields []string,
 		invoke = isTrue(propBool(cached, 30031, true))
 	}
 	value := false
-	if wants(fields, "value_preview") || wants(fields, "states") || wants(fields, "capabilities") {
+	if wants(fields, "value_preview") || wants(fields, "uri") || wants(fields, "states") || wants(fields, "capabilities") {
 		value = isTrue(propBool(cached, 30043, true))
 	}
 	writable := false
@@ -270,15 +272,22 @@ func (d *Driver) nodeFields(ctx context.Context, k backend.Key, fields []string,
 			o.States["read_only"] = ro
 			writable = ro.Status == dw.FactKnown && !isTrue(ro)
 			v, er := "", fmt.Errorf("unrequested")
-			if wants(fields, "value_preview") {
+			if wants(fields, "value_preview") || wants(fields, "uri") {
 				v, er = stringProp(pattern, 4)
 			}
 			if er == nil {
+				if wants(fields, "uri") && isTrue(ro) && (control == 50030 || control == 50005) {
+					if uri, err := url.Parse(v); err == nil && (uri.Scheme == "https" || uri.Scheme == "http" || uri.Scheme == "file") {
+						o.URI = dw.Known(v)
+					}
+				}
 				r := []rune(v)
 				if len(r) > 192 {
 					r = r[:192]
 				}
-				o.ValuePreview = dw.Known(string(r))
+				if wants(fields, "value_preview") {
+					o.ValuePreview = dw.Known(string(r))
+				}
 			}
 			pattern.release()
 		}
@@ -361,7 +370,7 @@ func (d *Driver) nodeFields(ctx context.Context, k backend.Key, fields []string,
 	return backend.Node{Fields: fields, Key: k, App: e.app, Window: e.window, Parent: e.parent, Object: o}, ctx.Err()
 }
 func role(c int32) string {
-	m := map[int32]string{50000: "button", 50002: "checkbox", 50004: "text_field", 50007: "list_item", 50008: "list", 50009: "menu", 50011: "menu_item", 50018: "tab", 50020: "text", 50030: "document", 50032: "window", 50033: "container"}
+	m := map[int32]string{50000: "button", 50001: "calendar", 50002: "checkbox", 50003: "combo_box", 50004: "text_field", 50005: "link", 50006: "image", 50007: "list_item", 50008: "list", 50009: "menu", 50010: "menu_bar", 50011: "menu_item", 50012: "progress_indicator", 50013: "radio_button", 50014: "scrollbar", 50015: "slider", 50016: "spin_button", 50017: "status_bar", 50018: "tab", 50019: "tab_item", 50020: "text", 50021: "toolbar", 50022: "tooltip", 50023: "tree", 50024: "tree_item", 50025: "container", 50026: "container", 50027: "container", 50028: "data_item", 50029: "split_button", 50030: "document", 50031: "container", 50032: "window", 50033: "container", 50034: "header", 50035: "header_item", 50036: "table", 50037: "title_bar", 50038: "separator"}
 	if r := m[c]; r != "" {
 		return r
 	}
@@ -479,7 +488,7 @@ func (d *Driver) scanStep(ctx context.Context, q backend.Query, scan *uiaScan, c
 
 func (d *Driver) seat() backend.Seat {
 	s := backend.Seat{Health: "ready", Intervention: "best_effort"}
-	hwnd, _, _ := foreground.Call()
+	hwnd := foregroundRoot()
 	for _, e := range d.entries {
 		if !e.gone && e.hwnd == hwnd {
 			s.Foreground = e.key
@@ -569,6 +578,23 @@ func (d *Driver) HitTest(ctx context.Context, p dw.Point, k backend.Key) (bool, 
 		return false, err
 	}
 	packed := uint64(uint32(int32(p.X))) | uint64(uint32(int32(p.Y)))<<32
+	// Some Chromium providers return their own element even while another
+	// native window covers the point. Confirm the physical HWND before trusting
+	// UIA ancestry; SendInput uses the actual desktop z-order.
+	win := e
+	if e.hwnd == 0 {
+		if err = d.refreshOwnership(e); err != nil {
+			return false, err
+		}
+		if win, err = d.lookup(e.window); err != nil {
+			return false, err
+		}
+	}
+	hwnd, _, _ := proc(user32, "WindowFromPoint").Call(uintptr(packed))
+	root, _, _ := proc(user32, "GetAncestor").Call(hwnd, 2)
+	if root == 0 || root != win.hwnd {
+		return false, nil
+	}
 	var hit *com
 	if err = d.uia.call(7, uintptr(packed), ptr(&hit)); err != nil {
 		return false, err
@@ -689,8 +715,15 @@ func (d *Driver) refreshOwnership(e *entry) error {
 		if cur.call(36, ptr(&hwnd)) == nil && hwnd != 0 {
 			root, _, _ := proc(user32, "GetAncestor").Call(hwnd, 2)
 			for _, window := range d.entries {
-				if !window.gone && window.hwnd == root && window.pid == e.pid && window.start == e.start {
+				// UWP content providers may live in a different process from the
+				// ApplicationFrameHost top-level HWND. Bind to the actual live root,
+				// while lookup independently validates each process lifetime.
+				if !window.gone && window.hwnd == root {
+					if _, err := d.lookup(window.key); err != nil {
+						return err
+					}
 					e.window = window.key
+					e.app = window.app
 					return nil
 				}
 			}
@@ -738,7 +771,7 @@ func (d *Driver) fieldCache(fields []string) (*com, error) {
 		if wants(fields, "value_preview") || wants(fields, "uri") || wants(fields, "capabilities") {
 			ids = append(ids, 30019)
 		}
-		if wants(fields, "value_preview") || wants(fields, "capabilities") {
+		if wants(fields, "value_preview") || wants(fields, "uri") || wants(fields, "capabilities") {
 			ids = append(ids, 30043)
 		}
 	}

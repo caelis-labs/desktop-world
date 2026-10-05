@@ -1,10 +1,12 @@
-Desktop World — public preview
+Desktop World
 
-Copyright 2026 Caelis Labs. All rights reserved.
+Copyright 2026 Caelis Labs.
 
-This repository and its prerelease artifacts are publicly available for preview.
-No open-source license is granted with this release. Public availability must
-not be interpreted as a grant of rights to reuse, modify, or redistribute the
-software. Obtain the copyright holder's permission for uses requiring a license.
+This Source Code Form is subject to the terms of the Mozilla Public
+License, v. 2.0. If a copy of the MPL was not distributed with this
+file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-No warranty or production-readiness commitment is provided with this preview.
+The license text is included in LICENSE. Third-party notices and their
+applicable licenses are preserved in THIRD_PARTY_NOTICES.md.
+
+Distribution archives include the corresponding source under source/.

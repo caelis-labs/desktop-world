@@ -1,0 +1,31 @@
+{
+  "run": "20261005T113634Z-3ae56a",
+  "platform": "Windows-10-10.0.22631-SP0",
+  "base_commit": "1e43d86161f06060db9d47cb053cce163d31515f",
+  "helper_version": {
+    "arch": "amd64",
+    "go": "go1.26.8",
+    "host_control": "desktop-world/host-control-v0.1",
+    "os": "windows",
+    "protocol": "desktop-world/helper-v0.1",
+    "vcs.modified": "true",
+    "vcs.revision": "1e43d86161f06060db9d47cb053cce163d31515f",
+    "vcs.time": "2026-10-05T10:15:19Z",
+    "version": "dev"
+  },
+  "helper_sha256": "c9c86022ba28c6f9af2745a8730a67aacaf5b57f93039c722a652f1701ddc077",
+  "go_version": "go version go1.26.8 windows/amd64",
+  "source_manifest": "source-sha256.json",
+  "features": {
+    "F4": {
+      "passed": true,
+      "test": "TestNativeWindowsContinuation",
+      "log": "f4.jsonl"
+    },
+    "F5": {
+      "passed": true,
+      "test": "TestNativeWindowsManagedControl",
+      "log": "f5.jsonl"
+    }
+  }
+}

@@ -30,4 +30,4 @@ await dw.check(item.ref, true);
 
 `dw.check`、`dw.select`、`dw.scrollIntoView` 是窄参数入口。目录与逐动作 schema、32 次脚本调用/60 秒/8 KiB print、24 KiB outline 页系列预算保持原有上限。错误、coverage、channel、delivery、verification、原收据不因 compact 而消失。SDK 次数与文本 bytes 仅说明接口体积，没有运行 LLM，不能换算成实际 token 节约率。
 
-实机证据与调用量见 [P1 独立验收](evidence/semantic-actions-20261004/README.md)。每项新应用/新 helper/唯一标题，前台持续 Unicode 输入，后台实际业务回调、时间重叠、no-op、false、未支持拒绝、原收据均独立检查。Windows 全部实机验收后置，不承诺当前 Windows 可用；Bot M0 与联调继续后置。
+实机证据与调用量见 [P1 独立验收](evidence/semantic-actions-20261004/README.md)。每项新应用/新 helper/唯一标题，前台持续 Unicode 输入，后台实际业务回调、时间重叠、no-op、false、未支持拒绝、原收据均独立检查。Windows 11 日常任务及 set_value/invoke 已实测，见 [Windows 验收报告](windows-validation.md)；本页展开、勾选、选择和语义滚动的 Windows 独立业务场景仍待专项验证。Bot M0 与联调继续后置。

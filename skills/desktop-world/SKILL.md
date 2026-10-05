@@ -100,8 +100,9 @@ See [large AX discovery](references/large-ax-discovery.md).
 `act` owns the epoch/request-ID plumbing. Preserve its envelope `id` and body on
 transport retry; a fresh ID may repeat effects. `focus`, `set_value`, `set_expanded`,
 `set_checked`, `set_selected` and `scroll_into_view` verify
-their own state. Other actions default to dispatch only. Add explicit `after`
-predicates when available, then verify the actual task result independently.
+their own state. Other actions default to dispatch only. Set `completion:"verify"`
+with explicit `after` predicates when waiting for UI results; `after` alone does
+not enable verification. Verify the actual task result independently.
 Batch steps whose targets remain known. If a step opens a new window/dialog or
 rebuilds controls, observe again before acting on new objects. Never silently
 replace a stale Ref with a similarly named object.
@@ -157,8 +158,10 @@ capability. It verifies viewport presence, not visibility through occluding
 windows or permission to click. Already-satisfied states return verified no-op.
 Request states/capabilities only on the relevant Ref. See
 [semantic action limits](references/semantic-actions.md) only when needed.
-Windows functionality is implemented but availability is not promised; interactive
-acceptance/adaptation is deferred to a separate Windows environment.
+Windows 11 amd64 has interactive acceptance for Chrome, Notepad, Calculator,
+Win32 input, UIA continuation and managed transport. Other providers, semantic
+state actions and environment variants need their own evidence; see
+[Windows validation](../../docs/windows-validation.md).
 
 
 ## Host-selected cooperative input

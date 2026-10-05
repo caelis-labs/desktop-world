@@ -1,6 +1,6 @@
 # 验收记录
 
-日期：2026-09-29。当前实现已通过 macOS 真实桌面验收和本地契约检查；尚未通过 SPEC 的双平台正式发布门槛。
+日期：2026-09-29（以下为当时的 macOS 验证记录）。2026-10-05 新增 [Windows 实机适配验收](windows-validation.md)，覆盖 Chrome、记事本、计算器、Win32、UIA 续扫和 managed host。尚未完成 SPEC 的全部环境矩阵；历史记录不等于当前所有平台状态。
 
 ## 环境
 
@@ -61,7 +61,7 @@ fixture 日志总计：ready 1、text_changed 20、key_down 21、submit 2、poin
 
 ## 验证边界
 
-Windows UIA / SendInput / GDI 后端和独立 Win32 fixture 已实现并通过交叉构建及静态检查，但没有 Windows 交互式桌面运行证据。macOS 的本轮证据覆盖当前 arm64 主机上的 AppKit 与 Chrome fixture，不能推导最低系统版本、多屏混合缩放、其他浏览器 / Electron 或 Wails 宿主均已通过。
+当时 Windows 仅有交叉构建和静态检查；后续真实桌面运行证据以 [2026-10-05 Windows 报告](windows-validation.md) 为准。macOS 的本轮证据覆盖当前 arm64 主机上的 AppKit 与 Chrome fixture，不能推导最低系统版本、多屏混合缩放、其他浏览器 / Electron 或 Wails 宿主均已通过。
 
 原生变化通知目前采用刷新和 Watch 轮询；AXObserver / UIA event invalidation 及其余正式发布条件见 [实现边界](implementation.md#尚未完成的正式发布条件)。
 
@@ -69,7 +69,7 @@ Windows UIA / SendInput / GDI 后端和独立 Win32 fixture 已实现并通过�
 
 当前源码 helper 改名为 `dtw`，F1 无共享输入策略、F2 语义展开/收起、F3 原生字段计划各自通过独立 macOS 场景。F1 的后台填写/提交没有打断另一应用持续 Unicode 输入；F2 的期望状态、可见明细和重复 no-op 均由应用独立日志确认；F3 在同一窗口把 12 次慢值 getter 降为 0 次，并完成后续订单提交。源码指纹、操作日志、成本定义和复跑命令见 [批次记录](features.md) 与 [实机证据](evidence/features-20261004/README.md)。
 
-F4 Windows UIA 续扫和 F5 Windows managed 私有管道已实现并通过交叉构建/静态检查，交互式 Windows 操作验收仍待完成。M0 进入 caelis-bot 的更新与联调继续后置。
+F4 Windows UIA 续扫和 F5 Windows managed 私有管道随后于 2026-10-05 完成 Windows 11 实机验收。M0 进入 caelis-bot 的更新与联调继续后置。
 
 ## 2026-09-30：Bot managed helper 收尾验证
 

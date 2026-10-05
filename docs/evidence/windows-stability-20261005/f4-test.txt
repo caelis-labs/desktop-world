@@ -1,0 +1,4 @@
+=== RUN   TestNativeWindowsContinuation
+    windows_features_test.go:79: F4 actual UIA task complete; scan pages=16 visited=1013 calls=19 bytes=21681
+--- PASS: TestNativeWindowsContinuation (4.13s)
+PASS

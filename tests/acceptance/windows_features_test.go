@@ -71,7 +71,7 @@ func TestNativeWindowsContinuation(t *testing.T) {
 	if button == "" {
 		t.Fatal("bounded continuation did not find deep target")
 	}
-	input := s.find(window.Ref, "内容")
+	input := s.findRole(window.Ref, "内容", "text_field")
 	s.grant(window.App)
 	want := "Windows resumed order"
 	s.act(dw.Step{ID: "fill", Op: "set_value", Target: dw.Target{Ref: input.Ref}, SetValue: &dw.SetValue{Text: want}}, dw.Step{ID: "deep-submit", Op: "invoke", Target: dw.Target{Ref: button}})
@@ -85,7 +85,7 @@ func TestNativeWindowsManagedControl(t *testing.T) {
 	title, path := requiredFeatureFixture(t, "DTW_F5")
 	s := featureStart(t, dw.InputNoShared)
 	window := s.window(title)
-	input := s.find(window.Ref, "内容")
+	input := s.findRole(window.Ref, "内容", "text_field")
 	button := s.find(window.Ref, "提交")
 	s.grant(window.App)
 	want := "Windows managed order"

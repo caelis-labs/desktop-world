@@ -30,6 +30,7 @@ dtw serve [host options]   New World for the lifetime of this stdio process.
 
 serve host options:
   --input-policy POLICY  Host ceiling: shared_input (default) or no_shared_input.
+	--input-mode MODE      shared (default) or cooperative (short foreground transactions).
   --write-app NAME       Grant writes to one exact live application name; repeatable.
   --write-app-window TITLE  Grant its owning app; resolves duplicate app names by exact window title.
   --desktop-write        Explicitly grant desktop-wide writes instead of named apps.
@@ -116,7 +117,7 @@ func run() error {
 	var auditPath, inputPolicy, inputMode string
 	f := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	f.SetOutput(os.Stderr)
-	f.StringVar(&inputMode, "input-mode", "", "trusted delivery mode: shared or cooperative (macOS short foreground transactions)")
+	f.StringVar(&inputMode, "input-mode", "", "trusted delivery mode: shared or cooperative (short foreground transactions)")
 	f.StringVar(&inputPolicy, "input-policy", "", "trusted ceiling: shared_input or no_shared_input")
 	f.Var(&apps, "write-app", "allow exact live application name")
 	f.Var(&appWindows, "write-app-window", "allow the application owning an exact window title")

@@ -1,5 +1,7 @@
 # P2 独立窗口捕获 · macOS 实机证据
 
+后续更新：2026-10-05 新增 Windows Chrome/Notepad/Calculator 窗口图像实测，见 [Windows 证据](../windows-20261005/README.md)。下文保留本轮 macOS 矩阵与当时状态。
+
 2026-10-04，macOS 27.0.1 arm64 / Go 1.26.8。使用现有 Accessibility/input/screen_capture 授权，没有修改系统权限。此目录只包含受控测试应用的日志与像素。
 
 最终独立全批 run 为 `20261004T074444Z-3d1d57`，F1/F2/F3/F6/F7/F8/F9 各使用新的应用进程、唯一窗口、独立 dtw 和应用自身日志。见 [summary](summary.json)、[原始测试输出](native-all.txt)、[完整检查](check.txt) 和 [85 项源码指纹](source-sha256.json)。构建记录的 base revision 为 `33729da`、modified=true；85 项源文件逐项 hash 与本次提交的实现/测试一致，文档/evidence 不参与源码指纹。合并后的分发包另从 clean exact HEAD 构建并验收。

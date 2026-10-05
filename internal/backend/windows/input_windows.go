@@ -74,6 +74,35 @@ func result(del dw.Delivery, code string) backend.Outcome {
 	}
 	return o
 }
+func heldInputError() error {
+	for _, k := range []uintptr{1, 2, 4, 16, 17, 18, 91, 92} {
+		v, _, _ := asyncKey.Call(k)
+		if v&0x8000 != 0 {
+			return dw.NewFault("user_interrupted", "a physical modifier or pointer button is held", "reobserve")
+		}
+	}
+	return nil
+}
+
+// Newline and Tab have the same real-key semantics on both native platforms.
+// CRLF is a single Enter; Unicode (including surrogate pairs) stays literal.
+func textEvents(text string) []input {
+	events := []input{}
+	for _, r := range strings.ReplaceAll(text, "\r\n", "\n") {
+		if r == '\r' || r == '\n' || r == '\t' {
+			key := uint16(13)
+			if r == '\t' {
+				key = 9
+			}
+			events = append(events, keyInput(key, 0, 0), keyInput(key, 0, 2))
+		} else {
+			for _, u := range utf16.Encode([]rune{r}) {
+				events = append(events, keyInput(0, u, 4), keyInput(0, u, 4|2))
+			}
+		}
+	}
+	return events
+}
 func (d *Driver) Perform(ctx context.Context, o backend.Operation) backend.Outcome {
 	restore := dpiScope()
 	defer restore()
@@ -162,25 +191,24 @@ func (d *Driver) Perform(ctx context.Context, o backend.Operation) backend.Outco
 			}
 		}
 		if err != nil {
-			return result(dw.DeliveryUnknown, "native_action_failed")
+			o := result(dw.DeliveryUnknown, "native_action_failed")
+			if native, ok := err.(*dw.Fault); ok {
+				o.Fault.NativeCode = native.NativeCode
+			}
+			return o
 		}
 		return result(dw.DeliveryComplete, "")
 	}
 	// Never clear physical key state. Interference requires the human to release it.
-	for _, k := range []uintptr{1, 2, 4, 16, 17, 18, 91, 92} {
-		v, _, _ := asyncKey.Call(k)
-		if v&0x8000 != 0 {
-			return result(dw.DeliveryNone, "user_interrupted")
-		}
+	if err := heldInputError(); err != nil {
+		return result(dw.DeliveryNone, "user_interrupted")
 	}
 	events := []input{}
 	cleanup := []input{}
 	duration := time.Duration(0)
 	switch s.Op {
 	case "keyboard.type_text":
-		for _, u := range utf16.Encode([]rune(s.TypeText.Text)) {
-			events = append(events, keyInput(0, u, 4), keyInput(0, u, 4|2))
-		}
+		events = textEvents(s.TypeText.Text)
 	case "keyboard.press":
 		for _, m := range s.Press.Modifiers {
 			k := modifier(m)
@@ -230,11 +258,37 @@ func (d *Driver) Perform(ctx context.Context, o backend.Operation) backend.Outco
 		return result(dw.DeliveryNone, "capability_unavailable")
 	}
 	accepted := 0
-	if duration == 0 {
+	var stopped error
+	guard := func() bool {
+		stopped = ctx.Err()
+		if stopped == nil && d.inputGuard != nil {
+			stopped = d.inputGuard(ctx)
+		}
+		return stopped == nil
+	}
+	if duration == 0 && s.Op != "keyboard.type_text" {
+		if !guard() {
+			return transactionOutcome(stopped)
+		}
 		accepted = send(events)
+	} else if s.Op == "keyboard.type_text" {
+		// Bound cancellation and foreground checks between complete key pairs.
+		// A surrogate pair is sent together, never left half written by a guard.
+		for accepted < len(events) && guard() {
+			count := 2
+			scan := binary.LittleEndian.Uint16(events[accepted].Data[2:4])
+			if utf16.IsSurrogate(rune(scan)) && scan <= 0xdbff && accepted+4 <= len(events) {
+				count = 4
+			}
+			n := send(events[accepted : accepted+count])
+			accepted += n
+			if n != count {
+				break
+			}
+		}
 	} else {
 		for i, ev := range events {
-			if ctx.Err() != nil {
+			if !guard() {
 				break
 			}
 			if send([]input{ev}) != 1 {
@@ -287,6 +341,9 @@ func (d *Driver) Perform(ctx context.Context, o backend.Operation) backend.Outco
 		out = result(dw.DeliveryNone, "input_rejected")
 	} else if accepted < len(events) {
 		out = result(dw.DeliveryPartial, "partial_delivery")
+	}
+	if stopped != nil && accepted < len(events) {
+		out.Fault = transactionOutcome(stopped).Fault
 	}
 	requested := len(events)
 	out.Accepted = &accepted

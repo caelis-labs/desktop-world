@@ -9,8 +9,8 @@ import (
 )
 
 func native(mode dw.InputMode) (backend.Driver, error) {
-	if mode != dw.InputModeShared {
-		return nil, dw.NewFault("capability_unavailable", "cooperative input is currently macOS only", "never_automatically")
+	if mode == dw.InputModeCooperative {
+		return windows.NewCooperative(), nil
 	}
 	return windows.New(), nil
 }

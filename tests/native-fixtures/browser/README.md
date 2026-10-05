@@ -23,4 +23,10 @@ DW_BROWSER_CAPTURE_PATH="$PWD/artifacts/browser-demo.png" \
 
 测试先按唯一窗口标题限定作用域，再通过原生接口查找输入框。五步计划执行聚焦、全选、Unicode 输入和 Enter；重复请求不增加提交次数。Canvas 中的像素文字不能绑定为语义按钮。日志文件必须不存在，服务拒绝覆盖上一轮记录。
 
-测试结束后关闭测试标签页，在终端一按 Ctrl+C 停止服务。默认的 `go test ./...` 跳过这项真实输入测试。当前仅在 macOS / Chrome 上执行通过，其他浏览器与 Windows 需要各自运行验收。
+测试结束后关闭测试标签页，在终端一按 Ctrl+C 停止服务。默认的 `go test ./...` 跳过这项真实输入测试。macOS / Chrome 和 Windows 11 / Chrome 已有实机证据；其他浏览器需要各自验收。Windows 的完整日常任务脚本会通过 dtw 打开新标签页并运行本 fixture：
+
+```powershell
+python scripts/accept-windows.py --browser-window '当前 Chrome 精确窗口标题 - Google Chrome'
+```
+
+包括可信键盘/input/submit、去重、Canvas 负面场景和 12 轮前台恢复；见 [Windows 验收报告](../../../docs/windows-validation.md)。
