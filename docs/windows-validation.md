@@ -87,4 +87,6 @@ python scripts/accept-windows-stability.py --electron 'C:\path\to\electron.exe' 
 
 脚本默认构建当前源码，`--helper` 指定现有包内二进制。每轮使用新标题、文件、日志与 loopback 端口，不覆盖旧证据；完整 wire/桌面截图只保留本机忽略目录，仓库保存合成应用日志、回执摘要及自有 fixture 图像。日常脚本编辑新建文档、改变计算器计算并打开自己的表单标签；语义/稳定性脚本只结束本轮创建的 fixture/helper。失败轮次同样保留，不重放未知业务操作。
 
+shared Win32 SDK fixture 的启动不保证获得 Windows 前台权限；脚本先通过 dtw 的公开 UIA focus 显式聚焦自有 EDIT，再运行独立 SDK 任务。一次初始窗口激活被系统拒绝的 needs_user_focus / delivery=none 回执已保留，后续步骤全部 skipped；新的任务样本在完成该前置准备后通过。此准备不注入 Alt 或改变 OS 前台规则。
+
 `check.ps1` 已通过 Go race/vet/build、headless/embodied 示例、9 个 JSON 协议示例和 19 个 JavaScript 测试。发布范围限 Windows 11 amd64、普通权限、当前单屏及上述 provider；更多机型、多屏缩放、RDP/锁屏/用户切换、复杂 IME 和实际 Bot/Wails 联调未形成实机矩阵。Mac 必须基于最终同一 commit 复验，不能用历史成功直接确认跨平台 RC。最终打包、Mac 命令和验收条件见 [rc-validation.md](rc-validation.md)。

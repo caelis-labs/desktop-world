@@ -317,6 +317,17 @@ def main():
             cwd=ROOT, creationflags=NO_CONSOLE)
         children.append(child)
         await_condition(lambda: native_log.exists())
+        # Launching a window does not guarantee foreground permission. Prepare
+        # the shared-input fixture explicitly through its public UIA focus,
+        # before starting the independent SDK task; do not replay failed input.
+        prep = Session(helper, out / "native-setup", ["--write-app-window", native_title])
+        try:
+            owned, _ = prep.observe()
+            native_win = next(o["ref"] for o in owned if o["kind"] == "window" and known(o["name"]) == native_title)
+            native_edit = prep.find(native_win, "text_field", "内容")
+            summary["native_foreground_setup"] = prep.act([step("focus", native_edit)])
+        finally:
+            prep.close()
         test_env = dict(ENV, DW_NATIVE_FIXTURE_TITLE=native_title, DW_NATIVE_FIXTURE_LOG=str(native_log),
             DW_NATIVE_CAPTURE_PATH=str(out / "native-capture.png"), DW_NATIVE_CANCEL_TEST="1")
         result = subprocess.run([str(acceptance), "-test.v", "-test.run", "^TestNativeFixture$"],
