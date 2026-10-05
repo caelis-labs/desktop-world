@@ -1,6 +1,27 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createSession } from './desktop.mjs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+test('CLI runs through directory aliases and preserved main symlinks', () => {
+  const folder = mkdtempSync(join(tmpdir(), 'dw-cli-path-'));
+  try {
+    const alias = join(folder, 'alias');
+    symlinkSync(dirname(fileURLToPath(import.meta.url)), alias, 'junction');
+    for (const flags of [[], ['--preserve-symlinks-main']]) {
+      const output = execFileSync(process.execPath, [...flags, join(alias, 'desktop.mjs'), '--version'], {encoding:'utf8',timeout:5000});
+      const version = JSON.parse(output);
+      assert.equal(version.adapter, 'desktop-world/javascript-v0.1');
+      assert.equal(version.platform, process.platform);
+    }
+  } finally {
+    rmSync(folder, {recursive:true,force:true});
+  }
+});
 
 const observed = { objects: [{ ref: 'r1', role: 'button', name: { known: 'Save' }, value_preview: { known: '' }, states: { enabled: { known: false }, focused: { status: 'unknown' } } }], coverage: { complete: true, truncated: false }, seat: { focused_object: { known: 'r1' } } };
 const completed = { run_id: 'run1', outcome: 'completed', state: 'terminal', steps: [{ id: 's1', delivery: 'complete', verification: 'not_requested' }] };
