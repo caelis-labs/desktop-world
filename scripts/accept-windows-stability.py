@@ -27,6 +27,17 @@ def window(session, title):
     matches = [o for o in objects if o["kind"] == "window" and h.known(o["name"]) == title]
     return matches[0]["ref"] if len(matches) == 1 else None
 
+def ready_find(session, ref, role, name):
+    # Native UIA can briefly expose an incomplete tree after state/visibility
+    # transitions. Repeat only reads and require full coverage before acting.
+    def ready():
+        objects, pages = session.observe(ref, {"role": role, "name_equals": name}, ["name", "role"])
+        coverage = pages[-1]
+        if len(objects) == 1 and coverage.get("complete") and not coverage.get("dirty") and not coverage.get("truncated") and not coverage.get("unavailable_sources"):
+            return objects[0]["ref"]
+        return None
+    return h.await_condition(ready, timeout=5)
+
 def pointer(op, ref, u=.5, v=.5, **args):
     return {"op": op, "target": {"anchor": {"target": ref, "u": u, "v": v}}, **args}
 
@@ -242,7 +253,10 @@ def electron_acceptance(executable, helper, out, children, sessions, human_title
         assert quitting[0]["result"]["seat_health"] == "ready", quitting
         dead = session.call("observe", {"scope": {"refs": [win]}, "projection": "detail", "fields": ["role"]}, allow_error=True)
         gone = session.act([h.step("focus", win)], request_id="closed-window-write", allow_error=True)
-        assert gone.get("error", {}).get("code") == "ref_gone" and gone["result"]["steps"][0]["delivery"] == "none", gone
+        # rc.2 expires the owning APP grant before input dispatch. Depending
+        # on guard ordering, the original Ref therefore reports either fault.
+        assert gone.get("error", {}).get("code") in {"ref_gone", "permission_denied"} and gone["result"]["steps"][0]["delivery"] == "none", gone
+        assert gone["result"]["outcome"] == "stopped" and gone["result"]["seat_health"] == "ready" and gone["result"]["input"]["restoration"] == "not_borrowed", gone
         assert not dead.get("result", {}).get("objects"), dead
         receipts.append({"name": "app-quit", "receipt": quitting[0]["result"]})
         # Transport failure after terminal input: a fresh helper has a new Epoch.
@@ -340,9 +354,9 @@ def main():
         assert final == {"checked": False, "selected": ["Beijing"], "expanded": False, "last_visible": False, "last_choice_visible": False}, final
         summary["scenarios"]["native_semantic_state"] = {"state": state, "final": final,
             "checked_on": on, "checked_noop": noop, "list_scroll": scrolled, "tree_scroll": tree_scrolled, "tree_state": tree_state}
-        field = session.find(win, "text_field", "内容")
-        cover = session.find(win, "button", "Cover input")
-        uncover = session.find(win, "button", "Uncover input")
+        field = ready_find(session, win, "text_field", "内容")
+        cover = ready_find(session, win, "button", "Cover input")
+        uncover = ready_find(session, win, "button", "Uncover input")
         donor_title = "DTW Restoration Donor " + stamp
         donor_child = subprocess.Popen([str(ROOT / "bin/DWNativeFixture.exe"), "-title", donor_title,
             "-log", str(out / "donor-events.jsonl")], creationflags=h.NO_CONSOLE)
@@ -350,7 +364,7 @@ def main():
         donor = h.Session(helper, out / "donor", ["--write-app-window", donor_title])
         sessions.append(donor)
         donor_win = h.await_condition(lambda: window(donor, donor_title))
-        donor_field = donor.find(donor_win, "text_field", "内容")
+        donor_field = ready_find(donor, donor_win, "text_field", "内容")
         session.act([h.step("invoke", cover)])
         donor.act([h.step("focus", donor_field)])
         def native_seat():
