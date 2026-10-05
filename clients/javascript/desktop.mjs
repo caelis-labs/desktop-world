@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { createServer, createConnection } from 'node:net';
 import { mkdtemp, mkdir, readFile, writeFile, chmod, unlink, rmdir } from 'node:fs/promises';
-import { openSync, writeSync, closeSync } from 'node:fs';
+import { openSync, writeSync, closeSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -434,6 +434,11 @@ export async function main(argv) {
   });
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+let invokedAsMain = false;
+if (process.argv[1]) {
+  try { invokedAsMain = realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { /* Importing the adapter need not supply a filesystem argv entry. */ }
+}
+if (invokedAsMain) {
   main(process.argv.slice(2)).catch(error => { console.error(JSON.stringify({ error: errorInfo(error) })); process.exitCode = 1; });
 }
