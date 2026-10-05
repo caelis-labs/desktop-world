@@ -27,6 +27,7 @@ type Options struct {
 	Executable  string
 	AssetsDir   string
 	AuditPath   string
+	AuditMode   string
 	Stderr      io.Writer
 }
 
@@ -44,6 +45,7 @@ type Hello struct {
 	Type        string         `json:"type"`
 	Protocol    string         `json:"protocol"`
 	Environment dw.Environment `json:"environment"`
+	AuditPath   string         `json:"audit_path"`
 	Managed     bool           `json:"managed"`
 }
 
@@ -157,6 +159,8 @@ type Client struct {
 	data, control *peer
 	exited        chan struct{}
 	closeOnce     sync.Once
+	closeErr      error
+	waitErr       error
 	mu            sync.Mutex
 	sequence      uint64
 	requests      map[string]string
@@ -196,6 +200,9 @@ func Start(ctx context.Context, o Options) (*Client, error) {
 	}
 	if o.AuditPath != "" {
 		args = append(args, "--audit", o.AuditPath)
+		if o.AuditMode != "" {
+			args = append(args, "--audit-mode", o.AuditMode)
+		}
 	}
 	cmd := exec.Command(o.Executable, args...)
 	cmd.Stderr = o.Stderr
@@ -242,7 +249,7 @@ func Start(ctx context.Context, o Options) (*Client, error) {
 	cr.Close()
 	rw.Close()
 	c := &Client{cmd: cmd, data: newPeer(stdout, stdin), control: newPeer(rr, cw), exited: make(chan struct{}), requests: map[string]string{}}
-	go func() { _ = cmd.Wait(); close(c.exited) }()
+	go func() { err := cmd.Wait(); c.mu.Lock(); c.waitErr = err; c.mu.Unlock(); close(c.exited) }()
 	controlScan := bufio.NewScanner(rr)
 	controlScan.Buffer(make([]byte, 4096), 2<<20)
 	go c.control.read(controlScan)
@@ -261,12 +268,14 @@ func Start(ctx context.Context, o Options) (*Client, error) {
 			InputMode      dw.InputMode   `json:"input_mode"`
 			Environment    json.RawMessage
 			Managed        bool
+			AuditPath      string `json:"audit_path"`
 		}
 		if err := json.Unmarshal(scan.Bytes(), &raw); err != nil {
 			ready <- err
 			return
 		}
 		c.Hello.Type, c.Hello.Protocol, c.Hello.Managed = raw.Type, raw.Protocol, raw.Managed
+		c.Hello.AuditPath = raw.AuditPath
 		c.Hello.InputPolicy = raw.InputPolicy
 		c.Hello.InputMode = raw.InputMode.Effective()
 		if err := protocol.Decode(raw.Environment, &c.Hello.Environment); err != nil {
@@ -304,28 +313,61 @@ func Start(ctx context.Context, o Options) (*Client, error) {
 	return c, nil
 }
 
-func (c *Client) controlCall(ctx context.Context, op, turn string, app dw.Ref) error {
+func (c *Client) controlRequest(ctx context.Context, request helper.ControlRequest) (Reply, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return Reply{}, err
 	}
 	c.mu.Lock()
 	c.sequence++
 	id := fmt.Sprintf("host-%d", c.sequence)
 	c.mu.Unlock()
-	x, err := c.control.submit(id, helper.ControlRequest{ID: id, Op: op, Turn: turn, Application: app})
+	request.ID = id
+	x, err := c.control.submit(id, request)
 	if err != nil {
-		return err
+		return Reply{}, err
 	}
 	reply, err := wait(ctx, x)
 	if err != nil {
 		c.Close() // An uncertain control mutation must never leave live grants behind.
-		return err
+		return Reply{}, err
 	}
 	if reply.Error != nil {
-		return reply.Error
+		return reply, reply.Error
 	}
-	return nil
+	return reply, nil
 }
+func (c *Client) controlCall(ctx context.Context, op, turn string, app dw.Ref) error {
+	_, err := c.controlRequest(ctx, helper.ControlRequest{Op: op, Turn: turn, Application: app})
+	return err
+}
+
+// Declare approves a selector for one turn; binding waits for a complete unique observation.
+func (c *Client) Declare(ctx context.Context, turn, name, windowTitle string) error {
+	_, err := c.controlRequest(ctx, helper.ControlRequest{Op: "declare", Turn: turn, Name: name, WindowTitle: windowTitle})
+	return err
+}
+func (c *Client) Revoke(ctx context.Context, turn string, app dw.Ref) error {
+	_, err := c.controlRequest(ctx, helper.ControlRequest{Op: "revoke", Turn: turn, Application: app})
+	return err
+}
+func (c *Client) RevokeGrant(ctx context.Context, turn, grantID string) error {
+	_, err := c.controlRequest(ctx, helper.ControlRequest{Op: "revoke", Turn: turn, GrantID: grantID})
+	return err
+}
+
+type ApplicationGrant = helper.ApplicationGrant
+type GrantStatus = helper.GrantStatus
+
+func (c *Client) Grants(ctx context.Context, turn string) (GrantStatus, error) {
+	reply, err := c.controlRequest(ctx, helper.ControlRequest{Op: "grants", Turn: turn})
+	if err != nil {
+		return GrantStatus{}, err
+	}
+	var out GrantStatus
+	err = protocol.Decode(reply.Result, &out)
+	return out, err
+}
+
 func (c *Client) BeginTurn(ctx context.Context, turn string) error {
 	return c.controlCall(ctx, "begin_turn", turn, "")
 }
@@ -407,6 +449,9 @@ func (c *Client) Close() {
 		select {
 		case <-c.exited:
 		case <-time.After(2 * time.Second):
+			c.mu.Lock()
+			c.closeErr = errors.New("helper_close_incomplete: forced termination does not prove native cleanup")
+			c.mu.Unlock()
 			_ = c.cmd.Process.Kill()
 			<-c.exited
 		}
@@ -415,4 +460,15 @@ func (c *Client) Close() {
 		c.data.fail(errors.New("host closed; no automatic restart or replay"))
 		c.control.fail(errors.New("host closed"))
 	})
+}
+
+// CloseWithError reports a forced or failed child exit; Close retains its legacy signature.
+func (c *Client) CloseWithError() error {
+	c.Close()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closeErr != nil {
+		return c.closeErr
+	}
+	return c.waitErr
 }

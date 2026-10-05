@@ -6,7 +6,9 @@ description: Operate authorized desktop applications through a persistent Deskto
 Use the helper supplied by the host. Its process must stay alive across calls: a
 fresh process means a new epoch, new Refs and no memory of previous execution.
 
-Prefer the supplied JavaScript entry point when available. The host starts it
+Use the supplied TS, Python, Rust or Go DesktopClient facade when embedded in an agent host. Read the matching clients/<language>/README.md and docs/agent-integration.md. Keep HostSession and helper paths in trusted host code.
+
+Prefer the supplied JavaScript entry point for persistent script tools. The host starts it
 once using host.json. Read `node clients/javascript/desktop.mjs help`, then:
 
 ```sh
@@ -179,3 +181,18 @@ Read Receipt `input.foreground_ms/restoration` alongside delivery/verification.
 `focus` evidence is from inside the transaction. Restore failure is unknown and
 fenced; reconcile the original request. `no_shared_input` remains strict.
 See [cooperative details](../../docs/cooperative-input.md) only when needed.
+
+## rc.2 application authority and plans
+
+The host can predeclare an APP that is not yet running and dynamically add/revoke approvals during the same session. Pending, ambiguous and unresolved declarations grant no write authority. Only complete discovery can bind a unique live application. An expired/revoked binding never follows a restarted APP automatically; report the exact observed APP Ref to the trusted host. Never call owner authorization from model desktop arguments. Status shows current authority; startup flags alone are not proof of permission.
+
+In cooperative mode, gather focus and keyboard input in ONE native plan. An independent focus call restores the user's foreground before the next call. JS/TS example:
+
+```javascript
+await dw.transaction(tx => {
+  tx.focus(windowRef);
+  tx.press(tx.bindFocus('input', windowRef), 'O', ['primary']);
+});
+```
+
+Builders execute no input until submitted. bindFocus resolves the focused UI at execution time inside the observed APP/window; it refuses focus outside that scope. If a specific control is known, focus that control in the same plan. Do not perform observe/call/act inside the builder callback. Check the original receipt and independently observe business state afterward. Transactions cannot undo dispatched input. Logs default to metadata; full script/wire logging requires trusted host debug:true.

@@ -4,9 +4,9 @@
 
 Desktop World 将应用、窗口和 UI 控件转换为可观察、可授权的对象。Agent 可以查找控件、读取文本、填写表单、操作键鼠和获取截图；每次执行返回包含投递结果、验证结果和错误的回执。
 
-提供 `dtw` 命令行、持久 JavaScript 会话、Go SDK 和宿主管理接口。桌面操作使用 macOS Accessibility / CGEvent / ScreenCaptureKit，以及 Windows UI Automation / SendInput / Win32；运行核心无需 LLM、API Key、浏览器扩展或云服务。
+提供 `dtw` 命令行、持久 JavaScript 会话、Go / TypeScript / Python / Rust SDK 和动态宿主管理接口。桌面操作使用 macOS Accessibility / CGEvent / ScreenCaptureKit，以及 Windows UI Automation / SendInput / Win32；运行核心无需 LLM、API Key、浏览器扩展或云服务。
 
-> 当前处于 RC 验收阶段。Windows 11 x64 已完成 Chrome、记事本、计算器、Win32 和 Electron 的真实操作及稳定性验证；macOS 需在同一提交上复验后才能完成跨平台 RC 验收。发布范围、打包及验收步骤见 [RC 验收指南](docs/rc-validation.md)，实测结果见 [Windows 验收报告](docs/windows-validation.md)。
+> 当前源码是 rc.2 候选：动态 APP 声明/追加授权、单份输入计划、审计轮转及多语言 SDK。rc.1 的 Windows 历史实测不代表 rc.2 已通过；正式发布前，需 DESKTOP-90677U0 在最终提交上完成 [Windows 交接验收](docs/rc2-windows-handoff.md)。
 
 ## 功能
 
@@ -57,9 +57,15 @@ go build -o bin/dtw ./cmd/dtw
 
 `version` 显示构建版本、平台和协议；源码构建默认标记为 `dev`。历史预发布及校验文件见 [Releases](https://github.com/caelis-labs/desktop-world/releases)。
 
+## 外部 Agent 接入
+
+按编排语言选择 [TypeScript](clients/typescript/README.md)、[Python](clients/python/README.md)、[Rust](clients/rust/README.md) 或 [Go host](docs/bot-integration.md)。完整接入契约、动态授权和停止/恢复流程见 [Agent 接入指南](docs/agent-integration.md)。Python/Rust 直接启动原生 helper，无需 Node。
+
+`--write-app` 可声明未启动 APP；可信宿主在运行期间追加/撤销授权。使用 `dtw session --session harness/owner.json`，通过 `dtw auth list|add|revoke` 管理同一会话。声明只有在完整发现证明唯一时才绑定一个 APP 实例，APP 重启需重新授权。
+
 ## 快速开始：持久 JavaScript 会话
 
-推荐 Agent 使用 JavaScript 入口：一个原生 helper 跨调用保留对象 Ref、观察和回执，脚本中间结果留在本地，只输出需要的信息。
+需要持久脚本工具的 Agent 可使用 JavaScript 入口：一个原生 helper 跨调用保留对象 Ref、观察和回执，脚本中间结果留在本地，只输出需要的信息。
 
 创建 `host.json`，将 helper 路径及窗口标题替换为本机实际值。宿主通过精确窗口标题授权其所属应用：
 

@@ -76,7 +76,7 @@ print(dw.rows(after, ['name','states.enabled','states.focused']));
 
 一个脚本最多 32 次调用、8 KiB print 输出、64 KiB 源码；异步期限 60 秒，初始同步执行限 1 秒。期限到了停止后续调用，等待已经发出的 helper 请求结束并保留收据。Node vm 不是安全边界，恶意代码及 await 后的无限同步循环可能阻塞宿主，生产宿主应另加进程 watchdog。调用串行，包括 Promise.all；不要把同一桌面的写入并行化。未 await 的调用可能在脚本退出时被拒绝，因此必须 await。
 
-完整 transport 日志 `harness/wire.jsonl`、脚本来源 `script-code.jsonl` 可能包含 UI 文本和键入内容，是私有评估证据，不进入公开发行包。`scripts.jsonl` 只保存计量。默认独占创建日志，避免混合不同运行；重测使用新目录。
+每次启动生成 `harness/runs/<uuid>`，`scripts.jsonl` 默认只保存计量。host.json 中显式设置 `"debug":true` 才记录 `wire.jsonl` / `script-code.jsonl`，它们可能包含 UI 文本和键入内容，不进入发行包。启动输出包含 `audit_dir`、`owner_file`；`status` 返回当前授权状态。可信宿主通过 `dtw auth add/revoke --session <owner_file>` 动态管理 APP，exec 脚本不能自行授权。
 
 ```sh
 node clients/javascript/desktop.mjs stop
@@ -96,3 +96,9 @@ unknown values and possible preview clipping. It never captures or expands scope
 ## 按需窗口图像
 
 先调用 `dw.captureWindows(appRef)` 取 32 条 / 8 KiB 的原生窗口目录，只有显式 `dw.capture({kind:'window_content', target:ref, max_pixel_width:1024, max_pixel_height:768})` 才生成图片。macOS 专用捕获 Ref 不与 AX 窗口按标题/位置关联，不提供 AX outline 或桌面点击映射；普通 summary 不自动披露该目录。宿主单独启用 capture。接口与平台验证限制见 [窗口捕获](window-capture.md)。
+
+## rc.2 计划与动态授权
+
+`dw.plan()` 在本地聚合步骤，`dw.act(plan)` 一次提交。`dw.transaction(tx => { tx.focus(windowRef); tx.press(tx.bindFocus('input',windowRef),'O',['primary']); })` 把焦点与快捷键放进同一原生计划；回调内禁止另行读取/执行桌面操作，不会回滚已投递输入。
+
+`--write-app` 允许待启动声明，只有完整发现证明唯一时才激活。重复同名 APP 或不完整发现保持明确的未授权状态；现有绑定不会跟随 APP 重启。JS 启动时输出原生 owner descriptor，其路径可传给 `dtw auth list|add|revoke --session`。完整状态和权限边界见 [Agent 接入](agent-integration.md)。

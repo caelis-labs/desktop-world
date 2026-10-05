@@ -143,7 +143,7 @@ func TestStdioMetadataAndEOF(t *testing.T) {
 		t.Fatalf("audit policy: %s", audit.String())
 	}
 	var row map[string]any
-	if json.Unmarshal(bytes.TrimSpace(audit.Bytes()), &row) != nil || row["op"] != "observe" {
+	if json.Unmarshal(bytes.Split(bytes.TrimSpace(audit.Bytes()), []byte("\n"))[1], &row) != nil || row["op"] != "observe" {
 		t.Fatal("invalid audit")
 	}
 	if row["full_response_bytes"].(float64) <= row["response_bytes"].(float64) {
@@ -189,9 +189,16 @@ func TestAppWindowDisambiguatesSameApplicationNames(t *testing.T) {
 	f.Form()
 	f.Add(dwtest.Node{ID: "other-app", Object: dw.Object{Kind: dw.KindApplication, Name: dw.Known("Fixture")}})
 	f.Add(dwtest.Node{ID: "other-window", App: "other-app", Parent: "other-app", Object: dw.Object{Kind: dw.KindWindow, Name: dw.Known("Other window")}})
-	if _, err := New(context.Background(), w, Config{WriteApps: []string{"Fixture"}}); err == nil {
-		t.Fatal("ambiguous app accepted")
+	ambiguous, err := New(context.Background(), w, Config{WriteApps: []string{"Fixture"}})
+	if err != nil {
+		t.Fatal(err)
 	}
+	status, err := ambiguous.grantStatus("session")
+	if err != nil || len(status.Grants) != 1 || status.Grants[0].State != "ambiguous" {
+		t.Fatal("ambiguity not reported", status, err)
+	}
+	ambiguous.actor.Close()
+	ambiguous.discovery.Close()
 	// A new helper process opens a new World; Actor IDs are not reusable after Close.
 	w2, f2, err := dwtest.New(context.Background())
 	if err != nil {

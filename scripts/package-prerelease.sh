@@ -32,7 +32,7 @@ with open(p, 'w') as f: json.dump(d, f, indent=2); f.write('\n')
 PY
 git archive HEAD | tar -x -C "$OUT/$NAME/source"
 cp README.md HANDOFF.md LICENSE NOTICE THIRD_PARTY_NOTICES.md "$OUT/$NAME/"
-cp -R docs clients skills examples "$OUT/$NAME/"
+cp -R "$OUT/$NAME/source/docs" "$OUT/$NAME/source/clients" "$OUT/$NAME/source/skills" "$OUT/$NAME/source/examples" "$OUT/$NAME/"
 tar -czf "$OUT/$NAME.tar.gz" -C "$OUT" "$NAME"
 git archive --format=tar.gz --prefix="desktop-world-$VERSION/" -o "$OUT/desktop-world-$VERSION-source.tar.gz" HEAD
 (cd "$OUT" && shasum -a 256 "$NAME.tar.gz" "desktop-world-$VERSION-source.tar.gz" > SHA256SUMS)

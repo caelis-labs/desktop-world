@@ -45,7 +45,7 @@ func normalizePlan(p dw.Plan) dw.Plan {
 		}
 		if s.Completion == "" {
 			s.Completion = "dispatch"
-			if s.Op == "focus" || s.Op == "set_value" || desiredState(*s) != nil || s.Op == "wait" || s.Op == "bind" {
+			if s.Op == "focus" || s.Op == "set_value" || desiredState(*s) != nil || s.Op == "wait" || s.Op == "bind" || s.Op == "bind_focus" {
 				s.Completion = "verify"
 			}
 		}
@@ -290,13 +290,74 @@ func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string
 		fail(e)
 		return
 	}
-	if s.Op == "bind" || s.Op == "wait" {
+	if s.Op == "bind" || s.Op == "bind_focus" || s.Op == "wait" {
 		res.Delivery = dw.DeliveryNA
 		if e := a.predicates(ctx, s.Before, bindings, s.Op); e != nil {
 			fail(e)
 			return
 		}
 	}
+	if s.Op == "bind_focus" {
+		res.Delivery = dw.DeliveryNA
+		within := s.BindFocus.Within
+		if e := a.check(ctx, dw.Intent{Operation: "bind_focus", Scope: dw.Scope{Refs: []dw.Ref{within}}}, false); e != nil {
+			fail(e)
+			return
+		}
+		root, e := w.read(ctx, within)
+		if e != nil {
+			fail(e)
+			return
+		}
+		w.mu.Lock()
+		seat := copyOf(w.seat)
+		w.mu.Unlock()
+		inside := false
+		if root.Kind == dw.KindWindow {
+			inside = seat.ForegroundWindow.Status == dw.FactKnown && seat.ForegroundWindow.Value != nil && *seat.ForegroundWindow.Value == within
+		}
+		if root.Kind == dw.KindApplication {
+			inside = seat.ForegroundApplication.Status == dw.FactKnown && seat.ForegroundApplication.Value != nil && *seat.ForegroundApplication.Value == within
+		}
+		if !inside || seat.FocusedObject.Value == nil || seat.FocusedObject.Status != dw.FactKnown {
+			fail(dw.NewFault("focus_outside_scope", "focus changed outside the declared scope; inspect seat and build a new plan", "reobserve"))
+			return
+		}
+		ref := *seat.FocusedObject.Value
+		focused, e := w.read(ctx, ref)
+		if e != nil {
+			fail(e)
+			return
+		}
+		w.mu.Lock()
+		currentSeat := copyOf(w.seat)
+		w.mu.Unlock()
+		if currentSeat.FocusedObject.Status != dw.FactKnown || currentSeat.FocusedObject.Value == nil || *currentSeat.FocusedObject.Value != ref {
+			fail(fault("focus_outside_scope"))
+			return
+		}
+		if focused.Kind != dw.KindUI || (root.Kind == dw.KindWindow && focused.Window != within) || (root.Kind == dw.KindApplication && focused.App != within) {
+			fail(fault("focus_outside_scope"))
+			return
+		}
+		if e = a.check(ctx, dw.Intent{Operation: "bind_focus", Targets: []dw.Ref{ref}}, false); e != nil {
+			fail(e)
+			return
+		}
+		bindings[s.BindFocus.Name] = ref
+		res.Target = ref
+		res.State = "satisfied"
+		res.Verification = dw.VerifyVerified
+		if len(s.After) > 0 {
+			res.Verification, e = a.poll(ctx, s.After, bindings, s.Op)
+			if e != nil {
+				fail(e)
+				res.State = "failed"
+			}
+		}
+		return
+	}
+
 	if s.Op == "bind" {
 		res.Delivery = dw.DeliveryNA
 		in := dw.Intent{Operation: "bind", Scope: dw.Scope{Refs: []dw.Ref{s.Bind.Locator.Within}}, Fields: []string{"name", "role", "states", "capabilities"}}
