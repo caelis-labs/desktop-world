@@ -79,11 +79,14 @@ func (s *featureSession) window(title string) dw.Object {
 	return dw.Object{}
 }
 func (s *featureSession) find(window dw.Ref, name string, fields ...string) dw.Object {
+	return s.findRole(window, name, "", fields...)
+}
+func (s *featureSession) findRole(window dw.Ref, name, role string, fields ...string) dw.Object {
 	s.t.Helper()
 	if len(fields) == 0 {
 		fields = []string{"role", "name"}
 	}
-	req := dw.ObserveRequest{Scope: dw.Scope{Refs: []dw.Ref{window}}, Projection: dw.ProjectionOutline, Fields: fields, Match: &dw.Locator{Within: window, NameEquals: &name}, Budget: dw.Budget{MaxDepth: 12, MaxVisitedNodes: 128, MaxResults: 4, MaxOutputBytes: 4096, ReadDeadline: 3 * time.Second}}
+	req := dw.ObserveRequest{Scope: dw.Scope{Refs: []dw.Ref{window}}, Projection: dw.ProjectionOutline, Fields: fields, Match: &dw.Locator{Within: window, Role: role, NameEquals: &name}, Budget: dw.Budget{MaxDepth: 12, MaxVisitedNodes: 128, MaxResults: 4, MaxOutputBytes: 4096, ReadDeadline: 3 * time.Second}}
 	for i := 0; i < 8; i++ {
 		var ob dw.Observation
 		s.call("observe", req, &ob)

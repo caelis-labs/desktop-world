@@ -148,7 +148,9 @@ func (d *Driver) captureWindow(ctx context.Context, r backend.CaptureRequest) ([
 		return nil, err
 	}
 	img, err := renderBitmap(dc, w, h, func(mem uintptr) error {
-		ok, _, _ := proc(user32, "PrintWindow").Call(e.hwnd, mem, 0)
+		// PW_RENDERFULLCONTENT includes GPU/compositor-backed Chromium and
+		// modern Windows application surfaces. Never blit the shared desktop.
+		ok, _, _ := proc(user32, "PrintWindow").Call(e.hwnd, mem, 2)
 		if ok == 0 {
 			return dw.NewFault("capture_frame_unavailable", "provider did not render the window", "reobserve")
 		}

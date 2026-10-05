@@ -1,0 +1,3 @@
+{"at": "2026-10-05T09:56:31.8423766Z", "event": "ready", "value": "DTW F5 20261005T095624Z-d9e9cc"}
+{"at": "2026-10-05T09:56:32.0522391Z", "event": "set_value", "value": "Windows managed order"}
+{"at": "2026-10-05T09:56:32.0659496Z", "event": "submit", "value": "Windows managed order"}

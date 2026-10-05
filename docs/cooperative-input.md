@@ -11,7 +11,7 @@ GOWORK=off go build -o bin/dtw ./cmd/dtw
 dtw serve --input-mode cooperative --write-app-window '精确的已观察窗口标题'
 ```
 
-直接嵌入使用 `local.Options{InputMode: desktopworld.InputModeCooperative}`；独立宿主使用 `host.Options{InputMode: desktopworld.InputModeCooperative}`。默认 `shared` 保留原来的前台输入契约。模式只由可信宿主配置，Hello 同时校验实际 World 和宿主选择；Agent 参数、UI 文本和授权管道不能改变模式。Windows 选择 cooperative 会明确失败；Windows 实机验收整体后置。
+直接嵌入使用 `local.Options{InputMode: desktopworld.InputModeCooperative}`；独立宿主使用 `host.Options{InputMode: desktopworld.InputModeCooperative}`。默认 `shared` 保留原来的前台输入契约。模式只由可信宿主配置，Hello 同时校验实际 World 和宿主选择；Agent 参数、UI 文本和授权管道不能改变模式。macOS 与 Windows amd64 均提供 cooperative 原生实现；Windows 当前实机范围见 [Windows 验收报告](windows-validation.md)。
 
 `InputPolicy` 是独立权限上限。`no_shared_input` 仍在任何原生效果前拒绝整份含 focus/键鼠的计划。合作模式不会增加写范围、原始 Point 权限或操作白名单，也不会把失败的语义/定向投递自动改成另一通道。
 
@@ -40,7 +40,11 @@ dtw serve --input-mode cooperative --write-app-window '精确的已观察窗口�
 
 ## 实现边界与证据
 
-原生 key-focus 与前台采样使用动态探测的 SkyLight 私有 SPI，精确绑定 AX 窗口和进程生命周期；只接受当前桌面上实际可见的 WindowServer 窗口，不自动跨 Space、恢复最小化窗口或改写系统权限。缺少 SPI/权限时明确不可用。最低 macOS 版本、其他机器、复杂 IME、系统级快捷键及任意应用的兼容性不能从单机通过推导。用户输入干预检测是 best effort，尤其不能完整区分同一应用内部的用户/应用窗口变化；不承诺无干扰。
+macOS 原生 key-focus 与前台采样使用动态探测的 SkyLight 私有 SPI，精确绑定 AX 窗口和进程生命周期；只接受当前桌面上实际可见的 WindowServer 窗口，不自动跨 Space、恢复最小化窗口或改写系统权限。缺少 SPI/权限时明确不可用。最低 macOS 版本、其他机器、复杂 IME、系统级快捷键及任意应用的兼容性不能从单机通过推导。
+
+Windows 使用公开的 SetForegroundWindow、UIA 焦点确认与 SendInput，在原生 MTA 线程中保留前台窗口、进程实例、焦点对象和物理像素指针。整份输入事务及清理使用一致的 DPI awareness；焦点更新有界等待，已经聚焦的编辑器不重复请求 SetFocus。系统拒绝激活时返回 `needs_user_focus`，不注入 Alt、不 AttachThreadInput、不调整全局前台锁。恢复时先确认 Windows 已恢复的焦点，再按需请求；用户的新前台优先。窗口级键盘目标会解析实际焦点并检查归属及保护状态。
+
+用户输入干预检测是 best effort，尤其不能完整区分同一应用内部的用户/应用窗口变化；不承诺无干扰。物理输入回执的 delivery 不能替代应用处理结果；需要等待时显式设置 `completion:verify` 与 `after`，并核对独立业务结果。
 
 POC 的 `public_pid` 已证明有限 AppKit 点击/短文本可不借用前台，但 WebKit 和不同 provider 不具备同等语义；该路线继续保留在 build-tagged 实验中。正式路径先交付经过多种 provider 验证的完整短事务，不建立未经验证的自动 provider 白名单。没有 VM、第二个登录会话、常驻桌面占有锁或后台输入服务。
 

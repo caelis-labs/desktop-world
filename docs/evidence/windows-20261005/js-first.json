@@ -1,0 +1,58 @@
+{
+  "epoch": "e-062c085fb13b37397ff61bde",
+  "outputs": [
+    {
+      "window": "DTW Windows Form 20261005T095545Z-d22052 - Google Chrome",
+      "ref": "r-062c085fb13b37397ff61bde-20"
+    }
+  ],
+  "observations": [
+    {
+      "id": "js-1",
+      "op": "observe",
+      "scope": {
+        "desktop": true
+      },
+      "fields": [
+        "name",
+        "role",
+        "app"
+      ],
+      "max_depth": 3,
+      "complete": false,
+      "truncated": true,
+      "dirty": true,
+      "continuation": "p-cb5adde9a4266aaa6dea73e4",
+      "unavailable_sources": [
+        "uia_partial"
+      ],
+      "cursor": "c-d4ce76ed9f0d94ac4968f674"
+    },
+    {
+      "id": "js-2",
+      "op": "observe",
+      "scope": {
+        "refs": [
+          "r-062c085fb13b37397ff61bde-20"
+        ]
+      },
+      "fields": [
+        "name",
+        "role"
+      ],
+      "max_depth": 3,
+      "complete": true,
+      "truncated": false,
+      "dirty": false,
+      "cursor": "c-bfc640da17250bca0c809915"
+    }
+  ],
+  "metrics": {
+    "calls": 2,
+    "elapsed_ms": 96,
+    "request_bytes": 380,
+    "helper_response_bytes": 9702,
+    "printed_bytes": 107,
+    "script_bytes": 662
+  }
+}

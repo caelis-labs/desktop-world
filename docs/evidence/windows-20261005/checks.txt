@@ -1,0 +1,52 @@
+?   	github.com/caelis-labs/desktop-world	[no test files]
+ok  	github.com/caelis-labs/desktop-world/cmd/dtw	1.437s
+?   	github.com/caelis-labs/desktop-world/cmd/dw-analyze	[no test files]
+?   	github.com/caelis-labs/desktop-world/cmd/dw-inspect	[no test files]
+?   	github.com/caelis-labs/desktop-world/dwtest	[no test files]
+?   	github.com/caelis-labs/desktop-world/examples/bot-host	[no test files]
+?   	github.com/caelis-labs/desktop-world/examples/embodied	[no test files]
+?   	github.com/caelis-labs/desktop-world/examples/headless	[no test files]
+ok  	github.com/caelis-labs/desktop-world/host	(cached)
+?   	github.com/caelis-labs/desktop-world/internal/backend	[no test files]
+ok  	github.com/caelis-labs/desktop-world/internal/backend/windows	2.105s
+ok  	github.com/caelis-labs/desktop-world/internal/engine	(cached)
+ok  	github.com/caelis-labs/desktop-world/internal/helper	(cached)
+?   	github.com/caelis-labs/desktop-world/internal/wire	[no test files]
+?   	github.com/caelis-labs/desktop-world/local	[no test files]
+ok  	github.com/caelis-labs/desktop-world/protocol	(cached)
+ok  	github.com/caelis-labs/desktop-world/tests/acceptance	1.548s
+ok  	github.com/caelis-labs/desktop-world/tests/contract	(cached)
+?   	github.com/caelis-labs/desktop-world/tests/native-fixtures/browser	[no test files]
+?   	github.com/caelis-labs/desktop-world/tests/native-fixtures/windows	[no test files]
+{"bindings":{"input":"r-afab40dd4d1c18f965371856-3"},"end_revision":"14","epoch":"e-afab40dd4d1c18f965371856","expires_at":"2026-10-05T10:04:43.0652713Z","outcome":"completed","request_id":"e-afab40dd4d1c18f965371856:demo","run_id":"run-fdff37736b79940a359b8ff5","seat_health":"ready","start_revision":"4","state":"terminal","steps":[{"channel":"focus","delivery":"complete","end_revision":"7","evidence":[{"equals_bool":true,"property":"foreground","target":{"ref":"r-afab40dd4d1c18f965371856-2"}}],"finished_at":"2026-10-05T09:59:43.0615483Z","id":"window","start_revision":"4","started_at":"2026-10-05T09:59:43.0610314Z","state":"satisfied","target":"r-afab40dd4d1c18f965371856-2","verification":"verified"},{"delivery":"not_applicable","end_revision":"9","finished_at":"2026-10-05T09:59:43.062587Z","id":"find","start_revision":"7","started_at":"2026-10-05T09:59:43.0615483Z","state":"satisfied","target":"r-afab40dd4d1c18f965371856-3","verification":"verified"},{"channel":"focus","delivery":"complete","end_revision":"13","evidence":[{"equals_bool":true,"property":"focused","target":{"ref":"r-afab40dd4d1c18f965371856-3"}}],"finished_at":"2026-10-05T09:59:43.0636851Z","id":"focus","start_revision":"9","started_at":"2026-10-05T09:59:43.062587Z","state":"satisfied","target":"r-afab40dd4d1c18f965371856-3","verification":"verified"},{"channel":"semantic","delivery":"complete","end_revision":"14","evidence":[{"equals_string":"Hello Desktop World 🌍","property":"value","target":{"ref":"r-afab40dd4d1c18f965371856-3"}}],"finished_at":"2026-10-05T09:59:43.0647509Z","id":"fill","start_revision":"13","started_at":"2026-10-05T09:59:43.0636851Z","state":"satisfied","target":"r-afab40dd4d1c18f965371856-3","verification":"verified"},{"channel":"shared_input","delivery":"complete","end_revision":"14","finished_at":"2026-10-05T09:59:43.0652713Z","id":"submit","start_revision":"14","started_at":"2026-10-05T09:59:43.0647509Z","state":"dispatched","target":"r-afab40dd4d1c18f965371856-3","verification":"not_requested"}]}
+fixture recorded 4 effects
+Look at r-3fdf7b0101d9aa7f574e53f9-4 in desktop: (200, 100), topology 1; fixture input events: 0
+OK: 9 JSON examples, 1 plan(s), 1 partial receipt(s).
+These checks do not validate native desktop behavior or implement the full wire schema.
+✔ discovery starts narrow and expands fields only on demand, with bounded output (3.5312ms)
+✔ desired collapse keeps explicit false and semantic delivery evidence (1.2969ms)
+✔ typed semantic conveniences keep false and reject omitted booleans before dispatch (3.3272ms)
+✔ one script composes observations and effects; only selected output leaves local memory (2.5133ms)
+✔ partial receipt is always surfaced and cannot be caught to continue input (1.3998ms)
+✔ top-level faults stop the chain and no automatic retries occur (1.1943ms)
+✔ bounded output and incomplete coverage are never silent successful discovery (2.2402ms)
+✔ concurrent calls serialize and calls after an error are not dispatched (15.6311ms)
+✔ script call budget and deadline do not continue to later effects (47.6466ms)
+✔ read polling handles transitioning dialogs without replaying effects (63.079ms)
+✔ disconnect stops later effects and retains in-flight outcome (2.064ms)
+✔ presentation pages preserve every ref without native re-observation or silent clipping (8.5911ms)
+✔ value accepts primitive metadata but unknown and redacted facts still fail closed (3.0875ms)
+✔ summary shorthand scopes the observed Ref without guessing an app field (0.9985ms)
+✔ focused convenience never retargets keyboard into another authorized window or app (2.5824ms)
+✔ next retains native query across scripts and never guesses continuation arguments (2.4793ms)
+✔ fragmented subtree recipe preserves Ref order, native blocks, redaction and clipping uncertainty (5.4912ms)
+✔ fragmented subtree recipe reports native incomplete sample without expanding scope (3.0165ms)
+✔ window discovery is explicit and small; it never requests pixels implicitly (1.0973ms)
+ℹ tests 19
+ℹ suites 0
+ℹ pass 19
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 264.1445

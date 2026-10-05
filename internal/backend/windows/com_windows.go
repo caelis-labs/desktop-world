@@ -5,6 +5,8 @@ package windows
 import (
 	"fmt"
 	dw "github.com/caelis-labs/desktop-world"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -131,6 +133,20 @@ func processStart(pid uint32) uint64 {
 		return 0
 	}
 	return creation
+}
+func processName(pid uint32) string {
+	h, _, _ := openProcess.Call(0x1000, 0, uintptr(pid))
+	if h == 0 {
+		return fmt.Sprintf("Process %d", pid)
+	}
+	defer closeHandle.Call(h)
+	var path [32768]uint16
+	size := uint32(len(path))
+	if ok, _, _ := proc(kernel32, "QueryFullProcessImageNameW").Call(h, 0, ptr(&path[0]), ptr(&size)); ok == 0 {
+		return fmt.Sprintf("Process %d", pid)
+	}
+	name := filepath.Base(syscall.UTF16ToString(path[:size]))
+	return strings.TrimSuffix(name, filepath.Ext(name))
 }
 func dpiScope() func() {
 	if setDPI.Find() != nil {

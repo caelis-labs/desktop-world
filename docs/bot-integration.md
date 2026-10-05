@@ -2,7 +2,7 @@
 
 `v0.1.0-alpha.1` 提供 `host` Go 包和 macOS arm64 helper 开发包。推荐 Bot 通过这个 Go client 管理一个持久子进程，不在 Wails 主进程直接执行原生输入。根包仍可嵌入，但使用方需自己承担原生调用阻塞、进程生命周期与权限隔离。
 
-以下示例使用当前源码的 `dtw` 命令。本批增加 Windows managed transport 和 InputPolicy，尚未发布，也未同步进入 caelis-bot 的 M0；Windows 真实操作状态见 [F4/F5](features.md)。公开 alpha 包的旧命令仍为 `desktop-world`。
+以下示例使用当前源码的 `dtw` 命令。Windows managed transport 和 InputPolicy 已有原生任务验收，见 [F4/F5](features.md) 与 [Windows 报告](windows-validation.md)。本次 Windows 适配未发布新包，也未同步进入 caelis-bot 的 M0；宿主应使用对应源码构建，历史包以其发布说明为准。
 
 本仓库提供接入边界与可运行示例，尚未修改或验收 caelis-bot 的实际 Runtime/Wails 集成。不要同时启用两个会竞争同一桌面的写后端，也不要在错误后自动切换后端重放动作。
 
@@ -74,7 +74,7 @@ Go client 启动 helper 时指定 `--full-output`，保留类型化 Fact、精�
 
 ## 底层控制协议
 
-`serve --host-control --full-output`：stdin/stdout 是数据 NDJSON。Unix 继承 FD 3 为 host→helper 控制请求，FD 4 为 helper→host 回应。Windows 当前源码由 host 复制两个私有匿名 pipe 端点，并通过 Go 的 AdditionalInheritedHandles 限定句柄继承列表；句柄编号仅经可信启动环境传递，helper 验证为不同 pipe、删除元数据并关闭继续继承标志。模型 schema 不含句柄、turn 或授权入口。控制 EOF 撤销全部授权并停止数据服务。Windows 控制实现已交叉构建，实机验收待完成。
+`serve --host-control --full-output`：stdin/stdout 是数据 NDJSON。Unix 继承 FD 3 为 host→helper 控制请求，FD 4 为 helper→host 回应。Windows 当前源码由 host 复制两个私有匿名 pipe 端点，并通过 Go 的 AdditionalInheritedHandles 限定句柄继承列表；句柄编号仅经可信启动环境传递，helper 验证为不同 pipe、删除元数据并关闭继续继承标志。模型 schema 不含句柄、turn 或授权入口。控制 EOF 撤销全部授权并停止数据服务。Windows 11 F5 实机已验证授权、填写/提交、回合撤销、拒绝新写入和原回执恢复。
 
 ```json
 {"id":"host-1","op":"begin_turn","turn":"turn-unique"}

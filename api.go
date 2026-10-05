@@ -63,7 +63,8 @@ const (
 )
 
 // InputMode is selected by the trusted host when opening a world. It never
-// relaxes InputPolicy or changes authorization. Cooperative is macOS-only.
+// relaxes InputPolicy or changes authorization. Cooperative uses short native
+// foreground transactions on macOS and Windows.
 type InputMode string
 
 const (

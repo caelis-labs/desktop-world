@@ -1,120 +1,207 @@
 # Desktop World
 
-独立 Go library：把桌面作为一个按需观察、带生命周期与不确定性的对象世界。根包不依赖 Agent Runtime、LLM、Wails、浏览器插件或网络服务。通用 Agent 接入见 [stdio helper](docs/helper.md)，真实任务成本见 [可用性评估](docs/usability-evaluation.md)，字段选择和后台隔离见 [设计说明](docs/observation-and-seats.md)。
+**为 AI Agent 提供原生、可验证的跨平台桌面操作。**
 
-MVP 优先验证 Token 效率与易用性。通用 Agent 推荐 [JavaScript 调用链](docs/scripting.md)：持久会话中组合观察与动作、中间数据本地保留、按需 print、强制呈现覆盖范围和失败。
+Desktop World 将应用、窗口和 UI 控件转换为可观察、可授权的对象。Agent 可以查找控件、读取文本、填写表单、操作键鼠和获取截图；每次执行返回包含投递结果、验证结果和错误的回执。
 
-**当前公开版本：`v0.1.0-alpha.6`，尚未达到 SPEC 的双平台正式发布门槛。** macOS 原生键鼠、语义操作、截图和生命周期路径已有实机记录。当前源码的 Windows 后端提供功能实现和编译/CI 检查，**不承诺 Windows 可用**；全部 Windows 实机验收与适配后置到功能完备临界点，在单独环境完成。原始设计保留在 [SPEC.md](SPEC.md)，实现边界见 [docs/implementation.md](docs/implementation.md)，实际运行证据见 [docs/validation.md](docs/validation.md)。
+提供 `dtw` 命令行、持久 JavaScript 会话、Go SDK 和宿主管理接口。桌面操作使用 macOS Accessibility / CGEvent / ScreenCaptureKit，以及 Windows UI Automation / SendInput / Win32；运行核心无需 LLM、API Key、浏览器扩展或云服务。
 
-当前源码的 helper 命令为 **`dtw`**。已补齐 `no_shared_input`、语义展开/收起、选择状态、勾选状态、滚动到目标、按需字段读取、Windows UIA 续扫和私有 managed 管道。独立场景与实机状态见 [feature 验收](docs/features.md)；本批变更按 alpha.6 分发，caelis-bot 的 M0 更新与联调后置。
+> 当前为预发布产品。本分支已完成 Windows 11 x64 的真实桌面适配验收，包括 Chrome、记事本、计算器及 Win32 测试应用。Windows 适配变更需从当前源码构建；本次没有发布新的版本。验证范围和复现证据见 [Windows 验收报告](docs/windows-validation.md)。
 
-同一桌面的键鼠任务可由宿主选择 [短前台事务](docs/cooperative-input.md)：`dtw serve --input-mode cooperative`。该 macOS 实现覆盖完整键鼠动作，并在一份短计划结束后恢复用户窗口；默认输入模式保留原契约，Windows 与 Bot M0 联调仍后置。
+## 功能
 
-## 快速运行
+| 能力 | 用途 |
+| --- | --- |
+| 原生对象发现 | 按应用、窗口、名称和角色定位控件；按需读取值、状态、能力和几何信息 |
+| 语义操作 | 调用、设值、展开/收起、勾选、选择和滚动到目标；依控件公开的能力执行 |
+| 键鼠操作 | Unicode 文本、组合键、点击、移动、拖拽、滚轮；`primary` 自动映射 Command / Control |
+| 短前台事务 | `cooperative` 模式在一份短计划内使用前台，结束时恢复原窗口、焦点和未被用户改变的指针 |
+| 截图 | 获取可见桌面区域或独立窗口 PNG，保留坐标变换和图像预算 |
+| 有界观察 | 字段投影、范围、节点/输出预算、分页及 AX / UIA 续扫，明确报告不完整覆盖 |
+| 执行回执 | 分别记录 delivery 与 verification；查询、取消及相同请求的去重与恢复 |
+| 宿主管理 | 按应用授权、每回合撤销权限、独立控制管道、后台输入策略和元数据审计 |
 
-需要 Go 1.23+；当前验证工具链为 Go 1.26.8。
+控件是否支持某项操作，以观察返回的 `capabilities` 为准。不支持的语义动作返回明确错误。网页 Canvas 的像素不会被识别成原生按钮。
+
+## 平台与运行要求
+
+| 平台 | 构建要求 | 已有实机覆盖 |
+| --- | --- | --- |
+| Windows 11 x64 | Go 1.23+，原生后端无需 CGO | Chrome、Windows 记事本、计算器、Win32 fixture |
+| macOS 14+，arm64 / amd64 | Go 1.23+、CGO、Xcode Command Line Tools | arm64 上的 AppKit、Chrome、WebKit、Electron、TextEdit；最低系统版本与 amd64 实机仍待扩展 |
+
+真实操作需要已登录的交互式桌面。macOS 需授予宿主 Accessibility、输入及屏幕捕获权限；`dtw doctor` 只检查状态，不弹出权限申请。Windows 受 UIPI、前台切换规则和应用 provider 限制，建议以普通用户权限运行，并操作相同或更低权限的应用。
+
+JavaScript 入口另需 Node.js 20+，无 npm 依赖。其他平台可运行协议及内存示例，原生桌面入口返回 `platform_unsupported`。Windows arm64 暂不支持。
+
+## 安装与检查
+
+从源码构建 Windows 版本：
+
+```powershell
+$env:GOWORK = 'off'
+go build -o bin\dtw.exe ./cmd/dtw
+.\bin\dtw.exe version
+.\bin\dtw.exe doctor
+.\bin\dtw.exe schema
+```
+
+macOS：
 
 ```sh
 export GOWORK=off
-# 完整的五步表单计划，使用内存 fixture，不发送系统输入。
-go run ./examples/headless
-
-# 共享 Ref / Anchor 的具身集成示例，不移动真实鼠标。
-go run ./examples/embodied
-
-# 只读原生探测，不自动申请系统权限。
-go run ./cmd/dw-inspect -environment
-go run ./cmd/dw-inspect
-
-# 契约、race、vet、Windows 交叉构建、协议示例检查。
-./scripts/check.sh
+go build -o bin/dtw ./cmd/dtw
+./bin/dtw version
+./bin/dtw doctor
 ```
 
-原生平台：
+`version` 显示构建版本、平台和协议；源码构建默认标记为 `dev`。历史预发布及校验文件见 [Releases](https://github.com/caelis-labs/desktop-world/releases)。
 
-- macOS 14+，arm64 / amd64，开启 CGO，安装 Xcode Command Line Tools。桥接使用 AX、CGEvent、ScreenCaptureKit，不创建 NSApplication，不接管宿主主线程。
-- Windows 11 amd64 实现目标，纯 Go 原生绑定，无 CGO 依赖；当前不承诺可用。COM 在固定 MTA 工作线程中初始化和释放；不会修改进程全局 DPI 模式。
-- 其他平台可运行协议和 fixture；`local.Open` 明确返回 `platform_unsupported`。
+## 快速开始：持久 JavaScript 会话
 
-模块路径：`github.com/caelis-labs/desktop-world`。本批预发布版本为 `v0.1.0-alpha.6`；下载与校验见 [Release](https://github.com/caelis-labs/desktop-world/releases/tag/v0.1.0-alpha.6)。公开预发布暂不授予开源许可，见 [NOTICE](NOTICE)。
+推荐 Agent 使用 JavaScript 入口：一个原生 helper 跨调用保留对象 Ref、观察和回执，脚本中间结果留在本地，只输出需要的信息。
 
-## 接入
+创建 `host.json`，将 helper 路径及窗口标题替换为本机实际值。宿主通过精确窗口标题授权其所属应用：
 
-caelis-bot 推荐使用 **Go `host` SDK + 独立 helper**：支持独立控制通道、按回合应用授权、停止、原收据恢复和 32 KiB 模型输出。先读 [简短交接](HANDOFF.md) 和 [Bot 接入说明](docs/bot-integration.md)。下面是直接嵌入 Go library 的方式。
+```json
+{
+  "helper": "D:/WorkDir/desktop-world/bin/dtw.exe",
+  "args": [
+    "serve",
+    "--input-mode", "cooperative",
+    "--write-app-window", "当前精确窗口标题",
+    "--assets-dir", "artifacts/captures"
+  ]
+}
+```
+
+在终端一启动并保持会话：
+
+```powershell
+node clients/javascript/desktop.mjs serve --host host.json
+```
+
+在终端二观察桌面：
+
+```powershell
+@'
+state.inventory = await dw.observe();
+print(dw.list(state.inventory, ['ref', 'kind', 'name', 'app']));
+'@ | node clients/javascript/desktop.mjs exec
+```
+
+从观察结果选定窗口 Ref，在该窗口内定位控件：
+
+```javascript
+// 将 Ref 替换为本会话观察得到的窗口 Ref，控件名称来自实际 UI。
+state.windowRef = '替换为已观察窗口的 Ref';
+state.fieldObservation = await dw.find(state.windowRef, {
+  role: 'text_field', name_equals: '内容'
+});
+state.field = dw.one(state.fieldObservation, {role: 'text_field'});
+await dw.set(state.field.ref, '你好，Desktop World 🌍');
+print(await dw.read(state.field.ref));
+```
+
+将上述 JavaScript 通过同样的 PowerShell here-string 传入 `exec`；macOS 可使用 heredoc。只读会话可在 `host.json` 中仅配置 `args: ["serve"]`。每轮使用新的会话日志目录，具体配置、分页和脚本预算见 [JavaScript 使用指南](docs/scripting.md)。
+
+结束会话：
+
+```powershell
+node clients/javascript/desktop.mjs stop
+```
+
+## 输入模式与完成条件
+
+宿主在启动时选择模式和权限上限：
+
+| 配置 | 行为 |
+| --- | --- |
+| `--input-mode shared` | 默认模式；显式聚焦后操作当前焦点对象，窗口保持当前前台状态 |
+| `--input-mode cooperative` | macOS / Windows 的短前台事务；计划结束后归还前台，回执含占用时间和恢复状态 |
+| `--input-policy no_shared_input` | 保留可用的语义操作；包含聚焦或共享键鼠的整份计划在产生效果前被拒绝 |
+
+一份计划最多 16 步、10 秒。协作模式采用一秒输入预算，单次文本最多 256 个 UTF-16 单元，拖拽最多 500 ms；原生调用和清理可能超过输入预算。长任务拆为多份已知的短计划，推理和网络等待在事务外完成。Windows 拒绝前台切换时返回 `needs_user_focus`，需要先将目标窗口置于前台。
+
+`focus`、`set_value` 和状态设置动作自动验证。其他动作默认只确认输入投递；需要等待界面结果时，**同时设置 `completion: "verify"` 和 `after`**：
+
+```javascript
+await dw.act([{
+  op: 'keyboard.type_text',
+  target: {ref: state.field.ref},
+  type_text: {text: 'Windows 表单验证 🌍'},
+  completion: 'verify',
+  after: [{
+    target: {ref: state.field.ref},
+    property: 'value',
+    equals_string: 'Windows 表单验证 🌍'
+  }]
+}]);
+```
+
+保存文档、提交表单等任务还应检查文件、应用回调或业务结果。回执中的 `completed` 表示声明的完成条件已满足。详见 [输入事务](docs/cooperative-input.md) 和 [语义动作](docs/semantic-actions.md)。
+
+## Go SDK 与宿主接入
+
+模块路径为 `github.com/caelis-labs/desktop-world`。直接嵌入原生 World：
 
 ```go
-ctx := context.Background()
-world, err := local.Open(ctx, local.Options{})
+world, err := local.Open(ctx, local.Options{
+    InputMode: desktopworld.InputModeCooperative,
+})
 if err != nil { return err }
 defer world.Close(ctx)
 
 actor, err := world.NewActor(ctx, desktopworld.ActorConfig{
     ID: "inspector",
     ReadScopes: []desktopworld.Scope{{Desktop: true}},
-    Operations: []string{"observe", "read", "sync", "resolve_anchor"},
+    Operations: []string{"observe", "read"},
 })
 if err != nil { return err }
 observation, err := actor.Observe(ctx, desktopworld.ObserveRequest{
     Scope: desktopworld.Scope{Desktop: true},
     Projection: desktopworld.ProjectionSummary,
+    Fields: []string{"name", "role"},
 })
 ```
 
-空权限不代表全部允许。发现窗口后，可创建另一个仅绑定该窗口 Ref 的 Actor，并授予需要的写操作。每一步都会重新检查 Ref、生存状态、所属范围、能力和必要焦点。`Authorizer` 可进一步收紧字段、参数和目标；它必须有界且非交互，审批 UI 由宿主负责。
+写入需要单独授予目标范围及动作。空权限表示没有权限。宿主应用建议使用 Go `host` SDK 启动独立 `dtw`：按回合授权、独立控制通道、取消和原回执恢复，同时隔离原生 provider 的阻塞。接入步骤见 [helper 协议](docs/helper.md)、[宿主集成](docs/bot-integration.md) 与 [示例](examples)。
 
-Actor 的操作名为 `observe`、`read`、`sync`、`resolve_anchor`、`capture`、`read_asset`、`bind`、`wait` 以及公开的动作名。绝对 Point 输入另需 `raw_input` 和 Desktop 写范围。`visible_region` 截图必须有 Desktop 读范围，即使裁切目标是一个已授权窗口。
+`dtw schema act <action>` 按需获取单个动作的参数；`dtw serve` 使用逐行 JSON 标准输入/输出，无网络监听端口。协议严格验证字段、类型与预算。
 
-宿主可显式调用 `World.RequestPermissions` 申请 `accessibility`、`input`、`screen_capture`。`Open` 不弹权限请求，Go library 本身不能替用户授予操作系统权限。
+## 验证与故障处理
 
-## 执行与恢复
+Windows 自动检查：
 
-- Plan 最多 16 步、10 秒；默认每步 2 秒。支持 bind / wait、focus / invoke / set_value / set_expanded / set_checked / set_selected / scroll_into_view、pointer move / click / drag / scroll、Unicode type_text、完整 key chord。状态动作始终验证，详见 [语义动作](docs/semantic-actions.md)。
-- Ref 固定指向一次 provider 实例。绑定失效会停止；不会换成同名对象，也不会静默把 invoke 改成 click。
-- 同 Epoch / Actor / RequestID / 规范化内容只执行一次。使用同 ID 查询或恢复，不换新 ID 重放未知动作。
-- **先保存 Receipt，再处理 Execute 的 error。** `delivery` 与 `verification` 是独立结果；`completed` 只表示声明的完成条件满足。
-- native 写调用仍在执行时，返回 unknown 并 fence 共享输入通道，直到原生调用退出。确认不了输入清理的通道保持 fenced，需重新启动宿主；不能用另一 World 绕过同进程 fence。
-- 拖拽与文本注入在事件边界检查取消；只释放库自己按下的键/按钮。已经进入系统输入流的事件无法撤回。
-
-完整例子在 [examples/headless/main.go](examples/headless/main.go)。角色渲染器可以使用 [examples/embodied/main.go](examples/embodied/main.go) 的 Anchor；解析 Anchor 不会自动聚焦或移动真实鼠标。
-
-## Agent 协议
-
-`protocol.Handler{Actor: actor, Epoch: env.Epoch}` 绑定可信宿主选定的 Actor。调用 `Handle(ctx, requestJSON)` 即可接入任意工具框架，不启动网络端口。
-
-协议固定为 `desktop-world/0.1`；版本和 revision 是十进制字符串，时长字段为 `*_ms`。拒绝重复 JSON key、未知字段、未知操作、非法 target 联合类型和超限参数。UI 文本始终是不可信数据。
-
-[examples/protocol](examples/protocol) 包含设计中原始请求。`protocol.Tools()` 提供工具描述、envelope 和完整参数 schema；最终由 Handler 严格验证。`dtw schema` 只列操作目录，`dtw schema act set_expanded` 按需给出单个动作的参数和上限。
-
-观察输出计入完整成功 envelope 的 UTF-8 字节预算，默认 16 KiB。多页观察固定在同一采样批次；每页 cursor 只描述这一页，需分别同步或重新获取完整观察。`Changes` 重新读取声明范围并比较物化视图，超预算或历史/权限/拓扑失效返回 `reset_required`。`Watch.Next` 是轮询式消费，不依赖原生事件无遗漏。
-
-## 真实桌面验收
-
-macOS：
-
-```sh
-# 启动专用 fixture，每轮使用新的标题和日志文件。
-DW_FIXTURE_TITLE='Desktop World Native Fixture demo' \
-DW_FIXTURE_LOG="$PWD/artifacts/demo.jsonl" \
-./script/build_and_run.sh --verify
-
-go test -c -o bin/native-acceptance.test ./tests/acceptance
-DW_NATIVE_FIXTURE_TITLE='Desktop World Native Fixture demo' \
-DW_NATIVE_FIXTURE_LOG="$PWD/artifacts/demo.jsonl" \
-DW_NATIVE_CAPTURE_PATH="$PWD/artifacts/demo.png" \
-DW_NATIVE_CANCEL_TEST=1 \
-./bin/native-acceptance.test -test.v -test.run TestNativeFixture
+```powershell
+.\scripts\check.ps1
 ```
 
-必须在已登录的交互式桌面、具有现有 OS 授权的宿主环境中运行；沙箱可能隐藏显示器和 TCC 状态。测试仅写入明确命名的 fixture 窗口。普通 `go test ./...` 会跳过真实输入测试。Codex 的 Run 按钮也指向这个 fixture 构建脚本。
+Windows 真实任务验收需要打开 Chrome，并传入其当前精确窗口标题；脚本会创建自己的本地表单、记事本文档及测试应用：
 
-Windows 的构建和运行步骤见 [tests/native-fixtures/windows/README.md](tests/native-fixtures/windows/README.md)。验收检查应用自己收到的文本、按键、提交次数和替换事件；不只依赖本库自己的 UIA/AX 读回。
+```powershell
+python scripts/accept-windows.py --browser-window '当前 Chrome 窗口标题 - Google Chrome'
+python scripts/accept-features.py F4 F5
+```
 
-浏览器原生接口和 Canvas 负面用例见 [tests/native-fixtures/browser/README.md](tests/native-fixtures/browser/README.md)。本地网页记录真实 DOM 输入与提交；表单操作由 AX / CGEvent 驱动，不依赖浏览器插件或 DOM 自动化。
+检查结果保存在新的 `artifacts/windows-acceptance-*` 目录，包括请求/响应、回执、浏览器可信事件、磁盘文件、PNG 和源码/二进制哈希。计算器及记事本标签因语言而异，参数和覆盖范围见 [Windows 验收报告](docs/windows-validation.md)。macOS 使用 [原生 fixture](docs/validation.md) 和 `scripts/check.sh`。普通 `go test ./...` 默认跳过真实桌面操作。
 
-## 当前限制
+遇到错误时保留原回执：
 
-- 原生变化同步使用显式刷新与 Watch 轮询，尚未接入 AXObserver / UIA 事件加速；普通 provider 漏事件不会被误当成完整变化日志。
-- 用户干预检测为 `best_effort`：执行前焦点、持有按键/按钮和目标命中检查，不是系统级输入隔离。
-- macOS 提供独立 `window_content`，通过应用范围的 `capture_windows` 目录按需发现专用 Ref；图像为窗口局部坐标。见 [窗口捕获与验收边界](docs/window-capture.md)。Windows provider 渲染仅实现/编译检查，不承诺可用；暂不包含鼠标光标。
-- 无 OCR、视觉定位、工作流 DSL、自动重绑、剪贴板后备、持久 exactly-once、角色动画或高帧率捕获。
-- 双屏混合缩放、Windows 真实桌面、更多浏览器 / Electron 兼容性和打包 Wails 宿主仍需验证；不能从当前 AppKit / Chrome fixture 推导全部应用兼容性。
+- `coverage.complete=false`：缩小范围、减少字段或消费 continuation；不能从零匹配推断目标不存在。
+- `ref_gone` / `ref_stale`：重新观察，确认新对象身份后再制定新计划。
+- `requires_shared_input`：当前宿主只允许后台语义操作，需要由宿主选择合适的任务或输入策略。
+- `partial` / `unknown`：查询原 RunID，核对业务结果；相同请求重试必须保持 ID 和正文不变。
+- `seat_health=fenced`：输入清理或恢复无法确认，停止写入并由宿主处理；不要换 ID 重放未知动作。
+
+同一进程中的相同 Epoch / Actor / RequestID / 计划只执行一次。新 helper 意味着新 Epoch、旧 Ref 失效；去重记录不跨进程持久化。UI 文本始终作为不可信数据处理。
+
+## 兼容性边界
+
+原生控件、浏览器及 Electron 的能力取决于应用自身的 Accessibility / UIA provider。Windows 独立窗口截图使用 `PrintWindow`，已验证 Chrome、记事本和计算器；Win32 已验证可见区域截图。其他 GPU、受保护或无响应窗口仍可能不能正确渲染。截图不包含鼠标光标。
+
+当前未提供 OCR、视觉定位、自动重绑、剪贴板输入后备、独立物理键鼠或系统级输入隔离。变化同步使用刷新与轮询。多屏混合缩放、RDP、锁屏/用户切换、更多 IME、Windows arm64 及全部 macOS 机型尚未形成完整实机矩阵。详细边界见 [实现说明](docs/implementation.md)。
+
+## 许可
+
+Copyright © 2026 Caelis Labs. 当前公开预发布未授予开源许可；使用、修改或分发所需授权见 [NOTICE](NOTICE)。第三方组件声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

@@ -1,5 +1,7 @@
 # #8 后的交付与补全计划
 
+2026-10-05 更新：Windows 专项已启动并完成 Chrome、记事本、计算器、Win32、F4/F5 及 cooperative 适配，见 [Windows 验收报告](windows-validation.md)。下文保留 2026-10-04 的决策和阶段计划；其中 Windows 整体后置的状态已由新报告更新。其他 UIA 语义状态场景、混合缩放/会话矩阵与 Bot M0 仍待专项验证。
+
 2026-10-04：选择 **1. 剩余功能补全计划**。本轮修复 #8 的三项 Review Findings 并验证、合并；不立即发布新的 pre-release，也不更新 caelis-bot M0。
 
 ## 决策依据

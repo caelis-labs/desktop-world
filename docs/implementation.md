@@ -30,15 +30,15 @@
 11. InputPolicy 是 Actor 的可信上限：no_shared_input 预先拒绝整份包含焦点/共享键鼠的计划，保留原收据。set_expanded / set_checked / set_selected / scroll_into_view 只使用原生语义 setter/pattern/action，始终验证期望状态，已达到状态时不重复发送。三态 checked 不映射为 false，未知状态不盲目 toggle，选择状态不主动清空其他项，provider 的单/多选规则仍适用。
 12. observe 的输出字段与 match 必需字段共同生成原生读取计划；部分节点只更新采样字段的 Fact 时间。未请求字段保留原缓存，保护状态变化会清除缓存敏感值。写前完整刷新不依赖观察缓存。
 13. Windows UIA continuation 保留有界 DFS 栈和未消费兄弟 COM 引用，最多 16 份、90 秒、每次遵守节点预算、总计 10,000 节点；续扫标记 dirty/incomplete，不以实时树的缺失证明不存在。新扫描不驱逐旧游标。原生引用比较成本仍需 Windows 实机测量。
-14. Windows managed helper 继承两个受限制的私有匿名 pipe 端点，控制通道与数据通道分开；Unix 保持 FD 3/4。当前源代码和交叉构建均覆盖这两条路径，Windows 真实电脑操作仍待验收。逐 feature 的证据和命令见 [features.md](features.md)。
+14. Windows managed helper 继承两个受限制的私有匿名 pipe 端点，控制通道与数据通道分开；Unix 保持 FD 3/4。Windows 11 实机已通过授权、原生填写/提交、回合撤销与原回执恢复；UIA 续扫也完成 1,000 行之后的目标发现和提交。逐 feature 的证据和命令见 [features.md](features.md) 与 [Windows 验收报告](windows-validation.md)。
 
 15. 同一桌面的 `InputModeCooperative` 由宿主开启，已知键鼠步骤在短 Plan 内借用前台并清理恢复；读取与语义动作保留后台通道。公开动作不增加模型参数，no_shared_input、授权与原收据去重继续适用。原生实现和逐项实机证据见 [cooperative-input.md](cooperative-input.md)。
 
 ## 尚未完成的正式发布条件
 
-当前批次按用户决定推进 macOS 实机与跨平台功能实现，全部 Windows 实机适配后置；不承诺 Windows 可用。下列双平台正式发布条件继续保留，但 Windows 实机不是本轮功能交付或 macOS alpha 候选的前置门槛。
+2026-10-05 已完成 Windows 11 x64 的 Chrome 表单、记事本保存、计算器、Win32 键鼠及 managed host 实机验证，并补齐 cooperative 输入。验证针对当前源码与这台电脑；下面的扩展矩阵仍是正式发布需要明确处理的条件。
 
-- Windows 11 交互式桌面验收；Windows arm64 尚不支持。
+- Windows 更多 UIA provider、语义状态动作专项与输入竞争场景；Windows arm64 尚不支持。
 - macOS amd64 实机运行（当前有交叉构建）；最低 macOS 14 实机运行。
 - AXObserver / UIA event invalidation；更完整的人类输入监测及权限矩阵。
 - 多显示器混合缩放、旋转、负原点、锁屏 / RDP / 用户切换实测。

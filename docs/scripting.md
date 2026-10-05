@@ -16,7 +16,7 @@ node clients/javascript/desktop.mjs serve --host host.json
 
 `node clients/javascript/desktop.mjs status`（或 doctor）读取现有会话健康和**启动时**权限，不新建 World；环境变化后不能把启动信息当成实时权限。`--version` 读取 adapter/Node 版本，helper 的 `version` 还给出可获得的构建 revision。
 
-保持该进程运行。使用标准管道启动 helper，避免 PTY 行截断。会话文件、socket 和完整日志限制本机访问；macOS/Linux 使用本地 Unix socket，无 TCP 端口。退出后不自动重启，旧 Ref 失效。Windows named-pipe 路径尚未实机验证。
+保持该进程运行。使用标准管道启动 helper，避免 PTY 行截断。会话文件、socket 和完整日志限制本机访问；macOS/Linux 使用本地 Unix socket，Windows 使用 named pipe，无 TCP 端口。退出后不自动重启，旧 Ref 失效。Windows 持久 JavaScript 会话已用于真实 Chrome、记事本和计算器任务；证据及范围见 [Windows 验收报告](windows-validation.md)。
 
 ## 每个模型回合执行一段脚本
 
@@ -28,7 +28,9 @@ print(dw.list(inventory, ['kind','name','app']));
 JS
 ```
 
-`uri` 可按 fields 请求原生文档/链接 URL，用于区分同名文档；缺失时为 unknown，Windows 当前为 unsupported。完整 URI 不按文本预览长度截断，但仍受总输出字节预算约束。它不能替代 Ref 身份或成为任意原生调用入口。
+`uri` 可按 fields 请求原生文档/链接 URL，用于区分同名文档。Windows 只从非保护、只读 document/link 的 ValuePattern 中提取有效 http/https/file URL，Chrome 文档 URL 已实测；provider 不暴露时保留 unknown/unsupported。完整 URI 不按文本预览长度截断，但仍受总输出字节预算约束。它不能替代 Ref 身份或成为任意原生调用入口。
+
+物理键鼠默认只等待投递。需要检查输入后的界面变化时，必须同时传 `completion:'verify'` 和 `after`；只写 `after` 不会启用验证。保存文档还应独立核对磁盘内容。
 
 `dw.observe(appOrWindowRef)` 是 `scope:{refs:[ref]}` 的 summary 简写；不使用 `scope.apps` 或 `scope.windows`。
 

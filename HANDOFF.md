@@ -13,8 +13,8 @@
 
 本轮真实 AppKit 验证已完成：Unicode 设值与 Enter 提交、相同请求不重复提交、结束回合后新输入被拒绝、原收据仍可恢复。独立应用日志和界面均确认只提交一次。自动检查覆盖 race、vet、Windows 交叉构建、协议和 JavaScript 调用链。
 
-边界：尚未接入实际 caelis-bot/Wails 打包进程；Windows 真实输入、macOS amd64/最低系统版本未验收。共享前台焦点与系统鼠标，无后台独立座席。Antigravity 真实任务能完成主要文件任务，但上一轮总耗时 10分42秒，仍超过 10 分钟目标；不能称为易用性验收全部通过。
+边界：尚未接入实际 caelis-bot/Wails 打包进程；macOS amd64/最低系统版本未验收。Windows 11 真实输入和日常任务于 2026-10-05 通过，范围见 [Windows 验收报告](docs/windows-validation.md)。共享前台焦点与系统鼠标，无后台独立座席。Antigravity 真实任务能完成主要文件任务，但上一轮总耗时 10分42秒，仍超过 10 分钟目标；不能称为易用性验收全部通过。
 
 当前仅公开预发布，**不授予开源许可**，见 [NOTICE](NOTICE)。
 
-macOS 宿主可显式配置 `host.Options{InputMode: desktopworld.InputModeCooperative}` 开启同一桌面的短前台事务；默认 shared 和 no_shared_input 权限上限保持原契约。先阅读 [输入模式、预算与恢复](docs/cooperative-input.md) 及 [逐项实机验收](poc/background-input/FULL_ACCEPTANCE.md)。此模式依赖动态探测的私有 key-focus SPI，不承诺任意应用、最低 macOS 或 Windows 可用。Bot 的固定版本与 M0 联调未更新。
+macOS / Windows amd64 宿主可显式配置 `host.Options{InputMode: desktopworld.InputModeCooperative}` 开启同一桌面的短前台事务；默认 shared 和 no_shared_input 权限上限保持原契约。先阅读 [输入模式、预算与恢复](docs/cooperative-input.md) 及 [macOS 实机验收](poc/background-input/FULL_ACCEPTANCE.md)、[Windows 实机验收](docs/windows-validation.md)。macOS 动态探测私有 key-focus SPI，Windows 使用 SetForegroundWindow / UIA / SendInput。任意应用与系统版本仍需专项验证；本次未发布 Windows 新包。Bot 的固定版本与 M0 联调未更新。

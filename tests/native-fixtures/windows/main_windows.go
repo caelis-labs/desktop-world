@@ -28,7 +28,7 @@ func wide(s string) *uint16 {
 	return v
 }
 
-var window, field, status, oldEdit uintptr
+var window, field, label, status, oldEdit uintptr
 var submits int
 var logPath string
 
@@ -59,6 +59,13 @@ func itoa(n int) string {
 	return "many"
 }
 func editProc(hwnd, msg, w, l uintptr) uintptr {
+	// Classic single-line EDIT does not implement Ctrl+A itself. Provide the
+	// same select-all command as the macOS fixture and ordinary text editors.
+	if msg == 0x100 && w == 'A' && call("GetKeyState", 17)&0x8000 != 0 {
+		call("SendMessageW", hwnd, 0xB1, 0, ^uintptr(0))
+		record("key_down", "Ctrl+A")
+		return 0
+	}
 	if msg == 0x100 && w == 13 {
 		record("key_down", "Enter")
 		submit()
@@ -98,6 +105,9 @@ func mainProc(hwnd, msg, w, l uintptr) uintptr {
 func createField() {
 	instance, _, _ := k.NewProc("GetModuleHandleW").Call(0)
 	field = call("CreateWindowExW", 0, p(wide("EDIT")), p(wide("")), 0x50810080, 24, 62, 430, 30, window, 1, instance, 0)
+	// Win32 derives the accessible edit name from the preceding static label.
+	// Keep that relationship when the replacement control is created later.
+	call("SetWindowPos", field, label, 0, 0, 0, 0, 0x13)
 	oldEdit = call("SetWindowLongPtrW", field, ^uintptr(3), editCallback)
 }
 func main() {
@@ -129,7 +139,7 @@ func main() {
 	if window == 0 {
 		panic("CreateWindowExW failed")
 	}
-	call("CreateWindowExW", 0, p(wide("STATIC")), p(wide("内容")), 0x50000000, 24, 28, 430, 24, window, 0, instance, 0)
+	label = call("CreateWindowExW", 0, p(wide("STATIC")), p(wide("内容")), 0x50000000, 24, 28, 430, 24, window, 0, instance, 0)
 	createField()
 	call("CreateWindowExW", 0, p(wide("BUTTON")), p(wide("提交")), 0x50010000, 24, 110, 110, 32, window, 2, instance, 0)
 	call("CreateWindowExW", 0, p(wide("BUTTON")), p(wide("替换输入框")), 0x50010000, 150, 110, 150, 32, window, 3, instance, 0)
