@@ -155,7 +155,12 @@ func (d *Driver) retain(el *com, app, window, parent backend.Key, hwnd uintptr) 
 				old.hwnd, old.window = hwnd, old.key
 				old.windowPID, old.windowStart = ownerPID, ownerStart
 			}
-			el.release()
+			// Preserve the Ref only after UIA confirms native identity, but use
+			// the freshly discovered interface. Chromium/MSAA can invalidate an
+			// older interface while still exposing that same native element.
+			previous := old.el
+			old.el = el
+			previous.release()
 			return old.key, nil
 		}
 	}
