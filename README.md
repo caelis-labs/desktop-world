@@ -217,6 +217,8 @@ macOS arm64 使用 `./scripts/package-prerelease.sh v0.1.0-rc.2`。脚本不创�
 
 同一进程中的相同 Epoch / Actor / RequestID / 计划只执行一次。新 helper 意味着新 Epoch、旧 Ref 失效；去重记录不跨进程持久化。UI 文本始终作为不可信数据处理。
 
+正常结束回合时先撤权，再核对原回执和应用结果，最后关闭会话。在途请求遇到 stdin/控制断开可能返回 `session_unknown`，关闭后的 helper 无法再查询原 run；应保留原请求及审计，用应用结果确认已发生的效果，不能通过新会话重放。
+
 ## 兼容性边界
 
 原生控件、浏览器及 Electron 的能力取决于应用自身的 Accessibility / UIA provider。Windows 独立窗口截图使用 `PrintWindow`，已验证 Chrome、记事本、计算器、Win32 和 Electron；隐藏或最小化窗口明确拒绝。旧版 Common Controls TreeView 的 ScrollItem provider 出现过超时，不会自动改成键鼠重试。其他 GPU、受保护或无响应窗口仍可能不能正确渲染。截图不包含鼠标光标。

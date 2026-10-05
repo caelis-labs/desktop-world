@@ -1,0 +1,57 @@
+name: package prerelease
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Accepted full commit SHA
+        required: true
+        type: string
+      version:
+        description: Prerelease version (vX.Y.Z-rc.N)
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  package:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.revision }}
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - name: Verify checkout
+        shell: bash
+        env:
+          ACCEPTED_REVISION: ${{ inputs.revision }}
+        run: |
+          [[ "$ACCEPTED_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "$ACCEPTED_REVISION" ]]
+          [[ -z "$(git status --porcelain)" ]]
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: ./scripts/package-prerelease.ps1 -Version $env:PACKAGE_VERSION
+      - name: Package macOS arm64
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: ./scripts/package-prerelease.sh "$PACKAGE_VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dtw-${{ runner.os }}-${{ inputs.version }}
+          if-no-files-found: error
+          path: |
+            artifacts/release/${{ inputs.version }}/*.zip
+            artifacts/release/${{ inputs.version }}/*.tar.gz
+            artifacts/release/${{ inputs.version }}/SHA256SUMS

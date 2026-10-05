@@ -53,9 +53,12 @@ def one(ob,name):
  assert len(matches)==1
  return matches[0]
 async def main():
- async with await HostSession.start(os.environ['DTW_NATIVE_HELPER'],write_app_windows=[os.environ['DTW_NATIVE_TITLE']]) as host:
+ async with await HostSession.start(os.environ['DTW_NATIVE_HELPER'],input_mode='shared' if os.environ.get('DTW_NATIVE_PREP') else 'cooperative',write_app_windows=[os.environ['DTW_NATIVE_TITLE']]) as host:
   dw=host.desktop;win=one(await dw.observe({'budget':{'max_results':256,'max_output_bytes':65536}}),os.environ['DTW_NATIVE_TITLE'])
   field=one(await dw.find(win['ref'],{'role':'text_field','name_equals':'内容'}),'内容');button=one(await dw.find(win['ref'],{'role':'button','name_equals':'提交'}),'提交')
+  if os.environ.get('DTW_NATIVE_PREP'):
+   await dw.act(dw.plan().focus(field['ref']),request_id='package-human-foreground')
+   print(json.dumps({'prepared':True}));return
   p=dw.plan().focus(field['ref']);focused=p.bind_focus('input',win['ref']);p.press(focused,'A',['primary']).type(focused,os.environ['DTW_NATIVE_TOKEN']).invoke(button['ref'])
   r=await dw.act(p,request_id='package-python-original')
   assert (await dw.act(p,request_id='package-python-original'))['run_id']==r['run_id']
@@ -72,6 +75,12 @@ asyncio.run(main())
  # Remove Node, Cargo, Go and developer PYTHONPATH from Python/Rust runtime.
  native_env={k:v for k,v in env.items() if k not in ['PYTHONPATH','NODE_PATH']}
  native_env['PATH']=str(Path(os.environ['SystemRoot'])/'System32')+';'+os.environ['SystemRoot']
+ human_title='DTW isolated human '+out.name;human_log=out/'human-events.jsonl'
+ human=subprocess.Popen([str(fixture),'-title',human_title,'-log',str(human_log)],cwd=consumer,creationflags=flags);children.append(human)
+ deadline=time.monotonic()+10
+ while not any(r['event']=='ready' for r in rows(human_log)):
+  if time.monotonic()>deadline:raise RuntimeError('human fixture startup failed')
+  time.sleep(.05)
  for language,command in [('typescript',['node',ts/'native.mjs']),('python',[interpreter,'-I',consumer/'native.py']),('rust',[rust/'target/debug/dtw_rc2_independent_consumer.exe'])]:
   title='DTW isolated '+language+' '+out.name;log=out/(language+'-events.jsonl')
   child=subprocess.Popen([str(fixture),'-title',title,'-log',str(log)],cwd=consumer,creationflags=flags);children.append(child)
@@ -80,6 +89,8 @@ asyncio.run(main())
    if time.monotonic()>deadline:raise RuntimeError('fixture startup failed')
    time.sleep(.05)
   token='rc.2 package '+language+' 中文 🙂'
+  prep_env={**native_env,'DTW_NATIVE_HELPER':str(helper),'DTW_NATIVE_TITLE':human_title,'DTW_NATIVE_PREP':'1'}
+  assert json.loads(run([interpreter,'-I',consumer/'native.py'],env=prep_env).stdout)['prepared']
   runtime_env={**(env if language=='typescript' else native_env),'DTW_NATIVE_HELPER':str(helper),'DTW_NATIVE_TITLE':title,'DTW_NATIVE_TOKEN':token}
   result=run(command,env=runtime_env)
   receipt=json.loads(result.stdout.strip().splitlines()[-1]);assert receipt['verified'] and receipt['input']['restoration']=='restored',receipt
@@ -88,6 +99,24 @@ asyncio.run(main())
   receipt.update({'passed':True,'independent_submit_count':1,'node_required':language=='typescript'})
   summary['cases'][language]=receipt
   child.terminate();child.wait(timeout=5)
+ # Real native JS runner restarts use separate metadata directories by default.
+ runner=package/'clients/javascript/desktop.mjs';host_path=consumer/'host.json';session_path=consumer/'harness/session.json'
+ host_path.write_text(json.dumps({'helper':str(helper),'args':['serve']}),encoding='utf-8')
+ audits=[]
+ for index in range(2):
+  server=subprocess.Popen(['node',str(runner),'serve','--host',str(host_path),'--session',str(session_path)],cwd=consumer,env=env,creationflags=flags,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf-8')
+  try:
+   ready=json.loads(server.stdout.readline());assert ready.get('audit_dir'),ready
+   directory=Path(ready['audit_dir']);audits.append(str(directory))
+   reply=json.loads(run(['node',runner,'exec','--session',session_path],input="const ob=await dw.observe({budget:{max_results:1}});print({objects:ob.objects.length});").stdout)
+   assert not reply.get('error'),reply
+   run(['node',runner,'stop','--session',session_path]);assert server.wait(timeout=5)==0
+   assert (directory/'scripts.jsonl').exists() and not (directory/'wire.jsonl').exists() and not (directory/'script-code.jsonl').exists()
+  finally:
+   if server.poll() is None:
+    run(['node',runner,'stop','--session',session_path]);assert server.wait(timeout=5)==0
+ assert audits[0]!=audits[1]
+ summary['cases']['javascript_metadata_restart']={'passed':True,'distinct_runs':2,'debug_content_files':False}
  summary['passed']=True
 except BaseException as error:
  summary.update({'passed':False,'error':{'type':type(error).__name__,'message':str(error)}})

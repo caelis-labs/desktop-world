@@ -145,15 +145,27 @@ async def accept():
    await host.declare_window(title)
    status=await host.grants();aliases=[g for g in status['grants'] if g.get('application')==window['app'] and g['state']=='active']
    assert len(aliases)>=2,status
-   blocked=dw.plan().add({'op':'wait','timeout_ms':2000,'after':[{'target':{'ref':field['ref']},'property':'value','equals_string':'never becomes ready'}]}).invoke(submit['ref'])
+   blocked=dw.plan().set(field['ref'],'waiting for revoke').add({'op':'wait','timeout_ms':2000,'after':[{'target':{'ref':field['ref']},'property':'value','equals_string':'never becomes ready'}]}).invoke(submit['ref'])
    task=asyncio.create_task(dw.act(blocked,request_id='revoke-inflight-original'))
-   await asyncio.sleep(.15);assert not task.done()
+   deadline=time.monotonic()+1
+   while known((await dw.read(field['ref']))['text'])!='waiting for revoke':
+    assert not task.done() and time.monotonic()<deadline
+    await asyncio.sleep(.01)
+   assert not task.done()
+   revoked_at=time.monotonic()
    await host.revoke_grant(aliases[0]['id'])
    try:await asyncio.wait_for(task,3);raise AssertionError('revoked wait completed')
    except DesktopError as error:
-    assert error.receipt and error.receipt['steps'][-1]['delivery']=='none',error.reply
+    assert time.monotonic()-revoked_at<1,error.reply
+    assert error.receipt and error.receipt['steps'][-1]['delivery']=='none' and error.receipt['seat_health']=='ready',error.reply
+    # Predicate cancellation uses verification_timeout as well. Its 2s limit
+    # cannot explain termination within 1s of revocation; all effects are known.
+    assert error.receipt['fault']['code'] in ['cancelled','turn_expired','permission_denied','verification_timeout'],error.reply
+    assert all(s.get('verification')!='unknown' for s in error.receipt['steps']),error.reply
+    assert known((await dw.read(field['ref']))['text'])=='waiting for revoke'
+    assert all(s['delivery'] not in ['unknown','partial'] for s in error.receipt['steps']),error.reply
     original=await dw.reconcile('revoke-inflight-original');assert original['result']['run_id']==error.receipt['run_id']
-    summary['cases']['revoke_alias_inflight']={'passed':True,'receipt':error.receipt}
+    summary['cases']['revoke_alias_inflight']={'passed':True,'receipt':error.receipt,'native_oracle_resolved':True,'cancellation_ms':int((time.monotonic()-revoked_at)*1000)}
    status=await host.grants();assert all(g['state']=='revoked' for g in status['grants'] if g.get('application')==window['app']),status
    await dw.set(secondfield['ref'],'B survives alias revoke')
    await asyncio.sleep(.25)
@@ -189,6 +201,39 @@ async def accept():
   await host.grant(fresh_window['app']);await dw.set(fresh_field['ref'],'fresh turn explicitly approved')
   assert known((await dw.read(fresh_field['ref']))['text'])=='fresh turn explicitly approved'
   summary['cases']['new_turn_and_original_run']={'passed':True}
+
+ # Closing SDK stdin cancels a known native wait and prevents its queued submit.
+ if windows:
+  eof=await HostSession.start(helper,write_app_windows=[title])
+  try:
+   eof_win=one(await eof.desktop.observe({'budget':{'max_results':256,'max_output_bytes':65536}}),title)
+   eof_field=one(await eof.desktop.find(eof_win['ref'],{'role':'text_field','name_equals':'内容'}),'内容')
+   eof_submit=one(await eof.desktop.find(eof_win['ref'],{'role':'button','name_equals':'提交'}),'提交')
+   before_submits=len([r for r in events(log) if r['event']=='submit'])
+   pending=eof.desktop.plan().set(eof_field['ref'],'waiting for EOF').add({'op':'wait','timeout_ms':2000,'after':[{'target':{'ref':eof_field['ref']},'property':'value','equals_string':'never becomes ready'}]}).invoke(eof_submit['ref'])
+   waiting=asyncio.create_task(eof.desktop.act(pending,request_id='stdin-eof-original'))
+   deadline=time.monotonic()+1
+   while known((await eof.desktop.read(eof_field['ref']))['text'])!='waiting for EOF':
+    assert not waiting.done() and time.monotonic()<deadline
+    await asyncio.sleep(.01)
+   closed_at=time.monotonic();await eof.close()
+   assert time.monotonic()-closed_at<1
+   try:await waiting;raise AssertionError('EOF task completed')
+   except DesktopError as error:
+    assert error.code=='session_unknown' or error.receipt,error.reply
+    original_reply=error.reply
+   await asyncio.sleep(.3)
+   assert len([r for r in events(log) if r['event']=='submit'])==before_submits
+   assert [r['value'] for r in events(log) if r['event']=='set_value'][-1]=='waiting for EOF'
+   # EOF can discard the in-flight transport receipt. Resolve this particular
+   # finite semantic plan against the APP oracle, without replaying any effect.
+   async with await HostSession.start(helper,input_policy='no_shared_input') as inspector:
+    inspected_win=one(await inspector.desktop.observe({'budget':{'max_results':256,'max_output_bytes':65536}}),title)
+    inspected_field=one(await inspector.desktop.find(inspected_win['ref'],{'role':'text_field','name_equals':'内容'}),'内容')
+    assert known((await inspector.desktop.read(inspected_field['ref']))['text'])=='waiting for EOF'
+   summary['cases']['stdin_eof']={'passed':True,'original_reply':original_reply,'exit_code':eof._transport.process.returncode,'native_oracle_resolved':True,'late_submit_count':0}
+  finally:
+   if eof._transport.process.returncode is None:await eof.close()
 
  async with await HostSession.start(helper,audit=audit,input_mode='cooperative') as second_host:
   assert second_host.hello['audit_path']!=audit
