@@ -221,7 +221,7 @@ macOS arm64 使用 `./scripts/package-prerelease.sh v0.1.0-rc.2`。脚本不创�
 
 ## 兼容性边界
 
-原生控件、浏览器及 Electron 的能力取决于应用自身的 Accessibility / UIA provider。Windows 独立窗口截图使用 `PrintWindow`，已验证 Chrome、记事本、计算器、Win32 和 Electron；隐藏或最小化窗口明确拒绝。旧版 `SysTreeView32` 的 ScrollItem provider 已确认会间歇超时，rc.2 不提供该控件项的 `scroll_into_view`，并在投递前返回 `capability_unavailable`；其展开/收起仍可用，列表项滚动照常支持。不会自动改成键鼠重试。其他 GPU、受保护或无响应窗口仍可能不能正确渲染。截图不包含鼠标光标。
+原生控件、浏览器及 Electron 的能力取决于应用自身的 Accessibility / UIA provider。Windows 独立窗口截图使用 `PrintWindow`，已验证 Chrome、记事本、计算器、Win32 和 Electron；隐藏或最小化窗口明确拒绝。支持原生复选框、多选列表、树节点展开/收起及列表项、树节点的语义滚动，具体能力以观察结果为准。动作结果不确定时不会自动改成键鼠重试。其他 GPU、受保护或无响应窗口仍可能不能正确渲染。截图不包含鼠标光标。
 
 当前未提供 OCR、视觉定位、自动重绑、剪贴板输入后备、独立物理键鼠或系统级输入隔离。变化同步使用刷新与轮询。多屏混合缩放、RDP、锁屏/用户切换、更多 IME、Windows arm64 及全部 macOS 机型尚未形成完整实机矩阵。详细边界见 [实现说明](docs/implementation.md)。
 

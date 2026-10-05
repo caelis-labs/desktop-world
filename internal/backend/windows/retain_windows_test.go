@@ -4,12 +4,9 @@ package windows
 
 import (
 	"os"
-	"runtime"
 	"syscall"
 	"testing"
 	"unsafe"
-
-	"github.com/caelis-labs/desktop-world/internal/backend"
 )
 
 func TestRetainReplacesInterfaceOnlyForSameLiveNativeIdentity(t *testing.T) {
@@ -35,7 +32,7 @@ func TestRetainReplacesInterfaceOnlyForSameLiveNativeIdentity(t *testing.T) {
 			e := &entry{key: "original", pid: pid, start: processStart(pid), el: original}
 			d.entries = append(d.entries, e)
 			d.byKey[e.key] = e
-			key, err := retainWithCallbackStack(d, fresh)
+			key, err := d.retain(fresh, "app", "window", "parent", 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -51,15 +48,4 @@ func TestRetainReplacesInterfaceOnlyForSameLiveNativeIdentity(t *testing.T) {
 			}
 		})
 	}
-}
-
-// Test COM callbacks reenter Go, unlike the real native UIA provider. Reserve
-// stack space before passing native out-pointers so callback stack growth cannot
-// relocate a caller's stack allocation while its address is in a native frame.
-func retainWithCallbackStack(d *Driver, el *com) (backend.Key, error) {
-	var reserve [32768]byte
-	reserve[0] = 1
-	key, err := d.retain(el, "app", "window", "parent", 0)
-	runtime.KeepAlive(&reserve)
-	return key, err
 }

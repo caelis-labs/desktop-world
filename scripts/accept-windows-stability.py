@@ -354,12 +354,13 @@ def main():
         assert state == {"checked": True, "selected": ["Beijing", "Shanghai"], "expanded": True, "last_visible": False, "last_choice_visible": True}, state
         tree_last = ready_find(session, win, "tree_item", "Invoice 79")
         tree_capabilities = session.call("observe", {"scope": {"refs": [tree_last]}, "projection": "detail", "fields": ["capabilities"]})
-        assert not any(c["name"] == "scroll_into_view" and c["support"] == "supported" for c in tree_capabilities["objects"][0].get("capabilities", [])), tree_capabilities
+        assert any(c["name"] == "scroll_into_view" and c["support"] == "supported" for c in tree_capabilities["objects"][0].get("capabilities", [])), tree_capabilities
         tree_scrolled = session.act([h.step("scroll_into_view", tree_last)], allow_error=True)
-        assert tree_scrolled.get("error", {}).get("code") == "capability_unavailable", tree_scrolled
-        assert tree_scrolled["result"]["steps"][0]["delivery"] == "none" and tree_scrolled["result"]["input"]["restoration"] == "not_borrowed", tree_scrolled
+        summary["scenarios"]["tree_scroll_original"] = tree_scrolled
+        assert not tree_scrolled.get("error"), tree_scrolled
+        assert tree_scrolled["result"]["steps"][0]["delivery"] == "complete" and tree_scrolled["result"]["input"]["restoration"] == "not_borrowed", tree_scrolled
         tree_state = snapshot()
-        assert tree_state == state, tree_state
+        assert tree_state == {**state, "last_visible": True}, tree_state
         state_action("set_selected", shanghai, "selected", False)
         state_action("set_checked", checkbox, "checked", False)
         state_action("set_expanded", archive, "expanded", False)

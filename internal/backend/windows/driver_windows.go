@@ -48,17 +48,17 @@ func (d *Driver) Open(ctx context.Context) error {
 		return nativeFault(hr)
 	}
 	d.initialized = true
-	hr, _, _ = coCreate.Call(ptr(&clsid), 0, 1, ptr(&iid), ptr(&d.uia))
+	hr, _, _ = coCreate.Call(uintptr(unsafe.Pointer(&clsid)), 0, 1, uintptr(unsafe.Pointer(&iid)), uintptr(unsafe.Pointer(&d.uia)))
 	if int32(hr) < 0 {
 		return nativeFault(hr)
 	}
 	_ = d.uia.call(59, 0)
 	_ = d.uia.call(61, 500)
 	_ = d.uia.call(63, 500)
-	if e := d.uia.call(14, ptr(&d.walker)); e != nil {
+	if e := d.uia.call(14, uintptr(unsafe.Pointer(&d.walker))); e != nil {
 		return e
 	}
-	if e := d.uia.call(20, ptr(&d.cache)); e != nil {
+	if e := d.uia.call(20, uintptr(unsafe.Pointer(&d.cache))); e != nil {
 		return e
 	}
 	for _, id := range []uintptr{30001, 30002, 30003, 30005, 30008, 30009, 30010, 30019, 30022, 30031, 30043, 30045, 30028, 30035, 30036, 30041} {
@@ -126,7 +126,7 @@ func (d *Driver) retain(el *com, app, window, parent backend.Key, hwnd uintptr) 
 	var ownerPID uint32
 	var ownerStart uint64
 	if hwnd != 0 {
-		windowPID.Call(hwnd, ptr(&ownerPID))
+		windowPID.Call(hwnd, uintptr(unsafe.Pointer(&ownerPID)))
 		ownerStart = processStart(ownerPID)
 		if ownerStart == 0 {
 			el.release()
@@ -141,7 +141,7 @@ func (d *Driver) retain(el *com, app, window, parent backend.Key, hwnd uintptr) 
 			continue
 		}
 		var same int32
-		if d.uia.call(3, ptr(old.el), ptr(el), ptr(&same)) == nil && same != 0 {
+		if d.uia.call(3, uintptr(unsafe.Pointer(old.el)), uintptr(unsafe.Pointer(el)), uintptr(unsafe.Pointer(&same))) == nil && same != 0 {
 			if app != "" {
 				old.app = app
 			}
@@ -207,7 +207,7 @@ func (d *Driver) lookup(k backend.Key) (*entry, error) {
 				e.gone = true
 			} else {
 				var pid uint32
-				windowPID.Call(e.hwnd, ptr(&pid))
+				windowPID.Call(e.hwnd, uintptr(unsafe.Pointer(&pid)))
 				// UIA can run in another process (for example OpenConsole).
 				// Validate both retained lifetimes rather than equating their PIDs.
 				if pid != e.windowPID || processStart(pid) != e.windowStart {
@@ -238,7 +238,7 @@ func (d *Driver) nodeFields(ctx context.Context, k backend.Key, fields []string,
 		}
 	}
 	var cached *com
-	if err = e.el.call(9, ptr(cache), ptr(&cached)); err != nil {
+	if err = e.el.call(9, uintptr(unsafe.Pointer(cache)), uintptr(unsafe.Pointer(&cached))); err != nil {
 		return backend.Node{}, err
 	}
 	defer cached.release()
@@ -273,7 +273,7 @@ func (d *Driver) nodeFields(ctx context.Context, k backend.Key, fields []string,
 	}
 	var rect [4]int32
 	if wants(fields, "bounds") {
-		if cached.call(75, ptr(&rect)) == nil {
+		if cached.call(75, uintptr(unsafe.Pointer(&rect))) == nil {
 			o.Bounds = dw.Known(dw.Bounds{Frame: "desktop", Topology: d.env.Topology, Rect: dw.Rect{X: float64(rect[0]), Y: float64(rect[1]), Width: float64(rect[2] - rect[0]), Height: float64(rect[3] - rect[1])}})
 		} else {
 			o.Bounds = dw.Unknown[dw.Bounds]()
@@ -293,7 +293,7 @@ func (d *Driver) nodeFields(ctx context.Context, k backend.Key, fields []string,
 	knownUnprotected := protected.Status == dw.FactKnown && protected.Value != nil && !*protected.Value
 	if value && knownUnprotected {
 		var pattern *com
-		if e.el.call(16, 10002, ptr(&pattern)) == nil && pattern != nil {
+		if e.el.call(16, 10002, uintptr(unsafe.Pointer(&pattern))) == nil && pattern != nil {
 			ro := boolProp(pattern, 5)
 			o.States["read_only"] = ro
 			writable = ro.Status == dw.FactKnown && !isTrue(ro)
@@ -329,7 +329,7 @@ func (d *Driver) nodeFields(ctx context.Context, k backend.Key, fields []string,
 		expandable = false
 		o.States["expanded"] = dw.Unknown[bool]()
 		var pattern *com
-		if e.el.call(16, 10005, ptr(&pattern)) == nil && pattern != nil {
+		if e.el.call(16, 10005, uintptr(unsafe.Pointer(&pattern))) == nil && pattern != nil {
 			state, er := intProp(pattern, 5)
 			pattern.release()
 			expandable = er == nil && state >= 0 && state <= 2
@@ -349,7 +349,7 @@ func (d *Driver) nodeFields(ctx context.Context, k backend.Key, fields []string,
 		if checkable {
 			o.States["checked"] = dw.Unknown[bool]()
 			var pattern *com
-			if e.el.call(16, 10015, ptr(&pattern)) == nil && pattern != nil {
+			if e.el.call(16, 10015, uintptr(unsafe.Pointer(&pattern))) == nil && pattern != nil {
 				state, er := intProp(pattern, 4)
 				pattern.release()
 				if er == nil && (state == 0 || state == 1) {
@@ -360,7 +360,7 @@ func (d *Driver) nodeFields(ctx context.Context, k backend.Key, fields []string,
 		if selectable {
 			o.States["selected"] = dw.Unknown[bool]()
 			var pattern *com
-			if e.el.call(16, 10010, ptr(&pattern)) == nil && pattern != nil {
+			if e.el.call(16, 10010, uintptr(unsafe.Pointer(&pattern))) == nil && pattern != nil {
 				o.States["selected"] = boolProp(pattern, 6)
 				pattern.release()
 			}
@@ -368,12 +368,6 @@ func (d *Driver) nodeFields(ctx context.Context, k backend.Key, fields []string,
 	}
 	if wants(fields, "capabilities") {
 		scrollable = isTrue(propBool(cached, 30035, true))
-		if scrollable && control == 50024 {
-			// The legacy Common Controls TreeView proxy advertises ScrollItem
-			// but intermittently times out after dispatch. Do not offer an
-			// unreliable semantic write or replace it with physical scrolling.
-			scrollable = !d.legacyTreeScrollBlocked(e)
-		}
 	}
 	if wants(fields, "capabilities") {
 		for op, supported := range map[string]bool{"set_expanded": expandable, "set_checked": checkable, "set_selected": selectable, "scroll_into_view": scrollable, "focus": e.hwnd != 0 || isTrue(boolProp(cached, 59)), "invoke": invoke, "set_value": writable} {
@@ -492,7 +486,7 @@ func (d *Driver) scanStep(ctx context.Context, q backend.Query, scan *uiaScan, c
 	}
 	if !frame.expanded {
 		frame.expanded = true
-		if er = d.walker.call(4, ptr(entry.el), ptr(&frame.next)); er != nil {
+		if er = d.walker.call(4, uintptr(unsafe.Pointer(entry.el)), uintptr(unsafe.Pointer(&frame.next))); er != nil {
 			scan.dirty = true
 			scan.pop()
 			return
@@ -504,7 +498,7 @@ func (d *Driver) scanStep(ctx context.Context, q backend.Query, scan *uiaScan, c
 	}
 	child := frame.next
 	frame.next = nil
-	er = d.walker.call(6, ptr(child), ptr(&frame.next))
+	er = d.walker.call(6, uintptr(unsafe.Pointer(child)), uintptr(unsafe.Pointer(&frame.next)))
 	if er != nil {
 		scan.dirty = true
 		frame.next.release()
@@ -528,7 +522,7 @@ func (d *Driver) seat() backend.Seat {
 		}
 	}
 	var focused *com
-	if d.uia.call(8, ptr(&focused)) == nil && focused != nil {
+	if d.uia.call(8, uintptr(unsafe.Pointer(&focused))) == nil && focused != nil {
 		if win := d.byKey[s.Foreground]; win != nil {
 			s.Focused, _ = d.retain(focused, win.app, win.key, win.key, 0)
 		} else {
@@ -536,7 +530,7 @@ func (d *Driver) seat() backend.Seat {
 		}
 	}
 	var point [2]int32
-	if ok, _, _ := cursorPos.Call(ptr(&point)); ok != 0 {
+	if ok, _, _ := cursorPos.Call(uintptr(unsafe.Pointer(&point))); ok != 0 {
 		s.Pointer = dw.Known(dw.Point{Frame: "desktop", Topology: d.env.Topology, X: float64(point[0]), Y: float64(point[1]), ObservedAt: time.Now().UTC()})
 	}
 	if hwnd == 0 {
@@ -572,7 +566,7 @@ func (d *Driver) ReadText(ctx context.Context, k backend.Key) (backend.Text, err
 		return backend.Text{Value: dw.Fact[string]{Status: dw.FactRedacted}, Source: "value"}, nil
 	}
 	var pattern *com
-	if e.el.call(16, 10002, ptr(&pattern)) == nil && pattern != nil {
+	if e.el.call(16, 10002, uintptr(unsafe.Pointer(&pattern))) == nil && pattern != nil {
 		defer pattern.release()
 		v, err := stringProp(pattern, 4)
 		if err != nil {
@@ -580,7 +574,7 @@ func (d *Driver) ReadText(ctx context.Context, k backend.Key) (backend.Text, err
 		}
 		return backend.Text{Value: dw.Known(v), Source: "value"}, nil
 	}
-	if e.el.call(16, 10014, ptr(&pattern)) == nil && pattern != nil {
+	if e.el.call(16, 10014, uintptr(unsafe.Pointer(&pattern))) == nil && pattern != nil {
 		defer pattern.release()
 		var r *com
 		if err = rDocument(pattern, &r); err != nil {
@@ -588,7 +582,7 @@ func (d *Driver) ReadText(ctx context.Context, k backend.Key) (backend.Text, err
 		}
 		defer r.release()
 		var bstr unsafe.Pointer
-		if err = r.call(12, 1<<20, ptr(&bstr)); err != nil {
+		if err = r.call(12, 1<<20, uintptr(unsafe.Pointer(&bstr))); err != nil {
 			return backend.Text{}, err
 		}
 		defer freeBSTR.Call(uintptr(bstr))
@@ -601,7 +595,7 @@ func (d *Driver) ReadText(ctx context.Context, k backend.Key) (backend.Text, err
 	v, err := stringProp(e.el, 23)
 	return backend.Text{Value: dw.Known(v), Source: "label"}, err
 }
-func rDocument(p *com, r **com) error { return p.call(7, ptr(r)) }
+func rDocument(p *com, r **com) error { return p.call(7, uintptr(unsafe.Pointer(r))) }
 func (d *Driver) HitTest(ctx context.Context, p dw.Point, k backend.Key) (bool, error) {
 	restore := dpiScope()
 	defer restore()
@@ -628,7 +622,7 @@ func (d *Driver) HitTest(ctx context.Context, p dw.Point, k backend.Key) (bool, 
 		return false, nil
 	}
 	var hit *com
-	if err = d.uia.call(7, uintptr(packed), ptr(&hit)); err != nil {
+	if err = d.uia.call(7, uintptr(packed), uintptr(unsafe.Pointer(&hit))); err != nil {
 		return false, err
 	}
 	current := hit
@@ -638,14 +632,14 @@ func (d *Driver) HitTest(ctx context.Context, p dw.Point, k backend.Key) (bool, 
 			return false, err
 		}
 		var same int32
-		if err := d.uia.call(3, ptr(current), ptr(e.el), ptr(&same)); err != nil {
+		if err := d.uia.call(3, uintptr(unsafe.Pointer(current)), uintptr(unsafe.Pointer(e.el)), uintptr(unsafe.Pointer(&same))); err != nil {
 			return false, err
 		}
 		if same != 0 {
 			return true, nil
 		}
 		var parent *com
-		if err := d.walker.call(3, ptr(current), ptr(&parent)); err != nil {
+		if err := d.walker.call(3, uintptr(unsafe.Pointer(current)), uintptr(unsafe.Pointer(&parent))); err != nil {
 			parent.release()
 			return false, err
 		}
@@ -669,7 +663,7 @@ var monitorCallback = syscall.NewCallback(func(h, dc, rect, data uintptr) uintpt
 		Flags         uint32
 	}
 	info.Size = uint32(unsafe.Sizeof(info))
-	success, _, _ := proc(user32, "GetMonitorInfoW").Call(h, ptr(&info))
+	success, _, _ := proc(user32, "GetMonitorInfoW").Call(h, uintptr(unsafe.Pointer(&info)))
 	if success != 0 {
 		r := info.Monitor
 		state.displays = append(state.displays, dw.Display{Ref: fmt.Sprint(h), Frame: "desktop", Bounds: dw.Rect{X: float64(r[0]), Y: float64(r[1]), Width: float64(r[2] - r[0]), Height: float64(r[3] - r[1])}, Unit: "physical_pixel", ScaleX: 1, ScaleY: 1})
@@ -701,7 +695,7 @@ var windowCallback = syscall.NewCallback(func(hwnd, param uintptr) uintptr {
 		return 1
 	}
 	var el *com
-	if d.uia.call(6, hwnd, ptr(&el)) != nil || el == nil {
+	if d.uia.call(6, hwnd, uintptr(unsafe.Pointer(&el))) != nil || el == nil {
 		state.complete = false
 		return 1
 	}
@@ -744,7 +738,7 @@ func (d *Driver) refreshOwnership(e *entry) error {
 	defer func() { cur.release() }()
 	for i := 0; i < 32; i++ {
 		var hwnd uintptr
-		if cur.call(36, ptr(&hwnd)) == nil && hwnd != 0 {
+		if cur.call(36, uintptr(unsafe.Pointer(&hwnd))) == nil && hwnd != 0 {
 			root, _, _ := proc(user32, "GetAncestor").Call(hwnd, 2)
 			for _, window := range d.entries {
 				// UWP content providers may live in a different process from the
@@ -762,42 +756,13 @@ func (d *Driver) refreshOwnership(e *entry) error {
 			return dw.NewFault("ref_stale", "window ownership needs rediscovery", "reobserve")
 		}
 		var parent *com
-		if d.walker.call(3, ptr(cur), ptr(&parent)) != nil || parent == nil {
+		if d.walker.call(3, uintptr(unsafe.Pointer(cur)), uintptr(unsafe.Pointer(&parent))) != nil || parent == nil {
 			return dw.NewFault("ref_stale", "window ownership unavailable", "reobserve")
 		}
 		cur.release()
 		cur = parent
 	}
 	return dw.NewFault("ref_stale", "ownership traversal limit reached", "reobserve")
-}
-
-// MSAA child items may have an empty ClassName. Check their current ancestors,
-// including Refs obtained directly from focus, rather than cached containment.
-func (d *Driver) legacyTreeScrollBlocked(e *entry) bool {
-	cur, owned := e.el, false
-	defer func() {
-		if owned {
-			cur.release()
-		}
-	}()
-	for i := 0; i < 32; i++ {
-		class, err := stringProp(cur, 30) // get_CurrentClassName
-		if err != nil || class == "SysTreeView32" {
-			return true
-		}
-		var parent *com
-		if d.walker == nil || d.walker.call(3, ptr(cur), ptr(&parent)) != nil {
-			return true
-		}
-		if parent == nil {
-			return false
-		}
-		if owned {
-			cur.release()
-		}
-		cur, owned = parent, true
-	}
-	return true
 }
 
 func wants(fields []string, name string) bool {
@@ -813,7 +778,7 @@ func wants(fields []string, name string) bool {
 }
 func (d *Driver) fieldCache(fields []string) (*com, error) {
 	var c *com
-	if err := d.uia.call(20, ptr(&c)); err != nil {
+	if err := d.uia.call(20, uintptr(unsafe.Pointer(&c))); err != nil {
 		return nil, err
 	}
 	ids := []uintptr{30003}

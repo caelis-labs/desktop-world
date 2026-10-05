@@ -43,7 +43,7 @@ func send(events []input) int {
 	if len(events) == 0 {
 		return 0
 	}
-	n, _, _ := sendInput.Call(uintptr(len(events)), ptr(&events[0]), unsafe.Sizeof(input{}))
+	n, _, _ := sendInput.Call(uintptr(len(events)), uintptr(unsafe.Pointer(&events[0])), unsafe.Sizeof(input{}))
 	return int(n)
 }
 func move(p dw.Point) input {
@@ -118,17 +118,6 @@ func (d *Driver) Perform(ctx context.Context, o backend.Operation) backend.Outco
 		if e.application {
 			return result(dw.DeliveryNone, "capability_unavailable")
 		}
-		if s.Op == "scroll_into_view" {
-			control, err := intProp(e.el, 21)
-			if err != nil {
-				return result(dw.DeliveryNone, "capability_unavailable")
-			}
-			if control == 50024 {
-				if d.legacyTreeScrollBlocked(e) {
-					return result(dw.DeliveryNone, "capability_unavailable")
-				}
-			}
-		}
 		if s.Op == "focus" {
 			if e.hwnd != 0 {
 				ok, _, _ := setForeground.Call(e.hwnd)
@@ -155,7 +144,7 @@ func (d *Driver) Perform(ctx context.Context, o backend.Operation) backend.Outco
 				patternID = 10017
 			}
 			var p *com
-			if er := e.el.call(16, patternID, ptr(&p)); er != nil || p == nil {
+			if er := e.el.call(16, patternID, uintptr(unsafe.Pointer(&p))); er != nil || p == nil {
 				return result(dw.DeliveryNone, "capability_unavailable")
 			}
 			defer p.release()
@@ -198,7 +187,7 @@ func (d *Driver) Perform(ctx context.Context, o backend.Operation) backend.Outco
 				if er != nil {
 					return result(dw.DeliveryNone, "invalid_argument")
 				}
-				err = p.call(3, ptr(&v[0]))
+				err = p.call(3, uintptr(unsafe.Pointer(&v[0])))
 			}
 		}
 		if err != nil {

@@ -33,12 +33,12 @@ func commonControls() func() {
 		Module                           uintptr
 	}{Source: wide(name)}
 	ctx.Size = uint32(unsafe.Sizeof(ctx))
-	handle, _, _ := k.NewProc("CreateActCtxW").Call(p(&ctx))
+	handle, _, _ := k.NewProc("CreateActCtxW").Call(uintptr(unsafe.Pointer(&ctx)))
 	if handle == ^uintptr(0) {
 		panic("Common Controls activation context unavailable")
 	}
 	var cookie uintptr
-	if ok, _, _ := k.NewProc("ActivateActCtx").Call(handle, p(&cookie)); ok == 0 {
+	if ok, _, _ := k.NewProc("ActivateActCtx").Call(handle, uintptr(unsafe.Pointer(&cookie))); ok == 0 {
 		panic("Common Controls activation failed")
 	}
 	return func() {

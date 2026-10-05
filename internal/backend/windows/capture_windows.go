@@ -88,7 +88,7 @@ func renderBitmap(dc uintptr, w, h int, render func(uintptr) error) (*image.RGBA
 	header.Planes = 1
 	header.BitCount = 32
 	var bits unsafe.Pointer
-	bitmap, _, _ := proc(gdi32, "CreateDIBSection").Call(dc, ptr(&header), 0, ptr(&bits), 0, 0)
+	bitmap, _, _ := proc(gdi32, "CreateDIBSection").Call(dc, uintptr(unsafe.Pointer(&header)), 0, uintptr(unsafe.Pointer(&bits)), 0, 0)
 	if bitmap == 0 {
 		return nil, nativeFault(0x80004005)
 	}
@@ -127,7 +127,7 @@ func (d *Driver) captureWindow(ctx context.Context, r backend.CaptureRequest) ([
 	defer proc(user32, "CloseDesktop").Call(desktop)
 	var name [256]uint16
 	var needed uint32
-	ok, _, _ := proc(user32, "GetUserObjectInformationW").Call(desktop, 2, ptr(&name), uintptr(len(name)*2), ptr(&needed))
+	ok, _, _ := proc(user32, "GetUserObjectInformationW").Call(desktop, 2, uintptr(unsafe.Pointer(&name)), uintptr(len(name)*2), uintptr(unsafe.Pointer(&needed)))
 	if ok == 0 || syscall.UTF16ToString(name[:]) != "Default" {
 		return nil, dw.NewFault("seat_unavailable", "interactive desktop is not active", "reobserve")
 	}
@@ -194,7 +194,7 @@ func renderWindow(ctx context.Context, hwnd uintptr) (*image.RGBA, error) {
 	}
 	defer setDPI.Call(previous)
 	var rect [4]int32
-	if ok, _, _ := proc(user32, "GetWindowRect").Call(hwnd, ptr(&rect)); ok == 0 {
+	if ok, _, _ := proc(user32, "GetWindowRect").Call(hwnd, uintptr(unsafe.Pointer(&rect))); ok == 0 {
 		return nil, dw.NewFault("ref_gone", "window render geometry unavailable", "reobserve")
 	}
 	w, h := int(rect[2]-rect[0]), int(rect[3]-rect[1])
@@ -223,14 +223,14 @@ func windowCaptureRect(hwnd uintptr) ([4]int32, error) {
 	visible, _, _ := isVisible.Call(hwnd)
 	minimized, _, _ := proc(user32, "IsIconic").Call(hwnd)
 	var cloaked uint32
-	hr, _, _ := proc(syscall.NewLazyDLL("dwmapi.dll"), "DwmGetWindowAttribute").Call(hwnd, 14, ptr(&cloaked), 4)
+	hr, _, _ := proc(syscall.NewLazyDLL("dwmapi.dll"), "DwmGetWindowAttribute").Call(hwnd, 14, uintptr(unsafe.Pointer(&cloaked)), 4)
 	if visible == 0 || minimized != 0 || cloaked != 0 {
 		return rect, dw.NewFault("window_not_visible", "window is hidden, minimized or cloaked", "reobserve")
 	}
 	if int32(hr) < 0 {
 		return rect, nativeFault(hr)
 	}
-	ok, _, _ := proc(user32, "GetWindowRect").Call(hwnd, ptr(&rect))
+	ok, _, _ := proc(user32, "GetWindowRect").Call(hwnd, uintptr(unsafe.Pointer(&rect)))
 	if ok == 0 {
 		return rect, dw.NewFault("ref_gone", "window is gone", "reobserve")
 	}

@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"syscall"
 	"testing"
+	"unsafe"
 
 	dw "github.com/caelis-labs/desktop-world"
 )
@@ -26,7 +27,7 @@ func TestWindowLookupKeepsProviderAndOwnerLifetimesSeparate(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	class, _ := syscall.UTF16PtrFromString("STATIC")
-	hwnd, _, nativeErr := proc(user32, "CreateWindowExW").Call(0, ptr(class), 0, 0, 0, 0, 1, 1, 0, 0, 0, 0)
+	hwnd, _, nativeErr := proc(user32, "CreateWindowExW").Call(0, uintptr(unsafe.Pointer(class)), 0, 0, 0, 0, 1, 1, 0, 0, 0, 0)
 	if hwnd == 0 {
 		t.Fatal("create owned hidden window:", nativeErr)
 	}

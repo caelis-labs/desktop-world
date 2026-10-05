@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 	"unicode/utf16"
+	"unsafe"
 
 	dw "github.com/caelis-labs/desktop-world"
 	"github.com/caelis-labs/desktop-world/internal/backend"
@@ -54,7 +55,7 @@ func (d *cooperative) BeginInput(ctx context.Context) error {
 }
 func currentWindowIdentity(hwnd uintptr) (uint32, uint64) {
 	var pid uint32
-	windowPID.Call(hwnd, ptr(&pid))
+	windowPID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
 	return pid, processStart(pid)
 }
 func (d *cooperative) guard(ctx context.Context) error {
@@ -170,10 +171,10 @@ func (d *cooperative) borrow(ctx context.Context, win *entry) error {
 	if d.previous == 0 || d.previousStart == 0 {
 		return dw.NewFault("seat_unavailable", "no live foreground window", "reobserve")
 	}
-	if ok, _, _ := cursorPos.Call(ptr(&d.pointer)); ok == 0 {
+	if ok, _, _ := cursorPos.Call(uintptr(unsafe.Pointer(&d.pointer))); ok == 0 {
 		return dw.NewFault("seat_unavailable", "pointer position unavailable", "reobserve")
 	}
-	if err := d.uia.call(8, ptr(&d.previousFocus)); err != nil || d.previousFocus == nil {
+	if err := d.uia.call(8, uintptr(unsafe.Pointer(&d.previousFocus))); err != nil || d.previousFocus == nil {
 		return dw.NewFault("seat_unavailable", "previous UIA focus cannot be retained for cleanup", "reobserve")
 	}
 	d.started = time.Now()
@@ -234,13 +235,13 @@ func (d *cooperative) Perform(ctx context.Context, op backend.Operation) backend
 			}
 		}
 		var focus *com
-		if err = d.uia.call(8, ptr(&focus)); err != nil || focus == nil {
+		if err = d.uia.call(8, uintptr(unsafe.Pointer(&focus))); err != nil || focus == nil {
 			return result(dw.DeliveryNone, "background_target_not_focused")
 		}
 		defer focus.release()
 		if e.hwnd == 0 {
 			var same int32
-			if d.uia.call(3, ptr(focus), ptr(e.el), ptr(&same)) != nil || same == 0 {
+			if d.uia.call(3, uintptr(unsafe.Pointer(focus)), uintptr(unsafe.Pointer(e.el)), uintptr(unsafe.Pointer(&same))) != nil || same == 0 {
 				return result(dw.DeliveryNone, "background_target_not_focused")
 			}
 		} else {
@@ -249,12 +250,12 @@ func (d *cooperative) Perform(ctx context.Context, op backend.Operation) backend
 			cur := focus
 			_ = cur.call(1)
 			for depth := 0; cur != nil && depth < 64; depth++ {
-				_ = cur.call(36, ptr(&native))
+				_ = cur.call(36, uintptr(unsafe.Pointer(&native)))
 				if native != 0 {
 					break
 				}
 				var parent *com
-				_ = d.walker.call(3, ptr(cur), ptr(&parent))
+				_ = d.walker.call(3, uintptr(unsafe.Pointer(cur)), uintptr(unsafe.Pointer(&parent)))
 				cur.release()
 				cur = parent
 			}
@@ -314,7 +315,7 @@ func (d *cooperative) Perform(ctx context.Context, op backend.Operation) backend
 	}
 	if strings.HasPrefix(op.Step.Op, "pointer.") {
 		p := [2]int32{}
-		if ok, _, _ := cursorPos.Call(ptr(&p)); ok != 0 {
+		if ok, _, _ := cursorPos.Call(uintptr(unsafe.Pointer(&p))); ok != 0 {
 			d.lastPointer = &p
 		}
 	}
@@ -329,9 +330,9 @@ func (d *cooperative) focusElement(ctx context.Context, target *com) error {
 		}
 		var actual *com
 		var same int32
-		err := d.uia.call(8, ptr(&actual))
+		err := d.uia.call(8, uintptr(unsafe.Pointer(&actual)))
 		if err == nil && actual != nil {
-			err = d.uia.call(3, ptr(actual), ptr(target), ptr(&same))
+			err = d.uia.call(3, uintptr(unsafe.Pointer(actual)), uintptr(unsafe.Pointer(target)), uintptr(unsafe.Pointer(&same)))
 		}
 		actual.release()
 		if err == nil && same != 0 {
@@ -436,7 +437,7 @@ func (d *cooperative) EndInput(ctx context.Context) (dw.InputReport, error) {
 	}
 	if d.lastPointer != nil && d.report.Restoration != "failed" && d.report.Restoration != "user_superseded" {
 		var p [2]int32
-		if ok, _, _ := cursorPos.Call(ptr(&p)); ok != 0 && p == *d.lastPointer {
+		if ok, _, _ := cursorPos.Call(uintptr(unsafe.Pointer(&p))); ok != 0 && p == *d.lastPointer {
 			if ok, _, _ := proc(user32, "SetCursorPos").Call(uintptr(d.pointer[0]), uintptr(d.pointer[1])); ok == 0 {
 				d.report.Restoration = "failed"
 				d.report.RestorationReason = "pointer_restore_denied"
@@ -461,9 +462,9 @@ func (d *cooperative) focusRestored(ctx context.Context, timeout time.Duration) 
 		}
 		var actual *com
 		var same int32
-		err := d.uia.call(8, ptr(&actual))
+		err := d.uia.call(8, uintptr(unsafe.Pointer(&actual)))
 		if err == nil && actual != nil {
-			err = d.uia.call(3, ptr(actual), ptr(d.previousFocus), ptr(&same))
+			err = d.uia.call(3, uintptr(unsafe.Pointer(actual)), uintptr(unsafe.Pointer(d.previousFocus)), uintptr(unsafe.Pointer(&same)))
 		}
 		actual.release()
 		if err == nil && same != 0 {

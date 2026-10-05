@@ -15,6 +15,10 @@ import (
 // pointer is owned and used exclusively on the engine's locked MTA worker.
 type com struct{ vt *[96]uintptr }
 
+// Convert pointer arguments at this call site, never in a uintptr-returning
+// helper. The directive keeps native out-buffers alive and off movable stacks,
+// including when a Windows callback reenters Go during SyscallN.
+//go:uintptrescapes
 func (c *com) call(slot int, args ...uintptr) error {
 	if c == nil {
 		return nativeFault(0x80004003)
@@ -31,7 +35,6 @@ func (c *com) release() {
 		_ = c.call(2)
 	}
 }
-func ptr[T any](v *T) uintptr { return uintptr(unsafe.Pointer(v)) }
 func nativeFault(hr uintptr) *dw.Fault {
 	return &dw.Fault{Code: "provider_unavailable", Message: "UI Automation call failed", NativeCode: fmt.Sprintf("0x%08x", uint32(hr)), RetryClass: "reobserve"}
 }
@@ -98,7 +101,7 @@ func strBSTR(v unsafe.Pointer) string {
 }
 func stringProp(c *com, slot int) (string, error) {
 	var s unsafe.Pointer
-	e := c.call(slot, ptr(&s))
+	e := c.call(slot, uintptr(unsafe.Pointer(&s)))
 	if s != nil {
 		defer freeBSTR.Call(uintptr(s))
 	}
@@ -107,7 +110,11 @@ func stringProp(c *com, slot int) (string, error) {
 	}
 	return strBSTR(s), nil
 }
-func intProp(c *com, slot int) (int32, error) { var v int32; e := c.call(slot, ptr(&v)); return v, e }
+func intProp(c *com, slot int) (int32, error) {
+	var v int32
+	e := c.call(slot, uintptr(unsafe.Pointer(&v)))
+	return v, e
+}
 func boolProp(c *com, slot int) dw.Fact[bool] {
 	v, e := intProp(c, slot)
 	if e != nil {
@@ -125,10 +132,10 @@ func propBool(c *com, id int32, cached bool) dw.Fact[bool] {
 	if cached {
 		slot = 12
 	}
-	if e := c.call(slot, uintptr(id), ptr(&v)); e != nil {
+	if e := c.call(slot, uintptr(id), uintptr(unsafe.Pointer(&v))); e != nil {
 		return dw.Unknown[bool]()
 	}
-	defer variantClear.Call(ptr(&v))
+	defer variantClear.Call(uintptr(unsafe.Pointer(&v)))
 	if v.VT != 11 {
 		return dw.Unknown[bool]()
 	}
@@ -147,7 +154,7 @@ func processStart(pid uint32) uint64 {
 		return 0
 	}
 	var creation, exit, kernel, user uint64
-	ok, _, _ := processTimes.Call(h, ptr(&creation), ptr(&exit), ptr(&kernel), ptr(&user))
+	ok, _, _ := processTimes.Call(h, uintptr(unsafe.Pointer(&creation)), uintptr(unsafe.Pointer(&exit)), uintptr(unsafe.Pointer(&kernel)), uintptr(unsafe.Pointer(&user)))
 	if ok == 0 {
 		return 0
 	}
@@ -164,7 +171,7 @@ func processName(pid uint32) string {
 	defer closeHandle.Call(h)
 	var path [32768]uint16
 	size := uint32(len(path))
-	if ok, _, _ := proc(kernel32, "QueryFullProcessImageNameW").Call(h, 0, ptr(&path[0]), ptr(&size)); ok == 0 {
+	if ok, _, _ := proc(kernel32, "QueryFullProcessImageNameW").Call(h, 0, uintptr(unsafe.Pointer(&path[0])), uintptr(unsafe.Pointer(&size))); ok == 0 {
 		return fmt.Sprintf("Process %d", pid)
 	}
 	name := filepath.Base(syscall.UTF16ToString(path[:size]))
