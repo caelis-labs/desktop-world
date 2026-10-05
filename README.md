@@ -6,7 +6,7 @@ Desktop World 将应用、窗口和 UI 控件转换为可观察、可授权的�
 
 提供 `dtw` 命令行、持久 JavaScript 会话、Go / TypeScript / Python / Rust SDK 和动态宿主管理接口。桌面操作使用 macOS Accessibility / CGEvent / ScreenCaptureKit，以及 Windows UI Automation / SendInput / Win32；运行核心无需 LLM、API Key、浏览器扩展或云服务。
 
-> 当前源码是 rc.2 候选：动态 APP 声明/追加授权、单份输入计划、审计轮转及多语言 SDK。rc.1 的 Windows 历史实测不代表 rc.2 已通过；正式发布前，需 DESKTOP-90677U0 在最终提交上完成 [Windows 交接验收](docs/rc2-windows-handoff.md)。
+当前版本为 **v0.1.0-rc.2**，供集成测试使用。提供 Windows x64 与 macOS arm64 安装包、对应源码及 SHA256 校验文件；下载和验收记录见 [Releases](https://github.com/caelis-labs/desktop-world/releases) 与 [rc.2 验收 Issue](https://github.com/caelis-labs/desktop-world/issues/20)。版本的实际覆盖以该提交的验收记录为准。
 
 ## 功能
 
@@ -35,6 +35,8 @@ Desktop World 将应用、窗口和 UI 控件转换为可观察、可授权的�
 JavaScript 入口另需 Node.js 20+，无 npm 依赖。其他平台可运行协议及内存示例，原生桌面入口返回 `platform_unsupported`。Windows arm64 暂不支持。
 
 ## 安装与检查
+
+从 [Releases](https://github.com/caelis-labs/desktop-world/releases) 下载对应平台的归档和 `SHA256SUMS`，校验后解压到可信目录。直接运行包内 `bin/dtw.exe`（Windows）或 `bin/dtw`（macOS）的 `version`、`doctor` 和 `schema`；使用预编译 helper 无需安装 Go。Python / Rust 客户端无需 Node，TypeScript 与 JavaScript 客户端需要 Node.js 20+。包内 `clients`、`docs` 与 `source` 对应 manifest 中的同一提交。
 
 从源码构建 Windows 版本：
 
@@ -189,6 +191,8 @@ Windows 真实任务验收需要打开 Chrome，并传入其当前精确窗口�
 python scripts/accept-windows.py --browser-window '当前 Chrome 窗口标题 - Google Chrome'
 python scripts/accept-features.py F4 F5
 python scripts/accept-windows-stability.py --electron 'C:\path\to\electron.exe' --rounds 32
+python scripts/accept-rc2.py --helper 'C:\path\to\package\bin\dtw.exe'
+python scripts/accept-rc2-package.py --package 'C:\path\to\package'
 ```
 
 检查结果保存在新的 `artifacts/windows-acceptance-*`、`windows-stability-*` 和 `feature-acceptance-*` 目录，包括回执、应用事件、磁盘文件、PNG 和源码/二进制哈希。Electron 验收需要独立的 Electron runtime，本轮使用 44.5.1。计算器及记事本标签因语言而异，参数和覆盖范围见 [Windows 验收报告](docs/windows-validation.md)。macOS 使用 [原生 fixture](docs/validation.md) 和 `scripts/check.sh`。普通 `go test ./...` 默认跳过真实桌面操作。
@@ -197,10 +201,10 @@ python scripts/accept-windows-stability.py --electron 'C:\path\to\electron.exe' 
 
 ```powershell
 # Windows amd64，PowerShell 7
-.\scripts\package-prerelease.ps1 -Version v0.1.0-rc.1
+.\scripts\package-prerelease.ps1 -Version v0.1.0-rc.2
 ```
 
-macOS arm64 使用 `./scripts/package-prerelease.sh v0.1.0-rc.1`。脚本不创建 tag 或发布 Release；包的 manifest 必须与待验收提交一致。包及源码使用 MPL-2.0，Windows 包未签名，macOS 包使用 ad-hoc 签名且未经公证。
+macOS arm64 使用 `./scripts/package-prerelease.sh v0.1.0-rc.2`。脚本不创建 tag 或发布 Release；包的 manifest 必须与待验收提交一致。包及源码使用 MPL-2.0，Windows 包未签名，macOS 包使用 ad-hoc 签名且未经公证。
 
 遇到错误时保留原回执：
 

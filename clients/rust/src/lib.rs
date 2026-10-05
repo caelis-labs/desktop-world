@@ -509,6 +509,11 @@ pub struct HostSession {
 impl HostSession {
     pub async fn start(options: SessionOptions) -> Result<Self> {
         let mut command = Command::new(options.helper);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.as_std_mut().creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
         command
             .arg("session")
             .arg("--input-mode")

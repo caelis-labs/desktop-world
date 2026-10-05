@@ -20,13 +20,14 @@ pwsh -File scripts/package-prerelease.ps1 -Version v0.1.0-rc.2
 ## 原生回归与新增 SDK 流程
 
 ```powershell
-python scripts/accept-windows.py --browser-window '<当前Chrome精确窗口标题>' --rounds 20
-python scripts/accept-windows-stability.py --electron '<可信electron.exe完整路径>' --rounds 32
-python scripts/accept-features.py F4 F5
+python scripts/accept-windows.py --helper '<解压候选包的bin\dtw.exe>' --browser-window '<当前Chrome精确窗口标题>' --rounds 20
+python scripts/accept-windows-stability.py --helper '<解压候选包的bin\dtw.exe>' --electron '<可信electron.exe完整路径>' --rounds 32
+python scripts/accept-features.py F4 F5 --helper '<解压候选包的bin\dtw.exe>'
 python scripts/accept-rc2.py --helper '<解压候选包的bin\dtw.exe>'
+python scripts/accept-rc2-package.py --package '<解压候选包目录>'
 ```
 
-前两项会构建当前 SHA 的 helper；第三项同样必须在该 checkout。最后一项必须用解压包原生 helper，检查包与源码行为一致。脚本只管理自身 fixture，原生操作统一经 dtw，不通过剪贴板、WebDriver/CDP 或另一个 UIA sidecar 注入。
+所有命令固定使用独立解压包的原生 helper，并在同一 SHA checkout 构建自有 fixture。最后一项在独立目录安装归档内的 npm/wheel/path dependency，验证实际提交且 Python/Rust 运行时 PATH 不含 Node。脚本只管理自身 fixture，原生操作统一经 dtw，不通过剪贴板、WebDriver/CDP 或另一个 UIA sidecar 注入。
 
 rc.2 新流程要求全部通过：
 
@@ -46,4 +47,4 @@ rc.2 新流程要求全部通过：
 
 在交接 Issue 回填：完整 SHA、所有命令/退出码、每场景 PASS/FAIL、summary.json、必要的脱敏原回执、helper/包哈希和实机环境。不要公开 full wire、script-code、截图、owner 文件及用户文档内容。
 
-**发布退出条件：** 三平台当前 SHA CI 通过；Mac 与 Windows 同一 SHA 的原生回归和新增 SDK/动态授权通过；源码与解压包接入通过；没有未解决的 unknown/fenced/restoration failure、权限升级或重复效果。只有这些条件完成后，才进入正式 rc.2 tag/Release/包发布步骤。交接状态本身不构成发布授权或验收通过。
+**发布退出条件：** 三平台当前 SHA CI 通过；Windows 当前 SHA 的原生回归、新增 SDK/动态授权及解压包接入通过；没有未解决的 unknown/fenced/restoration failure、权限升级或重复效果。Mac 原生回归基线、后续变更范围与当前 SHA 构建必须分别记录，不能将 CI 构建称为新的 Mac 交互实测。用户已授权本轮 Windows 验收通过后发布，并要求重新编译 Mac 包；若后续变更影响 Mac 原生行为，仍需重新实机验收。最终结论及分发哈希回填 Issue #20。

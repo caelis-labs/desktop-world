@@ -43,6 +43,13 @@ func TestWindowLookupKeepsProviderAndOwnerLifetimesSeparate(t *testing.T) {
 	}
 	defer func() { _ = stdin.Close(); _ = child.Wait() }()
 	providerPID, ownerPID := uint32(child.Process.Pid), uint32(os.Getpid())
+	// Keep the kernel process object alive after Wait closes exec's handle.
+	// Python's Popen similarly retains its handle after a fixture exits.
+	retained, _, errNative := openProcess.Call(0x1000|0x100000, 0, uintptr(providerPID))
+	if retained == 0 {
+		t.Fatal("retain provider process handle:", errNative)
+	}
+	defer closeHandle.Call(retained)
 	providerStart, ownerStart := processStart(providerPID), processStart(ownerPID)
 	if providerStart == 0 || ownerStart == 0 || providerPID == ownerPID {
 		t.Fatal("independent process lifetimes unavailable")
@@ -79,6 +86,9 @@ func TestWindowLookupKeepsProviderAndOwnerLifetimesSeparate(t *testing.T) {
 	_ = stdin.Close()
 	if err = child.Wait(); err != nil {
 		t.Fatal(err)
+	}
+	if processStart(providerPID) != 0 {
+		t.Fatal("exited process with a retained handle reported a live identity")
 	}
 	if _, err = d.lookup(e.key); err == nil {
 		t.Fatal("exited provider retained a live window Ref")

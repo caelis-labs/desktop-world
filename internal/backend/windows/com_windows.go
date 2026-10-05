@@ -82,6 +82,7 @@ var cursorPos = proc(user32, "GetCursorPos")
 var setDPI = proc(user32, "SetThreadDpiAwarenessContext")
 var openProcess = proc(kernel32, "OpenProcess")
 var processTimes = proc(kernel32, "GetProcessTimes")
+var waitForSingleObject = proc(kernel32, "WaitForSingleObject")
 var closeHandle = proc(kernel32, "CloseHandle")
 
 func strBSTR(v unsafe.Pointer) string {
@@ -135,14 +136,22 @@ func propBool(c *com, id int32, cached bool) dw.Fact[bool] {
 }
 func isTrue(v dw.Fact[bool]) bool { return v.Status == dw.FactKnown && v.Value != nil && *v.Value }
 func processStart(pid uint32) uint64 {
-	h, _, _ := openProcess.Call(0x1000, 0, uintptr(pid))
+	// Creation time survives process exit while another caller retains a handle.
+	// Check the process signal as well, so exited instances cannot keep grants.
+	h, _, _ := openProcess.Call(0x1000|0x100000, 0, uintptr(pid))
 	if h == 0 {
 		return 0
 	}
 	defer closeHandle.Call(h)
+	if state, _, _ := waitForSingleObject.Call(h, 0); state != 0x102 {
+		return 0
+	}
 	var creation, exit, kernel, user uint64
 	ok, _, _ := processTimes.Call(h, ptr(&creation), ptr(&exit), ptr(&kernel), ptr(&user))
 	if ok == 0 {
+		return 0
+	}
+	if state, _, _ := waitForSingleObject.Call(h, 0); state != 0x102 {
 		return 0
 	}
 	return creation

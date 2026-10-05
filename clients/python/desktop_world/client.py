@@ -2,6 +2,8 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import os
+import subprocess
 from typing import Any, Callable
 from .types import GrantStatus, Observation, Receipt, Reply
 
@@ -192,7 +194,8 @@ class HostSession:
             args += ["--write-app", name]
         for title in write_app_windows or []:
             args += ["--write-app-window", title]
-        process = await asyncio.create_subprocess_exec(*args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, limit=2**21)
+        process = await asyncio.create_subprocess_exec(*args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, limit=2**21,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
         try:
             hello = json.loads(await asyncio.wait_for(process.stdout.readline(), 15))
             if hello.get("protocol") != "desktop-world/session-v0.1" or "dynamic_app_grants" not in hello.get("features", []):

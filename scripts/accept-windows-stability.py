@@ -383,7 +383,15 @@ def main():
         resized_image = session.capture(win)
         refused_captures = []
         for button_name in ("Minimize briefly", "Hide briefly"):
-            button = session.find(win, "button", button_name)
+            def restored_button():
+                objects, pages = session.observe(win, {"role": "button", "name_equals": button_name}, ["name", "role"])
+                coverage = pages[-1]
+                if len(objects) == 1 and coverage.get("complete") and not coverage.get("dirty") and not coverage.get("unavailable_sources"):
+                    return objects[0]["ref"]
+                return None
+            # A restored HWND can precede UIA readiness. Wait with reads only;
+            # never retry the invoke or capture request.
+            button = h.await_condition(restored_button)
             before_events = len(events(log))
             session.act([h.step("invoke", button)])
             capture = session.call("capture", {"kind": "window_content", "target": win, "max_pixel_width": 800, "max_pixel_height": 700}, allow_error=True)

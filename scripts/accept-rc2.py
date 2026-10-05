@@ -27,8 +27,9 @@ helper=str(args.helper.resolve())
 out=ROOT/'artifacts'/('rc2-native-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'-'+uuid.uuid4().hex[:6])
 out.mkdir(parents=True)
 ENV={**os.environ,'GOWORK':'off','PYTHONUTF8':'1'}
+NO_CONSOLE=getattr(subprocess,'CREATE_NO_WINDOW',0)
 active=[]
-def run(command,**kwargs):return subprocess.run(command,cwd=ROOT,env=ENV,check=True,**kwargs)
+def run(command,**kwargs):return subprocess.run(command,cwd=ROOT,env=ENV,check=True,creationflags=NO_CONSOLE,**kwargs)
 if windows:
  fixture=ROOT/'bin/DWNativeFixture.exe';run(['go','build','-o',str(fixture),'./tests/native-fixtures/windows'])
 else:
@@ -39,7 +40,7 @@ def events(log):return [json.loads(line) for line in log.read_text(encoding='utf
 def launch(title,label,front=False):
  log=out/(label+'.jsonl')
  if windows:
-  child=subprocess.Popen([str(fixture),'-title',title,'-log',str(log)],cwd=ROOT);active.append(child)
+  child=subprocess.Popen([str(fixture),'-title',title,'-log',str(log)],cwd=ROOT,creationflags=NO_CONSOLE);active.append(child)
  else:run(['/usr/bin/open','-n',str(human if front else fixture),'--args','--title',title,'--log',str(log),'--background','0' if front else '1','--poc-observe-seat','1'])
  deadline=time.monotonic()+10
  while time.monotonic()<deadline:
@@ -67,7 +68,14 @@ async def accept():
   if windows:humanlog=launch(human_title,'human',front=True)
   dw=host.desktop;inv=await dw.observe({'budget':{'max_results':256,'max_output_bytes':65536}})
   window=one(inv,title);second=one(inv,other);original_seat=inv.get('seat',{})
-  refreshed=await host.grants();assert any(g['state']=='active' for g in refreshed['grants'])
+  deadline=time.monotonic()+5
+  while True:
+   refreshed=await host.grants()
+   if any(g['state']=='active' for g in refreshed['grants']):break
+   if time.monotonic()>deadline:
+    summary['initial_grants']=refreshed
+    raise AssertionError(refreshed)
+   await asyncio.sleep(.05)
   if not windows:assert any(g.get('name')=='DTWRC2Human' and g['state']=='active' for g in refreshed['grants']),refreshed
   field=one(await dw.find(window['ref'],{'role':'text_field','name_equals':'内容'}),'内容')
   submit=one(await dw.find(window['ref'],{'role':'button','name_equals':'提交'}),'提交')
@@ -75,6 +83,18 @@ async def accept():
   try:await dw.set(secondfield['ref'],'unauthorized',request_id='before-grant');raise AssertionError('APP B was authorized')
   except DesktopError:pass
   auth=json.loads(run([helper,'auth','add','--session',owner,'--app-ref',second['app'],'--id','native-add-b'],capture_output=True,text=True).stdout);assert not auth.get('error')
+  if windows:
+   # Startup logs do not guarantee foreground acknowledgement. Prepare only
+   # the owned human field through dtw, then sample the restoration oracle.
+   human_window=one(inv,human_title)
+   async with await HostSession.start(helper,input_mode='shared',write_app_windows=[human_title]) as prep:
+    prep_inv=await prep.desktop.observe({'budget':{'max_results':256,'max_output_bytes':65536}})
+    prep_window=one(prep_inv,human_title)
+    prep_field=one(await prep.desktop.find(prep_window['ref'],{'role':'text_field','name_equals':'内容'}),'内容')
+    setup=await prep.desktop.act(prep.desktop.plan().focus(prep_field['ref']),request_id='human-foreground-setup')
+    summary['cases']['foreground_preparation']={'passed':True,'receipt':setup}
+   original_seat=(await dw.observe({'scope':{'refs':[human_window['ref']]},'projection':'detail','fields':['name'],'budget':{'max_results':1}}))['seat']
+   assert known(original_seat['foreground_window'])==human_window['ref']
   token='rc.2 Python 中文 🙂';p=dw.plan().focus(field['ref']);input_ref=p.bind_focus('input',window['ref']);p.press(input_ref,'A',['primary']).type(input_ref,token).invoke(submit['ref'])
   receipt=await dw.act(p,request_id='native-python-original');assert receipt.get('input',{}).get('restoration')=='restored',receipt.get('input')
   after=await dw.observe({'scope':{'refs':[window['ref']]},'projection':'detail','fields':['name'],'budget':{'max_results':1}})
@@ -94,13 +114,50 @@ async def accept():
   # Exact native package helper, with SDK runtime loaded from the checkout.
   for language,command in [('typescript',['node','clients/typescript/test/native.mjs']),('rust',['cargo','run','--locked','--quiet','--manifest-path','clients/rust/Cargo.toml','--example','native'])]:
    sdk_token='rc.2 '+language+' 中文 🙂';env={**ENV,'DTW_NATIVE_HELPER':helper,'DTW_NATIVE_TITLE':title,'DTW_NATIVE_TOKEN':sdk_token}
-   result=subprocess.run(command,cwd=ROOT,env=env,check=True,capture_output=True,text=True,timeout=90)
+   result=subprocess.run(command,cwd=ROOT,env=env,check=True,capture_output=True,text=True,timeout=90,creationflags=NO_CONSOLE)
    (out/(language+'-output.txt')).write_text(result.stdout+result.stderr,encoding='utf-8')
    summary['cases'][language]=json.loads(result.stdout.strip().splitlines()[-1])
    assert [r['value'] for r in events(log) if r['event']=='submit'].count(sdk_token)==1
   # Metadata does not leak input text; rotate does not overwrite the original.
   actual=Path(host.hello['audit_path']);assert token not in actual.read_text(encoding='utf-8')
   summary['cases']['audit_privacy']={'passed':True}
+  if windows:
+   app_name=known(next(o for o in inv['objects'] if o['ref']==window['app'])['name'])
+   async with await HostSession.start(helper,write_apps=[app_name]) as ambiguous:
+    ambiguous_grants=await ambiguous.grants()
+    assert any(g['state']=='ambiguous' for g in ambiguous_grants['grants']),ambiguous_grants
+    own_inv=await ambiguous.desktop.observe({'budget':{'max_results':256,'max_output_bytes':65536}})
+    own_window=one(own_inv,title)
+    own_field=one(await ambiguous.desktop.find(own_window['ref'],{'role':'text_field','name_equals':'内容'}),'内容')
+    try:await ambiguous.desktop.set(own_field['ref'],'ambiguous forbidden');raise AssertionError('ambiguous authorized')
+    except DesktopError:pass
+   summary['cases']['ambiguous_instances']={'passed':True}
+   # The focus is explicitly in A; binding it inside B must stop before typing.
+   await host.grant(window['app'])
+   wrong=dw.plan().focus(field['ref']);wrong_input=wrong.bind_focus('wrong',second['ref']);wrong.type(wrong_input,'out of scope forbidden')
+   try:await dw.act(wrong,request_id='focus-outside-scope');raise AssertionError('foreign focus accepted')
+   except DesktopError as error:
+    assert error.receipt and error.receipt['steps'][-1]['delivery']=='none',error.reply
+    assert error.receipt.get('input',{}).get('restoration')=='restored',error.reply
+    summary['cases']['focus_scope']={'passed':True,'receipt':error.receipt}
+   assert known((await dw.read(secondfield['ref']))['text'])=='APP B independent'
+   # Bind two independent aliases to A, then revoke one during a native wait.
+   await host.declare_window(title)
+   status=await host.grants();aliases=[g for g in status['grants'] if g.get('application')==window['app'] and g['state']=='active']
+   assert len(aliases)>=2,status
+   blocked=dw.plan().add({'op':'wait','timeout_ms':2000,'after':[{'target':{'ref':field['ref']},'property':'value','equals_string':'never becomes ready'}]}).invoke(submit['ref'])
+   task=asyncio.create_task(dw.act(blocked,request_id='revoke-inflight-original'))
+   await asyncio.sleep(.15);assert not task.done()
+   await host.revoke_grant(aliases[0]['id'])
+   try:await asyncio.wait_for(task,3);raise AssertionError('revoked wait completed')
+   except DesktopError as error:
+    assert error.receipt and error.receipt['steps'][-1]['delivery']=='none',error.reply
+    original=await dw.reconcile('revoke-inflight-original');assert original['result']['run_id']==error.receipt['run_id']
+    summary['cases']['revoke_alias_inflight']={'passed':True,'receipt':error.receipt}
+   status=await host.grants();assert all(g['state']=='revoked' for g in status['grants'] if g.get('application')==window['app']),status
+   await dw.set(secondfield['ref'],'B survives alias revoke')
+   await asyncio.sleep(.25)
+   assert len([r for r in events(log) if r['event']=='submit'])==3
   # Restart the bound APP B, retaining the original session and prior receipts.
   pid=events(otherlog)[0]['pid']
   if windows:
@@ -121,11 +178,44 @@ async def accept():
   await host.grant(new_window['app']);await dw.set(new_field['ref'],'explicit reapproval')
   assert known((await dw.read(new_field['ref']))['text'])=='explicit reapproval'
   summary['cases']['instance_restart']={'passed':True}
+  await host.end_turn()
+  assert (await dw.get(receipt['run_id']))['run_id']==receipt['run_id']
+  await host.begin_turn('fresh-native-turn')
+  assert not (await host.grants())['grants']
+  fresh_inv=await dw.observe({'budget':{'max_results':256,'max_output_bytes':65536}});fresh_window=one(fresh_inv,other)
+  fresh_field=one(await dw.find(fresh_window['ref'],{'role':'text_field','name_equals':'内容'}),'内容')
+  try:await dw.set(fresh_field['ref'],'turn forbidden');raise AssertionError('new turn retained write grant')
+  except DesktopError:pass
+  await host.grant(fresh_window['app']);await dw.set(fresh_field['ref'],'fresh turn explicitly approved')
+  assert known((await dw.read(fresh_field['ref']))['text'])=='fresh turn explicitly approved'
+  summary['cases']['new_turn_and_original_run']={'passed':True}
 
  async with await HostSession.start(helper,audit=audit,input_mode='cooperative') as second_host:
   assert second_host.hello['audit_path']!=audit
   summary['cases']['audit_rotation']={'passed':True}
-try:asyncio.run(accept())
+ original_audit=Path(audit).read_bytes()
+ try:
+  unexpected=await HostSession.start(helper,audit=audit,audit_mode='create');await unexpected.close();raise AssertionError('create overwrote audit')
+ except DesktopError:pass
+ assert Path(audit).read_bytes()==original_audit
+ async with await HostSession.start(helper,audit=audit,audit_mode='append'):
+  try:
+   unexpected=await HostSession.start(helper,audit=audit,audit_mode='append');await unexpected.close();raise AssertionError('two append writers admitted')
+  except DesktopError:pass
+ incomplete=out/'incomplete-audit.jsonl';incomplete.write_bytes(b'{"event":"incomplete"')
+ try:
+  unexpected=await HostSession.start(helper,audit=str(incomplete),audit_mode='append');await unexpected.close();raise AssertionError('incomplete append admitted')
+ except DesktopError:pass
+ assert incomplete.read_bytes()==b'{"event":"incomplete"'
+ summary['cases']['audit_create_append_guards']={'passed':True}
+try:
+ asyncio.run(accept())
+ summary['passed']=True
+except BaseException as error:
+ summary['passed']=False
+ summary['error']={'type':type(error).__name__,'message':str(error)}
+ if isinstance(error,DesktopError):summary['original_reply']=error.reply
+ raise
 finally:
  for child in active:
   if windows:child.terminate();child.wait(timeout=5)
