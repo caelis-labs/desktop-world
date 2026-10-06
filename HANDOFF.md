@@ -1,8 +1,8 @@
-# Desktop World rc.2 候选交接
+# Desktop World rc.3 集成与发布交接
 
-rc.2 目标是外部 Agent 好用、会用、容易集成。实现包含延迟 APP 声明、动态追加/撤销授权、执行时焦点绑定、计划聚合、审计轮转和 Go/TS/Python/Rust 接入。方案对应 [Issue #18](https://github.com/caelis-labs/desktop-world/issues/18)，完整契约见 [Agent 接入](docs/agent-integration.md)。
+rc.3 保留 rc.2 的动态授权、焦点绑定、计划聚合、审计轮转和 Go/TS/Python/Rust 接入，修复 macOS Chrome checkbox `set_checked` 可写 AXValue 无 DOM 效果的问题。复现及修复范围见 [Issue #22](https://github.com/caelis-labs/desktop-world/issues/22)，完整契约见 [Agent 接入](docs/agent-integration.md) 与 [语义动作](docs/semantic-actions.md)。
 
-用户已授权 Windows 实机验收通过后发布 rc.2 GitHub pre-release，并要求 Mac 分发包从最新代码重新编译。DESKTOP-90677U0 的最终验收提交、原回执及发布哈希记录在 [Issue #20](https://github.com/caelis-labs/desktop-world/issues/20)；[验收清单与命令](docs/rc2-windows-handoff.md) 明确原生包及退出条件。rc.1 历史证据不能替代本次复验。npm/PyPI/crates.io 的注册表发布独立于 GitHub 安装包发布。
+rc.2 的 Windows 实机基线、原回执及发布哈希记录在 [Issue #20](https://github.com/caelis-labs/desktop-world/issues/20)；rc.3 的修复、Mac 新 helper 实测和两平台同提交分发身份见 [rc.3 修复记录](docs/releases/v0.1.0-rc.3.md)。Windows 构建与 CI 不等于此次 Windows GUI 实机复测。npm/PyPI/crates.io 的注册表发布独立于 GitHub 安装包发布。
 
 宿主保留 HostSession；模型仅获得 DesktopClient。Go 使用 host.Start 的私有继承管道；TS/Python/Rust 使用原生 dtw session supervisor，同一内核处理所有输入，不在各语言复制原生后端。动态 Grant/Declare/Revoke/Grants 与 BeginTurn/EndTurn 属于可信宿主。APP 实例退出、撤权或回合结束使授权失效，保留原始回执，不自动重启或重放。
 

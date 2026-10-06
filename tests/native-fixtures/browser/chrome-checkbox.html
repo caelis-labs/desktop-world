@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>DTW Chrome Checkbox Fixture</title>
+<style>body { font: 18px system-ui; margin: 40px } label { display: block; margin: 20px 0 }</style>
+<h1>Desktop World Chrome checkbox fixture</h1>
+<label><input id="box" type="checkbox" aria-label="DTW checkbox"> DTW checkbox</label>
+<label><input id="readonly" type="checkbox" aria-readonly="true" aria-label="DTW readonly checkbox"> DTW readonly checkbox</label>
+<label><input id="disabled" type="checkbox" disabled aria-label="DTW disabled checkbox"> DTW disabled checkbox</label>
+<label><input id="radio" type="radio" aria-label="DTW radio"> DTW radio</label>
+<label><select id="select" aria-label="DTW select"><option>A</option><option>B</option></select></label>
+<pre id="status"></pre>
+<script>
+  const run = new URLSearchParams(location.search).get('run');
+  if (run) document.title = `DTW Chrome Checkbox Fixture ${run}`;
+  const box = document.getElementById('box');
+  const log = [];
+  for (const type of ['input', 'change']) {
+    box.addEventListener(type, () => { log.push({type, checked: box.checked}); render(); });
+  }
+  function evidence() {
+    return {
+      checked: box.checked,
+      readonly: document.getElementById('readonly').checked,
+      disabled: document.getElementById('disabled').checked,
+      radio: document.getElementById('radio').checked,
+      select: document.getElementById('select').value,
+      log,
+    };
+  }
+  function render() { document.getElementById('status').textContent = JSON.stringify(evidence()); }
+  window.dtwEvidence = evidence;
+  render();
+</script>
+</html>

@@ -1,4 +1,4 @@
-# 外部 Agent 接入（rc.2 候选）
+# 外部 Agent 接入
 
 目标：少量有界观察、一次短计划、完整回执；宿主负责动态授权，Agent 只获得桌面 API。Go、TypeScript、Python 和 Rust 使用同一原生执行内核。TS/Python/Rust 通过 `dtw session` 的版本化 NDJSON 通信；Python/Rust 无需 Node，也无需自行实现 Windows HANDLE 继承。
 
@@ -76,4 +76,4 @@ await dw.transaction(tx => {
 
 JS 每次启动生成独立 `runs/<uuid>`，默认只有元数据。host.json 中 `"debug":true` 才写完整 wire 和 script-code，它们可能含敏感内容。私有日志、截图、owner 文件均不打入发行包；目录 0700 / 文件 0600 是 POSIX 权限，Windows 私有 owner named pipe 使用当前用户 SID DACL，日志隐私依赖宿主目录 ACL。没有 TCP 服务或公网访问要求。
 
-rc.2 候选尚未发布。自动检查不等于 Windows 桌面实测；发布前由 DESKTOP-90677U0 在最终提交上完成 [Windows 交接验收](rc2-windows-handoff.md)。
+rc.2 的 Windows 实机验收保留在 [历史交接](rc2-windows-handoff.md)。rc.3 的 macOS Chrome 语义修复和本轮验证边界见 [发行说明](releases/v0.1.0-rc.3.md)。自动检查不等于 Windows 桌面实测。

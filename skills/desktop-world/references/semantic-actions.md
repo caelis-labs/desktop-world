@@ -12,6 +12,11 @@ a new request ID. Check actual business callbacks/result after a submit.
 Checked states are booleans; mixed/indeterminate stays unknown. A native setter
 may handle it; a toggle is only allowed from a freshly known boolean state and
 is sent at most once. Native errors never trigger keyboard/pointer fallback.
+On macOS Chromium, a writable AXValue alone is insufficient: set_checked needs
+a numeric 0/1 state, an advertised AXPress action, and writable AXValue to
+exclude read-only web controls. It presses once from the opposite state. Empty
+AXValue, disabled or read-only targets are refused before dispatch. Native
+AppKit checkboxes may use AXPress without a writable AXValue.
 
 Selection writes only the requested item's state. Windows adds/removes through
 SelectionItem and never invokes its replacement Select operation. Providers may
