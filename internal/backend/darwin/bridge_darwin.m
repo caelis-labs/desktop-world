@@ -445,8 +445,14 @@ static NSDictionary *node(DWContext *c, NSString *k, NSArray *fields) {
   id value = protected || !wantField(fields, @"value_preview") ? nil : attr(e, kAXValueAttribute);
   NSString *valueText = scalarText(value);
   BOOL checkable = [role isEqual:@"AXCheckBox"] && !protected;
+  // Chromium's web AX node exposes this provider ID. Its AXValue writability
+  // distinguishes actionable checkboxes from aria-readonly checkboxes even
+  // though both can advertise AXPress. AppKit press-only checkboxes do not
+  // expose this ID and remain actionable.
+  BOOL chromiumCheck = checkable && attr(e, CFSTR("ChromeAXNodeId")) != nil;
+  id checkedValue = nil;
   if (checkable && (wantField(fields, @"states") || wantField(fields, @"capabilities"))) {
-    id checkedValue = value ?: attr(e, kAXValueAttribute);
+    checkedValue = value ?: attr(e, kAXValueAttribute);
     states[@"checked"] = checkedState(checkedValue);
   }
   id pos = nodeAttr(batch, e, kAXPositionAttribute), sz = nodeAttr(batch, e, kAXSizeAttribute);
@@ -487,7 +493,13 @@ static NSDictionary *node(DWContext *c, NSString *k, NSArray *fields) {
   NSDictionary *supported = @{
  @"set_expanded": @(expandError == kAXErrorSuccess && expandable),
     @"set_selected": @(selectError == kAXErrorSuccess && selectable),
-    @"set_checked": @(checkable && (writable || ([states[@"checked"][@"Status"] isEqual:@"known"] && [actions containsObject:(__bridge NSString *)kAXPressAction]))),
+    // Chromium can report AXValue as settable even when it returns an empty
+    // string and does not expose a usable checkbox action. A writable flag
+    // alone is not evidence that this desired-state operation is possible.
+    @"set_checked": @(checkable && [checkedValue isKindOfClass:NSNumber.class] &&
+                      (chromiumCheck
+                           ? (writable && [states[@"checked"][@"Status"] isEqual:@"known"] && [actions containsObject:(__bridge NSString *)kAXPressAction])
+                           : (writable || ([states[@"checked"][@"Status"] isEqual:@"known"] && [actions containsObject:(__bridge NSString *)kAXPressAction])))),
     @"scroll_into_view": @(scrollable),
     @"focus" : @([kind isEqual:@"window"] || focusable),
     @"invoke" : @([actions containsObject:(__bridge NSString *)kAXPressAction]),
@@ -934,18 +946,41 @@ static NSDictionary *perform(DWContext *c, NSDictionary *o, DWCancel *cancel) {
     if ([op isEqual:@"scroll_into_view"])
       rc = AXUIElementPerformAction(e, scrollToVisibleAction());
     if ([op isEqual:@"set_checked"]) {
-      id value = attr(e, kAXValueAttribute);
+      if (![attr(e, kAXRoleAttribute) isEqual:@"AXCheckBox"] || [attr(e, kAXEnabledAttribute) isEqual:@NO]) {
+        AXUIElementSetMessagingTimeout(e, 0.25);
+        return outcome(@"none", @"capability_unavailable");
+      }
       BOOL desired = [s[@"SetChecked"][@"Checked"] boolValue];
-      NSDictionary *current = checkedState(value);
-      if ([current[@"Status"] isEqual:@"known"] && [current[@"Value"] boolValue] == desired) return outcome(@"not_applicable", nil);
       Boolean writable = false;
       AXError support = AXUIElementIsAttributeSettable(e, kAXValueAttribute, &writable);
+      CFArrayRef rawActions = NULL;
+      AXUIElementCopyActionNames(e, &rawActions);
+      NSArray *actions = CFBridgingRelease(rawActions);
+      BOOL press = [actions containsObject:(__bridge NSString *)kAXPressAction];
+      BOOL chromiumCheck = attr(e, CFSTR("ChromeAXNodeId")) != nil;
+      // Read the actual state last, immediately before the possible toggle.
+      id value = attr(e, kAXValueAttribute);
+      NSDictionary *current = checkedState(value);
+      if ([current[@"Status"] isEqual:@"known"] && [current[@"Value"] boolValue] == desired) {
+        AXUIElementSetMessagingTimeout(e, 0.25);
+        return outcome(@"not_applicable", nil);
+      }
       AXUIElementSetMessagingTimeout(e, 1.0);
-      if (support == kAXErrorSuccess && writable)
-        rc = AXUIElementSetAttributeValue(e, kAXValueAttribute, desired ? kCFBooleanTrue : kCFBooleanFalse);
-      else if ([current[@"Status"] isEqual:@"known"])
+      if (chromiumCheck && !(support == kAXErrorSuccess && writable && [current[@"Status"] isEqual:@"known"] && press)) {
+        AXUIElementSetMessagingTimeout(e, 0.25);
+        return outcome(@"none", @"capability_unavailable");
+      }
+      // An advertised press is the checkbox's semantic change action. Chrome
+      // accepts AXValue writes without changing its DOM or dispatching events.
+      // Only press from a freshly known opposite state, and never retry it.
+      if ([current[@"Status"] isEqual:@"known"] && press)
         rc = AXUIElementPerformAction(e, kAXPressAction);
-      else return outcome(@"none", @"state_unknown");
+      else if (support == kAXErrorSuccess && writable && [value isKindOfClass:NSNumber.class])
+        rc = AXUIElementSetAttributeValue(e, kAXValueAttribute, desired ? kCFBooleanTrue : kCFBooleanFalse);
+      else {
+        AXUIElementSetMessagingTimeout(e, 0.25);
+        return outcome(@"none", @"capability_unavailable");
+      }
     }
     if ([op isEqual:@"focus"]) {
       NSString *role = attr(e, kAXRoleAttribute);

@@ -6,7 +6,7 @@ Desktop World 将应用、窗口和 UI 控件转换为可观察、可授权的�
 
 提供 `dtw` 命令行、持久 JavaScript 会话、Go / TypeScript / Python / Rust SDK 和动态宿主管理接口。桌面操作使用 macOS Accessibility / CGEvent / ScreenCaptureKit，以及 Windows UI Automation / SendInput / Win32；运行核心无需 LLM、API Key、浏览器扩展或云服务。
 
-当前版本为 **v0.1.0-rc.2**，供集成测试使用。提供 Windows x64 与 macOS arm64 安装包、对应源码及 SHA256 校验文件；下载和验收记录见 [Releases](https://github.com/caelis-labs/desktop-world/releases) 与 [rc.2 验收 Issue](https://github.com/caelis-labs/desktop-world/issues/20)。版本的实际覆盖以该提交的验收记录为准。
+当前版本为 **v0.1.0-rc.3**，供集成测试使用。提供 Windows x64 与 macOS arm64 安装包、对应源码及 SHA256 校验文件；下载和验收记录见 [Releases](https://github.com/caelis-labs/desktop-world/releases) 与 [Chrome 勾选框修复 Issue](https://github.com/caelis-labs/desktop-world/issues/22)。版本的实际覆盖以该提交的验收记录为准。
 
 ## 功能
 
@@ -201,10 +201,10 @@ python scripts/accept-rc2-package.py --package 'C:\path\to\package'
 
 ```powershell
 # Windows amd64，PowerShell 7
-.\scripts\package-prerelease.ps1 -Version v0.1.0-rc.2
+.\scripts\package-prerelease.ps1 -Version v0.1.0-rc.3
 ```
 
-macOS arm64 使用 `./scripts/package-prerelease.sh v0.1.0-rc.2`。脚本不创建 tag 或发布 Release；包的 manifest 必须与待验收提交一致。包及源码使用 MPL-2.0，Windows 包未签名，macOS 包使用 ad-hoc 签名且未经公证。
+macOS arm64 使用 `./scripts/package-prerelease.sh v0.1.0-rc.3`。脚本不创建 tag 或发布 Release；包的 manifest 必须与待验收提交一致。包及源码使用 MPL-2.0，Windows 包未签名，macOS 包使用 ad-hoc 签名且未经公证。
 
 遇到错误时保留原回执：
 
