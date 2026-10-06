@@ -1,6 +1,6 @@
-# RC 发布范围与同提交验收
+# rc.1 历史发布范围与同提交验收
 
-本轮目标是可供验收的 `v0.1.0-rc.1`，范围为 Windows 11 amd64 与 macOS arm64 的 CLI、JavaScript 持久会话、Go SDK 和 managed helper。Windows 实机验证已完成；macOS 必须在最终同一提交上复验，跨平台 RC 才能确认。历史 Mac 成功记录不代替本轮复验。当前不创建 tag、不上传发布包。
+本页保留 `v0.1.0-rc.1` 当时的验收计划，不代表当前版本状态。rc.3 的变更和新实测范围见 [rc.3 发行说明](releases/v0.1.0-rc.3.md)；实际发布提交与资产以 Release 的 manifest、`ACCEPTANCE.json` 和 SHA256SUMS 为准。
 
 ## 范围与完成条件
 
