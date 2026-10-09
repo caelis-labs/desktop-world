@@ -13,16 +13,23 @@ action when it satisfies the task. If status is unavailable, stop; do not substi
 `dtw serve` for MCP or start another helper to recover uncertain actions.
 
 Use `desktop_exec` with a unique `execution_id` and one async JavaScript body.
+Short IDs such as `e1`, `e2` are fine within one connection; retain the exact
+original ID for receipt queries. Do not shorten native Refs, run IDs, or epochs:
+their full values identify the original session and action.
 Inside it, `dw` is the desktop API, `state` persists across calls, and `print(value)`
 returns selected JSON. Local `const` and `let` do not persist. The first call should
 observe only:
 
 ```javascript
 state.inventory = await dw.observe();
-print(dw.list(state.inventory, ['kind', 'name', 'app']));
+print(dw.rows(state.inventory).map(row => row.name));
 ```
 
-Use observed Refs and a narrow scope. A result with `coverage.complete:false`
+Keep the full observation in `state`, but print only what the next decision
+needs. The first list of names is enough to select an application; resolve its
+Ref from `state.inventory` in the next script and print only the chosen match.
+Avoid printing every row and repeated `app`/`ref` fields. Use observed Refs and
+a narrow scope. A result with `coverage.complete:false`
 does not prove absence; consume its continuation or narrow the query. Read
 the installed [scripting API](references/scripting.md) when a method or action
 schema is needed. Useful methods: `dw.observe`, `dw.find`, `dw.one`, `dw.list`,
@@ -43,8 +50,12 @@ only for this MCP connection and helper epoch. A worker loss returns
 `state_lost`; do not assume its JavaScript state survived. A new helper epoch
 invalidates old Refs.
 
-Inspect `observations`, `actions`, `native_receipts`, `captures`, `error`, and
-`metrics` even when your script catches an exception. Partial, unknown and
+The default `desktop_exec` text contains printed values, coverage, action
+delivery, errors, and original native request IDs. Its `structuredContent`
+retains the full result including metrics and receipts; query `desktop_status`
+with the original `execution_id` for full original details. Inspect
+`observations`, `actions`, `native_receipts`, `captures`, `error`, and `metrics`
+when relevant, even when your script catches an exception. Partial, unknown and
 fenced outcomes are not permission to repeat a script or native request. Query
 `desktop_status` with the original `execution_id`; retain original run IDs and
 receipts. If an action's delivery is complete but verification was not
