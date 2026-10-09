@@ -29,6 +29,8 @@ func runCursorOverlay() error {
 	}
 	defer cursorOverlayClose()
 	commands := make(chan cursorCommand, 8)
+	var lastShow time.Time
+	visible := false
 	go func() {
 		defer close(commands)
 		scan := bufio.NewScanner(os.Stdin)
@@ -52,18 +54,28 @@ func runCursorOverlay() error {
 			switch command.Op {
 			case "hide":
 				cursorOverlayHide()
+				visible = false
 			case "show":
 				p := command.Point
 				if p.Frame != "desktop" || math.IsNaN(p.X) || math.IsNaN(p.Y) || math.IsInf(p.X, 0) || math.IsInf(p.Y, 0) {
 					cursorOverlayHide()
+					visible = false
 					continue
 				}
 				if err := cursorOverlayShow(p.X, p.Y); err != nil {
 					fmt.Fprintln(os.Stderr, "cursor overlay:", err)
 					cursorOverlayHide()
+					visible = false
+				} else {
+					lastShow = time.Now()
+					visible = true
 				}
 			}
 		default:
+			if visible && time.Since(lastShow) >= 5*time.Second {
+				cursorOverlayHide()
+				visible = false
+			}
 			cursorOverlayPoll()
 			time.Sleep(16 * time.Millisecond)
 		}

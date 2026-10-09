@@ -75,8 +75,8 @@ test('MCP tools preserve state, IDs, native denial and PNG ImageContent', async 
     await new Promise(resolve => setTimeout(resolve, 20));
   }
   assert.equal(status.result.structuredContent.epoch, 'fixture-epoch');
-  assert.equal(status.result.structuredContent.input_policy, 'no_shared_input');
-  assert.equal(status.result.structuredContent.physical_pointer_input, 'blocked');
+  assert.equal(status.result.structuredContent.input_policy, 'shared_input');
+  assert.equal(status.result.structuredContent.physical_pointer_input, 'may_move_real_cursor');
   assert.equal(status.result.structuredContent.worker_ready, true, JSON.stringify(status.result.structuredContent));
   const first = await mcp.send('tools/call', { name: 'desktop_exec', arguments: { execution_id: 'observe-1', code: "state.saved = await dw.observe(); print(dw.list(state.saved, ['name']));" } }).result;
   assert.equal(first.result.structuredContent.metrics.calls, 1);

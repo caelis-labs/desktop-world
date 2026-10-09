@@ -30,7 +30,7 @@ const bounded = (promise, ms, label) => Promise.race([
 ]);
 
 function options(argv) {
-  const out = { writeApps: [], inputPolicy: 'no_shared_input' };
+  const out = { writeApps: [] };
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i], value = argv[++i];
     if (!value || !['--data-dir', '--write-app', '--input-mode', '--input-policy'].includes(key)) throw new Error(`Unknown or incomplete server option: ${key}`);

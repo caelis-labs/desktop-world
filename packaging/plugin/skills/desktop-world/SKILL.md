@@ -7,9 +7,9 @@ description: Use Desktop World's two local MCP tools to inspect and operate auth
 
 Use `desktop_status` first. It reports the helper epoch, current native APP grants,
 input policy, physical pointer behavior and any prior execution. The Plugin
-defaults to `no_shared_input`: use supported semantic actions for writes;
-pointer actions are denied until a trusted host explicitly enables physical
-shared input with the user's approval. If status is unavailable, stop; do not substitute
+starts without an APP write grant. Its shared pointer path can move the real
+cursor after the user authorizes input for an APP; prefer a supported semantic
+action when it satisfies the task. If status is unavailable, stop; do not substitute
 `dtw serve` for MCP or start another helper to recover uncertain actions.
 
 Use `desktop_exec` with a unique `execution_id` and one async JavaScript body.
