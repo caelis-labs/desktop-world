@@ -22,6 +22,13 @@ jobs:
         with:
           node-version: '24'
       - run: node --test clients/javascript/desktop.test.mjs
+      - name: MCP supervisor contract
+        if: runner.os == 'macOS'
+        run: |
+          cd clients/mcp
+          npm ci
+          npm run build
+          npm test
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'

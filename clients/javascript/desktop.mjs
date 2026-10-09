@@ -97,7 +97,17 @@ const known = fact => {
   if (fact?.status === 'known' && Object.hasOwn(fact, 'value')) return fact.value;
   throw Object.assign(new Error(`Expected a known fact, got ${JSON.stringify(fact)}`), { code: 'fact_not_known' });
 };
-const errorInfo = error => ({ code: error?.code ?? 'script_failed', message: String(error?.message ?? error).slice(0, 2000) });
+const errorInfo = error => {
+  const info = { code: error?.code ?? 'script_failed', message: String(error?.message ?? error).slice(0, 2000) };
+  // The wrapper contributes one line. Keep location, never return the host stack.
+  const match = String(error?.stack ?? '').match(/desktop-script\.js:(\d+)(?::(\d+))?/);
+  if (match) {
+    info.line = Math.max(1, Number(match[1]) - 1);
+    const caret = String(error.stack).split('\n').find(line => /^\s*\^\s*$/.test(line));
+    if (match[2] || caret) info.column = match[2] ? Number(match[2]) : caret.indexOf('^') + 1;
+  }
+  return info;
+};
 const bytes = value => Buffer.byteLength(JSON.stringify(value));
 const pick = (value, keys) => Object.fromEntries(keys.filter(k => value?.[k] !== undefined).map(k => [k, value[k]]));
 const smallCoverage = value => pick(value, ['scope', 'fields', 'max_depth', 'complete', 'truncated', 'dirty', 'continuation', 'unavailable_sources']);

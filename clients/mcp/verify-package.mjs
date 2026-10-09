@@ -1,0 +1,44 @@
+import Ajv2020 from 'ajv/dist/2020.js';
+import { readFile, lstat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = resolve(process.argv[2] ?? '');
+if (!process.argv[2]) throw new Error('usage: node verify-package.mjs PLUGIN_ROOT');
+const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const ajv = new Ajv2020({ strict: true, allErrors: true });
+for (const component of ['plugin', 'mcp']) {
+  const schema = JSON.parse(await readFile(join(repo, 'packaging', 'schema', `${component}.schema.json`), 'utf8'));
+  const data = JSON.parse(await readFile(join(root, `${component}.json`), 'utf8'));
+  const valid = ajv.compile(schema);
+  if (!valid(data)) throw new Error(`${component}.json: ${ajv.errorsText(valid.errors)}`);
+}
+const mcp = JSON.parse(await readFile(join(root, 'mcp.json'), 'utf8'));
+const entries = Object.entries(mcp.mcpServers);
+if (entries.length !== 1 || entries[0][0] !== 'desktop-world') throw new Error('Expected exactly one desktop-world stdio server.');
+const config = entries[0][1];
+const manifest = JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8'));
+if (!['full', 'lite'].includes(manifest.flavor) || !['darwin-arm64', 'windows-amd64'].includes(manifest.platform)) throw new Error('Invalid package flavor or platform.');
+const windows = manifest.platform === 'windows-amd64';
+const expectedCommand = manifest.flavor === 'full' ? `./runtime/node${windows ? '.exe' : ''}` : `./bin/dtw${windows ? '.exe' : ''}`;
+const expectedArgs = manifest.flavor === 'full' ? ['${PLUGIN_ROOT}/mcp/server.mjs', '--data-dir', '${PLUGIN_DATA}'] : ['plugin-node', '--data-dir', '${PLUGIN_DATA}'];
+if (config.command !== expectedCommand || JSON.stringify(config.args) !== JSON.stringify(expectedArgs) || config.cwd !== '${PLUGIN_DATA}') throw new Error('Invalid portable command, args or cwd.');
+if (!(await lstat(join(root, config.command.slice(2)))).isFile()) throw new Error('Package launcher missing.');
+const bundledNode = join(root, 'runtime', windows ? 'node.exe' : 'node');
+if (manifest.flavor === 'full' && manifest.node.mode !== 'bundled') throw new Error('Full package must declare bundled Node.');
+if (manifest.flavor === 'lite' && (manifest.node.mode !== 'external' || manifest.node.path_environment !== 'DTW_NODE_PATH' || await lstat(bundledNode).then(() => true, () => false))) throw new Error('Lite package must require external Node and omit bundled Node.');
+const skill = await readFile(join(root, 'skills/desktop-world/SKILL.md'), 'utf8');
+if (!skill.startsWith('---\nname: desktop-world\n') || !skill.includes('\ndescription: ')) throw new Error('Plugin Skill is not discoverable.');
+if (!skill.includes('](references/scripting.md)') || !(await lstat(join(root, 'skills/desktop-world/references/scripting.md'))).isFile()) throw new Error('Standalone Skill API reference missing.');
+const lines = (await readFile(join(root, 'SHA256SUMS'), 'utf8')).trim().split('\n');
+for (const line of lines) {
+  const match = /^([a-f0-9]{64})  ([^\n]+)$/.exec(line);
+  if (!match || match[2].startsWith('/') || match[2].includes('..')) throw new Error(`Invalid SHA256SUMS entry: ${line}`);
+  const path = join(root, match[2]);
+  const info = await lstat(path);
+  if (!info.isFile()) throw new Error(`Not a regular file: ${match[2]}`);
+  const hash = createHash('sha256').update(await readFile(path)).digest('hex');
+  if (hash !== match[1]) throw new Error(`SHA256 mismatch: ${match[2]}`);
+}
+console.log(JSON.stringify({ valid: true, root, files: lines.length, schema: 'Agent Plugins 1.0.0' }));

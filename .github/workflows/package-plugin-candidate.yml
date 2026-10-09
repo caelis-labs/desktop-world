@@ -1,0 +1,60 @@
+name: package formal plugin candidate
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Exact reviewed 40-character source SHA
+        required: true
+        type: string
+      version:
+        description: Formal version (vX.Y.Z), package candidate only
+        required: true
+        type: string
+permissions:
+  contents: read
+env:
+  CANDIDATE_REVISION: ${{ github.event_name == 'workflow_dispatch' && inputs.revision || github.event.pull_request.head.sha }}
+  CANDIDATE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || 'v0.1.0' }}
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_REVISION }}
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+      - name: Verify exact clean source
+        shell: bash
+        run: |
+          [[ "$CANDIDATE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CANDIDATE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$(git rev-parse HEAD)" == "$CANDIDATE_REVISION" ]]
+          [[ -z "$(git status --porcelain)" ]]
+      - name: macOS arm64 package
+        if: runner.os == 'macOS'
+        shell: bash
+        run: ./scripts/package-plugin.sh "$CANDIDATE_VERSION"
+      - name: Windows amd64 package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/package-plugin.ps1 -Version $env:CANDIDATE_VERSION
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-candidate-${{ runner.os }}-${{ env.CANDIDATE_VERSION }}-${{ env.CANDIDATE_REVISION }}
+          if-no-files-found: error
+          path: |
+            artifacts/release/${{ env.CANDIDATE_VERSION }}/*.zip
+            artifacts/release/${{ env.CANDIDATE_VERSION }}/*.tar.gz
+            artifacts/release/${{ env.CANDIDATE_VERSION }}/SHA256SUMS
