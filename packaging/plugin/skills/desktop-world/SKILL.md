@@ -21,7 +21,7 @@ print(dw.list(state.inventory, ['kind', 'name', 'app']));
 
 Use observed Refs and a narrow scope. A result with `coverage.complete:false`
 does not prove absence; consume its continuation or narrow the query. Read
-the installed [scripting API](../../docs/scripting.md) when a method or action
+the installed [scripting API](references/scripting.md) when a method or action
 schema is needed. Useful methods: `dw.observe`, `dw.find`, `dw.one`, `dw.list`,
 `dw.read`, `dw.set`, `dw.invoke`, `dw.transaction`, `dw.capture`, `dw.get`.
 Keep predictable actions in one script and verify business state afterward.

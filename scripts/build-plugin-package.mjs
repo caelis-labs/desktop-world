@@ -25,6 +25,7 @@ await copy(nodeLicense, join('runtime', 'NODE-LICENSE'));
 await copy(join(repo, 'clients/mcp/dist/mcp'), 'mcp');
 await copy(join(repo, 'clients/mcp/dist/clients'), 'clients');
 await copy(join(repo, 'packaging/plugin/skills'), 'skills');
+await copy(join(repo, 'docs/scripting.md'), 'skills/desktop-world/references/scripting.md');
 await copy(join(repo, 'packaging/plugin/README.md'), 'README.md');
 await copy(join(repo, 'docs/scripting.md'), 'docs/scripting.md');
 for (const name of ['LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md']) await copy(join(repo, name), name);

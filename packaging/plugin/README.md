@@ -9,8 +9,8 @@ Python, Docker or browser extension.
 Install this directory in a local Agent that supports Agent Plugins. Its client
 must provide a persistent writable `PLUGIN_DATA` directory and expand
 `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` in `mcp.json` as specified. For a client
-that supports Skills and stdio MCP separately, install
-`skills/desktop-world/SKILL.md` as a Skill and register the same bundled MCP
+that supports Skills and stdio MCP separately, install the entire
+`skills/desktop-world/` directory as a Skill and register the same bundled MCP
 server with absolute paths. Registering MCP alone does not load the Skill.
 
 macOS direct MCP example (replace both paths):

@@ -22,6 +22,7 @@ if (!config.command.startsWith('./') || config.command.includes('${') || config.
 if (!(await lstat(join(root, config.command.slice(2)))).isFile()) throw new Error('Bundled Node executable missing.');
 const skill = await readFile(join(root, 'skills/desktop-world/SKILL.md'), 'utf8');
 if (!skill.startsWith('---\nname: desktop-world\n') || !skill.includes('\ndescription: ')) throw new Error('Plugin Skill is not discoverable.');
+if (!skill.includes('](references/scripting.md)') || !(await lstat(join(root, 'skills/desktop-world/references/scripting.md'))).isFile()) throw new Error('Standalone Skill API reference missing.');
 const lines = (await readFile(join(root, 'SHA256SUMS'), 'utf8')).trim().split('\n');
 for (const line of lines) {
   const match = /^([a-f0-9]{64})  ([^\n]+)$/.exec(line);
