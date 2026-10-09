@@ -15,10 +15,10 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 if (process.argv[2] === 'cursor-overlay') { process.stdin.resume(); }
 else if (process.argv[2] === 'session') {
-  const option = name => process.argv[process.argv.indexOf(name) + 1];
+  const option = name => { const i=process.argv.indexOf(name); return i<0?undefined:process.argv[i+1]; };
   const assets = option('--assets-dir'); mkdirSync(assets, { recursive: true });
   const owner = option('--session'); writeFileSync(owner, '{}');
-  process.stdout.write(JSON.stringify({type:'hello',protocol:'desktop-world/session-v0.1',environment:{epoch:'fixture-epoch'},input_mode:'shared',input_policy:'shared_input',features:['dynamic_app_grants']})+'\\n');
+  process.stdout.write(JSON.stringify({type:'hello',protocol:'desktop-world/session-v0.1',environment:{epoch:'fixture-epoch'},input_mode:'shared',input_policy:option('--input-policy')??'shared_input',features:['dynamic_app_grants']})+'\\n');
   createInterface({input:process.stdin}).on('line', line => {
     const r=JSON.parse(line); let result, error;
     if (r.channel === 'host') result = r.op === 'grants' ? {turn:'session',grants:[]} : {acknowledged:true};
@@ -75,6 +75,8 @@ test('MCP tools preserve state, IDs, native denial and PNG ImageContent', async 
     await new Promise(resolve => setTimeout(resolve, 20));
   }
   assert.equal(status.result.structuredContent.epoch, 'fixture-epoch');
+  assert.equal(status.result.structuredContent.input_policy, 'no_shared_input');
+  assert.equal(status.result.structuredContent.physical_pointer_input, 'blocked');
   assert.equal(status.result.structuredContent.worker_ready, true, JSON.stringify(status.result.structuredContent));
   const first = await mcp.send('tools/call', { name: 'desktop_exec', arguments: { execution_id: 'observe-1', code: "state.saved = await dw.observe(); print(dw.list(state.saved, ['name']));" } }).result;
   assert.equal(first.result.structuredContent.metrics.calls, 1);

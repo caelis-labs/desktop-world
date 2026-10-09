@@ -30,7 +30,7 @@ const bounded = (promise, ms, label) => Promise.race([
 ]);
 
 function options(argv) {
-  const out = { writeApps: [] };
+  const out = { writeApps: [], inputPolicy: 'no_shared_input' };
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i], value = argv[++i];
     if (!value || !['--data-dir', '--write-app', '--input-mode', '--input-policy'].includes(key)) throw new Error(`Unknown or incomplete server option: ${key}`);
@@ -221,7 +221,7 @@ class Supervisor {
       try { grants = await bounded(this.native.owner('grants', {}, `mcp-grants-${randomUUID()}`), 1000, 'grant status'); }
       catch (e) { grants = { unavailable: String(e.message).slice(0, 200) }; }
     }
-    return toolResult({ version: '0.1.0', protocol: this.protocol, epoch: this.epoch, platform: `${process.platform}/${process.arch}`, native_ready: Boolean(this.native && !this.native.closed), worker_ready: Boolean(this.worker && this.workerReady), cursor_overlay: this.overlayReady ? 'ready' : 'unavailable', fenced: this.fenced, state_lost: this.stateLost, cleanup: this.cleanup, input_mode: this.inputMode, input_policy: this.inputPolicy, owner_file: this.native ? this.ownerFile : undefined, grants, startup_error: this.startError, execution: record ? { execution_id: record.id, state: record.state, native_request_ids: record.nativeIds, result: record.done ? record.result?.structuredContent : undefined } : undefined, ...(id && !record ? { error: error('execution_not_found', 'No execution with this ID in this connection.') } : {}) });
+    return toolResult({ version: '0.1.0', protocol: this.protocol, epoch: this.epoch, platform: `${process.platform}/${process.arch}`, native_ready: Boolean(this.native && !this.native.closed), worker_ready: Boolean(this.worker && this.workerReady), cursor_overlay: this.overlayReady ? 'ready' : 'unavailable', fenced: this.fenced, state_lost: this.stateLost, cleanup: this.cleanup, input_mode: this.inputMode, input_policy: this.inputPolicy, physical_pointer_input: this.inputPolicy === 'no_shared_input' ? 'blocked' : 'may_move_real_cursor', owner_file: this.native ? this.ownerFile : undefined, grants, startup_error: this.startError, execution: record ? { execution_id: record.id, state: record.state, native_request_ids: record.nativeIds, result: record.done ? record.result?.structuredContent : undefined } : undefined, ...(id && !record ? { error: error('execution_not_found', 'No execution with this ID in this connection.') } : {}) });
   }
 
   async close() {
