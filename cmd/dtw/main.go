@@ -30,6 +30,7 @@ dtw schema [operation] [action]     JSON request schema; no native desktop acces
 dtw session [host options] Trusted owner facade for TS/Python/Rust SDKs.
 dtw auth list|add|revoke --session OWNER_FILE   Dynamic application grants.
 dtw cursor-overlay         Internal click-through Agent pointer display (stdin control).
+dtw plugin-node [MCP options]  Internal Lite launcher; requires absolute DTW_NODE_PATH (Node 24).
 dtw serve [host options]   New World for the lifetime of this stdio process.
 
 serve host options:
@@ -65,6 +66,13 @@ func (n *names) String() string     { return fmt.Sprint([]string(*n)) }
 func (n *names) Set(v string) error { *n = append(*n, v); return nil }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "plugin-node" {
+		if err := runPluginNode(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "Desktop World Lite:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		b, _ := json.Marshal(map[string]any{"error": map[string]string{"code": "command_failed", "message": err.Error()}})
 		fmt.Println(string(b))

@@ -12,7 +12,6 @@ try {
   if (-not $IsWindows -or $env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'build on Windows amd64 with PowerShell 7' }
   if (git status --porcelain) { throw 'clean checkout required' }
   $revision = (git rev-parse HEAD).Trim()
-  $name = "desktop-world-plugin-$Version-windows-amd64"
   $out = Join-Path $repo "artifacts/release/$Version"
   if (Test-Path -LiteralPath $out) { throw "output already exists: $out" }
   $stage = Join-Path $out 'staging'
@@ -33,16 +32,20 @@ try {
   if (-not $expected -or $expected -ne $actual) { throw 'official Node archive checksum mismatch' }
   Expand-Archive -LiteralPath $archivePath -DestinationPath $stage
   $nodeRoot = Join-Path $stage "node-$nodeVersion-win-x64"
-  $payload = Join-Path $out $name
-  Invoke-Checked node @('scripts/build-plugin-package.mjs', $Version, 'windows-amd64', $helper, (Join-Path $nodeRoot 'node.exe'), (Join-Path $nodeRoot 'LICENSE'), $actual, $payload)
-  Invoke-Checked node @('clients/mcp/verify-package.mjs', $payload)
-  $zip = Join-Path $out "$name.zip"
-  Compress-Archive -LiteralPath $payload -DestinationPath $zip -CompressionLevel Optimal
-  $source = Join-Path $out "desktop-world-$Version-source.zip"
-  Invoke-Checked git @('archive', '--format=zip', '--output', $source, 'HEAD')
-  @($zip, $source) | ForEach-Object { "$((Get-FileHash -Algorithm SHA256 -LiteralPath $_).Hash.ToLowerInvariant())  $(Split-Path -Leaf $_)" } | Set-Content -Encoding ascii -LiteralPath (Join-Path $out 'SHA256SUMS')
+  $archives = @()
+  foreach ($flavor in @('full', 'lite')) {
+    $name = "desktop-world-plugin-$Version-$flavor-windows-amd64"
+    $payload = Join-Path $out $name
+    Invoke-Checked node @('scripts/build-plugin-package.mjs', $Version, 'windows-amd64', $flavor, $helper, (Join-Path $nodeRoot 'node.exe'), (Join-Path $nodeRoot 'LICENSE'), $actual, $payload)
+    Invoke-Checked node @('clients/mcp/verify-package.mjs', $payload)
+    $zip = Join-Path $out "$name.zip"
+    Compress-Archive -LiteralPath $payload -DestinationPath $zip -CompressionLevel Optimal
+    $archives += $zip
+  }
+  $lines = @($archives | ForEach-Object { "$((Get-FileHash -Algorithm SHA256 -LiteralPath $_).Hash.ToLowerInvariant())  $(Split-Path -Leaf $_)" })
+  [IO.File]::WriteAllText((Join-Path $out 'SHA256SUMS'), ($lines -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
   Remove-Item -LiteralPath $stage -Recurse -Force
-  Write-Output "revision=$revision package=$zip"
+  Write-Output "revision=$revision full=$($archives[0]) lite=$($archives[1])"
 } finally {
   $env:GOWORK, $env:GOOS, $env:GOARCH, $env:CGO_ENABLED = $old
   Pop-Location

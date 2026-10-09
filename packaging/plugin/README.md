@@ -2,9 +2,14 @@
 
 This directory is an [Agent Plugins 1.0](https://agent-plugins.org/specification)
 package. It contains one Skill and one stdio MCP server with exactly two tools:
-`desktop_exec` and `desktop_status`. The private Node LTS runtime and native
-`dtw` helper are included. Running the package needs no system Node, npm, Go,
-Python, Docker or browser extension.
+`desktop_exec` and `desktop_status`. Each platform release has two archives of
+the same version and implementation. **Full** is the default: it includes a
+fixed private Node LTS and the native `dtw` helper, so it needs no system Node,
+npm, Go, Python, Docker or browser extension. **Lite** contains the same Skill,
+MCP server and helper but omits Node. Lite requires an explicitly configured
+absolute `DTW_NODE_PATH` to a compatible Node 24.x executable. The helper checks
+this at startup and reports missing or incompatible Node; it never searches
+`PATH`, downloads Node or changes the system environment.
 
 Install this directory in a local Agent that supports Agent Plugins. Its client
 must provide a persistent writable `PLUGIN_DATA` directory and expand
@@ -13,17 +18,29 @@ that supports Skills and stdio MCP separately, install the entire
 `skills/desktop-world/` directory as a Skill and register the same bundled MCP
 server with absolute paths. Registering MCP alone does not load the Skill.
 
-macOS direct MCP example (replace both paths):
+macOS Full direct MCP example (replace both paths):
 
 ```sh
 codex mcp add desktop-world -- "/absolute/plugin/root/runtime/node" "/absolute/plugin/root/mcp/server.mjs" --data-dir "/absolute/writable/data"
 ```
 
-Windows direct MCP example (PowerShell; replace paths):
+Windows Full direct MCP example (PowerShell; replace paths):
 
 ```powershell
 codex mcp add desktop-world -- 'C:\absolute\plugin\root\runtime\node.exe' 'C:\absolute\plugin\root\mcp\server.mjs' --data-dir 'C:\absolute\writable\data'
 ```
+
+For Lite, install the same complete Skill directory, then pass an explicit
+compatible Node path. The adapter is the packaged helper, not another MCP
+implementation:
+
+```sh
+codex mcp add --env DTW_NODE_PATH="/absolute/path/to/node" desktop-world -- "/absolute/lite/root/bin/dtw" plugin-node --data-dir "/absolute/writable/data"
+```
+
+For Windows, use `dtw.exe` and an absolute `node.exe` path with the same
+`--env DTW_NODE_PATH=...` option. A standard Plugin client may instead supply
+`DTW_NODE_PATH` in its trusted process environment before loading Lite.
 
 Preserve existing client configuration and its approval policy. `desktop_exec`
 is a local code execution tool and can change the desktop. Review the complete
@@ -52,6 +69,10 @@ after disconnect they cannot be queried over the closed stdio connection.
 Cleanup uncertainty is reported as `close_incomplete`. No cross-restart script
 or exactly-once guarantee exists. Do not automatically replay an unknown call.
 
-The package includes `manifest.json`, `SHA256SUMS`, MPL-2.0 source license and
+Each archive includes `manifest.json`, `SHA256SUMS`, MPL-2.0 license and
 third-party notices. Verify the outer archive SHA256 against the official
-release's `SHA256SUMS` before installation.
+release's `SHA256SUMS` before installation. The source checkout's
+`packaging/plugin/` contains standard manifests, Skill, installation guidance
+and a link to canonical MCP source. It does not contain a runnable release
+payload: repository or marketplace installation must locate and verify the
+matching official platform archive; it must not compile on the user's machine.

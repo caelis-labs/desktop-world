@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "desktop-world",
+  "version": "0.1.0",
+  "description": "Operate authorized desktop applications through persistent JavaScript scripts and native receipts.",
+  "author": { "name": "Caelis Labs", "url": "https://github.com/caelis-labs" },
+  "repository": "https://github.com/caelis-labs/desktop-world",
+  "homepage": "https://github.com/caelis-labs/desktop-world",
+  "license": "MPL-2.0",
+  "keywords": ["desktop", "computer-use", "mcp"]
+}

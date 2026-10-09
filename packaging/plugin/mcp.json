@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "desktop-world": {
+      "type": "stdio",
+      "command": "./runtime/node",
+      "args": ["${PLUGIN_ROOT}/mcp/server.mjs", "--data-dir", "${PLUGIN_DATA}"],
+      "cwd": "${PLUGIN_DATA}"
+    }
+  }
+}
