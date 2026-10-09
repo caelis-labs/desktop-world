@@ -7,7 +7,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const [version, platform, flavor, helper, nodeBinary, nodeLicense, nodeArchiveSHA, output] = process.argv.slice(2);
-if (!/^v\d+\.\d+\.\d+$/.test(version) || !['darwin-arm64', 'windows-amd64'].includes(platform) || !['full', 'lite'].includes(flavor) || !helper || !nodeBinary || !nodeLicense || !/^[a-f0-9]{64}$/i.test(nodeArchiveSHA ?? '') || !output) throw new Error('usage: build-plugin-package.mjs vX.Y.Z PLATFORM full|lite HELPER NODE NODE_LICENSE NODE_ARCHIVE_SHA256 OUTPUT');
+if (!/^v\d+\.\d+\.\d+(?:-rc\.[1-9]\d*)?$/.test(version) || !['darwin-arm64', 'windows-amd64'].includes(platform) || !['full', 'lite'].includes(flavor) || !helper || !nodeBinary || !nodeLicense || !/^[a-f0-9]{64}$/i.test(nodeArchiveSHA ?? '') || !output) throw new Error('usage: build-plugin-package.mjs vX.Y.Z[-rc.N] PLATFORM full|lite HELPER NODE NODE_LICENSE NODE_ARCHIVE_SHA256 OUTPUT');
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const out = resolve(output);
 const revision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
