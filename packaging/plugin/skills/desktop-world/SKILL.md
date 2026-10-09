@@ -57,3 +57,5 @@ displays; use each tile's `image_to_desktop` transform. The displayed Agent
 cursor marks the last successfully delivered pointer location. It does not
 grant input authority or move the physical pointer by itself. When shared
 pointer input is authorized, native mouse events still move the real cursor.
+The OS cursor can cover the drawn arrow; its subtle pastel halo identifies
+the Agent position briefly, then disappears after five seconds of inactivity.

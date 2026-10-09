@@ -84,15 +84,12 @@ func cursorPaint(pixels []byte) {
 				for sx := 0; sx < samples; sx++ {
 					px := float64(x) + (float64(sx)+0.5)/samples
 					py := float64(y) + (float64(sy)+0.5)/samples
-					if !cursorContains(px, py) {
-						continue
-					}
-					if cursorEdgeDistance(px, py) <= 0.72 {
-						red += 0.15 * 0.88
-						green += 0.20 * 0.88
-						blue += 0.29 * 0.88
-						alpha += 0.88
-						continue
+					// The real cursor is composited above layered windows. This
+					// small tint remains visible around a coincident real pointer.
+					haloAlpha := 0.0
+					dx, dy := (px-9)/8.5, (py-11)/9.5
+					if dx*dx+dy*dy <= 1 {
+						haloAlpha = 0.52
 					}
 					// Soft pink, lavender and mint follow the arrow diagonal.
 					t := math.Max(0, math.Min(1, (px+py*0.45-3)/20))
@@ -104,10 +101,17 @@ func cursorPaint(pixels []byte) {
 						u := (t - 0.54) / 0.46
 						r, g, b = 0.78-0.10*u, 0.77+0.14*u, 0.99-0.11*u
 					}
-					red += r * 0.96
-					green += g * 0.96
-					blue += b * 0.96
-					alpha += 0.96
+					fillR, fillG, fillB, fillAlpha := r, g, b, 0.0
+					if cursorContains(px, py) {
+						fillAlpha = 0.96
+						if cursorEdgeDistance(px, py) <= 0.62 {
+							fillR, fillG, fillB, fillAlpha = 0.15, 0.20, 0.29, 0.62
+						}
+					}
+					red += fillR*fillAlpha + r*haloAlpha*(1-fillAlpha)
+					green += fillG*fillAlpha + g*haloAlpha*(1-fillAlpha)
+					blue += fillB*fillAlpha + b*haloAlpha*(1-fillAlpha)
+					alpha += fillAlpha + haloAlpha*(1-fillAlpha)
 				}
 			}
 			i := (y*cursorWidth + x) * 4

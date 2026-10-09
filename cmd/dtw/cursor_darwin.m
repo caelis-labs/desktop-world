@@ -10,6 +10,14 @@
 - (void)drawRect:(NSRect)dirty {
   (void)dirty;
   [[NSColor clearColor] set]; NSRectFill(self.bounds);
+  // The system cursor is composited above normal windows, including this
+  // panel. A small translucent tint stays visible around a coincident pointer.
+  NSBezierPath *halo = [NSBezierPath bezierPathWithOvalInRect:NSMakeRect(.5, 1.5, 17, 19)];
+  NSGradient *haloTint = [[NSGradient alloc] initWithColorsAndLocations:
+    [NSColor colorWithSRGBRed:1 green:.74 blue:.84 alpha:.52], 0.0,
+    [NSColor colorWithSRGBRed:.81 green:.75 blue:1 alpha:.52], .55,
+    [NSColor colorWithSRGBRed:.70 green:.93 blue:.86 alpha:.50], 1.0, nil];
+  [haloTint drawInBezierPath:halo angle:-35];
   NSBezierPath *outline = [NSBezierPath bezierPath];
   [outline moveToPoint:NSMakePoint(2, 20)];
   [outline lineToPoint:NSMakePoint(2, 2)];
@@ -24,8 +32,8 @@
     [NSColor colorWithSRGBRed:.78 green:.77 blue:.99 alpha:.96], .54,
     [NSColor colorWithSRGBRed:.68 green:.91 blue:.88 alpha:.96], 1.0, nil];
   [tint drawInBezierPath:outline angle:-35];
-  [[NSColor colorWithSRGBRed:.15 green:.20 blue:.29 alpha:.88] setStroke];
-  outline.lineWidth = 1.15;
+  [[NSColor colorWithSRGBRed:.15 green:.20 blue:.29 alpha:.62] setStroke];
+  outline.lineWidth = 1.0;
   outline.lineJoinStyle = NSLineJoinStyleRound;
   [outline stroke];
 }
