@@ -8,6 +8,16 @@ Desktop World 将应用、窗口和 UI 控件转换为可观察、可授权的�
 
 当前版本为 **v0.1.0-rc.3**，供集成测试使用。提供 Windows x64 与 macOS arm64 安装包、对应源码及 SHA256 校验文件；下载和验收记录见 [Releases](https://github.com/caelis-labs/desktop-world/releases) 与 [Chrome 勾选框修复 Issue](https://github.com/caelis-labs/desktop-world/issues/22)。版本的实际覆盖以该提交的验收记录为准。
 
+## Agent Plugin 安装路径（v0.1.0 发布候选）
+
+首个正式版候选增加按平台分发的 Agent Plugins 1.0 标准包：`plugin.json`、`mcp.json`、`skills/desktop-world/SKILL.md`、私有 Node 24 LTS、预构建官方 MCP SDK 和同提交原生 `dtw`。默认只有 `desktop_exec` 与 `desktop_status` 两个 MCP 工具。`desktop_exec` 执行本地 JavaScript，须保留客户端对完整脚本的审批；`node:vm` 和 worker 不是安全沙箱。终端使用者不需要安装系统 Node/npm/Go/Python。包未正式发布前，不要把 rc.3 的 `dtw serve/session` 登记为 MCP。
+
+将以下提示词复制给本机 Agent 安装正式发布后的固定版本包：
+
+> 请为当前本机 Agent 安装 [caelis-labs/desktop-world](https://github.com/caelis-labs/desktop-world) 的官方 Desktop World Agent Plugin。先读取 README、对应正式 release 说明和包内 SKILL.md，确认本机 OS/架构与当前 Agent 的 Plugin、MCP、Skills 安装方式。仅选择含 `plugin.json`、`mcp.json`、`runtime` 和 `bin/dtw` 的对应平台固定版本归档，对照官方 `SHA256SUMS` 校验后解压到稳定目录。若正式官方包不存在，请报告缺口并停止，不自造 MCP 桥。优先用 Agent 的本地标准 Plugin 安装入口；若客户端只支持 stdio MCP 与 Skills，使用同一包的绝对路径登记 MCP 服务并安装同一份 Skill，合并现有配置。不要要求系统 Node、npm、Go、Python 或 Docker。先运行包内 `dtw version`、`dtw doctor`、`desktop_status` 和一次只读观察，报告版本、Skill 与 MCP 是否分别加载、APP 授权和 OS 权限缺口。保留脚本审批，只在我明确批准的 APP 范围内操作，不自行给 OS 授权或放宽自动批准。若当前 Agent 在云端、SSH 或 WSL 中，先确认服务实际运行于目标本机交互桌面。最后给出一句可直接开始桌面任务的示例指令。
+
+标准包自动安装时，客户端应按 Agent Plugins 1.0 提供 `PLUGIN_ROOT` 和持久可写 `PLUGIN_DATA`。只支持分开安装的客户端可按 [包内 README](packaging/plugin/README.md) 登记绝对路径；只登记 MCP 不等于 Skill 已加载。动态授权通过可信 owner descriptor 的 `dtw auth` 完成，模型工具参数没有授权入口。包内 cursor overlay 绘制成功投递的 Agent 指针位置，不以截图像素或虚拟坐标代替真实输入。完整生命周期和 Bot 宿主迁移依赖见 [Plugin 集成契约](docs/agent-plugin-host-contract.md)。
+
 ## 功能
 
 | 能力 | 用途 |

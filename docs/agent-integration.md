@@ -6,13 +6,14 @@
 
 | 使用方式 | 入口 | 运行要求 |
 | --- | --- | --- |
+| 本机 Agent Plugins 1.0 正式包候选 | `plugin.json`、`mcp.json`、`skills/desktop-world` | 随包 Node 24 LTS 和原生 helper；无需系统开发工具；`desktop_exec` 需要客户端审批完整脚本 |
 | Agent 的持久脚本工具 | `clients/javascript/desktop.mjs` | Node 20+；无 npm 依赖 |
 | TS 编排程序 | `clients/typescript` 的 `HostSession` / `DesktopClient` | Node 20+；发布包包含 JS 与声明文件 |
 | Python 编排程序 | `clients/python` 的异步 `HostSession` / `DesktopClient` | Python 3.11+；运行时无第三方依赖 |
 | Rust 编排程序 | `clients/rust` 的 `HostSession` / `DesktopClient` | Rust 1.75+、Tokio、Serde |
 | Go 宿主 | `host.Start`、`BeginTurn` / `Grant` / `Declare` / `Revoke` / `EndTurn` | Go 1.23+ |
 
-只向模型注册 `observe/read/sync/act/capture/get/cancel`，或其窄封装。不要把 `HostSession`、宿主控制通道、helper 路径、回合选择或执行任意本地代码的能力作为桌面工具参数。JS runner 是受信任的本地代码执行器，其 VM 与同用户 socket 不是安全沙箱。
+SDK 宿主可只向模型注册 `observe/read/sync/act/capture/get/cancel` 或其窄封装。标准 Plugin 默认只注册 `desktop_exec` 和 `desktop_status`；前者会执行任意本地 JavaScript，不能把工具 annotation 当作审批机制。不要把 `HostSession`、宿主控制通道、helper 路径或回合选择作为桌面工具参数。JS runner 的 VM 与同用户 worker 不是安全沙箱。Plugin 安装和数据/权限生命周期见 [通用宿主契约](agent-plugin-host-contract.md)。
 
 ## 启动与动态授权
 

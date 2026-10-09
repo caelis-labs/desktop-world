@@ -665,6 +665,14 @@ func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string
 		}
 		return
 	}
+	if strings.HasPrefix(s.Op, "pointer.") && outcome.Delivery == dw.DeliveryComplete {
+		// Record only a resolved, delivered location. A proposed target or an
+		// unknown/partial native call must not move the virtual cursor.
+		res.Pointer = op.Point
+		if s.Op == "pointer.drag" && op.To != nil {
+			res.Pointer = op.To
+		}
+	}
 	predicates := append([]dw.Predicate{}, s.After...)
 	if s.Op == "focus" {
 		prop := "focused"

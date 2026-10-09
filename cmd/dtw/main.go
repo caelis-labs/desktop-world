@@ -29,6 +29,7 @@ dtw doctor                 Read-only permission/environment probe; never prompts
 dtw schema [operation] [action]     JSON request schema; no native desktop access.
 dtw session [host options] Trusted owner facade for TS/Python/Rust SDKs.
 dtw auth list|add|revoke --session OWNER_FILE   Dynamic application grants.
+dtw cursor-overlay         Internal click-through Agent pointer display (stdin control).
 dtw serve [host options]   New World for the lifetime of this stdio process.
 
 serve host options:
@@ -84,6 +85,12 @@ func run() (runErr error) {
 	}
 	if args[0] == "auth" {
 		return runAuth(args[1:])
+	}
+	if args[0] == "cursor-overlay" {
+		if len(args) != 1 {
+			return fmt.Errorf("cursor-overlay takes no arguments")
+		}
+		return runCursorOverlay()
 	}
 	if args[0] == "version" || args[0] == "--version" || args[0] == "-v" {
 		v := map[string]any{"version": releaseVersion, "protocol": helper.Version, "host_control": helper.ControlVersion, "go": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH}

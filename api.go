@@ -455,14 +455,18 @@ type Fault struct {
 func (f *Fault) Error() string { return f.Code + ": " + f.Message }
 
 type StepResult struct {
-	Channel                    string // Operation channel; delivery records whether dispatch occurred.
-	ID                         string
-	Target                     Ref
-	State                      string // skipped | satisfied | dispatched | failed | unknown
-	Delivery                   Delivery
-	AcceptedInputEvents        *int
-	RequestedInputEvents       *int
-	Verification               Verification
+	Channel              string // Operation channel; delivery records whether dispatch occurred.
+	ID                   string
+	Target               Ref
+	State                string // skipped | satisfied | dispatched | failed | unknown
+	Delivery             Delivery
+	AcceptedInputEvents  *int
+	RequestedInputEvents *int
+	Verification         Verification
+	// Pointer is the resolved desktop location of a successfully delivered
+	// pointer step. It is evidence for an Agent cursor overlay, not an input
+	// instruction or proof that a business action succeeded.
+	Pointer                    *Point
 	Evidence                   []Predicate
 	Fault                      *Fault
 	StartRevision, EndRevision Revision

@@ -1,0 +1,63 @@
+name: package formal plugin candidate
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Exact reviewed 40-character source SHA
+        required: true
+        type: string
+      version:
+        description: Formal version (vX.Y.Z), package candidate only
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.revision }}
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+      - name: Verify exact clean source
+        shell: bash
+        env:
+          ACCEPTED_REVISION: ${{ inputs.revision }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$ACCEPTED_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$(git rev-parse HEAD)" == "$ACCEPTED_REVISION" ]]
+          [[ -z "$(git status --porcelain)" ]]
+      - name: macOS arm64 package
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: ./scripts/package-plugin.sh "$VERSION"
+      - name: Windows amd64 package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+        run: ./scripts/package-plugin.ps1 -Version $env:VERSION
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-candidate-${{ runner.os }}-${{ inputs.version }}-${{ inputs.revision }}
+          if-no-files-found: error
+          path: |
+            artifacts/release/${{ inputs.version }}/*.zip
+            artifacts/release/${{ inputs.version }}/*.tar.gz
+            artifacts/release/${{ inputs.version }}/SHA256SUMS

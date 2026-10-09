@@ -6,6 +6,7 @@
 __pycache__/
 
 node_modules/
+/clients/mcp/dist/
 /clients/rust/target/
 /clients/python/dist/
 *.egg-info/

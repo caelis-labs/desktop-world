@@ -70,7 +70,7 @@ Go client 启动 helper 时指定 `--full-output`，保留类型化 Fact、精�
 
 观察优先使用 scope + fields + budget；需要分页就保留同一 observation/cursor。不要每个动作都输出全树。时间与 Fact 的原始格式仍能从 host 保留结果读取。
 
-`clients/javascript/desktop.mjs` 提供 `createSession(transport)`、局部计算、多次 await、选择性 print 和失败时停止后续调用。**现成 Node CLI 使用固定的启动授权，不支持启动 managed FD 3/4 模式**。Bot 需要由自己的可信 transport 桥接到 `Client.Call`，固定回合、生成稳定请求 ID，并由 Go host 独占授权通道；这段 Bot/JS 桥尚未提供。使用现有 Node CLI 验证调用链见 [scripting.md](scripting.md)。Node vm 不是代码安全沙箱，生产宿主还需独立进程 watchdog。
+`clients/javascript/desktop.mjs` 提供 `createSession(transport)`、局部计算、多次 await、选择性 print 和失败时停止后续调用。当前 JS managed 路径已使用 `dtw session`；正式 Plugin 候选在其上提供标准 Skill + MCP、独立 worker 与 supervisor watchdog，见 [通用宿主契约](agent-plugin-host-contract.md)。Bot 等宿主应消费同一固定 release payload，不再维护独立 JS transport 桥。真实 Bot turn、权限和数据目录生命周期仍由 Bot 自己承担。Node vm 不是任意本机 JS 安全沙箱。
 
 ## 底层控制协议
 
@@ -86,7 +86,7 @@ Go client 启动 helper 时指定 `--full-output`，保留类型化 Fact、精�
 
 ## 发行边界
 
-公开 alpha 为 macOS arm64 预编译包，API 目标 macOS 14+，实际桌面仅在 macOS 27 arm64 验证。ad-hoc 签名，未经 Developer ID 签名、公证或 Gatekeeper 分发验收；实际 Bot 应用打包时还需自己的签名、公证和 TCC 流程。Windows 当前源码支持 managed host client，但 Windows 真机操作不在公开包或本轮已通过验收的范围。
+目前公开 v0.1.0-rc.3 已有 macOS arm64 与 Windows amd64 同提交预编译包。该版本的 macOS GUI 仅局部复测，Windows rc.3 未做本轮原生 GUI 复测；较早 rc.2 结果不能代替。macOS rc.3 为 ad-hoc 签名、未公证，Windows 未签名。正式 Plugin 候选也需各自归档的原生 GUI 和签名/分发证据，不能以源码构建或另一平台交叉编译代替。
 
 固定公开 tag 与模块版本，校验 SHA256SUMS 和 `manifest.json` 的 revision。打包脚本 `scripts/package-prerelease.sh` 拒绝脏工作区，打包干净 HEAD，包含同 revision 的 Go 源码。见 [HANDOFF](../HANDOFF.md) 和 [NOTICE](../NOTICE)。
 
