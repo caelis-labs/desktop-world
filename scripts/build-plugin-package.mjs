@@ -26,6 +26,10 @@ await copy(join(repo, 'clients/mcp/dist/mcp'), 'mcp');
 await copy(join(repo, 'clients/mcp/dist/clients'), 'clients');
 await copy(join(repo, 'packaging/plugin/skills'), 'skills');
 await copy(join(repo, 'docs/scripting.md'), 'skills/desktop-world/references/scripting.md');
+for (const path of ['skills/desktop-world/SKILL.md', 'skills/desktop-world/references/scripting.md']) {
+  const file = join(out, path);
+  await writeFile(file, (await readFile(file, 'utf8')).replaceAll('\r\n', '\n'));
+}
 await copy(join(repo, 'packaging/plugin/README.md'), 'README.md');
 await copy(join(repo, 'docs/scripting.md'), 'docs/scripting.md');
 for (const name of ['LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md']) await copy(join(repo, name), name);
