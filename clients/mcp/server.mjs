@@ -156,13 +156,19 @@ class Supervisor {
     return images;
   }
 
+  nativeReceipts(record) {
+    return Object.fromEntries(record.nativeIds
+      .filter(id => ['act', 'get', 'cancel'].includes(record.nativeOps[id]) || record.receipts[id]?.error)
+      .map(id => [id, record.receipts[id] ?? { pending: true, outcome: 'unknown' }]));
+  }
+
   async finish(record, result) {
     if (record.done) return;
     clearTimeout(record.timer);
+    record.abortSignal?.removeEventListener('abort', record.abortHandler);
     record.done = true;
     record.state = result.error ? 'failed' : 'completed';
-    const receipts = Object.fromEntries(record.nativeIds.filter(id => ['act', 'get', 'cancel'].includes(record.nativeOps[id]) || record.receipts[id]?.error).map(id => [id, record.receipts[id]]));
-    const value = { execution_id: record.id, state: record.state, ...result, native_request_ids: record.nativeIds, captures: record.captures.map(c => c.Capture ?? c.capture), native_receipts: receipts };
+    const value = { execution_id: record.id, state: record.state, ...result, native_request_ids: record.nativeIds, captures: record.captures.map(c => c.Capture ?? c.capture), native_receipts: this.nativeReceipts(record) };
     let images = [];
     try { images = await this.imagesFor(record); }
     catch (e) { value.error ??= error(e.code ?? 'image_failed', String(e.message).slice(0, 1000)); value.state = record.state = 'failed'; }
@@ -207,8 +213,15 @@ class Supervisor {
     this.records.set(id, record);
     this.active = record;
     record.timer = setTimeout(() => this.fence('script_timeout', 'Script deadline reached; native input stopped and original receipts retained.'), SCRIPT_TIMEOUT_MS);
-    if (signal?.aborted) this.fence('cancelled', 'MCP request cancelled; native input stopped.');
-    else signal?.addEventListener('abort', () => this.fence('cancelled', 'MCP request cancelled; native input stopped.'), { once: true });
+    if (signal) {
+      record.abortSignal = signal;
+      record.abortHandler = () => { void this.fence('cancelled', 'MCP request cancelled; native input stopped.'); };
+      signal.addEventListener('abort', record.abortHandler, { once: true });
+      if (signal.aborted) {
+        record.abortHandler();
+        return record.promise;
+      }
+    }
     this.worker.send({ type: 'exec', id, code });
     return record.promise;
   }
@@ -221,7 +234,8 @@ class Supervisor {
       try { grants = await bounded(this.native.owner('grants', {}, `mcp-grants-${randomUUID()}`), 1000, 'grant status'); }
       catch (e) { grants = { unavailable: String(e.message).slice(0, 200) }; }
     }
-    return toolResult({ version: '0.1.0', protocol: this.protocol, epoch: this.epoch, platform: `${process.platform}/${process.arch}`, native_ready: Boolean(this.native && !this.native.closed), worker_ready: Boolean(this.worker && this.workerReady), cursor_overlay: this.overlayReady ? 'ready' : 'unavailable', fenced: this.fenced, state_lost: this.stateLost, cleanup: this.cleanup, input_mode: this.inputMode, input_policy: this.inputPolicy, physical_pointer_input: this.inputPolicy === 'no_shared_input' ? 'blocked' : 'may_move_real_cursor', owner_file: this.native ? this.ownerFile : undefined, grants, startup_error: this.startError, execution: record ? { execution_id: record.id, state: record.state, native_request_ids: record.nativeIds, result: record.done ? record.result?.structuredContent : undefined } : undefined, ...(id && !record ? { error: error('execution_not_found', 'No execution with this ID in this connection.') } : {}) });
+    const result = record?.result?.structuredContent;
+    return toolResult({ version: '0.1.0', protocol: this.protocol, epoch: this.epoch, platform: `${process.platform}/${process.arch}`, native_ready: Boolean(this.native && !this.native.closed), worker_ready: Boolean(this.worker && this.workerReady), cursor_overlay: this.overlayReady ? 'ready' : 'unavailable', fenced: this.fenced, state_lost: this.stateLost, cleanup: this.cleanup, input_mode: this.inputMode, input_policy: this.inputPolicy, physical_pointer_input: this.inputPolicy === 'no_shared_input' ? 'blocked' : 'may_move_real_cursor', owner_file: this.native ? this.ownerFile : undefined, grants, startup_error: this.startError, execution: record ? { execution_id: record.id, state: record.state, native_request_ids: record.nativeIds, result: result ? { ...result, native_receipts: this.nativeReceipts(record) } : undefined } : undefined, ...(id && !record ? { error: error('execution_not_found', 'No execution with this ID in this connection.') } : {}) });
   }
 
   async close() {
@@ -237,6 +251,8 @@ class Supervisor {
     return this.closing;
   }
 }
+
+export { Supervisor };
 
 export async function main(argv = process.argv.slice(2)) {
   const supervisor = new Supervisor(options(argv));
