@@ -21,11 +21,11 @@ const cursorWidth, cursorHeight = 18, 22
 
 type cursorVertex struct{ x, y float64 }
 
-// The Windows bitmap uses top-left coordinates; the shape mirrors the macOS
-// view and its tip is anchored to the delivered desktop point.
-var cursorArrow = [...]cursorVertex{
-	{2, 2}, {2, 20}, {6.8, 15}, {9.5, 20.2},
-	{12.4, 18.9}, {9.3, 13.3}, {15.6, 13.1},
+// The Windows bitmap uses top-left coordinates. The paper plane's nose is
+// anchored to the delivered desktop point, matching the macOS view.
+var cursorPlane = [...]cursorVertex{
+	{2, 2}, {15.5, 8.2}, {15.9, 10.5}, {10.4, 11},
+	{11.7, 17.1}, {9.1, 18.6}, {2.8, 10.7},
 }
 
 type cursorBitmapInfo struct {
@@ -84,34 +84,33 @@ func cursorPaint(pixels []byte) {
 				for sx := 0; sx < samples; sx++ {
 					px := float64(x) + (float64(sx)+0.5)/samples
 					py := float64(y) + (float64(sy)+0.5)/samples
-					// The real cursor is composited above layered windows. This
-					// small tint remains visible around a coincident real pointer.
-					haloAlpha := 0.0
-					dx, dy := (px-9)/8.5, (py-11)/9.5
-					if dx*dx+dy*dy <= 1 {
-						haloAlpha = 0.52
+					if !cursorContains(px, py) {
+						continue
 					}
-					// Soft pink, lavender and mint follow the arrow diagonal.
+					// Cyan, violet and soft pink color the plane itself; there
+					// is no background disk or halo around the pointer.
 					t := math.Max(0, math.Min(1, (px+py*0.45-3)/20))
 					var r, g, b float64
-					if t < 0.54 {
-						u := t / 0.54
-						r, g, b = 0.98-0.20*u, 0.76+0.01*u, 0.85+0.14*u
+					if t < 0.52 {
+						u := t / 0.52
+						r, g, b = 0.28+0.30*u, 0.83-0.35*u, 1-0.02*u
 					} else {
-						u := (t - 0.54) / 0.46
-						r, g, b = 0.78-0.10*u, 0.77+0.14*u, 0.99-0.11*u
+						u := (t - 0.52) / 0.48
+						r, g, b = 0.58+0.40*u, 0.48+0.23*u, 0.98-0.12*u
 					}
-					fillR, fillG, fillB, fillAlpha := r, g, b, 0.0
-					if cursorContains(px, py) {
-						fillAlpha = 0.96
-						if cursorEdgeDistance(px, py) <= 0.62 {
-							fillR, fillG, fillB, fillAlpha = 0.15, 0.20, 0.29, 0.62
-						}
+					foldDistance := math.Min(
+						cursorSegmentDistance(px, py, cursorVertex{4.7, 5.2}, cursorVertex{9.4, 10.7}),
+						cursorSegmentDistance(px, py, cursorVertex{9.4, 10.7}, cursorVertex{10.1, 16.2}),
+					)
+					if cursorEdgeDistance(px, py) <= 0.38 {
+						r, g, b = r*0.25+0.75, g*0.25+0.75, b*0.25+0.75
+					} else if foldDistance <= 0.50 {
+						r, g, b = r*0.13+0.87, g*0.13+0.87, b*0.13+0.87
 					}
-					red += fillR*fillAlpha + r*haloAlpha*(1-fillAlpha)
-					green += fillG*fillAlpha + g*haloAlpha*(1-fillAlpha)
-					blue += fillB*fillAlpha + b*haloAlpha*(1-fillAlpha)
-					alpha += fillAlpha + haloAlpha*(1-fillAlpha)
+					red += r * 0.97
+					green += g * 0.97
+					blue += b * 0.97
+					alpha += 0.97
 				}
 			}
 			i := (y*cursorWidth + x) * 4
@@ -125,8 +124,8 @@ func cursorPaint(pixels []byte) {
 
 func cursorContains(x, y float64) bool {
 	inside := false
-	for i, current := range cursorArrow {
-		previous := cursorArrow[(i+len(cursorArrow)-1)%len(cursorArrow)]
+	for i, current := range cursorPlane {
+		previous := cursorPlane[(i+len(cursorPlane)-1)%len(cursorPlane)]
 		if (current.y > y) != (previous.y > y) &&
 			x < (previous.x-current.x)*(y-current.y)/(previous.y-current.y)+current.x {
 			inside = !inside
@@ -137,13 +136,17 @@ func cursorContains(x, y float64) bool {
 
 func cursorEdgeDistance(x, y float64) float64 {
 	closest := math.MaxFloat64
-	for i, start := range cursorArrow {
-		end := cursorArrow[(i+1)%len(cursorArrow)]
-		dx, dy := end.x-start.x, end.y-start.y
-		t := math.Max(0, math.Min(1, ((x-start.x)*dx+(y-start.y)*dy)/(dx*dx+dy*dy)))
-		closest = math.Min(closest, math.Hypot(x-start.x-t*dx, y-start.y-t*dy))
+	for i, start := range cursorPlane {
+		end := cursorPlane[(i+1)%len(cursorPlane)]
+		closest = math.Min(closest, cursorSegmentDistance(x, y, start, end))
 	}
 	return closest
+}
+
+func cursorSegmentDistance(x, y float64, start, end cursorVertex) float64 {
+	dx, dy := end.x-start.x, end.y-start.y
+	t := math.Max(0, math.Min(1, ((x-start.x)*dx+(y-start.y)*dy)/(dx*dx+dy*dy)))
+	return math.Hypot(x-start.x-t*dx, y-start.y-t*dy)
 }
 
 func cursorOverlayShow(x, y float64) error {

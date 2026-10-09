@@ -10,32 +10,37 @@
 - (void)drawRect:(NSRect)dirty {
   (void)dirty;
   [[NSColor clearColor] set]; NSRectFill(self.bounds);
-  // The system cursor is composited above normal windows, including this
-  // panel. A small translucent tint stays visible around a coincident pointer.
-  NSBezierPath *halo = [NSBezierPath bezierPathWithOvalInRect:NSMakeRect(.5, 1.5, 17, 19)];
-  NSGradient *haloTint = [[NSGradient alloc] initWithColorsAndLocations:
-    [NSColor colorWithSRGBRed:1 green:.74 blue:.84 alpha:.52], 0.0,
-    [NSColor colorWithSRGBRed:.81 green:.75 blue:1 alpha:.52], .55,
-    [NSColor colorWithSRGBRed:.70 green:.93 blue:.86 alpha:.50], 1.0, nil];
-  [haloTint drawInBezierPath:halo angle:-35];
-  NSBezierPath *outline = [NSBezierPath bezierPath];
-  [outline moveToPoint:NSMakePoint(2, 20)];
-  [outline lineToPoint:NSMakePoint(2, 2)];
-  [outline lineToPoint:NSMakePoint(6.8, 7)];
-  [outline lineToPoint:NSMakePoint(9.5, 1.8)];
-  [outline lineToPoint:NSMakePoint(12.4, 3.1)];
-  [outline lineToPoint:NSMakePoint(9.3, 8.7)];
-  [outline lineToPoint:NSMakePoint(15.6, 8.9)];
-  [outline closePath];
+  // A compact paper plane with its nose anchored to the delivered point.
+  // It has no halo or background disk that could cover the target.
+  NSBezierPath *plane = [NSBezierPath bezierPath];
+  [plane moveToPoint:NSMakePoint(2, 20)];
+  [plane lineToPoint:NSMakePoint(15.5, 13.8)];
+  [plane curveToPoint:NSMakePoint(15.9, 11.5)
+          controlPoint1:NSMakePoint(16.5, 13.3) controlPoint2:NSMakePoint(16.5, 12.2)];
+  [plane lineToPoint:NSMakePoint(10.4, 11)];
+  [plane lineToPoint:NSMakePoint(11.7, 4.9)];
+  [plane curveToPoint:NSMakePoint(9.1, 3.4)
+          controlPoint1:NSMakePoint(12, 3.5) controlPoint2:NSMakePoint(10.3, 2.8)];
+  [plane lineToPoint:NSMakePoint(2.8, 11.3)];
+  [plane closePath];
   NSGradient *tint = [[NSGradient alloc] initWithColorsAndLocations:
-    [NSColor colorWithSRGBRed:.98 green:.76 blue:.85 alpha:.96], 0.0,
-    [NSColor colorWithSRGBRed:.78 green:.77 blue:.99 alpha:.96], .54,
-    [NSColor colorWithSRGBRed:.68 green:.91 blue:.88 alpha:.96], 1.0, nil];
-  [tint drawInBezierPath:outline angle:-35];
-  [[NSColor colorWithSRGBRed:.15 green:.20 blue:.29 alpha:.62] setStroke];
-  outline.lineWidth = 1.0;
-  outline.lineJoinStyle = NSLineJoinStyleRound;
-  [outline stroke];
+    [NSColor colorWithSRGBRed:.28 green:.83 blue:1 alpha:.97], 0.0,
+    [NSColor colorWithSRGBRed:.58 green:.48 blue:.98 alpha:.97], .52,
+    [NSColor colorWithSRGBRed:.98 green:.71 blue:.86 alpha:.97], 1.0, nil];
+  [tint drawInBezierPath:plane angle:-42];
+  [[NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:.75] setStroke];
+  plane.lineWidth = .65;
+  plane.lineJoinStyle = NSLineJoinStyleRound;
+  [plane stroke];
+  NSBezierPath *fold = [NSBezierPath bezierPath];
+  [fold moveToPoint:NSMakePoint(4.7, 16.8)];
+  [fold lineToPoint:NSMakePoint(9.4, 11.3)];
+  [fold lineToPoint:NSMakePoint(10.1, 5.8)];
+  fold.lineWidth = 1.0;
+  fold.lineCapStyle = NSLineCapStyleRound;
+  fold.lineJoinStyle = NSLineJoinStyleRound;
+  [[NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:.87] setStroke];
+  [fold stroke];
 }
 @end
 

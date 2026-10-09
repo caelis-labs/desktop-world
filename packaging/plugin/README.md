@@ -63,8 +63,9 @@ The cursor overlay is a separate click-through, nonactivating native process.
 It draws only a point from a successfully delivered native pointer action; it
 does not post mouse events. It does not replace system input: if an authorized
 host enables shared pointer actions, the native backend also moves the real
-mouse cursor. The overlay stays above normal windows but below the OS cursor;
-its subtle pastel halo remains visible when both arrows occupy the same point.
+mouse cursor. The overlay stays above normal windows but below the OS cursor.
+It draws a small cyan, violet and pink paper plane with no surrounding circle;
+the OS cursor may partly cover it when both occupy the same point.
 It hides after five seconds without a delivered pointer action
 and exits on MCP cleanup. A `window_content`
 capture is target local, while `visible_region` tiles carry separate desktop

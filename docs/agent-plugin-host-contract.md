@@ -18,6 +18,6 @@ Desktop World 正式 Plugin 包是通用本机发行 payload。每个平台同�
 
 取消、60 秒超时和 stdio 断开先阻断新 native 请求，同时终止 worker 并调用可信 owner `end_turn`；本地审计记录清理结果。MCP 取消通知本身无确认响应，同一连接仍活着时用 `desktop_status` 查询。断开的 stdio 不可再调用 status。`close_incomplete` 不能证明原生输入清理成功。通用 MCP 缺少可信用户 turn 身份，因此原生 grant 作用于此连接及显式撤权；需真实 turn 级权限的宿主必须在自己的生命周期层管理，不应向模型开放 owner 通道。
 
-虚拟 cursor overlay 是独立原生进程。只有已完成投递且具有解析后 desktop point 的指针回执会更新它；最后一次投递后五秒自动隐藏，取消/断开时退出。绘制进程本身不发送事件、不改变真实鼠标、不抢焦点或接收点击；共享指针输入的原生后端仍会移动真实鼠标。overlay 在普通窗口上方、系统鼠标箭头下方；两者重合时，系统箭头可能遮住虚拟箭头，浅色半透明底色提供可见的 Agent 位置提示。`visible_region` 的每张图像有独立 `image_to_desktop`，`window_content` 是目标窗口本地坐标，不能以任一图像的像素直接授权点击。
+虚拟 cursor overlay 是独立原生进程。只有已完成投递且具有解析后 desktop point 的指针回执会更新它；最后一次投递后五秒自动隐藏，取消/断开时退出。绘制进程本身不发送事件、不改变真实鼠标、不抢焦点或接收点击；共享指针输入的原生后端仍会移动真实鼠标。overlay 在普通窗口上方、系统鼠标箭头下方；两者重合时，系统箭头可能部分遮住纸飞机标记；纸飞机本身使用青蓝、淡紫和浅粉渐变，不绘制外围圆圈。`visible_region` 的每张图像有独立 `image_to_desktop`，`window_content` 是目标窗口本地坐标，不能以任一图像的像素直接授权点击。
 
 Bot 迁移应等待同 SHA 双平台 Full/Lite 包、macOS 原生验收与 Windows 原生验收；安装/更新应固定 release 版本与哈希，保留 Bot 自有权限、真实 turn、进程与数据目录生命周期。Bot 可在实际确认宿主提供兼容 Node 24.x 后消费 Lite，否则使用 Full；不得假设当前已安装 Bot 自带 Node。此仓库不含 Bot 产品配置或专用 bridge。迁移跟踪见 [caelis-bot#129](https://github.com/caelis-labs/caelis-bot/issues/129)。
