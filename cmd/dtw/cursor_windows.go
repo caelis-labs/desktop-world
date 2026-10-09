@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"syscall"
 	"unsafe"
 )
@@ -16,7 +17,16 @@ var cursorBitmap uintptr
 var cursorOldBitmap uintptr
 var cursorBits unsafe.Pointer
 
-const cursorWidth, cursorHeight = 24, 30
+const cursorWidth, cursorHeight = 18, 22
+
+type cursorVertex struct{ x, y float64 }
+
+// The Windows bitmap uses top-left coordinates; the shape mirrors the macOS
+// view and its tip is anchored to the delivered desktop point.
+var cursorArrow = [...]cursorVertex{
+	{2, 2}, {2, 20}, {6.8, 15}, {9.5, 20.2},
+	{12.4, 18.9}, {9.3, 13.3}, {15.6, 13.1},
+}
 
 type cursorBitmapInfo struct {
 	Size                   uint32
@@ -59,32 +69,84 @@ func cursorOverlayInit() error {
 		return fmt.Errorf("cannot create cursor bitmap")
 	}
 	cursorOldBitmap = cursorCall(cursorGdi32, "SelectObject", cursorDC, cursorBitmap)
-	pixels := unsafe.Slice((*byte)(cursorBits), cursorWidth*cursorHeight*4)
+	cursorPaint(unsafe.Slice((*byte)(cursorBits), cursorWidth*cursorHeight*4))
+	return nil
+}
+
+func cursorPaint(pixels []byte) {
+	// Supersampling gives the narrow outline and diagonal edges smooth alpha
+	// without GDI drawing state or a background that could obscure the target.
+	const samples = 4
 	for y := 0; y < cursorHeight; y++ {
 		for x := 0; x < cursorWidth; x++ {
-			// Compact arrow with a white edge and blue interior. Coordinates are
-			// confined to this translucent window and never represent input.
-			inside := (y >= 2 && y <= 24 && x >= 3 && x <= 3+(y-2)*2/3) || (y >= 17 && y <= 27 && x >= 8 && x <= 12)
-			if !inside {
-				continue
+			var red, green, blue, alpha float64
+			for sy := 0; sy < samples; sy++ {
+				for sx := 0; sx < samples; sx++ {
+					px := float64(x) + (float64(sx)+0.5)/samples
+					py := float64(y) + (float64(sy)+0.5)/samples
+					if !cursorContains(px, py) {
+						continue
+					}
+					if cursorEdgeDistance(px, py) <= 0.72 {
+						red += 0.15 * 0.88
+						green += 0.20 * 0.88
+						blue += 0.29 * 0.88
+						alpha += 0.88
+						continue
+					}
+					// Soft pink, lavender and mint follow the arrow diagonal.
+					t := math.Max(0, math.Min(1, (px+py*0.45-3)/20))
+					var r, g, b float64
+					if t < 0.54 {
+						u := t / 0.54
+						r, g, b = 0.98-0.20*u, 0.76+0.01*u, 0.85+0.14*u
+					} else {
+						u := (t - 0.54) / 0.46
+						r, g, b = 0.78-0.10*u, 0.77+0.14*u, 0.99-0.11*u
+					}
+					red += r * 0.96
+					green += g * 0.96
+					blue += b * 0.96
+					alpha += 0.96
+				}
 			}
-			edge := x == 3 || x == 3+(y-2)*2/3 || y == 2 || y == 24 || x == 8 || x == 12 || y == 27
 			i := (y*cursorWidth + x) * 4
-			if edge {
-				pixels[i], pixels[i+1], pixels[i+2], pixels[i+3] = 255, 255, 255, 255
-			} else {
-				pixels[i], pixels[i+1], pixels[i+2], pixels[i+3] = 211, 112, 24, 245
-			}
+			pixels[i] = byte(math.Round(blue * 255 / (samples * samples)))
+			pixels[i+1] = byte(math.Round(green * 255 / (samples * samples)))
+			pixels[i+2] = byte(math.Round(red * 255 / (samples * samples)))
+			pixels[i+3] = byte(math.Round(alpha * 255 / (samples * samples)))
 		}
 	}
-	return nil
+}
+
+func cursorContains(x, y float64) bool {
+	inside := false
+	for i, current := range cursorArrow {
+		previous := cursorArrow[(i+len(cursorArrow)-1)%len(cursorArrow)]
+		if (current.y > y) != (previous.y > y) &&
+			x < (previous.x-current.x)*(y-current.y)/(previous.y-current.y)+current.x {
+			inside = !inside
+		}
+	}
+	return inside
+}
+
+func cursorEdgeDistance(x, y float64) float64 {
+	closest := math.MaxFloat64
+	for i, start := range cursorArrow {
+		end := cursorArrow[(i+1)%len(cursorArrow)]
+		dx, dy := end.x-start.x, end.y-start.y
+		t := math.Max(0, math.Min(1, ((x-start.x)*dx+(y-start.y)*dy)/(dx*dx+dy*dy)))
+		closest = math.Min(closest, math.Hypot(x-start.x-t*dx, y-start.y-t*dy))
+	}
+	return closest
 }
 
 func cursorOverlayShow(x, y float64) error {
 	if cursorWindow == 0 || cursorDC == 0 {
 		return fmt.Errorf("cursor overlay closed")
 	}
-	position := cursorPoint{int32(x) - 3, int32(y) - 2}
+	position := cursorPoint{int32(x) - 2, int32(y) - 2}
 	size := cursorSize{cursorWidth, cursorHeight}
 	source := cursorPoint{}
 	blend := cursorBlend{Alpha: 255, Format: 1}

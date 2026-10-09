@@ -11,18 +11,22 @@
   (void)dirty;
   [[NSColor clearColor] set]; NSRectFill(self.bounds);
   NSBezierPath *outline = [NSBezierPath bezierPath];
-  [outline moveToPoint:NSMakePoint(3, 26)];
-  [outline lineToPoint:NSMakePoint(3, 3)];
-  [outline lineToPoint:NSMakePoint(8, 8)];
-  [outline lineToPoint:NSMakePoint(12, 1)];
-  [outline lineToPoint:NSMakePoint(16, 3)];
-  [outline lineToPoint:NSMakePoint(12, 10)];
-  [outline lineToPoint:NSMakePoint(19, 10)];
+  [outline moveToPoint:NSMakePoint(2, 20)];
+  [outline lineToPoint:NSMakePoint(2, 2)];
+  [outline lineToPoint:NSMakePoint(6.8, 7)];
+  [outline lineToPoint:NSMakePoint(9.5, 1.8)];
+  [outline lineToPoint:NSMakePoint(12.4, 3.1)];
+  [outline lineToPoint:NSMakePoint(9.3, 8.7)];
+  [outline lineToPoint:NSMakePoint(15.6, 8.9)];
   [outline closePath];
-  [[NSColor colorWithSRGBRed:.10 green:.47 blue:.86 alpha:.94] setFill];
-  [outline fill];
-  [[NSColor whiteColor] setStroke];
-  outline.lineWidth = 2.0;
+  NSGradient *tint = [[NSGradient alloc] initWithColorsAndLocations:
+    [NSColor colorWithSRGBRed:.98 green:.76 blue:.85 alpha:.96], 0.0,
+    [NSColor colorWithSRGBRed:.78 green:.77 blue:.99 alpha:.96], .54,
+    [NSColor colorWithSRGBRed:.68 green:.91 blue:.88 alpha:.96], 1.0, nil];
+  [tint drawInBezierPath:outline angle:-35];
+  [[NSColor colorWithSRGBRed:.15 green:.20 blue:.29 alpha:.88] setStroke];
+  outline.lineWidth = 1.15;
+  outline.lineJoinStyle = NSLineJoinStyleRound;
   [outline stroke];
 }
 @end
@@ -33,7 +37,7 @@ int dw_cursor_init(void) {
   @autoreleasepool {
     [NSApplication sharedApplication];
     [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
-    cursorWindow = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 24, 30)
+    cursorWindow = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 18, 22)
       styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
       backing:NSBackingStoreBuffered defer:NO];
     if (!cursorWindow) return 0;
@@ -43,7 +47,7 @@ int dw_cursor_init(void) {
     cursorWindow.ignoresMouseEvents = YES;
     cursorWindow.level = NSFloatingWindowLevel + 1;
     cursorWindow.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorFullScreenAuxiliary;
-    cursorWindow.contentView = [[DWCursorView alloc] initWithFrame:NSMakeRect(0, 0, 24, 30)];
+    cursorWindow.contentView = [[DWCursorView alloc] initWithFrame:NSMakeRect(0, 0, 18, 22)];
     return 1;
   }
 }
@@ -61,8 +65,8 @@ int dw_cursor_show(double x, double y) {
       // have a different origin and scale on secondary displays.
       CGFloat localX = (x - CGRectGetMinX(cg)) * screen.frame.size.width / cg.size.width;
       CGFloat localY = (y - CGRectGetMinY(cg)) * screen.frame.size.height / cg.size.height;
-      NSPoint origin = NSMakePoint(NSMinX(screen.frame) + localX - 3,
-                                   NSMaxY(screen.frame) - localY - 26);
+      NSPoint origin = NSMakePoint(NSMinX(screen.frame) + localX - 2,
+                                   NSMaxY(screen.frame) - localY - 20);
       [cursorWindow setFrameOrigin:origin];
       [cursorWindow orderFrontRegardless];
       return 1;
