@@ -94,8 +94,10 @@ the POC's progressive presentation helper: it keeps a per-Session, bounded
 Ref/field cache and returns only new or changed fields. Repeating an unchanged
 target returns `items:[]`; asking for `capabilities` later adds just that field.
 Use `refresh:true` when the model explicitly needs an unchanged fact again.
-The model-facing `id` is a short display alias, such as `W2/R1`, scoped to a
-window. `dtw.index(windowObservation)` can register window bounds without
+The POC's `id` is an experimental short display alias, such as `W2/R1`, scoped to a
+window. Do not infer capability or durable identity from its role letter;
+check the current role, name, capability and coverage. The final addressing
+scheme has not been selected. `dtw.index(windowObservation)` can register window bounds without
 printing them. Use `dtw.observe({scope:{ids:[id]},match:{within_id:id}})`,
 `dtw.read({target_id:id})`,
 `dtw.capture({kind:'window_content',target_id:windowId})`, and
