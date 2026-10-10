@@ -10,6 +10,12 @@
     "skill_read": "model command_execution read exact POC SKILL.md; then one MCP exec printed skill-loaded and model reported four exact limits",
     "skill_trace_sha256": "6c702d08166cbcbe4a30833b9ab53f556f8a0e5036838591fd6a59d4ae2b64a2",
     "two_call_js_state_trace_sha256": "0bbec88d5d9e17945f9b4a36c7dffe7721c62100f16d52a89cbd7d7c97f3ced8",
+    "actual_adapter_payloads": [
+      {"trace": "skill-limits", "operation": "exec", "content_text_chars": 48, "content_json_bytes": 76, "structured_json_bytes": 85, "printed_fact_repeated_in_text_and_structured": true},
+      {"trace": "full-task-first", "operation": "exec", "content_text_chars": 448, "content_json_bytes": 515, "structured_json_bytes": 617, "printed_fact_repeated_in_text_and_structured": true},
+      {"trace": "full-task-retry", "operation": "exec", "content_text_chars": 197, "content_json_bytes": 227, "structured_json_bytes": 350},
+      {"trace": "full-task-retry", "operation": "result", "content_text_chars": 197, "content_json_bytes": 227, "structured_json_bytes": 16561}
+    ],
     "model_full_task_attempts": [
       {
         "trace_sha256": "3b58cb6a97861869941dcdc064c589ef3327f5615d1f30eb6f688b1b1a3faa2e",
