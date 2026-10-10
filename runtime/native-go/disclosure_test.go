@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,16 +35,16 @@ func TestDiscloseOnlyChangedFieldsPerSession(t *testing.T) {
 		if err != nil || res.IsError {
 			t.Fatalf("disclosure call %s: %v, %+v", id, err, res)
 		}
-		out := res.StructuredContent.(map[string]any)
-		if out["state"] != "completed" {
-			t.Fatalf("disclosure script %s: %+v", id, out)
+		if res.StructuredContent != nil || len(res.Content) != 1 {
+			t.Fatalf("disclosure script %s duplicated or missing text: %+v", id, res)
 		}
-		lines := out["print"].([]any)
-		if len(lines) != 1 {
-			t.Fatalf("disclosure script %s printed %d lines", id, len(lines))
+		line := res.Content[0].(*mcp.TextContent).Text
+		body, ok := strings.CutPrefix(line, id+" · ")
+		if !ok {
+			t.Fatalf("disclosure script %s unlinked text: %q", id, line)
 		}
 		var facts map[string]any
-		if err := json.Unmarshal([]byte(lines[0].(string)), &facts); err != nil {
+		if err := json.Unmarshal([]byte(body), &facts); err != nil {
 			t.Fatal(err)
 		}
 		return facts

@@ -224,6 +224,9 @@ func (a *actor) query(ctx context.Context, r dw.ObserveRequest, resume string, n
 	w := a.w
 	cov := dw.Coverage{Scope: r.Scope, Fields: r.Fields, MaxDepth: r.Budget.MaxDepth, SampleStart: time.Now().UTC()}
 	q := backend.Query{Fields: readFields(r), Desktop: r.Scope.Desktop, Depth: r.Budget.MaxDepth, MaxNodes: r.Budget.MaxVisitedNodes, Summary: r.Projection == dw.ProjectionSummary, CaptureWindows: r.Projection == dw.ProjectionCaptureWindows, Detail: r.Projection == dw.ProjectionDetail, Resume: resume, NoContinuation: noContinuation}
+	if r.Scope.Desktop && r.Match != nil && r.Match.Kind == dw.KindApplication && r.Match.NameEquals != nil {
+		q.AppName = *r.Match.NameEquals
+	}
 	w.mu.Lock()
 	for _, ref := range r.Scope.Refs {
 		rec := w.objects[ref]
@@ -404,7 +407,7 @@ func (a *actor) selectObjectsLocked(all []dw.Object, r dw.ObserveRequest) []dw.O
 		if seen[o.Ref] || !a.objectInQueryLocked(o, r) || !a.inScopeLocked(o.Ref, a.config.ReadScopes) || !match(o, r.Match) {
 			continue
 		}
-		if r.Match != nil && !a.inScopeLocked(o.Ref, []dw.Scope{{Refs: []dw.Ref{r.Match.Within}}}) {
+		if r.Match != nil && r.Match.Within != "" && !a.inScopeLocked(o.Ref, []dw.Scope{{Refs: []dw.Ref{r.Match.Within}}}) {
 			continue
 		}
 		seen[o.Ref] = true

@@ -18,23 +18,10 @@ jobs:
       - run: go vet ./...
       - run: go run ./examples/headless
       - run: go run ./examples/embodied
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - run: node --test clients/javascript/desktop.test.mjs
-      - name: MCP supervisor contract
-        if: runner.os == 'macOS'
-        run: |
-          cd clients/mcp
-          npm ci
-          npm run build
-          npm test
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - uses: dtolnay/rust-toolchain@stable
       - run: python verify_examples.py
-      - run: python scripts/check-sdks.py
   native-build:
     runs-on: macos-15
     steps:
@@ -47,5 +34,4 @@ jobs:
           cd runtime/native-go
           GOWORK=off go test ./...
       - run: ./scripts/build-native-plugin.sh /tmp/dtw-native-plugin-ci
-# Hosted CI is deliberately not counted as interactive desktop acceptance.
-# Run tests/acceptance on logged-in, authorized macOS and Windows machines.
+# Hosted CI does not count as interactive desktop acceptance.

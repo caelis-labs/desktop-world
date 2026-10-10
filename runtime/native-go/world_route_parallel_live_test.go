@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -148,6 +149,17 @@ func TestCoreObjectAutomaticRoutesAcrossTwoOwnedApps(t *testing.T) {
 			t.Fatalf("%s background not confirmed: %v %s", targets[i].label, got.err, got.text)
 		}
 	}
+	beforeInput := [2]int{len(ownedRows(t, targets[0].log)), len(ownedRows(t, targets[1].log))}
+	backgroundInput := parallel("background-input", func(routeTarget) string {
+		return `await state.submit.click();`
+	})
+	for i, got := range backgroundInput {
+		t.Logf("%s background physical input: %s", targets[i].label, got.text)
+		if got.err != nil || !strings.Contains(got.text, ".click: dispatched; effect unverified via background") ||
+			!waitOwnedEvent(t, targets[i].log, beforeInput[i], "submit", targets[i].label+"-中文🙂", 500*time.Millisecond) {
+			t.Fatalf("%s background click not confirmed: %v %s", targets[i].label, got.err, got.text)
+		}
+	}
 	before := [2]int{len(ownedRows(t, targets[0].log)), len(ownedRows(t, targets[1].log))}
 	frontBefore := frontmostPID()
 	px, py, err := pointerLocation()
@@ -200,19 +212,45 @@ func TestCoreObjectAutomaticRoutesAcrossTwoOwnedApps(t *testing.T) {
 	}
 	t.Logf("shared seat restored: front PID matched; pointer displacement %.1f px", math.Hypot(qx-px, qy-py))
 	rows := routeTrace(t, trace)
-	for _, kind := range []string{"background", "foreground"} {
+	for _, kind := range []string{"background", "background-input", "foreground"} {
 		a, b := routeSpan(rows, "route-"+kind+"-a-native-"), routeSpan(rows, "route-"+kind+"-b-native-")
 		if a.acquired == 0 || a.released == 0 || b.acquired == 0 || b.released == 0 || a.app == "" || b.app == "" || a.app == b.app {
 			t.Fatalf("%s distinct trace incomplete: a=%+v b=%+v", kind, a, b)
 		}
 		overlap := a.acquired < b.released && b.acquired < a.released
-		if kind == "background" && (!overlap || a.foreground || b.foreground) {
+		if (kind == "background" || kind == "background-input") && (!overlap || a.foreground || b.foreground) {
 			t.Fatalf("background actions did not overlap: a=%+v b=%+v", a, b)
 		}
-		if kind == "foreground" && (overlap || !a.foreground || !b.foreground) {
-			t.Fatalf("physical foreground actions overlapped: a=%+v b=%+v", a, b)
-		}
 		t.Logf("%s overlap=%t a=%dms b=%dms", kind, overlap, (a.released-a.acquired)/1e6, (b.released-b.acquired)/1e6)
+	}
+	frontLeases := func() (waiting, acquired int, owners map[int]bool) {
+		rows := routeTrace(t, trace)
+		sort.Slice(rows, func(i, j int) bool { return rows[i].Time < rows[j].Time })
+		active := map[int]bool{}
+		owners = map[int]bool{}
+		for _, row := range rows {
+			switch row.Event {
+			case "front_waiting":
+				waiting++
+			case "front_acquired":
+				if len(active) != 0 {
+					t.Fatalf("physical foreground leases overlapped: active=%v new=%d", active, row.PID)
+				}
+				active[row.PID] = true
+				owners[row.PID] = true
+				acquired++
+			case "front_released":
+				if !active[row.PID] {
+					t.Fatalf("unmatched foreground release by %d", row.PID)
+				}
+				delete(active, row.PID)
+			}
+		}
+		return
+	}
+	_, frontAcquired, owners := frontLeases()
+	if frontAcquired != 2 || len(owners) != 2 {
+		t.Fatalf("two distinct native helpers did not acquire foreground serially: acquisitions=%d owners=%v", frontAcquired, owners)
 	}
 	// Cancelling one Session while it waits for the shared foreground must not
 	// post its click or alter the already running peer's drag.
@@ -223,29 +261,34 @@ func TestCoreObjectAutomaticRoutesAcrossTwoOwnedApps(t *testing.T) {
 	go func() {
 		aDone <- call(targets[0], "route-cancel-a", `await state.canvas.dragTo(state.canvas,{from:{u:0.2,v:0.5},to:{u:0.7,v:0.5},durationMs:250});`)
 	}()
-	waitTrace := func(prefix, event string) bool {
-		deadline := time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			for _, row := range routeTrace(t, trace) {
-				if strings.HasPrefix(row.ID, prefix) && row.Event == event {
-					return true
-				}
-			}
-			time.Sleep(10 * time.Millisecond)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		_, count, _ := frontLeases()
+		if count >= frontAcquired+1 {
+			break
 		}
-		return false
+		time.Sleep(10 * time.Millisecond)
 	}
-	if !waitTrace("route-cancel-a-native-", "acquired") {
-		t.Fatal("Session A did not acquire the foreground lock")
+	if _, count, _ := frontLeases(); count != frontAcquired+1 {
+		t.Fatal("Session A did not acquire the native foreground lock")
 	}
 	go func() { bDone <- call(targets[1], "route-cancel-b", `await state.canvas.click();`) }()
-	if !waitTrace("route-cancel-b-native-", "waiting") {
-		t.Fatal("Session B did not wait for foreground")
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		waiting, _, _ := frontLeases()
+		if waiting >= frontAcquired+2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if waiting, _, _ := frontLeases(); waiting < frontAcquired+2 {
+		t.Fatal("Session B did not wait for native foreground lock")
 	}
 	if _, err := targets[1].session.CallTool(ctx, &mcp.CallToolParams{Name: "exec", Arguments: map[string]any{"operation": "cancel", "execution_id": "route-cancel-b"}}); err != nil {
 		t.Fatal(err)
 	}
 	a, b := <-aDone, <-bDone
+	t.Logf("cancel results: A=%+v B=%+v", a, b)
 	dropped := false
 	for _, row := range ownedRows(t, targets[0].log)[beforeA:] {
 		if row["event"] == "drop" {
@@ -261,9 +304,11 @@ func TestCoreObjectAutomaticRoutesAcrossTwoOwnedApps(t *testing.T) {
 	if b.err == nil || !strings.Contains(b.text, "cancel") {
 		t.Fatalf("Session B did not report cancellation: %+v", b)
 	}
-	if waitOwnedEvent(t, targets[1].log, beforeB, "click", "1", 150*time.Millisecond) ||
-		routeSpan(routeTrace(t, trace), "route-cancel-b-native-").acquired != 0 {
-		t.Fatal("cancelled Session B dispatched an input action")
+	if waitOwnedEvent(t, targets[1].log, beforeB, "click", "1", 150*time.Millisecond) {
+		t.Fatalf("cancelled Session B dispatched an input action: rows=%+v", ownedRows(t, targets[1].log)[beforeB:])
+	}
+	if _, count, _ := frontLeases(); count != frontAcquired+1 {
+		t.Fatalf("cancelled Session B acquired foreground: acquisitions=%d want=%d", count, frontAcquired+1)
 	}
 	t.Log("cancelled waiting Session B: no App callback or foreground acquisition; Session A drag completed")
 	// Both Sessions now address App A. The same-app lock must serialize
@@ -312,6 +357,7 @@ type routeTraceRow struct {
 	ID         string `json:"native_id"`
 	App        string `json:"app"`
 	Foreground bool   `json:"foreground"`
+	PID        int    `json:"pid"`
 	Time       int64  `json:"time"`
 }
 

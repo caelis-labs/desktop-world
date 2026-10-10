@@ -56,9 +56,11 @@ func TestSelectedChromeAutomaticInputOnLocalPage(t *testing.T) {
 <script>
 const post=(kind,value)=>fetch('/event',{method:'POST',body:JSON.stringify({kind,value})});
 document.getElementById('button').addEventListener('click',()=>{document.getElementById('status').textContent='clicked';post('click','button')});
+document.getElementById('button').addEventListener('mousemove',()=>post('move','button'));
 document.getElementById('input').addEventListener('input',e=>{document.getElementById('status').textContent='typed';post('input',e.target.value)});
 document.getElementById('input').addEventListener('keydown',e=>{if(e.key==='Enter')post('key','Enter')});
 document.addEventListener('wheel',e=>post('wheel',String(Math.sign(e.deltaY))));
+post('ready','page');
 </script></body></html>`, title)
 		loadOnce.Do(func() { close(loaded) })
 	}))
@@ -73,6 +75,25 @@ document.addEventListener('wheel',e=>post('wheel',String(Math.sign(e.deltaY))));
 	case <-loaded:
 	case <-time.After(12 * time.Second):
 		t.Fatal("isolated Chrome did not load the loopback test page")
+	}
+	readyDeadline := time.Now().Add(5 * time.Second)
+	pageReady := false
+	for time.Now().Before(readyDeadline) {
+		mu.Lock()
+		for _, event := range received {
+			if event == `{"kind":"ready","value":"page"}` {
+				pageReady = true
+				break
+			}
+		}
+		mu.Unlock()
+		if pageReady {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !pageReady {
+		t.Fatal("isolated Chrome page listeners did not signal readiness")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
 	defer cancel()
@@ -145,6 +166,32 @@ print(state.button);print(state.input);`
 	}
 	waitEvent(`{"kind":"click","value":"button"}`)
 	t.Log("independent Chrome callback confirms the test button click")
+	moveEvent := `{"kind":"move","value":"button"}`
+	countMove := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		n := 0
+		for _, event := range received {
+			if event == moveEvent {
+				n++
+			}
+		}
+		return n
+	}
+	beforeMove := countMove()
+	line = call("chrome-local-pointer-move", `await state.button.move({u:0.65,v:0.5});`)
+	if !strings.Contains(line, ".move:") {
+		t.Fatalf("pointer move result cannot be tied to script target: %s", line)
+	}
+	assertOriginalRoute("chrome-local-pointer-move", "targeted_background")
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	for time.Now().Before(deadline) && countMove() <= beforeMove {
+		time.Sleep(30 * time.Millisecond)
+	}
+	if got := countMove(); got != beforeMove+1 {
+		t.Fatalf("background pointer move callback count changed %d -> %d; want exactly one new event", beforeMove, got)
+	}
+	t.Log("independent Chrome callback confirms background pointer move")
 	line = call("chrome-local-input-focus", `await state.input.click();`)
 	if !strings.Contains(line, ".click:") {
 		t.Fatalf("input click result cannot be tied to script target: %s", line)
@@ -160,16 +207,16 @@ print(state.button);print(state.input);`
 	if !strings.Contains(line, ".press:") {
 		t.Fatalf("Enter result cannot be tied to script target: %s", line)
 	}
-	assertOriginalRoute("chrome-local-enter", "targeted_foreground")
+	assertOriginalRoute("chrome-local-enter", "targeted_background")
 	waitEvent(`{"kind":"key","value":"Enter"}`)
-	t.Log("independent Chrome callback confirms foreground Enter")
+	t.Log("independent Chrome callback confirms background Enter")
 	line = call("chrome-local-scroll", `await state.win.scroll({dy:1,u:0.8,v:0.7});`)
 	if !strings.Contains(line, ".scroll:") {
 		t.Fatalf("scroll result cannot be tied to script target: %s", line)
 	}
-	assertOriginalRoute("chrome-local-scroll", "targeted_foreground")
+	assertOriginalRoute("chrome-local-scroll", "targeted_background")
 	waitEvent(`{"kind":"wheel","value":"1"}`)
-	t.Log("independent Chrome callback confirms foreground wheel")
+	t.Log("independent Chrome callback confirms background wheel")
 	mu.Lock()
 	defer mu.Unlock()
 	for _, event := range []string{`{"kind":"click","value":"button"}`, `{"kind":"input","value":"DTW-Chrome-中文🙂"}`, `{"kind":"key","value":"Enter"}`, `{"kind":"wheel","value":"1"}`} {

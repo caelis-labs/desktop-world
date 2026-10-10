@@ -1,6 +1,5 @@
-// Package host supervises the private Desktop World helper. Only trusted Bot
-// host code gets this client; model tool arguments must never select a turn,
-// authorize an app, choose an executable, or receive the control pipe.
+// Package host supervises the private native helper. Model tool arguments
+// cannot choose a process executable or access the owner control pipe.
 package host
 
 import (
@@ -38,6 +37,10 @@ type Reply struct {
 	Result   json.RawMessage `json:"result,omitempty"`
 	Error    *dw.Fault       `json:"error,omitempty"`
 }
+
+// ErrTurnStopped means a cancelled data call ended its helper turn. The
+// original request must be reconciled before a new turn can be opened.
+var ErrTurnStopped = errors.New("native turn stopped after cancelled call")
 
 type Hello struct {
 	InputPolicy dw.InputPolicy `json:"input_policy"`
@@ -207,7 +210,7 @@ func Start(ctx context.Context, o Options) (*Client, error) {
 	}
 	cmd := exec.Command(o.Executable, args...)
 	cmd.Stderr = o.Stderr
-	for _, k := range []string{"HOME", "PATH", "TMPDIR", "LANG", "LC_CTYPE", "SystemRoot", "WINDIR", "USERPROFILE", "TEMP", "TMP"} {
+	for _, k := range []string{"HOME", "PATH", "TMPDIR", "LANG", "LC_CTYPE", "SystemRoot", "WINDIR", "USERPROFILE", "TEMP", "TMP", "DTW_POC_COORD_DIR", "DTW_POC_COORD_TRACE"} {
 		if v, ok := os.LookupEnv(k); ok {
 			cmd.Env = append(cmd.Env, k+"="+v)
 		}
@@ -338,50 +341,18 @@ func (c *Client) controlRequest(ctx context.Context, request helper.ControlReque
 	}
 	return reply, nil
 }
-func (c *Client) controlCall(ctx context.Context, op, turn string, app dw.Ref) error {
-	_, err := c.controlRequest(ctx, helper.ControlRequest{Op: op, Turn: turn, Application: app})
+func (c *Client) controlCall(ctx context.Context, op, turn string) error {
+	_, err := c.controlRequest(ctx, helper.ControlRequest{Op: op, Turn: turn})
 	return err
-}
-
-// Declare approves a selector for one turn; binding waits for a complete unique observation.
-func (c *Client) Declare(ctx context.Context, turn, name, windowTitle string) error {
-	_, err := c.controlRequest(ctx, helper.ControlRequest{Op: "declare", Turn: turn, Name: name, WindowTitle: windowTitle})
-	return err
-}
-func (c *Client) Revoke(ctx context.Context, turn string, app dw.Ref) error {
-	_, err := c.controlRequest(ctx, helper.ControlRequest{Op: "revoke", Turn: turn, Application: app})
-	return err
-}
-func (c *Client) RevokeGrant(ctx context.Context, turn, grantID string) error {
-	_, err := c.controlRequest(ctx, helper.ControlRequest{Op: "revoke", Turn: turn, GrantID: grantID})
-	return err
-}
-
-type ApplicationGrant = helper.ApplicationGrant
-type GrantStatus = helper.GrantStatus
-
-func (c *Client) Grants(ctx context.Context, turn string) (GrantStatus, error) {
-	reply, err := c.controlRequest(ctx, helper.ControlRequest{Op: "grants", Turn: turn})
-	if err != nil {
-		return GrantStatus{}, err
-	}
-	var out GrantStatus
-	err = protocol.Decode(reply.Result, &out)
-	return out, err
 }
 
 func (c *Client) BeginTurn(ctx context.Context, turn string) error {
-	return c.controlCall(ctx, "begin_turn", turn, "")
-}
-
-// Grant must follow Runtime approval of this exact observed application instance.
-func (c *Client) Grant(ctx context.Context, turn string, app dw.Ref) error {
-	return c.controlCall(ctx, "grant", turn, app)
+	return c.controlCall(ctx, "begin_turn", turn)
 }
 
 // EndTurn revokes authority and cancels work; it does not prove no effect occurred.
 func (c *Client) EndTurn(ctx context.Context, turn string) error {
-	err := c.controlCall(ctx, "end_turn", turn, "")
+	err := c.controlCall(ctx, "end_turn", turn)
 	if err != nil {
 		c.Close() // Also fail closed if the caller passes an expired context.
 	}
@@ -424,7 +395,7 @@ func (c *Client) Call(ctx context.Context, turn, id, op string, args any) (Reply
 		if stopErr != nil {
 			c.Close()
 		}
-		return Reply{}, fmt.Errorf("call cancelled; turn stopped, effects may be unknown; reconcile original request: %w", err)
+		return Reply{}, fmt.Errorf("%w; effects may be unknown; reconcile original request: %w", ErrTurnStopped, err)
 	}
 	return reply, err
 }
@@ -445,7 +416,7 @@ func (c *Client) Reconcile(ctx context.Context, turn, id string) (Reply, error) 
 }
 func (c *Client) Close() {
 	c.closeOnce.Do(func() {
-		// Closing the owner pipe revokes grants, then EOF requests bounded native cleanup.
+		// Closing the owner pipe cancels the active turn and requests native cleanup.
 		c.control.output.Close()
 		c.data.output.Close()
 		select {

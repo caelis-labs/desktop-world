@@ -1,6 +1,7 @@
 // A bounded foreground transaction. Uses exact-window key-focus SPI and HID
-// input; the experimental PID/SkyLight routes never silently fall back to this
-// path. The foreground transaction checks WindowServer directly, including
+// input. Automatic routing enters this path only after a proven pre-dispatch
+// background refusal or for operations that require the physical foreground.
+// The foreground transaction checks WindowServer directly, including
 // switches made by a different process. No host NSApplication/run loop is
 // required.
 #include <dlfcn.h>
@@ -176,6 +177,16 @@ static NSDictionary *cooperativeEnd(DWContext *c) {
   NSString *restoration = @"not_borrowed";
   double start = [session[@"start"] doubleValue];
   if ([session[@"borrowed"] boolValue]) {
+    // A genuinely required foreground action gets a short settling window.
+    // Consecutive steps in one native plan already share this lease; the
+    // trailing grace avoids an immediate activate/restore flash. Stop waiting
+    // as soon as the user selects another app and never take it back.
+    double lastAction = [session[@"lastAction"] doubleValue];
+    double graceEnd = lastAction + .45;
+    while (lastAction > 0 && monotonicSeconds() < graceEnd &&
+           cooperativeFrontPID() == [session[@"targetPID"] intValue] &&
+           !c.inputFault)
+      usleep(10000);
     pid_t pid = [session[@"previousPID"] intValue];
     if (cooperativeFrontPID() != [session[@"targetPID"] intValue])
       restoration = @"user_superseded";
@@ -414,8 +425,10 @@ static NSDictionary *cooperativePerform(DWContext *c, NSDictionary *o,
     if ([attr((__bridge AXUIElementRef)focus, kAXSubroleAttribute)
             isEqual:@"AXSecureTextField"])
       return outcome(@"none", @"protected_target");
-    if ([op isEqual:@"focus"])
+    if ([op isEqual:@"focus"]) {
+      c.inputSession[@"lastAction"] = @(monotonicSeconds());
       return outcome(@"complete", nil);
+    }
   }
   if ([op hasPrefix:@"pointer."]) {
     if (!cooperativeHits(c, e, o[@"Point"]))
@@ -436,6 +449,8 @@ static NSDictionary *cooperativePerform(DWContext *c, NSDictionary *o,
   }
   if (c.inputFault)
     result = outcome(result[@"Result"][@"Delivery"], c.inputFault);
+  if (![result[@"Result"][@"Delivery"] isEqual:@"none"])
+    c.inputSession[@"lastAction"] = @(monotonicSeconds());
   // Allow the target to consume posted input before restoring the front
   // process.
   usleep([op isEqual:@"pointer.click"] &&

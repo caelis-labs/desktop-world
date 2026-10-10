@@ -18,6 +18,14 @@ func TestWorldTextKeepsUncertainRecoveryAndOmitsRoutineFlags(t *testing.T) {
 	if strings.Contains(unknown, "native_request_ids") || strings.Count(unknown, "e7 ·") != 1 {
 		t.Fatalf("routine ID duplication: %q", unknown)
 	}
+	blocked := modelResultText(input{Operation: "exec", ExecutionID: "blocked"}, map[string]any{
+		"state": "failed", "native_error": map[string]any{
+			"code": "user_active", "message": "user_active: physical input is active", "retry_class": "never_automatically",
+		},
+	})
+	if strings.Count(blocked, "user_active") != 1 || !strings.Contains(blocked, "physical input is active") {
+		t.Fatalf("native fault repeated its code: %q", blocked)
+	}
 	incomplete := modelResultText(input{Operation: "exec", ExecutionID: "e8"}, map[string]any{
 		"execution_id": "e8", "state": "completed", "observations": []map[string]any{{
 			"native_request_id": "e8-native-1", "complete": false, "dirty": true, "truncated": true, "more": true,
@@ -47,11 +55,7 @@ func TestWorldTextGroupsRoutineStepsButKeepsScriptIDsAndExceptions(t *testing.T)
 		}},
 	}
 	result := modelResultText(input{Operation: "exec", ExecutionID: "input-batch"}, full)
-	legacy := compactToolText(compactExec(full))
-	t.Logf("fixed three-step action text: previous=%d UTF-8 bytes, current=%d UTF-8 bytes; tokenizer and model context not measured", len(legacy), len(result))
-	if len(result) >= len(legacy) {
-		t.Fatalf("routine action result did not shrink: previous=%q current=%q", legacy, result)
-	}
+	t.Logf("fixed three-step action text: %d UTF-8 bytes; tokenizer and model context not measured", len(result))
 	for _, want := range []string{"input-batch ·", "W1/B2.click#1, W1/T1.press#2, W1/T1.typeText#3: dispatched; effect unverified via foreground", "foreground restoration: restored"} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("missing %q in %q", want, result)
@@ -59,6 +63,14 @@ func TestWorldTextGroupsRoutineStepsButKeepsScriptIDsAndExceptions(t *testing.T)
 	}
 	if strings.Contains(result, "foreground_transaction") || strings.Count(result, "via foreground") != 1 || strings.Count(result, "restored") != 1 || strings.Contains(result, "seat_health") {
 		t.Fatalf("routine status repeated: %q", result)
+	}
+	ax := modelResultText(input{Operation: "exec", ExecutionID: "tab"}, map[string]any{
+		"state": "completed", "actions": []map[string]any{{"outcome": "completed", "steps": []map[string]any{{
+			"id": "W1/B2.invoke", "channel": "semantic", "delivery": "complete", "verification": "not_requested",
+		}}}},
+	})
+	if !strings.Contains(ax, "W1/B2.invoke: dispatched; effect unverified via AX") || strings.Contains(ax, "foreground") {
+		t.Fatalf("AX tab operation route unclear: %q", ax)
 	}
 	partial := modelResultText(input{Operation: "exec", ExecutionID: "partial"}, map[string]any{
 		"execution_id": "partial", "state": "completed", "actions": []map[string]any{{

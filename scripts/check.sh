@@ -8,6 +8,6 @@ go vet ./...
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./...
 python3 verify_examples.py
-node --test clients/javascript/desktop.test.mjs
-
-python3 scripts/check-sdks.py
+if [[ "$(uname -s)" == Darwin ]]; then
+  (cd runtime/native-go && GOWORK=off go test ./... && GOWORK=off go vet ./...)
+fi

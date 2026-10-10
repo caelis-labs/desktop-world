@@ -203,20 +203,7 @@ func (s *supervisor) handleChildNative(msg childMessage) {
 				time.Sleep(duration)
 			}
 		}
-		// A contended seat can be held before native dispatch. Recheck physical
-		// activity at that boundary so input that begins during the POC hold
-		// cannot be treated as the earlier quiet interval.
-		if route == "foreground_transaction" && reply.Error == nil {
-			if err := waitForUserInputQuiet(r.RunCtx, 600*time.Millisecond, 3*time.Second); err != nil {
-				code := "coordination_unavailable"
-				if r.RunCtx.Err() != nil {
-					code = "cancelled"
-				} else if strings.HasPrefix(err.Error(), "user_active:") {
-					code = "user_active"
-				}
-				reply.Error = dw.NewFault(code, err.Error(), "never_automatically")
-			}
-		}
+		_ = route // The native helper chooses the actual input rung per step.
 	}
 	if reply.Error != nil {
 		// The action never reached the native helper.
@@ -236,14 +223,36 @@ func (s *supervisor) handleChildNative(msg childMessage) {
 	} else {
 		// A cancelled/wedged script must not destroy the original native reply.
 		// Reconcile reads the same request ID; it never redispatches a write.
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
+		ctx, cancel := context.WithTimeout(r.RunCtx, 60*time.Second)
 		s.nativeMu.Lock()
 		var got host.Reply
 		var err error
-		got, err = s.native.Call(ctx, "session", msg.ID, msg.Operation, msg.Body)
-		if err != nil {
-			got, err = s.native.Reconcile(ctx, "session", msg.ID)
+		turn := s.nativeTurn
+		if turn == "" {
+			err = errors.New("native turn unavailable after cancellation")
+		} else {
+			got, err = s.native.Call(ctx, turn, msg.ID, msg.Operation, msg.Body)
+		}
+		cancel()
+		if err != nil && turn != "" {
+			stopped := errors.Is(err, host.ErrTurnStopped)
+			// Cancellation stops the native turn. Reconciliation reads the same
+			// request ID with an independent cleanup budget; it never redispatches.
+			reconcileCtx, stop := context.WithTimeout(context.Background(), 15*time.Second)
+			got, err = s.native.Reconcile(reconcileCtx, turn, msg.ID)
+			stop()
+			if stopped {
+				s.nativeTurnNo++
+				next := fmt.Sprintf("session-%d", s.nativeTurnNo)
+				beginCtx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+				beginErr := s.native.BeginTurn(beginCtx, next)
+				stop()
+				if beginErr == nil {
+					s.nativeTurn = next
+				} else {
+					s.nativeTurn = ""
+				}
+			}
 		}
 		s.nativeMu.Unlock()
 		if err != nil {

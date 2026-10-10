@@ -22,11 +22,16 @@ func NewBackgroundPOC(mode string) backend.Driver {
 	return &backgroundPOC{Driver: &Driver{}, mode: mode}
 }
 func (d *backgroundPOC) TargetsInput(op string) bool {
-	return op == "pointer.click" || op == "keyboard.type_text"
+	switch op {
+	case "pointer.move", "pointer.click", "pointer.scroll", "keyboard.press", "keyboard.type_text":
+		return true
+	default:
+		return false
+	}
 }
 func (d *backgroundPOC) Environment(ctx context.Context) (dw.Environment, error) {
 	e, err := d.Driver.Environment(ctx)
-	e.Capabilities = append(e.Capabilities, dw.Capability{Name: "targeted_input_poc", Support: "unknown", Availability: "unknown", Reason: "Experimental same-desktop " + d.mode + ": scoped left single click and <=256 UTF-16 text units only. Private window routing; app-specific acceptance and verification required."})
+	e.Capabilities = append(e.Capabilities, dw.Capability{Name: "targeted_input_poc", Support: "unknown", Availability: "unknown", Reason: "Same-desktop window-targeted mouse, wheel and keyboard delivery. Drag and explicit focus require foreground; posted input still needs application-effect verification."})
 	return e, err
 }
 func (d *backgroundPOC) Perform(ctx context.Context, op backend.Operation) (v backend.Outcome) {
@@ -34,7 +39,7 @@ func (d *backgroundPOC) Perform(ctx context.Context, op backend.Operation) (v ba
 		if dw.ActionChannel(op.Step.Op) == "semantic" {
 			return d.Driver.Perform(ctx, op)
 		}
-		return backend.Outcome{Delivery: dw.DeliveryNone, Fault: dw.NewFault("background_unavailable", "POC allows scoped left click, short text and semantic actions only", "never_automatically")}
+		return backend.Outcome{Delivery: dw.DeliveryNone, Fault: dw.NewFault("background_unavailable", "operation has no background route", "never_automatically")}
 	}
 	if ctx.Err() != nil {
 		return backend.Outcome{Delivery: dw.DeliveryNone, Fault: dw.NewFault("cancelled", "cancelled before native dispatch", "reobserve")}

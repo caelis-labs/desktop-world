@@ -44,5 +44,6 @@ versioned candidate archive from a clean checkout; it does not publish it.
 
 The new runtime has live macOS evidence for owned AppKit fixtures and selected
 Obsidian, Chrome, and WPS tasks. Windows behavior for this runtime remains
-unverified and is not packaged as the same candidate. Historical SDKs and
-acceptance material remain in the repository but are not the plugin entrypoint.
+unverified and is not packaged as the same candidate. The native engine is
+shared internally; platform launch, input coordination, and desktop drivers
+have separate Darwin and Windows implementation files.

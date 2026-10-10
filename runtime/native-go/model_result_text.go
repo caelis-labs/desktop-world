@@ -28,6 +28,7 @@ func modelResultText(in input, full map[string]any) string {
 	if nativeErr, ok := view["native_error"].(map[string]any); ok {
 		message, _ := nativeErr["message"].(string)
 		code, _ := nativeErr["code"].(string)
+		message = strings.TrimPrefix(message, code+": ")
 		if message != "" && message != code {
 			body += ": " + message
 		}
@@ -163,6 +164,8 @@ func stepStatus(action, step map[string]any) string {
 	}
 	if channel, ok := step["channel"].(string); ok && verification != "verified" {
 		switch channel {
+		case "semantic":
+			status += " via AX"
 		case "targeted_background":
 			status += " via background"
 		case "targeted_foreground", "foreground_transaction":

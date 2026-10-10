@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -55,6 +57,68 @@ func TestPackagedNativeMCPNoNode(t *testing.T) {
 		if result.StructuredContent != nil {
 			t.Fatalf("%s: duplicated structured output: %#v", call.id, result.StructuredContent)
 		}
+	}
+}
+
+func TestPackagedControlSurvivesBusyScript(t *testing.T) {
+	binary := os.Getenv("DTW_PACKAGED_DTW")
+	if binary == "" {
+		t.Skip("set DTW_PACKAGED_DTW to the local native package binary")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	client := mcp.NewClient(&mcp.Implementation{Name: "native-control-test", Version: "1"}, nil)
+	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: exec.Command(binary)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	const id = "busy-script"
+	var wg sync.WaitGroup
+	resultCh := make(chan *mcp.CallToolResult, 1)
+	errorCh := make(chan error, 1)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		result, callErr := session.CallTool(ctx, &mcp.CallToolParams{Name: "exec", Arguments: map[string]any{
+			"operation": "exec", "execution_id": id, "code": "while(true){}",
+		}})
+		resultCh <- result
+		errorCh <- callErr
+	}()
+	call := func(operation string) string {
+		t.Helper()
+		result, callErr := session.CallTool(ctx, &mcp.CallToolParams{Name: "exec", Arguments: map[string]any{
+			"operation": operation, "execution_id": id,
+		}})
+		if callErr != nil || result == nil || len(result.Content) != 1 || result.StructuredContent != nil {
+			t.Fatalf("%s control unavailable: %v %+v", operation, callErr, result)
+		}
+		return result.Content[0].(*mcp.TextContent).Text
+	}
+	for ctx.Err() == nil {
+		if status := call("status"); status == id+" · running" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("busy script did not reach running state")
+	}
+	if stopped := call("cancel"); !strings.Contains(stopped, "cancelling") && !strings.Contains(stopped, "cancelled") {
+		t.Fatalf("cancel response: %q", stopped)
+	}
+	select {
+	case result := <-resultCh:
+		if callErr := <-errorCh; callErr != nil || result == nil || len(result.Content) != 1 {
+			t.Fatalf("cancelled script result: %v %+v", callErr, result)
+		}
+	case <-ctx.Done():
+		t.Fatal("cancelled script did not return")
+	}
+	wg.Wait()
+	if status := call("status"); !strings.Contains(status, "cancelled") && !strings.Contains(status, "failed") {
+		t.Fatalf("final busy-script state: %q", status)
 	}
 }
 
@@ -138,6 +202,10 @@ func TestPackagedOwnedSemanticAction(t *testing.T) {
 	if binary == "" || app == "" || title == "" || logPath == "" {
 		t.Skip("set packaged binary and owned action fixture")
 	}
+	fixturePID := ownedFixturePID(t, logPath)
+	if err := syscall.Kill(fixturePID, 0); err != nil {
+		t.Fatalf("owned fixture PID %d is not live before action: %v", fixturePID, err)
+	}
 	before := countFixtureEvent(t, logPath, "submit")
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -168,6 +236,25 @@ func TestPackagedOwnedSemanticAction(t *testing.T) {
 	} else {
 		t.Logf("owned callback readback: %d -> %d", before, after)
 	}
+	if err := syscall.Kill(fixturePID, 0); err != nil {
+		t.Fatalf("owned fixture PID %d exited during action: %v", fixturePID, err)
+	}
+}
+
+func ownedFixturePID(t *testing.T, path string) int {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _, _ := strings.Cut(string(data), "\n")
+	var row struct {
+		PID int `json:"pid"`
+	}
+	if json.Unmarshal([]byte(first), &row) != nil || row.PID <= 0 {
+		t.Fatalf("owned fixture log lacks PID: %s", path)
+	}
+	return row.PID
 }
 
 func countFixtureEvent(t *testing.T, path, event string) int {

@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -89,7 +91,7 @@ func TestCoreObjectFullInputOnOwnedAppKit(t *testing.T) {
 		}
 		return line
 	}
-	assertOriginalChannel := func(id, channel string) {
+	assertOriginalChannel := func(id, channel string) string {
 		t.Helper()
 		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "exec", Arguments: map[string]any{
 			"operation": "result", "execution_id": id, "detail": "full",
@@ -101,6 +103,7 @@ func TestCoreObjectFullInputOnOwnedAppKit(t *testing.T) {
 		if !strings.Contains(original, `"channel": "`+channel+`"`) {
 			t.Fatalf("%s original receipt missing actual route %s: %s", id, channel, original)
 		}
+		return original
 	}
 	setup := `const app=await dtw.app('DTWFullFixture');const win=await app.window(` + string(mustJSON(title)) + `);state.app=app;state.win=win;state.field=await win.one({name:'POC text'});state.multi=await win.one({name:'POC multiline'});state.canvas=await win.one({name:'POC Canvas'});state.submit=await win.one({name:'POC submit'});state.dialog=await win.one({name:'POC dialog'});print(state.field);print(state.multi);print(state.canvas);print(state.submit);print(state.dialog);`
 	line := call("owned-setup", setup)
@@ -183,6 +186,95 @@ func TestCoreObjectFullInputOnOwnedAppKit(t *testing.T) {
 		if trace := os.Getenv("DTW_POC_CURSOR_TRACE"); trace != "" {
 			expectOwnedCursorOverlay(t, trace)
 		}
+		return
+	}
+	if os.Getenv("DTW_POC_INPUT_CASE") == "route" {
+		gracePattern := regexp.MustCompile(`(?i)"foreground_?ms"\s*:\s*(\d+)`)
+		checkGrace := func(id, receipt string) {
+			t.Helper()
+			match := gracePattern.FindStringSubmatch(receipt)
+			if len(match) != 2 {
+				t.Fatalf("%s foreground duration absent from original receipt: %s", id, receipt)
+			}
+			ms, _ := strconv.Atoi(match[1])
+			if ms < 400 {
+				t.Fatalf("%s foreground borrowed for only %dms; expected settling window", id, ms)
+			}
+		}
+		countSince := func(from int, kind string) int {
+			n := 0
+			for _, row := range ownedRows(t, logPath)[from:] {
+				if row["event"] == kind {
+					n++
+				}
+			}
+			return n
+		}
+		waitKind := func(from int, kind string) bool {
+			t.Helper()
+			deadline := time.Now().Add(750 * time.Millisecond)
+			for time.Now().Before(deadline) {
+				rows := ownedRows(t, logPath)
+				for _, row := range rows[min(from, len(rows)):] {
+					if row["event"] == kind {
+						return true
+					}
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			return false
+		}
+		for _, trial := range []struct{ id, code, event, channel string }{
+			{"route-canvas-click", `await state.canvas.click({u:0.35,v:0.5});`, "click", "targeted_foreground"},
+			{"route-move", `await state.canvas.move({u:0.65,v:0.5});`, "move", "targeted_foreground"},
+			{"route-wheel", `await state.canvas.scroll({dy:2,u:0.5,v:0.5});`, "scroll", "targeted_background"},
+		} {
+			before := len(ownedRows(t, logPath))
+			line := call(trial.id, trial.code)
+			receipt := assertOriginalChannel(trial.id, trial.channel)
+			if !waitKind(before, trial.event) || frontmostPID() != frontBefore {
+				t.Errorf("%s background effect/front failed: %s; rows=%+v", trial.id, line, ownedRows(t, logPath)[before:])
+			}
+			if got := countSince(before, trial.event); got != 1 {
+				t.Fatalf("%s callback count=%d; background dispatch must never be replayed", trial.id, got)
+			}
+			if trial.channel == "targeted_foreground" {
+				checkGrace(trial.id, receipt)
+			}
+		}
+		call("route-field-click", `await state.field.click();`)
+		assertOriginalChannel("route-field-click", "targeted_background")
+		before := len(ownedRows(t, logPath))
+		call("route-field-type", `await state.field.typeText('ROUTE');`)
+		assertOriginalChannel("route-field-type", "targeted_background")
+		if !waitOwnedEvent(t, logPath, before, "text", "DTW-CORE-中文🙂ROUTE", 750*time.Millisecond) {
+			t.Fatalf("background text effect missing: %+v", ownedRows(t, logPath)[before:])
+		}
+		before = len(ownedRows(t, logPath))
+		call("route-key", `await state.field.press('Backspace');`)
+		assertOriginalChannel("route-key", "targeted_background")
+		if !waitOwnedEvent(t, logPath, before, "text", "DTW-CORE-中文🙂ROUT", 750*time.Millisecond) || frontmostPID() != frontBefore {
+			t.Fatalf("background key effect/front failed: %+v", ownedRows(t, logPath)[before:])
+		}
+		before = len(ownedRows(t, logPath))
+		call("route-drag", `await state.canvas.dragTo(state.canvas,{from:{u:0.2,v:0.5},to:{u:0.8,v:0.5},durationMs:250});`)
+		checkGrace("route-drag", assertOriginalChannel("route-drag", "targeted_foreground"))
+		if !waitKind(before, "drop") || frontmostPID() != frontBefore {
+			t.Fatalf("foreground drag or restoration failed: %+v", ownedRows(t, logPath)[before:])
+		}
+		if got := countSince(before, "drop"); got != 1 {
+			t.Fatalf("route-drag callback count=%d; want one", got)
+		}
+		before = len(ownedRows(t, logPath))
+		call("route-field-type-fallback", `await state.field.typeText('F');`)
+		checkGrace("route-field-type-fallback", assertOriginalChannel("route-field-type-fallback", "targeted_foreground"))
+		if !waitKind(before, "text") || frontmostPID() != frontBefore {
+			t.Fatalf("keyboard foreground fallback did not write and restore: %+v", ownedRows(t, logPath)[before:])
+		}
+		if got := countSince(before, "text"); got != 1 {
+			t.Fatalf("keyboard foreground fallback text callback count=%d; want one", got)
+		}
+		t.Log("independent AppKit callbacks: background wheel/text/key and foreground canvas move/click/drag; prior app restored")
 		return
 	}
 	beforeAuto = len(ownedRows(t, logPath))

@@ -636,9 +636,7 @@ static NSDictionary *seat(DWContext *c) {
     @"Intervention" : @"best_effort"
   };
 }
-#ifdef DTW_POC_EXACTGRANT
 static NSDictionary *pocWindowIdentity(DWContext *c, NSString *targetKey);
-#endif
 #include "capture_darwin.h"
 static NSDictionary *queryPage(DWContext *c, NSDictionary *q, DWCancel *cancel) {
   if (!AXIsProcessTrusted())
@@ -669,9 +667,28 @@ static NSDictionary *queryPage(DWContext *c, NSDictionary *q, DWCancel *cancel) 
   BOOL summary = [q[@"Summary"] boolValue], detail = [q[@"Detail"] boolValue];
   if (!resume.length && [q[@"Desktop"] boolValue]) {
     BOOL appsComplete = YES;
+    NSString *appName = [q[@"AppName"] isKindOfClass:NSString.class] ? q[@"AppName"] : @"";
     for (NSNumber *pid in applicationPIDs(&appsComplete, cancel)) {
       AXUIElementRef e = AXUIElementCreateApplication(pid.intValue);
       AXUIElementSetMessagingTimeout(e, 0.25);
+      if (appName.length) {
+        // NSRunningApplication.localizedName can differ from the AX name
+        // displayed to the Agent (for example, Google Chrome vs Chrome).
+        // Read only this candidate's scalar AX name; do not traverse its
+        // windows or the unrelated desktop tree.
+        id title = attr(e, kAXTitleAttribute);
+        if (![title isKindOfClass:NSString.class] || ![title length])
+          title = attr(e, kAXDescriptionAttribute);
+        if (![title isKindOfClass:NSString.class] || ![title length]) {
+          appsComplete = NO;
+          CFRelease(e);
+          continue;
+        }
+        if (![title isEqualToString:appName]) {
+          CFRelease(e);
+          continue;
+        }
+      }
       NSString *k = key(c, e, nil, nil, nil);
       CFRelease(e);
       if (k.length)
@@ -713,7 +730,7 @@ static NSDictionary *queryPage(DWContext *c, NSDictionary *q, DWCancel *cancel) 
     }
     NSString *kind = n[@"Object"][@"Kind"];
     NSInteger d = [item[1] integerValue];
-    if (!detail && d < depth && (!summary || [kind isEqual:@"application"])) {
+    if (!detail && d < depth && ![q[@"AppName"] length] && (!summary || [kind isEqual:@"application"])) {
       AXUIElementRef e = element(c, k);
       CFStringRef field = summary ? kAXWindowsAttribute : kAXChildrenAttribute;
       CFIndex count = 0;
@@ -865,7 +882,17 @@ static BOOL virtualPostToTarget(DWContext *c, CGEventRef e) {
     c.inputSession[@"virtualX"] = @(point.x);
     c.inputSession[@"virtualY"] = @(point.y);
   }
-  CGEventPostToPid(pid, e);
+  // Use the same per-PID SkyLight route as background input. Keeping the
+  // target in front changes AppKit hit testing, not the physical cursor.
+  typedef void (*TargetPost)(pid_t, CGEventRef);
+  static TargetPost targetPost;
+  static dispatch_once_t postOnce;
+  dispatch_once(&postOnce, ^{
+    void *sky = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY);
+    targetPost = sky ? (TargetPost)dlsym(sky, "SLEventPostToPid") : NULL;
+    if (!targetPost) targetPost = CGEventPostToPid;
+  });
+  targetPost(pid, e);
   if (positioned) {
     CGPoint point = CGEventGetLocation(e);
     fprintf(stderr, "{\"poc\":\"virtual_pointer\",\"x\":%.3f,\"y\":%.3f}\n", point.x, point.y);
@@ -1325,9 +1352,8 @@ void dw_close(void *p) {
     CFBridgingRelease(p);
   }
 }
-#ifdef DTW_POC_EXACTGRANT
-// Isolated helper build only. Resolve an action key to the actual AXWindow,
-// then to a live same-PID native window number. Never use title or geometry.
+// Resolve an AX action key to a live same-PID native window number for
+// window-content capture. Never use title or geometry as identity.
 static NSDictionary *pocWindowIdentity(DWContext *c, NSString *targetKey) {
   if (!alive(c, targetKey)) return err(@"ref_gone");
   AXUIElementRef target = element(c, targetKey);
@@ -1381,7 +1407,6 @@ static NSDictionary *pocWindowIdentity(DWContext *c, NSString *targetKey) {
   return @{ @"Result": @{ @"PID": @(pid), @"StartSec": identity[0], @"StartUSec": identity[1],
     @"NativeWindowID": @(wid), @"AppKey": appKey, @"WindowKey": windowKey } };
 }
-#endif
 char *dw_call(void *p, const char *opstr, const char *json, void *cancel) {
   @autoreleasepool {
     @try {
@@ -1548,6 +1573,8 @@ char *dw_call(void *p, const char *opstr, const char *json, void *cancel) {
                             .UTF8String
                         ?: "{}");
     } @catch (NSException *exception) {
+      if (getenv("DTW_POC_NATIVE_TRACE"))
+        fprintf(stderr, "DTW native exception: %s\n", exception.name.UTF8String ?: "unknown");
       return strdup("{\"Fault\":{\"Code\":\"provider_unavailable\",\"Message\":"
                     "\"native exception\",\"RetryClass\":\"reobserve\"}}");
     }

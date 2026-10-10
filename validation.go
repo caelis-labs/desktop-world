@@ -382,6 +382,15 @@ func (r ObserveRequest) Validate() error {
 		seen[f] = true
 	}
 	if r.Match != nil {
+		// A desktop inventory may be narrowed to one exact application name
+		// before the provider traverses unrelated application trees. This is
+		// the only locator form that has no existing within Ref.
+		if r.Scope.Desktop && r.Match.Within == "" && r.Match.Kind == KindApplication &&
+			r.Match.NameEquals != nil && *r.Match.NameEquals != "" {
+			match := *r.Match
+			match.Within = Ref("desktop-inventory")
+			return match.Validate()
+		}
 		return r.Match.Validate()
 	}
 	return nil

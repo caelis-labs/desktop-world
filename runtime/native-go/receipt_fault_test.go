@@ -71,7 +71,22 @@ func TestSyntheticUnknownPartialAndLateReceiptsThroughMCP(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return res.StructuredContent.(map[string]any)
+		if res.StructuredContent != nil {
+			t.Fatalf("%s duplicated structured content: %+v", id, res.StructuredContent)
+		}
+		full, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "exec", Arguments: map[string]any{"operation": "result", "execution_id": id, "detail": "full"}})
+		if err != nil || len(full.Content) != 1 {
+			t.Fatalf("%s original result: %v %+v", id, err, full)
+		}
+		body, ok := strings.CutPrefix(full.Content[0].(*mcp.TextContent).Text, id+" · original result\n")
+		if !ok {
+			t.Fatalf("%s original result text: %+v", id, full.Content)
+		}
+		var out map[string]any
+		if err := json.Unmarshal([]byte(body), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
 	}
 	script := `const r=await dtw.act({steps:[{id:'first',op:'set_value',target:{ref:'owned-synthetic-ref'},set_value:{text:'A'}},{id:'second',op:'set_value',target:{ref:'owned-synthetic-ref'},set_value:{text:'B'}}]});print(r.outcome);`
 	unknown := call("exec", "unknown-original", script)

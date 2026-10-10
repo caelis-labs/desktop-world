@@ -105,6 +105,11 @@ func TestWorldObjectScriptAndTextOnlyMCP(t *testing.T) {
 	if !strings.Contains(line, "e1 · W1/B1 Submit · button · invoke") || strings.Contains(line, "native_request") || strings.Contains(line, "observation incomplete") || strings.Contains(line, `\"`) {
 		t.Fatalf("not concise or reusable: %q", line)
 	}
+	positive := call("e-positive-window", "exec", `print(await dtw.app('Fixture',{window:'Fixture Window'}));`, "")
+	if positive.IsError || !strings.Contains(positive.Content[0].(*mcp.TextContent).Text, "Fixture") ||
+		strings.Contains(positive.Content[0].(*mcp.TextContent).Text, "observation incomplete") {
+		t.Fatalf("positive scoped window must survive unrelated desktop continuation: %+v", positive)
+	}
 	second := call("e2", "exec", `await dtw.at('W1/B1').invoke();`, "")
 	if second.IsError {
 		t.Fatalf("object action: %s", second.Content[0].(*mcp.TextContent).Text)

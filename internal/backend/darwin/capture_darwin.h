@@ -115,10 +115,8 @@ static NSDictionary *capture(DWContext *c, NSDictionary *r, DWCancel *cancel) {
   BOOL window = [r[@"Kind"] isEqual:@"window_content"];
   NSString *k = r[@"Key"];
   DWCaptureWindow *target = c.captureWindows[k];
-#ifdef DTW_POC_EXACTGRANT
-  // The isolated object POC accepts an AX window as a capture target only
-  // after a same-worker native ID join. Titles, bounds and foreground state
-  // are never used to choose a ScreenCaptureKit window.
+  // An AX window becomes a capture target only after a same-worker native ID
+  // join. Titles, bounds and foreground state never choose the SCWindow.
   NSDictionary *joined = nil;
   if (window && !target) {
     NSDictionary *identity = pocWindowIdentity(c, k);
@@ -143,7 +141,6 @@ static NSDictionary *capture(DWContext *c, NSDictionary *r, DWCancel *cancel) {
     target.window = matched;
     target.app = joined[@"AppKey"];
   }
-#endif
   if (window) {
     NSString *failure = refreshCaptureRecord(c, target, content);
     if (failure) return err(failure);
@@ -217,7 +214,6 @@ static NSDictionary *capture(DWContext *c, NSDictionary *r, DWCancel *cancel) {
       CGRect before = target.window.frame;
       SCShareableContent *after = shareable(cancel, deadline);
       if (!after) return err(@"window_unavailable");
-#ifdef DTW_POC_EXACTGRANT
       if (joined) {
         NSDictionary *fresh = pocWindowIdentity(c, k)[@"Result"];
         if (!fresh || ![fresh[@"PID"] isEqual:joined[@"PID"]] ||
@@ -227,7 +223,6 @@ static NSDictionary *capture(DWContext *c, NSDictionary *r, DWCancel *cancel) {
             ![fresh[@"WindowKey"] isEqual:joined[@"WindowKey"]])
           return err(@"capture_identity_changed");
       }
-#endif
       NSString *failure = refreshCaptureRecord(c, target, after);
       if (failure) return err(failure);
       if (!CGRectEqualToRect(before, target.window.frame)) return err(@"capture_geometry_changed");

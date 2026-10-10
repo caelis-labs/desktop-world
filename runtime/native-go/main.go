@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
 
@@ -63,6 +62,8 @@ type supervisor struct {
 	commands     chan scriptCommand
 	native       *host.Client
 	nativeMu     sync.Mutex
+	nativeTurn   string
+	nativeTurnNo int
 	assetsDir    string
 	remoteNative func(context.Context, string, string, json.RawMessage, bool) (host.Reply, error)
 	// POC-only injection point for end-to-end receipt fault tests. Production
@@ -76,7 +77,7 @@ type supervisor struct {
 }
 
 func newSupervisor(native *host.Client, assetsDir string) *supervisor {
-	s := &supervisor{records: make(map[string]*record), commands: make(chan scriptCommand), native: native, assetsDir: assetsDir, refApps: make(map[string]string), refParents: make(map[string]string)}
+	s := &supervisor{records: make(map[string]*record), commands: make(chan scriptCommand), native: native, nativeTurn: "session", nativeTurnNo: 1, assetsDir: assetsDir, refApps: make(map[string]string), refParents: make(map[string]string)}
 	s.startScriptChild()
 	return s
 }
@@ -449,46 +450,6 @@ func nativeFacts(op, id string, result json.RawMessage) map[string]any {
 	return nil
 }
 
-func toolText(out map[string]any) string {
-	var lines []string
-	// Printed facts have one canonical model-facing home: structuredContent.
-	// Repeating the same AX node in text caused the adapter to receive it twice.
-	if observations, ok := out["observations"].([]map[string]any); ok {
-		for _, ob := range observations {
-			if ob["complete"] != true || ob["dirty"] == true {
-				lines = append(lines, fmt.Sprintf("observation %v: incomplete (truncated=%v, dirty=%v, more=%v)", ob["native_request_id"], ob["truncated"], ob["dirty"], ob["more"] == true))
-			}
-		}
-	}
-	if actions, ok := out["actions"].([]map[string]any); ok {
-		for _, action := range actions {
-			line := fmt.Sprintf("action %v: %v; seat=%v", action["run_id"], action["outcome"], action["seat_health"])
-			if restoration, ok := action["restoration"]; ok {
-				line += fmt.Sprintf("; restoration=%v", restoration)
-			}
-			if steps, ok := action["steps"].([]map[string]any); ok {
-				for _, step := range steps {
-					line += fmt.Sprintf("; %v=%v/%v via %v", step["id"], step["delivery"], step["verification"], step["channel"])
-				}
-			}
-			lines = append(lines, line)
-		}
-	}
-	if err, ok := out["error"].(map[string]any); ok {
-		lines = append(lines, fmt.Sprintf("%v: %v", err["code"], err["message"]))
-	}
-	if err, ok := out["native_error"].(map[string]any); ok {
-		lines = append(lines, fmt.Sprintf("native %v: %v", err["code"], err["message"]))
-	}
-	state, _ := out["state"].(string)
-	id, _ := out["execution_id"].(string)
-	if state != "completed" || len(lines) == 0 {
-		lines = append(lines, "state: "+state)
-	}
-	lines = append(lines, "execution_id: "+id)
-	return strings.Join(lines, "\n")
-}
-
 func (s *supervisor) call(ctx context.Context, in input) map[string]any {
 	if in.ExecutionID == "" {
 		return map[string]any{"error": map[string]any{"code": "invalid_request", "message": "execution_id is required"}}
@@ -590,41 +551,17 @@ func newServerWithSupervisor(s *supervisor) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "dtw", Version: releaseVersion}, nil)
 	mcp.AddTool(server, &mcp.Tool{Name: "exec", Description: "Run DTW JavaScript; query or cancel by the original execution ID"}, func(ctx context.Context, _ *mcp.CallToolRequest, in input) (*mcp.CallToolResult, any, error) {
 		out := s.call(ctx, in)
-		if os.Getenv("DTW_POC_TEXT_OUTPUT") == "1" || os.Getenv("DTW_POC_LEGACY_OUTPUT") != "1" {
-			content := []mcp.Content{&mcp.TextContent{Text: modelResultText(in, out)}}
-			if in.Operation == "result" && in.IncludeImage {
-				png, err := s.imageFor(in.ExecutionID)
-				if err != nil {
-					content[0] = &mcp.TextContent{Text: in.ExecutionID + " · image unavailable: " + err.Error()}
-					return &mcp.CallToolResult{Content: content, IsError: true}, nil, nil
-				}
-				content = append(content, &mcp.ImageContent{Data: png, MIMEType: "image/png"})
-			}
-			_, isError := out["error"]
-			return &mcp.CallToolResult{Content: content, IsError: isError}, nil, nil
-		}
-		compact := os.Getenv("DTW_POC_COMPACT_OUTPUT") == "1" && in.Operation == "exec"
-		message := toolText(out)
-		if compact {
-			view := compactExec(out)
-			message = compactToolText(view)
-			out = compactStructured(view)
-		}
-		_, err := json.Marshal(out)
-		if err != nil {
-			return nil, nil, err
-		}
-		_, isError := out["error"]
-		content := []mcp.Content{&mcp.TextContent{Text: message}}
+		content := []mcp.Content{&mcp.TextContent{Text: modelResultText(in, out)}}
 		if in.Operation == "result" && in.IncludeImage {
-			png, imageErr := s.imageFor(in.ExecutionID)
-			if imageErr != nil {
-				failure := map[string]any{"execution_id": in.ExecutionID, "error": map[string]any{"code": "image_unavailable", "message": imageErr.Error()}}
-				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: toolText(failure)}}, IsError: true}, failure, nil
+			png, err := s.imageFor(in.ExecutionID)
+			if err != nil {
+				content[0] = &mcp.TextContent{Text: in.ExecutionID + " · image unavailable: " + err.Error()}
+				return &mcp.CallToolResult{Content: content, IsError: true}, nil, nil
 			}
 			content = append(content, &mcp.ImageContent{Data: png, MIMEType: "image/png"})
 		}
-		return &mcp.CallToolResult{Content: content, IsError: isError}, out, nil
+		_, isError := out["error"]
+		return &mcp.CallToolResult{Content: content, IsError: isError}, nil, nil
 	})
 	return server
 }
@@ -632,7 +569,6 @@ func newServerWithSupervisor(s *supervisor) *mcp.Server {
 func runServer(ctx context.Context) error {
 	var native *host.Client
 	var assetsDir string
-	var cursor *virtualCursorOverlay
 	helper := ""
 	if os.Getenv("DTW_POC_CHILD") == "1" {
 		helper = os.Getenv("DTW_POC_HELPER")
@@ -663,19 +599,12 @@ func runServer(ctx context.Context) error {
 		if err := os.MkdirAll(assetsDir, 0700); err != nil {
 			return err
 		}
-		options := host.Options{Executable: helper, AssetsDir: assetsDir, InputMode: dw.InputModeCooperative}
-		if os.Getenv("DTW_POC_VIRTUAL") == "1" || os.Getenv("DTW_POC_CHILD") != "1" && os.Getenv("DTW_POC_VIRTUAL") != "0" {
-			cursor = newVirtualCursorOverlay(helper)
-			defer cursor.Close()
-			options.Stderr = cursor
-		} else if os.Getenv("DTW_POC_NATIVE_TRACE") == "1" {
-			options.Stderr = os.Stderr
-		}
-		native, err = host.Start(ctx, options)
+		var closeNative func()
+		native, closeNative, err = startNativePlatform(ctx, helper, assetsDir)
 		if err != nil {
 			return err
 		}
-		defer native.Close()
+		defer closeNative()
 		if !native.Hello.CoreNoAuth {
 			return errors.New("DTW helper must omit its own grant gate; application permissions belong to the host")
 		}

@@ -15,9 +15,12 @@ type Node struct {
 	Object                   dw.Object
 }
 type Query struct {
-	Fields          []string
-	Roots           []Key
-	Desktop         bool
+	Fields  []string
+	Roots   []Key
+	Desktop bool
+	// AppName narrows a desktop application locator before AX traversal.
+	// Empty leaves ordinary desktop discovery unchanged.
+	AppName         string
 	Depth, MaxNodes int
 	Summary, Detail bool
 	CaptureWindows  bool

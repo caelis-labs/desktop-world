@@ -202,6 +202,7 @@ dtw.app = async (name, options={}) => {
   let complete = false;
   for (let page = 0; page < 8; page++) {
     const ob = await dtw._observe({scope:{desktop:true},projection:'summary',fields:['name','role','app'],
+      match:{kind:'application',name_equals:name},
       budget:{max_results:32,max_visited_nodes:10000,max_depth:3,read_deadline_ms:4000},
       ...(continuation ? {continuation} : {})});
     candidates.push(...ob.objects.filter(o => o.kind === 'application' && nameOf(o) === name));
@@ -214,7 +215,10 @@ dtw.app = async (name, options={}) => {
   if (candidates.length === 0) throw Error(complete ? 'App not found: ' + name :
     'App unresolved: desktop discovery incomplete; no matching candidate');
   if (windowTitle) {
-    if (!complete) throw Error('App window selector unresolved: desktop discovery incomplete');
+    // A positive native App Ref can be checked through its exact scoped
+    // window. Unrelated unfinished desktop pages do not invalidate that
+    // positive match; zero matches and observed duplicates remain unknown.
+    candidates = [...new Map(candidates.map(candidate => [candidate.ref,candidate])).values()];
     const selected = [];
     for (const candidate of candidates) {
       const ob = await dtw._observe({scope:{refs:[candidate.ref]},projection:'summary',
