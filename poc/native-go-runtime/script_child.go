@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	dw "github.com/caelis-labs/desktop-world"
 	"github.com/caelis-labs/desktop-world/host"
+	"github.com/caelis-labs/desktop-world/protocol"
 )
 
 // The POC child has no MCP, native helper, grants or receipt ledger. Its only
@@ -213,13 +215,40 @@ func (s *supervisor) handleChildNative(msg childMessage) {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		s.nativeMu.Lock()
-		got, err := s.native.Call(ctx, "session", msg.ID, msg.Operation, msg.Body)
-		if err != nil {
-			got, err = s.native.Reconcile(ctx, "session", msg.ID)
+		var got host.Reply
+		var err error
+		switch msg.Operation {
+		case "grants":
+			var status host.GrantStatus
+			status, err = s.native.Grants(ctx, "session")
+			if err == nil {
+				got.Result, err = protocol.Marshal(status)
+			}
+			got.ID = msg.ID
+		case "revoke_grant":
+			var request struct {
+				GrantID string `json:"grant_id"`
+			}
+			if json.Unmarshal(msg.Body, &request) != nil || request.GrantID == "" {
+				err = errors.New("revoke_grant requires grant_id")
+			} else {
+				err = s.native.RevokeGrant(ctx, "session", request.GrantID)
+			}
+			got.ID, got.Result = msg.ID, json.RawMessage(`{"revoked":true}`)
+		default:
+			got, err = s.native.Call(ctx, "session", msg.ID, msg.Operation, msg.Body)
+			if err != nil {
+				got, err = s.native.Reconcile(ctx, "session", msg.ID)
+			}
 		}
 		s.nativeMu.Unlock()
 		if err != nil {
-			reply.Error = dw.NewFault("native_unknown", err.Error(), "never_automatically")
+			var fault *dw.Fault
+			if errors.As(err, &fault) {
+				reply.Error = fault
+			} else {
+				reply.Error = dw.NewFault("native_unknown", err.Error(), "never_automatically")
+			}
 		} else {
 			reply = got
 		}

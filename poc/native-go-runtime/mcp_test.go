@@ -737,6 +737,90 @@ func TestOwnedSemanticControlsThroughGoMCP(t *testing.T) {
 	t.Logf("%s: four MCP semantic actions, three independent app transitions %v; all semantic/verified/not_borrowed", kind, actual)
 }
 
+func TestOwnedGrantRevocationThroughGoMCP(t *testing.T) {
+	if os.Getenv("DTW_POC_CHILD") == "1" {
+		return
+	}
+	title, logPath := os.Getenv("DTW_POC_REVOKE_TITLE"), os.Getenv("DTW_POC_REVOKE_EVENT_LOG")
+	if title == "" || logPath == "" || os.Getenv("DTW_POC_HELPER") == "" {
+		t.Skip("set owned fixture title/log and native helper")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	child := exec.Command(os.Args[0], "-test.run=^TestStdioChild$")
+	child.Env = append(os.Environ(), "DTW_POC_CHILD=1", "DTW_POC_WRITE_WINDOW="+title, "PATH=/usr/bin:/bin")
+	client := mcp.NewClient(&mcp.Implementation{Name: "poc-grant-revoke", Version: "1"}, nil)
+	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: child}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	call := func(id, code string) map[string]any {
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "exec", Arguments: map[string]any{"operation": "exec", "execution_id": id, "code": code}})
+		if err != nil || result.IsError {
+			t.Fatalf("%s: %v %+v", id, err, result)
+		}
+		return result.StructuredContent.(map[string]any)
+	}
+	setup := `const title=` + string(mustJSON(title)) + `;let ob=await dtw.observe({scope:{desktop:true},projection:'summary',fields:['name','role','app'],budget:{max_results:64,max_visited_nodes:512,max_depth:12,read_deadline_ms:3000}});let wins=ob.objects.filter(o=>o.kind==='window'&&o.name?.value===title);for(let i=0;i<8&&wins.length===0&&ob.coverage?.continuation;i++){ob=await dtw.observe({scope:{desktop:true},projection:'summary',fields:['name','role','app'],budget:{max_results:64,max_visited_nodes:512,max_depth:12,read_deadline_ms:3000},continuation:ob.coverage.continuation});wins.push(...ob.objects.filter(o=>o.kind==='window'&&o.name?.value===title));}if(wins.length!==1)throw Error('window not unique');state.win=wins[0];let items=await dtw.observe({scope:{refs:[state.win.ref]},projection:'outline',fields:['name','role'],match:{within:state.win.ref,name_equals:'POC text'},budget:{max_results:16,max_visited_nodes:512,max_depth:12,read_deadline_ms:3000}});let fields=items.objects.filter(o=>o.name?.value==='POC text');if(fields.length!==1)throw Error('field not unique');state.field=fields[0];print('ready');`
+	call("revoke-setup", setup)
+	before := call("revoke-before", `const r=await dtw.act({steps:[{id:'set',op:'set_value',target:{ref:state.field.ref},set_value:{text:'POC-中文🙂'}}]});if(r.outcome!=='completed'||r.steps?.[0]?.verification!=='verified')throw Error(JSON.stringify(r));print('verified-write');`)
+	if got := before["print"].([]any)[0]; got != "verified-write" {
+		t.Fatalf("pre-revoke write: %v", got)
+	}
+	childB := exec.Command(os.Args[0], "-test.run=^TestStdioChild$")
+	childB.Env = append(os.Environ(), "DTW_POC_CHILD=1", "DTW_POC_WRITE_WINDOW="+title, "PATH=/usr/bin:/bin")
+	clientB := mcp.NewClient(&mcp.Implementation{Name: "poc-grant-peer", Version: "1"}, nil)
+	sessionB, err := clientB.Connect(ctx, &mcp.CommandTransport{Command: childB}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sessionB.Close()
+	callB := func(id, code string) map[string]any {
+		result, err := sessionB.CallTool(ctx, &mcp.CallToolParams{Name: "exec", Arguments: map[string]any{"operation": "exec", "execution_id": id, "code": code}})
+		if err != nil || result.IsError {
+			t.Fatalf("peer %s: %v %+v", id, err, result)
+		}
+		return result.StructuredContent.(map[string]any)
+	}
+	callB("revoke-peer-setup", setup)
+	peerGrant := callB("revoke-peer-grant", `const grants=await dtw.grants();const title=`+string(mustJSON(title))+`;const grant=grants.grants?.find(g=>g.window_title===title&&g.state==='active');if(!grant)throw Error('peer grant missing');print(grant.id);`)
+	t.Logf("peer independent grant: %+v", peerGrant["print"])
+	time.Sleep(100 * time.Millisecond)
+	beforeLog, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changeCount := strings.Count(string(beforeLog), `"event":"text_change"`)
+	control := call("revoke-control", `const grants=await dtw.grants();const title=`+string(mustJSON(title))+`;const grant=grants.grants?.find(g=>g.window_title===title&&g.state==='active');if(!grant)throw Error('active grant missing: '+JSON.stringify(grants));await dtw.revokeGrant({grant_id:grant.id});const after=await dtw.grants();const current=after.grants?.find(g=>g.id===grant.id);if(current?.state!=='revoked')throw Error('grant still active: '+JSON.stringify(after));print(JSON.stringify({id:grant.id,state:current.state}));`)
+	t.Logf("revoke: %+v", control["print"])
+	blocked := call("revoke-blocked", `let result;try{const r=await dtw.act({steps:[{id:'set',op:'set_value',target:{ref:state.field.ref},set_value:{text:'UNAUTHORIZED'}}]});result={outcome:r.outcome,delivery:r.steps?.[0]?.delivery,fault:r.steps?.[0]?.fault?.code};}catch(e){result={error:e.code??e.message};}print(JSON.stringify(result));`)
+	t.Logf("post-revoke: %+v", blocked["print"])
+	if strings.Contains(fmt.Sprint(blocked["print"]), `"outcome":"completed"`) {
+		t.Fatalf("write completed after revoke: %+v", blocked)
+	}
+	readback := call("revoke-readback", `const ob=await dtw.observe({scope:{refs:[state.field.ref]},projection:'detail',fields:['name','role','value_preview'],budget:{max_results:4}});print(JSON.stringify({value:ob.objects?.[0]?.value_preview?.value,complete:ob.coverage?.complete}));`)
+	if !strings.Contains(fmt.Sprint(readback["print"]), "POC-中文🙂") {
+		t.Fatalf("revoke changed controlled value: %+v", readback)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(data), `"event":"text_change"`) != changeCount {
+		t.Fatal("owned App received a new text change after grant revocation")
+	}
+	peerWrite := callB("revoke-peer-write", `const r=await dtw.act({steps:[{id:'set',op:'set_value',target:{ref:state.field.ref},set_value:{text:'SESSION-B-AUTHORIZED'}}]});if(r.outcome!=='completed'||r.steps?.[0]?.verification!=='verified')throw Error(JSON.stringify(r));print('peer-verified');`)
+	if got := peerWrite["print"].([]any)[0]; got != "peer-verified" {
+		t.Fatalf("peer write after other Session revoke: %+v", peerWrite)
+	}
+	peerRead := callB("revoke-peer-read", `const ob=await dtw.observe({scope:{refs:[state.field.ref]},projection:'detail',fields:['value_preview'],budget:{max_results:4}});print(ob.objects?.[0]?.value_preview?.value);`)
+	if got := peerRead["print"].([]any)[0]; got != "SESSION-B-AUTHORIZED" {
+		t.Fatalf("peer write not observed: %+v", peerRead)
+	}
+	t.Log("Session A grant revoked and its write denied; Session B retained its independent grant and completed one real background write")
+}
+
 func TestTwoStdioSessionsKeepJSStateAndCancellationSeparate(t *testing.T) {
 	if os.Getenv("DTW_POC_CHILD") == "1" {
 		return

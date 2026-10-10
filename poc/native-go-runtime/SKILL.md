@@ -17,7 +17,9 @@ finished `result` can expose the original native receipt and, with
 
 JavaScript has persistent `state`, `print`, and `dtw`. `dtw` supplies async
 `observe`, `read`, `sync`, `act`, `capture`, `get`, and `cancel`; `dtw.sleep` is a
-bounded scheduling primitive. Use `await`, loops, filters, and exceptions to
+bounded scheduling primitive. `dtw.grants()` reads this Session's grants and
+`dtw.revokeGrant({grant_id})` can revoke one of them; scripts cannot grant
+themselves authority. Use `await`, loops, filters, and exceptions to
 batch narrow work, keep full observations in `state`, and `print` only the facts
 needed for the next decision. For example:
 

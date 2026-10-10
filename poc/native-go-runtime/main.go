@@ -194,7 +194,7 @@ func (s *supervisor) scriptLoop() {
 				return ctx.ThrowTypeError("native call needs operation and arguments")
 			}
 			op := args[0].ToString()
-			if op != "observe" && op != "read" && op != "sync" && op != "act" && op != "capture" && op != "get" && op != "cancel" {
+			if op != "observe" && op != "read" && op != "sync" && op != "act" && op != "capture" && op != "get" && op != "cancel" && op != "grants" && op != "revoke_grant" {
 				return ctx.ThrowTypeError("unknown desktop operation")
 			}
 			body := json.RawMessage(args[1].ToString())
@@ -271,7 +271,7 @@ func (s *supervisor) scriptLoop() {
 			}))
 		}
 		ctx.Globals().Set("dtw", global)
-		wrapper := ctx.Eval(`dtw.call = async (op, args={}) => { const reply = JSON.parse(await dtw.native(op, JSON.stringify(args))); if (reply.error) { const e = new Error(reply.error.message); e.code = reply.error.code; throw e; } return reply.result; }; for (const op of ['observe','read','sync','act','capture','get','cancel']) dtw[op] = args => dtw.call(op,args);`)
+		wrapper := ctx.Eval(`dtw.call = async (op, args={}) => { const reply = JSON.parse(await dtw.native(op, JSON.stringify(args))); if (reply.error) { const e = new Error(reply.error.message); e.code = reply.error.code; throw e; } return reply.result; }; for (const op of ['observe','read','sync','act','capture','get','cancel','grants']) dtw[op] = args => dtw.call(op,args); dtw.revokeGrant = args => dtw.call('revoke_grant',args);`)
 		if wrapper != nil {
 			wrapper.Free()
 		}

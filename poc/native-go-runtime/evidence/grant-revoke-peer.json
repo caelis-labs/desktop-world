@@ -1,0 +1,30 @@
+{
+  "previous_poc_commit": "3387362237a36a4d9471b439e8de9b4a7ad3b8e5",
+  "platform": "macOS 27.0.1 arm64",
+  "test": "TestOwnedGrantRevocationThroughGoMCP",
+  "fixture": "owned DTWFocusTarget.app, launched with open -g -n",
+  "fixture_pid": 26625,
+  "raw_local_log_sha256": "17fd8dcb5e957dec5ef425853128d992f8d10bd894c6b941498a7d633ae9b3a0",
+  "event_counts": {
+    "ready": 1,
+    "begin_edit": 1,
+    "text_change": 2
+  },
+  "ever_frontmost": false,
+  "ever_active": false,
+  "ever_key_window": false,
+  "session_a": {
+    "first_write": "completed and verified; App changed to controlled POC value",
+    "grant_after_revoke": "revoked",
+    "subsequent_write_error": "permission_denied",
+    "app_text_change_after_rejected_write": false,
+    "readback_after_rejected_write": "original controlled POC value"
+  },
+  "session_b": {
+    "started_before_a_revoke": true,
+    "own_grant": "active",
+    "write_after_a_revoke": "completed and verified",
+    "readback": "SESSION-B-AUTHORIZED"
+  },
+  "limits": "This verifies owned-App window grant revocation and peer isolation for semantic background set_value. It does not cover foreground input, permission prompts, expiry, or grant replay after helper loss."
+}
