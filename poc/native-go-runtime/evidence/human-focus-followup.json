@@ -1,0 +1,34 @@
+{
+  "fixture_pid": 24505,
+  "raw_local_log_sha256": "d415e9ea9d386bec4ddcff63d45fec34ce5411da7a8a9f2859ea06e9e91bef66",
+  "bundle": "DTWFocusHuman.app",
+  "launch": "open -n succeeded but ready was not active; open -a of the same app produced a key window",
+  "ready": {
+    "time": 1791600823.277732,
+    "active": false,
+    "key": false,
+    "window_visible": true,
+    "window_frame": "{{1320, 146}, {460, 252}}",
+    "visible_frame": "{{0, 76}, {1800, 1054}}",
+    "field_length": 0
+  },
+  "first_key": {
+    "time": 1791600846.617978,
+    "active": true,
+    "key": true,
+    "field_length": 0
+  },
+  "events": {
+    "became_key": 7,
+    "became_main": 6,
+    "end_edit": 1,
+    "ready": 1,
+    "resigned_key": 7,
+    "resigned_main": 6,
+    "seat_sample": 4633
+  },
+  "max_field_length": 0,
+  "window_input_events": 0,
+  "human_report": "Could click the window but could not type; a second double-click then single digit still did not appear.",
+  "interpretation": "A key window alone did not establish an editable Human input lane. No DTW foreground action ran in this follow-up. Human-input priority and misrouting remain unverified."
+}

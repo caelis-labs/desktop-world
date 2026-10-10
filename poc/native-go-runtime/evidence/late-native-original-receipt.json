@@ -1,0 +1,74 @@
+{
+  "actions": [
+    {
+      "native_request_id": "late-write-native-1",
+      "outcome": "completed",
+      "restoration": "not_borrowed",
+      "run_id": "run-05cca19f1d5fa9cb492f92b9",
+      "seat_health": "ready",
+      "steps": [
+        {
+          "channel": "semantic",
+          "delivery": "complete",
+          "id": "set",
+          "verification": "verified"
+        }
+      ]
+    }
+  ],
+  "error": {
+    "code": "cancelled",
+    "message": "cancelled"
+  },
+  "execution_id": "late-write",
+  "native_receipts": {
+    "late-write-native-1": {
+      "id": "data-6",
+      "protocol": "desktop-world/helper-v0.1",
+      "result": {
+        "bindings": {},
+        "end_revision": "59",
+        "epoch": "e-493fb65e3dd069e195ba6d73",
+        "expires_at": "2026-10-10T02:43:14.600998Z",
+        "input": {
+          "mode": "cooperative",
+          "restoration": "not_borrowed"
+        },
+        "outcome": "completed",
+        "request_id": "e-493fb65e3dd069e195ba6d73:session:data-6",
+        "run_id": "run-05cca19f1d5fa9cb492f92b9",
+        "seat_health": "ready",
+        "start_revision": "57",
+        "state": "terminal",
+        "steps": [
+          {
+            "channel": "semantic",
+            "delivery": "complete",
+            "end_revision": "59",
+            "evidence": [
+              {
+                "equals_string": "LATE-中文🙂",
+                "property": "value",
+                "target": {
+                  "ref": "r-493fb65e3dd069e195ba6d73-30"
+                }
+              }
+            ],
+            "finished_at": "2026-10-10T02:38:14.600956Z",
+            "id": "set",
+            "start_revision": "57",
+            "started_at": "2026-10-10T02:38:14.553876Z",
+            "state": "satisfied",
+            "target": "r-493fb65e3dd069e195ba6d73-30",
+            "verification": "verified"
+          }
+        ]
+      },
+      "world": "e-493fb65e3dd069e195ba6d73"
+    }
+  },
+  "native_request_ids": [
+    "late-write-native-1"
+  ],
+  "state": "cancelled"
+}

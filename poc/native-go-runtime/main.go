@@ -1,5 +1,5 @@
-// POC only: official Go MCP SDK with a per-connection embedded QuickJS context.
-// Native Desktop World calls and cross-process seat scheduling are not yet wired.
+// POC only: official Go MCP SDK with a per-connection QuickJS subprocess.
+// The parent owns the native helper, receipts, and cross-process seat locks.
 package main
 
 import (
@@ -38,6 +38,7 @@ type record struct {
 	Error          string
 	Cancel         context.CancelFunc
 	Done           chan struct{}
+	RunCtx         context.Context
 	NativeIDs      []string
 	NativeReceipts map[string]host.Reply
 	NativeError    *dw.Fault
@@ -53,18 +54,24 @@ type scriptCommand struct {
 }
 
 type supervisor struct {
-	mu        sync.Mutex
-	records   map[string]*record
-	active    *record
-	commands  chan scriptCommand
-	native    *host.Client
-	nativeMu  sync.Mutex
-	assetsDir string
+	mu           sync.Mutex
+	records      map[string]*record
+	active       *record
+	commands     chan scriptCommand
+	native       *host.Client
+	nativeMu     sync.Mutex
+	assetsDir    string
+	remoteNative func(context.Context, string, string, json.RawMessage) (host.Reply, error)
+	onDone       func(*record)
+	child        *scriptChild
+	childDead    bool
+	refApps      map[string]string
+	refParents   map[string]string
 }
 
 func newSupervisor(native *host.Client, assetsDir string) *supervisor {
-	s := &supervisor{records: make(map[string]*record), commands: make(chan scriptCommand), native: native, assetsDir: assetsDir}
-	go s.scriptLoop()
+	s := &supervisor{records: make(map[string]*record), commands: make(chan scriptCommand), native: native, assetsDir: assetsDir, refApps: make(map[string]string), refParents: make(map[string]string)}
+	s.startScriptChild()
 	return s
 }
 
@@ -194,7 +201,7 @@ func (s *supervisor) scriptLoop() {
 			if len(body) > 65536 || !json.Valid(body) {
 				return ctx.ThrowTypeError("native arguments are invalid or too large")
 			}
-			if s.native == nil {
+			if s.native == nil && s.remoteNative == nil {
 				return ctx.ThrowError(errors.New("native helper is not configured in this POC"))
 			}
 			s.mu.Lock()
@@ -207,9 +214,15 @@ func (s *supervisor) scriptLoop() {
 			s.mu.Unlock()
 			return ctx.NewPromise(func(resolve, _ func(*quickjs.Value)) {
 				go func() {
-					s.nativeMu.Lock()
-					reply, callErr := s.native.Call(command.Ctx, "session", id, op, body)
-					s.nativeMu.Unlock()
+					var reply host.Reply
+					var callErr error
+					if s.remoteNative != nil {
+						reply, callErr = s.remoteNative(command.Ctx, id, op, body)
+					} else {
+						s.nativeMu.Lock()
+						reply, callErr = s.native.Call(command.Ctx, "session", id, op, body)
+						s.nativeMu.Unlock()
+					}
 					if callErr != nil {
 						// The request may already have reached the native provider.
 						reply = host.Reply{ID: id}
@@ -251,6 +264,12 @@ func (s *supervisor) scriptLoop() {
 			})
 		})
 		global.Set("native", nativeFn)
+		if os.Getenv("DTW_POC_TEST_BLOCK") == "1" {
+			global.Set("_testBlock", ctx.NewFunction(func(ctx *quickjs.Context, _ *quickjs.Value, _ []*quickjs.Value) *quickjs.Value {
+				time.Sleep(5 * time.Second)
+				return ctx.Undefined()
+			}))
+		}
 		ctx.Globals().Set("dtw", global)
 		wrapper := ctx.Eval(`dtw.call = async (op, args={}) => { const reply = JSON.parse(await dtw.native(op, JSON.stringify(args))); if (reply.error) { const e = new Error(reply.error.message); e.code = reply.error.code; throw e; } return reply.result; }; for (const op of ['observe','read','sync','act','capture','get','cancel']) dtw[op] = args => dtw.call(op,args);`)
 		if wrapper != nil {
@@ -294,6 +313,9 @@ func (s *supervisor) scriptLoop() {
 		}
 		close(command.Record.Done)
 		s.mu.Unlock()
+		if s.onDone != nil {
+			s.onDone(command.Record)
+		}
 		running = context.Background()
 	}
 }
@@ -308,6 +330,15 @@ func brief(r *record) map[string]any {
 	}
 	if len(r.NativeIDs) > 0 {
 		out["native_request_ids"] = append([]string(nil), r.NativeIDs...)
+		var pending []string
+		for _, id := range r.NativeIDs {
+			if _, ok := r.NativeReceipts[id]; !ok {
+				pending = append(pending, id)
+			}
+		}
+		if len(pending) > 0 {
+			out["native_pending_ids"] = pending
+		}
 	}
 	if r.NativeError != nil {
 		out["native_error"] = map[string]any{"code": r.NativeError.Code, "message": r.NativeError.Message, "retry_class": r.NativeError.RetryClass}
@@ -467,10 +498,17 @@ func (s *supervisor) call(ctx context.Context, in input) map[string]any {
 			s.mu.Unlock()
 			select {
 			case <-done:
-				return brief(r)
+				s.mu.Lock()
+				out := brief(r)
+				s.mu.Unlock()
+				return out
 			case <-ctx.Done():
 				return map[string]any{"execution_id": in.ExecutionID, "state": "running"}
 			}
+		}
+		if s.childDead {
+			s.mu.Unlock()
+			return map[string]any{"execution_id": in.ExecutionID, "error": map[string]any{"code": "state_lost", "message": "script subprocess exited; Session JavaScript state is lost"}}
 		}
 		if s.active != nil {
 			s.mu.Unlock()
@@ -481,16 +519,19 @@ func (s *supervisor) call(ctx context.Context, in input) map[string]any {
 			return map[string]any{"execution_id": in.ExecutionID, "error": map[string]any{"code": "history_full", "message": "session execution history is full"}}
 		}
 		runCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		r = &record{ID: in.ExecutionID, Hash: hash, State: "running", Done: make(chan struct{}), Cancel: cancel}
+		r = &record{ID: in.ExecutionID, Hash: hash, State: "running", Done: make(chan struct{}), Cancel: cancel, RunCtx: runCtx}
 		s.records[r.ID] = r
 		s.active = r
 		s.mu.Unlock()
 		s.commands <- scriptCommand{Ctx: runCtx, Code: in.Code, Record: r}
 		select {
 		case <-r.Done:
-			return brief(r)
+			s.mu.Lock()
+			out := brief(r)
+			s.mu.Unlock()
+			return out
 		case <-ctx.Done():
-			cancel()
+			s.cancelRecord(r)
 			return map[string]any{"execution_id": in.ExecutionID, "state": "cancelling"}
 		}
 	case "status", "result":
@@ -512,6 +553,7 @@ func (s *supervisor) call(ctx context.Context, in input) map[string]any {
 		if r.State == "running" {
 			r.State = "cancelling"
 			r.Cancel()
+			go s.cancelScript(r.ID)
 		}
 		out := brief(r)
 		s.mu.Unlock()
@@ -525,7 +567,7 @@ func (s *supervisor) call(ctx context.Context, in input) map[string]any {
 func newServer(native *host.Client, assetsDir string) *mcp.Server {
 	s := newSupervisor(native, assetsDir)
 	server := mcp.NewServer(&mcp.Implementation{Name: "dtw-poc", Version: "0.0.0-poc"}, nil)
-	mcp.AddTool(server, &mcp.Tool{Name: "dtw_exec", Description: "POC: run approved JavaScript; query and cancel by original execution ID"}, func(ctx context.Context, _ *mcp.CallToolRequest, in input) (*mcp.CallToolResult, map[string]any, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "exec", Description: "POC: run approved JavaScript; query and cancel by original execution ID"}, func(ctx context.Context, _ *mcp.CallToolRequest, in input) (*mcp.CallToolResult, map[string]any, error) {
 		out := s.call(ctx, in)
 		_, err := json.Marshal(out)
 		if err != nil {
@@ -585,6 +627,13 @@ func runServer(ctx context.Context) error {
 }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--script-child" {
+		if err := runScriptChild(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := runServer(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

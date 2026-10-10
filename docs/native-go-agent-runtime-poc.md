@@ -4,13 +4,15 @@ Date: 2026-10-10. Baseline: `c8e7579eb55cd002ad8189ced6574f9a80ccd62f` on `feat/
 
 ## Product target and authority
 
-`dtw` is one native Go desktop core, using the official `github.com/modelcontextprotocol/go-sdk/mcp` for stdio MCP and an embedded JavaScript engine for approved scripts. Distributed runtime has no Node/npm or embedded Node. One public MCP tool, `dtw_exec`, accepts a discriminated `operation` (`exec`, `status`, `result`, `cancel`) and a stable `execution_id`; `exec` also accepts `code`. The CLI is `dtw`; the script global is `dtw`, alongside persistent `state` and `print`. The Skill describes this exact surface. Status, full result and cancellation are available through the same tool while execution is blocked. Trusted owner authorization stays outside model parameters and OS approval is never bypassed.
+`dtw` is one native Go desktop core, using the official `github.com/modelcontextprotocol/go-sdk/mcp` for stdio MCP and an embedded JavaScript engine for approved scripts. Distributed runtime has no Node/npm or embedded Node. One public MCP tool, `exec`, accepts a discriminated `operation` (`exec`, `status`, `result`, `cancel`) and a stable `execution_id`; `exec` also accepts `code`. The CLI is `dtw`; the script global is `dtw`, alongside persistent `state` and `print`. The Skill describes this exact surface. Status, full result and cancellation are available through the same tool while execution is blocked. Trusted owner authorization stays outside model parameters and OS approval is never bypassed.
 
 One MCP connection owns one Session. Its Go supervisor handles MCP/control independently of a same-binary Go script subprocess that hosts QuickJS and preserves its JS context across calls. The native helper may remain a separate process for provider isolation. Killing a wedged script child loses that Session's JS state and must report `state_lost`; it does not imply that an in-flight native action was undone. Keep original request IDs/receipts until reconciliation. Multiple connections create separate Session state, refs, grants, records and cancellation. A narrow per-user coordination primitive shared by these processes serializes physical foreground access and same-app/window writes; unrelated background reads and independent-app semantic actions can proceed. This is coordination, not a new daemon or multi-tenant service. User input/switching wins over agent borrowing. Lock order and stale-owner recovery need explicit proof; a process-local mutex is insufficient.
 
+Foreground acceptance requires the exact target App window to become the **actual key window**, not only the frontmost PID or an AX focused-window value. The execution layer must stop before posting if that handoff is not acknowledged. A quiet interval before borrowing is only one signal: actual user keyboard/pointer activity during the handoff must take precedence, and a user-chosen new foreground must not be overwritten by restoration. A dispatch-complete receipt is not proof that the App callback or business result happened. If user input may reach the agent target during a borrow, the gate stays failed until a tested input isolation/refusal path prevents it.
+
 The execution layer classifies each **known step** before dispatch: semantic native action or independent window capture stays in background; verified, target-scoped input may use a provider-specific background route only after live acceptance for that app/action; otherwise a known key/mouse step takes a short cooperative foreground lease and restores. The script never chooses a transport or mode. Unsupported capability fails explicitly; a failed or unknown delivery never falls back or replays. Receipt records selected route, delivery, verification, input lease and restoration. Cross-app plans split only before any effect at a safe boundary; already dispatched plans preserve the original ID and outcome.
 
-`dtw_exec` defaults to bounded printed output plus execution ID, state, coverage/incomplete flags, effect outcome/delivery/verification, errors and receipt lookup hint. Both `content` text and `structuredContent` use the **same compact facts**; neither silently includes the full tree/metrics/receipt. `result` by the original execution ID retrieves internal full detail with explicit bounded page/image requests. Unknown delivery, partial completion, cancellation, state loss and original native request IDs must be visible even when no `print` happened. Images use MCP `ImageContent` only on explicit demand; paths/metadata remain queryable. No token-saving claim follows from byte counts alone.
+`exec` defaults to bounded printed output plus execution ID, state, coverage/incomplete flags, effect outcome/delivery/verification, errors and receipt lookup hint. Both `content` text and `structuredContent` use the **same compact facts**; neither silently includes the full tree/metrics/receipt. `result` by the original execution ID retrieves internal full detail with explicit bounded page/image requests. Unknown delivery, partial completion, cancellation, state loss and original native request IDs must be visible even when no `print` happened. Images use MCP `ImageContent` only on explicit demand; paths/metadata remain queryable. No token-saving claim follows from byte counts alone.
 
 Keep the existing Go World/Actor, macOS AX/CGEvent/ScreenCaptureKit and Windows UIA/SendInput/Win32 capability, authorization, refs, native receipts, cooperative restoration, virtual cursor and reconciliation mechanisms wherever sound. Node MCP/JS/packaging assets are historical references, not runtime dependencies. Do not migrate or remove them until this entire POC gate passes.
 
@@ -22,7 +24,7 @@ The official Go MCP SDK supports `mcp.NewServer`, `mcp.AddTool`, `mcp.StdioTrans
 
 ## Complete baseline preservation matrix
 
-Each row needs current-candidate evidence through `dtw_exec`/native `dtw`, including refusal/error paths. `P` means pending, **not passed**. Historical evidence is a fixture design input only.
+Each row needs current-candidate evidence through `exec`/native `dtw`, including refusal/error paths. `P` means pending, **not passed**. Historical evidence is a fixture design input only.
 
 | ID | Capability and hard edge | Current-candidate gate |
 | --- | --- | --- |
@@ -46,7 +48,7 @@ All `C` rows must pass on this macOS host before formal product implementation. 
 
 | ID | Required actual proof | Gate |
 | --- | --- | --- |
-| C01 | Build/start official Go MCP stdio server and load matching Skill/JS batch through `dtw_exec`, with Node/npm absent from runtime PATH/package | P |
+| C01 | Build/start official Go MCP stdio server and load matching Skill/JS batch through `exec`, with Node/npm absent from runtime PATH/package | P |
 | C02 | JS async/await, loops/filter/catch, `print`, cross-call `state` and refs; asynchronous Go/native completion and on-demand MCP PNG | P |
 | C03 | Infinite loop before/after `await`, slow native call and cancellation: same MCP connection answers status/cancel promptly; original receipt remains queryable; no effect replay | P |
 | C04 | Full B01–B13 on real owned AppKit, WebKit/Chrome and Electron/other-provider apps as relevant; fixture tests do not substitute for these calls | P |
@@ -57,6 +59,8 @@ All `C` rows must pass on this macOS host before formal product implementation. 
 | C09 | Windows conditions: at least inspect cgo compiler/linking and cross-build feasibility; Windows GUI/background/multi-Agent remain unpassed without a Windows machine | P |
 
 If any C row is unpassed, stop dependent product implementation and report the exact blocker and smallest next experiment/fix. Historical macOS/Windows acceptance and `go test` may support a baseline but cannot be promoted to this candidate's pass. If Windows is unavailable, report C09 as platform-scope unresolved to the coordinating agent; do not invent Windows results. A final POC report must bind all claims to exact SHA and differentiate current live proof, fixture/CI proof and historical reference.
+
+The current isolated candidate, exact test commands, owned-App callbacks, controlled foreground failure and still-open rows are recorded in [POC checkpoint 2](../poc/native-go-runtime/RESULTS.md). That checkpoint does not change this stage gate.
 
 ## Primary references
 

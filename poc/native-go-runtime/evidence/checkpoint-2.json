@@ -1,0 +1,462 @@
+{
+  "base_commit": "c8e7579eb55cd002ad8189ced6574f9a80ccd62f",
+  "previous_poc_commit": "0042ffbc056d0a557fedb0f14b1296b8abbec524",
+  "runtime_binary_sha256": "03c2fb8916e42dfcb871a7d6bc5697c128a96415d2808151e7d8b7e03e781a22",
+  "native_helper_sha256": "30816f35a45fe687b18ff39fd0c04fa0cac050a8909400402dbdf0902548195b",
+  "focus": {
+    "click_rounds": [
+      {
+        "round": "round-a",
+        "receipt_sha256": "758075e99ef5ab3eca49fe1ddedfcd741a1683c84709ea2d73d89427744a55d3",
+        "run_id": "run-c5ce7710c1894f7c97bcfe85",
+        "foreground_ms": 260,
+        "restoration": "restored",
+        "outcome": "completed",
+        "delivery": "complete",
+        "verification": "not_requested"
+      },
+      {
+        "round": "round-b",
+        "receipt_sha256": "d7ec178f41d4e1756d63dde9ab91d84ad703d50c056ce2a0da156c054ba6ed95",
+        "run_id": "run-4870da45f67f35593a0f683d",
+        "foreground_ms": 245,
+        "restoration": "restored",
+        "outcome": "completed",
+        "delivery": "complete",
+        "verification": "not_requested"
+      },
+      {
+        "round": "round-c",
+        "receipt_sha256": "db4ce19ad7a64f68173331cf0c254a240cea3591a7e90a441a73066a552b4fd0",
+        "run_id": "run-62065a33a41bf209a1dda29d",
+        "foreground_ms": 119,
+        "restoration": "restored",
+        "outcome": "completed",
+        "delivery": "complete",
+        "verification": "not_requested"
+      },
+      {
+        "round": "round-d",
+        "receipt_sha256": "08efe7af8cbcd6ac60136c22f4706fff8990344589439f47d3d879d946a343d2",
+        "run_id": "run-42ad3624bf62730365b5776d",
+        "foreground_ms": 125,
+        "restoration": "restored",
+        "outcome": "completed",
+        "delivery": "complete",
+        "verification": "not_requested"
+      },
+      {
+        "round": "live-1",
+        "receipt_sha256": "63f3f6693ac180dc02bf66a6824b32b085b7377e9a79c50ca9bbed64484c1e2a",
+        "run_id": "run-555375d9ccec887dbae2add3",
+        "foreground_ms": 179,
+        "restoration": "restored",
+        "outcome": "completed",
+        "delivery": "complete",
+        "verification": "not_requested"
+      },
+      {
+        "round": "live-2",
+        "receipt_sha256": "057c154e0ab0eb7fd29ad1a086e2bc29f6bb357eb7ab851d919238a4585e9476",
+        "run_id": "run-8ec0cb6844c7184cd1fe5d75",
+        "foreground_ms": 126,
+        "restoration": "restored",
+        "outcome": "completed",
+        "delivery": "complete",
+        "verification": "not_requested"
+      },
+      {
+        "round": "live-3",
+        "receipt_sha256": "a2f367c266c6a84c6dc22a95760d89e64a966c6582adcddee78a0ee5c0eb99f3",
+        "run_id": "run-af70f1a3fb17543820b9957b",
+        "foreground_ms": 120,
+        "restoration": "restored",
+        "outcome": "completed",
+        "delivery": "complete",
+        "verification": "not_requested"
+      },
+      {
+        "round": "live-4",
+        "receipt_sha256": "28bc9c15cd63651ab352164806d48f3f3ca14901ee5734a7cb370963512e956a",
+        "run_id": "run-e8458857e9db85404a72b6d3",
+        "foreground_ms": 135,
+        "restoration": "restored",
+        "outcome": "completed",
+        "delivery": "complete",
+        "verification": "not_requested"
+      },
+      {
+        "round": "live-5",
+        "receipt_sha256": "fc1290bba8ed80dd4e26d86497d6efbb020c7684a7485d78fffb9d73ead38b3d",
+        "run_id": "run-00b5843337d35ddc15efddc2",
+        "foreground_ms": 131,
+        "restoration": "restored",
+        "outcome": "completed",
+        "delivery": "complete",
+        "verification": "not_requested"
+      },
+      {
+        "round": "live-6",
+        "receipt_sha256": "99bd602e5fb6b31ebf1fdcf6f4f3ebc769614315cb7b851ef6510ad409e0b790",
+        "run_id": "run-2fc33b0475e58683db6c218c",
+        "foreground_ms": 119,
+        "restoration": "restored",
+        "outcome": "completed",
+        "delivery": "complete",
+        "verification": "not_requested"
+      }
+    ],
+    "foreground_ms_median": 128.5,
+    "foreground_ms_range": [
+      119,
+      260
+    ],
+    "focus_fixture_submit_callbacks": 0,
+    "human_fixture_key_events": 0,
+    "interpretation": "The attempted human-input rounds are invalid because the two fixture windows overlapped and the human fixture received no keys. Complete dispatch receipts do not prove app handling. The earlier separate FullFixture submit with added 画 remains unattributed."
+  },
+  "late_native": {
+    "receipt_sha256": "9e80d9def4b68196741bc464f2a8d4eab130bc8d83f5f6ace72d28c2518a958f",
+    "execution_state": "cancelled",
+    "run_id": "run-05cca19f1d5fa9cb492f92b9",
+    "outcome": "completed",
+    "delivery": "complete",
+    "verification": "verified",
+    "restoration": "not_borrowed",
+    "owned_app_exact_write_count": 1
+  },
+  "logs": {
+    "round-a": {
+      "sha256": "ab2bcb21dbe70ad8dc73adc1cc28d7bc399c08c50603d0d87b0a7c4a5dd24266",
+      "pid": 15232,
+      "events": {
+        "begin_edit": 1,
+        "ready": 1,
+        "text_change": 1
+      },
+      "last_field_value": "POC-中文🙂"
+    },
+    "round-b": {
+      "sha256": "72128a0c102b32cd8b81dd67e711457157e8581293024ef49048a577e6ee8093",
+      "pid": 15473,
+      "events": {
+        "became_key": 1,
+        "became_main": 1,
+        "begin_edit": 1,
+        "ready": 1,
+        "text_change": 1
+      },
+      "last_field_value": "POC-中文🙂"
+    },
+    "round-c": {
+      "sha256": "aba7783e81de5bc4c8499c094b09d87aba00fa3eeb4d199d740fa6f667762f78",
+      "pid": 15840,
+      "events": {
+        "became_key": 1,
+        "became_main": 1,
+        "begin_edit": 1,
+        "ready": 1,
+        "resigned_key": 1,
+        "resigned_main": 1,
+        "text_change": 9
+      },
+      "last_field_value": "POC-中文🙂"
+    },
+    "human-c": {
+      "sha256": "09d742bb43f41c56cae7f0e6ed8963c5322bd3567eaaef1211a52e58aad26ac7",
+      "pid": 15853,
+      "events": {
+        "became_key": 3,
+        "became_main": 3,
+        "ready": 1,
+        "resigned_key": 3,
+        "resigned_main": 3
+      },
+      "last_field_value": ""
+    },
+    "late-exact": {
+      "sha256": "fa5b4a507d260cfbdc34acb4748a185389fec1d61be6c08633262a830420df7e",
+      "pid": 17945,
+      "events": {
+        "begin_edit": 1,
+        "ready": 1,
+        "text_change": 1
+      },
+      "last_field_value": "LATE-中文🙂"
+    },
+    "same-app": {
+      "sha256": "3b290c7a0865a6586da3dc59a78e249c17a0c6515b101f67e8b78d4b3b117f56",
+      "pid": 18128,
+      "events": {
+        "begin_edit": 1,
+        "ready": 1,
+        "text_change": 3
+      },
+      "last_field_value": "SESSION-a"
+    },
+    "independent-app": {
+      "sha256": "2213973c374efe688d5c8e278b9713ea9fdb5594152b16fe2f71ca97770727af",
+      "pid": 18221,
+      "events": {
+        "begin_edit": 1,
+        "ready": 1,
+        "text_change": 1
+      },
+      "last_field_value": "SESSION-b"
+    },
+    "ref-isolation": {
+      "sha256": "2320f53f1581e281aa25552224a1010f31441329988489880d415829d6d6144e",
+      "pid": 18442,
+      "events": {
+        "begin_edit": 1,
+        "ready": 1,
+        "text_change": 4
+      },
+      "last_field_value": "SESSION-a"
+    },
+    "cancel-peer": {
+      "sha256": "4ed5c6ad36de4e3bbb38f867c264eb26dcd02610840681a0560ccb7156747e8a",
+      "pid": 18687,
+      "events": {
+        "begin_edit": 1,
+        "ready": 1,
+        "text_change": 1
+      },
+      "last_field_value": "CANCEL-PEER-A"
+    },
+    "semantic-check-exact": {
+      "sha256": "79663ba5210fd9ea51f3d771f4cd6dbadcad906079a119d400e5264adc93e8d6",
+      "pid": 19698,
+      "events": {
+        "checkbox": 3,
+        "ready": 1
+      },
+      "last_field_value": null
+    },
+    "semantic-selection-exact": {
+      "sha256": "2e86f8c1a12666a0cb884703d7884590b98229a6eb9ee849ffd7b539d8647787",
+      "pid": 19782,
+      "events": {
+        "ready": 1,
+        "selected": 3
+      },
+      "last_field_value": null
+    },
+    "semantic-expansion-final": {
+      "sha256": "d6e7177864dcf8fe8df7e45fe956123d59234f914e967b56e3eee079307baed0",
+      "pid": 21689,
+      "events": {
+        "details_visible": 3,
+        "expanded": 3,
+        "ready": 1
+      },
+      "last_field_value": null
+    },
+    "semantic-invoke-check": {
+      "sha256": "25699325b91746c3570312cdcb380573c48e2107e59355536d5ae57ff62bd638",
+      "pid": 21988,
+      "events": {
+        "approved": 1,
+        "checkbox": 3,
+        "ready": 1
+      },
+      "last_field_value": null
+    },
+    "semantic-invoke-selection": {
+      "sha256": "b89bfd534d0310f8535b8d119ddd782145870f5c06cbee865f75d1cf4af8a1b3",
+      "pid": 22068,
+      "events": {
+        "ordered": 1,
+        "ready": 1,
+        "selected": 3
+      },
+      "last_field_value": null
+    }
+  },
+  "traces": {
+    "same-app-coord": {
+      "sha256": "4bbb69b83648a86b02ede845ac6fa077f52f61b462b7fde02e04e6edeaa24f83",
+      "events": [
+        {
+          "app": "DTWFocusFixture",
+          "event": "acquired",
+          "foreground": false,
+          "native_id": "same-b-native-1",
+          "pid": 18168,
+          "time": 1791599995627090000
+        },
+        {
+          "app": "DTWFocusFixture",
+          "event": "released",
+          "foreground": false,
+          "native_id": "same-b-native-1",
+          "pid": 18168,
+          "time": 1791599996181362000
+        },
+        {
+          "app": "DTWFocusFixture",
+          "event": "acquired",
+          "foreground": false,
+          "native_id": "same-a-native-1",
+          "pid": 18165,
+          "time": 1791599996184831000
+        },
+        {
+          "app": "DTWFocusFixture",
+          "event": "released",
+          "foreground": false,
+          "native_id": "same-a-native-1",
+          "pid": 18165,
+          "time": 1791599996719479000
+        }
+      ]
+    },
+    "independent-coord": {
+      "sha256": "f67ca3553833cbf459aa9897c8e74afbe072dee52d27880a19968e56659e9a06",
+      "events": [
+        {
+          "app": "DTWFocusFixture",
+          "event": "acquired",
+          "foreground": false,
+          "native_id": "same-a-native-1",
+          "pid": 18281,
+          "time": 1791600040177551000
+        },
+        {
+          "app": "DTWFocusOther",
+          "event": "acquired",
+          "foreground": false,
+          "native_id": "same-b-native-1",
+          "pid": 18284,
+          "time": 1791600040177607000
+        },
+        {
+          "app": "DTWFocusFixture",
+          "event": "released",
+          "foreground": false,
+          "native_id": "same-a-native-1",
+          "pid": 18281,
+          "time": 1791600040720597000
+        },
+        {
+          "app": "DTWFocusOther",
+          "event": "released",
+          "foreground": false,
+          "native_id": "same-b-native-1",
+          "pid": 18284,
+          "time": 1791600040732626000
+        }
+      ]
+    },
+    "ref-isolation-2-coord": {
+      "sha256": "6ac1af91052340cbbe016999908b3ee81d333c536eae955787c7cbf156953538",
+      "events": [
+        {
+          "app": "DTWFocusFixture",
+          "event": "acquired",
+          "foreground": false,
+          "native_id": "same-b-native-1",
+          "pid": 18550,
+          "time": 1791600109631039000
+        },
+        {
+          "app": "DTWFocusFixture",
+          "event": "released",
+          "foreground": false,
+          "native_id": "same-b-native-1",
+          "pid": 18550,
+          "time": 1791600110166965000
+        },
+        {
+          "app": "DTWFocusFixture",
+          "event": "acquired",
+          "foreground": false,
+          "native_id": "same-a-native-1",
+          "pid": 18546,
+          "time": 1791600110172966000
+        },
+        {
+          "app": "DTWFocusFixture",
+          "event": "released",
+          "foreground": false,
+          "native_id": "same-a-native-1",
+          "pid": 18546,
+          "time": 1791600110714886000
+        },
+        {
+          "app": "",
+          "event": "acquired",
+          "foreground": false,
+          "native_id": "foreign-ref-native-1",
+          "pid": 18550,
+          "time": 1791600110717208000
+        },
+        {
+          "app": "",
+          "event": "released",
+          "foreground": false,
+          "native_id": "foreign-ref-native-1",
+          "pid": 18550,
+          "time": 1791600111194725000
+        }
+      ]
+    },
+    "cancel-peer-coord": {
+      "sha256": "46b7104b5a74f62e365695a4eb25ae9d5e1cccaa0fc19197882ee3212a38303e",
+      "events": [
+        {
+          "app": "DTWFocusFixture",
+          "event": "waiting",
+          "foreground": false,
+          "native_id": "cancel-peer-a-native-5",
+          "pid": 18717,
+          "time": 1791600168123701000
+        },
+        {
+          "app": "DTWFocusFixture",
+          "event": "acquired",
+          "foreground": false,
+          "native_id": "cancel-peer-a-native-5",
+          "pid": 18717,
+          "time": 1791600168124078000
+        },
+        {
+          "app": "DTWFocusFixture",
+          "event": "waiting",
+          "foreground": false,
+          "native_id": "cancel-peer-b-native-5",
+          "pid": 18720,
+          "time": 1791600168642373000
+        },
+        {
+          "app": "DTWFocusFixture",
+          "event": "released",
+          "foreground": false,
+          "native_id": "cancel-peer-b-native-5",
+          "pid": 18720,
+          "time": 1791600168655633000
+        },
+        {
+          "app": "DTWFocusFixture",
+          "event": "released",
+          "foreground": false,
+          "native_id": "cancel-peer-a-native-5",
+          "pid": 18717,
+          "time": 1791600169176428000
+        }
+      ]
+    }
+  },
+  "payload_bytes": {
+    "state_read_text": 19,
+    "state_read_structured": 56,
+    "state_read_full_mcp_result": 248,
+    "native_observe_default_text": 120,
+    "native_observe_default_structured": 242,
+    "native_observe_default_mcp_result": 536,
+    "native_observe_full_structured": 5486,
+    "native_observe_full_mcp_result": 5780,
+    "model_token_usage": "unmeasured"
+  },
+  "windows": "unverified: no Windows host/toolchain"
+}

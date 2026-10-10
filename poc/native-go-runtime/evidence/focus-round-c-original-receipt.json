@@ -1,0 +1,72 @@
+{
+  "actions": [
+    {
+      "native_request_id": "fixture-submit-click-native-1",
+      "outcome": "completed",
+      "restoration": "restored",
+      "run_id": "run-62065a33a41bf209a1dda29d",
+      "seat_health": "ready",
+      "steps": [
+        {
+          "channel": "foreground_transaction",
+          "delivery": "complete",
+          "id": "submit",
+          "verification": "not_requested"
+        }
+      ]
+    }
+  ],
+  "execution_id": "fixture-submit-click",
+  "native_receipts": {
+    "fixture-submit-click-native-1": {
+      "id": "data-11",
+      "protocol": "desktop-world/helper-v0.1",
+      "result": {
+        "bindings": {},
+        "end_revision": "61",
+        "epoch": "e-11d6bb127631260995204d02",
+        "expires_at": "2026-10-10T02:33:02.045128Z",
+        "input": {
+          "foreground_ms": 119,
+          "mode": "cooperative",
+          "restoration": "restored"
+        },
+        "outcome": "completed",
+        "request_id": "e-11d6bb127631260995204d02:session:data-11",
+        "run_id": "run-62065a33a41bf209a1dda29d",
+        "seat_health": "ready",
+        "start_revision": "60",
+        "state": "terminal",
+        "steps": [
+          {
+            "channel": "foreground_transaction",
+            "delivery": "complete",
+            "end_revision": "61",
+            "finished_at": "2026-10-10T02:28:02.016057Z",
+            "id": "submit",
+            "pointer": {
+              "frame": "desktop",
+              "observed_at": "2026-10-10T02:28:01.921407Z",
+              "topology": "1",
+              "x": 270,
+              "y": 883
+            },
+            "start_revision": "60",
+            "started_at": "2026-10-10T02:28:01.902597Z",
+            "state": "dispatched",
+            "target": "r-11d6bb127631260995204d02-2e",
+            "verification": "not_requested"
+          }
+        ]
+      },
+      "world": "e-11d6bb127631260995204d02"
+    }
+  },
+  "native_request_ids": [
+    "fixture-submit-click-native-1"
+  ],
+  "print": [
+    "{\"outcome\":\"completed\",\"delivery\":\"complete\",\"channel\":\"foreground_transaction\",\"restoration\":\"restored\"}"
+  ],
+  "state": "completed"
+}
