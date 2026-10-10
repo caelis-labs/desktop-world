@@ -3,15 +3,16 @@
 import AppKit
 
 guard CommandLine.arguments.count >= 2 else {
-  fputs("usage: LaunchOwnedFixture OWNED_APP_PATH [APP_ARGS...]\n", stderr)
+  fputs("usage: LaunchOwnedFixture OWNED_APP_PATH [--reuse-registration] [APP_ARGS...]\n", stderr)
   exit(2)
 }
 let url = URL(fileURLWithPath: CommandLine.arguments[1])
+let reuseRegistration = CommandLine.arguments.dropFirst(2).first == "--reuse-registration"
 let configuration = NSWorkspace.OpenConfiguration()
 configuration.activates = false
-configuration.createsNewApplicationInstance = true
+configuration.createsNewApplicationInstance = !reuseRegistration
 configuration.addsToRecentItems = false
-configuration.arguments = Array(CommandLine.arguments.dropFirst(2))
+configuration.arguments = Array(CommandLine.arguments.dropFirst(reuseRegistration ? 3 : 2))
 var finished = false
 var launchedPID: pid_t = 0
 var launchError: Error?
