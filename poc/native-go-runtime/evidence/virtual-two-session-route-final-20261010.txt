@@ -7,8 +7,9 @@
         foreground restoration: restored
     world_route_parallel_live_test.go:189: parallel foreground routes, in-flight physical pointer displacement: 0.0 px at 0s; base=(1675.3,505.7), peak=(1675.3,505.7)
     world_route_parallel_live_test.go:201: shared seat restored: front PID matched; pointer displacement 0.0 px
-    world_route_parallel_live_test.go:215: background overlap=true a=260ms b=260ms
-    world_route_parallel_live_test.go:215: foreground overlap=false a=460ms b=462ms
---- PASS: TestCoreObjectAutomaticRoutesAcrossTwoOwnedApps (3.91s)
+    world_route_parallel_live_test.go:215: background overlap=true a=262ms b=262ms
+    world_route_parallel_live_test.go:215: foreground overlap=false a=418ms b=429ms
+    world_route_parallel_live_test.go:268: cancelled waiting Session B: no App callback or foreground acquisition; Session A drag completed
+--- PASS: TestCoreObjectAutomaticRoutesAcrossTwoOwnedApps (4.39s)
 PASS
-ok  	github.com/caelis-labs/desktop-world/poc/native-go-runtime	4.202s
+ok  	github.com/caelis-labs/desktop-world/poc/native-go-runtime	7.421s

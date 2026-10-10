@@ -214,6 +214,58 @@ func TestCoreObjectAutomaticRoutesAcrossTwoOwnedApps(t *testing.T) {
 		}
 		t.Logf("%s overlap=%t a=%dms b=%dms", kind, overlap, (a.released-a.acquired)/1e6, (b.released-b.acquired)/1e6)
 	}
+	// Cancelling one Session while it waits for the shared foreground must not
+	// post its click or alter the already running peer's drag.
+	beforeA := len(ownedRows(t, targets[0].log))
+	beforeB := len(ownedRows(t, targets[1].log))
+	aDone := make(chan answer, 1)
+	bDone := make(chan answer, 1)
+	go func() {
+		aDone <- call(targets[0], "route-cancel-a", `await state.canvas.dragTo(state.canvas,{from:{u:0.2,v:0.5},to:{u:0.7,v:0.5},durationMs:250});`)
+	}()
+	waitTrace := func(prefix, event string) bool {
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			for _, row := range routeTrace(t, trace) {
+				if strings.HasPrefix(row.ID, prefix) && row.Event == event {
+					return true
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		return false
+	}
+	if !waitTrace("route-cancel-a-native-", "acquired") {
+		t.Fatal("Session A did not acquire the foreground lock")
+	}
+	go func() { bDone <- call(targets[1], "route-cancel-b", `await state.canvas.click();`) }()
+	if !waitTrace("route-cancel-b-native-", "waiting") {
+		t.Fatal("Session B did not wait for foreground")
+	}
+	if _, err := targets[1].session.CallTool(ctx, &mcp.CallToolParams{Name: "exec", Arguments: map[string]any{"operation": "cancel", "execution_id": "route-cancel-b"}}); err != nil {
+		t.Fatal(err)
+	}
+	a, b := <-aDone, <-bDone
+	dropped := false
+	for _, row := range ownedRows(t, targets[0].log)[beforeA:] {
+		if row["event"] == "drop" {
+			var dx, dy float64
+			if _, err := fmt.Sscanf(fmt.Sprint(row["value"]), "%f,%f", &dx, &dy); err == nil && dx > 100 && math.Abs(dy) < 10 {
+				dropped = true
+			}
+		}
+	}
+	if a.err != nil || !strings.Contains(a.text, "W1/N1.dragTo: dispatched") || !dropped {
+		t.Fatalf("Session A drag failed after B cancellation: %+v; rows=%+v", a, ownedRows(t, targets[0].log)[beforeA:])
+	}
+	if b.err == nil || !strings.Contains(b.text, "cancel") {
+		t.Fatalf("Session B did not report cancellation: %+v", b)
+	}
+	if waitOwnedEvent(t, targets[1].log, beforeB, "click", "1", 150*time.Millisecond) ||
+		routeSpan(routeTrace(t, trace), "route-cancel-b-native-").acquired != 0 {
+		t.Fatal("cancelled Session B dispatched an input action")
+	}
+	t.Log("cancelled waiting Session B: no App callback or foreground acquisition; Session A drag completed")
 }
 
 type routeTraceRow struct {
