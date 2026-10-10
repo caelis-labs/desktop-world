@@ -8,14 +8,14 @@ on:
         required: true
         type: string
       version:
-        description: Formal version (vX.Y.Z), package candidate only
+        description: Version (vX.Y.Z or vX.Y.Z-rc.N), package candidate only
         required: true
         type: string
 permissions:
   contents: read
 env:
   CANDIDATE_REVISION: ${{ github.event_name == 'workflow_dispatch' && inputs.revision || github.event.pull_request.head.sha }}
-  CANDIDATE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || 'v0.1.0' }}
+  CANDIDATE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || 'v0.1.0-rc.4' }}
 jobs:
   package:
     strategy:
@@ -39,7 +39,7 @@ jobs:
         shell: bash
         run: |
           [[ "$CANDIDATE_REVISION" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$CANDIDATE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$CANDIDATE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]]
           [[ "$(git rev-parse HEAD)" == "$CANDIDATE_REVISION" ]]
           [[ -z "$(git status --porcelain)" ]]
       - name: macOS arm64 package

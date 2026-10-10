@@ -8,7 +8,7 @@ try {
     & $Program @Arguments
     if ($LASTEXITCODE -ne 0) { throw "$Program failed ($LASTEXITCODE)" }
   }
-  if ($Version -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'stable version required' }
+  if ($Version -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$') { throw 'stable or numbered release candidate version required' }
   if (-not $IsWindows -or $env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'build on Windows amd64 with PowerShell 7' }
   if (git status --porcelain) { throw 'clean checkout required' }
   $revision = (git rev-parse HEAD).Trim()

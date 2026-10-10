@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-VERSION="${1:?usage: package-plugin.sh vX.Y.Z}"
-[[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'stable version required' >&2; exit 1; }
+VERSION="${1:?usage: package-plugin.sh vX.Y.Z[-rc.N]}"
+[[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]] || { echo 'stable or numbered release candidate version required' >&2; exit 1; }
 [[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || { echo 'build on macOS arm64' >&2; exit 1; }
 [[ -z "$(git status --porcelain)" ]] || { echo 'clean checkout required' >&2; exit 1; }
 REVISION="$(git rev-parse HEAD)"
