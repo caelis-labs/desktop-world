@@ -1,4 +1,4 @@
-// POC only: official Go MCP SDK with a per-connection QuickJS subprocess.
+// Native DTW MCP runtime: official Go SDK with a per-connection QuickJS subprocess.
 // The parent owns the native helper, receipts, and cross-process seat locks.
 package main
 
@@ -31,6 +31,8 @@ type input struct {
 	IncludeImage bool   `json:"include_image,omitempty" jsonschema:"include requested PNG on result query"`
 }
 
+var releaseVersion = "0.1.0"
+
 type record struct {
 	ID             string
 	Hash           string
@@ -62,7 +64,7 @@ type supervisor struct {
 	native       *host.Client
 	nativeMu     sync.Mutex
 	assetsDir    string
-	remoteNative func(context.Context, string, string, json.RawMessage) (host.Reply, error)
+	remoteNative func(context.Context, string, string, json.RawMessage, bool) (host.Reply, error)
 	// POC-only injection point for end-to-end receipt fault tests. Production
 	// server construction leaves this nil and always uses the real native host.
 	testNative func(context.Context, string, string, json.RawMessage) (host.Reply, error)
@@ -196,10 +198,11 @@ func (s *supervisor) scriptLoop() {
 		global := ctx.NewObject()
 		global.Set("sleep", sleepFn)
 		nativeFn := ctx.NewFunction(func(ctx *quickjs.Context, _ *quickjs.Value, args []*quickjs.Value) *quickjs.Value {
-			if len(args) != 2 {
+			if len(args) < 2 || len(args) > 3 {
 				return ctx.ThrowTypeError("native call needs operation and arguments")
 			}
 			op := args[0].ToString()
+			internal := len(args) == 3 && args[2].ToString() == "internal"
 			if op != "observe" && op != "read" && op != "sync" && op != "act" && op != "capture" && op != "get" && op != "cancel" {
 				return ctx.ThrowTypeError("unknown desktop operation")
 			}
@@ -223,7 +226,7 @@ func (s *supervisor) scriptLoop() {
 					var reply host.Reply
 					var callErr error
 					if s.remoteNative != nil {
-						reply, callErr = s.remoteNative(command.Ctx, id, op, body)
+						reply, callErr = s.remoteNative(command.Ctx, id, op, body, internal)
 					} else {
 						s.nativeMu.Lock()
 						reply, callErr = s.native.Call(command.Ctx, "session", id, op, body)
@@ -246,7 +249,7 @@ func (s *supervisor) scriptLoop() {
 						facts := nativeFacts(op, id, reply.Result)
 						switch op {
 						case "observe":
-							if facts != nil {
+							if facts != nil && !internal {
 								command.Record.Observations = append(command.Record.Observations, facts)
 							}
 						case "act":
@@ -277,7 +280,7 @@ func (s *supervisor) scriptLoop() {
 			}))
 		}
 		ctx.Globals().Set("dtw", global)
-		wrapper := ctx.Eval(`dtw.call = async (op, args={}) => { const reply = JSON.parse(await dtw.native(op, JSON.stringify(args))); if (reply.error) { const e = new Error(reply.error.message); e.code = reply.error.code; throw e; } return reply.result; }; for (const op of ['observe','read','sync','act','capture','get','cancel']) dtw[op] = args => dtw.call(op,args);`)
+		wrapper := ctx.Eval(`dtw.call = async (op, args={}, internal=false) => { const reply = JSON.parse(await dtw.native(op, JSON.stringify(args), internal ? 'internal' : 'public')); if (reply.error) { const e = new Error(reply.error.message); e.code = reply.error.code; throw e; } return reply.result; }; for (const op of ['observe','read','sync','act','capture','get','cancel']) dtw[op] = args => dtw.call(op,args);`)
 		if wrapper != nil {
 			wrapper.Free()
 		}
@@ -584,8 +587,8 @@ func newServer(native *host.Client, assetsDir string) *mcp.Server {
 }
 
 func newServerWithSupervisor(s *supervisor) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "dtw-poc", Version: "0.0.0-poc"}, nil)
-	mcp.AddTool(server, &mcp.Tool{Name: "exec", Description: "POC: run approved JavaScript; query and cancel by original execution ID"}, func(ctx context.Context, _ *mcp.CallToolRequest, in input) (*mcp.CallToolResult, any, error) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "dtw", Version: releaseVersion}, nil)
+	mcp.AddTool(server, &mcp.Tool{Name: "exec", Description: "Run DTW JavaScript; query or cancel by the original execution ID"}, func(ctx context.Context, _ *mcp.CallToolRequest, in input) (*mcp.CallToolResult, any, error) {
 		out := s.call(ctx, in)
 		if os.Getenv("DTW_POC_TEXT_OUTPUT") == "1" || os.Getenv("DTW_POC_LEGACY_OUTPUT") != "1" {
 			content := []mcp.Content{&mcp.TextContent{Text: modelResultText(in, out)}}
@@ -630,8 +633,25 @@ func runServer(ctx context.Context) error {
 	var native *host.Client
 	var assetsDir string
 	var cursor *virtualCursorOverlay
-	if helper := os.Getenv("DTW_POC_HELPER"); helper != "" {
+	helper := ""
+	if os.Getenv("DTW_POC_CHILD") == "1" {
+		helper = os.Getenv("DTW_POC_HELPER")
+	} else {
+		self, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		name := "dtw-helper"
+		if runtime.GOOS == "windows" {
+			name += ".exe"
+		}
+		helper = filepath.Clean(filepath.Join(filepath.Dir(self), "..", "libexec", name))
+	}
+	if helper != "" {
 		var err error
+		if _, err = os.Stat(helper); err != nil {
+			return fmt.Errorf("native helper unavailable at %s: %w", helper, err)
+		}
 		assetsDir = os.Getenv("DTW_POC_ASSETS")
 		if assetsDir == "" {
 			assetsDir, err = os.MkdirTemp("", "dtw-native-go-poc-assets-")
@@ -644,7 +664,7 @@ func runServer(ctx context.Context) error {
 			return err
 		}
 		options := host.Options{Executable: helper, AssetsDir: assetsDir, InputMode: dw.InputModeCooperative}
-		if os.Getenv("DTW_POC_VIRTUAL") == "1" {
+		if os.Getenv("DTW_POC_VIRTUAL") == "1" || os.Getenv("DTW_POC_CHILD") != "1" && os.Getenv("DTW_POC_VIRTUAL") != "0" {
 			cursor = newVirtualCursorOverlay(helper)
 			defer cursor.Close()
 			options.Stderr = cursor
@@ -657,7 +677,7 @@ func runServer(ctx context.Context) error {
 		}
 		defer native.Close()
 		if !native.Hello.CoreNoAuth {
-			return errors.New("core POC requires a helper built with dtw_poc_noauth; DTW grants are not part of this interface")
+			return errors.New("DTW helper must omit its own grant gate; application permissions belong to the host")
 		}
 		if err := native.BeginTurn(ctx, "session"); err != nil {
 			return err
@@ -667,12 +687,20 @@ func runServer(ctx context.Context) error {
 }
 
 func main() {
+	if len(os.Args) == 2 && (os.Args[1] == "version" || os.Args[1] == "--version") {
+		fmt.Println("dtw " + releaseVersion)
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "--script-child" {
 		if err := runScriptChild(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		return
+	}
+	if len(os.Args) > 1 {
+		fmt.Fprintln(os.Stderr, "usage: dtw [version] (no arguments starts the MCP exec server)")
+		os.Exit(2)
 	}
 	if err := runServer(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, err)

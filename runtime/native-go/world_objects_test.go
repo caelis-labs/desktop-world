@@ -102,7 +102,7 @@ func TestWorldObjectScriptAndTextOnlyMCP(t *testing.T) {
 	}
 	line := first.Content[0].(*mcp.TextContent).Text
 	t.Logf("model result 1 (%d UTF-8 bytes): %s", len(line), line)
-	if !strings.Contains(line, "e1 · W1/B1 Submit · button · invoke") || strings.Contains(line, "native_request") || strings.Contains(line, `\"`) {
+	if !strings.Contains(line, "e1 · W1/B1 Submit · button · invoke") || strings.Contains(line, "native_request") || strings.Contains(line, "observation incomplete") || strings.Contains(line, `\"`) {
 		t.Fatalf("not concise or reusable: %q", line)
 	}
 	second := call("e2", "exec", `await dtw.at('W1/B1').invoke();`, "")

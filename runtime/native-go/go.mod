@@ -1,4 +1,4 @@
-module github.com/caelis-labs/desktop-world/poc/native-go-runtime
+module github.com/caelis-labs/desktop-world/runtime/native-go
 
 go 1.26.0
 

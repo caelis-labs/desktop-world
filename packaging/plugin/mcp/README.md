@@ -1,8 +1,5 @@
-# MCP source and installed payload
+# MCP payload
 
-The canonical MCP server, worker and build sources are in
-[`clients/mcp`](../../../clients/mcp/). The release build places their bundled
-output here. A source checkout does not contain the native helper or private
-Node runtime: install the matching official Full or Lite release archive for
-this `plugin.json` version before running the MCP server. The repository files
-are for inspection and marketplace metadata, not an implicit build step.
+The native MCP server is built from `runtime/native-go` into `bin/dtw` by
+`scripts/build-native-plugin.sh`. The package also includes the private native
+helper. No JavaScript server file or Node runtime is installed.

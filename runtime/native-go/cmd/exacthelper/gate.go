@@ -11,7 +11,7 @@ import (
 	dw "github.com/caelis-labs/desktop-world"
 	"github.com/caelis-labs/desktop-world/internal/engine"
 	"github.com/caelis-labs/desktop-world/internal/helper"
-	"github.com/caelis-labs/desktop-world/poc/native-go-runtime/internal/exactgrant"
+	"github.com/caelis-labs/desktop-world/runtime/native-go/internal/exactgrant"
 )
 
 type identitySource interface {

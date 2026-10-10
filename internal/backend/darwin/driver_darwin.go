@@ -121,6 +121,9 @@ func (d *Driver) Perform(c context.Context, o backend.Operation) (v backend.Outc
 		return backend.Outcome{Delivery: dw.DeliveryNone, Fault: dw.NewFault("cancelled", "cancelled before native dispatch", "reobserve")}
 	}
 	if e := d.call(c, "perform", o, &v); e != nil {
+		if f, ok := preDispatchFault(e); ok {
+			return backend.Outcome{Delivery: dw.DeliveryNone, Fault: f}
+		}
 		v.Delivery = dw.DeliveryUnknown
 		v.Unsafe = true
 		f, ok := e.(*dw.Fault)
@@ -130,6 +133,10 @@ func (d *Driver) Perform(c context.Context, o backend.Operation) (v backend.Outc
 		v.Fault = f
 	}
 	return
+}
+func preDispatchFault(err error) (*dw.Fault, bool) {
+	f, ok := err.(*dw.Fault)
+	return f, ok && (f.Code == "terminal_application_blocked" || f.Code == "target_identity_unknown")
 }
 func (d *Driver) HitTest(c context.Context, p dw.Point, k backend.Key) (v bool, e error) {
 	e = d.call(c, "hit", map[string]any{"Point": p, "Key": k}, &v)

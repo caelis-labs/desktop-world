@@ -26,6 +26,7 @@ type childMessage struct {
 	Code        string          `json:"code,omitempty"`
 	Operation   string          `json:"operation,omitempty"`
 	Body        json.RawMessage `json:"body,omitempty"`
+	Internal    bool            `json:"internal,omitempty"`
 	Reply       *host.Reply     `json:"reply,omitempty"`
 	State       string          `json:"state,omitempty"`
 	Output      []string        `json:"output,omitempty"`
@@ -279,7 +280,9 @@ func (s *supervisor) handleChildNative(msg childMessage) {
 		if facts != nil {
 			switch msg.Operation {
 			case "observe":
-				r.Observations = append(r.Observations, facts)
+				if !msg.Internal {
+					r.Observations = append(r.Observations, facts)
+				}
 			case "act":
 				r.Actions = append(r.Actions, facts)
 			case "capture":
@@ -304,13 +307,13 @@ func runScriptChild() error {
 	var pendingMu sync.Mutex
 	pending := make(map[string]chan host.Reply)
 	s := &supervisor{commands: commands}
-	s.remoteNative = func(ctx context.Context, id, op string, body json.RawMessage) (host.Reply, error) {
+	s.remoteNative = func(ctx context.Context, id, op string, body json.RawMessage, internal bool) (host.Reply, error) {
 		result := make(chan host.Reply, 1)
 		pendingMu.Lock()
 		pending[id] = result
 		pendingMu.Unlock()
 		defer func() { pendingMu.Lock(); delete(pending, id); pendingMu.Unlock() }()
-		if err := write(childMessage{Type: "native", ExecutionID: executionFromNativeID(id), ID: id, Operation: op, Body: body}); err != nil {
+		if err := write(childMessage{Type: "native", ExecutionID: executionFromNativeID(id), ID: id, Operation: op, Body: body, Internal: internal}); err != nil {
 			return host.Reply{}, err
 		}
 		select {

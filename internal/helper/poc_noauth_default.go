@@ -1,4 +1,4 @@
-//go:build !dtw_poc_noauth
+//go:build !dtw_core_noauth && !dtw_poc_noauth
 
 package helper
 

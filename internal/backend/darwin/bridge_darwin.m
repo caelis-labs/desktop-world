@@ -82,6 +82,38 @@ static NSDictionary *scanCapacityError(void) {
     @"RetryClass" : @"never_automatically"
   }};
 }
+static AXUIElementRef element(DWContext *c, NSString *k);
+static BOOL alive(DWContext *c, NSString *k);
+// The public DTW runtime never dispatches an action to terminal applications.
+// Resolve the process from the retained AX element immediately before native
+// delivery, so changing a model-visible window title cannot bypass the rule.
+static NSString *terminalTargetFailure(DWContext *c, NSDictionary *request) {
+  NSDictionary *operation = request[@"Operation"] ?: request;
+  for (NSString *field in @[@"Key", @"ToKey"]) {
+    NSString *key = operation[field];
+    if (![key isKindOfClass:NSString.class] || !key.length) continue;
+    AXUIElementRef target = element(c, key);
+    pid_t pid = 0;
+    if (!target || !alive(c, key) || AXUIElementGetPid(target, &pid) != kAXErrorSuccess || pid <= 0)
+      return @"target_identity_unknown";
+    NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+    if (!app) return @"target_identity_unknown";
+    NSString *bundle = app.bundleIdentifier.lowercaseString ?: @"";
+    NSString *executable = app.executableURL.lastPathComponent.lowercaseString ?: @"";
+    NSString *bundlePath = app.bundleURL.lastPathComponent.lowercaseString ?: @"";
+    if (!bundle.length && !executable.length) return @"target_identity_unknown";
+    NSSet *bundles = [NSSet setWithArray:@[@"com.apple.terminal", @"com.googlecode.iterm2",
+      @"com.mitchellh.ghostty", @"dev.warp.warp-stable", @"dev.warp.warp",
+      @"org.alacritty", @"net.kovidgoyal.kitty", @"com.github.wez.wezterm",
+      @"co.zeit.hyper", @"com.raphaelamorim.rio", @"com.electron.tabby"]];
+    NSSet *names = [NSSet setWithArray:@[@"terminal", @"iterm2", @"ghostty", @"warp",
+      @"alacritty", @"kitty", @"wezterm-gui", @"hyper", @"rio", @"tabby"]];
+    if ([bundles containsObject:bundle] || [names containsObject:executable] ||
+        [names containsObject:[bundlePath stringByDeletingPathExtension]])
+      return @"terminal_application_blocked";
+  }
+  return nil;
+}
 // Keep previews, full reads and predicates on the same AX scalar contract.
 // Unsupported values stay unknown; labels are a separately identified source.
 static NSString *scalarText(id value) {
@@ -1441,12 +1473,22 @@ char *dw_call(void *p, const char *opstr, const char *json, void *cancel) {
       else if ([op isEqual:@"poc_window_identity"])
         out = pocWindowIdentity(c, r[@"Key"]);
 #endif
+      else if ([op isEqual:@"perform"] || [op isEqual:@"cooperative_perform"] ||
+               [op isEqual:@"background_poc"]) {
+        NSString *failure = terminalTargetFailure(c, r);
+        if ([failure isEqual:@"terminal_application_blocked"])
+          out = @{ @"Fault": @{ @"Code": failure,
+            @"Message": @"DTW does not operate terminal applications",
+            @"RetryClass": @"never_automatically" } };
+        else if (failure) out = err(failure);
+        else if ([op isEqual:@"perform"]) out = perform(c, r, (DWCancel *)cancel);
+        else if ([op isEqual:@"cooperative_perform"]) out = cooperativePerform(c, r, (DWCancel *)cancel);
 #ifdef DTW_BACKGROUND_POC
-      else if ([op isEqual:@"background_poc"])
-        out = backgroundPOC(c, r, (DWCancel *)cancel);
+        else out = backgroundPOC(c, r, (DWCancel *)cancel);
+#else
+        else out = err(@"background_unavailable");
 #endif
-      else if ([op isEqual:@"cooperative_perform"])
-        out = cooperativePerform(c, r, (DWCancel *)cancel);
+      }
       else if ([op isEqual:@"input_end"]) {
         out = cooperativeEnd(c);
         c.inputFault = nil;
@@ -1466,8 +1508,6 @@ char *dw_call(void *p, const char *opstr, const char *json, void *cancel) {
         NSString *failure = cooperativeGuard(c);
         out = failure ? err(failure) : @{@"Result" : @YES};
       }
-      else if ([op isEqual:@"perform"])
-        out = perform(c, r, (DWCancel *)cancel);
       else if ([op isEqual:@"hit"]) {
         AXUIElementRef sys = AXUIElementCreateSystemWide(), hit = NULL;
         NSDictionary *p = r[@"Point"];

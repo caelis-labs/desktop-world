@@ -3,8 +3,8 @@
   "mcpServers": {
     "desktop-world": {
       "type": "stdio",
-      "command": "./runtime/node",
-      "args": ["${PLUGIN_ROOT}/mcp/server.mjs", "--data-dir", "${PLUGIN_DATA}"],
+      "command": "${PLUGIN_ROOT}/bin/dtw",
+      "args": [],
       "cwd": "${PLUGIN_DATA}"
     }
   }

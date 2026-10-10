@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "desktop-world",
   "version": "0.1.0",
-  "description": "Operate authorized desktop applications through persistent JavaScript scripts and native receipts.",
+  "description": "Operate desktop applications through native Go MCP, persistent JavaScript and concise receipts.",
   "author": { "name": "Caelis Labs", "url": "https://github.com/caelis-labs" },
   "repository": "https://github.com/caelis-labs/desktop-world",
   "homepage": "https://github.com/caelis-labs/desktop-world",

@@ -40,6 +40,9 @@ func (d *backgroundPOC) Perform(ctx context.Context, op backend.Operation) (v ba
 		return backend.Outcome{Delivery: dw.DeliveryNone, Fault: dw.NewFault("cancelled", "cancelled before native dispatch", "reobserve")}
 	}
 	if err := d.call(ctx, "background_poc", map[string]any{"Operation": op, "Mode": d.mode}, &v); err != nil {
+		if f, ok := preDispatchFault(err); ok {
+			return backend.Outcome{Delivery: dw.DeliveryNone, Fault: f}
+		}
 		v = backend.Outcome{Delivery: dw.DeliveryUnknown, Unsafe: true, Fault: dw.NewFault("provider_unavailable", err.Error(), "never_automatically")}
 	}
 	return

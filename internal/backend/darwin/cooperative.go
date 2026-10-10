@@ -79,6 +79,9 @@ func (d *cooperative) Perform(ctx context.Context, op backend.Operation) (v back
 		return d.Driver.Perform(ctx, op)
 	}
 	if err := d.call(ctx, "cooperative_perform", op, &v); err != nil {
+		if f, ok := preDispatchFault(err); ok {
+			return backend.Outcome{Delivery: dw.DeliveryNone, Fault: f}
+		}
 		return backend.Outcome{Delivery: dw.DeliveryUnknown, Unsafe: true, Fault: dw.NewFault("provider_unavailable", err.Error(), "never_automatically")}
 	}
 	return

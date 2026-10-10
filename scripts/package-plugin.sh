@@ -1,35 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-VERSION="${1:?usage: package-plugin.sh vX.Y.Z[-rc.N]}"
-[[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]] || { echo 'stable or numbered release candidate version required' >&2; exit 1; }
-[[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || { echo 'build on macOS arm64' >&2; exit 1; }
+version="${1:?usage: package-plugin.sh vX.Y.Z[-rc.N]}"
+[[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]] || { echo 'stable or numbered candidate version required' >&2; exit 1; }
+[[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || { echo 'native plugin packaging requires macOS arm64' >&2; exit 1; }
 [[ -z "$(git status --porcelain)" ]] || { echo 'clean checkout required' >&2; exit 1; }
-REVISION="$(git rev-parse HEAD)"
-OUT="$PWD/artifacts/release/$VERSION"
-[[ ! -e "$OUT" ]] || { echo "output already exists: $OUT" >&2; exit 1; }
-mkdir -p "$OUT/staging"
-export GOWORK=off CGO_ENABLED=1 GOOS=darwin GOARCH=arm64
-export GOCACHE="${GOCACHE:-${TMPDIR:-/tmp}/desktop-world-plugin-go-cache}"
-export CGO_CFLAGS='-mmacosx-version-min=14.0'
-export CGO_LDFLAGS='-mmacosx-version-min=14.0'
-go build -trimpath -buildvcs=true -ldflags "-X main.releaseVersion=$VERSION" -o "$OUT/staging/dtw" ./cmd/dtw
-(cd clients/mcp && npm ci && npm run build)
-NODE_VERSION=v24.21.0
-NODE_ARCHIVE="node-$NODE_VERSION-darwin-arm64.tar.gz"
-curl -fsSLo "$OUT/staging/$NODE_ARCHIVE" "https://nodejs.org/dist/$NODE_VERSION/$NODE_ARCHIVE"
-curl -fsSLo "$OUT/staging/SHASUMS256.txt" "https://nodejs.org/dist/$NODE_VERSION/SHASUMS256.txt"
-EXPECTED="$(awk -v name="$NODE_ARCHIVE" '$2 == name { print $1 }' "$OUT/staging/SHASUMS256.txt")"
-ACTUAL="$(shasum -a 256 "$OUT/staging/$NODE_ARCHIVE" | awk '{print $1}')"
-[[ -n "$EXPECTED" && "$EXPECTED" == "$ACTUAL" ]] || { echo 'official Node archive checksum mismatch' >&2; exit 1; }
-tar -xzf "$OUT/staging/$NODE_ARCHIVE" -C "$OUT/staging"
-NODE_ROOT="$OUT/staging/node-$NODE_VERSION-darwin-arm64"
-for FLAVOR in full lite; do
-  NAME="desktop-world-plugin-${VERSION}-${FLAVOR}-darwin-arm64"
-  node scripts/build-plugin-package.mjs "$VERSION" darwin-arm64 "$FLAVOR" "$OUT/staging/dtw" "$NODE_ROOT/bin/node" "$NODE_ROOT/LICENSE" "$ACTUAL" "$OUT/$NAME"
-  node clients/mcp/verify-package.mjs "$OUT/$NAME"
-  tar -czf "$OUT/$NAME.tar.gz" -C "$OUT" "$NAME"
-done
-(cd "$OUT" && shasum -a 256 "desktop-world-plugin-${VERSION}-full-darwin-arm64.tar.gz" "desktop-world-plugin-${VERSION}-lite-darwin-arm64.tar.gz" > SHA256SUMS)
-rm -rf "$OUT/staging"
-echo "revision=$REVISION full=$OUT/desktop-world-plugin-${VERSION}-full-darwin-arm64.tar.gz lite=$OUT/desktop-world-plugin-${VERSION}-lite-darwin-arm64.tar.gz"
+out="$PWD/artifacts/release/$version"
+[[ ! -e "$out" ]] || { echo "output already exists: $out" >&2; exit 1; }
+name="desktop-world-plugin-${version}-darwin-arm64"
+mkdir -p "$out/$name"
+./scripts/build-native-plugin.sh "$out/$name" "$version"
+(cd "$out" && tar -czf "$name.tar.gz" "$name" && shasum -a 256 "$name.tar.gz" > SHA256SUMS)
+echo "revision=$(git rev-parse HEAD) package=$out/$name.tar.gz"

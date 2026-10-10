@@ -12,7 +12,7 @@ import (
 
 	dw "github.com/caelis-labs/desktop-world"
 	"github.com/caelis-labs/desktop-world/local"
-	"github.com/caelis-labs/desktop-world/poc/native-go-runtime/internal/grantcandidate"
+	"github.com/caelis-labs/desktop-world/runtime/native-go/internal/grantcandidate"
 )
 
 type page struct {

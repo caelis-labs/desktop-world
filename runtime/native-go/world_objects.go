@@ -113,7 +113,7 @@ class Element {
     }
     if (!['name','role','states','checked','selected','expanded'].includes(property))
       throw TypeError('unsupported read property');
-    const ob = await dtw.observe({scope:{ids:[this.id]},projection:'detail',
+    const ob = await dtw._observe({scope:{ids:[this.id]},projection:'detail',
       fields:['name','role','states'],budget:{max_results:1,read_deadline_ms:3000}});
     requireClean(ob, 'read');
     const found = ob.objects.find(o => o.ref === source.ref);
@@ -138,7 +138,7 @@ class Window extends Element {
       throw TypeError('name must be nonempty text');
     if (query.nameContains !== undefined && (typeof query.nameContains !== 'string' || !query.nameContains))
       throw TypeError('nameContains must be nonempty text');
-    const ob = await dtw.observe({scope:{ids:[this.id]},projection:'outline',
+    const ob = await dtw._observe({scope:{ids:[this.id]},projection:'outline',
       fields:['name','role','capabilities','value_preview'],
       match:{within_id:this.id,...(query.name ? {name_equals:query.name} : {}),
         ...(query.nameContains ? {name_contains:query.nameContains} : {}),
@@ -161,7 +161,7 @@ class Window extends Element {
 }
 class App extends Element {
   async windows() {
-    const ob = await dtw.observe({scope:{ids:[this.id]},projection:'summary',
+    const ob = await dtw._observe({scope:{ids:[this.id]},projection:'summary',
       fields:['name','role','app','capabilities'],
       budget:{max_results:16,max_visited_nodes:512,max_depth:3,read_deadline_ms:4000}});
     requireClean(ob, 'windows');
@@ -171,12 +171,12 @@ class App extends Element {
   }
   async window(title) {
     if (typeof title !== 'string' || !title) throw TypeError('window needs an exact title');
-    let ob = await dtw.observe({scope:{ids:[this.id]},projection:'summary',
+    let ob = await dtw._observe({scope:{ids:[this.id]},projection:'summary',
       fields:['name','role','app','capabilities'],
       budget:{max_results:64,max_visited_nodes:512,max_depth:3,read_deadline_ms:4000}});
     let hits = ob.objects.filter(o => o.kind === 'window' && o.app === dtw.ref(this.id) && nameOf(o) === title);
     if (!clean(ob) || hits.length === 0) {
-      ob = await dtw.observe({scope:{ids:[this.id]},projection:'outline',
+      ob = await dtw._observe({scope:{ids:[this.id]},projection:'outline',
         fields:['name','role','app','capabilities'],
         match:{within_id:this.id,name_equals:title},budget});
       hits = ob.objects.filter(o => o.kind === 'window' && o.app === dtw.ref(this.id) && nameOf(o) === title);
@@ -201,7 +201,7 @@ dtw.app = async (name, options={}) => {
   let candidates = [];
   let complete = false;
   for (let page = 0; page < 8; page++) {
-    const ob = await dtw.observe({scope:{desktop:true},projection:'summary',fields:['name','role','app'],
+    const ob = await dtw._observe({scope:{desktop:true},projection:'summary',fields:['name','role','app'],
       budget:{max_results:32,max_visited_nodes:10000,max_depth:3,read_deadline_ms:4000},
       ...(continuation ? {continuation} : {})});
     candidates.push(...ob.objects.filter(o => o.kind === 'application' && nameOf(o) === name));
@@ -217,7 +217,7 @@ dtw.app = async (name, options={}) => {
     if (!complete) throw Error('App window selector unresolved: desktop discovery incomplete');
     const selected = [];
     for (const candidate of candidates) {
-      const ob = await dtw.observe({scope:{refs:[candidate.ref]},projection:'summary',
+      const ob = await dtw._observe({scope:{refs:[candidate.ref]},projection:'summary',
         fields:['name','role','app'],budget:{max_results:64,max_visited_nodes:512,
           max_depth:3,read_deadline_ms:4000}});
       requireClean(ob, 'App window selector');
@@ -232,7 +232,7 @@ dtw.app = async (name, options={}) => {
   // Re-read that exact Ref before exposing an App handle. It does not claim
   // global name uniqueness, and later window/action identity remains native.
   const candidate = candidates[0];
-  const ob = await dtw.observe({scope:{refs:[candidate.ref]},projection:'detail',
+  const ob = await dtw._observe({scope:{refs:[candidate.ref]},projection:'detail',
     fields:['name','role','app'],budget:{max_results:1,read_deadline_ms:3000}});
   requireClean(ob, 'App candidate');
   const found = ob.objects.filter(o => o.kind === 'application' && o.ref === candidate.ref &&

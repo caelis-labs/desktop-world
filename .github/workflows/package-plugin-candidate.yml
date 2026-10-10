@@ -18,11 +18,7 @@ env:
   CANDIDATE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || 'v0.1.0-rc.4' }}
 jobs:
   package:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-15, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -32,9 +28,6 @@ jobs:
         with:
           go-version: '1.26.x'
           cache: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24.21.0'
       - name: Verify exact clean source
         shell: bash
         run: |
@@ -42,19 +35,18 @@ jobs:
           [[ "$CANDIDATE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]]
           [[ "$(git rev-parse HEAD)" == "$CANDIDATE_REVISION" ]]
           [[ -z "$(git status --porcelain)" ]]
+      - name: Native runtime and MCP tests
+        shell: bash
+        run: |
+          cd runtime/native-go
+          GOWORK=off go test ./...
       - name: macOS arm64 package
-        if: runner.os == 'macOS'
         shell: bash
         run: ./scripts/package-plugin.sh "$CANDIDATE_VERSION"
-      - name: Windows amd64 package
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./scripts/package-plugin.ps1 -Version $env:CANDIDATE_VERSION
       - uses: actions/upload-artifact@v4
         with:
-          name: plugin-candidate-${{ runner.os }}-${{ env.CANDIDATE_VERSION }}-${{ env.CANDIDATE_REVISION }}
+          name: plugin-candidate-macos-${{ env.CANDIDATE_VERSION }}-${{ env.CANDIDATE_REVISION }}
           if-no-files-found: error
           path: |
-            artifacts/release/${{ env.CANDIDATE_VERSION }}/*.zip
             artifacts/release/${{ env.CANDIDATE_VERSION }}/*.tar.gz
             artifacts/release/${{ env.CANDIDATE_VERSION }}/SHA256SUMS

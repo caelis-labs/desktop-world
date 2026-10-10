@@ -80,7 +80,7 @@ dtw.ref = alias => {
   if (!ref) throw new Error('unknown or expired display alias');
   return ref;
 };
-const rawObserve = dtw.observe, rawRead = dtw.read, rawCapture = dtw.capture, rawAct = dtw.act;
+const rawRead = dtw.read, rawCapture = dtw.capture, rawAct = dtw.act;
 const resolveTarget = target => {
   if (!target || !Object.prototype.hasOwnProperty.call(target, 'id')) return target;
   if (typeof target.id !== 'string' || Object.keys(target).length !== 1)
@@ -89,8 +89,8 @@ const resolveTarget = target => {
     throw new Error('display alias needs one clean complete observation before an action');
   return {ref: dtw.ref(target.id)};
 };
-dtw.observe = args => {
-  if (!args || typeof args !== 'object') return rawObserve(args);
+const mappedObserve = (args, internal) => {
+  if (!args || typeof args !== 'object') return dtw.call('observe', args, internal);
   let scope = args.scope, match = args.match;
   if (scope?.ids !== undefined) {
     if (scope.refs !== undefined || !Array.isArray(scope.ids))
@@ -103,8 +103,10 @@ dtw.observe = args => {
     match = {...match, within: dtw.ref(match.within_id)};
     delete match.within_id;
   }
-  return rawObserve({...args, scope, match});
+  return dtw.call('observe', {...args, scope, match}, internal);
 };
+dtw.observe = args => mappedObserve(args, false);
+dtw._observe = args => mappedObserve(args, true);
 dtw.read = args => {
   if (args?.target_id === undefined) return rawRead(args);
   if (args.target !== undefined) throw new TypeError('target_id cannot mix with target');
