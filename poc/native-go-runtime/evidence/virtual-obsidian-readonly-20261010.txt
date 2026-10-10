@@ -1,0 +1,5 @@
+=== RUN   TestSelectedRealAppReadOnlyObserve
+    real_app_readonly_live_test.go:81: selected real app read-only facts: map[app_matches:1 desktop_complete:true desktop_more:false new_note_controls:[map[label:新建笔记 role:container] map[label:新建文件夹 role:container]] outline:[map[buttons:[unknown unknown unknown] complete:false count:79 dirty:false more:false pages:2 roles:map[button:3 container:52 document:1 image:16 text:4 unknown:2 window:1] truncated:true unavailable:[ax_output_limit] unique_refs:79]] own_complete:true own_dirty:false own_more:false own_objects:2 own_truncated:false own_windows:1 targeted:[map[capabilities:[[map[availability:blocked name:focus support:unsupported] map[availability:available name:invoke support:supported] map[availability:available name:scroll_into_view support:supported] map[availability:blocked name:set_value support:unsupported]]] complete:true dirty:false matches:1 more:false roles:[container] truncated:false]] window_names:[欢迎 - DevNote - Obsidian 1.14.4] window_roles:[window]]
+--- PASS: TestSelectedRealAppReadOnlyObserve (0.99s)
+PASS
+ok  	github.com/caelis-labs/desktop-world/poc/native-go-runtime	2.469s
