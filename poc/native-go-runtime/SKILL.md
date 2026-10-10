@@ -26,13 +26,19 @@ state.button = button;
 print(button); // e.g. W1/B1 新建笔记 · button · invoke
 ```
 
-The next `exec` can use `await state.button.invoke()` or
-`await dtw.at('W1/B1').invoke()`. For several actions, use
+The next `exec` can use `await state.button.activate()` or
+`await dtw.at('W1/B1').activate()`. `activate()` chooses an available semantic
+`invoke` before the action starts, otherwise it uses one physical click. It
+never retries a failed or uncertain delivery through another route. Use
+`click()` when the task specifically needs a mouse click. For several actions, use
 `await dtw.transaction(tx => { tx.scrollIntoView(state.button); tx.invoke(state.button); })`.
 Available
-Element methods include `read`, `focus`, `invoke`, `setValue`, `setChecked`,
+Element methods include `read`, `focus`, `activate`, `invoke`, `setValue`, `setChecked`,
 `setSelected`, `setExpanded`, `scrollIntoView`, `move`, `click`, `dragTo`,
 `scroll`, `press`, and `typeText`; `win.capture()` requests a window image.
+`move`, `click`, and `scroll` accept `{u,v}` normalized within the observed
+element; `dragTo` accepts `{from:{u,v},to:{u,v},durationMs}`. Physical actions
+use a short coordinated foreground transaction.
 Check the behaviors printed for the observed element before acting. The
 execution layer chooses semantic background or coordinated foreground input.
 Scripts do not select a transport or input mode.

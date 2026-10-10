@@ -20,7 +20,10 @@ type actionShape struct {
 	Steps []struct {
 		Op     string `json:"op"`
 		Target struct {
-			Ref string `json:"ref"`
+			Ref    string `json:"ref"`
+			Anchor struct {
+				Target string `json:"target"`
+			} `json:"anchor"`
 		} `json:"target"`
 	} `json:"steps"`
 }
@@ -41,7 +44,11 @@ func (s *supervisor) coordinateAction(ctx context.Context, id string, body json.
 		if strings.HasPrefix(step.Op, "pointer.") || strings.HasPrefix(step.Op, "keyboard.") || step.Op == "focus" {
 			foreground = true
 		}
-		known := s.resolveApp(step.Target.Ref)
+		ref := step.Target.Ref
+		if ref == "" {
+			ref = step.Target.Anchor.Target
+		}
+		known := s.resolveApp(ref)
 		if known == "" || app != "" && app != known {
 			app = ""
 			break

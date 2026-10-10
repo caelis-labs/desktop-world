@@ -57,7 +57,7 @@ func compactExec(full map[string]any) map[string]any {
 				}
 				briefSteps := make([]map[string]any, 0, len(steps))
 				for _, step := range steps {
-					entry := map[string]any{"id": step["id"], "channel": step["channel"], "verification": step["verification"]}
+					entry := map[string]any{"id": step["id"], "state": step["state"], "channel": step["channel"], "verification": step["verification"]}
 					if delivery := step["delivery"]; delivery != "not_applicable" {
 						entry["delivery"] = delivery
 					}

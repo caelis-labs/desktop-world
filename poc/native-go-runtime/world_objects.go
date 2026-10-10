@@ -40,7 +40,14 @@ const available = o => (o.capabilities ?? []).filter(c =>
 const words = {setValue:'set_value',setChecked:'set_checked',setSelected:'set_selected',
   setExpanded:'set_expanded',scrollIntoView:'scroll_into_view',move:'pointer.move',
   click:'pointer.click',dragTo:'pointer.drag',scroll:'pointer.scroll',
-  press:'keyboard.press',typeText:'keyboard.type_text',focus:'focus',invoke:'invoke'};
+  press:'keyboard.press',typeText:'keyboard.type_text',focus:'focus',invoke:'invoke',activate:'activate'};
+const positioned = (id, options, method) => {
+  if (options?.u === undefined && options?.v === undefined) return {id};
+  const u = options?.u, v = options?.v;
+  if (!Number.isFinite(u) || !Number.isFinite(v) || u < 0 || u > 1 || v < 0 || v > 1)
+    throw RangeError(method + ' needs u and v in 0..1');
+  return {anchor:{target:dtw.ref(id),u,v}};
+};
 const argsFor = (method, args) => {
   switch (method) {
     case 'setValue': case 'typeText':
@@ -53,8 +60,10 @@ const argsFor = (method, args) => {
     case 'click':
       return {click:{button:args[0]?.button ?? 'left',count:args[0]?.count ?? 1}};
     case 'dragTo':
-      if (!(args[0] instanceof Element)) throw TypeError('dragTo needs an Element');
-      return {drag:{to:{id:args[0].id},duration_ms:args[1]?.durationMs ?? 250}};
+      if (typeof args[0]?.id !== 'string' || !book().items.has(args[0].id))
+        throw TypeError('dragTo needs a current Element');
+      return {drag:{to:positioned(args[0].id,args[1]?.to,'dragTo.to'),
+        duration_ms:args[1]?.durationMs ?? 250}};
     case 'scroll':
       return {scroll:{dx:args[0]?.dx ?? 0,dy:args[0]?.dy ?? 1,unit:'wheel_step'}};
     case 'press': {
@@ -69,11 +78,17 @@ const stepFor = (target, method, args, number) => {
   const source = book().items.get(target.id);
   if (!source || dtw.ref(target.id) !== source.ref)
     throw Error('target address expired; observe again');
-  if (['invoke','setValue','setChecked','setSelected','setExpanded','scrollIntoView'].includes(method) &&
-      !available(source).includes(words[method]))
+  // Resolve once before dispatch. An unavailable semantic capability selects
+  // one physical attempt; a failed/unknown semantic delivery never replays.
+  const effective = method === 'activate' ?
+    (available(source).includes('invoke') ? 'invoke' : 'click') : method;
+  if (['invoke','setValue','setChecked','setSelected','setExpanded','scrollIntoView'].includes(effective) &&
+      !available(source).includes(words[effective]))
     throw Error(target.id + '.' + method + ' unavailable; observe capabilities again');
+  const location = effective === 'dragTo' ? args[1]?.from :
+    ['move','click','scroll'].includes(effective) ? args[0] : undefined;
   return {id:target.id + '.' + method + (number ? '#' + number : ''),
-    op:words[method],target:{id:target.id},...argsFor(method,args)};
+    op:words[effective],target:positioned(target.id,location,method),...argsFor(effective,args)};
 };
 class Element {
   constructor(id) { this.id = id; }
@@ -209,7 +224,8 @@ dtw.transaction = async build => {
   const steps = [];
   const tx = {};
   for (const method of Object.keys(words)) tx[method] = (target,...args) => {
-    if (!(target instanceof Element)) throw TypeError(method + ' needs an Element');
+    if (typeof target?.id !== 'string' || !book().items.has(target.id))
+      throw TypeError(method + ' needs a current Element');
     if (steps.length >= 16) throw Error('transaction step limit exceeded');
     steps.push(stepFor(target,method,args,steps.length + 1));
   };

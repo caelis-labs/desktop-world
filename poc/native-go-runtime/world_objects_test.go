@@ -56,7 +56,7 @@ func TestWorldObjectScriptAndTextOnlyMCP(t *testing.T) {
 					result = `{"epoch":"one","objects":[{"ref":"w1","kind":"window","app":"app1","name":{"status":"known","value":"Fixture Window"}}],"coverage":{"complete":true}}`
 				}
 			case "w1":
-				result = `{"epoch":"one","objects":[{"ref":"b1","kind":"ui","window":"w1","app":"app1","role":"button","name":{"status":"known","value":"Submit"},"capabilities":[{"name":"invoke","support":"supported","availability":"available"},{"name":"set_checked","support":"supported","availability":"available"},{"name":"set_selected","support":"supported","availability":"available"},{"name":"set_expanded","support":"supported","availability":"available"}]}],"coverage":{"complete":true}}`
+				result = `{"epoch":"one","objects":[{"ref":"b1","kind":"ui","window":"w1","app":"app1","role":"button","name":{"status":"known","value":"Submit"},"capabilities":[{"name":"invoke","support":"supported","availability":"available"},{"name":"set_checked","support":"supported","availability":"available"},{"name":"set_selected","support":"supported","availability":"available"},{"name":"set_expanded","support":"supported","availability":"available"}]},{"ref":"c1","kind":"ui","window":"w1","app":"app1","role":"image","name":{"status":"known","value":"Canvas"}}],"coverage":{"complete":true}}`
 			default:
 				t.Fatalf("unexpected observation target: %s", body)
 			}
@@ -111,13 +111,13 @@ func TestWorldObjectScriptAndTextOnlyMCP(t *testing.T) {
 	}
 	line = second.Content[0].(*mcp.TextContent).Text
 	t.Logf("model result 2 (%d UTF-8 bytes): %s", len(line), line)
-	if !strings.Contains(line, "e2 · W1/B1.invoke: completed, verified via semantic") || len(actions) != 1 {
+	if !strings.Contains(line, "e2 · W1/B1.invoke: verified via semantic") || len(actions) != 1 {
 		t.Fatalf("action not correlated: %q actions=%d", line, len(actions))
 	}
 	if !strings.Contains(string(actions[0]), `"target":{"ref":"b1"}`) {
 		t.Fatalf("display alias did not compile to native ref: %s", actions[0])
 	}
-	_ = call("e3", "exec", `await dtw.transaction(tx => { const target=dtw.at('W1/B1'); tx.setChecked(target,true); tx.setSelected(target,false); tx.setExpanded(target,true); });`, "")
+	_ = call("e3", "exec", `await dtw.transaction(tx => { tx.setChecked(state.button,true); tx.setSelected(state.button,false); tx.setExpanded(state.button,true); });`, "")
 	if len(actions) != 2 || !strings.Contains(string(actions[1]), `"set_checked":{"checked":true}`) ||
 		!strings.Contains(string(actions[1]), `"set_selected":{"selected":false}`) ||
 		!strings.Contains(string(actions[1]), `"set_expanded":{"expanded":true}`) {
@@ -126,6 +126,24 @@ func TestWorldObjectScriptAndTextOnlyMCP(t *testing.T) {
 	resumed := call("e4", "exec", `await state.button.invoke();`, "")
 	if resumed.IsError || len(actions) != 3 {
 		t.Fatalf("persistent JS object did not resume: %s", resumed.Content[0].(*mcp.TextContent).Text)
+	}
+	positioned := call("e-position", "exec", `const actual=dtw.act;dtw.act=async request=>{print(JSON.stringify(request));return {}};await state.button.dragTo(state.button,{from:{u:0.2,v:0.5},to:{u:0.7,v:0.5},durationMs:200});dtw.act=actual;`, "")
+	positionText := positioned.Content[0].(*mcp.TextContent).Text
+	if positioned.IsError || len(actions) != 3 ||
+		!strings.Contains(positionText, `"target":{"anchor":{"target":"b1","u":0.2,"v":0.5}}`) ||
+		!strings.Contains(positionText, `"to":{"anchor":{"target":"b1","u":0.7,"v":0.5}}`) {
+		t.Fatalf("positioned drag did not retain the observed target: %q actions=%d", positionText, len(actions))
+	}
+	badPosition := call("e-position-invalid", "exec", `let refused=false;try{await state.button.move({u:1.2,v:0.5})}catch(e){refused=e instanceof RangeError}print(refused);`, "")
+	if badPosition.IsError || !strings.Contains(badPosition.Content[0].(*mcp.TextContent).Text, "true") || len(actions) != 3 {
+		t.Fatalf("invalid position reached native: %+v", badPosition)
+	}
+	auto := call("e-auto", "exec", `state.canvas=await dtw.at('W1').one({name:'Canvas'});const real=dtw.act;dtw.act=async request=>{print(JSON.stringify(request));return {}};await state.button.activate();await state.canvas.activate({u:0.2,v:0.5});dtw.act=real;`, "")
+	autoText := auto.Content[0].(*mcp.TextContent).Text
+	if auto.IsError || len(actions) != 3 || !strings.Contains(autoText, `"id":"W1/B1.activate","op":"invoke"`) ||
+		!strings.Contains(autoText, `"id":"W1/N1.activate","op":"pointer.click"`) ||
+		!strings.Contains(autoText, `"target":{"anchor":{"target":"c1","u":0.2,"v":0.5}}`) {
+		t.Fatalf("behavior route did not preserve JS action ID or target: %q", autoText)
 	}
 	stale := call("e5", "exec", `dtw.disclose({epoch:'two',objects:[],coverage:{complete:true}});let rejected=false;try{await state.button.invoke()}catch(e){rejected=String(e).includes('expired')}print(rejected);`, "")
 	if stale.IsError || !strings.Contains(stale.Content[0].(*mcp.TextContent).Text, "true") || len(actions) != 3 {

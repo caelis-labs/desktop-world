@@ -399,6 +399,7 @@ func nativeFacts(op, id string, result json.RawMessage) map[string]any {
 			SeatHealth string `json:"seat_health"`
 			Steps      []struct {
 				ID           string `json:"id"`
+				State        string `json:"state"`
 				Channel      string `json:"channel"`
 				Delivery     string `json:"delivery"`
 				Verification string `json:"verification"`
@@ -417,7 +418,7 @@ func nativeFacts(op, id string, result json.RawMessage) map[string]any {
 		out := map[string]any{"native_request_id": id, "run_id": v.RunID, "outcome": v.Outcome, "seat_health": v.SeatHealth}
 		steps := make([]map[string]any, 0, len(v.Steps))
 		for _, step := range v.Steps {
-			item := map[string]any{"id": step.ID, "channel": step.Channel, "delivery": step.Delivery, "verification": step.Verification}
+			item := map[string]any{"id": step.ID, "state": step.State, "channel": step.Channel, "delivery": step.Delivery, "verification": step.Verification}
 			if step.Fault != nil {
 				item["fault"] = step.Fault.Code
 			}
