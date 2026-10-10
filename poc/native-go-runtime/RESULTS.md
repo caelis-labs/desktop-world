@@ -105,6 +105,14 @@ There is no supported bridge fix to apply from this result. For blocked backgrou
 
 One independent B06 step then passed on the **current chain without AXWindow**. A uniquely titled owned background AppKit window appeared once in `capture_windows`; `window_content` returned one tile/file and an on-demand MCP `ImageContent` with a valid 6,460-byte PNG. After the fixture itself closed that window, a second execution using the same Session's retained capture Ref returned `window_not_visible` and no image. The fixture remained inactive and non-key, and the owned log records the close. [Bounded capture evidence](evidence/capture-stale-own-c84bab5.json) excludes the image itself. This adds stale-window refusal to B06, but visible-region/occlusion/geometry/budget and other-provider cases remain unpassed.
 
+## 2b840d4 follow-up: Cua source reference and owned capture geometry
+
+The user-suggested Cua Driver repository was read at exact SHA `f4a7f5ef2f90a9e2663ee6f949fb3482507a4f56`; [source comparison](CUA_REFERENCE.md) records its license boundaries and relevant macOS implementation. Cua also treats CG window IDs as candidates and requires a real AXWindow mapping for an actionable window tree. Its unresolved scope produces no actionable nodes and an explicit degraded state. Its private remote-token probe addresses omitted off-Space/off-screen windows, not a verified fix for the App-root samples here. No Cua runtime was installed or run and no Cua code was imported.
+
+A second owned background `window_content` round strengthened B06 geometry evidence on the current MCP chain: the one native tile and PNG IHDR both measured 300×160 pixels within a 320×160 request cap; its positive image-to-target scale was 1.2×1.2, target Ref matched, and desktop frame was omitted. Closing that same owned window made the retained Ref return `window_not_visible` without a new image. The first invocation failed only a test assertion that expected an empty desktop-frame string; the projection correctly omitted the field. The corrected complete test passed once. [Bounded evidence](evidence/cua-reference-capture-2b840d4.json) includes exact binaries and owned log hashes. B06 still lacks visible-region, occlusion and broader provider cases; no AX or foreground row is promoted.
+
+This round also found a POC-only build-tag omission: `cmd/exacthelper/gate.go` referenced the tagged native identity hook in an ordinary `go test ./...`. The file now has the same `darwin && cgo && dtw_poc_exactgrant` constraint as that POC helper's `main.go`. The ordinary four control regression tests pass across `./...`, and `go test -tags dtw_poc_exactgrant -run '^Test' ./cmd/exacthelper` passes. This changes no product helper build or authorization behavior.
+
 ## Gate matrix (macOS current candidate)
 
 | Row | Current evidence | Gate |

@@ -1,0 +1,39 @@
+{
+  "date": "2026-10-10",
+  "base_sha": "2b840d4fdbc2b525500d62c8d86c20d36a667bff",
+  "cua_reference": {
+    "repository": "https://github.com/trycua/cua",
+    "exact_sha": "f4a7f5ef2f90a9e2663ee6f949fb3482507a4f56",
+    "local_checkout": "/private/tmp/dtw-cua-source",
+    "mode": "shallow sparse source-only read; no Cua binary, daemon, installer, permission or input run",
+    "finding": "CG PID/window ID is a candidate; Cua's AX window-scope decision reports AxUnresolved with zero actionable nodes when no AXWindow maps to the requested ID. Its private remote-token probe is limited to omitted off-Space/off-screen windows, not a demonstrated fix for DTW's App-root result. Cua's public MCP tool inventory was not adopted."
+  },
+  "capture_geometry_live": {
+    "fixture_pid": 88319,
+    "fixture_native_window_id": 77404,
+    "fixture_binary_sha256": "3d4a005958c5ac07436971dc72c78a3cef887926a845afb6fa161a269939b43a",
+    "fixture_log_sha256": "a534d86b516bdff4a4624d75feb8db8af7dd513f5289b7ced52015d96c9f224b",
+    "helper_binary_sha256": "b504289af017fb766d4064d543d49649f2743ba5b3dd14a81bab11a81d0828ad",
+    "ready": "owned fixture background, visible, not active or key",
+    "MCP_chain": "one public exec -> QuickJS -> exact native helper",
+    "capture_kind": "window_content",
+    "pixel_limits": [320, 160],
+    "tile_and_png_pixels": [300, 160],
+    "PNG_bytes": 6654,
+    "PNG_IHDR_dimensions_equal_tile": true,
+    "image_to_target_A_D": [1.2, 1.2],
+    "target_ref_matches_owned_capture_ref": true,
+    "desktop_frame": "omitted",
+    "after_owned_close": "same Session retained Ref refused window_not_visible, no new image",
+    "image_contents_committed": false,
+    "test": "GOWORK=off GOCACHE=/private/tmp/dtw-go-cache GOPROXY=off DTW_POC_HELPER=/private/tmp/dtw-exact-poc-helper DTW_POC_CAPTURE_TITLE='DTW Own Capture Geometry POC' DTW_POC_CAPTURE_CONTROL=/private/tmp/dtw-own-capture-geometry-control.txt DTW_POC_CAPTURE_LOG=/private/tmp/dtw-own-capture-geometry.jsonl go test -run '^TestOwnedWindowCaptureRefExpiresWithoutAX$' -count=1 -v . passed in 0.84s",
+    "initial_test_assertion_limit": "First invocation captured the own window but failed because the test assumed desktop_frame would be an empty string; the correct structured projection omits it. No close request was sent in that invocation. The assertion was corrected and the bounded full test passed."
+  },
+  "poc_build_tag_regression": {
+    "cause": "cmd/exacthelper/gate.go lacked the same darwin && cgo && dtw_poc_exactgrant build constraint as its POC main and native identity hook",
+    "repair": "add matching build constraint to POC gate.go; no product helper change",
+    "ordinary_control_tests": "GOWORK=off GOCACHE=/private/tmp/dtw-go-cache GOPROXY=off go test -run '^Test(QuickJSAsyncPersistentStateAndInterrupt|OfficialMCPStdioSingleToolControlAndState|WedgedScriptSubprocessLeavesExecControlAlive|TwoStdioSessionsKeepJSStateAndCancellationSeparate)$' ./... passed",
+    "tagged_exact_helper": "GOWORK=off GOCACHE=/private/tmp/dtw-go-cache GOPROXY=off go test -tags dtw_poc_exactgrant -run '^Test' ./cmd/exacthelper passed"
+  },
+  "gate": "B06 remains partial: visible-region, occlusion, broader budgets and provider cases are unpassed. Cua source review is reference only and does not pass DTW AX or foreground rows."
+}

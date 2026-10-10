@@ -1,0 +1,19 @@
+# Cua Driver source comparison for the isolated DTW POC
+
+Read-only reference: [`trycua/cua` at `f4a7f5ef2f90a9e2663ee6f949fb3482507a4f56`](https://github.com/trycua/cua/tree/f4a7f5ef2f90a9e2663ee6f949fb3482507a4f56), inspected 2026-10-10 from a shallow sparse checkout in `/private/tmp`. No Cua binary, daemon, installer, permission request or input path was run. No source code was copied into DTW.
+
+The repository's [licensing map](https://github.com/trycua/cua/blob/f4a7f5ef2f90a9e2663ee6f949fb3482507a4f56/LICENSING.md) says the Driver source uses the root MIT license, while Cua Spaces and optional perception components have separate license boundaries. This comparison uses Driver design ideas only.
+
+## Relevant implementation facts
+
+- [Window enumeration](https://github.com/trycua/cua/blob/f4a7f5ef2f90a9e2663ee6f949fb3482507a4f56/libs/cua-driver/rust/crates/platform-macos/src/tools/list_windows.rs) accepts a PID filter over WindowServer's native list. This yields a candidate `(PID, CGWindowID)` without asserting AX action authority.
+- [Window-scope decision](https://github.com/trycua/cua/blob/f4a7f5ef2f90a9e2663ee6f949fb3482507a4f56/libs/cua-driver/rust/crates/platform-macos/src/ax/window_scope.rs) treats a same-PID native window with no matching AXWindow as `AxUnresolved` and walks **zero** actionable AX nodes. The [state tool](https://github.com/trycua/cua/blob/f4a7f5ef2f90a9e2663ee6f949fb3482507a4f56/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs) reports that degradation separately from an empty tree. This supports DTW's refusal to infer a window grant from CG alone; it also shows why `pending/application_not_running` is an imprecise status for a known live native window.
+- [AX bindings](https://github.com/trycua/cua/blob/f4a7f5ef2f90a9e2663ee6f949fb3482507a4f56/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs) use the same public `AXUIElementCreateApplication` / `AXWindows` read and the same private `_AXUIElementGetWindow` identity join as our independent reader and isolated exact-grant helper. They retain CFArray children before releasing the array. Our raw Objective-C test already ruled out that ownership mistake in the observed App-root result.
+- The bindings contain a private remote-token probe for a requested window omitted from `AXWindows` on another Space or an inconsistent off-screen view. The source explicitly skips that probe for an on-screen current-Space window. It is not a demonstrated repair for DTW's background fixture whose AX call returns an `AXApplication` root, and private token enumeration would need independent safety and platform validation before any use.
+- [Cua's macOS process notes](https://github.com/trycua/cua/blob/f4a7f5ef2f90a9e2663ee6f949fb3482507a4f56/libs/cua-driver/README.md) say Accessibility and Screen Recording grants follow the responsible app identity, not only a helper's filesystem path. DTW sampled its **actual** managed helper after launch and received Accessibility `granted`; the cause of this host's root substitution remains undetermined. There is no evidence here for a TCC reset or a new permission prompt.
+
+## DTW POC consequence
+
+A single trusted process-scoped target lookup should serve the host's exact-title declaration and the per-action identity check: native `(PID, process start, window ID)` is a candidate, and only a fresh same-window `AXWindow` Ref completes an actionable binding. Distinguish `AX unavailable` from `application absent`; retain incomplete/unknown status and the original grant/revoke record. Cua's public MCP tool inventory and permission modes are separate products and do not change DTW's one public `exec` tool or transparent automatic routing requirement.
+
+This source comparison is not a live Cua acceptance test and does not pass any DTW B-row by itself. It informs a directed POC lookup only after a stable real AXWindow can be proven on the current macOS host.

@@ -1,3 +1,5 @@
+//go:build darwin && cgo && dtw_poc_exactgrant
+
 package main
 
 import (
