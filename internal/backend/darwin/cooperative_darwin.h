@@ -130,7 +130,9 @@ static NSDictionary *cooperativeEnd(DWContext *c) {
         @"Restoration" : @"not_borrowed"
       }
     };
+#ifndef DTW_VIRTUAL_INPUT_POC
   c.inputSession = nil;
+#endif
   BOOL released = YES;
   for (NSString *held in c.inputHeld.allKeys) {
     unsigned code = (unsigned)[[held substringFromIndex:1] intValue];
@@ -138,8 +140,13 @@ static NSDictionary *cooperativeEnd(DWContext *c) {
     CGEventType up = code == 0   ? kCGEventLeftMouseUp
                      : code == 1 ? kCGEventRightMouseUp
                                  : kCGEventOtherMouseUp;
+    CGPoint releasePoint = cooperativeCursor();
+#ifdef DTW_VIRTUAL_INPUT_POC
+    if (mouse && session[@"virtualX"] && session[@"virtualY"])
+      releasePoint = CGPointMake([session[@"virtualX"] doubleValue], [session[@"virtualY"] doubleValue]);
+#endif
     CGEventRef event =
-        mouse ? CGEventCreateMouseEvent(NULL, up, cooperativeCursor(), code)
+        mouse ? CGEventCreateMouseEvent(NULL, up, releasePoint, code)
               : CGEventCreateKeyboardEvent(NULL, code, false);
     if (!event) {
       released = NO;
@@ -155,10 +162,17 @@ static NSDictionary *cooperativeEnd(DWContext *c) {
                                  kCGEventSourceStateCombinedSessionState) &
                                  ~mask);
     }
+#ifdef DTW_VIRTUAL_INPUT_POC
+    if (!virtualPostToTarget(c, event)) released = NO;
+#else
     CGEventPost(kCGHIDEventTap, event);
+#endif
     CFRelease(event);
     [c.inputHeld removeObjectForKey:held];
   }
+#ifdef DTW_VIRTUAL_INPUT_POC
+  c.inputSession = nil;
+#endif
   NSString *restoration = @"not_borrowed";
   double start = [session[@"start"] doubleValue];
   if ([session[@"borrowed"] boolValue]) {
@@ -191,12 +205,14 @@ static NSDictionary *cooperativeEnd(DWContext *c) {
   }
   // A user cursor movement wins. Only undo our own final pointer position.
   if (session[@"lastX"] && [restoration isEqual:@"restored"]) {
+#ifndef DTW_VIRTUAL_INPUT_POC
     CGPoint current = cooperativeCursor();
     CGPoint last = CGPointMake([session[@"lastX"] doubleValue],
                                [session[@"lastY"] doubleValue]);
     if (CGPointEqualToPoint(current, last))
       CGWarpMouseCursorPosition(CGPointMake([session[@"x"] doubleValue],
                                             [session[@"y"] doubleValue]));
+#endif
   }
   if (!released)
     restoration = @"failed";
@@ -282,6 +298,21 @@ static NSDictionary *cooperativePerform(DWContext *c, NSDictionary *o,
       [attr(e, kAXRoleAttribute) isEqual:@"AXWindow"] ? key : meta[@"Window"];
   AXUIElementRef window = element(c, windowKey);
   pid_t pid = [meta[@"PID"] intValue];
+#ifdef DTW_VIRTUAL_INPUT_POC
+  id focusedWindow = nil;
+  if ([op hasPrefix:@"keyboard."]) {
+    AXUIElementRef targetApp = AXUIElementCreateApplication(pid);
+    id focusedElement = attr(targetApp, kAXFocusedUIElementAttribute);
+    focusedWindow = attr(targetApp, kAXFocusedWindowAttribute);
+    CFRelease(targetApp);
+    pid_t focusedPID = 0;
+    if (focusedElement && focusedWindow &&
+        CFEqual((__bridge CFTypeRef)focusedElement, e) &&
+        AXUIElementGetPid((__bridge AXUIElementRef)focusedWindow, &focusedPID) == kAXErrorSuccess &&
+        focusedPID == pid && cooperativeOnScreen(pid, (__bridge AXUIElementRef)focusedWindow))
+      window = (__bridge AXUIElementRef)focusedWindow;
+  }
+#endif
   if (!window || !alive(c, windowKey) || !pid)
     return outcome(@"none", @"background_unavailable");
   if (!cooperativeAvailable() || !cooperativeOnScreen(pid, window))
@@ -317,6 +348,13 @@ static NSDictionary *cooperativePerform(DWContext *c, NSDictionary *o,
     CFRelease(app);
     if (!previousWindow)
       return outcome(@"none", @"background_unavailable");
+#ifdef DTW_VIRTUAL_INPUT_POC
+    typedef AXError (*WindowID)(AXUIElementRef, CGWindowID *);
+    WindowID getWindow = (WindowID)dlsym(RTLD_DEFAULT, "_AXUIElementGetWindow");
+    CGWindowID nativeWindowID = 0;
+    if (!getWindow || getWindow(window, &nativeWindowID) != kAXErrorSuccess || !nativeWindowID)
+      return outcome(@"none", @"background_unavailable");
+#endif
     CGPoint cursor = cooperativeCursor();
     if (!isfinite(cursor.x) || !isfinite(cursor.y))
       return outcome(@"none", @"background_unavailable");
@@ -331,6 +369,9 @@ static NSDictionary *cooperativePerform(DWContext *c, NSDictionary *o,
       @"start" : @(start),
       @"deadline" : @(start + 1.0),
       @"borrowed" : @(borrowed),
+#ifdef DTW_VIRTUAL_INPUT_POC
+      @"targetWindowID" : @(nativeWindowID),
+#endif
       @"x" : @(cursor.x),
       @"y" : @(cursor.y)
     } mutableCopy];
@@ -343,6 +384,14 @@ static NSDictionary *cooperativePerform(DWContext *c, NSDictionary *o,
     // same application may be selected using its exact live window identity.
     if ([c.inputSession[@"targetPID"] intValue] != pid)
       return outcome(@"none", @"input_transaction_scope");
+#ifdef DTW_VIRTUAL_INPUT_POC
+    typedef AXError (*WindowID)(AXUIElementRef, CGWindowID *);
+    WindowID getWindow = (WindowID)dlsym(RTLD_DEFAULT, "_AXUIElementGetWindow");
+    CGWindowID nativeWindowID = 0;
+    if (!getWindow || getWindow(window, &nativeWindowID) != kAXErrorSuccess || !nativeWindowID)
+      return outcome(@"none", @"background_unavailable");
+    c.inputSession[@"targetWindowID"] = @(nativeWindowID);
+#endif
     if (!cooperativeFocusedWindow(pid, window) &&
         !cooperativeActivate(pid, window,
                              MIN(monotonicSeconds() + .2,
@@ -394,9 +443,11 @@ static NSDictionary *cooperativePerform(DWContext *c, NSDictionary *o,
              ? 120000
              : 40000);
   if ([op hasPrefix:@"pointer."]) {
+#ifndef DTW_VIRTUAL_INPUT_POC
     CGPoint p = cooperativeCursor();
     c.inputSession[@"lastX"] = @(p.x);
     c.inputSession[@"lastY"] = @(p.y);
+#endif
   }
   return result;
 }

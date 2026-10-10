@@ -1,0 +1,16 @@
+=== RUN   TestCoreObjectFullInputOnOwnedAppKit
+    world_full_input_live_test.go:106: exec owned-setup: owned-setup · W1/T1 POC text · text_field · focus, setValue
+        W1/T2 POC multiline · text_field · focus, setValue
+        W1/N1 POC Canvas · image · focus
+        W1/B1 POC submit · button · focus, invoke
+        W1/B2 POC dialog · button · focus, invoke
+        observation incomplete (truncated, more)
+    world_full_input_live_test.go:110: exec owned-semantic: owned-semantic · setValue requested
+        W1/T1.setValue: verified
+    world_full_input_live_test.go:158: exec owned-auto-background: owned-auto-background · W1/B1.activate: dispatched; effect unverified
+    world_full_input_live_test.go:172: exec owned-targeted-background: owned-targeted-background · W1/B1.click: dispatched; effect unverified via background
+    world_full_input_live_test.go:182: targeted background button callback confirmed; front PID and real pointer unchanged
+    world_full_input_live_test.go:184: independent cursor overlay on-screen: pid=46457 window=84803
+--- PASS: TestCoreObjectFullInputOnOwnedAppKit (1.77s)
+PASS
+ok  	github.com/caelis-labs/desktop-world/poc/native-go-runtime	2.805s

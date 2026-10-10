@@ -1,0 +1,49 @@
+=== RUN   TestCoreObjectFullInputOnOwnedAppKit
+    world_full_input_live_test.go:106: exec owned-setup: owned-setup · W1/T1 POC text · text_field · focus, setValue
+        W1/T2 POC multiline · text_field · focus, setValue
+        W1/N1 POC Canvas · image · focus
+        W1/B1 POC submit · button · focus, invoke
+        W1/B2 POC dialog · button · focus, invoke
+        observation incomplete (truncated, more)
+    world_full_input_live_test.go:110: exec owned-semantic: owned-semantic · setValue requested
+        W1/T1.setValue: verified
+    world_full_input_live_test.go:158: exec owned-auto-background: owned-auto-background · W1/B1.activate: dispatched; effect unverified
+    world_full_input_live_test.go:238: exec owned-auto-foreground: owned-auto-foreground · W1/N1.activate: dispatched; effect unverified via foreground
+        foreground restoration: restored
+    world_full_input_live_test.go:248: agent click in-flight physical pointer displacement: 0.0 px
+    world_full_input_live_test.go:254: independent cursor overlay on-screen: pid=46490 window=84817
+    world_full_input_live_test.go:263: independent pointer restoration: displacement=0.0 px
+    world_full_input_live_test.go:268: independent frontmost PID restoration: matched
+    world_full_input_live_test.go:301: exec owned-move: owned-move · W1/N1.move: dispatched; effect unverified via foreground
+        foreground restoration: restored
+    world_full_input_live_test.go:309: exec owned-pointer-batch: owned-pointer-batch · W1/N1.click#1, W1/N1.click#2, W1/N1.click#3, W1/N1.scroll#4, W1/N1.scroll#5: dispatched; effect unverified via foreground
+        foreground restoration: restored
+    world_full_input_live_test.go:337: exec owned-drag: owned-drag · W1/N1.dragTo: dispatched; effect unverified via foreground
+        foreground restoration: restored
+    world_full_input_live_test.go:356: exec owned-keyboard-submit: owned-keyboard-submit · W1/T1.click#1: dispatched; effect unverified via background
+        W1/T1.press#2: dispatched; effect unverified via foreground
+        W1/T1.typeText#3, W1/B1.click#4: dispatched; effect unverified via background
+        foreground restoration: restored
+    world_full_input_live_test.go:367: exec owned-shortcuts: owned-shortcuts · W1/T1.click#1: dispatched; effect unverified via background
+        W1/T1.press#2: dispatched; effect unverified via foreground
+        W1/T1.typeText#3: dispatched; effect unverified via background
+        W1/T1.press#4, W1/T1.press#5: dispatched; effect unverified via foreground
+        foreground restoration: restored
+    world_full_input_live_test.go:377: exec owned-multiline: owned-multiline · W1/T2.click#1: dispatched; effect unverified via background
+        W1/T2.typeText#2: dispatched; effect unverified via foreground
+        foreground restoration: restored
+    world_full_input_live_test.go:385: exec owned-window-key: owned-window-key · W1.press: dispatched; effect unverified via foreground
+        foreground restoration: restored
+    world_full_input_live_test.go:274: exec owned-context-menu: owned-context-menu · W1/N1.right: dispatched; effect unverified via foreground
+        menu.bind: verified
+        menu.invoke: dispatched; effect unverified
+        foreground restoration: restored
+    world_full_input_live_test.go:288: exec owned-dialog: owned-dialog · W1/B2.click: dispatched; effect unverified via background
+        dialog.bindText: verified
+        dialog.focusText, dialog.typeText: dispatched; effect unverified via background
+        dialog.bindConfirm: verified
+        dialog.confirm: dispatched; effect unverified
+    world_full_input_live_test.go:214: full action sequence in-flight physical pointer displacement: 0.0 px
+--- PASS: TestCoreObjectFullInputOnOwnedAppKit (5.19s)
+PASS
+ok  	github.com/caelis-labs/desktop-world/poc/native-go-runtime	5.484s

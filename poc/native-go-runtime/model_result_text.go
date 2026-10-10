@@ -161,8 +161,13 @@ func stepStatus(action, step map[string]any) string {
 		}
 		status += "; verification=" + verification
 	}
-	if channel, ok := step["channel"].(string); ok && channel != "" {
-		status += " via " + channel
+	if channel, ok := step["channel"].(string); ok && verification != "verified" {
+		switch channel {
+		case "targeted_background":
+			status += " via background"
+		case "targeted_foreground", "foreground_transaction":
+			status += " via foreground"
+		}
 	}
 	if step["delivery"] == "unknown" {
 		status += "; delivery unknown"

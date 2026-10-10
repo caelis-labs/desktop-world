@@ -111,7 +111,7 @@ func TestWorldObjectScriptAndTextOnlyMCP(t *testing.T) {
 	}
 	line = second.Content[0].(*mcp.TextContent).Text
 	t.Logf("model result 2 (%d UTF-8 bytes): %s", len(line), line)
-	if !strings.Contains(line, "e2 · W1/B1.invoke: verified via semantic") || len(actions) != 1 {
+	if !strings.Contains(line, "e2 · W1/B1.invoke: verified") || len(actions) != 1 {
 		t.Fatalf("action not correlated: %q actions=%d", line, len(actions))
 	}
 	if !strings.Contains(string(actions[0]), `"target":{"ref":"b1"}`) {

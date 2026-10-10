@@ -9,6 +9,7 @@
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <libproc.h>
+#include <dlfcn.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -786,6 +787,60 @@ static NSDictionary *outcome(NSString *d, NSString *f) {
 // remain necessary to avoid leaving synthetic buttons/modifiers held.
 static _Thread_local void *inputPostingContext;
 static pid_t cooperativeFrontPID(void);
+#ifdef DTW_VIRTUAL_INPUT_POC
+// POC route: deliver to the retained target process/window. It deliberately
+// never posts to the HID tap or changes the physical cursor position.
+static BOOL virtualPostToTarget(DWContext *c, CGEventRef e) {
+  if (!c.inputSession) return NO;
+  pid_t pid = [c.inputSession[@"targetPID"] intValue];
+  CGWindowID wid = [c.inputSession[@"targetWindowID"] unsignedIntValue];
+  if (!pid || !wid) return NO;
+  CGEventType type = CGEventGetType(e);
+  BOOL positioned = type == kCGEventMouseMoved || type == kCGEventLeftMouseDown ||
+                    type == kCGEventLeftMouseUp || type == kCGEventRightMouseDown ||
+                    type == kCGEventRightMouseUp || type == kCGEventOtherMouseDown ||
+                    type == kCGEventOtherMouseUp || type == kCGEventLeftMouseDragged ||
+                    type == kCGEventRightMouseDragged || type == kCGEventOtherMouseDragged ||
+                    type == kCGEventScrollWheel;
+  if (positioned) {
+    typedef void (*WindowLocation)(CGEventRef, double, double);
+    static WindowLocation setLocation;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+      void *sky = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY);
+      setLocation = sky ? (WindowLocation)dlsym(sky, "CGEventSetWindowLocation") : NULL;
+    });
+    if (!setLocation) return NO;
+    NSArray *windows = CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID));
+    CGRect rect = CGRectZero;
+    BOOL found = NO;
+    for (NSDictionary *row in windows) {
+      if ([row[(id)kCGWindowNumber] unsignedIntValue] == wid &&
+          [row[(id)kCGWindowOwnerPID] intValue] == pid &&
+          CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)row[(id)kCGWindowBounds], &rect)) {
+        found = YES;
+        break;
+      }
+    }
+    CGPoint point = CGEventGetLocation(e);
+    if (!found || !CGRectContainsPoint(rect, point)) return NO;
+    CGEventSetIntegerValueField(e, (CGEventField)7, 3);
+    CGEventSetIntegerValueField(e, (CGEventField)40, pid);
+    CGEventSetIntegerValueField(e, (CGEventField)51, wid);
+    CGEventSetIntegerValueField(e, (CGEventField)91, wid);
+    CGEventSetIntegerValueField(e, (CGEventField)92, wid);
+    setLocation(e, point.x - rect.origin.x, point.y - rect.origin.y);
+    c.inputSession[@"virtualX"] = @(point.x);
+    c.inputSession[@"virtualY"] = @(point.y);
+  }
+  CGEventPostToPid(pid, e);
+  if (positioned) {
+    CGPoint point = CGEventGetLocation(e);
+    fprintf(stderr, "{\"poc\":\"virtual_pointer\",\"x\":%.3f,\"y\":%.3f}\n", point.x, point.y);
+  }
+  return YES;
+}
+#endif
 static BOOL postInputEvent(CGEventRef e) {
   DWContext *c =
       inputPostingContext ? (__bridge DWContext *)inputPostingContext : nil;
@@ -841,7 +896,11 @@ static BOOL postInputEvent(CGEventRef e) {
       }
     }
   }
+#ifdef DTW_VIRTUAL_INPUT_POC
+  if (!virtualPostToTarget(c, e)) return NO;
+#else
   CGEventPost(kCGHIDEventTap, e);
+#endif
   if (heldKey) {
     if (release)
       [c.inputHeld removeObjectForKey:heldKey];

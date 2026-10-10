@@ -1,4 +1,4 @@
-//go:build dtw_background_poc && darwin && cgo
+//go:build dtw_background_poc && !dtw_virtual_input_poc && darwin && cgo
 
 package main
 

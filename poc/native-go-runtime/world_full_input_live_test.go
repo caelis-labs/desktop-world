@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +30,8 @@ func TestCoreObjectFullInputOnOwnedAppKit(t *testing.T) {
 	if os.Getenv("DTW_POC_HELPER") == "" {
 		t.Skip("requires isolated core helper")
 	}
+	virtual := os.Getenv("DTW_POC_VIRTUAL") == "1"
+	physicalChannel, clickChannel := "foreground", "foreground"
 	fixture := filepath.Join("..", "..", "bin", "DTWFullFixture.app", "Contents", "MacOS", "DTWFullFixture")
 	if _, err := os.Stat(fixture); err != nil {
 		t.Fatal("build the owned AppKit fixture first: ", err)
@@ -53,6 +56,9 @@ func TestCoreObjectFullInputOnOwnedAppKit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	child := exec.Command(os.Args[0], "-test.run=^TestStdioChild$")
+	if os.Getenv("DTW_POC_NATIVE_TRACE") == "1" {
+		child.Stderr = os.Stderr
+	}
 	child.Env = append(os.Environ(), "DTW_POC_CHILD=1", "DTW_POC_LEGACY_OUTPUT=0", "PATH=/usr/bin:/bin")
 	client := mcp.NewClient(&mcp.Implementation{Name: "owned-input", Version: "1"}, nil)
 	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: child}, nil)
@@ -83,13 +89,26 @@ func TestCoreObjectFullInputOnOwnedAppKit(t *testing.T) {
 		}
 		return line
 	}
+	assertOriginalChannel := func(id, channel string) {
+		t.Helper()
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "exec", Arguments: map[string]any{
+			"operation": "result", "execution_id": id, "detail": "full",
+		}})
+		if err != nil || result == nil || len(result.Content) != 1 {
+			t.Fatalf("%s original receipt unavailable: %v %+v", id, err, result)
+		}
+		original := result.Content[0].(*mcp.TextContent).Text
+		if !strings.Contains(original, `"channel": "`+channel+`"`) {
+			t.Fatalf("%s original receipt missing actual route %s: %s", id, channel, original)
+		}
+	}
 	setup := `const app=await dtw.app('DTWFullFixture');const win=await app.window(` + string(mustJSON(title)) + `);state.app=app;state.win=win;state.field=await win.one({name:'POC text'});state.multi=await win.one({name:'POC multiline'});state.canvas=await win.one({name:'POC Canvas'});state.submit=await win.one({name:'POC submit'});state.dialog=await win.one({name:'POC dialog'});print(state.field);print(state.multi);print(state.canvas);print(state.submit);print(state.dialog);`
 	line := call("owned-setup", setup)
 	if !strings.Contains(line, "POC text") || !strings.Contains(line, "POC Canvas") || !strings.Contains(line, "POC submit") {
 		t.Fatalf("owned targets unavailable: %q", line)
 	}
 	line = call("owned-semantic", `await state.field.setValue('DTW-CORE-中文🙂');print('setValue requested');`)
-	if !strings.Contains(line, "via semantic") || !strings.Contains(line, "verified") {
+	if !strings.Contains(line, "W1/T1.setValue: verified") {
 		t.Fatalf("semantic background route unverified: %q", line)
 	}
 	if !ownedEventValue(ownedRows(t, logPath), "text", "DTW-CORE-中文🙂") {
@@ -137,22 +156,102 @@ func TestCoreObjectFullInputOnOwnedAppKit(t *testing.T) {
 	}
 	beforeAuto := len(ownedRows(t, logPath))
 	line = call("owned-auto-background", `await state.submit.activate();`)
-	if !strings.Contains(line, "W1/B1.activate: dispatched; effect unverified via semantic") || strings.Contains(line, "foreground restoration") ||
+	if !strings.Contains(line, "W1/B1.activate: dispatched; effect unverified") || strings.Contains(line, "foreground restoration") ||
 		!waitOwnedEvent(t, logPath, beforeAuto, "submit", "DTW-CORE-中文🙂", 500*time.Millisecond) {
 		t.Fatalf("automatic semantic activation not confirmed: %q", line)
 	}
 	if got := frontmostPID(); got != frontBefore {
 		t.Fatalf("semantic activation changed frontmost PID: before=%d after=%d", frontBefore, got)
 	}
+	if os.Getenv("DTW_POC_INPUT_CASE") == "background" {
+		px, py, err := pointerLocation()
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := len(ownedRows(t, logPath))
+		line := call("owned-targeted-background", `await state.submit.click();`)
+		assertOriginalChannel("owned-targeted-background", "targeted_background")
+		if !strings.Contains(line, "W1/B1.click: dispatched; effect unverified via background") ||
+			!waitOwnedEvent(t, logPath, before, "submit", "DTW-CORE-中文🙂", 500*time.Millisecond) {
+			t.Fatalf("targeted background effect unverified: %q", line)
+		}
+		qx, qy, err := pointerLocation()
+		if err != nil || math.Hypot(qx-px, qy-py) > 2 || frontmostPID() != frontBefore {
+			t.Fatalf("targeted background changed seat: pointer %.1f px, front %d -> %d, err %v", math.Hypot(qx-px, qy-py), frontBefore, frontmostPID(), err)
+		}
+		t.Log("targeted background button callback confirmed; front PID and real pointer unchanged")
+		if trace := os.Getenv("DTW_POC_CURSOR_TRACE"); trace != "" {
+			expectOwnedCursorOverlay(t, trace)
+		}
+		return
+	}
 	beforeAuto = len(ownedRows(t, logPath))
 	px, py, err := pointerLocation()
 	if err != nil {
 		t.Fatal(err)
 	}
+	if virtual {
+		stopRunSample := make(chan struct{})
+		runSampleDone := make(chan float64, 1)
+		go func() {
+			maxDistance := 0.0
+			for {
+				select {
+				case <-stopRunSample:
+					runSampleDone <- maxDistance
+					return
+				default:
+				}
+				if x, y, err := pointerLocation(); err == nil {
+					maxDistance = math.Max(maxDistance, math.Hypot(x-px, y-py))
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}()
+		defer func() {
+			close(stopRunSample)
+			maxDistance := <-runSampleDone
+			t.Logf("full action sequence in-flight physical pointer displacement: %.1f px", maxDistance)
+			if maxDistance > 2 {
+				t.Errorf("full virtual input sequence moved physical pointer %.1f px", maxDistance)
+			}
+		}()
+	}
+	stopSample := make(chan struct{})
+	var sampleMu sync.Mutex
+	maxDisplacement := 0.0
+	go func() {
+		for {
+			select {
+			case <-stopSample:
+				return
+			default:
+			}
+			if x, y, err := pointerLocation(); err == nil {
+				sampleMu.Lock()
+				maxDisplacement = math.Max(maxDisplacement, math.Hypot(x-px, y-py))
+				sampleMu.Unlock()
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
 	line = call("owned-auto-foreground", `await state.canvas.activate({u:0.2,v:0.5});`)
-	if !strings.Contains(line, "W1/N1.activate: dispatched; effect unverified via foreground_transaction") || !strings.Contains(line, "foreground restoration: restored") ||
+	if virtual {
+		assertOriginalChannel("owned-auto-foreground", "targeted_foreground")
+	}
+	close(stopSample)
+	if !strings.Contains(line, "W1/N1.activate: dispatched; effect unverified via "+clickChannel) || (!virtual && !strings.Contains(line, "foreground restoration: restored")) ||
 		!waitOwnedEvent(t, logPath, beforeAuto, "click", "1", 500*time.Millisecond) {
-		t.Fatalf("automatic foreground activation not confirmed: %q", line)
+		t.Fatalf("automatic foreground activation not confirmed: %q; app rows: %+v", line, ownedRows(t, logPath)[beforeAuto:])
+	}
+	sampleMu.Lock()
+	t.Logf("agent click in-flight physical pointer displacement: %.1f px", maxDisplacement)
+	if virtual && maxDisplacement > 2 {
+		t.Fatalf("virtual route moved real pointer %.1f px", maxDisplacement)
+	}
+	sampleMu.Unlock()
+	if virtual && os.Getenv("DTW_POC_CURSOR_TRACE") != "" {
+		expectOwnedCursorOverlay(t, os.Getenv("DTW_POC_CURSOR_TRACE"))
 	}
 	qx, qy, err := pointerLocation()
 	if err != nil {
@@ -187,7 +286,7 @@ func TestCoreObjectFullInputOnOwnedAppKit(t *testing.T) {
 	checkDialog := func() {
 		before := len(ownedRows(t, logPath))
 		line := call("owned-dialog", `const windowRef=dtw.ref(state.win.id);await dtw.act({steps:[{id:state.dialog.id+'.click',op:'pointer.click',target:{id:state.dialog.id},click:{button:'left',count:1}},{id:'dialog.bindText',op:'bind',bind:{name:'dialogtext',require_unique:true,locator:{within:windowRef,name_equals:'POC dialog text',role:'text_field',max_depth:12}}},{id:'dialog.focusText',op:'pointer.click',target:{bound:'dialogtext'},click:{button:'left',count:1}},{id:'dialog.typeText',op:'keyboard.type_text',target:{bound:'dialogtext'},type_text:{text:'CONFIRMED-中文'}},{id:'dialog.bindConfirm',op:'bind',bind:{name:'confirm',require_unique:true,locator:{within:windowRef,name_equals:'POC confirm',role:'button',max_depth:12}}},{id:'dialog.confirm',op:'invoke',target:{bound:'confirm'}}]});`)
-		if !strings.Contains(line, "W1/B2.click") || !strings.Contains(line, "dialog.typeText") || !strings.Contains(line, "dialog.confirm") || !strings.Contains(line, "foreground restoration: restored") {
+		if !strings.Contains(line, "W1/B2.click") || !strings.Contains(line, "dialog.typeText") || !strings.Contains(line, "dialog.confirm") || (!virtual && !strings.Contains(line, "foreground restoration: restored")) {
 			t.Fatalf("dialog route unverified: %q", line)
 		}
 		newRows := ownedRows(t, logPath)[before:]
@@ -200,7 +299,7 @@ func TestCoreObjectFullInputOnOwnedAppKit(t *testing.T) {
 		return
 	}
 	line = call("owned-move", `await state.canvas.move({u:0.2,v:0.5});`)
-	if !strings.Contains(line, "via foreground_transaction") || !strings.Contains(line, "foreground restoration: restored") {
+	if !strings.Contains(line, "via "+physicalChannel) || !strings.Contains(line, "foreground restoration: restored") {
 		t.Fatalf("short foreground pointer route unverified: %q", line)
 	}
 	if !ownedEventValue(ownedRows(t, logPath), "move", "") {
@@ -208,7 +307,7 @@ func TestCoreObjectFullInputOnOwnedAppKit(t *testing.T) {
 	}
 	before := len(ownedRows(t, logPath))
 	line = call("owned-pointer-batch", `await dtw.transaction(tx=>{tx.click(state.canvas);tx.click(state.canvas,{count:2});tx.click(state.canvas,{button:'middle'});tx.scroll(state.canvas,{dy:3});tx.scroll(state.canvas,{dx:3,dy:0});});`)
-	for _, marker := range []string{"W1/N1.click#1", "W1/N1.click#2", "W1/N1.click#3", "W1/N1.scroll#4", "W1/N1.scroll#5", "foreground_transaction", "foreground restoration: restored"} {
+	for _, marker := range []string{"W1/N1.click#1", "W1/N1.click#2", "W1/N1.click#3", "W1/N1.scroll#4", "W1/N1.scroll#5", "via " + physicalChannel, "foreground restoration: restored"} {
 		if !strings.Contains(line, marker) {
 			t.Fatalf("pointer batch result omits %q: %q", marker, line)
 		}
@@ -255,7 +354,7 @@ func TestCoreObjectFullInputOnOwnedAppKit(t *testing.T) {
 	}
 	before = len(ownedRows(t, logPath))
 	line = call("owned-keyboard-submit", `await dtw.transaction(tx=>{tx.click(state.field);tx.press(state.field,'A',['primary']);tx.typeText(state.field,'Typed-中文🙂');tx.click(state.submit);});`)
-	for _, marker := range []string{"W1/T1.click#1", "W1/T1.press#2", "W1/T1.typeText#3", "W1/B1.click#4", "foreground_transaction", "foreground restoration: restored"} {
+	for _, marker := range []string{"W1/T1.click#1", "W1/T1.press#2", "W1/T1.typeText#3", "W1/B1.click#4", "via " + physicalChannel, "foreground restoration: restored"} {
 		if !strings.Contains(line, marker) {
 			t.Fatalf("keyboard batch result omits %q: %q", marker, line)
 		}
@@ -341,4 +440,25 @@ func waitOwnedEvent(t *testing.T, path string, from int, event, value string, ti
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+func expectOwnedCursorOverlay(t *testing.T, tracePath string) {
+	t.Helper()
+	var overlayPID int
+	until := time.Now().Add(time.Second)
+	for time.Now().Before(until) {
+		for _, row := range ownedRows(t, tracePath) {
+			if row["event"] == "overlay_started" {
+				overlayPID = int(row["pid"].(float64))
+			}
+		}
+		if overlayPID != 0 && onScreenWindowForPID(overlayPID) != 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if overlayPID == 0 || onScreenWindowForPID(overlayPID) == 0 {
+		t.Fatalf("virtual cursor overlay was not visible: pid=%d", overlayPID)
+	}
+	t.Logf("independent cursor overlay on-screen: pid=%d window=%d", overlayPID, onScreenWindowForPID(overlayPID))
 }

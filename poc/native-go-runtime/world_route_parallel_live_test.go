@@ -117,7 +117,7 @@ func TestCoreObjectAutomaticRoutesAcrossTwoOwnedApps(t *testing.T) {
 		return answer{text: text}
 	}
 	for _, target := range targets {
-		code := `const app=await dtw.app(` + string(mustJSON(target.app)) + `);const win=await app.window(` + string(mustJSON(target.title)) + `);state.field=await win.one({name:'POC text'});state.submit=await win.one({name:'POC submit'});print(state.submit);`
+		code := `const app=await dtw.app(` + string(mustJSON(target.app)) + `);const win=await app.window(` + string(mustJSON(target.title)) + `);state.field=await win.one({name:'POC text'});state.submit=await win.one({name:'POC submit'});state.canvas=await win.one({name:'POC Canvas'});print(state.submit);print(state.canvas);`
 		got := call(target, "route-setup-"+target.label, code)
 		if got.err != nil || !strings.Contains(got.text, "POC submit") {
 			t.Fatalf("%s setup: %v %s", target.label, got.err, got.text)
@@ -144,7 +144,7 @@ func TestCoreObjectAutomaticRoutesAcrossTwoOwnedApps(t *testing.T) {
 	})
 	for i, got := range background {
 		t.Logf("%s background: %s", targets[i].label, got.text)
-		if got.err != nil || !strings.Contains(got.text, "verified via semantic") || !waitOwnedEvent(t, targets[i].log, 0, "text", targets[i].label+"-中文🙂", 500*time.Millisecond) {
+		if got.err != nil || !strings.Contains(got.text, "setValue: verified") || !waitOwnedEvent(t, targets[i].log, 0, "text", targets[i].label+"-中文🙂", 500*time.Millisecond) {
 			t.Fatalf("%s background not confirmed: %v %s", targets[i].label, got.err, got.text)
 		}
 	}
@@ -154,11 +154,41 @@ func TestCoreObjectAutomaticRoutesAcrossTwoOwnedApps(t *testing.T) {
 	if frontBefore == 0 || err != nil {
 		t.Fatalf("initial seat metadata unavailable: pid=%d pointer=%v", frontBefore, err)
 	}
-	foreground := parallel("foreground", func(target routeTarget) string { return `await state.submit.click();` })
+	physicalMax := 0.0
+	maxAt := time.Duration(0)
+	maxX, maxY := px, py
+	sampleStart := time.Now()
+	stopSample := make(chan struct{})
+	sampleDone := make(chan struct{})
+	go func() {
+		defer close(sampleDone)
+		for {
+			select {
+			case <-stopSample:
+				return
+			default:
+			}
+			if x, y, err := pointerLocation(); err == nil {
+				if distance := math.Hypot(x-px, y-py); distance > physicalMax {
+					physicalMax, maxAt, maxX, maxY = distance, time.Since(sampleStart), x, y
+				}
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	foreground := parallel("foreground", func(target routeTarget) string { return `await state.canvas.click();` })
+	close(stopSample)
+	<-sampleDone
 	for i, got := range foreground {
 		t.Logf("%s foreground: %s", targets[i].label, got.text)
-		if got.err != nil || !strings.Contains(got.text, "foreground restoration: restored") || !waitOwnedEvent(t, targets[i].log, before[i], "submit", targets[i].label+"-中文🙂", 500*time.Millisecond) {
+		if got.err != nil || !strings.Contains(got.text, "foreground restoration: restored") || !waitOwnedEvent(t, targets[i].log, before[i], "click", "1", 500*time.Millisecond) {
 			t.Fatalf("%s foreground not confirmed: %v %s", targets[i].label, got.err, got.text)
+		}
+	}
+	if os.Getenv("DTW_POC_VIRTUAL") == "1" {
+		t.Logf("parallel foreground routes, in-flight physical pointer displacement: %.1f px at %s; base=(%.1f,%.1f), peak=(%.1f,%.1f)", physicalMax, maxAt, px, py, maxX, maxY)
+		if physicalMax > 2 {
+			t.Fatalf("parallel virtual input moved physical pointer %.1f px", physicalMax)
 		}
 	}
 	qx, qy, err := pointerLocation()

@@ -58,6 +58,9 @@ type Outcome struct {
 	Accepted, Requested *int
 	Fault               *dw.Fault
 	Unsafe              bool
+	// Channel is the route actually used by a driver that selects delivery per
+	// action. Empty keeps the plan's pre-dispatch channel.
+	Channel string
 }
 
 // CaptureRequest carries the resolved native key only inside the trusted helper.

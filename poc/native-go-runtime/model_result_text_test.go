@@ -52,12 +52,12 @@ func TestWorldTextGroupsRoutineStepsButKeepsScriptIDsAndExceptions(t *testing.T)
 	if len(result) >= len(legacy) {
 		t.Fatalf("routine action result did not shrink: previous=%q current=%q", legacy, result)
 	}
-	for _, want := range []string{"input-batch ·", "W1/B2.click#1, W1/T1.press#2, W1/T1.typeText#3: dispatched; effect unverified via foreground_transaction", "foreground restoration: restored"} {
+	for _, want := range []string{"input-batch ·", "W1/B2.click#1, W1/T1.press#2, W1/T1.typeText#3: dispatched; effect unverified via foreground", "foreground restoration: restored"} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("missing %q in %q", want, result)
 		}
 	}
-	if strings.Count(result, "foreground_transaction") != 1 || strings.Count(result, "restored") != 1 || strings.Contains(result, "seat_health") {
+	if strings.Contains(result, "foreground_transaction") || strings.Count(result, "via foreground") != 1 || strings.Count(result, "restored") != 1 || strings.Contains(result, "seat_health") {
 		t.Fatalf("routine status repeated: %q", result)
 	}
 	partial := modelResultText(input{Operation: "exec", ExecutionID: "partial"}, map[string]any{

@@ -103,7 +103,29 @@ static NSDictionary *backgroundPOC(DWContext *c, NSDictionary *request, DWCancel
       CFRelease(app); dlclose(sky); return outcome(@"none", @"background_unavailable");
     }
     id focusedWindow = attr(app, kAXFocusedWindowAttribute), focused = attr(app, kAXFocusedUIElementAttribute);
-    if (!focusedWindow || !focused || !CFEqual((__bridge CFTypeRef)focusedWindow, window) || !CFEqual((__bridge CFTypeRef)focused, e)) {
+    BOOL exactElement = focused && CFEqual((__bridge CFTypeRef)focused, e);
+    BOOL exactWindow = focusedWindow && CFEqual((__bridge CFTypeRef)focusedWindow, window);
+#ifdef DTW_VIRTUAL_INPUT_POC
+    // An AppKit sheet can be the focused AXWindow while discovery still
+    // associates its text child with the main window. Exact focused-element
+    // identity plus a live same-PID sheet is sufficient for PID keyboard
+    // delivery; no foreground activation or re-post is needed.
+    if (!exactWindow && exactElement && focusedWindow) {
+      CGWindowID focusedWID = 0;
+      pid_t focusedPID = 0;
+      AXUIElementGetPid((__bridge AXUIElementRef)focusedWindow, &focusedPID);
+      if (focusedPID == pid && getWindow((__bridge AXUIElementRef)focusedWindow, &focusedWID) == kAXErrorSuccess && focusedWID) {
+        for (NSDictionary *candidate in info) {
+          if ([candidate[(id)kCGWindowNumber] unsignedIntValue] == focusedWID &&
+              [candidate[(id)kCGWindowOwnerPID] intValue] == pid) {
+            exactWindow = YES;
+            break;
+          }
+        }
+      }
+    }
+#endif
+    if (!exactWindow || !exactElement) {
       CFRelease(app); dlclose(sky); return outcome(@"none", @"background_target_not_focused");
     }
   }
@@ -139,7 +161,11 @@ static NSDictionary *backgroundPOC(DWContext *c, NSDictionary *request, DWCancel
       dlclose(sky); return outcome(lease.start ? @"unknown" : @"none", @"background_focus_unresolved");
     }
     // Allocate the complete pair before dispatch; no second transport/replay.
-    post(pid, events[0]); usleep(12000);
+    post(pid, events[0]);
+#ifdef DTW_VIRTUAL_INPUT_POC
+    fprintf(stderr, "{\"poc\":\"virtual_pointer\",\"x\":%.3f,\"y\":%.3f}\n", point.x, point.y);
+#endif
+    usleep(12000);
     post(pid, events[1]); usleep(12000);
     post(pid, events[2]);
     for (int i = 0; i < 3; i++) CFRelease(events[i]);

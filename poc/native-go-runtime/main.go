@@ -629,6 +629,7 @@ func newServerWithSupervisor(s *supervisor) *mcp.Server {
 func runServer(ctx context.Context) error {
 	var native *host.Client
 	var assetsDir string
+	var cursor *virtualCursorOverlay
 	if helper := os.Getenv("DTW_POC_HELPER"); helper != "" {
 		var err error
 		assetsDir = os.Getenv("DTW_POC_ASSETS")
@@ -642,7 +643,15 @@ func runServer(ctx context.Context) error {
 		if err := os.MkdirAll(assetsDir, 0700); err != nil {
 			return err
 		}
-		native, err = host.Start(ctx, host.Options{Executable: helper, AssetsDir: assetsDir, InputMode: dw.InputModeCooperative})
+		options := host.Options{Executable: helper, AssetsDir: assetsDir, InputMode: dw.InputModeCooperative}
+		if os.Getenv("DTW_POC_VIRTUAL") == "1" {
+			cursor = newVirtualCursorOverlay(helper)
+			defer cursor.Close()
+			options.Stderr = cursor
+		} else if os.Getenv("DTW_POC_NATIVE_TRACE") == "1" {
+			options.Stderr = os.Stderr
+		}
+		native, err = host.Start(ctx, options)
 		if err != nil {
 			return err
 		}

@@ -649,6 +649,9 @@ func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string
 		}
 	}
 	res.Delivery = outcome.Delivery
+	if outcome.Channel != "" {
+		res.Channel = outcome.Channel
+	}
 	res.AcceptedInputEvents = outcome.Accepted
 	res.RequestedInputEvents = outcome.Requested
 	if outcome.Unsafe {
