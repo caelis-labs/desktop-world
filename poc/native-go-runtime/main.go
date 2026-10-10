@@ -649,14 +649,16 @@ func runServer(ctx context.Context) error {
 		if err := native.BeginTurn(ctx, "session"); err != nil {
 			return err
 		}
-		if app := os.Getenv("DTW_POC_WRITE_APP"); app != "" {
-			if err := native.Declare(ctx, "session", app, ""); err != nil {
-				return err
+		if os.Getenv("DTW_POC_NO_AUTH") != "1" {
+			if app := os.Getenv("DTW_POC_WRITE_APP"); app != "" {
+				if err := native.Declare(ctx, "session", app, ""); err != nil {
+					return err
+				}
 			}
-		}
-		if title := os.Getenv("DTW_POC_WRITE_WINDOW"); title != "" {
-			if err := native.Declare(ctx, "session", "", title); err != nil {
-				return err
+			if title := os.Getenv("DTW_POC_WRITE_WINDOW"); title != "" {
+				if err := native.Declare(ctx, "session", "", title); err != nil {
+					return err
+				}
 			}
 		}
 	}

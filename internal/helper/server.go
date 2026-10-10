@@ -116,6 +116,11 @@ func New(ctx context.Context, w dw.World, c Config) (*Server, error) {
 	if !c.DesktopWrite {
 		grants = &turnGrants{used: map[string]bool{}}
 		authorizer = grants
+		// The isolated core POC deliberately exercises native desktop behavior
+		// without Desktop World's own grant gate. The normal build returns false.
+		if pocCoreWithoutGrants(c) {
+			authorizer = nil
+		}
 		if !c.Managed {
 			if err := grants.begin("session"); err != nil {
 				return nil, err
