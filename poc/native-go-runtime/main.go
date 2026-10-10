@@ -581,12 +581,19 @@ func newServerWithSupervisor(s *supervisor) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "dtw-poc", Version: "0.0.0-poc"}, nil)
 	mcp.AddTool(server, &mcp.Tool{Name: "exec", Description: "POC: run approved JavaScript; query and cancel by original execution ID"}, func(ctx context.Context, _ *mcp.CallToolRequest, in input) (*mcp.CallToolResult, map[string]any, error) {
 		out := s.call(ctx, in)
+		compact := os.Getenv("DTW_POC_COMPACT_OUTPUT") == "1" && in.Operation == "exec"
+		message := toolText(out)
+		if compact {
+			view := compactExec(out)
+			message = compactToolText(view)
+			out = compactStructured(view)
+		}
 		_, err := json.Marshal(out)
 		if err != nil {
 			return nil, nil, err
 		}
 		_, isError := out["error"]
-		content := []mcp.Content{&mcp.TextContent{Text: toolText(out)}}
+		content := []mcp.Content{&mcp.TextContent{Text: message}}
 		if in.Operation == "result" && in.IncludeImage {
 			png, imageErr := s.imageFor(in.ExecutionID)
 			if imageErr != nil {

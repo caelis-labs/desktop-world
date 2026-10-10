@@ -132,6 +132,15 @@ native request IDs. Never generate a new ID to replay an uncertain effect.
 An unverified provider route or an unknown outcome cannot fall back to
 foreground input. Never extend grants through script arguments.
 
+An [opt-in result economy POC](ECONOMY_TASK_TRACE.md) puts routine task facts
+in `content.text` and leaves routine `structuredContent` with only `state`.
+Its successful actual-model lookup used the concrete [experimental Skill](SKILL_ECONOMY_POC.md).
+For that mode, print a short ID/role/name/available-action line; the server
+adds one authoritative action/capture summary automatically. Treat missing
+capabilities as unknown, and retain incomplete/unknown/partial/cancelled
+recovery metadata and the original `result` path. This mode is not the
+default POC or a product interface yet.
+
 Current POC limits: 64 KiB script, 8 KiB printed text, at most 32 native calls
 and 128 retained executions per Session. See `RESULTS.md` for failed and
 unverified acceptance rows. Do not treat this POC as a product runtime.

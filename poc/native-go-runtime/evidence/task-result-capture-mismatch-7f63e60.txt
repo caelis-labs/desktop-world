@@ -1,0 +1,179 @@
+# Selected Obsidian DTW task; exact model-visible MCP results
+base=7f63e60f9f20587e13d5f816682adc106814cfb3
+window=欢迎 - DevNote - Obsidian 1.13.7
+
+## task-01-grant | Identify exact selected window grant
+error=false
+content.text (44 UTF-8 bytes):
+state: completed
+execution_id: task-01-grant
+structuredContent (218 UTF-8 bytes):
+{
+  "execution_id": "task-01-grant",
+  "native_request_ids": [
+    "task-01-grant-native-1"
+  ],
+  "print": [
+    "{\"grant\":\"active\",\"window\":\"欢迎 - DevNote - Obsidian 1.13.7\"}"
+  ],
+  "state": "completed"
+}
+
+## task-02-window | Locate one selected window in the granted App
+error=false
+content.text (45 UTF-8 bytes):
+state: completed
+execution_id: task-02-window
+structuredContent (1135 UTF-8 bytes):
+{
+  "execution_id": "task-02-window",
+  "native_request_ids": [
+    "task-02-window-native-1"
+  ],
+  "observations": [
+    {
+      "complete": true,
+      "dirty": false,
+      "native_request_id": "task-02-window-native-1",
+      "truncated": false
+    }
+  ],
+  "print": [
+    "{\"items\":[{\"id\":\"W1\",\"kind\":\"window\",\"role\":\"window\",\"name\":{\"source\":\"ui_content\",\"status\":\"known\",\"value\":\"欢迎 - DevNote - Obsidian 1.13.7\"}},{\"id\":\"A1/R1\",\"kind\":\"ui\",\"role\":\"container\",\"name\":{\"source\":\"ui_content\",\"status\":\"known\",\"value\":\"欢迎 - DevNote - Obsidian 1.13.7\"}},{\"id\":\"A1/N1\",\"kind\":\"ui\",\"role\":\"menu_item\",\"name\":{\"source\":\"ui_content\",\"status\":\"known\",\"value\":\"欢迎 - DevNote - Obsidian 1.13.7\"}},{\"id\":\"A1/N2\",\"kind\":\"ui\",\"role\":\"document\",\"name\":{\"source\":\"ui_content\",\"status\":\"known\",\"value\":\"欢迎 - DevNote - Obsidian 1.13.7\"}}],\"matched\":4,\"unchanged\":0,\"omitted\":0,\"coverage\":{\"complete\":true,\"dirty\":false,\"truncated\":false,\"more\":false,\"unavailable_sources\":[]}}"
+  ],
+  "state": "completed"
+}
+
+## task-03-control | Find New Note and its native capabilities
+error=false
+content.text (46 UTF-8 bytes):
+state: completed
+execution_id: task-03-control
+structuredContent (993 UTF-8 bytes):
+{
+  "execution_id": "task-03-control",
+  "native_request_ids": [
+    "task-03-control-native-1"
+  ],
+  "observations": [
+    {
+      "complete": true,
+      "dirty": false,
+      "native_request_id": "task-03-control-native-1",
+      "truncated": false
+    }
+  ],
+  "print": [
+    "{\"items\":[{\"id\":\"W1/R1\",\"kind\":\"ui\",\"role\":\"container\",\"name\":{\"source\":\"ui_content\",\"status\":\"known\",\"value\":\"新建笔记\"},\"capabilities\":[{\"availability\":\"blocked\",\"name\":\"focus\",\"support\":\"unsupported\"},{\"availability\":\"available\",\"name\":\"invoke\",\"support\":\"supported\"},{\"availability\":\"available\",\"name\":\"scroll_into_view\",\"support\":\"supported\"},{\"availability\":\"blocked\",\"name\":\"set_value\",\"support\":\"unsupported\"}],\"area_hint\":\"top\"}],\"matched\":1,\"unchanged\":0,\"omitted\":0,\"coverage\":{\"complete\":true,\"dirty\":false,\"truncated\":false,\"more\":false,\"unavailable_sources\":[]}}"
+  ],
+  "state": "completed"
+}
+
+## task-04-repeat | Recheck the same control without repeating unchanged facts
+error=false
+content.text (45 UTF-8 bytes):
+state: completed
+execution_id: task-04-repeat
+structuredContent (479 UTF-8 bytes):
+{
+  "execution_id": "task-04-repeat",
+  "native_request_ids": [
+    "task-04-repeat-native-1"
+  ],
+  "observations": [
+    {
+      "complete": true,
+      "dirty": false,
+      "native_request_id": "task-04-repeat-native-1",
+      "truncated": false
+    }
+  ],
+  "print": [
+    "{\"items\":[],\"matched\":1,\"unchanged\":1,\"omitted\":0,\"coverage\":{\"complete\":true,\"dirty\":false,\"truncated\":false,\"more\":false,\"unavailable_sources\":[]}}"
+  ],
+  "state": "completed"
+}
+
+## task-05-act | Ensure the selected control is visible via semantic route
+error=false
+content.text (163 UTF-8 bytes):
+action run-92955ad949389c8cb4eeaf7e: completed; seat=ready; restoration=not_borrowed; ensure-visible=not_applicable/verified via semantic
+execution_id: task-05-act
+structuredContent (706 UTF-8 bytes):
+{
+  "actions": [
+    {
+      "native_request_id": "task-05-act-native-1",
+      "outcome": "completed",
+      "restoration": "not_borrowed",
+      "run_id": "run-92955ad949389c8cb4eeaf7e",
+      "seat_health": "ready",
+      "steps": [
+        {
+          "channel": "semantic",
+          "delivery": "not_applicable",
+          "id": "ensure-visible",
+          "verification": "verified"
+        }
+      ]
+    }
+  ],
+  "execution_id": "task-05-act",
+  "native_request_ids": [
+    "task-05-act-native-1"
+  ],
+  "print": [
+    "{\"outcome\":\"completed\",\"channel\":\"semantic\",\"delivery\":\"not_applicable\",\"verification\":\"verified\",\"restoration\":\"not_borrowed\"}"
+  ],
+  "state": "completed"
+}
+
+## task-06-confirm | Reobserve same control after action
+error=false
+content.text (46 UTF-8 bytes):
+state: completed
+execution_id: task-06-confirm
+structuredContent (482 UTF-8 bytes):
+{
+  "execution_id": "task-06-confirm",
+  "native_request_ids": [
+    "task-06-confirm-native-1"
+  ],
+  "observations": [
+    {
+      "complete": true,
+      "dirty": false,
+      "native_request_id": "task-06-confirm-native-1",
+      "truncated": false
+    }
+  ],
+  "print": [
+    "{\"items\":[],\"matched\":1,\"unchanged\":1,\"omitted\":0,\"coverage\":{\"complete\":true,\"dirty\":false,\"truncated\":false,\"more\":false,\"unavailable_sources\":[]}}"
+  ],
+  "state": "completed"
+}
+
+## task-07-capture | Capture only the selected Obsidian window; no image in default result
+error=true
+content.text (135 UTF-8 bytes):
+failed: Error: capability_unavailable
+native capability_unavailable: capability_unavailable
+state: failed
+execution_id: task-07-capture
+structuredContent (344 UTF-8 bytes):
+{
+  "error": {
+    "code": "failed",
+    "message": "Error: capability_unavailable"
+  },
+  "execution_id": "task-07-capture",
+  "native_error": {
+    "code": "capability_unavailable",
+    "message": "capability_unavailable",
+    "retry_class": "reobserve"
+  },
+  "native_request_ids": [
+    "task-07-capture-native-1"
+  ],
+  "state": "failed"
+}

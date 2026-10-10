@@ -1,0 +1,95 @@
+# Selected Obsidian DTW task; exact model-visible MCP results
+base=7f63e60f9f20587e13d5f816682adc106814cfb3
+window=欢迎 - DevNote - Obsidian 1.13.7
+compact=true
+
+## task-01-grant | Identify exact selected window grant
+error=false
+content.text (12 UTF-8 bytes):
+grant active
+structuredContent (compact JSON 21 UTF-8 bytes; pretty text below):
+{
+  "state": "completed"
+}
+
+## task-02-window | Locate one selected window in the granted App
+error=false
+content.text (48 UTF-8 bytes):
+W1 Obsidian "欢迎 - DevNote - Obsidian 1.13.7"
+structuredContent (compact JSON 21 UTF-8 bytes; pretty text below):
+{
+  "state": "completed"
+}
+
+## task-03-control | Find New Note and its native capabilities
+error=false
+content.text (54 UTF-8 bytes):
+W1/R1 container "新建笔记" invoke,scroll_into_view
+structuredContent (compact JSON 21 UTF-8 bytes; pretty text below):
+{
+  "state": "completed"
+}
+
+## task-04-repeat | Recheck the same control without repeating unchanged facts
+error=false
+content.text (15 UTF-8 bytes):
+W1/R1 unchanged
+structuredContent (compact JSON 21 UTF-8 bytes; pretty text below):
+{
+  "state": "completed"
+}
+
+## task-05-act | Ensure the selected control is visible via semantic route
+error=false
+content.text (48 UTF-8 bytes):
+ensure-visible: completed, verified via semantic
+structuredContent (compact JSON 21 UTF-8 bytes; pretty text below):
+{
+  "state": "completed"
+}
+
+## task-06-confirm | Reobserve same control after action
+error=false
+content.text (15 UTF-8 bytes):
+W1/R1 unchanged
+structuredContent (compact JSON 21 UTF-8 bytes; pretty text below):
+{
+  "state": "completed"
+}
+
+## task-07-capture-discover | Find the visual capture target for the selected window
+error=false
+content.text (20 UTF-8 bytes):
+capture target ready
+structuredContent (compact JSON 21 UTF-8 bytes; pretty text below):
+{
+  "state": "completed"
+}
+
+## task-07-capture | Capture only the selected Obsidian window; no image in default result
+error=false
+content.text (25 UTF-8 bytes):
+capture: 1 image(s) ready
+structuredContent (compact JSON 21 UTF-8 bytes; pretty text below):
+{
+  "state": "completed"
+}
+
+## task-08-broad | Diagnose a broad window outline without exposing its private tree
+error=false
+content.text (83 UTF-8 bytes):
+48 nodes seen
+observation incomplete (truncated, more); execution_id: task-08-broad
+structuredContent (compact JSON 162 UTF-8 bytes; pretty text below):
+{
+  "execution_id": "task-08-broad",
+  "observations": [
+    {
+      "complete": false,
+      "more": true,
+      "native_request_id": "task-08-broad-native-1",
+      "truncated": true
+    }
+  ],
+  "state": "completed"
+}

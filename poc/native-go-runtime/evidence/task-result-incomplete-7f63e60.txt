@@ -1,0 +1,51 @@
+# Selected Obsidian DTW task; exact model-visible MCP results
+base=7f63e60f9f20587e13d5f816682adc106814cfb3
+window=欢迎 - DevNote - Obsidian 1.13.7
+
+## task-01-grant | Identify exact selected window grant
+error=false
+content.text (44 UTF-8 bytes):
+state: completed
+execution_id: task-01-grant
+structuredContent (218 UTF-8 bytes):
+{
+  "execution_id": "task-01-grant",
+  "native_request_ids": [
+    "task-01-grant-native-1"
+  ],
+  "print": [
+    "{\"grant\":\"active\",\"window\":\"欢迎 - DevNote - Obsidian 1.13.7\"}"
+  ],
+  "state": "completed"
+}
+
+## task-02-window | Locate one selected window in the granted App
+error=true
+content.text (173 UTF-8 bytes):
+observation task-02-window-native-1: incomplete (truncated=true, dirty=true, more=false)
+failed: Error: selected window unresolved
+state: failed
+execution_id: task-02-window
+structuredContent (433 UTF-8 bytes):
+{
+  "error": {
+    "code": "failed",
+    "message": "Error: selected window unresolved"
+  },
+  "execution_id": "task-02-window",
+  "native_request_ids": [
+    "task-02-window-native-1"
+  ],
+  "observations": [
+    {
+      "complete": false,
+      "dirty": true,
+      "native_request_id": "task-02-window-native-1",
+      "truncated": true,
+      "unavailable_sources": [
+        "ax_partial"
+      ]
+    }
+  ],
+  "state": "failed"
+}
