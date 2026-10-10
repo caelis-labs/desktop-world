@@ -1,5 +1,6 @@
-// Package exactgrant is an isolated POC for the identity checks a native
-// helper must make at dispatch. It is not wired to the current App-wide helper.
+// Package exactgrant is an isolated POC for the identity checks made at the
+// dispatch boundary by the build-tagged exacthelper. The normal helper is
+// unchanged while the full runtime POC remains behind its phase gate.
 package exactgrant
 
 import "errors"

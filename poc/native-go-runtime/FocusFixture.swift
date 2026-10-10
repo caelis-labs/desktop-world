@@ -13,7 +13,8 @@ let logPath = option("--log", "/private/tmp/dtw-focus-manual-\(ProcessInfo.proce
 let selfTest = option("--self-test", "0") == "1"
 let selfTestKey = option("--self-test-key", "0") == "1"
 let isAccessory = option("--accessory", "0") == "1"
-let fixtureVersion = "focus-event-chain-20261010-f-finite-event-metadata"
+let fixtureVersion = "focus-event-chain-20261010-h-exact-grant-replacement"
+let controlPath = option("--control-file", "")
 
 final class FixtureWindow: NSWindow {
   var eventSink: (([String: Any]) -> Void)?
@@ -49,9 +50,11 @@ final class FixtureWindow: NSWindow {
 final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
   var window: NSWindow!
   var secondWindow: NSWindow?
+  var secondField: NSTextField?
   var field: NSTextField!
   var sequence = 0
   var timer: Timer?
+  var controlTimer: Timer?
   var localMonitor: Any?
 
   func record(_ event: String, _ extra: [String: Any] = [:]) {
@@ -69,6 +72,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     // length, and whether the target still equals the controlled test value.
     let value = field?.stringValue ?? ""
     row["field_length"] = value.count
+    row["second_field_length"] = secondField?.stringValue.count ?? 0
     if !isHuman { row["matches_expected"] = value == "POC-中文🙂" }
     for (key, value) in extra { row[key] = value }
     guard var data = try? JSONSerialization.data(withJSONObject: row) else { return }
@@ -80,6 +84,39 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     file.seekToEndOfFile()
     file.write(data)
     try? file.close()
+  }
+
+  // Private, fixture-only control. The replacement never activates this app or
+  // synthesizes input; it is used to prove a title grant cannot follow a new
+  // native window with the same title inside the same process.
+  func pollControl() {
+    guard !controlPath.isEmpty,
+      let command = try? String(contentsOfFile: controlPath, encoding: .utf8) else { return }
+    try? FileManager.default.removeItem(atPath: controlPath)
+    guard command.trimmingCharacters(in: .whitespacesAndNewlines) == "replace_main" else {
+      record("unknown_control")
+      return
+    }
+    let oldNumber = window.windowNumber
+    let oldTitle = window.title
+    let frame = window.frame
+    window.close()
+    let replacement = NSWindow(contentRect: frame, styleMask: [.titled, .closable],
+      backing: .buffered, defer: false)
+    replacement.title = oldTitle
+    replacement.isReleasedWhenClosed = false
+    let label = NSTextField(labelWithString: "DTW-owned replacement window")
+    label.frame = NSRect(x: 20, y: 180, width: 420, height: 24)
+    replacement.contentView?.addSubview(label)
+    let input = NSTextField(frame: NSRect(x: 20, y: 145, width: 420, height: 30))
+    input.setAccessibilityLabel("POC text")
+    input.delegate = self
+    replacement.contentView?.addSubview(input)
+    window = replacement
+    field = input
+    replacement.orderBack(nil)
+    record("replaced_main", ["old_window_number": oldNumber,
+      "new_window_number": replacement.windowNumber])
   }
 
   func applicationDidFinishLaunching(_ notification: Notification) {
@@ -119,7 +156,14 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         backing: .buffered, defer: false)
       sibling.title = secondTitle
       sibling.isReleasedWhenClosed = false
-      sibling.contentView?.addSubview(NSTextField(labelWithString: "Owned sibling window"))
+      let siblingLabel = NSTextField(labelWithString: "Owned sibling window")
+      siblingLabel.frame = NSRect(x: 20, y: 90, width: 260, height: 20)
+      sibling.contentView?.addSubview(siblingLabel)
+      let siblingInput = NSTextField(frame: NSRect(x: 20, y: 45, width: 260, height: 28))
+      siblingInput.setAccessibilityLabel("POC sibling text")
+      siblingInput.delegate = self
+      sibling.contentView?.addSubview(siblingInput)
+      secondField = siblingInput
       secondWindow = sibling
     }
     for (name, label) in [(NSWindow.didBecomeKeyNotification, "became_key"), (NSWindow.didResignKeyNotification, "resigned_key"), (NSWindow.didBecomeMainNotification, "became_main"), (NSWindow.didResignMainNotification, "resigned_main")] {
@@ -138,6 +182,11 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
       return event
     }
     timer = Timer.scheduledTimer(withTimeInterval: 0.025, repeats: true) { [weak self] _ in self?.record("seat_sample") }
+    if !controlPath.isEmpty {
+      controlTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+        self?.pollControl()
+      }
+    }
     if option("--background", isHuman ? "0" : "1") == "1" {
       // Diagnostic opt-in: order the owned window forward without activating
       // the application or making it key. This tests whether AXWindows drops
@@ -205,6 +254,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
       "editor_present": field.currentEditor() != nil,
       "window_class": String(describing: type(of: window)),
       "second_window_number": secondWindow?.windowNumber ?? 0,
+      "second_field_length": secondField?.stringValue.count ?? 0,
       "event_sink_present": window is FixtureWindow])
     if selfTest {
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
@@ -248,6 +298,10 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
   func controlTextDidBeginEditing(_ notification: Notification) { record("begin_edit") }
   func controlTextDidChange(_ notification: Notification) {
+    if let secondField, (notification.object as AnyObject?) === secondField {
+      record("sibling_text_change")
+      return
+    }
     let editor = window.firstResponder as? NSTextView
     let marked = editor?.markedRange() ?? NSRange(location: NSNotFound, length: 0)
     record("text_change", ["marked_location": marked.location, "marked_length": marked.length])

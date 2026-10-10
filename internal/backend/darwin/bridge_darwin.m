@@ -1231,6 +1231,63 @@ void dw_close(void *p) {
     CFBridgingRelease(p);
   }
 }
+#ifdef DTW_POC_EXACTGRANT
+// Isolated helper build only. Resolve an action key to the actual AXWindow,
+// then to a live same-PID native window number. Never use title or geometry.
+static NSDictionary *pocWindowIdentity(DWContext *c, NSString *targetKey) {
+  if (!alive(c, targetKey)) return err(@"ref_gone");
+  AXUIElementRef target = element(c, targetKey);
+  if (!target) return err(@"window_identity_unavailable");
+  pid_t pid = 0;
+  if (AXUIElementGetPid(target, &pid) != kAXErrorSuccess || pid <= 0)
+    return err(@"window_identity_unavailable");
+  id current = (__bridge id)target;
+  id window = nil;
+  NSMutableSet *seen = [NSMutableSet set];
+  for (int depth = 0; current && depth < 32; depth++) {
+    if ([seen containsObject:current]) break;
+    [seen addObject:current];
+    AXUIElementRef candidate = (__bridge AXUIElementRef)current;
+    pid_t candidatePID = 0;
+    if (AXUIElementGetPid(candidate, &candidatePID) != kAXErrorSuccess || candidatePID != pid)
+      break;
+    if ([attr(candidate, kAXRoleAttribute) isEqual:(__bridge NSString *)kAXWindowRole]) {
+      window = current;
+      break;
+    }
+    id direct = attr(candidate, kAXWindowAttribute);
+    if (direct && CFGetTypeID((__bridge CFTypeRef)direct) == AXUIElementGetTypeID()) {
+      pid_t windowPID = 0;
+      if (AXUIElementGetPid((__bridge AXUIElementRef)direct, &windowPID) == kAXErrorSuccess && windowPID == pid &&
+          [attr((__bridge AXUIElementRef)direct, kAXRoleAttribute) isEqual:(__bridge NSString *)kAXWindowRole]) {
+        window = direct;
+        break;
+      }
+    }
+    current = attr(candidate, kAXParentAttribute);
+  }
+  if (!window) return err(@"window_identity_unavailable");
+  typedef AXError (*WindowID)(AXUIElementRef, CGWindowID *);
+  WindowID getWindow = (WindowID)dlsym(RTLD_DEFAULT, "_AXUIElementGetWindow");
+  CGWindowID wid = 0;
+  if (!getWindow || getWindow((__bridge AXUIElementRef)window, &wid) != kAXErrorSuccess || !wid)
+    return err(@"window_identity_unavailable");
+  NSArray *identity = processIdentity(pid);
+  if (identity.count != 2) return err(@"window_identity_unavailable");
+  NSArray *list = CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionAll, kCGNullWindowID));
+  NSInteger matches = 0;
+  for (NSDictionary *row in list)
+    if ([row[(id)kCGWindowNumber] unsignedIntValue] == wid &&
+        [row[(id)kCGWindowOwnerPID] intValue] == pid) matches++;
+  if (matches != 1) return err(@"window_identity_unavailable");
+  id app = CFBridgingRelease(AXUIElementCreateApplication(pid));
+  NSString *appKey = key(c, (__bridge AXUIElementRef)app, nil, nil, nil);
+  NSString *windowKey = key(c, (__bridge AXUIElementRef)window, appKey, nil, appKey);
+  if (!appKey.length || !windowKey.length) return err(@"window_identity_unavailable");
+  return @{ @"Result": @{ @"PID": @(pid), @"StartSec": identity[0], @"StartUSec": identity[1],
+    @"NativeWindowID": @(wid), @"AppKey": appKey, @"WindowKey": windowKey } };
+}
+#endif
 char *dw_call(void *p, const char *opstr, const char *json, void *cancel) {
   @autoreleasepool {
     @try {
@@ -1318,6 +1375,10 @@ char *dw_call(void *p, const char *opstr, const char *json, void *cancel) {
           };
         }
       }
+#ifdef DTW_POC_EXACTGRANT
+      else if ([op isEqual:@"poc_window_identity"])
+        out = pocWindowIdentity(c, r[@"Key"]);
+#endif
 #ifdef DTW_BACKGROUND_POC
       else if ([op isEqual:@"background_poc"])
         out = backgroundPOC(c, r, (DWCancel *)cancel);
