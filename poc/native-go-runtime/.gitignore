@@ -1,0 +1,5 @@
+.gomodcache/
+.gocache/
+.swift-module-cache/
+bin/
+artifacts/

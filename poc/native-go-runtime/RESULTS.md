@@ -1,0 +1,40 @@
+# Native Go runtime POC checkpoint — stage gate **not passed**
+
+2026-10-10, macOS 27.0.1 arm64. Base source: `c8e7579eb55cd002ad8189ced6574f9a80ccd62f`. This is an isolated POC, not the product implementation. Exact POC commit SHA is recorded after the local checkpoint commit. All commands below use this worktree; `GOWORK=off`, a POC-local `GOMODCACHE`/`GOCACHE`, and `GOPROXY=off` after verified module download. The two dependencies are pinned in `go.mod`/`go.sum`: `github.com/buke/quickjs-go v0.7.6` and official `github.com/modelcontextprotocol/go-sdk v1.8.0`. The QuickJS binding and embedded quickjs-ng sources have MIT license files. Go MCP SDK v1.8.0 requires Go 1.25; this POC uses Go 1.26.8, while the existing root module declares Go 1.23. A product toolchain decision is still required.
+
+## What the isolated code proves
+
+- One **actual stdio MCP** connection starts a native Go process. `tools/list` contains only `dtw_exec`. `exec`, `status`, `result`, and `cancel` are operations of that same tool. A test child uses `PATH=/usr/bin:/bin`; the built Go binary's `otool -L` lists system libraries/frameworks only and no Node library. The current repository Skill/package has **not** been migrated or loaded as the new matching Skill.
+- QuickJS Bare Context has Promise but no QuickJS std/os bootstrap. `await` of scheduled Go completion, loops/filter/catch, print, persistent `state`, and interrupt of both a pre-await and post-await infinite loop pass. The official Go MCP SDK continues answering status/cancel on the same stdio connection while QuickJS loops. Same execution ID/code returns the prior result; same ID/different code returns `execution_conflict`.
+- Two simultaneous **stdio MCP processes** retain distinct JS state. Cancelling an infinite loop in Session A leaves Session B's awaited script and state intact. This proves JS/process isolation only; it does **not** prove native grants, refs, same-app writes, foreground arbitration or user-input priority.
+- A real native helper built from this baseline was reached through `Go MCP → QuickJS Promise → Go host.Client → dtw`. Under normal workspace sandboxing, `observe` returned `permission_denied` with its original native request ID. Through the tool approval path, the same read-only test passed and reported `complete:false`, `truncated:true`, `more:true`; `result` by execution ID exposed the original native response. The initial denial was a sandbox execution boundary, not evidence that macOS TCC itself was absent.
+- An owned AppKit fixture, built from the existing `FullFixture.swift` into `poc/native-go-runtime/bin`, was located by current native window Ref. Across MCP calls, `state` kept the window/control refs; `set_value` returned `completed / complete delivery / verified / semantic`, and an independent native read returned `POC-中文🙂`. `window_content` capture returned one tile and one file; explicit `result(include_image:true)` carried a real 15,629-byte PNG `ImageContent`. The inspected image contains only this fixture. [Owned window image](evidence/owned-appkit-window.png), SHA-256 `881fe116df4b557b9c028de2febe83fcffde07ece1b6ff001fdd3878bfb343ac`.
+- The same fixture's `pointer.click` on its test submit button reported `completed`, `delivery:complete`, `channel:foreground_transaction`, `restoration:restored`. **Independent business evidence did not match:** after a prior native read of `POC-中文🙂`, the fixture's submit callback logged `POC-中文🙂画`. The added character's source is unknown. This is a failed business-result/user-input-priority gate, despite the dispatch/restoration receipt. No further foreground experiment was run after this mismatch; the owned fixture PID 9774 was terminated. Original ignored local fixture log: `artifacts/fixture/events.jsonl`, SHA-256 `d9ffbbfc19d86962c9733f6ae61f008b6f0930fc205e2da513f89008e0df5b01`.
+- The fixed JS state-read response measured **19 UTF-8 bytes text**, **56 bytes structured JSON**, **248 bytes full marshaled Go MCP result**. Both channels are concise; this is a protocol byte measurement, not model token usage or token savings. The full tree stays in JS `state`; coverage and native request IDs are projected separately. Native full results are currently queryable only while this POC process lives.
+
+The binding's `Value.Set` transfers the JS value to QuickJS. Freeing a newly assigned callback immediately caused a reproducible SIGSEGV in the first MCP run; after retaining assigned values, the stdio and native tests passed. This is an ownership rule for any product implementation, not evidence that the binding is inherently unusable. The POC creates new callback wrappers per execution and does not yet prove long-lived memory bounds. It also keeps QuickJS **inside** the MCP process; the planned same-binary script child and hard-kill/state-loss path remain untested.
+
+## Gate matrix — no row is fully passed
+
+| Row | Current evidence | Gate |
+| --- | --- | --- |
+| C01 | Go MCP stdio and one tool pass; matching Skill, packaging and no-Node installation untested | **Partial** |
+| C02 | JS state, async Go callback, owned AppKit semantic call and PNG pass; full script API/capture variants untested | **Partial** |
+| C03 | Busy loops and same-connection control pass; slow native call, worker kill, late receipt and state loss untested | **Partial** |
+| C04 | AppKit discovery/set/read/window PNG and one click attempted; B01–B13 full matrix, Chrome/WebKit/Electron routes untested | **Partial** |
+| C05 | AppKit semantic background and cooperative route observed; unexplained submit text mutation, cross-app automatic routing and targeted input untested | **Failed/unpassed** |
+| C06 | Two JS MCP Sessions and one-sided cancellation pass; native concurrent sessions, same-app conflict and shared seat untested | **Partial** |
+| C07 | Original native read result query pass; native ref/grant isolation, revoke, unknown/partial and late receipt untested | **Partial** |
+| C08 | Fixed MCP byte counts and dual-channel shape pass; actual model token accounting/task acceptance untested | **Partial** |
+| C09 | macOS build passes. No Windows GNU/MSYS2 compiler or Windows desktop here: `CGO_ENABLED=0` cannot build binding; `CGO_ENABLED=1 CC=clang GOOS=windows` fails at `runtime/cgo` (`-mthreads`/target assembly). Windows GUI/background/multi-Agent **unpassed** | **Unpassed** |
+
+Baseline B01–B13 remain **unpassed as a complete candidate matrix**. Historical fixtures/docs preserve their original platform-specific evidence; they are not promoted to this runtime's acceptance.
+
+## Minimum next work before product changes
+
+1. Preserve and investigate the foreground submit mismatch using a controlled second owned app as the human seat, explicit before/after app and input event logging, and the original action receipt. Prove user typing cannot land in the borrowed target or stop/fence with an explicit result. Do not infer business completion from the current dispatch receipt.
+2. Move QuickJS into a same-binary script child so a C/binding/provider wedge can be killed without blocking `dtw_exec status/cancel`; retain native helper and original receipt in the Go supervisor. Test slow native calls, late replies, state-loss reporting and cancellation without replay.
+3. Add cross-process physical seat and same-app/window write coordination, then run two real native MCP Sessions against owned AppKit, WebKit/Chrome and Electron fixtures. Verify background parallelism, foreground contention, user interruption, ref/grant isolation and one-sided cancellation.
+4. Complete B01–B13 and the explicit C matrix, including targeted background input only where accepted, native image variants, authorization/revocation, incomplete scans, unknown/partial receipts, cursor overlay, and a fixed model-facing token or bounded transport-cost task. Run Windows build on a proper toolchain and Windows GUI acceptance separately.
+
+**Stage decision:** no product implementation, history deletion, bulk migration, push, PR, merge or release. The user-authorized product phase begins only when every critical POC row has explicit current evidence.
