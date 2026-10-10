@@ -2,6 +2,7 @@
 // Prints only counts and exact-title matches, never unrelated window names.
 import AppKit
 import ApplicationServices
+import Darwin
 
 guard CommandLine.arguments.count == 3,
       let pid = Int32(CommandLine.arguments[1]) else {
@@ -9,6 +10,9 @@ guard CommandLine.arguments.count == 3,
   exit(2)
 }
 let title = CommandLine.arguments[2]
+var processInfo = proc_bsdinfo()
+let processInfoBytes = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0,
+  &processInfo, Int32(MemoryLayout<proc_bsdinfo>.size))
 let all = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
 let owned = all.filter { ($0[kCGWindowOwnerPID as String] as? Int32) == pid }
 let cgMatches = owned.filter { ($0[kCGWindowName as String] as? String) == title }
@@ -20,10 +24,17 @@ let rawType = raw.map { CFGetTypeID($0) } ?? 0
 let arrayType = CFArrayGetTypeID()
 let elementType = AXUIElementGetTypeID()
 let windows = raw as? [AXUIElement] ?? []
+// Existing cooperative backend uses this macOS SPI. This read-only probe
+// checks whether an AX window can be joined to an owned CGWindow by number;
+// absence or error is an unresolved identity, never a title-based fallback.
+typealias AXWindowNumber = @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
+let axWindowSymbol = dlsym(dlopen(nil, RTLD_NOW), "_AXUIElementGetWindow")
+let axWindowNumber = axWindowSymbol.map { unsafeBitCast($0, to: AXWindowNumber.self) }
 var axMatches = 0
 var axTitles: [String] = []
 var axRoles: [String] = []
 var axSameAsApp: [Bool] = []
+var axNative: [[String: Any]] = []
 for window in windows {
   axSameAsApp.append(CFEqual(window, app))
   var name: CFTypeRef?
@@ -36,14 +47,22 @@ for window in windows {
   if AXUIElementCopyAttributeValue(window, kAXRoleAttribute as CFString, &role) == .success {
     axRoles.append(role as? String ?? "<non-string>")
   } else { axRoles.append("<unavailable>") }
+  var number: CGWindowID = 0
+  let status = axWindowNumber?(window, &number).rawValue ?? -1
+  let matches = owned.filter { ($0[kCGWindowNumber as String] as? CGWindowID) == number }
+  axNative.append(["status": status, "number": number,
+    "owned_cg_matches": matches.count, "owner_pid_matches": matches.count == 1])
 }
 let result: [String: Any] = [
-  "pid": pid, "cg_windows": owned.count, "cg_exact_matches": cgMatches.count,
+  "pid": pid, "process_start_sec": processInfoBytes == MemoryLayout<proc_bsdinfo>.size ? processInfo.pbi_start_tvsec : 0,
+  "process_start_usec": processInfoBytes == MemoryLayout<proc_bsdinfo>.size ? processInfo.pbi_start_tvusec : 0,
+  "cg_windows": owned.count, "cg_exact_matches": cgMatches.count,
   "ax_status": code.rawValue, "ax_windows": windows.count, "ax_exact_matches": axMatches,
   "ax_raw_type": rawType, "cf_array_type": arrayType, "ax_element_type": elementType,
   "ax_owned_titles": axTitles,
   "ax_roles": axRoles,
   "ax_same_as_app": axSameAsApp,
+  "ax_native": axNative,
   "cg_owned": owned.map { ["name": $0[kCGWindowName as String] as? String ?? "", "layer": String(describing:$0[kCGWindowLayer as String] ?? ""), "number": String(describing:$0[kCGWindowNumber as String] ?? "")] },
 ]
 let data = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])

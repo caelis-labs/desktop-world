@@ -13,20 +13,30 @@ let logPath = option("--log", "/private/tmp/dtw-focus-manual-\(ProcessInfo.proce
 let selfTest = option("--self-test", "0") == "1"
 let selfTestKey = option("--self-test-key", "0") == "1"
 let isAccessory = option("--accessory", "0") == "1"
-let fixtureVersion = "focus-event-chain-20261010-e"
+let fixtureVersion = "focus-event-chain-20261010-f-finite-event-metadata"
 
 final class FixtureWindow: NSWindow {
   var eventSink: (([String: Any]) -> Void)?
   override func sendEvent(_ event: NSEvent) {
     var metadata: [String: Any]? = nil
     if [.keyDown, .keyUp, .leftMouseDown, .leftMouseUp].contains(event.type) {
-      metadata = ["type": event.type.rawValue, "event_time": event.timestamp]
+      metadata = ["type": event.type.rawValue,
+        "event_time": event.timestamp.isFinite ? event.timestamp : 0]
       if [.keyDown, .keyUp].contains(event.type) {
         metadata?["key_code"] = Int(event.keyCode)
       } else {
         metadata?["event_number"] = event.eventNumber
-        metadata?["x"] = event.locationInWindow.x
-        metadata?["y"] = event.locationInWindow.y
+        let location = event.locationInWindow
+        if location.x.isFinite && location.y.isFinite {
+          metadata?["x"] = location.x
+          metadata?["y"] = location.y
+          metadata?["location_valid"] = true
+        } else {
+          // Some system-delivered activation records have nonfinite location.
+          // NSJSONSerialization raises an Objective-C exception for NaN/Inf;
+          // a Swift `try?` cannot catch that exception.
+          metadata?["location_valid"] = false
+        }
       }
     }
     super.sendEvent(event)
@@ -38,6 +48,7 @@ final class FixtureWindow: NSWindow {
 
 final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
   var window: NSWindow!
+  var secondWindow: NSWindow?
   var field: NSTextField!
   var sequence = 0
   var timer: Timer?
@@ -100,6 +111,17 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let submit = NSButton(title: "POC submit", target: self, action: #selector(submit))
     submit.frame = NSRect(x: 20, y: 70, width: 140, height: 32)
     window.contentView!.addSubview(submit)
+    if let secondTitle = args.firstIndex(of: "--second-window-title").flatMap({ index in
+      index + 1 < args.count ? args[index + 1] : nil
+    }) {
+      let sibling = NSWindow(contentRect: NSRect(x: rect.minX + 60, y: rect.minY + 35,
+        width: 300, height: 130), styleMask: [.titled, .closable],
+        backing: .buffered, defer: false)
+      sibling.title = secondTitle
+      sibling.isReleasedWhenClosed = false
+      sibling.contentView?.addSubview(NSTextField(labelWithString: "Owned sibling window"))
+      secondWindow = sibling
+    }
     for (name, label) in [(NSWindow.didBecomeKeyNotification, "became_key"), (NSWindow.didResignKeyNotification, "resigned_key"), (NSWindow.didBecomeMainNotification, "became_main"), (NSWindow.didResignMainNotification, "resigned_main")] {
       NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in self?.record(label) }
     }
@@ -108,7 +130,8 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
     localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .leftMouseDown, .leftMouseUp]) { [weak self] event in
       var metadata: [String: Any] = ["type": event.type.rawValue,
-        "event_window_number": event.windowNumber, "event_time": event.timestamp]
+        "event_window_number": event.windowNumber,
+        "event_time": event.timestamp.isFinite ? event.timestamp : 0]
       if [.keyDown, .keyUp].contains(event.type) { metadata["key_code"] = Int(event.keyCode) }
       else { metadata["event_number"] = event.eventNumber }
       self?.record("local_input", metadata)
@@ -121,6 +144,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
       // a window that has only ever been ordered to the back.
       if option("--background-window-front", "0") == "1" { window.orderFront(nil) }
       else { window.orderBack(nil) }
+      secondWindow?.orderBack(nil)
       if option("--prime-once", "0") == "1" {
         // Fixture-only diagnostic. One brief self-activation after a quiet
         // physical input interval; no synthesized input and no pointer move.
@@ -157,6 +181,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
     else {
       window.makeKeyAndOrderFront(nil)
+      secondWindow?.orderFront(nil)
       NSApp.activate(ignoringOtherApps: true)
       if isHuman { window.makeFirstResponder(field) }
       // Launch Services can finish registering a freshly built test bundle
@@ -179,6 +204,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
       "field_editable": field.isEditable, "field_selectable": field.isSelectable,
       "editor_present": field.currentEditor() != nil,
       "window_class": String(describing: type(of: window)),
+      "second_window_number": secondWindow?.windowNumber ?? 0,
       "event_sink_present": window is FixtureWindow])
     if selfTest {
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
