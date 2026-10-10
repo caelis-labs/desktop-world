@@ -19,25 +19,47 @@ connection with `dtw.at('W1/B2')` until that UI object expires. A script's
 outcome; do not replay the action. The companion Skill teaches discovery,
 actions, screenshots, and receipt handling.
 
-## Build and install
+## Quick install
 
-On macOS arm64 with Go 1.26 and Xcode Command Line Tools:
+From the repository root on macOS arm64 (Go 1.26 and Xcode Command Line
+Tools required), build the native package once:
 
 ```sh
-./scripts/build-native-plugin.sh /absolute/output/dtw-plugin
-/absolute/output/dtw-plugin/bin/dtw version
-/absolute/output/dtw-plugin/bin/dtw install codex
+./scripts/build-native-plugin.sh "$PWD/artifacts/dtw-plugin"
+DTW="$PWD/artifacts/dtw-plugin/bin/dtw"
+"$DTW" version
 ```
 
-`dtw install AGENT` supports `codex`, `claude`, `antigravity`, `gemini`, and
-`cursor`. It installs the MCP server and the same Skill using each client's
-current package or configuration format. Default scope is `user`; add
-`--scope project --project /path/to/project` for a supported project install.
-Claude Code installation calls its `claude plugin install` CLI. Gemini CLI
-extensions currently support user scope in DTW. `dtw install plugin --to DIR`
-copies the portable Agent Plugin 1.0 package for any compatible client.
-Run `dtw install` for the complete usage line. Restart or reload the target
-Agent after installation.
+**CLI install:** choose your Agent. Each command installs the native MCP
+server and the same companion Skill. The default scope is your user account.
+
+| Agent | Command |
+| --- | --- |
+| Codex | `"$DTW" install codex` |
+| Claude Code | `"$DTW" install claude` |
+| Antigravity | `"$DTW" install antigravity` |
+| Gemini CLI | `"$DTW" install gemini` |
+| Cursor | `"$DTW" install cursor` |
+
+For a supported project install, use
+`"$DTW" install codex --scope project --project /path/to/project` (replace
+`codex` with the target Agent). Gemini
+CLI extensions currently support user scope only. Claude Code requires its
+`claude` CLI; DTW registers a local marketplace and installs the plugin through
+that CLI. Running `dtw` without arguments starts its stdio MCP server for
+hosts configured manually.
+
+**Plugin package:** copy an [Agent Plugin 1.0](https://agent-plugins.org/)
+package to a chosen directory, then load that directory in a compatible
+Agent's plugin manager:
+
+```sh
+"$DTW" install plugin --to "$PWD/artifacts/dtw-agent-plugin"
+```
+
+Run `"$DTW" install` for all options. Restart or reload the Agent after
+installation. The build destination must be empty; use a fresh directory for
+a new build.
 
 The package contains `plugin.json`, `mcp.json`, the Claude Code plugin
 adapter, `bin/dtw`, a private `libexec/dtw-helper`, and

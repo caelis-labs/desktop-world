@@ -398,11 +398,19 @@ func installClaudeCLI(marketplace, scope, project string) error {
 	if _, err := exec.LookPath("claude"); err != nil {
 		return fmt.Errorf("Claude Code CLI unavailable: %w", err)
 	}
-	command := exec.Command("claude", "plugin", "install", "desktop-world", "--marketplace", marketplace, "--scope", scope)
-	command.Dir = project
-	command.Stdout, command.Stderr = os.Stdout, os.Stderr
-	if err := command.Run(); err != nil {
-		return fmt.Errorf("Claude plugin installation failed: %w", err)
+	for _, step := range []struct {
+		name string
+		args []string
+	}{
+		{"marketplace registration", []string{"plugin", "marketplace", "add", marketplace, "--scope", scope}},
+		{"plugin installation", []string{"plugin", "install", "desktop-world@dtw-local", "--scope", scope}},
+	} {
+		command := exec.Command("claude", step.args...)
+		command.Dir = project
+		command.Stdout, command.Stderr = os.Stdout, os.Stderr
+		if err := command.Run(); err != nil {
+			return fmt.Errorf("Claude %s failed: %w", step.name, err)
+		}
 	}
 	return nil
 }
