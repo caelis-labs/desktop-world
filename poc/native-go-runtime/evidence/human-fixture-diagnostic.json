@@ -1,0 +1,214 @@
+{
+  "source_sha256": "ccbc1cfdc49aa62815bc30b3c6f439d7f7bb483b8d1b13a3a233c88d9f094dde",
+  "old_human_binary": {
+    "sha256": "98922758d8bd77352d17a632df277f36d35cf663791777d5dc1bea05d653d791",
+    "bytes": 152800,
+    "mtime_ns": 1791600808332481232,
+    "has_window_input_string": false,
+    "has_activation_retry_string": false
+  },
+  "unrun_newer_binary": {
+    "sha256": "59ec7c794227b79fe3ab4a2cce71d72aa0c86e46dbf10439956ef93de73c9697",
+    "bytes": 153600,
+    "mtime_ns": 1791601007487063952,
+    "has_window_input_string": true,
+    "has_activation_retry_string": true
+  },
+  "fixed_human_binary": {
+    "sha256": "c304fec866d198ff73d22d96645506dd3b09541774f460c74738d435f1ae1d1c",
+    "bytes": 183040,
+    "mtime_ns": 1791601818803125696,
+    "has_window_input_string": true,
+    "has_activation_retry_string": true
+  },
+  "old_human_live_log": {
+    "sha256": "d415e9ea9d386bec4ddcff63d45fec34ce5411da7a8a9f2859ea06e9e91bef66",
+    "rows": 4661,
+    "by_pid": {
+      "24505": {
+        "events": {
+          "became_key": 7,
+          "became_main": 6,
+          "end_edit": 1,
+          "ready": 1,
+          "resigned_key": 7,
+          "resigned_main": 6,
+          "seat_sample": 4633
+        },
+        "ever_frontmost": true,
+        "ever_active": true,
+        "ever_key": true,
+        "max_field_length": 0,
+        "ready": {
+          "version": null,
+          "bundle_path": null,
+          "executable_path": null,
+          "window_number": null,
+          "window_class": null,
+          "activation_policy": null,
+          "field_enabled": null,
+          "field_editable": null,
+          "field_selectable": null,
+          "editor_present": null,
+          "first_responder": "NSTextView"
+        }
+      }
+    }
+  },
+  "background_post_self_test": {
+    "sha256": "4129438287753cabbe15ac1ca1a50476590347631ae4256dac7d15f26fac91cb",
+    "rows": 520,
+    "by_pid": {
+      "28553": {
+        "events": {
+          "local_input": 1,
+          "ready": 1,
+          "seat_sample": 517,
+          "self_post": 1
+        },
+        "ever_frontmost": false,
+        "ever_active": false,
+        "ever_key": false,
+        "max_field_length": 0,
+        "ready": {
+          "version": "focus-event-chain-20261010-a",
+          "bundle_path": "/private/tmp/dtw-focus-poc-diagnostic-20261010/DTWFocusHuman.app",
+          "executable_path": "/private/tmp/dtw-focus-poc-diagnostic-20261010/DTWFocusHuman.app/Contents/MacOS/DTWFocusHuman",
+          "window_number": 75411,
+          "window_class": null,
+          "activation_policy": 0,
+          "field_enabled": true,
+          "field_editable": true,
+          "field_selectable": true,
+          "editor_present": true,
+          "first_responder": "NSTextView"
+        }
+      }
+    }
+  },
+  "pre_fix_crash_self_test": {
+    "sha256": "ca663ae17defa858cbff8fc7578a7c4f2ba4f8151fc9984e78bc4def9d6020ce",
+    "rows": 22,
+    "by_pid": {
+      "28607": {
+        "events": {
+          "local_input": 1,
+          "ready": 1,
+          "seat_sample": 18,
+          "self_direct_send": 1,
+          "self_post": 1
+        },
+        "ever_frontmost": false,
+        "ever_active": false,
+        "ever_key": false,
+        "max_field_length": 0,
+        "ready": {
+          "version": "focus-event-chain-20261010-a",
+          "bundle_path": "/private/tmp/dtw-focus-poc-diagnostic2-20261010/DTWFocusHuman.app",
+          "executable_path": "/private/tmp/dtw-focus-poc-diagnostic2-20261010/DTWFocusHuman.app/Contents/MacOS/DTWFocusHuman",
+          "window_number": 75416,
+          "window_class": null,
+          "activation_policy": 0,
+          "field_enabled": true,
+          "field_editable": true,
+          "field_selectable": true,
+          "editor_present": true,
+          "first_responder": "NSTextView"
+        }
+      }
+    }
+  },
+  "pre_fix_crash_report": {
+    "sha256": "ecd540de5be40a7483af5c08578a5f05dcec382d6d4170a82a43c8c040d5cbef",
+    "signal": "SIGABRT",
+    "faulting_symbols": [
+      "__pthread_kill",
+      "pthread_kill",
+      "abort",
+      "__abort_message",
+      "demangling_terminate_handler()",
+      "_objc_terminate()",
+      "std::__terminate(void (*)())",
+      "__cxxabiv1::failed_throw(__cxxabiv1::__cxa_exception*)",
+      "__cxa_throw",
+      "objc_exception_throw",
+      "-[NSAssertionHandler handleFailureInMethod:object:file:lineNumber:description:]",
+      "-[NSEvent keyCode]",
+      "closure #2 in Fixture.applicationDidFinishLaunching(_:)",
+      "FixtureWindow.sendEvent(_:)",
+      "closure #1 in closure #6 in Fixture.applicationDidFinishLaunching(_:)",
+      "thunk for @escaping @callee_guaranteed () -> ()"
+    ],
+    "interpretation": "NSEvent.keyCode was called for a leftMouseDown event inside window eventSink; AppKit threw Objective-C exception."
+  },
+  "fixed_self_test": {
+    "sha256": "3022971c80cc58137be11cf056fed728cc9f40a97342ae7bd734aa7124b6551a",
+    "rows": 1008,
+    "by_pid": {
+      "28700": {
+        "events": {
+          "became_key": 1,
+          "became_main": 1,
+          "local_input": 7,
+          "ready": 1,
+          "resigned_key": 1,
+          "resigned_main": 1,
+          "seat_sample": 659,
+          "self_direct_send": 1,
+          "self_post": 1,
+          "window_input": 8
+        },
+        "ever_frontmost": true,
+        "ever_active": true,
+        "ever_key": true,
+        "max_field_length": 0,
+        "ready": {
+          "version": "focus-event-chain-20261010-a",
+          "bundle_path": "/private/tmp/dtw-focus-poc-diagnostic3-20261010/DTWFocusHuman.app",
+          "executable_path": "/private/tmp/dtw-focus-poc-diagnostic3-20261010/DTWFocusHuman.app/Contents/MacOS/DTWFocusHuman",
+          "window_number": 75436,
+          "window_class": "Optional<FixtureWindow>",
+          "activation_policy": 0,
+          "field_enabled": true,
+          "field_editable": true,
+          "field_selectable": true,
+          "editor_present": true,
+          "first_responder": "NSTextView"
+        }
+      },
+      "28726": {
+        "events": {
+          "local_input": 1,
+          "ready": 1,
+          "seat_sample": 321,
+          "self_direct_send": 1,
+          "self_post": 1,
+          "window_input": 2
+        },
+        "ever_frontmost": false,
+        "ever_active": false,
+        "ever_key": false,
+        "max_field_length": 0,
+        "ready": {
+          "version": "focus-event-chain-20261010-a",
+          "bundle_path": "/private/tmp/dtw-focus-poc-diagnostic3-20261010/DTWFocusHuman.app",
+          "executable_path": "/private/tmp/dtw-focus-poc-diagnostic3-20261010/DTWFocusHuman.app/Contents/MacOS/DTWFocusHuman",
+          "window_number": 75444,
+          "window_class": "Optional<FixtureWindow>",
+          "activation_policy": 0,
+          "field_enabled": true,
+          "field_editable": true,
+          "field_selectable": true,
+          "editor_present": true,
+          "first_responder": "NSTextView"
+        }
+      }
+    }
+  },
+  "method_limits": [
+    "The old user-tested binary had no NSWindow.sendEvent instrumentation; zero window_input cannot be interpreted.",
+    "An in-process queued mouse event reached the local monitor and, after the keyCode fix, NSWindow.sendEvent. Direct window.sendEvent also logged. This validates logging, not physical keyboard delivery.",
+    "The open -g launch of fixed bundle unexpectedly activated PID 28700 and was closed; direct launch PID 28726 stayed non-frontmost. Neither path is accepted as reliable no-focus launch for further human trials.",
+    "Raw logs are local and contain event timing/coordinates but no typed text. No foreground DTW action ran in these diagnostics."
+  ]
+}

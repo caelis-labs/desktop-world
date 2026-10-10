@@ -1,0 +1,23 @@
+# B01–B13 candidate evidence ledger
+
+Baseline source is `c8e7579eb55cd002ad8189ced6574f9a80ccd62f`. This ledger distinguishes **current MCP → QuickJS child → native helper** proof from historical native proof. `Partial` never passes a whole row. No foreground DTW action was run during the checkpoint-4 fixture diagnosis.
+
+| Row | Current candidate proof | Remaining condition | Gate |
+| --- | --- | --- | --- |
+| B01 discovery, narrow projection, locator/Ref | Real native `observe`, owned AppKit discovery and same-App/foreign-Session Ref denial in [results](RESULTS.md) and [grant proof](evidence/grant-revoke-peer.json) | Incomplete zero-match, stale locator, cross-provider identity and projection breadth | Partial |
+| B02 bounded scan/continuation | Real `observe` returned `complete:false`, `truncated:true`, `more:true` and original details remained queryable | AX multi-page continuation, cursor cap/dirty/stale/unavailable; Windows UIA real continuation | Partial |
+| B03 values and freshness | Owned AppKit Unicode set/read exact value in [results](RESULTS.md) | Fragmented/protected/unknown field, per-field freshness, WebKit/Chrome | Partial |
+| B04 semantic actions | Owned AppKit invoke, set_value, checked/selected/expanded true/false/no-op with app callbacks and [receipts](evidence/semantic-check-exact-receipt.json) | `scroll_into_view`, unsupported/mixed states and provider-specific outcomes through new chain | Partial |
+| B05 target/focus binding | Verified semantic state; native foreground click receipt preserved but 0/10 controlled callbacks in [focus evidence](evidence/checkpoint-2.json) | Proven hit/focus and actual effect for pointer; before/after predicate and failed binding | **Failed** |
+| B06 captures | Current-window native `window_content` PNG via on-demand MCP ImageContent; [owned image](evidence/owned-appkit-window.png) | Visible-region path, occlusion/geometry/budget/stale/hidden/refusal matrix | Partial |
+| B07 keyboard/mouse | Foreground click route and receipt measured; controlled target callback failed | All actual pointer/drag/wheel/text/chord/shortcut effects and refusal paths | **Failed** |
+| B08 cooperative foreground | Ten short borrow receipts recorded 119–260 ms and restoration field; [original receipt](evidence/focus-round-c-original-receipt.json) | Actual effect, competing Session, user priority/supersession, pointer restoration and held input cleanup | **Failed** |
+| B09 automatic routing | Semantic background acted with no borrow; pointer routed to foreground transaction | Targeted input real app/provider proof, unsupported/unknown refusal and cross-App automatic decision | Partial |
+| B10 virtual cursor | Historical native implementation only | Current chain delivery/expiry/no authority test | Pending |
+| B11 authorization | Real two-Session independent grant, revoke/peer isolation and App-exit expiry through current chain: [revoke](evidence/grant-revoke-peer.json), [expiry](evidence/grant-expiry.json) | Deferred/ambiguous identity, end-turn and OS permission denial through new chain | Partial |
+| B12 exact receipts/recovery | Same-ID dedupe/conflict, running status/cancel, child state loss and real late original native receipt; [receipt](evidence/late-native-original-receipt.json) | Real partial/unknown delivery, native timeout/reconcile and no replay in each uncertain case | Partial |
+| B13 one public interface | Built MCP lists exactly one `exec`; JS object `dtw`; POC Skill names `exec`/`dtw`; no public transport switch | Installed Skill/CLI and full command parity with current chain | Partial |
+
+Historical evidence at the base SHA: [feature acceptance](../../docs/features.md), [cooperative input](../../docs/cooperative-input.md), [full native POC](../background-input/FULL_ACCEPTANCE.md), [semantic actions](../../docs/evidence/semantic-actions-20261004/README.md), [Windows native acceptance](../../docs/windows-validation.md). Those reports establish reusable historical assets, **not** current candidate B-row passes. Windows remains unpassed without a running Windows host and a valid cgo toolchain.
+
+The no-foreground tests rerun at this checkpoint were `TestQuickJSAsyncPersistentStateAndInterrupt`, `TestOfficialMCPStdioSingleToolControlAndState`, `TestWedgedScriptSubprocessLeavesExecControlAlive`, and `TestTwoStdioSessionsKeepJSStateAndCancellationSeparate`; all passed on macOS with `GOWORK=off GOCACHE=/private/tmp/dtw-go-cache go test -run '^Test(QuickJSAsyncPersistentStateAndInterrupt|OfficialMCPStdioSingleToolControlAndState|WedgedScriptSubprocessLeavesExecControlAlive|TwoStdioSessionsKeepJSStateAndCancellationSeparate)$' ./...`. These are contract/control regression evidence, not native desktop effect tests.

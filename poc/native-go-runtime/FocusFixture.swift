@@ -8,6 +8,8 @@ func option(_ key: String, _ fallback: String) -> String {
 let title = option("--title", "DTW Focus POC")
 let logPath = option("--log", "/tmp/dtw-focus-poc.jsonl")
 let isHuman = option("--human", "0") == "1"
+let selfTest = option("--self-test", "0") == "1"
+let fixtureVersion = "focus-event-chain-20261010-a"
 
 final class FixtureWindow: NSWindow {
   var eventSink: ((NSEvent) -> Void)?
@@ -24,6 +26,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
   var field: NSTextField!
   var sequence = 0
   var timer: Timer?
+  var localMonitor: Any?
 
   func record(_ event: String, _ extra: [String: Any] = [:]) {
     sequence += 1
@@ -34,6 +37,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
       "active": NSApp.isActive, "key": window?.isKeyWindow ?? false,
       "first_responder": window?.firstResponder.map { String(describing: type(of: $0)) } ?? "none",
       "role": isHuman ? "human" : "target",
+      "window_number": window?.windowNumber ?? 0,
     ]
     // Either window may receive accidental private typing. Keep only timing,
     // length, and whether the target still equals the controlled test value.
@@ -81,7 +85,14 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
       NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in self?.record(label) }
     }
     window.eventSink = { [weak self] event in
-      self?.record("window_input", ["type": event.type.rawValue, "key_code": event.keyCode, "event_time": event.timestamp, "event_number": event.eventNumber, "x": event.locationInWindow.x, "y": event.locationInWindow.y])
+      let keyCode = [.keyDown, .keyUp].contains(event.type) ? Int(event.keyCode) : -1
+      self?.record("window_input", ["type": event.type.rawValue, "key_code": keyCode,
+        "event_time": event.timestamp, "event_number": event.eventNumber,
+        "x": event.locationInWindow.x, "y": event.locationInWindow.y])
+    }
+    localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .leftMouseDown, .leftMouseUp]) { [weak self] event in
+      self?.record("local_input", ["type": event.type.rawValue, "event_window_number": event.windowNumber, "event_number": event.eventNumber])
+      return event
     }
     timer = Timer.scheduledTimer(withTimeInterval: 0.025, repeats: true) { [weak self] _ in self?.record("seat_sample") }
     if option("--background", isHuman ? "0" : "1") == "1" { window.orderBack(nil) }
@@ -101,7 +112,37 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         }
       }
     }
-    record("ready", ["title": title, "window_frame": NSStringFromRect(window.frame), "visible_frame": NSStringFromRect(visible), "window_visible": window.isVisible])
+    record("ready", ["title": title, "version": fixtureVersion,
+      "bundle_path": Bundle.main.bundlePath, "executable_path": Bundle.main.executablePath ?? "",
+      "activation_policy": NSApp.activationPolicy().rawValue,
+      "window_frame": NSStringFromRect(window.frame), "visible_frame": NSStringFromRect(visible),
+      "window_visible": window.isVisible, "field_enabled": field.isEnabled,
+      "field_editable": field.isEditable, "field_selectable": field.isSelectable,
+      "editor_present": field.currentEditor() != nil,
+      "window_class": String(describing: type(of: window)),
+      "event_sink_present": window.eventSink != nil])
+    if selfTest {
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+        guard let self else { return }
+        // The event is queued only inside this process and names only its own
+        // window. It cannot move the pointer or type into another application.
+        let point = NSPoint(x: 400, y: 30)
+        guard let event = NSEvent.mouseEvent(with: .leftMouseDown, location: point,
+          modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+          windowNumber: self.window.windowNumber, context: nil, eventNumber: 704201,
+          clickCount: 1, pressure: 1) else {
+          self.record("self_post_failed")
+          return
+        }
+        self.record("self_post", ["event_number": event.eventNumber])
+        NSApp.postEvent(event, atStart: false)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+          guard let self else { return }
+          self.record("self_direct_send", ["event_number": event.eventNumber])
+          self.window.sendEvent(event)
+        }
+      }
+    }
   }
 
   func controlTextDidBeginEditing(_ notification: Notification) { record("begin_edit") }

@@ -1,0 +1,125 @@
+{
+  "probe_source_sha256": "03f6fdb2203e78f8735830f288cc0a6e3eab9cb003bad678fb9d3b1037e43a45",
+  "probe_binary_sha256": "fd0c5cf7631488ea325d64fefeda141131a216fc020ce2ecb3cede6b3405cd3b",
+  "client": "codex exec --ignore-user-config --approve-for-me --json --ephemeral --skip-git-repo-check -C /private/tmp",
+  "prompt": "Call the dtw_token exec tool exactly once with operation probe. Then answer with the status and value in one short sentence. Use no other tool.",
+  "mcp_server": "dedicated synthetic Go SDK stdio server; one exec tool; no Desktop World native helper; mode controlled by DTW_TOKEN_MODE",
+  "rounds": [
+    {
+      "mode": "dual",
+      "round": "approve",
+      "trace_sha256": "ac83a93963e2b2e18d48b56f2d953536277f0ce07a56887776883bc2cece8b20",
+      "tool_server": "dtw_token",
+      "tool_name": "exec",
+      "tool_status": "completed",
+      "model_visible_result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "probe=42; status=ok"
+          }
+        ],
+        "structured_content": {
+          "print": "probe=42",
+          "status": "ok",
+          "value": 42
+        }
+      },
+      "usage": {
+        "input_tokens": 31816,
+        "cached_input_tokens": 22784,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 61,
+        "reasoning_output_tokens": 0
+      },
+      "answer": "Status is ok, and value is 42."
+    },
+    {
+      "mode": "single",
+      "round": "approve",
+      "trace_sha256": "28c3b408fbb2c1ce255b390c1e329579561150ba55f8c972fca1e6c979d442af",
+      "tool_server": "dtw_token",
+      "tool_name": "exec",
+      "tool_status": "completed",
+      "model_visible_result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "probe=42; status=ok"
+          }
+        ],
+        "structured_content": {}
+      },
+      "usage": {
+        "input_tokens": 31810,
+        "cached_input_tokens": 14336,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 67,
+        "reasoning_output_tokens": 0
+      },
+      "answer": "Status is ok, and value is 42."
+    },
+    {
+      "mode": "dual",
+      "round": "repeat",
+      "trace_sha256": "97d1e2d54b07cc597fcdf5aa18104b7bf2ae6bc768449c919cf1cf2a9f35ec33",
+      "tool_server": "dtw_token",
+      "tool_name": "exec",
+      "tool_status": "completed",
+      "model_visible_result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "probe=42; status=ok"
+          }
+        ],
+        "structured_content": {
+          "print": "probe=42",
+          "status": "ok",
+          "value": 42
+        }
+      },
+      "usage": {
+        "input_tokens": 31822,
+        "cached_input_tokens": 15616,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 67,
+        "reasoning_output_tokens": 0
+      },
+      "answer": "Status is ok, and value is 42."
+    },
+    {
+      "mode": "single",
+      "round": "repeat",
+      "trace_sha256": "9c19d2832afc59423279cba40a6c9b8b1f0f512504e5c12ce58c47e5e44da629",
+      "tool_server": "dtw_token",
+      "tool_name": "exec",
+      "tool_status": "completed",
+      "model_visible_result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "probe=42; status=ok"
+          }
+        ],
+        "structured_content": {}
+      },
+      "usage": {
+        "input_tokens": 39382,
+        "cached_input_tokens": 26624,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 75,
+        "reasoning_output_tokens": 0
+      },
+      "answer": "Status is ok, and value is 42."
+    }
+  ],
+  "limits": [
+    "Codex JSONL item.completed reports the model adapter tool result; it shows both content.text and structured_content for dual mode.",
+    "turn.completed is whole-turn token usage including harness instructions and tool schema. The input-token difference cannot be attributed solely to result duplication; cache hits and model variation differed.",
+    "The single mode returned structured_content as an empty object. This probe measures model adapter forwarding and fixed synthetic task only, not a DTW business result token-savings percentage."
+  ],
+  "client_version": "codex-cli 0.160.0",
+  "go_version": "go1.26.8 darwin/arm64",
+  "os_version": "macOS 27.0.1"
+}
