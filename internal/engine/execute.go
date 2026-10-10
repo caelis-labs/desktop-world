@@ -5,8 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	dw "github.com/caelis-labs/desktop-world"
 	"github.com/caelis-labs/desktop-world/internal/backend"
+	dw "github.com/caelis-labs/desktop-world/internal/world"
 	"reflect"
 	"strings"
 	"time"
@@ -649,6 +649,9 @@ func (a *actor) step(ctx context.Context, r *run, s dw.Step, bindings map[string
 		}
 	}
 	res.Delivery = outcome.Delivery
+	if outcome.Channel != "" {
+		res.Channel = outcome.Channel
+	}
 	res.AcceptedInputEvents = outcome.Accepted
 	res.RequestedInputEvents = outcome.Requested
 	if outcome.Unsafe {
@@ -717,7 +720,7 @@ func (w *World) inputChannel() string {
 	if d, ok := w.driver.(backend.InputTransaction); ok {
 		return d.InputChannel()
 	}
-	return "targeted_input_poc"
+	return "targeted_background"
 }
 
 func (a *actor) endInput(r *run) {

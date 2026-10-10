@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	dw "github.com/caelis-labs/desktop-world"
 	"github.com/caelis-labs/desktop-world/internal/backend"
+	dw "github.com/caelis-labs/desktop-world/internal/world"
 	"reflect"
 	"runtime"
 	"sync"
@@ -308,10 +308,7 @@ func (w *World) NewActor(ctx context.Context, c dw.ActorConfig) (dw.Actor, error
 	if _, ok := w.actors[c.ID]; ok {
 		return nil, dw.Invalid("duplicate actor id")
 	}
-	authorizer := c.Authorizer
-	c.Authorizer = nil
 	c = copyOf(c)
-	c.Authorizer = authorizer
 	a := &actor{w: w, config: c, views: map[dw.Cursor]*view{}, pages: map[string]*page{}, texts: map[string]textPage{}, assets: map[dw.AssetID]assetRecord{}}
 	w.actors[c.ID] = a
 	return a, nil

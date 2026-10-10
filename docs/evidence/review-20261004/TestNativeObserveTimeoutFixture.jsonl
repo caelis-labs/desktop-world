@@ -1,4 +1,0 @@
-{"value": "DTW Review TestNativeObserveTimeoutFixture review-native-9637bf8a", "event": "ready", "at": "2026-10-04T05:58:39Z"}
-{"event": "value_read", "at": "2026-10-04T05:58:40Z", "value": "Slow row 0"}
-{"event": "value_read", "at": "2026-10-04T05:58:40Z", "value": "Slow row 1"}
-{"event": "value_read", "at": "2026-10-04T05:58:40Z", "value": "Slow row 2"}

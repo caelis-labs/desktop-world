@@ -2,9 +2,9 @@ package engine
 
 import (
 	"context"
-	dw "github.com/caelis-labs/desktop-world"
 	"github.com/caelis-labs/desktop-world/internal/backend"
-	"github.com/caelis-labs/desktop-world/internal/wire"
+	"github.com/caelis-labs/desktop-world/internal/ipc/wire"
+	dw "github.com/caelis-labs/desktop-world/internal/world"
 	"reflect"
 	"sort"
 	"strings"
@@ -145,37 +145,9 @@ func (a *actor) check(ctx context.Context, in dw.Intent, write bool) error {
 	for _, r := range append(append([]dw.Ref{}, in.Targets...), in.Scope.Refs...) {
 		ok = ok && a.inScopeLocked(r, scopes)
 	}
-	// Resolve owners from engine identity, never caller-supplied application names.
-	in.Applications = nil
-	seenApps := map[dw.Ref]bool{}
-	for _, ref := range in.Targets {
-		var app dw.Ref
-		if object := a.w.objects[ref]; object != nil {
-			app = object.object.App
-			if object.object.Kind == dw.KindApplication {
-				app = ref
-			}
-		}
-		// Preserve an unresolved owner as an empty Ref so an authorizer cannot
-		// accidentally approve a mixed known/unknown target set.
-		if !seenApps[app] {
-			in.Applications = append(in.Applications, app)
-			seenApps[app] = true
-		}
-	}
 	a.w.mu.Unlock()
 	if !ok {
 		return fault("permission_denied")
-	}
-	in.Actor = a.ID()
-	if auth := a.config.Authorizer; auth != nil {
-		d, e := auth.Check(ctx, copyOf(in))
-		if e != nil || !d.Allow {
-			a.w.mu.Lock()
-			a.invalidateLocked()
-			a.w.mu.Unlock()
-			return fault("permission_denied")
-		}
 	}
 	return ctx.Err()
 }
@@ -224,6 +196,9 @@ func (a *actor) query(ctx context.Context, r dw.ObserveRequest, resume string, n
 	w := a.w
 	cov := dw.Coverage{Scope: r.Scope, Fields: r.Fields, MaxDepth: r.Budget.MaxDepth, SampleStart: time.Now().UTC()}
 	q := backend.Query{Fields: readFields(r), Desktop: r.Scope.Desktop, Depth: r.Budget.MaxDepth, MaxNodes: r.Budget.MaxVisitedNodes, Summary: r.Projection == dw.ProjectionSummary, CaptureWindows: r.Projection == dw.ProjectionCaptureWindows, Detail: r.Projection == dw.ProjectionDetail, Resume: resume, NoContinuation: noContinuation}
+	if r.Scope.Desktop && r.Match != nil && r.Match.Kind == dw.KindApplication && r.Match.NameEquals != nil {
+		q.AppName = *r.Match.NameEquals
+	}
 	w.mu.Lock()
 	for _, ref := range r.Scope.Refs {
 		rec := w.objects[ref]
@@ -404,7 +379,7 @@ func (a *actor) selectObjectsLocked(all []dw.Object, r dw.ObserveRequest) []dw.O
 		if seen[o.Ref] || !a.objectInQueryLocked(o, r) || !a.inScopeLocked(o.Ref, a.config.ReadScopes) || !match(o, r.Match) {
 			continue
 		}
-		if r.Match != nil && !a.inScopeLocked(o.Ref, []dw.Scope{{Refs: []dw.Ref{r.Match.Within}}}) {
+		if r.Match != nil && r.Match.Within != "" && !a.inScopeLocked(o.Ref, []dw.Scope{{Refs: []dw.Ref{r.Match.Within}}}) {
 			continue
 		}
 		seen[o.Ref] = true

@@ -4,10 +4,7 @@ permissions:
   contents: read
 jobs:
   contracts:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-15, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -16,25 +13,6 @@ jobs:
           cache: false
       - run: go test -race ./...
       - run: go vet ./...
-      - run: go run ./examples/headless
-      - run: go run ./examples/embodied
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - run: node --test clients/javascript/desktop.test.mjs
-      - name: MCP supervisor contract
-        if: runner.os == 'macOS'
-        run: |
-          cd clients/mcp
-          npm ci
-          npm run build
-          npm test
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - uses: dtolnay/rust-toolchain@stable
-      - run: python verify_examples.py
-      - run: python scripts/check-sdks.py
   native-build:
     runs-on: macos-15
     steps:
@@ -43,6 +21,18 @@ jobs:
         with:
           go-version: '1.26.x'
           cache: false
-      - run: ./script/build_and_run.sh --build-only
-# Hosted CI is deliberately not counted as interactive desktop acceptance.
-# Run tests/acceptance on logged-in, authorized macOS and Windows machines.
+      - run: GOWORK=off go test ./cmd/dtw/...
+      - run: ./scripts/build-native-plugin.sh /tmp/dtw-native-plugin-ci
+  platform-build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - run: go test ./cmd/dtw-helper ./internal/...
+# Hosted CI does not count as interactive desktop acceptance.

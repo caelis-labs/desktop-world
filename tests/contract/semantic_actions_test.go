@@ -1,8 +1,8 @@
 package contract_test
 
 import (
-	dw "github.com/caelis-labs/desktop-world"
-	"github.com/caelis-labs/desktop-world/dwtest"
+	dw "github.com/caelis-labs/desktop-world/internal/world"
+	"github.com/caelis-labs/desktop-world/internal/testutil"
 	"testing"
 	"time"
 )

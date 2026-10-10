@@ -3,7 +3,7 @@ package engine_test
 import (
 	"context"
 	"errors"
-	dw "github.com/caelis-labs/desktop-world"
+	dw "github.com/caelis-labs/desktop-world/internal/world"
 	"github.com/caelis-labs/desktop-world/internal/backend"
 	"sync/atomic"
 	"testing"

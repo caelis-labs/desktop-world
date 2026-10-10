@@ -1,5 +1,0 @@
-{"at": "2026-10-04T06:57:02Z", "event": "ready", "value": "DTW F6-background 20261004T065658Z-be2049", "time": 1791097022.8785439}
-{"value": "Order A:true", "at": "2026-10-04T06:57:05Z", "event": "selected", "time": 1791097025.629039}
-{"at": "2026-10-04T06:57:05Z", "value": "Order A:false", "event": "selected", "time": 1791097025.69587}
-{"value": "Order A:true", "time": 1791097025.723178, "event": "selected", "at": "2026-10-04T06:57:05Z"}
-{"value": "Order A,Order B", "time": 1791097025.74749, "event": "ordered", "at": "2026-10-04T06:57:05Z"}

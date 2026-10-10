@@ -13,11 +13,6 @@ try {
     Invoke-Check go @('test', '-race', './...')
     Invoke-Check go @('vet', './...')
     Invoke-Check go @('build', './...')
-    Invoke-Check go @('run', './examples/headless')
-    Invoke-Check go @('run', './examples/embodied')
-    Invoke-Check python @('verify_examples.py')
-    Invoke-Check node @('--test', 'clients/javascript/desktop.test.mjs')
-    Invoke-Check python @('scripts/check-sdks.py')
 } finally {
     $env:GOWORK = $previousGoWork
     Pop-Location

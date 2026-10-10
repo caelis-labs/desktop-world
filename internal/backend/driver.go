@@ -4,7 +4,7 @@ package backend
 
 import (
 	"context"
-	dw "github.com/caelis-labs/desktop-world"
+	dw "github.com/caelis-labs/desktop-world/internal/world"
 )
 
 type Key string
@@ -15,9 +15,12 @@ type Node struct {
 	Object                   dw.Object
 }
 type Query struct {
-	Fields          []string
-	Roots           []Key
-	Desktop         bool
+	Fields  []string
+	Roots   []Key
+	Desktop bool
+	// AppName narrows a desktop application locator before AX traversal.
+	// Empty leaves ordinary desktop discovery unchanged.
+	AppName         string
 	Depth, MaxNodes int
 	Summary, Detail bool
 	CaptureWindows  bool
@@ -58,6 +61,9 @@ type Outcome struct {
 	Accepted, Requested *int
 	Fault               *dw.Fault
 	Unsafe              bool
+	// Channel is the route actually used by a driver that selects delivery per
+	// action. Empty keeps the plan's pre-dispatch channel.
+	Channel string
 }
 
 // CaptureRequest carries the resolved native key only inside the trusted helper.

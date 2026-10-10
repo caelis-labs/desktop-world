@@ -1,265 +1,645 @@
-// dtw exposes discovery and a persistent, host-owned stdio helper.
+// Native DTW MCP runtime: official Go SDK with a per-connection QuickJS subprocess.
+// The parent owns the native helper, receipts, and cross-process seat locks.
 package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
-	"flag"
+	"errors"
 	"fmt"
 	"os"
-	"os/signal"
+	"path/filepath"
 	"runtime"
-	"runtime/debug"
-	"syscall"
+	"sync"
 	"time"
 
-	dw "github.com/caelis-labs/desktop-world"
-	"github.com/caelis-labs/desktop-world/internal/auditlog"
-	"github.com/caelis-labs/desktop-world/internal/helper"
-	"github.com/caelis-labs/desktop-world/local"
-	"github.com/caelis-labs/desktop-world/protocol"
+	quickjs "github.com/buke/quickjs-go"
+	"github.com/caelis-labs/desktop-world/internal/ipc/host"
+	"github.com/caelis-labs/desktop-world/internal/ipc/protocol"
+	dw "github.com/caelis-labs/desktop-world/internal/world"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-var releaseVersion = "dev"
+type input struct {
+	Operation    string `json:"operation" jsonschema:"exec, status, result or cancel"`
+	ExecutionID  string `json:"execution_id" jsonschema:"stable execution identifier"`
+	Code         string `json:"code,omitempty" jsonschema:"approved JavaScript body for exec"`
+	Detail       string `json:"detail,omitempty" jsonschema:"optional full original result detail"`
+	IncludeImage bool   `json:"include_image,omitempty" jsonschema:"include requested PNG on result query"`
+}
 
-const usage = `Desktop World — native desktop operations, persistent JSON sessions.
+var releaseVersion = "0.1.0"
 
-dtw version                Protocol, build revision and platform; no desktop access.
-dtw doctor                 Read-only permission/environment probe; never prompts.
-dtw schema [operation] [action]     JSON request schema; no native desktop access.
-dtw session [host options] Trusted owner facade for TS/Python/Rust SDKs.
-dtw auth list|add|revoke --session OWNER_FILE   Dynamic application grants.
-dtw cursor-overlay         Internal click-through Agent pointer display (stdin control).
-dtw plugin-node [MCP options]  Internal Lite launcher; requires absolute DTW_NODE_PATH (Node 24).
-dtw serve [host options]   New World for the lifetime of this stdio process.
+type record struct {
+	ID             string
+	Hash           string
+	State          string
+	Output         []string
+	Error          string
+	Cancel         context.CancelFunc
+	Done           chan struct{}
+	RunCtx         context.Context
+	NativeIDs      []string
+	NativeReceipts map[string]host.Reply
+	NativeError    *dw.Fault
+	Observations   []map[string]any
+	Actions        []map[string]any
+	Captures       []map[string]any
+}
 
-serve host options:
-  --input-policy POLICY  Host ceiling: shared_input (default) or no_shared_input.
-	--input-mode MODE      shared (default) or cooperative (short foreground transactions).
-  --write-app NAME       Approve one exact application name; pending until uniquely observed. Repeatable.
-  --write-app-window TITLE  Grant its owning app; resolves duplicate app names by exact window title.
-  --desktop-write        Explicitly grant desktop-wide writes instead of named apps.
-  --raw-input            Permit absolute Point input; requires --desktop-write.
-  --assets-dir PATH      Enable capture and save PNG files in this host-chosen directory.
-  --audit PATH           Metadata-only JSONL; collision selects a new session file.
-  --audit-mode MODE      rotate (default), append (single writer) or create.
-  --full-output          Typed wire facts and exact timestamps; default is compact UI facts.
-  --host-control         Managed mode: private inherited request/reply pipes.
-                         No startup write flags. Host controls application grants per turn.
+type scriptCommand struct {
+	Ctx    context.Context
+	Code   string
+	Record *record
+}
 
-Send one JSON object per line; receive hello, then {id,protocol,world,result,error}.
-Supported verbs: observe, read, sync, act, capture, get, cancel.
-Example read:
-{"id":"inventory-1","op":"observe","args":{"scope":{"desktop":true},"projection":"summary","fields":["name","role"],"budget":{"max_results":64}}}
+type supervisor struct {
+	mu           sync.Mutex
+	records      map[string]*record
+	active       *record
+	commands     chan scriptCommand
+	native       *host.Client
+	nativeMu     sync.Mutex
+	nativeTurn   string
+	nativeTurnNo int
+	assetsDir    string
+	remoteNative func(context.Context, string, string, json.RawMessage, bool) (host.Reply, error)
+	// Test-only injection point for end-to-end receipt fault tests. Production
+	// server construction leaves this nil and always uses the real native host.
+	testNative func(context.Context, string, string, json.RawMessage) (host.Reply, error)
+	onDone     func(*record)
+	child      *scriptChild
+	childDead  bool
+	refApps    map[string]string
+	refParents map[string]string
+}
 
-For writes, get schema act ACTION as needed. args contains steps and optional timeout_ms.
-Helper supplies epoch and request_id from the stable envelope id. Reuse that id
-and the SAME body after transport uncertainty; never blindly replay effects.
-New process = new epoch, invalid old Refs, no persisted exactly-once guarantee.
-No network listener, login, API key, automatic permission prompts, or implicit rebinding after an app restart.
-Stdout is JSON only except --help; diagnostics go to stderr. --json is accepted.
-`
+func newSupervisor(native *host.Client, assetsDir string) *supervisor {
+	s := &supervisor{records: make(map[string]*record), commands: make(chan scriptCommand), native: native, nativeTurn: "session", nativeTurnNo: 1, assetsDir: assetsDir, refApps: make(map[string]string), refParents: make(map[string]string)}
+	s.startScriptChild()
+	return s
+}
 
-type names []string
+func (s *supervisor) imageFor(id string) ([]byte, error) {
+	s.mu.Lock()
+	r := s.records[id]
+	if r == nil {
+		s.mu.Unlock()
+		return nil, errors.New("execution not found")
+	}
+	var bodies []json.RawMessage
+	for _, nativeID := range r.NativeIDs {
+		if reply, ok := r.NativeReceipts[nativeID]; ok && reply.Error == nil {
+			bodies = append(bodies, append(json.RawMessage(nil), reply.Result...))
+		}
+	}
+	s.mu.Unlock()
+	for _, body := range bodies {
+		var captured struct {
+			Files []struct {
+				Path  string `json:"path"`
+				Bytes int    `json:"bytes"`
+			} `json:"files"`
+		}
+		if json.Unmarshal(body, &captured) != nil {
+			continue
+		}
+		for _, file := range captured.Files {
+			if file.Bytes <= 0 || file.Bytes > 4<<20 || s.assetsDir == "" {
+				continue
+			}
+			base, err := filepath.Abs(s.assetsDir)
+			if err != nil {
+				continue
+			}
+			path, err := filepath.Abs(file.Path)
+			if err != nil {
+				continue
+			}
+			rel, err := filepath.Rel(base, path)
+			if err != nil || rel == ".." || len(rel) >= 3 && rel[:3] == "../" {
+				continue
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil, err
+			}
+			if len(data) != file.Bytes || len(data) < 8 || string(data[:8]) != "\x89PNG\r\n\x1a\n" {
+				return nil, errors.New("capture is not a verified PNG")
+			}
+			return data, nil
+		}
+	}
+	return nil, errors.New("no requested capture image under this execution")
+}
 
-func (n *names) String() string     { return fmt.Sprint([]string(*n)) }
-func (n *names) Set(v string) error { *n = append(*n, v); return nil }
+func (s *supervisor) scriptLoop() {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	// Bound script-owned JS memory and stack inside the disposable child. The
+	// parent keeps native receipts and MCP control alive if the child runs out.
+	rt := quickjs.NewRuntime(quickjs.WithMemoryLimit(64<<20), quickjs.WithGCThreshold(8<<20), quickjs.WithMaxStackSize(1<<20))
+	defer rt.Close()
+	// Bare context retains ECMAScript Promise but does not register QuickJS
+	// std/os modules or timers. The approved script surface is supplied below.
+	ctx := rt.NewBareContext()
+	defer ctx.Close()
+	ctx.Globals().Set("state", ctx.NewObject())
+	var running context.Context = context.Background()
+	rt.SetInterruptHandler(func() int {
+		if running.Err() != nil {
+			return 1
+		}
+		return 0
+	})
+	for command := range s.commands {
+		running = command.Ctx
+		outputs := []string{}
+		printBytes := 0
+		printFn := ctx.NewFunction(func(_ *quickjs.Context, _ *quickjs.Value, args []*quickjs.Value) *quickjs.Value {
+			for _, arg := range args {
+				value := arg.ToString()
+				if len(outputs) >= 32 || printBytes+len(value) > 8192 {
+					return ctx.ThrowError(errors.New("print limit exceeded; query original execution details"))
+				}
+				outputs = append(outputs, value)
+				printBytes += len(value)
+			}
+			return ctx.Undefined()
+		})
+		ctx.Globals().Set("print", printFn)
+		// Go's timer resolves a JS Promise on the context's owner thread.
+		sleepFn := ctx.NewFunction(func(ctx *quickjs.Context, _ *quickjs.Value, args []*quickjs.Value) *quickjs.Value {
+			ms := int64(1)
+			if len(args) > 0 {
+				ms = int64(args[0].Int32())
+			}
+			if ms < 0 {
+				ms = 0
+			}
+			if ms > 10000 {
+				ms = 10000
+			}
+			return ctx.NewPromise(func(resolve, _ func(*quickjs.Value)) {
+				go func() {
+					select {
+					case <-time.After(time.Duration(ms) * time.Millisecond):
+					case <-command.Ctx.Done():
+					}
+					ctx.Schedule(func(inner *quickjs.Context) {
+						v := inner.NewString("done")
+						resolve(v)
+						v.Free()
+					})
+				}()
+			})
+		})
+		global := ctx.NewObject()
+		global.Set("sleep", sleepFn)
+		nativeFn := ctx.NewFunction(func(ctx *quickjs.Context, _ *quickjs.Value, args []*quickjs.Value) *quickjs.Value {
+			if len(args) < 2 || len(args) > 3 {
+				return ctx.ThrowTypeError("native call needs operation and arguments")
+			}
+			op := args[0].ToString()
+			internal := len(args) == 3 && args[2].ToString() == "internal"
+			if op != "observe" && op != "read" && op != "sync" && op != "act" && op != "capture" && op != "get" && op != "cancel" {
+				return ctx.ThrowTypeError("unknown desktop operation")
+			}
+			body := json.RawMessage(args[1].ToString())
+			if len(body) > 65536 || !json.Valid(body) {
+				return ctx.ThrowTypeError("native arguments are invalid or too large")
+			}
+			if s.native == nil && s.remoteNative == nil {
+				return ctx.ThrowError(errors.New("native helper is not configured"))
+			}
+			s.mu.Lock()
+			if len(command.Record.NativeIDs) >= 32 {
+				s.mu.Unlock()
+				return ctx.ThrowError(errors.New("native call limit exceeded"))
+			}
+			id := fmt.Sprintf("%s-native-%d", command.Record.ID, len(command.Record.NativeIDs)+1)
+			command.Record.NativeIDs = append(command.Record.NativeIDs, id)
+			s.mu.Unlock()
+			return ctx.NewPromise(func(resolve, _ func(*quickjs.Value)) {
+				go func() {
+					var reply host.Reply
+					var callErr error
+					if s.remoteNative != nil {
+						reply, callErr = s.remoteNative(command.Ctx, id, op, body, internal)
+					} else {
+						s.nativeMu.Lock()
+						reply, callErr = s.native.Call(command.Ctx, "session", id, op, body)
+						s.nativeMu.Unlock()
+					}
+					if callErr != nil {
+						// The request may already have reached the native provider.
+						reply = host.Reply{ID: id}
+						reply.Error = dw.NewFault("native_unknown", callErr.Error(), "never_automatically")
+					}
+					s.mu.Lock()
+					if command.Record.NativeReceipts == nil {
+						command.Record.NativeReceipts = make(map[string]host.Reply)
+					}
+					command.Record.NativeReceipts[id] = reply
+					if reply.Error != nil {
+						command.Record.NativeError = reply.Error
+					}
+					if reply.Error == nil {
+						facts := nativeFacts(op, id, reply.Result)
+						switch op {
+						case "observe":
+							if facts != nil && !internal {
+								command.Record.Observations = append(command.Record.Observations, facts)
+							}
+						case "act":
+							if facts != nil {
+								command.Record.Actions = append(command.Record.Actions, facts)
+							}
+						case "capture":
+							if facts != nil {
+								command.Record.Captures = append(command.Record.Captures, facts)
+							}
+						}
+					}
+					s.mu.Unlock()
+					data, _ := protocol.Marshal(reply)
+					ctx.Schedule(func(inner *quickjs.Context) {
+						v := inner.NewString(string(data))
+						resolve(v)
+						v.Free()
+					})
+				}()
+			})
+		})
+		global.Set("native", nativeFn)
+		if os.Getenv("DTW_TEST_TEST_BLOCK") == "1" {
+			global.Set("_testBlock", ctx.NewFunction(func(ctx *quickjs.Context, _ *quickjs.Value, _ []*quickjs.Value) *quickjs.Value {
+				time.Sleep(5 * time.Second)
+				return ctx.Undefined()
+			}))
+		}
+		ctx.Globals().Set("dtw", global)
+		wrapper := ctx.Eval(`dtw.call = async (op, args={}, internal=false) => { const reply = JSON.parse(await dtw.native(op, JSON.stringify(args), internal ? 'internal' : 'public')); if (reply.error) { const e = new Error(reply.error.message); e.code = reply.error.code; throw e; } return reply.result; }; for (const op of ['observe','read','sync','act','capture','get','cancel']) dtw[op] = args => dtw.call(op,args);`)
+		if wrapper != nil {
+			wrapper.Free()
+		}
+		disclosure := ctx.Eval(disclosureJS)
+		if disclosure != nil {
+			disclosure.Free()
+		}
+		world := ctx.Eval(worldJS)
+		if world != nil {
+			world.Free()
+		}
+		wrapped := "(async () => {\n" + command.Code + "\n})()"
+		value := ctx.Eval(wrapped)
+		var failure string
+		if value == nil {
+			failure = "JavaScript runtime returned no value"
+		} else {
+			if !value.IsException() {
+				settled := ctx.Await(value)
+				if settled != value {
+					value.Free()
+					value = settled
+				}
+			}
+			if value == nil {
+				failure = "JavaScript await returned no value"
+			} else if value.IsException() {
+				failure = ctx.Exception().Error()
+			}
+			if value != nil {
+				value.Free()
+			}
+		}
+		s.mu.Lock()
+		command.Record.Output = outputs
+		if command.Ctx.Err() != nil {
+			command.Record.State = "cancelled"
+			command.Record.Error = "cancelled"
+		} else if failure != "" {
+			command.Record.State = "failed"
+			command.Record.Error = failure
+		} else {
+			command.Record.State = "completed"
+		}
+		if s.active == command.Record {
+			s.active = nil
+		}
+		close(command.Record.Done)
+		s.mu.Unlock()
+		if s.onDone != nil {
+			s.onDone(command.Record)
+		}
+		running = context.Background()
+	}
+}
+
+func brief(r *record) map[string]any {
+	out := map[string]any{"execution_id": r.ID, "state": r.State}
+	if len(r.Output) > 0 {
+		out["print"] = r.Output
+	}
+	if r.Error != "" {
+		out["error"] = map[string]any{"code": r.State, "message": r.Error}
+	}
+	if len(r.NativeIDs) > 0 {
+		out["native_request_ids"] = append([]string(nil), r.NativeIDs...)
+		var pending []string
+		for _, id := range r.NativeIDs {
+			if _, ok := r.NativeReceipts[id]; !ok {
+				pending = append(pending, id)
+			}
+		}
+		if len(pending) > 0 {
+			out["native_pending_ids"] = pending
+		}
+	}
+	if r.NativeError != nil {
+		out["native_error"] = map[string]any{"code": r.NativeError.Code, "message": r.NativeError.Message, "retry_class": r.NativeError.RetryClass}
+	}
+	if len(r.Observations) > 0 {
+		out["observations"] = r.Observations
+	}
+	if len(r.Actions) > 0 {
+		out["actions"] = r.Actions
+	}
+	if len(r.Captures) > 0 {
+		out["captures"] = r.Captures
+	}
+	return out
+}
+
+func nativeFacts(op, id string, result json.RawMessage) map[string]any {
+	switch op {
+	case "observe":
+		var v struct {
+			Coverage struct {
+				Complete           bool     `json:"complete"`
+				Truncated          bool     `json:"truncated"`
+				Dirty              bool     `json:"dirty"`
+				Continuation       string   `json:"continuation"`
+				UnavailableSources []string `json:"unavailable_sources"`
+			} `json:"coverage"`
+		}
+		if json.Unmarshal(result, &v) != nil {
+			return nil
+		}
+		out := map[string]any{"native_request_id": id, "complete": v.Coverage.Complete, "truncated": v.Coverage.Truncated, "dirty": v.Coverage.Dirty}
+		if v.Coverage.Continuation != "" {
+			out["more"] = true
+		}
+		if len(v.Coverage.UnavailableSources) > 0 {
+			out["unavailable_sources"] = v.Coverage.UnavailableSources
+		}
+		return out
+	case "act":
+		var v struct {
+			RunID      string `json:"run_id"`
+			Outcome    string `json:"outcome"`
+			SeatHealth string `json:"seat_health"`
+			Steps      []struct {
+				ID           string `json:"id"`
+				State        string `json:"state"`
+				Channel      string `json:"channel"`
+				Delivery     string `json:"delivery"`
+				Verification string `json:"verification"`
+				Fault        *struct {
+					Code string `json:"code"`
+				} `json:"fault"`
+			} `json:"steps"`
+			Input *struct {
+				Restoration       string `json:"restoration"`
+				RestorationReason string `json:"restoration_reason"`
+			} `json:"input"`
+		}
+		if json.Unmarshal(result, &v) != nil {
+			return nil
+		}
+		out := map[string]any{"native_request_id": id, "run_id": v.RunID, "outcome": v.Outcome, "seat_health": v.SeatHealth}
+		steps := make([]map[string]any, 0, len(v.Steps))
+		for _, step := range v.Steps {
+			item := map[string]any{"id": step.ID, "state": step.State, "channel": step.Channel, "delivery": step.Delivery, "verification": step.Verification}
+			if step.Fault != nil {
+				item["fault"] = step.Fault.Code
+			}
+			steps = append(steps, item)
+		}
+		out["steps"] = steps
+		if v.Input != nil {
+			out["restoration"] = v.Input.Restoration
+			if v.Input.RestorationReason != "" {
+				out["restoration_reason"] = v.Input.RestorationReason
+			}
+		}
+		return out
+	case "capture":
+		var v struct {
+			Files []struct {
+				Path string `json:"path"`
+			} `json:"files"`
+		}
+		if json.Unmarshal(result, &v) != nil {
+			return nil
+		}
+		return map[string]any{"native_request_id": id, "images": len(v.Files)}
+	}
+	return nil
+}
+
+func (s *supervisor) call(ctx context.Context, in input) map[string]any {
+	if in.ExecutionID == "" {
+		return map[string]any{"error": map[string]any{"code": "invalid_request", "message": "execution_id is required"}}
+	}
+	if len(in.ExecutionID) > 128 {
+		return map[string]any{"error": map[string]any{"code": "invalid_request", "message": "execution_id is too long"}}
+	}
+	s.mu.Lock()
+	r := s.records[in.ExecutionID]
+	switch in.Operation {
+	case "exec":
+		if in.Code == "" || len(in.Code) > 65536 {
+			s.mu.Unlock()
+			return map[string]any{"execution_id": in.ExecutionID, "error": map[string]any{"code": "invalid_request", "message": "code is required and must fit 64 KiB"}}
+		}
+		digest := sha256.Sum256([]byte(in.Code))
+		hash := hex.EncodeToString(digest[:])
+		if r != nil {
+			if r.Hash != hash {
+				s.mu.Unlock()
+				return map[string]any{"execution_id": in.ExecutionID, "error": map[string]any{"code": "execution_conflict", "message": "same ID, different script"}}
+			}
+			done := r.Done
+			s.mu.Unlock()
+			select {
+			case <-done:
+				s.mu.Lock()
+				out := brief(r)
+				s.mu.Unlock()
+				return out
+			case <-ctx.Done():
+				return map[string]any{"execution_id": in.ExecutionID, "state": "running"}
+			}
+		}
+		if s.childDead {
+			s.mu.Unlock()
+			return map[string]any{"execution_id": in.ExecutionID, "error": map[string]any{"code": "state_lost", "message": "script subprocess exited; Session JavaScript state is lost"}}
+		}
+		if s.active != nil {
+			s.mu.Unlock()
+			return map[string]any{"execution_id": in.ExecutionID, "error": map[string]any{"code": "script_busy", "message": "query or cancel the active execution"}}
+		}
+		if len(s.records) >= 128 {
+			s.mu.Unlock()
+			return map[string]any{"execution_id": in.ExecutionID, "error": map[string]any{"code": "history_full", "message": "session execution history is full"}}
+		}
+		runCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		r = &record{ID: in.ExecutionID, Hash: hash, State: "running", Done: make(chan struct{}), Cancel: cancel, RunCtx: runCtx}
+		s.records[r.ID] = r
+		s.active = r
+		s.mu.Unlock()
+		s.commands <- scriptCommand{Ctx: runCtx, Code: in.Code, Record: r}
+		select {
+		case <-r.Done:
+			s.mu.Lock()
+			out := brief(r)
+			s.mu.Unlock()
+			return out
+		case <-ctx.Done():
+			s.cancelRecord(r)
+			return map[string]any{"execution_id": in.ExecutionID, "state": "cancelling"}
+		}
+	case "status", "result":
+		if r == nil {
+			s.mu.Unlock()
+			return map[string]any{"execution_id": in.ExecutionID, "error": map[string]any{"code": "execution_not_found", "message": "no execution with this ID"}}
+		}
+		out := brief(r)
+		if in.Operation == "result" && len(r.NativeReceipts) > 0 {
+			out["native_receipts"] = r.NativeReceipts
+		}
+		s.mu.Unlock()
+		return out
+	case "cancel":
+		if r == nil {
+			s.mu.Unlock()
+			return map[string]any{"execution_id": in.ExecutionID, "error": map[string]any{"code": "execution_not_found", "message": "no execution with this ID"}}
+		}
+		if r.State == "running" {
+			r.State = "cancelling"
+			r.Cancel()
+			go s.cancelScript(r.ID)
+		}
+		out := brief(r)
+		s.mu.Unlock()
+		return out
+	default:
+		s.mu.Unlock()
+		return map[string]any{"execution_id": in.ExecutionID, "error": map[string]any{"code": "invalid_request", "message": "unknown operation"}}
+	}
+}
+
+func newServer(native *host.Client, assetsDir string) *mcp.Server {
+	s := newSupervisor(native, assetsDir)
+	return newServerWithSupervisor(s)
+}
+
+func newServerWithSupervisor(s *supervisor) *mcp.Server {
+	server := mcp.NewServer(&mcp.Implementation{Name: "dtw", Version: releaseVersion}, nil)
+	mcp.AddTool(server, &mcp.Tool{Name: "exec", Description: "Run DTW JavaScript; query or cancel by the original execution ID"}, func(ctx context.Context, _ *mcp.CallToolRequest, in input) (*mcp.CallToolResult, any, error) {
+		out := s.call(ctx, in)
+		content := []mcp.Content{&mcp.TextContent{Text: modelResultText(in, out)}}
+		if in.Operation == "result" && in.IncludeImage {
+			png, err := s.imageFor(in.ExecutionID)
+			if err != nil {
+				content[0] = &mcp.TextContent{Text: in.ExecutionID + " · image unavailable: " + err.Error()}
+				return &mcp.CallToolResult{Content: content, IsError: true}, nil, nil
+			}
+			content = append(content, &mcp.ImageContent{Data: png, MIMEType: "image/png"})
+		}
+		_, isError := out["error"]
+		return &mcp.CallToolResult{Content: content, IsError: isError}, nil, nil
+	})
+	return server
+}
+
+func runServer(ctx context.Context) error {
+	var native *host.Client
+	var assetsDir string
+	helper := ""
+	if os.Getenv("DTW_TEST_CHILD") == "1" {
+		helper = os.Getenv("DTW_TEST_HELPER")
+	} else {
+		self, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		name := "dtw-helper"
+		if runtime.GOOS == "windows" {
+			name += ".exe"
+		}
+		helper = filepath.Clean(filepath.Join(filepath.Dir(self), "..", "libexec", name))
+	}
+	if helper != "" {
+		var err error
+		if _, err = os.Stat(helper); err != nil {
+			return fmt.Errorf("native helper unavailable at %s: %w", helper, err)
+		}
+		assetsDir = os.Getenv("DTW_TEST_ASSETS")
+		if assetsDir == "" {
+			assetsDir, err = os.MkdirTemp("", "dtw-assets-")
+			if err != nil {
+				return err
+			}
+			defer os.RemoveAll(assetsDir)
+		}
+		if err := os.MkdirAll(assetsDir, 0700); err != nil {
+			return err
+		}
+		var closeNative func()
+		native, closeNative, err = startNativePlatform(ctx, helper, assetsDir)
+		if err != nil {
+			return err
+		}
+		defer closeNative()
+		if !native.Hello.CoreNoAuth {
+			return errors.New("DTW helper must omit its own grant gate; application permissions belong to the host")
+		}
+		if err := native.BeginTurn(ctx, "session"); err != nil {
+			return err
+		}
+	}
+	return newServer(native, assetsDir).Run(ctx, &mcp.StdioTransport{})
+}
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "plugin-node" {
-		if err := runPluginNode(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "Desktop World Lite:", err)
+	if len(os.Args) == 2 && (os.Args[1] == "version" || os.Args[1] == "--version") {
+		fmt.Println("dtw " + releaseVersion)
+		return
+	}
+	if len(os.Args) == 2 && os.Args[1] == "--script-child" {
+		if err := runScriptChild(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		return
 	}
-	if err := run(); err != nil {
-		b, _ := json.Marshal(map[string]any{"error": map[string]string{"code": "command_failed", "message": err.Error()}})
-		fmt.Println(string(b))
+	if len(os.Args) > 1 && os.Args[1] == "install" {
+		if err := runInstall(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		return
+	}
+	if len(os.Args) > 1 {
+		fmt.Fprintln(os.Stderr, "usage: dtw [version|install] (no arguments starts the MCP exec server)")
+		os.Exit(2)
+	}
+	if err := runServer(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-}
-func run() (runErr error) {
-	args := os.Args[1:]
-	if len(args) > 0 && args[0] == "--json" {
-		args = args[1:]
-	}
-	if len(args) == 0 || args[0] == "--help" || args[0] == "help" {
-		fmt.Print(usage)
-		return nil
-	}
-	if args[0] == "session" {
-		return runSession(args[1:])
-	}
-	if args[0] == "auth" {
-		return runAuth(args[1:])
-	}
-	if args[0] == "cursor-overlay" {
-		if len(args) != 1 {
-			return fmt.Errorf("cursor-overlay takes no arguments")
-		}
-		return runCursorOverlay()
-	}
-	if args[0] == "version" || args[0] == "--version" || args[0] == "-v" {
-		v := map[string]any{"version": releaseVersion, "protocol": helper.Version, "host_control": helper.ControlVersion, "go": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH}
-		if info, ok := debug.ReadBuildInfo(); ok {
-			for _, setting := range info.Settings {
-				if setting.Key == "vcs.revision" || setting.Key == "vcs.modified" || setting.Key == "vcs.time" {
-					v[setting.Key] = setting.Value
-				}
-			}
-		}
-		return json.NewEncoder(os.Stdout).Encode(v)
-	}
-	if args[0] == "schema" {
-		var s any = helper.SchemaIndex()
-		if len(args) > 3 {
-			return fmt.Errorf("use schema [operation] or schema act ACTION")
-		}
-		if len(args) >= 2 {
-			operationSchema := helper.Schema(args[1])
-			if operationSchema == nil {
-				return fmt.Errorf("unknown operation")
-			}
-			if len(args) == 3 {
-				if args[1] != "act" {
-					return fmt.Errorf("action selector requires schema act")
-				}
-				operationSchema = helper.ActionSchema(args[2])
-				if operationSchema == nil {
-					return fmt.Errorf("unknown action")
-				}
-			}
-			s = operationSchema
-		}
-		return json.NewEncoder(os.Stdout).Encode(s)
-	}
-	if args[0] != "doctor" && args[0] != "serve" {
-		return fmt.Errorf("unknown command; use --help")
-	}
-	var c helper.Config
-	var apps, appWindows names
-	var auditPath, auditMode, inputPolicy, inputMode string
-	f := flag.NewFlagSet(args[0], flag.ContinueOnError)
-	f.SetOutput(os.Stderr)
-	f.StringVar(&inputMode, "input-mode", "", "trusted delivery mode: shared or cooperative (short foreground transactions)")
-	f.StringVar(&inputPolicy, "input-policy", "", "trusted ceiling: shared_input or no_shared_input")
-	f.Var(&apps, "write-app", "allow exact live application name")
-	f.Var(&appWindows, "write-app-window", "allow the application owning an exact window title")
-	f.BoolVar(&c.DesktopWrite, "desktop-write", false, "allow desktop writes")
-	f.BoolVar(&c.RawInput, "raw-input", false, "allow absolute Point input")
-	f.StringVar(&c.AssetsDir, "assets-dir", "", "capture destination")
-	f.StringVar(&auditPath, "audit", "", "metadata-only audit file")
-	f.StringVar(&auditMode, "audit-mode", "rotate", "rotate (default), append or create")
-	f.BoolVar(&c.FullOutput, "full-output", false, "retain typed wire facts and per-object timestamps")
-	f.BoolVar(&c.Managed, "host-control", false, "trusted host control on private inherited pipes")
-	openWorld := backgroundPOCFlag(f)
-	if err := f.Parse(args[1:]); err != nil {
-		return err
-	}
-	if f.NArg() != 0 {
-		return fmt.Errorf("unexpected positional arguments")
-	}
-	if args[0] == "doctor" && len(args) > 1 {
-		return fmt.Errorf("doctor takes no host permission flags")
-	}
-	c.InputMode = dw.InputMode(inputMode)
-	if err := c.InputMode.Validate(); err != nil {
-		return err
-	}
-	c.InputPolicy = dw.InputPolicy(inputPolicy)
-	if err := c.InputPolicy.Validate(); err != nil {
-		return err
-	}
-	c.WriteApps = apps
-	c.WriteAppWindows = appWindows
-	c.Capture = c.AssetsDir != ""
-	if c.DesktopWrite && len(apps)+len(appWindows) > 0 {
-		return fmt.Errorf("choose write-app scopes or desktop-write, not both")
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	var controlIn, controlOut *os.File
-	if c.Managed {
-		var err error
-		controlIn, controlOut, err = helper.InheritedControlFiles()
-		if err != nil {
-			return err
-		}
-
-		for _, f := range []*os.File{controlIn, controlOut} {
-			if f == nil {
-				return fmt.Errorf("host-control requires inherited pipes")
-			}
-			info, err := f.Stat()
-			if err != nil || info.Mode()&os.ModeNamedPipe == 0 {
-				return fmt.Errorf("host-control requires private inherited pipes")
-			}
-			defer f.Close()
-		}
-	}
-	openCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-	w, err := openWorld(openCtx, local.Options{InputMode: c.InputMode})
-	cancel()
-	if err != nil {
-		return err
-	}
-	defer func() {
-		closeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		if err := w.Close(closeCtx); err != nil {
-			fmt.Fprintln(os.Stderr, "close:", err)
-			if runErr == nil {
-				runErr = err
-			}
-		}
-	}()
-	if args[0] == "doctor" {
-		probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		env, err := w.Environment(probeCtx)
-		if err != nil {
-			return err
-		}
-		b, err := protocol.Marshal(struct {
-			Protocol, Auth string
-			Environment    any
-		}{helper.Version, "OS permissions; no API credential", env})
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(b))
-		return nil
-	}
-	if auditPath != "" {
-		f, err := auditlog.Open(auditPath, auditMode)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		c.Audit = f
-		c.AuditPath = f.Path
-	}
-	initCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-	server, err := helper.New(initCtx, w, c)
-	cancel()
-	if err != nil {
-		return err
-	}
-	// Closing stdin on a signal unblocks the scanner, then Serve cancels calls
-	// and the World gets a bounded opportunity to release owned input.
-	go func() { <-ctx.Done(); _ = os.Stdin.Close() }()
-	if c.Managed {
-		go func() {
-			if err := server.ServeControl(ctx, controlIn, controlOut); err != nil {
-				fmt.Fprintln(os.Stderr, "host control:", err)
-			}
-			stop() // Loss of the private owner channel stops the data server too.
-		}()
-	}
-	serveErr := server.Serve(ctx, os.Stdin, os.Stdout)
-	if ctx.Err() != nil {
-		return nil
-	}
-	return serveErr
 }

@@ -1,9 +1,0 @@
-=== RUN   TestNativeLargeSiteDiscovery
-    large_site_test.go:80: wikipedia candidate_windows=1 selected_probe_visited=1200
-    large_site_test.go:121: wikipedia survey_page=1 visited=1200 hits=24 bytes=4815 continuation=true sources=[ax_node_budget]
-    large_site_test.go:121: wikipedia survey_page=2 visited=1200 hits=24 bytes=4720 continuation=true sources=[ax_node_budget]
-    large_site_test.go:121: wikipedia survey_page=3 visited=1200 hits=24 bytes=4787 continuation=true sources=[ax_node_budget]
-    large_site_test.go:121: wikipedia survey_page=4 visited=1200 hits=0 bytes=847 continuation=false sources=[ax_node_budget ax_output_limit]
-    large_site_test.go:126: wikipedia broad_cap calls=4 visited=1200 hits=72 model_bytes=15169 max_page_bytes=4815 elapsed=3.045469958s complete=false source=ax_output_limit
---- PASS: TestNativeLargeSiteDiscovery (6.56s)
-PASS

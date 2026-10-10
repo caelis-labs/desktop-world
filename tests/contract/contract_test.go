@@ -4,13 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	dw "github.com/caelis-labs/desktop-world"
-	"github.com/caelis-labs/desktop-world/dwtest"
-	"github.com/caelis-labs/desktop-world/protocol"
+	"github.com/caelis-labs/desktop-world/internal/ipc/protocol"
+	"github.com/caelis-labs/desktop-world/internal/testutil"
+	dw "github.com/caelis-labs/desktop-world/internal/world"
 	"reflect"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -394,25 +393,6 @@ func TestScopesCursorIsolationAndCapture(t *testing.T) {
 	}
 }
 
-type authFunc func(context.Context, dw.Intent) (dw.Decision, error)
-
-func (f authFunc) Check(c context.Context, i dw.Intent) (dw.Decision, error) { return f(c, i) }
-func TestAuthorizationCheckedBeforeEachWrite(t *testing.T) {
-	h := setup(t)
-	var allowed atomic.Bool
-	allowed.Store(true)
-	a, e := h.w.NewActor(ctx, dw.ActorConfig{ID: "revoked", ReadScopes: []dw.Scope{{Desktop: true}}, WriteScopes: []dw.Scope{{Desktop: true}}, Operations: allOps, Authorizer: authFunc(func(_ context.Context, _ dw.Intent) (dw.Decision, error) {
-		return dw.Decision{Allow: allowed.Load()}, nil
-	})})
-	if e != nil {
-		t.Fatal(e)
-	}
-	h.f.Enqueue("invoke", dwtest.Behavior{Apply: true, Before: func(*dwtest.Fixture) { allowed.Store(false) }})
-	r, e := a.Execute(ctx, h.plan("revoke", dw.Step{ID: "first", Op: "invoke", Target: target(h.refs["提交"])}, dw.Step{ID: "second", Op: "invoke", Target: target(h.refs["提交"])}))
-	if code(e) != "permission_denied" || r.Outcome != "partial" || len(h.f.Events()) != 1 {
-		t.Fatalf("%+v %v", r, e)
-	}
-}
 func TestReceiptTombstoneSurvivesExpiry(t *testing.T) {
 	h := setup(t, dwtest.Options{ReceiptTTL: time.Millisecond, RequestLimit: 1})
 	p := h.plan("expire", dw.Step{ID: "invoke", Op: "invoke", Target: target(h.refs["提交"])})

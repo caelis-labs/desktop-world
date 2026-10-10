@@ -1,4 +1,0 @@
-=== RUN   TestNativeSetChecked
-    semantic_actions_test.go:230: F7 native business=order-42; human Unicode intact; pointer/focus stable; no-op verified; background SDK calls=14 bytes=20266; original receipt=run-095ec6879345fcbc6c8db129
---- PASS: TestNativeSetChecked (4.49s)
-PASS

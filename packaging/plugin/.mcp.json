@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "dtw": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/dtw"
+    }
+  }
+}
