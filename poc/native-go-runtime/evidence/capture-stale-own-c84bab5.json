@@ -1,0 +1,35 @@
+{
+  "date": "2026-10-10",
+  "base_sha": "c84bab59221a570b5360e66ce74c82487accc014",
+  "scope": "Current Go MCP exec -> QuickJS -> exact native helper; only one uniquely titled owned background AppKit fixture. No AXWindow, foreground borrow, user input, visible-region screen image, or unrelated window image was used.",
+  "fixture": {
+    "pid": 83426,
+    "bundle": "/private/tmp/dtw-ax-capture-owned.app",
+    "binary_sha256": "3d4a005958c5ac07436971dc72c78a3cef887926a845afb6fa161a269939b43a",
+    "native_window_id": 77245,
+    "ready_active": false,
+    "ready_key": false,
+    "ready_visible": true,
+    "closed_visible": false,
+    "owned_log_sha256": "257a92024252c70301c59cd9fcbcd6821f5b7b206c2bb9b8dfbb62ff79d41c41"
+  },
+  "helper_sha256": "b504289af017fb766d4064d543d49649f2743ba5b3dd14a81bab11a81d0828ad",
+  "capture": {
+    "projection": "capture_windows",
+    "owned_exact_title_matches": 1,
+    "kind": "window_content",
+    "tiles": 1,
+    "files": 1,
+    "MCP_result_include_image": "one ImageContent, image/png, 6460 bytes, PNG signature checked",
+    "image_contents_committed": false
+  },
+  "after_owned_window_close": {
+    "same_Session_JS_state_Ref": true,
+    "new_execution_id": "owned-capture-stale",
+    "attempted_kind": "window_content",
+    "error_code": "window_not_visible",
+    "new_image_returned": false,
+    "replay": false
+  },
+  "verification": "GOWORK=off GOCACHE=/private/tmp/dtw-go-cache GOPROXY=off DTW_POC_HELPER=/private/tmp/dtw-exact-poc-helper DTW_POC_CAPTURE_TITLE='DTW Own Capture Stale POC' DTW_POC_CAPTURE_CONTROL=/private/tmp/dtw-own-capture-control.txt DTW_POC_CAPTURE_LOG=/private/tmp/dtw-own-capture-stale.jsonl go test -run '^TestOwnedWindowCaptureRefExpiresWithoutAX$' -count=1 -v . passed in 0.91s. The first attempt before moving the standalone ObjC reader out of the Go package did not compile and sent no capture; the corrected test passed once."
+}

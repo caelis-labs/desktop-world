@@ -103,6 +103,8 @@ The actual exact POC helper binary was separately started through its normal `ho
 
 There is no supported bridge fix to apply from this result. For blocked background exact-window authorization, the concrete prerequisite is an owned App whose remote `AXWindows` supplies a real `AXWindow` mapping to its native window ID, or a demonstrated provider/OS repair that restores that output. The sampled helper already reports AX permission granted, so a TCC reset or fresh permission prompt has no evidence-based justification. Keep the existing exact grant fail-closed and continue independent B-row work; the full POC gate remains closed.
 
+One independent B06 step then passed on the **current chain without AXWindow**. A uniquely titled owned background AppKit window appeared once in `capture_windows`; `window_content` returned one tile/file and an on-demand MCP `ImageContent` with a valid 6,460-byte PNG. After the fixture itself closed that window, a second execution using the same Session's retained capture Ref returned `window_not_visible` and no image. The fixture remained inactive and non-key, and the owned log records the close. [Bounded capture evidence](evidence/capture-stale-own-c84bab5.json) excludes the image itself. This adds stale-window refusal to B06, but visible-region/occlusion/geometry/budget and other-provider cases remain unpassed.
+
 ## Gate matrix (macOS current candidate)
 
 | Row | Current evidence | Gate |

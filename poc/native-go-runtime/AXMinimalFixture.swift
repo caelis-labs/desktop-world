@@ -114,6 +114,9 @@ final class Fixture: NSObject, NSApplicationDelegate {
       case "order_front":
         self.window.orderFront(nil)
         self.record("ordered_front")
+      case "close":
+        self.window.close()
+        self.record("closed")
       case "make_main":
         self.window.makeMain()
         self.record("made_main")

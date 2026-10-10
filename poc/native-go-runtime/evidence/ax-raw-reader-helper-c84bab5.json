@@ -13,7 +13,7 @@
     "owned_log_sha256": "28f4dac8b8f18b1b7318728f605621f2939233d762fad206afa2da1bb261f05b"
   },
   "independent_reader": {
-    "source": "poc/native-go-runtime/AXRawReader.m",
+    "source": "poc/native-go-runtime/tools/axrawreader/main.m",
     "path": "/private/tmp/dtw-ax-raw-reader",
     "sha256": "100671b8b25c953d54b67221a181a566916aff23ade7fd67b449afa872ba969e",
     "signing": "ad hoc, CDHash 9425f247aa0bd12524a7cf34a347d22a61b8b563, no team ID or embedded entitlements printed",
