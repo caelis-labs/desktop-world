@@ -134,7 +134,9 @@ func (s *supervisor) imageFor(id string) ([]byte, error) {
 func (s *supervisor) scriptLoop() {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	rt := quickjs.NewRuntime()
+	// Bound script-owned JS memory and stack inside the disposable child. The
+	// parent keeps native receipts and MCP control alive if the child runs out.
+	rt := quickjs.NewRuntime(quickjs.WithMemoryLimit(64<<20), quickjs.WithGCThreshold(8<<20), quickjs.WithMaxStackSize(1<<20))
 	defer rt.Close()
 	// Bare context retains ECMAScript Promise but does not register QuickJS
 	// std/os modules or timers. The approved script surface is supplied below.

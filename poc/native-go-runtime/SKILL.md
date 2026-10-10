@@ -56,6 +56,31 @@ first inspect `await dtw.grants()`. If exactly one active grant has that
 ambiguous, or pending grant does not authorize an action. If a read-only
 observation is dirty or partial, at most one fresh bounded read may resolve it;
 act only on clean, complete coverage and never replay an uncertain write.
+The supported projections are `summary`, `outline`, `detail`, and
+`capture_windows`. `summary` and `detail` can return only the scoped root;
+use `outline` to find descendants. `value` is not an observation field; use
+`value_preview` or `dtw.read` for long text. A narrow control lookup after
+proving an exact window is:
+
+```javascript
+const ob = await dtw.observe({
+  scope: {refs: [state.window.ref]}, projection: 'outline',
+  fields: ['name', 'role', 'capabilities', 'value_preview'],
+  match: {within: state.window.ref, name_equals: 'POC text'},
+  budget: {max_results: 16, max_visited_nodes: 512, max_depth: 12,
+           read_deadline_ms: 3000}
+});
+const fields = ob.objects.filter(o => o.name?.status === 'known' &&
+  o.name.value === 'POC text');
+if (ob.coverage?.complete !== true || ob.coverage?.dirty || fields.length !== 1)
+  throw Error('field is not uniquely proven');
+state.field = fields[0];
+print(JSON.stringify({field_found: true, coverage_complete: true}));
+```
+
+Find another named control with the same scoped `outline` pattern and its
+own exact `name_equals` predicate. Keep full objects in `state`; print only
+the facts needed for the task.
 Preserve current Refs and read a control's
 capabilities before an action. For `set_checked`, `set_selected`, and
 `set_expanded`, give an explicit desired boolean. The native receipt states the

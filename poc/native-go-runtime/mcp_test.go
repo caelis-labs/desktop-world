@@ -124,6 +124,49 @@ func TestOfficialMCPStdioSingleToolControlAndState(t *testing.T) {
 	}
 }
 
+func TestOfficialMCPBoundedQuickJSMemoryRetainsControl(t *testing.T) {
+	if os.Getenv("DTW_POC_CHILD") == "1" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	child := exec.Command(os.Args[0], "-test.run=^TestStdioChild$")
+	child.Env = append(os.Environ(), "DTW_POC_CHILD=1", "PATH=/usr/bin:/bin")
+	client := mcp.NewClient(&mcp.Implementation{Name: "poc-memory-bound", Version: "1"}, nil)
+	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: child}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	call := func(operation, id, code string) map[string]any {
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "exec", Arguments: map[string]any{
+			"operation": operation, "execution_id": id, "code": code}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, ok := res.StructuredContent.(map[string]any)
+		if !ok {
+			t.Fatalf("structured: %T", res.StructuredContent)
+		}
+		return out
+	}
+	result := call("exec", "memory-limit", `state.chunks=[];for(let i=0;i<256;i++)state.chunks.push(('x'.repeat(1024*1024))+i);print('unexpected-success')`)
+	if result["state"] == "completed" {
+		t.Fatalf("script escaped JS memory limit: %+v", result)
+	}
+	if result["state"] != "failed" && result["state"] != "state_lost" {
+		t.Fatalf("unexpected memory failure state: %+v", result)
+	}
+	if result["state"] == "failed" && !strings.Contains(strings.ToLower(fmt.Sprint(result["error"])), "memory") {
+		t.Fatalf("failure did not identify memory limit: %+v", result)
+	}
+	status := call("status", "memory-limit", "")
+	if status["state"] != result["state"] {
+		t.Fatalf("original state unavailable after memory limit: %+v", status)
+	}
+	t.Logf("bounded JS memory: original state=%v error=%v; MCP status remained responsive", status["state"], status["error"])
+}
+
 func TestBuiltNativeGoBinaryWithNoNodePath(t *testing.T) {
 	if os.Getenv("DTW_POC_CHILD") == "1" {
 		return
@@ -1033,6 +1076,10 @@ let fields=ob.objects.filter(o=>o.name?.status==='known' && o.name?.value==='POC
 		return
 	}
 	call("fixture-submit-find", `const ob=await dtw.observe({scope:{refs:[state.win.ref]},projection:'outline',fields:['name','role'],match:{within:state.win.ref,name_equals:'POC submit'},budget:{max_results:8,max_visited_nodes:256,max_depth:12,read_deadline_ms:3000}});const buttons=ob.objects.filter(o=>o.name?.status==='known' && o.name?.value==='POC submit');if(buttons.length!==1)throw Error('submit not unique: '+buttons.length);state.submit=buttons[0];print('submit_found');`)
+	previousSubmits := 0
+	if path := os.Getenv("DTW_POC_EVENT_LOG"); path != "" {
+		previousSubmits = ownedFixtureSubmitCount(t, path)
+	}
 	click := call("fixture-submit-click", `const receipt=await dtw.act({steps:[{id:'submit',op:'pointer.click',target:{ref:state.submit.ref},click:{button:'left',count:1}}]});print(JSON.stringify({outcome:receipt.outcome,delivery:receipt.steps?.[0]?.delivery,channel:receipt.steps?.[0]?.channel,restoration:receipt.input?.restoration}));`)
 	fullClick, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "exec", Arguments: map[string]any{"operation": "result", "execution_id": "fixture-submit-click"}})
 	if err != nil {
@@ -1052,24 +1099,34 @@ let fields=ob.objects.filter(o=>o.name?.status==='known' && o.name?.value==='POC
 	}
 	if path := os.Getenv("DTW_POC_EVENT_LOG"); path != "" {
 		time.Sleep(150 * time.Millisecond)
-		data, readErr := os.ReadFile(path)
-		if readErr != nil {
-			t.Fatal(readErr)
-		}
-		var submits []string
-		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-			var event struct {
-				Event      string `json:"event"`
-				FieldValue string `json:"field_value"`
-			}
-			if json.Unmarshal([]byte(line), &event) == nil && event.Event == "submit" {
-				submits = append(submits, event.FieldValue)
-			}
-		}
-		if len(submits) != 1 || submits[0] != "POC-中文🙂" {
-			t.Fatalf("native click receipt claimed complete, but owned app submits = %q; original receipt: %+v", submits, fullClick.StructuredContent)
+		if got := ownedFixtureSubmitCount(t, path); got != previousSubmits+1 {
+			t.Fatalf("native click receipt claimed complete, but owned app submit callback delta = %d; original receipt: %+v", got-previousSubmits, fullClick.StructuredContent)
 		}
 	}
+}
+
+// The owned fixture deliberately records no text. The callback's
+// matches_expected flag is computed in-process from the controlled test value.
+func ownedFixtureSubmitCount(t *testing.T, path string) int {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var event struct {
+			Event           string `json:"event"`
+			MatchesExpected bool   `json:"matches_expected"`
+		}
+		if json.Unmarshal([]byte(line), &event) == nil && event.Event == "submit" {
+			count++
+			if !event.MatchesExpected {
+				t.Fatalf("owned submit callback did not retain the controlled test value")
+			}
+		}
+	}
+	return count
 }
 
 func mustJSON(v any) []byte {

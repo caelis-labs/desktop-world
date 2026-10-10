@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 
 let args = CommandLine.arguments
 func option(_ key: String, _ fallback: String) -> String {
@@ -85,7 +86,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let rect = NSRect(x: x, y: y, width: 460, height: 220)
     // Keep the Human control completely standard; the instrumented subclass
     // remains available on the separate DTW Target fixture.
-    if isHuman { window = NSWindow(contentRect: rect, styleMask: [.titled, .closable], backing: .buffered, defer: false) }
+    if isHuman || option("--plain-window", "0") == "1" { window = NSWindow(contentRect: rect, styleMask: [.titled, .closable], backing: .buffered, defer: false) }
     else { window = FixtureWindow(contentRect: rect, styleMask: [.titled, .closable], backing: .buffered, defer: false) }
     window.title = title
     window.isReleasedWhenClosed = false
@@ -114,7 +115,46 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
       return event
     }
     timer = Timer.scheduledTimer(withTimeInterval: 0.025, repeats: true) { [weak self] _ in self?.record("seat_sample") }
-    if option("--background", isHuman ? "0" : "1") == "1" { window.orderBack(nil) }
+    if option("--background", isHuman ? "0" : "1") == "1" {
+      // Diagnostic opt-in: order the owned window forward without activating
+      // the application or making it key. This tests whether AXWindows drops
+      // a window that has only ever been ordered to the back.
+      if option("--background-window-front", "0") == "1" { window.orderFront(nil) }
+      else { window.orderBack(nil) }
+      if option("--prime-once", "0") == "1" {
+        // Fixture-only diagnostic. One brief self-activation after a quiet
+        // physical input interval; no synthesized input and no pointer move.
+        let deadline = Date().addingTimeInterval(3)
+        func inputAge() -> Double {
+          let types: [CGEventType] = [.keyDown, .leftMouseDown, .rightMouseDown,
+            .otherMouseDown, .mouseMoved, .scrollWheel]
+          return types.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }
+            .filter { $0 >= 0 }.min() ?? 1e9
+        }
+        func tryPrime() {
+          if inputAge() < 0.6 {
+            if Date() < deadline { DispatchQueue.main.asyncAfter(deadline: .now() + 0.02, execute: tryPrime) }
+            else { self.record("prime_user_active") }
+            return
+          }
+          let prior = NSWorkspace.shared.frontmostApplication
+          guard prior?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+          let started = ProcessInfo.processInfo.systemUptime
+          self.window.makeKeyAndOrderFront(nil)
+          NSApp.activate(ignoringOtherApps: true)
+          self.record("prime_requested", ["prior_pid": prior?.processIdentifier ?? 0])
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            let userInterrupted = inputAge() < 0.15
+            let targetWasFront = NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+            let restored = prior?.activate(options: []) ?? false
+            self.record("prime_restored", ["target_was_front": targetWasFront,
+              "user_interrupted": userInterrupted, "restore_requested": restored,
+              "elapsed_ms": Int((ProcessInfo.processInfo.systemUptime - started) * 1000)])
+          }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: tryPrime)
+      }
+    }
     else {
       window.makeKeyAndOrderFront(nil)
       NSApp.activate(ignoringOtherApps: true)

@@ -181,11 +181,10 @@ func (s *supervisor) handleChildNative(msg childMessage) {
 	s.mu.Unlock()
 	reply := host.Reply{ID: msg.ID}
 	var release func()
+	var route string
 	if msg.Operation == "act" {
-		var route string
 		var err error
 		release, route, err = s.coordinateAction(r.RunCtx, msg.ID, msg.Body)
-		_ = route
 		if err != nil {
 			code := "coordination_unavailable"
 			if r.RunCtx.Err() != nil {
@@ -202,6 +201,20 @@ func (s *supervisor) handleChildNative(msg childMessage) {
 		if delay := os.Getenv("DTW_POC_COORD_HOLD_MS"); delay != "" {
 			if duration, err := time.ParseDuration(delay + "ms"); err == nil && duration <= time.Second {
 				time.Sleep(duration)
+			}
+		}
+		// A contended seat can be held before native dispatch. Recheck physical
+		// activity at that boundary so input that begins during the POC hold
+		// cannot be treated as the earlier quiet interval.
+		if route == "foreground_transaction" && reply.Error == nil {
+			if err := waitForUserInputQuiet(r.RunCtx, 600*time.Millisecond, 3*time.Second); err != nil {
+				code := "coordination_unavailable"
+				if r.RunCtx.Err() != nil {
+					code = "cancelled"
+				} else if strings.HasPrefix(err.Error(), "user_active:") {
+					code = "user_active"
+				}
+				reply.Error = dw.NewFault(code, err.Error(), "never_automatically")
 			}
 		}
 	}
