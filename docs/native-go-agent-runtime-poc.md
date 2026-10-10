@@ -60,7 +60,7 @@ All `C` rows must pass on this macOS host before formal product implementation. 
 
 If any C row is unpassed, stop dependent product implementation and report the exact blocker and smallest next experiment/fix. Historical macOS/Windows acceptance and `go test` may support a baseline but cannot be promoted to this candidate's pass. If Windows is unavailable, report C09 as platform-scope unresolved to the coordinating agent; do not invent Windows results. A final POC report must bind all claims to exact SHA and differentiate current live proof, fixture/CI proof and historical reference.
 
-The current isolated candidate, exact test commands, owned-App callbacks, controlled foreground failure and still-open rows are recorded in [POC checkpoint 2](../poc/native-go-runtime/RESULTS.md). That checkpoint does not change this stage gate.
+The current isolated candidate, exact test commands, owned-App callbacks, controlled foreground failure and still-open rows are recorded in the [POC results](../poc/native-go-runtime/RESULTS.md). Those checkpoints do not change this stage gate.
 
 ## Primary references
 
