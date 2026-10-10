@@ -97,6 +97,31 @@ func TestTwoRealAppObjectSessionsRemainIndependent(t *testing.T) {
 		}
 		t.Logf("Session %s parallel native read=%s", got.label, got.spent.Round(time.Millisecond))
 	}
+	if sequence := os.Getenv("DTW_POC_SEQUENTIAL_CAPTURE"); sequence != "" {
+		peers := []struct {
+			label   string
+			session *mcp.ClientSession
+		}{{"A1", a}, {"A2", a}}
+		if sequence == "cross" {
+			peers = []struct {
+				label   string
+				session *mcp.ClientSession
+			}{{"A1", a}, {"B", b}, {"A2", a}}
+		}
+		for _, peer := range peers {
+			started := time.Now()
+			result, err := call(peer.session, "exec", "real-sequence-capture-"+peer.label, `await state.win.capture();print(state.owner);`)
+			message := ""
+			if result != nil && len(result.Content) > 0 {
+				message = result.Content[0].(*mcp.TextContent).Text
+			}
+			t.Logf("Session %s sequential capture duration=%s result=%q transport=%v", peer.label,
+				time.Since(started).Round(time.Millisecond), message, err)
+			if err != nil || result == nil || result.IsError || !strings.Contains(message, "capture: 1 image(s) ready") {
+				t.Errorf("Session %s sequential capture failed: %v %q", peer.label, err, message)
+			}
+		}
+	}
 	if os.Getenv("DTW_POC_PARALLEL_CAPTURE") == "1" {
 		type capture struct {
 			label string
