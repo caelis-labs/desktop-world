@@ -19,11 +19,28 @@ const MAX_IMAGES = 2;
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const SCRIPT_TIMEOUT_MS = 60000;
 const error = (code, message) => ({ code, message });
-const toolResult = (value, images = []) => ({
+const toolResult = (value, images = [], text = JSON.stringify(value)) => ({
   isError: Boolean(value.error),
   structuredContent: value,
-  content: [{ type: 'text', text: JSON.stringify(value) }, ...images],
+  content: [{ type: 'text', text }, ...images],
 });
+// Keep the machine-readable result and original receipts intact. Most agents
+// only need printed values, coverage, and delivery state on the first pass.
+// desktop_status(execution_id) exposes the full original result when needed.
+function execText(value) {
+  const brief = { execution_id: value.execution_id, state: value.state };
+  if (value.outputs?.length) brief.outputs = value.outputs;
+  if (value.observations?.length) brief.observations = value.observations.map(({ id, complete, truncated, dirty, continuation, unavailable_sources }) =>
+    ({ id, complete, truncated, dirty, ...(continuation ? { more: true } : {}), ...(unavailable_sources?.length ? { unavailable_sources } : {}) }));
+  if (value.actions?.length) brief.actions = value.actions.map(({ run_id, outcome, seat_health, delivery_verification, problems }) =>
+    ({ run_id, outcome, seat_health, delivery_verification, ...(problems?.length ? { problems } : {}) }));
+  if (value.native_request_ids?.length) brief.native_request_ids = value.native_request_ids;
+  if (value.captures?.length) brief.captures = value.captures;
+  if (value.error) brief.error = value.error;
+  if (value.cleanup) brief.cleanup = value.cleanup;
+  if (Object.keys(value.native_receipts ?? {}).length) brief.receipt_detail = 'desktop_status with this execution_id';
+  return JSON.stringify(brief);
+}
 const bounded = (promise, ms, label) => Promise.race([
   promise,
   new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error(`${label} exceeded ${ms} ms`)), ms); timer.unref(); }),
@@ -172,7 +189,7 @@ class Supervisor {
     let images = [];
     try { images = await this.imagesFor(record); }
     catch (e) { value.error ??= error(e.code ?? 'image_failed', String(e.message).slice(0, 1000)); value.state = record.state = 'failed'; }
-    record.result = toolResult(value, images);
+    record.result = toolResult(value, images, execText(value));
     await this.audit({ event: 'execution_end', execution_id: record.id, state: record.state, native_request_ids: record.nativeIds, error: value.error?.code });
     if (this.active === record) this.active = null;
     record.resolve(record.result);

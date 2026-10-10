@@ -88,6 +88,12 @@ test('MCP tools preserve state, IDs, native denial and PNG ImageContent', async 
   const first = await mcp.send('tools/call', { name: 'desktop_exec', arguments: { execution_id: 'observe-1', code: "state.saved = await dw.observe(); print(dw.list(state.saved, ['name']));" } }).result;
   assert.equal(first.result.structuredContent.metrics.calls, 1);
   assert.equal(first.result.structuredContent.outputs[0].rows[0].name, 'Fixture');
+  const firstText = JSON.parse(first.result.content[0].text);
+  assert.equal(firstText.outputs[0].rows[0].name, 'Fixture');
+  assert.deepEqual(firstText.native_request_ids, ['js-1']);
+  assert.equal(firstText.observations[0].complete, true);
+  assert.equal('metrics' in firstText, false);
+  assert.ok(Buffer.byteLength(first.result.content[0].text) < Buffer.byteLength(JSON.stringify(first.result.structuredContent)));
   const next = await mcp.send('tools/call', { name: 'desktop_exec', arguments: { execution_id: 'state-2', code: 'print(state.saved.objects[0].ref);' } }).result;
   assert.equal(next.result.structuredContent.outputs[0], 'app-1');
   const same = await mcp.send('tools/call', { name: 'desktop_exec', arguments: { execution_id: 'observe-1', code: "state.saved = await dw.observe(); print(dw.list(state.saved, ['name']));" } }).result;
@@ -98,6 +104,12 @@ test('MCP tools preserve state, IDs, native denial and PNG ImageContent', async 
   assert.equal(denied.result.isError, true);
   assert.equal(denied.result.structuredContent.native_request_ids.length, 1);
   assert.equal(denied.result.structuredContent.actions[0].run_id, 'run-1');
+  const deniedText = JSON.parse(denied.result.content[0].text);
+  assert.equal(deniedText.error.code, 'permission_denied');
+  assert.deepEqual(deniedText.native_request_ids, denied.result.structuredContent.native_request_ids);
+  assert.equal(deniedText.receipt_detail, 'desktop_status with this execution_id');
+  const deniedStatus = await mcp.send('tools/call', { name: 'desktop_status', arguments: { execution_id: 'deny-3' } }).result;
+  assert.equal(deniedStatus.result.structuredContent.execution.result.native_receipts[deniedText.native_request_ids[0]].error.code, 'permission_denied');
   const capture = await mcp.send('tools/call', { name: 'desktop_exec', arguments: { execution_id: 'image-4', code: "await dw.capture({kind:'visible_region',max_pixel_width:1,max_pixel_height:1});" } }).result;
   assert.equal(capture.result.content[1].type, 'image');
   assert.equal(capture.result.content[1].mimeType, 'image/png');
