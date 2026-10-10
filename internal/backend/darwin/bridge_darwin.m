@@ -603,6 +603,9 @@ static NSDictionary *seat(DWContext *c) {
     @"Intervention" : @"best_effort"
   };
 }
+#ifdef DTW_POC_EXACTGRANT
+static NSDictionary *pocWindowIdentity(DWContext *c, NSString *targetKey);
+#endif
 #include "capture_darwin.h"
 static NSDictionary *queryPage(DWContext *c, NSDictionary *q, DWCancel *cancel) {
   if (!AXIsProcessTrusted())

@@ -153,11 +153,17 @@ class App extends Element {
   }
   async window(title) {
     if (typeof title !== 'string' || !title) throw TypeError('window needs an exact title');
-    const ob = await dtw.observe({scope:{ids:[this.id]},projection:'outline',
+    let ob = await dtw.observe({scope:{ids:[this.id]},projection:'summary',
       fields:['name','role','app','capabilities'],
-      match:{within_id:this.id,name_equals:title},budget});
+      budget:{max_results:64,max_visited_nodes:512,max_depth:3,read_deadline_ms:4000}});
+    let hits = ob.objects.filter(o => o.kind === 'window' && o.app === dtw.ref(this.id) && nameOf(o) === title);
+    if (!clean(ob) || hits.length === 0) {
+      ob = await dtw.observe({scope:{ids:[this.id]},projection:'outline',
+        fields:['name','role','app','capabilities'],
+        match:{within_id:this.id,name_equals:title},budget});
+      hits = ob.objects.filter(o => o.kind === 'window' && o.app === dtw.ref(this.id) && nameOf(o) === title);
+    }
     requireClean(ob, 'window');
-    const hits = ob.objects.filter(o => o.kind === 'window' && o.app === dtw.ref(this.id) && nameOf(o) === title);
     if (hits.length !== 1) throw Error('window match count ' + hits.length + '; select one exact title');
     return new Window(remember(idFor(ob,hits[0]),hits[0]));
   }
@@ -173,6 +179,7 @@ dtw.app = async name => {
   const grants = await dtw.grants();
   const refs = [...new Set((grants.grants ?? []).filter(g => g.state === 'active' && g.application &&
     (!g.name || g.name === name)).map(g => g.application))];
+  if (refs.length > 16) throw Error('too many App candidates; narrow the trusted host scope');
   let found = [];
   for (const ref of refs) {
     const ob = await dtw.observe({scope:{refs:[ref]},projection:'detail',
@@ -180,10 +187,31 @@ dtw.app = async name => {
     if (clean(ob)) found.push(...ob.objects.filter(o => o.kind === 'application' && o.ref === ref && nameOf(o) === name).map(o => ({ob,o})));
   }
   if (found.length === 0) {
-    const ob = await dtw.observe({scope:{desktop:true},projection:'summary',fields:['name','role','app'],
-      budget:{max_results:32,max_visited_nodes:10000,max_depth:3,read_deadline_ms:4000}});
-    requireClean(ob, 'app');
-    found = ob.objects.filter(o => o.kind === 'application' && nameOf(o) === name).map(o => ({ob,o}));
+    let continuation;
+    let candidates = [];
+    let complete = false;
+    for (let page = 0; page < 8; page++) {
+      const ob = await dtw.observe({scope:{desktop:true},projection:'summary',fields:['name','role','app'],
+        budget:{max_results:32,max_visited_nodes:10000,max_depth:3,read_deadline_ms:4000},
+        ...(continuation ? {continuation} : {})});
+      candidates.push(...ob.objects.filter(o => o.kind === 'application' && nameOf(o) === name));
+      if (candidates.length > 1) throw Error('multiple observed App instances named ' + name);
+      if (candidates.length === 1) break;
+      if (clean(ob)) { complete = true; break; }
+      continuation = ob.coverage?.continuation;
+      if (!continuation) break;
+    }
+    if (candidates.length === 0) throw Error(complete ? 'App not found: ' + name :
+      'App unresolved: desktop discovery incomplete; no matching candidate');
+    // A partial desktop page can prove an observed native candidate exists.
+    // Re-read that exact Ref before exposing an App handle. It does not claim
+    // global name uniqueness, and later window/action identity remains native.
+    const candidate = candidates[0];
+    const ob = await dtw.observe({scope:{refs:[candidate.ref]},projection:'detail',
+      fields:['name','role','app'],budget:{max_results:1,read_deadline_ms:3000}});
+    requireClean(ob, 'App candidate');
+    found = ob.objects.filter(o => o.kind === 'application' && o.ref === candidate.ref &&
+      nameOf(o) === name).map(o => ({ob,o}));
   }
   if (found.length !== 1) throw Error('app match count ' + found.length + '; select one exact instance');
   return new App(remember(idFor(found[0].ob,found[0].o),found[0].o));

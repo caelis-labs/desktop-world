@@ -33,10 +33,9 @@ static NSDictionary *windowInfo(CGWindowID wid, BOOL *available) {
   for (NSDictionary *row in list) if ([row[(id)kCGWindowNumber] unsignedIntValue] == wid) return row;
   return nil;
 }
-static NSString *refreshCaptureWindow(DWContext *c, NSString *k, SCShareableContent *content) {
-  DWCaptureWindow *r = c.captureWindows[k];
+static NSString *refreshCaptureRecord(DWContext *c, DWCaptureWindow *r, SCShareableContent *content) {
   if (!r) return @"capability_unavailable";
-  if (!alive(c, k)) return @"ref_gone";
+  if (r.gone || ![r.identity isEqual:processIdentity(r.pid)]) return @"ref_gone";
   BOOL available = NO;
   NSDictionary *info = windowInfo(r.window.windowID, &available);
   if (!available) return @"seat_unavailable";
@@ -50,6 +49,9 @@ static NSString *refreshCaptureWindow(DWContext *c, NSString *k, SCShareableCont
     }
   }
   return @"window_unavailable";
+}
+static NSString *refreshCaptureWindow(DWContext *c, NSString *k, SCShareableContent *content) {
+  return refreshCaptureRecord(c, c.captureWindows[k], content);
 }
 static NSDictionary *captureWindowsQuery(DWContext *c, NSDictionary *q, DWCancel *cancel) {
   if (!CGPreflightScreenCaptureAccess()) return err(@"permission_denied");
@@ -113,8 +115,37 @@ static NSDictionary *capture(DWContext *c, NSDictionary *r, DWCancel *cancel) {
   BOOL window = [r[@"Kind"] isEqual:@"window_content"];
   NSString *k = r[@"Key"];
   DWCaptureWindow *target = c.captureWindows[k];
+#ifdef DTW_POC_EXACTGRANT
+  // The isolated object POC accepts an AX window as a capture target only
+  // after a same-worker native ID join. Titles, bounds and foreground state
+  // are never used to choose a ScreenCaptureKit window.
+  NSDictionary *joined = nil;
+  if (window && !target) {
+    NSDictionary *identity = pocWindowIdentity(c, k);
+    joined = identity[@"Result"];
+    if (!joined) return identity;
+    pid_t pid = [joined[@"PID"] intValue];
+    CGWindowID wid = [joined[@"NativeWindowID"] unsignedIntValue];
+    NSArray *process = processIdentity(pid);
+    if (!process || ![process isEqual:@[joined[@"StartSec"], joined[@"StartUSec"]]])
+      return err(@"capture_identity_unavailable");
+    SCWindow *matched = nil;
+    for (SCWindow *candidate in content.windows) {
+      if (candidate.windowID == wid && candidate.owningApplication.processID == pid) {
+        if (matched) return err(@"capture_identity_ambiguous");
+        matched = candidate;
+      }
+    }
+    if (!matched) return err(@"window_unavailable");
+    target = [DWCaptureWindow new];
+    target.pid = pid;
+    target.identity = process;
+    target.window = matched;
+    target.app = joined[@"AppKey"];
+  }
+#endif
   if (window) {
-    NSString *failure = refreshCaptureWindow(c, k, content);
+    NSString *failure = refreshCaptureRecord(c, target, content);
     if (failure) return err(failure);
   }
   NSMutableArray *images = [NSMutableArray array];
@@ -186,7 +217,18 @@ static NSDictionary *capture(DWContext *c, NSDictionary *r, DWCancel *cancel) {
       CGRect before = target.window.frame;
       SCShareableContent *after = shareable(cancel, deadline);
       if (!after) return err(@"window_unavailable");
-      NSString *failure = refreshCaptureWindow(c, k, after);
+#ifdef DTW_POC_EXACTGRANT
+      if (joined) {
+        NSDictionary *fresh = pocWindowIdentity(c, k)[@"Result"];
+        if (!fresh || ![fresh[@"PID"] isEqual:joined[@"PID"]] ||
+            ![fresh[@"StartSec"] isEqual:joined[@"StartSec"]] ||
+            ![fresh[@"StartUSec"] isEqual:joined[@"StartUSec"]] ||
+            ![fresh[@"NativeWindowID"] isEqual:joined[@"NativeWindowID"]] ||
+            ![fresh[@"WindowKey"] isEqual:joined[@"WindowKey"]])
+          return err(@"capture_identity_changed");
+      }
+#endif
+      NSString *failure = refreshCaptureRecord(c, target, after);
       if (failure) return err(failure);
       if (!CGRectEqualToRect(before, target.window.frame)) return err(@"capture_geometry_changed");
     }

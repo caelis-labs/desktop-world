@@ -31,16 +31,21 @@ func TestWorldObjectScriptAndTextOnlyMCP(t *testing.T) {
 		var result string
 		switch op {
 		case "grants":
-			result = `{"grants":[{"application":"app1","name":"Fixture","state":"active"}]}`
+			result = `{"grants":[{"name":"Fixture","state":"pending"}]}`
 		case "observe":
 			var q struct {
 				Scope struct {
-					Refs []string `json:"refs"`
+					Refs    []string `json:"refs"`
+					Desktop bool     `json:"desktop"`
 				} `json:"scope"`
 				Projection string `json:"projection"`
 			}
 			if err := json.Unmarshal(body, &q); err != nil {
 				t.Fatal(err)
+			}
+			if q.Scope.Desktop {
+				result = `{"epoch":"one","objects":[{"ref":"app1","kind":"application","name":{"status":"known","value":"Fixture"}}],"coverage":{"complete":false,"truncated":true,"continuation":"next"}}`
+				break
 			}
 			if len(q.Scope.Refs) != 1 {
 				t.Fatalf("unexpected observation scope: %s", body)
