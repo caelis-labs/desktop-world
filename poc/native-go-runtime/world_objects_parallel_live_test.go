@@ -19,14 +19,14 @@ func TestTwoRealAppObjectSessionsRemainIndependent(t *testing.T) {
 		return
 	}
 	title := os.Getenv("DTW_POC_REAL_WINDOW_TITLE")
-	if title == "" || os.Getenv("DTW_POC_HELPER") == "" || os.Getenv("DTW_POC_NO_AUTH") != "1" {
-		t.Skip("requires selected real window and isolated no-grant helper")
+	if title == "" || os.Getenv("DTW_POC_HELPER") == "" {
+		t.Skip("requires selected real window and isolated core helper")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	open := func(label string) *mcp.ClientSession {
 		child := exec.Command(os.Args[0], "-test.run=^TestStdioChild$")
-		child.Env = append(os.Environ(), "DTW_POC_CHILD=1", "DTW_POC_TEXT_OUTPUT=1", "PATH=/usr/bin:/bin")
+		child.Env = append(os.Environ(), "DTW_POC_CHILD=1", "DTW_POC_LEGACY_OUTPUT=0", "PATH=/usr/bin:/bin")
 		client := mcp.NewClient(&mcp.Implementation{Name: "real-object-" + label, Version: "1"}, nil)
 		session, err := client.Connect(ctx, &mcp.CommandTransport{Command: child}, nil)
 		if err != nil {

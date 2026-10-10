@@ -18,14 +18,13 @@ func TestSelectedRealAppObjectSurfaceReadAndSemanticScroll(t *testing.T) {
 		return
 	}
 	title := os.Getenv("DTW_POC_REAL_WINDOW_TITLE")
-	if title == "" || os.Getenv("DTW_POC_HELPER") == "" ||
-		(os.Getenv("DTW_POC_NO_AUTH") != "1" && os.Getenv("DTW_POC_WRITE_WINDOW") != title) {
+	if title == "" || os.Getenv("DTW_POC_HELPER") == "" {
 		t.Skip("requires selected exact window title and native helper")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	child := exec.Command(os.Args[0], "-test.run=^TestStdioChild$")
-	child.Env = append(os.Environ(), "DTW_POC_CHILD=1", "DTW_POC_TEXT_OUTPUT=1", "PATH=/usr/bin:/bin")
+	child.Env = append(os.Environ(), "DTW_POC_CHILD=1", "DTW_POC_LEGACY_OUTPUT=0", "PATH=/usr/bin:/bin")
 	client := mcp.NewClient(&mcp.Implementation{Name: "selected-object-surface", Version: "1"}, nil)
 	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: child}, nil)
 	if err != nil {
@@ -42,11 +41,7 @@ func TestSelectedRealAppObjectSurfaceReadAndSemanticScroll(t *testing.T) {
 		}
 		return res
 	}
-	noGrant := ""
-	if os.Getenv("DTW_POC_NO_AUTH") == "1" {
-		noGrant = `const g=await dtw.grants();if((g.grants??[]).some(x=>x.state==='active'))throw Error('core POC still depends on DTW grants');`
-	}
-	code := noGrant + `const app=await dtw.app('Obsidian');const win=await app.window(` + string(mustJSON(title)) + `);const control=await win.one({name:'新建笔记'});const name=await control.read('name');if(name?.status!=='known'||name.value!=='新建笔记')throw Error('control name readback failed');state.win=win;print(control);`
+	code := `if(dtw.grants!==undefined||dtw.revokeGrant!==undefined)throw Error('DTW grants still exposed');const app=await dtw.app('Obsidian');const win=await app.window(` + string(mustJSON(title)) + `);const control=await win.one({name:'新建笔记'});const name=await control.read('name');if(name?.status!=='known'||name.value!=='新建笔记')throw Error('control name readback failed');state.win=win;print(control);`
 	first := call("world-real-find", "exec", code)
 	if first.IsError {
 		t.Fatalf("real object lookup: %s", first.Content[0].(*mcp.TextContent).Text)

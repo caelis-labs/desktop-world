@@ -14,7 +14,7 @@ import (
 
 func TestWorldObjectScriptAndTextOnlyMCP(t *testing.T) {
 	t.Setenv("DTW_POC_CHILD", "1")
-	t.Setenv("DTW_POC_TEXT_OUTPUT", "1")
+	t.Setenv("DTW_POC_LEGACY_OUTPUT", "0")
 	coordDir := t.TempDir()
 	if err := os.Chmod(coordDir, 0700); err != nil {
 		t.Fatal(err)
@@ -30,8 +30,6 @@ func TestWorldObjectScriptAndTextOnlyMCP(t *testing.T) {
 	s.testNative = func(_ context.Context, id, op string, body json.RawMessage) (host.Reply, error) {
 		var result string
 		switch op {
-		case "grants":
-			result = `{"grants":[{"name":"Fixture","state":"pending"}]}`
 		case "observe":
 			var q struct {
 				Scope struct {
@@ -93,6 +91,10 @@ func TestWorldObjectScriptAndTextOnlyMCP(t *testing.T) {
 			t.Fatalf("text mode duplicated structuredContent: %+v", res.StructuredContent)
 		}
 		return res
+	}
+	auth := call("auth-surface", "exec", `if(dtw.grants!==undefined||dtw.revokeGrant!==undefined)throw Error('grant API exposed');let denied=false;try{await dtw.call('grants')}catch(e){denied=String(e).includes('unknown desktop operation')}if(!denied)throw Error('grant operation exposed');print('no DTW grant API');`, "")
+	if auth.IsError || !strings.Contains(auth.Content[0].(*mcp.TextContent).Text, "no DTW grant API") {
+		t.Fatalf("core POC still exposes DTW authorization: %+v", auth)
 	}
 	first := call("e1", "exec", `const app=await dtw.app('Fixture'); const win=await app.window('Fixture Window'); const button=await win.one({name:'Submit'}); state.button=button; print(button);`, "")
 	if first.IsError {

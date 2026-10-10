@@ -58,6 +58,9 @@ func TestIncompleteInventoryCannotAuthorizeUniqueObservedApp(t *testing.T) {
 	}
 }
 func TestDynamicGrantRevokeKeepsOtherGrantAndReceipts(t *testing.T) {
+	if pocCoreWithoutGrants(Config{Managed: true}) {
+		t.Skip("grant contract does not apply to the core POC helper")
+	}
 	s, f := setup(t, Config{Managed: true})
 	control(t, s, "begin_turn", "t1", "")
 	f.Add(dwtest.Node{ID: "other", Object: dw.Object{Kind: dw.KindApplication, Name: dw.Known("Other")}})
@@ -103,6 +106,9 @@ func TestBindFocusUsesExecutionTimeScopedFocus(t *testing.T) {
 }
 
 func TestRevocationCancelsInflightAndAllBoundAliases(t *testing.T) {
+	if pocCoreWithoutGrants(Config{Managed: true}) {
+		t.Skip("grant contract does not apply to the core POC helper")
+	}
 	s, f := setup(t, Config{Managed: true})
 	control(t, s, "begin_turn", "t1", "")
 	r := managedRefs(t, s, "t1")

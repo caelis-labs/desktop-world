@@ -47,6 +47,7 @@ type Hello struct {
 	Environment dw.Environment `json:"environment"`
 	AuditPath   string         `json:"audit_path"`
 	Managed     bool           `json:"managed"`
+	CoreNoAuth  bool           `json:"core_no_auth"`
 }
 
 type exchange struct {
@@ -268,13 +269,14 @@ func Start(ctx context.Context, o Options) (*Client, error) {
 			InputMode      dw.InputMode   `json:"input_mode"`
 			Environment    json.RawMessage
 			Managed        bool
+			CoreNoAuth     bool   `json:"core_no_auth"`
 			AuditPath      string `json:"audit_path"`
 		}
 		if err := json.Unmarshal(scan.Bytes(), &raw); err != nil {
 			ready <- err
 			return
 		}
-		c.Hello.Type, c.Hello.Protocol, c.Hello.Managed = raw.Type, raw.Protocol, raw.Managed
+		c.Hello.Type, c.Hello.Protocol, c.Hello.Managed, c.Hello.CoreNoAuth = raw.Type, raw.Protocol, raw.Managed, raw.CoreNoAuth
 		c.Hello.AuditPath = raw.AuditPath
 		c.Hello.InputPolicy = raw.InputPolicy
 		c.Hello.InputMode = raw.InputMode.Effective()

@@ -200,7 +200,7 @@ func (s *supervisor) scriptLoop() {
 				return ctx.ThrowTypeError("native call needs operation and arguments")
 			}
 			op := args[0].ToString()
-			if op != "observe" && op != "read" && op != "sync" && op != "act" && op != "capture" && op != "get" && op != "cancel" && op != "grants" && op != "revoke_grant" {
+			if op != "observe" && op != "read" && op != "sync" && op != "act" && op != "capture" && op != "get" && op != "cancel" {
 				return ctx.ThrowTypeError("unknown desktop operation")
 			}
 			body := json.RawMessage(args[1].ToString())
@@ -277,7 +277,7 @@ func (s *supervisor) scriptLoop() {
 			}))
 		}
 		ctx.Globals().Set("dtw", global)
-		wrapper := ctx.Eval(`dtw.call = async (op, args={}) => { const reply = JSON.parse(await dtw.native(op, JSON.stringify(args))); if (reply.error) { const e = new Error(reply.error.message); e.code = reply.error.code; throw e; } return reply.result; }; for (const op of ['observe','read','sync','act','capture','get','cancel','grants']) dtw[op] = args => dtw.call(op,args); dtw.revokeGrant = args => dtw.call('revoke_grant',args);`)
+		wrapper := ctx.Eval(`dtw.call = async (op, args={}) => { const reply = JSON.parse(await dtw.native(op, JSON.stringify(args))); if (reply.error) { const e = new Error(reply.error.message); e.code = reply.error.code; throw e; } return reply.result; }; for (const op of ['observe','read','sync','act','capture','get','cancel']) dtw[op] = args => dtw.call(op,args);`)
 		if wrapper != nil {
 			wrapper.Free()
 		}
@@ -586,7 +586,7 @@ func newServerWithSupervisor(s *supervisor) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "dtw-poc", Version: "0.0.0-poc"}, nil)
 	mcp.AddTool(server, &mcp.Tool{Name: "exec", Description: "POC: run approved JavaScript; query and cancel by original execution ID"}, func(ctx context.Context, _ *mcp.CallToolRequest, in input) (*mcp.CallToolResult, any, error) {
 		out := s.call(ctx, in)
-		if os.Getenv("DTW_POC_TEXT_OUTPUT") == "1" {
+		if os.Getenv("DTW_POC_TEXT_OUTPUT") == "1" || os.Getenv("DTW_POC_LEGACY_OUTPUT") != "1" {
 			content := []mcp.Content{&mcp.TextContent{Text: modelResultText(in, out)}}
 			if in.Operation == "result" && in.IncludeImage {
 				png, err := s.imageFor(in.ExecutionID)
@@ -646,20 +646,11 @@ func runServer(ctx context.Context) error {
 			return err
 		}
 		defer native.Close()
+		if !native.Hello.CoreNoAuth {
+			return errors.New("core POC requires a helper built with dtw_poc_noauth; DTW grants are not part of this interface")
+		}
 		if err := native.BeginTurn(ctx, "session"); err != nil {
 			return err
-		}
-		if os.Getenv("DTW_POC_NO_AUTH") != "1" {
-			if app := os.Getenv("DTW_POC_WRITE_APP"); app != "" {
-				if err := native.Declare(ctx, "session", app, ""); err != nil {
-					return err
-				}
-			}
-			if title := os.Getenv("DTW_POC_WRITE_WINDOW"); title != "" {
-				if err := native.Declare(ctx, "session", "", title); err != nil {
-					return err
-				}
-			}
 		}
 	}
 	return newServer(native, assetsDir).Run(ctx, &mcp.StdioTransport{})

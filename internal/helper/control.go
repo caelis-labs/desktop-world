@@ -138,6 +138,12 @@ func (g *turnGrants) Check(ctx context.Context, in dw.Intent) (dw.Decision, erro
 func (s *Server) Control(ctx context.Context, r ControlRequest) Response {
 	out := Response{ID: r.ID, Protocol: ControlVersion, World: s.epoch}
 	var err error
+	// The tagged core POC uses this private pipe only for Session lifecycle.
+	// Keep DTW's own grant operations unavailable even to its trusted host.
+	if pocCoreWithoutGrants(s.config) && r.Op != "begin_turn" && r.Op != "end_turn" {
+		out.Error = dw.Invalid("DTW grants are unavailable in the core POC")
+		return out
+	}
 	if !s.config.Managed && r.Turn == "" {
 		r.Turn = "session"
 	}

@@ -42,6 +42,9 @@ func control(t *testing.T, s *Server, op, turn string, app dw.Ref) {
 	}
 }
 func TestManagedApplicationTurnAndSeparateControl(t *testing.T) {
+	if pocCoreWithoutGrants(Config{Managed: true}) {
+		t.Skip("grant contract does not apply to the core POC helper")
+	}
 	s, f := setup(t, Config{Managed: true})
 	control(t, s, "begin_turn", "turn1", "")
 	f.Add(dwtest.Node{ID: "other", Object: dw.Object{Kind: dw.KindApplication, Name: dw.Known("Other")}})
@@ -96,6 +99,9 @@ func TestManagedApplicationTurnAndSeparateControl(t *testing.T) {
 	}
 }
 func TestEndTurnCancelsNativePlanAndDoesNotWaitOnDataLane(t *testing.T) {
+	if pocCoreWithoutGrants(Config{Managed: true}) {
+		t.Skip("grant contract does not apply to the core POC helper")
+	}
 	s, f := setup(t, Config{Managed: true})
 	control(t, s, "begin_turn", "turn1", "")
 	refs := managedRefs(t, s, "turn1")

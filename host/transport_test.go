@@ -112,6 +112,9 @@ func TestManagedInheritedTransportCancelsBusyProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
+	if c.Hello.CoreNoAuth {
+		t.Skip("grant transport contract does not apply to the core POC helper")
+	}
 	if err = c.BeginTurn(ctx, "t1"); err != nil {
 		t.Fatal(err)
 	}

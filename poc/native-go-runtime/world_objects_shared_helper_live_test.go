@@ -21,11 +21,11 @@ func TestTwoRealObjectSessionsCanShareOneNativeCaptureOwner(t *testing.T) {
 	}
 	title := os.Getenv("DTW_POC_REAL_WINDOW_TITLE")
 	helper := os.Getenv("DTW_POC_HELPER")
-	if title == "" || helper == "" || os.Getenv("DTW_POC_NO_AUTH") != "1" {
-		t.Skip("requires selected real window and isolated no-grant helper")
+	if title == "" || helper == "" {
+		t.Skip("requires selected real window and isolated core helper")
 	}
 	t.Setenv("DTW_POC_CHILD", "1")
-	t.Setenv("DTW_POC_TEXT_OUTPUT", "1")
+	t.Setenv("DTW_POC_LEGACY_OUTPUT", "0")
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	assets := t.TempDir()

@@ -1,7 +1,7 @@
 package main
 
 // worldJS is the small Agent-facing object layer of the isolated POC. It
-// compiles methods to the existing native requests; native identity, grants,
+// compiles methods to the existing native requests; native identity,
 // scheduling and receipts remain authoritative. The address book lives only
 // in this QuickJS Session.
 const worldJS = `(function () {

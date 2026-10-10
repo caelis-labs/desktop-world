@@ -3,144 +3,59 @@ name: desktop-world-native-go-poc
 description: Use the isolated native Go Desktop World POC through its one MCP exec tool.
 ---
 
-# Desktop World native Go POC
+# Desktop World core POC
 
-This file describes the isolated POC surface. It is not installed as the product Skill.
-The trusted host starts the native Go MCP server, its native helper, and exact
-per-Session grants. No Node/npm process or model-selected transport is involved.
+Use the one MCP tool, `exec`. Set `operation` to `exec`, `status`, `result`, or
+`cancel`. Always supply a short, unique `execution_id`; use that same ID to
+query or cancel an execution. For `exec`, supply JavaScript in `code`.
 
-Use the sole MCP tool, **`exec`**. Its `operation` is `exec`, `status`, `result`,
-or `cancel`; every call carries the original `execution_id`. `exec` also takes
-JavaScript `code`. Query or cancel the same ID while a script is running. A
-finished `result` can expose the original native receipt and, with
-`include_image:true`, a requested PNG as MCP `ImageContent`.
-Printed facts live in `structuredContent.print`; text carries the short
-execution/status/error summary and does not copy printed AX nodes.
+The default MCP result is
+one short `content.text` block with the execution ID and printed facts; routine
+`structuredContent` is absent. A window capture adds an image only when the
+original execution is queried with `operation:"result", include_image:true`.
+Use `detail:"full"` on that original result only when its receipt is needed.
 
-JavaScript has persistent `state`, `print`, and `dtw`. `dtw` supplies async
-`observe`, `read`, `sync`, `act`, `capture`, `get`, and `cancel`; `dtw.sleep` is a
-bounded scheduling primitive. `dtw.grants()` reads this Session's grants and
-`dtw.revokeGrant({grant_id})` can revoke one of them; scripts cannot grant
-themselves authority. Use `await`, loops, filters, and exceptions to
-batch narrow work, keep full observations in `state`, and `print` only the facts
-needed for the next decision. Start with an existing exact grant when one is
-available, then search inside that App for one exact window:
+JavaScript has persistent `state`, `print`, `await`, loops, filters, exceptions,
+and the `dtw` object. The core path is App → Window → Element:
 
 ```javascript
-const title = 'exact approved window title';
-const grants = await dtw.grants();
-const active = grants.grants.filter(g => g.window_title === title &&
-  g.state === 'active' && g.application);
-if (active.length !== 1) throw Error('exact grant unresolved');
-const app = active[0].application;
-const ob = await dtw.observe({
-  scope: {refs: [app]}, projection: 'outline', fields: ['name', 'role', 'app'],
-  match: {within: app, name_equals: title},
-  budget: {max_results: 16, max_visited_nodes: 512, max_depth: 12}
-});
-const matches = ob.objects.filter(o => o.kind === 'window' &&
-  o.name?.status === 'known' && o.name.value === title);
-if (matches.length !== 1 || ob.coverage?.complete !== true || ob.coverage?.dirty)
-  throw Error('window is not uniquely proven');
-state.window = matches[0];
-const shown = dtw.disclose(ob, {fields: ['kind', 'role', 'name']});
-const windowItem = shown.items.find(i => i.kind === 'window' &&
-  i.name?.value === title);
-if (!windowItem) throw Error('selected window was not disclosed');
-state.windowId = windowItem.id;
-print(JSON.stringify(shown));
+const app = await dtw.app('Obsidian');
+const win = await app.window('exact window title');
+const button = await win.one({name:'新建笔记'});
+state.button = button;
+print(button); // e.g. W1/B1 新建笔记 · button · invoke
 ```
 
-The `name` field is a fact object; compare `name.status` and `name.value`, not
-`name` directly to a string. `complete:false` and zero matches mean unknown,
-not absent. If no grant is available for a read-only task, find the selected App
-in a bounded desktop summary, then narrow to its windows. Follow continuation
-only when needed to establish the declared scope; do not send unrelated tree
-pages to the model. An absent, ambiguous, or pending grant does not authorize
-an action. If a read-only
-observation is dirty or partial, at most one fresh bounded read may resolve it;
-act only on clean, complete coverage and never replay an uncertain write.
-The supported projections are `summary`, `outline`, `detail`, and
-`capture_windows`. `summary` and `detail` can return only the scoped root;
-use `outline` to find descendants. `value` is not an observation field; use
-`value_preview` or `dtw.read` for long text. A narrow control lookup after
-proving an exact window is:
+The next `exec` can use `await state.button.invoke()` or
+`await dtw.at('W1/B1').invoke()`. For several actions, use
+`await dtw.transaction(tx => { tx.scrollIntoView(state.button); tx.invoke(state.button); })`.
+Available
+Element methods include `read`, `focus`, `invoke`, `setValue`, `setChecked`,
+`setSelected`, `setExpanded`, `scrollIntoView`, `move`, `click`, `dragTo`,
+`scroll`, `press`, and `typeText`; `win.capture()` requests a window image.
+Check the behaviors printed for the observed element before acting. The
+execution layer chooses semantic background or coordinated foreground input.
+Scripts do not select a transport or input mode.
 
-```javascript
-const ob = await dtw.observe({
-  scope: {ids: [state.windowId]}, projection: 'outline',
-  fields: ['name', 'role', 'capabilities', 'value_preview'],
-  match: {within_id: state.windowId, name_equals: 'POC text'},
-  budget: {max_results: 16, max_visited_nodes: 512, max_depth: 12,
-           read_deadline_ms: 3000}
-});
-const fields = ob.objects.filter(o => o.name?.status === 'known' &&
-  o.name.value === 'POC text');
-if (ob.coverage?.complete !== true || ob.coverage?.dirty || fields.length !== 1)
-  throw Error('field is not uniquely proven');
-state.field = fields[0];
-const shown = dtw.disclose(ob, {
-  fields: ['kind', 'role', 'name', 'capabilities']
-});
-const fieldItem = shown.items.find(i => i.name?.value === 'POC text');
-if (!fieldItem) throw Error('selected field was not disclosed');
-state.fieldId = fieldItem.id;
-print(JSON.stringify(shown));
-```
+Use `win.find({name:'...'})` or `win.find({nameContains:'...',role:'...'})` for
+narrow discovery. `win.one({name:'...'})` requires exactly one match. A large
+AX tree stays inside the script: filter it and print only facts needed for the
+next decision. Low-level `dtw.observe`, `read`, `sync`, `act`, and `capture`
+remain available for behavior not yet wrapped by the object surface.
+`dtw.disclose` exposes changed fields with short Session-local addresses;
+unchanged nodes do not need to be printed again. Addresses expire when their
+native epoch changes. Incomplete observation is unresolved, even with zero
+matches; narrow or refresh before an action.
 
-Find another named control with the same scoped `outline` pattern and its
-own exact `name_equals` predicate. `dtw.disclose(ob, {fields, max_items})` is
-the POC's progressive presentation helper: it keeps a per-Session, bounded
-Ref/field cache and returns only new or changed fields. Repeating an unchanged
-target returns `items:[]`; asking for `capabilities` later adds just that field.
-Use `refresh:true` when the model explicitly needs an unchanged fact again.
-The POC's `id` is an experimental short display alias, such as `W2/R1`, scoped to a
-window. Do not infer capability or durable identity from its role letter;
-check the current role, name, capability and coverage. The final addressing
-scheme has not been selected. `dtw.index(windowObservation)` can register window bounds without
-printing them. Use `dtw.observe({scope:{ids:[id]},match:{within_id:id}})`,
-`dtw.read({target_id:id})`,
-`dtw.capture({kind:'window_content',target_id:windowId})`, and
-`dtw.act({steps:[{id:'one',op:'invoke',target:{id}}]})` to use it. An action ID
-must first have appeared in a clean, complete disclosure. The POC still
-supports `dtw.ref(id)` for old scripts; it resolves the full native Ref inside
-the same Session but gives no authority, and stale Refs still fail native
-action checks. Alias maps clear on native epoch change and are never shared
-between Sessions. When a selected window and target expose usable
-bounds, `area_hint` reports a rough relative band (`top`, `left`, `main`,
-`right`, `bottom`); it is navigation context, not a semantic role or action
-target. Windows receive distinct `W` aliases; main/popup relationships remain
-unknown unless the native provider supplies trustworthy structure. Full native
-Refs and sampling times stay in the internal observation and original receipt.
-Its `coverage` is the original native coverage; `omitted` is a separate
-presentation limit. Neither `items:[]` nor an incomplete native scan proves
-absence. Use the original `ob.objects` for action decisions, keep full objects
-in `state`, and print only the disclosure or even smaller task facts. A large
-unfiltered `outline` may hit the native output cap; refine by exact window,
-name, role, and depth rather than sending a long tree or all its pages.
-Preserve current native observations inside the script and read a control's
-capabilities before an action. For `set_checked`, `set_selected`, and
-`set_expanded`, give an explicit desired boolean. The native receipt states the
-selected semantic or foreground channel, delivery, verification, and
-restoration. A physical dispatch receipt does not by itself prove that an App
-handled the action; verify the business result independently. The execution
-layer chooses a background or short foreground route; scripts do not set mode.
+DTW's own grant, declaration, and revocation API is absent from this core POC.
+The helper must be built with `dtw_poc_noauth`; the MCP server rejects a normal
+helper. Operating-system Accessibility, Screen Recording, and input permission
+checks still apply. Select only the intended App and window.
 
-On cancellation, partial completion, unknown delivery, a late native reply, or
-`state_lost`, query `result` for the same `execution_id` and retain its original
-native request IDs. Never generate a new ID to replay an uncertain effect.
-An unverified provider route or an unknown outcome cannot fall back to
-foreground input. Never extend grants through script arguments.
-
-An [opt-in result economy POC](ECONOMY_TASK_TRACE.md) puts routine task facts
-in `content.text` and leaves routine `structuredContent` with only `state`.
-Its successful actual-model lookup used the concrete [experimental Skill](SKILL_ECONOMY_POC.md).
-For that mode, print a short ID/role/name/available-action line; the server
-adds one authoritative action/capture summary automatically. Treat missing
-capabilities as unknown, and retain incomplete/unknown/partial/cancelled
-recovery metadata and the original `result` path. This mode is not the
-default POC or a product interface yet.
-
-Current POC limits: 64 KiB script, 8 KiB printed text, at most 32 native calls
-and 128 retained executions per Session. See `RESULTS.md` for failed and
-unverified acceptance rows. Do not treat this POC as a product runtime.
+An action receipt reports the chosen route, delivery, verification, and
+restoration. Dispatch alone does not prove that an App handled the action;
+read back the intended effect. For cancellation, partial completion, unknown
+delivery, late receipts, or lost script state, query `result` with the original
+`execution_id`. Never replay an action whose delivery is unknown. A script is
+limited to 64 KiB, 8 KiB printed text, 32 native calls, and 128 retained
+executions per Session. This Skill describes a POC, not a product runtime.
