@@ -207,6 +207,17 @@ func (s *supervisor) handleChildNative(msg childMessage) {
 	}
 	if reply.Error != nil {
 		// The action never reached the native helper.
+	} else if s.testNative != nil {
+		// The isolated test transport can return an original partial/unknown/late
+		// receipt without driving any OS UI. It is never installed by runServer.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		got, err := s.testNative(ctx, msg.ID, msg.Operation, msg.Body)
+		if err != nil {
+			reply.Error = dw.NewFault("native_unknown", err.Error(), "never_automatically")
+		} else {
+			reply = got
+		}
 	} else if s.native == nil {
 		reply.Error = dw.NewFault("native_unavailable", "native helper is not configured", "never_automatically")
 	} else {

@@ -1,0 +1,90 @@
+{
+  "checkpoint": 5,
+  "platform": "macOS 27.0.1 arm64",
+  "preceding_head": "8a4bc95780de09f5f84fb1093c2c7a90d08604cc",
+  "scope": "isolated POC only; no product migration",
+  "native_go_binary_sha256": "621c152eec328862930fb66a692466bfe104aeb243a495b1231fbb9fafffe139",
+  "native_helper_sha256": "30816f35a45fe687b18ff39fd0c04fa0cac050a8909400402dbdf0902548195b",
+  "skill_model": {
+    "scratch_repo": "/private/tmp/dtw-skill-check-8a4bc957",
+    "skill_read": "model command_execution read exact POC SKILL.md; then one MCP exec printed skill-loaded and model reported four exact limits",
+    "skill_trace_sha256": "6c702d08166cbcbe4a30833b9ab53f556f8a0e5036838591fd6a59d4ae2b64a2",
+    "two_call_js_state_trace_sha256": "0bbec88d5d9e17945f9b4a36c7dffe7721c62100f16d52a89cbd7d7c97f3ced8",
+    "model_full_task_attempts": [
+      {
+        "trace_sha256": "3b58cb6a97861869941dcdc064c589ef3327f5615d1f30eb6f688b1b1a3faa2e",
+        "result": "stopped before write: incomplete window discovery; first script used wrong name fact comparison",
+        "whole_turn_input_tokens": 62833,
+        "whole_turn_output_tokens": 352
+      },
+      {
+        "trace_sha256": "7e669666ade785a5770da9992c4b63ffe6410be1293f19f4fc15ed7eaee1c875",
+        "result": "stopped before write: dirty/truncated desktop AX, ax_partial and no continuation; original observation result queried",
+        "whole_turn_input_tokens": 91766,
+        "whole_turn_output_tokens": 532
+      }
+    ],
+    "token_limit": "whole-turn usage is not a tool-result savings ratio; no further paid retry was run once native grant resolution became unstable"
+  },
+  "background_native": {
+    "owned_regular_target_pid": 36124,
+    "target_log_sha256": "bab36283dcfc02661f3abe2e17c5369f75068b0693de3de8892ca3f0f4ba18db",
+    "never_front_active_or_key": true,
+    "semantic_set": "completed/complete/verified/semantic; controlled value POC-中文🙂 read back exactly",
+    "window_png_bytes": 16437,
+    "test_output_sha256": "2124df647f14a956653c2253a89c7e942ca270dcf7dac0ddb25c36a257cd7f6c",
+    "grant_first_read_only_pass": "active exact-window grant; app-scoped outline and summary each one match, complete clean; desktop AX two pages 40+8, final complete",
+    "grant_first_read_only_output_sha256": "4f9a4ccd2c10104de9c15dfcbbd9ec525042a1ce50ac48711d58a619304fd7bb",
+    "later_grant_failure": "same target new session and fixed R2 target later returned unresolved/discovery_incomplete; three bounded status refreshes stayed unresolved; no action dispatched"
+  },
+  "synthetic_receipts": {
+    "test_output_sha256": "3cee476a115a84873c57c92322392820011c196d43617fb40b0a876dcd41e9fd",
+    "unknown": "native_unknown/never_automatically; original result retained; native call count 1",
+    "partial": "first complete/verified, second unknown/not_verified/provider_timeout; original run-partial-original retained; native call count 1",
+    "cancel_late": "cancelled script, original run-late-original receipt retained; native call count 1",
+    "limit": "injected native boundary; not real provider unknown/partial acceptance"
+  },
+  "focus_fixture": {
+    "old_target_pid_34412": "became front/active/key, but user reported operating that App; launch causality unproven",
+    "old_target_log_sha256": "f7ded9378774890890c04253efcee8089699d9dedc06ad9a739ec8349f449135",
+    "plain_one_field_pid_40568": "user saw 1; eight text changes, maximum length 5",
+    "plain_one_field_binary_sha256": "9e0344a82a04681cb9f9123b06c3a1437d31205c392fe8ad7ca96c146369e4de",
+    "plain_log_sha256": "39ed83bab43ff5c7b8a8f4d0663cbbe7b8de7367acdc801e054f9d5add9934f6",
+    "empty_subclass_pid_40845": "user saw 1; 35 text changes, maximum length 9",
+    "empty_subclass_log_sha256": "38bc400d1d19d733b724708268cc2f14421f08161ea53d61468f39790f937299",
+    "forward_only_override_pid_40977": "text length grew from 0 to 11 while front/key; no event instrumentation",
+    "forward_only_log_sha256": "12cef7357a8d96f86268b8261e1138d035608c16761f934a27a1fdaa3da23213",
+    "instrumented_pre_fix_pid_40704": "user could not see 1; mouse events only, no text changes",
+    "instrumented_pre_fix_log_sha256": "260d1773965110887eb9b757686f08568bd0130ad298524faeff6b1475eecdfa",
+    "deferred_pre_fix_crash": {
+      "pids": [41235, 41264],
+      "signals": ["SIGABRT", "SIGABRT"],
+      "stack": "NSEvent.eventNumber -> eventSink closure -> deferred sendEvent callback",
+      "report_sha256": [
+        "bb7e1ebce28bc3a3c9c3c984850cadbed4cf868b8ed88d1ebd1733e7e514ee01",
+        "77923c8d610b27e7d020c04036ecc89bd8a8f8fa12584690223b38cc2d2a062c"
+      ]
+    },
+    "fixed_background_key_self_test": "own window received key_code 18, text length 0 to 1, no crash, no foreground",
+    "fixed_self_test_log_sha256": "98c7e7f7b6a0d7b77c6ab3fb4632df89e0dc251578ac0ef44780807b8e7b14a3",
+    "fixed_real_input_pid_41665": "user saw 1 without crash; 28 window events in first validation, including 12 key down/up pairs for key_code 18, and text changes while key",
+    "fixed_real_input_binary_sha256": "67c4e5361901b89a8b8846e3a094dbeb2497a3fed7799885eed9aed705e7dccd",
+    "fixed_real_input_log_sha256": "52e51debb755215ad9606222067706b5fc251972dd8906a1c74619bfb8185105",
+    "privacy": "only own fixture event type, key code, timestamps, field length, and focus metadata; no input text committed"
+  },
+  "human_input_priority": {
+    "human_pid": 41665,
+    "target_pid": 41744,
+    "coordinator_wait_ms": 3022,
+    "coordinator_result": "user_active; waiting then released, never acquired; no native action dispatched",
+    "human_key_down_and_text_changes_during_wait": [31, 31],
+    "human_front_and_key_for_all_62_recorded_rows_during_wait": true,
+    "target_front_active_key_or_input_events_during_wait": 0,
+    "gate_output_sha256": "a4fd016ec0471e141d8a82a971149b8f691ad3d7911ce237f182201fcf706ce4",
+    "coord_trace_sha256": "5295d7f2455dc13d625ff365dd79da55f88d7be907b49d9ae7f39e88c29d0386",
+    "human_log_sha256": "52e51debb755215ad9606222067706b5fc251972dd8906a1c74619bfb8185105",
+    "target_log_sha256": "c9a77719f1209d7149ce044a00fe1f708d9beaf360e0caaef98b46b6f018ea1c",
+    "limit": "coordinator gate only; target exact-window grant unresolved, so no physical foreground borrow, two-agent contention, or restoration acceptance"
+  },
+  "windows": "no Windows host; unverified"
+}

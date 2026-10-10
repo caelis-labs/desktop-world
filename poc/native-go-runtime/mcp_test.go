@@ -994,6 +994,15 @@ let windows = ob.objects.filter(o=>o.kind==='window' && o.name?.status==='known'
 for(let i=0;i<8 && windows.length===0 && ob.coverage?.continuation;i++){ob=await dtw.observe({scope:{desktop:true},projection:'summary',fields:['name','role','app'],budget:{max_results:64,max_visited_nodes:512,max_depth:12,read_deadline_ms:3000},continuation:ob.coverage.continuation});scanned.push(...ob.objects);windows.push(...ob.objects.filter(o=>o.kind==='window' && o.name?.status==='known' && o.name?.value===title));}
 if(windows.length!==1)throw Error('fixture window not unique: '+JSON.stringify({found:windows.length,scanned:scanned.length,kinds:scanned.reduce((a,o)=>(a[o.kind]=(a[o.kind]||0)+1,a),{}),nameKeys:Object.keys(scanned[0]?.name??{}),coverage:ob.coverage}));
 state.win=windows[0];print(JSON.stringify({window_found:true,complete:ob.coverage?.complete,truncated:ob.coverage?.truncated}));`
+	if os.Getenv("DTW_POC_GRANT_FIRST") == "1" {
+		find = `const title = ` + string(mustJSON(title)) + `;
+const grants=await dtw.grants();const own=(grants.grants??[]).filter(g=>g.window_title===title&&g.state==='active'&&!!g.application);
+if(own.length!==1)throw Error('exact owned grant not unique');
+let ob;for(let i=0;i<2;i++){ob=await dtw.observe({scope:{refs:[own[0].application]},projection:'summary',fields:['name','role','app'],match:{within:own[0].application,name_equals:title},budget:{max_results:16,max_visited_nodes:128,max_depth:3,read_deadline_ms:3000}});if(ob.coverage?.complete===true&&!ob.coverage?.dirty&&!ob.coverage?.truncated)break;}
+const windows=ob.objects.filter(o=>o.kind==='window'&&o.name?.status==='known'&&o.name.value===title);
+if(windows.length!==1||ob.coverage?.complete!==true||ob.coverage?.dirty||ob.coverage?.truncated)throw Error('owned window coverage unproven');
+state.win=windows[0];print(JSON.stringify({window_found:true,grant_first:true,complete:ob.coverage.complete,dirty:ob.coverage.dirty}));`
+	}
 	call("fixture-find", find)
 	if os.Getenv("DTW_POC_APP_IDENTITY") == "1" {
 		call("fixture-app", `const ob=await dtw.observe({scope:{refs:[state.win.app]},projection:'detail',fields:['name','role','app'],budget:{max_results:4}});print(JSON.stringify(ob.objects.map(o=>({ref:o.ref,kind:o.kind,name:o.name,app:o.app}))));`)

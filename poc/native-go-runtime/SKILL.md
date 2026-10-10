@@ -24,17 +24,39 @@ batch narrow work, keep full observations in `state`, and `print` only the facts
 needed for the next decision. For example:
 
 ```javascript
-const ob = await dtw.observe({
-  scope: {desktop: true}, projection: 'summary', fields: ['name', 'role'],
-  budget: {max_results: 32}
+const title = 'exact owned window title';
+let ob = await dtw.observe({
+  scope: {desktop: true}, projection: 'summary', fields: ['name', 'role', 'app'],
+  budget: {max_results: 64, max_visited_nodes: 512, max_depth: 12}
 });
-state.windows = ob.objects.filter(o => o.kind === 'window');
-print(JSON.stringify({count: state.windows.length,
-  complete: ob.coverage?.complete, more: !!ob.coverage?.continuation}));
+const matches = [];
+for (let page = 0; page < 8; page++) {
+  matches.push(...ob.objects.filter(o => o.kind === 'window' &&
+    o.name?.status === 'known' && o.name.value === title));
+  if (matches.length > 1 || !ob.coverage?.continuation) break;
+  ob = await dtw.observe({
+    scope: {desktop: true}, projection: 'summary', fields: ['name', 'role', 'app'],
+    budget: {max_results: 64, max_visited_nodes: 512, max_depth: 12},
+    continuation: ob.coverage.continuation
+  });
+}
+if (matches.length !== 1 || ob.coverage?.complete !== true)
+  throw Error('window is not uniquely proven');
+state.window = matches[0];
+print(JSON.stringify({window_found: true, coverage_complete: ob.coverage?.complete}));
 ```
 
-`complete:false` and zero matches mean unknown, not absent. Follow a bounded
-continuation or narrow the scope. Preserve current Refs and read a control's
+The `name` field is a fact object; compare `name.status` and `name.value`, not
+`name` directly to a string. `complete:false` and zero matches mean unknown,
+not absent. Follow a bounded continuation or narrow the scope. Do not print
+other windows or the full observation. For a previously approved exact window,
+first inspect `await dtw.grants()`. If exactly one active grant has that
+`window_title` and an `application` Ref, observe with
+`scope:{refs:[grant.application]}` and find the exact window there. An absent,
+ambiguous, or pending grant does not authorize an action. If a read-only
+observation is dirty or partial, at most one fresh bounded read may resolve it;
+act only on clean, complete coverage and never replay an uncertain write.
+Preserve current Refs and read a control's
 capabilities before an action. For `set_checked`, `set_selected`, and
 `set_expanded`, give an explicit desired boolean. The native receipt states the
 selected semantic or foreground channel, delivery, verification, and

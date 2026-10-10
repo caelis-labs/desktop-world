@@ -62,11 +62,14 @@ type supervisor struct {
 	nativeMu     sync.Mutex
 	assetsDir    string
 	remoteNative func(context.Context, string, string, json.RawMessage) (host.Reply, error)
-	onDone       func(*record)
-	child        *scriptChild
-	childDead    bool
-	refApps      map[string]string
-	refParents   map[string]string
+	// POC-only injection point for end-to-end receipt fault tests. Production
+	// server construction leaves this nil and always uses the real native host.
+	testNative func(context.Context, string, string, json.RawMessage) (host.Reply, error)
+	onDone     func(*record)
+	child      *scriptChild
+	childDead  bool
+	refApps    map[string]string
+	refParents map[string]string
 }
 
 func newSupervisor(native *host.Client, assetsDir string) *supervisor {
@@ -566,6 +569,10 @@ func (s *supervisor) call(ctx context.Context, in input) map[string]any {
 
 func newServer(native *host.Client, assetsDir string) *mcp.Server {
 	s := newSupervisor(native, assetsDir)
+	return newServerWithSupervisor(s)
+}
+
+func newServerWithSupervisor(s *supervisor) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "dtw-poc", Version: "0.0.0-poc"}, nil)
 	mcp.AddTool(server, &mcp.Tool{Name: "exec", Description: "POC: run approved JavaScript; query and cancel by original execution ID"}, func(ctx context.Context, _ *mcp.CallToolRequest, in input) (*mcp.CallToolResult, map[string]any, error) {
 		out := s.call(ctx, in)

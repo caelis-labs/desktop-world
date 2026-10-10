@@ -5,24 +5,38 @@ func option(_ key: String, _ fallback: String) -> String {
   guard let i = args.firstIndex(of: key), i + 1 < args.count else { return fallback }
   return args[i + 1]
 }
-let title = option("--title", "DTW Focus POC")
-let logPath = option("--log", "/tmp/dtw-focus-poc.jsonl")
-let isHuman = option("--human", "0") == "1"
+let bundleIsHuman = Bundle.main.executableURL?.lastPathComponent == "DTWFocusHuman"
+let isHuman = option("--human", bundleIsHuman ? "1" : "0") == "1"
+let title = option("--title", isHuman ? "DTW Focus POC Human" : "DTW Focus POC Target")
+let logPath = option("--log", "/private/tmp/dtw-focus-manual-\(ProcessInfo.processInfo.processIdentifier).jsonl")
 let selfTest = option("--self-test", "0") == "1"
-let fixtureVersion = "focus-event-chain-20261010-a"
+let selfTestKey = option("--self-test-key", "0") == "1"
+let isAccessory = option("--accessory", "0") == "1"
+let fixtureVersion = "focus-event-chain-20261010-e"
 
 final class FixtureWindow: NSWindow {
-  var eventSink: ((NSEvent) -> Void)?
+  var eventSink: (([String: Any]) -> Void)?
   override func sendEvent(_ event: NSEvent) {
+    var metadata: [String: Any]? = nil
     if [.keyDown, .keyUp, .leftMouseDown, .leftMouseUp].contains(event.type) {
-      eventSink?(event)
+      metadata = ["type": event.type.rawValue, "event_time": event.timestamp]
+      if [.keyDown, .keyUp].contains(event.type) {
+        metadata?["key_code"] = Int(event.keyCode)
+      } else {
+        metadata?["event_number"] = event.eventNumber
+        metadata?["x"] = event.locationInWindow.x
+        metadata?["y"] = event.locationInWindow.y
+      }
     }
     super.sendEvent(event)
+    if let metadata {
+      DispatchQueue.main.async { [weak self] in self?.eventSink?(metadata) }
+    }
   }
 }
 
 final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
-  var window: FixtureWindow!
+  var window: NSWindow!
   var field: NSTextField!
   var sequence = 0
   var timer: Timer?
@@ -68,7 +82,11 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let separatedHorizontally = visible.width >= 1000
     let x = isHuman && separatedHorizontally ? visible.maxX - 480 : visible.minX + 20
     let y = isHuman && !separatedHorizontally ? visible.maxY - 260 : visible.minY + 70
-    window = FixtureWindow(contentRect: NSRect(x: x, y: y, width: 460, height: 220), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+    let rect = NSRect(x: x, y: y, width: 460, height: 220)
+    // Keep the Human control completely standard; the instrumented subclass
+    // remains available on the separate DTW Target fixture.
+    if isHuman { window = NSWindow(contentRect: rect, styleMask: [.titled, .closable], backing: .buffered, defer: false) }
+    else { window = FixtureWindow(contentRect: rect, styleMask: [.titled, .closable], backing: .buffered, defer: false) }
     window.title = title
     window.isReleasedWhenClosed = false
     let instruction = NSTextField(labelWithString: isHuman ? "Click below and type non-sensitive test text" : "DTW-owned target window")
@@ -84,14 +102,15 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     for (name, label) in [(NSWindow.didBecomeKeyNotification, "became_key"), (NSWindow.didResignKeyNotification, "resigned_key"), (NSWindow.didBecomeMainNotification, "became_main"), (NSWindow.didResignMainNotification, "resigned_main")] {
       NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in self?.record(label) }
     }
-    window.eventSink = { [weak self] event in
-      let keyCode = [.keyDown, .keyUp].contains(event.type) ? Int(event.keyCode) : -1
-      self?.record("window_input", ["type": event.type.rawValue, "key_code": keyCode,
-        "event_time": event.timestamp, "event_number": event.eventNumber,
-        "x": event.locationInWindow.x, "y": event.locationInWindow.y])
+    (window as? FixtureWindow)?.eventSink = { [weak self] metadata in
+      self?.record("window_input", metadata)
     }
     localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .leftMouseDown, .leftMouseUp]) { [weak self] event in
-      self?.record("local_input", ["type": event.type.rawValue, "event_window_number": event.windowNumber, "event_number": event.eventNumber])
+      var metadata: [String: Any] = ["type": event.type.rawValue,
+        "event_window_number": event.windowNumber, "event_time": event.timestamp]
+      if [.keyDown, .keyUp].contains(event.type) { metadata["key_code"] = Int(event.keyCode) }
+      else { metadata["event_number"] = event.eventNumber }
+      self?.record("local_input", metadata)
       return event
     }
     timer = Timer.scheduledTimer(withTimeInterval: 0.025, repeats: true) { [weak self] _ in self?.record("seat_sample") }
@@ -120,7 +139,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
       "field_editable": field.isEditable, "field_selectable": field.isSelectable,
       "editor_present": field.currentEditor() != nil,
       "window_class": String(describing: type(of: window)),
-      "event_sink_present": window.eventSink != nil])
+      "event_sink_present": window is FixtureWindow])
     if selfTest {
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
         guard let self else { return }
@@ -143,6 +162,22 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         }
       }
     }
+    if selfTestKey {
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+        guard let self else { return }
+        guard let key = NSEvent.keyEvent(with: .keyDown, location: .zero,
+          modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+          windowNumber: self.window.windowNumber, context: nil,
+          characters: "1", charactersIgnoringModifiers: "1", isARepeat: false,
+          keyCode: 18) else {
+          self.record("self_key_create_failed")
+          return
+        }
+        self.record("self_key_direct_send")
+        self.window.sendEvent(key)
+        self.record("self_key_after_send")
+      }
+    }
   }
 
   func controlTextDidBeginEditing(_ notification: Notification) { record("begin_edit") }
@@ -157,6 +192,6 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
 let app = NSApplication.shared
 let delegate = Fixture()
-app.setActivationPolicy(.regular)
+app.setActivationPolicy(isAccessory ? .accessory : .regular)
 app.delegate = delegate
 app.run()
