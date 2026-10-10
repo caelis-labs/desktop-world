@@ -27,6 +27,7 @@ type input struct {
 	Operation    string `json:"operation" jsonschema:"exec, status, result or cancel"`
 	ExecutionID  string `json:"execution_id" jsonschema:"stable execution identifier"`
 	Code         string `json:"code,omitempty" jsonschema:"approved JavaScript body for exec"`
+	Detail       string `json:"detail,omitempty" jsonschema:"optional full original result detail"`
 	IncludeImage bool   `json:"include_image,omitempty" jsonschema:"include requested PNG on result query"`
 }
 
@@ -283,6 +284,10 @@ func (s *supervisor) scriptLoop() {
 		disclosure := ctx.Eval(disclosureJS)
 		if disclosure != nil {
 			disclosure.Free()
+		}
+		world := ctx.Eval(worldJS)
+		if world != nil {
+			world.Free()
 		}
 		wrapped := "(async () => {\n" + command.Code + "\n})()"
 		value := ctx.Eval(wrapped)
@@ -579,8 +584,21 @@ func newServer(native *host.Client, assetsDir string) *mcp.Server {
 
 func newServerWithSupervisor(s *supervisor) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "dtw-poc", Version: "0.0.0-poc"}, nil)
-	mcp.AddTool(server, &mcp.Tool{Name: "exec", Description: "POC: run approved JavaScript; query and cancel by original execution ID"}, func(ctx context.Context, _ *mcp.CallToolRequest, in input) (*mcp.CallToolResult, map[string]any, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "exec", Description: "POC: run approved JavaScript; query and cancel by original execution ID"}, func(ctx context.Context, _ *mcp.CallToolRequest, in input) (*mcp.CallToolResult, any, error) {
 		out := s.call(ctx, in)
+		if os.Getenv("DTW_POC_TEXT_OUTPUT") == "1" {
+			content := []mcp.Content{&mcp.TextContent{Text: modelResultText(in, out)}}
+			if in.Operation == "result" && in.IncludeImage {
+				png, err := s.imageFor(in.ExecutionID)
+				if err != nil {
+					content[0] = &mcp.TextContent{Text: in.ExecutionID + " · image unavailable: " + err.Error()}
+					return &mcp.CallToolResult{Content: content, IsError: true}, nil, nil
+				}
+				content = append(content, &mcp.ImageContent{Data: png, MIMEType: "image/png"})
+			}
+			_, isError := out["error"]
+			return &mcp.CallToolResult{Content: content, IsError: isError}, nil, nil
+		}
 		compact := os.Getenv("DTW_POC_COMPACT_OUTPUT") == "1" && in.Operation == "exec"
 		message := toolText(out)
 		if compact {

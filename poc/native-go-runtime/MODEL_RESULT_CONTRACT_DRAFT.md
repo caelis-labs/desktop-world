@@ -1,6 +1,6 @@
 # DTW desktop world, JavaScript and model result contract — review draft
 
-Status: **proposal only**, 2026-10-10. This document changes no runtime or interface. The full native POC gate remains closed. The [saved real task trace](ECONOMY_TASK_TRACE.md) demonstrates excessive escaped JSON, IDs and normal coverage flags. The earlier output-only draft was premature: a compact result is useful only when its objects and verbs are exactly those the next `exec` script accepts.
+Status: **design plus isolated POC slice**, 2026-10-10. The App/Window/Element JavaScript facade and opt-in text-only MCP result are now implemented in the isolated runtime; see [bounded verification](WORLD_OBJECT_POC.md). This is not product migration or full native acceptance. The [saved real task trace](ECONOMY_TASK_TRACE.md) demonstrates excessive escaped JSON, IDs and normal coverage flags. A compact result is useful only when its objects and verbs are exactly those the next `exec` script accepts.
 
 ## First define the world
 
@@ -158,4 +158,4 @@ The full view may be long because the Agent explicitly asked for diagnosis. It s
 
 This draft favors **the object/behavior script surface plus text-only default MCP results** and full internal records. Before selecting it, test: (1) the official MCP client and actual model adapter both deliver `content.text` without a `structuredContent` fallback; (2) an Agent can reuse an address **unchanged** in the next script and can use a same-script object for a real action/readback; (3) semantic and guarded physical plans select routes automatically, with no unsupported/unknown replay; (4) two Sessions, window replacement, incomplete reads and revoked grants never rebind an address; (5) unknown/partial/cancelled/late receipts and user takeover remain visible and queryable by the same execution ID; (6) fixed task token accounting includes the Skill, JavaScript arguments and result body, with model success and safety checked alongside cost. The previous 4,978→650 result-byte comparison does not establish Token savings for this proposal.
 
-No runtime code, product migration, Windows pass, push, PR or release follows from this draft.
+The POC implementation is opt-in for text-only output; the full native gate, product migration and Windows acceptance remain open. No push, PR or release follows from this draft.
