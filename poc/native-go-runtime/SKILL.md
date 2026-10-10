@@ -43,7 +43,12 @@ const matches = ob.objects.filter(o => o.kind === 'window' &&
 if (matches.length !== 1 || ob.coverage?.complete !== true || ob.coverage?.dirty)
   throw Error('window is not uniquely proven');
 state.window = matches[0];
-print(JSON.stringify(dtw.disclose(ob, {fields: ['kind', 'role', 'name']})));
+const shown = dtw.disclose(ob, {fields: ['kind', 'role', 'name']});
+const windowItem = shown.items.find(i => i.kind === 'window' &&
+  i.name?.value === title);
+if (!windowItem) throw Error('selected window was not disclosed');
+state.windowId = windowItem.id;
+print(JSON.stringify(shown));
 ```
 
 The `name` field is a fact object; compare `name.status` and `name.value`, not
@@ -63,9 +68,9 @@ proving an exact window is:
 
 ```javascript
 const ob = await dtw.observe({
-  scope: {refs: [state.window.ref]}, projection: 'outline',
+  scope: {ids: [state.windowId]}, projection: 'outline',
   fields: ['name', 'role', 'capabilities', 'value_preview'],
-  match: {within: state.window.ref, name_equals: 'POC text'},
+  match: {within_id: state.windowId, name_equals: 'POC text'},
   budget: {max_results: 16, max_visited_nodes: 512, max_depth: 12,
            read_deadline_ms: 3000}
 });
@@ -74,9 +79,13 @@ const fields = ob.objects.filter(o => o.name?.status === 'known' &&
 if (ob.coverage?.complete !== true || ob.coverage?.dirty || fields.length !== 1)
   throw Error('field is not uniquely proven');
 state.field = fields[0];
-print(JSON.stringify(dtw.disclose(ob, {
+const shown = dtw.disclose(ob, {
   fields: ['kind', 'role', 'name', 'capabilities']
-})));
+});
+const fieldItem = shown.items.find(i => i.name?.value === 'POC text');
+if (!fieldItem) throw Error('selected field was not disclosed');
+state.fieldId = fieldItem.id;
+print(JSON.stringify(shown));
 ```
 
 Find another named control with the same scoped `outline` pattern and its
@@ -87,10 +96,15 @@ target returns `items:[]`; asking for `capabilities` later adds just that field.
 Use `refresh:true` when the model explicitly needs an unchanged fact again.
 The model-facing `id` is a short display alias, such as `W2/R1`, scoped to a
 window. `dtw.index(windowObservation)` can register window bounds without
-printing them. `dtw.ref('W2/R1')` resolves the full native Ref inside the same
-Session for a later script; it gives no authority and stale Refs still fail
-native action checks. Alias maps clear on native epoch change and are never
-shared between Sessions. When a selected window and target expose usable
+printing them. Use `dtw.observe({scope:{ids:[id]},match:{within_id:id}})`,
+`dtw.read({target_id:id})`,
+`dtw.capture({kind:'window_content',target_id:windowId})`, and
+`dtw.act({steps:[{id:'one',op:'invoke',target:{id}}]})` to use it. An action ID
+must first have appeared in a clean, complete disclosure. The POC still
+supports `dtw.ref(id)` for old scripts; it resolves the full native Ref inside
+the same Session but gives no authority, and stale Refs still fail native
+action checks. Alias maps clear on native epoch change and are never shared
+between Sessions. When a selected window and target expose usable
 bounds, `area_hint` reports a rough relative band (`top`, `left`, `main`,
 `right`, `bottom`); it is navigation context, not a semantic role or action
 target. Windows receive distinct `W` aliases; main/popup relationships remain
@@ -102,7 +116,7 @@ absence. Use the original `ob.objects` for action decisions, keep full objects
 in `state`, and print only the disclosure or even smaller task facts. A large
 unfiltered `outline` may hit the native output cap; refine by exact window,
 name, role, and depth rather than sending a long tree or all its pages.
-Preserve current Refs and read a control's
+Preserve current native observations inside the script and read a control's
 capabilities before an action. For `set_checked`, `set_selected`, and
 `set_expanded`, give an explicit desired boolean. The native receipt states the
 selected semantic or foreground channel, delivery, verification, and

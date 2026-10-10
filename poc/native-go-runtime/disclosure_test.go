@@ -77,6 +77,22 @@ func TestDiscloseOnlyChangedFieldsPerSession(t *testing.T) {
 	if _, added := item["capabilities"]; !added {
 		t.Fatalf("capabilities absent: %+v", item)
 	}
+	partialAction := call(a, "disclosure-partial-action", `
+const id=state._dtwDisclosure.refToAlias.get('r1');
+let refused=false;
+try { await dtw.act({steps:[{id:'bad',op:'invoke',target:{id}}]}); }
+catch (e) { refused=String(e).includes('clean complete observation'); }
+print(JSON.stringify({refused}));`)
+	if partialAction["refused"] != true {
+		t.Fatalf("incomplete disclosure became actionable: %+v", partialAction)
+	}
+	cleanSame := call(a, "disclosure-clean-same", `
+const ob={epoch:'one',objects:[{ref:'r1',kind:'ui',role:'button',name:{status:'known',value:'Test'},capabilities:[{name:'invoke',support:'supported'}]}],coverage:{complete:true,dirty:false,truncated:false}};
+const shown=dtw.disclose(ob,{fields:['kind','role','name','capabilities']});
+print(JSON.stringify({items:shown.items,actionable:state._dtwDisclosure.actionableAliases.has(shown.items[0]?.id)}));`)
+	if len(cleanSame["items"].([]any)) != 1 || cleanSame["items"].([]any)[0].(map[string]any)["id"] != "U1/B1" || cleanSame["actionable"] != true {
+		t.Fatalf("clean confirmation did not re-expose partial alias: %+v", cleanSame)
+	}
 	changed := call(a, "disclosure-changed", `const ob={epoch:'one',objects:[{ref:'r1',kind:'ui',role:'button',name:{status:'known',value:'Changed'}}],coverage:{complete:true,dirty:false,truncated:false}};print(JSON.stringify(dtw.disclose(ob)));`)
 	if len(changed["items"].([]any)) != 1 || changed["items"].([]any)[0].(map[string]any)["name"].(map[string]any)["value"] != "Changed" {
 		t.Fatalf("changed fact suppressed: %+v", changed)
@@ -102,5 +118,24 @@ print(JSON.stringify({one:one.items[0],two:two.items[0],resolved:dtw.ref(one.ite
 	epoch := call(a, "disclosure-new-epoch", `const ob={epoch:'two',objects:[{ref:'w3',kind:'window',name:{status:'known',value:'New'}}],coverage:{complete:true}};const d=dtw.disclose(ob);let stale=false;try{dtw.ref('W1/R1')}catch{stale=true};print(JSON.stringify({id:d.items[0].id,stale}));`)
 	if epoch["id"] != "W3" || epoch["stale"] != true {
 		t.Fatalf("epoch reused an alias or retained stale display identity: %+v", epoch)
+	}
+	routed := call(a, "display-id-routing", `
+dtw.call=async(op,args)=>({op,args});
+const observed=await dtw.observe({scope:{ids:['W3']},projection:'detail',match:{within_id:'W3',name_equals:'New'}});
+const read=await dtw.read({target_id:'W3'});
+const capture=await dtw.capture({kind:'window_content',target_id:'W3'});
+const action=await dtw.act({steps:[{id:'one',op:'invoke',target:{id:'W3'},before:[{target:{id:'W3'}}],drag:{to:{id:'W3'}}}]});
+let stale=false,mixed=false;try{await dtw.act({steps:[{id:'bad',op:'invoke',target:{id:'W1/R1'}}]})}catch{stale=true}
+try{await dtw.act({steps:[{id:'bad',op:'invoke',target:{id:'W3',ref:'w3'}}]})}catch{mixed=true}
+print(JSON.stringify({scope:observed.args.scope,within:observed.args.match.within,
+read:read.args.target,capture:capture.args.target,target:action.args.steps[0].target,
+before:action.args.steps[0].before[0].target,drag:action.args.steps[0].drag.to,stale,mixed}));`)
+	if routed["scope"].(map[string]any)["refs"].([]any)[0] != "w3" || routed["within"] != "w3" ||
+		routed["read"] != "w3" || routed["capture"] != "w3" ||
+		routed["target"].(map[string]any)["ref"] != "w3" ||
+		routed["before"].(map[string]any)["ref"] != "w3" ||
+		routed["drag"].(map[string]any)["ref"] != "w3" ||
+		routed["stale"] != true || routed["mixed"] != true {
+		t.Fatalf("display-only routing widened or lost native identity: %+v", routed)
 	}
 }

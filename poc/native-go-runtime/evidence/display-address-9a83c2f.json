@@ -1,0 +1,37 @@
+{
+  "date": "2026-10-10",
+  "base_sha": "9a83c2f2228ab76f5d0d1a7f41b58c204076abf9",
+  "scope": "Isolated macOS POC only. One public MCP exec, per-Session QuickJS state and alias map; no product migration.",
+  "source_sha256": {
+    "disclosure.go": "829f138a9b0543e8b1a7e2613bdd09b40befa3b7fdad7be952868da9b39466ff",
+    "disclosure_test.go": "459c5ade5ef5a2ae4b530e4185e93ed3c9fed7b3799497fe21fa03a9787d8754",
+    "real_app_scroll_live_test.go": "d0eb9e6e696e11cda0e4c1a622242cb44a105febdd1a66baf7f5d69771561608"
+  },
+  "native_helper_sha256": "b504289af017fb766d4064d543d49649f2743ba5b3dd14a81bab11a81d0828ad",
+  "cua_reference_sha": "f4a7f5ef2f90a9e2663ee6f949fb3482507a4f56",
+  "contract_test": {
+    "command": "GOWORK=off GOCACHE=/private/tmp/dtw-go-cache go test -run '^TestDiscloseOnlyChangedFieldsPerSession$' -count=1 -v .",
+    "result": "PASS",
+    "checked": [
+      "two MCP Sessions have separate aliases",
+      "partial/truncated disclosure alias refuses action before native call; later clean identical disclosure re-emits its ID",
+      "same-Session changed and added fields, refresh and duplicate suppression",
+      "separate window-scoped aliases and region hints",
+      "old native epoch and mixed id/ref refuse",
+      "id resolves for observe scope/match, read, capture, action target/predicate/drag destination"
+    ]
+  },
+  "real_app_test": {
+    "command": "GOWORK=off GOCACHE=/private/tmp/dtw-go-cache DTW_POC_REAL_WINDOW_TITLE='欢迎 - DevNote - Obsidian 1.13.7' DTW_POC_WRITE_WINDOW='欢迎 - DevNote - Obsidian 1.13.7' DTW_POC_HELPER=/private/tmp/dtw-exact-poc-helper go test -run '^TestSelectedRealAppExactWindowSemanticScroll$' -count=1 -v .",
+    "result": "PASS",
+    "target_id": "W1/R1",
+    "channel": "semantic",
+    "outcome": "completed",
+    "delivery": "not_applicable",
+    "verification": "verified",
+    "restoration": "not_borrowed",
+    "effect_limit": "The selected control was already visible. This proves live alias routing and a verified semantic no-op, not actual scroll motion. No keyboard/pointer dispatch, note mutation or foreground borrow occurred."
+  },
+  "regression": "Selected control tests (QuickJS async, official MCP single-tool, wedged-script subprocess, two-Session state/cancel plus disclosure) passed with go test ./...; git diff --check passed.",
+  "stage_gate": "Full native POC remains incomplete: AX/provider breadth, exact grant status/revoke/expiry, distinct-App two-sided foreground completion, user takeover and pointer restore, complete B matrix and real Windows acceptance remain open."
+}

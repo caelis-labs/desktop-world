@@ -123,6 +123,12 @@ The user requested targeted progressive disclosure for large AX trees. The isola
 
 The earlier paid model traces above belong to the previous duplicated-channel wire shape. The current single-copy projection was verified with the official MCP client and selected real App, but was not rerun as a paid model task. Those traces establish adapter support for `structuredContent`; they do not establish a new token saving or complete current-model acceptance.
 
+## Short display-address follow-up from `9a83c2f`
+
+The isolated JavaScript POC now accepts short display IDs in `dtw.observe` scope/match, `dtw.read`, `dtw.capture`, and `dtw.act` target/predicate/drag destination. The model can use `target:{id:'W1/R1'}` without spelling a native Ref. The Session-local resolver maps the alias back to the observed Ref; native exact-window authorization and stale checks still run at each action. An action alias requires one clean, complete disclosure; partial, dirty, truncated, undisclosed, old-epoch, peer-Session and mixed `{id,ref}` inputs refuse before dispatch. The POC retains `dtw.ref` for historical script compatibility; this is model-surface simplification, not native identity deletion. [Addressing decision and Cua source comparison](ADDRESSING_POC.md) specify numbering and limits.
+
+`TestDiscloseOnlyChangedFieldsPerSession` passed in two official Go MCP Sessions, including incomplete alias refusal and observe/read/capture/act argument translation. The selected real Obsidian main window then passed `TestSelectedRealAppExactWindowSemanticScroll` through MCP → QuickJS → the exact helper: `target_id=W1/R1`, `channel=semantic`, `outcome=completed`, `verification=verified`, `restoration=not_borrowed`. The control was already visible, so this is verified routing/no-op rather than proof of scroll movement. No keyboard, pointer movement, note write, or foreground borrow was involved in this round. [Bounded evidence](evidence/display-address-9a83c2f.json) records source/helper hashes and test conditions. Product migration remains barred; B01/B02/B04/B11 and Windows stay partial or unpassed as listed below.
+
 ## Gate matrix (macOS current candidate)
 
 | Row | Current evidence | Gate |
