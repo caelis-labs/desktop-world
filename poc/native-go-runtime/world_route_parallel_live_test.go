@@ -266,6 +266,45 @@ func TestCoreObjectAutomaticRoutesAcrossTwoOwnedApps(t *testing.T) {
 		t.Fatal("cancelled Session B dispatched an input action")
 	}
 	t.Log("cancelled waiting Session B: no App callback or foreground acquisition; Session A drag completed")
+	// Both Sessions now address App A. The same-app lock must serialize
+	// conflicting background writes, while each Session keeps its own object.
+	alias := `const app=await dtw.app(` + string(mustJSON(targets[0].app)) + `);const win=await app.window(` + string(mustJSON(targets[0].title)) + `);state.sameField=await win.one({name:'POC text'});print(state.sameField);`
+	if got := call(targets[1], "route-same-setup-b", alias); got.err != nil || !strings.Contains(got.text, "POC text") {
+		t.Fatalf("Session B same-app binding failed: %+v", got)
+	}
+	sameStart := make(chan struct{})
+	sameDone := make(chan answer, 2)
+	go func() {
+		<-sameStart
+		sameDone <- call(targets[0], "route-same-a", `await state.field.setValue('same-a');`)
+	}()
+	go func() {
+		<-sameStart
+		sameDone <- call(targets[1], "route-same-b", `await state.sameField.setValue('same-b');`)
+	}()
+	close(sameStart)
+	for range 2 {
+		got := <-sameDone
+		if got.err != nil || !strings.Contains(got.text, "setValue: verified") {
+			t.Fatalf("same-app background write failed: %+v", got)
+		}
+	}
+	sameRows := routeTrace(t, trace)
+	left, right := routeSpan(sameRows, "route-same-a-native-"), routeSpan(sameRows, "route-same-b-native-")
+	if left.app == "" || right.app == "" || left.app != right.app || left.foreground || right.foreground ||
+		left.acquired == 0 || right.acquired == 0 || left.released == 0 || right.released == 0 ||
+		left.acquired < right.released && right.acquired < left.released {
+		t.Fatalf("same-app background writes overlapped or lost identity: a=%+v b=%+v", left, right)
+	}
+	winner := "same-a"
+	if right.released > left.released {
+		winner = "same-b"
+	}
+	readback := call(targets[0], "route-same-read", `const value=await state.field.read('value');if(value?.status!=='known')throw Error('value unknown');print(value.value);`)
+	if readback.err != nil || !strings.Contains(readback.text, "route-same-read · "+winner) {
+		t.Fatalf("same-app final AX value did not match last serialized write %s: %+v", winner, readback)
+	}
+	t.Logf("same-app background overlap=false a=%dms b=%dms; final AX value matches last writer %s", (left.released-left.acquired)/1e6, (right.released-right.acquired)/1e6, winner)
 }
 
 type routeTraceRow struct {

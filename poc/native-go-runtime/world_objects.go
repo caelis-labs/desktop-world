@@ -107,7 +107,10 @@ class Element {
   async read(property='value') {
     const source = book().items.get(this.id);
     if (!source || dtw.ref(this.id) !== source.ref) throw Error('target address expired');
-    if (property === 'value') return dtw.read({target_id:this.id,limit_runes:2048});
+    if (property === 'value') {
+      const result = await dtw.read({target_id:this.id,limit_runes:2048});
+      return result.text;
+    }
     if (!['name','role','states','checked','selected','expanded'].includes(property))
       throw TypeError('unsupported read property');
     const ob = await dtw.observe({scope:{ids:[this.id]},projection:'detail',
