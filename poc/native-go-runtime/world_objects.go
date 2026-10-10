@@ -192,8 +192,11 @@ dtw.at = id => {
   if (dtw.ref(id) !== source.ref) throw Error('DTW address expired');
   return source.kind === 'application' ? new App(id) : source.kind === 'window' ? new Window(id) : new Element(id);
 };
-dtw.app = async name => {
+dtw.app = async (name, options={}) => {
   if (typeof name !== 'string' || !name) throw TypeError('app needs an exact name');
+  const windowTitle = options?.window;
+  if (windowTitle !== undefined && (typeof windowTitle !== 'string' || !windowTitle))
+    throw TypeError('app window selector needs an exact title');
   let continuation;
   let candidates = [];
   let complete = false;
@@ -202,14 +205,29 @@ dtw.app = async name => {
       budget:{max_results:32,max_visited_nodes:10000,max_depth:3,read_deadline_ms:4000},
       ...(continuation ? {continuation} : {})});
     candidates.push(...ob.objects.filter(o => o.kind === 'application' && nameOf(o) === name));
-    if (candidates.length > 1) throw Error('multiple observed App instances named ' + name);
-    if (candidates.length === 1) break;
+    if (!windowTitle && candidates.length > 1) throw Error('multiple observed App instances named ' + name);
+    if (!windowTitle && candidates.length === 1) break;
     if (clean(ob)) { complete = true; break; }
     continuation = ob.coverage?.continuation;
     if (!continuation) break;
   }
   if (candidates.length === 0) throw Error(complete ? 'App not found: ' + name :
     'App unresolved: desktop discovery incomplete; no matching candidate');
+  if (windowTitle) {
+    if (!complete) throw Error('App window selector unresolved: desktop discovery incomplete');
+    const selected = [];
+    for (const candidate of candidates) {
+      const ob = await dtw.observe({scope:{refs:[candidate.ref]},projection:'summary',
+        fields:['name','role','app'],budget:{max_results:64,max_visited_nodes:512,
+          max_depth:3,read_deadline_ms:4000}});
+      requireClean(ob, 'App window selector');
+      if (ob.objects.some(o => o.kind === 'window' && o.app === candidate.ref &&
+          nameOf(o) === windowTitle)) selected.push(candidate);
+    }
+    if (selected.length !== 1) throw Error('App window selector match count ' +
+      selected.length + '; select one exact window');
+    candidates = selected;
+  }
   // A partial desktop page can prove an observed native candidate exists.
   // Re-read that exact Ref before exposing an App handle. It does not claim
   // global name uniqueness, and later window/action identity remains native.

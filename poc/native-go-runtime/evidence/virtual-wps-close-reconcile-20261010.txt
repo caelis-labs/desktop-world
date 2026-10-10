@@ -1,0 +1,7 @@
+=== RUN   TestSelectedWPSTemporaryDocumentClose
+    world_wps_close_live_test.go:61: wps-close-setup: wps-close-setup · exact temporary document window already absent
+        observation incomplete (truncated, more)
+    world_wps_close_live_test.go:62: fresh App observation confirms the temporary document was already closed; no input sent
+--- PASS: TestSelectedWPSTemporaryDocumentClose (0.73s)
+PASS
+ok  	github.com/caelis-labs/desktop-world/poc/native-go-runtime	2.346s

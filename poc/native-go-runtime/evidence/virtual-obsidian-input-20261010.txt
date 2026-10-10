@@ -1,0 +1,16 @@
+=== RUN   TestSelectedObsidianVirtualClickCreatesOneNote
+    world_real_input_live_test.go:61: real-virtual-setup: real-virtual-setup · W1/R1 新建笔记 · container · invoke, scrollIntoView
+        observation incomplete (truncated, more)
+    world_real_input_live_test.go:65: real-virtual-new-note-click: real-virtual-new-note-click · W1/R1.click: dispatched; effect unverified via foreground
+        foreground restoration: restored
+    world_real_input_live_test.go:124: independent effect: exact new note exists, size=0, mtime=2026-10-10T21:10:52.94240774+08:00
+    world_real_input_live_test.go:125: real-virtual-post-window: real-virtual-post-window · W1 未命名 - DevNote - Obsidian 1.14.4 · window · focus
+        observation incomplete (truncated, more)
+    world_real_input_live_test.go:146: real-virtual-type-text: real-virtual-type-text · observation incomplete (truncated, more)
+        W1.typeText: dispatched; effect unverified via foreground
+        foreground restoration: restored
+    world_real_input_live_test.go:163: independent keyboard effect: exact Unicode marker became the test note title; editor focus remains unproved
+    world_real_input_live_test.go:121: removed only the exact test note created by this click
+--- PASS: TestSelectedObsidianVirtualClickCreatesOneNote (1.48s)
+PASS
+ok  	github.com/caelis-labs/desktop-world/poc/native-go-runtime	2.755s

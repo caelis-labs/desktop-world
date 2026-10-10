@@ -1,0 +1,9 @@
+=== RUN   TestSelectedWPSTemporaryDocumentInput
+    world_wps_input_live_test.go:59: wps-input-setup: wps-input-setup · W1 dtw-wps-cua-poc-20261010.rtf · window · focus
+        observation incomplete (truncated, more)
+    world_wps_input_live_test.go:62: wps-input-sequence: wps-input-sequence · W1.click#1, W1.typeText#2, W1.press#3: dispatched; effect unverified via foreground
+        foreground restoration: restored
+    world_wps_input_live_test.go:73: independent WPS file readback contains exact marker; before=73 after=14333 bytes
+--- PASS: TestSelectedWPSTemporaryDocumentInput (1.24s)
+PASS
+ok  	github.com/caelis-labs/desktop-world/poc/native-go-runtime	2.501s
