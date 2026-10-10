@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -819,6 +821,73 @@ func TestOwnedGrantRevocationThroughGoMCP(t *testing.T) {
 		t.Fatalf("peer write not observed: %+v", peerRead)
 	}
 	t.Log("Session A grant revoked and its write denied; Session B retained its independent grant and completed one real background write")
+}
+
+func TestOwnedGrantExpiresAfterAppExitThroughGoMCP(t *testing.T) {
+	if os.Getenv("DTW_POC_CHILD") == "1" {
+		return
+	}
+	title, logPath, pidText := os.Getenv("DTW_POC_EXPIRY_TITLE"), os.Getenv("DTW_POC_EXPIRY_EVENT_LOG"), os.Getenv("DTW_POC_EXPIRY_PID")
+	if title == "" || logPath == "" || pidText == "" || os.Getenv("DTW_POC_HELPER") == "" {
+		t.Skip("set exact owned fixture title, log, PID and native helper")
+	}
+	pid, err := strconv.Atoi(pidText)
+	if err != nil || pid <= 1 {
+		t.Fatal("invalid owned fixture PID")
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ready struct {
+		Event string `json:"event"`
+		Title string `json:"title"`
+		PID   int    `json:"pid"`
+	}
+	if json.Unmarshal([]byte(strings.SplitN(string(logData), "\n", 2)[0]), &ready) != nil || ready.Event != "ready" || ready.Title != title || ready.PID != pid {
+		t.Fatal("PID/title do not match the fresh owned fixture log")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	child := exec.Command(os.Args[0], "-test.run=^TestStdioChild$")
+	child.Env = append(os.Environ(), "DTW_POC_CHILD=1", "DTW_POC_WRITE_WINDOW="+title, "PATH=/usr/bin:/bin")
+	client := mcp.NewClient(&mcp.Implementation{Name: "poc-grant-expiry", Version: "1"}, nil)
+	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: child}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	call := func(id, code string) map[string]any {
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "exec", Arguments: map[string]any{"operation": "exec", "execution_id": id, "code": code}})
+		if err != nil || result.IsError {
+			t.Fatalf("%s: %v %+v", id, err, result)
+		}
+		return result.StructuredContent.(map[string]any)
+	}
+	setup := `const title=` + string(mustJSON(title)) + `;let ob=await dtw.observe({scope:{desktop:true},projection:'summary',fields:['name','role','app'],budget:{max_results:64,max_visited_nodes:512,max_depth:12,read_deadline_ms:3000}});let wins=ob.objects.filter(o=>o.kind==='window'&&o.name?.value===title);for(let i=0;i<8&&wins.length===0&&ob.coverage?.continuation;i++){ob=await dtw.observe({scope:{desktop:true},projection:'summary',fields:['name','role','app'],budget:{max_results:64,max_visited_nodes:512,max_depth:12,read_deadline_ms:3000},continuation:ob.coverage.continuation});wins.push(...ob.objects.filter(o=>o.kind==='window'&&o.name?.value===title));}if(wins.length!==1)throw Error('window not unique');state.win=wins[0];let items=await dtw.observe({scope:{refs:[state.win.ref]},projection:'outline',fields:['name','role'],match:{within:state.win.ref,name_equals:'POC text'},budget:{max_results:16,max_visited_nodes:512,max_depth:12,read_deadline_ms:3000}});let fields=items.objects.filter(o=>o.name?.value==='POC text');if(fields.length!==1)throw Error('field not unique');state.field=fields[0];const grants=await dtw.grants();const grant=grants.grants?.find(g=>g.window_title===title&&g.state==='active');if(!grant)throw Error('active grant missing');state.grantID=grant.id;print(grant.id);`
+	active := call("expiry-setup", setup)
+	t.Logf("active owned grant: %+v", active["print"])
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		t.Fatalf("terminate only owned fixture PID %d: %v", pid, err)
+	}
+	for i := 0; i < 100; i++ {
+		if err := syscall.Kill(pid, 0); err == syscall.ESRCH {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if syscall.Kill(pid, 0) != syscall.ESRCH {
+		t.Fatal("owned fixture did not exit after SIGTERM")
+	}
+	expired := call("expiry-refresh", `let stateNow='';for(let i=0;i<10;i++){try{await dtw.observe({scope:{desktop:true},projection:'summary',fields:['name','role'],budget:{max_results:1,max_visited_nodes:32,read_deadline_ms:1000}})}catch(e){}const grants=await dtw.grants();stateNow=grants.grants?.find(g=>g.id===state.grantID)?.state??'missing';if(stateNow==='expired')break;await dtw.sleep(100)}print(stateNow);`)
+	if got := expired["print"].([]any)[0]; got != "expired" {
+		t.Fatalf("terminated App grant not expired: %+v", expired)
+	}
+	blocked := call("expiry-stale-write", `try{const r=await dtw.act({steps:[{id:'set',op:'set_value',target:{ref:state.field.ref},set_value:{text:'STALE-WRITE'}}]});print(JSON.stringify({outcome:r.outcome,delivery:r.steps?.[0]?.delivery}));}catch(e){print(JSON.stringify({error:e.code??e.message}));}`)
+	if strings.Contains(fmt.Sprint(blocked["print"]), `"outcome":"completed"`) {
+		t.Fatalf("stale write completed after App exit: %+v", blocked)
+	}
+	t.Logf("grant expired after owned App exited; old Ref refused: %+v", blocked["print"])
 }
 
 func TestTwoStdioSessionsKeepJSStateAndCancellationSeparate(t *testing.T) {
