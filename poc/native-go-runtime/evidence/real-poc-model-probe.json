@@ -1,0 +1,48 @@
+{
+  "poc_binary_sha256": "b5a50d9706a62e39994bb8fa1284255a339700aa732667c154e5450e405750f0",
+  "trace_sha256": "d63fed481ea4eb4ba166c23d3dab6b535e254ec2fd6d99a72719340d3feacc5d",
+  "model_client": "codex-cli 0.160.0, exec --ignore-user-config --approve-for-me --json --ephemeral",
+  "native_helper_env": "DTW_POC_HELPER empty; no desktop native helper was started",
+  "prompt": "Call the dtw_poc exec tool exactly once with operation exec, execution_id model-probe-1, and JavaScript code print(\"probe=42\"). Then answer with the printed value in one short sentence. Use no other tool.",
+  "model_visible_tool_event": {
+    "id": "item_0",
+    "type": "mcp_tool_call",
+    "server": "dtw_poc",
+    "tool": "exec",
+    "arguments": {
+      "operation": "exec",
+      "execution_id": "model-probe-1",
+      "code": "print(\"probe=42\")"
+    },
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "probe=42\nexecution_id: model-probe-1"
+        }
+      ],
+      "structured_content": {
+        "execution_id": "model-probe-1",
+        "print": [
+          "probe=42"
+        ],
+        "state": "completed"
+      }
+    },
+    "error": null,
+    "status": "completed"
+  },
+  "model_answer": "The printed value is probe=42.",
+  "whole_turn_usage": {
+    "input_tokens": 39466,
+    "cached_input_tokens": 26624,
+    "cache_write_input_tokens": 0,
+    "output_tokens": 98,
+    "reasoning_output_tokens": 0
+  },
+  "limits": [
+    "Model Skill file was not installed or automatically selected in this run.",
+    "Whole-turn token usage includes harness, tool schema and response; no savings claim follows.",
+    "This no-native synthetic JS call does not validate desktop behavior or full candidate B matrix."
+  ]
+}
