@@ -280,6 +280,10 @@ func (s *supervisor) scriptLoop() {
 		if wrapper != nil {
 			wrapper.Free()
 		}
+		disclosure := ctx.Eval(disclosureJS)
+		if disclosure != nil {
+			disclosure.Free()
+		}
 		wrapped := "(async () => {\n" + command.Code + "\n})()"
 		value := ctx.Eval(wrapped)
 		var failure string
@@ -438,9 +442,8 @@ func nativeFacts(op, id string, result json.RawMessage) map[string]any {
 
 func toolText(out map[string]any) string {
 	var lines []string
-	if printed, ok := out["print"].([]string); ok {
-		lines = append(lines, printed...)
-	}
+	// Printed facts have one canonical model-facing home: structuredContent.
+	// Repeating the same AX node in text caused the adapter to receive it twice.
 	if observations, ok := out["observations"].([]map[string]any); ok {
 		for _, ob := range observations {
 			if ob["complete"] != true || ob["dirty"] == true {

@@ -33,10 +33,12 @@ func main() {
 		fail(err)
 	}
 	defer client.Close()
-	var accessibility string
+	var accessibility, screenCapture string
 	for _, permission := range client.Hello.Environment.Permissions {
 		if permission.Name == "accessibility" {
 			accessibility = string(permission.State)
+		} else if permission.Name == "screen_capture" {
+			screenCapture = string(permission.State)
 		}
 	}
 	row := map[string]any{
@@ -46,6 +48,7 @@ func main() {
 		"hello_managed":  client.Hello.Managed,
 		"helper_epoch":   client.Hello.Environment.Epoch,
 		"accessibility":  accessibility,
+		"screen_capture": screenCapture,
 	}
 	encoded, err := json.Marshal(row)
 	if err != nil {

@@ -307,7 +307,10 @@ func TestNativeObserveThroughGoMCP(t *testing.T) {
 	fullStructured, _ := json.Marshal(full.StructuredContent)
 	fullEnvelope, _ := json.Marshal(full)
 	printed := structured["print"].([]any)[0].(string)
-	t.Logf("fixed native observe payload: default text=%d structured=%d envelope=%d bytes; result structured=%d envelope=%d bytes; printed fact occurs in both channels=%v", len(defaultText), len(defaultStructured), len(defaultEnvelope), len(fullStructured), len(fullEnvelope), strings.Contains(defaultText, printed) && strings.Contains(string(defaultStructured), printed))
+	if strings.Contains(defaultText, printed) || !strings.Contains(string(defaultStructured), printed) {
+		t.Fatal("printed fact must appear once in structuredContent, not in both model-facing channels")
+	}
+	t.Logf("fixed native observe payload: default text=%d structured=%d envelope=%d bytes; result structured=%d envelope=%d bytes; printed fact occurs only in structuredContent", len(defaultText), len(defaultStructured), len(defaultEnvelope), len(fullStructured), len(fullEnvelope))
 	if res.IsError {
 		t.Fatal("native observe failed")
 	}

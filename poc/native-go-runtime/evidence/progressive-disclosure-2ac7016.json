@@ -1,0 +1,30 @@
+{
+  "date": "2026-10-10",
+  "base_sha": "2ac70162d3e0e9067e0daa0be4e15a8a45204e68",
+  "scope": "Isolated POC only. One public MCP exec with dtw JS helper. User-selected disposable Obsidian main window, read-only AX observations, no foreground activation, pointer or keyboard dispatch.",
+  "native_helper_sha256": "b504289af017fb766d4064d543d49649f2743ba5b3dd14a81bab11a81d0828ad",
+  "poc_source_sha256": {
+    "disclosure.go": "b02bdef9eb6590397ab893a5a36850072353f07b84e82dd4afd611d9cad6bdb4",
+    "main.go": "073867c6ec983130137afea829e4444d08bd97d1f9e6c7c1455a83bc327eb7ec",
+    "real_app_disclosure_live_test.go": "1b6ed3f351667495578b93d88dc21269f7b0ad13cc9cea2ab81bb1bc06f7dd73"
+  },
+  "problem": {
+    "unfiltered_outline": "Two Obsidian windows each reached the native 24 KiB cumulative ax_output_limit after two pages: 80 and 79 unique Refs, truncated true, no continuation, complete false. No zero-match conclusion was drawn.",
+    "targeted_locator": "An exact 新建笔记 name lookup within the one selected main-window Ref returned exactly one control with complete clean coverage."
+  },
+  "implementation": {
+    "api": "dtw.index(ob), dtw.disclose(ob,{fields,max_items,refresh}) and dtw.ref(display_id) in per-Session QuickJS state, no second MCP tool",
+    "native_receipts": "Unchanged and retained by execution ID; dtw.disclose only projects model-facing print data.",
+    "behavior": "Ref and field signature cache bounded to 512 Refs per Session; strips volatile fact sampled_at from comparison and displayed facts; window-scoped short display IDs (e.g. W2/R1) resolve to full internal Ref; first disclosure gives selected fields, repeat returns zero items, richer request emits only undisclosed capabilities. Explicit refresh re-emits selected facts. Native epoch change clears aliases without reusing window numbers in that Session.",
+    "region": "Two real Obsidian AXWindow bounds were indexed. The exact New Note control had bounds but no object.window property; its clean single-window query scope safely supplied the owning window for a geometry-only area_hint=top. The heuristic does not claim semantic sidebar/main/popup identity.",
+    "limits": "Requires a targeted native observe query. A broad native scan still stops at its native output cap. Arbitrary script print can still duplicate text across calls. MCP printed facts are in structuredContent once; text carries execution/status/error, not the same AX node. Byte sizes are not token or cost savings."
+  },
+  "verification": {
+    "synthetic_contract_test": "TestDiscloseOnlyChangedFieldsPerSession passed: partial coverage retained, same-Session repeat suppressed, added and changed fields emitted, explicit refresh works, peer Session independent, two windows get W1/R1 and W2/R1, geometry bands left/main, stale epoch alias and foreign Session alias refused.",
+    "real_app_test": "TestSelectedRealAppProgressiveDisclosure passed in one official Go MCP Session across three exec calls: complete clean exact lookup, model-facing item counts 1/0/1; first item W2/R1 with area_hint=top and internal dtw.ref roundtrip; third item only adds capabilities, no repeated name; printed node absent from MCP text.",
+    "real_app_text_bytes_first_repeat_richer": [52, 53, 59],
+    "real_app_structured_bytes_first_repeat_richer": [854, 421, 826],
+    "measurement_note": "Same fixed three-call real-App content comparison. Short text contains only status and execution IDs; structuredContent holds printed facts. Model billing tokens were not remeasured and no token saving percentage is inferred."
+  },
+  "gate": "Progressive model-facing disclosure on real Obsidian passed as an isolated POC slice. Full B02 remains partial due to native AX cap/dirty/stale and Windows continuation; product phase gate remains closed."
+}

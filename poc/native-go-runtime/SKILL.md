@@ -14,6 +14,8 @@ or `cancel`; every call carries the original `execution_id`. `exec` also takes
 JavaScript `code`. Query or cancel the same ID while a script is running. A
 finished `result` can expose the original native receipt and, with
 `include_image:true`, a requested PNG as MCP `ImageContent`.
+Printed facts live in `structuredContent.print`; text carries the short
+execution/status/error summary and does not copy printed AX nodes.
 
 JavaScript has persistent `state`, `print`, and `dtw`. `dtw` supplies async
 `observe`, `read`, `sync`, `act`, `capture`, `get`, and `cancel`; `dtw.sleep` is a
@@ -21,39 +23,36 @@ bounded scheduling primitive. `dtw.grants()` reads this Session's grants and
 `dtw.revokeGrant({grant_id})` can revoke one of them; scripts cannot grant
 themselves authority. Use `await`, loops, filters, and exceptions to
 batch narrow work, keep full observations in `state`, and `print` only the facts
-needed for the next decision. For example:
+needed for the next decision. Start with an existing exact grant when one is
+available, then search inside that App for one exact window:
 
 ```javascript
-const title = 'exact owned window title';
-let ob = await dtw.observe({
-  scope: {desktop: true}, projection: 'summary', fields: ['name', 'role', 'app'],
-  budget: {max_results: 64, max_visited_nodes: 512, max_depth: 12}
+const title = 'exact approved window title';
+const grants = await dtw.grants();
+const active = grants.grants.filter(g => g.window_title === title &&
+  g.state === 'active' && g.application);
+if (active.length !== 1) throw Error('exact grant unresolved');
+const app = active[0].application;
+const ob = await dtw.observe({
+  scope: {refs: [app]}, projection: 'outline', fields: ['name', 'role', 'app'],
+  match: {within: app, name_equals: title},
+  budget: {max_results: 16, max_visited_nodes: 512, max_depth: 12}
 });
-const matches = [];
-for (let page = 0; page < 8; page++) {
-  matches.push(...ob.objects.filter(o => o.kind === 'window' &&
-    o.name?.status === 'known' && o.name.value === title));
-  if (matches.length > 1 || !ob.coverage?.continuation) break;
-  ob = await dtw.observe({
-    scope: {desktop: true}, projection: 'summary', fields: ['name', 'role', 'app'],
-    budget: {max_results: 64, max_visited_nodes: 512, max_depth: 12},
-    continuation: ob.coverage.continuation
-  });
-}
-if (matches.length !== 1 || ob.coverage?.complete !== true)
+const matches = ob.objects.filter(o => o.kind === 'window' &&
+  o.name?.status === 'known' && o.name.value === title);
+if (matches.length !== 1 || ob.coverage?.complete !== true || ob.coverage?.dirty)
   throw Error('window is not uniquely proven');
 state.window = matches[0];
-print(JSON.stringify({window_found: true, coverage_complete: ob.coverage?.complete}));
+print(JSON.stringify(dtw.disclose(ob, {fields: ['kind', 'role', 'name']})));
 ```
 
 The `name` field is a fact object; compare `name.status` and `name.value`, not
 `name` directly to a string. `complete:false` and zero matches mean unknown,
-not absent. Follow a bounded continuation or narrow the scope. Do not print
-other windows or the full observation. For a previously approved exact window,
-first inspect `await dtw.grants()`. If exactly one active grant has that
-`window_title` and an `application` Ref, observe with
-`scope:{refs:[grant.application]}` and find the exact window there. An absent,
-ambiguous, or pending grant does not authorize an action. If a read-only
+not absent. If no grant is available for a read-only task, find the selected App
+in a bounded desktop summary, then narrow to its windows. Follow continuation
+only when needed to establish the declared scope; do not send unrelated tree
+pages to the model. An absent, ambiguous, or pending grant does not authorize
+an action. If a read-only
 observation is dirty or partial, at most one fresh bounded read may resolve it;
 act only on clean, complete coverage and never replay an uncertain write.
 The supported projections are `summary`, `outline`, `detail`, and
@@ -75,12 +74,34 @@ const fields = ob.objects.filter(o => o.name?.status === 'known' &&
 if (ob.coverage?.complete !== true || ob.coverage?.dirty || fields.length !== 1)
   throw Error('field is not uniquely proven');
 state.field = fields[0];
-print(JSON.stringify({field_found: true, coverage_complete: true}));
+print(JSON.stringify(dtw.disclose(ob, {
+  fields: ['kind', 'role', 'name', 'capabilities']
+})));
 ```
 
 Find another named control with the same scoped `outline` pattern and its
-own exact `name_equals` predicate. Keep full objects in `state`; print only
-the facts needed for the task.
+own exact `name_equals` predicate. `dtw.disclose(ob, {fields, max_items})` is
+the POC's progressive presentation helper: it keeps a per-Session, bounded
+Ref/field cache and returns only new or changed fields. Repeating an unchanged
+target returns `items:[]`; asking for `capabilities` later adds just that field.
+Use `refresh:true` when the model explicitly needs an unchanged fact again.
+The model-facing `id` is a short display alias, such as `W2/R1`, scoped to a
+window. `dtw.index(windowObservation)` can register window bounds without
+printing them. `dtw.ref('W2/R1')` resolves the full native Ref inside the same
+Session for a later script; it gives no authority and stale Refs still fail
+native action checks. Alias maps clear on native epoch change and are never
+shared between Sessions. When a selected window and target expose usable
+bounds, `area_hint` reports a rough relative band (`top`, `left`, `main`,
+`right`, `bottom`); it is navigation context, not a semantic role or action
+target. Windows receive distinct `W` aliases; main/popup relationships remain
+unknown unless the native provider supplies trustworthy structure. Full native
+Refs and sampling times stay in the internal observation and original receipt.
+Its `coverage` is the original native coverage; `omitted` is a separate
+presentation limit. Neither `items:[]` nor an incomplete native scan proves
+absence. Use the original `ob.objects` for action decisions, keep full objects
+in `state`, and print only the disclosure or even smaller task facts. A large
+unfiltered `outline` may hit the native output cap; refine by exact window,
+name, role, and depth rather than sending a long tree or all its pages.
 Preserve current Refs and read a control's
 capabilities before an action. For `set_checked`, `set_selected`, and
 `set_expanded`, give an explicit desired boolean. The native receipt states the
