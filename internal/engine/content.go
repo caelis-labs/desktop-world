@@ -3,7 +3,7 @@ package engine
 import (
 	"context"
 	"crypto/sha256"
-	dw "github.com/caelis-labs/desktop-world"
+	dw "github.com/caelis-labs/desktop-world/internal/world"
 	"github.com/caelis-labs/desktop-world/internal/backend"
 	"time"
 	"unicode/utf8"

@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	dw "github.com/caelis-labs/desktop-world"
-	"github.com/caelis-labs/desktop-world/dwtest"
+	dw "github.com/caelis-labs/desktop-world/internal/world"
+	"github.com/caelis-labs/desktop-world/internal/testutil"
 )
 
 // A persistent task must not stop observing when rapid snapshots fill the

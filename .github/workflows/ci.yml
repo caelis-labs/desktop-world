@@ -4,10 +4,7 @@ permissions:
   contents: read
 jobs:
   contracts:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-15, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -16,12 +13,6 @@ jobs:
           cache: false
       - run: go test -race ./...
       - run: go vet ./...
-      - run: go run ./examples/headless
-      - run: go run ./examples/embodied
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: python verify_examples.py
   native-build:
     runs-on: macos-15
     steps:
@@ -30,8 +21,18 @@ jobs:
         with:
           go-version: '1.26.x'
           cache: false
-      - run: |
-          cd runtime/native-go
-          GOWORK=off go test ./...
+      - run: GOWORK=off go test ./cmd/dtw/...
       - run: ./scripts/build-native-plugin.sh /tmp/dtw-native-plugin-ci
+  platform-build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - run: go test ./cmd/dtw-helper ./internal/...
 # Hosted CI does not count as interactive desktop acceptance.

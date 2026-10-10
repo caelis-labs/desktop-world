@@ -13,9 +13,6 @@ try {
     Invoke-Check go @('test', '-race', './...')
     Invoke-Check go @('vet', './...')
     Invoke-Check go @('build', './...')
-    Invoke-Check go @('run', './examples/headless')
-    Invoke-Check go @('run', './examples/embodied')
-    Invoke-Check python @('verify_examples.py')
 } finally {
     $env:GOWORK = $previousGoWork
     Pop-Location

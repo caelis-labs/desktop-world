@@ -1,6 +1,0 @@
-=== RUN   TestWorldObjectScriptAndTextOnlyMCP
-    world_objects_test.go:97: model result 1 (76 UTF-8 bytes): e1 · W1/B1 Submit · button · invoke, setChecked, setSelected, setExpanded
-    world_objects_test.go:106: model result 2 (52 UTF-8 bytes): e2 · W1/B1.invoke: completed, verified via semantic
---- PASS: TestWorldObjectScriptAndTextOnlyMCP (0.05s)
-PASS
-ok  	github.com/caelis-labs/desktop-world/poc/native-go-runtime	1.161s

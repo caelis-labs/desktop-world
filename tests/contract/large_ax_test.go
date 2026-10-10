@@ -3,9 +3,9 @@ package contract_test
 import (
 	"context"
 	"fmt"
-	dw "github.com/caelis-labs/desktop-world"
-	"github.com/caelis-labs/desktop-world/dwtest"
-	"github.com/caelis-labs/desktop-world/protocol"
+	dw "github.com/caelis-labs/desktop-world/internal/world"
+	"github.com/caelis-labs/desktop-world/internal/testutil"
+	"github.com/caelis-labs/desktop-world/internal/ipc/protocol"
 	"strings"
 	"testing"
 	"time"

@@ -5,8 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	dw "github.com/caelis-labs/desktop-world"
 	"github.com/caelis-labs/desktop-world/internal/backend"
+	dw "github.com/caelis-labs/desktop-world/internal/world"
 	"reflect"
 	"strings"
 	"time"
@@ -720,7 +720,7 @@ func (w *World) inputChannel() string {
 	if d, ok := w.driver.(backend.InputTransaction); ok {
 		return d.InputChannel()
 	}
-	return "targeted_input_poc"
+	return "targeted_background"
 }
 
 func (a *actor) endInput(r *run) {

@@ -12,10 +12,13 @@ fi
 mkdir -p "$destination/bin" "$destination/libexec" "$destination/skills/desktop-world"
 destination="$(cd "$destination" && pwd)"
 export GOWORK=off CGO_ENABLED=1
-(cd runtime/native-go && go build -trimpath -ldflags "-X main.releaseVersion=$version" -o "$destination/bin/dtw" .)
-go build -trimpath -tags 'dtw_background_poc dtw_virtual_input_poc' -o "$destination/libexec/dtw-helper" ./cmd/dtw-helper
-cp packaging/plugin/plugin.json packaging/plugin/mcp.json "$destination/"
-cp LICENSE "$destination/"
+go build -trimpath -ldflags "-X main.releaseVersion=$version" -o "$destination/bin/dtw" ./cmd/dtw
+go build -trimpath -o "$destination/libexec/dtw-helper" ./cmd/dtw-helper
+cp packaging/plugin/plugin.json packaging/plugin/mcp.json packaging/plugin/.mcp.json "$destination/"
+mkdir -p "$destination/.claude-plugin"
+cp packaging/plugin/.claude-plugin/plugin.json "$destination/.claude-plugin/"
+cp LICENSE NOTICE THIRD_PARTY_NOTICES.md "$destination/"
 sed -i '' "s/\"version\": \"0.1.0\"/\"version\": \"${version#v}\"/" "$destination/plugin.json"
+sed -i '' "s/\"version\": \"0.1.0\"/\"version\": \"${version#v}\"/" "$destination/.claude-plugin/plugin.json"
 cp packaging/plugin/skills/desktop-world/SKILL.md "$destination/skills/desktop-world/"
 "$destination/bin/dtw" version

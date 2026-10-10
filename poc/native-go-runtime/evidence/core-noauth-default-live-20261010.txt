@@ -1,9 +1,0 @@
-=== RUN   TestSelectedRealAppObjectSurfaceReadAndSemanticScroll
-    world_objects_live_test.go:80: selected real model results: "world-real-find · W1/R1 新建笔记 · container · invoke, scrollIntoView\nobservation incomplete (truncated, more)"; "world-real-scroll · W1/R1.scrollIntoView: completed, verified via semantic"; "world-real-capture · capture: 1 image(s) ready"; on-demand PNG bytes=134912
---- PASS: TestSelectedRealAppObjectSurfaceReadAndSemanticScroll (1.16s)
-=== RUN   TestTwoRealObjectSessionsCanShareOneNativeCaptureOwner
-    world_objects_shared_helper_live_test.go:104: Session B shared native capture=558ms result="shared-B-capture · B\ncapture: 1 image(s) ready" error=<nil> tool_error=false
-    world_objects_shared_helper_live_test.go:104: Session A shared native capture=582ms result="shared-A-capture · A\ncapture: 1 image(s) ready" error=<nil> tool_error=false
---- PASS: TestTwoRealObjectSessionsCanShareOneNativeCaptureOwner (1.34s)
-PASS
-ok  	github.com/caelis-labs/desktop-world/poc/native-go-runtime	2.836s

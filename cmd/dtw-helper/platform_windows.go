@@ -5,8 +5,8 @@ package main
 import (
 	"context"
 	"errors"
-	dw "github.com/caelis-labs/desktop-world"
-	"github.com/caelis-labs/desktop-world/local"
+	dw "github.com/caelis-labs/desktop-world/internal/world"
+	"github.com/caelis-labs/desktop-world/internal/platform"
 )
 
 // Windows receives its own world and route implementation here. Until it is

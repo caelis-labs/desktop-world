@@ -1,5 +1,0 @@
-=== RUN   TestNativeFragmentedTextFixture
-    fragmented_text_test.go:39: pages=2 visited=47 fragments=41 paragraphs=["Fragmented native AX fixture" "Every character has its own span." "Nested 中文 🌍 café العربية." "Repeat Repeat"]
-    fragmented_text_test.go:46: model-visible compact result bytes: batched=10483 over 2 calls; per-leaf=15141 over 41 additional calls (discovery common)
---- PASS: TestNativeFragmentedTextFixture (1.47s)
-PASS

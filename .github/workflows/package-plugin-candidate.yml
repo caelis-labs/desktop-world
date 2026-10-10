@@ -37,9 +37,7 @@ jobs:
           [[ -z "$(git status --porcelain)" ]]
       - name: Native runtime and MCP tests
         shell: bash
-        run: |
-          cd runtime/native-go
-          GOWORK=off go test ./...
+        run: GOWORK=off go test ./cmd/dtw/...
       - name: macOS arm64 package
         shell: bash
         run: ./scripts/package-plugin.sh "$CANDIDATE_VERSION"

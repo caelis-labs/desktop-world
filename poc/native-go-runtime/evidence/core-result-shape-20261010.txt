@@ -1,5 +1,0 @@
-=== RUN   TestWorldTextGroupsRoutineStepsButKeepsScriptIDsAndExceptions
-    model_result_text_test.go:51: fixed three-step action text: previous=326 UTF-8 bytes, current=152 UTF-8 bytes; tokenizer and model context not measured
---- PASS: TestWorldTextGroupsRoutineStepsButKeepsScriptIDsAndExceptions (0.00s)
-PASS
-ok  	github.com/caelis-labs/desktop-world/poc/native-go-runtime	1.086s

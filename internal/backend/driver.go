@@ -4,7 +4,7 @@ package backend
 
 import (
 	"context"
-	dw "github.com/caelis-labs/desktop-world"
+	dw "github.com/caelis-labs/desktop-world/internal/world"
 )
 
 type Key string

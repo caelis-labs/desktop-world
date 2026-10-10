@@ -1,4 +1,0 @@
-=== RUN   TestNativeWindowsManagedControl
-    windows_features_test.go:110: F5 Windows private managed pipes completed task, revoked writes and preserved receipt; calls=4 bytes=7725
---- PASS: TestNativeWindowsManagedControl (0.21s)
-PASS

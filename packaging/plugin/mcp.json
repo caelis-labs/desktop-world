@@ -3,9 +3,7 @@
   "mcpServers": {
     "desktop-world": {
       "type": "stdio",
-      "command": "${PLUGIN_ROOT}/bin/dtw",
-      "args": [],
-      "cwd": "${PLUGIN_DATA}"
+      "command": "./bin/dtw"
     }
   }
 }

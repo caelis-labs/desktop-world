@@ -14,9 +14,9 @@ import (
 	"syscall"
 	"time"
 
-	dw "github.com/caelis-labs/desktop-world"
-	"github.com/caelis-labs/desktop-world/internal/helper"
-	"github.com/caelis-labs/desktop-world/local"
+	dw "github.com/caelis-labs/desktop-world/internal/world"
+	"github.com/caelis-labs/desktop-world/internal/ipc/helper"
+	"github.com/caelis-labs/desktop-world/internal/platform"
 )
 
 func main() {

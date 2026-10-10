@@ -1,44 +1,59 @@
 ---
 name: desktop-world
-description: Use DTW's native MCP exec tool to inspect and operate desktop apps with JavaScript.
+description: Use DTW to inspect and operate local desktop apps through its single MCP exec tool. Use for desktop UI tasks involving windows, controls, screenshots, mouse, or keyboard.
 ---
 
 # Desktop World
 
-Use the sole MCP tool `exec`. Give each script a short `execution_id` and
-`operation:"exec"`. The same tool accepts `status`, `result`, and `cancel` with
-that ID. Keep the ID when an outcome is unknown; inspect its original result
-and never repeat the action under a new ID.
+Call the DTW MCP server's **`exec`** tool. Its `code` is JavaScript with
+`dtw`, persistent `state`, `print`, `async`/`await`, loops, and exceptions.
+Give each call a short, unique `execution_id`; the result starts with that ID.
+`print(...)` supplies script findings; DTW also adds concise action and error
+lines. Print the facts needed for the next decision, not the entire UI tree or
+a native receipt.
 
-The script has `dtw`, `state`, and `print`. `state` persists within this MCP
-connection. `print` is the model-facing result; native observations and full
-receipts remain available with `result` and `detail:"full"`.
+Start with an exact app name, then discover its windows:
 
-```javascript
-const app = await dtw.app('Obsidian');
-const window = await app.window('exact window title');
-print(await window.find({role:'button'}));
+```json
+{"operation":"exec","execution_id":"windows-1","code":"const app = await dtw.app('Obsidian'); print(await app.windows())"}
 ```
 
-The printed address, such as `W1/B2`, is directly usable in a later call:
+The result lists addresses such as `W1`. Use the printed address directly in
+the next script. Addresses belong to this MCP connection and expire when the
+underlying app/window changes:
 
-```javascript
-await dtw.at('W1/B2').click();
+```json
+{"operation":"exec","execution_id":"buttons-1","code":"const win = dtw.at('W1'); print(await win.find({role:'button',nameContains:'New'}))"}
 ```
 
-Use exact names to select one control with `window.one({name:'...'})`. The
-available element methods are shown beside each address. They include `read`,
-`invoke`, `setValue`, `setChecked`, `setSelected`, `setExpanded`,
-`scrollIntoView`, `focus`, `move`, `click`, `dragTo`, `scroll`, `press`, and
-`typeText`. `window.capture()` saves a window image; query `result` with
-`include_image:true` to receive it as MCP image content.
+Use `win.one({name:'exact label'})` when one control should match. The
+returned element has an address such as `W1/B2`. Its printed line shows its
+name, role, and available behaviors. `activate()` invokes the semantic
+behavior when supported, otherwise makes one click. Other methods include
+`read()`, `invoke()`, `setValue(text)`, `setChecked(bool)`,
+`setSelected(bool)`, `setExpanded(bool)`, `scrollIntoView()`, `focus()`,
+`click()`, `move()`, `dragTo(target)`, `scroll({dx,dy})`,
+`press(key, modifiers)`, and `typeText(text)`. `win.capture()` takes a
+window screenshot.
 
-Use `dtw.transaction(tx => { ... })` to group predictable input into one plan.
-The executor chooses the background route when available and a brief
-foreground route otherwise. There is no mode or transport selector. A
-`dispatched` receipt says the event was sent; read back app state when the task
-requires proof of its effect. An incomplete observation cannot prove absence.
-After a window closes or an app restarts, reacquire its address by observing.
+```json
+{"operation":"exec","execution_id":"click-1","code":"await dtw.at('W1/B2').activate()"}
+```
 
-DTW refuses actions in terminal applications. OS desktop permissions still
-apply; the embedding application controls its own user authorization.
+DTW chooses background delivery first when supported and coordinates
+foreground delivery when needed. Scripts have no mode switch. A delivered
+input receipt proves dispatch, not the app's resulting state; read the relevant
+control or window again when the task needs effect confirmation. A partial
+observation cannot prove that a control is absent. Reacquire addresses after
+a window closes or an app restarts.
+
+For a screenshot, execute `await win.capture()`, then call the **same**
+`exec` tool with `{"operation":"result","execution_id":"capture-1",
+"include_image":true}`. For a long execution, use `status` or `cancel`
+with its original ID. If delivery or completion is unknown, query `result`
+with that ID (and `detail:"full"` if necessary); never replay the action
+with a new ID just to see whether it worked. `state` persists only within
+this MCP connection.
+
+DTW blocks actions in terminal applications. Operating system desktop
+permissions still apply; the embedding application owns user authorization.

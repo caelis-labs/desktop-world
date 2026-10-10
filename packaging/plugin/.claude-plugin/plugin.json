@@ -1,0 +1,6 @@
+{
+  "name": "desktop-world",
+  "version": "0.1.0",
+  "description": "Native desktop actions through one DTW MCP exec tool and a concise Agent Skill",
+  "author": {"name": "Caelis Labs"}
+}

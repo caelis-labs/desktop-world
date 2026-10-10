@@ -1,4 +1,0 @@
-=== RUN   TestNativeFixture
-    native_test.go:238: native fixture passed: darwin topology=1, 6-step plan, independent keyboard submit=1, pointer submit=1, drag/scroll dispatched
---- PASS: TestNativeFixture (1.14s)
-PASS

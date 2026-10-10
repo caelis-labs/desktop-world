@@ -1,13 +1,9 @@
 .DS_Store
-/bin/
 /artifacts/
+/.gocache/
+/.gomodcache/
+/.swift-module-cache/
+/bin/
 *.test
 *.exe
 __pycache__/
-
-node_modules/
-/clients/mcp/dist/
-/clients/rust/target/
-/clients/python/dist/
-*.egg-info/
-/clients/python/build/

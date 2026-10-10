@@ -1,4 +1,0 @@
-=== RUN   TestNativeSetSelected
-    semantic_actions_test.go:225: F6 native business=Order A,Order B; human Unicode intact; pointer/focus stable; no-op verified; background SDK calls=12 bytes=17680; original receipt=run-08f99f632eee3751048ead46
---- PASS: TestNativeSetSelected (4.53s)
-PASS

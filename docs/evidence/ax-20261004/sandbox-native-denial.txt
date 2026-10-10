@@ -1,4 +1,0 @@
-=== RUN   TestNativeObserveTimeoutFixture
-    observe_timeout_test.go:34: inventory <nil> permission_denied: permission_denied
---- FAIL: TestNativeObserveTimeoutFixture (0.02s)
-FAIL

@@ -1,5 +1,0 @@
-=== RUN   TestNativeLargeSiteDiscovery
-    large_site_test.go:80: wikipedia candidate_windows=1 selected_probe_visited=1200
-    large_site_test.go:182: wikipedia exact calls=4 visited=4800 hits=1 model_bytes=3719 elapsed=12.844914875s first_call_visited=1200 first_call_hits=0 target_sha256=5ec7520839acbb0d3e6153f0b139119b99c37101092df8d7e533a0384c2f6ef8
---- PASS: TestNativeLargeSiteDiscovery (17.03s)
-PASS

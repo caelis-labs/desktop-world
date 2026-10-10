@@ -1,6 +1,0 @@
-=== RUN   TestNativeObserveTimeoutFixture
-    observe_timeout_test.go:74: native timeout elapsed=104.639792ms visited=14 complete=false sources=[ax_timeout] model_bytes=4277
-    observe_timeout_test.go:106: node allowance visited=8; smaller output budget visited=8, next=true
-    observe_timeout_test.go:121: EndTurn independently expired old-turn Ref use and revoked the application write grant; new-turn input denied
---- PASS: TestNativeObserveTimeoutFixture (1.69s)
-PASS

@@ -1,8 +1,7 @@
 package contract_test
 
 import (
-	"context"
-	dw "github.com/caelis-labs/desktop-world"
+	dw "github.com/caelis-labs/desktop-world/internal/world"
 	"testing"
 )
 
@@ -51,34 +50,16 @@ func TestWindowCaptureFailureNeverReturnsAnAsset(t *testing.T) {
 	}
 }
 
-func TestWindowCaptureAuthorizationAndRevocation(t *testing.T) {
+func TestCaptureOSPermissionRevocation(t *testing.T) {
 	h := setup(t)
 	ref := h.refs["Desktop World Fixture"]
-	checks := 0
-	a, err := h.w.NewActor(ctx, dw.ActorConfig{ID: "capture-policy", ReadScopes: []dw.Scope{{Desktop: true}}, Operations: allOps, Authorizer: authFunc(func(_ context.Context, in dw.Intent) (dw.Decision, error) {
-		if in.Operation == "capture" {
-			checks++
-			return dw.Decision{Allow: in.CaptureKind == "window_content" && checks < 3}, nil
-		}
-		return dw.Decision{Allow: true}, nil
-	})})
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, err := a.Capture(ctx, dw.CaptureRequest{Kind: "window_content", Target: ref})
-	if code(err) != "permission_denied" || len(r.Tiles) != 0 || checks != 3 {
-		t.Fatal("authorization not rechecked after native delivery", r, err, checks)
-	}
-	if _, err = a.Capture(ctx, dw.CaptureRequest{Kind: "visible_region"}); code(err) != "permission_denied" {
-		t.Fatal(err)
-	}
 	good, err := h.a.Capture(ctx, dw.CaptureRequest{Kind: "window_content", Target: ref})
 	if err != nil {
 		t.Fatal(err)
 	}
 	h.f.SetPermission("screen_capture", "denied")
 	if _, err = h.a.ReadAsset(ctx, good.Tiles[0].Asset); code(err) != "asset_expired" {
-		t.Fatal("revoked capture asset remained readable", err)
+		t.Fatal("revoked OS capture permission left an asset readable", err)
 	}
 }
 
