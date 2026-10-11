@@ -17,9 +17,6 @@ jobs:
     name: macOS source, package, and MCP
     runs-on: macos-26
     timeout-minutes: 75
-    env:
-      DTW_BUILD_DIR: ${{ runner.temp }}/dtw-cua-build
-      DTW_CUA_SOURCE_DIR: ${{ runner.temp }}/dtw-cua-source
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -32,7 +29,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            ${{ env.DTW_BUILD_DIR }}
+            ${{ runner.temp }}/dtw-cua-build
           key: dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-ac967b9-${{ hashFiles('cmd/dtw/Cargo.lock', 'cmd/dtw/**/*.rs') }}
           restore-keys: |
             dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-ac967b9-
@@ -41,6 +38,9 @@ jobs:
       - name: Check Python harness syntax
         run: python3 -m compileall -q tests/acceptance
       - name: Build package from pinned CUA source
+        env:
+          DTW_BUILD_DIR: ${{ runner.temp }}/dtw-cua-build
+          DTW_CUA_SOURCE_DIR: ${{ runner.temp }}/dtw-cua-source
         run: scripts/build-plugin.sh "$RUNNER_TEMP/dtw-plugin"
       - name: Verify package and desktop-independent MCP
         run: |
@@ -53,9 +53,6 @@ jobs:
     name: Windows source, package, and MCP
     runs-on: windows-latest
     timeout-minutes: 75
-    env:
-      DTW_BUILD_DIR: ${{ runner.temp }}/dtw-cua-build
-      DTW_CUA_SOURCE_DIR: ${{ runner.temp }}/dtw-cua-source
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -67,7 +64,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            ${{ env.DTW_BUILD_DIR }}
+            ${{ runner.temp }}/dtw-cua-build
           key: dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-ac967b9-${{ hashFiles('cmd/dtw/Cargo.lock', 'cmd/dtw/**/*.rs') }}
           restore-keys: |
             dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-ac967b9-
@@ -75,6 +72,9 @@ jobs:
         run: python -m compileall -q tests/acceptance
       - name: Build package from pinned CUA source
         shell: pwsh
+        env:
+          DTW_BUILD_DIR: ${{ runner.temp }}/dtw-cua-build
+          DTW_CUA_SOURCE_DIR: ${{ runner.temp }}/dtw-cua-source
         run: |
           $package = Join-Path $env:RUNNER_TEMP 'dtw-plugin'
           ./scripts/build-plugin.ps1 $package
