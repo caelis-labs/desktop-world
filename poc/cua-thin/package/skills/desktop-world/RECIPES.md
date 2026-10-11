@@ -50,6 +50,33 @@ Then request `{"operation":"result","execution_id":"ORIGINAL_ID","part":"image"}
 
 For a text-heavy target, prefer `app.getState({query:"target label",max_elements:100,include_screenshot:false})` or `app.query({name:"exact label"})`. `max_elements` truncation is not absence. `since:"latest"` returns a small diff after a prior read with the same options. Upstream's typed browser/CDP tools can be faster for permitted page-aware tasks, but `run_script` cannot call them; attaching a personal Chrome profile also has a separate authorization/setup boundary. This POC's one-tool path uses native screenshot/AX input.
 
+## Region candidates from a window screenshot
+
+If a **window** binds and has an AX tree, the model can mark a rectangle in its PNG. Run this in the same Session with the rectangle's image-pixel `x,y,w,h`, and set `include_image:true` on this `exec` to inspect the **new** image alongside the candidates. If the page or window moved since the image the model marked, discard the old rectangle and mark it again on the new image. `screenshot_frame` is already mapped by CUA to the screenshot returned by this `getState`; `frame` is in screen points and must not be compared with image pixels. Keep the returned image and candidate list from this **one** observation together. For a large tree, this bounded walk may truncate, so an empty list means only that no candidate was found in the returned rows.
+
+```js
+const roi={x:IMAGE_X,y:IMAGE_Y,w:IMAGE_W,h:IMAGE_H};
+const app=await cua.getApp({pid:PID,windowId:WINDOW_ID});
+const s=await app.getState({tree_format:"elements",max_elements:250,
+  include_screenshot:true,max_image_dimension:1600});
+if(!s.screenshot_frame_valid) return {candidates:[],reason:"no verified window screenshot"};
+const overlaps=f=>f && f.w>0 && f.h>0 &&
+  f.x<roi.x+roi.w && f.x+f.w>roi.x &&
+  f.y<roi.y+roi.h && f.y+f.h>roi.y;
+const candidates=(s.elements||[])
+  .filter(e=>e.enabled!==false && e.element_token &&
+    (e.actions||[]).includes("AXPress") && overlaps(e.screenshot_frame))
+  .slice(0,20).map(e=>({label:e.label,role:e.role,token:e.element_token,
+    screenshot_center:[e.screenshot_frame.x+e.screenshot_frame.w/2,
+                       e.screenshot_frame.y+e.screenshot_frame.h/2],
+    screenshot_frame:e.screenshot_frame,basis:"AXPress"}));
+return {window_id:app.windowId,capture_id:s.capture_id,
+  image_size:[s.screenshot_width,s.screenshot_height],
+  truncated:s.truncated,candidates};
+```
+
+If exactly one candidate matches the visually confirmed control, call `app.click(candidate.token)` while that snapshot is current; CUA targets the AX element directly. If no AXPress candidate exists but a visible point is clear, measure that point in the **new** image and click it with the **same capture's** one-use `capture_id`, then reobserve. Neither an AX action nor a center point proves an occluded control was activated. For a system picker visible only in a **desktop** screenshot, CUA does not supply a matching `screenshot_frame` tree. Use the fresh desktop image/capture ID and visual center, then check the effect; the optional upstream `parse_visual_regions` needs a separately installed perception extension and is absent from this light package.
+
 ## Canvas document editor
 
 Some editors expose toolbar AX controls but draw the document text without AX text nodes. The WPS acceptance used one exact temporary window: screenshot the document, foreground-click a visually confirmed text position, move to the intended line end with an app/window hotkey, insert a line break, and use `app.zoom(rect)` to confirm the caret before typing. `app.typeText(text,undefined,{delivery_mode:"foreground"})` then typed into the focused canvas; a new screenshot showed the marker. An exact-window `app.pressKey("cmd+s",undefined,{delivery_mode:"foreground"})` saved it. Verify the app's visible saved state, and when the task requires disk proof use an independent file readback outside the desktop script. Coordinates, caret placement and keyboard behavior must come from the current document; do not reuse the fixture's points or infer success from `effect:"unverifiable"`.

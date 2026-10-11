@@ -41,7 +41,11 @@ type Element = {
   enabled?: boolean;
   selected?: boolean;
   display_only?: boolean;
+  /** Screen points; use screenshot_frame for a region drawn on this response's PNG. */
   frame?: { x: number; y: number; w?: number; h?: number };
+  /** This response's window screenshot pixels, including any image downscaling. */
+  screenshot_frame?: { x: number; y: number; w: number; h: number };
+  actions?: string[];
 };
 type WindowState = {
   snapshot_id?: string;
