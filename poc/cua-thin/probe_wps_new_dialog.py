@@ -11,7 +11,7 @@ import sys
 import time
 import uuid
 
-from accept_chrome import run_script
+from accept_chrome import run_script, save_image
 from accept_agent_wps import wps_pids
 from probe import call
 from probe_modal_focus import focus
@@ -20,8 +20,8 @@ from probe_modal_focus import focus
 def main():
     package = Path(sys.argv[1]).resolve()
     mode = sys.argv[2] if len(sys.argv) > 2 else "hotkey"
-    if mode not in ("hotkey", "button"):
-        raise SystemExit("mode must be hotkey or button")
+    if mode not in ("hotkey", "button", "pixelplus", "pixelmenu"):
+        raise SystemExit("mode must be hotkey, button, pixelplus, or pixelmenu")
     source = Path("/private/tmp/agy-cua-acceptance-20261011/test-data/wps-test.docx")
     root = Path("/private/tmp") / f"dtw-cua-wps-new-{mode}-{uuid.uuid4().hex[:8]}"
     root.mkdir(mode=0o700)
@@ -67,27 +67,39 @@ def main():
             raise RuntimeError("temporary document window not uniquely identified")
         window_id = targets[0]["window_id"]
         record["window_id"] = window_id
-        _, discover = run_script(proc, 6, session,
+        discover_id, discover = run_script(proc, 6, session,
                                  f"const a=await cua.getApp({{pid:{pid},windowId:{window_id}}});"
-                                 "const s=await a.getState({max_elements:300,include_screenshot:false});"
+                                 "const s=await a.getState({max_elements:300,include_screenshot:true});"
                                  "const lines=String(s.tree_markdown||'').split('\\n');"
                                  "return {snapshot_id:s.snapshot_id,truncated:s.truncated,"
                                  "new_controls:lines.filter(x=>/新建|创建|模板/.test(x)&&/AX(Button|MenuItem|Tab|StaticText)/.test(x))"
                                  ".slice(0,15).map(x=>x.slice(0,140))};")
         record["discover"] = discover
+        if discover.get("image_count", 0):
+            record["before_image_saved"] = save_image(proc, 10, session, discover_id,
+                                                       root / "before.png")
         record["focus_main"] = focus(proc, 20, session, pid, window_id)
         _, before_ids = run_script(proc, 30, session,
                                    "return (await cua.listWindows()).map(w=>w.window_id);")
         ids = before_ids.get("value", [])
         if before_ids.get("status") != "completed":
             raise RuntimeError("global window discovery failed")
-        action_js = ("const q=await a.query({role:'button',name:'新建'});"
-                     "if(q.length!==1)return {found:q.length};"
-                     "const action=await a.click({role:'button',name:'新建'},"
-                     "{delivery_mode:'foreground'});") if mode == "button" else (
-                     "const action=await a.pressKey('cmd+n',undefined,"
-                     "{delivery_mode:'foreground'});")
-        _, new = run_script(proc, 32, session,
+        if mode == "button":
+            action_js = ("const q=await a.query({role:'button',name:'新建'});"
+                         "if(q.length!==1)return {found:q.length};"
+                         "const action=await a.click({role:'button',name:'新建'},"
+                         "{delivery_mode:'foreground'});")
+        elif mode in ("pixelplus", "pixelmenu"):
+            bounds = targets[0]["bounds"]
+            if bounds["width"] != 1402 or bounds["height"] != 873:
+                raise RuntimeError("WPS test window geometry changed; pixel target not verified")
+            x = 587 if mode == "pixelplus" else 606
+            action_js = (f"const action=await a.click([{x},20],"
+                         "{delivery_mode:'foreground'});")
+        else:
+            action_js = ("const action=await a.pressKey('cmd+n',undefined,"
+                         "{delivery_mode:'foreground'});")
+        new_id, new = run_script(proc, 32, session,
                             f"const a=await cua.getApp({{pid:{pid},windowId:{window_id}}});"
                             + action_js +
                             f"const before=new Set({json.dumps(ids)});"
@@ -97,13 +109,16 @@ def main():
                             "title:w.title,layer:w.layer,is_on_screen:w.is_on_screen,bounds:w.bounds}));"
                             "const immediate=await cua.listWindows();await cua.sleep(700);"
                             "const later=await cua.listWindows();"
-                            "const state=await a.getState({max_elements:350,include_screenshot:false});"
+                            "const state=await a.getState({max_elements:350,include_screenshot:true});"
                             "const tree=String(state.tree_markdown||'');"
                             "return {action,immediate:shape(immediate),later:shape(later),"
                             "after_snapshot_id:state.snapshot_id,after_truncated:state.truncated,"
-                            "after_controls:tree.split('\\n').filter(x=>/新建|空白|模板/.test(x)"
+                            "after_controls:tree.split('\\n').filter(x=>/新建|空白|模板|文字|演示|表格|PDF/.test(x)"
                             "&&/AX(Button|MenuItem|Tab|StaticText)/.test(x)).slice(0,20).map(x=>x.slice(0,140))};")
         record["new"] = new
+        if new.get("image_count", 0):
+            record["after_image_saved"] = save_image(proc, 34, session, new_id,
+                                                      root / "after.png")
     finally:
         if proc is not None:
             if prior_pid is not None and prior_pid != pid:
