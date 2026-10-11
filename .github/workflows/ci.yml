@@ -1,20 +1,78 @@
 name: CI
+
 on:
-  push:
   pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dtw-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  macos-source:
-    runs-on: macos-15
+  macos-package:
+    name: macOS source, package, and MCP
+    runs-on: macos-26
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.98.0
           components: rustfmt
-      - name: Format
+      - name: Format Rust
         run: cargo +1.98.0 fmt --manifest-path cmd/dtw/Cargo.toml --check
-      - name: Compile source
-        run: cargo +1.98.0 check --manifest-path cmd/dtw/Cargo.toml --locked
-      - name: Check acceptance harness syntax
+      - name: Check Python harness syntax
         run: python3 -m compileall -q tests/acceptance
+      - name: Build package from pinned CUA source
+        run: scripts/build-plugin.sh "$RUNNER_TEMP/dtw-plugin"
+      - name: Verify package and desktop-independent MCP
+        run: |
+          (cd "$RUNNER_TEMP/dtw-plugin" && shasum -a 256 -c SHA256SUMS)
+          codesign --verify "$RUNNER_TEMP/dtw-plugin/bin/dtw"
+          codesign --verify "$RUNNER_TEMP/dtw-plugin/libexec/cua-driver"
+          python3 tests/acceptance/mcp_smoke.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
+
+  windows-package:
+    name: Windows source, package, and MCP
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+      - name: Check Python harness syntax
+        run: python -m compileall -q tests/acceptance
+      - name: Build package from pinned CUA source
+        shell: pwsh
+        run: |
+          $package = Join-Path $env:RUNNER_TEMP 'dtw-plugin'
+          ./scripts/build-plugin.ps1 $package
+          "DTW_PACKAGE=$package" >> $env:GITHUB_ENV
+      - name: Verify package and desktop-independent MCP
+        shell: pwsh
+        run: |
+          $required = @('bin/dtw.exe', 'libexec/cua-driver.exe', 'LICENSE',
+                        'NOTICE', 'CUA-MIT-LICENSE.txt', 'CUA-THIRD_PARTY_NOTICES.md',
+                        'skills/desktop-world/SKILL.md')
+          foreach ($name in $required) {
+            if (-not (Test-Path -LiteralPath (Join-Path $env:DTW_PACKAGE $name))) {
+              throw "Package file missing: $name"
+            }
+          }
+          $mcp = Get-Content -LiteralPath (Join-Path $env:DTW_PACKAGE 'mcp.json') -Raw | ConvertFrom-Json
+          if ($mcp.mcpServers.'desktop-world'.command -ne './bin/dtw.exe') {
+            throw 'Windows MCP command does not name dtw.exe'
+          }
+          foreach ($line in Get-Content -LiteralPath (Join-Path $env:DTW_PACKAGE 'SHA256SUMS')) {
+            if ($line -notmatch '^([0-9a-f]{64})  (.+)$') { throw "Invalid checksum line: $line" }
+            $file = Join-Path $env:DTW_PACKAGE $Matches[2]
+            $actual = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $Matches[1]) { throw "Checksum mismatch: $file" }
+          }
+          python tests/acceptance/mcp_smoke.py (Join-Path $env:DTW_PACKAGE 'bin/dtw.exe')
+          if ($LASTEXITCODE -ne 0) { throw "MCP smoke failed with exit code $LASTEXITCODE" }

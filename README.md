@@ -6,14 +6,21 @@ This source tree is the thin CUA implementation. The former Go/QuickJS/helper ru
 
 ## Build and install
 
-Building requires macOS, Xcode with its Swift toolchain, Rust 1.98.0, and access to the pinned [Cua Driver source](https://github.com/trycua/cua/tree/ac967b9006aafa10870aadb5a645b038cba9721a). `scripts/build-plugin.sh` verifies that commit and builds the DTW CLI plus CUA's private worker. Choose a new destination:
+Building requires Rust 1.98.0 and access to the pinned [Cua Driver source](https://github.com/trycua/cua/tree/ac967b9006aafa10870aadb5a645b038cba9721a). macOS additionally needs Xcode with its Swift toolchain; Windows needs the MSVC Rust target and Visual Studio C++ build tools. The platform build script verifies the CUA commit and builds the DTW CLI plus CUA's private worker. Choose a new destination:
 
 ```sh
 ./scripts/build-plugin.sh /private/tmp/dtw-plugin
 /private/tmp/dtw-plugin/bin/dtw --version
 ```
 
-To use an existing clean CUA checkout at the exact pinned commit, set `CUA_SOURCE_ROOT=/path/to/cua`. The script reads that checkout without editing it. Build output defaults to a temporary directory; `DTW_BUILD_DIR` selects another. For an offline build, set `DTW_CARGO_OFFLINE=1` with dependencies cached. A previously built exact-source worker can be supplied with both `CUA_DRIVER_BIN` and `CUA_DRIVER_BIN_SHA256` when rebuilding only the adapter.
+On Windows, run PowerShell 7 and select a new directory:
+
+```powershell
+pwsh -File ./scripts/build-plugin.ps1 C:\Temp\dtw-plugin
+C:\Temp\dtw-plugin\bin\dtw.exe --version
+```
+
+To use an existing clean CUA checkout at the exact pinned commit, set `CUA_SOURCE_ROOT` to that path. The scripts read that checkout without editing it. Build output defaults to a temporary directory; `DTW_BUILD_DIR` selects another. For an offline build, set `DTW_CARGO_OFFLINE=1` with dependencies cached. A previously built exact-source worker can be supplied with both `CUA_DRIVER_BIN` and `CUA_DRIVER_BIN_SHA256` when rebuilding only the adapter. The macOS script ad hoc signs a local test package; the Windows script produces an unsigned test package. Release signing remains separate.
 
 Install the package into a new Agent Plugin directory:
 
@@ -30,6 +37,8 @@ agy plugin validate /path/to/existing-project/.agents/plugins/desktop-world
 
 The installer refuses an existing destination and does not change global Agent configuration. Other MCP hosts can launch `bin/dtw` over stdio and expose `skills/desktop-world/SKILL.md` to the Agent. The package advertises only `exec`; its `status`, `result`, and `cancel` operations share that entry. Actual desktop permission belongs to the host process, so the host needs macOS Accessibility and Screen Recording authorization. Agents working on the same desktop can affect one another's focus; an independent host should launch its own DTW MCP process and private CUA worker.
 
+On Windows, use `bin/dtw.exe`; the packaged `mcp.json` and project installer also name `.exe`. Windows UI Automation and foreground input remain subject to Windows integrity/UIPI rules. The unsigned local package does not grant elevated or UIAccess input.
+
 ## Script example
 
 Read the packaged [Skill](packaging/plugin/skills/desktop-world/SKILL.md), [recipes](packaging/plugin/skills/desktop-world/RECIPES.md), and [API reference](packaging/plugin/skills/desktop-world/api.d.ts) before authoring actions. Replace the PID and window ID with values observed for the authorized target.
@@ -45,7 +54,7 @@ If `exec` returns `status:"running"`, use the same `session` and original `execu
 ```text
 cmd/dtw/                    Rust MCP server, CUA SDK adapter, installer
 packaging/plugin/           Agent Plugin manifests and one compact Skill
-scripts/build-plugin.sh     pinned-source package build
+scripts/build-plugin.*      pinned-source package builds for macOS/Windows
 tests/acceptance/           isolated protocol and real GUI acceptance harnesses
 docs/                      architecture and acceptance boundaries
 ```

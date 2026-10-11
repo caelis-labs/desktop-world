@@ -20,6 +20,10 @@ const MAX_STATE_BYTES: usize = 32 * 1024;
 const MODEL_TEXT_BYTES: usize = 12 * 1024;
 const PAGE_BYTES: usize = 32 * 1024;
 
+fn executable_name(stem: &str) -> String {
+    format!("{stem}{}", std::env::consts::EXE_SUFFIX)
+}
+
 struct Session {
     native: Arc<CuaDriverSession>,
     state: String,
@@ -100,8 +104,13 @@ fn worker_path() -> Result<String, String> {
     let path = binary
         .parent()
         .and_then(|p| p.parent())
-        .map(|p| p.join("libexec/cua-driver"))
-        .ok_or_else(|| "cannot locate sibling libexec/cua-driver".to_owned())?;
+        .map(|p| p.join("libexec").join(executable_name("cua-driver")))
+        .ok_or_else(|| {
+            format!(
+                "cannot locate sibling libexec/{}",
+                executable_name("cua-driver")
+            )
+        })?;
     Ok(path.to_string_lossy().into_owned())
 }
 
@@ -132,12 +141,12 @@ fn package_root() -> Result<PathBuf, String> {
         .and_then(|p| p.parent())
         .ok_or("cannot locate package root")?;
     for required in [
-        "libexec/cua-driver",
-        "skills/desktop-world/SKILL.md",
-        "mcp.json",
+        PathBuf::from("libexec").join(executable_name("cua-driver")),
+        PathBuf::from("skills/desktop-world/SKILL.md"),
+        PathBuf::from("mcp.json"),
     ] {
-        if !package.join(required).is_file() {
-            return Err(format!("incomplete package: {required}"));
+        if !package.join(&required).is_file() {
+            return Err(format!("incomplete package: {}", required.display()));
         }
     }
     Ok(package.to_path_buf())
@@ -184,7 +193,7 @@ fn install_package(destination: &Path, antigravity: bool) -> Result<(), String> 
             });
             fs::write(staging.join("plugin.json"), format!("{plugin}\n"))
                 .map_err(|e| e.to_string())?;
-            let mcp = json!({"mcpServers":{"dtw":{"command":destination.join("bin/dtw")}}});
+            let mcp = json!({"mcpServers":{"dtw":{"command":destination.join("bin").join(executable_name("dtw"))}}});
             fs::write(staging.join("mcp_config.json"), format!("{mcp}\n"))
                 .map_err(|e| e.to_string())?;
             // The source package's checksums cover its original manifest.
@@ -206,7 +215,7 @@ fn install_package(destination: &Path, antigravity: bool) -> Result<(), String> 
     result?;
     println!(
         "{}",
-        json!({"plugin":destination,"mcp_command":destination.join("bin/dtw"),"format":if antigravity {"antigravity"} else {"agent-plugin-1.0"}})
+        json!({"plugin":destination,"mcp_command":destination.join("bin").join(executable_name("dtw")),"format":if antigravity {"antigravity"} else {"agent-plugin-1.0"}})
     );
     Ok(())
 }
