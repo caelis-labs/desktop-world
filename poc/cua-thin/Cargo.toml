@@ -1,0 +1,15 @@
+[package]
+name = "dtw-cua-poc"
+version = "0.0.1"
+edition = "2021"
+license = "MPL-2.0"
+
+[[bin]]
+name = "dtw"
+path = "src/main.rs"
+
+[dependencies]
+cua-driver-sdk = { path = "/Users/xueyongzhi/WorkDir/github/cua/libs/cua-driver/rust/crates/cua-driver-sdk" }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4"] }

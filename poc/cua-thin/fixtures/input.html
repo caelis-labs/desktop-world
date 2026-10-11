@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>DTW Input Fixture</title>
+<style>
+  body { font: 20px system-ui; margin: 40px }
+  button, input { font: 20px system-ui; margin: 8px; padding: 10px }
+  #drag { position: absolute; left: 60px; top: 300px; width: 130px; height: 60px; background: #d7eaff; padding: 20px; box-sizing: border-box }
+  #drop { position: absolute; left: 360px; top: 300px; width: 150px; height: 90px; background: #e4f5df; padding: 20px; box-sizing: border-box }
+</style>
+<h1 id="status">INIT-20261011</h1>
+<input id="message" aria-label="Message">
+<button id="apply" onclick="document.getElementById('status').textContent='INPUT-'+document.getElementById('message').value">Apply</button>
+<button id="menu" aria-haspopup="menu" onclick="document.getElementById('items').hidden=false">Open menu</button>
+<div id="items" role="menu" hidden><button role="menuitem" onclick="document.getElementById('status').textContent='MENU-GREEN-20261011'">Choose green</button></div>
+<div id="drag" role="button" aria-label="Drag source" draggable="true" ondragstart="event.dataTransfer.setData('text/plain','poc')">Drag source</div>
+<div id="drop" role="button" aria-label="Drop target" ondragover="event.preventDefault()" ondrop="event.preventDefault();document.getElementById('status').textContent='DRAGGED-20261011'">Drop target</div>
+</html>
