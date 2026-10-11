@@ -2,10 +2,8 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "desktop-world",
   "version": "0.1.0",
-  "description": "Operate desktop applications through native Go MCP, persistent JavaScript and concise receipts.",
-  "author": { "name": "Caelis Labs", "url": "https://github.com/caelis-labs" },
-  "repository": "https://github.com/caelis-labs/desktop-world",
-  "homepage": "https://github.com/caelis-labs/desktop-world",
-  "license": "MPL-2.0",
+  "description": "DTW single-exec desktop plugin backed by CUA Driver",
+  "author": {"name": "Caelis Labs", "url": "https://github.com/caelis-labs"},
+  "license": "MIT",
   "keywords": ["desktop", "computer-use", "mcp"]
 }

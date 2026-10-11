@@ -1,12 +1,12 @@
 Desktop World
 
-Copyright 2026 Caelis Labs.
+Copyright (c) 2026 Caelis Labs.
 
-This Source Code Form is subject to the terms of the Mozilla Public
-License, v. 2.0. If a copy of the MPL was not distributed with this
-file, You can obtain one at https://mozilla.org/MPL/2.0/.
+The current DTW adapter source is licensed under the MIT License in LICENSE.
+It links Cua Driver SDK and packages a private Cua Driver worker from
+trycua/cua commit ac967b9006aafa10870aadb5a645b038cba9721a. Their
+copyright and MIT license are preserved separately in packaged artifacts as
+CUA-MIT-LICENSE.txt. See THIRD_PARTY_NOTICES.md for additional attribution.
 
-The license text is included in LICENSE. Third-party notices and their
-applicable licenses are preserved in THIRD_PARTY_NOTICES.md.
-
-Distribution archives include the corresponding source under source/.
+Earlier, removed DTW source revisions remain governed by the license notices
+that accompanied those revisions. This notice does not change their terms.

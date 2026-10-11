@@ -1,93 +1,64 @@
 # Desktop World
 
-DTW gives an Agent a compact desktop model: App → Window → Element. The native
-Go MCP server exposes one tool, `exec`; scripts use `dtw`, persistent `state`,
-and `print`. The process needs no Node or npm. Input routes to the background
-when possible and borrows the foreground when necessary. Terminal application
-actions are blocked. Operating system desktop permissions still apply; an
-embedding application owns its user authorization.
+Desktop World (DTW) gives an Agent a compact App → Window → Element desktop API through one MCP tool, `exec`. It runs scripts in Cua Driver's native QuickJS `run_script`. DTW keeps packaging, bounded results, execution receipts, and a small per-Session JSON `state`; CUA performs desktop discovery, screenshots, keyboard and pointer input, and native permission checks. Node and a separate CuaDriver App are not needed at runtime.
 
-```javascript
-const app = await dtw.app('Obsidian');
-print(await app.windows());
-```
+This source tree is the thin CUA implementation. The former Go/QuickJS/helper runtime is gone; scripts use `cua`, not the former `dtw.app` signatures. macOS is the exercised platform. The [acceptance record](docs/acceptance.md) separates prior POC, current build, and unverified paths.
 
-An address printed by one script, such as `W1/B2`, works in the same MCP
-connection with `dtw.at('W1/B2')` until that UI object expires. A script's
-`execution_id` appears in the result. The same `exec` tool accepts `status`,
-`result`, and `cancel` for that ID. Query the original result after an unknown
-outcome; do not replay the action. The companion Skill teaches discovery,
-actions, screenshots, and receipt handling.
+## Build and install
 
-## Quick install
-
-From the repository root on macOS arm64 (Go 1.26 and Xcode Command Line
-Tools required), build the native package once:
+Building requires Rust 1.98.0 and access to the pinned [Cua Driver source](https://github.com/trycua/cua/tree/ac967b9006aafa10870aadb5a645b038cba9721a). macOS additionally needs Xcode with its Swift toolchain; Windows needs the MSVC Rust target and Visual Studio C++ build tools. The platform build script verifies the CUA commit and builds the DTW CLI plus CUA's private worker. Choose a new destination:
 
 ```sh
-./scripts/build-native-plugin.sh "$PWD/artifacts/dtw-plugin"
-DTW="$PWD/artifacts/dtw-plugin/bin/dtw"
-"$DTW" version
+./scripts/build-plugin.sh /private/tmp/dtw-plugin
+/private/tmp/dtw-plugin/bin/dtw --version
 ```
 
-**CLI install:** choose your Agent. Each command installs the native MCP
-server and the same companion Skill. The default scope is your user account.
+On Windows, run PowerShell 7 and select a new directory:
 
-| Agent | Command |
-| --- | --- |
-| Codex | `"$DTW" install codex` |
-| Claude Code | `"$DTW" install claude` |
-| Antigravity | `"$DTW" install antigravity` |
-| Gemini CLI | `"$DTW" install gemini` |
-| Cursor | `"$DTW" install cursor` |
+```powershell
+pwsh -File ./scripts/build-plugin.ps1 C:\Temp\dtw-plugin
+C:\Temp\dtw-plugin\bin\dtw.exe --version
+```
 
-For a supported project install, use
-`"$DTW" install codex --scope project --project /path/to/project` (replace
-`codex` with the target Agent). Gemini
-CLI extensions currently support user scope only. Claude Code requires its
-`claude` CLI; DTW registers a local marketplace and installs the plugin through
-that CLI. Running `dtw` without arguments starts its stdio MCP server for
-hosts configured manually.
+To use an existing clean CUA checkout at the exact pinned commit, set `CUA_SOURCE_ROOT` to that path. The scripts read that checkout without editing it. Build output defaults to a temporary directory; `DTW_BUILD_DIR` selects another. CI uses a stable `DTW_CUA_SOURCE_DIR` and caches the Rust build and downloads across runs. For an offline build, set `DTW_CARGO_OFFLINE=1` with dependencies cached. A previously built exact-source worker can be supplied with both `CUA_DRIVER_BIN` and `CUA_DRIVER_BIN_SHA256` when rebuilding only the adapter. The macOS script ad hoc signs a local test package; the Windows script produces an unsigned test package. Release signing remains separate.
 
-**Plugin package:** copy an [Agent Plugin 1.0](https://agent-plugins.org/)
-package to a chosen directory, then load that directory in a compatible
-Agent's plugin manager:
+Install the package into a new Agent Plugin directory:
 
 ```sh
-"$DTW" install plugin --to "$PWD/artifacts/dtw-agent-plugin"
+/private/tmp/dtw-plugin/bin/dtw install plugin --to /path/to/new-plugin-dir
 ```
 
-Run `"$DTW" install` for all options. Restart or reload the Agent after
-installation. The build destination must be empty; use a fresh directory for
-a new build.
+For an isolated Antigravity project, install into its `.agents/plugins/desktop-world` directory:
 
-The package contains `plugin.json`, `mcp.json`, the Claude Code plugin
-adapter, `bin/dtw`, a private `libexec/dtw-helper`, and
-`skills/desktop-world/SKILL.md`. Cursor can consume the portable Agent Plugin
-format; its direct installer also writes Cursor's MCP and Skill locations.
-Antigravity uses its own closed plugin manifest, so its installer creates a
-separate adapter package. Gemini CLI receives its extension manifest. None of
-these adapters changes the DTW tool or JavaScript API.
+```sh
+/private/tmp/dtw-plugin/bin/dtw install antigravity --project /path/to/existing-project
+agy plugin validate /path/to/existing-project/.agents/plugins/desktop-world
+```
 
-The macOS runtime has live tests for owned AppKit fixtures and selected
-Obsidian, Chrome, and WPS interactions. Windows has a separate driver entry
-and cross-platform build checks, but this runtime has not passed real Windows
-desktop validation.
+The installer refuses an existing destination and does not change global Agent configuration. Other MCP hosts can launch `bin/dtw` over stdio and expose `skills/desktop-world/SKILL.md` to the Agent. The package advertises only `exec`; its `status`, `result`, and `cancel` operations share that entry. Actual desktop permission belongs to the host process, so the host needs macOS Accessibility and Screen Recording authorization. Agents working on the same desktop can affect one another's focus; an independent host should launch its own DTW MCP process and private CUA worker.
+
+On Windows, use `bin/dtw.exe`; the packaged `mcp.json` and project installer also name `.exe`. Windows UI Automation and foreground input remain subject to Windows integrity/UIPI rules. The unsigned local package does not grant elevated or UIAccess input.
+
+## Script example
+
+Read the packaged [Skill](packaging/plugin/skills/desktop-world/SKILL.md), [recipes](packaging/plugin/skills/desktop-world/RECIPES.md), and [API reference](packaging/plugin/skills/desktop-world/api.d.ts) before authoring actions. Replace the PID and window ID with values observed for the authorized target.
+
+```json
+{"session":"task","script":"const app=await cua.getApp({pid:123,windowId:456}); const view=await app.getState({query:'Save',max_elements:80,include_screenshot:false}); return {window_id:app.windowId,tree:view.tree_markdown,truncated:view.truncated};"}
+```
+
+If `exec` returns `status:"running"`, use the same `session` and original `execution_id` with `operation:"result"`. Default results are compact; `part:"structured"`, `part:"text"`, and `part:"image"` retrieve retained detail. A native action receipt reports delivery, so observe the UI effect before a further action. See the Skill for native file pickers, desktop screenshots, image coordinates, large browser trees, and stale or unknown receipts.
 
 ## Source layout
 
 ```text
-cmd/dtw/                    MCP server, JavaScript runtime, installer
-cmd/dtw-helper/             private native helper
-internal/world/             desktop object and receipt types
-internal/engine/            observation and action execution
-internal/backend/           shared driver contract
-internal/platform/          platform opener and Darwin/Windows drivers
-internal/ipc/               private host/helper protocol
-internal/auditlog/          internal logging
-internal/testutil/          deterministic desktop fixture
-tests/contract/             behavioral contract tests
-testdata/                   protocol and AppKit fixtures
-packaging/plugin/           portable manifests and one Agent Skill
-scripts/                    build, checks, fixture builders
+cmd/dtw/                    Rust MCP server, CUA SDK adapter, installer
+packaging/plugin/           Agent Plugin manifests and one compact Skill
+scripts/build-plugin.*      pinned-source package builds for macOS/Windows
+tests/acceptance/           isolated protocol and real GUI acceptance harnesses
+docs/                      architecture and acceptance boundaries
 ```
+
+## License
+
+The current DTW implementation is [MIT licensed](LICENSE). The packaged upstream CUA SDK and private worker are pinned to `ac967b9006aafa10870aadb5a645b038cba9721a`; their MIT notice and [third-party attributions](THIRD_PARTY_NOTICES.md) are preserved in the package. Optional CUA perception and Spaces components are not included. Removed historical DTW revisions retain their original notices, as explained in [NOTICE](NOTICE). No binary release is implied by this source migration.
