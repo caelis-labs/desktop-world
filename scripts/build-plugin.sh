@@ -84,8 +84,7 @@ mkdir -p "$staging/bin" "$staging/libexec" "$staging/skills"
 cp "$target_dir/dtw/release/dtw" "$staging/bin/dtw"
 cp "$driver_binary" "$staging/libexec/cua-driver"
 if [ "$(uname -s)" = Darwin ]; then
-  # The final Rust link currently drops the Swift bridge's transitive rpath.
-  install_name_tool -add_rpath /usr/lib/swift "$staging/bin/dtw"
+  # cmd/dtw/build.rs supplies the final Swift runtime rpath for CLI and tests.
   codesign --force --sign - "$staging/bin/dtw" >/dev/null
   codesign --force --sign - "$staging/libexec/cua-driver" >/dev/null
   codesign --verify "$staging/bin/dtw"

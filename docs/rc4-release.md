@@ -26,6 +26,11 @@ All three are repairable in CUA's native implementations. This release keeps
 CUA unchanged at `ac967b9006aafa10870aadb5a645b038cba9721a`; no speculative
 coordinate or input fallback was added to the thin adapter.
 
+The macOS Swift runtime rpath is now emitted at DTW's final Rust link for
+both CLI and test executables. The previous packaging-only binary patch
+left the newly exercised unit-test executable unable to load Swift; the
+native CI run caught this before merge or publication.
+
 An immediate post-action window listing in the initial harness was too early.
 That was an acceptance-harness timing issue, now corrected with bounded,
 read-only PID-scoped polling. A new DTW fixture then discovered the picker,
