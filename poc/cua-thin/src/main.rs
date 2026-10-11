@@ -9,6 +9,7 @@ use std::{
     env,
     path::PathBuf,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 use tokio::{
     io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -45,6 +46,7 @@ struct SavedResult {
 enum Work {
     Script(String),
     Cursor(Option<bool>),
+    Focus { pid: u32, window_id: Option<u64> },
 }
 
 struct Server {
@@ -133,6 +135,18 @@ fn short(s: &str, max: usize) -> (String, bool) {
     (s[..end].to_owned(), true)
 }
 
+fn compact_success_text(value: &str) -> Option<String> {
+    if !value.starts_with("run_script: ok") || !value.contains("\nreturn value:") {
+        return None;
+    }
+    let first = value.lines().next()?;
+    let calls = value
+        .find("\ncalls:\n")
+        .map(|at| &value[at..])
+        .unwrap_or("");
+    Some(format!("{first}{calls}"))
+}
+
 fn page(s: &str, offset: usize) -> Value {
     let offset = offset.min(s.len());
     let mut start = offset;
@@ -179,8 +193,11 @@ impl Server {
                         "properties":{
                             "session":{"type":"string","description":"Session label (default: default). POC limitation: native element tokens can cross labels in one MCP process; use a separate process per independent Agent."},
                             "script":{"type":"string","description":"Async CUA script body. Use cua.getApp, getState, query, click, typeText, pressKey, drag and return."},
-                            "operation":{"type":"string","enum":["run","status","result","cancel","permissions","cursor"]},
+                            "operation":{"type":"string","enum":["run","status","result","cancel","permissions","cursor","focus"]},
+                            "wait_ms":{"type":"integer","minimum":0,"maximum":5000,"description":"Wait briefly for a terminal receipt in the same exec call (default 4000 ms). If still running, query the original execution_id with operation=result."},
                             "enabled":{"type":"boolean","description":"With operation=cursor, show or hide this Session's virtual cursor. Omit to read cursor state."},
+                            "pid":{"type":"integer","minimum":1,"description":"With operation=focus, the exact app PID to activate."},
+                            "window_id":{"type":"integer","minimum":1,"description":"With operation=focus, an ordinary window ID to verify as focused. Omit to verify only the app."},
                             "execution_id":{"type":"string"},
                             "part":{"type":"string","enum":["summary","text","structured","image"]},
                             "offset":{"type":"integer","minimum":0},
@@ -222,17 +239,42 @@ impl Server {
             .get("operation")
             .and_then(Value::as_str)
             .unwrap_or("run");
+        let wait_ms = obj
+            .get("wait_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(4_000)
+            .min(5_000);
         match operation {
             "run" => match obj.get("script").and_then(Value::as_str) {
-                Some(script) => self.run(session_id, Work::Script(script.to_owned())).await,
+                Some(script) => {
+                    self.run(session_id, Work::Script(script.to_owned()), wait_ms)
+                        .await
+                }
                 None => mcp_text(json!({"error":"script is required"}), true),
             },
             "cursor" => {
                 self.run(
                     session_id,
                     Work::Cursor(obj.get("enabled").and_then(Value::as_bool)),
+                    wait_ms,
                 )
                 .await
+            }
+            "focus" => {
+                let Some(pid) = obj
+                    .get("pid")
+                    .and_then(Value::as_u64)
+                    .and_then(|n| u32::try_from(n).ok())
+                    .filter(|n| *n > 0)
+                else {
+                    return mcp_text(json!({"error":"focus requires positive pid"}), true);
+                };
+                let window_id = obj.get("window_id").and_then(Value::as_u64);
+                if obj.get("window_id").is_some() && window_id.is_none_or(|n| n == 0) {
+                    return mcp_text(json!({"error":"window_id must be positive"}), true);
+                }
+                self.run(session_id, Work::Focus { pid, window_id }, wait_ms)
+                    .await
             }
             "permissions" => {
                 match self
@@ -260,7 +302,7 @@ impl Server {
         }
     }
 
-    async fn run(self: &Arc<Self>, session_id: &str, work: Work) -> Value {
+    async fn run(self: &Arc<Self>, session_id: &str, work: Work, wait_ms: u64) -> Value {
         if let Work::Script(script) = &work {
             if script.len() > MAX_SCRIPT_BYTES {
                 return mcp_text(
@@ -377,6 +419,31 @@ impl Server {
             .into();
             job.result = Some(saved);
         });
+        for _ in 0..wait_ms.div_ceil(25) {
+            let terminal = self
+                .jobs
+                .lock()
+                .unwrap()
+                .get(&execution_id)
+                .is_some_and(|job| job.phase != "running");
+            if terminal {
+                return self
+                    .control(session_id, "result", &json!({"execution_id":execution_id}))
+                    .await;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        if self
+            .jobs
+            .lock()
+            .unwrap()
+            .get(&execution_id)
+            .is_some_and(|job| job.phase != "running")
+        {
+            return self
+                .control(session_id, "result", &json!({"execution_id":execution_id}))
+                .await;
+        }
         mcp_text(
             json!({"execution_id":execution_id,"session":session_id,"status":"running"}),
             false,
@@ -425,6 +492,16 @@ impl Server {
                     None => ("get_agent_cursor_state", json!({})),
                 };
                 let result = native.call_tool(name.into(), args.to_string()).await?;
+                return Ok((save(result), None, true));
+            }
+            Work::Focus { pid, window_id } => {
+                let mut args = json!({"pid":pid});
+                if let Some(window_id) = window_id {
+                    args["window_id"] = json!(window_id);
+                }
+                let result = native
+                    .call_tool("bring_to_front".into(), args.to_string())
+                    .await?;
                 return Ok((save(result), None, true));
             }
             Work::Script(code) => code,
@@ -496,14 +573,28 @@ impl Server {
             } else {
                 MODEL_TEXT_BYTES
             };
-            let (preview, truncated) = short(&result.text, preview_limit);
+            let compacted = (!result.is_error)
+                .then(|| compact_success_text(&result.text))
+                .flatten();
+            let display_text = compacted.as_deref().unwrap_or(&result.text);
+            let (preview, truncated) = short(display_text, preview_limit);
             summary["error_code"] = json!(result.error_code);
             summary["is_error"] = json!(result.is_error);
             summary["text"] = json!(preview);
-            summary["text_truncated"] = json!(truncated);
+            summary["text_truncated"] = json!(truncated || compacted.is_some());
+            summary["text_compacted"] = json!(compacted.is_some());
+            summary["full_text_bytes"] = json!(result.text.len());
             summary["structured_bytes"] = json!(result.structured.len());
             summary["image_count"] = json!(result.images.len());
             if let Ok(structured) = serde_json::from_str::<Value>(&result.structured) {
+                if let Some(activated) = structured.get("activated").and_then(Value::as_bool) {
+                    summary["focus"] = json!({
+                        "activated": activated,
+                        "code": structured.get("code"),
+                        "focused_window_id": structured.pointer("/observed/focused_window_id"),
+                        "verified": structured.pointer("/exact_window_effect/verified"),
+                    });
+                }
                 if let Some(value) = structured.get("value") {
                     let encoded = value.to_string();
                     if encoded.len() <= 2048 {
@@ -564,12 +655,17 @@ fn save(result: ToolResult) -> SavedResult {
                 .and_then(Value::as_str)
                 .map(str::to_owned)
         });
+    let error_code = if result.is_error {
+        result.error_code.or(native_code)
+    } else {
+        None
+    };
     SavedResult {
         text: result.text,
         structured,
         images: result.images,
         is_error: result.is_error,
-        error_code: result.error_code.or(native_code),
+        error_code,
     }
 }
 

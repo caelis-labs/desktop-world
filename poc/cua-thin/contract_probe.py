@@ -12,8 +12,9 @@ from probe import call, exec_call, result
 
 def run(proc, ident, session, script):
     started = exec_call(proc, ident, {"session": session, "script": script})
-    assert started["status"] == "running", started
-    return started["execution_id"], result(proc, ident + 1, session, started["execution_id"])
+    assert "execution_id" in started, started
+    done = result(proc, ident + 1, session, started["execution_id"]) if started["status"] == "running" else started
+    return started["execution_id"], done
 
 
 def main():
@@ -61,10 +62,10 @@ def main():
                                   "native_error": bad.get("native_error")}
         assert bad["status"] == "failed" and report["script_error"]["preserved_marker"]
 
-        started = exec_call(proc, 14, {"session": "a", "script":
+        started = exec_call(proc, 14, {"session": "a", "wait_ms": 0, "script":
                                        "await cua.sleep(1500); return 'SLEPT-ONCE';"})
         original = started["execution_id"]
-        other = exec_call(proc, 21, {"session": "b", "script":
+        other = exec_call(proc, 21, {"session": "b", "wait_ms": 0, "script":
                                      "state.n=(state.n||0)+1; return state.n;"})
         cancel = exec_call(proc, 15, {"session": "a", "operation": "cancel",
                                       "execution_id": original})
