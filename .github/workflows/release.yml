@@ -1,0 +1,99 @@
+name: Release candidates
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build (must match package version)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-26
+            platform: darwin-arm64
+          - os: windows-latest
+            platform: windows-amd64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+          components: rustfmt
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ runner.temp }}/dtw-cua-build
+          key: dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-ac967b9-${{ hashFiles('cmd/dtw/Cargo.lock', 'cmd/dtw/**/*.rs') }}
+          restore-keys: |
+            dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-ac967b9-
+      - name: Validate release version
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: python scripts/release-artifacts.py validate
+      - name: Build and verify macOS package
+        if: runner.os == 'macOS'
+        env:
+          DTW_BUILD_DIR: ${{ runner.temp }}/dtw-cua-build
+          DTW_CUA_SOURCE_DIR: ${{ runner.temp }}/dtw-cua-source
+        run: |
+          test "$(uname -m)" = arm64
+          scripts/build-plugin.sh "$RUNNER_TEMP/dtw-plugin"
+          (cd "$RUNNER_TEMP/dtw-plugin" && shasum -a 256 -c SHA256SUMS)
+          codesign --verify "$RUNNER_TEMP/dtw-plugin/bin/dtw"
+          codesign --verify "$RUNNER_TEMP/dtw-plugin/libexec/cua-driver"
+          python3 tests/acceptance/mcp_smoke.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
+          python3 tests/acceptance/contract_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
+          python3 tests/acceptance/licenses_probe.py "$RUNNER_TEMP/dtw-plugin"
+          python3 tests/acceptance/package_install_probe.py "$RUNNER_TEMP/dtw-plugin" --output "$RUNNER_TEMP/install-probe"
+      - name: Build and verify Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          DTW_BUILD_DIR: ${{ runner.temp }}/dtw-cua-build
+          DTW_CUA_SOURCE_DIR: ${{ runner.temp }}/dtw-cua-source
+        run: |
+          if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'Expected Windows x64' }
+          $package = Join-Path $env:RUNNER_TEMP 'dtw-plugin'
+          ./scripts/build-plugin.ps1 $package
+          foreach ($line in Get-Content -LiteralPath (Join-Path $package 'SHA256SUMS')) {
+            if ($line -notmatch '^([0-9a-f]{64})  (.+)$') { throw "Invalid checksum line: $line" }
+            if ((Get-FileHash -LiteralPath (Join-Path $package $Matches[2]) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Matches[1]) {
+              throw "Checksum mismatch: $line"
+            }
+          }
+          python tests/acceptance/mcp_smoke.py (Join-Path $package 'bin/dtw.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'MCP smoke failed' }
+          python tests/acceptance/contract_probe.py (Join-Path $package 'bin/dtw.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Contract probe failed' }
+          python tests/acceptance/licenses_probe.py $package
+          if ($LASTEXITCODE -ne 0) { throw 'License check failed' }
+          python tests/acceptance/package_install_probe.py $package --output (Join-Path $env:RUNNER_TEMP 'install-probe')
+          if ($LASTEXITCODE -ne 0) { throw 'Installation probe failed' }
+      - name: Archive candidate and build evidence
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_PLATFORM: ${{ matrix.platform }}
+        run: python scripts/release-artifacts.py archive
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14

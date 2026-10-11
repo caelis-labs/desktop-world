@@ -3,23 +3,52 @@
 
 import json
 import os
-import select
+from queue import Empty, Queue
 import subprocess
 import sys
+from threading import Thread
 import time
 
 
+def runtime_env():
+    """Keep OS-required variables while proving that Node is not on PATH."""
+    env = os.environ.copy()
+    if os.name == "nt":
+        system_root = env.get("SystemRoot", r"C:\Windows")
+        env["PATH"] = os.pathsep.join([
+            os.path.join(system_root, "System32"), system_root,
+            os.path.join(system_root, "System32", "WindowsPowerShell", "v1.0"),
+        ])
+    else:
+        env["PATH"] = "/usr/bin:/bin"
+    return env
+
+
 def call(proc, request, timeout=20):
+    # Windows select() only accepts sockets, not subprocess pipes.
+    if not hasattr(proc, "_dtw_responses"):
+        proc._dtw_responses = Queue()
+
+        def read_lines():
+            try:
+                for line in proc.stdout:
+                    proc._dtw_responses.put(json.loads(line))
+            except Exception as error:
+                proc._dtw_responses.put(error)
+            finally:
+                proc._dtw_responses.put(EOFError("MCP stdout closed"))
+
+        Thread(target=read_lines, daemon=True).start()
     proc.stdin.write(json.dumps(request) + "\n")
     proc.stdin.flush()
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if not select.select([proc.stdout], [], [], 0.2)[0]:
+        try:
+            response = proc._dtw_responses.get(timeout=min(0.2, max(0.001, deadline - time.monotonic())))
+        except Empty:
             continue
-        line = proc.stdout.readline()
-        if not line:
-            raise RuntimeError(f"MCP exited {proc.poll()}")
-        response = json.loads(line)
+        if isinstance(response, Exception):
+            raise RuntimeError(f"MCP exited {proc.poll()}: {response}") from response
         if response.get("id") == request["id"]:
             return response
     raise TimeoutError(f"MCP request {request['id']} timed out")
@@ -42,7 +71,7 @@ def result(proc, ident, session, execution_id):
 def main():
     binary = sys.argv[1]
     proc = subprocess.Popen([binary], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                            env={"PATH": "/usr/bin:/bin", "TMPDIR": "/private/tmp"})
+                            env=runtime_env(), encoding="utf-8")
     try:
         initialized = call(proc, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "dtw-probe", "version": "1"}}})
         tools = call(proc, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
@@ -67,6 +96,7 @@ def main():
         assert count["status"] == "completed", count
         permissions = exec_call(proc, 11, {"operation": "permissions"})
         print(json.dumps({"permissions": permissions}))
+        assert permissions.get("status") == "ok", permissions
         if "--cursor" in sys.argv[2:]:
             cursor_results = []
             for ident, enabled in [(12, None), (14, True), (16, None), (18, False)]:

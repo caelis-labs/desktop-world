@@ -144,6 +144,8 @@ fn package_root() -> Result<PathBuf, String> {
         PathBuf::from("libexec").join(executable_name("cua-driver")),
         PathBuf::from("skills/desktop-world/SKILL.md"),
         PathBuf::from("mcp.json"),
+        PathBuf::from("LICENSING/DEPENDENCIES.json"),
+        PathBuf::from("LICENSING/MPL-SOURCES.tar.gz"),
     ] {
         if !package.join(&required).is_file() {
             return Err(format!("incomplete package: {}", required.display()));
@@ -284,6 +286,74 @@ fn compact_success_text(value: &str) -> Option<String> {
         .map(|at| &value[at..])
         .unwrap_or("");
     Some(format!("{first}{calls}"))
+}
+
+fn focus_summary(structured: &Value) -> Option<Value> {
+    if let Some(activated) = structured.get("activated").and_then(Value::as_bool) {
+        return Some(json!({
+            "activated": activated,
+            "code": structured.get("code"),
+            "focused_window_id": structured.pointer("/observed/focused_window_id"),
+            "verified": structured.pointer("/exact_window_effect/verified"),
+        }));
+    }
+    // Windows reports the observed foreground HWND rather than macOS's fields.
+    let landed = structured.get("landed_on_target")?.as_bool()?;
+    let hwnd = |key: &str| {
+        structured
+            .get(key)
+            .and_then(Value::as_str)
+            .and_then(|value| u64::from_str_radix(value.strip_prefix("0x")?, 16).ok())
+    };
+    let observed = hwnd("now_fg_hwnd");
+    let target = hwnd("target_hwnd");
+    Some(json!({
+        "activated": landed,
+        "code": structured.get("code"),
+        "focused_window_id": observed,
+        "verified": landed && observed.is_some() && observed == target,
+    }))
+}
+
+#[cfg(test)]
+mod focus_tests {
+    use super::*;
+
+    #[test]
+    fn windows_verifies_the_observed_exact_foreground_window() {
+        let summary = focus_summary(&json!({
+            "landed_on_target": true, "now_fg_hwnd": "0x14026c", "target_hwnd": "0x14026c"
+        }))
+        .unwrap();
+        assert_eq!(summary["verified"], true);
+        assert_eq!(summary["focused_window_id"], 0x14026cu64);
+    }
+
+    #[test]
+    fn windows_does_not_verify_raising_or_a_different_foreground_window() {
+        for landed in [false, true] {
+            let summary = focus_summary(&json!({
+                "landed_on_target": landed, "raised": true,
+                "now_fg_hwnd": "0x123", "target_hwnd": "0x456"
+            }))
+            .unwrap();
+            assert_eq!(summary["verified"], false);
+        }
+        let missing = focus_summary(&json!({"landed_on_target": true})).unwrap();
+        assert_eq!(missing["verified"], false);
+    }
+
+    #[test]
+    fn macos_retains_native_activation_and_verification() {
+        let summary = focus_summary(&json!({
+            "activated": true, "observed": {"focused_window_id": 42},
+            "exact_window_effect": {"verified": false}
+        }))
+        .unwrap();
+        assert_eq!(summary["activated"], true);
+        assert_eq!(summary["verified"], false);
+        assert_eq!(summary["focused_window_id"], 42);
+    }
 }
 
 fn page(s: &str, offset: usize) -> Value {
@@ -501,9 +571,15 @@ impl Server {
                 .await
             }
             "permissions" => {
+                // Windows accepts no arguments; prompt is a macOS-only option.
+                let arguments = if cfg!(target_os = "macos") {
+                    "{\"prompt\":false}"
+                } else {
+                    "{}"
+                };
                 match self
                     .driver
-                    .call_tool("check_permissions".into(), "{\"prompt\":false}".into())
+                    .call_tool("check_permissions".into(), arguments.into())
                     .await
                 {
                     Ok(result) => {
@@ -843,13 +919,8 @@ impl Server {
             summary["structured_bytes"] = json!(result.structured.len());
             summary["image_count"] = json!(result.images.len());
             if let Ok(structured) = serde_json::from_str::<Value>(&result.structured) {
-                if let Some(activated) = structured.get("activated").and_then(Value::as_bool) {
-                    summary["focus"] = json!({
-                        "activated": activated,
-                        "code": structured.get("code"),
-                        "focused_window_id": structured.pointer("/observed/focused_window_id"),
-                        "verified": structured.pointer("/exact_window_effect/verified"),
-                    });
+                if let Some(focus) = focus_summary(&structured) {
+                    summary["focus"] = focus;
                 }
                 if let Some(capture_id) = structured.get("capture_id").and_then(Value::as_str) {
                     summary["capture"] = json!({

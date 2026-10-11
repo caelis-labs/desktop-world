@@ -5,14 +5,14 @@ import json
 import subprocess
 import sys
 
-from probe import call, exec_call, result
+from probe import call, exec_call, result, runtime_env
 
 
 def main():
     proc = subprocess.Popen(
         [sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, text=True,
-        env={"PATH": "/usr/bin:/bin", "TMPDIR": "/private/tmp"},
+        env=runtime_env(), encoding="utf-8",
     )
     report = {}
     try:

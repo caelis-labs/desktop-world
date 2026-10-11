@@ -54,6 +54,9 @@ type WindowState = {
   elements?: Element[];
   element_count?: number;
   truncated?: boolean;
+  /** macOS geometry verdict. Windows omits this flag; require capture_id,
+   * positive dimensions, no screenshot_error and a screenshot_frame, then visually
+   * check alignment. DPI-unaware Windows captures can have misaligned pixels. */
   screenshot_frame_valid?: boolean;
   capture_id?: string;
   screenshot_width?: number;
