@@ -96,10 +96,9 @@ cp -R "$repo_root/packaging/plugin/skills/desktop-world" "$staging/skills/deskto
 cp "$repo_root/LICENSE" "$repo_root/NOTICE" "$repo_root/THIRD_PARTY_NOTICES.md" "$staging/"
 cp "$source_root/LICENSE.md" "$staging/CUA-MIT-LICENSE.txt"
 cp "$source_root/libs/cua-driver/rust/THIRD_PARTY_NOTICES.md" "$staging/CUA-THIRD_PARTY_NOTICES.md"
-(cd "$staging" && shasum -a 256 bin/dtw libexec/cua-driver plugin.json mcp.json \
-  skills/desktop-world/SKILL.md skills/desktop-world/api.d.ts \
-  skills/desktop-world/RECIPES.md LICENSE NOTICE CUA-MIT-LICENSE.txt \
-  THIRD_PARTY_NOTICES.md CUA-THIRD_PARTY_NOTICES.md > SHA256SUMS)
+python3 "$repo_root/scripts/license-audit.py" --cua-source "$source_root" --output "$staging/LICENSING"
+python3 "$repo_root/tests/acceptance/licenses_probe.py" "$staging"
+(cd "$staging" && find . -type f ! -name SHA256SUMS -exec shasum -a 256 {} + | LC_ALL=C sort > SHA256SUMS)
 "$staging/bin/dtw" --version
 mv -- "$staging" "$destination"
 staging=

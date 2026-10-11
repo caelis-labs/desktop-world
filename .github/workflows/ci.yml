@@ -19,6 +19,9 @@ jobs:
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.98.0
@@ -36,7 +39,7 @@ jobs:
       - name: Format Rust
         run: cargo +1.98.0 fmt --manifest-path cmd/dtw/Cargo.toml --check
       - name: Check Python harness syntax
-        run: python3 -m compileall -q tests/acceptance
+        run: python3 -m compileall -q scripts tests/acceptance
       - name: Build package from pinned CUA source
         env:
           DTW_BUILD_DIR: ${{ runner.temp }}/dtw-cua-build
@@ -48,6 +51,10 @@ jobs:
           codesign --verify "$RUNNER_TEMP/dtw-plugin/bin/dtw"
           codesign --verify "$RUNNER_TEMP/dtw-plugin/libexec/cua-driver"
           python3 tests/acceptance/mcp_smoke.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
+          python3 tests/acceptance/licenses_probe.py "$RUNNER_TEMP/dtw-plugin"
+          python3 tests/acceptance/contract_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
+          python3 tests/acceptance/package_install_probe.py "$RUNNER_TEMP/dtw-plugin" --output "$RUNNER_TEMP/install-probe"
+          CARGO_TARGET_DIR="$RUNNER_TEMP/dtw-cua-build/dtw" cargo +1.98.0 test --manifest-path cmd/dtw/Cargo.toml --release --locked
 
   windows-package:
     name: Windows source, package, and MCP
@@ -55,9 +62,13 @@ jobs:
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.98.0
+          components: rustfmt
       - name: Restore pinned Rust build cache
         uses: actions/cache@v4
         with:
@@ -69,7 +80,9 @@ jobs:
           restore-keys: |
             dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-ac967b9-
       - name: Check Python harness syntax
-        run: python -m compileall -q tests/acceptance
+        run: python -m compileall -q scripts tests/acceptance
+      - name: Format Rust
+        run: cargo +1.98.0 fmt --manifest-path cmd/dtw/Cargo.toml --check
       - name: Build package from pinned CUA source
         shell: pwsh
         env:
@@ -102,3 +115,12 @@ jobs:
           }
           python tests/acceptance/mcp_smoke.py (Join-Path $env:DTW_PACKAGE 'bin/dtw.exe')
           if ($LASTEXITCODE -ne 0) { throw "MCP smoke failed with exit code $LASTEXITCODE" }
+          python tests/acceptance/licenses_probe.py $env:DTW_PACKAGE
+          if ($LASTEXITCODE -ne 0) { throw "License check failed with exit code $LASTEXITCODE" }
+          python tests/acceptance/contract_probe.py (Join-Path $env:DTW_PACKAGE 'bin/dtw.exe')
+          if ($LASTEXITCODE -ne 0) { throw "Contract probe failed with exit code $LASTEXITCODE" }
+          python tests/acceptance/package_install_probe.py $env:DTW_PACKAGE --output (Join-Path $env:RUNNER_TEMP 'install-probe')
+          if ($LASTEXITCODE -ne 0) { throw "Installation probe failed with exit code $LASTEXITCODE" }
+          $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'dtw-cua-build/dtw'
+          cargo +1.98.0 test --manifest-path cmd/dtw/Cargo.toml --release --locked
+          if ($LASTEXITCODE -ne 0) { throw "Adapter regression test failed with exit code $LASTEXITCODE" }

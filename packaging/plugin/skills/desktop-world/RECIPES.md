@@ -52,6 +52,8 @@ For a text-heavy target, prefer `app.getState({query:"target label",max_elements
 
 ## Region candidates from a window screenshot
 
+The native action names differ by platform: macOS buttons expose `AXPress`, while Windows UIA buttons expose `invoke`. Windows also omits `screenshot_frame_valid`; require a capture ID, positive screenshot dimensions, no screenshot error, and an element's `screenshot_frame`. Those fields establish an available capture, not pixel/geometry fidelity. At the current CUA pin, Windows acceptance found misaligned window screenshots for DPI-unaware applications at 125% display scale. Visually confirm the candidate's frame against the returned image before using region matching or pixel input; stop on black padding or mismatched geometry. The recipe below handles both payloads without rescaling that frame a second time.
+
 If a **window** binds and has an AX tree, the model can mark a rectangle in its PNG. Run this in the same Session with the rectangle's image-pixel `x,y,w,h`, and set `include_image:true` on this `exec` to inspect the **new** image alongside the candidates. If the page or window moved since the image the model marked, discard the old rectangle and mark it again on the new image. `screenshot_frame` is already mapped by CUA to the screenshot returned by this `getState`; `frame` is in screen points and must not be compared with image pixels. Keep the returned image and candidate list from this **one** observation together. For a large tree, this bounded walk may truncate, so an empty list means only that no candidate was found in the returned rows.
 
 ```js
@@ -59,17 +61,22 @@ const roi={x:IMAGE_X,y:IMAGE_Y,w:IMAGE_W,h:IMAGE_H};
 const app=await cua.getApp({pid:PID,windowId:WINDOW_ID});
 const s=await app.getState({tree_format:"elements",max_elements:250,
   include_screenshot:true,max_image_dimension:1600});
-if(!s.screenshot_frame_valid) return {candidates:[],reason:"no verified window screenshot"};
+const screenshotValid=s.screenshot_frame_valid===true ||
+  (cua.computer.target==="windows" && !!s.capture_id &&
+   s.screenshot_width>0 && s.screenshot_height>0 && !s.screenshot_error);
+if(!screenshotValid) return {candidates:[],reason:"no usable window screenshot"};
 const overlaps=f=>f && f.w>0 && f.h>0 &&
   f.x<roi.x+roi.w && f.x+f.w>roi.x &&
   f.y<roi.y+roi.h && f.y+f.h>roi.y;
 const candidates=(s.elements||[])
   .filter(e=>e.enabled!==false && e.element_token &&
-    (e.actions||[]).includes("AXPress") && overlaps(e.screenshot_frame))
+    (e.actions||[]).some(action=>action==="AXPress" || action==="invoke") &&
+    overlaps(e.screenshot_frame))
   .slice(0,20).map(e=>({label:e.label,role:e.role,token:e.element_token,
     screenshot_center:[e.screenshot_frame.x+e.screenshot_frame.w/2,
                        e.screenshot_frame.y+e.screenshot_frame.h/2],
-    screenshot_frame:e.screenshot_frame,basis:"AXPress"}));
+    screenshot_frame:e.screenshot_frame,
+    basis:(e.actions||[]).includes("AXPress")?"AXPress":"invoke"}));
 return {window_id:app.windowId,capture_id:s.capture_id,
   image_size:[s.screenshot_width,s.screenshot_height],
   truncated:s.truncated,candidates};
@@ -99,13 +106,14 @@ To discover a localized menu path, first query the exact command label in one wi
 ```js
 const app = await cua.getApp({pid: PID,windowId: WINDOW_ID});
 const before = await app.getState({query:"Save",max_elements:80,include_screenshot:false});
-const matches = await app.query({name:"Save"});
+const matches = (await app.query({name:"Save"}))
+  .filter(e=>e.element_token && e.display_only!==true);
 if (matches.length !== 1 || matches[0].enabled === false)
   return {acted:false,reason:"Save is absent or ambiguous",snapshot_id:before.snapshot_id};
-const action = await app.click({name:"Save"});
+const action = await app.click(matches[0].element_token);
 const after = await app.getState({query:"Saved",max_elements:80,include_screenshot:false});
 return {acted:true,delivery:action,after:after.tree_markdown,
         snapshot_id:after.snapshot_id};
 ```
 
-This checks the target before acting, then reads once at the meaningful checkpoint. CUA's `effect:"unverifiable"` is not a success verdict. On stale references, permission refusal or `unknown`, observe/reconcile the original receipt; do not replay the action. Upstream `run_steps` does its own stale-token re-find/retry, so this integration does **not** surface it as an `exec` operation. Keep logic in `run_script`, where branches and the point of action remain explicit.
+This checks the target before acting, then reads once at the meaningful checkpoint. Windows queries can include `display_only` text rows, and role aliases such as `textfield` also match native `Text` labels alongside `Edit` controls. Inspect the returned native role and supported actions, exclude display-only rows, and require one actionable match before typing or clicking. CUA's `effect:"unverifiable"` is not a success verdict. On stale references, permission refusal or `unknown`, observe/reconcile the original receipt; do not replay the action. Upstream `run_steps` does its own stale-token re-find/retry, so this integration does **not** surface it as an `exec` operation. Keep logic in `run_script`, where branches and the point of action remain explicit.

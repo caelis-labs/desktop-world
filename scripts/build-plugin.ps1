@@ -98,12 +98,13 @@ try {
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'LICENSE.md') -Destination (Join-Path $stage 'CUA-MIT-LICENSE.txt')
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'libs/cua-driver/rust/THIRD_PARTY_NOTICES.md') -Destination (Join-Path $stage 'CUA-THIRD_PARTY_NOTICES.md')
 
-    $paths = @(
-        'bin/dtw.exe', 'libexec/cua-driver.exe', 'plugin.json', 'mcp.json',
-        'skills/desktop-world/SKILL.md', 'skills/desktop-world/api.d.ts',
-        'skills/desktop-world/RECIPES.md', 'LICENSE', 'NOTICE',
-        'CUA-MIT-LICENSE.txt', 'THIRD_PARTY_NOTICES.md', 'CUA-THIRD_PARTY_NOTICES.md'
-    )
+    & python (Join-Path $repoRoot 'scripts/license-audit.py') --cua-source $sourceRoot --output (Join-Path $stage 'LICENSING')
+    Assert-ExitCode 'audit dependency licenses'
+    & python (Join-Path $repoRoot 'tests/acceptance/licenses_probe.py') $stage
+    Assert-ExitCode 'verify dependency notices and MPL source'
+    $paths = Get-ChildItem -LiteralPath $stage -File -Recurse | Sort-Object FullName | ForEach-Object {
+        $_.FullName.Substring($stage.Length + 1).Replace('\', '/')
+    }
     $checksums = foreach ($path in $paths) {
         $file = Join-Path $stage ($path.Replace('/', [System.IO.Path]::DirectorySeparatorChar))
         $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
