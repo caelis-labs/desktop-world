@@ -1,0 +1,3 @@
+# Original upstream notice bytes are verified against immutable hashes.
+# Preserve their line endings on every checkout, including Windows CI.
+packaging/third-party/** -text
