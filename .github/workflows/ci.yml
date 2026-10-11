@@ -17,12 +17,25 @@ jobs:
     name: macOS source, package, and MCP
     runs-on: macos-26
     timeout-minutes: 75
+    env:
+      DTW_BUILD_DIR: ${{ runner.temp }}/dtw-cua-build
+      DTW_CUA_SOURCE_DIR: ${{ runner.temp }}/dtw-cua-source
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.98.0
           components: rustfmt
+      - name: Restore pinned Rust build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ env.DTW_BUILD_DIR }}
+          key: dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-ac967b9-${{ hashFiles('cmd/dtw/Cargo.lock', 'cmd/dtw/**/*.rs') }}
+          restore-keys: |
+            dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-ac967b9-
       - name: Format Rust
         run: cargo +1.98.0 fmt --manifest-path cmd/dtw/Cargo.toml --check
       - name: Check Python harness syntax
@@ -40,11 +53,24 @@ jobs:
     name: Windows source, package, and MCP
     runs-on: windows-latest
     timeout-minutes: 75
+    env:
+      DTW_BUILD_DIR: ${{ runner.temp }}/dtw-cua-build
+      DTW_CUA_SOURCE_DIR: ${{ runner.temp }}/dtw-cua-source
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.98.0
+      - name: Restore pinned Rust build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ env.DTW_BUILD_DIR }}
+          key: dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-ac967b9-${{ hashFiles('cmd/dtw/Cargo.lock', 'cmd/dtw/**/*.rs') }}
+          restore-keys: |
+            dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-ac967b9-
       - name: Check Python harness syntax
         run: python -m compileall -q tests/acceptance
       - name: Build package from pinned CUA source

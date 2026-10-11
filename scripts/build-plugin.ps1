@@ -21,8 +21,16 @@ try {
     if ($env:CUA_SOURCE_ROOT) {
         $sourceRoot = (Resolve-Path -LiteralPath $env:CUA_SOURCE_ROOT).Path
     } else {
-        $ownedSource = Join-Path ([System.IO.Path]::GetTempPath()) "dtw-cua-source-$([Guid]::NewGuid().ToString('N'))"
-        New-Item -ItemType Directory -Path $ownedSource | Out-Null
+        $newSource = if ($env:DTW_CUA_SOURCE_DIR) {
+            [System.IO.Path]::GetFullPath($env:DTW_CUA_SOURCE_DIR)
+        } else {
+            Join-Path ([System.IO.Path]::GetTempPath()) "dtw-cua-source-$([Guid]::NewGuid().ToString('N'))"
+        }
+        if (Test-Path -LiteralPath $newSource) {
+            throw "Temporary CUA source path must be new: $newSource"
+        }
+        New-Item -ItemType Directory -Path $newSource | Out-Null
+        $ownedSource = $newSource
         $sourceRoot = $ownedSource
         & git -C $sourceRoot init -q
         Assert-ExitCode 'git init'

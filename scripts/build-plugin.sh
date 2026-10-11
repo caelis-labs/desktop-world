@@ -25,7 +25,17 @@ trap cleanup 0
 if [ -n "${CUA_SOURCE_ROOT:-}" ]; then
   source_root=$(CDPATH= cd -- "$CUA_SOURCE_ROOT" && pwd -P)
 else
-  owned_source=$(mktemp -d "${TMPDIR:-/private/tmp}/dtw-cua-source.XXXXXXXX")
+  if [ -n "${DTW_CUA_SOURCE_DIR:-}" ]; then
+    if [ -e "$DTW_CUA_SOURCE_DIR" ] || [ -L "$DTW_CUA_SOURCE_DIR" ]; then
+      echo "temporary CUA source path must be new: $DTW_CUA_SOURCE_DIR" >&2
+      exit 2
+    fi
+    mkdir -p "$(dirname -- "$DTW_CUA_SOURCE_DIR")"
+    mkdir -- "$DTW_CUA_SOURCE_DIR"
+    owned_source=$DTW_CUA_SOURCE_DIR
+  else
+    owned_source=$(mktemp -d "${TMPDIR:-/private/tmp}/dtw-cua-source.XXXXXXXX")
+  fi
   source_root=$owned_source
   git -C "$source_root" init -q
   git -C "$source_root" remote add origin https://github.com/trycua/cua.git
