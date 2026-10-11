@@ -16,7 +16,6 @@ use tokio::{
     sync::Mutex as AsyncMutex,
 };
 
-const MAX_SCRIPT_BYTES: usize = 30 * 1024;
 const MAX_STATE_BYTES: usize = 32 * 1024;
 const MODEL_TEXT_BYTES: usize = 12 * 1024;
 const PAGE_BYTES: usize = 32 * 1024;
@@ -46,7 +45,18 @@ struct SavedResult {
 enum Work {
     Script(String),
     Cursor(Option<bool>),
-    Focus { pid: u32, window_id: Option<u64> },
+    Focus {
+        pid: u32,
+        window_id: Option<u64>,
+    },
+    Menu {
+        pid: u32,
+        window_id: u64,
+        path: Vec<String>,
+    },
+    Desktop {
+        max_image_dimension: u32,
+    },
 }
 
 struct Server {
@@ -187,17 +197,19 @@ impl Server {
                 id,
                 json!({"tools":[{
                     "name":"exec",
-                    "description":"Run a CUA desktop script; or inspect its original status/result/cancel receipt. CUA's native QuickJS supplies the cua App→Window→Element API. Results are compact; fetch full text, structured data or image with operation=result.",
+                    "description":"Run CUA's native QuickJS script, or call its exact-window menu and full-desktop snapshot primitives through the same receipt channel. Use the short Skill and api.d.ts for signatures. Fetch retained images with operation=result,part=image.",
                     "inputSchema":{
                         "type":"object",
                         "properties":{
                             "session":{"type":"string","description":"Session label (default: default). POC limitation: native element tokens can cross labels in one MCP process; use a separate process per independent Agent."},
-                            "script":{"type":"string","description":"Async CUA script body. Use cua.getApp, getState, query, click, typeText, pressKey, drag and return."},
-                            "operation":{"type":"string","enum":["run","status","result","cancel","permissions","cursor","focus"]},
+                            "script":{"type":"string","description":"Async CUA run_script body. Use cua.getApp, getState, query, click, typeText, pressKey, zoom and return; see packaged api.d.ts."},
+                            "operation":{"type":"string","enum":["run","status","result","cancel","permissions","cursor","focus","menu","desktop"]},
                             "wait_ms":{"type":"integer","minimum":0,"maximum":5000,"description":"Wait briefly for a terminal receipt in the same exec call (default 4000 ms). If still running, query the original execution_id with operation=result."},
                             "enabled":{"type":"boolean","description":"With operation=cursor, show or hide this Session's virtual cursor. Omit to read cursor state."},
-                            "pid":{"type":"integer","minimum":1,"description":"With operation=focus, the exact app PID to activate."},
-                            "window_id":{"type":"integer","minimum":1,"description":"With operation=focus, an ordinary window ID to verify as focused. Omit to verify only the app."},
+                            "pid":{"type":"integer","minimum":1,"description":"With focus/menu, exact app PID."},
+                            "window_id":{"type":"integer","minimum":1,"description":"With menu, exact target window; with focus, optional ordinary window ID."},
+                            "path":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string"},"description":"With menu, exact macOS menu labels from menu bar to command."},
+                            "max_image_dimension":{"type":"integer","minimum":0,"description":"With desktop, optional screenshot long-edge cap (default 1600, 0 for original size); image is retained for result,part=image."},
                             "execution_id":{"type":"string"},
                             "part":{"type":"string","enum":["summary","text","structured","image"]},
                             "offset":{"type":"integer","minimum":0},
@@ -276,6 +288,71 @@ impl Server {
                 self.run(session_id, Work::Focus { pid, window_id }, wait_ms)
                     .await
             }
+            "menu" => {
+                let Some(pid) = obj
+                    .get("pid")
+                    .and_then(Value::as_u64)
+                    .and_then(|n| u32::try_from(n).ok())
+                    .filter(|n| *n > 0)
+                else {
+                    return mcp_text(json!({"error":"menu requires positive pid"}), true);
+                };
+                let Some(window_id) = obj
+                    .get("window_id")
+                    .and_then(Value::as_u64)
+                    .filter(|n| *n > 0)
+                else {
+                    return mcp_text(json!({"error":"menu requires positive window_id"}), true);
+                };
+                let Some(path) = obj.get("path").and_then(Value::as_array) else {
+                    return mcp_text(json!({"error":"menu requires path"}), true);
+                };
+                if path.is_empty()
+                    || path.len() > 16
+                    || path
+                        .iter()
+                        .any(|s| s.as_str().is_none_or(|s| s.trim().is_empty()))
+                {
+                    return mcp_text(
+                        json!({"error":"menu path must have 1-16 non-empty labels"}),
+                        true,
+                    );
+                }
+                self.run(
+                    session_id,
+                    Work::Menu {
+                        pid,
+                        window_id,
+                        path: path
+                            .iter()
+                            .map(|s| s.as_str().unwrap().to_owned())
+                            .collect(),
+                    },
+                    wait_ms,
+                )
+                .await
+            }
+            "desktop" => {
+                let Some(cap) = obj
+                    .get("max_image_dimension")
+                    .map(Value::as_u64)
+                    .unwrap_or(Some(1600))
+                    .and_then(|n| u32::try_from(n).ok())
+                else {
+                    return mcp_text(
+                        json!({"error":"max_image_dimension must be a non-negative u32"}),
+                        true,
+                    );
+                };
+                self.run(
+                    session_id,
+                    Work::Desktop {
+                        max_image_dimension: cap,
+                    },
+                    wait_ms,
+                )
+                .await
+            }
             "permissions" => {
                 match self
                     .driver
@@ -303,14 +380,6 @@ impl Server {
     }
 
     async fn run(self: &Arc<Self>, session_id: &str, work: Work, wait_ms: u64) -> Value {
-        if let Work::Script(script) = &work {
-            if script.len() > MAX_SCRIPT_BYTES {
-                return mcp_text(
-                    json!({"error":"script too large","max_bytes":MAX_SCRIPT_BYTES}),
-                    true,
-                );
-            }
-        }
         let (native, state, started) = {
             let mut sessions = self.sessions.lock().unwrap();
             if !sessions.contains_key(session_id) {
@@ -504,6 +573,30 @@ impl Server {
                     .await?;
                 return Ok((save(result), None, true));
             }
+            Work::Menu {
+                pid,
+                window_id,
+                path,
+            } => {
+                let result = native
+                    .call_tool(
+                        "invoke_menu".into(),
+                        json!({"pid":pid,"window_id":window_id,"path":path}).to_string(),
+                    )
+                    .await?;
+                return Ok((save(result), None, true));
+            }
+            Work::Desktop {
+                max_image_dimension,
+            } => {
+                let result = native
+                    .call_tool(
+                        "get_desktop_state".into(),
+                        json!({"max_image_dimension":max_image_dimension}).to_string(),
+                    )
+                    .await?;
+                return Ok((save(result), None, true));
+            }
             Work::Script(code) => code,
         };
         let wrapped = format!(
@@ -595,9 +688,19 @@ impl Server {
                         "verified": structured.pointer("/exact_window_effect/verified"),
                     });
                 }
+                if let Some(capture_id) = structured.get("capture_id").and_then(Value::as_str) {
+                    summary["capture"] = json!({
+                        "capture_id": capture_id,
+                        "display": structured.get("display"),
+                        "screenshot_width": structured.get("screenshot_width"),
+                        "screenshot_height": structured.get("screenshot_height"),
+                        "screen_width": structured.get("screen_width"),
+                        "screen_height": structured.get("screen_height"),
+                    });
+                }
                 if let Some(value) = structured.get("value") {
                     let encoded = value.to_string();
-                    if encoded.len() <= 2048 {
+                    if encoded.len() <= 4096 {
                         summary["value"] = value.clone();
                     } else {
                         summary["value_bytes"] = json!(encoded.len());

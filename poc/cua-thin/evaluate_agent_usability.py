@@ -16,6 +16,26 @@ from accept_chrome import exact_chrome_pid, run_script
 from probe import call
 
 
+ALLOW_RULE = "mcp(desktop-world_dtw/exec)"
+
+
+def restore_test_allow(path, before, injected):
+    current = path.read_bytes()
+    if current == injected:
+        temporary = path.with_name(path.name + ".dtw-poc-restore-" + uuid.uuid4().hex)
+        temporary.write_bytes(before)
+        os.replace(temporary, path)
+        return "byte_identical_restore"
+    config = json.loads(current)
+    allowed = config.setdefault("userSettings", {}).setdefault("globalPermissionGrants", {}).setdefault("allow", [])
+    if ALLOW_RULE in allowed:
+        allowed.remove(ALLOW_RULE)
+        temporary = path.with_name(path.name + ".dtw-poc-restore-" + uuid.uuid4().hex)
+        temporary.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
+        os.replace(temporary, path)
+    return "concurrent_config_change_rule_removed"
+
+
 def summarize(log):
     calls = []
     result = None
@@ -95,10 +115,26 @@ def main():
         err = root / "agent.stderr"
         print(json.dumps({"root": str(root), "pid": pid, "plugin": str(plugin), "log": str(log)}), flush=True)
         start = time.monotonic()
-        with log.open("w") as out, err.open("w") as stderr:
-            agent = subprocess.run(["agy", "--print", prompt, "--model", "gemini-3.8-flash-high",
-                                    "--output-format", "stream-json", "--print-timeout", "300s"],
-                                   cwd=project, stdout=out, stderr=stderr, timeout=320)
+        config_path = Path.home() / ".gemini/config/config.json"
+        original = config_path.read_bytes()
+        config = json.loads(original)
+        allowed = config.setdefault("userSettings", {}).setdefault("globalPermissionGrants", {}).setdefault("allow", [])
+        added_rule = ALLOW_RULE not in allowed
+        if added_rule:
+            allowed.append(ALLOW_RULE)
+        injected = (json.dumps(config, ensure_ascii=False, indent=2) + "\n").encode()
+        if added_rule:
+            temporary = config_path.with_name(config_path.name + ".dtw-poc-" + uuid.uuid4().hex)
+            temporary.write_bytes(injected)
+            os.replace(temporary, config_path)
+        try:
+            with log.open("w") as out, err.open("w") as stderr:
+                agent = subprocess.run(["agy", "--print", prompt, "--model", "gemini-3.8-flash-high",
+                                        "--output-format", "stream-json", "--print-timeout", "300s"],
+                                       cwd=project, stdout=out, stderr=stderr, timeout=320)
+        finally:
+            config_restore = (restore_test_allow(config_path, original, injected)
+                              if added_rule else "preexisting_rule_unchanged")
         elapsed = time.monotonic() - start
         proc = subprocess.Popen([str(package / "bin/dtw")], stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -121,11 +157,15 @@ def main():
                 proc.kill()
                 proc.wait()
         record = {"agent_exit_code": agent.returncode, "elapsed_seconds": round(elapsed, 2),
+                  "config_restore": config_restore,
+                  "config_original_sha256": hashlib.sha256(original).hexdigest(),
+                  "config_after_sha256": hashlib.sha256(config_path.read_bytes()).hexdigest(),
                   "agent": summarize(log), "independent_readback": after}
         (root / "record.json").write_text(json.dumps(record, ensure_ascii=False, indent=2))
         print(json.dumps({"record": str(root / "record.json"), "agent_exit_code": agent.returncode,
                           "elapsed_seconds": round(elapsed, 2), "run_calls": record["agent"]["run_calls"],
                           "failed_receipts": record["agent"]["failed_receipts"],
+                          "config_restore": config_restore,
                           "independent_readback": after.get("value")}, ensure_ascii=False), flush=True)
     finally:
         if pid is not None:

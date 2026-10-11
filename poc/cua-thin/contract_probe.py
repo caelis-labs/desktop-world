@@ -51,6 +51,18 @@ def main():
         assert report["large"]["summary_bytes"] < 15000
         assert page["page"]["next_offset"] is not None
 
+        _, medium = run(proc, 23, "a", "return {marker:'y'.repeat(2200)};")
+        report["medium_value"] = {"status": medium["status"],
+                                  "value_inline": "value" in medium,
+                                  "marker_bytes": len(medium.get("value", {}).get("marker", ""))}
+        assert report["medium_value"] == {"status": "completed", "value_inline": True,
+                                          "marker_bytes": 2200}
+
+        _, long_script = run(proc, 25, "a", "/*" + "x" * 40000 + "*/ return 64;")
+        report["upstream_script_limit"] = {"status": long_script["status"],
+                                           "value": long_script.get("value")}
+        assert report["upstream_script_limit"] == {"status": "completed", "value": 64}
+
         foreign = exec_call(proc, 11, {"session": "b", "operation": "result",
                                        "execution_id": large_id})
         report["foreign_receipt"] = foreign
