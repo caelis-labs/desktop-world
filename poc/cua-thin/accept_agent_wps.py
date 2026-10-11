@@ -16,7 +16,12 @@ from probe import call, exec_call, result
 
 
 def wps_pids():
-    output = subprocess.check_output(["pgrep", "-fl", "/Applications/wpsoffice.app/Contents/MacOS/wpsoffice"], text=True)
+    found = subprocess.run(["pgrep", "-fl", "/Applications/wpsoffice.app/Contents/MacOS/wpsoffice"],
+                           capture_output=True, text=True)
+    if found.returncode == 1:
+        return set()
+    found.check_returncode()
+    output = found.stdout
     return {int(line.split(None, 1)[0]) for line in output.splitlines()
             if "/Applications/wpsoffice.app/Contents/MacOS/wpsoffice" in line}
 

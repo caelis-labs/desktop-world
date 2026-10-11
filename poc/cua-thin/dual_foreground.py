@@ -71,7 +71,16 @@ def main():
         jobs = []
         outcomes = []
         readback = []
+        focus_results = []
         for index, (label, pid, wid) in enumerate(bound):
+            if sequential and "--focus-before" in sys.argv[2:]:
+                focused = exec_call(proc, 500 + index * 2, {
+                    "session": label, "operation": "focus", "pid": pid, "window_id": wid})
+                if focused.get("status") == "running":
+                    focused = result(proc, 501 + index * 2, label, focused["execution_id"])
+                focus_results.append({"session": label, "status": focused.get("status"),
+                                      "focus": focused.get("focus")})
+                assert focused.get("status") == "completed" and focused.get("focus", {}).get("verified"), focused
             script = (f"const a=await cua.getApp({{pid:{pid},windowId:{wid}}});"
                       "const s=await a.getState({max_elements:80});"
                       "if(!s.screenshot_frame_valid||!String(s.tree_markdown).includes('Drag source'))return {refused:true};"
@@ -101,7 +110,7 @@ def main():
             done = result(proc, 31 + index * 2, label, started["execution_id"])
             readback.append({"session": label, "status": done["status"], "value": done.get("value")})
         record = {"mode": "sequential" if sequential else "concurrent", "targets": bound,
-                  "outcomes": outcomes, "readback": readback}
+                  "focus_results": focus_results, "outcomes": outcomes, "readback": readback}
         (root / "record.json").write_text(json.dumps(record, ensure_ascii=False, indent=2))
         print(json.dumps(record, ensure_ascii=False), flush=True)
         assert all(o["status"] == "completed" and o.get("value", {}).get("delivery", {}).get("mode") == "foreground" for o in outcomes)

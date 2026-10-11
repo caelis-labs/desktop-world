@@ -44,7 +44,7 @@ def summarize(log):
         if event.get("event") == "result":
             result = event["result"]
         step = event.get("step_update", {})
-        if step.get("state") != "DONE" or step.get("tool_name") != "call_mcp_tool":
+        if step.get("state") not in ("DONE", "ERROR") or step.get("tool_name") != "call_mcp_tool":
             continue
         info = step.get("tool_info", {})
         params = info.get("parameters", {})
@@ -56,7 +56,7 @@ def summarize(log):
             value = json.loads(output)
         except (TypeError, json.JSONDecodeError):
             value = {}
-        calls.append({"operation": args.get("operation", "run"), "script_sha256":
+        calls.append({"operation": args.get("operation", "run"), "tool_step_state": step.get("state"), "script_sha256":
                       hashlib.sha256(args.get("script", "").encode()).hexdigest() if args.get("script") else None,
                       "execution_id": value.get("execution_id"), "status": value.get("status"),
                       "error_code": value.get("error_code"), "is_error": value.get("is_error"),
@@ -66,7 +66,8 @@ def summarize(log):
             "agent_response": result.get("response") if result else None,
             "exec_calls": calls,
             "run_calls": sum(c["operation"] == "run" for c in calls),
-            "failed_receipts": sum(c["status"] in ("failed", "unknown", "refused") or c["is_error"] is True for c in calls)}
+            "failed_receipts": sum(c["status"] in ("failed", "unknown", "refused") or c["is_error"] is True
+                                   or c["tool_step_state"] == "ERROR" for c in calls)}
 
 
 def main():

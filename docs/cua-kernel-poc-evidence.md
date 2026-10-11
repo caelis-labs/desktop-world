@@ -1,5 +1,7 @@
 # DTW thin CUA kernel POC: evidence and stop gates
 
+Current convergence, corrected Agent counts, the successful desktop-screenshot Obsidian route, coordinate measurement, and the final package are in [the final POC report](cua-thin-final-poc.md). The notes below are the chronological experiment record and contain earlier open gates that were subsequently resolved.
+
 Date: 2026-10-11. Baseline `b2bee974af969a746c4367f7ec413a2c7a9b3a05`, branch `poc/cua-kernel-thin-integration`; upstream CUA source `ac967b9006aafa10870aadb5a645b038cba9721a` stayed clean and read-only. This is a local POC. No product migration, push, PR, or release occurred.
 
 ## Artifact and architecture

@@ -17,6 +17,7 @@ type ElementSelector = {
 type Target = ElementSelector | string | number | Point;
 type PixelOptions = Delivery & {
   from_zoom?: boolean;
+  /** One-use action binding to a screenshot; the first pixel action consumes it. */
   capture_id?: string;
   button?: "left" | "right" | "middle";
   modifiers?: string[];
@@ -119,11 +120,12 @@ declare const state: Record<string, Json>;
 /** The same MCP tool carries all results. `result` with part=image displays
  * a retained screenshot; part=structured pages the complete native data. */
 type ExecInput =
-  | { session?: string; operation?: "run"; script: string; wait_ms?: number }
+  | { session?: string; operation?: "run"; script: string; wait_ms?: number;
+      include_image?: boolean }
   | { session?: string; operation: "menu"; pid: number; window_id: number;
       path: string[]; wait_ms?: number }
   | { session?: string; operation: "desktop"; max_image_dimension?: number;
-      wait_ms?: number }
+      wait_ms?: number; include_image?: boolean }
   | { session?: string; operation: "focus"; pid: number; window_id?: number;
       wait_ms?: number }
   | { session?: string; operation: "cursor"; enabled?: boolean; wait_ms?: number }

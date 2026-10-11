@@ -6,8 +6,8 @@ use cua_driver_sdk::{
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
-    env,
-    path::PathBuf,
+    env, fs,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -77,6 +77,14 @@ fn worker_path() -> Result<String, String> {
                 .nth(2)
                 .ok_or_else(|| "--worker needs a binary path".to_owned());
         }
+        if arg == "install" {
+            let args: Vec<String> = env::args().collect();
+            if args.len() != 5 || args[2] != "antigravity" || args[3] != "--project" {
+                return Err("usage: dtw install antigravity --project PROJECT_DIR".into());
+            }
+            install_antigravity(Path::new(&args[4]))?;
+            std::process::exit(0);
+        }
         return Err(format!("unknown argument: {arg}"));
     }
     if let Ok(path) = env::var("DTW_CUA_WORKER") {
@@ -89,6 +97,86 @@ fn worker_path() -> Result<String, String> {
         .map(|p| p.join("libexec/cua-driver"))
         .ok_or_else(|| "cannot locate sibling libexec/cua-driver".to_owned())?;
     Ok(path.to_string_lossy().into_owned())
+}
+
+fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
+    fs::create_dir(destination).map_err(|e| e.to_string())?;
+    for item in fs::read_dir(source).map_err(|e| e.to_string())? {
+        let item = item.map_err(|e| e.to_string())?;
+        let kind = item.file_type().map_err(|e| e.to_string())?;
+        let target = destination.join(item.file_name());
+        if kind.is_dir() {
+            copy_tree(&item.path(), &target)?;
+        } else if kind.is_file() {
+            fs::copy(item.path(), &target).map_err(|e| e.to_string())?;
+        } else {
+            return Err(format!(
+                "unsupported package entry: {}",
+                item.path().display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn install_antigravity(project: &Path) -> Result<(), String> {
+    let project = project.canonicalize().map_err(|e| e.to_string())?;
+    if !project.is_dir() {
+        return Err("project must be an existing directory".into());
+    }
+    let binary = env::current_exe().map_err(|e| e.to_string())?;
+    let package = binary
+        .parent()
+        .and_then(|p| p.parent())
+        .ok_or("cannot locate package root")?;
+    for required in [
+        "libexec/cua-driver",
+        "skills/desktop-world/SKILL.md",
+        "mcp.json",
+    ] {
+        if !package.join(required).is_file() {
+            return Err(format!("incomplete package: {required}"));
+        }
+    }
+    let destination = project.join(".agents/plugins/desktop-world");
+    if fs::symlink_metadata(&destination).is_ok() {
+        return Err(format!(
+            "destination already exists: {}",
+            destination.display()
+        ));
+    }
+    fs::create_dir_all(destination.parent().ok_or("invalid destination")?)
+        .map_err(|e| e.to_string())?;
+    let staging =
+        destination.with_file_name(format!(".desktop-world-install-{}", uuid::Uuid::new_v4()));
+    let plugin = json!({
+        "$schema":"https://antigravity.google/schemas/v1/plugin.json",
+        "name":"desktop-world",
+        "description":"DTW thin CUA kernel POC"
+    });
+    let result = (|| {
+        copy_tree(package, &staging)?;
+        fs::write(staging.join("plugin.json"), format!("{plugin}\n")).map_err(|e| e.to_string())?;
+        let mcp = json!({"mcpServers":{"dtw":{"command":destination.join("bin/dtw")}}});
+        fs::write(staging.join("mcp_config.json"), format!("{mcp}\n"))
+            .map_err(|e| e.to_string())?;
+        if fs::symlink_metadata(&destination).is_ok() {
+            return Err(format!(
+                "destination already exists: {}",
+                destination.display()
+            ));
+        }
+        fs::rename(&staging, &destination).map_err(|e| e.to_string())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    result?;
+    println!(
+        "{}",
+        json!({"plugin":destination,"mcp_command":destination.join("bin/dtw")})
+    );
+    Ok(())
 }
 
 fn configured_driver() -> ConfiguredDriverOptions {
@@ -205,6 +293,7 @@ impl Server {
                             "script":{"type":"string","description":"Async CUA run_script body. Use cua.getApp, getState, query, click, typeText, pressKey, zoom and return; see packaged api.d.ts."},
                             "operation":{"type":"string","enum":["run","status","result","cancel","permissions","cursor","focus","menu","desktop"]},
                             "wait_ms":{"type":"integer","minimum":0,"maximum":5000,"description":"Wait briefly for a terminal receipt in the same exec call (default 4000 ms). If still running, query the original execution_id with operation=result."},
+                            "include_image":{"type":"boolean","description":"If this execution completes within wait_ms and has an image, return the first image with its summary. Default false; later result,part=image still works."},
                             "enabled":{"type":"boolean","description":"With operation=cursor, show or hide this Session's virtual cursor. Omit to read cursor state."},
                             "pid":{"type":"integer","minimum":1,"description":"With focus/menu, exact app PID."},
                             "window_id":{"type":"integer","minimum":1,"description":"With menu, exact target window; with focus, optional ordinary window ID."},
@@ -256,11 +345,20 @@ impl Server {
             .and_then(Value::as_u64)
             .unwrap_or(4_000)
             .min(5_000);
+        let include_image = obj
+            .get("include_image")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         match operation {
             "run" => match obj.get("script").and_then(Value::as_str) {
                 Some(script) => {
-                    self.run(session_id, Work::Script(script.to_owned()), wait_ms)
-                        .await
+                    self.run(
+                        session_id,
+                        Work::Script(script.to_owned()),
+                        wait_ms,
+                        include_image,
+                    )
+                    .await
                 }
                 None => mcp_text(json!({"error":"script is required"}), true),
             },
@@ -269,6 +367,7 @@ impl Server {
                     session_id,
                     Work::Cursor(obj.get("enabled").and_then(Value::as_bool)),
                     wait_ms,
+                    include_image,
                 )
                 .await
             }
@@ -285,8 +384,13 @@ impl Server {
                 if obj.get("window_id").is_some() && window_id.is_none_or(|n| n == 0) {
                     return mcp_text(json!({"error":"window_id must be positive"}), true);
                 }
-                self.run(session_id, Work::Focus { pid, window_id }, wait_ms)
-                    .await
+                self.run(
+                    session_id,
+                    Work::Focus { pid, window_id },
+                    wait_ms,
+                    include_image,
+                )
+                .await
             }
             "menu" => {
                 let Some(pid) = obj
@@ -329,6 +433,7 @@ impl Server {
                             .collect(),
                     },
                     wait_ms,
+                    include_image,
                 )
                 .await
             }
@@ -350,6 +455,7 @@ impl Server {
                         max_image_dimension: cap,
                     },
                     wait_ms,
+                    include_image,
                 )
                 .await
             }
@@ -379,7 +485,13 @@ impl Server {
         }
     }
 
-    async fn run(self: &Arc<Self>, session_id: &str, work: Work, wait_ms: u64) -> Value {
+    async fn run(
+        self: &Arc<Self>,
+        session_id: &str,
+        work: Work,
+        wait_ms: u64,
+        include_image: bool,
+    ) -> Value {
         let (native, state, started) = {
             let mut sessions = self.sessions.lock().unwrap();
             if !sessions.contains_key(session_id) {
@@ -496,21 +608,31 @@ impl Server {
                 .get(&execution_id)
                 .is_some_and(|job| job.phase != "running");
             if terminal {
-                return self
-                    .control(session_id, "result", &json!({"execution_id":execution_id}))
-                    .await;
+                break;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
-        if self
+        let (terminal, has_image) = self
             .jobs
             .lock()
             .unwrap()
             .get(&execution_id)
-            .is_some_and(|job| job.phase != "running")
-        {
+            .map(|job| {
+                (
+                    job.phase != "running",
+                    job.result
+                        .as_ref()
+                        .is_some_and(|result| !result.images.is_empty()),
+                )
+            })
+            .unwrap_or((false, false));
+        if terminal {
             return self
-                .control(session_id, "result", &json!({"execution_id":execution_id}))
+                .control(
+                    session_id,
+                    "result",
+                    &json!({"execution_id":execution_id,"part":if include_image && has_image {"image"} else {"summary"}}),
+                )
                 .await;
         }
         mcp_text(

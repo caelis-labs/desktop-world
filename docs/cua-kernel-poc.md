@@ -1,5 +1,7 @@
 # DTW thin CUA kernel POC
 
+For the final package, corrected fresh-Agent acceptance, and remaining release limits, read [the convergence report](cua-thin-final-poc.md). This file records the initial goal and technical selection.
+
 ## Goal and selection
 
 Useful desktop task completion takes priority over compatibility with today's DTW implementation. Preserve the product shape: App → Window → Element discovery, one `exec` MCP tool, scripts and session state, compact results with exact result lookup, background input when CUA can deliver it and controlled foreground input otherwise, no Node requirement, isolated Agent sessions, and a small installable plugin. The public script API is CUA's `cua` API for this POC; no `dtw.app` compatibility promise.
