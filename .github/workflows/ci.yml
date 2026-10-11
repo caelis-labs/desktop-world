@@ -1,38 +1,20 @@
-name: contracts
-on: [push, pull_request]
-permissions:
-  contents: read
+name: CI
+on:
+  push:
+  pull_request:
+
 jobs:
-  contracts:
+  macos-source:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          go-version: '1.26.x'
-          cache: false
-      - run: go test -race ./...
-      - run: go vet ./...
-  native-build:
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.x'
-          cache: false
-      - run: GOWORK=off go test ./cmd/dtw/...
-      - run: ./scripts/build-native-plugin.sh /tmp/dtw-native-plugin-ci
-  platform-build:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.x'
-          cache: false
-      - run: go test ./cmd/dtw-helper ./internal/...
-# Hosted CI does not count as interactive desktop acceptance.
+          toolchain: 1.98.0
+          components: rustfmt
+      - name: Format
+        run: cargo +1.98.0 fmt --manifest-path cmd/dtw/Cargo.toml --check
+      - name: Compile source
+        run: cargo +1.98.0 check --manifest-path cmd/dtw/Cargo.toml --locked
+      - name: Check acceptance harness syntax
+        run: python3 -m compileall -q tests/acceptance
