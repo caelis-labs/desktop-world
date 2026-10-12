@@ -58,7 +58,7 @@ PowerShell uses `.\dtw.exe uninstall ...`. Claude removal unregisters only `desk
 
 ## Permissions and first use
 
-On macOS, grant Accessibility and Screen Recording to the Agent or terminal app that launches DTW, then fully quit and reopen it. The signed CLI and worker should be checked on a fresh Mac before public release. On Windows, the x64 Visual C++ runtime may be required; an elevated target app still follows Windows integrity restrictions.
+On macOS, grant Accessibility and Screen Recording to the app that launches the Agent CLI (for example, Terminal.app), then fully quit and reopen that app. The `agy` and `codex` command-line executables may not appear as separate apps in Privacy & Security. DTW's embedded worker checks the launching host's permissions but does not raise its own authorization prompt. If the host is absent from the list, use the **+** button in each permission pane to add it. A network proxy's authorization is separate from macOS desktop permissions. The signed CLI and worker should be checked on a fresh Mac before public release. On Windows, the x64 Visual C++ runtime may be required; an elevated target app still follows Windows integrity restrictions.
 
 Start with a read-only task: “Use the Desktop World Skill to inspect my open browser window and describe its controls. Do not click or type.” Next, use a temporary document and ask the Agent to type a short string and verify it appears. The [Skill](../packaging/plugin/skills/desktop-world/SKILL.md) explains native scripts, receipts, and readback; users can describe tasks in natural language.
 
