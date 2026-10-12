@@ -90,7 +90,13 @@ def main():
                 continue
             assert hashlib.sha256((installed / name).read_bytes()).hexdigest() == digest, name
         run([binary, "install", "antigravity", "--project", project])
-        assert Path(json.loads((installed / "mcp_config.json").read_text())["mcpServers"]["dtw"]["command"]).samefile(installed / "bin" / executable)
+        repeated_command = json.loads((installed / "mcp_config.json").read_text())["mcpServers"]["dtw"]["command"]
+        if not Path(repeated_command).is_file():
+            print(json.dumps({"first_command": command, "repeated_command": repeated_command,
+                              "expected": str(installed / "bin" / executable),
+                              "expected_exists": (installed / "bin" / executable).is_file()},
+                             ensure_ascii=True), file=sys.stderr)
+        assert Path(repeated_command).samefile(installed / "bin" / executable)
         run([sys.executable, repo / "tests/acceptance/mcp_smoke.py", command])
         run([sys.executable, repo / "tests/acceptance/licenses_probe.py", installed])
         standalone = root / ("standalone dtw.exe" if os.name == "nt" else "standalone dtw")

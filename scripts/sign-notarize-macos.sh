@@ -28,7 +28,11 @@ security unlock-keychain -p "$keychain_password" "$keychain" >/dev/null
 security set-keychain-settings -lut 21600 "$keychain"
 security import "$work/identity.p12" -k "$keychain" -P "$APPLE_DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign >/dev/null
 security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
-identity=$(security find-identity -v -p codesigning "$keychain" | grep -Eo '[A-F0-9]{40}' | head -1)
+# codesign still consults the user keychain search list when resolving a SHA-1
+# identity, even with --keychain. The runner is ephemeral and this keychain is
+# removed by the cleanup trap.
+security list-keychains -d user -s "$keychain"
+identity=$(security find-identity -v -p codesigning "$keychain" | grep 'Developer ID Application:' | grep -Eo '[A-F0-9]{40}' | head -1 || true)
 if [ -z "$identity" ]; then
   echo 'Developer ID signing identity not found in uploaded certificate' >&2
   exit 2
