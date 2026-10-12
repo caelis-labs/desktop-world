@@ -386,120 +386,74 @@ fn mcp_text(value: Value, is_error: bool) -> Value {
     json!({"content":[{"type":"text","text":value.to_string()}], "isError":is_error})
 }
 
-fn short(s: &str, max: usize) -> (String, bool) {
+fn mcp_plain(value: impl Into<String>, is_error: bool) -> Value {
+    json!({"content":[{"type":"text","text":value.into()}], "isError":is_error})
+}
+
+fn short(s: &str, max: usize) -> String {
     if s.len() <= max {
-        return (s.to_owned(), false);
+        return s.to_owned();
     }
     let mut end = max;
     while !s.is_char_boundary(end) {
         end -= 1;
     }
-    (s[..end].to_owned(), true)
+    format!(
+        "{}...truncated {} chars...",
+        &s[..end],
+        s[end..].chars().count()
+    )
 }
 
-fn compact_success_text(value: &str) -> Option<String> {
-    if !value.starts_with("run_script: ok") || !value.contains("\nreturn value:") {
-        return None;
+fn display_result(result: &SavedResult) -> String {
+    let mut text = result.text.clone();
+    if result.is_error || !text.starts_with("run_script: ok") {
+        return text;
     }
-    let first = value.lines().next()?;
-    let calls = value
-        .find("\ncalls:\n")
-        .map(|at| &value[at..])
-        .unwrap_or("");
-    Some(format!("{first}{calls}"))
-}
-
-fn focus_summary(structured: &Value) -> Option<Value> {
-    if let Some(activated) = structured.get("activated").and_then(Value::as_bool) {
-        return Some(json!({
-            "activated": activated,
-            "code": structured.get("code"),
-            "focused_window_id": structured.pointer("/observed/focused_window_id"),
-            "verified": structured.pointer("/exact_window_effect/verified"),
-        }));
+    // CUA's return line contains our private state wrapper. Replace that
+    // line in place, retaining the native order of status, value and calls.
+    let mut returned = String::new();
+    if let Ok(structured) = serde_json::from_str::<Value>(&result.structured) {
+        if let Some(value) = structured.get("value").filter(|v| !v.is_null()) {
+            // CUA already names each action and its result in the call trace.
+            // Repeating its action object adds fields without an action fact.
+            let action_in_calls = text.contains("\ncalls:\n")
+                && value.get("effect").is_some()
+                && value.get("route").is_some();
+            if !action_in_calls {
+                returned = format!("\nreturn value: {value}");
+            }
+        }
     }
-    // Windows reports the observed foreground HWND rather than macOS's fields.
-    let landed = structured.get("landed_on_target")?.as_bool()?;
-    let hwnd = |key: &str| {
-        structured
-            .get(key)
-            .and_then(Value::as_str)
-            .and_then(|value| u64::from_str_radix(value.strip_prefix("0x")?, 16).ok())
-    };
-    let observed = hwnd("now_fg_hwnd");
-    let target = hwnd("target_hwnd");
-    Some(json!({
-        "activated": landed,
-        "code": structured.get("code"),
-        "focused_window_id": observed,
-        "verified": landed && observed.is_some() && observed == target,
-    }))
-}
-
-fn omit_null_members(mut value: Value) -> Value {
-    if let Some(fields) = value.as_object_mut() {
-        fields.retain(|_, field| !field.is_null());
+    if let Some(start) = text.find("\nreturn value:") {
+        let end = text[start + 1..]
+            .find('\n')
+            .map(|n| start + 1 + n)
+            .unwrap_or(text.len());
+        text.replace_range(start..end, &returned);
     }
-    value
-}
-
-fn compact_inline_value(value: &Value) -> Value {
-    let mut compacted = value.clone();
-    let Some(fields) = compacted.as_object_mut() else {
-        return compacted;
-    };
-    // Project only the known CUA action result shape. Arbitrary script return
-    // objects keep their exact fields, and the full structure remains pageable.
-    if !fields.contains_key("effect") || !fields.contains_key("route") {
-        return compacted;
-    }
-    if fields.get("text") == fields.get("summary") {
-        fields.remove("text");
-    }
-    if fields.get("delivery") == Some(&json!({"mode":"not_applicable"})) {
-        fields.remove("delivery");
-    }
-    compacted
+    text
 }
 
 #[cfg(test)]
-mod focus_tests {
+mod receipt_tests {
     use super::*;
 
     #[test]
-    fn windows_verifies_the_observed_exact_foreground_window() {
-        let summary = focus_summary(&json!({
-            "landed_on_target": true, "now_fg_hwnd": "0x14026c", "target_hwnd": "0x14026c"
-        }))
-        .unwrap();
-        assert_eq!(summary["verified"], true);
-        assert_eq!(summary["focused_window_id"], 0x14026cu64);
+    fn native_action_text_is_not_repeated_as_json() {
+        let result = SavedResult {
+            text: "run_script: ok in 1021 ms, 1 driver call(s)\nreturn value: {\"__dtw_value\":{},\"__dtw_state\":{}}\ncalls:\n  1. line 3 press_key ok (16 ms): Pressed 'return' on the desktop.".into(),
+            structured: json!({"value":{"effect":"unverifiable","route":"global_input","summary":"Pressed 'return' on the desktop.","text":"Pressed 'return' on the desktop."}}).to_string(),
+            images: vec![],
+            is_error: false,
+            error_code: None,
+        };
+        assert_eq!(display_result(&result), "run_script: ok in 1021 ms, 1 driver call(s)\ncalls:\n  1. line 3 press_key ok (16 ms): Pressed 'return' on the desktop.");
     }
 
     #[test]
-    fn windows_does_not_verify_raising_or_a_different_foreground_window() {
-        for landed in [false, true] {
-            let summary = focus_summary(&json!({
-                "landed_on_target": landed, "raised": true,
-                "now_fg_hwnd": "0x123", "target_hwnd": "0x456"
-            }))
-            .unwrap();
-            assert_eq!(summary["verified"], false);
-        }
-        let missing = focus_summary(&json!({"landed_on_target": true})).unwrap();
-        assert_eq!(missing["verified"], false);
-    }
-
-    #[test]
-    fn macos_retains_native_activation_and_verification() {
-        let summary = focus_summary(&json!({
-            "activated": true, "observed": {"focused_window_id": 42},
-            "exact_window_effect": {"verified": false}
-        }))
-        .unwrap();
-        assert_eq!(summary["activated"], true);
-        assert_eq!(summary["verified"], false);
-        assert_eq!(summary["focused_window_id"], 42);
+    fn truncation_reports_characters_in_the_text() {
+        assert_eq!(short("é中ab", 3), "é...truncated 3 chars...");
     }
 }
 
@@ -513,7 +467,7 @@ fn page(s: &str, offset: usize) -> Value {
     while !s.is_char_boundary(end) {
         end -= 1;
     }
-    json!({"data": &s[start..end], "offset":start, "next_offset": if end < s.len() {Some(end)} else {None}, "bytes":s.len()})
+    json!({"data": &s[start..end], "offset":start, "next_offset": if end < s.len() {Some(end)} else {None}})
 }
 
 impl Server {
@@ -550,14 +504,14 @@ impl Server {
                             "session":{"type":"string","description":"Session label (default: default). Native element tokens can cross labels in one MCP process; use a separate process per independent Agent."},
                             "script":{"type":"string","description":"Async CUA run_script body. Use cua.getApp, getState, query, click, typeText, pressKey, zoom and return; see packaged api.d.ts."},
                             "operation":{"type":"string","enum":["run","status","result","cancel","permissions","cursor","focus","menu","desktop"]},
-                            "wait_ms":{"type":"integer","minimum":0,"maximum":5000,"description":"Wait briefly for a terminal receipt in the same exec call (default 4000 ms). If still running, query the original execution_id with operation=result."},
+                            "wait_ms":{"type":"integer","minimum":0,"maximum":5000,"description":"Wait briefly for a terminal receipt in the same exec call (default 4000 ms). If still running, query the original id with operation=result."},
                             "include_image":{"type":"boolean","description":"If this execution completes within wait_ms and has an image, return the first image with its summary. Default false; later result,part=image still works."},
                             "enabled":{"type":"boolean","description":"With operation=cursor, show or hide this Session's virtual cursor. Omit to read cursor state."},
                             "pid":{"type":"integer","minimum":1,"description":"With focus/menu, exact app PID."},
                             "window_id":{"type":"integer","minimum":1,"description":"With menu, exact target window; with focus, optional ordinary window ID."},
                             "path":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string"},"description":"With menu, exact macOS menu labels from menu bar to command."},
                             "max_image_dimension":{"type":"integer","minimum":0,"description":"With desktop, optional screenshot long-edge cap (default 1600, 0 for original size); image is retained for result,part=image."},
-                            "execution_id":{"type":"string"},
+                            "id":{"type":"string","description":"The original short receipt ID for status, result, or cancel."},
                             "part":{"type":"string","enum":["summary","text","structured","image"]},
                             "offset":{"type":"integer","minimum":0},
                             "image_index":{"type":"integer","minimum":0}
@@ -585,14 +539,14 @@ impl Server {
 
     async fn exec(self: &Arc<Self>, args: Value) -> Value {
         let Some(obj) = args.as_object() else {
-            return mcp_text(json!({"error":"arguments must be an object"}), true);
+            return mcp_plain("arguments must be an object", true);
         };
         let session_id = obj
             .get("session")
             .and_then(Value::as_str)
             .unwrap_or("default");
         if session_id.is_empty() || session_id.len() > 100 || !session_id.is_ascii() {
-            return mcp_text(json!({"error":"invalid session"}), true);
+            return mcp_plain("invalid session", true);
         }
         let operation = obj
             .get("operation")
@@ -618,7 +572,7 @@ impl Server {
                     )
                     .await
                 }
-                None => mcp_text(json!({"error":"script is required"}), true),
+                None => mcp_plain("script is required", true),
             },
             "cursor" => {
                 self.run(
@@ -636,11 +590,11 @@ impl Server {
                     .and_then(|n| u32::try_from(n).ok())
                     .filter(|n| *n > 0)
                 else {
-                    return mcp_text(json!({"error":"focus requires positive pid"}), true);
+                    return mcp_plain("focus requires positive pid", true);
                 };
                 let window_id = obj.get("window_id").and_then(Value::as_u64);
                 if obj.get("window_id").is_some() && window_id.is_none_or(|n| n == 0) {
-                    return mcp_text(json!({"error":"window_id must be positive"}), true);
+                    return mcp_plain("window_id must be positive", true);
                 }
                 self.run(
                     session_id,
@@ -657,17 +611,17 @@ impl Server {
                     .and_then(|n| u32::try_from(n).ok())
                     .filter(|n| *n > 0)
                 else {
-                    return mcp_text(json!({"error":"menu requires positive pid"}), true);
+                    return mcp_plain("menu requires positive pid", true);
                 };
                 let Some(window_id) = obj
                     .get("window_id")
                     .and_then(Value::as_u64)
                     .filter(|n| *n > 0)
                 else {
-                    return mcp_text(json!({"error":"menu requires positive window_id"}), true);
+                    return mcp_plain("menu requires positive window_id", true);
                 };
                 let Some(path) = obj.get("path").and_then(Value::as_array) else {
-                    return mcp_text(json!({"error":"menu requires path"}), true);
+                    return mcp_plain("menu requires path", true);
                 };
                 if path.is_empty()
                     || path.len() > 16
@@ -675,10 +629,7 @@ impl Server {
                         .iter()
                         .any(|s| s.as_str().is_none_or(|s| s.trim().is_empty()))
                 {
-                    return mcp_text(
-                        json!({"error":"menu path must have 1-16 non-empty labels"}),
-                        true,
-                    );
+                    return mcp_plain("menu path must have 1-16 non-empty labels", true);
                 }
                 self.run(
                     session_id,
@@ -702,10 +653,7 @@ impl Server {
                     .unwrap_or(Some(1600))
                     .and_then(|n| u32::try_from(n).ok())
                 else {
-                    return mcp_text(
-                        json!({"error":"max_image_dimension must be a non-negative u32"}),
-                        true,
-                    );
+                    return mcp_plain("max_image_dimension must be a non-negative u32", true);
                 };
                 self.run(
                     session_id,
@@ -731,21 +679,13 @@ impl Server {
                 {
                     Ok(result) => {
                         let saved = save(result);
-                        let structured =
-                            serde_json::from_str::<Value>(&saved.structured).unwrap_or(Value::Null);
-                        let (description, truncated) = short(&saved.text, MODEL_TEXT_BYTES);
-                        mcp_text(
-                            json!({"status":if saved.is_error {"refused"} else {"ok"},
-                            "error_code":saved.error_code,"text":description,"text_truncated":truncated,
-                            "details":structured}),
-                            saved.is_error,
-                        )
+                        mcp_plain(short(&saved.text, MODEL_TEXT_BYTES), saved.is_error)
                     }
-                    Err(e) => mcp_text(json!({"status":"error","error":e.to_string()}), true),
+                    Err(e) => mcp_plain(e.to_string(), true),
                 }
             }
             "status" | "result" | "cancel" => self.control(session_id, operation, &args).await,
-            _ => mcp_text(json!({"error":"invalid operation"}), true),
+            _ => mcp_plain("invalid operation", true),
         }
     }
 
@@ -770,7 +710,7 @@ impl Server {
                     bounded_manifest_path: None,
                 }) {
                     Ok(native) => native,
-                    Err(e) => return mcp_text(json!({"error":e.to_string()}), true),
+                    Err(e) => return mcp_plain(e.to_string(), true),
                 };
                 sessions.insert(
                     session_id.to_owned(),
@@ -784,7 +724,7 @@ impl Server {
             }
             let current = sessions.get_mut(session_id).unwrap();
             if current.busy {
-                return mcp_text(json!({"error":"session_busy"}), true);
+                return mcp_plain("session_busy", true);
             }
             current.busy = true;
             (
@@ -793,19 +733,31 @@ impl Server {
                 current.started,
             )
         };
-        let execution_id = uuid::Uuid::new_v4().to_string();
-        self.jobs.lock().unwrap().insert(
-            execution_id.clone(),
-            Job {
-                session: session_id.to_owned(),
-                phase: "running".into(),
-                cancel_requested: false,
-                result: None,
-            },
-        );
+        // IDs are scoped to this process. Retry a collision against its
+        // receipt map so eight hex characters remain safe for live jobs.
+        let id = {
+            let mut jobs = self.jobs.lock().unwrap();
+            loop {
+                let uuid = uuid::Uuid::new_v4().simple().to_string();
+                let id = uuid[..8].to_owned();
+                if jobs.contains_key(&id) {
+                    continue;
+                }
+                jobs.insert(
+                    id.clone(),
+                    Job {
+                        session: session_id.to_owned(),
+                        phase: "running".into(),
+                        cancel_requested: false,
+                        result: None,
+                    },
+                );
+                break id;
+            }
+        };
         let own = self.clone();
         let name = session_id.to_owned();
-        let job_id = execution_id.clone();
+        let job_id = id.clone();
         tokio::spawn(async move {
             let outcome = own.execute(native, work, &state, started, &job_id).await;
             let mut sessions = own.sessions.lock().unwrap();
@@ -869,7 +821,7 @@ impl Server {
                 .jobs
                 .lock()
                 .unwrap()
-                .get(&execution_id)
+                .get(&id)
                 .is_some_and(|job| job.phase != "running");
             if terminal {
                 break;
@@ -880,7 +832,7 @@ impl Server {
             .jobs
             .lock()
             .unwrap()
-            .get(&execution_id)
+            .get(&id)
             .map(|job| {
                 (
                     job.phase != "running",
@@ -895,14 +847,11 @@ impl Server {
                 .control(
                     session_id,
                     "result",
-                    &json!({"execution_id":execution_id,"part":if include_image && has_image {"image"} else {"summary"}}),
+                    &json!({"id":id,"part":if include_image && has_image {"image"} else {"summary"}}),
                 )
                 .await;
         }
-        mcp_text(
-            json!({"execution_id":execution_id,"session":session_id,"status":"running"}),
-            false,
-        )
+        mcp_plain(format!("id={id} status=running"), false)
     }
 
     async fn execute(
@@ -1018,106 +967,29 @@ impl Server {
     }
 
     async fn control(&self, session_id: &str, operation: &str, args: &Value) -> Value {
-        let Some(id) = args.get("execution_id").and_then(Value::as_str) else {
-            return mcp_text(json!({"error":"execution_id is required"}), true);
+        let Some(id) = args.get("id").and_then(Value::as_str) else {
+            return mcp_plain("id is required", true);
         };
         let mut jobs = self.jobs.lock().unwrap();
         let Some(job) = jobs.get_mut(id) else {
-            return mcp_text(
-                json!({"error":"execution_not_found","execution_id":id}),
-                true,
-            );
+            return mcp_plain("execution_not_found", true);
         };
         if job.session != session_id {
-            return mcp_text(
-                json!({"error":"execution_not_found","execution_id":id}),
-                true,
-            );
+            return mcp_plain("execution_not_found", true);
         }
         if operation == "cancel" && job.phase == "running" {
             job.cancel_requested = true;
         }
-        let mut summary = json!({
-            "execution_id":id,"session":session_id,"status":job.phase,
-        });
+        let mut line = format!("id={id} status={}", job.phase);
         if job.cancel_requested {
-            summary["cancel_requested"] = json!(true);
+            line.push_str(" cancel_requested");
         }
         if let Some(result) = &job.result {
-            let preview_limit = if operation == "result"
-                && args
-                    .get("part")
-                    .and_then(Value::as_str)
-                    .is_some_and(|part| part != "summary")
-            {
-                512
-            } else {
-                MODEL_TEXT_BYTES
-            };
-            if result.is_error {
-                summary["is_error"] = json!(true);
-                if let Some(code) = &result.error_code {
-                    summary["error_code"] = json!(code);
-                }
+            if let Some(code) = result.error_code.as_deref() {
+                line.push_str(&format!(" code={code}"));
             }
-            if !result.images.is_empty() {
-                summary["image_count"] = json!(result.images.len());
-            }
-            let mut inline_value = false;
-            if let Ok(structured) = serde_json::from_str::<Value>(&result.structured) {
-                if let Some(focus) = focus_summary(&structured) {
-                    summary["focus"] = omit_null_members(focus);
-                }
-                if let Some(capture_id) = structured.get("capture_id").and_then(Value::as_str) {
-                    summary["capture"] = omit_null_members(json!({
-                        "capture_id": capture_id,
-                        "display": structured.get("display"),
-                        "screenshot_width": structured.get("screenshot_width"),
-                        "screenshot_height": structured.get("screenshot_height"),
-                        "screen_width": structured.get("screen_width"),
-                        "screen_height": structured.get("screen_height"),
-                    }));
-                }
-                if let Some(value) = structured.get("value").filter(|value| !value.is_null()) {
-                    let projected = compact_inline_value(value);
-                    let encoded = projected.to_string();
-                    if encoded.len() <= 4096 {
-                        summary["value"] = projected;
-                        inline_value = true;
-                    } else {
-                        summary["value_bytes"] = json!(encoded.len());
-                        summary["structured_bytes"] = json!(result.structured.len());
-                    }
-                }
-                if let Some(error) = structured.get("error").filter(|error| !error.is_null()) {
-                    let encoded = error.to_string();
-                    let (preview, truncated) = short(&encoded, 2048);
-                    summary["native_error"] = json!(preview);
-                    if truncated {
-                        summary["native_error_truncated"] = json!(true);
-                    }
-                }
-            }
-            // A successful, small structured value is the default model response. The
-            // driver call trace remains available through result/part=text by ID.
-            if result.is_error || !inline_value {
-                let compacted = (!result.is_error)
-                    .then(|| compact_success_text(&result.text))
-                    .flatten();
-                let display_text = compacted.as_deref().unwrap_or(&result.text);
-                let (preview, truncated) = short(display_text, preview_limit);
-                if !preview.is_empty() {
-                    summary["text"] = json!(preview);
-                }
-                if truncated {
-                    summary["text_truncated"] = json!(true);
-                }
-                if compacted.is_some() {
-                    summary["text_compacted"] = json!(true);
-                }
-                if truncated || compacted.is_some() {
-                    summary["full_text_bytes"] = json!(result.text.len());
-                }
+            if operation == "status" || operation == "cancel" {
+                return mcp_plain(line, result.is_error);
             }
             if operation == "result" {
                 let part = args
@@ -1126,29 +998,51 @@ impl Server {
                     .unwrap_or("summary");
                 let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
                 match part {
-                    "text" => summary["page"] = page(&result.text, offset),
-                    "structured" => summary["page"] = page(&result.structured, offset),
+                    "text" => {
+                        return mcp_text(
+                            json!({"id":id,"status":job.phase,"page":page(&display_result(result), offset)}),
+                            result.is_error,
+                        )
+                    }
+                    "structured" => {
+                        return mcp_text(
+                            json!({"id":id,"status":job.phase,"page":page(&result.structured, offset)}),
+                            result.is_error,
+                        )
+                    }
                     "image" => {
                         let index =
                             args.get("image_index").and_then(Value::as_u64).unwrap_or(0) as usize;
                         if let Some(image) = result.images.get(index) {
+                            let body = short(&display_result(result), MODEL_TEXT_BYTES);
+                            if !body.is_empty() {
+                                line.push('\n');
+                                line.push_str(&body);
+                            }
                             return json!({"content":[
-                                {"type":"text","text":summary.to_string()},
+                                {"type":"text","text":line},
                                 {"type":"image","mimeType":image.mime_type,"data":image.data_base64}
                             ],"isError":result.is_error});
                         }
-                        return mcp_text(json!({"error":"image_index_out_of_range"}), true);
+                        return mcp_plain("image_index_out_of_range", true);
                     }
                     "summary" => {}
-                    _ => return mcp_text(json!({"error":"invalid part"}), true),
+                    _ => return mcp_plain("invalid part", true),
                 }
             }
-            return mcp_text(summary, result.is_error);
+            let body = short(&display_result(result), MODEL_TEXT_BYTES);
+            if !body.is_empty() {
+                line.push('\n');
+                line.push_str(&body);
+            }
+            return mcp_plain(line, result.is_error);
         }
         if operation == "cancel" {
-            summary["note"] = json!("Cancellation requested. Upstream private worker may finish the in-flight action; query this original receipt. No replay.");
+            line.push_str(
+                "\nQuery this id for the final result; an in-flight action may still finish.",
+            );
         }
-        mcp_text(summary, false)
+        mcp_plain(line, false)
     }
 }
 

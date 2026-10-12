@@ -36,14 +36,14 @@ def exact_chrome_pid(profile):
 
 def run_script(proc, ident, session, script):
     started = exec_call(proc, ident, {"session": session, "script": script})
-    if "execution_id" not in started:
+    if "id" not in started:
         raise RuntimeError(f"run refused: {started}")
-    return started["execution_id"], result(proc, ident + 1, session, started["execution_id"])
+    return started["id"], result(proc, ident + 1, session, started["id"])
 
 
-def save_image(proc, ident, session, execution_id, destination):
+def save_image(proc, ident, session, id, destination):
     response = call(proc, {"jsonrpc": "2.0", "id": ident, "method": "tools/call", "params": {"name": "exec", "arguments": {
-        "session": session, "operation": "result", "execution_id": execution_id, "part": "image", "image_index": 0}}})
+        "session": session, "operation": "result", "id": id, "part": "image", "image_index": 0}}})
     for content in response["result"].get("content", []):
         if content.get("type") == "image":
             destination.write_bytes(base64.b64decode(content["data"]))
@@ -91,8 +91,6 @@ def main():
                 raise RuntimeError(f"unknown read outcome; original receipt {before_id}")
             time.sleep(0.5)
         record["before"] = before
-        if before.get("image_count", 0):
-            record["before_image_saved"] = save_image(proc, 200, session, before_id, root / "before.png")
         print(json.dumps({"before": before}))
         if before.get("status") != "completed" or not before.get("value", {}).get("ready") or not before.get("value", {}).get("button"):
             raise RuntimeError("target not identified with READY marker and Advance button; no click attempted")
@@ -141,8 +139,6 @@ def main():
         after_script = f"const app=await cua.getApp({{pid:{pid},windowId:{window_id}}}); const s=await app.getState({{max_elements:100,timeout_ms:5000}}); return {{clicked:String(s.tree_markdown||'').includes('CLICKED-20261011'),ready:String(s.tree_markdown||'').includes('READY-20261011'),snapshot_id:s.snapshot_id,tree:String(s.tree_markdown||'').slice(0,1800)}};"
         after_id, after = run_script(proc, 203, session, after_script)
         record["after"] = after
-        if after.get("image_count", 0):
-            record["after_image_saved"] = save_image(proc, 205, session, after_id, root / "after.png")
         print(json.dumps({"after": after}))
         print(json.dumps({"postcondition": bool(after.get("value", {}).get("clicked")), "record": str(root / "record.json")}))
     finally:

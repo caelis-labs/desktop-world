@@ -137,7 +137,7 @@ type ExecInput =
       wait_ms?: number }
   | { session?: string; operation: "cursor"; enabled?: boolean; wait_ms?: number }
   | { session?: string; operation: "permissions" }
-  | { session?: string; operation: "status" | "cancel"; execution_id: string }
-  | { session?: string; operation: "result"; execution_id: string;
+  | { session?: string; operation: "status" | "cancel"; id: string }
+  | { session?: string; operation: "result"; id: string;
       part?: "summary" | "text" | "structured" | "image";
       offset?: number; image_index?: number };

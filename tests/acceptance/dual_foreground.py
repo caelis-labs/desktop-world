@@ -12,7 +12,7 @@ import time
 import uuid
 
 from accept_chrome import exact_chrome_pid
-from probe import call, exec_call, result
+from probe import call, exec_call, result, structured_result, focus_verified
 
 
 def launch(profile, page):
@@ -58,7 +58,7 @@ def main():
                 ident = 100 + index * 100 + attempt * 2
                 started = exec_call(proc, ident, {"session": label,
                     "script": f"return (await cua.listWindows({{pid:{pid}}})).filter(w=>w.pid==={pid} && w.title==='DTW Input Fixture').map(w=>w.window_id);"})
-                done = result(proc, ident + 1, label, started["execution_id"])
+                done = result(proc, ident + 1, label, started["id"])
                 windows = done.get("value")
                 if done["status"] == "completed" and isinstance(windows, list) and len(windows) == 1:
                     break
@@ -77,29 +77,30 @@ def main():
                 focused = exec_call(proc, 500 + index * 2, {
                     "session": label, "operation": "focus", "pid": pid, "window_id": wid})
                 if focused.get("status") == "running":
-                    focused = result(proc, 501 + index * 2, label, focused["execution_id"])
+                    focused = result(proc, 501 + index * 2, label, focused["id"])
+                native_focus = structured_result(proc, 502 + index * 2, label, focused["id"])
                 focus_results.append({"session": label, "status": focused.get("status"),
-                                      "focus": focused.get("focus")})
-                assert focused.get("status") == "completed" and focused.get("focus", {}).get("verified"), focused
+                                      "focus": native_focus})
+                assert focused.get("status") == "completed" and focus_verified(native_focus, wid), focused
             script = (f"const a=await cua.getApp({{pid:{pid},windowId:{wid}}});"
                       "const s=await a.getState({max_elements:80});"
                       "if(!s.screenshot_frame_valid||!String(s.tree_markdown).includes('Drag source'))return {refused:true};"
                       f"return await cua.call('drag',{{pid:{pid},window_id:{wid},from_x:140,from_y:415,to_x:495,to_y:430,duration_ms:800,steps:30,delivery_mode:'foreground'}});")
             started = exec_call(proc, 10 + index, {"session": label, "script": script})
-            jobs.append((label, started["execution_id"]))
+            jobs.append((label, started["id"]))
             if sequential:
-                done = result(proc, 20 + index, label, started["execution_id"])
-                outcomes.append({"session": label, "execution_id": started["execution_id"],
+                done = result(proc, 20 + index, label, started["id"])
+                outcomes.append({"session": label, "id": started["id"],
                                  "status": done["status"], "value": done.get("value"),
                                  "error_code": done.get("error_code")})
                 observed = exec_call(proc, 30 + index * 2, {"session": label,
                     "script": f"const a=await cua.getApp({{pid:{pid},windowId:{wid}}});const s=await a.getState({{max_elements:80,include_screenshot:false}});return {{dragged:String(s.tree_markdown).includes('DRAGGED-20261011'),snapshot_id:s.snapshot_id}};"})
-                fresh = result(proc, 31 + index * 2, label, observed["execution_id"])
+                fresh = result(proc, 31 + index * 2, label, observed["id"])
                 readback.append({"session": label, "status": fresh["status"], "value": fresh.get("value")})
         if not sequential:
-            for index, (label, execution_id) in enumerate(jobs):
-                done = result(proc, 20 + index, label, execution_id)
-                outcomes.append({"session": label, "execution_id": execution_id,
+            for index, (label, id) in enumerate(jobs):
+                done = result(proc, 20 + index, label, id)
+                outcomes.append({"session": label, "id": id,
                                  "status": done["status"], "value": done.get("value"),
                                  "error_code": done.get("error_code")})
         for index, (label, pid, wid) in enumerate(bound):
@@ -107,7 +108,7 @@ def main():
                 continue
             started = exec_call(proc, 30 + index * 2, {"session": label,
                 "script": f"const a=await cua.getApp({{pid:{pid},windowId:{wid}}});const s=await a.getState({{max_elements:80,include_screenshot:false}});return {{dragged:String(s.tree_markdown).includes('DRAGGED-20261011'),snapshot_id:s.snapshot_id}};"})
-            done = result(proc, 31 + index * 2, label, started["execution_id"])
+            done = result(proc, 31 + index * 2, label, started["id"])
             readback.append({"session": label, "status": done["status"], "value": done.get("value")})
         record = {"mode": "sequential" if sequential else "concurrent", "targets": bound,
                   "focus_results": focus_results, "outcomes": outcomes, "readback": readback}

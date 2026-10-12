@@ -12,9 +12,9 @@ from probe import call, exec_call, result, runtime_env
 
 def run(proc, ident, session, script):
     started = exec_call(proc, ident, {"session": session, "script": script})
-    assert "execution_id" in started, started
-    done = result(proc, ident + 1, session, started["execution_id"]) if started["status"] == "running" else started
-    return started["execution_id"], done
+    assert "id" in started, started
+    done = result(proc, ident + 1, session, started["id"]) if started["status"] == "running" else started
+    return started["id"], done
 
 
 def main():
@@ -37,34 +37,43 @@ def main():
         default_id, default = run(proc, 18, "default", "return 42;")
         report["default_session"] = {"status": default["status"], "value": default.get("value")}
         assert report["default_session"] == {"status": "completed", "value": 42}
-        assert not any(key in default for key in (
-            "cancel_requested", "error_code", "is_error", "text", "text_truncated",
-            "text_compacted", "full_text_bytes", "structured_bytes", "image_count",
-        )), default
+        assert len(default_id) == 8 and all(c in "0123456789abcdef" for c in default_id)
+        assert "run_script: ok" in default["text"] and "return value: 42" in default["text"]
+        assert "__dtw_state" not in default["text"]
+        raw_reply = call(proc, {"jsonrpc": "2.0", "id": 19, "method": "tools/call",
+                                "params": {"name": "exec", "arguments": {
+                                    "session": "default", "operation": "result", "id": default_id}}})
+        raw_text = raw_reply["result"]["content"][0]["text"]
+        assert raw_text.startswith(f"id={default_id} status=completed\nrun_script: ok"), raw_text
+        assert not any(key in raw_text for key in ("execution_id", "full_text_bytes",
+                                                "structured_bytes", "text_truncated",
+                                                "effect", "__dtw_state")), raw_text
         full_text = exec_call(proc, 20, {"session": "default", "operation": "result",
-                                         "execution_id": default_id, "part": "text"})
+                                         "id": default_id, "part": "text"})
         assert "run_script: ok" in full_text["page"]["data"], full_text
+        assert "__dtw_state" not in full_text["page"]["data"], full_text
 
         action_id, action = run(proc, 27, "default", "return {delivery:{mode:'not_applicable'},"
                                 "effect:'unverifiable',route:'global_input',"
                                 "summary:'Pressed return',text:'Pressed return'};")
-        assert action["value"] == {"effect": "unverifiable", "route": "global_input",
-                                   "summary": "Pressed return"}, action
+        assert action["value"] == {"delivery": {"mode": "not_applicable"},
+                                   "effect": "unverifiable", "route": "global_input",
+                                   "summary": "Pressed return", "text": "Pressed return"}, action
         raw = exec_call(proc, 29, {"session": "default", "operation": "result",
-                                   "execution_id": action_id, "part": "structured"})
+                                   "id": action_id, "part": "structured"})
         assert json.loads(raw["page"]["data"])["value"]["text"] == "Pressed return", raw
 
         large_id, large = run(proc, 8, "a", "return 'x'.repeat(100000);")
         page = exec_call(proc, 10, {"session": "a", "operation": "result",
-                                    "execution_id": large_id, "part": "structured"})
-        report["large"] = {"status": large["status"], "summary_bytes": len(json.dumps(large)),
-                           "structured_bytes": large.get("structured_bytes"),
-                           "text_bytes": len(large.get("text", "")),
-                           "text_truncated_by_adapter": large.get("text_truncated"),
+                                    "id": large_id, "part": "structured"})
+        report["large"] = {"status": large["status"], "summary_bytes": len(large["text"]),
+                           "truncation_inline": "...truncated " in large["text"],
                            "page_data_bytes": len(page["page"]["data"]),
                            "next_offset": page["page"]["next_offset"]}
         assert large["status"] == "completed", report["large"]
         assert report["large"]["summary_bytes"] < 15000
+        assert report["large"]["truncation_inline"]
+        assert "bytes" not in page["page"]
         assert page["page"]["next_offset"] is not None
 
         _, medium = run(proc, 23, "a", "return {marker:'y'.repeat(2200)};")
@@ -80,34 +89,34 @@ def main():
         assert report["upstream_script_limit"] == {"status": "completed", "value": 64}
 
         foreign = exec_call(proc, 11, {"session": "b", "operation": "result",
-                                       "execution_id": large_id})
+                                       "id": large_id})
         report["foreign_receipt"] = foreign
         assert foreign.get("error") == "execution_not_found"
 
         bad_id, bad = run(proc, 12, "a", "throw new Error('DTW-UNIQUE-ERROR');")
-        report["script_error"] = {"status": bad["status"], "error_code": bad.get("error_code"),
+        report["script_error"] = {"status": bad["status"], "code": bad.get("code"),
                                   "preserved_marker": "DTW-UNIQUE-ERROR" in json.dumps(bad),
-                                  "native_error": bad.get("native_error")}
+                                  "text": bad.get("text")}
         assert bad["status"] == "failed" and report["script_error"]["preserved_marker"]
 
         started = exec_call(proc, 14, {"session": "a", "wait_ms": 0, "script":
                                        "await cua.sleep(1500); return 'SLEPT-ONCE';"})
-        original = started["execution_id"]
+        original = started["id"]
         other = exec_call(proc, 21, {"session": "b", "wait_ms": 0, "script":
                                      "state.n=(state.n||0)+1; return state.n;"})
         cancel = exec_call(proc, 15, {"session": "a", "operation": "cancel",
-                                      "execution_id": original})
+                                      "id": original})
         terminal = result(proc, 16, "a", original)
-        other_terminal = result(proc, 22, "b", other["execution_id"])
-        report["cancel"] = {"execution_id": original, "immediate": cancel["status"],
-                            "requested": cancel["cancel_requested"],
+        other_terminal = result(proc, 22, "b", other["id"])
+        report["cancel"] = {"id": original, "immediate": cancel["status"],
+                            "requested": cancel.get("cancel_requested", False),
                             "terminal": terminal["status"], "terminal_value": terminal.get("value"),
                             "terminal_requested": terminal.get("cancel_requested", False),
-                            "other_session": {"execution_id": other["execution_id"],
+                            "other_session": {"id": other["id"],
                                               "status": other_terminal["status"],
                                               "value": other_terminal.get("value"),
                                               "cancel_requested": other_terminal.get("cancel_requested", False)}}
-        assert cancel["cancel_requested"] and terminal["execution_id"] == original
+        assert terminal["id"] == original
         assert other_terminal["status"] == "completed" and other_terminal.get("value") == 2
         assert not other_terminal.get("cancel_requested", False)
         print(json.dumps(report, ensure_ascii=False, indent=2))
