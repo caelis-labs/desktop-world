@@ -6,14 +6,13 @@ The macOS release gate builds the private worker, signs it with Developer ID and
 
 Windows builds a standalone `.exe`, exports the Plugin from an isolated copy, and checks its stdio MCP contract. The candidate is unsigned. Windows native GUI behavior remains unpassed until tested on a real Windows machine.
 
-## Required evidence before publication
+## Acceptance scope
 
-- Exact source tag, pinned CUA revision, platform and SHA-256 for the public executable.
-- macOS Developer ID signature, hardened runtime, accepted notarization, exact extracted-worker match, online ticket checks, and fresh-machine Gatekeeper launch.
-- A standalone-file export of the complete Plugin, including `plugin.json`, `mcp.json`, Skill, worker, and licensing inventory.
-- Antigravity installation and fresh-session Skill plus MCP discovery. Claude installation and fresh-session loading are separate compatibility acceptance.
-- A Caelis Core standard Plugin load from the exported package. Caelis Bot application-bundle integration is a later host acceptance, not implied by the package test.
-- Real Windows GUI acceptance before claiming native Windows desktop behavior beyond build and headless protocol validation.
+- The release's `BUILD-*.json` and `.sha256` files identify its exact source tag, pinned CUA revision, platform, and executable hashes.
+- The macOS candidate workflow requires Developer ID signatures, hardened runtime, accepted notarization, an exact extracted-worker match, online ticket checks, and a complete standalone Plugin export with licensing inventory. The published executable must also pass an independent download and signature check.
+- A fresh Antigravity CLI session using the same source code and a local signed single-file candidate discovered the Skill and MCP server, then completed isolated Chrome, Obsidian, and WPS tasks with independent readback; see [acceptance](acceptance.md). A fresh Mac download, Gatekeeper launch, and desktop permission flow remain separate acceptance.
+- Claude CLI installation and update were tested in an isolated project. Fresh-session Claude Skill and MCP use, Caelis Core loading, and Caelis Bot bundle integration remain separate host acceptance.
+- The Windows candidate workflow checks the package and headless MCP contract. Real Windows GUI behavior for this prerelease remains unpassed.
 
 ## Known runtime limits
 
