@@ -34,9 +34,16 @@ def main():
                           "state.n=(state.n||0)+1; return state.n;")
             report.setdefault("state", []).append([session, done["status"], done.get("value")])
         assert report["state"] == [["a", "completed", 1], ["a", "completed", 2], ["b", "completed", 1]]
-        _, default = run(proc, 18, "default", "return 42;")
+        default_id, default = run(proc, 18, "default", "return 42;")
         report["default_session"] = {"status": default["status"], "value": default.get("value")}
         assert report["default_session"] == {"status": "completed", "value": 42}
+        assert not any(key in default for key in (
+            "cancel_requested", "error_code", "is_error", "text", "text_truncated",
+            "text_compacted", "full_text_bytes", "structured_bytes", "image_count",
+        )), default
+        full_text = exec_call(proc, 20, {"session": "default", "operation": "result",
+                                         "execution_id": default_id, "part": "text"})
+        assert "run_script: ok" in full_text["page"]["data"], full_text
 
         large_id, large = run(proc, 8, "a", "return 'x'.repeat(100000);")
         page = exec_call(proc, 10, {"session": "a", "operation": "result",
@@ -86,14 +93,14 @@ def main():
         report["cancel"] = {"execution_id": original, "immediate": cancel["status"],
                             "requested": cancel["cancel_requested"],
                             "terminal": terminal["status"], "terminal_value": terminal.get("value"),
-                            "terminal_requested": terminal["cancel_requested"],
+                            "terminal_requested": terminal.get("cancel_requested", False),
                             "other_session": {"execution_id": other["execution_id"],
                                               "status": other_terminal["status"],
                                               "value": other_terminal.get("value"),
-                                              "cancel_requested": other_terminal["cancel_requested"]}}
+                                              "cancel_requested": other_terminal.get("cancel_requested", False)}}
         assert cancel["cancel_requested"] and terminal["execution_id"] == original
         assert other_terminal["status"] == "completed" and other_terminal.get("value") == 2
-        assert not other_terminal["cancel_requested"]
+        assert not other_terminal.get("cancel_requested", False)
         print(json.dumps(report, ensure_ascii=False, indent=2))
     finally:
         proc.stdin.close()

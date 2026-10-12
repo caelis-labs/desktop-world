@@ -112,6 +112,7 @@ def main():
         worker_name = "cua-driver.exe" if os.name == "nt" else "cua-driver"
         embedded_worker = standalone_plugin / "libexec" / worker_name
         assert hashlib.sha256(embedded_worker.read_bytes()).hexdigest() == source["libexec/" + worker_name]
+        assert (standalone_plugin / "bin" / executable).read_bytes() == standalone.read_bytes()
         run([sys.executable, repo / "tests/acceptance/mcp_smoke.py", standalone_plugin / "bin" / executable])
         run([standalone, "uninstall", "agy", "--project", standalone_project])
         assert not standalone_plugin.exists()

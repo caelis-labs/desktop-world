@@ -230,10 +230,17 @@ fn expand_embedded(binary: &Path) -> Result<PathBuf, String> {
         return Err("this development binary has no embedded runtime; use a release package or scripts/build-plugin".into());
     }
     let digest = format!("{:x}", Sha256::digest(EMBEDDED_BUNDLE));
+    // The runtime bundle can stay byte-identical across CLI-only updates. Include
+    // the executing binary so a newer installer never reuses a cached old CLI.
+    let binary_digest = format!(
+        "{:x}",
+        Sha256::digest(fs::read(binary).map_err(|e| e.to_string())?)
+    );
     let root = data_root()?.join("runtime").join(format!(
-        "{}-{}",
+        "{}-{}-{}",
         env!("CARGO_PKG_VERSION"),
-        &digest[..16]
+        &digest[..16],
+        &binary_digest[..16]
     ));
     let marker = root.join(".dtw-bundle-sha256");
     if root.exists() {
@@ -427,6 +434,13 @@ fn focus_summary(structured: &Value) -> Option<Value> {
         "focused_window_id": observed,
         "verified": landed && observed.is_some() && observed == target,
     }))
+}
+
+fn omit_null_members(mut value: Value) -> Value {
+    if let Some(fields) = value.as_object_mut() {
+        fields.retain(|_, field| !field.is_null());
+    }
+    value
 }
 
 #[cfg(test)]
@@ -1006,8 +1020,10 @@ impl Server {
         }
         let mut summary = json!({
             "execution_id":id,"session":session_id,"status":job.phase,
-            "cancel_requested":job.cancel_requested,
         });
+        if job.cancel_requested {
+            summary["cancel_requested"] = json!(true);
+        }
         if let Some(result) = &job.result {
             let preview_limit = if operation == "result"
                 && args
@@ -1019,46 +1035,68 @@ impl Server {
             } else {
                 MODEL_TEXT_BYTES
             };
-            let compacted = (!result.is_error)
-                .then(|| compact_success_text(&result.text))
-                .flatten();
-            let display_text = compacted.as_deref().unwrap_or(&result.text);
-            let (preview, truncated) = short(display_text, preview_limit);
-            summary["error_code"] = json!(result.error_code);
-            summary["is_error"] = json!(result.is_error);
-            summary["text"] = json!(preview);
-            summary["text_truncated"] = json!(truncated || compacted.is_some());
-            summary["text_compacted"] = json!(compacted.is_some());
-            summary["full_text_bytes"] = json!(result.text.len());
-            summary["structured_bytes"] = json!(result.structured.len());
-            summary["image_count"] = json!(result.images.len());
+            if result.is_error {
+                summary["is_error"] = json!(true);
+                if let Some(code) = &result.error_code {
+                    summary["error_code"] = json!(code);
+                }
+            }
+            if !result.images.is_empty() {
+                summary["image_count"] = json!(result.images.len());
+            }
+            let mut inline_value = false;
             if let Ok(structured) = serde_json::from_str::<Value>(&result.structured) {
                 if let Some(focus) = focus_summary(&structured) {
-                    summary["focus"] = focus;
+                    summary["focus"] = omit_null_members(focus);
                 }
                 if let Some(capture_id) = structured.get("capture_id").and_then(Value::as_str) {
-                    summary["capture"] = json!({
+                    summary["capture"] = omit_null_members(json!({
                         "capture_id": capture_id,
                         "display": structured.get("display"),
                         "screenshot_width": structured.get("screenshot_width"),
                         "screenshot_height": structured.get("screenshot_height"),
                         "screen_width": structured.get("screen_width"),
                         "screen_height": structured.get("screen_height"),
-                    });
+                    }));
                 }
-                if let Some(value) = structured.get("value") {
+                if let Some(value) = structured.get("value").filter(|value| !value.is_null()) {
                     let encoded = value.to_string();
                     if encoded.len() <= 4096 {
                         summary["value"] = value.clone();
+                        inline_value = true;
                     } else {
                         summary["value_bytes"] = json!(encoded.len());
+                        summary["structured_bytes"] = json!(result.structured.len());
                     }
                 }
-                if let Some(error) = structured.get("error") {
+                if let Some(error) = structured.get("error").filter(|error| !error.is_null()) {
                     let encoded = error.to_string();
                     let (preview, truncated) = short(&encoded, 2048);
                     summary["native_error"] = json!(preview);
-                    summary["native_error_truncated"] = json!(truncated);
+                    if truncated {
+                        summary["native_error_truncated"] = json!(true);
+                    }
+                }
+            }
+            // A successful, small structured value is the default model response. The
+            // driver call trace remains available through result/part=text by ID.
+            if result.is_error || !inline_value {
+                let compacted = (!result.is_error)
+                    .then(|| compact_success_text(&result.text))
+                    .flatten();
+                let display_text = compacted.as_deref().unwrap_or(&result.text);
+                let (preview, truncated) = short(display_text, preview_limit);
+                if !preview.is_empty() {
+                    summary["text"] = json!(preview);
+                }
+                if truncated {
+                    summary["text_truncated"] = json!(true);
+                }
+                if compacted.is_some() {
+                    summary["text_compacted"] = json!(true);
+                }
+                if truncated || compacted.is_some() {
+                    summary["full_text_bytes"] = json!(result.text.len());
                 }
             }
             if operation == "result" {
