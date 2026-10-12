@@ -45,6 +45,15 @@ def main():
                                          "execution_id": default_id, "part": "text"})
         assert "run_script: ok" in full_text["page"]["data"], full_text
 
+        action_id, action = run(proc, 27, "default", "return {delivery:{mode:'not_applicable'},"
+                                "effect:'unverifiable',route:'global_input',"
+                                "summary:'Pressed return',text:'Pressed return'};")
+        assert action["value"] == {"effect": "unverifiable", "route": "global_input",
+                                   "summary": "Pressed return"}, action
+        raw = exec_call(proc, 29, {"session": "default", "operation": "result",
+                                   "execution_id": action_id, "part": "structured"})
+        assert json.loads(raw["page"]["data"])["value"]["text"] == "Pressed return", raw
+
         large_id, large = run(proc, 8, "a", "return 'x'.repeat(100000);")
         page = exec_call(proc, 10, {"session": "a", "operation": "result",
                                     "execution_id": large_id, "part": "structured"})

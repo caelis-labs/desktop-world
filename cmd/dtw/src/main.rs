@@ -443,6 +443,25 @@ fn omit_null_members(mut value: Value) -> Value {
     value
 }
 
+fn compact_inline_value(value: &Value) -> Value {
+    let mut compacted = value.clone();
+    let Some(fields) = compacted.as_object_mut() else {
+        return compacted;
+    };
+    // Project only the known CUA action result shape. Arbitrary script return
+    // objects keep their exact fields, and the full structure remains pageable.
+    if !fields.contains_key("effect") || !fields.contains_key("route") {
+        return compacted;
+    }
+    if fields.get("text") == fields.get("summary") {
+        fields.remove("text");
+    }
+    if fields.get("delivery") == Some(&json!({"mode":"not_applicable"})) {
+        fields.remove("delivery");
+    }
+    compacted
+}
+
 #[cfg(test)]
 mod focus_tests {
     use super::*;
@@ -1060,9 +1079,10 @@ impl Server {
                     }));
                 }
                 if let Some(value) = structured.get("value").filter(|value| !value.is_null()) {
-                    let encoded = value.to_string();
+                    let projected = compact_inline_value(value);
+                    let encoded = projected.to_string();
                     if encoded.len() <= 4096 {
-                        summary["value"] = value.clone();
+                        summary["value"] = projected;
                         inline_value = true;
                     } else {
                         summary["value_bytes"] = json!(encoded.len());
