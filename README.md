@@ -1,66 +1,88 @@
 # Desktop World
 
-Desktop World (DTW) gives an Agent a compact App → Window → Element desktop API through one MCP tool, `exec`. It runs scripts in Cua Driver's native QuickJS `run_script`. DTW keeps packaging, bounded results, execution receipts, and a small per-Session JSON `state`; CUA performs desktop discovery, screenshots, keyboard and pointer input, and native permission checks. Node and a separate CuaDriver App are not needed at runtime.
+**Give your AI Agent the ability to operate desktop apps.** Desktop World (DTW) lets an Agent inspect windows, click controls, type, and take screenshots through one MCP tool. A companion Skill teaches it how to use those abilities.
 
-This source tree is the thin CUA implementation. The former Go/QuickJS/helper runtime is gone; scripts use `cua`, not the former `dtw.app` signatures. macOS and Windows have live fixture evidence; [Windows acceptance](docs/windows-acceptance.md) retains a blocking screenshot/geometry failure for DPI-unaware windows at 125% scaling. The [acceptance record](docs/acceptance.md) separates prior POC, current build, and unverified paths.
+Ask your Agent to fill in a form, operate a browser, or work with a desktop document. DTW uses CUA Driver for native computer use, preferring background actions where supported. You do not need to write scripts, install Node, or install a separate CuaDriver App.
 
-## Build and install
+**[Download the plugin](https://github.com/caelis-labs/desktop-world/releases/tag/v0.1.0-rc.4)** · [Installation guide](docs/install.md) · [Agent Skill](packaging/plugin/skills/desktop-world/SKILL.md)
 
-Building requires Rust 1.98.0, Python 3.11+ for dependency-notice generation, and access to the pinned [Cua Driver source](https://github.com/trycua/cua/tree/ac967b9006aafa10870aadb5a645b038cba9721a). macOS additionally needs Xcode with its Swift toolchain; Windows needs the MSVC Rust target, Visual Studio C++ build tools, a Windows SDK, and the matching **MSVC x64/x86 Spectre-mitigated libraries** (`Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre`). The pinned dependency `msvc_spectre_libs` rejects a build without that optional component. The platform build script verifies the CUA commit and builds the DTW CLI plus CUA's private worker. Choose a new destination:
+## Quick start
+
+### 1. Download and unpack
+
+The current release is **v0.1.0-rc.4**, a preview release. Download the complete package for your computer:
+
+| Your computer | Download |
+| --- | --- |
+| macOS, Apple Silicon | [macOS arm64 plugin](https://github.com/caelis-labs/desktop-world/releases/download/v0.1.0-rc.4/desktop-world-v0.1.0-rc.4-darwin-arm64.tar.gz) |
+| Windows, Intel/AMD x64 | [Windows x64 plugin](https://github.com/caelis-labs/desktop-world/releases/download/v0.1.0-rc.4/desktop-world-v0.1.0-rc.4-windows-amd64.zip) |
+
+Extract it to a permanent folder. Keep the **entire `desktop-world` folder**, including `bin`, `libexec`, `skills`, and `LICENSING`; moving only the executable will not work. Source archives are for developers, not installation. Checksums are available on the release page.
+
+### 2. Connect your Agent
+
+Choose the route your Agent supports:
+
+- **Agent Plugin 1.0 client:** use its local-plugin installation flow to load the extracted `desktop-world` directory, which contains `plugin.json`. The exact UI or command belongs to your Agent.
+- **Antigravity:** use the bundled installer shown below. It installs both MCP and the Skill in your project.
+- **Other Skills + MCP clients, including Codex:** register the bundled executable as a stdio MCP server and install the companion Skill. See the [copyable setup instructions](docs/install.md#skills--mcp-clients).
+
+For **Antigravity**, open a terminal in the extracted `desktop-world` folder and replace the project path with an existing project:
+
+macOS:
 
 ```sh
-./scripts/build-plugin.sh /private/tmp/dtw-plugin
-/private/tmp/dtw-plugin/bin/dtw --version
+./bin/dtw install antigravity --project "/absolute/path/to/your-project"
 ```
 
-On Windows, run PowerShell 7 and select a new directory:
+Windows PowerShell:
 
 ```powershell
-pwsh -File ./scripts/build-plugin.ps1 C:\Temp\dtw-plugin
-C:\Temp\dtw-plugin\bin\dtw.exe --version
+.\bin\dtw.exe install antigravity --project "C:\path\to\your-project"
 ```
 
-To use an existing clean CUA checkout at the exact pinned commit, set `CUA_SOURCE_ROOT` to that path. The scripts read that checkout without editing it. Build output defaults to a temporary directory; `DTW_BUILD_DIR` selects another. CI uses a stable `DTW_CUA_SOURCE_DIR` and caches the Rust build and downloads across runs. For an offline build, set `DTW_CARGO_OFFLINE=1` with dependencies cached. A previously built exact-source worker can be supplied with both `CUA_DRIVER_BIN` and `CUA_DRIVER_BIN_SHA256` when rebuilding only the adapter. The macOS script ad hoc signs a local test package; the Windows script produces an unsigned test package. Release signing remains separate.
+Reload your Agent or open a new session. The installer uses a new `.agents/plugins/desktop-world` directory; it will not overwrite an existing installation. [Upgrading and manual setup →](docs/install.md)
 
-Install the package into a new Agent Plugin directory:
+### 3. Grant access and try a task
 
-```sh
-/private/tmp/dtw-plugin/bin/dtw install plugin --to /path/to/new-plugin-dir
-```
+On macOS, grant **Accessibility** and **Screen Recording** to the Agent app that launches DTW, then fully restart that app. No separate CuaDriver App is required. On Windows, install the [x64 Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) if it is missing.
 
-For an isolated Antigravity project, install into its `.agents/plugins/desktop-world` directory:
+Start with a read-only request:
 
-```sh
-/private/tmp/dtw-plugin/bin/dtw install antigravity --project /path/to/existing-project
-agy plugin validate /path/to/existing-project/.agents/plugins/desktop-world
-```
+> Use Desktop World to inspect my browser window and describe the available controls. Do not click or type yet.
 
-The installer refuses an existing destination and does not change global Agent configuration. Other MCP hosts can launch `bin/dtw` over stdio and expose `skills/desktop-world/SKILL.md` to the Agent. The package advertises only `exec`; its `status`, `result`, and `cancel` operations share that entry. Actual desktop permission belongs to the host process, so the host needs macOS Accessibility and Screen Recording authorization. Agents working on the same desktop can affect one another's focus; an independent host should launch its own DTW MCP process and private CUA worker.
+Then try an action on a temporary document or test page:
 
-On Windows, use `bin/dtw.exe`; the packaged `mcp.json` and project installer also name `.exe`. Windows UI Automation and foreground input remain subject to Windows integrity/UIPI rules. The unsigned local package does not grant elevated or UIAccess input.
+> Use Desktop World to type “Hello from DTW” into my open test document. Verify that the text appears, and leave the document open.
 
-PowerShell 7 is required for the Windows source packaging script, not for the installed plugin. The MCP host launches `dtw.exe` and its packaged private worker directly; Rust, Visual Studio build tools, Python, PowerShell 7, and Node are not plugin runtime requirements. Python is used by source packaging and the acceptance harnesses; Pillow is only needed for Windows screenshot/geometry checks. The pinned worker's integrity-level diagnostic uses the built-in Windows `powershell.exe` (5.1); that is separate from PowerShell 7. The current MSVC Windows build dynamically links the Visual C++ runtime (`VCRUNTIME140.dll`); the target machine needs a compatible [x64 Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist), at least as recent as the build tools. The local package does not bundle that redistributable.
+Your Agent should discover the **Desktop World Skill** and one MCP tool, **`exec`**. The Skill handles scripting, screenshots, and checking the result; you can give tasks in natural language.
 
-## Script example
+## What to expect
 
-Read the packaged [Skill](packaging/plugin/skills/desktop-world/SKILL.md), [recipes](packaging/plugin/skills/desktop-world/RECIPES.md), and [API reference](packaging/plugin/skills/desktop-world/api.d.ts) before authoring actions. Replace the PID and window ID with values observed for the authorized target.
+- **One tool, scriptable actions:** the Agent can batch desktop operations instead of calling a separate MCP tool for every click.
+- **Small results:** screenshots and large UI trees are available when needed, rather than always filling the conversation.
+- **Background where supported:** some operations still require the foreground. Multiple Agents share the same desktop and can affect focus.
+- **Native runtime:** installed packages do not need Node, Rust, Python, or build tools.
 
-```json
-{"session":"task","script":"const app=await cua.getApp({pid:123,windowId:456}); const view=await app.getState({query:'Save',max_elements:80,include_screenshot:false}); return {window_id:app.windowId,tree:view.tree_markdown,truncated:view.truncated};"}
-```
+rc.4 is a preview, not a guarantee that every application works. Known Windows limitations include coordinate mismatch for some DPI-unaware windows at 125% scaling and uncertain completion around modal file dialogs. The macOS package is ad hoc signed and not notarized; Windows binaries are unsigned. See [release limitations and acceptance](docs/rc4-release.md) before relying on DTW for unattended work.
 
-If `exec` returns `status:"running"`, use the same `session` and original `execution_id` with `operation:"result"`. Default results are compact; `part:"structured"`, `part:"text"`, and `part:"image"` retrieve retained detail. A native action receipt reports delivery, so observe the UI effect before a further action. See the Skill for native file pickers, desktop screenshots, image coordinates, large browser trees, and stale or unknown receipts.
+## Troubleshooting
 
-## Source layout
+| Problem | What to check |
+| --- | --- |
+| No Desktop World tool or Skill | Reload the Agent; confirm both MCP and the Skill are installed. |
+| Permission denied on macOS | Authorize the actual launching Agent app, then fully restart it. |
+| Missing worker or library | Restore the complete release folder; do not copy only `bin/dtw`. |
+| Missing `VCRUNTIME140.dll` on Windows | Install the x64 Visual C++ Redistributable. |
+| Installer says the destination exists | Follow the [upgrade instructions](docs/install.md#upgrading); it deliberately does not overwrite existing files. |
+| An operation times out | Ask the Agent to inspect the UI and check the original execution result before retrying. The action may already have happened. |
 
-```text
-cmd/dtw/                    Rust MCP server, CUA SDK adapter, installer
-packaging/plugin/           Agent Plugin manifests and one compact Skill
-scripts/build-plugin.*      pinned-source package builds for macOS/Windows
-tests/acceptance/           isolated protocol and real GUI acceptance harnesses
-docs/                      architecture and acceptance boundaries
-```
+## For contributors and application integrators
+
+[Build from source](docs/building.md) · [Architecture](docs/architecture.md) · [Acceptance records](docs/acceptance.md) · [Script recipes](packaging/plugin/skills/desktop-world/RECIPES.md) · [API reference](packaging/plugin/skills/desktop-world/api.d.ts)
+
+DTW supplies the plugin, a single execution entry, bounded results, and execution receipts. A pinned CUA native worker supplies desktop operations. Applications can bundle the complete plugin and own the operating-system permissions.
 
 ## License
 
-The current DTW implementation is [MIT licensed](LICENSE). The packaged upstream CUA SDK and private worker are pinned to `ac967b9006aafa10870aadb5a645b038cba9721a`; their MIT notice and [third-party attributions](THIRD_PARTY_NOTICES.md) are preserved in the package. Optional CUA perception and Spaces components are not included. Removed historical DTW revisions retain their original notices, as explained in [NOTICE](NOTICE). See the [rc.4 release gate](docs/rc4-release.md) for dependency attribution and known upstream Windows exclusions.
+DTW is [MIT licensed](LICENSE). CUA and its dependencies retain their own licenses. Complete notices and required source bundles ship in `LICENSING`; keep that directory when redistributing. Optional CUA perception and Spaces components are not included. See [third-party notices](THIRD_PARTY_NOTICES.md).
