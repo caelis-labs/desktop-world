@@ -1,6 +1,6 @@
 # Release readiness
 
-The first public release is pending. The current candidate is `v0.1.0-rc.5`. Each platform's user-facing artifact is **one executable**: `dtw-darwin-arm64` or `dtw-windows-amd64.exe`, accompanied by its `.sha256` checksum and build-evidence JSON. The CI package directory is an intermediate validation artifact; users do not download a DMG or a Plugin ZIP.
+The first public release is pending. The current candidate is `v0.1.0-rc.6`. Each platform's user-facing artifact is **one executable**: `dtw-darwin-arm64` or `dtw-windows-amd64.exe`, accompanied by its `.sha256` checksum and build-evidence JSON. The CI package directory is an intermediate validation artifact; users do not download a DMG or a Plugin ZIP.
 
 The macOS release gate builds the private worker, signs it with Developer ID and hardened runtime, embeds those signed bytes in DTW, signs the final DTW executable, and submits both final Mach-O files in one ZIP to Apple's notary service. The ZIP is only a submission container. The gate then exports a Plugin from the standalone CLI, byte-compares the extracted worker with the signed worker, verifies both signatures, and asks Gatekeeper to assess each executable. [Apple's notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow) says tickets for standalone executables are available online but cannot be stapled directly to the executable. Fresh-machine launch and permission acceptance remain a separate release check.
 
