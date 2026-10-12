@@ -18,6 +18,7 @@ Windows builds a standalone `.exe`, exports the Plugin from an isolated copy, an
 ## Known runtime limits
 
 - macOS Accessibility and Screen Recording authorization belongs to the actual launching Agent or terminal app.
+- On macOS with multiple displays, the pinned CUA worker draws its virtual cursor in a single main-display overlay. A target window on a secondary display can receive an AX action while the cursor is drawn on the other display or clipped. Do not use the cursor's visible position as proof of the target; secondary-display pixel input requires a live retest after an upstream overlay fix.
 - On Windows, an x64 Visual C++ runtime may be needed; elevated applications still follow Windows integrity restrictions.
 - Some DPI-unaware Windows windows at 125% scaling can expose a mismatch between screenshot pixels and UIA geometry. Inspect the target again before pixel input.
 - Modal file dialogs can cause uncertain completion or focus changes. Reconcile the original execution receipt and visible UI before another action.
