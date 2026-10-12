@@ -8,6 +8,8 @@ import subprocess
 import sys
 from threading import Thread
 
+from probe import parse_exec_result
+
 
 def main():
     binary = Path(sys.argv[1]).resolve()
@@ -44,7 +46,7 @@ def main():
     def exec_tool(arguments):
         result = call("tools/call", {"name": "exec", "arguments": arguments})
         assert not result.get("isError"), result
-        return json.loads(result["content"][0]["text"])
+        return parse_exec_result(result)
 
     try:
         server = call("initialize", {
@@ -60,11 +62,11 @@ def main():
                 "script": "state.n=(state.n||0)+1; return state.n;",
             })
             if response["status"] == "running":
-                original_id = response["execution_id"]
+                original_id = response["id"]
                 for _ in range(30):
                     response = exec_tool({
                         "session": session, "operation": "result",
-                        "execution_id": original_id,
+                        "id": original_id,
                     })
                     if response["status"] != "running":
                         break

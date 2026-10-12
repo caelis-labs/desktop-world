@@ -4,6 +4,7 @@ use cua_driver_sdk::{
     TrustedSessionOptions,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     env, fs,
@@ -16,9 +17,12 @@ use tokio::{
     sync::Mutex as AsyncMutex,
 };
 
+mod installer;
+
 const MAX_STATE_BYTES: usize = 32 * 1024;
 const MODEL_TEXT_BYTES: usize = 12 * 1024;
 const PAGE_BYTES: usize = 32 * 1024;
+const EMBEDDED_BUNDLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/embedded-bundle.tar.gz"));
 
 fn executable_name(stem: &str) -> String {
     format!("{stem}{}", std::env::consts::EXE_SUFFIX)
@@ -72,6 +76,14 @@ struct Server {
 
 fn worker_path() -> Result<String, String> {
     if let Some(arg) = env::args().skip(1).next() {
+        if arg == "--help" || arg == "-h" || arg == "help" {
+            println!(
+                "Desktop World {}\n\n{}",
+                env!("CARGO_PKG_VERSION"),
+                installer::usage()
+            );
+            std::process::exit(0);
+        }
         if arg == "--version" || arg == "version" {
             println!(
                 "dtw {} (CUA source ac967b9006aa)",
@@ -86,13 +98,20 @@ fn worker_path() -> Result<String, String> {
         }
         if arg == "install" {
             let args: Vec<String> = env::args().collect();
-            if args.len() == 5 && args[2] == "antigravity" && args[3] == "--project" {
-                install_antigravity(Path::new(&args[4]))?;
-            } else if args.len() == 5 && args[2] == "plugin" && args[3] == "--to" {
+            if args.get(2).map(String::as_str) == Some("--help") {
+                println!("{}", installer::usage());
+                std::process::exit(0);
+            }
+            if args.len() == 5 && args[2] == "plugin" && args[3] == "--to" {
                 install_plugin(Path::new(&args[4]))?;
             } else {
-                return Err("usage: dtw install antigravity --project PROJECT_DIR | dtw install plugin --to DESTINATION".into());
+                installer::run(&args[1..])?;
             }
+            std::process::exit(0);
+        }
+        if arg == "uninstall" {
+            let args: Vec<String> = env::args().collect();
+            installer::run(&args[1..])?;
             std::process::exit(0);
         }
         return Err(format!("unknown argument: {arg}"));
@@ -100,17 +119,9 @@ fn worker_path() -> Result<String, String> {
     if let Ok(path) = env::var("DTW_CUA_WORKER") {
         return Ok(path);
     }
-    let binary = env::current_exe().map_err(|e| e.to_string())?;
-    let path = binary
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.join("libexec").join(executable_name("cua-driver")))
-        .ok_or_else(|| {
-            format!(
-                "cannot locate sibling libexec/{}",
-                executable_name("cua-driver")
-            )
-        })?;
+    let path = package_root()?
+        .join("libexec")
+        .join(executable_name("cua-driver"));
     Ok(path.to_string_lossy().into_owned())
 }
 
@@ -136,10 +147,17 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
 
 fn package_root() -> Result<PathBuf, String> {
     let binary = env::current_exe().map_err(|e| e.to_string())?;
-    let package = binary
+    let adjacent = binary
         .parent()
         .and_then(|p| p.parent())
         .ok_or("cannot locate package root")?;
+    if adjacent.join("bin").join(executable_name("dtw")) == binary && valid_package(adjacent) {
+        return Ok(adjacent.to_path_buf());
+    }
+    expand_embedded(&binary)
+}
+
+fn valid_package(package: &Path) -> bool {
     for required in [
         PathBuf::from("libexec").join(executable_name("cua-driver")),
         PathBuf::from("skills/desktop-world/SKILL.md"),
@@ -148,26 +166,145 @@ fn package_root() -> Result<PathBuf, String> {
         PathBuf::from("LICENSING/MPL-SOURCES.tar.gz"),
     ] {
         if !package.join(&required).is_file() {
-            return Err(format!("incomplete package: {}", required.display()));
+            return false;
         }
     }
-    Ok(package.to_path_buf())
+    true
 }
 
-fn install_antigravity(project: &Path) -> Result<(), String> {
-    let project = project.canonicalize().map_err(|e| e.to_string())?;
-    if !project.is_dir() {
-        return Err("project must be an existing directory".into());
+fn data_root() -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    let home = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME"));
+    #[cfg(not(windows))]
+    let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"));
+    let home = PathBuf::from(home.ok_or("HOME or USERPROFILE is required")?);
+    #[cfg(target_os = "macos")]
+    let base = home.join("Library/Application Support");
+    #[cfg(windows)]
+    let base = env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join("AppData/Local"));
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let base = env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".local/share"));
+    Ok(base.join("desktop-world"))
+}
+
+fn write_sums(root: &Path) -> Result<(), String> {
+    fn walk(root: &Path, dir: &Path, paths: &mut Vec<PathBuf>) -> Result<(), String> {
+        for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            if path.is_dir() {
+                walk(root, &path, paths)?;
+            } else if path.is_file()
+                && path.file_name().and_then(|s| s.to_str()) != Some("SHA256SUMS")
+            {
+                paths.push(
+                    path.strip_prefix(root)
+                        .map_err(|e| e.to_string())?
+                        .to_path_buf(),
+                );
+            }
+        }
+        Ok(())
     }
-    let destination = project.join(".agents/plugins/desktop-world");
-    install_package(&destination, true)
+    let mut paths = Vec::new();
+    walk(root, root, &mut paths)?;
+    paths.sort();
+    let mut lines = String::new();
+    for path in paths {
+        let bytes = fs::read(root.join(&path)).map_err(|e| e.to_string())?;
+        lines.push_str(&format!(
+            "{:x}  {}\n",
+            Sha256::digest(&bytes),
+            path.to_string_lossy().replace('\\', "/")
+        ));
+    }
+    fs::write(root.join("SHA256SUMS"), lines).map_err(|e| e.to_string())
+}
+
+fn expand_embedded(binary: &Path) -> Result<PathBuf, String> {
+    if EMBEDDED_BUNDLE.is_empty() {
+        return Err("this development binary has no embedded runtime; use a release package or scripts/build-plugin".into());
+    }
+    let digest = format!("{:x}", Sha256::digest(EMBEDDED_BUNDLE));
+    // The runtime bundle can stay byte-identical across CLI-only updates. Include
+    // the executing binary so a newer installer never reuses a cached old CLI.
+    let binary_digest = format!(
+        "{:x}",
+        Sha256::digest(fs::read(binary).map_err(|e| e.to_string())?)
+    );
+    let root = data_root()?.join("runtime").join(format!(
+        "{}-{}-{}",
+        env!("CARGO_PKG_VERSION"),
+        &digest[..16],
+        &binary_digest[..16]
+    ));
+    let marker = root.join(".dtw-bundle-sha256");
+    if root.exists() {
+        if fs::read_to_string(&marker)
+            .map_err(|e| e.to_string())?
+            .trim()
+            != digest
+            || !valid_package(&root)
+        {
+            return Err(format!(
+                "embedded runtime cache is invalid: {}",
+                root.display()
+            ));
+        }
+        return Ok(root);
+    }
+    let parent = root.parent().ok_or("invalid runtime cache path")?;
+    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let stage = parent.join(format!(".dtw-runtime-{}", uuid::Uuid::new_v4()));
+    let result = (|| {
+        fs::create_dir(&stage).map_err(|e| e.to_string())?;
+        let gz = flate2::read::GzDecoder::new(EMBEDDED_BUNDLE);
+        let mut archive = tar::Archive::new(gz);
+        for entry in archive.entries().map_err(|e| e.to_string())? {
+            let mut entry = entry.map_err(|e| e.to_string())?;
+            if !entry.unpack_in(&stage).map_err(|e| e.to_string())? {
+                return Err("embedded bundle has an unsafe path".into());
+            }
+        }
+        fs::create_dir_all(stage.join("bin")).map_err(|e| e.to_string())?;
+        fs::copy(binary, stage.join("bin").join(executable_name("dtw")))
+            .map_err(|e| e.to_string())?;
+        if !valid_package(&stage) {
+            return Err("embedded runtime is incomplete".into());
+        }
+        fs::write(stage.join(".dtw-bundle-sha256"), format!("{digest}\n"))
+            .map_err(|e| e.to_string())?;
+        write_sums(&stage)?;
+        match fs::rename(&stage, &root) {
+            Ok(()) => Ok(()),
+            Err(e) if root.exists() => {
+                let _ = fs::remove_dir_all(&stage);
+                if fs::read_to_string(&marker)
+                    .map_err(|e| e.to_string())?
+                    .trim()
+                    == digest
+                    && valid_package(&root)
+                {
+                    Ok(())
+                } else {
+                    Err(format!("runtime cache race: {e}"))
+                }
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&stage);
+    }
+    result?;
+    Ok(root)
 }
 
 fn install_plugin(destination: &Path) -> Result<(), String> {
-    install_package(destination, false)
-}
-
-fn install_package(destination: &Path, antigravity: bool) -> Result<(), String> {
     let package = package_root()?;
     let parent = destination
         .parent()
@@ -187,22 +324,6 @@ fn install_package(destination: &Path, antigravity: bool) -> Result<(), String> 
         destination.with_file_name(format!(".desktop-world-install-{}", uuid::Uuid::new_v4()));
     let result = (|| {
         copy_tree(&package, &staging)?;
-        if antigravity {
-            let plugin = json!({
-                "$schema":"https://antigravity.google/schemas/v1/plugin.json",
-                "name":"desktop-world",
-                "description":"Desktop World native CUA integration"
-            });
-            fs::write(staging.join("plugin.json"), format!("{plugin}\n"))
-                .map_err(|e| e.to_string())?;
-            let mcp = json!({"mcpServers":{"dtw":{"command":destination.join("bin").join(executable_name("dtw"))}}});
-            fs::write(staging.join("mcp_config.json"), format!("{mcp}\n"))
-                .map_err(|e| e.to_string())?;
-            // The source package's checksums cover its original manifest.
-            // This host-specific install rewrites that manifest, so remove
-            // the now-invalid list instead of presenting stale integrity data.
-            fs::remove_file(staging.join("SHA256SUMS")).map_err(|e| e.to_string())?;
-        }
         if fs::symlink_metadata(&destination).is_ok() {
             return Err(format!(
                 "destination already exists: {}",
@@ -217,7 +338,7 @@ fn install_package(destination: &Path, antigravity: bool) -> Result<(), String> 
     result?;
     println!(
         "{}",
-        json!({"plugin":destination,"mcp_command":destination.join("bin").join(executable_name("dtw")),"format":if antigravity {"antigravity"} else {"agent-plugin-1.0"}})
+        json!({"plugin":destination,"mcp_command":destination.join("bin").join(executable_name("dtw")),"format":"agent-plugin-1.0"})
     );
     Ok(())
 }
@@ -265,94 +386,74 @@ fn mcp_text(value: Value, is_error: bool) -> Value {
     json!({"content":[{"type":"text","text":value.to_string()}], "isError":is_error})
 }
 
-fn short(s: &str, max: usize) -> (String, bool) {
+fn mcp_plain(value: impl Into<String>, is_error: bool) -> Value {
+    json!({"content":[{"type":"text","text":value.into()}], "isError":is_error})
+}
+
+fn short(s: &str, max: usize) -> String {
     if s.len() <= max {
-        return (s.to_owned(), false);
+        return s.to_owned();
     }
     let mut end = max;
     while !s.is_char_boundary(end) {
         end -= 1;
     }
-    (s[..end].to_owned(), true)
+    format!(
+        "{}...truncated {} chars...",
+        &s[..end],
+        s[end..].chars().count()
+    )
 }
 
-fn compact_success_text(value: &str) -> Option<String> {
-    if !value.starts_with("run_script: ok") || !value.contains("\nreturn value:") {
-        return None;
+fn display_result(result: &SavedResult) -> String {
+    let mut text = result.text.clone();
+    if result.is_error || !text.starts_with("run_script: ok") {
+        return text;
     }
-    let first = value.lines().next()?;
-    let calls = value
-        .find("\ncalls:\n")
-        .map(|at| &value[at..])
-        .unwrap_or("");
-    Some(format!("{first}{calls}"))
-}
-
-fn focus_summary(structured: &Value) -> Option<Value> {
-    if let Some(activated) = structured.get("activated").and_then(Value::as_bool) {
-        return Some(json!({
-            "activated": activated,
-            "code": structured.get("code"),
-            "focused_window_id": structured.pointer("/observed/focused_window_id"),
-            "verified": structured.pointer("/exact_window_effect/verified"),
-        }));
+    // CUA's return line contains our private state wrapper. Replace that
+    // line in place, retaining the native order of status, value and calls.
+    let mut returned = String::new();
+    if let Ok(structured) = serde_json::from_str::<Value>(&result.structured) {
+        if let Some(value) = structured.get("value").filter(|v| !v.is_null()) {
+            // CUA already names each action and its result in the call trace.
+            // Repeating its action object adds fields without an action fact.
+            let action_in_calls = text.contains("\ncalls:\n")
+                && value.get("effect").is_some()
+                && value.get("route").is_some();
+            if !action_in_calls {
+                returned = format!("\nreturn value: {value}");
+            }
+        }
     }
-    // Windows reports the observed foreground HWND rather than macOS's fields.
-    let landed = structured.get("landed_on_target")?.as_bool()?;
-    let hwnd = |key: &str| {
-        structured
-            .get(key)
-            .and_then(Value::as_str)
-            .and_then(|value| u64::from_str_radix(value.strip_prefix("0x")?, 16).ok())
-    };
-    let observed = hwnd("now_fg_hwnd");
-    let target = hwnd("target_hwnd");
-    Some(json!({
-        "activated": landed,
-        "code": structured.get("code"),
-        "focused_window_id": observed,
-        "verified": landed && observed.is_some() && observed == target,
-    }))
+    if let Some(start) = text.find("\nreturn value:") {
+        let end = text[start + 1..]
+            .find('\n')
+            .map(|n| start + 1 + n)
+            .unwrap_or(text.len());
+        text.replace_range(start..end, &returned);
+    }
+    text
 }
 
 #[cfg(test)]
-mod focus_tests {
+mod receipt_tests {
     use super::*;
 
     #[test]
-    fn windows_verifies_the_observed_exact_foreground_window() {
-        let summary = focus_summary(&json!({
-            "landed_on_target": true, "now_fg_hwnd": "0x14026c", "target_hwnd": "0x14026c"
-        }))
-        .unwrap();
-        assert_eq!(summary["verified"], true);
-        assert_eq!(summary["focused_window_id"], 0x14026cu64);
+    fn native_action_text_is_not_repeated_as_json() {
+        let result = SavedResult {
+            text: "run_script: ok in 1021 ms, 1 driver call(s)\nreturn value: {\"__dtw_value\":{},\"__dtw_state\":{}}\ncalls:\n  1. line 3 press_key ok (16 ms): Pressed 'return' on the desktop.".into(),
+            structured: json!({"value":{"effect":"unverifiable","route":"global_input","summary":"Pressed 'return' on the desktop.","text":"Pressed 'return' on the desktop."}}).to_string(),
+            images: vec![],
+            is_error: false,
+            error_code: None,
+        };
+        assert_eq!(display_result(&result), "run_script: ok in 1021 ms, 1 driver call(s)\ncalls:\n  1. line 3 press_key ok (16 ms): Pressed 'return' on the desktop.");
     }
 
     #[test]
-    fn windows_does_not_verify_raising_or_a_different_foreground_window() {
-        for landed in [false, true] {
-            let summary = focus_summary(&json!({
-                "landed_on_target": landed, "raised": true,
-                "now_fg_hwnd": "0x123", "target_hwnd": "0x456"
-            }))
-            .unwrap();
-            assert_eq!(summary["verified"], false);
-        }
-        let missing = focus_summary(&json!({"landed_on_target": true})).unwrap();
-        assert_eq!(missing["verified"], false);
-    }
-
-    #[test]
-    fn macos_retains_native_activation_and_verification() {
-        let summary = focus_summary(&json!({
-            "activated": true, "observed": {"focused_window_id": 42},
-            "exact_window_effect": {"verified": false}
-        }))
-        .unwrap();
-        assert_eq!(summary["activated"], true);
-        assert_eq!(summary["verified"], false);
-        assert_eq!(summary["focused_window_id"], 42);
+    fn truncation_reports_characters_in_the_text() {
+        assert_eq!(short("é中ab", 3), "é...truncated 3 chars...");
     }
 }
 
@@ -366,7 +467,7 @@ fn page(s: &str, offset: usize) -> Value {
     while !s.is_char_boundary(end) {
         end -= 1;
     }
-    json!({"data": &s[start..end], "offset":start, "next_offset": if end < s.len() {Some(end)} else {None}, "bytes":s.len()})
+    json!({"data": &s[start..end], "offset":start, "next_offset": if end < s.len() {Some(end)} else {None}})
 }
 
 impl Server {
@@ -403,14 +504,14 @@ impl Server {
                             "session":{"type":"string","description":"Session label (default: default). Native element tokens can cross labels in one MCP process; use a separate process per independent Agent."},
                             "script":{"type":"string","description":"Async CUA run_script body. Use cua.getApp, getState, query, click, typeText, pressKey, zoom and return; see packaged api.d.ts."},
                             "operation":{"type":"string","enum":["run","status","result","cancel","permissions","cursor","focus","menu","desktop"]},
-                            "wait_ms":{"type":"integer","minimum":0,"maximum":5000,"description":"Wait briefly for a terminal receipt in the same exec call (default 4000 ms). If still running, query the original execution_id with operation=result."},
+                            "wait_ms":{"type":"integer","minimum":0,"maximum":5000,"description":"Wait briefly for a terminal receipt in the same exec call (default 4000 ms). If still running, query the original id with operation=result."},
                             "include_image":{"type":"boolean","description":"If this execution completes within wait_ms and has an image, return the first image with its summary. Default false; later result,part=image still works."},
                             "enabled":{"type":"boolean","description":"With operation=cursor, show or hide this Session's virtual cursor. Omit to read cursor state."},
                             "pid":{"type":"integer","minimum":1,"description":"With focus/menu, exact app PID."},
                             "window_id":{"type":"integer","minimum":1,"description":"With menu, exact target window; with focus, optional ordinary window ID."},
                             "path":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string"},"description":"With menu, exact macOS menu labels from menu bar to command."},
                             "max_image_dimension":{"type":"integer","minimum":0,"description":"With desktop, optional screenshot long-edge cap (default 1600, 0 for original size); image is retained for result,part=image."},
-                            "execution_id":{"type":"string"},
+                            "id":{"type":"string","description":"The original short receipt ID for status, result, or cancel."},
                             "part":{"type":"string","enum":["summary","text","structured","image"]},
                             "offset":{"type":"integer","minimum":0},
                             "image_index":{"type":"integer","minimum":0}
@@ -438,14 +539,14 @@ impl Server {
 
     async fn exec(self: &Arc<Self>, args: Value) -> Value {
         let Some(obj) = args.as_object() else {
-            return mcp_text(json!({"error":"arguments must be an object"}), true);
+            return mcp_plain("arguments must be an object", true);
         };
         let session_id = obj
             .get("session")
             .and_then(Value::as_str)
             .unwrap_or("default");
         if session_id.is_empty() || session_id.len() > 100 || !session_id.is_ascii() {
-            return mcp_text(json!({"error":"invalid session"}), true);
+            return mcp_plain("invalid session", true);
         }
         let operation = obj
             .get("operation")
@@ -471,7 +572,7 @@ impl Server {
                     )
                     .await
                 }
-                None => mcp_text(json!({"error":"script is required"}), true),
+                None => mcp_plain("script is required", true),
             },
             "cursor" => {
                 self.run(
@@ -489,11 +590,11 @@ impl Server {
                     .and_then(|n| u32::try_from(n).ok())
                     .filter(|n| *n > 0)
                 else {
-                    return mcp_text(json!({"error":"focus requires positive pid"}), true);
+                    return mcp_plain("focus requires positive pid", true);
                 };
                 let window_id = obj.get("window_id").and_then(Value::as_u64);
                 if obj.get("window_id").is_some() && window_id.is_none_or(|n| n == 0) {
-                    return mcp_text(json!({"error":"window_id must be positive"}), true);
+                    return mcp_plain("window_id must be positive", true);
                 }
                 self.run(
                     session_id,
@@ -510,17 +611,17 @@ impl Server {
                     .and_then(|n| u32::try_from(n).ok())
                     .filter(|n| *n > 0)
                 else {
-                    return mcp_text(json!({"error":"menu requires positive pid"}), true);
+                    return mcp_plain("menu requires positive pid", true);
                 };
                 let Some(window_id) = obj
                     .get("window_id")
                     .and_then(Value::as_u64)
                     .filter(|n| *n > 0)
                 else {
-                    return mcp_text(json!({"error":"menu requires positive window_id"}), true);
+                    return mcp_plain("menu requires positive window_id", true);
                 };
                 let Some(path) = obj.get("path").and_then(Value::as_array) else {
-                    return mcp_text(json!({"error":"menu requires path"}), true);
+                    return mcp_plain("menu requires path", true);
                 };
                 if path.is_empty()
                     || path.len() > 16
@@ -528,10 +629,7 @@ impl Server {
                         .iter()
                         .any(|s| s.as_str().is_none_or(|s| s.trim().is_empty()))
                 {
-                    return mcp_text(
-                        json!({"error":"menu path must have 1-16 non-empty labels"}),
-                        true,
-                    );
+                    return mcp_plain("menu path must have 1-16 non-empty labels", true);
                 }
                 self.run(
                     session_id,
@@ -555,10 +653,7 @@ impl Server {
                     .unwrap_or(Some(1600))
                     .and_then(|n| u32::try_from(n).ok())
                 else {
-                    return mcp_text(
-                        json!({"error":"max_image_dimension must be a non-negative u32"}),
-                        true,
-                    );
+                    return mcp_plain("max_image_dimension must be a non-negative u32", true);
                 };
                 self.run(
                     session_id,
@@ -584,21 +679,13 @@ impl Server {
                 {
                     Ok(result) => {
                         let saved = save(result);
-                        let structured =
-                            serde_json::from_str::<Value>(&saved.structured).unwrap_or(Value::Null);
-                        let (description, truncated) = short(&saved.text, MODEL_TEXT_BYTES);
-                        mcp_text(
-                            json!({"status":if saved.is_error {"refused"} else {"ok"},
-                            "error_code":saved.error_code,"text":description,"text_truncated":truncated,
-                            "details":structured}),
-                            saved.is_error,
-                        )
+                        mcp_plain(short(&saved.text, MODEL_TEXT_BYTES), saved.is_error)
                     }
-                    Err(e) => mcp_text(json!({"status":"error","error":e.to_string()}), true),
+                    Err(e) => mcp_plain(e.to_string(), true),
                 }
             }
             "status" | "result" | "cancel" => self.control(session_id, operation, &args).await,
-            _ => mcp_text(json!({"error":"invalid operation"}), true),
+            _ => mcp_plain("invalid operation", true),
         }
     }
 
@@ -623,7 +710,7 @@ impl Server {
                     bounded_manifest_path: None,
                 }) {
                     Ok(native) => native,
-                    Err(e) => return mcp_text(json!({"error":e.to_string()}), true),
+                    Err(e) => return mcp_plain(e.to_string(), true),
                 };
                 sessions.insert(
                     session_id.to_owned(),
@@ -637,7 +724,7 @@ impl Server {
             }
             let current = sessions.get_mut(session_id).unwrap();
             if current.busy {
-                return mcp_text(json!({"error":"session_busy"}), true);
+                return mcp_plain("session_busy", true);
             }
             current.busy = true;
             (
@@ -646,19 +733,31 @@ impl Server {
                 current.started,
             )
         };
-        let execution_id = uuid::Uuid::new_v4().to_string();
-        self.jobs.lock().unwrap().insert(
-            execution_id.clone(),
-            Job {
-                session: session_id.to_owned(),
-                phase: "running".into(),
-                cancel_requested: false,
-                result: None,
-            },
-        );
+        // IDs are scoped to this process. Retry a collision against its
+        // receipt map so eight hex characters remain safe for live jobs.
+        let id = {
+            let mut jobs = self.jobs.lock().unwrap();
+            loop {
+                let uuid = uuid::Uuid::new_v4().simple().to_string();
+                let id = uuid[..8].to_owned();
+                if jobs.contains_key(&id) {
+                    continue;
+                }
+                jobs.insert(
+                    id.clone(),
+                    Job {
+                        session: session_id.to_owned(),
+                        phase: "running".into(),
+                        cancel_requested: false,
+                        result: None,
+                    },
+                );
+                break id;
+            }
+        };
         let own = self.clone();
         let name = session_id.to_owned();
-        let job_id = execution_id.clone();
+        let job_id = id.clone();
         tokio::spawn(async move {
             let outcome = own.execute(native, work, &state, started, &job_id).await;
             let mut sessions = own.sessions.lock().unwrap();
@@ -722,7 +821,7 @@ impl Server {
                 .jobs
                 .lock()
                 .unwrap()
-                .get(&execution_id)
+                .get(&id)
                 .is_some_and(|job| job.phase != "running");
             if terminal {
                 break;
@@ -733,7 +832,7 @@ impl Server {
             .jobs
             .lock()
             .unwrap()
-            .get(&execution_id)
+            .get(&id)
             .map(|job| {
                 (
                     job.phase != "running",
@@ -748,14 +847,11 @@ impl Server {
                 .control(
                     session_id,
                     "result",
-                    &json!({"execution_id":execution_id,"part":if include_image && has_image {"image"} else {"summary"}}),
+                    &json!({"id":id,"part":if include_image && has_image {"image"} else {"summary"}}),
                 )
                 .await;
         }
-        mcp_text(
-            json!({"execution_id":execution_id,"session":session_id,"status":"running"}),
-            false,
-        )
+        mcp_plain(format!("id={id} status=running"), false)
     }
 
     async fn execute(
@@ -871,81 +967,29 @@ impl Server {
     }
 
     async fn control(&self, session_id: &str, operation: &str, args: &Value) -> Value {
-        let Some(id) = args.get("execution_id").and_then(Value::as_str) else {
-            return mcp_text(json!({"error":"execution_id is required"}), true);
+        let Some(id) = args.get("id").and_then(Value::as_str) else {
+            return mcp_plain("id is required", true);
         };
         let mut jobs = self.jobs.lock().unwrap();
         let Some(job) = jobs.get_mut(id) else {
-            return mcp_text(
-                json!({"error":"execution_not_found","execution_id":id}),
-                true,
-            );
+            return mcp_plain("execution_not_found", true);
         };
         if job.session != session_id {
-            return mcp_text(
-                json!({"error":"execution_not_found","execution_id":id}),
-                true,
-            );
+            return mcp_plain("execution_not_found", true);
         }
         if operation == "cancel" && job.phase == "running" {
             job.cancel_requested = true;
         }
-        let mut summary = json!({
-            "execution_id":id,"session":session_id,"status":job.phase,
-            "cancel_requested":job.cancel_requested,
-        });
+        let mut line = format!("id={id} status={}", job.phase);
+        if job.cancel_requested {
+            line.push_str(" cancel_requested");
+        }
         if let Some(result) = &job.result {
-            let preview_limit = if operation == "result"
-                && args
-                    .get("part")
-                    .and_then(Value::as_str)
-                    .is_some_and(|part| part != "summary")
-            {
-                512
-            } else {
-                MODEL_TEXT_BYTES
-            };
-            let compacted = (!result.is_error)
-                .then(|| compact_success_text(&result.text))
-                .flatten();
-            let display_text = compacted.as_deref().unwrap_or(&result.text);
-            let (preview, truncated) = short(display_text, preview_limit);
-            summary["error_code"] = json!(result.error_code);
-            summary["is_error"] = json!(result.is_error);
-            summary["text"] = json!(preview);
-            summary["text_truncated"] = json!(truncated || compacted.is_some());
-            summary["text_compacted"] = json!(compacted.is_some());
-            summary["full_text_bytes"] = json!(result.text.len());
-            summary["structured_bytes"] = json!(result.structured.len());
-            summary["image_count"] = json!(result.images.len());
-            if let Ok(structured) = serde_json::from_str::<Value>(&result.structured) {
-                if let Some(focus) = focus_summary(&structured) {
-                    summary["focus"] = focus;
-                }
-                if let Some(capture_id) = structured.get("capture_id").and_then(Value::as_str) {
-                    summary["capture"] = json!({
-                        "capture_id": capture_id,
-                        "display": structured.get("display"),
-                        "screenshot_width": structured.get("screenshot_width"),
-                        "screenshot_height": structured.get("screenshot_height"),
-                        "screen_width": structured.get("screen_width"),
-                        "screen_height": structured.get("screen_height"),
-                    });
-                }
-                if let Some(value) = structured.get("value") {
-                    let encoded = value.to_string();
-                    if encoded.len() <= 4096 {
-                        summary["value"] = value.clone();
-                    } else {
-                        summary["value_bytes"] = json!(encoded.len());
-                    }
-                }
-                if let Some(error) = structured.get("error") {
-                    let encoded = error.to_string();
-                    let (preview, truncated) = short(&encoded, 2048);
-                    summary["native_error"] = json!(preview);
-                    summary["native_error_truncated"] = json!(truncated);
-                }
+            if let Some(code) = result.error_code.as_deref() {
+                line.push_str(&format!(" code={code}"));
+            }
+            if operation == "status" || operation == "cancel" {
+                return mcp_plain(line, result.is_error);
             }
             if operation == "result" {
                 let part = args
@@ -954,29 +998,51 @@ impl Server {
                     .unwrap_or("summary");
                 let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
                 match part {
-                    "text" => summary["page"] = page(&result.text, offset),
-                    "structured" => summary["page"] = page(&result.structured, offset),
+                    "text" => {
+                        return mcp_text(
+                            json!({"id":id,"status":job.phase,"page":page(&display_result(result), offset)}),
+                            result.is_error,
+                        )
+                    }
+                    "structured" => {
+                        return mcp_text(
+                            json!({"id":id,"status":job.phase,"page":page(&result.structured, offset)}),
+                            result.is_error,
+                        )
+                    }
                     "image" => {
                         let index =
                             args.get("image_index").and_then(Value::as_u64).unwrap_or(0) as usize;
                         if let Some(image) = result.images.get(index) {
+                            let body = short(&display_result(result), MODEL_TEXT_BYTES);
+                            if !body.is_empty() {
+                                line.push('\n');
+                                line.push_str(&body);
+                            }
                             return json!({"content":[
-                                {"type":"text","text":summary.to_string()},
+                                {"type":"text","text":line},
                                 {"type":"image","mimeType":image.mime_type,"data":image.data_base64}
                             ],"isError":result.is_error});
                         }
-                        return mcp_text(json!({"error":"image_index_out_of_range"}), true);
+                        return mcp_plain("image_index_out_of_range", true);
                     }
                     "summary" => {}
-                    _ => return mcp_text(json!({"error":"invalid part"}), true),
+                    _ => return mcp_plain("invalid part", true),
                 }
             }
-            return mcp_text(summary, result.is_error);
+            let body = short(&display_result(result), MODEL_TEXT_BYTES);
+            if !body.is_empty() {
+                line.push('\n');
+                line.push_str(&body);
+            }
+            return mcp_plain(line, result.is_error);
         }
         if operation == "cancel" {
-            summary["note"] = json!("Cancellation requested. Upstream private worker may finish the in-flight action; query this original receipt. No replay.");
+            line.push_str(
+                "\nQuery this id for the final result; an in-flight action may still finish.",
+            );
         }
-        mcp_text(summary, false)
+        mcp_plain(line, false)
     }
 }
 

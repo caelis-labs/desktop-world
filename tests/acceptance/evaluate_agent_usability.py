@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -52,24 +53,20 @@ def summarize(log):
             continue
         args = params.get("Arguments", {})
         output = info.get("output", "")
-        try:
-            # Antigravity may append an image block after the JSON receipt.
-            # Parse the first value, rather than discarding a valid receipt
-            # because the whole tool-output string is not a single JSON value.
-            value, _ = json.JSONDecoder().raw_decode(output.lstrip())
-        except (AttributeError, TypeError, json.JSONDecodeError):
-            value = {}
+        match = re.search(r"\bid=([0-9a-f]{8}) status=(\w+)(?: code=([^\s]+))?", output or "")
+        value = {"id": match.group(1), "status": match.group(2),
+                 "code": match.group(3)} if match else {}
         calls.append({"operation": args.get("operation", "run"), "tool_step_state": step.get("state"), "script_sha256":
                       hashlib.sha256(args.get("script", "").encode()).hexdigest() if args.get("script") else None,
-                      "execution_id": value.get("execution_id"), "status": value.get("status"),
-                      "error_code": value.get("error_code"), "is_error": value.get("is_error"),
+                      "id": value.get("id"), "status": value.get("status"),
+                      "code": value.get("code"),
                       "duration_seconds": step.get("duration_seconds")})
     return {"conversation_id": result.get("conversation_id") if result else None,
             "agent_turn_status": result.get("status") if result else None,
             "agent_response": result.get("response") if result else None,
             "exec_calls": calls,
             "run_calls": sum(c["operation"] == "run" for c in calls),
-            "failed_receipts": sum(c["status"] in ("failed", "unknown", "refused") or c["is_error"] is True
+            "failed_receipts": sum(c["status"] in ("failed", "unknown", "refused")
                                    or c["tool_step_state"] == "ERROR" for c in calls)}
 
 

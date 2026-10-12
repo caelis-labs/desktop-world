@@ -1,0 +1,8 @@
+{
+  "name": "desktop-world",
+  "version": "0.1.0-rc.8",
+  "description": "Desktop World native CUA integration",
+  "mcpServers": {
+    "desktop-world": {"command": "${extensionPath}${/}bin${/}dtw"}
+  }
+}

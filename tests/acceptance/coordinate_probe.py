@@ -14,25 +14,25 @@ import time
 import uuid
 
 from accept_chrome import exact_chrome_pid, run_script
-from probe import call, exec_call, result
+from probe import call, exec_call, result, structured_result, parse_exec_result, focus_verified
 
 
 def image_call(proc, ident, session, args, path):
     response = call(proc, {'jsonrpc':'2.0','id':ident,'method':'tools/call',
                            'params':{'name':'exec','arguments':args}}, timeout=30)
     content = response['result']['content']
-    summary = json.loads(content[0]['text'])
+    summary = parse_exec_result(response['result'])
     if summary['status'] == 'running':
         response = call(proc, {'jsonrpc':'2.0','id':ident+1,'method':'tools/call',
                                'params':{'name':'exec','arguments':{
                                    'session':session,'operation':'result',
-                                   'execution_id':summary['execution_id'],'part':'image'}}},timeout=30)
+                                   'id':summary['id'],'part':'image'}}},timeout=30)
         content = response['result']['content']
-        summary = json.loads(content[0]['text'])
+        summary = parse_exec_result(response['result'])
     assert summary['status'] == 'completed', summary
     image = next(item for item in content if item['type'] == 'image')
     path.write_bytes(base64.b64decode(image['data']))
-    return summary['capture']
+    return structured_result(proc, ident+2, session, summary['id'])
 
 
 def main():
@@ -83,8 +83,9 @@ def main():
             focused = exec_call(proc,100,{'session':session,'operation':'focus',
                                         'pid':pid,'window_id':window_id})
             if focused['status']=='running':
-                focused = result(proc,101,session,focused['execution_id'])
-            assert focused['status']=='completed' and focused['focus']['verified'],focused
+                focused = result(proc,101,session,focused['id'])
+            native_focus = structured_result(proc, 102, session, focused['id'])
+            assert focused['status']=='completed' and focus_verified(native_focus, window_id),focused
             points=[]
             for index,(cx,cy) in enumerate([(100,100),(400,250),(700,400)]):
                 cap = image_call(proc,10+index*10,session,{

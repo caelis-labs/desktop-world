@@ -39,16 +39,16 @@ def main():
         started = exec_call(proc, 5, {"operation": "menu", "pid": 987654321,
                                       "window_id": 987654321, "path": ["File", "Open"],
                                       "wait_ms": 0})
-        assert "execution_id" in started
-        terminal = result(proc, 6, "default", started["execution_id"])
+        assert "id" in started
+        terminal = result(proc, 6, "default", started["id"])
         assert terminal["status"] == "failed" and terminal["is_error"]
         report["native_menu_dispatch"] = {"status": terminal["status"],
-                                          "error_code": terminal.get("error_code"),
+                                          "code": terminal.get("code"),
                                           "text": terminal.get("text", "")[:300]}
 
         script = "try { await cua.call('get_desktop_state',{}); return 'unexpected'; } catch(e) { return {code:e.code||null, message:String(e).slice(0,300)}; }"
         started = exec_call(proc, 7, {"script": script, "wait_ms": 0})
-        terminal = result(proc, 8, "default", started["execution_id"])
+        terminal = result(proc, 8, "default", started["id"])
         assert terminal["status"] == "completed"
         assert terminal.get("value", {}).get("code") == "not_allowed", terminal
         report["script_native_boundary"] = terminal["value"]

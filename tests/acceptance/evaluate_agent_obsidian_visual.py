@@ -17,13 +17,16 @@ from host import obsidian_pid
 
 
 def main():
-    package = Path(sys.argv[1]).resolve()
+    source = Path(sys.argv[1]).resolve()
+    binary = source if source.is_file() else source / 'bin/dtw'
+    if not binary.is_file():
+        raise SystemExit(f'DTW executable not found: {binary}')
     root = Path('/private/tmp') / f'dtw-cua-obsidian-final-{uuid.uuid4().hex[:8]}'
     root.mkdir(mode=0o700)
     project = root / 'project'
     project.mkdir()
     plugin = project / '.agents/plugins/desktop-world'
-    subprocess.run([str(package / 'bin/dtw'), 'install', 'antigravity', '--project',
+    subprocess.run([str(binary), 'install', 'agy', '--project',
                     str(project)], check=True, stdout=subprocess.DEVNULL)
     with (root / 'plugin-validate.txt').open('w') as out:
         subprocess.run(['agy', 'plugin', 'validate', str(plugin)], stdout=out,
@@ -31,7 +34,7 @@ def main():
     profile = root / 'obsidian-profile'
     location = root / 'vault-location'
     location.mkdir()
-    vault_name = 'DTW-CUA-FINAL-ACCEPTANCE'
+    vault_name = 'DTW-AGY-NEW-VAULT'
     opened = subprocess.run(['open', '-g', '-na', '/Applications/Obsidian.app', '--args',
                              f'--user-data-dir={profile}'], capture_output=True, text=True)
     if opened.returncode:
@@ -54,7 +57,7 @@ def main():
             '需要经过 Obsidian 的“浏览”与系统文件选择器。文件选择器可能持续显示，却无法通过 PID/Window ID 绑定。'
             '请从安装的 Skill 自行选择观察和操作路线；遇到这种情况要确认屏幕实际状态，不能把绑定失败当成弹窗消失。'
             '最终从新仓库 UI 读回名称，并由验收脚本独立检查新目录。不要打开旧仓库或个人笔记。'
-            '如果窗口身份不明、被其他 App 遮挡、权限拒绝或动作结果 unknown，停止并报告原 execution_id；'
+            '如果窗口身份不明、被其他 App 遮挡、权限拒绝或动作结果 unknown，停止并报告原 id；'
             '不要对旧坐标或未知动作重试。桌面截图仅用于识别临时目标，不读、不操作其他内容；'
             '不用终端、旧 CUA 插件、其他桌面工具、微信或私人内容。'
             '完成后分开报告任务结果和首次使用者批判性评价，包括定位弹窗、脚本语法、回执质量、'
@@ -76,8 +79,8 @@ def main():
                 atomic_write(config_path, injected)
             with log.open('w') as out, err.open('w') as stderr:
                 agent = subprocess.run(['agy', '--print', prompt, '--model', 'gemini-3.8-flash-high',
-                                        '--output-format', 'stream-json', '--print-timeout', '600s'],
-                                       cwd=project, stdout=out, stderr=stderr, timeout=620)
+                                        '--output-format', 'stream-json', '--print-timeout', '900s'],
+                                       cwd=project, stdout=out, stderr=stderr, timeout=930)
         finally:
             if not had_rule:
                 restore = remove_our_allow(config_path, original, injected)
@@ -86,7 +89,8 @@ def main():
         readback = {'vault_directory_exists': expected.is_dir(),
                     'obsidian_config_exists': (expected / '.obsidian').is_dir(),
                     'location_entries': sorted(p.name for p in location.iterdir())[:20]}
-        record = {'package': str(package), 'agent_exit_code': agent.returncode if agent else None,
+        record = {'binary': str(binary), 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+                  'agent_exit_code': agent.returncode if agent else None,
                   'elapsed_seconds': elapsed, 'config_restore': restore,
                   'config_original_sha256': hashlib.sha256(original).hexdigest(),
                   'config_after_sha256': hashlib.sha256(config_path.read_bytes()).hexdigest(),
@@ -97,6 +101,8 @@ def main():
                           'failed_receipts': record['agent']['failed_receipts'],
                           'config_restore': restore, 'readback': readback},
                          ensure_ascii=False), flush=True)
+        if agent.returncode != 0 or not readback['vault_directory_exists'] or not readback['obsidian_config_exists']:
+            raise RuntimeError(f'Obsidian vault acceptance did not reach the target; see {root / "record.json"}')
     finally:
         if pid is not None:
             try:

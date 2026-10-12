@@ -54,16 +54,6 @@ mkdir -p "$target_dir/dtw" "$target_dir/cua" "$(dirname -- "$destination")"
 offline=
 if [ "${DTW_CARGO_OFFLINE:-0}" = 1 ]; then offline=--offline; fi
 
-# Cargo's git dependency and the private worker use the same checked commit.
-# The redirect avoids a second fetch while retaining a portable pinned URL in
-# Cargo.toml and Cargo.lock. It changes only this build process's git config.
-CARGO_NET_GIT_FETCH_WITH_CLI=true \
-GIT_CONFIG_COUNT=1 \
-GIT_CONFIG_KEY_0="url.file://$source_root.insteadOf" \
-GIT_CONFIG_VALUE_0=https://github.com/trycua/cua.git \
-CARGO_TARGET_DIR="$target_dir/dtw" \
-  cargo +1.98.0 build --manifest-path "$repo_root/cmd/dtw/Cargo.toml" --release --locked $offline
-
 if [ -n "${CUA_DRIVER_BIN:-}" ]; then
   driver_binary=$CUA_DRIVER_BIN
   expected_binary_sha=${CUA_DRIVER_BIN_SHA256:?CUA_DRIVER_BIN_SHA256 is required with CUA_DRIVER_BIN}
@@ -81,22 +71,44 @@ fi
 
 staging=$(mktemp -d "${destination}.stage.XXXXXXXX")
 mkdir -p "$staging/bin" "$staging/libexec" "$staging/skills"
-cp "$target_dir/dtw/release/dtw" "$staging/bin/dtw"
 cp "$driver_binary" "$staging/libexec/cua-driver"
+sign_binary() {
+  if [ -n "${DTW_SIGN_IDENTITY:-}" ]; then
+    : "${DTW_SIGN_KEYCHAIN:?DTW_SIGN_KEYCHAIN is required with DTW_SIGN_IDENTITY}"
+    codesign --force --sign "$DTW_SIGN_IDENTITY" --keychain "$DTW_SIGN_KEYCHAIN" --options runtime --timestamp "$1"
+  else
+    codesign --force --sign - "$1" >/dev/null
+  fi
+  codesign --verify --strict "$1"
+}
 if [ "$(uname -s)" = Darwin ]; then
-  # cmd/dtw/build.rs supplies the final Swift runtime rpath for CLI and tests.
-  codesign --force --sign - "$staging/bin/dtw" >/dev/null
-  codesign --force --sign - "$staging/libexec/cua-driver" >/dev/null
-  codesign --verify "$staging/bin/dtw"
-  codesign --verify "$staging/libexec/cua-driver"
+  sign_binary "$staging/libexec/cua-driver"
 fi
 cp "$repo_root/packaging/plugin/plugin.json" "$repo_root/packaging/plugin/mcp.json" "$staging/"
+cp "$repo_root/packaging/plugin/.mcp.json" "$repo_root/packaging/plugin/gemini-extension.json" "$staging/"
+cp -R "$repo_root/packaging/plugin/.claude-plugin" "$staging/.claude-plugin"
 cp -R "$repo_root/packaging/plugin/skills/desktop-world" "$staging/skills/desktop-world"
 cp "$repo_root/LICENSE" "$repo_root/NOTICE" "$repo_root/THIRD_PARTY_NOTICES.md" "$staging/"
 cp "$source_root/LICENSE.md" "$staging/CUA-MIT-LICENSE.txt"
 cp "$source_root/libs/cua-driver/rust/THIRD_PARTY_NOTICES.md" "$staging/CUA-THIRD_PARTY_NOTICES.md"
 python3 "$repo_root/scripts/license-audit.py" --cua-source "$source_root" --output "$staging/LICENSING"
 python3 "$repo_root/tests/acceptance/licenses_probe.py" "$staging"
+bundle="$target_dir/runtime-bundle.tar.gz"
+python3 "$repo_root/scripts/embed-runtime.py" "$staging" "$bundle"
+# Cargo's git dependency and the private worker use the same checked commit.
+# The redirect avoids a second fetch while retaining a portable pinned URL.
+DTW_EMBED_BUNDLE="$bundle" \
+CARGO_NET_GIT_FETCH_WITH_CLI=true \
+GIT_CONFIG_COUNT=1 \
+GIT_CONFIG_KEY_0="url.file://$source_root.insteadOf" \
+GIT_CONFIG_VALUE_0=https://github.com/trycua/cua.git \
+CARGO_TARGET_DIR="$target_dir/dtw" \
+  cargo +1.98.0 build --manifest-path "$repo_root/cmd/dtw/Cargo.toml" --release --locked $offline
+cp "$target_dir/dtw/release/dtw" "$staging/bin/dtw"
+if [ "$(uname -s)" = Darwin ]; then
+  # cmd/dtw/build.rs supplies the final Swift runtime rpath for the CLI.
+  sign_binary "$staging/bin/dtw"
+fi
 (cd "$staging" && find . -type f ! -name SHA256SUMS -exec shasum -a 256 {} + | LC_ALL=C sort > SHA256SUMS)
 "$staging/bin/dtw" --version
 mv -- "$staging" "$destination"

@@ -17,7 +17,7 @@ import uuid
 
 from PIL import Image, ImageChops
 
-from probe import call, exec_call, result, runtime_env
+from probe import call, exec_call, result, runtime_env, parse_exec_result, focus_verified
 
 
 class MCP:
@@ -45,34 +45,36 @@ class MCP:
             raise RuntimeError("An original execution is unresolved; further scripts stopped")
         response = self.request("tools/call", {"name": "exec", "arguments": args})
         assert "error" not in response, response
-        receipt = json.loads(response["result"]["content"][0]["text"])
-        original = receipt.get("execution_id")
+        receipt = parse_exec_result(response["result"])
+        original = receipt.get("id")
         deadline = time.monotonic() + 45
         while receipt.get("status") == "running" and time.monotonic() < deadline:
             time.sleep(.05)
             response = self.request("tools/call", {"name": "exec", "arguments": {
                 "session": args.get("session", "default"), "operation": "result",
-                "execution_id": original}})
-            receipt = json.loads(response["result"]["content"][0]["text"])
+                "id": original}})
+            receipt = parse_exec_result(response["result"])
         self.records.append({"arguments": args, "receipt": receipt})
         self.flush()
         if receipt.get("status") in ("running", "unknown"):
             self.uncertain = True
             raise RuntimeError(f"Unresolved original execution {original}: {receipt}")
-        if receipt.get("status") == "completed" and "value_bytes" in receipt:
-            chunks = []
-            offset = 0
-            while True:
-                response = self.request("tools/call", {"name": "exec", "arguments": {
-                    "session": args.get("session", "default"), "operation": "result",
-                    "execution_id": original, "part": "structured", "offset": offset}})
-                page = json.loads(response["result"]["content"][0]["text"])["page"]
-                chunks.append(page["data"])
-                offset = page["next_offset"]
-                if offset is None:
-                    break
-            receipt = dict(receipt, value=json.loads("".join(chunks))["value"])
+        if receipt.get("status") == "completed" and "...truncated " in receipt.get("text", ""):
+            receipt = dict(receipt, value=self.structured(receipt, args.get("session", "default"))["value"])
         return receipt
+
+    def structured(self, receipt, session="windows-live"):
+        chunks = []
+        offset = 0
+        while True:
+            response = self.request("tools/call", {"name": "exec", "arguments": {
+                "session": session, "operation": "result", "id": receipt["id"],
+                "part": "structured", "offset": offset}})
+            page = json.loads(response["result"]["content"][0]["text"])["page"]
+            chunks.append(page["data"])
+            offset = page["next_offset"]
+            if offset is None:
+                return json.loads("".join(chunks))
 
     def script(self, script, session="windows-live"):
         return self.exec(session=session, script=script)
@@ -80,7 +82,7 @@ class MCP:
     def image(self, receipt, name, session="windows-live"):
         response = self.request("tools/call", {"name": "exec", "arguments": {
             "session": session, "operation": "result", "part": "image",
-            "execution_id": receipt["execution_id"]}})
+            "id": receipt["id"]}})
         for block in response["result"].get("content", []):
             if block.get("type") == "image":
                 payload = base64.b64decode(block["data"])
@@ -214,7 +216,7 @@ def main():
         completed(initial)
         # Preserve full bounded tree even if the adapter omits its large inline value.
         tree_response = mcp.request("tools/call", {"name": "exec", "arguments": {
-            "session": "windows-live", "operation": "result", "execution_id": initial["execution_id"],
+            "session": "windows-live", "operation": "result", "id": initial["id"],
             "part": "structured"}})
         (root / "native-tree.json").write_text(json.dumps(tree_response, indent=2), encoding="utf-8")
         if args.inspect:
@@ -263,8 +265,9 @@ def main():
             receipt = mcp.exec(session="windows-live", operation="focus",
                 pid=fixture_process.pid, window_id=window_id)
             completed(receipt)
-            assert receipt.get("focus", {}).get("verified") and receipt["focus"]["focused_window_id"] == window_id, receipt
-            return receipt["focus"]
+            native_focus = mcp.structured(receipt)
+            assert focus_verified(native_focus, window_id), receipt
+            return native_focus
         if not check("native_focus", focus):
             raise RuntimeError("Fixture focus could not be verified; no input attempted")
 
@@ -277,7 +280,7 @@ def main():
             completed(receipt)
             events = native_events(root)
             assert events and any(e["kind"] == "input" and e["value"].replace("\r\n", "\n") == text for e in events), events[-8:]
-            return {"unicode_and_multiline": True, "receipt": receipt["execution_id"]}
+            return {"unicode_and_multiline": True, "receipt": receipt["id"]}
         if not check("native_unicode_input", input_text):
             raise RuntimeError("Input outcome reconciled from fixture log; dependent writes stopped")
 
@@ -288,8 +291,8 @@ def main():
             completed(receipt)
             events = [e for e in native_events(root) if e["kind"] == "submit"]
             assert len(events) == 1 and events[0]["value"].replace("\r\n", "\n") == text, events
-            original = mcp.exec(session="windows-live", operation="result", execution_id=receipt["execution_id"])
-            assert original["execution_id"] == receipt["execution_id"], original
+            original = mcp.exec(session="windows-live", operation="result", id=receipt["id"])
+            assert original["id"] == receipt["id"], original
             assert len([e for e in native_events(root) if e["kind"] == "submit"]) == 1
             return {"submissions": 1, "original_receipt_query_no_duplicate": True}
         check("native_semantic_submit", submit)
@@ -401,7 +404,7 @@ def main():
             mcp.image(receipt, "native-picker.png")
             focused = mcp.exec(session="windows-live", operation="focus", pid=fixture_process.pid, window_id=dialog_id)
             completed(focused)
-            assert focused.get("focus", {}).get("verified"), focused
+            assert focus_verified(mcp.structured(focused), dialog_id), focused
             completed(mcp.script(dialog_bind + "return await a.pressKey('return',undefined,{delivery_mode:'foreground'});"))
             deadline = time.monotonic() + 3
             while time.monotonic() < deadline:
@@ -411,7 +414,7 @@ def main():
                 time.sleep(.05)
             assert len(observed) == 1 and observed[0]["value"] == "OK", observed
             report["picker_reconciliation"] = {"opening_status": opening["status"],
-                "opening_execution_id": opening["execution_id"], "dialog_window_id": dialog_id,
+                "opening_id": opening["id"], "dialog_window_id": dialog_id,
                 "application_result": "OK", "opening_action_replays": 0}
             assert opening["status"] == "completed", report["picker_reconciliation"]
             return {"dialog_window_id": dialog_id, "application_result": "OK", "preset_owned_file": "picker.txt"}

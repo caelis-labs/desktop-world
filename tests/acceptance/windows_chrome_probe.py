@@ -12,6 +12,7 @@ import time
 import uuid
 
 from windows_probe import MCP, completed, painted_bounds
+from probe import focus_verified
 
 
 def main():
@@ -145,8 +146,9 @@ def main():
         def focus():
             receipt = mcp.exec(session="windows-live", operation="focus", pid=chrome.pid, window_id=window_id)
             completed(receipt)
-            assert receipt.get("focus", {}).get("verified") and receipt["focus"]["focused_window_id"] == window_id, receipt
-            return receipt["focus"]
+            native_focus = mcp.structured(receipt)
+            assert focus_verified(native_focus, window_id), receipt
+            return native_focus
         if not check("chrome_focus", focus):
             raise RuntimeError("Chrome focus was not verified; no input attempted")
 
@@ -168,8 +170,8 @@ def main():
             completed(receipt)
             observed = oracle("submit")
             assert len(observed) == 1 and observed[0]["value"] == text and observed[0]["trusted"], observed
-            queried = mcp.exec(session="windows-live", operation="result", execution_id=receipt["execution_id"])
-            assert queried["execution_id"] == receipt["execution_id"]
+            queried = mcp.exec(session="windows-live", operation="result", id=receipt["id"])
+            assert queried["id"] == receipt["id"]
             assert len(oracle("submit")) == 1
             readback = completed(mcp.script(bind + "const s=await a.getState({query:'SUBMITTED-CHROME',max_elements:30,include_screenshot:false});return s.tree_markdown;"))
             assert "SUBMITTED-CHROME" in readback, readback

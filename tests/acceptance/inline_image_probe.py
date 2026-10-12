@@ -12,7 +12,7 @@ import time
 import uuid
 
 from accept_chrome import exact_chrome_pid
-from probe import call
+from probe import call, parse_exec_result
 
 
 def main():
@@ -55,10 +55,10 @@ def main():
                 'name': 'exec', 'arguments': {'session': 'inline-image', 'script': script,
                                              'include_image': True, 'wait_ms': 5000}}})
             contents = reply['result']['content']
-            text = json.loads(contents[0]['text'])
+            text = parse_exec_result(reply['result'])
             images = [part for part in contents if part['type'] == 'image']
-            report = {'status': text.get('status'), 'execution_id': text.get('execution_id'),
-                      'image_count': text.get('image_count'), 'inline_images': len(images),
+            report = {'status': text.get('status'), 'id': text.get('id'),
+                      'inline_images': len(images),
                       'mime_type': images[0]['mimeType'] if images else None,
                       'value': text.get('value')}
             assert report['status'] == 'completed' and report['inline_images'] == 1, report
