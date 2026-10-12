@@ -1,6 +1,6 @@
 # Install Desktop World
 
-The first public release is pending. When published, download the one executable matching your platform from [Releases](https://github.com/caelis-labs/desktop-world/releases): `dtw-darwin-arm64` for macOS Apple Silicon or `dtw-windows-amd64.exe` for Windows x64. The [README](../README.md#get-started) has copyable download and first-use commands. Keep the downloaded `dtw` file if you want to rerun the installer for upgrades or removal.
+Download the `v0.1.0-rc.8` prerelease's one executable matching your platform from [Releases](https://github.com/caelis-labs/desktop-world/releases/tag/v0.1.0-rc.8): `dtw-darwin-arm64` for macOS Apple Silicon or `dtw-windows-amd64.exe` for Windows x64. The [README](../README.md#get-started) has copyable download and first-use commands. Keep the downloaded `dtw` file if you want to rerun the installer for upgrades or removal.
 
 The release executable embeds its own CUA worker, Skill, manifests, and licensing files. On first use it expands a versioned runtime under your user profile. Moving or deleting the original download after installation does not break an installed Plugin; that Plugin has its own `bin/dtw` and `libexec/cua-driver`.
 

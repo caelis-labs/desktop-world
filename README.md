@@ -6,12 +6,12 @@
 
 Download **one `dtw` executable for your platform**. It contains the Skill, plugin manifests, notices, and its private CUA worker. `dtw install` expands these files and connects the Agent; users do not need Rust, Python, Node, a DMG, or a separate worker download.
 
-The first public release is pending. These asset links and commands become usable when it is published; the [release workflow](.github/workflows/release.yml) currently produces candidate binaries for review.
+Download the `v0.1.0-rc.8` prerelease from [Releases](https://github.com/caelis-labs/desktop-world/releases/tag/v0.1.0-rc.8). Use the versioned links below so the commands resolve to this tested build.
 
 ### macOS Apple Silicon
 
 ```sh
-curl -fL https://github.com/caelis-labs/desktop-world/releases/latest/download/dtw-darwin-arm64 -o dtw
+curl -fL https://github.com/caelis-labs/desktop-world/releases/download/v0.1.0-rc.8/dtw-darwin-arm64 -o dtw
 chmod +x dtw
 ./dtw install agy
 ```
@@ -19,7 +19,7 @@ chmod +x dtw
 ### Windows x64 (PowerShell)
 
 ```powershell
-Invoke-WebRequest https://github.com/caelis-labs/desktop-world/releases/latest/download/dtw-windows-amd64.exe -OutFile dtw.exe
+Invoke-WebRequest https://github.com/caelis-labs/desktop-world/releases/download/v0.1.0-rc.8/dtw-windows-amd64.exe -OutFile dtw.exe
 .\dtw.exe install agy
 ```
 
