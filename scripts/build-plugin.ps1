@@ -60,11 +60,6 @@ try {
     New-Item -ItemType Directory -Force -Path $dtwTarget, $cuaTarget | Out-Null
     $offline = if ($env:DTW_CARGO_OFFLINE -eq '1') { @('--offline') } else { @() }
 
-    $env:CARGO_NET_GIT_FETCH_WITH_CLI = 'true'
-    $env:CARGO_TARGET_DIR = $dtwTarget
-    & cargo +1.98.0 build --manifest-path (Join-Path $repoRoot 'cmd/dtw/Cargo.toml') --release --locked @offline
-    Assert-ExitCode 'build DTW'
-
     if ($env:CUA_DRIVER_BIN) {
         if (-not $env:CUA_DRIVER_BIN_SHA256) {
             throw 'CUA_DRIVER_BIN_SHA256 is required with CUA_DRIVER_BIN'
@@ -85,9 +80,16 @@ try {
     New-Item -ItemType Directory -Force -Path $parent | Out-Null
     $stage = Join-Path $parent ".desktop-world-stage-$([Guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path (Join-Path $stage 'bin'), (Join-Path $stage 'libexec'), (Join-Path $stage 'skills') -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $dtwTarget 'release/dtw.exe') -Destination (Join-Path $stage 'bin/dtw.exe')
     Copy-Item -LiteralPath $driverBinary -Destination (Join-Path $stage 'libexec/cua-driver.exe')
     Copy-Item -LiteralPath (Join-Path $repoRoot 'packaging/plugin/plugin.json') -Destination $stage
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'packaging/plugin/.claude-plugin') -Destination (Join-Path $stage '.claude-plugin') -Recurse -Force
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'packaging/plugin/.mcp.json') -Destination $stage -Force
+    $gemini = Get-Content -LiteralPath (Join-Path $repoRoot 'packaging/plugin/gemini-extension.json') -Raw | ConvertFrom-Json
+    $gemini.mcpServers.'desktop-world'.command = '${extensionPath}${/}bin${/}dtw.exe'
+    $gemini | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $stage 'gemini-extension.json') -Encoding utf8NoBOM
+    $claudeMcp = Get-Content -LiteralPath (Join-Path $stage '.mcp.json') -Raw | ConvertFrom-Json
+    $claudeMcp.mcpServers.'desktop-world'.command = '${CLAUDE_PLUGIN_ROOT}/bin/dtw.exe'
+    $claudeMcp | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $stage '.mcp.json') -Encoding utf8NoBOM
     $mcp = Get-Content -LiteralPath (Join-Path $repoRoot 'packaging/plugin/mcp.json') -Raw | ConvertFrom-Json
     $mcp.mcpServers.'desktop-world'.command = './bin/dtw.exe'
     $mcp | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $stage 'mcp.json') -Encoding utf8NoBOM
@@ -102,7 +104,16 @@ try {
     Assert-ExitCode 'audit dependency licenses'
     & python (Join-Path $repoRoot 'tests/acceptance/licenses_probe.py') $stage
     Assert-ExitCode 'verify dependency notices and MPL source'
-    $paths = Get-ChildItem -LiteralPath $stage -File -Recurse | Sort-Object FullName | ForEach-Object {
+    $bundle = Join-Path $buildRoot 'runtime-bundle.tar.gz'
+    & python (Join-Path $repoRoot 'scripts/embed-runtime.py') $stage $bundle
+    Assert-ExitCode 'create embedded runtime'
+    $env:DTW_EMBED_BUNDLE = $bundle
+    $env:CARGO_NET_GIT_FETCH_WITH_CLI = 'true'
+    $env:CARGO_TARGET_DIR = $dtwTarget
+    & cargo +1.98.0 build --manifest-path (Join-Path $repoRoot 'cmd/dtw/Cargo.toml') --release --locked @offline
+    Assert-ExitCode 'build DTW'
+    Copy-Item -LiteralPath (Join-Path $dtwTarget 'release/dtw.exe') -Destination (Join-Path $stage 'bin/dtw.exe')
+    $paths = Get-ChildItem -LiteralPath $stage -File -Recurse -Force | Sort-Object FullName | ForEach-Object {
         $_.FullName.Substring($stage.Length + 1).Replace('\', '/')
     }
     $checksums = foreach ($path in $paths) {

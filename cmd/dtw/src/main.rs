@@ -4,6 +4,7 @@ use cua_driver_sdk::{
     TrustedSessionOptions,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     env, fs,
@@ -16,9 +17,12 @@ use tokio::{
     sync::Mutex as AsyncMutex,
 };
 
+mod installer;
+
 const MAX_STATE_BYTES: usize = 32 * 1024;
 const MODEL_TEXT_BYTES: usize = 12 * 1024;
 const PAGE_BYTES: usize = 32 * 1024;
+const EMBEDDED_BUNDLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/embedded-bundle.tar.gz"));
 
 fn executable_name(stem: &str) -> String {
     format!("{stem}{}", std::env::consts::EXE_SUFFIX)
@@ -72,6 +76,14 @@ struct Server {
 
 fn worker_path() -> Result<String, String> {
     if let Some(arg) = env::args().skip(1).next() {
+        if arg == "--help" || arg == "-h" || arg == "help" {
+            println!(
+                "Desktop World {}\n\n{}",
+                env!("CARGO_PKG_VERSION"),
+                installer::usage()
+            );
+            std::process::exit(0);
+        }
         if arg == "--version" || arg == "version" {
             println!(
                 "dtw {} (CUA source ac967b9006aa)",
@@ -86,13 +98,20 @@ fn worker_path() -> Result<String, String> {
         }
         if arg == "install" {
             let args: Vec<String> = env::args().collect();
-            if args.len() == 5 && args[2] == "antigravity" && args[3] == "--project" {
-                install_antigravity(Path::new(&args[4]))?;
-            } else if args.len() == 5 && args[2] == "plugin" && args[3] == "--to" {
+            if args.get(2).map(String::as_str) == Some("--help") {
+                println!("{}", installer::usage());
+                std::process::exit(0);
+            }
+            if args.len() == 5 && args[2] == "plugin" && args[3] == "--to" {
                 install_plugin(Path::new(&args[4]))?;
             } else {
-                return Err("usage: dtw install antigravity --project PROJECT_DIR | dtw install plugin --to DESTINATION".into());
+                installer::run(&args[1..])?;
             }
+            std::process::exit(0);
+        }
+        if arg == "uninstall" {
+            let args: Vec<String> = env::args().collect();
+            installer::run(&args[1..])?;
             std::process::exit(0);
         }
         return Err(format!("unknown argument: {arg}"));
@@ -100,17 +119,9 @@ fn worker_path() -> Result<String, String> {
     if let Ok(path) = env::var("DTW_CUA_WORKER") {
         return Ok(path);
     }
-    let binary = env::current_exe().map_err(|e| e.to_string())?;
-    let path = binary
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.join("libexec").join(executable_name("cua-driver")))
-        .ok_or_else(|| {
-            format!(
-                "cannot locate sibling libexec/{}",
-                executable_name("cua-driver")
-            )
-        })?;
+    let path = package_root()?
+        .join("libexec")
+        .join(executable_name("cua-driver"));
     Ok(path.to_string_lossy().into_owned())
 }
 
@@ -136,10 +147,17 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
 
 fn package_root() -> Result<PathBuf, String> {
     let binary = env::current_exe().map_err(|e| e.to_string())?;
-    let package = binary
+    let adjacent = binary
         .parent()
         .and_then(|p| p.parent())
         .ok_or("cannot locate package root")?;
+    if adjacent.join("bin").join(executable_name("dtw")) == binary && valid_package(adjacent) {
+        return Ok(adjacent.to_path_buf());
+    }
+    expand_embedded(&binary)
+}
+
+fn valid_package(package: &Path) -> bool {
     for required in [
         PathBuf::from("libexec").join(executable_name("cua-driver")),
         PathBuf::from("skills/desktop-world/SKILL.md"),
@@ -148,26 +166,138 @@ fn package_root() -> Result<PathBuf, String> {
         PathBuf::from("LICENSING/MPL-SOURCES.tar.gz"),
     ] {
         if !package.join(&required).is_file() {
-            return Err(format!("incomplete package: {}", required.display()));
+            return false;
         }
     }
-    Ok(package.to_path_buf())
+    true
 }
 
-fn install_antigravity(project: &Path) -> Result<(), String> {
-    let project = project.canonicalize().map_err(|e| e.to_string())?;
-    if !project.is_dir() {
-        return Err("project must be an existing directory".into());
+fn data_root() -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    let home = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME"));
+    #[cfg(not(windows))]
+    let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"));
+    let home = PathBuf::from(home.ok_or("HOME or USERPROFILE is required")?);
+    #[cfg(target_os = "macos")]
+    let base = home.join("Library/Application Support");
+    #[cfg(windows)]
+    let base = env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join("AppData/Local"));
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let base = env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".local/share"));
+    Ok(base.join("desktop-world"))
+}
+
+fn write_sums(root: &Path) -> Result<(), String> {
+    fn walk(root: &Path, dir: &Path, paths: &mut Vec<PathBuf>) -> Result<(), String> {
+        for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            if path.is_dir() {
+                walk(root, &path, paths)?;
+            } else if path.is_file()
+                && path.file_name().and_then(|s| s.to_str()) != Some("SHA256SUMS")
+            {
+                paths.push(
+                    path.strip_prefix(root)
+                        .map_err(|e| e.to_string())?
+                        .to_path_buf(),
+                );
+            }
+        }
+        Ok(())
     }
-    let destination = project.join(".agents/plugins/desktop-world");
-    install_package(&destination, true)
+    let mut paths = Vec::new();
+    walk(root, root, &mut paths)?;
+    paths.sort();
+    let mut lines = String::new();
+    for path in paths {
+        let bytes = fs::read(root.join(&path)).map_err(|e| e.to_string())?;
+        lines.push_str(&format!(
+            "{:x}  {}\n",
+            Sha256::digest(&bytes),
+            path.to_string_lossy().replace('\\', "/")
+        ));
+    }
+    fs::write(root.join("SHA256SUMS"), lines).map_err(|e| e.to_string())
+}
+
+fn expand_embedded(binary: &Path) -> Result<PathBuf, String> {
+    if EMBEDDED_BUNDLE.is_empty() {
+        return Err("this development binary has no embedded runtime; use a release package or scripts/build-plugin".into());
+    }
+    let digest = format!("{:x}", Sha256::digest(EMBEDDED_BUNDLE));
+    let root = data_root()?.join("runtime").join(format!(
+        "{}-{}",
+        env!("CARGO_PKG_VERSION"),
+        &digest[..16]
+    ));
+    let marker = root.join(".dtw-bundle-sha256");
+    if root.exists() {
+        if fs::read_to_string(&marker)
+            .map_err(|e| e.to_string())?
+            .trim()
+            != digest
+            || !valid_package(&root)
+        {
+            return Err(format!(
+                "embedded runtime cache is invalid: {}",
+                root.display()
+            ));
+        }
+        return Ok(root);
+    }
+    let parent = root.parent().ok_or("invalid runtime cache path")?;
+    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let stage = parent.join(format!(".dtw-runtime-{}", uuid::Uuid::new_v4()));
+    let result = (|| {
+        fs::create_dir(&stage).map_err(|e| e.to_string())?;
+        let gz = flate2::read::GzDecoder::new(EMBEDDED_BUNDLE);
+        let mut archive = tar::Archive::new(gz);
+        for entry in archive.entries().map_err(|e| e.to_string())? {
+            let mut entry = entry.map_err(|e| e.to_string())?;
+            if !entry.unpack_in(&stage).map_err(|e| e.to_string())? {
+                return Err("embedded bundle has an unsafe path".into());
+            }
+        }
+        fs::create_dir_all(stage.join("bin")).map_err(|e| e.to_string())?;
+        fs::copy(binary, stage.join("bin").join(executable_name("dtw")))
+            .map_err(|e| e.to_string())?;
+        if !valid_package(&stage) {
+            return Err("embedded runtime is incomplete".into());
+        }
+        fs::write(stage.join(".dtw-bundle-sha256"), format!("{digest}\n"))
+            .map_err(|e| e.to_string())?;
+        write_sums(&stage)?;
+        match fs::rename(&stage, &root) {
+            Ok(()) => Ok(()),
+            Err(e) if root.exists() => {
+                let _ = fs::remove_dir_all(&stage);
+                if fs::read_to_string(&marker)
+                    .map_err(|e| e.to_string())?
+                    .trim()
+                    == digest
+                    && valid_package(&root)
+                {
+                    Ok(())
+                } else {
+                    Err(format!("runtime cache race: {e}"))
+                }
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&stage);
+    }
+    result?;
+    Ok(root)
 }
 
 fn install_plugin(destination: &Path) -> Result<(), String> {
-    install_package(destination, false)
-}
-
-fn install_package(destination: &Path, antigravity: bool) -> Result<(), String> {
     let package = package_root()?;
     let parent = destination
         .parent()
@@ -187,22 +317,6 @@ fn install_package(destination: &Path, antigravity: bool) -> Result<(), String> 
         destination.with_file_name(format!(".desktop-world-install-{}", uuid::Uuid::new_v4()));
     let result = (|| {
         copy_tree(&package, &staging)?;
-        if antigravity {
-            let plugin = json!({
-                "$schema":"https://antigravity.google/schemas/v1/plugin.json",
-                "name":"desktop-world",
-                "description":"Desktop World native CUA integration"
-            });
-            fs::write(staging.join("plugin.json"), format!("{plugin}\n"))
-                .map_err(|e| e.to_string())?;
-            let mcp = json!({"mcpServers":{"dtw":{"command":destination.join("bin").join(executable_name("dtw"))}}});
-            fs::write(staging.join("mcp_config.json"), format!("{mcp}\n"))
-                .map_err(|e| e.to_string())?;
-            // The source package's checksums cover its original manifest.
-            // This host-specific install rewrites that manifest, so remove
-            // the now-invalid list instead of presenting stale integrity data.
-            fs::remove_file(staging.join("SHA256SUMS")).map_err(|e| e.to_string())?;
-        }
         if fs::symlink_metadata(&destination).is_ok() {
             return Err(format!(
                 "destination already exists: {}",
@@ -217,7 +331,7 @@ fn install_package(destination: &Path, antigravity: bool) -> Result<(), String> 
     result?;
     println!(
         "{}",
-        json!({"plugin":destination,"mcp_command":destination.join("bin").join(executable_name("dtw")),"format":if antigravity {"antigravity"} else {"agent-plugin-1.0"}})
+        json!({"plugin":destination,"mcp_command":destination.join("bin").join(executable_name("dtw")),"format":"agent-plugin-1.0"})
     );
     Ok(())
 }

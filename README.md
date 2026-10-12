@@ -1,88 +1,48 @@
 # Desktop World
 
-**Give your AI Agent the ability to operate desktop apps.** Desktop World (DTW) lets an Agent inspect windows, click controls, type, and take screenshots through one MCP tool. A companion Skill teaches it how to use those abilities.
+**Give an AI Agent the ability to inspect and operate desktop apps.** Desktop World (DTW) exposes one MCP `exec` tool for window inspection, screenshots, clicks, typing, and short native scripts. Its Skill teaches the Agent to observe, act, and verify. An Agent still needs your normal desktop permissions before it can control an app.
 
-Ask your Agent to fill in a form, operate a browser, or work with a desktop document. DTW uses CUA Driver for native computer use, preferring background actions where supported. You do not need to write scripts, install Node, or install a separate CuaDriver App.
+## Get started
 
-**[Download the plugin](https://github.com/caelis-labs/desktop-world/releases/tag/v0.1.0-rc.4)** · [Installation guide](docs/install.md) · [Agent Skill](packaging/plugin/skills/desktop-world/SKILL.md)
+Download **one `dtw` executable for your platform**. It contains the Skill, plugin manifests, notices, and its private CUA worker. `dtw install` expands these files and connects the Agent; users do not need Rust, Python, Node, a DMG, or a separate worker download.
 
-## Quick start
+The first public release is pending. These asset links and commands become usable when it is published; the [release workflow](.github/workflows/release.yml) currently produces candidate binaries for review.
 
-### 1. Download and unpack
-
-The current release is **v0.1.0-rc.4**, a preview release. Download the complete package for your computer:
-
-| Your computer | Download |
-| --- | --- |
-| macOS, Apple Silicon | [macOS arm64 plugin](https://github.com/caelis-labs/desktop-world/releases/download/v0.1.0-rc.4/desktop-world-v0.1.0-rc.4-darwin-arm64.tar.gz) |
-| Windows, Intel/AMD x64 | [Windows x64 plugin](https://github.com/caelis-labs/desktop-world/releases/download/v0.1.0-rc.4/desktop-world-v0.1.0-rc.4-windows-amd64.zip) |
-
-Extract it to a permanent folder. Keep the **entire `desktop-world` folder**, including `bin`, `libexec`, `skills`, and `LICENSING`; moving only the executable will not work. Source archives are for developers, not installation. Checksums are available on the release page.
-
-### 2. Connect your Agent
-
-Choose the route your Agent supports:
-
-- **Agent Plugin 1.0 client:** use its local-plugin installation flow to load the extracted `desktop-world` directory, which contains `plugin.json`. The exact UI or command belongs to your Agent.
-- **Antigravity:** use the bundled installer shown below. It installs both MCP and the Skill in your project.
-- **Other Skills + MCP clients, including Codex:** register the bundled executable as a stdio MCP server and install the companion Skill. See the [copyable setup instructions](docs/install.md#skills--mcp-clients).
-
-For **Antigravity**, open a terminal in the extracted `desktop-world` folder and replace the project path with an existing project:
-
-macOS:
+### macOS Apple Silicon
 
 ```sh
-./bin/dtw install antigravity --project "/absolute/path/to/your-project"
+curl -fL https://github.com/caelis-labs/desktop-world/releases/latest/download/dtw-darwin-arm64 -o dtw
+chmod +x dtw
+./dtw install agy
 ```
 
-Windows PowerShell:
+### Windows x64 (PowerShell)
 
 ```powershell
-.\bin\dtw.exe install antigravity --project "C:\path\to\your-project"
+Invoke-WebRequest https://github.com/caelis-labs/desktop-world/releases/latest/download/dtw-windows-amd64.exe -OutFile dtw.exe
+.\dtw.exe install agy
 ```
 
-Reload your Agent or open a new session. The installer uses a new `.agents/plugins/desktop-world` directory; it will not overwrite an existing installation. [Upgrading and manual setup →](docs/install.md)
+`agy` uses the installed Antigravity CLI to register the complete Plugin at user scope. For Claude Code, run `./dtw install claude` on macOS or `.\dtw.exe install claude` on Windows instead. The corresponding Agent CLI must already be installed. Both installs can coexist. Use `--project "/absolute/path/to/project"` for a project-local Antigravity Plugin or Claude registration. [Installation, upgrade, and removal →](docs/install.md)
 
-### 3. Grant access and try a task
+Start a new Agent session and try a read-only task:
 
-On macOS, grant **Accessibility** and **Screen Recording** to the Agent app that launches DTW, then fully restart that app. No separate CuaDriver App is required. On Windows, install the [x64 Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) if it is missing.
+> Use the Desktop World Skill to inspect my open browser window and describe its controls. Do not click or type.
 
-Start with a read-only request:
+Then open a temporary document and ask it to type a short string and verify the visible result. On macOS, grant Accessibility and Screen Recording to the app that launches DTW, then restart that app. On Windows, the system may need the x64 Visual C++ runtime. [Permissions and limits →](docs/install.md#permissions-and-first-use)
 
-> Use Desktop World to inspect my browser window and describe the available controls. Do not click or type yet.
+## Embed DTW in an Agent host
 
-Then try an action on a temporary document or test page:
+The same single executable can expand a complete [Agent Plugin 1.0](https://agent-plugins.org/) directory, with `plugin.json`, `mcp.json`, `skills/`, `bin/dtw`, and `libexec/cua-driver`:
 
-> Use Desktop World to type “Hello from DTW” into my open test document. Verify that the text appears, and leave the document open.
+```sh
+./dtw install plugin --to "/absolute/new/plugin-directory"
+```
 
-Your Agent should discover the **Desktop World Skill** and one MCP tool, **`exec`**. The Skill handles scripting, screenshots, and checking the result; you can give tasks in natural language.
+The destination must be new. A host such as Caelis Bot can package that directory for its own platform and load its one stdio MCP server plus Skill through the standard plugin interface. Host lifecycle, authorization, and enabling remain the host's responsibility. See the [embedding contract](docs/embedding.md). Caelis Core currently installs this local Plugin through its TUI; a direct `dtw install caelis` entry awaits [a supported headless Caelis installation API](https://github.com/caelis-labs/caelis/issues/129).
 
-## What to expect
+## Source and distribution
 
-- **One tool, scriptable actions:** the Agent can batch desktop operations instead of calling a separate MCP tool for every click.
-- **Small results:** screenshots and large UI trees are available when needed, rather than always filling the conversation.
-- **Background where supported:** some operations still require the foreground. Multiple Agents share the same desktop and can affect focus.
-- **Native runtime:** installed packages do not need Node, Rust, Python, or build tools.
+The [developer build guide](docs/building.md) covers Rust and Python only for contributors. The signed macOS release gate signs the worker **before** embedding it, signs the final CLI, notarizes both executables, and verifies the extracted worker. Windows candidate CI validates package and MCP behavior; live Windows GUI acceptance is separate. See [release readiness](docs/release-readiness.md).
 
-rc.4 is a preview, not a guarantee that every application works. Known Windows limitations include coordinate mismatch for some DPI-unaware windows at 125% scaling and uncertain completion around modal file dialogs. The macOS package is ad hoc signed and not notarized; Windows binaries are unsigned. See [release limitations and acceptance](docs/rc4-release.md) before relying on DTW for unattended work.
-
-## Troubleshooting
-
-| Problem | What to check |
-| --- | --- |
-| No Desktop World tool or Skill | Reload the Agent; confirm both MCP and the Skill are installed. |
-| Permission denied on macOS | Authorize the actual launching Agent app, then fully restart it. |
-| Missing worker or library | Restore the complete release folder; do not copy only `bin/dtw`. |
-| Missing `VCRUNTIME140.dll` on Windows | Install the x64 Visual C++ Redistributable. |
-| Installer says the destination exists | Follow the [upgrade instructions](docs/install.md#upgrading); it deliberately does not overwrite existing files. |
-| An operation times out | Ask the Agent to inspect the UI and check the original execution result before retrying. The action may already have happened. |
-
-## For contributors and application integrators
-
-[Build from source](docs/building.md) · [Architecture](docs/architecture.md) · [Acceptance records](docs/acceptance.md) · [Script recipes](packaging/plugin/skills/desktop-world/RECIPES.md) · [API reference](packaging/plugin/skills/desktop-world/api.d.ts)
-
-DTW supplies the plugin, a single execution entry, bounded results, and execution receipts. A pinned CUA native worker supplies desktop operations. Applications can bundle the complete plugin and own the operating-system permissions.
-
-## License
-
-DTW is [MIT licensed](LICENSE). CUA and its dependencies retain their own licenses. Complete notices and required source bundles ship in `LICENSING`; keep that directory when redistributing. Optional CUA perception and Spaces components are not included. See [third-party notices](THIRD_PARTY_NOTICES.md).
+DTW is [MIT licensed](LICENSE). Its bundled CUA worker and dependencies retain their own terms; the expanded Plugin includes the complete [third-party notices](THIRD_PARTY_NOTICES.md) and `LICENSING` inventory.

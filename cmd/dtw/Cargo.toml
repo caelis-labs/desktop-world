@@ -1,6 +1,6 @@
 [package]
 name = "desktop-world"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/caelis-labs/desktop-world"
@@ -14,3 +14,7 @@ cua-driver-sdk = { git = "https://github.com/trycua/cua.git", rev = "ac967b9006a
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
+toml_edit = "0.25.12"
+flate2 = "1"
+sha2 = "0.10"
+tar = "0.4"

@@ -6,7 +6,7 @@
 
 PR [#32](https://github.com/caelis-labs/desktop-world/pull/32) 已合并。验收基线为最新抓取的 `main`：`b048ad68d40c4797b761cb14f95808d7d335f5d0`，其 [CI run 38153435126](https://github.com/caelis-labs/desktop-world/actions/runs/38153435126) 已成功。最初测试的 PR head 为 `76032075e51e3c7d58469cc2126816fd372d3f9d`，两者源树相同。CUA 固定于 `ac967b9006aafa10870aadb5a645b038cba9721a`；本地 CUA checkout 保持干净，未修改或更换 pin。
 
-本地分支：`codex/windows-cua-acceptance-20261011`。以下适配修复、验收脚本和文档为本地改动，生成初次记录时尚未推送；后续责任归属及发布门禁见 [rc.4 release gate](rc4-release.md)。
+本地分支：`codex/windows-cua-acceptance-20261011`。以下适配修复、验收脚本和文档为本地改动，生成初次记录时尚未推送；后续责任归属及发布门禁见 [release readiness](release-readiness.md)。
 
 | 交付物 | 本地位置 |
 | --- | --- |
@@ -116,4 +116,4 @@ python tests/acceptance/windows_probe.py $pkg --dpi-aware --rounds 2 --picker-mo
 
 ## 后续责任归属核对
 
-2026-10-12 绕过 DTW 直接调用固定 CUA worker，截图错位、语义 Invoke 等待和点击后 foreground_unavailable 均复现。窗口枚举过早属于 harness 时序问题；补限时只读轮询后，新 fixture 完成 picker 选择并独立记录 OK，原打开动作未重发、失败回执未改判成功。用户明确授权跳过这些 CUA 限制后继续 rc.4，详见 [责任边界和许可证审计](rc4-release.md)。原始失败证据仍保留。
+2026-10-12 绕过 DTW 直接调用固定 CUA worker，截图错位、语义 Invoke 等待和点击后 foreground_unavailable 均复现。窗口枚举过早属于 harness 时序问题；补限时只读轮询后，新 fixture 完成 picker 选择并独立记录 OK，原打开动作未重发、失败回执未改判成功。用户明确授权跳过这些 CUA 限制后继续 rc.4，详见 [发布就绪约束](release-readiness.md)。原始失败证据仍保留。

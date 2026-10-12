@@ -1,67 +1,67 @@
 # Install Desktop World
 
-Download a platform package from the [rc.4 release](https://github.com/caelis-labs/desktop-world/releases/tag/v0.1.0-rc.4), extract it to a permanent location, and keep the entire folder. You do not need to clone or compile the repository.
+The first public release is pending. When published, download the one executable matching your platform from [Releases](https://github.com/caelis-labs/desktop-world/releases): `dtw-darwin-arm64` for macOS Apple Silicon or `dtw-windows-amd64.exe` for Windows x64. The [README](../README.md#get-started) has copyable download and first-use commands. Keep the downloaded `dtw` file if you want to rerun the installer for upgrades or removal.
 
-## Agent Plugin clients
-
-The extracted directory is an Agent Plugin 1.0 package with `plugin.json`, `mcp.json`, and `skills/`. Load that directory using your client's local-plugin flow. A client-specific plugin format may require an adapter; support for MCP alone does not imply support for Agent Plugin manifests.
-
-If you need a separate copy for a plugin manager, run from the extracted folder:
-
-```sh
-./bin/dtw install plugin --to "/absolute/path/to/new-plugin-directory"
-```
-
-On Windows, use `.\bin\dtw.exe` instead of `./bin/dtw`. The destination must not already exist.
+The release executable embeds its own CUA worker, Skill, manifests, and licensing files. On first use it expands a versioned runtime under your user profile. Moving or deleting the original download after installation does not break an installed Plugin; that Plugin has its own `bin/dtw` and `libexec/cua-driver`.
 
 ## Antigravity
 
-Run the command in the [quick start](../README.md#2-connect-your-agent). It creates `<project>/.agents/plugins/desktop-world` with Antigravity's manifest, MCP configuration, and the Skill. Open that project in Antigravity and reload or start a fresh session. It does not modify global Agent configuration.
-
-## Skills + MCP clients
-
-For Codex or another client without a compatible local-plugin loader, configure **both** components:
-
-1. Add a stdio MCP server launching the absolute path to the extracted `bin/dtw` (`bin/dtw.exe` on Windows). No arguments are needed.
-2. Copy the complete `skills/desktop-world` directory into the client's documented Skills location, or register that directory if it supports external Skill paths.
-3. Reload the client and confirm it exposes the Skill and one tool, `exec`.
-
-For clients using JSON MCP settings, merge this entry with existing settings. Do not replace other servers:
-
-```json
-{
-  "mcpServers": {
-    "desktop-world": {
-      "command": "/absolute/path/to/desktop-world/bin/dtw"
-    }
-  }
-}
-```
-
-On Windows, a JSON command path looks like `C:\\Tools\\desktop-world\\bin\\dtw.exe`.
-
-Codex CLI can register the MCP server with:
+User scope (the default):
 
 ```sh
-codex mcp add desktop-world -- "/absolute/path/to/desktop-world/bin/dtw"
+./dtw install agy
 ```
 
-Install the complete companion Skill in your Codex user Skills directory, `~/.agents/skills/desktop-world`, and start a fresh session. If that directory already exists, use the upgrade procedure below. rc.4 does **not** include the former `dtw install codex`, `install claude`, `install gemini`, or `install cursor` commands.
+PowerShell: `.\dtw.exe install agy`. This requires the `agy` CLI and uses its native `plugin install` command to register `desktop-world` and its Skill and MCP server. If the CLI is missing, install Antigravity first and rerun the command. To install only for one project, use an **existing** project path:
 
-## Permissions
+```sh
+./dtw install agy --project "/absolute/path/to/my project"
+```
 
-On macOS, the responsible host app needs Accessibility and Screen Recording. When running a CLI Agent in a terminal, the responsible app may be the terminal. Grant access to the application macOS identifies, then fully quit and restart it. Do not install a second CuaDriver App to work around permission attribution.
+PowerShell: `.\dtw.exe install agy --project "C:\path\to\my project"`. Project scope writes the Plugin to that project's `.agents/plugins/desktop-world` directory for Antigravity's project plugin discovery; it does not register a user import. `antigravity` is also accepted as a command alias. The installer owns only its `desktop-world` directory and refuses to overwrite another owner's files. Repeat the same command to update DTW. Start a fresh Antigravity session to load the new Skill and MCP server.
 
-Windows needs a compatible x64 Visual C++ Runtime. Input into elevated applications remains subject to Windows integrity rules; installing DTW does not grant elevated access.
+The plugin directory contains Antigravity's `plugin.json`, `mcp_config.json`, the Skill, and the complete native runtime. The MCP command resolves to the executable inside that installed directory; it does not depend on where you left the downloaded file.
 
-## Upgrading
+## Claude Code
 
-Stop the Agent's DTW connection before changing its files. Download and unpack the new **complete** release into a new permanent directory. For a direct MCP registration, update the executable path; replace the companion Skill as a whole. For a plugin-manager installation, use that manager's replacement flow.
+Install Claude Code first. Then run:
 
-The Antigravity and generic copy installers refuse existing destinations. Back up the old plugin directory outside the Agent's discovery directory, then install into the now-absent destination. Reload the Agent and check the new version before removing the backup. Avoid leaving two copies discoverable at once.
+```sh
+./dtw install claude
+```
 
-Do not mix a new `dtw` executable with an old worker or replace the packaged worker with an unrelated upstream CUA release.
+PowerShell: `.\dtw.exe install claude`. For an existing project only, append `--project "/absolute/path/to/project"` (PowerShell: `--project "C:\path\to\project"`). DTW creates a local `dtw-local` marketplace containing its Plugin and asks the Claude CLI to register `desktop-world@dtw-local`. The Plugin contains `.claude-plugin/plugin.json`, `.mcp.json`, and the same Skill and native runtime. A missing Claude CLI produces an actionable error. Restart the Claude session after installation or update.
 
-## First use
+## Standard Agent Plugin and Caelis hosts
 
-See the [read-only request and test task](../README.md#3-grant-access-and-try-a-task). Let the Agent read the Skill; users do not need to learn the script API.
+To stage a complete [Agent Plugin 1.0](https://agent-plugins.org/) package for an embedding host:
+
+```sh
+./dtw install plugin --to "/absolute/new/plugin-directory"
+```
+
+PowerShell: `.\dtw.exe install plugin --to "C:\new\plugin-directory"`. The destination must not already exist. The result includes its own `bin/dtw` and `libexec/cua-driver`; keep those together. Its `mcp.json` declares one stdio server and `skills/desktop-world/SKILL.md` supplies Agent guidance. [Host integration contract →](embedding.md)
+
+Caelis Core currently accepts this package through its TUI `/plugin install <absolute directory>`. Caelis Bot can use the same standard package as a versioned embedded dependency once its host integration installs and enables it. A direct `dtw install caelis` requires [a supported headless Caelis Plugin API](https://github.com/caelis-labs/caelis/issues/129) and is outside the first release gate; DTW does not edit Caelis's private store.
+
+## Upgrade and remove
+
+Download the newer platform `dtw` and repeat the install command with the **same scope or project**. The installer replaces only directories marked as its own and preserves unrelated host configuration. Stop active DTW sessions and start a fresh Agent session after updating.
+
+```sh
+./dtw uninstall agy
+./dtw uninstall claude
+./dtw uninstall agy --project "/absolute/path/to/my project"
+```
+
+PowerShell uses `.\dtw.exe uninstall ...`. Claude removal unregisters only `desktop-world@dtw-local` and its DTW-owned local marketplace. User-scope Antigravity removal uses `agy plugin uninstall desktop-world` after checking DTW ownership; project-scope removal deletes only its installer-owned Plugin directory. For a generic `install plugin --to` export, the embedding host owns its lifecycle; remove it through that host.
+
+## Permissions and first use
+
+On macOS, grant Accessibility and Screen Recording to the Agent or terminal app that launches DTW, then fully quit and reopen it. The signed CLI and worker should be checked on a fresh Mac before public release. On Windows, the x64 Visual C++ runtime may be required; an elevated target app still follows Windows integrity restrictions.
+
+Start with a read-only task: “Use the Desktop World Skill to inspect my open browser window and describe its controls. Do not click or type.” Next, use a temporary document and ask the Agent to type a short string and verify it appears. The [Skill](../packaging/plugin/skills/desktop-world/SKILL.md) explains native scripts, receipts, and readback; users can describe tasks in natural language.
+
+## Protocol references
+
+[Agent Plugin 1.0](https://agent-plugins.org/) · [Claude plugin components](https://code.claude.com/docs/en/plugins/components) · [Antigravity plugins](https://www.antigravity.google/docs/plugins)
