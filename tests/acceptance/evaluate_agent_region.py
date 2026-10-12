@@ -18,13 +18,16 @@ from probe import call
 
 
 def main():
-    package = Path(sys.argv[1]).resolve()
+    source = Path(sys.argv[1]).resolve()
+    binary = source if source.is_file() else source / 'bin/dtw'
+    if not binary.is_file():
+        raise SystemExit(f'DTW executable not found: {binary}')
     root = Path('/private/tmp') / f'dtw-cua-region-agent-{uuid.uuid4().hex[:8]}'
     root.mkdir(mode=0o700)
     project = root / 'project'
     project.mkdir()
     plugin = project / '.agents/plugins/desktop-world'
-    subprocess.run([str(package / 'bin/dtw'), 'install', 'antigravity', '--project',
+    subprocess.run([str(binary), 'install', 'agy', '--project',
                     str(project)], check=True, stdout=subprocess.DEVNULL)
     with (root / 'plugin-validate.txt').open('w') as out:
         subprocess.run(['agy', 'plugin', 'validate', str(plugin)], stdout=out,
@@ -90,9 +93,11 @@ def main():
             if not had_rule:
                 restore = remove_our_allow(config_path, original, injected)
         elapsed = round(time.monotonic() - start, 2)
-        proc = subprocess.Popen([str(package / 'bin/dtw')], stdin=subprocess.PIPE,
+        proc = subprocess.Popen([str(binary)], stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                env={'PATH': '/usr/bin:/bin', 'TMPDIR': '/private/tmp'})
+                                env={'PATH': '/usr/bin:/bin', 'TMPDIR': '/private/tmp',
+                                     'HOME': str(Path.home())})
+        after = None
         try:
             call(proc, {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {
                 'protocolVersion': '2025-06-18', 'capabilities': {},
@@ -103,10 +108,13 @@ def main():
                                   'include_screenshot:false});'
                                   'return {clicked:String(s.tree_markdown).includes('
                                   '"CLICKED-REGION-AGENT"),tree:s.tree_markdown};')
+        except Exception as error:
+            after = {'status': 'readback_error', 'error': str(error)}
         finally:
             proc.stdin.close()
             proc.wait(timeout=8)
-        record = {'package': str(package), 'agent_exit_code': agent.returncode if agent else None,
+        record = {'binary': str(binary), 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+                  'agent_exit_code': agent.returncode if agent else None,
                   'elapsed_seconds': elapsed, 'config_restore': restore,
                   'config_original_sha256': hashlib.sha256(original).hexdigest(),
                   'config_after_sha256': hashlib.sha256(config_path.read_bytes()).hexdigest(),
@@ -118,6 +126,8 @@ def main():
                           'failed_receipts': record['agent']['failed_receipts'],
                           'config_restore': restore,
                           'independent_readback': after.get('value')}, ensure_ascii=False), flush=True)
+        if agent.returncode != 0 or after.get('value', {}).get('clicked') is not True:
+            raise RuntimeError(f'Agent GUI acceptance did not reach the target; see {path}')
     finally:
         if pid is not None:
             try:
