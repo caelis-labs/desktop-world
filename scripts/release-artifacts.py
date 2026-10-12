@@ -38,7 +38,8 @@ def main():
         notary = json.loads((Path(os.environ["RUNNER_TEMP"]) / "dtw-notary-evidence.json").read_text())
         assert notary["status"] == "Accepted"
         assert notary["embedded_worker_matches_signed_worker"]
-        assert notary["gatekeeper_dtw"] == "PASS" and notary["gatekeeper_extracted_worker"] == "PASS"
+        assert notary["notarization_ticket_dtw"] == "PASS"
+        assert notary["notarization_ticket_extracted_worker"] == "PASS"
         assert notary["hardened_runtime"] and notary["signed_binaries"] == ["bin/dtw", "libexec/cua-driver"]
         signing = {"type": "Developer ID Application", "notarization": notary}
     path.write_bytes(binary.read_bytes())

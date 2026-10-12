@@ -71,15 +71,15 @@ cmp "$package/libexec/cua-driver" "$work/expanded/libexec/cua-driver"
 cmp "$package/bin/dtw" "$work/expanded/bin/dtw"
 codesign --verify --strict --verbose=2 "$work/expanded/bin/dtw"
 codesign --verify --strict --verbose=2 "$work/expanded/libexec/cua-driver"
-spctl --assess --type execute --verbose=4 "$work/standalone/dtw"
-spctl --assess --type execute --verbose=4 "$work/expanded/libexec/cua-driver"
+codesign -vvvv -R="notarized" --check-notarization "$work/standalone/dtw"
+codesign -vvvv -R="notarized" --check-notarization "$work/expanded/libexec/cua-driver"
 python3 - "$work/notary.json" "$evidence" "$APPLE_TEAM_ID" <<'PY'
 import json,sys
 v=json.load(open(sys.argv[1],encoding='utf-8'))
 e={'submission_id':v['id'],'status':v['status'],'team_id':sys.argv[3],
    'signed_binaries':['bin/dtw','libexec/cua-driver'],
    'hardened_runtime':True,'embedded_worker_matches_signed_worker':True,
-   'gatekeeper_dtw':'PASS','gatekeeper_extracted_worker':'PASS',
+   'notarization_ticket_dtw':'PASS','notarization_ticket_extracted_worker':'PASS',
    'ticket_delivery':'online; standalone Mach-O tickets cannot be stapled'}
 with open(sys.argv[2],'w',encoding='utf-8') as f:
     json.dump(e,f,indent=2)
