@@ -144,7 +144,7 @@ def main():
             raise RuntimeError("Chrome target was not identified; no input attempted")
 
         def focus():
-            receipt = mcp.exec(session="windows-live", operation="focus", pid=chrome.pid, window_id=window_id)
+            receipt = mcp.exec(operation="focus", pid=chrome.pid, window_id=window_id)
             completed(receipt)
             native_focus = mcp.structured(receipt)
             assert focus_verified(native_focus, window_id), receipt
@@ -170,7 +170,7 @@ def main():
             completed(receipt)
             observed = oracle("submit")
             assert len(observed) == 1 and observed[0]["value"] == text and observed[0]["trusted"], observed
-            queried = mcp.exec(session="windows-live", operation="result", id=receipt["id"])
+            queried = mcp.exec(operation="result", id=receipt["id"])
             assert queried["id"] == receipt["id"]
             assert len(oracle("submit")) == 1
             readback = completed(mcp.script(bind + "const s=await a.getState({query:'SUBMITTED-CHROME',max_elements:30,include_screenshot:false});return s.tree_markdown;"))

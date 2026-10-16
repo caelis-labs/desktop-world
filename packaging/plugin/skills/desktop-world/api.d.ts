@@ -1,6 +1,6 @@
 /** Authoring reference for the JS string passed to desktop-world exec.
  * This file is documentation for editors and Agents; no TypeScript/Node runs in DTW.
- * Upstream CUA prelude: crates/cua-driver-core/src/script_tool/prelude.js at ac967b9006aa.
+ * Upstream CUA prelude: crates/cua-driver-core/src/script_tool/prelude.js at cua-driver-rs-v0.35.4 (d74a9cab3fb2).
  */
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type Point = [x: number, y: number];
@@ -127,17 +127,21 @@ declare const state: Record<string, Json>;
 /** The same MCP tool carries all results. `result` with part=image displays
  * a retained screenshot; part=structured pages the complete native data. */
 type ExecInput =
-  | { session?: string; operation?: "run"; script: string; wait_ms?: number;
+  | { operation?: "run"; script: string; wait_ms?: number;
       include_image?: boolean }
-  | { session?: string; operation: "menu"; pid: number; window_id: number;
+  | { operation: "menu"; pid: number; window_id: number;
       path: string[]; wait_ms?: number }
-  | { session?: string; operation: "desktop"; max_image_dimension?: number;
+  | { operation: "desktop"; max_image_dimension?: number;
       wait_ms?: number; include_image?: boolean }
-  | { session?: string; operation: "focus"; pid: number; window_id?: number;
+  | { operation: "focus"; pid: number; window_id?: number;
       wait_ms?: number }
-  | { session?: string; operation: "cursor"; enabled?: boolean; wait_ms?: number }
-  | { session?: string; operation: "permissions" }
-  | { session?: string; operation: "status" | "cancel"; id: string }
-  | { session?: string; operation: "result"; id: string;
+  | { operation: "cursor"; enabled?: boolean; wait_ms?: number }
+  | { operation: "app"; pid: number; max_windows?: number;
+      max_image_dimension?: number; wait_ms?: number; include_image?: boolean }
+  | { operation: "click"; observation_id: string; image_index: number;
+      x: number; y: number; wait_ms?: number }
+  | { operation: "permissions" }
+  | { operation: "status" | "cancel"; id: string }
+  | { operation: "result"; id: string;
       part?: "summary" | "text" | "structured" | "image";
       offset?: number; image_index?: number };

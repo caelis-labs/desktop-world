@@ -35,7 +35,7 @@ def exact_chrome_pid(profile):
 
 
 def run_script(proc, ident, session, script):
-    started = exec_call(proc, ident, {"session": session, "script": script})
+    started = exec_call(proc, ident, {"script": script})
     if "id" not in started:
         raise RuntimeError(f"run refused: {started}")
     return started["id"], result(proc, ident + 1, session, started["id"])
@@ -43,7 +43,7 @@ def run_script(proc, ident, session, script):
 
 def save_image(proc, ident, session, id, destination):
     response = call(proc, {"jsonrpc": "2.0", "id": ident, "method": "tools/call", "params": {"name": "exec", "arguments": {
-        "session": session, "operation": "result", "id": id, "part": "image", "image_index": 0}}})
+        "operation": "result", "id": id, "part": "image", "image_index": 0}}})
     for content in response["result"].get("content", []):
         if content.get("type") == "image":
             destination.write_bytes(base64.b64decode(content["data"]))

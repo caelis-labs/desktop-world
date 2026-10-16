@@ -55,24 +55,24 @@ def main():
         })["serverInfo"]
         tools = call("tools/list", {})["tools"]
         assert [tool["name"] for tool in tools] == ["exec"], tools
+        assert "session" not in tools[0]["inputSchema"]["properties"]
         values = []
         for session in ("one", "one", "two"):
             response = exec_tool({
-                "session": session,
                 "script": "state.n=(state.n||0)+1; return state.n;",
             })
             if response["status"] == "running":
                 original_id = response["id"]
                 for _ in range(30):
                     response = exec_tool({
-                        "session": session, "operation": "result",
+                        "operation": "result",
                         "id": original_id,
                     })
                     if response["status"] != "running":
                         break
             assert response["status"] == "completed", response
             values.append(response["value"])
-        assert values == [1, 2, 1], values
+        assert values == [1, 2, 3], values
         print(json.dumps({"server": server, "tools": ["exec"], "state": values}))
     finally:
         process.stdin.close()

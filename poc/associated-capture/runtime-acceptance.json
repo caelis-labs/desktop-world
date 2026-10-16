@@ -1,0 +1,105 @@
+{
+  "date": "2026-10-16",
+  "status": "implementation_and_warm_gui_passed_cold_capture_blocked",
+  "release_ready": false,
+  "worktree": "/Users/xueyongzhi/.codex/worktrees/dtw-associated-capture-poc/desktop-world",
+  "branch": "codex/dtw-associated-capture-poc",
+  "base_commit": "10d6c056222fd0756f87493a8db62761e34331e7",
+  "uncommitted": true,
+  "platform": {
+    "os": "macOS 27.0.1",
+    "build": "26A434",
+    "arch": "arm64"
+  },
+  "cua": {
+    "component_version": "0.35.4",
+    "revision": "d74a9cab3fb2e80ab7f0cef47025ec828586ea75",
+    "source_checkout": "/private/tmp/dtw-top2-clean-release",
+    "source_clean": true,
+    "kernel_modified": false,
+    "original_worker_sha256": "c76d59f64b90147a3928fe7775594b0da26af2b2e523968c90246cdcbd5ad4f4"
+  },
+  "artifacts": {
+    "/private/tmp/dtw-runtime-reviewed/bin/dtw": "85a02deeea6f3d1a22434dd0e96004c669477c5af0dcac013a4d95f09c9bd60b",
+    "/private/tmp/dtw-runtime-reviewed/libexec/cua-driver": "15a2abacf6a856978de4b2c3e8463c79bc3c502321d4169f4bcf38d8e44ba043"
+  },
+  "source_sha256": {
+    "cmd/dtw/Cargo.toml": "f998f6d14808891b3b61beabf1e800d45603d5df4142822c372d336e259068b9",
+    "cmd/dtw/Cargo.lock": "f6b657d5e38958eb17496341edae281c554098b7d36eb87cd3b0aa97b8cba1f7",
+    "cmd/dtw/build.rs": "df2b79414b8928688b66b783ce972eef200a05a629d1f83930da5c97ce8853f5",
+    "cmd/dtw/src/main.rs": "32d421a71bacea208dcf5023af869943bd95aa453dd400b74b1dc444249a53f8",
+    "cmd/dtw/src/app_view.rs": "c6842bc000974f05a7183442a0935b0c1366660cf62056eaf635bf2116e33576",
+    "cmd/dtw/src/app_view/Scene.swift": "e95d7fe5fb6b63bf08b38a7e943695bce19737e50e45e3a6d4409309184a731c",
+    "cmd/dtw/src/app_view/macos.rs": "20f2a31b15c858dc8c0df7fc24b298cd696834e1a158d7b2e9730862753f400f",
+    "packaging/plugin/skills/desktop-world/SKILL.md": "e8b2f03c5d6d939db3982b0c8512c35ddbeab02285feaef950ce132928ed12cf",
+    "packaging/plugin/skills/desktop-world/api.d.ts": "d6ef8c361260fe49c9a1a1d03628e87e337ee7fc9b4f42fc4e7e5826815b78ef",
+    "packaging/plugin/skills/desktop-world/RECIPES.md": "4393a4508952bdf5fbaf7c73929fdd5c892cb5df840c8c65d41978ecb3d29626",
+    "tests/acceptance/scene_fixture_probe.py": "6bddcf6d6c7e1b2fb824b336603ff0683d3826953b390161ab81d53cbd8b378f",
+    "tests/acceptance/runtime_probe.py": "1cc682c794a238f5fa037b2ef81df4cde71f7911399bdcff673df18d8c6c593b",
+    "tests/fixtures/scene/main.swift": "653d6b5dd44802e6a2ee11e22e9785f51548ca99aef3667bf20b54482b87c913"
+  },
+  "checks": {
+    "rust_unit_tests": 5,
+    "mcp_smoke": "passed",
+    "contract": "passed",
+    "runtime_process_isolation": "passed",
+    "package_install": "passed",
+    "license_inventory": "373 packages, 679 notice files; passed",
+    "skill_validation": "passed",
+    "warm_fixture": {
+      "runtime": "existing",
+      "pid": 84508,
+      "inventory": 3,
+      "default_images": 2,
+      "expanded_images": 3,
+      "pixel_effect": "independent counter +1",
+      "cua_point_effect": "independent counter +1",
+      "reuse": "refused",
+      "moved": "refused",
+      "closed": "refused",
+      "intervening_script": "refused",
+      "opaque_other_process": "refused",
+      "expired": "refused"
+    },
+    "wps_cold": {
+      "attempts": 3,
+      "passed": 3
+    },
+    "obsidian_cold": "capture_timeout",
+    "fixture_cold": "three capture_timeout read attempts; no input",
+    "fresh_explicit_worker_runtime": "original receipt 6529882e eventually failed capture_timeout; exceeded harness poll window"
+  },
+  "gui": {
+    "root": "/private/tmp/dtw-runtime-reviewed-gui",
+    "wps": {
+      "pid": 59196,
+      "capture": "001",
+      "click": "002",
+      "effect": "003; popup closed, new-document template page visible"
+    },
+    "obsidian": {
+      "pid": 59194,
+      "remote_menu_pid": 61404,
+      "menu_capture": "011",
+      "menu_click": "013",
+      "directory_effect": "014; private directory shown",
+      "cancel_click": "016",
+      "cancel_effect": "017; only main window remains"
+    }
+  },
+  "evidence": {
+    "cold_fixture": "/private/tmp/dtw-runtime-reviewed-fixture-evidence",
+    "warm_fixture": "/private/tmp/dtw-runtime-reviewed-fixture-warm-evidence",
+    "fresh_runtime": "/private/tmp/dtw-runtime-reviewed-fresh-harness",
+    "install": "/private/tmp/dtw-runtime-reviewed-install-proof",
+    "build": "/private/tmp/dtw-runtime-reviewed-build.log",
+    "unit_tests": "/private/tmp/dtw-runtime-reviewed-tests.log"
+  },
+  "not_validated": [
+    "Windows build/live GUI",
+    "multiple displays and mixed DPI live",
+    "fresh external Agent host using updated Skill",
+    "public signing/notarization and clean-machine permissions",
+    "universal cross-process window attribution"
+  ]
+}

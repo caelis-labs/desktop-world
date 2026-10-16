@@ -2,7 +2,7 @@
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
-expected=ac967b9006aafa10870aadb5a645b038cba9721a
+expected=d74a9cab3fb2e80ab7f0cef47025ec828586ea75
 destination=${1:?usage: scripts/build-plugin.sh DESTINATION}
 case "$destination" in
   /*) ;;

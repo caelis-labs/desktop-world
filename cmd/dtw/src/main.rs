@@ -17,6 +17,7 @@ use tokio::{
     sync::Mutex as AsyncMutex,
 };
 
+mod app_view;
 mod installer;
 
 const MAX_STATE_BYTES: usize = 32 * 1024;
@@ -33,10 +34,17 @@ struct Session {
     state: String,
     busy: bool,
     started: bool,
+    created: std::time::Instant,
+    last_used: std::time::Instant,
+}
+
+// Extensions can do useful work without touching CUA, so cap absolute age below
+// the upstream idle TTL too. Never transparently replay an expired-context action.
+fn context_expired(age: Duration, idle: Duration) -> bool {
+    age >= Duration::from_secs(1500) || idle >= Duration::from_secs(1500)
 }
 
 struct Job {
-    session: String,
     phase: String,
     cancel_requested: bool,
     result: Option<SavedResult>,
@@ -52,6 +60,11 @@ struct SavedResult {
 
 enum Work {
     Script(String),
+    App {
+        pid: u32,
+        max_image_dimension: u32,
+        max_windows: usize,
+    },
     Cursor(Option<bool>),
     Focus {
         pid: u32,
@@ -65,11 +78,18 @@ enum Work {
     Desktop {
         max_image_dimension: u32,
     },
+    AppClick {
+        observation_id: String,
+        image_index: usize,
+        x: f64,
+        y: f64,
+    },
 }
 
 struct Server {
     driver: Arc<CuaDriver>,
-    sessions: Mutex<HashMap<String, Session>>,
+    session: Mutex<Option<Session>>,
+    app_view: app_view::Runtime,
     jobs: Mutex<HashMap<String, Job>>,
     stdout: AsyncMutex<io::Stdout>,
 }
@@ -86,7 +106,7 @@ fn worker_path() -> Result<String, String> {
         }
         if arg == "--version" || arg == "version" {
             println!(
-                "dtw {} (CUA source ac967b9006aa)",
+                "dtw {} (CUA 0.35.4 source d74a9cab3fb2)",
                 env!("CARGO_PKG_VERSION")
             );
             std::process::exit(0);
@@ -437,6 +457,23 @@ fn display_result(result: &SavedResult) -> String {
 
 #[cfg(test)]
 mod receipt_tests {
+    #[test]
+    fn context_rotation_precedes_upstream_idle_expiry_even_with_extension_activity() {
+        use std::time::Duration;
+        assert!(!super::context_expired(
+            Duration::from_secs(1499),
+            Duration::ZERO
+        ));
+        assert!(super::context_expired(
+            Duration::from_secs(1500),
+            Duration::ZERO
+        ));
+        assert!(super::context_expired(
+            Duration::ZERO,
+            Duration::from_secs(1500)
+        ));
+    }
+
     use super::*;
 
     #[test]
@@ -497,20 +534,23 @@ impl Server {
                 id,
                 json!({"tools":[{
                     "name":"exec",
-                    "description":"Run CUA's native QuickJS script, or call its exact-window menu and full-desktop snapshot primitives through the same receipt channel. Use the short Skill and api.d.ts for signatures. Fetch retained images with operation=result,part=image.",
+                    "description":"Run CUA's native QuickJS script or its native primitives. operation=app observes attributed app windows (default top2 images); operation=click consumes its observation_id and image pixel point. Runtime owns the session. Attribution is best effort. Use the short Skill and api.d.ts for signatures. Fetch retained images with operation=result,part=image.",
                     "inputSchema":{
                         "type":"object",
                         "properties":{
-                            "session":{"type":"string","description":"Session label (default: default). Native element tokens can cross labels in one MCP process; use a separate process per independent Agent."},
+                            "observation_id":{"type":"string","description":"With click, the one-use application observation binding."},
+                            "x":{"type":"number","minimum":0},
+                            "y":{"type":"number","minimum":0},
+                            "max_windows":{"type":"integer","minimum":1,"maximum":8,"description":"With app, number of upper windows to capture, default 2; all attributed candidates are listed."},
                             "script":{"type":"string","description":"Async CUA run_script body. Use cua.getApp, getState, query, click, typeText, pressKey, zoom and return; see packaged api.d.ts."},
-                            "operation":{"type":"string","enum":["run","status","result","cancel","permissions","cursor","focus","menu","desktop"]},
+                            "operation":{"type":"string","enum":["run","status","result","cancel","permissions","cursor","focus","menu","desktop","app","click"]},
                             "wait_ms":{"type":"integer","minimum":0,"maximum":5000,"description":"Wait briefly for a terminal receipt in the same exec call (default 4000 ms). If still running, query the original id with operation=result."},
                             "include_image":{"type":"boolean","description":"If this execution completes within wait_ms and has an image, return the first image with its summary. Default false; later result,part=image still works."},
-                            "enabled":{"type":"boolean","description":"With operation=cursor, show or hide this Session's virtual cursor. Omit to read cursor state."},
-                            "pid":{"type":"integer","minimum":1,"description":"With focus/menu, exact app PID."},
+                            "enabled":{"type":"boolean","description":"With operation=cursor, show or hide the runtime virtual cursor. Omit to read cursor state."},
+                            "pid":{"type":"integer","minimum":1,"description":"With focus/menu/app, exact app PID."},
                             "window_id":{"type":"integer","minimum":1,"description":"With menu, exact target window; with focus, optional ordinary window ID."},
                             "path":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string"},"description":"With menu, exact macOS menu labels from menu bar to command."},
-                            "max_image_dimension":{"type":"integer","minimum":0,"description":"With desktop, optional screenshot long-edge cap (default 1600, 0 for original size); image is retained for result,part=image."},
+                            "max_image_dimension":{"type":"integer","minimum":0,"description":"With desktop/app, optional screenshot long-edge cap (default 1600, 0 for original size); image is retained for result,part=image."},
                             "id":{"type":"string","description":"The original short receipt ID for status, result, or cancel."},
                             "part":{"type":"string","enum":["summary","text","structured","image"]},
                             "offset":{"type":"integer","minimum":0},
@@ -541,12 +581,8 @@ impl Server {
         let Some(obj) = args.as_object() else {
             return mcp_plain("arguments must be an object", true);
         };
-        let session_id = obj
-            .get("session")
-            .and_then(Value::as_str)
-            .unwrap_or("default");
-        if session_id.is_empty() || session_id.len() > 100 || !session_id.is_ascii() {
-            return mcp_plain("invalid session", true);
+        if obj.contains_key("session") {
+            return mcp_plain("session_managed_by_runtime: omit session; use a separate MCP process for an independent context", true);
         }
         let operation = obj
             .get("operation")
@@ -564,19 +600,13 @@ impl Server {
         match operation {
             "run" => match obj.get("script").and_then(Value::as_str) {
                 Some(script) => {
-                    self.run(
-                        session_id,
-                        Work::Script(script.to_owned()),
-                        wait_ms,
-                        include_image,
-                    )
-                    .await
+                    self.run(Work::Script(script.to_owned()), wait_ms, include_image)
+                        .await
                 }
                 None => mcp_plain("script is required", true),
             },
             "cursor" => {
                 self.run(
-                    session_id,
                     Work::Cursor(obj.get("enabled").and_then(Value::as_bool)),
                     wait_ms,
                     include_image,
@@ -596,13 +626,8 @@ impl Server {
                 if obj.get("window_id").is_some() && window_id.is_none_or(|n| n == 0) {
                     return mcp_plain("window_id must be positive", true);
                 }
-                self.run(
-                    session_id,
-                    Work::Focus { pid, window_id },
-                    wait_ms,
-                    include_image,
-                )
-                .await
+                self.run(Work::Focus { pid, window_id }, wait_ms, include_image)
+                    .await
             }
             "menu" => {
                 let Some(pid) = obj
@@ -632,7 +657,6 @@ impl Server {
                     return mcp_plain("menu path must have 1-16 non-empty labels", true);
                 }
                 self.run(
-                    session_id,
                     Work::Menu {
                         pid,
                         window_id,
@@ -640,6 +664,75 @@ impl Server {
                             .iter()
                             .map(|s| s.as_str().unwrap().to_owned())
                             .collect(),
+                    },
+                    wait_ms,
+                    include_image,
+                )
+                .await
+            }
+            "click" => {
+                let Some(observation_id) = obj
+                    .get("observation_id")
+                    .and_then(Value::as_str)
+                    .filter(|s| s.len() == 32)
+                else {
+                    return mcp_plain("click requires observation_id", true);
+                };
+                let Some(image_index) = obj
+                    .get("image_index")
+                    .and_then(Value::as_u64)
+                    .and_then(|n| usize::try_from(n).ok())
+                else {
+                    return mcp_plain("click requires image_index", true);
+                };
+                let (Some(x), Some(y)) = (
+                    obj.get("x").and_then(Value::as_f64),
+                    obj.get("y").and_then(Value::as_f64),
+                ) else {
+                    return mcp_plain("click requires image pixel x/y", true);
+                };
+                self.run(
+                    Work::AppClick {
+                        observation_id: observation_id.into(),
+                        image_index,
+                        x,
+                        y,
+                    },
+                    wait_ms,
+                    include_image,
+                )
+                .await
+            }
+            "app" => {
+                let Some(pid) = obj
+                    .get("pid")
+                    .and_then(Value::as_u64)
+                    .and_then(|n| u32::try_from(n).ok())
+                    .filter(|n| *n > 0 && *n <= i32::MAX as u32)
+                else {
+                    return mcp_plain("app requires positive process pid", true);
+                };
+                let Some(cap) = obj
+                    .get("max_image_dimension")
+                    .map(Value::as_u64)
+                    .unwrap_or(Some(1600))
+                    .and_then(|n| u32::try_from(n).ok())
+                else {
+                    return mcp_plain("max_image_dimension must be non-negative u32", true);
+                };
+                let Some(max_windows) = obj
+                    .get("max_windows")
+                    .map(Value::as_u64)
+                    .unwrap_or(Some(2))
+                    .filter(|n| (1..=8).contains(n))
+                else {
+                    return mcp_plain("max_windows must be 1..8", true);
+                };
+                self.run(
+                    Work::App {
+                        pid,
+                        max_image_dimension: cap,
+                        max_windows: max_windows as usize,
                     },
                     wait_ms,
                     include_image,
@@ -656,7 +749,6 @@ impl Server {
                     return mcp_plain("max_image_dimension must be a non-negative u32", true);
                 };
                 self.run(
-                    session_id,
                     Work::Desktop {
                         max_image_dimension: cap,
                     },
@@ -684,25 +776,24 @@ impl Server {
                     Err(e) => mcp_plain(e.to_string(), true),
                 }
             }
-            "status" | "result" | "cancel" => self.control(session_id, operation, &args).await,
+            "status" | "result" | "cancel" => self.control(operation, &args).await,
             _ => mcp_plain("invalid operation", true),
         }
     }
 
-    async fn run(
-        self: &Arc<Self>,
-        session_id: &str,
-        work: Work,
-        wait_ms: u64,
-        include_image: bool,
-    ) -> Value {
+    async fn run(self: &Arc<Self>, work: Work, wait_ms: u64, include_image: bool) -> Value {
         let (native, state, started) = {
-            let mut sessions = self.sessions.lock().unwrap();
-            if !sessions.contains_key(session_id) {
+            let mut session = self.session.lock().unwrap();
+            if session.as_ref().is_some_and(|s| {
+                !s.busy && (context_expired(s.created.elapsed(), s.last_used.elapsed()))
+            }) {
+                *session = None;
+                self.app_view.invalidate();
+                return mcp_plain("runtime_context_reset: native context expired; state and observations were cleared; observe again before input", true);
+            }
+            if session.is_none() {
                 let native = match self.driver.create_trusted_session(TrustedSessionOptions {
-                    // CUA reserves the literal implicit/default label for transport leases.
-                    // Every DTW session, including the omitted public default, is explicit.
-                    public_session: format!("dtw-{session_id}"),
+                    public_session: format!("dtw-{}", uuid::Uuid::new_v4().simple()),
                     mode: SessionPermissionMode::Standard,
                     ttl_seconds: 3600,
                     idle_ttl_seconds: 1800,
@@ -712,19 +803,18 @@ impl Server {
                     Ok(native) => native,
                     Err(e) => return mcp_plain(e.to_string(), true),
                 };
-                sessions.insert(
-                    session_id.to_owned(),
-                    Session {
-                        native,
-                        state: "{}".into(),
-                        busy: false,
-                        started: false,
-                    },
-                );
+                *session = Some(Session {
+                    native,
+                    state: "{}".into(),
+                    busy: false,
+                    started: false,
+                    created: std::time::Instant::now(),
+                    last_used: std::time::Instant::now(),
+                });
             }
-            let current = sessions.get_mut(session_id).unwrap();
+            let current = session.as_mut().unwrap();
             if current.busy {
-                return mcp_plain("session_busy", true);
+                return mcp_plain("runtime_busy", true);
             }
             current.busy = true;
             (
@@ -746,7 +836,6 @@ impl Server {
                 jobs.insert(
                     id.clone(),
                     Job {
-                        session: session_id.to_owned(),
                         phase: "running".into(),
                         cancel_requested: false,
                         result: None,
@@ -756,12 +845,12 @@ impl Server {
             }
         };
         let own = self.clone();
-        let name = session_id.to_owned();
         let job_id = id.clone();
         tokio::spawn(async move {
             let outcome = own.execute(native, work, &state, started, &job_id).await;
-            let mut sessions = own.sessions.lock().unwrap();
-            let current = sessions.get_mut(&name).unwrap();
+            let mut session = own.session.lock().unwrap();
+            let current = session.as_mut().unwrap();
+            current.last_used = std::time::Instant::now();
             current.busy = false;
             if let Ok((_, Some(new_state), _)) = &outcome {
                 current.state = new_state.clone();
@@ -769,7 +858,7 @@ impl Server {
             if let Ok((_, _, true)) = &outcome {
                 current.started = true;
             }
-            drop(sessions);
+            drop(session);
             let mut jobs = own.jobs.lock().unwrap();
             let job = jobs.get_mut(&job_id).unwrap();
             let (saved, unknown) = match outcome {
@@ -845,7 +934,6 @@ impl Server {
         if terminal {
             return self
                 .control(
-                    session_id,
                     "result",
                     &json!({"id":id,"part":if include_image && has_image {"image"} else {"summary"}}),
                 )
@@ -888,6 +976,9 @@ impl Server {
                 None,
                 true,
             ));
+        }
+        if !matches!(&work, Work::App { .. } | Work::AppClick { .. }) {
+            self.app_view.invalidate();
         }
         let code = match work {
             Work::Cursor(enabled) => {
@@ -932,6 +1023,37 @@ impl Server {
                     .await?;
                 return Ok((save(result), None, true));
             }
+            Work::AppClick {
+                observation_id,
+                image_index,
+                x,
+                y,
+            } => {
+                return Ok((
+                    app_view::click(&self.app_view, &native, &observation_id, image_index, x, y)
+                        .await?,
+                    None,
+                    true,
+                ));
+            }
+            Work::App {
+                pid,
+                max_image_dimension,
+                max_windows,
+            } => {
+                return Ok((
+                    app_view::capture(
+                        &self.app_view,
+                        &native,
+                        pid,
+                        max_image_dimension,
+                        max_windows,
+                    )
+                    .await?,
+                    None,
+                    true,
+                ));
+            }
             Work::Script(code) => code,
         };
         let wrapped = format!(
@@ -966,7 +1088,7 @@ impl Server {
         Ok((saved, new_state, true))
     }
 
-    async fn control(&self, session_id: &str, operation: &str, args: &Value) -> Value {
+    async fn control(&self, operation: &str, args: &Value) -> Value {
         let Some(id) = args.get("id").and_then(Value::as_str) else {
             return mcp_plain("id is required", true);
         };
@@ -974,9 +1096,6 @@ impl Server {
         let Some(job) = jobs.get_mut(id) else {
             return mcp_plain("execution_not_found", true);
         };
-        if job.session != session_id {
-            return mcp_plain("execution_not_found", true);
-        }
         if operation == "cancel" && job.phase == "running" {
             job.cancel_requested = true;
         }
@@ -1090,7 +1209,8 @@ async fn main() {
     };
     let server = Arc::new(Server {
         driver: driver.clone(),
-        sessions: Mutex::new(HashMap::new()),
+        session: Mutex::new(None),
+        app_view: app_view::Runtime::default(),
         jobs: Mutex::new(HashMap::new()),
         stdout: AsyncMutex::new(io::stdout()),
     });
@@ -1104,6 +1224,6 @@ async fn main() {
         }
     }
     // The supervisor and trusted session handles own the private child's lifetime.
-    server.sessions.lock().unwrap().clear();
+    server.session.lock().unwrap().take();
     let _ = driver.shutdown().await;
 }

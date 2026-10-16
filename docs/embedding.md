@@ -13,11 +13,22 @@ LICENSING/                    dependency inventory, notices, and source material
 .mcp.json                     Claude-compatible MCP declaration
 ```
 
-The standard `mcp.json` launches `./bin/dtw` from the Plugin root. The CLI finds `libexec/cua-driver` beside itself at runtime. Keep the directory together; copying only `bin/dtw` out of it loses the private worker. On Windows the exported `mcp.json` uses `./bin/dtw.exe`. The host should treat the package as a single versioned unit and keep an active Session on its original version until that Session ends.
+The standard `mcp.json` launches `./bin/dtw` from the Plugin root. The CLI finds `libexec/cua-driver` beside itself at runtime. Keep the directory together; copying only `bin/dtw` out of it loses the private worker. On Windows the exported `mcp.json` uses `./bin/dtw.exe`. The host should treat the package as a single versioned unit and keep an active MCP process on its original version until that process exits.
+
+## Runtime context ownership
+
+Launch one stdio MCP process per independent Agent context. The Runtime owns its
+CUA session, script state, observation bindings and receipt IDs; the Agent sends
+no `session` argument. Legacy named-session calls are rejected. A shared MCP
+connection is a shared execution context: the host must not multiplex unrelated
+Agents into it without an authenticated context boundary. Coordinate pointer and
+focus access across processes because the physical desktop remains shared.
+Process restart or context expiry requires a new observation; do not replay an
+unreconciled action. See [architecture](architecture.md) for expiry and busy rules.
 
 ## Caelis Bot integration boundary
 
-Caelis Bot can stage the platform-specific Plugin during its own build or installation, verify the release executable's published SHA-256, and load the exported directory through the standard Agent Plugin interface in Caelis Core. Core already recognizes root `plugin.json`, root `mcp.json`, and `skills/`. The Bot remains responsible for enabling the Plugin, obtaining user authorization, providing its own lifecycle and update policy, and starting new Sessions after an update. DTW exposes only the single MCP `exec` tool; the Bot should not add a second desktop-control bridge for this package.
+Caelis Bot can stage the platform-specific Plugin during its own build or installation, verify the release executable's published SHA-256, and load the exported directory through the standard Agent Plugin interface in Caelis Core. Core already recognizes root `plugin.json`, root `mcp.json`, and `skills/`. The Bot remains responsible for enabling the Plugin, obtaining user authorization, providing its own lifecycle and update policy, and starting new MCP processes after an update. DTW exposes only the single MCP `exec` tool; the Bot should not add a second desktop-control bridge for this package.
 
 The current Bot release still uses its existing Desktop World integration. This document defines the new package handoff; it is not a claim that a Bot build has already switched to this Plugin. A Bot acceptance run must verify Plugin registration, Skill discovery, MCP initialization, `exec` availability, and native worker startup from its actual application bundle on each platform.
 

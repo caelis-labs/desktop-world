@@ -40,9 +40,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ${{ runner.temp }}/dtw-cua-build
-          key: dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-ac967b9-${{ hashFiles('cmd/dtw/Cargo.lock', 'cmd/dtw/**/*.rs') }}
+          key: dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-d74a9ca-${{ hashFiles('cmd/dtw/Cargo.lock', 'cmd/dtw/**/*.rs') }}
           restore-keys: |
-            dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-ac967b9-
+            dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-d74a9ca-
       - name: Validate release version
         env:
           RELEASE_TAG: ${{ inputs.tag }}

@@ -11,7 +11,7 @@ from probe import call, exec_call, result, runtime_env
 
 
 def run(proc, ident, session, script):
-    started = exec_call(proc, ident, {"session": session, "script": script})
+    started = exec_call(proc, ident, {"script": script})
     assert "id" in started, started
     done = result(proc, ident + 1, session, started["id"]) if started["status"] == "running" else started
     return started["id"], done
@@ -33,7 +33,7 @@ def main():
             _, done = run(proc, ident, session,
                           "state.n=(state.n||0)+1; return state.n;")
             report.setdefault("state", []).append([session, done["status"], done.get("value")])
-        assert report["state"] == [["a", "completed", 1], ["a", "completed", 2], ["b", "completed", 1]]
+        assert report["state"] == [["a", "completed", 1], ["a", "completed", 2], ["b", "completed", 3]]
         default_id, default = run(proc, 18, "default", "return 42;")
         report["default_session"] = {"status": default["status"], "value": default.get("value")}
         assert report["default_session"] == {"status": "completed", "value": 42}
@@ -42,13 +42,13 @@ def main():
         assert "__dtw_state" not in default["text"]
         raw_reply = call(proc, {"jsonrpc": "2.0", "id": 19, "method": "tools/call",
                                 "params": {"name": "exec", "arguments": {
-                                    "session": "default", "operation": "result", "id": default_id}}})
+                                    "operation": "result", "id": default_id}}})
         raw_text = raw_reply["result"]["content"][0]["text"]
         assert raw_text.startswith(f"id={default_id} status=completed\nrun_script: ok"), raw_text
         assert not any(key in raw_text for key in ("execution_id", "full_text_bytes",
                                                 "structured_bytes", "text_truncated",
                                                 "effect", "__dtw_state")), raw_text
-        full_text = exec_call(proc, 20, {"session": "default", "operation": "result",
+        full_text = exec_call(proc, 20, {"operation": "result",
                                          "id": default_id, "part": "text"})
         assert "run_script: ok" in full_text["page"]["data"], full_text
         assert "__dtw_state" not in full_text["page"]["data"], full_text
@@ -59,12 +59,12 @@ def main():
         assert action["value"] == {"delivery": {"mode": "not_applicable"},
                                    "effect": "unverifiable", "route": "global_input",
                                    "summary": "Pressed return", "text": "Pressed return"}, action
-        raw = exec_call(proc, 29, {"session": "default", "operation": "result",
+        raw = exec_call(proc, 29, {"operation": "result",
                                    "id": action_id, "part": "structured"})
         assert json.loads(raw["page"]["data"])["value"]["text"] == "Pressed return", raw
 
         large_id, large = run(proc, 8, "a", "return 'x'.repeat(100000);")
-        page = exec_call(proc, 10, {"session": "a", "operation": "result",
+        page = exec_call(proc, 10, {"operation": "result",
                                     "id": large_id, "part": "structured"})
         report["large"] = {"status": large["status"], "summary_bytes": len(large["text"]),
                            "truncation_inline": "...truncated " in large["text"],
@@ -88,10 +88,9 @@ def main():
                                            "value": long_script.get("value")}
         assert report["upstream_script_limit"] == {"status": "completed", "value": 64}
 
-        foreign = exec_call(proc, 11, {"session": "b", "operation": "result",
-                                       "id": large_id})
-        report["foreign_receipt"] = foreign
-        assert foreign.get("error") == "execution_not_found"
+        legacy = exec_call(proc, 11, {"session": "b", "script": "throw new Error('MUST-NOT-RUN');"})
+        assert "session_managed_by_runtime" in legacy.get("error", ""), legacy
+        report["legacy_session_refused"] = True
 
         bad_id, bad = run(proc, 12, "a", "throw new Error('DTW-UNIQUE-ERROR');")
         report["script_error"] = {"status": bad["status"], "code": bad.get("code"),
@@ -99,26 +98,21 @@ def main():
                                   "text": bad.get("text")}
         assert bad["status"] == "failed" and report["script_error"]["preserved_marker"]
 
-        started = exec_call(proc, 14, {"session": "a", "wait_ms": 0, "script":
+        started = exec_call(proc, 14, {"wait_ms": 0, "script":
                                        "await cua.sleep(1500); return 'SLEPT-ONCE';"})
         original = started["id"]
-        other = exec_call(proc, 21, {"session": "b", "wait_ms": 0, "script":
+        other = exec_call(proc, 21, {"wait_ms": 0, "script":
                                      "state.n=(state.n||0)+1; return state.n;"})
-        cancel = exec_call(proc, 15, {"session": "a", "operation": "cancel",
+        cancel = exec_call(proc, 15, {"operation": "cancel",
                                       "id": original})
         terminal = result(proc, 16, "a", original)
-        other_terminal = result(proc, 22, "b", other["id"])
+        assert other.get("error") == "runtime_busy", other
         report["cancel"] = {"id": original, "immediate": cancel["status"],
                             "requested": cancel.get("cancel_requested", False),
-                            "terminal": terminal["status"], "terminal_value": terminal.get("value"),
-                            "terminal_requested": terminal.get("cancel_requested", False),
-                            "other_session": {"id": other["id"],
-                                              "status": other_terminal["status"],
-                                              "value": other_terminal.get("value"),
-                                              "cancel_requested": other_terminal.get("cancel_requested", False)}}
+                            "terminal": terminal["status"]}
         assert terminal["id"] == original
-        assert other_terminal["status"] == "completed" and other_terminal.get("value") == 2
-        assert not other_terminal.get("cancel_requested", False)
+        assert terminal["status"] in ("completed", "cancelled", "failed", "unknown")
+        report["concurrent_execution_refused"] = True
         print(json.dumps(report, ensure_ascii=False, indent=2))
     finally:
         proc.stdin.close()

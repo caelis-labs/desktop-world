@@ -25,7 +25,7 @@ def image_call(proc, ident, session, args, path):
     if summary['status'] == 'running':
         response = call(proc, {'jsonrpc':'2.0','id':ident+1,'method':'tools/call',
                                'params':{'name':'exec','arguments':{
-                                   'session':session,'operation':'result',
+                                   'operation':'result',
                                    'id':summary['id'],'part':'image'}}},timeout=30)
         content = response['result']['content']
         summary = parse_exec_result(response['result'])
@@ -80,7 +80,7 @@ def main():
             items = target['value']['items']
             assert len(items)==1 and items[0].get('frame'),items
             frame = items[0]['frame']
-            focused = exec_call(proc,100,{'session':session,'operation':'focus',
+            focused = exec_call(proc,100,{'operation':'focus',
                                         'pid':pid,'window_id':window_id})
             if focused['status']=='running':
                 focused = result(proc,101,session,focused['id'])
@@ -89,7 +89,7 @@ def main():
             points=[]
             for index,(cx,cy) in enumerate([(100,100),(400,250),(700,400)]):
                 cap = image_call(proc,10+index*10,session,{
-                    'session':session,'operation':'desktop','include_image':True,
+                    'operation':'desktop','include_image':True,
                     'max_image_dimension':1600,'wait_ms':4000},root/f'before-{index}.png')
                 x=(frame['x']+1+cx)*cap['screenshot_width']/cap['screen_width']
                 y=(frame['y']+1+cy)*cap['screenshot_height']/cap['screen_height']
