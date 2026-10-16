@@ -33,9 +33,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ${{ runner.temp }}/dtw-cua-build
-          key: dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-ac967b9-${{ hashFiles('cmd/dtw/Cargo.lock', 'cmd/dtw/**/*.rs') }}
+          key: dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-d74a9ca-${{ hashFiles('cmd/dtw/Cargo.lock', 'cmd/dtw/**/*.rs', 'cmd/dtw/**/*.swift') }}
           restore-keys: |
-            dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-ac967b9-
+            dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-d74a9ca-
       - name: Format Rust
         run: cargo +1.98.0 fmt --manifest-path cmd/dtw/Cargo.toml --check
       - name: Check Python harness syntax
@@ -53,6 +53,7 @@ jobs:
           python3 tests/acceptance/mcp_smoke.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
           python3 tests/acceptance/licenses_probe.py "$RUNNER_TEMP/dtw-plugin"
           python3 tests/acceptance/contract_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
+          python3 tests/acceptance/runtime_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
           python3 tests/acceptance/package_install_probe.py "$RUNNER_TEMP/dtw-plugin" --output "$RUNNER_TEMP/install-probe"
           CARGO_TARGET_DIR="$RUNNER_TEMP/dtw-cua-build/dtw" cargo +1.98.0 test --manifest-path cmd/dtw/Cargo.toml --release --locked
 
@@ -76,9 +77,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ${{ runner.temp }}/dtw-cua-build
-          key: dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-ac967b9-${{ hashFiles('cmd/dtw/Cargo.lock', 'cmd/dtw/**/*.rs') }}
+          key: dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-d74a9ca-${{ hashFiles('cmd/dtw/Cargo.lock', 'cmd/dtw/**/*.rs', 'cmd/dtw/**/*.swift') }}
           restore-keys: |
-            dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-ac967b9-
+            dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-d74a9ca-
       - name: Check Python harness syntax
         run: python -m compileall -q scripts tests/acceptance
       - name: Format Rust
@@ -119,6 +120,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "License check failed with exit code $LASTEXITCODE" }
           python tests/acceptance/contract_probe.py (Join-Path $env:DTW_PACKAGE 'bin/dtw.exe')
           if ($LASTEXITCODE -ne 0) { throw "Contract probe failed with exit code $LASTEXITCODE" }
+          python tests/acceptance/runtime_probe.py (Join-Path $env:DTW_PACKAGE 'bin/dtw.exe')
+          if ($LASTEXITCODE -ne 0) { throw "Runtime probe failed with exit code $LASTEXITCODE" }
           python tests/acceptance/package_install_probe.py $env:DTW_PACKAGE --output (Join-Path $env:RUNNER_TEMP 'install-probe')
           if ($LASTEXITCODE -ne 0) { throw "Installation probe failed with exit code $LASTEXITCODE" }
           $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'dtw-cua-build/dtw'

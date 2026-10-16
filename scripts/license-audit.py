@@ -17,7 +17,7 @@ import subprocess
 import tarfile
 import tomllib
 
-PIN = "ac967b9006aafa10870aadb5a645b038cba9721a"
+PIN = "d74a9cab3fb2e80ab7f0cef47025ec828586ea75"
 TARGETS = ("x86_64-pc-windows-msvc", "aarch64-apple-darwin")
 ALLOWED = {"MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib",
            "Unicode-3.0", "MPL-2.0", "Unlicense", "0BSD", "MIT-0", "BSL-1.0",
@@ -175,13 +175,16 @@ def main():
         "mpl_source_packages": sorted(source_crates),
         "mpl_source_sha256": hashlib.sha256(source_archive.read_bytes()).hexdigest()}
     assets = source / "libs/cua-driver/rust/crates/cursor-overlay/assets"
+    cursor_packages = [key for key, entry in entries.items() if entry["name"] == "cursor-overlay"]
+    assert len(cursor_packages) == 1, cursor_packages
+    cursor_notice_root = "licenses/" + cursor_packages[0]
     inventory["embedded_components"] = [
         {"name": "Inter font", "license": "OFL-1.1", "source_path": "cursor-overlay/assets/Inter.ttf",
          "source_sha256": hashlib.sha256((assets / "Inter.ttf").read_bytes()).hexdigest(),
-         "notice": "licenses/cursor-overlay-0.34.0/assets/Inter-OFL.txt"},
+         "notice": cursor_notice_root + "/assets/Inter-OFL.txt"},
         {"name": "CUA default cursor theme", "license": "MIT", "source_path": "cursor-overlay/assets/cua.default.cua-theme",
          "source_sha256": hashlib.sha256((assets / "cua.default.cua-theme").read_bytes()).hexdigest(),
-         "notice": "licenses/cursor-overlay-0.34.0/LICENSE.md"},
+         "notice": cursor_notice_root + "/LICENSE.md"},
     ]
     assert all((output / item["notice"]).is_file() for item in inventory["embedded_components"])
     (output / "DEPENDENCIES.json").write_text(json.dumps(inventory, indent=2) + "\n", encoding="utf-8")
@@ -192,7 +195,7 @@ def main():
             "CUA derived-code attribution is also preserved in the package's CUA-THIRD_PARTY_NOTICES.md.",
             "System Windows/Apple libraries are supplied by the OS and are not redistributed in this archive.",
             "Node, perception models and Cua Spaces are not bundled.", "",
-            "Embedded Inter font: OFL-1.1, original notice at licenses/cursor-overlay-0.34.0/assets/Inter-OFL.txt.",
+            f"Embedded Inter font: OFL-1.1, original notice at {cursor_notice_root}/assets/Inter-OFL.txt.",
             "Embedded default cursor theme: CUA MIT. QuickJS-ng/native crypto and other vendored notices are",
             "preserved recursively in their respective crate notice directories.", "",
             "| Dependency | Declared license | Original notices |", "| --- | --- | --- |"]

@@ -1,6 +1,6 @@
 # Short CUA scripts for DTW
 
-Each JavaScript block is the `script` string of the installed DTW `exec` tool (called `desktop-world_dtw/exec` in Antigravity) with one stable `session`. The native code is upstream CUA `run_script`; DTW does not evaluate another JS language. Replace example PIDs, window IDs, labels and coordinates with values observed in this run. A script may branch between reads and actions. Return only facts the Agent needs; the complete native result and up to two images stay retrievable through the original `id`.
+Each JavaScript block is the `script` string of the installed DTW `exec` tool (called `desktop-world_dtw/exec` in Antigravity) with a runtime-owned execution context (omit `session`). The native code is upstream CUA `run_script`; DTW does not evaluate another JS language. Replace example PIDs, window IDs, labels and coordinates with values observed in this run. A script may branch between reads and actions. Return only facts the Agent needs; the complete native result and up to two images stay retrievable through the original `id`.
 
 ## A chooser or newly opened window
 
@@ -17,7 +17,7 @@ return {pid:app.pid,window_id:app.windowId,title:app.title,
 If PID-only binding misses the chooser, compare `cua.listWindows({pid:PARENT_PID})` before and after. Keep discovery scoped to the authorized process; a global window listing can expose unrelated titles. A macOS Open/Save service window may be invisible while the parent app has a visible AX proxy. Use the parent-owned `(pid,window_id)` if its `getState` has the real controls. A returned ID that fails on `getApp` does **not** prove the picker closed: in real Obsidian acceptance it remained visibly open for minutes. Do not repeatedly bind that ID or click its stale element frame. Capture the primary display instead:
 
 ```json
-{"session":"task","operation":"desktop","include_image":true,"max_image_dimension":1600}
+{"operation":"desktop","include_image":true,"max_image_dimension":1600}
 ```
 
 Inspect the image in that response (or `result,part:image` if still running). Confirm the intended temporary picker by its visible title/path and buttons. Measure `x,y` in the **returned PNG pixel grid** (dimensions from that receipt’s native `part:"structured"` page), not in a resized chat preview, macOS screen points, or an earlier screenshot. Aim at the center of a large visible control. CUA maps a capped screenshot back to native screen points when the matching `capture_id` is supplied; do not multiply by display scale yourself. Then send exactly one pixel action with its one-use capture ID:
@@ -46,7 +46,7 @@ return {window_id:app.windowId,capture_id:view.capture_id,
         has_image:view.screenshot_frame_valid};
 ```
 
-Then request `{"operation":"result","id":"ORIGINAL_ID","part":"image"}` in the **same** Session, inspect that original image, and click a point measured in its window-local pixels. If it was downscaled, pass the returned `capture_id` so CUA can reject a stale or mismatched frame and map coordinates. `app.click([x,y],{capture_id:CAPTURE_ID})` works when background delivery lands; use `{delivery_mode:"foreground",capture_id:CAPTURE_ID}` only for an authorized visible target. A capture ID is consumed by its first pixel action, even if a later line in that script fails. A second click with the same ID returns `capture_not_found` before dispatch. Read the actual page heading or control state after the first click; `app.title` only reports the window title. If another action is needed, take a fresh screenshot. After navigation or resizing, never reuse the old point. `app.zoom([x1,y1,x2,y2])` gives a cropped image. A following `app.click([x,y],{from_zoom:true})` uses **zoom-image** coordinates, not the full screenshot's. A screenshot-only read with `display_only:true` is a preview and cannot ground a click.
+Then request `{"operation":"result","id":"ORIGINAL_ID","part":"image"}` in the same runtime, inspect that original image, and click a point measured in its window-local pixels. If it was downscaled, pass the returned `capture_id` so CUA can reject a stale or mismatched frame and map coordinates. `app.click([x,y],{capture_id:CAPTURE_ID})` works when background delivery lands; use `{delivery_mode:"foreground",capture_id:CAPTURE_ID}` only for an authorized visible target. A capture ID is consumed by its first pixel action, even if a later line in that script fails. A second click with the same ID returns `capture_not_found` before dispatch. Read the actual page heading or control state after the first click; `app.title` only reports the window title. If another action is needed, take a fresh screenshot. After navigation or resizing, never reuse the old point. `app.zoom([x1,y1,x2,y2])` gives a cropped image. A following `app.click([x,y],{from_zoom:true})` uses **zoom-image** coordinates, not the full screenshot's. A screenshot-only read with `display_only:true` is a preview and cannot ground a click.
 
 For a text-heavy target, prefer `app.getState({query:"target label",max_elements:100,include_screenshot:false})` or `app.query({name:"exact label"})`. `max_elements` truncation is not absence. `since:"latest"` returns a small diff after a prior read with the same options. Upstream's typed browser/CDP tools can be faster for permitted page-aware tasks, but `run_script` cannot call them; attaching a personal Chrome profile also has a separate authorization/setup boundary. This one-tool path uses native screenshot/AX input.
 
@@ -54,7 +54,7 @@ For a text-heavy target, prefer `app.getState({query:"target label",max_elements
 
 The native action names differ by platform: macOS buttons expose `AXPress`, while Windows UIA buttons expose `invoke`. Windows also omits `screenshot_frame_valid`; require a capture ID, positive screenshot dimensions, no screenshot error, and an element's `screenshot_frame`. Those fields establish an available capture, not pixel/geometry fidelity. At the current CUA pin, Windows acceptance found misaligned window screenshots for DPI-unaware applications at 125% display scale. Visually confirm the candidate's frame against the returned image before using region matching or pixel input; stop on black padding or mismatched geometry. The recipe below handles both payloads without rescaling that frame a second time.
 
-If a **window** binds and has an AX tree, the model can mark a rectangle in its PNG. Run this in the same Session with the rectangle's image-pixel `x,y,w,h`, and set `include_image:true` on this `exec` to inspect the **new** image alongside the candidates. If the page or window moved since the image the model marked, discard the old rectangle and mark it again on the new image. `screenshot_frame` is already mapped by CUA to the screenshot returned by this `getState`; `frame` is in screen points and must not be compared with image pixels. Keep the returned image and candidate list from this **one** observation together. For a large tree, this bounded walk may truncate, so an empty list means only that no candidate was found in the returned rows.
+If a **window** binds and has an AX tree, the model can mark a rectangle in its PNG. Run this in the same runtime with the rectangle's image-pixel `x,y,w,h`, and set `include_image:true` on this `exec` to inspect the **new** image alongside the candidates. If the page or window moved since the image the model marked, discard the old rectangle and mark it again on the new image. `screenshot_frame` is already mapped by CUA to the screenshot returned by this `getState`; `frame` is in screen points and must not be compared with image pixels. Keep the returned image and candidate list from this **one** observation together. For a large tree, this bounded walk may truncate, so an empty list means only that no candidate was found in the returned rows.
 
 ```js
 const roi={x:IMAGE_X,y:IMAGE_Y,w:IMAGE_W,h:IMAGE_H};
@@ -93,11 +93,11 @@ Some editors expose toolbar AX controls but draw the document text without AX te
 The upstream QuickJS allowlist excludes `invoke_menu` and `get_desktop_state`. The same DTW `exec` therefore has two narrow pass-through operations:
 
 ```json
-{"session":"task","operation":"menu","pid":123,"window_id":456,"path":["File","Open..."]}
-{"session":"task","operation":"desktop","max_image_dimension":1600}
+{"operation":"menu","pid":123,"window_id":456,"path":["File","Open..."]}
+{"operation":"desktop","max_image_dimension":1600}
 ```
 
-`menu` delegates to CUA's exact native menu-path resolver. It may temporarily activate the target and is suitable only for an authorized target; read the resulting window state afterward. `desktop` captures the whole primary display with no AX walk, and its image is retrieved with `operation=result,part=image`. Use it only when the task requires the shared visible desktop. Pixel input on that image uses `cua.call("click",{target:{kind:"desktop",display_id:"primary"},x,y,capture_id})` in a later script; the screenshot's capture ID belongs to that Session. A global keyboard shortcut can use `cua.call("hotkey",{target:{kind:"desktop",display_id:"primary"},keys:["cmd","space"]})`, followed by a new `desktop` read. Such a shortcut acts on the **current global focus**, so do not send text until the intended field is visibly focused. Prefer an exact app/window hotkey when one exists.
+`menu` delegates to CUA's exact native menu-path resolver. It may temporarily activate the target and is suitable only for an authorized target; read the resulting window state afterward. `desktop` captures the whole primary display with no AX walk, and its image is retrieved with `operation=result,part=image`. Use it only when the task requires the shared visible desktop. Pixel input on that image uses `cua.call("click",{target:{kind:"desktop",display_id:"primary"},x,y,capture_id})` in a later script; the screenshot's capture ID belongs to that runtime. A global keyboard shortcut can use `cua.call("hotkey",{target:{kind:"desktop",display_id:"primary"},keys:["cmd","space"]})`, followed by a new `desktop` read. Such a shortcut acts on the **current global focus**, so do not send text until the intended field is visibly focused. Prefer an exact app/window hotkey when one exists.
 
 To discover a localized menu path, first query the exact command label in one window read, for example `const s=await app.getState({query:"重新加载",max_elements:80,include_screenshot:false}); return s.tree_markdown;`. The result can show its enclosing `AXMenuBarItem` and `AXMenu`. Pass those observed labels to `operation:"menu"`; do not translate an English example path by guesswork.
 
@@ -117,3 +117,29 @@ return {acted:true,delivery:action,after:after.tree_markdown,
 ```
 
 This checks the target before acting, then reads once at the meaningful checkpoint. Windows queries can include `display_only` text rows, and role aliases such as `textfield` also match native `Text` labels alongside `Edit` controls. Inspect the returned native role and supported actions, exclude display-only rows, and require one actionable match before typing or clicking. A CUA action receipt is not a success verdict. On stale references, permission refusal or `unknown`, observe/reconcile the original receipt; do not replay the action. Upstream `run_steps` does its own stale-token re-find/retry, so this integration does **not** surface it as an `exec` operation. Keep logic in `run_script`, where branches and the point of action remain explicit.
+
+## Application popups and choosers (macOS)
+
+```json
+{"operation":"app","pid":123,"include_image":true}
+```
+
+Fetch the original receipt's `part:"structured"` to read `observation_id`, window
+inventory and `frames`. Fetch `part:"image",image_index:0` (and 1 when present).
+The default top2 is a presentation limit; use `max_windows` up to 8 to inspect more
+attributed windows. `association_complete:false` and potential `occluders` must
+not be interpreted as proof that every app-launched surface was found.
+
+After inspecting the original image, use its pixels directly:
+
+```json
+{"operation":"click","observation_id":"OBSERVED_32_HEX_ID","image_index":0,"x":140,"y":300}
+```
+
+This consumes the observation, checks application identity, window geometry and
+stacking, and validates that the point is visible. CUA images use CUA input;
+ScreenCaptureKit images use DTW's guarded foreground pointer route. Transparent
+OS surfaces are checked locally; their images are never returned to the Agent.
+The runtime does not retry refused or unknown input with another delivery mode.
+Observe again after input and verify the intended change. Do not use `run_script`
+between the app observation and its click; that invalidates the observation.

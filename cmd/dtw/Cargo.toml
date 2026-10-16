@@ -1,6 +1,6 @@
 [package]
 name = "desktop-world"
-version = "0.1.0-rc.8"
+version = "0.1.0-rc.9"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/caelis-labs/desktop-world"
@@ -10,7 +10,7 @@ name = "dtw"
 path = "src/main.rs"
 
 [dependencies]
-cua-driver-sdk = { git = "https://github.com/trycua/cua.git", rev = "ac967b9006aafa10870aadb5a645b038cba9721a" }
+cua-driver-sdk = { git = "https://github.com/trycua/cua.git", rev = "d74a9cab3fb2e80ab7f0cef47025ec828586ea75" }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
@@ -18,3 +18,6 @@ toml_edit = "0.25.12"
 flate2 = "1"
 sha2 = "0.10"
 tar = "0.4"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"

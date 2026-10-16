@@ -91,7 +91,7 @@ def parse_exec_result(result):
 
 def result(proc, ident, session, id):
     for _ in range(100):
-        current = exec_call(proc, ident, {"session": session, "operation": "result", "id": id})
+        current = exec_call(proc, ident, {"operation": "result", "id": id})
         if current["status"] != "running":
             return current
         time.sleep(0.1)
@@ -102,7 +102,7 @@ def structured_result(proc, ident, session, id):
     chunks = []
     offset = 0
     while True:
-        receipt = exec_call(proc, ident, {"session": session, "operation": "result",
+        receipt = exec_call(proc, ident, {"operation": "result",
                                           "id": id, "part": "structured", "offset": offset})
         page = receipt["page"]
         chunks.append(page["data"])
@@ -131,32 +131,32 @@ def main():
         assert names == ["exec"], names
         values = []
         for ident, session in [(3, "probe-a"), (5, "probe-a"), (7, "probe-b")]:
-            started = exec_call(proc, ident, {"session": session, "script": "state.count = (state.count || 0) + 1; return state.count;"})
+            started = exec_call(proc, ident, {"script": "state.count = (state.count || 0) + 1; return state.count;"})
             if "id" not in started:
                 print(json.dumps({"run_refusal": started}))
                 break
             done = result(proc, ident + 1, session, started["id"])
-            values.append({"session": session, "status": done["status"], "value": done.get("value"), "error_code": done.get("error_code"), "text": done.get("text", "")[:300]})
+            values.append({"status": done["status"], "value": done.get("value"), "error_code": done.get("error_code"), "text": done.get("text", "")[:300]})
             if done["status"] != "completed":
                 raise AssertionError(f"state probe failed: {values[-1]}")
         print(json.dumps({"state_probe": values}))
-        assert [entry["value"] for entry in values] == [1, 2, 1], values
-        listed = exec_call(proc, 9, {"session": "probe-a", "script": "return (await cua.listApps()).length;"})
+        assert [entry["value"] for entry in values] == [1, 2, 3], values
+        listed = exec_call(proc, 9, {"script": "return (await cua.listApps()).length;"})
         count = result(proc, 10, "probe-a", listed["id"])
         print(json.dumps({"app_count_probe": {"status": count["status"], "value": count.get("value"), "error_code": count.get("error_code"), "text": count.get("text", "")[:300]}}))
         assert count["status"] == "completed", count
         permissions = exec_call(proc, 11, {"operation": "permissions"})
         print(json.dumps({"permissions": permissions}))
-        assert permissions.get("status") == "ok", permissions
+        assert not permissions.get("is_error") and permissions.get("text"), permissions
         if "--cursor" in sys.argv[2:]:
             cursor_results = []
             for ident, enabled in [(12, None), (14, True), (16, None), (18, False)]:
-                args = {"session": "probe-a", "operation": "cursor"}
+                args = {"operation": "cursor"}
                 if enabled is not None:
                     args["enabled"] = enabled
                 started = exec_call(proc, ident, args)
                 done = result(proc, ident + 1, "probe-a", started["id"])
-                detail = exec_call(proc, ident + 20, {"session": "probe-a", "operation": "result", "id": started["id"], "part": "structured"})
+                detail = exec_call(proc, ident + 20, {"operation": "result", "id": started["id"], "part": "structured"})
                 cursor_results.append({"enabled_request": enabled, "status": done["status"],
                                        "error_code": done.get("error_code"), "text": done.get("text", "")[:400],
                                        "structured": json.loads(detail["page"]["data"])})

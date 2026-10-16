@@ -52,7 +52,7 @@ def main():
                       'return {window_id:a.windowId,capture_id:s.capture_id,'
                       'width:s.screenshot_width,height:s.screenshot_height};')
             reply = call(proc, {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {
-                'name': 'exec', 'arguments': {'session': 'inline-image', 'script': script,
+                'name': 'exec', 'arguments': {'script': script,
                                              'include_image': True, 'wait_ms': 5000}}})
             contents = reply['result']['content']
             text = parse_exec_result(reply['result'])

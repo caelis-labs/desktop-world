@@ -1,0 +1,43 @@
+{
+  "recorded_at": "2026-10-16T02:28:26.815262+00:00",
+  "base_commit": "10d6c056222fd0756f87493a8db62761e34331e7",
+  "branch": "codex/dtw-associated-capture-poc",
+  "cua": {
+    "tag": "cua-driver-rs-v0.35.4",
+    "revision": "d74a9cab3fb2e80ab7f0cef47025ec828586ea75",
+    "prerelease": true,
+    "kernel_modified": false,
+    "worker_path": "/private/tmp/dtw-associated-capture-release/cua-driver",
+    "worker_sha256": "c76d59f64b90147a3928fe7775594b0da26af2b2e523968c90246cdcbd5ad4f4"
+  },
+  "dtw": {
+    "path": "/private/tmp/dtw-associated-capture-dtw-target/release/dtw",
+    "sha256": "9c9f3d6b0f54abd760525901104e4ba0d7227967e3dfdd0d8ec805a72acb7e75",
+    "rust_toolchain": "1.97.1",
+    "source_sha256": {
+      "cmd/dtw/src/app_view/macos.rs": "f0d1d33e5557880dec2cfe3198ad2f6510308e7139f8169046424708941f7729",
+      "cmd/dtw/src/app_view.rs": "737e0943e340503f87a883e84a53341a3e0afb33d52db9cb7136b11f9f9371b5",
+      "cmd/dtw/src/installer.rs": "89b69633de332698692786f254eab24a23d48018c7f4d13cec2429a72d6c158f",
+      "cmd/dtw/src/main.rs": "47d75c24cd654d2585aadbbd88694dff53d9b896f412ac5cfad4d2abccfe4a8a",
+      "cmd/dtw/Cargo.toml": "7b82e9de4444ad916f037db6b5f5641433876118d89fd5a5b5ad06880d162101",
+      "cmd/dtw/Cargo.lock": "566be62c325f2546a2d3600b49f0a44225ee5ebc7d16ae002eb9b2627886282c",
+      "cmd/dtw/build.rs": "abe4ba3b74c4c9118fe56651cadae56119f1d2ff900a49290917ab7150afcbf2"
+    }
+  },
+  "evidence_roots": [
+    "/private/tmp/dtw-top2-final",
+    "/private/tmp/dtw-top2-acceptance"
+  ],
+  "checks": {
+    "rust_tests": "5 passed",
+    "mcp_smoke": "passed",
+    "receipt_contract": "passed",
+    "read_only_probe": "passed",
+    "license": "373 packages, 679 notices passed",
+    "obsidian_picker_image_contract": "passed",
+    "separate_worker_popup_probes": "failed: WPS capture timeout; remote menu no content",
+    "windows_gui": "not run",
+    "signed_package": "not built"
+  },
+  "promotion": "candidate only; no broad reliability or improvement-over-old-pin claim"
+}

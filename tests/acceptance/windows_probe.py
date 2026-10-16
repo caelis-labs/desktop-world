@@ -51,7 +51,7 @@ class MCP:
         while receipt.get("status") == "running" and time.monotonic() < deadline:
             time.sleep(.05)
             response = self.request("tools/call", {"name": "exec", "arguments": {
-                "session": args.get("session", "default"), "operation": "result",
+                "operation": "result",
                 "id": original}})
             receipt = parse_exec_result(response["result"])
         self.records.append({"arguments": args, "receipt": receipt})
@@ -68,7 +68,7 @@ class MCP:
         offset = 0
         while True:
             response = self.request("tools/call", {"name": "exec", "arguments": {
-                "session": session, "operation": "result", "id": receipt["id"],
+                "operation": "result", "id": receipt["id"],
                 "part": "structured", "offset": offset}})
             page = json.loads(response["result"]["content"][0]["text"])["page"]
             chunks.append(page["data"])
@@ -77,11 +77,11 @@ class MCP:
                 return json.loads("".join(chunks))
 
     def script(self, script, session="windows-live"):
-        return self.exec(session=session, script=script)
+        return self.exec(script=script)
 
     def image(self, receipt, name, session="windows-live"):
         response = self.request("tools/call", {"name": "exec", "arguments": {
-            "session": session, "operation": "result", "part": "image",
+            "operation": "result", "part": "image",
             "id": receipt["id"]}})
         for block in response["result"].get("content", []):
             if block.get("type") == "image":
@@ -216,7 +216,7 @@ def main():
         completed(initial)
         # Preserve full bounded tree even if the adapter omits its large inline value.
         tree_response = mcp.request("tools/call", {"name": "exec", "arguments": {
-            "session": "windows-live", "operation": "result", "id": initial["id"],
+            "operation": "result", "id": initial["id"],
             "part": "structured"}})
         (root / "native-tree.json").write_text(json.dumps(tree_response, indent=2), encoding="utf-8")
         if args.inspect:
@@ -262,7 +262,7 @@ def main():
         alignment_ok = check("native_screenshot_frame_alignment", frame_alignment)
 
         def focus():
-            receipt = mcp.exec(session="windows-live", operation="focus",
+            receipt = mcp.exec(operation="focus",
                 pid=fixture_process.pid, window_id=window_id)
             completed(receipt)
             native_focus = mcp.structured(receipt)
@@ -291,7 +291,7 @@ def main():
             completed(receipt)
             events = [e for e in native_events(root) if e["kind"] == "submit"]
             assert len(events) == 1 and events[0]["value"].replace("\r\n", "\n") == text, events
-            original = mcp.exec(session="windows-live", operation="result", id=receipt["id"])
+            original = mcp.exec(operation="result", id=receipt["id"])
             assert original["id"] == receipt["id"], original
             assert len([e for e in native_events(root) if e["kind"] == "submit"]) == 1
             return {"submissions": 1, "original_receipt_query_no_duplicate": True}
@@ -357,7 +357,7 @@ def main():
         check("native_repeated_set_value", stability)
 
         def menu():
-            receipt = mcp.exec(session="windows-live", operation="menu",
+            receipt = mcp.exec(operation="menu",
                 pid=fixture_process.pid, window_id=window_id, path=["File", "Record menu"])
             completed(receipt)
             observed = [e for e in native_events(root) if e["kind"] == "menu"]
@@ -402,7 +402,7 @@ def main():
             state = completed(receipt)
             assert "picker.txt" in json.dumps(state), state
             mcp.image(receipt, "native-picker.png")
-            focused = mcp.exec(session="windows-live", operation="focus", pid=fixture_process.pid, window_id=dialog_id)
+            focused = mcp.exec(operation="focus", pid=fixture_process.pid, window_id=dialog_id)
             completed(focused)
             assert focus_verified(mcp.structured(focused), dialog_id), focused
             completed(mcp.script(dialog_bind + "return await a.pressKey('return',undefined,{delivery_mode:'foreground'});"))

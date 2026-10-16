@@ -1,5 +1,7 @@
 # Windows acceptance — 2026-10-11/12
 
+> Historical Windows evidence: the implicit Runtime context and CUA 0.35.4 candidate in this worktree have not been rebuilt or GUI-validated on Windows. See [runtime acceptance](runtime-acceptance.md).
+
 **结论：Windows 全面验收未通过。** 本机工具链已安装，源码构建、插件独立安装、MCP 协议以及常用原生/Chrome 操作有通过证据。主线的两处 DTW 适配问题已在本地修复；固定 CUA 源码中的 DPI 截图问题和文件选择器路径仍阻塞完整验收。该记录不代表生产发布或干净机器验收。
 
 ## 基线与交付物

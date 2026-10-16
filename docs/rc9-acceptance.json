@@ -1,0 +1,150 @@
+{
+  "version": "0.1.0-rc.9",
+  "checkpoint": "f07a4d5",
+  "platform": "macOS 27.0.1 (26A434) arm64",
+  "cua_revision": "d74a9cab3fb2e80ab7f0cef47025ec828586ea75",
+  "cua_source_modified": false,
+  "artifact_sha256": {
+    "/private/tmp/dtw-rc9-final/bin/dtw": "08dd9f41505121e92f44e0a2be30fd02ad2c5c2dec166bd7df6b644b09905300",
+    "/private/tmp/dtw-rc9-final/libexec/cua-driver": "15a2abacf6a856978de4b2c3e8463c79bc3c502321d4169f4bcf38d8e44ba043"
+  },
+  "source_sha256": {
+    "cmd/dtw/Cargo.toml": "31b3b616f273ee46a033b839706e7fef55230c083f84e3cc8343ee6f8a37eb80",
+    "cmd/dtw/Cargo.lock": "d7ce21a7a52af2eed6a3d5c92b9bc195403f6439af7aaf5e6ad6cabf9245ff14",
+    "cmd/dtw/build.rs": "df2b79414b8928688b66b783ce972eef200a05a629d1f83930da5c97ce8853f5",
+    "cmd/dtw/src/main.rs": "7391812f2319f5e61e7f937a06e9acd45ba555039e21317504dee5294398dd35",
+    "cmd/dtw/src/app_view.rs": "562d710a52b32be0690b00b6198d7dcc51f2c08f76264fe1cb5836b0cbf6b536",
+    "cmd/dtw/src/app_view/Scene.swift": "0cc9b3907a11ff9bddba7eea6b44aebe3568aff6df645c386adde004c0c71243",
+    "cmd/dtw/src/app_view/macos.rs": "f73a03833090b4d8c8e9914d48b1a0fb1c93102be337610dee6080a10dd25297",
+    "packaging/plugin/plugin.json": "4af4d8aaeed2cc31fb44307d756ee69ebec73f72256c3a4b4f2f462514362f21",
+    "packaging/plugin/gemini-extension.json": "24244ab484397bf9f275e8bad588874d9fac6c73c9564d6f920c0bba93bbf716",
+    "packaging/plugin/.claude-plugin/plugin.json": "6712190db143ef003a69d5b7e892abc2ab7966c997dadf9596715e9b949b290f",
+    "packaging/plugin/skills/desktop-world/SKILL.md": "4eebcaca6db75f1e0bc943bc81c1a31408a2aa9eeafb88dfa4ef9866490602e4",
+    "packaging/plugin/skills/desktop-world/api.d.ts": "d6ef8c361260fe49c9a1a1d03628e87e337ee7fc9b4f42fc4e7e5826815b78ef",
+    "packaging/plugin/skills/desktop-world/RECIPES.md": "4393a4508952bdf5fbaf7c73929fdd5c892cb5df840c8c65d41978ecb3d29626"
+  },
+  "fixture": {
+    "runtime": "fresh",
+    "pid": 87557,
+    "inventory": 3,
+    "default_images": 2,
+    "expanded_images": 3,
+    "pixel_effect": "independent counter +1",
+    "ordinary_point_effect": "independent counter +1",
+    "ordinary_backend": "cua",
+    "reuse": "refused",
+    "moved": "refused",
+    "closed": "refused",
+    "intervening_script": "refused",
+    "opaque_other_process": "refused",
+    "expired": "refused"
+  },
+  "multi_runtime": {
+    "status": "passed",
+    "live_runtimes": 2,
+    "alternating_reads": 6,
+    "concurrent_reads": 2,
+    "input_sent": false,
+    "max_seconds": 1.397
+  },
+  "cold_fixture": [
+    {
+      "attempt": 1,
+      "exit_code": 0,
+      "seconds": 0.829
+    },
+    {
+      "attempt": 2,
+      "exit_code": 0,
+      "seconds": 0.827
+    },
+    {
+      "attempt": 3,
+      "exit_code": 0,
+      "seconds": 0.855
+    },
+    {
+      "attempt": 4,
+      "exit_code": 0,
+      "seconds": 0.833
+    },
+    {
+      "attempt": 5,
+      "exit_code": 0,
+      "seconds": 0.857
+    },
+    {
+      "attempt": 6,
+      "exit_code": 0,
+      "seconds": 0.834
+    },
+    {
+      "attempt": 7,
+      "exit_code": 0,
+      "seconds": 0.833
+    },
+    {
+      "attempt": 8,
+      "exit_code": 0,
+      "seconds": 0.837
+    },
+    {
+      "attempt": 9,
+      "exit_code": 0,
+      "seconds": 0.831
+    },
+    {
+      "attempt": 10,
+      "exit_code": 0,
+      "seconds": 0.83
+    }
+  ],
+  "cold_obsidian": [
+    {
+      "attempt": 1,
+      "exit_code": 0,
+      "seconds": 1.103
+    },
+    {
+      "attempt": 2,
+      "exit_code": 0,
+      "seconds": 1.067
+    },
+    {
+      "attempt": 3,
+      "exit_code": 0,
+      "seconds": 1.11
+    },
+    {
+      "attempt": 4,
+      "exit_code": 0,
+      "seconds": 1.059
+    },
+    {
+      "attempt": 5,
+      "exit_code": 0,
+      "seconds": 1.051
+    }
+  ],
+  "gui_root": "/private/tmp/dtw-rc9-final-gui",
+  "passed": [
+    "6 release-mode unit tests",
+    "MCP smoke",
+    "protocol contract",
+    "Runtime isolation",
+    "license inventory",
+    "independent package installation",
+    "WPS overlay click and screenshot readback",
+    "Obsidian associated chooser/menu click and screenshot readback",
+    "Skill validation",
+    "format and syntax checks"
+  ],
+  "not_claimed": [
+    "Windows live GUI",
+    "multiple-display/mixed-DPI live input",
+    "fresh external Agent host discovery",
+    "clean-machine permission flow",
+    "universal app window attribution"
+  ],
+  "publication": "not published"
+}
