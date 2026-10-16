@@ -893,16 +893,17 @@ impl Server {
                     )
                 }
             };
-            job.phase = if unknown {
-                "unknown"
-            } else if saved.error_code.as_deref() == Some("cancelled_before_action") {
-                "cancelled"
-            } else if saved.is_error {
-                "failed"
-            } else {
-                "completed"
-            }
-            .into();
+            job.phase =
+                if unknown || saved.error_code.as_deref() == Some("input_outcome_unknown") {
+                    "unknown"
+                } else if saved.error_code.as_deref() == Some("cancelled_before_action") {
+                    "cancelled"
+                } else if saved.is_error {
+                    "failed"
+                } else {
+                    "completed"
+                }
+                .into();
             job.result = Some(saved);
         });
         for _ in 0..wait_ms.div_ceil(25) {
@@ -1193,6 +1194,9 @@ fn save(result: ToolResult) -> SavedResult {
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
+    if app_view::helper_entry() {
+        return;
+    }
     let worker = match worker_path() {
         Ok(path) => path,
         Err(e) => {

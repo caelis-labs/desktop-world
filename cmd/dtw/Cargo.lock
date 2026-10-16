@@ -1018,10 +1018,11 @@ dependencies = [
 
 [[package]]
 name = "desktop-world"
-version = "0.1.0-rc.8"
+version = "0.1.0-rc.9"
 dependencies = [
  "cua-driver-sdk",
  "flate2",
+ "libc",
  "serde_json",
  "sha2",
  "tar",

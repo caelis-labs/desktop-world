@@ -67,7 +67,7 @@ try:
  assert count()==before+1
  command('restore');v=observe();run({'script':'return 1;'});invalidated=click(v);assert invalidated.get('code')=='stale_observation',invalidated
  # CUA's ordinary-window route remains usable through the same point contract.
- v=observe(8);base=count();ordinary=click(v,2);assert not ordinary.get('is_error'),ordinary
+ v=observe(8);ordinary_backend=v['frames'][2]['backend'];base=count();ordinary=click(v,2);assert not ordinary.get('is_error'),ordinary
  time.sleep(.3);assert count()==base+1,(ordinary,count(),base)
  # A separately launched process must not be attributed to the target or clicked through.
  v=observe();base=count();cover=out/'cover'
@@ -84,7 +84,7 @@ try:
  time.sleep(.3)
  # Expiry is checked without sending input; no synthetic clock override.
  v=observe();time.sleep(30.2);expired=click(v);assert expired.get('code')=='stale_observation',expired
- print(json.dumps({'runtime':'existing' if shared else 'fresh','pid':pid,'inventory':3,'default_images':2,'expanded_images':3,'pixel_effect':'independent counter +1','cua_point_effect':'independent counter +1','reuse':'refused','moved':'refused','closed':'refused','intervening_script':'refused','opaque_other_process':'refused','expired':'refused'}))
+ print(json.dumps({'runtime':'existing' if shared else 'fresh','pid':pid,'inventory':3,'default_images':2,'expanded_images':3,'pixel_effect':'independent counter +1','ordinary_point_effect':'independent counter +1','ordinary_backend':ordinary_backend,'reuse':'refused','moved':'refused','closed':'refused','intervening_script':'refused','opaque_other_process':'refused','expired':'refused'}))
 finally:
  if proc:
   proc.stdin.close()

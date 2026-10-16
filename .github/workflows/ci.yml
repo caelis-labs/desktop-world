@@ -33,7 +33,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ${{ runner.temp }}/dtw-cua-build
-          key: dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-d74a9ca-${{ hashFiles('cmd/dtw/Cargo.lock', 'cmd/dtw/**/*.rs') }}
+          key: dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-d74a9ca-${{ hashFiles('cmd/dtw/Cargo.lock', 'cmd/dtw/**/*.rs', 'cmd/dtw/**/*.swift') }}
           restore-keys: |
             dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-d74a9ca-
       - name: Format Rust
@@ -77,7 +77,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ${{ runner.temp }}/dtw-cua-build
-          key: dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-d74a9ca-${{ hashFiles('cmd/dtw/Cargo.lock', 'cmd/dtw/**/*.rs') }}
+          key: dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-d74a9ca-${{ hashFiles('cmd/dtw/Cargo.lock', 'cmd/dtw/**/*.rs', 'cmd/dtw/**/*.swift') }}
           restore-keys: |
             dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-d74a9ca-
       - name: Check Python harness syntax

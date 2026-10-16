@@ -99,10 +99,19 @@ private func capture(_ request: [String:Any]) -> [String:Any] {
     let pid = Int32(request["pid"] as? Int ?? 0)
     let cap = request["max_image_dimension"] as? Int ?? 1600
     let semaphore = DispatchSemaphore(value:0)
+    let tracing = ProcessInfo.processInfo.environment["DTW_SCENE_TRACE"] == "1"
+    let began = ProcessInfo.processInfo.systemUptime
+    func trace(_ phase: String) {
+        guard tracing else { return }
+        let message = "dtw_scene capture pid=\(pid) window=\(id) elapsed=\(ProcessInfo.processInfo.systemUptime-began) phase=\(phase)\n"
+        FileHandle.standardError.write(Data(message.utf8))
+    }
+    trace("begin")
     // The callback retains its own box even after timeout; never accesses freed FFI memory.
     final class Box: @unchecked Sendable { var result: [String:Any] = [:] }
     let box = Box()
     SCShareableContent.getExcludingDesktopWindows(true, onScreenWindowsOnly:true) { content, error in
+        trace("shareable_callback")
         guard let window = content?.windows.first(where: { $0.windowID == id && $0.owningApplication?.processID == pid }) else {
             box.result = fail("window_unavailable",error?.localizedDescription ?? "Window is no longer shareable"); semaphore.signal(); return
         }
@@ -113,7 +122,9 @@ private func capture(_ request: [String:Any]) -> [String:Any] {
         config.height = max(1, Int((window.frame.height*scale).rounded()))
         config.showsCursor = false; config.ignoreShadowsSingleWindow = true
         config.shouldBeOpaque = false
+        trace("image_request")
         SCScreenshotManager.captureImage(contentFilter:filter,configuration:config) { image, error in
+            trace("image_callback")
             guard let image else { box.result = fail("capture_failed",error?.localizedDescription ?? "Empty SCK frame"); semaphore.signal(); return }
             if let sx = request["screen_x"] as? Double, let sy = request["screen_y"] as? Double {
                 let px = Int((sx-window.frame.minX)/window.frame.width*Double(image.width))
@@ -141,7 +152,7 @@ private func capture(_ request: [String:Any]) -> [String:Any] {
             semaphore.signal()
         }
     }
-    guard semaphore.wait(timeout:.now()+12) == .success else { return fail("capture_timeout","ScreenCaptureKit timed out; no input occurred") }
+    guard semaphore.wait(timeout:.now()+12) == .success else { trace("timeout"); return fail("capture_timeout","ScreenCaptureKit timed out; no input occurred") }
     return box.result
 }
 // WindowServer bounds include transparent full-screen utility surfaces. Test

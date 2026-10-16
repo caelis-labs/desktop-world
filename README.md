@@ -41,7 +41,7 @@ The same single executable can expand a complete [Agent Plugin 1.0](https://agen
 
 The destination must be new. A host such as Caelis Bot can package that directory for its own platform and load its one stdio MCP server plus Skill through the standard plugin interface. Host lifecycle, authorization, and enabling remain the host's responsibility. See the [embedding contract](docs/embedding.md). Caelis Core currently installs this local Plugin through its TUI; a direct `dtw install caelis` entry awaits [a supported headless Caelis installation API](https://github.com/caelis-labs/caelis/issues/129).
 
-The current development branch makes CUA sessions implicit in the Runtime and adds macOS application observation with screenshot-bound clicks. See [architecture](docs/architecture.md) and [current validation, including remaining limits](docs/runtime-acceptance.md); these changes are not part of the download linked above.
+The current development branch makes CUA sessions implicit in the Runtime and adds macOS application observation with screenshot-bound clicks. See [architecture](docs/architecture.md) and [RC.9 integration validation](docs/rc9-acceptance.md); these changes are not part of the download linked above.
 
 ## Source and distribution
 

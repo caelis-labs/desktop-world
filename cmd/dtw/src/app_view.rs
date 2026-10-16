@@ -9,6 +9,16 @@ use std::{
 
 #[cfg(target_os = "macos")]
 mod macos;
+pub(super) fn helper_entry() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos::helper_entry()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
 async fn platform(request: Value) -> Result<Value, String> {
     #[cfg(target_os = "macos")]
     {
@@ -229,7 +239,7 @@ pub(super) async fn click(
     if frame["backend"] == "cua" {
         return native.call_tool("click".into(),json!({"pid":frame["pid"],"window_id":frame["window_id"],"x":x,"y":y,"capture_id":frame["native"]["capture_id"],"delivery_mode":"background"}).to_string()).await.map(save);
     }
-    let v=match platform(json!({"operation":"click","pid":frame["pid"],"window_id":frame["window_id"],"bounds":frame["bounds"],"screen_x":sx,"screen_y":sy})).await {Ok(v)=>v,Err(e)=>return Ok(refusal("input_unavailable",&e))};
+    let v=match platform(json!({"operation":"click","pid":frame["pid"],"window_id":frame["window_id"],"bounds":frame["bounds"],"screen_x":sx,"screen_y":sy})).await {Ok(v)=>v,Err(e)=>return Ok(refusal("input_outcome_unknown",&e))};
     if let Some(e) = platform_error(&v) {
         return Ok(e);
     }

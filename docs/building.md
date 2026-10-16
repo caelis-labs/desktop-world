@@ -27,4 +27,5 @@ The DTW application-observation extension statically compiles
 `cmd/dtw/src/app_view/Scene.swift` with Xcode's Swift compiler. The resulting macOS candidate
 requires macOS 14+; there is no Node runtime or additional helper installation.
 After a SDK/worker upgrade, run the implicit-session contract tests and the live
-application/point gates in `docs/runtime-acceptance.md` before promotion.
+application/point gates in `docs/rc9-acceptance.md` before promotion. The same executable also serves as
+a short-lived native extension child; no additional distributed helper is needed.

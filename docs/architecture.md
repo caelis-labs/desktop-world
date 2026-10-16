@@ -29,7 +29,14 @@ one physical desktop, so their input must be coordinated by the host.
 ## Application observation extension
 
 `app_view.rs` contains the observation/point contract; `app_view/Scene.swift` is a
-small statically linked public macOS API bridge. These modules are compiled
+small statically linked public macOS API bridge. Each native operation runs in a
+bounded child of the same signed DTW executable, without starting another CUA
+worker. The MCP parent owns a per-user file lease until the child exits. This
+releases its SCK client before another Runtime uses the bridge; multiple live
+SCScreenshotManager clients of one executable reproduced missing image callbacks
+on the test machine. The lease waits at most three seconds; child execution is
+bounded to 25 seconds. Receipts and script state stay private to each MCP process.
+There is no shared daemon or separate helper installation. These modules are compiled
 extensions, not a dynamic plugin ABI. There are no app-specific WPS/Obsidian rules
 or private AX symbols. WindowServer supplies visible stacking; same-PID windows
 are associated directly. Remote surfaces additionally require public AX client
@@ -62,7 +69,8 @@ point locally and never disclose unrelated pixels. Unknown or opaque coverage
 refuses input. CUA frames retain CUA capture IDs and background delivery. SCK
 frames use DTW's minimal CGEvent left-click route only at an already visible,
 verified point; no activation, hidden-window delivery or automatic fallback.
-A delivered event is not proof of effect. Agent must reobserve; stale/failed/unknown
+If a native input child times out or exits without a complete reply, its receipt
+is `unknown`; no input is replayed. A delivered event is not proof of effect. Agent must reobserve; stale/failed/unknown
 actions are not replayed. Races with another controller cannot be eliminated.
 
 ## Capability and integration limits
@@ -80,4 +88,4 @@ no separately installed runtime. OS-extension tests and CUA upgrade tests are
 separate. Upgrade official release/prerelease candidates as SDK+worker pairs,
 lock the exact revision/checksum, run contract and real GUI gates, and keep the
 previous tested pair available. Remove an extension only when the upstream path
-passes the same cases. See [runtime acceptance](runtime-acceptance.md).
+passes the same cases. See [checkpoint acceptance](runtime-acceptance.md) and [RC.9 acceptance](rc9-acceptance.md).
