@@ -6,7 +6,7 @@ use cua_driver_sdk::{
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env, fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -95,6 +95,7 @@ struct Server {
     session: Mutex<Option<Session>>,
     app_view: app_view::Runtime,
     jobs: Mutex<HashMap<String, Job>>,
+    pending_requests: Mutex<HashSet<String>>,
     stdout: AsyncMutex<io::Stdout>,
 }
 
@@ -643,6 +644,10 @@ impl Server {
             _ => error(id, -32601, format!("unknown method: {method}")),
         };
         self.write(response).await;
+        self.pending_requests
+            .lock()
+            .unwrap()
+            .remove(&id.to_string());
     }
 
     async fn exec(self: &Arc<Self>, args: Value) -> Value {
@@ -1311,6 +1316,7 @@ async fn main() {
         session: Mutex::new(None),
         app_view: app_view::Runtime::default(),
         jobs: Mutex::new(HashMap::new()),
+        pending_requests: Mutex::new(HashSet::new()),
         stdout: AsyncMutex::new(io::stdout()),
     });
     let mut input = BufReader::new(io::stdin()).lines();
@@ -1320,6 +1326,38 @@ async fn main() {
             _ = shutdown_signal() => break,
         };
         if let Ok(request) = serde_json::from_str::<Value>(&line) {
+            if request["method"] == "notifications/cancelled" {
+                if let Some(id) = request.pointer("/params/requestId") {
+                    if server
+                        .pending_requests
+                        .lock()
+                        .unwrap()
+                        .contains(&id.to_string())
+                    {
+                        if server.lifetime.stop().is_ok() {
+                            for job in server
+                                .jobs
+                                .lock()
+                                .unwrap()
+                                .values_mut()
+                                .filter(|j| j.phase == "running")
+                            {
+                                job.cancel_requested = true;
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            if request["method"] == "tools/call" {
+                if let Some(id) = request.get("id") {
+                    server
+                        .pending_requests
+                        .lock()
+                        .unwrap()
+                        .insert(id.to_string());
+                }
+            }
             let server = server.clone();
             tokio::spawn(async move {
                 server.handle(request).await;

@@ -47,3 +47,18 @@ if sys.platform == 'darwin':
         while any(alive(pid) for pid in supervisors+workers) and time.monotonic()<deadline: time.sleep(.025)
         assert not any(alive(pid) for pid in supervisors+workers), (termination,supervisors,workers)
     print(json.dumps({'eof':'reaped','sigterm':'reaped','sigkill_parent':'descendants_stopped'}))
+
+# Standard MCP cancellation is scoped to an outstanding request ID.
+p = start(sys.argv[1])
+try:
+    p.stdin.write(json.dumps({'jsonrpc':'2.0','id':400,'method':'tools/call','params':{'name':'exec','arguments':{'script':'while(true){}','wait_ms':5000}}})+'\n')
+    p.stdin.flush()
+    time.sleep(.2)
+    p.stdin.write(json.dumps({'jsonrpc':'2.0','method':'notifications/cancelled','params':{'requestId':400}})+'\n')
+    p.stdin.flush()
+    time.sleep(.2)
+    refused = exec_call(p,401,{'script':'return 1;'})
+    assert 'runtime_stopped' in refused.get('error',''), refused
+    print('{"mcp_request_cancellation":"stopped"}')
+finally:
+    p.stdin.close();p.wait(timeout=5)
