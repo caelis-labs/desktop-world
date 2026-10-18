@@ -6,7 +6,7 @@ use cua_driver_sdk::{
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env, fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -19,6 +19,7 @@ use tokio::{
 
 mod app_view;
 mod installer;
+mod lifecycle;
 
 const MAX_STATE_BYTES: usize = 32 * 1024;
 const MODEL_TEXT_BYTES: usize = 12 * 1024;
@@ -48,6 +49,8 @@ struct Job {
     phase: String,
     cancel_requested: bool,
     result: Option<SavedResult>,
+    finished: Option<std::time::Instant>,
+    expired: bool,
 }
 
 struct SavedResult {
@@ -88,9 +91,11 @@ enum Work {
 
 struct Server {
     driver: Arc<CuaDriver>,
+    lifetime: lifecycle::Lifetime,
     session: Mutex<Option<Session>>,
     app_view: app_view::Runtime,
     jobs: Mutex<HashMap<String, Job>>,
+    pending_requests: Mutex<HashSet<String>>,
     stdout: AsyncMutex<io::Stdout>,
 }
 
@@ -163,6 +168,58 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+// Export only release-owned content; host registrations and owner markers never travel.
+fn canonical_copy(source: &Path, destination: &Path) -> Result<(), String> {
+    fs::create_dir(destination).map_err(|e| e.to_string())?;
+    for name in ["bin", "libexec", "skills", "LICENSING"] {
+        copy_tree(&source.join(name), &destination.join(name))?;
+    }
+    for name in [
+        "LICENSE",
+        "NOTICE",
+        "THIRD_PARTY_NOTICES.md",
+        "CUA-MIT-LICENSE.txt",
+        "CUA-THIRD_PARTY_NOTICES.md",
+    ] {
+        fs::copy(source.join(name), destination.join(name)).map_err(|e| e.to_string())?;
+    }
+    fs::create_dir(destination.join(".claude-plugin")).map_err(|e| e.to_string())?;
+    for (name, content) in [
+        (
+            "plugin.json",
+            include_str!("../../../packaging/plugin/plugin.json"),
+        ),
+        (
+            "mcp.json",
+            include_str!("../../../packaging/plugin/mcp.json"),
+        ),
+        (
+            ".mcp.json",
+            include_str!("../../../packaging/plugin/.mcp.json"),
+        ),
+        (
+            "gemini-extension.json",
+            include_str!("../../../packaging/plugin/gemini-extension.json"),
+        ),
+        (
+            ".claude-plugin/plugin.json",
+            include_str!("../../../packaging/plugin/.claude-plugin/plugin.json"),
+        ),
+    ] {
+        let content = if cfg!(windows) {
+            content
+                .replace("bin/dtw\"", "bin/dtw.exe\"")
+                .replace("bin${/}dtw\"", "bin${/}dtw.exe\"")
+        } else {
+            content.to_owned()
+        };
+        fs::write(destination.join(name), content).map_err(|e| e.to_string())?;
+    }
+    // Skills may have installer ownership markers in direct host projections.
+    let _ = fs::remove_file(destination.join("skills/desktop-world/.dtw-owner.json"));
+    write_sums(destination)
 }
 
 fn package_root() -> Result<PathBuf, String> {
@@ -334,6 +391,9 @@ fn install_plugin(destination: &Path) -> Result<(), String> {
     let parent = parent.canonicalize().map_err(|e| e.to_string())?;
     let leaf = destination.file_name().ok_or("invalid destination")?;
     let destination = parent.join(leaf);
+    if destination.starts_with(package.canonicalize().map_err(|e| e.to_string())?) {
+        return Err("export destination must be outside the source package".into());
+    }
     if fs::symlink_metadata(&destination).is_ok() {
         return Err(format!(
             "destination already exists: {}",
@@ -343,7 +403,7 @@ fn install_plugin(destination: &Path) -> Result<(), String> {
     let staging =
         destination.with_file_name(format!(".desktop-world-install-{}", uuid::Uuid::new_v4()));
     let result = (|| {
-        copy_tree(&package, &staging)?;
+        canonical_copy(&package, &staging)?;
         if fs::symlink_metadata(&destination).is_ok() {
             return Err(format!(
                 "destination already exists: {}",
@@ -378,17 +438,26 @@ fn configured_driver() -> ConfiguredDriverOptions {
     }
 }
 
-fn new_driver(path: String) -> Result<Arc<CuaDriver>, String> {
+fn new_driver(path: String, lifetime: &lifecycle::Lifetime) -> Result<Arc<CuaDriver>, String> {
     if !PathBuf::from(&path).is_file() {
         return Err(format!("private CUA worker missing: {path}"));
     }
     CuaDriver::create_private_worker(PrivateWorkerOptions {
-        binary_path: path,
+        binary_path: env::current_exe()
+            .map_err(|e| e.to_string())?
+            .to_string_lossy()
+            .into_owned(),
         host_bundle_id: "dev.caelis.dtw".into(),
         startup_timeout_ms: Some(15_000),
         shutdown_timeout_ms: Some(3_000),
         configured_driver: configured_driver(),
-        environment: Vec::<EmbeddedEnvironmentVariable>::new(),
+        environment: ["TMPDIR", "TMP", "TEMP"]
+            .iter()
+            .map(|name| EmbeddedEnvironmentVariable {
+                name: (*name).into(),
+                value: lifetime.root.to_string_lossy().into_owned(),
+            })
+            .collect(),
         inherit_stderr: true,
     })
     .map_err(|e| e.to_string())
@@ -575,6 +644,10 @@ impl Server {
             _ => error(id, -32601, format!("unknown method: {method}")),
         };
         self.write(response).await;
+        self.pending_requests
+            .lock()
+            .unwrap()
+            .remove(&id.to_string());
     }
 
     async fn exec(self: &Arc<Self>, args: Value) -> Value {
@@ -782,6 +855,15 @@ impl Server {
     }
 
     async fn run(self: &Arc<Self>, work: Work, wait_ms: u64, include_image: bool) -> Value {
+        if self.jobs.lock().unwrap().len() >= 4096 {
+            return mcp_plain(
+                "receipt_capacity_reached: restart Runtime after reconciling existing receipts",
+                true,
+            );
+        }
+        if self.lifetime.stopped() {
+            return mcp_plain("runtime_stopped: restart Runtime and observe before any further input; never replay an unknown action", true);
+        }
         let (native, state, started) = {
             let mut session = self.session.lock().unwrap();
             if session.as_ref().is_some_and(|s| {
@@ -839,6 +921,8 @@ impl Server {
                         phase: "running".into(),
                         cancel_requested: false,
                         result: None,
+                        finished: None,
+                        expired: false,
                     },
                 );
                 break id;
@@ -893,18 +977,22 @@ impl Server {
                     )
                 }
             };
-            job.phase =
-                if unknown || saved.error_code.as_deref() == Some("input_outcome_unknown") {
-                    "unknown"
-                } else if saved.error_code.as_deref() == Some("cancelled_before_action") {
-                    "cancelled"
-                } else if saved.is_error {
-                    "failed"
-                } else {
-                    "completed"
-                }
-                .into();
+            job.phase = if job.cancel_requested
+                || unknown
+                || saved.error_code.as_deref() == Some("input_outcome_unknown")
+            {
+                "unknown"
+            } else if saved.error_code.as_deref() == Some("cancelled_before_action") {
+                "cancelled"
+            } else if saved.is_error {
+                "failed"
+            } else {
+                "completed"
+            }
+            .into();
             job.result = Some(saved);
+            job.finished = Some(std::time::Instant::now());
+            prune_results(&mut jobs);
         });
         for _ in 0..wait_ms.div_ceil(25) {
             let terminal = self
@@ -1094,15 +1182,22 @@ impl Server {
             return mcp_plain("id is required", true);
         };
         let mut jobs = self.jobs.lock().unwrap();
+        prune_results(&mut jobs);
         let Some(job) = jobs.get_mut(id) else {
             return mcp_plain("execution_not_found", true);
         };
         if operation == "cancel" && job.phase == "running" {
+            if let Err(error) = self.lifetime.stop() {
+                return mcp_plain(format!("stop_failed: {error}"), true);
+            }
             job.cancel_requested = true;
         }
         let mut line = format!("id={id} status={}", job.phase);
         if job.cancel_requested {
             line.push_str(" cancel_requested");
+        }
+        if job.expired && operation == "result" {
+            return mcp_plain(format!("{line} result_expired: payload evicted; do not repeat the action; observe to reconcile"), true);
         }
         if let Some(result) = &job.result {
             if let Some(code) = result.error_code.as_deref() {
@@ -1194,7 +1289,7 @@ fn save(result: ToolResult) -> SavedResult {
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
-    if app_view::helper_entry() {
+    if lifecycle::supervisor_entry() || app_view::helper_entry() {
         return;
     }
     let worker = match worker_path() {
@@ -1204,7 +1299,11 @@ async fn main() {
             std::process::exit(2);
         }
     };
-    let driver = match new_driver(worker) {
+    let lifetime = lifecycle::Lifetime::new(&worker).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(2)
+    });
+    let driver = match new_driver(worker, &lifetime) {
         Ok(driver) => driver,
         Err(e) => {
             eprintln!("{e}");
@@ -1213,14 +1312,52 @@ async fn main() {
     };
     let server = Arc::new(Server {
         driver: driver.clone(),
+        lifetime,
         session: Mutex::new(None),
         app_view: app_view::Runtime::default(),
         jobs: Mutex::new(HashMap::new()),
+        pending_requests: Mutex::new(HashSet::new()),
         stdout: AsyncMutex::new(io::stdout()),
     });
     let mut input = BufReader::new(io::stdin()).lines();
-    while let Ok(Some(line)) = input.next_line().await {
+    loop {
+        let line = tokio::select! {
+            line = input.next_line() => match line { Ok(Some(line)) => line, _ => break },
+            _ = shutdown_signal() => break,
+        };
         if let Ok(request) = serde_json::from_str::<Value>(&line) {
+            if request["method"] == "notifications/cancelled" {
+                if let Some(id) = request.pointer("/params/requestId") {
+                    if server
+                        .pending_requests
+                        .lock()
+                        .unwrap()
+                        .contains(&id.to_string())
+                    {
+                        if server.lifetime.stop().is_ok() {
+                            for job in server
+                                .jobs
+                                .lock()
+                                .unwrap()
+                                .values_mut()
+                                .filter(|j| j.phase == "running")
+                            {
+                                job.cancel_requested = true;
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            if request["method"] == "tools/call" {
+                if let Some(id) = request.get("id") {
+                    server
+                        .pending_requests
+                        .lock()
+                        .unwrap()
+                        .insert(id.to_string());
+                }
+            }
             let server = server.clone();
             tokio::spawn(async move {
                 server.handle(request).await;
@@ -1228,6 +1365,123 @@ async fn main() {
         }
     }
     // The supervisor and trusted session handles own the private child's lifetime.
-    server.session.lock().unwrap().take();
-    let _ = driver.shutdown().await;
+    let _ = server.lifetime.stop();
+    let _ = tokio::time::timeout(Duration::from_secs(3), driver.shutdown()).await;
+    // Blocking SDK tasks must not hold process exit after bounded shutdown.
+    std::process::exit(0);
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut term = signal(SignalKind::terminate()).expect("SIGTERM handler");
+        tokio::select! { _ = term.recv() => {}, _ = tokio::signal::ctrl_c() => {} }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+// Payloads: 64 MiB / 64 results / 15 minutes. Lightweight receipts remain bounded
+// by refusing admission rather than forgetting an uncertain action's identity.
+fn prune_results(jobs: &mut HashMap<String, Job>) {
+    let mut completed: Vec<_> = jobs
+        .iter()
+        .filter_map(|(id, j)| j.finished.map(|t| (id.clone(), t)))
+        .collect();
+    completed.sort_by_key(|(_, t)| *t);
+    let bytes = |r: &SavedResult| {
+        r.text.len()
+            + r.structured.len()
+            + r.images
+                .iter()
+                .map(|i| i.data_base64.len() + i.mime_type.len())
+                .sum::<usize>()
+    };
+    let mut total: usize = jobs
+        .values()
+        .filter_map(|j| j.result.as_ref())
+        .map(bytes)
+        .sum();
+    let mut count = jobs.values().filter(|j| j.result.is_some()).count();
+    for (id, time) in completed {
+        let job = jobs.get_mut(&id).unwrap();
+        if total > 64 * 1024 * 1024 || count > 64 || time.elapsed() >= Duration::from_secs(900) {
+            if let Some(result) = job.result.take() {
+                total -= bytes(&result);
+                count -= 1;
+                job.expired = true;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+    #[test]
+    fn payload_eviction_preserves_unknown_receipts_and_running_jobs() {
+        let mut jobs = HashMap::new();
+        for n in 0..70 {
+            jobs.insert(
+                n.to_string(),
+                Job {
+                    phase: "unknown".into(),
+                    cancel_requested: true,
+                    result: Some(SavedResult {
+                        text: "result".into(),
+                        structured: "{}".into(),
+                        images: vec![],
+                        is_error: true,
+                        error_code: None,
+                    }),
+                    finished: Some(std::time::Instant::now()),
+                    expired: false,
+                },
+            );
+        }
+        jobs.insert(
+            "active".into(),
+            Job {
+                phase: "running".into(),
+                cancel_requested: false,
+                result: None,
+                finished: None,
+                expired: false,
+            },
+        );
+        prune_results(&mut jobs);
+        assert_eq!(jobs.len(), 71);
+        assert_eq!(jobs.values().filter(|j| j.result.is_some()).count(), 64);
+        assert_eq!(jobs.values().filter(|j| j.expired).count(), 6);
+        assert_eq!(jobs["active"].phase, "running");
+        for job in jobs.values().filter(|j| j.expired) {
+            assert_eq!(job.phase, "unknown");
+        }
+    }
+    #[test]
+    fn oversized_and_old_results_expire_without_replay() {
+        let mut jobs = HashMap::new();
+        jobs.insert(
+            "large".into(),
+            Job {
+                phase: "completed".into(),
+                cancel_requested: false,
+                result: Some(SavedResult {
+                    text: "x".repeat(65 * 1024 * 1024),
+                    structured: "{}".into(),
+                    images: vec![],
+                    is_error: false,
+                    error_code: None,
+                }),
+                finished: Some(std::time::Instant::now()),
+                expired: false,
+            },
+        );
+        prune_results(&mut jobs);
+        assert!(jobs["large"].expired);
+        assert!(jobs["large"].result.is_none());
+    }
 }

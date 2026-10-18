@@ -37,7 +37,24 @@ pub(super) fn helper_entry() -> bool {
     if std::env::args().nth(1).as_deref() != Some(HELPER) {
         return false;
     }
+    let parent = unsafe { libc::getppid() } as u32;
+    let stop = std::env::var_os("DTW_STOP_FILE").map(std::path::PathBuf::from);
+    std::thread::spawn(move || loop {
+        if !crate::lifecycle::parent_alive(parent) || stop.as_ref().is_some_and(|p| p.exists()) {
+            std::process::exit(1);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    });
     let result = (|| {
+        // Deliberately keep the descriptor until OS process exit, including the
+        // teardown of Swift/SCK globals after this function returns.
+        let lease = lock_scene()?;
+        std::mem::forget(lease);
+        if !crate::lifecycle::parent_alive(parent)
+            || std::env::var_os("DTW_STOP_FILE").is_some_and(|p| std::path::Path::new(&p).exists())
+        {
+            return Err("runtime stopped before native dispatch".into());
+        }
         let mut bytes = Vec::new();
         std::io::stdin()
             .take(4097)
@@ -95,9 +112,7 @@ fn lock_scene_at(path: &std::path::Path, timeout: Duration) -> Result<File, Stri
     }
 }
 pub(super) fn call(request: Value) -> Result<Value, String> {
-    // The parent keeps this lock until the child has exited, not merely until a
-    // screenshot callback returns. This releases the OS capture client as well.
-    let _lease = lock_scene()?;
+    // The helper owns its lease until exit, including after an abnormal parent exit.
     let mut child = Command::new(std::env::current_exe().map_err(|e| e.to_string())?)
         .arg(HELPER)
         .stdin(Stdio::piped())

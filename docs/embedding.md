@@ -1,5 +1,7 @@
 # Embed the Desktop World Agent Plugin
 
+Prefer the platform `desktop-world-plugin-*` archive for host embedding. It contains a slim runtime without the redundant self-extracting payload. Verify its archive and runtime digests separately using the release BUILD file.
+
 The per-platform `dtw` release executable is also a Plugin exporter. At application packaging or installation time, run `dtw install plugin --to NEW_DIRECTORY`. This needs no DTW build toolchain or network access. The output is a complete, relocatable Plugin for that platform:
 
 ```text
@@ -26,11 +28,13 @@ focus access across processes because the physical desktop remains shared.
 Process restart or context expiry requires a new observation; do not replay an
 unreconciled action. See [architecture](architecture.md) for expiry and busy rules.
 
+Cancellation permanently stops execution in that Runtime and retains the original receipt as unknown when an action may have been dispatched. Hosts should close/restart the MCP process after cancellation, preserve the receipt in their own task history, and observe before deciding on further input. EOF and parent death also stop child processes. Payloads have 64 MiB / 64 result / 15 minute bounds; `result_expired` never authorizes replay.
+
 ## Caelis Bot integration boundary
 
 Caelis Bot can stage the platform-specific Plugin during its own build or installation, verify the release executable's published SHA-256, and load the exported directory through the standard Agent Plugin interface in Caelis Core. Core already recognizes root `plugin.json`, root `mcp.json`, and `skills/`. The Bot remains responsible for enabling the Plugin, obtaining user authorization, providing its own lifecycle and update policy, and starting new MCP processes after an update. DTW exposes only the single MCP `exec` tool; the Bot should not add a second desktop-control bridge for this package.
 
-The current Bot release still uses its existing Desktop World integration. This document defines the new package handoff; it is not a claim that a Bot build has already switched to this Plugin. A Bot acceptance run must verify Plugin registration, Skill discovery, MCP initialization, `exec` availability, and native worker startup from its actual application bundle on each platform.
+Bot consumes a separately pinned DTW dependency; publishing DTW alone does not update installed Bot copies. A Bot acceptance run must verify Plugin registration, Skill discovery, MCP initialization, `exec` availability, and native worker startup from its actual application bundle on each platform.
 
 ## Validation from one downloaded file
 

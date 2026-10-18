@@ -59,7 +59,11 @@ def main():
         assert "LICENSING/MPL-SOURCES.tar.gz" in source
         generic = root / "generic plugin"
         run([binary, "install", "plugin", "--to", generic])
-        assert checksum_map(generic) == source
+        exported = checksum_map(generic)
+        for name, digest in source.items():
+            if name not in {'plugin.json', 'mcp.json', '.mcp.json', 'gemini-extension.json', '.claude-plugin/plugin.json'}:
+                assert exported[name] == digest, name
+        source = exported
         standard = json.loads((generic / "plugin.json").read_text(encoding="utf-8"))
         mcp = json.loads((generic / "mcp.json").read_text(encoding="utf-8"))
         assert standard["$schema"] == "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
@@ -89,6 +93,13 @@ def main():
             if name in {"mcp.json", "plugin.json"}:
                 continue
             assert hashlib.sha256((installed / name).read_bytes()).hexdigest() == digest, name
+        reexport = root / "reexported canonical plugin"
+        run([installed / 'bin' / executable, 'install', 'plugin', '--to', reexport])
+        assert checksum_map(reexport) == source
+        assert not (reexport / 'mcp_config.json').exists()
+        assert not (reexport / '.dtw-owner.json').exists()
+        run([sys.executable, repo / 'tests/acceptance/mcp_smoke.py', reexport / 'bin' / executable])
+        run([binary, "install", "claude", "--project", project], expected=2)
         run([binary, "install", "antigravity", "--project", project])
         repeated_command = json.loads((installed / "mcp_config.json").read_text(encoding="utf-8"))["mcpServers"]["dtw"]["command"]
         assert Path(repeated_command).samefile(installed / "bin" / executable)
