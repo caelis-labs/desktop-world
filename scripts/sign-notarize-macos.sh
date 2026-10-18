@@ -43,6 +43,7 @@ export DTW_SIGN_IDENTITY=$identity DTW_SIGN_KEYCHAIN=$keychain
 
 mkdir -p "$work/submission" "$work/standalone" "$(dirname "$evidence")" "$work/home"
 for binary in "$package/bin/dtw" "$package/libexec/cua-driver" "${package}-slim/bin/dtw"; do
+  xcrun vtool -show-build "$binary" | python3 -c 'import re,sys; values=re.findall(r"minos\s+(\S+)",sys.stdin.read()); assert values and all(v in ("14.0", "14.0.0") for v in values), values'
   codesign --verify --strict --verbose=2 "$binary"
   details=$(codesign -dv --verbose=4 "$binary" 2>&1)
   printf '%s\n' "$details" | grep -q 'flags=.*runtime'
@@ -80,7 +81,7 @@ import json,sys
 v=json.load(open(sys.argv[1],encoding='utf-8'))
 e={'submission_id':v['id'],'status':v['status'],'team_id':sys.argv[3],
    'signed_binaries':['bin/dtw','libexec/cua-driver'],
-   'slim_runtime_notarized':True,'hardened_runtime':True,'embedded_worker_matches_signed_worker':True,
+   'deployment_target':'14.0','slim_runtime_notarized':True,'hardened_runtime':True,'embedded_worker_matches_signed_worker':True,
    'notarization_ticket_dtw':'PASS','notarization_ticket_extracted_worker':'PASS',
    'ticket_delivery':'online; standalone Mach-O tickets cannot be stapled'}
 with open(sys.argv[2],'w',encoding='utf-8') as f:

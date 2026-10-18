@@ -105,6 +105,7 @@ jobs:
           python3 tests/acceptance/mcp_smoke.py "$RUNNER_TEMP/dtw-plugin-slim/bin/dtw"
           python3 tests/acceptance/runtime_probe.py "$RUNNER_TEMP/dtw-plugin-slim/bin/dtw"
           python3 tests/acceptance/lifecycle_probe.py "$RUNNER_TEMP/dtw-plugin-slim/bin/dtw"
+          python3 tests/acceptance/native_lifecycle_probe.py "$RUNNER_TEMP/dtw-plugin-slim/bin/dtw"
           python3 tests/acceptance/licenses_probe.py "$RUNNER_TEMP/dtw-plugin"
           python3 tests/acceptance/package_install_probe.py "$RUNNER_TEMP/dtw-plugin" --output "$RUNNER_TEMP/install-probe"
       - name: Archive candidate and build evidence
