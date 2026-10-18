@@ -69,6 +69,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Contract probe failed' }
           python tests/acceptance/runtime_probe.py (Join-Path $package 'bin/dtw.exe')
           if ($LASTEXITCODE -ne 0) { throw 'Runtime isolation probe failed' }
+          $slim = Join-Path $env:RUNNER_TEMP 'dtw-plugin-slim/bin/dtw.exe'
+          python tests/acceptance/mcp_smoke.py $slim
+          if ($LASTEXITCODE -ne 0) { throw 'Slim MCP failed' }
+          python tests/acceptance/runtime_probe.py $slim
+          if ($LASTEXITCODE -ne 0) { throw 'Slim runtime failed' }
+          python tests/acceptance/lifecycle_probe.py $slim
+          if ($LASTEXITCODE -ne 0) { throw 'Bounded stop failed' }
           python tests/acceptance/licenses_probe.py $package
           if ($LASTEXITCODE -ne 0) { throw 'License check failed' }
           python tests/acceptance/package_install_probe.py $package --output (Join-Path $env:RUNNER_TEMP 'install-probe')
@@ -94,6 +101,10 @@ jobs:
           python3 tests/acceptance/mcp_smoke.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
           python3 tests/acceptance/contract_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
           python3 tests/acceptance/runtime_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
+          python3 tests/acceptance/lifecycle_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
+          python3 tests/acceptance/mcp_smoke.py "$RUNNER_TEMP/dtw-plugin-slim/bin/dtw"
+          python3 tests/acceptance/runtime_probe.py "$RUNNER_TEMP/dtw-plugin-slim/bin/dtw"
+          python3 tests/acceptance/lifecycle_probe.py "$RUNNER_TEMP/dtw-plugin-slim/bin/dtw"
           python3 tests/acceptance/licenses_probe.py "$RUNNER_TEMP/dtw-plugin"
           python3 tests/acceptance/package_install_probe.py "$RUNNER_TEMP/dtw-plugin" --output "$RUNNER_TEMP/install-probe"
       - name: Archive candidate and build evidence

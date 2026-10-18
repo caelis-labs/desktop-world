@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+export MACOSX_DEPLOYMENT_TARGET=14.0
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 expected=d74a9cab3fb2e80ab7f0cef47025ec828586ea75
@@ -93,6 +94,21 @@ cp "$source_root/LICENSE.md" "$staging/CUA-MIT-LICENSE.txt"
 cp "$source_root/libs/cua-driver/rust/THIRD_PARTY_NOTICES.md" "$staging/CUA-THIRD_PARTY_NOTICES.md"
 python3 "$repo_root/scripts/license-audit.py" --cua-source "$source_root" --output "$staging/LICENSING"
 python3 "$repo_root/tests/acceptance/licenses_probe.py" "$staging"
+# Build the runtime without the self-extracting payload for host embedding.
+# Strip before signing; do not modify any signed bytes afterwards.
+unset DTW_EMBED_BUNDLE
+CARGO_NET_GIT_FETCH_WITH_CLI=true \
+GIT_CONFIG_COUNT=1 \
+GIT_CONFIG_KEY_0="url.file://$source_root.insteadOf" \
+GIT_CONFIG_VALUE_0=https://github.com/trycua/cua.git \
+CARGO_TARGET_DIR="$target_dir/dtw" \
+  cargo +1.98.0 build --manifest-path "$repo_root/cmd/dtw/Cargo.toml" --release --locked $offline
+slim="${destination}-slim"
+if [ -e "$slim" ] || [ -L "$slim" ]; then echo "slim destination exists" >&2; exit 2; fi
+cp -R "$staging" "$slim"
+cp "$target_dir/dtw/release/dtw" "$slim/bin/dtw"
+if [ "$(uname -s)" = Darwin ]; then sign_binary "$slim/bin/dtw"; fi
+(cd "$slim" && find . -type f ! -name SHA256SUMS -exec shasum -a 256 {} + | LC_ALL=C sort > SHA256SUMS)
 bundle="$target_dir/runtime-bundle.tar.gz"
 python3 "$repo_root/scripts/embed-runtime.py" "$staging" "$bundle"
 # Cargo's git dependency and the private worker use the same checked commit.

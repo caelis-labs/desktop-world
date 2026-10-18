@@ -7,6 +7,9 @@ from pathlib import Path
 import subprocess
 import sys
 import tomllib
+import shutil
+import tarfile
+import zipfile
 
 
 def main():
@@ -57,6 +60,29 @@ def main():
         "validation": {"source_build": "PASS", "package_checksums": "PASS", "mcp_smoke": "PASS",
             "protocol_contracts": "PASS", "independent_installs": "PASS", "license_notices_and_mpl_source": "PASS"},
         "signing": signing}
+    slim = package.with_name(package.name + "-slim")
+    # Package files, including dot manifests, are rooted directly in the archive.
+    plugin_name = f"desktop-world-plugin-{platform}"
+    if platform.startswith("windows"):
+        plugin_archive = Path(shutil.make_archive(str(out / plugin_name), "zip", slim))
+        compressed = out / (path.name + ".zip")
+        with zipfile.ZipFile(compressed, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+            z.write(path, path.name)
+    else:
+        assert signing["notarization"]["slim_runtime_notarized"]
+        plugin_archive = out / (plugin_name + ".tar.gz")
+        with tarfile.open(plugin_archive, "w:gz", compresslevel=9) as t:
+            for item in sorted(slim.iterdir()): t.add(item, arcname=item.name)
+        compressed = out / (path.name + ".tar.gz")
+        with tarfile.open(compressed, "w:gz", compresslevel=9) as t: t.add(path, arcname=path.name)
+    for asset in [plugin_archive, compressed]:
+        (out / (asset.name + ".sha256")).write_text(hashlib.sha256(asset.read_bytes()).hexdigest() + "  " + asset.name + "\n")
+    evidence["plugin"] = {"asset":plugin_archive.name, "sha256":hashlib.sha256(plugin_archive.read_bytes()).hexdigest(),
+        "adapter_sha256":hashlib.sha256((slim / ("bin/dtw" + executable)).read_bytes()).hexdigest(),
+        "unpacked_bytes":sum(p.stat().st_size for p in slim.rglob("*") if p.is_file()),
+        "archive_bytes":plugin_archive.stat().st_size}
+    evidence["standalone_bytes"] = path.stat().st_size
+    evidence["compressed_standalone_bytes"] = compressed.stat().st_size
     (out / f"BUILD-{platform}.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(evidence))
 

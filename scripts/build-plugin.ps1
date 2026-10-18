@@ -104,6 +104,19 @@ try {
     Assert-ExitCode 'audit dependency licenses'
     & python (Join-Path $repoRoot 'tests/acceptance/licenses_probe.py') $stage
     Assert-ExitCode 'verify dependency notices and MPL source'
+    Remove-Item Env:DTW_EMBED_BUNDLE -ErrorAction SilentlyContinue
+    $env:CARGO_TARGET_DIR = $dtwTarget
+    & cargo +1.98.0 build --manifest-path (Join-Path $repoRoot 'cmd/dtw/Cargo.toml') --release --locked @offline
+    Assert-ExitCode 'build slim DTW'
+    $slim = "$destinationPath-slim"
+    if (Test-Path -LiteralPath $slim) { throw 'Slim destination exists' }
+    Copy-Item -LiteralPath $stage -Destination $slim -Recurse -Force
+    Copy-Item -LiteralPath (Join-Path $dtwTarget 'release/dtw.exe') -Destination (Join-Path $slim 'bin/dtw.exe')
+    $slimSums = Get-ChildItem -LiteralPath $slim -File -Recurse -Force | Sort-Object FullName | ForEach-Object {
+        $relative = $_.FullName.Substring($slim.Length + 1).Replace('\', '/')
+        "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $relative"
+    }
+    [System.IO.File]::WriteAllLines((Join-Path $slim 'SHA256SUMS'), $slimSums)
     $bundle = Join-Path $buildRoot 'runtime-bundle.tar.gz'
     & python (Join-Path $repoRoot 'scripts/embed-runtime.py') $stage $bundle
     Assert-ExitCode 'create embedded runtime'

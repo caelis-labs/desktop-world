@@ -42,7 +42,7 @@ impl Agent {
 }
 
 pub(super) fn usage() -> String {
-    "usage:\n  dtw install agy|claude|codex|gemini|cursor [--scope user | --project EXISTING_DIR]\n  dtw uninstall agy|claude|codex|gemini|cursor [--scope user | --project EXISTING_DIR]\n  dtw install plugin --to NEW_DIRECTORY\n\n'antigravity' is an alias for 'agy'; gemini supports user scope only".into()
+    "usage:\n  dtw install agy|claude|codex|gemini|cursor [--scope user | --project EXISTING_DIR]\n  dtw uninstall agy|claude|codex|gemini|cursor [--scope user | --project EXISTING_DIR]\n  dtw install plugin --to NEW_DIRECTORY\n\n'antigravity' is an alias for 'agy'; gemini and claude support user scope only".into()
 }
 fn home() -> Result<PathBuf, String> {
     #[cfg(windows)]
@@ -99,7 +99,11 @@ fn stage_copy(
     let stage = parent.join(format!(".dtw-stage-{}", uuid::Uuid::new_v4()));
     let backup = parent.join(format!(".dtw-backup-{}", uuid::Uuid::new_v4()));
     let result = (|| {
-        copy_tree(source, &stage)?;
+        if package {
+            super::canonical_copy(source, &stage)?;
+        } else {
+            copy_tree(source, &stage)?;
+        }
         fs::write(
             stage.join(OWNER),
             format!("{}\n", json!({"id":ID,"agent":agent.name()})),
@@ -364,6 +368,9 @@ pub(super) fn run(args: &[String]) -> Result<(), String> {
         [flag, value] if flag == "--project" => ("project", Some(absolute_existing(value)?)),
         _ => return Err(usage()),
     };
+    if agent == Agent::Claude && project.is_some() {
+        return Err("Claude supports user scope only in v0.1.0; project marketplace identity is not supported".into());
+    }
     if agent == Agent::Gemini && project.is_some() {
         return Err("Gemini extensions install at user scope; use --scope user".into());
     }
@@ -430,6 +437,21 @@ pub(super) fn run(args: &[String]) -> Result<(), String> {
             json_preflight(c, &command)?;
         }
     }
+    if agent == Agent::Claude {
+        let markets = cli_list("claude", &["plugin", "marketplace", "list", "--json"], None)?;
+        if let Some(market) = markets
+            .as_array()
+            .and_then(|a| a.iter().find(|m| m["name"] == "dtw-local"))
+        {
+            let location = market["installLocation"].as_str().map(PathBuf::from);
+            if market["source"] != "directory"
+                || location.as_deref() != Some(root.as_path())
+                || !owned(&target, agent)?
+            {
+                return Err("dtw-local marketplace is not the owned DTW source; refusing to replace or reuse it".into());
+            }
+        }
+    }
     if install {
         if agent == Agent::Antigravity && scope == "user" {
             agy_install(&package, &target)?;
@@ -478,7 +500,11 @@ pub(super) fn run(args: &[String]) -> Result<(), String> {
                 )?;
             }
             let plugins = cli_list("claude", &["plugin", "list", "--json"], project.as_deref())?;
-            if !array_has_name(&plugins, "desktop-world@dtw-local") {
+            if !plugins.as_array().is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|p| p["id"] == "desktop-world@dtw-local" && p["scope"] == "user")
+            }) {
                 cli(
                     "claude",
                     &[

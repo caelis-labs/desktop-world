@@ -54,6 +54,10 @@ jobs:
           python3 tests/acceptance/licenses_probe.py "$RUNNER_TEMP/dtw-plugin"
           python3 tests/acceptance/contract_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
           python3 tests/acceptance/runtime_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
+          python3 tests/acceptance/lifecycle_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
+          python3 tests/acceptance/mcp_smoke.py "$RUNNER_TEMP/dtw-plugin-slim/bin/dtw"
+          python3 tests/acceptance/runtime_probe.py "$RUNNER_TEMP/dtw-plugin-slim/bin/dtw"
+          python3 tests/acceptance/lifecycle_probe.py "$RUNNER_TEMP/dtw-plugin-slim/bin/dtw"
           python3 tests/acceptance/package_install_probe.py "$RUNNER_TEMP/dtw-plugin" --output "$RUNNER_TEMP/install-probe"
           CARGO_TARGET_DIR="$RUNNER_TEMP/dtw-cua-build/dtw" cargo +1.98.0 test --manifest-path cmd/dtw/Cargo.toml --release --locked
 
@@ -116,6 +120,13 @@ jobs:
           }
           python tests/acceptance/mcp_smoke.py (Join-Path $env:DTW_PACKAGE 'bin/dtw.exe')
           if ($LASTEXITCODE -ne 0) { throw "MCP smoke failed with exit code $LASTEXITCODE" }
+          $slim = Join-Path $env:RUNNER_TEMP 'dtw-plugin-slim/bin/dtw.exe'
+          python tests/acceptance/mcp_smoke.py $slim
+          if ($LASTEXITCODE -ne 0) { throw 'Slim MCP failed' }
+          python tests/acceptance/runtime_probe.py $slim
+          if ($LASTEXITCODE -ne 0) { throw 'Slim runtime failed' }
+          python tests/acceptance/lifecycle_probe.py $slim
+          if ($LASTEXITCODE -ne 0) { throw 'Bounded stop failed' }
           python tests/acceptance/licenses_probe.py $env:DTW_PACKAGE
           if ($LASTEXITCODE -ne 0) { throw "License check failed with exit code $LASTEXITCODE" }
           python tests/acceptance/contract_probe.py (Join-Path $env:DTW_PACKAGE 'bin/dtw.exe')

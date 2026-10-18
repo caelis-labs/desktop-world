@@ -6,12 +6,12 @@
 
 Download **one `dtw` executable for your platform**. It contains the Skill, plugin manifests, notices, and its private CUA worker. `dtw install` expands these files and connects the Agent; users do not need Rust, Python, Node, a DMG, or a separate worker download.
 
-Download the `v0.1.0-rc.8` prerelease from [Releases](https://github.com/caelis-labs/desktop-world/releases/tag/v0.1.0-rc.8). Use the versioned links below so the commands resolve to this tested build.
+Download the `v0.1.0` release from [Releases](https://github.com/caelis-labs/desktop-world/releases/tag/v0.1.0). Use the versioned links below so the commands resolve to this tested build.
 
 ### macOS Apple Silicon
 
 ```sh
-curl -fL https://github.com/caelis-labs/desktop-world/releases/download/v0.1.0-rc.8/dtw-darwin-arm64 -o dtw
+curl -fL https://github.com/caelis-labs/desktop-world/releases/download/v0.1.0/dtw-darwin-arm64 -o dtw
 chmod +x dtw
 ./dtw install agy
 ```
@@ -19,19 +19,23 @@ chmod +x dtw
 ### Windows x64 (PowerShell)
 
 ```powershell
-Invoke-WebRequest https://github.com/caelis-labs/desktop-world/releases/download/v0.1.0-rc.8/dtw-windows-amd64.exe -OutFile dtw.exe
+Invoke-WebRequest https://github.com/caelis-labs/desktop-world/releases/download/v0.1.0/dtw-windows-amd64.exe -OutFile dtw.exe
 .\dtw.exe install agy
 ```
 
-`agy` uses the installed Antigravity CLI to register the complete Plugin at user scope. For Claude Code, run `./dtw install claude` on macOS or `.\dtw.exe install claude` on Windows instead. The corresponding Agent CLI must already be installed. Both installs can coexist. Use `--project "/absolute/path/to/project"` for a project-local Antigravity Plugin or Claude registration. [Installation, upgrade, and removal →](docs/install.md)
+`agy` uses the installed Antigravity CLI to register the complete Plugin at user scope. For Claude Code, run `./dtw install claude` on macOS or `.\dtw.exe install claude` on Windows instead. The corresponding Agent CLI must already be installed. Both installs can coexist. Use `--project "/absolute/path/to/project"` for a project-local Antigravity Plugin; Claude supports user scope only in v0.1.0. [Installation, upgrade, and removal →](docs/install.md)
 
 Start a new Agent session and try a read-only task:
 
 > Use the Desktop World Skill to inspect my open browser window and describe its controls. Do not click or type.
 
-Then open a temporary document and ask it to type a short string and verify the visible result. On macOS, grant Accessibility and Screen Recording to the app that launches DTW, then restart that app. On Windows, the system may need the x64 Visual C++ runtime. [Permissions and limits →](docs/install.md#permissions-and-first-use)
+Then open a temporary document and ask it to type a short string and verify the visible result. On macOS, grant Accessibility and Screen Recording to the app that launches DTW, then restart that app. On Windows, the system requires the x64 Visual C++ runtime. [Permissions and limits →](docs/install.md#permissions-and-first-use)
+
+Windows upstream DPI, modal-provider and uncertain-focus limitations are tracked in [#36](https://github.com/caelis-labs/desktop-world/issues/36) and do not block this release. These flows remain limited support.
 
 ## Embed DTW in an Agent host
+
+For smaller embedded packages, download the platform `desktop-world-plugin-*` archive from the same Release; it removes the redundant self-extracting payload.
 
 The same single executable can expand a complete [Agent Plugin 1.0](https://agent-plugins.org/) directory, with `plugin.json`, `mcp.json`, `skills/`, `bin/dtw`, and `libexec/cua-driver`:
 
@@ -39,9 +43,9 @@ The same single executable can expand a complete [Agent Plugin 1.0](https://agen
 ./dtw install plugin --to "/absolute/new/plugin-directory"
 ```
 
-The destination must be new. A host such as Caelis Bot can package that directory for its own platform and load its one stdio MCP server plus Skill through the standard plugin interface. Host lifecycle, authorization, and enabling remain the host's responsibility. See the [embedding contract](docs/embedding.md). Caelis Core currently installs this local Plugin through its TUI; a direct `dtw install caelis` entry awaits [a supported headless Caelis installation API](https://github.com/caelis-labs/caelis/issues/129).
+The destination must be new. A host such as Caelis Bot can package that directory for its own platform and load its one stdio MCP server plus Skill through the standard plugin interface. Host lifecycle, authorization, and enabling remain the host's responsibility. See the [embedding contract](docs/embedding.md). Caelis Core supports `caelis plugin install/remove/status` for standard Plugins.
 
-The current development branch makes CUA sessions implicit in the Runtime and adds macOS application observation with screenshot-bound clicks. See [architecture](docs/architecture.md) and [RC.9 integration validation](docs/rc9-acceptance.md); these changes are not part of the download linked above.
+Runtime-owned CUA sessions and macOS application observation with screenshot-bound clicks are included. See [architecture](docs/architecture.md) and [release readiness](docs/release-readiness.md).
 
 ## Source and distribution
 

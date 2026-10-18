@@ -42,7 +42,7 @@ export DTW_SIGN_IDENTITY=$identity DTW_SIGN_KEYCHAIN=$keychain
 "$repo_root/scripts/build-plugin.sh" "$package"
 
 mkdir -p "$work/submission" "$work/standalone" "$(dirname "$evidence")" "$work/home"
-for binary in "$package/bin/dtw" "$package/libexec/cua-driver"; do
+for binary in "$package/bin/dtw" "$package/libexec/cua-driver" "${package}-slim/bin/dtw"; do
   codesign --verify --strict --verbose=2 "$binary"
   details=$(codesign -dv --verbose=4 "$binary" 2>&1)
   printf '%s\n' "$details" | grep -q 'flags=.*runtime'
@@ -53,6 +53,7 @@ for binary in "$package/bin/dtw" "$package/libexec/cua-driver"; do
     exit 2
   fi
 done
+cp "${package}-slim/bin/dtw" "$work/submission/dtw-slim"
 cp "$package/bin/dtw" "$work/submission/dtw"
 cp "$package/libexec/cua-driver" "$work/submission/cua-driver"
 cp "$package/bin/dtw" "$work/standalone/dtw"
@@ -73,12 +74,13 @@ codesign --verify --strict --verbose=2 "$work/expanded/bin/dtw"
 codesign --verify --strict --verbose=2 "$work/expanded/libexec/cua-driver"
 codesign -vvvv -R="notarized" --check-notarization "$work/standalone/dtw"
 codesign -vvvv -R="notarized" --check-notarization "$work/expanded/libexec/cua-driver"
+codesign -vvvv -R="notarized" --check-notarization "${package}-slim/bin/dtw"
 python3 - "$work/notary.json" "$evidence" "$APPLE_TEAM_ID" <<'PY'
 import json,sys
 v=json.load(open(sys.argv[1],encoding='utf-8'))
 e={'submission_id':v['id'],'status':v['status'],'team_id':sys.argv[3],
    'signed_binaries':['bin/dtw','libexec/cua-driver'],
-   'hardened_runtime':True,'embedded_worker_matches_signed_worker':True,
+   'slim_runtime_notarized':True,'hardened_runtime':True,'embedded_worker_matches_signed_worker':True,
    'notarization_ticket_dtw':'PASS','notarization_ticket_extracted_worker':'PASS',
    'ticket_delivery':'online; standalone Mach-O tickets cannot be stapled'}
 with open(sys.argv[2],'w',encoding='utf-8') as f:
