@@ -5,7 +5,9 @@ if sys.platform != 'darwin': raise SystemExit(0)
 code = "import subprocess,sys,time; p=subprocess.Popen([sys.argv[1],'--dtw-scene-helper'],stdin=subprocess.PIPE,stdout=subprocess.DEVNULL); print(p.pid,flush=True); time.sleep(30)"
 owner = subprocess.Popen([sys.executable, '-c', code, sys.argv[1]], stdout=subprocess.PIPE, text=True)
 helper = int(owner.stdout.readline())
-lock = open('/private/tmp/dev.caelis.dtw-scene-'+str(os.geteuid())+'.lock','a+')
+# Match the runtime's private lock mode even if the probe wins creation.
+lock = os.fdopen(os.open('/private/tmp/dev.caelis.dtw-scene-'+str(os.geteuid())+'.lock',
+                         os.O_RDWR | os.O_CREAT, 0o600), 'a+')
 try:
     # Wait until this helper acquires the scene lease before killing its parent.
     deadline = time.monotonic()+3
