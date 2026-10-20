@@ -17,7 +17,7 @@ import subprocess
 import tarfile
 import tomllib
 
-PIN = "d74a9cab3fb2e80ab7f0cef47025ec828586ea75"
+PIN = "2d2f99228d4d2508dc6fcc84c176b296e146714a"
 TARGETS = ("x86_64-pc-windows-msvc", "aarch64-apple-darwin")
 ALLOWED = {"MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib",
            "Unicode-3.0", "MPL-2.0", "Unlicense", "0BSD", "MIT-0", "BSL-1.0",

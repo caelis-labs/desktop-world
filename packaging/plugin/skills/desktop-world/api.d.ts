@@ -1,6 +1,6 @@
 /** Authoring reference for the JS string passed to desktop-world exec.
  * This file is documentation for editors and Agents; no TypeScript/Node runs in DTW.
- * Upstream CUA prelude: crates/cua-driver-core/src/script_tool/prelude.js at cua-driver-rs-v0.35.4 (d74a9cab3fb2).
+ * Upstream CUA prelude: crates/cua-driver-core/src/script_tool/prelude.js at cua-driver-rs-v0.37.0 (2d2f99228d4d).
  */
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type Point = [x: number, y: number];
@@ -15,13 +15,30 @@ type ElementSelector = {
   timeout_ms?: number;
 };
 type Target = ElementSelector | string | number | Point;
-type PixelOptions = Delivery & {
-  from_zoom?: boolean;
-  /** One-use action binding to a screenshot; the first pixel action consumes it. */
-  capture_id?: string;
+/** Arrays only. Both spellings are accepted by DTW; never supply both. */
+type Modifier = "cmd" | "command" | "super" | "meta" | "win" | "shift" |
+                "option" | "alt" | "ctrl" | "control";
+type ModifierOptions =
+  | { modifiers?: Modifier[]; modifier?: never }
+  | { modifier?: Modifier[]; modifiers?: never };
+type ElementClickOptions = Delivery & ModifierOptions & {
   button?: "left" | "right" | "middle";
-  modifiers?: string[];
 };
+/** One-use screenshot binding, valid only with a Point target. Zoom pixels
+ * cannot be combined with capture_id. */
+type ClickOptions = ElementClickOptions & (
+  | { from_zoom?: boolean; capture_id?: never }
+  | { capture_id: string; from_zoom?: false }
+);
+type WindowsZoomOptions = {
+  /** Windows pixel targets only, after zoom(); macOS rejects this option. */
+  from_zoom?: boolean;
+};
+/** No capture_id, button or modifiers on doubleClick. */
+type DoubleClickOptions = Delivery & WindowsZoomOptions;
+/** No capture_id or button. Modifiers require a Point target.
+ * For a screenshot-bound right click use click(point, {button:"right", capture_id}). */
+type RightClickOptions = Delivery & ModifierOptions & WindowsZoomOptions;
 type WindowInfo = {
   pid: number;
   window_id: number;
@@ -86,11 +103,16 @@ interface CuaApp {
   waitFor(selector: ElementSelector & { text?: string; gone?: boolean; value?: string },
           options?: { timeout_ms?: number }): Promise<Json>;
   verify(expect: Json | Json[], options?: Json): Promise<Json>;
-  click(target: Target, options?: PixelOptions): Promise<Json>;
-  doubleClick(target: Target, options?: PixelOptions): Promise<Json>;
-  rightClick(target: Target, options?: PixelOptions): Promise<Json>;
+  /** macOS modifiers require an exact window binding and foreground delivery.
+   * Dispatch does not establish GUI effect; reobserve before further input. */
+  click(target: Point, options?: ClickOptions): Promise<Json>;
+  click(target: Target, options?: ElementClickOptions): Promise<Json>;
+  doubleClick(target: Point, options?: DoubleClickOptions): Promise<Json>;
+  doubleClick(target: Target, options?: Delivery): Promise<Json>;
+  rightClick(target: Point, options?: RightClickOptions): Promise<Json>;
+  rightClick(target: Target, options?: Delivery): Promise<Json>;
   /** Text first; for a canvas, a Point focuses and types in one native call. */
-  typeText(text: string, target?: Target, options?: PixelOptions): Promise<Json>;
+  typeText(text: string, target?: Target, options?: Delivery): Promise<Json>;
   pressKey(key: string, target?: Target, options?: Delivery): Promise<Json>;
   hotkey(keys: string[] | string, target?: Target, options?: Delivery): Promise<Json>;
   scroll(target: Target, direction?: "up" | "down" | "left" | "right",

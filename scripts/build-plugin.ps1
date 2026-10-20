@@ -4,7 +4,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$expected = 'd74a9cab3fb2e80ab7f0cef47025ec828586ea75'
+$expected = '2d2f99228d4d2508dc6fcc84c176b296e146714a'
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $destinationPath = [System.IO.Path]::GetFullPath($Destination)
 if (Get-Item -LiteralPath $destinationPath -Force -ErrorAction SilentlyContinue) {
@@ -48,6 +48,10 @@ try {
     Assert-ExitCode 'git status'
     if ($actual -ne $expected -or $dirty) {
         throw "CUA source must be clean at $expected; got $actual"
+    }
+    if ($env:DTW_CHECK_CLICK_CONTRACT -eq '1') {
+        & node (Join-Path $repoRoot 'tests/acceptance/click_prelude_contract.mjs') $sourceRoot
+        if ($LASTEXITCODE -ne 0) { throw 'Pinned click prelude contract failed' }
     }
 
     $buildRoot = if ($env:DTW_BUILD_DIR) {

@@ -4,7 +4,10 @@ DTW is a Rust Agent Plugin: MCP + Skills, linked to the official CUA SDK and one
 supervised private worker. CUA owns QuickJS `run_script`, accessibility, ordinary
 screenshots and general desktop actions. DTW does not copy the JS engine, modify
 CUA, or require Node. The SDK and worker are locked to the same released component
-revision (currently the 0.35.4 prerelease candidate).
+revision (currently the 0.37.0 stable component release).
+DTW checks click options and translates its documented `modifiers` alias to
+CUA's `modifier` array; the native prelude and driver stay unmodified. Per-method
+options, regression evidence and upstream limitations are in [the click contract](click-contract.md).
 
 ## Runtime-owned execution context
 

@@ -3,7 +3,7 @@ set -eu
 export MACOSX_DEPLOYMENT_TARGET=14.0
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
-expected=d74a9cab3fb2e80ab7f0cef47025ec828586ea75
+expected=2d2f99228d4d2508dc6fcc84c176b296e146714a
 destination=${1:?usage: scripts/build-plugin.sh DESTINATION}
 case "$destination" in
   /*) ;;
@@ -49,9 +49,14 @@ if [ "$actual" != "$expected" ] || [ -n "$(git -C "$source_root" status --porcel
   echo "CUA source must be clean at $expected; got $actual" >&2
   exit 2
 fi
+if [ "${DTW_CHECK_CLICK_CONTRACT:-0}" = 1 ]; then
+  node "$repo_root/tests/acceptance/click_prelude_contract.mjs" "$source_root"
+fi
 
 target_dir=${DTW_BUILD_DIR:-${TMPDIR:-/private/tmp}/dtw-cua-build}
 mkdir -p "$target_dir/dtw" "$target_dir/cua" "$(dirname -- "$destination")"
+# Swift module caches retain absolute paths; use one physical cache identity.
+dtw_target=$(CDPATH= cd -- "$target_dir/dtw" && pwd -P)
 offline=
 if [ "${DTW_CARGO_OFFLINE:-0}" = 1 ]; then offline=--offline; fi
 
@@ -101,7 +106,7 @@ CARGO_NET_GIT_FETCH_WITH_CLI=true \
 GIT_CONFIG_COUNT=1 \
 GIT_CONFIG_KEY_0="url.file://$source_root.insteadOf" \
 GIT_CONFIG_VALUE_0=https://github.com/trycua/cua.git \
-CARGO_TARGET_DIR="$target_dir/dtw" \
+CARGO_TARGET_DIR="$dtw_target" \
   cargo +1.98.0 build --manifest-path "$repo_root/cmd/dtw/Cargo.toml" --release --locked $offline
 slim="${destination}-slim"
 if [ -e "$slim" ] || [ -L "$slim" ]; then echo "slim destination exists" >&2; exit 2; fi
@@ -118,7 +123,7 @@ CARGO_NET_GIT_FETCH_WITH_CLI=true \
 GIT_CONFIG_COUNT=1 \
 GIT_CONFIG_KEY_0="url.file://$source_root.insteadOf" \
 GIT_CONFIG_VALUE_0=https://github.com/trycua/cua.git \
-CARGO_TARGET_DIR="$target_dir/dtw" \
+CARGO_TARGET_DIR="$dtw_target" \
   cargo +1.98.0 build --manifest-path "$repo_root/cmd/dtw/Cargo.toml" --release --locked $offline
 cp "$target_dir/dtw/release/dtw" "$staging/bin/dtw"
 if [ "$(uname -s)" = Darwin ]; then

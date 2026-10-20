@@ -46,9 +46,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ${{ runner.temp }}/dtw-cua-build
-          key: dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-d74a9ca-${{ hashFiles('cmd/dtw/Cargo.lock', 'cmd/dtw/**/*.rs', 'cmd/dtw/**/*.swift') }}
+          key: dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-2d2f992-${{ hashFiles('cmd/dtw/Cargo.lock', 'cmd/dtw/**/*.rs', 'cmd/dtw/**/*.swift') }}
           restore-keys: |
-            dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-d74a9ca-
+            dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-2d2f992-
       - name: Validate release version
         env:
           RELEASE_TAG: ${{ inputs.tag }}
@@ -73,6 +73,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'MCP smoke failed' }
           python tests/acceptance/contract_probe.py (Join-Path $package 'bin/dtw.exe')
           if ($LASTEXITCODE -ne 0) { throw 'Contract probe failed' }
+          python tests/acceptance/click_contract_probe.py (Join-Path $package 'bin/dtw.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Click contract probe failed' }
           python tests/acceptance/runtime_probe.py (Join-Path $package 'bin/dtw.exe')
           if ($LASTEXITCODE -ne 0) { throw 'Runtime isolation probe failed' }
           $slim = Join-Path $env:RUNNER_TEMP 'dtw-plugin-slim/bin/dtw.exe'
@@ -106,6 +108,7 @@ jobs:
           (cd "$RUNNER_TEMP/dtw-plugin" && shasum -a 256 -c SHA256SUMS)
           python3 tests/acceptance/mcp_smoke.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
           python3 tests/acceptance/contract_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
+          python3 tests/acceptance/click_contract_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
           python3 tests/acceptance/runtime_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
           python3 tests/acceptance/lifecycle_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
           python3 tests/acceptance/mcp_smoke.py "$RUNNER_TEMP/dtw-plugin-slim/bin/dtw"

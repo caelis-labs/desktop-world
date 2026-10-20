@@ -111,7 +111,7 @@ fn worker_path() -> Result<String, String> {
         }
         if arg == "--version" || arg == "version" {
             println!(
-                "dtw {} (CUA 0.35.4 source d74a9cab3fb2)",
+                "dtw {} (CUA 0.37.0 source 2d2f99228d4d)",
                 env!("CARGO_PKG_VERSION")
             );
             std::process::exit(0);
@@ -1145,8 +1145,16 @@ impl Server {
             }
             Work::Script(code) => code,
         };
+        // Function-constructor frames have their own source identity in QuickJS,
+        // so CUA's first script.js stack frame stays the Agent's call site.
+        // Open the user's body on line 1, just as CUA's own engine does.
+        let adapter = serde_json::to_string(&format!(
+            "{}\nreturn __dtw_click_api(native);",
+            include_str!("click_contract.js")
+        ))
+        .expect("encode adapter source");
         let wrapped = format!(
-            "const state = {state};\nconst __dtw_value = await (async () => {{\n{code}\n}})();\nreturn {{__dtw_value, __dtw_state: state}};"
+            "const state = {state};const __dtw_value = await (async (cua) => {{{code}\n}})(Function(\"native\", {adapter})(cua));return {{__dtw_value, __dtw_state: state}};"
         );
         let arguments = json!({"script":wrapped,"timeout_ms":120000,"max_calls":500}).to_string();
         let result = native.call_tool("run_script".into(), arguments).await?;
