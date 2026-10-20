@@ -7,6 +7,12 @@ on:
         description: Existing release tag to build (must match package version)
         required: true
         type: string
+  workflow_call:
+    inputs:
+      tag:
+        description: Existing release tag to build (must match package version)
+        required: true
+        type: string
 
 permissions:
   contents: read

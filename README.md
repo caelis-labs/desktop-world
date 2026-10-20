@@ -13,17 +13,52 @@ Download the `v0.1.0` release from [Releases](https://github.com/caelis-labs/des
 ```sh
 curl -fL https://github.com/caelis-labs/desktop-world/releases/download/v0.1.0/dtw-darwin-arm64 -o dtw
 chmod +x dtw
-./dtw install agy
 ```
 
 ### Windows x64 (PowerShell)
 
 ```powershell
 Invoke-WebRequest https://github.com/caelis-labs/desktop-world/releases/download/v0.1.0/dtw-windows-amd64.exe -OutFile dtw.exe
-.\dtw.exe install agy
 ```
 
-`agy` uses the installed Antigravity CLI to register the complete Plugin at user scope. For Claude Code, run `./dtw install claude` on macOS or `.\dtw.exe install claude` on Windows instead. The corresponding Agent CLI must already be installed. Both installs can coexist. Use `--project "/absolute/path/to/project"` for a project-local Antigravity Plugin; Claude supports user scope only in v0.1.0. [Installation, upgrade, and removal →](docs/install.md)
+### Choose your Agent
+
+Run the command for your Agent after downloading DTW. On Windows, replace `./dtw` with `.\dtw.exe`.
+
+| Agent / host | Installation entry | Scope and integration |
+| --- | --- | --- |
+| **Caelis** | [Export and register the Plugin](#use-with-caelis) | Local host registration; standard Plugin with Skill + MCP |
+| **Caelis Bot** | Built-in Computer Use Plugin | Bot manages its own pinned DTW version; [embedding contract](docs/embedding.md) |
+| **Antigravity** | `./dtw install agy` | User or `--project`; native Plugin, requires `agy` CLI |
+| **Claude Code** | `./dtw install claude` | User only; local marketplace Plugin, requires `claude` CLI |
+| **Codex** | `./dtw install codex` | User or `--project`; MCP configuration + Skill |
+| **Gemini CLI** | `./dtw install gemini` | User only; extension, requires `gemini` CLI |
+| **Cursor** | `./dtw install cursor` | User or `--project`; MCP configuration + Skill |
+| **Other Agent Plugin 1.0 hosts** | `./dtw install plugin --to "/absolute/new/plugin-directory"` | Export a complete package, then register through the host |
+
+These are implemented installation paths, not a claim of native desktop acceptance for every Agent/platform combination. DTW publishes macOS Apple Silicon (macOS 14+) and Windows x64 packages. Agent-specific trust and permission prompts still apply. [Installation, upgrade, and removal →](docs/install.md)
+
+### Use with Caelis
+
+With the [Caelis CLI](https://github.com/caelis-labs/caelis) installed, expand DTW into a **new, permanent directory outside your workspace**, then register it:
+
+```sh
+./dtw install plugin --to "$HOME/.local/share/desktop-world-plugin"
+caelis plugin install "$HOME/.local/share/desktop-world-plugin" --json
+caelis plugin status desktop-world --json
+```
+
+PowerShell:
+
+```powershell
+.\dtw.exe install plugin --to "$env:LOCALAPPDATA\desktop-world-plugin"
+caelis plugin install "$env:LOCALAPPDATA\desktop-world-plugin" --json
+caelis plugin status desktop-world --json
+```
+
+Caelis registers the directory in place: keep its files available. You can also enter `/plugin install /absolute/path/to/plugin` in the Caelis TUI. Start a new Session after installation, check that the Skill and `desktop_world__exec` are ready, then try the task below. Registration status alone does not establish MCP readiness. For updates, finish active work and update the package at the same registered path. [Caelis installation details →](docs/install.md#caelis)
+
+### First task
 
 Start a new Agent session and try a read-only task:
 
@@ -43,12 +78,14 @@ The same single executable can expand a complete [Agent Plugin 1.0](https://agen
 ./dtw install plugin --to "/absolute/new/plugin-directory"
 ```
 
-The destination must be new. A host such as Caelis Bot can package that directory for its own platform and load its one stdio MCP server plus Skill through the standard plugin interface. Host lifecycle, authorization, and enabling remain the host's responsibility. See the [embedding contract](docs/embedding.md). Caelis Core supports `caelis plugin install/remove/status` for standard Plugins.
+The destination must be new. A host such as Caelis Bot can package that directory for its own platform and load its one stdio MCP server plus Skill through the standard plugin interface. Host lifecycle, authorization, and enabling remain the host's responsibility. Publishing DTW does not update Bot's separately pinned copy. See the [embedding contract](docs/embedding.md).
 
 Runtime-owned CUA sessions and macOS application observation with screenshot-bound clicks are included. See [architecture](docs/architecture.md) and [release readiness](docs/release-readiness.md).
 
 ## Source and distribution
 
 The [developer build guide](docs/building.md) covers Rust, Python and the macOS Swift toolchain for contributors. The signed macOS release gate signs the worker **before** embedding it, signs the final CLI, notarizes both executables, and verifies the extracted worker. Windows candidate CI validates package and MCP behavior; live Windows GUI acceptance is separate. See [release readiness](docs/release-readiness.md).
+
+Maintainers use release-please for version PRs and changelogs, followed by signed candidates attached to a draft Release. [Release workflow and promotion →](docs/releasing.md)
 
 DTW is [MIT licensed](LICENSE). Its bundled CUA worker and dependencies retain their own terms; the expanded Plugin includes the complete [third-party notices](THIRD_PARTY_NOTICES.md) and `LICENSING` inventory.

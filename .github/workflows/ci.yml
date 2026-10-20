@@ -13,6 +13,16 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  release-versions:
+    name: Release version consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python scripts/release-artifacts.py check
+
   macos-package:
     name: macOS source, package, and MCP
     runs-on: macos-26
