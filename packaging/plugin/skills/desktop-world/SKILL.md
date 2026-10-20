@@ -1,38 +1,130 @@
 ---
 name: desktop-world
-description: Use one DTW exec tool to inspect and operate desktop apps through CUA native scripts.
+description: Control local macOS and Windows desktop apps through native UI automation and screenshots for tasks that require reading or operating app UI. Prefer purpose-built connectors, APIs, CLIs, or file tools when available.
 ---
 
 # Desktop World
 
-Use the installed DTW `exec` tool (Antigravity names it `desktop-world_dtw/exec`) with `{"script":"..."}`. This runs upstream CUA `run_script` in native QuickJS, with `cua` plus a JSON `state` object persisted after successful calls. No Node, filesystem, network or process API is available inside a script. When authoring calls, read the relevant signatures in [api.d.ts](api.d.ts); consult [RECIPES.md](RECIPES.md) as needed for copyable dialog, large-page, image, menu and global-shortcut flows. These two short files are authoring references, not runtime dependencies.
+Control and inspect desktop applications on macOS and Windows through native accessibility trees (AX/UIA) and visual screenshots.
 
-For an Agent desktop task, read this Skill and, as needed, its linked references through the host's file viewer. Use `exec` to inspect app content and verify UI effects; do not switch to a host file tool to read a document or new vault. A test harness may independently check disk effects outside the Agent turn.
+## Execution Environment & Rules
 
-**Choose a route:** Bind an app/window, inspect a small AX query, and act by an exact semantic control when it exists. Keep window discovery scoped to the authorized PID: a global `listWindows()` can expose unrelated titles. A PID may first bind a Chrome translation or extension popup; for a known main-window title use `cua.getApp({pid,title:"Exact title"})` or filter `cua.listWindows({pid})` and pin its `window_id`. For a native chooser, first rebind by parent PID without `windowId` and check its real controls. **On macOS, use `operation:"app",pid:<target PID>` for application observation.** It lists all attributed visible windows and returns up to two upper-window images by default (`max_windows:1..8` expands them). Inspect `frames`, `occluders`, `omitted_count` and each original PNG before acting. Attribution is best effort, not an all-window guarantee. Use `operation:"click",observation_id:<returned ID>,image_index:<frame>,x:<PNG pixel>,y:<PNG pixel>` for a point on these images. The runtime binds the target, geometry and delivery route; do not extract or fabricate a CUA capture ID for a DTW ScreenCaptureKit frame. The visible-point route uses the real pointer and does not activate a hidden panel. An observation expires after 30 seconds and is consumed by one click attempt. A new app observation replaces the old one; scripts and other native operations invalidate it. Results/status reads do not. On stale observations, changed windows or occlusion, observe again and decide; never replay input automatically. If this cannot expose the intended picker, an explicitly desktop-scoped observation can use `operation:"desktop",include_image:true`. Confirm the intended picker visually, then use one desktop-scope coordinate action with that screenshot's `capture_id`; recapture and verify. `window_not_found` does not prove a visible panel closed. For a large web page or canvas, get a screenshot without walking the AX tree and use a point from that **same** image and runtime; query text only when needed. An action receipt is delivery evidence; verify the changed UI.
+- **Tool Entrypoint**: Invoke the installed DTW exec tool (named `desktop-world_dtw/exec` in Antigravity) with `{"script":"..."}` or native atomic operations (`app`, `click`, `menu`, `desktop`, `focus`).
+- **Sandbox**: Scripts run inside upstream CUA `run_script` via native QuickJS, with `cua` plus a JSON `state` object persisted across successful calls.
+- **No Host APIs**: Node.js, `npm`, filesystem (`fs`), network, and process APIs are **NOT** available inside scripts. Use `exec` to inspect app content and verify UI effects; do not switch to a host file tool to inspect an active document. (A test harness may independently verify disk files outside the Agent turn).
+- **Verification Mandate**: Action receipts prove delivery only, not UI success. **Always observe the resulting UI after an action before deciding the next step.**
 
-For a crowded **window** screenshot, mark a rectangle in that returned PNG's pixels and use the [region candidates recipe](RECIPES.md#region-candidates-from-a-window-screenshot). It returns AX-backed controls within the rectangle with image-pixel centers and element tokens; prefer an exact token to a point. The rectangle only narrows discovery: controls may be occluded or missing from a truncated AX tree. A full desktop screenshot or an unbound system picker has no matching window AX geometry, so this recipe cannot certify a clickable point there.
+---
 
-`app.title` is the macOS window title, not a page heading or document state. Verify the changed UI before deciding whether any further input is needed. An element token may survive across scripts, but has no promised lifetime: navigation, redraw, window changes, or another Agent can make it stale. Re-query the exact control after such a change; if CUA refuses a stale token, observe again before deciding on any action. A `capture_id` is **one-use** for one pixel action. After an action, observe its effect; a second action needs a fresh screenshot/capture ID. Do not put an automatic fallback click after a possibly successful action.
+## Standard Workflow (SOP)
 
-If a script reports `window_not_found` after a successful `click` in its `calls before the error took effect`, the clicked modal may have closed. Rebind by PID or recapture the desktop to find the resulting window; do not replay that click.
+Follow this 4-step loop for every desktop interaction:
 
-For a screenshot you intend to inspect immediately, add `include_image:true` to the initial `exec`; when it finishes within `wait_ms`, the same reply contains the first image and compact summary. If it is still running, use the original ID with `operation:"result",part:"image"`. Omit this flag for ordinary reads so large images stay off the default path.
+### 1. Initialize & Bind Target
 
-Minimal read:
+Keep discovery scoped to the authorized PID; a global `listWindows()` can expose unrelated titles.
 
 ```js
-const app=await cua.getApp({pid:123,windowId:456});
-const s=await app.getState({query:"Save",max_elements:80,include_screenshot:false});
-return {window_id:app.windowId,tree:s.tree_markdown,truncated:s.truncated};
+// Bind by PID (follows active front window, including file dialogs)
+const app = await cua.getApp({ pid: TARGET_PID });
+
+// Bind by PID and exact title (avoids auxiliary popup / translation panels)
+const app = await cua.getApp({ pid: TARGET_PID, title: "Exact Window Title" });
 ```
 
-Common methods: `app.query({name:"Save"})`, `app.waitFor({name:"Save"},{timeout_ms:3000})`, `app.click({name:"Save"})`, `app.typeText("text",selector)` (**text first**), `app.setValue(selector,"text")` (**selector first**), `app.pressKey("cmd+s")`, `app.hotkey(["cmd","shift","g"])`, `app.scroll([x,y],"down",3)`, `app.drag([x1,y1],[x2,y2],{delivery_mode:"foreground"})`, `app.zoom([x1,y1,x2,y2])`. Selectors use `name`, but query results expose `label`; broad queries cap at 50. `getState({since:"latest",include_screenshot:false})` keeps the read small. A screenshot-only read uses `include_accessibility_tree:false` with `include_screenshot:true`; omit `display_only:true` when its pixels will ground input.
+### 2. Observe State
 
-The chooser and `cmd` shortcut examples in RECIPES.md describe macOS. On Windows, inspect the actual target window and use its observed controls and Windows keys such as `ctrl+s`; do not copy macOS shortcuts or assume UIAccess for elevated/AppContainer windows. The same capture ID and readback rules apply.
+Choose the appropriate observation route based on interface type:
 
-The same `exec` also passes two upstream atomics that `run_script` cannot call: `operation:"menu"` with exact `pid`, `window_id`, `path` calls CUA `invoke_menu`; `operation:"desktop"` captures the full primary display and retains its image. Use these only for the requested visible target or desktop scope, then read back. Desktop pixel input in a later script is `cua.call("click",{target:{kind:"desktop",display_id:"primary"},x,y,capture_id})`; obtain `capture_id` and screenshot dimensions from that receipt's native `part:"structured"` page, and measure coordinates on the **same fresh PNG pixel grid**. CUA maps to screen points; do not apply a second scale factor. For an exact ordinary window, `operation:"focus"` returns CUA's own activation text; inspect its native `part:"structured"` data for exact-window verification before a foreground drag or click. Window-targeted actions default to background. Keep that default for popup coordinate actions unless foreground delivery is specifically needed: some panels cannot become the exact focused window. Remote-service windows can be observable while their coordinate actions are refused; prefer observed semantic controls, reobserve after errors, and never silently broaden to desktop input. Global hotkeys are available inside scripts with `cua.call("hotkey",{target:{kind:"desktop",display_id:"primary"},keys:["cmd","shift","g"]})`; they act on shared focus, so verify the focused UI before typing. For a single key use `cua.call("press_key",{target:{kind:"desktop",display_id:"primary"},key:"return"})`, not a one-key `hotkey`.
+```js
+// Route A: Semantic AX Tree (preferred for standard controls, forms, and dialogs)
+const s = await app.getState({ query: "Save", max_elements: 80, include_screenshot: false });
+return { window_id: app.windowId, tree: s.tree_markdown, truncated: s.truncated };
 
-Short calls usually return terminal results in 4 seconds. The reply begins `id=<8 hex chars> status=completed`, followed by CUA's `run_script` text and any explicit script return value. Native action results already described under `calls:` are not repeated as JSON. If `status=running`, use the original `id` with `operation:"result"`; `status` and `cancel` use that ID too. Use `result` with `part:"text"` for the full readable CUA text, `part:"structured"` for its full JSON, and `part:"image"` for a retained image. Text is capped with an inline `...truncated N chars...` marker; structured pages use `offset` and `next_offset`. The ID tracks the original execution, not a UI success claim. Observe the target after input; on stale tokens, permission refusal, timeout, `input_outcome_unknown`, or `status=unknown`, reconcile the original action and do not blindly replay it. Runtime owns the CUA session and JSON state. Do not send a `session` parameter; old named-session calls are rejected rather than silently merged. One MCP process is one execution context. `runtime_busy` means another execution is active: inspect its existing receipt. `runtime_context_reset` means state and native handles expired; observe again before input. Worker/process restart invalidates old handles and receipts. Use a separate MCP process per independent Agent context; the physical desktop and focus remain shared, so the host must coordinate controllers.
+// Route B: Visual-First (for large browser pages, canvases, or text-heavy views)
+const s = await app.getState({ include_accessibility_tree: false, include_screenshot: true, max_image_dimension: 1600 });
+return { window_id: app.windowId, capture_id: s.capture_id, width: s.screenshot_width, height: s.screenshot_height };
+```
 
-Cancellation stops the worker and makes the Runtime unusable for further actions. Query the original receipt: dispatched input is `unknown`, never assumed undone. Restart the Runtime and observe before deciding on new input. Completed payloads expire after 15 minutes or earlier at 64 results / 64 MiB; `result_expired` retains the receipt status and is not permission to replay. At 4096 receipts the Runtime refuses new jobs; reconcile outstanding work before restart.
+*Tip*: Add `include_image: true` to the initial `exec` if you intend to inspect screenshots immediately within `wait_ms`. For ongoing executions, fetch via `{"operation":"result", "id": ORIGINAL_ID, "part":"image"}`.
+
+### 3. Act
+
+- **Semantic Controls**: Use exact element names or tokens (`app.click`, `app.typeText`).
+- **Visual Pixels**: Measure coordinates directly on the returned PNG pixel grid and pass the one-use `capture_id`.
+
+```js
+// Semantic actions
+await app.click({ name: "Save" });
+await app.typeText("hello", { name: "SearchField" }); // NOTE: text first, selector second
+await app.pressKey("Return");
+
+// Coordinate action bound to current screenshot
+await app.click([x, y], { capture_id: CAPTURE_ID });
+```
+
+### 4. Verify & Loop
+
+Inspect the updated UI before taking further actions. **Never replay inputs or add automatic fallback clicks without observing first.**
+
+---
+
+## Dual-Track Decision & Platform Matrix
+
+| Scenario | Recommended Route | Primary APIs & Strategy |
+| :--- | :--- | :--- |
+| **Standard Native Controls** | **Semantic (AX/UIA)** | `app.query({name: "..."})`, `app.click({name: "..."})`. Stable across window resizing and DPI scaling. |
+| **Canvas / Rich Editor / Web** | **Visual-First** | `getState({include_accessibility_tree: false, include_screenshot: true})` -> inspect PNG -> `app.click([x, y], {capture_id})`. |
+| **Crowded Window Screenshot** | **Region Candidates** | Filter AX controls inside a bounding rectangle. See [Region Candidates Recipe](RECIPES.md#region-candidates-from-a-window-screenshot). |
+| **Native Modal / File Chooser** | **Rebind or Desktop Scope** | Rebind by parent PID without `windowId`. If not exposed in AX, use `operation: "desktop", include_image: true`. |
+| **macOS Native Application Observation** | **Native `app` Op** | On macOS, `operation: "app", pid: <PID>` returns attributed upper-window images. Click via `operation: "click", observation_id, image_index, x, y`. |
+| **macOS Native Menus** | **Native `menu` Op** | Pass-through `operation: "menu", pid, window_id, path: ["File", "Open..."]`. |
+
+### Platform Key Differences
+- **macOS**: Actions expose `AXPress`; standard shortcuts use `cmd` (e.g. `cmd+s`, `cmd+shift+g`).
+- **Windows**: Actions expose `invoke`; standard shortcuts use `ctrl` (e.g. `ctrl+s`). Windows omits `screenshot_frame_valid`: verify `capture_id && width > 0 && height > 0 && !screenshot_error`, and visually check candidate frames against 125% DPI display scale.
+
+---
+
+## Common Methods & Native Operations
+
+### CUA Script Methods (`app.*` & `cua.*`)
+
+| Method | Signature / Usage | Notes |
+| :--- | :--- | :--- |
+| `app.query` | `app.query({ name: "Save" })` | Broad queries capped at 50 results. |
+| `app.waitFor` | `app.waitFor({ name: "Save" }, { timeout_ms: 3000 })` | Waits for element appearance. |
+| `app.click` | `app.click(target, { capture_id })` | Target can be selector, token, or `[x, y]`. |
+| `app.typeText` | `app.typeText("text", target)` | **Text is first parameter**. `\n` simulates Return. |
+| `app.setValue` | `app.setValue(target, "text")` | **Selector is first parameter**. Writes AX value directly. |
+| `app.pressKey` | `app.pressKey("cmd+s")` | Single key or modified key stroke. |
+| `app.hotkey` | `app.hotkey(["cmd", "shift", "g"])` | Key sequence combination. |
+| `app.scroll` | `app.scroll([x, y], "down", 3)` | Directions: `"up"`, `"down"`, `"left"`, `"right"`. |
+| `app.drag` | `app.drag([x1, y1], [x2, y2], { delivery_mode: "foreground" })` | Drag from one coordinate to another. |
+| `app.zoom` | `app.zoom([x1, y1, x2, y2])` | Crop view; subsequent click uses `{ from_zoom: true }`. |
+
+### Native Atomic Operations (via `exec` params)
+
+- **Application Observation (macOS)**: `{"operation":"app", "pid": 123, "max_windows": 2}` lists attributed windows and returns up to 2 upper-window images. Click via `{"operation":"click", "observation_id": ID, "image_index": 0, "x": px, "y": py}`.
+- **Menu**: `{"operation":"menu", "pid": 123, "window_id": 456, "path": ["File", "Open..."]}` triggers native macOS menus.
+- **Desktop Snapshot**: `{"operation":"desktop", "include_image": true, "max_image_dimension": 1600}` captures full primary display.
+- **Result & Pagination**: For `status=running` executions, query via `{"operation":"result", "id": ID, "part": "summary"|"text"|"structured"|"image", "offset": 0}`.
+
+---
+
+## Critical Guardrails & Error Recovery
+
+1. **One-Use Capture ID**: `capture_id` binds to a specific screenshot and is consumed by its first pixel action. A second click with the same ID returns `capture_not_found`. Always observe anew before subsequent clicks.
+2. **Stale Tokens**: Element tokens expire when pages navigate, windows change, or elements re-render. If CUA rejects a token, re-observe before acting.
+3. **Modal Window Closing**: If a script reports `window_not_found` after a click in `calls before the error took effect`, the modal dialog likely closed successfully. Check resulting windows; never replay the button click.
+4. **Window Titles vs Headings**: `app.title` is the OS-level window title, not in-page document headings.
+5. **No Blind Replay**: On timeouts, `input_outcome_unknown`, or errors, reconcile the actual UI state rather than blindly repeating destructive inputs.
+
+---
+
+## Specialized References
+
+Consult the accompanying reference files as needed for specific task patterns:
+- [RECIPES.md](RECIPES.md): Copyable code patterns for file pickers, large web pages, canvas editors, ROI control discovery, and native menus.
+- [api.d.ts](api.d.ts): Complete TypeScript signatures and interfaces for `cua`, `app`, and `exec` options.
+- [references/safety-policy.md](references/safety-policy.md): User confirmation rules for high-stakes actions, sensitive data, and destructive operations.
