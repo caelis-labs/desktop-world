@@ -18,7 +18,44 @@ permissions:
   contents: read
 
 jobs:
+  source-contract:
+    name: Release source contract
+    runs-on: ubuntu-latest
+    outputs:
+      source_revision: ${{ steps.proof.outputs.source_revision }}
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify exact source-check provenance
+        id: proof
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || '' }}
+        run: >-
+          python3 scripts/source-check-proof.py --repo "$GITHUB_REPOSITORY"
+          --sha "$(git rev-parse HEAD)" --run-id "$SOURCE_RUN_ID"
+      - uses: actions/setup-node@v4
+        if: steps.proof.outputs.reuse != 'true'
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.proof.outputs.reuse != 'true'
+        with:
+          toolchain: 1.98.0
+          components: rustfmt
+      - name: Check source when no exact successful proof exists
+        if: steps.proof.outputs.reuse != 'true'
+        run: sh scripts/check-source.sh
+
   package:
+    needs: source-contract
     strategy:
       fail-fast: false
       matrix:
@@ -33,6 +70,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag }}
+      - name: Require the source-checked revision
+        shell: bash
+        env:
+          SOURCE_REVISION: ${{ needs.source-contract.outputs.source_revision }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
