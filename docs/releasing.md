@@ -1,10 +1,28 @@
 # Releasing Desktop World
 
-Release Please opens a version PR from Conventional Commits on `main`. Merging
+After successful main source CI, Release Please opens a version PR from Conventional Commits. Merging
 that PR creates a `vX.Y.Z` tag and a **draft** GitHub Release, then calls the same
 signed candidate workflow used by manual releases. Both platform jobs must pass
 before candidate assets are attached to the draft. Publishing remains a maintainer
 action after acceptance; an empty or failed draft is not a shipped release.
+
+| Event | Validation |
+| --- | --- |
+| PR | Version/source checks once, then full macOS and Windows package/MCP checks |
+| main push | Version/source checks; no redundant unsigned platform packages |
+| Successful main CI | Release Please may update its version PR or create the tag/draft |
+| Candidate | Reuse source checks only from that exact successful main CI SHA; always verify final packages and signed macOS bytes |
+
+The candidate gate queries the triggering run and its explicit `Source contract`
+and version jobs. A different SHA, missing/failed/skipped job or unavailable proof
+runs source checks again on the candidate commit. Manual candidates also run them.
+An overlapping main push cannot lend an older SHA's success to a newer tag.
+Each platform checkout must match the source gate's recorded revision; a moved
+tag fails before building or signing.
+Required check names stay stable; on PR source failure the platform guards fail,
+so dependency skips cannot masquerade as successful required platform checks.
+Historical tags without these helpers should use their immutable historical
+workflow, for example `gh workflow run release.yml --ref v0.1.1 -f tag=v0.1.1`.
 
 ## One-time repository setup
 
