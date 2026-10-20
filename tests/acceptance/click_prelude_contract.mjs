@@ -68,13 +68,11 @@ for (const platform of ['mac', 'windows']) {
     ['click','{name:"fixture"}','{capture_id:"fresh"}'],
     ['click','[10,20]','{capture_id:"fresh",from_zoom:true}'],
     ['rightClick','[10,20]','{capture_id:"fresh"}'],
-    ['rightClick','[10,20]','{from_zoom:true}'],
     ['rightClick','[10,20]','{button:"right"}'],
     ['rightClick','{name:"fixture"}','{modifiers:["ctrl"]}'],
     ['doubleClick','[10,20]','{modifiers:["ctrl"]}'],
     ['doubleClick','[10,20]','{modifier:[]}'],
     ['doubleClick','[10,20]','{capture_id:"fresh"}'],
-    ['doubleClick','[10,20]','{from_zoom:true}'],
     ['doubleClick','[10,20]','{button:"right"}'],
     ['click','[10,20]','null'],
     ['click','[10,20]','[]'],
@@ -95,6 +93,25 @@ for (const platform of ['mac', 'windows']) {
     await assert.rejects(run(`await cua.call(${JSON.stringify(tool)},${args});`), /DTW /);
     assert.equal(calls.length, before);
     passed++;
+  }
+  for (const [method, tool] of [['rightClick','right_click'], ['doubleClick','double_click']]) {
+    const body = `const app=await cua.getApp({pid:123,windowId:456});
+      await app.${method}([10,20],{from_zoom:true});`;
+    if (platform === 'windows') {
+      await run(body);
+      assert.deepEqual(calls.at(-1), {op:tool,
+        args:{pid:123,window_id:456,x:10,y:20,from_zoom:true}});
+      await run(`await cua.call("${tool}",{pid:123,x:10,y:20,from_zoom:true});`);
+      assert.deepEqual(calls.at(-1), {op:tool,args:{pid:123,x:10,y:20,from_zoom:true}});
+    } else {
+      const before=calls.length;
+      await assert.rejects(run(body), /from_zoom is supported only on Windows/);
+      assert.deepEqual(calls.slice(before).map(c=>c.op), ['get_app']);
+      await assert.rejects(run(`await cua.call("${tool}",{x:10,y:20,from_zoom:true});`),
+        /from_zoom is supported only on Windows/);
+      assert.equal(calls.length, before+1);
+    }
+    passed += 2;
   }
 }
 console.log(JSON.stringify({pin, passed, evidence:'pinned prelude + recording host; no native input'}));

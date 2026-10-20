@@ -18,12 +18,13 @@ key names and conflicting aliases are rejected before pointer dispatch.
 | Method | Supported options beyond delivery_mode | Observation binding |
 | --- | --- | --- |
 | `click` | button; modifier array; from_zoom | capture_id with a pixel Point, mutually exclusive with from_zoom |
-| `rightClick` | modifier array with a pixel Point | None; use `click(point, {button:"right", capture_id})` for bound right input |
-| `doubleClick` | None | None |
+| `rightClick` | modifier array with a pixel Point; Windows from_zoom | None; use `click(point, {button:"right", capture_id})` for bound right input |
+| `doubleClick` | Windows from_zoom | None |
 | `typeText` | None in DTW's authoring declaration | None |
 
-Unsupported right/double-click options fail explicitly rather than dropping a
-binding or selecting another input route. macOS modified `click` requires an
+Right/double-click preserve Windows pixel `from_zoom` conversion after `zoom()`;
+macOS rejects that field. Unsupported capture/button options fail explicitly
+rather than dropping a binding or selecting another input route. macOS modified `click` requires an
 exact window and explicit foreground delivery; DTW never fronts or rebinds a
 window automatically. Native `operation=click` retains its separate one-use
 observation contract and single unmodified left-click behavior.
@@ -37,10 +38,10 @@ Local macOS arm64 checks used the official 0.37.0 release worker. Downloaded
 `bf3d7e400bd8d46186e624e74413715b02924c74512ce9001f549b0e7af506cf`.
 Package assembly ad hoc signs its own copy; the SDK was built from the same tag.
 
-- 66 checks run against the clean, exact upstream prelude with a recording host:
+- 70 checks run against the clean, exact upstream prelude with a recording host:
   argument mapping, getApp/launch handles, raw calls and pre-dispatch rejection.
   This layer sends no native input.
-- TypeScript positive calls and ten expected type errors pass with TypeScript
+- TypeScript positive calls and nine expected type errors pass with TypeScript
   5.9.3, `--strict --lib es2020 --noEmit`.
 - Packaged worker probes omit all input targets and coordinates. They reproduce
   upstream `unknown argument modifiers` and `right_click: unknown argument
@@ -80,14 +81,29 @@ local test artifacts, not distributed runtime dependencies.
 0.37.0 still accepts a scalar native `modifier` but reads it as an empty array;
 the fixture confirms ordinary input. DTW rejects that shape. Native rightClick
 still has no capture binding; doubleClick has no modifier option on macOS, while
-Windows accepts modifier arrays as a no-op. DTW exposes the portable subset and
-rejects that double-click option on both platforms. Windows modifier handling
+Windows accepts modifier arrays as a no-op. DTW rejects that double-click modifier option on both platforms and preserves
+Windows right/double-click zoom conversion. Windows modifier handling
 and other provider-specific GUI effects remain unvalidated locally. A delivered
 mouse event is not proof of a context menu, selection or other application effect.
 
 These upstream differences are non-blocking for DTW delivery. No upstream report,
 app-authorization research (#42), live-account test or production replacement is
 part of this change. Existing historical acceptance documents retain their pins.
+
+The PR #43 review follow-up also verifies real pinned-worker `calls[].line`,
+error lines and human-readable logs against Agent source lines (including the
+wrapped app click). Adapter frames use a separate QuickJS function source and
+no lines are prepended to the Agent body. Native acceptance now hard-fails on a
+failed receipt, missing/wrong events, modifier mismatch or double-click count;
+each case uses an explicit append-only event window and waits for quiet before
+continuing. Negative controls prove wrong/empty results fail, and the release
+candidate workflow runs the packaged click probe after macOS signing/notarization
+and on the final Windows package. The seven asserted native cases passed using
+the updated local ad hoc slim package and a canvas that explicitly accepts the
+activation click. Two earlier zero-event failures are retained as negative
+evidence; no input was replayed in either failed run. Review receipts are in
+`/private/tmp/dtw-issue41-evidence/review-first-mouse-native.json`. This remains
+macOS fixture evidence, not a notarized-distribution or Windows GUI acceptance.
 
 ## Reproduce
 

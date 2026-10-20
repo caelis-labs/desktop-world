@@ -33,8 +33,11 @@ function __dtw_click_api(native) {
       }
     }
     if (tool !== "click") {
-      for (const key of ["capture_id", "from_zoom", "button"]) {
+      for (const key of ["capture_id", "button"]) {
         if (has(key)) throw new TypeError(`DTW ${tool}: ${key} is unsupported; use click for screenshot-bound button input`);
+      }
+      if (has("from_zoom") && native.computer.target !== "windows") {
+        throw new TypeError(`DTW ${tool}: from_zoom is supported only on Windows`);
       }
     } else if (has("capture_id")) {
       if (typeof args.capture_id !== "string" || !args.capture_id.trim() ||
@@ -44,6 +47,9 @@ function __dtw_click_api(native) {
       if (args.from_zoom === true) {
         throw new TypeError("DTW click: capture_id and from_zoom cannot be combined");
       }
+    }
+    if (has("from_zoom") && typeof args.from_zoom !== "boolean") {
+      throw new TypeError(`DTW ${tool}: from_zoom must be a boolean`);
     }
     return args;
   };

@@ -86,13 +86,14 @@ Click options follow the pinned CUA 0.37.0 component. DTW accepts either
 | Method | Options beyond delivery_mode | Screenshot binding |
 | --- | --- | --- |
 | `click` | `button`, `modifiers` / `modifier`, `from_zoom` | `capture_id` with a Point; cannot combine with `from_zoom` |
-| `rightClick` | `modifiers` / `modifier` with a Point only | None; use `click(point, {button: "right", capture_id})` |
-| `doubleClick` | None | None |
+| `rightClick` | `modifiers` / `modifier` with a Point; `from_zoom` on Windows only | None; use `click(point, {button: "right", capture_id})` |
+| `doubleClick` | `from_zoom` on Windows only | None |
 | `typeText` | None | None |
 
 On macOS, modified `click` requires an exact window binding
 (`cua.getApp({pid: PID, windowId: WID})`) and `delivery_mode: "foreground"`.
-DTW never changes delivery mode automatically. Native `rightClick` modifiers and
+DTW never changes delivery mode automatically. Windows preserves the native `from_zoom` conversion for pixel `rightClick` and
+`doubleClick` after `zoom`; macOS rejects that option. Native `rightClick` modifiers and
 Windows modifier delivery have upstream limitations; verify the resulting UI.
 Windows accepts double-click modifiers without applying them; DTW rejects that
 option on all platforms. `cua.call` applies the same click argument checks.

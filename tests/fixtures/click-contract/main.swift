@@ -6,13 +6,16 @@ let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 var events: [[String: Any]] = []
 func save() {
-    let data: [String: Any] = ["pid": ProcessInfo.processInfo.processIdentifier, "events": events]
+    let data: [String: Any] = ["pid": ProcessInfo.processInfo.processIdentifier, "events": events,
+                               "active": app.isActive, "key_window": app.keyWindow != nil]
     try? JSONSerialization.data(withJSONObject: data, options: [.sortedKeys])
         .write(to: root.appendingPathComponent("state.json"), options: .atomic)
 }
 final class Canvas: NSView {
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
+    // This canvas measures delivered events, including the first activation click.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func draw(_ rect: NSRect) {
         NSColor.white.setFill()
         bounds.fill()
@@ -35,6 +38,8 @@ final class Canvas: NSView {
 final class Delegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
     var timer: Timer?
+    func applicationDidBecomeActive(_ notification: Notification) { save() }
+    func applicationDidResignActive(_ notification: Notification) { save() }
     func applicationDidFinishLaunching(_ notification: Notification) {
         window = NSWindow(contentRect: NSRect(x: 300, y: 300, width: 500, height: 300),
                           styleMask: [.titled, .closable], backing: .buffered, defer: false)

@@ -24,7 +24,14 @@ app.rightClick([1, 2], {capture_id: "fresh"});
 app.rightClick({name: "fixture"}, {modifiers: ["ctrl"]});
 // @ts-expect-error doubleClick has no modifier support in DTW
 app.doubleClick([1, 2], {modifiers: ["ctrl"]});
-// @ts-expect-error doubleClick has no zoom support in DTW
+// Windows-only zoom options; macOS rejects these at runtime.
 app.doubleClick([1, 2], {from_zoom: true});
+app.rightClick([1, 2], {from_zoom: true});
 // @ts-expect-error typeText is not a screenshot-bound click
 app.typeText("fixture", [1, 2], {capture_id: "fresh"});
+
+// Dynamic targets retain the options supported for both element and pixel input.
+declare const dynamicTarget: Target;
+app.click(dynamicTarget);
+app.rightClick(dynamicTarget);
+app.doubleClick(dynamicTarget);

@@ -30,11 +30,15 @@ type ClickOptions = ElementClickOptions & (
   | { from_zoom?: boolean; capture_id?: never }
   | { capture_id: string; from_zoom?: false }
 );
-/** No capture_id, button, from_zoom or modifiers on doubleClick. */
-type DoubleClickOptions = Delivery;
-/** No capture_id, button or from_zoom. Modifiers require a Point target.
+type WindowsZoomOptions = {
+  /** Windows pixel targets only, after zoom(); macOS rejects this option. */
+  from_zoom?: boolean;
+};
+/** No capture_id, button or modifiers on doubleClick. */
+type DoubleClickOptions = Delivery & WindowsZoomOptions;
+/** No capture_id or button. Modifiers require a Point target.
  * For a screenshot-bound right click use click(point, {button:"right", capture_id}). */
-type RightClickOptions = Delivery & ModifierOptions;
+type RightClickOptions = Delivery & ModifierOptions & WindowsZoomOptions;
 type WindowInfo = {
   pid: number;
   window_id: number;
@@ -102,10 +106,11 @@ interface CuaApp {
   /** macOS modifiers require an exact window binding and foreground delivery.
    * Dispatch does not establish GUI effect; reobserve before further input. */
   click(target: Point, options?: ClickOptions): Promise<Json>;
-  click(target: ElementSelector | string | number, options?: ElementClickOptions): Promise<Json>;
-  doubleClick(target: Target, options?: DoubleClickOptions): Promise<Json>;
+  click(target: Target, options?: ElementClickOptions): Promise<Json>;
+  doubleClick(target: Point, options?: DoubleClickOptions): Promise<Json>;
+  doubleClick(target: Target, options?: Delivery): Promise<Json>;
   rightClick(target: Point, options?: RightClickOptions): Promise<Json>;
-  rightClick(target: ElementSelector | string | number, options?: Delivery): Promise<Json>;
+  rightClick(target: Target, options?: Delivery): Promise<Json>;
   /** Text first; for a canvas, a Point focuses and types in one native call. */
   typeText(text: string, target?: Target, options?: Delivery): Promise<Json>;
   pressKey(key: string, target?: Target, options?: Delivery): Promise<Json>;

@@ -9,7 +9,7 @@ import json
 import subprocess
 import sys
 
-from probe import call, exec_call, result, runtime_env
+from probe import call, exec_call, result, runtime_env, structured_result
 
 
 def main():
@@ -29,6 +29,8 @@ const cases = [
   ["native_scalar", true, "click", {modifier:"ctrl"}],
   ["native_right_capture", true, "right_click", {capture_id:"never-a-real-capture"}],
   ["native_double_modifier", true, "double_click", {modifier:["ctrl"]}],
+  ["native_right_zoom", true, "right_click", {from_zoom:true}],
+  ["native_double_zoom", true, "double_click", {from_zoom:true}],
   ["adapted_plural", false, "click", {modifiers:["ctrl"]}],
   ["adapted_array", false, "click", {modifier:["ctrl"]}],
   ["adapted_scalar", false, "click", {modifier:"ctrl"}],
@@ -37,6 +39,7 @@ const cases = [
   ["adapted_right_capture", false, "right_click", {capture_id:"never-a-real-capture"}],
   ["adapted_double_modifier", false, "double_click", {modifiers:["ctrl"]}],
   ["adapted_right_zoom", false, "right_click", {from_zoom:true}],
+  ["adapted_double_zoom", false, "double_click", {from_zoom:true}],
 ];
 const report = {platform:cua.computer.target, cases:{}};
 for (const [name,raw,tool,args] of cases) {
@@ -65,8 +68,34 @@ return report;
         # Both array spellings reach the same native failure for the missing target.
         assert cases["adapted_plural"] == cases["adapted_array"] == cases["native_array"], report
         for name in ["adapted_scalar", "adapted_conflict", "adapted_unknown_key",
-                     "adapted_right_capture", "adapted_double_modifier", "adapted_right_zoom"]:
+                     "adapted_right_capture", "adapted_double_modifier"]:
             assert cases[name]["message"].startswith("DTW "), (name, report)
+        for tool in ["right", "double"]:
+            if report["platform"] == "windows":
+                assert cases[f"adapted_{tool}_zoom"] == cases[f"native_{tool}_zoom"], report
+            else:
+                assert "from_zoom is supported only on Windows" in cases[f"adapted_{tool}_zoom"]["message"], report
+
+        report["line_checks"] = []
+        for ident, name, script, line, native_call in [
+            (10, "ordinary_statement", 'const marker=1;\n\nthrow new Error("DTW-LINE");', 3, False),
+            (20, "native_click", 'const marker=1;\n\nawait cua.call("click",{});', 3, True),
+            (30, "adapter_click_error", 'const marker=1;\n\nawait cua.call("click",{modifier:"ctrl"});', 3, False),
+            (40, "first_line", 'await cua.call("click",{});', 1, True),
+        ]:
+            started = exec_call(proc, ident, {"script": script})
+            done = result(proc, ident + 1, "unused", started["id"])
+            detail = structured_result(proc, ident + 2, "unused", started["id"])
+            assert done["status"] == "failed", (name, done)
+            assert detail["error"]["line"] == line, (name, detail)
+            assert f"at line {line}" in done["text"], (name, done)
+            if native_call:
+                assert detail["calls"][-1]["line"] == line, (name, detail)
+                assert f"line {line} click ERROR" in done["text"], (name, done)
+            else:
+                assert detail["calls"] == [], (name, detail)
+            report["line_checks"].append({"case": name, "line": line,
+                                          "calls": detail["calls"], "error": detail["error"]})
         print(json.dumps(report, ensure_ascii=False, indent=2))
     finally:
         proc.stdin.close()
