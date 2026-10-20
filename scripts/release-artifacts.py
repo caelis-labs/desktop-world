@@ -14,12 +14,18 @@ import zipfile
 
 def main():
     repo = Path(__file__).resolve().parent.parent
-    tag = os.environ["RELEASE_TAG"]
     version = tomllib.loads((repo / "cmd/dtw/Cargo.toml").read_text())["package"]["version"]
-    assert tag == "v" + version and "/" not in tag and "\\" not in tag, (tag, version)
+    assert (repo / "version.txt").read_text().strip() == version
+    packages = tomllib.loads((repo / "cmd/dtw/Cargo.lock").read_text())["package"]
+    assert [p["version"] for p in packages if p["name"] == "desktop-world"] == [version]
     assert json.loads((repo / "packaging/plugin/plugin.json").read_text())["version"] == version
     assert json.loads((repo / "packaging/plugin/.claude-plugin/plugin.json").read_text())["version"] == version
     assert json.loads((repo / "packaging/plugin/gemini-extension.json").read_text())["version"] == version
+    if sys.argv[1] == "check":
+        print(json.dumps({"version": version, "version_files": "consistent"}))
+        return
+    tag = os.environ["RELEASE_TAG"]
+    assert tag == "v" + version and "/" not in tag and "\\" not in tag, (tag, version)
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     if sys.argv[1] == "validate":
         assert subprocess.check_output(["git", "rev-parse", tag + "^{commit}"], text=True).strip() == revision
