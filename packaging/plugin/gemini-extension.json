@@ -3,6 +3,8 @@
   "version": "0.1.1",
   "description": "Desktop World native CUA integration",
   "mcpServers": {
-    "desktop-world": {"command": "${extensionPath}${/}bin${/}dtw"}
+    "desktop-world": {
+      "command": "${extensionPath}${/}bin${/}dtw"
+    }
   }
 }
