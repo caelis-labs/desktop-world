@@ -79,6 +79,26 @@ const app = await cua.getApp({ pid: TARGET_PID });
 return await app.click([x, y], { capture_id: CAPTURE_ID });
 ```
 
+Click options follow the pinned CUA 0.37.0 component. DTW accepts either
+`modifiers: ["ctrl"]` or native `modifier: ["ctrl"]`; a string such as
+`modifier: "ctrl"`, an unknown key name, or both spellings is rejected before input.
+
+| Method | Options beyond delivery_mode | Screenshot binding |
+| --- | --- | --- |
+| `click` | `button`, `modifiers` / `modifier`, `from_zoom` | `capture_id` with a Point; cannot combine with `from_zoom` |
+| `rightClick` | `modifiers` / `modifier` with a Point only | None; use `click(point, {button: "right", capture_id})` |
+| `doubleClick` | None | None |
+| `typeText` | None | None |
+
+On macOS, modified `click` requires an exact window binding
+(`cua.getApp({pid: PID, windowId: WID})`) and `delivery_mode: "foreground"`.
+DTW never changes delivery mode automatically. Native `rightClick` modifiers and
+Windows modifier delivery have upstream limitations; verify the resulting UI.
+Windows accepts double-click modifiers without applying them; DTW rejects that
+option on all platforms. `cua.call` applies the same click argument checks.
+Native `operation=click` remains a single unmodified left click with its own
+`observation_id`; it does not accept these JS options.
+
 ### 4. Verify & Loop
 
 Inspect the updated UI before taking further actions. **Never replay inputs or add automatic fallback clicks without observing first.**

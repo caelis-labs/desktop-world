@@ -111,7 +111,7 @@ fn worker_path() -> Result<String, String> {
         }
         if arg == "--version" || arg == "version" {
             println!(
-                "dtw {} (CUA 0.35.4 source d74a9cab3fb2)",
+                "dtw {} (CUA 0.37.0 source 2d2f99228d4d)",
                 env!("CARGO_PKG_VERSION")
             );
             std::process::exit(0);
@@ -1146,7 +1146,8 @@ impl Server {
             Work::Script(code) => code,
         };
         let wrapped = format!(
-            "const state = {state};\nconst __dtw_value = await (async () => {{\n{code}\n}})();\nreturn {{__dtw_value, __dtw_state: state}};"
+            "{adapter}\nconst state = {state};\nconst __dtw_value = await (async (cua) => {{\n{code}\n}})(__dtw_click_api(cua));\nreturn {{__dtw_value, __dtw_state: state}};",
+            adapter = include_str!("click_contract.js"),
         );
         let arguments = json!({"script":wrapped,"timeout_ms":120000,"max_calls":500}).to_string();
         let result = native.call_tool("run_script".into(), arguments).await?;
