@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/caelis-labs/desktop-world/compare/v0.1.1...v0.1.2) (2026-10-20)
+
+
+### Bug Fixes
+
+* align click contracts with CUA 0.37.0 ([#43](https://github.com/caelis-labs/desktop-world/issues/43)) ([d455eb9](https://github.com/caelis-labs/desktop-world/commit/d455eb9353d9d60c5d3de8358b3f5f2ec041a0d2))
+
 ## [0.1.1](https://github.com/caelis-labs/desktop-world/compare/v0.1.0...v0.1.1) (2026-10-20)
 
 
