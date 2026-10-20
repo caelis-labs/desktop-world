@@ -6,19 +6,19 @@
 
 Download **one `dtw` executable for your platform**. It contains the Skill, plugin manifests, notices, and its private CUA worker. `dtw install` expands these files and connects the Agent; users do not need Rust, Python, Node, a DMG, or a separate worker download.
 
-Download the `v0.1.1` release from [Releases](https://github.com/caelis-labs/desktop-world/releases/tag/v0.1.1). Use the versioned links below so the commands resolve to this tested build.
+Download the `v0.1.2` release from [Releases](https://github.com/caelis-labs/desktop-world/releases/tag/v0.1.2). Use the versioned links below so the commands resolve to this tested build.
 
 ### macOS Apple Silicon
 
 ```sh
-curl -fL https://github.com/caelis-labs/desktop-world/releases/download/v0.1.1/dtw-darwin-arm64 -o dtw
+curl -fL https://github.com/caelis-labs/desktop-world/releases/download/v0.1.2/dtw-darwin-arm64 -o dtw
 chmod +x dtw
 ```
 
 ### Windows x64 (PowerShell)
 
 ```powershell
-Invoke-WebRequest https://github.com/caelis-labs/desktop-world/releases/download/v0.1.1/dtw-windows-amd64.exe -OutFile dtw.exe
+Invoke-WebRequest https://github.com/caelis-labs/desktop-world/releases/download/v0.1.2/dtw-windows-amd64.exe -OutFile dtw.exe
 ```
 
 ### Choose your Agent
