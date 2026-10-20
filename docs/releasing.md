@@ -61,20 +61,13 @@ Uploads intentionally omit `--clobber`: existing assets are never silently
 replaced. If the attach job partially succeeds, inspect existing asset hashes
 before uploading only the missing files.
 
-## Transition from the in-progress v0.1.1
+## Existing and manual releases
 
-The bootstrap manifest records the last public release, `0.1.0`; the local
-version files are already `0.1.1`. With pre-1.0 feature patching, PR #38's
-`feat(skills)` change produces a `0.1.1` version PR on first activation. Review
-that PR before merging. An earlier local-only `v0.1.1` tag may point to the manual
-version bump rather than the eventual release PR merge. Keep that local ref out
-of pushes; Release Please creates the remote tag from the reviewed release PR.
-
-If v0.1.1 is instead published manually before this integration lands, update
-`.release-please-manifest.json` to `0.1.1` and `version.txt` to the same version
-before enabling the workflow. Never let automation reuse an existing release tag
-for different source. Resolve a local-only tag's intended source before pushing;
-do not overwrite an already public tag.
+When onboarding an existing repository, seed `.release-please-manifest.json`
+with the most recent public version. A local version bump or local-only tag is
+not a published release. Keep stale local tags out of pushes: Release Please
+creates the remote tag from the reviewed release PR. Never reuse a public tag
+for different source.
 
 ## Manual candidates and recovery
 
