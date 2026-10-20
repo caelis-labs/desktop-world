@@ -1,7 +1,9 @@
 name: Release please
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -14,6 +16,11 @@ concurrency:
 
 jobs:
   release:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
@@ -37,6 +44,9 @@ jobs:
   candidates:
     needs: release
     if: needs.release.outputs.release_created == 'true'
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ needs.release.outputs.tag_name }}
