@@ -12,7 +12,7 @@ OPERATIONS = ['get_browser_state', 'browser_prepare', 'browser_navigate',
 
 def main():
     proc = subprocess.Popen([sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, text=True, env=runtime_env())
+                            stderr=subprocess.PIPE, text=True, encoding="utf-8", env=runtime_env())
     try:
         call(proc, {'jsonrpc':'2.0','id':1,'method':'initialize','params':{
             'protocolVersion':'2025-06-18','capabilities':{},
@@ -42,7 +42,7 @@ def main():
                                      'arguments':{'include':['binary_version']}})
         health = result(proc, 81, None, health['id']) if health['status']=='running' else health
         assert health['status']=='completed', health
-        detail = structured_result(proc, 82, None, health['id'])
+        detail = health['data']
         assert '0.38.0' in json.dumps(detail), detail
         guide = exec_call(proc, 83, {'operation':'get_guide','arguments':{'topic':'browser'}})
         guide = result(proc, 84, None, guide['id']) if guide['status']=='running' else guide

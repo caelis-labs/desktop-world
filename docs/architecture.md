@@ -19,11 +19,11 @@ created lazily with unpredictable host-generated session and transport labels, p
 and receipts. One admitted execution runs at a time; control requests remain
 available. Successful scripts commit bounded JSON state; failures do not.
 
-At the next execution after 25 idle minutes or 25 minutes of context age, DTW
-invalidates observation bindings and returns `runtime_context_expired` without
-dispatching the requested action. Restart the runtime and observe again; an agent
-call cannot renew approved manifests. Native manifest expiry/idle limits can be
-shorter and remain authoritative. Worker
+After 25 idle minutes, DTW invalidates old handles, ends the idle native session,
+and returns `runtime_context_reset` without dispatching the requested action.
+The next observation starts a fresh session in the same worker and immutable
+native authorization context. Continuous use has no absolute-age cutoff. Native
+manifest expiry/idle limits remain authoritative and are never renewed. Worker
 failure is surfaced on the original receipt; unknown actions are never replayed.
 Process restart loses receipts and native tokens. Independent tasks require
 independent MCP processes or a host-provided authenticated context boundary; DTW
@@ -98,7 +98,11 @@ and `get_guide` through a fixed allowlist. `describe` reads the linked worker's
 canonical schema and removes its session parameter. Native arguments are nested
 under `arguments`; session/private-context overrides are rejected before dispatch.
 Calls run in the existing serialized job queue and native authorization context.
-Complete native metadata and images use existing receipt pagination. Structured
+Completed native receipts contain actionable JSON: tabs, bindings, refs, outline,
+continuations and adapted `next_call` arguments without session/private fields.
+Large responses advertise a result page; raw native diagnostics and images remain
+retrievable through existing receipt pagination. `describe` without a name exposes
+configured targets so a bounded browser task never needs a script scout. Structured
 browser refusals map to failed jobs even when upstream MCP isError is false;
 successful health diagnostics can still report degraded individual checks.
 
@@ -109,16 +113,20 @@ and file grants. DTW snapshots the bytes before worker initialization. Its custo
 SCK app/click routes are disabled in bounded mode because they cannot enforce a
 native manifest. The default remains standard mode, without an existing-profile grant.
 
-Downloads hold session admission while the originating MCP tools/call requests
-form elicitation. Only an explicit accept plus boolean `approve:true` permits
-that exact action; decline, cancellation, errors, unsupported hosts and 120-second
-timeout dispatch nothing. Responses are matched to one-shot random request IDs.
-All native calls use the pinned SDK's trusted adapter ingress with the same private
-session/transport identity, configured mode and immutable manifest. The adapter
-strips caller evidence before injecting host-owned identity and, only after that
-download's confirmation, CUA's native download evidence. Native resource/ref checks
-still run. A delegated SDK session and the compatibility adapter cannot be mixed:
-CUA correctly rejects a download crossing their transport identities.
+The Harness decides whether to dispatch a tool call. DTW has no separate form,
+approval timeout or permission cache. Like CUA's native MCP server, its trusted
+adapter supplies native download approval evidence for an admitted `tools/call`.
+All native calls use the same private session/transport identity and immutable
+manifest. Caller-supplied private fields are rejected, and CUA still validates
+resource scope, current refs and destinations. Ordinary absolute download paths
+are canonicalized at the adapter boundary. The single exec tool conservatively
+advertises potentially destructive, non-idempotent, open-world behavior; nested
+operation schemas are descriptive, not a substitute for Harness policy.
+
+MCP request IDs track their admitted job. Cancellation before job admission only
+removes that request; a late/read-only cancellation cannot kill unrelated work.
+Cancelling an admitted running job retains the conservative worker stop and
+unknown-effect receipt. Inputs are never replayed automatically.
 
 The private worker still has no dynamic `DriverAuthorizationHost` callback bridge;
 ordinary MCP elicitation must never substitute for that protected profile callback.

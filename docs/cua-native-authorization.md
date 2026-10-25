@@ -1,129 +1,110 @@
-# Native browser authorization acceptance
+# Browser integration and review acceptance
 
-Checked on macOS arm64, 2026-10-25, against the unmodified CUA 0.38.0 worker at
-`85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`. This completes the profile/download
-integration gaps in [the earlier repair checkpoint](cua-0380-repairs.md).
+Checked on macOS arm64, 2026-10-25, using the unmodified CUA 0.38.0 worker at
+`85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`. This record supersedes the initial
+form-elicitation design in PR #47. The current adapter delegates tool approval
+to the Harness, matching CUA's native MCP ingress (`cua-driver-core/src/server.rs`).
 
-## Implementation and boundaries
+## Review fixes
 
-- The host selects and explicitly approves a native capability manifest using
-  `--capability-manifest PATH --approve-capability-manifest`. DTW freezes those
-  bytes in its private runtime directory; CUA parses and enforces bounded mode,
-  exact PID/window grants, origins, tools, file scope and expiry. No tool argument
-  changes authorization. Standard startup has no existing-profile grant.
-- The custom SCK app/click extensions are disabled for bounded runtimes because
-  they cannot enforce CUA's manifest. Native browser/desktop routes remain subject
-  to their native policy. There is no unrestricted fallback or automatic grant renewal.
-- Downloads use [MCP form elicitation](https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation).
-  The pending tools/call asks for one exact target/tab/ref/destination, defaulting
-  to false. Only accept plus boolean `approve:true` permits dispatch. The wait is
-  bounded to 120 seconds; session admission stays occupied. Unsupported/URL-only
-  hosts, decline, cancellation, malformed/error responses and timeout fail closed.
-- CUA's Rust-only `call_tool_from_trusted_adapter` preserves trusted transport
-  evidence in the official private worker. DTW strips incoming private fields,
-  then supplies its own random session/transport identity and one-shot approval.
-  Every native call uses this same configured authorization context. Mixing a
-  delegated `CuaDriverSession` with the compatibility adapter was experimentally
-  rejected with `session_ended`; the final implementation does not mix them.
-- Native authorization, resource scope and live browser ref checks still run
-  after host confirmation. Model-visible JSON cannot approve a download or profile.
-  Host launch configuration and genuine client elicitation responses are trusted.
-
-The launcher configuration and example native manifest are documented in the
-packaged [browser guide](../packaging/plugin/skills/desktop-world/BROWSER.md).
-
-## Real-machine results
-
-`browser_authorization_probe.py` launched a disposable Chrome profile independently
-of DTW before attachment, served a localhost page and used temporary download
-directories. All browser commands then passed through DTW MCP and the official
-worker. This did not read a personal profile or exercise account credentials.
-Its fixture MCP host deliberately sent each decision; it verifies the actual
-protocol and Chrome effects, not Codex/Claude/Cursor confirmation UI rendering.
-
-| Case | Independent result |
+| Finding | Result |
 | --- | --- |
-| Existing profile with native grant | Exact PID/window attached to an already owned DevTools endpoint; native receipt reports no profile copy, browser launch/restart or preference changes. |
-| Standard mode / unapproved launch | Profile rejected without grant; missing approval flag rejected before worker startup. |
-| Wrong window / outside origin | Native refusal; no navigation to the denied site. |
-| Replace original manifest after startup | Approved private snapshot still used; invalid replacement did not alter grants. |
-| DTW SCK in bounded mode | Rejected before helper dispatch. |
-| No elicitation / decline / cancel / false / host error | No HTTP download request and no file created. |
-| Unrelated or replayed confirmation ID / forged private field | Rejected or ignored; no transferable approval. |
-| Other action during confirmation | `runtime_busy`; exact request remains reserved. |
-| Explicit accept | Exactly one HTTP download and one 35-byte file; SHA-256 `9fd842a5ce194aa5b9ac66e44bec9a22a9bbed395f76638d4d9dc66cbc696a76`. |
-| Accepted download outside manifest directory | CUA refusal; no HTTP download or file. |
-| Accepted stale ref | CUA refusal; no replay or second file. |
-| Idle MCP EOF | Existing Chrome process remained alive, then the test cleaned up only its owned PID. |
+| All calls stop after 25 minutes of absolute age | Removed the absolute-age cutoff. After 25 idle minutes, return `runtime_context_reset`, discard handles/state and allow a new observation in the same authorization context. |
+| Cancelling a pending confirmation kills the Runtime | Removed the confirmation subsystem. Request cancellation tracks its own admitted job; before admission it leaves the Runtime usable, and late/read-only cancellation cannot kill another job. |
+| Bounded mode cannot discover the approved window | `describe` without a name returns configured targets and directly callable `next_call`. No script scout is required. |
+| Default receipts omit tabs/refs/outline | Small native results are inline; large results retain whole refs and advertise pagination. Raw diagnostics remain available. |
+| Recovery and descriptions contain unusable session/authorization instructions | Adapted descriptions and `next_call` to DTW's actual operations; host-only profile requirements are marked. Native schemas remain derived from the pinned worker. |
+| Timed-out elicitation leaves a form open | No DTW elicitation, approval timeout or stale form remains. The Harness controls whether to dispatch the call. |
+| Windows needs special canonical path spelling | DTW accepts ordinary absolute directories and canonicalizes them before CUA dispatch. |
 
-The desktop-independent `authorization_probe.py` also exercises cancellation
-during confirmation, URL-only clients, stale response replay, forged authority and
-accepted confirmation followed by native invalid-capability rejection. It is wired
-into macOS/Windows package and release checks; Windows GUI acceptance is not claimed.
+The main Skill now teaches discovery, observation, action and verification in
+about 100 lines. Advanced click details remain in recipes. Deployment and scope
+configuration live in [harness-integration.md](harness-integration.md); the unused
+secondary confirmation-policy checklist was removed.
 
-Local raw evidence: `/private/tmp/dtw-authorization-final3-live` (final package; complete positive and
-scope/ref refusal matrix), `/private/tmp/dtw-authorization-setup` (setup limitation),
-and `/private/tmp/dtw-authorization-checks` (build and regression logs).
+CUA still owns bounded manifest validation, live PID/window/origin checks, ref
+freshness, file scope and grant expiry. DTW freezes the host-approved manifest at
+startup and never reloads it during idle recovery. The custom SCK app/click route
+is unavailable in bounded mode because it does not enforce native manifests.
+There is no new tool, approval flag or permission cache.
 
-## Remaining issues and ownership
+## Real Harness and browser evidence
 
-**Pinned CUA behavior:** a second owned Chrome profile launched without remote
-debugging could not complete native setup. After valid manifest authorization,
-CUA returned `browser_wrong_target_refused`: “the approved Google Chrome window
-has no exact New Tab button”. The source is `platform-macos/src/browser/setup_ui.rs`,
-which refuses when its exact AX control matcher fails. DTW preserves the refusal;
-it does not guess coordinates or silently enable debugging. Therefore existing
-profiles with already available endpoints are verified; automatic setup of this
-machine's ordinary Chrome window is not reliable.
+`tests/acceptance/browser_authorization_probe.py --caelis` runs an independently
+launched disposable Chrome profile, a localhost fixture and an isolated Caelis
+Store. Host setup selects its owned window through macOS and configures the native
+manifest. The Agent prompt contains a task and download destination, with no
+PID/window/tab/ref IDs. The Agent reads the installed Skill and obtains every
+browser binding from DTW. The test does not fetch hidden structured results for it.
 
-CUA's embedded `DriverAuthorizationHost` exists, but the released private-worker
-protocol has no callback transport. Dynamic protected profile dialogs remain an
-upstream transport/DTW integration gap. The completed profile channel is native
-host-approved bounded startup, not an interactive profile consent callback, and
-ordinary MCP elicitation is not substituted for that protected callback.
+The real Caelis v0.73.2 Agent used the user's existing local provider configuration
+(`deepseek/deepseek-flash`). It used Skill, ToolSearch, one browser-reference read
+and **12–14 DTW calls across two runs**, including `describe`, native setup recovery, observations,
+typing, clicking and download. There were **zero structured-result fetches**, zero
+scripts and no shell/HTTP/fixture-file reads by the Agent. Re-observation confirmed
+the textbox and rendered output both contained `DTW-Harness-verified`.
 
-Other pinned upstream limitations remain as detailed in the repair report:
-native parent/sheet composition, uncertain background gesture effects, synchronous
-JavaScript prompt timeouts, picker AX discovery/Escape, Chromium-only typed browser
-engines, and primary-display desktop capture. The SCK repairs address DTW's app
-route; they do not claim to repair all upstream providers.
+Independent fixture evidence confirmed the Apply HTTP event and one Harness
+initiated download, containing the exact 35 bytes with SHA-256
+`ce22c6927afd8a37dba402702c5b7e050e85b33c70d817cc17eb905ef1b15072`.
+The direct protocol check separately downloaded one file. Wrong windows, denied
+origins, outside-manifest directories, stale refs and private-field forgery were
+refused. Changing the original manifest after startup did not change the frozen
+scope. The pre-existing Chrome process survived DTW EOF, and only the fixture's
+owned process was cleaned up afterwards.
 
-Host products still need to support MCP form elicitation and present a genuine
-user decision. No cross-host confirmation UI acceptance, production install,
-Windows/Linux GUI acceptance, release signing or notarization is claimed here.
+Final-package evidence: `/private/tmp/dtw-review-final5-caelis/report.json` and
+`caelis-transcript.jsonl`; the first run is in `/private/tmp/dtw-review-browser-caelis1`. This is a real Caelis model/Skill/MCP acceptance, not
+CaelisBot UI or Telegram acceptance. No production installation, personal browser
+profile, account credential or cross-Harness approval UI was changed or tested.
 
-## Candidate and regression provenance
+## Lifecycle and package checks
 
-Both final3 packages have 712 independently verified checksum entries and valid
-local ad hoc signatures:
+The opt-in Rust recovery test uses the real supervisor/worker and advances DTW's
+idle timestamp, without waiting 25 wall-clock minutes. It proves fresh state after
+idle reset, no dispatch of the reset-triggering script, pre-admission cancellation
+recovery, and expiry of a three-second native manifest after a context reset.
+Continuous use is covered by removing the absolute-age state and idle-boundary
+unit checks; this is not a multi-hour soak test. The native expiry test is wired
+into macOS and Windows package CI.
 
-| Artifact | SHA-256 |
+Source checks cover Rust formatting, 70 pinned-prelude cases, strict TypeScript
+and eight Python unit tests. The Windows failure on the prior PR head was a test
+reading UTF-8 native output through cp1252; the probe now specifies UTF-8.
+Final local package validation passed 17 Rust tests (including native recovery),
+MCP/receipt/schema/authorization/isolation/cancellation/worker-lifecycle probes,
+and standalone installation/export into a path containing spaces and Chinese.
+Both package variants have 711 independently verified checksum entries and valid
+ad hoc signatures. Final artifacts:
+
+| Artifact under `/private/tmp` | SHA-256 |
 | --- | --- |
-| `/private/tmp/dtw-cua-authorization-final3/bin/dtw` | `d704c1c87ea13c772931ab0aa936c2388719f263c32c0db0f8232a29bc287293` |
-| `/private/tmp/dtw-cua-authorization-final3-slim/bin/dtw` | `1f073eb27f84ea480758f375a34d56c7bf1646adfd972a962a43dbdfa9e41cf2` |
-| Packaged worker, both | `f1463aad7bda8f236003ecb1d8d20c7da7c2c2d4f72127bf7c258f37427f1014` |
+| `dtw-review-final5/bin/dtw` | `8fd214b16efa4604d722f8cc2aefa5dca3b3c91e53172dba4c6db1a8b137ca65` |
+| `dtw-review-final5-slim/bin/dtw` | `1014cfc17fb6e1ba95941cd442b6493a93bd494bc34559b1ce5796523ba7ac62` |
+| Packaged CUA worker | `f1463aad7bda8f236003ecb1d8d20c7da7c2c2d4f72127bf7c258f37427f1014` |
 
-The supervised native worker launch fixes its cleanup idle TTL at 1,800 seconds,
-preserving the earlier delegated-session cleanup ceiling. This is CUA's native
-`CUA_DRIVER_RS_SESSION_IDLE_TTL_SECS` maintenance setting, owned by DTW's launcher;
-it is not a tool argument or a permission-mode override. The SDK general environment
-allowlist excludes this setting, so it belongs at the actual supervised worker
-launch. DTW's 25-minute absolute context cap precedes cleanup, including SCK-only
-activity. Native manifest and individual authorization-grant expiry are independent.
+Logs: `/private/tmp/dtw-review-final5-checks.log`,
+`dtw-review-final5-rust.log` and `dtw-review-source-final.log`.
 
-The full browser form/gesture/upload/dialog regression and SCK scene regression
-passed on `/private/tmp/dtw-cua-authorization-final-slim`; three isolated browsers
-exited on idle EOF, and the independent standalone install probe passed. That
-candidate predates only the explicit native cleanup TTL at worker launch. The
-final3 candidates repeat the MCP/authority/lifecycle and real profile/download
-matrix with this lifecycle setting in place. The prompt-trigger 20-second timeout
-remains explicitly recorded as an upstream limitation, even though subsequent
-dialog inspection and acceptance succeeds.
+Windows GUI and CaelisBot front-end acceptance remain unperformed.
 
-The 120-second unanswered confirmation path was measured at 120.002 seconds,
-with a consent refusal and no native download dispatch, in
-`/private/tmp/dtw-confirmation-timeout`. Source validation passed 13 Rust unit tests,
-70 pinned-prelude checks, strict TypeScript authoring checks and eight Python unit
-tests. These checks are distinct from the GUI fixture evidence above. A sandboxed
-native-worker smoke failed to initialize macOS services; the same check passed
-with normal host runtime access. No remote CI success is inferred from local tests.
+## Remaining CUA and integration limits
+
+- **Chrome setup without an existing endpoint:** the owned ordinary Chrome
+  window failed CUA's exact AX `New Tab` matcher in
+  `platform-macos/src/browser/setup_ui.rs`, returning `browser_wrong_target_refused`.
+  Attachment with an already available DevTools endpoint is verified. DTW does
+  not silently relaunch the browser or guess setup coordinates.
+- **Dynamic existing-profile consent:** embedded `DriverAuthorizationHost`
+  exists, but the released private-worker protocol has no callback transport.
+  The supported route is host-approved bounded startup. Dynamic protected profile
+  dialogs need an upstream transport extension and DTW integration; ordinary MCP
+  elicitation is not a substitute.
+- **Synchronous JavaScript dialogs:** a prompt-triggering click can time out even
+  though the prompt opened. Inspect before the trigger and resolve its returned
+  generation; do not replay the click. This remains upstream behavior.
+- **Other pinned native limits:** parent/sheet screenshot composition, uncertain
+  background gestures, picker AX discovery/Escape, Chromium-only typed browser
+  engines and primary-display desktop capture remain as recorded in
+  [the earlier repair acceptance](cua-0380-repairs.md). DTW's SCK repairs cover its
+  own app route, not all native providers.

@@ -153,3 +153,40 @@ OS surfaces are checked locally; their images are never returned to the Agent.
 The runtime does not retry refused or unknown input with another delivery mode.
 Observe again after input and verify the intended change. Do not use `run_script`
 between the app observation and its click; that invalidates the observation.
+
+## Click options and platform limits
+
+Click options follow the pinned CUA 0.38.0 component. DTW accepts either
+`modifiers: ["ctrl"]` or native `modifier: ["ctrl"]`; a string such as
+`modifier: "ctrl"`, an unknown key name, or both spellings is rejected before input.
+
+| Method | Options beyond delivery_mode | Screenshot binding |
+| --- | --- | --- |
+| `click` | `button`, `modifiers` / `modifier`, `from_zoom`; `count` of 1, 2, or 3 with a Point (route limits below) | `capture_id` with a Point; cannot combine with `from_zoom` |
+| `rightClick` | `modifiers` / `modifier` with a Point; `from_zoom` on Windows only | None; use `click(point, {button: "right", capture_id})` |
+| `doubleClick` | `from_zoom` on Windows only | None |
+| `typeText` | `delay_ms` (0–200; default 30, synthesis routes only) | None |
+| `scroll` | `by: "line"` or `by: "page"` | None |
+| `drag` | `duration_ms`, `steps`, `button`, `from_zoom` | None |
+
+On macOS, modified `click` requires an exact window binding
+(`cua.getApp({pid: PID, windowId: WID})`) and `delivery_mode: "foreground"`.
+DTW never changes delivery mode automatically. Windows preserves the native `from_zoom` conversion for pixel `rightClick` and
+`doubleClick` after `zoom`; macOS rejects that option. Native `rightClick` modifiers and
+Windows modifier delivery have upstream limitations; verify the resulting UI.
+Windows accepts double-click modifiers without applying them; DTW rejects that
+option on all platforms. `cua.call` applies the same click argument checks.
+Native `operation=click` remains a single unmodified left click with its own
+`observation_id`; it does not accept these JS options.
+
+For a screenshot-bound double click, use
+`app.click([x,y], {capture_id: CAPTURE_ID, count: 2})`. This is one native
+gesture consuming one capture, not two attempts with the same credential.
+The native schema accepts `count:3`, but macOS Chromium background left clicks
+are capped at two; macOS background right/middle clicks ignore `count`.
+Do not infer a triple click or repeated right click from an accepted option.
+Native `drag` supports background delivery on some controls; macOS drag-and-drop
+sessions and some Windows controls still require explicit foreground delivery.
+Inspect the result and UI before changing route. `getState({verbose:true})`
+exposes the native macOS `background_input` report when troubleshooting;
+`full_output:true` expands tree metadata and should not be combined with `since`.

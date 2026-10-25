@@ -9,21 +9,20 @@ not `cua.call` methods. Read the exact worker schema without performing an actio
 
 Supply native parameters under `arguments`; never provide `session`, private
 context fields, a CDP endpoint, or invented target/ref IDs. Results use normal
-DTW receipts. Poll a running receipt; retrieve `part:"structured"` for complete
-native bindings, error context, side effects, continuations and diagnostic data.
+DTW receipts. Poll a running receipt. Bindings, refs, outline and continuations appear directly
+in the completed receipt. Follow `more` only when the response is truncated;
+`part:"structured"` keeps raw diagnostics.
 Use `part:"image"` for the retained PNG. Input is never automatically replayed.
 
 ## Bind and observe
 
-For an existing browser, enumerate the exact PID/window using the script API,
-then call `get_browser_state` with `{pid,window_id}`. If setup is needed,
-`browser_prepare` supports `{pid,window_id,strategy:{kind:"existing_profile"}}`.
-Existing profile access requires upstream runtime authorization. The host can
-approve a native capability manifest at DTW startup, as described below. Without
-it, standard mode preserves `browser_consent_required`. A desktop MCP tool approval
-or model-provided boolean is not a native profile grant.
+Start with `{"operation":"describe"}` and follow the configured target's
+`next_call`. It works in bounded mode without scripts or desktop enumeration.
+Otherwise discover the task's PID/window with the script API when available.
+For setup, follow the returned DTW `next_call`; if it says `requires:"host"`,
+report that requirement. Do not copy session fields from raw upstream diagnostics.
 
-For a task explicitly using a fresh isolated browser:
+In standard mode with `run` available, for a task explicitly using a fresh isolated browser:
 
 ```json
 {"operation":"browser_prepare","arguments":{"allow_launch":true,"profile":{"mode":"isolated_new"}}}
@@ -62,86 +61,24 @@ Each call includes the same exact `target_id` and `tab_id`:
 | `browser_pointer` | `action:"hover"/"right_click"/"double_click"/"scroll"/"drag"`; current ref or CSS coordinates, deltas or destination as described by the native schema. |
 | `browser_dialog` | `action:"inspect"` returns the current dialog generation. `accept`/`dismiss` requires that exact `dialog_id`; accepting a prompt optionally uses `prompt_text`. |
 | `browser_set_input_files` | File-input `ref`, `files` containing scoped absolute paths to regular files. Retains native upload consent. |
-| `browser_download` | Current initiating `ref`, existing canonical `destination_root`. Retains native download consent. |
+| `browser_download` | Current initiating `ref`, existing absolute `destination_root`. Harness approves the tool call; CUA checks the binding and file scope. |
 
 In CUA 0.38, call `browser_dialog` with `action:"inspect"` **before** a known
 JavaScript-dialog trigger to register dialog events. A synchronous prompt can
 still make the triggering click time out; do not replay it. Inspect and resolve
 the dialog's returned generation instead. First registering after a dialog is
 already open can itself time out. This is an upstream limitation, not a verified
-smooth prompt flow. Native OS file pickers use the application screenshot route.
+smooth prompt flow. Native OS file pickers can use the application screenshot
+route only when `describe` lists that capability; bounded browser-only scope
+requires host help instead.
 
 File assignment to an isolated page was verified with a task-owned local file.
-`browser_download` asks the MCP host for an explicit form confirmation of that
-one target/tab/ref/destination. Accepting the form with `approve:true` carries
-CUA's native destructive-tool approval evidence through the trusted SDK adapter.
-The public arguments never include that evidence. A host without form elicitation,
-decline, cancel, invalid response or 120-second timeout refuses without dispatch.
-The originating tools/call stays pending during confirmation; other actions return
-`runtime_busy`. Set host tool-call timeouts accordingly. Native manifest, exact
-binding, ref freshness and output validation remain required after confirmation.
-Completed native output intentionally contains an opaque download ID and byte count,
-not source URLs or filenames. Do not replay a timed-out download.
-
-## Host-approved existing profile
-
-The launcher must review exact grants and pass both flags (never synthesize
-approval from a tool request):
-
-```sh
-dtw --capability-manifest /absolute/reviewed-browser.yaml --approve-capability-manifest
-```
-
-Add these arguments to the MCP host's DTW server configuration. Restart after
-changing grants. DTW freezes the approved file before CUA initializes; changes to
-the original file cannot widen a running process. Invalid manifests fail startup.
-This is the native CUA **bounded** authorization path. Example native v2 manifest:
-
-```yaml
-version: 2
-mode: bounded
-expires_after: 20m
-idle_timeout: 10m
-resources:
-  browser:
-    existing_profiles:
-      - pid: 12345      # replace with the exact reviewed running process
-        window_id: 678 # replace with the exact reviewed native window
-    origins: ["https://app.example.com"]
-  files:
-    write:
-      - dir: /absolute/existing/canonical/downloads
-        recursive: false
-allow:
-  tools: [start_session, end_session, browser_prepare, get_browser_state,
-          browser_navigate, browser_click, browser_type, browser_select,
-          browser_pointer, browser_dialog, browser_download, health_report]
-```
-
-Use the narrowest tools/resources needed; uploads additionally need the native
-read-file grants and `browser_set_input_files`. `describe` still gives exact schemas.
-An existing endpoint must be owned by the approved PID; any native setup side
-effects are reported by CUA. Task-owned real Chrome acceptance verified attachment
-to an already running profile with an existing endpoint, without copying profile
-data, relaunching Chrome or changing preferences. It did not exercise a personal
-logged-in account. Disconnecting DTW preserves the pre-existing browser process.
-
-The DTW SCK `app`/`click` extensions are unavailable in bounded mode because they
-cannot enforce native manifests; use permitted native browser/desktop routes.
-After 25 minutes of DTW context age or idle time, restart and observe again;
-shorter native manifest lifetimes still apply. There is no automatic grant renewal.
-
-CUA's embedded `DriverAuthorizationHost` provides a different, protected dynamic
-profile consent mechanism. The released private-worker protocol does not transport
-that callback. DTW does not replace it with ordinary MCP elicitation; interactive
-profile callback support remains a separate upstream transport/integration gap.
-
-For click/pointer, `delivery_mode:"foreground"` explicitly permits the trusted
-route to activate the browser. A background refusal does not authorize changing
-route. Choose the route according to the user's task; do not silently fall back
-or replay. Native receipts distinguish dispatch and effect. Refresh page state
-and check the actual postcondition before another action. Keep native AX/SCK
-routes for browser chrome and operating-system dialogs.
+`browser_download` accepts a normal absolute directory path (including ordinary
+Windows paths); DTW canonicalizes it for CUA. The Harness owns tool approval,
+with no additional DTW form or approval argument. Native manifest, exact binding,
+ref freshness and output validation still apply. A receipt reports an opaque
+download ID and byte count, not source URLs or filenames. Do not replay a timed-out
+download.
 
 ## Diagnostics
 

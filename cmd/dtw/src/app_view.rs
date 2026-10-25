@@ -50,6 +50,7 @@ impl Runtime {
 }
 fn refusal(code: &str, message: &str) -> SavedResult {
     SavedResult {
+        native_operation: None,
         text: message.into(),
         structured: json!({"code":code,"coverage":"incomplete"}).to_string(),
         images: vec![],
@@ -180,7 +181,7 @@ async fn capture_once(
         inventory: after,
         frames,
     });
-    Ok(SavedResult{text:format!("App {pid}: {} observed window(s), {} image(s), front to back. observation_id={id}. Fetch image_index; use operation=click with observation_id, image_index, x, y. Attribution is best effort; inspect occluders and omitted_count. Reobserve after input.",windows.len(),images.len()),structured:summary.to_string(),images,is_error:false,error_code:None})
+    Ok(SavedResult{native_operation:None,text:format!("App {pid}: {} observed window(s), {} image(s), front to back. observation_id={id}. Fetch image_index; use operation=click with observation_id, image_index, x, y. Attribution is best effort; inspect occluders and omitted_count. Reobserve after input.",windows.len(),images.len()),structured:summary.to_string(),images,is_error:false,error_code:None})
 }
 pub(super) async fn click(
     runtime: &Runtime,
@@ -232,7 +233,7 @@ pub(super) async fn click(
     if let Some(e) = platform_error(&v) {
         return Ok(e);
     }
-    Ok(SavedResult{text:"Pointer input posted to the verified visible window. Effect is unverified; observe again before further input.".into(),structured:v.to_string(),images:vec![],is_error:false,error_code:None})
+    Ok(SavedResult{native_operation:None,text:"Pointer input posted to the verified visible window. Effect is unverified; observe again before further input.".into(),structured:v.to_string(),images:vec![],is_error:false,error_code:None})
 }
 #[cfg(test)]
 mod tests {

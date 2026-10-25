@@ -1024,6 +1024,7 @@ dependencies = [
  "flate2",
  "libc",
  "serde_json",
+ "serde_yaml_ng",
  "sha2",
  "tar",
  "tokio",

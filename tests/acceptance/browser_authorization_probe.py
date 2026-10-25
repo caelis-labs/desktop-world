@@ -2,8 +2,8 @@
 """Opt-in macOS real-browser authorization acceptance, owned fixture only.
 
 Usage: DTW_CUA_WORKER=... python3 browser_authorization_probe.py DTW NEW_DIR
-The test MCP host deliberately returns each explicit decision below. This tests
-protocol + real CUA/Chrome effects, not a particular product's confirmation UI.
+The model-facing path uses only inline receipts, with no scout MCP Runtime
+or hidden structured-result fetches. --caelis also runs the real local Harness.
 """
 import hashlib
 import http.server
@@ -16,13 +16,13 @@ import sys
 import threading
 import time
 from accept_chrome import exact_chrome_pid
-from probe import call, exec_call, structured_result
+from probe import call, exec_call
 
 root = Path(sys.argv[2]).resolve()
 root.mkdir(parents=True, exist_ok=False)
 downloads = root/'downloads'; downloads.mkdir()
-payload = b'DTW explicit host approval fixture\n'
-html = b'<!doctype html><title>DTW authorization fixture</title><h1>Owned authorization fixture</h1><a href="/download" download>Download fixture</a>'
+payload = b'DTW Harness-owned approval fixture\n'
+html = b'<!doctype html><title>DTW authorization fixture</title><h1>Owned authorization fixture</h1><label>Message<input id="message"></label><button onclick="document.querySelector(\'output\').textContent=document.querySelector(\'input\').value;fetch(\'/applied?text=\'+encodeURIComponent(document.querySelector(\'input\').value))">Apply</button><output>Not applied</output><a href="/download" download>Download fixture</a>'
 requests = []
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -41,12 +41,12 @@ processes = []
 report = {}
 pid = None
 
-def host(label, flags=(), elicitation=True):
+def host(label, flags=()):
     p = subprocess.Popen([sys.argv[1], *flags], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=(root/f'{label}-stderr.log').open('w'), text=True)
+        stderr=(root/f'{label}-stderr.log').open('w'), text=True, encoding='utf-8')
     processes.append(p)
     call(p, {'jsonrpc':'2.0','id':1,'method':'initialize','params':{
-        'protocolVersion':'2025-06-18', 'capabilities':{'elicitation':{}} if elicitation else {},
+        'protocolVersion':'2025-06-18', 'capabilities':{},
         'clientInfo':{'name':'owned-authorization-test-host','version':'1'}}})
     return p
 
@@ -67,7 +67,7 @@ def run(p, op, arguments=None, **extra):
     while receipt.get('status') == 'running' and time.monotonic() < deadline:
         time.sleep(.1)
         receipt = exec_call(p, number*100+1, {'operation':'result','id':receipt['id']})
-    native = structured_result(p, number*100+2, None, receipt['id']) if 'id' in receipt else receipt
+    native = receipt.get('data', receipt)
     (folder/'receipt.json').write_text(json.dumps(receipt, indent=2))
     (folder/'native.json').write_text(json.dumps(native, indent=2))
     return receipt, native
@@ -90,24 +90,19 @@ try:
         try: pid = exact_chrome_pid(profile); break
         except (RuntimeError, subprocess.CalledProcessError): time.sleep(.1)
     assert pid
-    scout = host('scout', elicitation=False)
+    # Host configuration identifies its own fixture window via macOS. These
+    # IDs are never supplied to the Agent prompt or discovered by a scout DTW.
+    swift = root/'owned-window.swift'
+    swift.write_text('import CoreGraphics\nimport Foundation\nlet p = Int(CommandLine.arguments[1])!\nlet windows = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String:Any]]\nlet ids = windows.filter { ($0[kCGWindowOwnerPID as String] as? Int) == p && ($0[kCGWindowLayer as String] as? Int) == 0 }.compactMap { $0[kCGWindowNumber as String] as? Int }\nprint(String(data:try! JSONSerialization.data(withJSONObject:ids),encoding:.utf8)!)\n')
+    windows = []
     for _ in range(30):
-        windows = ok(scout, 'run', script=f'return await cua.listWindows({{pid:{pid}}});')['value']
+        windows = json.loads(subprocess.check_output(['swift',str(swift),str(pid)],text=True))
         if windows: break
         time.sleep(.2)
     assert len(windows) == 1, windows
-    window = windows[0]['window_id']
-    anchor = {'pid':pid,'window_id':window,'strategy':{'kind':'existing_profile'},'delivery_mode':'foreground'}
-    refused, detail = run(scout, 'browser_prepare', anchor)
-    assert refused.get('is_error') and 'consent' in json.dumps(detail).lower(), (refused,detail)
-    report['standard_existing_profile'] = 'refused without native grant'
-    denied, _ = run(scout, 'browser_download', {'target_id':'x','tab_id':'x','ref':'x','destination_root':str(downloads)})
-    assert denied.get('is_error') and not list(downloads.iterdir()), denied
-    report['no_elicitation'] = 'refused without download'
-    stop(scout)
-
+    window = windows[0]
     manifest = root/'approved.yaml'
-    native_tools = ['start_session','end_session','browser_prepare','get_browser_state','browser_navigate','browser_download','health_report']
+    native_tools = ['start_session','end_session','browser_prepare','get_browser_state','browser_navigate','browser_download','browser_type','browser_click','health_report']
     content = {'version':2,'mode':'bounded','expires_after':'20m','idle_timeout':'10m',
         'allow':{'tools':native_tools},'resources':{
             'browser':{'existing_profiles':[{'pid':pid,'window_id':window}], 'origins':[url]},
@@ -121,73 +116,53 @@ try:
     manifest.write_text('invalid: changed after launch\n')
     denied, _ = run(p, 'app', pid=pid)
     assert denied.get('is_error') and 'bounded_operation_unavailable' in denied['error'], denied
-    wrong, _ = run(p, 'browser_prepare', {**anchor,'window_id':window+1})
+    wrong, _ = run(p, 'browser_prepare', {'pid':pid,'window_id':window+1,'strategy':{'kind':'existing_profile'}})
     assert wrong.get('is_error'), wrong
-    prepared = ok(p, 'browser_prepare', anchor)
-    report['existing_profile'] = {'pid':pid,'window_id':window,'prepared':prepared}
-    bound = ok(p, 'get_browser_state', {'pid':pid,'window_id':window})
+    discovery = ok(p, 'describe')
+    assert 'run' not in discovery['operations'] and len(discovery['targets']) == 1, discovery
+    next_call = discovery['targets'][0]['next_call']
+    receipt, bound = run(p, next_call['operation'], next_call['arguments'])
+    if receipt.get('is_error'):
+        next_call = bound.get('next_call', bound.get('detail',{}).get('next_call'))
+        assert next_call and next_call['operation'] == 'browser_prepare', bound
+        assert 'session' not in next_call['arguments'], next_call
+        ok(p, next_call['operation'], next_call['arguments'])
+        bound = ok(p, 'get_browser_state', discovery['targets'][0]['next_call']['arguments'])
     assert bound['binding_quality'] == 'exact' and len(bound['tabs']) == 1, bound
     binding = {'target_id':bound['target_id'],'tab_id':bound['tabs'][0]['tab_id']}
     denied, _ = run(p, 'browser_navigate', {**binding,'url':'https://example.invalid'})
     assert denied.get('is_error'), denied
-    report['bounded_checks'] = 'unapproved startup / wrong window / outside origin / SCK bypass refused; original manifest replacement ignored'
-
-    decisions = []
-    expected_destination = downloads
-    def confirm(request):
-        prompt = request['params']
-        assert json.dumps(str(expected_destination)) in prompt['message'], prompt
-        assert prompt['requestedSchema']['properties']['approve']['default'] is False
-        # While waiting, another action cannot mutate the confirmed binding.
-        busy = exec_call(p, 999998, {'operation':'health_report','arguments':{'include':['binary_version']}})
-        assert busy.get('is_error') and 'runtime_busy' in busy['error'], busy
-        decision = decisions.pop(0)
-        with (root/'confirmations.jsonl').open('a') as f:
-            f.write(json.dumps({'request':request,'response':decision})+'\n')
-        # An unrelated response must not satisfy this pending confirmation.
-        p.stdin.write(json.dumps({'jsonrpc':'2.0','id':'unrelated','result':{'action':'accept','content':{'approve':True}}})+'\n'); p.stdin.flush()
-        return decision
-    p._dtw_elicitation = confirm
-    for answer in [
-        {'result':{'action':'decline'}}, {'result':{'action':'cancel'}},
-        {'result':{'action':'accept','content':{'approve':False}}},
-        {'error':{'code':-32601,'message':'no confirmation handler'}},
-        {'result':{'action':'accept','content':{'approve':True}}}]:
-        snap = ok(p, 'get_browser_state', {**binding,'snapshot_format':'semantic_v2'})
-        refs = [r['ref'] for r in snap['refs'] if r.get('name') == 'Download fixture']
-        assert len(refs) == 1, snap
-        decisions.append(answer)
-        before = requests.count('/download')
-        receipt, native = run(p, 'browser_download', {**binding,'ref':refs[0],'destination_root':str(downloads)})
-        accepted = answer.get('result',{}).get('content',{}).get('approve') is True
-        if accepted:
-            assert not receipt.get('is_error'), (receipt,native)
-            files = list(downloads.iterdir())
-            assert len(files) == 1 and files[0].read_bytes() == payload, files
-            assert requests.count('/download') == before+1, requests
-            report['download'] = {'native':native, 'sha256':hashlib.sha256(files[0].read_bytes()).hexdigest(), 'bytes':len(payload)}
-        else:
-            assert receipt.get('is_error') and not list(downloads.iterdir()), receipt
-            assert requests.count('/download') == before, requests
-    report['confirmation'] = 'decline / cancel / false / host error / unrelated id refused; explicit one-shot accept downloaded exact bytes'
-    outside = root/'outside-manifest'; outside.mkdir()
-    expected_destination = outside
+    report['bounded_checks'] = 'unapproved startup / wrong window / outside origin / SCK bypass refused; manifest replacement ignored'
     snap = ok(p, 'get_browser_state', {**binding,'snapshot_format':'semantic_v2'})
     download_ref = next(r['ref'] for r in snap['refs'] if r.get('name') == 'Download fixture')
-    decisions.append({'result':{'action':'accept','content':{'approve':True}}})
+    before = requests.count('/download')
+    native = ok(p, 'browser_download', {**binding,'ref':download_ref,'destination_root':str(downloads)+'/' + '.'})
+    files = list(downloads.iterdir())
+    assert len(files) == 1 and files[0].read_bytes() == payload, files
+    assert requests.count('/download') == before+1, requests
+    report['download'] = {'native':native, 'sha256':hashlib.sha256(files[0].read_bytes()).hexdigest(), 'bytes':len(payload)}
+    report['workflow'] = 'describe -> configured target -> native recovery -> binding/tabs -> snapshot/refs -> download, all inline; no elicitation'
+    outside = root/'outside-manifest'; outside.mkdir()
+    snap = ok(p, 'get_browser_state', {**binding,'snapshot_format':'semantic_v2'})
+    download_ref = next(r['ref'] for r in snap['refs'] if r.get('name') == 'Download fixture')
     before = requests.count('/download')
     denied, _ = run(p, 'browser_download', {**binding,'ref':download_ref,'destination_root':str(outside)})
     assert denied.get('is_error') and not list(outside.iterdir()) and requests.count('/download') == before, denied
     report['approved_outside_manifest'] = 'native refusal; no HTTP download or file'
-    expected_destination = downloads
     ok(p, 'get_browser_state', {**binding,'snapshot_format':'semantic_v2'})
-    decisions.append({'result':{'action':'accept','content':{'approve':True}}})
     denied, _ = run(p, 'browser_download', {**binding,'ref':download_ref,'destination_root':str(downloads)})
     assert denied.get('is_error') and requests.count('/download') == before and len(list(downloads.iterdir())) == 1, denied
     report['approved_stale_ref'] = 'native refusal; no replay or second download'
     stop(p)
     assert exact_chrome_pid(profile) == pid, 'DTW must not terminate a pre-existing browser'
     report['existing_browser_survived_eof'] = True
+    if '--caelis' in sys.argv[3:]:
+        from caelis_harness_probe import run_caelis
+        manifest.write_text(json.dumps(content, indent=2))
+        report['caelis'] = run_caelis(root, Path(sys.argv[1]).resolve().parent.parent, manifest, downloads)
+        assert any(path.startswith('/applied?text=DTW-Harness-verified') for path in requests), requests
+        assert requests.count('/download') == 2, requests
+        assert len(list(downloads.iterdir())) == 2 and all(f.read_bytes() == payload for f in downloads.iterdir())
     report['completed'] = True
 finally:
     for p in processes: stop(p)

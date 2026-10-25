@@ -197,7 +197,7 @@ type NativeArguments = { [key: string]: Json } & {
   _session_id?: never; _permission_mode?: never; _authorization_context?: never;
 };
 type ExecInput =
-  | { operation: "describe"; name: BrowserOperation | "health_report" | "get_guide" }
+  | { operation: "describe"; name?: BrowserOperation | "health_report" | "get_guide" }
   | { operation: BrowserOperation; arguments: NativeArguments;
       wait_ms?: number; include_image?: boolean }
   | { operation: "health_report"; arguments?: { include?: string[]; skip?: string[] };
