@@ -2,7 +2,7 @@
 
 The packaged Cua Driver SDK and private worker come from
 [`trycua/cua`](https://github.com/trycua/cua) at commit
-`2d2f99228d4d2508dc6fcc84c176b296e146714a` and are MIT licensed.
+`85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19` and are MIT licensed.
 Their copyright notice and full license are distributed in
 `CUA-MIT-LICENSE.txt`. The Cua Driver workspace's derived-code notices are
 distributed unchanged in `CUA-THIRD_PARTY_NOTICES.md`; these include its

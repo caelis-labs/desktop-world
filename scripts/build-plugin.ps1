@@ -4,7 +4,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$expected = '2d2f99228d4d2508dc6fcc84c176b296e146714a'
+$expected = '85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19'
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $destinationPath = [System.IO.Path]::GetFullPath($Destination)
 if (Get-Item -LiteralPath $destinationPath -Force -ErrorAction SilentlyContinue) {

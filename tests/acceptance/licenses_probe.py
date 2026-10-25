@@ -11,7 +11,7 @@ def main():
     package = Path(sys.argv[1]).resolve()
     root = package / "LICENSING"
     inventory = json.loads((root / "DEPENDENCIES.json").read_text(encoding="utf-8"))
-    assert inventory["cua_revision"] == "2d2f99228d4d2508dc6fcc84c176b296e146714a"
+    assert inventory["cua_revision"] == "85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19"
     assert set(inventory["targets"]) == {"aarch64-apple-darwin", "x86_64-pc-windows-msvc"}
     assert len(inventory["packages"]) >= 300
     count = 0

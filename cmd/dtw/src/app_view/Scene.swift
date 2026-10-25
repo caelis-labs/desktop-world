@@ -116,16 +116,29 @@ private func capture(_ request: [String:Any]) -> [String:Any] {
             box.result = fail("window_unavailable",error?.localizedDescription ?? "Window is no longer shareable"); semaphore.signal(); return
         }
         let filter = SCContentFilter(desktopIndependentWindow:window)
+        // Child-window composition can return a parent+sheet canvas scaled
+        // inside the requested sheet's dimensions. Bind one surface only.
+        guard #available(macOS 14.2, *) else {
+            box.result=fail("unsupported_platform","Exact single-window capture requires macOS 14.2 or later");semaphore.signal();return
+        }
+        guard near(filter.contentRect,window.frame) else {
+            box.result=fail("capture_geometry_mismatch","SCK content geometry differs from the window; no input binding created");semaphore.signal();return
+        }
         let config = SCStreamConfiguration()
         let scale = cap > 0 ? min(2, Double(cap) / max(window.frame.width,window.frame.height)) : 2
         config.width = max(1, Int((window.frame.width*scale).rounded()))
         config.height = max(1, Int((window.frame.height*scale).rounded()))
         config.showsCursor = false; config.ignoreShadowsSingleWindow = true
         config.shouldBeOpaque = false
+        config.includeChildWindows = false
+        config.destinationRect=CGRect(x:0,y:0,width:config.width,height:config.height)
         trace("image_request")
         SCScreenshotManager.captureImage(contentFilter:filter,configuration:config) { image, error in
             trace("image_callback")
             guard let image else { box.result = fail("capture_failed",error?.localizedDescription ?? "Empty SCK frame"); semaphore.signal(); return }
+            guard image.width==config.width,image.height==config.height else {
+                box.result=fail("capture_geometry_mismatch","SCK output dimensions differ from the configured frame");semaphore.signal();return
+            }
             if let sx = request["screen_x"] as? Double, let sy = request["screen_y"] as? Double {
                 let px = Int((sx-window.frame.minX)/window.frame.width*Double(image.width))
                 let py = Int((sy-window.frame.minY)/window.frame.height*Double(image.height))
@@ -198,8 +211,30 @@ private func click(_ request: [String:Any]) -> [String:Any] {
           let up = CGEvent(mouseEventSource:source,mouseType:.leftMouseUp,mouseCursorPosition:point,mouseButton:.left) else {
         return fail("input_unavailable","Cannot create pointer events")
     }
-    down.post(tap:.cghidEventTap); up.post(tap:.cghidEventTap)
-    return ["delivery":"posted","effect":"unverified","route":"dtw_visible_point","window_id":Int(id)]
+    // This is visible-point input: AppKit can hit-test against the physical
+    // cursor rather than only the event location. Never activate or retry.
+    guard CGWarpMouseCursorPosition(point) == .success,
+          CGAssociateMouseAndMouseCursorPosition(1) == .success else {
+        return fail("input_unavailable","Cannot position the pointer; no click posted")
+    }
+    Thread.sleep(forTimeInterval:0.04)
+    let settled=windows()
+    guard let live=settled.first(where: {$0.id==id && $0.pid==pid}),live.rect==expected,
+          signature(after)==signature(settled),
+          let pointer=CGEvent(source:nil)?.location,
+          abs(pointer.x-point.x)<=2,abs(pointer.y-point.y)<=2 else {
+        return fail("stale_observation","Window, hit stack or pointer changed after pointer placement; no click posted")
+    }
+    // A normal click has clickState=1. Zero can be delivered without activating
+    // an NSButton. Separate press/release so tracking controls see both phases.
+    down.flags=[];up.flags=[]
+    down.setIntegerValueField(.mouseEventClickState,value:1)
+    up.setIntegerValueField(.mouseEventClickState,value:1)
+    down.post(tap:.cghidEventTap)
+    Thread.sleep(forTimeInterval:0.028)
+    up.post(tap:.cghidEventTap)
+    Thread.sleep(forTimeInterval:0.04)
+    return ["delivery":"posted","effect":"unverified","route":"dtw_visible_point","window_id":Int(id),"pointer_moved":true]
 }
 @_cdecl("dtw_scene_call")
 public func dtwSceneCall(_ raw: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>? {

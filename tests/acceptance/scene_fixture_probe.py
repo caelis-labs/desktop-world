@@ -11,6 +11,8 @@ binary,fixture_path,output=sys.argv[1:4]
 shared=Path(sys.argv[4]) if len(sys.argv)>4 else None
 last_folder=None
 fixture=Path(fixture_path);out=Path(output);out.mkdir(parents=True,exist_ok=False)
+deadline=time.monotonic()+5
+while not (fixture/'state.json').exists() and time.monotonic()<deadline:time.sleep(.05)
 pid=json.loads((fixture/'state.json').read_text())['pid']
 proc=None if shared else subprocess.Popen([binary],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=(out/'stderr.log').open('w'),text=True)
 ident=1
@@ -58,15 +60,18 @@ try:
  if proc:call(proc,{'jsonrpc':'2.0','id':1,'method':'initialize','params':{'protocolVersion':'2025-06-18','capabilities':{},'clientInfo':{'name':'scene-fixture','version':'1'}}})
  v=observe();assert len(v['windows'])==3 and len(v['frames'])==2 and v['omitted_count']==1,v
  expanded=observe(8);assert len(expanded['frames'])==3,expanded
+ assert all(f['backend']=='screencapturekit' and f['input_route']=='dtw_visible_point' for f in expanded['frames']),expanded
  before=count();r=click(expanded);assert not r.get('is_error'),r
  time.sleep(.3);assert count()==before+1,(r,count(),before)
+ delivered=json.loads((fixture/'state.json').read_text())['events']
+ assert [e['type'] for e in delivered[-2:]]==['down','up'] and all(e['count']==1 for e in delivered[-2:]),delivered
  reused=click(expanded);assert reused.get('code')=='stale_observation',reused
  v=observe();command('move');stale=click(v);assert stale.get('code')=='stale_observation',stale
  assert count()==before+1
  command('restore');v=observe();command('close');closed=click(v);assert closed.get('code')=='stale_observation',closed
  assert count()==before+1
  command('restore');v=observe();run({'script':'return 1;'});invalidated=click(v);assert invalidated.get('code')=='stale_observation',invalidated
- # CUA's ordinary-window route remains usable through the same point contract.
+ # Ordinary windows use the same exact SCK surface and visible-point contract.
  v=observe(8);ordinary_backend=v['frames'][2]['backend'];base=count();ordinary=click(v,2);assert not ordinary.get('is_error'),ordinary
  time.sleep(.3);assert count()==base+1,(ordinary,count(),base)
  # A separately launched process must not be attributed to the target or clicked through.

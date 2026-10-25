@@ -8,7 +8,7 @@ import {execFileSync} from 'node:child_process';
 
 const root = path.resolve(import.meta.dirname, '../..');
 const source = path.resolve(process.argv[2]);
-const pin = '2d2f99228d4d2508dc6fcc84c176b296e146714a';
+const pin = '85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19';
 assert.equal(execFileSync('git', ['-C', source, 'rev-parse', 'HEAD'], {encoding:'utf8'}).trim(), pin);
 assert.equal(execFileSync('git', ['-C', source, 'status', '--porcelain'], {encoding:'utf8'}).trim(), '');
 assert.ok(fs.readFileSync(path.join(root, 'cmd/dtw/Cargo.toml'), 'utf8').includes(pin));

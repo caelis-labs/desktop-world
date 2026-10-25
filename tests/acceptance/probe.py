@@ -49,6 +49,8 @@ def call(proc, request, timeout=20):
             continue
         if isinstance(response, Exception):
             raise RuntimeError(f"MCP exited {proc.poll()}: {response}") from response
+        if response.get("method") == "elicitation/create":
+            raise AssertionError("DTW must leave tool approval to the Harness")
         if response.get("id") == request["id"]:
             return response
     raise TimeoutError(f"MCP request {request['id']} timed out")
@@ -84,6 +86,10 @@ def parse_exec_result(result):
                     value["value"] = json.loads(line[len("return value: "):])
                 except json.JSONDecodeError:
                     pass
+        try:
+            value["data"] = json.loads(body)
+        except json.JSONDecodeError:
+            pass
     elif result.get("isError"):
         value["error"] = text
     return value

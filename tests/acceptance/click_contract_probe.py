@@ -14,7 +14,7 @@ from probe import call, exec_call, result, runtime_env, structured_result
 
 def main():
     version = subprocess.check_output([sys.argv[1], "--version"], text=True).strip()
-    assert "CUA 0.37.0 source 2d2f99228d4d" in version, version
+    assert "CUA 0.38.0 source 85e2b1318bd7" in version, version
     proc = subprocess.Popen([sys.argv[1]], stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, env=runtime_env(), encoding="utf-8")

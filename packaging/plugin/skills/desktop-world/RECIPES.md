@@ -6,6 +6,13 @@ Each JavaScript block is the `script` string of the installed DTW `exec` tool (c
 
 Bind only the app PID after opening a dialog. An unpinned CUA `App` follows the app's current front window, including its picker; an exact `windowId` stays pinned to the old window. The user's persistent Obsidian picker was selected by PID-only binding and exposed `AXWindow "打开本地仓库" [id=open-panel]`. Confirm the title and controls before input.
 
+On Windows, a foreground click can return `foreground_unavailable` after the
+picker has opened. Reconcile with `cua.listWindows({pid:PARENT_PID})` and bind the
+observed dialog; the failed receipt is not permission to replay the trigger.
+Semantic UIA invocation of a modal can remain pending until the dialog closes.
+Poll the original receipt. If the Runtime must be cancelled, restart it and
+observe the existing dialog before continuing; cancellation cannot undo input.
+
 ```js
 const app = await cua.getApp({pid: PARENT_PID});
 const view = await app.getState({query:"打开",max_elements:100,include_screenshot:true});
@@ -14,7 +21,17 @@ return {pid:app.pid,window_id:app.windowId,title:app.title,
         has_image:view.screenshot_frame_valid};
 ```
 
-If PID-only binding misses the chooser, compare `cua.listWindows({pid:PARENT_PID})` before and after. Keep discovery scoped to the authorized process; a global window listing can expose unrelated titles. A macOS Open/Save service window may be invisible while the parent app has a visible AX proxy. Use the parent-owned `(pid,window_id)` if its `getState` has the real controls. A returned ID that fails on `getApp` does **not** prove the picker closed: in real Obsidian acceptance it remained visibly open for minutes. Do not repeatedly bind that ID or click its stale element frame. Capture the primary display instead:
+If PID-only binding misses the chooser, compare `cua.listWindows({pid:PARENT_PID})` before and after. Keep discovery scoped to the authorized process; a global window listing can expose unrelated titles. A macOS Open/Save service window may be invisible while the parent app has a visible AX proxy. Use the parent-owned `(pid,window_id)` if its `getState` has the real controls. A returned ID that fails on `getApp` does **not** prove the picker closed: in real Obsidian acceptance it remained visibly open for minutes. Do not repeatedly bind that ID or click its stale element frame. On macOS, next use the [application observation](#application-popups-and-choosers-macos) route:
+
+```json
+{"operation":"app","pid":123,"include_image":true}
+```
+
+Replace `123` with the authorized parent PID. Inspect the attributed windows,
+images and `omitted_count`; expand `max_windows` if needed. If a bound window has
+a crowded tree, try [region candidates](#region-candidates-from-a-window-screenshot).
+Only when these application-scoped observations cannot reveal the chooser and
+the task authorizes desktop scope, capture the primary display:
 
 ```json
 {"operation":"desktop","include_image":true,"max_image_dimension":1600}
@@ -143,3 +160,40 @@ OS surfaces are checked locally; their images are never returned to the Agent.
 The runtime does not retry refused or unknown input with another delivery mode.
 Observe again after input and verify the intended change. Do not use `run_script`
 between the app observation and its click; that invalidates the observation.
+
+## Click options and platform limits
+
+Click options follow the pinned CUA 0.38.0 component. DTW accepts either
+`modifiers: ["ctrl"]` or native `modifier: ["ctrl"]`; a string such as
+`modifier: "ctrl"`, an unknown key name, or both spellings is rejected before input.
+
+| Method | Options beyond delivery_mode | Screenshot binding |
+| --- | --- | --- |
+| `click` | `button`, `modifiers` / `modifier`, `from_zoom`; `count` of 1, 2, or 3 with a Point (route limits below) | `capture_id` with a Point; cannot combine with `from_zoom` |
+| `rightClick` | `modifiers` / `modifier` with a Point; `from_zoom` on Windows only | None; use `click(point, {button: "right", capture_id})` |
+| `doubleClick` | `from_zoom` on Windows only | None |
+| `typeText` | `delay_ms` (macOS synthesis only, 0–200; default 30). Windows ignores it, including foreground SendInput. | None |
+| `scroll` | `by: "line"` or `by: "page"` | None |
+| `drag` | `duration_ms`, `steps`, `button`, `from_zoom` | None |
+
+On macOS, modified `click` requires an exact window binding
+(`cua.getApp({pid: PID, windowId: WID})`) and `delivery_mode: "foreground"`.
+DTW never changes delivery mode automatically. Windows preserves the native `from_zoom` conversion for pixel `rightClick` and
+`doubleClick` after `zoom`; macOS rejects that option. Native `rightClick` modifiers and
+Windows modifier delivery have upstream limitations; verify the resulting UI.
+Windows accepts double-click modifiers without applying them; DTW rejects that
+option on all platforms. `cua.call` applies the same click argument checks.
+Native `operation=click` remains a single unmodified left click with its own
+`observation_id`; it does not accept these JS options.
+
+For a screenshot-bound double click, use
+`app.click([x,y], {capture_id: CAPTURE_ID, count: 2})`. This is one native
+gesture consuming one capture, not two attempts with the same credential.
+The native schema accepts `count:3`, but macOS Chromium background left clicks
+are capped at two; macOS background right/middle clicks ignore `count`.
+Do not infer a triple click or repeated right click from an accepted option.
+Native `drag` supports background delivery on some controls; macOS drag-and-drop
+sessions and some Windows controls still require explicit foreground delivery.
+Inspect the result and UI before changing route. `getState({verbose:true})`
+exposes the native macOS `background_input` report when troubleshooting;
+`full_output:true` expands tree metadata and should not be combined with `since`.
