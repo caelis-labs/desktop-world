@@ -1,6 +1,6 @@
 /** Authoring reference for the JS string passed to desktop-world exec.
  * This file is documentation for editors and Agents; no TypeScript/Node runs in DTW.
- * Upstream CUA prelude: crates/cua-driver-core/src/script_tool/prelude.js at cua-driver-rs-v0.37.0 (2d2f99228d4d).
+ * Upstream CUA prelude: crates/cua-driver-core/src/script_tool/prelude.js at cua-driver-rs-v0.38.0 (85e2b1318bd7).
  */
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type Point = [x: number, y: number];
@@ -26,7 +26,12 @@ type ElementClickOptions = Delivery & ModifierOptions & {
 };
 /** One-use screenshot binding, valid only with a Point target. Zoom pixels
  * cannot be combined with capture_id. */
-type ClickOptions = ElementClickOptions & (
+type ClickOptions = ElementClickOptions & {
+  /** Pixel targets only. Native schema accepts 1..3; macOS Chromium background
+   * input caps left clicks at 2, and background right/middle input ignores count.
+   * A capture binds the whole gesture once; verify the resulting UI. */
+  count?: 1 | 2 | 3;
+} & (
   | { from_zoom?: boolean; capture_id?: never }
   | { capture_id: string; from_zoom?: false }
 );
@@ -39,6 +44,21 @@ type DoubleClickOptions = Delivery & WindowsZoomOptions;
 /** No capture_id or button. Modifiers require a Point target.
  * For a screenshot-bound right click use click(point, {button:"right", capture_id}). */
 type RightClickOptions = Delivery & ModifierOptions & WindowsZoomOptions;
+type TypeTextOptions = Delivery & {
+  /** 0..200 ms between synthesized characters; default 30. Atomic AX/UIA
+   * insertion ignores this. This does not enable a clipboard route. */
+  delay_ms?: number;
+};
+type ScrollOptions = Delivery & { by?: "line" | "page" };
+type DragOptions = Delivery & {
+  /** 0..10000 ms; default 500. Native routes may use their own timing. */
+  duration_ms?: number;
+  /** 1..200 intermediate events; default 20. */
+  steps?: number;
+  button?: "left" | "right" | "middle";
+  /** Coordinates from this window's latest zoom image. No capture_id support. */
+  from_zoom?: boolean;
+};
 type WindowInfo = {
   pid: number;
   window_id: number;
@@ -71,6 +91,11 @@ type WindowState = {
   elements?: Element[];
   element_count?: number;
   truncated?: boolean;
+  truncation_reason?: string;
+  degraded_reason?: string;
+  since_status?: string;
+  /** Request verbose:true to inspect the native macOS input capability report. */
+  background_input?: Json;
   /** macOS geometry verdict. Windows omits this flag; require capture_id,
    * positive dimensions, no screenshot_error and a screenshot_frame, then visually
    * check alignment. DPI-unaware Windows captures can have misaligned pixels. */
@@ -90,14 +115,28 @@ type StateOptions = {
   include_accessibility_tree?: boolean;
   display_only?: boolean;
   max_image_dimension?: number;
+  /** Legacy screenshot cap. Prefer max_image_dimension; Windows ignores this
+   * field when max_image_dimension is explicitly supplied. */
+  max_dimension?: number;
+  timeout_ms?: number;
+  /** Includes native diagnostic metadata such as background_input on macOS. */
+  verbose?: boolean;
+  /** Full tree/metadata response; do not combine with since. */
+  full_output?: boolean;
 };
 
 interface CuaApp {
   readonly pid: number;
   /** Updated by getState(); without windowId binding, follows the app's front window. */
   windowId: number;
+  readonly name: string | null;
   title: string | null;
+  /** Most recent getState snapshot for numeric row targets in this script. */
+  snapshotId: string | null;
   readonly pinned: boolean;
+  where(): { pid: number; window_id?: number };
+  /** Refresh the bound window metadata without requesting a screenshot/tree. */
+  window(): Promise<Json>;
   getState(options?: StateOptions): Promise<WindowState>;
   query(selector?: ElementSelector & { text?: string }): Promise<Element[]>;
   waitFor(selector: ElementSelector & { text?: string; gone?: boolean; value?: string },
@@ -112,14 +151,14 @@ interface CuaApp {
   rightClick(target: Point, options?: RightClickOptions): Promise<Json>;
   rightClick(target: Target, options?: Delivery): Promise<Json>;
   /** Text first; for a canvas, a Point focuses and types in one native call. */
-  typeText(text: string, target?: Target, options?: Delivery): Promise<Json>;
+  typeText(text: string, target?: Target, options?: TypeTextOptions): Promise<Json>;
   pressKey(key: string, target?: Target, options?: Delivery): Promise<Json>;
   hotkey(keys: string[] | string, target?: Target, options?: Delivery): Promise<Json>;
-  scroll(target: Target, direction?: "up" | "down" | "left" | "right",
-         amount?: number, options?: Delivery): Promise<Json>;
+  scroll(target?: Target, direction?: "up" | "down" | "left" | "right",
+         amount?: number, options?: ScrollOptions): Promise<Json>;
   /** Selector first; writes an exposed AX value, which may not commit a form. */
   setValue(target: Target, value: string, options?: Delivery): Promise<Json>;
-  drag(from: Point, to: Point, options?: Delivery): Promise<Json>;
+  drag(from: Point, to: Point, options?: DragOptions): Promise<Json>;
   /** Requires a valid screenshot of this window; retains a cropped image. */
   zoom(rect: Rect | { x1: number; y1: number; x2: number; y2: number }): Promise<Json>;
 }
@@ -148,7 +187,22 @@ declare const state: Record<string, Json>;
 
 /** The same MCP tool carries all results. `result` with part=image displays
  * a retained screenshot; part=structured pages the complete native data. */
+type BrowserOperation = "get_browser_state" | "browser_prepare" | "browser_navigate" |
+  "browser_click" | "browser_type" | "browser_select" | "browser_dialog" |
+  "browser_pointer" | "browser_set_input_files" | "browser_download";
+/** Native schemas come from operation=describe against this exact worker.
+ * Preserve target_id/tab_id/ref; never supply native session/private fields. */
+type NativeArguments = { [key: string]: Json } & {
+  session?: never; session_id?: never; public_session?: never;
+  _session_id?: never; _permission_mode?: never; _authorization_context?: never;
+};
 type ExecInput =
+  | { operation: "describe"; name: BrowserOperation | "health_report" | "get_guide" }
+  | { operation: BrowserOperation; arguments: NativeArguments;
+      wait_ms?: number; include_image?: boolean }
+  | { operation: "health_report"; arguments?: { include?: string[]; skip?: string[] };
+      wait_ms?: number }
+  | { operation: "get_guide"; arguments: { topic: string }; wait_ms?: number }
   | { operation?: "run"; script: string; wait_ms?: number;
       include_image?: boolean }
   | { operation: "menu"; pid: number; window_id: number;

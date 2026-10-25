@@ -2,7 +2,7 @@
 
 For contributors and application packagers. To install the released executable, see the [user quick start](../README.md#get-started).
 
-Building requires Rust 1.98.0, Python 3.11+ for dependency-notice generation, and access to the pinned [Cua Driver source](https://github.com/trycua/cua/tree/2d2f99228d4d2508dc6fcc84c176b296e146714a). macOS additionally needs Xcode with its Swift toolchain; Windows needs the MSVC Rust target, Visual Studio C++ build tools, a Windows SDK, and the matching **MSVC x64/x86 Spectre-mitigated libraries** (`Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre`). The pinned dependency `msvc_spectre_libs` rejects a build without that optional component. The platform build script verifies the CUA commit and builds the DTW CLI plus CUA's private worker. DTW uses CUA component release **0.37.0**, pinned to its exact tag commit. The app top2 extension uses the unmodified worker; see [the POC](../poc/associated-capture/README.md). Choose a new destination:
+Building requires Rust 1.98.0, Python 3.11+ for dependency-notice generation, and access to the pinned [Cua Driver source](https://github.com/trycua/cua/tree/85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19). macOS additionally needs Xcode with its Swift toolchain; Windows needs the MSVC Rust target, Visual Studio C++ build tools, a Windows SDK, and the matching **MSVC x64/x86 Spectre-mitigated libraries** (`Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre`). The pinned dependency `msvc_spectre_libs` rejects a build without that optional component. The platform build script verifies the CUA commit and builds the DTW CLI plus CUA's private worker. DTW uses CUA component release **0.38.0**, pinned to its exact tag commit. The app top2 extension uses the unmodified worker; see [the POC](../poc/associated-capture/README.md). Choose a new destination:
 
 ```sh
 ./scripts/build-plugin.sh /private/tmp/dtw-plugin
@@ -22,13 +22,14 @@ To use an existing clean CUA checkout at the exact pinned commit, set `CUA_SOURC
 
 
 See [architecture](architecture.md), [acceptance](acceptance.md), and [release readiness](release-readiness.md) for implementation and release validation.
-The [click contract](click-contract.md) records the current pin and its bounded
+The [CUA upgrade audit](cua-0380-usability.md) records the current pin and acceptance.
+The [click contract](click-contract.md) retains the 0.37.0 baseline and bounded
 regression commands. `DTW_CHECK_CLICK_CONTRACT=1` additionally checks DTW against
 the exact source prelude during packaging (Node 22+ is a test dependency only).
 
 The DTW application-observation extension statically compiles
 `cmd/dtw/src/app_view/Scene.swift` with Xcode's Swift compiler. The resulting macOS candidate
-requires macOS 14+; there is no Node runtime or additional helper installation.
+supports the core runtime on macOS 14+ and exact application screenshots on macOS 14.2+; there is no Node runtime or additional helper installation.
 After a SDK/worker upgrade, run the implicit-session contract tests and the live
 application/point gates in `docs/rc9-acceptance.md` before promotion. The same executable also serves as
 a short-lived native extension child; no additional distributed helper is needed.

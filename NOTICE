@@ -4,7 +4,7 @@ Copyright (c) 2026 Caelis Labs.
 
 The current DTW adapter source is licensed under the MIT License in LICENSE.
 It links Cua Driver SDK and packages a private Cua Driver worker from
-trycua/cua commit 2d2f99228d4d2508dc6fcc84c176b296e146714a. Their
+trycua/cua commit 85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19. Their
 copyright and MIT license are preserved separately in packaged artifacts as
 CUA-MIT-LICENSE.txt. See THIRD_PARTY_NOTICES.md for additional attribution.
 

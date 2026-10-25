@@ -3,7 +3,7 @@ set -eu
 export MACOSX_DEPLOYMENT_TARGET=14.0
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
-expected=2d2f99228d4d2508dc6fcc84c176b296e146714a
+expected=85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19
 destination=${1:?usage: scripts/build-plugin.sh DESTINATION}
 case "$destination" in
   /*) ;;

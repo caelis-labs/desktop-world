@@ -1,6 +1,6 @@
 //! Application observation and one-use coordinate bindings. CUA remains unmodified.
-use crate::{save, SavedResult};
-use cua_driver_sdk::{CuaDriverSession, DriverError, ImageContent};
+use crate::SavedResult;
+use cua_driver_sdk::{DriverError, ImageContent};
 use serde_json::{json, Value};
 use std::{
     sync::Mutex,
@@ -71,15 +71,6 @@ fn inventory_equal(a: &Value, b: &Value) -> bool {
     };
     normalize(a).is_some() && normalize(a) == normalize(b)
 }
-fn valid_native(v: &Value, n: usize, w: &Value) -> bool {
-    n == 1
-        && v["screenshot_frame_valid"] == true
-        && v["capture_id"].as_str().is_some_and(|s| !s.is_empty())
-        && v["pid"] == w["pid"]
-        && v["window_id"] == w["id"]
-        && v["screenshot_width"].as_u64().is_some_and(|n| n > 0)
-        && v["screenshot_height"].as_u64().is_some_and(|n| n > 0)
-}
 fn point(frame: &Value, x: f64, y: f64) -> Option<(f64, f64)> {
     let width = frame["width"].as_f64()?;
     let height = frame["height"].as_f64()?;
@@ -103,7 +94,29 @@ fn point(frame: &Value, x: f64, y: f64) -> Option<(f64, f64)> {
 }
 pub(super) async fn capture(
     runtime: &Runtime,
-    native: &CuaDriverSession,
+    pid: u32,
+    cap: u32,
+    limit: usize,
+) -> Result<SavedResult, DriverError> {
+    // WindowServer may advertise a newly opened sheet before SCK can share it.
+    // Retry only a whole read-only observation, never an action or a partial
+    // image set. Permission, timeout and geometry-contract errors fail directly.
+    for attempt in 0..3 {
+        let result = capture_once(runtime, pid, cap, limit).await?;
+        let transitioning = matches!(
+            result.error_code.as_deref(),
+            Some("window_unavailable" | "app_windows_changed")
+        );
+        if !transitioning || attempt == 2 {
+            return Ok(result);
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    unreachable!()
+}
+
+async fn capture_once(
+    runtime: &Runtime,
     pid: u32,
     cap: u32,
     limit: usize,
@@ -126,28 +139,8 @@ pub(super) async fn capture(
     let mut frames = Vec::new();
     let mut images = Vec::new();
     for w in windows.iter().take(limit) {
-        // Ordinary windows retain CUA's capture/input contract. Raised or service
-        // surfaces use SCK directly, avoiding unsupported activation/AX bindings.
-        let ordinary = w["layer"] == 0 && w["pid"] == pid;
-        if ordinary {
-            // Bound a read-only upstream capture. A timeout may leave its read
-            // finishing upstream, but never causes input replay or a UI mutation.
-            let request = native.call_tool("get_window_state".into(), json!({"pid":w["pid"],"window_id":w["id"],"include_accessibility_tree":false,"max_image_dimension":cap}).to_string());
-            if let Ok(result) = tokio::time::timeout(Duration::from_secs(3), request).await {
-                let saved = save(result?);
-                if saved.error_code.as_deref().is_some_and(|code| {
-                    code.contains("permission") || code.contains("unauthorized")
-                }) {
-                    return Ok(saved);
-                }
-                let v: Value = serde_json::from_str(&saved.structured).unwrap_or(Value::Null);
-                if !saved.is_error && valid_native(&v, saved.images.len(), w) {
-                    frames.push(json!({"image_index":images.len(),"pid":w["pid"],"window_id":w["id"],"bounds":w["bounds"],"layer":w["layer"],"stack_rank":w["rank"],"association":w["association"],"backend":"cua","input_route":"cua_background","width":v["screenshot_width"],"height":v["screenshot_height"],"native":v}));
-                    images.extend(saved.images);
-                    continue;
-                }
-            }
-        }
+        // One image/coordinate contract for all attributed surfaces. CUA's
+        // outer-dimension validity check does not detect composed sheet images.
         let v=match platform(json!({"operation":"capture","pid":w["pid"],"window_id":w["id"],"max_image_dimension":cap})).await { Ok(v)=>v,Err(e)=>return Ok(refusal("app_capture_incomplete",&e)) };
         if let Some(e) = platform_error(&v) {
             return Ok(e);
@@ -191,7 +184,6 @@ pub(super) async fn capture(
 }
 pub(super) async fn click(
     runtime: &Runtime,
-    native: &CuaDriverSession,
     id: &str,
     index: usize,
     x: f64,
@@ -235,9 +227,6 @@ pub(super) async fn click(
     let guard=match platform(json!({"operation":"validate_point","pid":frame["pid"],"window_id":frame["window_id"],"bounds":frame["bounds"],"screen_x":sx,"screen_y":sy})).await {Ok(v)=>v,Err(e)=>return Ok(refusal("input_unavailable",&e))};
     if let Some(e) = platform_error(&guard) {
         return Ok(e);
-    }
-    if frame["backend"] == "cua" {
-        return native.call_tool("click".into(),json!({"pid":frame["pid"],"window_id":frame["window_id"],"x":x,"y":y,"capture_id":frame["native"]["capture_id"],"delivery_mode":"background"}).to_string()).await.map(save);
     }
     let v=match platform(json!({"operation":"click","pid":frame["pid"],"window_id":frame["window_id"],"bounds":frame["bounds"],"screen_x":sx,"screen_y":sy})).await {Ok(v)=>v,Err(e)=>return Ok(refusal("input_outcome_unknown",&e))};
     if let Some(e) = platform_error(&v) {

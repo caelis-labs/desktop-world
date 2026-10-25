@@ -1,7 +1,6 @@
 use cua_driver_sdk::{
-    ConfiguredDriverOptions, CuaDriver, CuaDriverSession, DriverError, EmbeddedEnvironmentVariable,
+    ConfiguredDriverOptions, CuaDriver, DriverError, EmbeddedEnvironmentVariable,
     PrivateWorkerOptions, RuntimeAuthorizationOptions, SessionPermissionMode, ToolResult,
-    TrustedSessionOptions,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -18,8 +17,10 @@ use tokio::{
 };
 
 mod app_view;
+mod authorization;
 mod installer;
 mod lifecycle;
+mod native_tools;
 
 const MAX_STATE_BYTES: usize = 32 * 1024;
 const MODEL_TEXT_BYTES: usize = 12 * 1024;
@@ -31,7 +32,7 @@ fn executable_name(stem: &str) -> String {
 }
 
 struct Session {
-    native: Arc<CuaDriverSession>,
+    native: Arc<authorization::NativeSession>,
     state: String,
     busy: bool,
     started: bool,
@@ -63,6 +64,10 @@ struct SavedResult {
 
 enum Work {
     Script(String),
+    Native {
+        name: String,
+        arguments: Value,
+    },
     App {
         pid: u32,
         max_image_dimension: u32,
@@ -92,18 +97,22 @@ enum Work {
 struct Server {
     driver: Arc<CuaDriver>,
     lifetime: lifecycle::Lifetime,
+    closing: std::sync::atomic::AtomicBool,
     session: Mutex<Option<Session>>,
     app_view: app_view::Runtime,
     jobs: Mutex<HashMap<String, Job>>,
     pending_requests: Mutex<HashSet<String>>,
+    capability_manifest: Option<String>,
+    elicitation_supported: std::sync::atomic::AtomicBool,
+    confirmations: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Value>>>,
     stdout: AsyncMutex<io::Stdout>,
 }
 
-fn worker_path() -> Result<String, String> {
+fn worker_path() -> Result<authorization::Launch, String> {
     if let Some(arg) = env::args().skip(1).next() {
         if arg == "--help" || arg == "-h" || arg == "help" {
             println!(
-                "Desktop World {}\n\n{}",
+                "Desktop World {}\n\n{}\n\nRuntime: dtw [--worker PATH] [--capability-manifest PATH --approve-capability-manifest]\nThe host must review the native CUA manifest before approving it. Grants apply in bounded mode and cannot be changed through exec. Downloads require per-call MCP form elicitation.",
                 env!("CARGO_PKG_VERSION"),
                 installer::usage()
             );
@@ -111,15 +120,10 @@ fn worker_path() -> Result<String, String> {
         }
         if arg == "--version" || arg == "version" {
             println!(
-                "dtw {} (CUA 0.37.0 source 2d2f99228d4d)",
+                "dtw {} (CUA 0.38.0 source 85e2b1318bd7)",
                 env!("CARGO_PKG_VERSION")
             );
             std::process::exit(0);
-        }
-        if arg == "--worker" {
-            return env::args()
-                .nth(2)
-                .ok_or_else(|| "--worker needs a binary path".to_owned());
         }
         if arg == "install" {
             let args: Vec<String> = env::args().collect();
@@ -139,15 +143,20 @@ fn worker_path() -> Result<String, String> {
             installer::run(&args[1..])?;
             std::process::exit(0);
         }
-        return Err(format!("unknown argument: {arg}"));
+    }
+    let mut launch = authorization::parse(&env::args().skip(1).collect::<Vec<_>>())?;
+    if launch.worker.is_some() {
+        return Ok(launch);
     }
     if let Ok(path) = env::var("DTW_CUA_WORKER") {
-        return Ok(path);
+        launch.worker = Some(path);
+        return Ok(launch);
     }
     let path = package_root()?
         .join("libexec")
         .join(executable_name("cua-driver"));
-    Ok(path.to_string_lossy().into_owned())
+    launch.worker = Some(path.to_string_lossy().into_owned());
+    Ok(launch)
 }
 
 fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
@@ -423,13 +432,18 @@ fn install_plugin(destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn configured_driver() -> ConfiguredDriverOptions {
+fn configured_driver(manifest: &Option<String>) -> ConfiguredDriverOptions {
+    let mode = if manifest.is_some() {
+        SessionPermissionMode::Bounded
+    } else {
+        SessionPermissionMode::Standard
+    };
     ConfiguredDriverOptions {
         claude_code_compatibility: false,
         authorization: RuntimeAuthorizationOptions {
-            allowed_modes: vec![SessionPermissionMode::Standard],
-            compatibility_mode: SessionPermissionMode::Standard,
-            compatibility_capability_manifest_path: None,
+            allowed_modes: vec![mode],
+            compatibility_mode: mode,
+            compatibility_capability_manifest_path: manifest.clone(),
             compatibility_bounded_manifest_path: None,
             unrestricted_acknowledged: false,
             max_session_ttl_seconds: 3600,
@@ -438,7 +452,11 @@ fn configured_driver() -> ConfiguredDriverOptions {
     }
 }
 
-fn new_driver(path: String, lifetime: &lifecycle::Lifetime) -> Result<Arc<CuaDriver>, String> {
+fn new_driver(
+    path: String,
+    lifetime: &lifecycle::Lifetime,
+    manifest: &Option<String>,
+) -> Result<Arc<CuaDriver>, String> {
     if !PathBuf::from(&path).is_file() {
         return Err(format!("private CUA worker missing: {path}"));
     }
@@ -450,7 +468,7 @@ fn new_driver(path: String, lifetime: &lifecycle::Lifetime) -> Result<Arc<CuaDri
         host_bundle_id: "dev.caelis.dtw".into(),
         startup_timeout_ms: Some(15_000),
         shutdown_timeout_ms: Some(3_000),
-        configured_driver: configured_driver(),
+        configured_driver: configured_driver(manifest),
         environment: ["TMPDIR", "TMP", "TEMP"]
             .iter()
             .map(|name| EmbeddedEnvironmentVariable {
@@ -577,6 +595,30 @@ fn page(s: &str, offset: usize) -> Value {
 }
 
 impl Server {
+    async fn confirm_download(&self, arguments: &Value) -> Result<(), String> {
+        if !self
+            .elicitation_supported
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err("browser_download requires an MCP host with form elicitation and explicit user confirmation; no download dispatched".into());
+        }
+        let params = authorization::download_prompt(arguments)?;
+        let id = format!("dtw-download-{}", uuid::Uuid::new_v4());
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.confirmations
+            .lock()
+            .unwrap()
+            .insert(id.clone(), sender);
+        self.write(json!({"jsonrpc":"2.0","id":id,"method":"elicitation/create","params":params}))
+            .await;
+        let response = tokio::time::timeout(Duration::from_secs(120), receiver).await;
+        self.confirmations.lock().unwrap().remove(&id);
+        match response {
+            Ok(Ok(response)) if authorization::approved(&response) => Ok(()),
+            _ => Err("download confirmation declined, cancelled, invalid or expired; no download dispatched".into()),
+        }
+    }
+
     async fn write(&self, value: Value) {
         let mut stdout = self.stdout.lock().await;
         let _ = stdout.write_all(value.to_string().as_bytes()).await;
@@ -590,20 +632,26 @@ impl Server {
             return;
         };
         let response = match method {
-            "initialize" => reply(
-                id,
-                json!({
-                    "protocolVersion":"2025-06-18",
-                    "capabilities":{"tools":{}},
-                    "serverInfo":{"name":"dtw", "version":env!("CARGO_PKG_VERSION")}
-                }),
-            ),
+            "initialize" => {
+                self.elicitation_supported.store(
+                    authorization::supports_elicitation(&request["params"]),
+                    std::sync::atomic::Ordering::Release,
+                );
+                reply(
+                    id,
+                    json!({
+                        "protocolVersion":"2025-06-18",
+                        "capabilities":{"tools":{}},
+                        "serverInfo":{"name":"dtw", "version":env!("CARGO_PKG_VERSION")}
+                    }),
+                )
+            }
             "ping" => reply(id, json!({})),
             "tools/list" => reply(
                 id,
                 json!({"tools":[{
                     "name":"exec",
-                    "description":"Run CUA's native QuickJS script or its native primitives. operation=app observes attributed app windows (default top2 images); operation=click consumes its observation_id and image pixel point. Runtime owns the session. Attribution is best effort. Use the short Skill and api.d.ts for signatures. Fetch retained images with operation=result,part=image.",
+                    "description":"Run CUA scripts, observe apps or use its typed browser tools. operation=app returns attributed window images; click consumes observation_id and image pixels. Browser operations use native arguments nested under arguments; describe with name returns the current worker schema. health_report diagnoses readiness. Runtime owns session and consent; no automatic input replay. Fetch images with result,part=image.",
                     "inputSchema":{
                         "type":"object",
                         "properties":{
@@ -612,7 +660,9 @@ impl Server {
                             "y":{"type":"number","minimum":0},
                             "max_windows":{"type":"integer","minimum":1,"maximum":8,"description":"With app, number of upper windows to capture, default 2; all attributed candidates are listed."},
                             "script":{"type":"string","description":"Async CUA run_script body. Use cua.getApp, getState, query, click, typeText, pressKey, zoom and return; see packaged api.d.ts."},
-                            "operation":{"type":"string","enum":["run","status","result","cancel","permissions","cursor","focus","menu","desktop","app","click"]},
+                            "operation":{"type":"string","enum":["run","status","result","cancel","permissions","cursor","focus","menu","desktop","app","click","describe","health_report","get_guide","get_browser_state","browser_prepare","browser_navigate","browser_click","browser_type","browser_select","browser_dialog","browser_pointer","browser_set_input_files","browser_download"]},
+                            "name":{"type":"string","description":"With describe, exact exposed browser operation, health_report or get_guide. Returns its native arguments schema."},
+                            "arguments":{"type":"object","description":"Native browser/health arguments. Read describe first. Never provide session or private context fields; exact target/tab/ref bindings and upstream authorization are enforced."},
                             "wait_ms":{"type":"integer","minimum":0,"maximum":5000,"description":"Wait briefly for a terminal receipt in the same exec call (default 4000 ms). If still running, query the original id with operation=result."},
                             "include_image":{"type":"boolean","description":"If this execution completes within wait_ms and has an image, return the first image with its summary. Default false; later result,part=image still works."},
                             "enabled":{"type":"boolean","description":"With operation=cursor, show or hide the runtime virtual cursor. Omit to read cursor state."},
@@ -670,7 +720,43 @@ impl Server {
             .get("include_image")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        // DTW's SCK helper has no native manifest enforcement. Do not let it
+        // circumvent a bounded CUA runtime; native observation remains usable.
+        if self.capability_manifest.is_some() && matches!(operation, "app" | "click") {
+            return mcp_plain("bounded_operation_unavailable: use native CUA observation/input; DTW SCK app/click does not enforce capability manifests", true);
+        }
         match operation {
+            "describe" => {
+                let Some(name) = obj
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .filter(|s| native_tools::allowed(s))
+                else {
+                    return mcp_plain("describe requires an exposed browser operation, health_report or get_guide name", true);
+                };
+                match self.driver.list_tools_json().await {
+                    Ok(raw) => match serde_json::from_str::<Value>(&raw).ok().and_then(|v| native_tools::description(&v, name)) {
+                        Some(schema) => mcp_text(schema, false),
+                        None => mcp_plain("native_operation_unavailable: this worker/platform does not expose the requested operation", true),
+                    },
+                    Err(error) => mcp_plain(error.to_string(), true),
+                }
+            }
+            name if native_tools::allowed(name) => {
+                let arguments = match native_tools::arguments(obj.get("arguments")) {
+                    Ok(arguments) => arguments,
+                    Err(error) => return mcp_plain(error, true),
+                };
+                self.run(
+                    Work::Native {
+                        name: name.into(),
+                        arguments,
+                    },
+                    wait_ms,
+                    include_image,
+                )
+                .await
+            }
             "run" => match obj.get("script").and_then(Value::as_str) {
                 Some(script) => {
                     self.run(Work::Script(script.to_owned()), wait_ms, include_image)
@@ -866,25 +952,20 @@ impl Server {
         }
         let (native, state, started) = {
             let mut session = self.session.lock().unwrap();
+            if self.closing.load(std::sync::atomic::Ordering::Acquire) {
+                return mcp_plain(
+                    "runtime_stopped: Runtime is closing; no action dispatched",
+                    true,
+                );
+            }
             if session.as_ref().is_some_and(|s| {
                 !s.busy && (context_expired(s.created.elapsed(), s.last_used.elapsed()))
             }) {
-                *session = None;
                 self.app_view.invalidate();
-                return mcp_plain("runtime_context_reset: native context expired; state and observations were cleared; observe again before input", true);
+                return mcp_plain("runtime_context_expired: restart Runtime and observe again; native grants are never renewed by an agent call", true);
             }
             if session.is_none() {
-                let native = match self.driver.create_trusted_session(TrustedSessionOptions {
-                    public_session: format!("dtw-{}", uuid::Uuid::new_v4().simple()),
-                    mode: SessionPermissionMode::Standard,
-                    ttl_seconds: 3600,
-                    idle_ttl_seconds: 1800,
-                    capability_manifest_path: None,
-                    bounded_manifest_path: None,
-                }) {
-                    Ok(native) => native,
-                    Err(e) => return mcp_plain(e.to_string(), true),
-                };
+                let native = authorization::NativeSession::new(self.driver.clone());
                 *session = Some(Session {
                     native,
                     state: "{}".into(),
@@ -905,6 +986,33 @@ impl Server {
                 current.started,
             )
         };
+        if let Work::Native { name, arguments } = &work {
+            if name == "browser_download" {
+                // Keep the originating tools/call open while the host asks its
+                // user. Session admission stays reserved, binding approval to
+                // these exact arguments and preventing overlapping mutations.
+                if let Err(message) = self.confirm_download(arguments).await {
+                    self.session.lock().unwrap().as_mut().unwrap().busy = false;
+                    return mcp_text(
+                        json!({"code":"browser_consent_required","text":message,"effect":"refused"}),
+                        true,
+                    );
+                }
+                let live = {
+                    let session = self.session.lock().unwrap();
+                    session.as_ref().is_some_and(|s| {
+                        !context_expired(s.created.elapsed(), s.last_used.elapsed())
+                    })
+                };
+                if !live
+                    || self.lifetime.stopped()
+                    || self.closing.load(std::sync::atomic::Ordering::Acquire)
+                {
+                    self.session.lock().unwrap().as_mut().unwrap().busy = false;
+                    return mcp_plain("download_confirmation_expired: runtime stopped or context expired; nothing dispatched", true);
+                }
+            }
+        }
         // IDs are scoped to this process. Retry a collision against its
         // receipt map so eight hex characters remain safe for live jobs.
         let id = {
@@ -1033,7 +1141,7 @@ impl Server {
 
     async fn execute(
         &self,
-        native: Arc<CuaDriverSession>,
+        native: Arc<authorization::NativeSession>,
         work: Work,
         state: &str,
         started: bool,
@@ -1070,6 +1178,14 @@ impl Server {
             self.app_view.invalidate();
         }
         let code = match work {
+            Work::Native { name, arguments } => {
+                let result = if name == "browser_download" {
+                    native.approved_download(arguments).await?
+                } else {
+                    native.call_tool(name, arguments.to_string()).await?
+                };
+                return Ok((save(native_tools::normalize(result)), None, true));
+            }
             Work::Cursor(enabled) => {
                 let (name, args) = match enabled {
                     Some(enabled) => ("set_agent_cursor_enabled", json!({"enabled":enabled})),
@@ -1119,8 +1235,7 @@ impl Server {
                 y,
             } => {
                 return Ok((
-                    app_view::click(&self.app_view, &native, &observation_id, image_index, x, y)
-                        .await?,
+                    app_view::click(&self.app_view, &observation_id, image_index, x, y).await?,
                     None,
                     true,
                 ));
@@ -1131,14 +1246,8 @@ impl Server {
                 max_windows,
             } => {
                 return Ok((
-                    app_view::capture(
-                        &self.app_view,
-                        &native,
-                        pid,
-                        max_image_dimension,
-                        max_windows,
-                    )
-                    .await?,
+                    app_view::capture(&self.app_view, pid, max_image_dimension, max_windows)
+                        .await?,
                     None,
                     true,
                 ));
@@ -1300,18 +1409,23 @@ async fn main() {
     if lifecycle::supervisor_entry() || app_view::helper_entry() {
         return;
     }
-    let worker = match worker_path() {
+    let launch = match worker_path() {
         Ok(path) => path,
         Err(e) => {
             eprintln!("{e}");
             std::process::exit(2);
         }
     };
+    let worker = launch.worker.clone().unwrap();
     let lifetime = lifecycle::Lifetime::new(&worker).unwrap_or_else(|e| {
         eprintln!("{e}");
         std::process::exit(2)
     });
-    let driver = match new_driver(worker, &lifetime) {
+    let manifest = launch.snapshot(&lifetime.root).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(2)
+    });
+    let driver = match new_driver(worker, &lifetime, &manifest) {
         Ok(driver) => driver,
         Err(e) => {
             eprintln!("{e}");
@@ -1321,10 +1435,14 @@ async fn main() {
     let server = Arc::new(Server {
         driver: driver.clone(),
         lifetime,
+        closing: std::sync::atomic::AtomicBool::new(false),
         session: Mutex::new(None),
         app_view: app_view::Runtime::default(),
         jobs: Mutex::new(HashMap::new()),
         pending_requests: Mutex::new(HashSet::new()),
+        capability_manifest: manifest,
+        elicitation_supported: std::sync::atomic::AtomicBool::new(false),
+        confirmations: Mutex::new(HashMap::new()),
         stdout: AsyncMutex::new(io::stdout()),
     });
     let mut input = BufReader::new(io::stdin()).lines();
@@ -1334,6 +1452,14 @@ async fn main() {
             _ = shutdown_signal() => break,
         };
         if let Ok(request) = serde_json::from_str::<Value>(&line) {
+            if request.get("method").is_none() {
+                if let Some(id) = request.get("id").and_then(Value::as_str) {
+                    if let Some(sender) = server.confirmations.lock().unwrap().remove(id) {
+                        let _ = sender.send(request);
+                    }
+                }
+                continue;
+            }
             if request["method"] == "notifications/cancelled" {
                 if let Some(id) = request.pointer("/params/requestId") {
                     if server
@@ -1343,6 +1469,7 @@ async fn main() {
                         .contains(&id.to_string())
                     {
                         if server.lifetime.stop().is_ok() {
+                            server.confirmations.lock().unwrap().clear();
                             for job in server
                                 .jobs
                                 .lock()
@@ -1372,7 +1499,30 @@ async fn main() {
             });
         }
     }
-    // The supervisor and trusted session handles own the private child's lifetime.
+    server.confirmations.lock().unwrap().clear();
+    // Close admission under the same lock as run(), then allow an idle native
+    // session to release its isolated browsers before killing the worker. A busy
+    // action or an explicit cancellation keeps the immediate-stop path.
+    let idle = {
+        let session = server.session.lock().unwrap();
+        server
+            .closing
+            .store(true, std::sync::atomic::Ordering::Release);
+        session
+            .as_ref()
+            .filter(|s| !s.busy && s.started)
+            .map(|s| s.native.clone())
+    };
+    if !server.lifetime.stopped() {
+        if let Some(native) = idle {
+            let _ = tokio::time::timeout(
+                Duration::from_secs(2),
+                native.call_tool("end_session".into(), "{}".into()),
+            )
+            .await;
+        }
+    }
+    // The supervisor still bounds shutdown if graceful resource cleanup stalls.
     let _ = server.lifetime.stop();
     let _ = tokio::time::timeout(Duration::from_secs(3), driver.shutdown()).await;
     // Blocking SDK tasks must not hold process exit after bounded shutdown.

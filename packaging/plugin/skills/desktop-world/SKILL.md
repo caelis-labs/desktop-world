@@ -79,16 +79,18 @@ const app = await cua.getApp({ pid: TARGET_PID });
 return await app.click([x, y], { capture_id: CAPTURE_ID });
 ```
 
-Click options follow the pinned CUA 0.37.0 component. DTW accepts either
+Click options follow the pinned CUA 0.38.0 component. DTW accepts either
 `modifiers: ["ctrl"]` or native `modifier: ["ctrl"]`; a string such as
 `modifier: "ctrl"`, an unknown key name, or both spellings is rejected before input.
 
 | Method | Options beyond delivery_mode | Screenshot binding |
 | --- | --- | --- |
-| `click` | `button`, `modifiers` / `modifier`, `from_zoom` | `capture_id` with a Point; cannot combine with `from_zoom` |
+| `click` | `button`, `modifiers` / `modifier`, `from_zoom`; `count` of 1, 2, or 3 with a Point (route limits below) | `capture_id` with a Point; cannot combine with `from_zoom` |
 | `rightClick` | `modifiers` / `modifier` with a Point; `from_zoom` on Windows only | None; use `click(point, {button: "right", capture_id})` |
 | `doubleClick` | `from_zoom` on Windows only | None |
-| `typeText` | None | None |
+| `typeText` | `delay_ms` (0–200; default 30, synthesis routes only) | None |
+| `scroll` | `by: "line"` or `by: "page"` | None |
+| `drag` | `duration_ms`, `steps`, `button`, `from_zoom` | None |
 
 On macOS, modified `click` requires an exact window binding
 (`cua.getApp({pid: PID, windowId: WID})`) and `delivery_mode: "foreground"`.
@@ -99,6 +101,18 @@ Windows accepts double-click modifiers without applying them; DTW rejects that
 option on all platforms. `cua.call` applies the same click argument checks.
 Native `operation=click` remains a single unmodified left click with its own
 `observation_id`; it does not accept these JS options.
+
+For a screenshot-bound double click, use
+`app.click([x,y], {capture_id: CAPTURE_ID, count: 2})`. This is one native
+gesture consuming one capture, not two attempts with the same credential.
+The native schema accepts `count:3`, but macOS Chromium background left clicks
+are capped at two; macOS background right/middle clicks ignore `count`.
+Do not infer a triple click or repeated right click from an accepted option.
+Native `drag` supports background delivery on some controls; macOS drag-and-drop
+sessions and some Windows controls still require explicit foreground delivery.
+Inspect the result and UI before changing route. `getState({verbose:true})`
+exposes the native macOS `background_input` report when troubleshooting;
+`full_output:true` expands tree metadata and should not be combined with `since`.
 
 ### 4. Verify & Loop
 
@@ -129,6 +143,36 @@ Different screenshot operations bind to different input mechanisms and lifecycle
 
 > **Warning on Coordinate Grids**: Measuring coordinates on a resized chat preview, a different window, or mixing window-local coordinates with desktop coordinates will cause misclicks. Always measure against the exact PNG returned by that specific observation receipt.
 
+The macOS application route requires macOS 14.2+. Every frame uses an exact
+ScreenCaptureKit window with child composition disabled. Its click moves the
+real pointer and posts one left click at a verified visible point; it does not
+activate a hidden window. This differs from native CUA background delivery.
+Read the resulting UI after it settles; a posted event is not verified effect.
+
+## Native Browser and Diagnostics
+
+CUA's typed browser tools are available as `exec` operations, outside scripts.
+Start with `{"operation":"describe","name":"get_browser_state"}` for the
+worker's current schema, then use `{"operation":"get_browser_state",
+"arguments":{"pid":PID,"window_id":WID}}`. Preserve the returned opaque
+`target_id` and `tab_id`. Use `snapshot_format:"semantic_v2"` for actionable
+refs and optional exact-tab screenshots. A newer snapshot invalidates old refs.
+
+Read [BROWSER.md](BROWSER.md) for preparation, input, dialogs and files. Existing
+profile attachment uses a host-reviewed native capability manifest approved at
+DTW startup. Agents cannot grant or widen it through exec. Downloads require a
+fresh MCP host form confirmation for the exact request and destination; CUA still
+checks the live ref and native file scope. Unsupported hosts fail closed. See
+BROWSER.md for launcher configuration and the remaining dynamic-callback limitation.
+Do not switch to unrestricted mode to satisfy a refusal. An explicitly requested
+isolated profile can be prepared with `browser_prepare`.
+
+Use `{"operation":"health_report","arguments":{}}` for read-only runtime
+diagnostics; `permissions` remains the short OS-permission check. Use
+`{"operation":"get_guide","arguments":{"topic":"browser"}}` for the
+pinned upstream guide. Guides may mention tools DTW intentionally does not expose;
+`describe` identifies the available native contract.
+
 ---
 
 ## Execution Lifecycle & Recovery Protocol
@@ -148,6 +192,11 @@ Different screenshot operations bind to different input mechanisms and lifecycle
 
 - **macOS**: Button actions expose `AXPress`. Shortcuts use `cmd` (e.g. `cmd+s`, `cmd+shift+g`). Native menus are accessible via `{"operation":"menu", "pid": PID, "window_id": WID, "path": ["File", "Save"]}`.
 - **Windows**: Button actions expose `invoke`. Shortcuts use `ctrl` (e.g. `ctrl+s`). Windows omits `screenshot_frame_valid`: manually verify `capture_id && screenshot_width > 0 && screenshot_height > 0 && !screenshot_error`. Check candidate alignment visually on 125% DPI displays before pixel interaction.
+- **Web text**: Native CUA receipts may suggest `page` or `browser_*`. Use the
+  typed `browser_*` exec operations; legacy `page` is not exposed. Reobserve the field
+  to establish whether text landed before changing input routes.
+  Do not repeatedly call an unavailable tool or replay unverified text. AX/UIA
+  value echoes in Chromium/Electron do not establish renderer acceptance.
 
 ---
 
@@ -155,5 +204,6 @@ Different screenshot operations bind to different input mechanisms and lifecycle
 
 Consult accompanying reference documents as needed:
 - [RECIPES.md](RECIPES.md): Concrete implementations for modal choosers, large browser pages, region candidates ROI, canvas editors, and native menus.
+- [BROWSER.md](BROWSER.md): Exact-tab browser tools, native authorization and diagnostic workflows.
 - [api.d.ts](api.d.ts): Authoritative TypeScript signatures and type definitions for `cua`, `app`, and `exec` options.
 - [references/safety-policy.md](references/safety-policy.md): Host policy precedence, confirmation modes, and sensitive data protection.

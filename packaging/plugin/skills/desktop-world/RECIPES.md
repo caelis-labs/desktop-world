@@ -14,7 +14,17 @@ return {pid:app.pid,window_id:app.windowId,title:app.title,
         has_image:view.screenshot_frame_valid};
 ```
 
-If PID-only binding misses the chooser, compare `cua.listWindows({pid:PARENT_PID})` before and after. Keep discovery scoped to the authorized process; a global window listing can expose unrelated titles. A macOS Open/Save service window may be invisible while the parent app has a visible AX proxy. Use the parent-owned `(pid,window_id)` if its `getState` has the real controls. A returned ID that fails on `getApp` does **not** prove the picker closed: in real Obsidian acceptance it remained visibly open for minutes. Do not repeatedly bind that ID or click its stale element frame. Capture the primary display instead:
+If PID-only binding misses the chooser, compare `cua.listWindows({pid:PARENT_PID})` before and after. Keep discovery scoped to the authorized process; a global window listing can expose unrelated titles. A macOS Open/Save service window may be invisible while the parent app has a visible AX proxy. Use the parent-owned `(pid,window_id)` if its `getState` has the real controls. A returned ID that fails on `getApp` does **not** prove the picker closed: in real Obsidian acceptance it remained visibly open for minutes. Do not repeatedly bind that ID or click its stale element frame. On macOS, next use the [application observation](#application-popups-and-choosers-macos) route:
+
+```json
+{"operation":"app","pid":123,"include_image":true}
+```
+
+Replace `123` with the authorized parent PID. Inspect the attributed windows,
+images and `omitted_count`; expand `max_windows` if needed. If a bound window has
+a crowded tree, try [region candidates](#region-candidates-from-a-window-screenshot).
+Only when these application-scoped observations cannot reveal the chooser and
+the task authorizes desktop scope, capture the primary display:
 
 ```json
 {"operation":"desktop","include_image":true,"max_image_dimension":1600}

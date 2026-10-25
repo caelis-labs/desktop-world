@@ -49,6 +49,12 @@ def call(proc, request, timeout=20):
             continue
         if isinstance(response, Exception):
             raise RuntimeError(f"MCP exited {proc.poll()}: {response}") from response
+        if response.get("method") == "elicitation/create" and hasattr(proc, "_dtw_elicitation"):
+            answer = proc._dtw_elicitation(response)
+            if answer is not None:
+                proc.stdin.write(json.dumps({"jsonrpc":"2.0", "id":response["id"], **answer}) + "\n")
+                proc.stdin.flush()
+            continue
         if response.get("id") == request["id"]:
             return response
     raise TimeoutError(f"MCP request {request['id']} timed out")

@@ -82,6 +82,13 @@ pub fn supervisor_entry() -> bool {
         }
         let mut child = Command::new(config["worker"].as_str().ok_or("missing worker")?)
             .args(env::args().skip(1))
+            // Host-owned native lifecycle configuration, not permission/grant
+            // evidence. The SDK's general environment allowlist excludes this
+            // native maintenance setting. Preserve the previous delegated
+            // session's 30-minute cleanup ceiling at our actual worker launch;
+            // DTW refuses new work at 25 minutes of context age. Native manifest
+            // and authorization-grant expiry remain independently enforced.
+            .env("CUA_DRIVER_RS_SESSION_IDLE_TTL_SECS", "1800")
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
