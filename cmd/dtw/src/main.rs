@@ -621,6 +621,7 @@ impl Server {
             .native_operation
             .as_deref()
             .is_some_and(|name| name != "get_guide")
+            && serde_json::from_str::<Value>(&result.structured).is_ok_and(|value| !value.is_null())
         {
             native_tools::presentation(&result.structured, id, &self.discovery).to_string()
         } else {
@@ -672,7 +673,7 @@ impl Server {
                             "enabled":{"type":"boolean","description":"With operation=cursor, show or hide the runtime virtual cursor. Omit to read cursor state."},
                             "pid":{"type":"integer","minimum":1,"description":"With focus/menu/app, exact app PID."},
                             "window_id":{"type":"integer","minimum":1,"description":"With menu, exact target window; with focus, optional ordinary window ID."},
-                            "path":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string"},"description":"With menu, exact macOS menu labels from menu bar to command."},
+                            "path":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string"},"description":"With menu, exact observed menu labels from menu bar to command (macOS or Windows)."},
                             "max_image_dimension":{"type":"integer","minimum":0,"description":"With desktop/app, optional screenshot long-edge cap (default 1600, 0 for original size); image is retained for result,part=image."},
                             "id":{"type":"string","description":"The original short receipt ID for status, result, or cancel."},
                             "part":{"type":"string","enum":["summary","text","structured","image"]},

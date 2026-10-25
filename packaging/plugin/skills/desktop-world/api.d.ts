@@ -45,8 +45,9 @@ type DoubleClickOptions = Delivery & WindowsZoomOptions;
  * For a screenshot-bound right click use click(point, {button:"right", capture_id}). */
 type RightClickOptions = Delivery & ModifierOptions & WindowsZoomOptions;
 type TypeTextOptions = Delivery & {
-  /** 0..200 ms between synthesized characters; default 30. Atomic AX/UIA
-   * insertion ignores this. This does not enable a clipboard route. */
+  /** macOS synthesis routes: 0..200 ms between characters, default 30.
+   * Windows ignores this option, including foreground SendInput; it cannot
+   * slow typing there. Atomic AX/UIA insertion also ignores it. */
   delay_ms?: number;
 };
 type ScrollOptions = Delivery & { by?: "line" | "page" };

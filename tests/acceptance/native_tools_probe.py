@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Read-only native bridge contract; no browser launch or GUI input."""
 import json
+import os
 import subprocess
 import sys
 from probe import call, exec_call, result, runtime_env, structured_result
@@ -21,6 +22,10 @@ def main():
         tools = inventory['result']['tools']
         assert [t['name'] for t in tools] == ['exec']
         advertised = tools[0]['inputSchema']['properties']['operation']['enum']
+        discovery = exec_call(proc, 3, {'operation':'describe'})
+        assert 'menu' in discovery['operations'], discovery
+        if os.name == 'nt':
+            assert not {'app','click'}.intersection(discovery['operations']), discovery
         for i, name in enumerate(OPERATIONS, 10):
             assert name in advertised, name
             described = exec_call(proc, i, {'operation':'describe','name':name})
@@ -50,6 +55,17 @@ def main():
         bad = exec_call(proc, 90, {'operation':'browser_click','arguments':{}})
         bad = result(proc, 91, None, bad['id']) if bad['status']=='running' else bad
         assert bad['status']=='failed' and bad.get('code'), bad
+        # These native validation errors have text but no structured payload.
+        # The default receipt must still tell the Agent which argument is missing.
+        for i, (name, arguments, field) in enumerate([
+            ('browser_prepare', {'profile':{'mode':'isolated_new'}}, 'pid'),
+            ('browser_dialog', {'action':'inspect'}, 'target_id'),
+        ], 100):
+            invalid = exec_call(proc, i*10, {'operation':name,'arguments':arguments})
+            if invalid['status'] == 'running': invalid = result(proc, i*10+1, None, invalid['id'])
+            assert invalid['status'] == 'failed' and invalid['is_error'], invalid
+            assert 'Missing required' in invalid['text'] and field in invalid['text'], invalid
+            assert structured_result(proc, i*10+2, None, invalid['id']) is None
         print(json.dumps({'schemas':len(OPERATIONS),'session_forgery':'refused before dispatch',
                           'health':'complete native data','guide':'available',
                           'native_error_code':bad['code']}))

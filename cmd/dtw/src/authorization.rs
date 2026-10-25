@@ -155,7 +155,7 @@ pub fn discovery(manifest: Option<&str>) -> Result<Value, String> {
             info["operations"]
                 .as_array_mut()
                 .unwrap()
-                .retain(|op| !matches!(op.as_str(), Some("app" | "click" | "menu")));
+                .retain(|op| !matches!(op.as_str(), Some("app" | "click")));
         }
         return Ok(info);
     };
@@ -225,6 +225,7 @@ mod tests {
             cfg!(target_os = "macos")
         );
         assert!(crate::native_tools::available(&info, "get_browser_state"));
+        assert!(crate::native_tools::available(&info, "menu"));
     }
     #[test]
     fn startup_requires_explicit_paired_host_approval() {

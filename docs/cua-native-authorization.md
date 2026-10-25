@@ -86,7 +86,60 @@ ad hoc signatures. Final artifacts:
 Logs: `/private/tmp/dtw-review-final5-checks.log`,
 `dtw-review-final5-rust.log` and `dtw-review-source-final.log`.
 
-Windows GUI and CaelisBot front-end acceptance remain unperformed.
+Windows GUI acceptance was subsequently performed below. CaelisBot front-end
+acceptance remains unperformed.
+
+## Windows review and follow-up fixes (2026-10-25)
+
+Windows 11 x64 (build 22631), 125% display scaling, CUA 0.38.0 at the same
+`85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19` pin:
+
+- Native validation errors without a structured payload now retain their text in
+  the default receipt. `browser_prepare` without a PID and `browser_dialog`
+  without a target identify the missing argument instead of displaying `null`.
+  The real-worker native-tools probe checks both cases on Windows and macOS CI.
+- Standard Windows `describe` now advertises `menu`; only the macOS-specific
+  `app` and SCK `click` routes are excluded. Bounded discovery still follows the
+  host manifest. The WinForms fixture independently recorded exactly one menu
+  callback, and discovery has a regression assertion.
+- Skill and TypeScript declarations now state that `typeText.delay_ms` applies
+  only to macOS synthesis. The pinned Windows implementation ignores it,
+  including foreground SendInput. This documents the actual worker contract;
+  it does not claim to add delayed Windows typing.
+
+Both standard isolated Chrome and host-approved bounded existing Chrome passed
+the inline-receipt workflow: discover/bind, observe, reject a stale ref, type
+Chinese, apply once with independent page-event readback, select, download into
+a Chinese path, and observe again. No structured-result fetch was needed.
+Isolated Chrome exited with EOF; the existing browser survived EOF. These are
+scripted Agent-interface checks, not a new Windows model/harness evaluation.
+
+DPI-aware WinForms passed discovery, exact screenshot-frame alignment, foreground
+Unicode/multiline input, semantic submit, independent Ctrl+S disk readback,
+pixel click and capture-reuse rejection, checkbox, three rounds of setValue and
+native menu invocation. MCP/contract/click/native-tools/authorization/runtime/
+lifecycle probes, 15 Rust unit tests, 70 pinned-prelude cases, eight Python unit
+tests and strict TypeScript passed locally.
+
+Local evidence is under
+`D:/WorkDir/desktop-world/artifacts/pr47-fixes-20261025`, including `browser/`,
+`browser-bounded/`, and `native/windows-live-4d3f364f/summary.json`.
+The tested standalone adapter SHA-256 is
+`0b1add24357c220cb4d8a5920fb289466580f1794883ee1b38cd28bd0fd6a6b0`;
+the unchanged worker SHA-256 is
+`d6105cce860760f0e186b637e81a1782a95d97b7aca812facc2566de8e65b791`.
+Release builds have separate provenance and require candidate verification.
+
+The existing [Windows limitations (#36)](https://github.com/caelis-labs/desktop-world/issues/36)
+remain limited support under the established release policy. The review again
+reproduced DPI-unaware 125% capture misalignment (PNG box `[198,206,155,39]`, UIA
+frame `[250,257,194,50]`) and a picker-opening click that returned
+`foreground_unavailable` after opening the dialog. Scoped re-observation and
+Return completed the picker with zero replay; the opening receipt still failed.
+The Skill now explicitly stops pixel input on alignment mismatch and instructs
+Agents to observe a new modal before any further input. Pending semantic modal
+calls retain the original receipt/cancel-and-reobserve workflow. These are
+documented handling paths, not upstream capture or modal fixes.
 
 ## Remaining CUA and integration limits
 

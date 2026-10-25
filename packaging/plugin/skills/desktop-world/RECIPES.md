@@ -6,6 +6,13 @@ Each JavaScript block is the `script` string of the installed DTW `exec` tool (c
 
 Bind only the app PID after opening a dialog. An unpinned CUA `App` follows the app's current front window, including its picker; an exact `windowId` stays pinned to the old window. The user's persistent Obsidian picker was selected by PID-only binding and exposed `AXWindow "打开本地仓库" [id=open-panel]`. Confirm the title and controls before input.
 
+On Windows, a foreground click can return `foreground_unavailable` after the
+picker has opened. Reconcile with `cua.listWindows({pid:PARENT_PID})` and bind the
+observed dialog; the failed receipt is not permission to replay the trigger.
+Semantic UIA invocation of a modal can remain pending until the dialog closes.
+Poll the original receipt. If the Runtime must be cancelled, restart it and
+observe the existing dialog before continuing; cancellation cannot undo input.
+
 ```js
 const app = await cua.getApp({pid: PARENT_PID});
 const view = await app.getState({query:"打开",max_elements:100,include_screenshot:true});
@@ -165,7 +172,7 @@ Click options follow the pinned CUA 0.38.0 component. DTW accepts either
 | `click` | `button`, `modifiers` / `modifier`, `from_zoom`; `count` of 1, 2, or 3 with a Point (route limits below) | `capture_id` with a Point; cannot combine with `from_zoom` |
 | `rightClick` | `modifiers` / `modifier` with a Point; `from_zoom` on Windows only | None; use `click(point, {button: "right", capture_id})` |
 | `doubleClick` | `from_zoom` on Windows only | None |
-| `typeText` | `delay_ms` (0–200; default 30, synthesis routes only) | None |
+| `typeText` | `delay_ms` (macOS synthesis only, 0–200; default 30). Windows ignores it, including foreground SendInput. | None |
 | `scroll` | `by: "line"` or `by: "page"` | None |
 | `drag` | `duration_ms`, `steps`, `button`, `from_zoom` | None |
 

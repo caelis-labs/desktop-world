@@ -73,7 +73,17 @@ scale or mix these credentials:
 | macOS `operation:app` | `observation_id` + `image_index`, frame PNG pixels | 30 seconds, one attempt; another execution invalidates it |
 | `operation:desktop` | `capture_id`, primary display PNG pixels via `cua.call("click",{target:{kind:"desktop",display_id:"primary"},x,y,capture_id})` | One pixel action |
 
+On Windows, a `capture_id` does not prove pixel alignment. DPI-unaware windows
+at 125% scaling can have black padding and UIA frames displaced from the image.
+Check alignment before pixel input; stop that route on a mismatch. Use fresh
+semantic controls when available, or an authorized desktop observation. Never
+repair the coordinates by guessing a scale factor.
+
 For a new modal, rebind by parent PID first, then try PID-scoped `app` if available.
+On Windows, `foreground_unavailable` can follow a click that already opened a
+picker. Enumerate the parent's windows and observe the dialog before continuing;
+do not repeat the opening click. A semantic modal trigger can also remain pending:
+poll its original receipt, and if cancelled, restart the Runtime and re-observe.
 Use full-desktop scope only when the task authorizes it and app-scoped observation
 cannot reveal the target. [RECIPES.md](RECIPES.md) covers pickers, regions, native
 menus and advanced click options; [api.d.ts](api.d.ts) has the exact signatures.
