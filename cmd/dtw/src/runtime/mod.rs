@@ -170,8 +170,18 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         Ok(())
     }
 
-    fn remaining(&self, expires_at: Instant) -> Result<Duration, Error> {
+    // This check takes no state lock: callers also use it while holding admission.
+    fn check_deadline(&self, deadline: Option<Instant>) -> Result<(), Error> {
+        if deadline.is_some_and(|until| self.clock.now() >= until) {
+            Err(Error::TimedOut)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn remaining(&self, expires_at: Instant, deadline: Option<Instant>) -> Result<Duration, Error> {
         self.live_context(&self.state())?;
+        let expires_at = deadline.map_or(expires_at, |until| until.min(expires_at));
         let remaining = expires_at.saturating_duration_since(self.clock.now());
         if remaining.is_zero() {
             Err(Error::TimedOut)
@@ -182,12 +192,22 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
 
     /// Window discovery reads AX metadata only after app-scoped Observe admission.
     pub fn windows(&self) -> Result<Vec<WindowInfo>, Error> {
+        self.list_windows(None)
+    }
+
+    /// Tightens this call's budget without changing the context's grant.
+    pub fn windows_until(&self, deadline: Instant) -> Result<Vec<WindowInfo>, Error> {
+        self.list_windows(Some(deadline))
+    }
+
+    fn list_windows(&self, deadline: Option<Instant>) -> Result<Vec<WindowInfo>, Error> {
         let (flight, retired, provider) = {
             let mut state = self.state();
             if state.busy {
                 return Err(Error::Busy);
             }
             self.authorize(&state, &self.grant.app, Capability::Observe)?;
+            self.check_deadline(deadline)?;
             state.busy = true;
             (
                 Flight::new(&self.state),
@@ -196,13 +216,14 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             )
         };
         drop(retired);
-        let poll = || self.remaining(self.grant.expires_at);
+        let poll = || self.remaining(self.grant.expires_at, deadline);
         let call = CallContext { poll: &poll };
         let result = call
             .remaining()
             .and_then(|_| self.backend.windows(&self.grant.app, &call));
         let state = flight.finish();
         self.live_context(&state)?;
+        self.check_deadline(deadline)?;
         if self.backend.stamp() != provider {
             return Err(Error::WrongProvider);
         }
@@ -214,14 +235,35 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
     }
 
     pub fn observe(&self, target: &WindowTarget) -> Result<Observation, Error> {
-        self.read(target, ObservationKind::Semantic)
+        self.read(target, ObservationKind::Semantic, None)
+    }
+
+    pub fn observe_until(
+        &self,
+        target: &WindowTarget,
+        deadline: Instant,
+    ) -> Result<Observation, Error> {
+        self.read(target, ObservationKind::Semantic, Some(deadline))
     }
 
     pub fn capture(&self, target: &WindowTarget) -> Result<Observation, Error> {
-        self.read(target, ObservationKind::Pixels)
+        self.read(target, ObservationKind::Pixels, None)
     }
 
-    fn read(&self, target: &WindowTarget, kind: ObservationKind) -> Result<Observation, Error> {
+    pub fn capture_until(
+        &self,
+        target: &WindowTarget,
+        deadline: Instant,
+    ) -> Result<Observation, Error> {
+        self.read(target, ObservationKind::Pixels, Some(deadline))
+    }
+
+    fn read(
+        &self,
+        target: &WindowTarget,
+        kind: ObservationKind,
+        deadline: Option<Instant>,
+    ) -> Result<Observation, Error> {
         let capability = match kind {
             ObservationKind::Semantic => Capability::Observe,
             ObservationKind::Pixels => Capability::Capture,
@@ -232,6 +274,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                 return Err(Error::Busy);
             }
             self.authorize(&state, &target.app, capability)?;
+            self.check_deadline(deadline)?;
             state.generation = state
                 .generation
                 .checked_add(1)
@@ -264,6 +307,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         let ready = {
             let state = self.state();
             self.authorize(&state, &target.app, capability)
+                .and_then(|_| self.check_deadline(deadline))
                 .and_then(|_| {
                     if self.backend.stamp() != provider {
                         Err(Error::WrongProvider)
@@ -278,7 +322,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             drop(flight.finish());
             return Err(error);
         }
-        let poll = || self.remaining(expires_at);
+        let poll = || self.remaining(expires_at, deadline);
         let call = CallContext { poll: &poll };
         let received = match kind {
             ObservationKind::Semantic => self.backend.observe(target, &call),
@@ -310,6 +354,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             Err(error) => {
                 let state = flight.finish();
                 self.live_context(&state)?;
+                self.check_deadline(deadline)?;
                 return Err(error);
             }
         };
@@ -317,6 +362,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         let invalidated = self
             .live_context(&state)
             .err()
+            .or_else(|| self.check_deadline(deadline).err())
             .or_else(|| (self.backend.stamp() != provider).then_some(Error::WrongProvider))
             .or_else(|| (self.clock.now() >= expires_at).then_some(Error::StaleObservation));
         if let Some(error) = invalidated {
@@ -325,6 +371,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             // Do not release admission until native cleanup really returned.
             let state = flight.finish();
             self.live_context(&state)?;
+            self.check_deadline(deadline)?;
             return Err(error);
         }
         let result = Observation {
@@ -354,7 +401,17 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         reference: ObservationRef,
         element: ElementId,
     ) -> ActionReceipt {
-        self.act(target, reference, Action::Press(element))
+        self.act(target, reference, Action::Press(element), None)
+    }
+
+    pub fn press_until(
+        &self,
+        target: &WindowTarget,
+        reference: ObservationRef,
+        element: ElementId,
+        deadline: Instant,
+    ) -> ActionReceipt {
+        self.act(target, reference, Action::Press(element), Some(deadline))
     }
 
     pub fn click(
@@ -363,7 +420,17 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         reference: ObservationRef,
         point: PixelPoint,
     ) -> ActionReceipt {
-        self.act(target, reference, Action::Click(point))
+        self.act(target, reference, Action::Click(point), None)
+    }
+
+    pub fn click_until(
+        &self,
+        target: &WindowTarget,
+        reference: ObservationRef,
+        point: PixelPoint,
+        deadline: Instant,
+    ) -> ActionReceipt {
+        self.act(target, reference, Action::Click(point), Some(deadline))
     }
 
     fn act(
@@ -371,16 +438,17 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         target: &WindowTarget,
         reference: ObservationRef,
         action: Action,
+        deadline: Option<Instant>,
     ) -> ActionReceipt {
         let prepared = {
             let mut state = self.state();
-            self.prepare_action(&mut state, target, reference, action)
+            self.prepare_action(&mut state, target, reference, action, deadline)
         };
         let (flight, observation) = match prepared {
             Ok(prepared) => prepared,
             Err(error) => return ActionReceipt::rejected(error),
         };
-        let poll = || self.remaining(observation.expires_at);
+        let poll = || self.remaining(observation.expires_at, deadline);
         let call = CallContext { poll: &poll };
         let outcome = match call.remaining() {
             Err(error) => ActionOutcome::rejected(error),
@@ -403,6 +471,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         let interruption = self
             .live_context(&state)
             .err()
+            .or_else(|| self.check_deadline(deadline).err())
             .or_else(|| (self.backend.stamp() != provider).then_some(Error::WrongProvider))
             .or_else(|| (self.clock.now() >= expires_at).then_some(Error::TimedOut));
         ActionReceipt::from_provider(outcome, interruption)
@@ -414,6 +483,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         target: &WindowTarget,
         reference: ObservationRef,
         action: Action,
+        deadline: Option<Instant>,
     ) -> Result<(Flight<'a, B::Binding>, LiveObservation<B::Binding>), Error> {
         if state.busy {
             return Err(Error::Busy);
@@ -423,6 +493,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             Action::Click(_) => (Capability::Click, ObservationKind::Pixels),
         };
         self.authorize(state, &target.app, capability)?;
+        self.check_deadline(deadline)?;
         let live = state.observation.as_ref().ok_or(Error::StaleObservation)?;
         if live.reference != reference || self.clock.now() >= live.expires_at {
             return Err(Error::StaleObservation);

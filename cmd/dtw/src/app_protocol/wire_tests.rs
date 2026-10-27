@@ -3,7 +3,7 @@ use computer::{ActionOutcome, DispatchState, EffectEvidence, Error};
 
 fn submit(command: Value) -> Value {
     let mut target = json!({"app_ref": "app-a"});
-    if command["kind"] != "windows" {
+    if command["kind"] != "windows" && command["kind"] != "script" {
         target["window_ref"] = json!("window-a");
     }
     json!({"version": 1, "operation": "submit", "request_id": "request-a",
@@ -357,4 +357,95 @@ fn shutdown_failure_remains_separate_from_the_cancellation_reason() {
         "native transport: Shutdown(\"kill failed\")"
     );
     assert_eq!(value["interruption"]["code"], "cancelled");
+}
+
+#[test]
+fn scripts_are_app_bound_and_have_only_reducible_limits() {
+    let request = submit(json!({"kind":"script","source":"return 42;"}));
+    assert_eq!(
+        parse_request(request.clone()),
+        Ok(Request::Submit(Submit {
+            request_id: "request-a".into(),
+            target: Target {
+                app_ref: "app-a".into(),
+                window_ref: None
+            },
+            command: Command::Script {
+                source: "return 42;".into(),
+                timeout_ms: 5000,
+                max_calls: 32
+            }
+        }))
+    );
+    for (key, values) in [
+        (
+            "timeout_ms",
+            vec![
+                json!(0),
+                json!(-1),
+                json!(5001),
+                json!(1.5),
+                json!("1"),
+                json!(null),
+            ],
+        ),
+        (
+            "max_calls",
+            vec![json!(0), json!(33), json!(1.5), json!(true), json!(null)],
+        ),
+    ] {
+        for value in values {
+            let mut bad = request.clone();
+            bad["command"][key] = value;
+            assert!(parse_request(bad).is_err());
+        }
+    }
+    for (time, calls) in [(json!(1), json!(1)), (json!(5000.0), json!(32.0))] {
+        let mut valid = request.clone();
+        valid["command"]["timeout_ms"] = time;
+        valid["command"]["max_calls"] = calls;
+        assert!(parse_request(valid).is_ok());
+    }
+    for field in ["app_ref", "pid", "approved", "memory_bytes", "native_call"] {
+        let mut bad = request.clone();
+        bad["command"][field] = json!("forged");
+        assert!(parse_request(bad).is_err());
+    }
+    let mut window = request.clone();
+    window["target"]["window_ref"] = json!("window-a");
+    assert!(parse_request(window).is_err());
+    for source in [
+        json!(null),
+        json!(42),
+        json!("x".repeat(65537)),
+        json!("界".repeat(21846)),
+    ] {
+        let mut bad = request.clone();
+        bad["command"]["source"] = source;
+        assert!(parse_request(bad).is_err());
+    }
+    let mut boundary = request;
+    boundary["command"]["source"] = json!("x".repeat(65536));
+    assert!(parse_request(boundary).is_ok());
+    let schema = input_schema();
+    let scripts: Vec<_> = schema["oneOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["properties"]["command"]["properties"]["kind"]["const"] == "script")
+        .collect();
+    assert_eq!(scripts.len(), 1);
+    let schema = scripts[0];
+    assert_eq!(
+        schema["properties"]["target"]["required"],
+        json!(["app_ref"])
+    );
+    assert_eq!(
+        schema["properties"]["command"]["properties"]["timeout_ms"]["maximum"],
+        5000
+    );
+    assert_eq!(
+        schema["properties"]["command"]["properties"]["max_calls"]["maximum"],
+        32
+    );
 }

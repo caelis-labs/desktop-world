@@ -1,6 +1,6 @@
 # DTW 实施检查点
 
-本文件把 [架构基线](next-architecture-baseline.md) 转成可评审、可验证的实施步骤。日期：2026 年 10 月 27 日。方向已确认；C1、C2-macOS 和 C3-macOS 的限定切片已通过本地验证与独立审阅，后两项包含真实交互桌面 fixture。C4-macOS.1 已完成显式选择的单 app 协议、可信启动 grant 与实际 Caelis 预授权闭环；下一步是 C4-macOS.2 生产 Harness 授权接线，Windows C2/C3 独立待办。详细证据见 [原生验收记录](native-checkpoint-acceptance.md)和 [C4 验收记录](app-protocol-acceptance.md)。
+本文件把 [架构基线](next-architecture-baseline.md) 转成可评审、可验证的实施步骤。日期：2026 年 10 月 27 日。方向已确认；C1、C2-macOS 和 C3-macOS 的限定切片已通过本地验证与独立审阅，后两项包含真实交互桌面 fixture。C4-macOS.1 已完成显式选择的单 app 协议、可信启动 grant 与实际 Caelis 预授权闭环；C4-macOS.2 的生产 Harness 本地授权接线和 C5-macOS.1 的前台 fixture 最小脚本闭环已通过；Caelis 配套按用户要求仅本地提交。下一步为 C5-macOS.2 空窗口枚举可靠性检查点，Windows C2/C3 独立待办。详细证据见 [原生验收记录](native-checkpoint-acceptance.md)、[C4 验收记录](app-protocol-acceptance.md)和 [C5 验收记录](app-script-acceptance.md)。
 
 当前行为回归参照为 DTW `a1833a1fbc80de6e14fc86a0972782a00706de33`，首批 CUA 来源固定为 Driver 0.38.0 / `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`。检查点编号只用于记录实施与验收，不引入新运行框架或新的授权状态机。
 
@@ -27,8 +27,9 @@
 | C3-macOS | B2b | 限定内部切片实机通过 | AX snapshot/advertised AXPress、迟到效果读回 |
 | C3-Windows | B2b | 未实施 | UIA 与选定 WGC/像素路径，需 Windows GUI |
 | C4-macOS.1 | B3a | 本地、实机与预授权 Harness 闭环通过 | v1 request/receipt、固定 Host grant、cancel/result、单 exec |
-| C4-macOS.2 | B3b | 未实施 | 生产 Harness app/能力审批、上下文建立与撤销；通过后才进入 C5 |
-| C5 | B4 | 未开始 | app 级脚本及全部 Host Call 边界 |
+| C4-macOS.2 | B3b | 本地产品代码与真实 GUI 通过，Caelis 未发布 | 生产 Harness app/能力审批、上下文建立与撤销 |
+| C5-macOS.1 | B4a | 最小前台 fixture 切片通过 | 五方法、有界 VM、逐次 Core、state/步骤回执、原生超时/取消 |
+| C5-macOS.2 | B4b | 待定位与复验 | 偶发空窗口列表的冷启动/后台/前台支持边界与诊断 |
 | C6-能力组-平台 | B5 | 未开始，逐组验收 | 选定能力批量扩展及过渡路径收敛 |
 
 ## C0：架构方向与来源基线
@@ -131,7 +132,7 @@ C2 进一步按独立可评审的小切片推进，不把表中全部能力放�
 - 派发中取消：约 159 ms 返回 Unknown + Cancelled，worker 已回收；目标应用约 2 秒后完成一次动作，独立新上下文读回。取消没有撤销已经进入目标应用的工作，也没有重放。
 - Windows C2/C3、新路径分发包、公开协议和 app 脚本均未完成；生产 MCP 仍使用原有执行器。
 
-后续已选择并完成 **C4-macOS.1 协议契约切片**：冻结 request/receipt、能力与目标声明、可信 grant 入口和 cancel/result 语义；让 Harness 适配器能展示并批准单 app 范围，再沿已验收的 macOS 路径运行一次端到端闭环。确定性协议测试、实际 Caelis 预授权流程及 GUI 读回三类证据已记录在 [C4 验收记录](app-protocol-acceptance.md)。生产动态审批仍属于 C4-macOS.2；在该门槛完成前不接入脚本和额外动作。Windows C2.1 可以独立推进，必须另取 Windows 原生进程及桌面证据。
+后续已选择并完成 **C4-macOS.1 协议契约切片**：冻结 request/receipt、能力与目标声明、可信 grant 入口和 cancel/result 语义；让 Harness 适配器能展示并批准单 app 范围，再沿已验收的 macOS 路径运行一次端到端闭环。确定性协议测试、实际 Caelis 预授权流程及 GUI 读回三类证据已记录在 [C4 验收记录](app-protocol-acceptance.md)。生产动态审批现已在 C4-macOS.2 本地产品代码中通过；后续 C5-macOS.1 验收记录见下文。Windows C2.1 可以独立推进，必须另取 Windows 原生进程及桌面证据。
 
 ## C4：稳定外部协议（B3）
 
@@ -144,8 +145,8 @@ C2 进一步按独立可评审的小切片推进，不把表中全部能力放�
 
 ### C4 分阶段准入
 
-1. **C4-macOS.1（本轮）**：显式选择 `app-protocol` feature；单 `exec` 的版本化 typed requests、opaque refs、单活动请求、原 ID 查询/去重及原始 receipt；可信启动 grant 与请求隔离，实际 Caelis 预授权 + 原生 GUI 闭环。见 [协议 v1](app-protocol-v1.md)。既有发布包未切换。
-2. **C4-macOS.2（下一检查点）**：生产 Harness 在执行前展示完整 app 实例和能力，由自己的审批政策建立/撤销上下文；覆盖拒绝、到期、app 重启、并发审批、取消和上下文更换，审计记录与实际 grant 一致。模型字段始终不能构造审批事实。需要真实集成入口及 GUI 证据，不以参考 Host 文件替代。
+1. **C4-macOS.1（已通过）**：显式选择 `app-protocol` feature；单 `exec` 的版本化 typed requests、opaque refs、单活动请求、原 ID 查询/去重及原始 receipt；可信启动 grant 与请求隔离，实际 Caelis 预授权 + 原生 GUI 闭环。见 [协议 v1](app-protocol-v1.md)。既有发布包未切换。
+2. **C4-macOS.2（本地通过，配套未发布）**：生产 Harness 在执行前展示完整 app 实例和能力，由自己的审批政策建立/撤销上下文；覆盖拒绝、到期、app 重启、并发审批、取消和上下文更换，审计记录与实际 grant 一致。模型字段始终不能构造审批事实。需要真实集成入口及 GUI 证据，不以参考 Host 文件替代。
 3. 只有上述生产授权闭环和本轮协议都稳定后，才选择最小 C5 app 脚本切片；Windows 与新入口分发验收独立记录。
 
 ## C5：App 级脚本（B4）
@@ -156,6 +157,12 @@ C2 进一步按独立可评审的小切片推进，不把表中全部能力放�
 - **证据**：脚本与 Host Call 的边界测试、限额和取消集成测试、在已通过平台上的单 app 语义/像素组合 GUI 流程。真实桌面与测试后端分别记录，跨 app 流程由 Harness 编排。
 - **停止条件**：静态解析被当作授权，Host Call 绕过 Core，预算不能终止等待，或脚本失败导致动作自动重放，均阻止通过。
 - **下一步准入**：脚本执行与原子入口具有同等边界，并完成所声明平台的真实验证后，再按需求进入 C6。
+
+### C5 本轮结论与下一次循环
+
+C5-macOS.1 的五个既有原子方法已接入同一 Core，137 项库测试及 26 项既有执行器测试通过；实际生产 Harness 完成同脚本语义/像素组合、图片输入、动作后异常、state 保留、原 ID 去重和撤销，另有真实超时/取消与迟到效果读回。来源、限额、失败和未覆盖项见 [协议](app-script-v1.md)与[验收记录](app-script-acceptance.md)。Caelis 的 `96b1ffe9`、`e63a0fc7` 均只保留本地。
+
+C5-macOS.2 的明确目标是解释偶发 `inventory=[]`，建立冷启动/后台/前台的支持边界和有界诊断，再按每种受支持状态至少三个新上下文复验。当前前台 fixture 通过不替代这项可靠性证据；零窗口必须不派发、不猜测、不自动 focus。完成前不切换默认入口，不进入 C6 批量扩展；这是一条限定的验证循环，不追加全部原子能力。
 
 ## C6：按能力组扩展（B5）
 

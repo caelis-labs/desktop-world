@@ -1,6 +1,8 @@
-# C4-macOS.1 验收记录
+# C4-macOS 验收记录
 
-日期：2026-10-27。本轮只交付 [单 app 协议 v1](app-protocol-v1.md)、可信宿主启动配置及显式选择的新 MCP 入口。实现主体提交 `8c741d740da76758e8f431b8bb934009e3dc0465`，MCP 兼容性修正提交 `fd562fee764781e22f5bfa47183f7bd51ff32b4c`，基线 `eafd12e629a89a19fd3b4bbfdebb5f27d76d2767`；另有验收脚本与文档提交。CUA 来源仍固定 0.38.0 / `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`，没有追加迁移原子能力。
+本文件先保留 C4-macOS.1 的历史记录，文末记录 C4-macOS.2；后续脚本验收见 [C5 记录](app-script-acceptance.md)。
+
+日期：2026-10-27。C4-macOS.1 只交付 [单 app 协议 v1](app-protocol-v1.md)、可信宿主启动配置及显式选择的新 MCP 入口。实现主体提交 `8c741d740da76758e8f431b8bb934009e3dc0465`，MCP 兼容性修正提交 `fd562fee764781e22f5bfa47183f7bd51ff32b4c`，基线 `eafd12e629a89a19fd3b4bbfdebb5f27d76d2767`；另有验收脚本与文档提交。CUA 来源仍固定 0.38.0 / `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`，没有追加迁移原子能力。
 
 ## 可重复验证
 
@@ -65,3 +67,14 @@ python3 tests/acceptance/app_protocol_probe.py /path/to/dtw \
 - 未开放脚本、任意 PID/native call、额外键盘/滚动/菜单/浏览器能力，也没有跨连接的持久化结果恢复。
 
 C4-macOS.1 以这个窄合同和实机预授权闭环作为检查点。下一步 C4-macOS.2 要验证生产 Harness 的 app/能力审批、上下文创建与撤销一致性；该门槛通过后才进入 C5，不能把本轮预授权 fixture 结果视为动态审批已完成。
+
+
+## C4-macOS.2：实际 Harness 授权入口（2026-10-27）
+
+DTW 基线为 #55 合并提交 `95c7bb3f304d852e591f87109f8122e801abc85b`。配套 Caelis 在 `c882776c` 上完成本地提交 `96b1ffe9`；用户指定保留本地，未推送、未发布。该检查点证明真实产品代码路径的本地集成，不代表已发布 Caelis 具备此入口。
+
+真实 Stack → Session → Runtime policy → Control canonical approval → Headless callback → DesktopApp Host → 原生 DTW 共运行 9 次工具调用、2 次完整 app 范围审批。首次拒绝无 grant/context 和桌面效果；第二次批准后单次 AXPress 派发，AX Count、独立 clicks 和 actions_started 均增加 1；另一个 fixture app 不变。审批 Subject 与实际 grant 的 app identity/PID/generation、能力、截止时间和 grant ID 精确一致。close 后原上下文执行被拒绝，Runtime 关闭无清理错误，私有授权目录为空，无遗留 dtw 进程。
+
+[脱敏证据索引](evidence/c4-host-authorization-20261027.json) 保留原始 trace SHA-256、真实断言与验证边界。原始记录保留在本机 `/private/tmp/dtw-c42-native-harness-20261027-r3/evidence.jsonl`，不公开包含其他应用 metadata 的 catalog。前两次失败来自验收代码：SDK 文本 result 解包遗漏、json.Number 与 float64 的类型比较；均未派发动作，修正后第三次通过。
+
+配套 SDK/Host 测试覆盖准备调用后审批、完整权限事实冻结、拒绝/取消、并发审批、app 实例变化、到期、上下文更换和 Runtime 资源所有权；完成所属包测试、重点 race、commit-check 与 CLI 构建。真实 GUI 使用确定性模型和审批 Surface，未验证自主 LLM 策略、交互 TUI 展示、Windows 或安装包。C5 可在此本地产品集成基线上继续，配套代码发布仍独立受控。

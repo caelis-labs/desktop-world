@@ -1357,3 +1357,471 @@ fn shutdown_failure_is_reported_without_reopening_execution() {
     assert_eq!(runtime.windows(), Err(Error::Closed));
     assert_eq!(backend.counts(), (1, 0, 0, 1));
 }
+
+// Records the live budget at the native boundary. The optional gate models a
+// blocking provider that polls CallContext while waiting for its response.
+struct BudgetBackend {
+    inner: PixelBackend,
+    entries: AtomicUsize,
+    budgets: Arc<Mutex<Vec<Duration>>>,
+    wait: Mutex<Option<WorkerGate>>,
+    windows_gate: Mutex<Option<WorkerGate>>,
+}
+impl BudgetBackend {
+    fn new(inner: TestBackend) -> Self {
+        Self {
+            inner: PixelBackend(inner),
+            entries: AtomicUsize::new(0),
+            budgets: Arc::new(Mutex::new(Vec::new())),
+            wait: Mutex::new(None),
+            windows_gate: Mutex::new(None),
+        }
+    }
+    fn enter(&self, call: &CallContext<'_>) -> Result<(), Error> {
+        self.entries.fetch_add(1, Ordering::SeqCst);
+        self.budgets.lock().unwrap().push(call.remaining()?);
+        let gate = self.wait.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.entered.send(()).unwrap();
+            loop {
+                let left = call.remaining()?;
+                match gate
+                    .release
+                    .recv_timeout(left.min(Duration::from_millis(10)))
+                {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                }
+            }
+        }
+        Ok(())
+    }
+}
+impl Backend for BudgetBackend {
+    type Binding = NativeBinding;
+    fn stamp(&self) -> ProviderStamp {
+        self.inner.stamp()
+    }
+    fn supports(&self, capability: Capability) -> bool {
+        self.inner.supports(capability)
+    }
+    fn windows(&self, app: &AppInstance, call: &CallContext<'_>) -> Result<Vec<WindowInfo>, Error> {
+        self.enter(call)?;
+        let gate = self.windows_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.wait();
+        }
+        Ok(vec![WindowInfo {
+            target: WindowTarget {
+                app: app.clone(),
+                ..target()
+            },
+            title: "budget window".into(),
+            visible: true,
+        }])
+    }
+    fn observe(
+        &self,
+        target: &WindowTarget,
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservation<Self::Binding>, Error> {
+        self.enter(call)?;
+        self.inner.observe(target, call)
+    }
+    fn capture(
+        &self,
+        target: &WindowTarget,
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservation<Self::Binding>, Error> {
+        self.enter(call)?;
+        self.inner.capture(target, call)
+    }
+    fn press(
+        &self,
+        target: &WindowTarget,
+        binding: &Self::Binding,
+        element: ElementId,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        if let Err(error) = self.enter(call) {
+            return ActionOutcome::unknown(error);
+        }
+        self.inner.press(target, binding, element, call)
+    }
+    fn click(
+        &self,
+        target: &WindowTarget,
+        binding: &Self::Binding,
+        point: PixelPoint,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        if let Err(error) = self.enter(call) {
+            return ActionOutcome::unknown(error);
+        }
+        self.inner.click(target, binding, point, call)
+    }
+}
+fn budget_fixture() -> (
+    Arc<Runtime<BudgetBackend, ManualClock>>,
+    TestBackend,
+    ManualClock,
+) {
+    let model = TestBackend::new();
+    let clock = ManualClock::new();
+    let runtime = Runtime::with_clock(
+        BudgetBackend::new(model.clone()),
+        Grant::new(
+            target().app,
+            vec![
+                Capability::Observe,
+                Capability::Press,
+                Capability::Capture,
+                Capability::Click,
+            ],
+            clock.now() + Duration::from_secs(10),
+        ),
+        Duration::from_secs(3),
+        clock.clone(),
+    );
+    (Arc::new(runtime), model, clock)
+}
+
+#[test]
+fn elapsed_call_deadlines_reject_all_operations_before_native_dispatch() {
+    let (runtime, model, clock) = budget_fixture();
+    let deadline = clock.now();
+    assert_eq!(runtime.windows_until(deadline), Err(Error::TimedOut));
+    assert_eq!(
+        runtime.observe_until(&target(), deadline),
+        Err(Error::TimedOut)
+    );
+    assert_eq!(
+        runtime.capture_until(&target(), deadline),
+        Err(Error::TimedOut)
+    );
+    assert_eq!(runtime.backend.entries.load(Ordering::SeqCst), 0);
+    let semantic = runtime.observe(&target()).unwrap();
+    assert_eq!(runtime.windows_until(deadline), Err(Error::TimedOut));
+    assert_eq!(
+        runtime.observe_until(&target(), deadline),
+        Err(Error::TimedOut)
+    );
+    assert_eq!(
+        runtime.capture_until(&target(), deadline),
+        Err(Error::TimedOut)
+    );
+    assert_rejected(
+        runtime.press_until(&target(), semantic.reference, ElementId(7), deadline),
+        Error::TimedOut,
+    );
+    assert_eq!(model.counts().1, 0);
+    assert_eq!(runtime.backend.entries.load(Ordering::SeqCst), 1);
+    // An expired call budget neither consumes a valid reference nor expires the grant.
+    assert_eq!(
+        runtime
+            .press(&target(), semantic.reference, ElementId(7))
+            .outcome
+            .dispatch,
+        DispatchState::Dispatched
+    );
+    let pixels = runtime.capture(&target()).unwrap();
+    assert_rejected(
+        runtime.click_until(
+            &target(),
+            pixels.reference,
+            PixelPoint { x: 1.0, y: 1.0 },
+            deadline,
+        ),
+        Error::TimedOut,
+    );
+    assert_eq!(model.counts().1, 1);
+    assert_eq!(runtime.backend.entries.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        runtime
+            .click(&target(), pixels.reference, PixelPoint { x: 1.0, y: 1.0 })
+            .outcome
+            .dispatch,
+        DispatchState::Dispatched
+    );
+    assert_eq!(runtime.backend.entries.load(Ordering::SeqCst), 4);
+}
+
+#[test]
+fn shared_call_deadline_shrinks_across_every_native_operation() {
+    let (runtime, _, clock) = budget_fixture();
+    let deadline = clock.now() + Duration::from_secs(1);
+    runtime.windows_until(deadline).unwrap();
+    clock.advance(Duration::from_millis(200));
+    let semantic = runtime.observe_until(&target(), deadline).unwrap();
+    clock.advance(Duration::from_millis(200));
+    assert_eq!(
+        runtime
+            .press_until(&target(), semantic.reference, ElementId(7), deadline)
+            .outcome
+            .dispatch,
+        DispatchState::Dispatched
+    );
+    clock.advance(Duration::from_millis(200));
+    let pixels = runtime.capture_until(&target(), deadline).unwrap();
+    clock.advance(Duration::from_millis(200));
+    assert_eq!(
+        runtime
+            .click_until(
+                &target(),
+                pixels.reference,
+                PixelPoint { x: 1.0, y: 1.0 },
+                deadline
+            )
+            .outcome
+            .dispatch,
+        DispatchState::Dispatched
+    );
+    assert_eq!(
+        *runtime.backend.budgets.lock().unwrap(),
+        [1000, 800, 600, 400, 200].map(Duration::from_millis)
+    );
+}
+
+#[test]
+fn longer_call_deadline_cannot_extend_observation_or_grant_lifetime() {
+    let (runtime, _, clock) = budget_fixture();
+    let deadline = clock.now() + Duration::from_secs(60);
+    runtime.windows_until(deadline).unwrap();
+    let semantic = runtime.observe_until(&target(), deadline).unwrap();
+    clock.advance(Duration::from_secs(2));
+    assert_eq!(
+        runtime
+            .press_until(&target(), semantic.reference, ElementId(7), deadline)
+            .outcome
+            .dispatch,
+        DispatchState::Dispatched
+    );
+    assert_eq!(
+        *runtime.backend.budgets.lock().unwrap(),
+        [10, 3, 1].map(Duration::from_secs)
+    );
+    let pixels = runtime.capture_until(&target(), deadline).unwrap();
+    clock.advance(Duration::from_secs(3));
+    assert_rejected(
+        runtime.click_until(
+            &target(),
+            pixels.reference,
+            PixelPoint { x: 1.0, y: 1.0 },
+            deadline,
+        ),
+        Error::StaleObservation,
+    );
+    clock.advance(Duration::from_secs(5));
+    assert_eq!(runtime.windows_until(deadline), Err(Error::GrantExpired));
+    assert_eq!(
+        runtime.observe_until(&target(), deadline),
+        Err(Error::GrantExpired)
+    );
+}
+
+#[test]
+fn deadline_is_rechecked_after_retired_binding_cleanup_before_all_reads() {
+    for operation in 0..3 {
+        let (runtime, model, clock) = budget_fixture();
+        let (gate, control) = TestGate::pair();
+        model.edit(|state| state.drop_gate = Some(gate));
+        runtime.observe(&target()).unwrap();
+        let deadline = clock.now() + Duration::from_secs(1);
+        let active = runtime.clone();
+        let worker = thread::spawn(move || match operation {
+            0 => active.windows_until(deadline).map(|_| ()),
+            1 => active.observe_until(&target(), deadline).map(|_| ()),
+            _ => active.capture_until(&target(), deadline).map(|_| ()),
+        });
+        control.wait_until_entered();
+        clock.advance(Duration::from_secs(1));
+        assert_eq!(runtime.windows(), Err(Error::Busy));
+        control.release();
+        assert_eq!(worker.join().unwrap(), Err(Error::TimedOut));
+        assert_eq!(runtime.backend.entries.load(Ordering::SeqCst), 1);
+        assert_eq!(model.counts(), (1, 0, 0, 1));
+        runtime.windows().unwrap();
+    }
+}
+
+#[test]
+fn native_read_replies_after_call_deadline_are_never_published() {
+    for operation in 0..3 {
+        let (runtime, model, clock) = budget_fixture();
+        let prior = runtime.observe(&target()).unwrap();
+        let (gate, control) = TestGate::pair();
+        if operation == 0 {
+            *runtime.backend.windows_gate.lock().unwrap() = Some(gate);
+        } else {
+            model.edit(|state| state.observe_gate = Some(gate));
+        }
+        let deadline = clock.now() + Duration::from_secs(1);
+        let active = runtime.clone();
+        let worker = thread::spawn(move || match operation {
+            0 => active.windows_until(deadline).map(|_| ()),
+            1 => active.observe_until(&target(), deadline).map(|_| ()),
+            _ => active.capture_until(&target(), deadline).map(|_| ()),
+        });
+        control.wait_until_entered();
+        clock.advance(Duration::from_secs(1));
+        control.release();
+        assert_eq!(worker.join().unwrap(), Err(Error::TimedOut));
+        assert_rejected(
+            runtime.press(&target(), prior.reference, ElementId(7)),
+            Error::StaleObservation,
+        );
+        assert_eq!(model.counts().3, if operation == 0 { 1 } else { 2 });
+        runtime.observe(&target()).unwrap();
+    }
+}
+
+#[test]
+fn action_call_deadline_preserves_late_provider_evidence_and_known_no_dispatch() {
+    for pixels in [false, true] {
+        for provider in [
+            successful_press(),
+            ActionOutcome::unknown(Error::BackendFailed("late uncertain provider".into())),
+            ActionOutcome::rejected(Error::TargetChanged),
+        ] {
+            let (runtime, model, clock) = budget_fixture();
+            let observation = if pixels {
+                runtime.capture(&target())
+            } else {
+                runtime.observe(&target())
+            }
+            .unwrap();
+            let (gate, control) = TestGate::pair();
+            model.edit(|state| {
+                state.press_gate = Some(gate);
+                state.press_outcome = Some(provider.clone());
+            });
+            let deadline = clock.now() + Duration::from_secs(1);
+            let active = runtime.clone();
+            let worker = thread::spawn(move || {
+                if pixels {
+                    active.click_until(
+                        &target(),
+                        observation.reference,
+                        PixelPoint { x: 1.0, y: 1.0 },
+                        deadline,
+                    )
+                } else {
+                    active.press_until(&target(), observation.reference, ElementId(7), deadline)
+                }
+            });
+            control.wait_until_entered();
+            clock.advance(Duration::from_secs(1));
+            control.release();
+            let receipt = worker.join().unwrap();
+            if provider.dispatch == DispatchState::NotDispatched {
+                assert_eq!(receipt.outcome, provider);
+                assert_eq!(receipt.provider_outcome, Some(provider));
+                assert_eq!(receipt.interruption, Some(Error::TimedOut));
+            } else {
+                assert_interrupted(receipt, Error::TimedOut, provider);
+            }
+            assert_eq!(model.counts().1, 1);
+            assert_rejected(
+                runtime.press(&target(), observation.reference, ElementId(7)),
+                Error::StaleObservation,
+            );
+        }
+    }
+}
+
+#[test]
+fn action_binding_cleanup_is_inside_the_call_deadline_and_busy_slot() {
+    for pixels in [false, true] {
+        let (runtime, model, clock) = budget_fixture();
+        let (gate, control) = TestGate::pair();
+        model.edit(|state| state.drop_gate = Some(gate));
+        let observation = if pixels {
+            runtime.capture(&target())
+        } else {
+            runtime.observe(&target())
+        }
+        .unwrap();
+        let deadline = clock.now() + Duration::from_secs(1);
+        let active = runtime.clone();
+        let worker = thread::spawn(move || {
+            if pixels {
+                active.click_until(
+                    &target(),
+                    observation.reference,
+                    PixelPoint { x: 1.0, y: 1.0 },
+                    deadline,
+                )
+            } else {
+                active.press_until(&target(), observation.reference, ElementId(7), deadline)
+            }
+        });
+        control.wait_until_entered();
+        clock.advance(Duration::from_secs(1));
+        assert_eq!(runtime.windows(), Err(Error::Busy));
+        control.release();
+        assert_interrupted(worker.join().unwrap(), Error::TimedOut, successful_press());
+        assert_eq!(model.counts(), (1, 1, 1, 1));
+    }
+}
+
+#[test]
+fn rejected_native_binding_cleanup_rechecks_call_deadline() {
+    let (runtime, model, clock) = budget_fixture();
+    let (gate, control) = TestGate::pair();
+    model.edit(|state| {
+        state.drop_gate = Some(gate);
+        state.observed_target = Some(WindowTarget {
+            native_id: 987,
+            ..target()
+        });
+    });
+    let deadline = clock.now() + Duration::from_secs(1);
+    let active = runtime.clone();
+    let worker = thread::spawn(move || active.observe_until(&target(), deadline));
+    control.wait_until_entered();
+    clock.advance(Duration::from_secs(1));
+    assert_eq!(runtime.windows(), Err(Error::Busy));
+    control.release();
+    assert_eq!(worker.join().unwrap(), Err(Error::TimedOut));
+    assert_eq!(model.counts(), (1, 0, 0, 1));
+}
+
+#[test]
+fn call_deadline_interrupts_a_native_style_wait_without_grant_expiry() {
+    let model = TestBackend::new();
+    let runtime = Arc::new(Runtime::new(
+        BudgetBackend::new(model.clone()),
+        Grant::new(
+            target().app,
+            vec![Capability::Observe, Capability::Press],
+            Instant::now() + Duration::from_secs(60),
+        ),
+        Duration::from_secs(30),
+    ));
+    let observation = runtime.observe(&target()).unwrap();
+    let (gate, control) = TestGate::pair();
+    *runtime.backend.wait.lock().unwrap() = Some(gate);
+    let active = runtime.clone();
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        let receipt = active.press_until(
+            &target(),
+            observation.reference,
+            ElementId(7),
+            Instant::now() + Duration::from_millis(200),
+        );
+        done_tx.send(receipt).unwrap();
+    });
+    control.wait_until_entered();
+    // No response is released: only the supplied budget can terminate the wait.
+    let result = done_rx.recv_timeout(Duration::from_secs(2));
+    control.release();
+    worker.join().unwrap();
+    assert_interrupted(
+        result.expect("provider wait ignored the call deadline"),
+        Error::TimedOut,
+        ActionOutcome::unknown(Error::TimedOut),
+    );
+    assert_eq!(model.counts(), (1, 0, 0, 1));
+    runtime.observe(&target()).unwrap();
+}

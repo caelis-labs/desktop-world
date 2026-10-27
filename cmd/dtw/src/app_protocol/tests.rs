@@ -51,6 +51,7 @@ struct Model {
     action_gate: Option<WorkerGate>,
     outcome: ActionOutcome,
     panic_action: bool,
+    poll_action: bool,
     shutdown_error: Option<Error>,
 }
 struct Shared {
@@ -75,6 +76,7 @@ impl MockBackend {
                     error: None,
                 },
                 panic_action: false,
+                poll_action: false,
                 shutdown_error: None,
             }),
             windows: AtomicUsize::new(0),
@@ -94,18 +96,36 @@ impl MockBackend {
         self.0.model.lock().unwrap().action_gate = Some(worker);
         test
     }
-    fn act(&self) -> ActionOutcome {
+    fn act(&self, call: &CallContext<'_>) -> ActionOutcome {
         self.0.actions.fetch_add(1, Ordering::SeqCst);
-        let (gate, outcome, panic) = {
+        let (gate, outcome, panic, poll) = {
             let mut model = self.0.model.lock().unwrap();
             (
                 model.action_gate.take(),
                 model.outcome.clone(),
                 model.panic_action,
+                model.poll_action,
             )
         };
         if let Some(gate) = gate {
-            gate.wait();
+            if poll {
+                gate.entered.send(()).unwrap();
+                loop {
+                    let left = match call.remaining() {
+                        Ok(left) => left,
+                        Err(error) => return ActionOutcome::unknown(error),
+                    };
+                    match gate
+                        .release
+                        .recv_timeout(left.min(Duration::from_millis(10)))
+                    {
+                        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    }
+                }
+            } else {
+                gate.wait();
+            }
         }
         assert!(!panic, "controlled provider panic");
         outcome
@@ -188,11 +208,23 @@ impl Backend for MockBackend {
         self.0.captures.fetch_add(1, Ordering::SeqCst);
         Ok(self.read(target, true))
     }
-    fn press(&self, _: &WindowTarget, _: &(), _: ElementId, _: &CallContext<'_>) -> ActionOutcome {
-        self.act()
+    fn press(
+        &self,
+        _: &WindowTarget,
+        _: &(),
+        _: ElementId,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        self.act(call)
     }
-    fn click(&self, _: &WindowTarget, _: &(), _: PixelPoint, _: &CallContext<'_>) -> ActionOutcome {
-        self.act()
+    fn click(
+        &self,
+        _: &WindowTarget,
+        _: &(),
+        _: PixelPoint,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        self.act(call)
     }
 }
 fn authority() -> HostGrant {
@@ -1040,3 +1072,6 @@ fn mcp_request_ids_accept_integer_valued_numbers_and_preserve_the_received_value
         assert!(response.get("result").is_none());
     }
 }
+
+#[path = "script_tests.rs"]
+mod script_tests;

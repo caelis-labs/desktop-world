@@ -1024,6 +1024,7 @@ dependencies = [
  "cua-driver-sdk",
  "flate2",
  "libc",
+ "rquickjs",
  "serde_json",
  "serde_yaml_ng",
  "sha2",

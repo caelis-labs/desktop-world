@@ -13,6 +13,8 @@ use std::{
 };
 pub mod grant;
 pub mod mcp;
+mod script_engine;
+mod scripts;
 #[cfg(test)]
 mod tests;
 #[cfg(target_os = "macos")]
@@ -71,6 +73,7 @@ fn reference(prefix: &str) -> String {
 }
 fn operation(command: &Command) -> &'static str {
     match command {
+        Command::Script { .. } => "script",
         Command::Windows => "windows",
         Command::Observe => "observe",
         Command::Capture => "capture",
@@ -96,13 +99,14 @@ struct Completed {
     value: Option<Value>,
     image: Option<Arc<String>>,
     receipt: Option<ActionReceipt>,
-    error: Option<Error>,
+    error: Option<WireError>,
     payload_bytes: usize,
     payload_expired: bool,
 }
 struct Work {
     completed: Completed,
     publication: Publication,
+    state_update: Option<Value>,
 }
 impl Work {
     fn read_error(error: Error) -> Self {
@@ -111,15 +115,16 @@ impl Work {
                 value: None,
                 image: None,
                 receipt: None,
-                error: Some(error),
+                error: Some(wire::core_error(&error)),
                 payload_bytes: 0,
                 payload_expired: false,
             },
             publication: Publication::None,
+            state_update: None,
         }
     }
     fn action(receipt: ActionReceipt) -> Self {
-        let error = receipt.outcome.error.clone();
+        let error = receipt.outcome.error.as_ref().map(wire::core_error);
         Self {
             completed: Completed {
                 value: None,
@@ -130,6 +135,7 @@ impl Work {
                 payload_expired: false,
             },
             publication: Publication::None,
+            state_update: None,
         }
     }
     fn rejected(command: &Command, error: Error) -> Self {
@@ -147,6 +153,7 @@ impl Work {
 struct Job {
     submitted: Submit,
     completed: Option<Completed>,
+    script: Option<scripts::ScriptRun>,
 }
 struct State {
     terminal: Option<Error>,
@@ -154,6 +161,7 @@ struct State {
     jobs: Vec<Job>,
     windows: HashMap<String, WindowTarget>,
     observation: Option<Snapshot>,
+    script_state: Value,
 }
 pub struct Coordinator<B: Backend> {
     runtime: Runtime<B>,
@@ -189,6 +197,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 jobs: Vec::new(),
                 windows: HashMap::new(),
                 observation: None,
+                script_state: json!({}),
             }),
             finished: Condvar::new(),
             max_requests: MAX_REQUESTS,
@@ -216,6 +225,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 "expires_at_unix_ms":self.authority.expires_at_unix_ms},
             "supported_capabilities":grant::capabilities_json(&self.supported),
             "context":{"state":context_state(&state)},
+            "script":scripts::description(),
             "limits":{"max_requests":self.max_requests,"max_payload_bytes":self.max_payload_bytes,
                 "observation_ttl_ms":OBSERVATION_TTL.as_millis(),
                 "result_retention":"receipts until process exit; payloads may be evicted"},
@@ -262,6 +272,13 @@ impl<B: Backend + 'static> Coordinator<B> {
         state.jobs.push(Job {
             submitted: submitted.clone(),
             completed: None,
+            script: match &submitted.command {
+                Command::Script { timeout_ms, .. } => Some(scripts::ScriptRun::new(
+                    (Instant::now() + Duration::from_millis(*timeout_ms))
+                        .min(self.authority.expires_at),
+                )),
+                _ => None,
+            },
         });
         let accepted = self.job_reply(state.jobs.last().unwrap());
         let owner = self.clone();
@@ -272,7 +289,12 @@ impl<B: Backend + 'static> Coordinator<B> {
                 let work = match catch_unwind(AssertUnwindSafe(|| owner.execute(&submitted))) {
                     Ok(work) => work,
                     Err(_) => {
-                        let _ = owner.close();
+                        if matches!(&submitted.command, Command::Script { .. }) {
+                            owner.stop_script(&submitted.request_id, Error::Closed);
+                            owner.abandon_script_step(&submitted.request_id);
+                        } else {
+                            let _ = owner.close();
+                        }
                         let error =
                             Error::BackendFailed("Execution panicked; context closed".into());
                         if is_action(&submitted.command) {
@@ -317,21 +339,32 @@ impl<B: Backend + 'static> Coordinator<B> {
     fn job_reply(&self, job: &Job) -> Reply {
         let done = job.completed.as_ref();
         let error = done.and_then(|d| d.error.as_ref());
-        Reply {
-            data: json!({"version":1,"request_id":job.submitted.request_id,"app_ref":self.app_ref,
+        let mut data = json!({"version":1,"request_id":job.submitted.request_id,"app_ref":self.app_ref,
                 "operation":operation(&job.submitted.command),
                 "status":if done.is_some() {"completed"} else {"running"},
                 "value":done.and_then(|d|d.value.as_ref()),
-                "error":error.map(core_error),
+                "error":error.map(error_json),
                 "receipt":done.and_then(|d|d.receipt.as_ref()).map(wire::receipt),
-                "payload_expired":done.is_some_and(|d|d.payload_expired)}),
+                "payload_expired":done.is_some_and(|d|d.payload_expired)});
+        if let Some(script) = &job.script {
+            data["script"] = script.json();
+        }
+        Reply {
+            data,
             image: done.and_then(|d| d.image.clone()),
             is_error: error.is_some(),
         }
     }
     fn execute(&self, submitted: &Submit) -> Work {
+        if matches!(&submitted.command, Command::Script { .. }) {
+            return self.execute_script(submitted);
+        }
+        self.execute_atomic(submitted, self.authority.expires_at)
+    }
+    // Called under the outer job reservation, including every script Host Call.
+    fn execute_atomic(&self, submitted: &Submit, deadline: Instant) -> Work {
         if submitted.command == Command::Windows {
-            return match self.runtime.windows() {
+            return match self.runtime.windows_until(deadline) {
                 Err(error) => Work::read_error(error),
                 Ok(windows) => {
                     if windows.len() > 256 {
@@ -355,6 +388,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                             payload_expired: false,
                         },
                         publication: Publication::Windows(bound),
+                        state_update: None,
                     }
                 }
             };
@@ -377,9 +411,9 @@ impl<B: Backend + 'static> Coordinator<B> {
         match &submitted.command {
             Command::Observe | Command::Capture => {
                 let read = if submitted.command == Command::Observe {
-                    self.runtime.observe(&target)
+                    self.runtime.observe_until(&target, deadline)
                 } else {
-                    self.runtime.capture(&target)
+                    self.runtime.capture_until(&target, deadline)
                 };
                 match read {
                     Err(error) => Work::read_error(error),
@@ -406,9 +440,12 @@ impl<B: Backend + 'static> Coordinator<B> {
                         })
                 };
                 match bound {
-                    Some((observation, element)) => {
-                        Work::action(self.runtime.press(&target, observation, element))
-                    }
+                    Some((observation, element)) => Work::action(self.runtime.press_until(
+                        &target,
+                        observation,
+                        element,
+                        deadline,
+                    )),
                     None => Work::rejected(&submitted.command, Error::InvalidObservation),
                 }
             }
@@ -429,15 +466,16 @@ impl<B: Backend + 'static> Coordinator<B> {
                         .map(|o| o.core)
                 };
                 match bound {
-                    Some(observation) => Work::action(self.runtime.click(
+                    Some(observation) => Work::action(self.runtime.click_until(
                         &target,
                         observation,
                         PixelPoint { x: *x, y: *y },
+                        deadline,
                     )),
                     None => Work::rejected(&submitted.command, Error::InvalidObservation),
                 }
             }
-            Command::Windows => unreachable!(),
+            Command::Windows | Command::Script { .. } => unreachable!(),
         }
     }
     fn observation(&self, submitted: &Submit, observation: Observation) -> Work {
@@ -479,20 +517,47 @@ impl<B: Backend + 'static> Coordinator<B> {
                 elements,
                 public,
             }),
+            state_update: None,
         }
     }
     fn complete(&self, id: &str, mut work: Work) {
-        let mut state = self.state.lock().unwrap();
-        if state.terminal.is_none() {
-            match work.publication {
-                Publication::Windows(windows) => {
-                    state.windows = windows;
-                    state.observation = None;
+        // Recheck immediately at the state commit boundary. A script that
+        // finishes on the deadline must not commit state or retain an idle worker.
+        let mut state = loop {
+            let state = self.state.lock().unwrap();
+            let script = state
+                .jobs
+                .iter()
+                .find(|j| j.submitted.request_id == id)
+                .and_then(|j| j.script.as_ref());
+            if let Some(script) = script {
+                if state.terminal.is_none() && Instant::now() >= script.deadline {
+                    drop(state);
+                    self.stop_script(id, Error::TimedOut);
+                    work.completed.error = Some(wire::core_error(&Error::TimedOut));
+                    work.state_update = None;
+                    continue;
                 }
-                Publication::Observation(observation) => state.observation = Some(observation),
-                Publication::None => {}
+            }
+            break state;
+        };
+        if let Some(next) = work.state_update.take() {
+            if state.terminal.is_none() && work.completed.error.is_none() {
+                state.script_state = next;
+                state
+                    .jobs
+                    .iter_mut()
+                    .find(|j| j.submitted.request_id == id)
+                    .unwrap()
+                    .script
+                    .as_mut()
+                    .unwrap()
+                    .state_committed = true;
+            } else if work.completed.error.is_none() {
+                work.completed.error = state.terminal.as_ref().map(wire::core_error);
             }
         }
+        apply_publication(&mut state, work.publication);
         work.completed.payload_bytes = work
             .completed
             .value
@@ -531,7 +596,8 @@ impl<B: Backend + 'static> Coordinator<B> {
     fn cancel(&self, id: &str) -> Reply {
         {
             let mut state = self.state.lock().unwrap();
-            if state.active.as_deref() != Some(id) || matches!(state.terminal, Some(Error::Closed))
+            if state.active.as_deref() != Some(id)
+                || (state.terminal.is_some() && !matches!(state.terminal, Some(Error::Cancelled)))
             {
                 return Reply::plain(json!({"version":1,"request_id":id,"cancel_requested":false,
                     "context_state":context_state(&state),"shutdown_error":null}));
@@ -541,6 +607,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             if state.terminal.is_none() {
                 state.terminal = Some(Error::Cancelled);
             }
+            scripts::cancel_active(&state);
             state.windows.clear();
             state.observation = None;
         }
@@ -558,6 +625,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             if state.terminal.is_none() {
                 state.terminal = Some(Error::Closed);
             }
+            scripts::cancel_active(&state);
             state.windows.clear();
             state.observation = None;
             matches!(state.terminal, Some(Error::Cancelled))
@@ -588,6 +656,20 @@ impl<B: Backend + 'static> Coordinator<B> {
         true
     }
 }
+fn apply_publication(state: &mut State, publication: Publication) {
+    if state.terminal.is_some() {
+        return;
+    }
+    match publication {
+        Publication::Windows(windows) => {
+            state.windows = windows;
+            state.observation = None;
+        }
+        Publication::Observation(observation) => state.observation = Some(observation),
+        Publication::None => {}
+    }
+}
+
 fn context_state(state: &State) -> &'static str {
     match state.terminal {
         Some(Error::Cancelled) => "cancelled",
