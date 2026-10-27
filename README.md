@@ -84,10 +84,10 @@ Runtime-owned CUA sessions and macOS application observation with screenshot-bou
 
 ## Source and distribution
 
-The next DTW core is being developed through [implementation checkpoints](docs/implementation-checkpoints.md), guided by the [architecture baseline](docs/next-architecture-baseline.md). C1 is an independently tested internal core. The feature-gated macOS C2/C3 slice now has [real desktop fixture evidence](docs/native-checkpoint-acceptance.md) for native discovery, SCK capture/click, AX observe/press and cancellation. This internal path has not replaced the current MCP runtime; Windows C2/C3 remain pending.
+The next release targets the usable rewrite only, with no old-runtime compatibility. The [product matrix](docs/product-matrix.md) records verified slices and remaining gaps; [implementation checkpoints](docs/implementation-checkpoints.md) follow the [architecture baseline](docs/next-architecture-baseline.md). macOS discovery, SCK capture/click, AX observe/press, app-scoped MCP and bounded scripts have checkpoint evidence. Real-app inventory validation, Windows, default-entry cleanup and rewritten packaging remain unfinished. The installation instructions above describe the existing released product.
 
-The [developer build guide](docs/building.md) covers Rust, Python and the macOS Swift toolchain for contributors. The signed macOS release gate signs the worker **before** embedding it, signs the final CLI, notarizes both executables, and verifies the extracted worker. Windows candidate CI validates package and MCP behavior; live Windows GUI acceptance is separate. See [release readiness](docs/release-readiness.md).
+The [developer build guide](docs/building.md) separates fast source/Swift controls from targeted local builds and GUI acceptance. Development CI no longer compiles upstream CUA or validates old platform packages. Stable core behavior will gain targeted CI coverage as the product develops.
 
-Maintainers use release-please for version PRs and changelogs, followed by signed candidates attached to a draft Release. [Release workflow and promotion →](docs/releasing.md)
+The old automatic release/candidate workflows have been retired. New candidates will use the rewritten package contract once its scope and acceptance are ready. [Release direction and checkpoints →](docs/releasing.md)
 
-DTW is [MIT licensed](LICENSE). Its bundled CUA worker and dependencies retain their own terms; the expanded Plugin includes the complete [third-party notices](THIRD_PARTY_NOTICES.md) and `LICENSING` inventory.
+DTW is [MIT licensed](LICENSE). Derived code and third-party dependencies retain their own terms; see [third-party notices](THIRD_PARTY_NOTICES.md). Historical released Plugins also include their bundled worker's notices and `LICENSING` inventory.

@@ -12,192 +12,31 @@ concurrency:
   group: dtw-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Early rewrite development: keep fast, desktop-independent checks here.
+# Product/platform validation runs at the relevant implementation checkpoint.
 jobs:
-  release-versions:
-    name: Release version consistency
+  source:
+    name: Source checks
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python scripts/release-artifacts.py check
-
-  source-contract:
-    name: Source contract
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.98.0
           components: rustfmt
       - run: sh scripts/check-source.sh
 
-  macos-package:
-    needs: [release-versions, source-contract]
-    if: ${{ always() && github.event_name == 'pull_request' }}
-    name: macOS source, package, and MCP
+  macos-inventory:
+    name: macOS inventory controls
     runs-on: macos-26
-    timeout-minutes: 75
+    timeout-minutes: 5
     steps:
-      - name: Require successful source checks
-        shell: bash
-        env:
-          VERSION_RESULT: ${{ needs.release-versions.result }}
-          SOURCE_RESULT: ${{ needs.source-contract.result }}
-        run: |
-          test "$VERSION_RESULT" = success
-          test "$SOURCE_RESULT" = success
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.98.0
-          components: rustfmt
-      - name: Restore pinned Rust build cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ${{ runner.temp }}/dtw-cua-build
-          key: dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-2d2f992-${{ hashFiles('cmd/dtw/Cargo.lock', 'cmd/dtw/**/*.rs', 'cmd/dtw/**/*.swift') }}
-          restore-keys: |
-            dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-2d2f992-
-      - name: Verify native inventory attribution without GUI
-        run: python3 tests/ci/run_native_inventory_tests.py
-      - name: Build package from pinned CUA source
-        env:
-          DTW_BUILD_DIR: ${{ runner.temp }}/dtw-cua-build
-          DTW_CUA_SOURCE_DIR: ${{ runner.temp }}/dtw-cua-source
-        run: scripts/build-plugin.sh "$RUNNER_TEMP/dtw-plugin"
-      - name: Verify package and desktop-independent MCP
-        run: |
-          (cd "$RUNNER_TEMP/dtw-plugin" && shasum -a 256 -c SHA256SUMS)
-          codesign --verify "$RUNNER_TEMP/dtw-plugin/bin/dtw"
-          codesign --verify "$RUNNER_TEMP/dtw-plugin/libexec/cua-driver"
-          python3 tests/acceptance/mcp_smoke.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
-          python3 tests/acceptance/licenses_probe.py "$RUNNER_TEMP/dtw-plugin"
-          python3 tests/acceptance/contract_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
-          python3 tests/acceptance/click_contract_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
-          python3 tests/acceptance/native_tools_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
-          python3 tests/acceptance/observation_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
-          python3 tests/acceptance/authorization_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
-          python3 tests/acceptance/runtime_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
-          python3 tests/acceptance/lifecycle_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
-          python3 tests/acceptance/mcp_smoke.py "$RUNNER_TEMP/dtw-plugin-slim/bin/dtw"
-          python3 tests/acceptance/runtime_probe.py "$RUNNER_TEMP/dtw-plugin-slim/bin/dtw"
-          python3 tests/acceptance/lifecycle_probe.py "$RUNNER_TEMP/dtw-plugin-slim/bin/dtw"
-          python3 tests/acceptance/native_lifecycle_probe.py "$RUNNER_TEMP/dtw-plugin-slim/bin/dtw"
-          python3 tests/acceptance/package_install_probe.py "$RUNNER_TEMP/dtw-plugin" --output "$RUNNER_TEMP/install-probe"
-          CARGO_TARGET_DIR="$RUNNER_TEMP/dtw-cua-build/dtw" cargo +1.98.0 test --manifest-path cmd/dtw/Cargo.toml --release --locked
-          CARGO_TARGET_DIR="$RUNNER_TEMP/dtw-cua-build/dtw" cargo +1.98.0 test --manifest-path cmd/dtw/Cargo.toml --release --locked --features app-protocol --lib
-          CARGO_TARGET_DIR="$RUNNER_TEMP/dtw-cua-build/dtw" cargo +1.98.0 build --manifest-path cmd/dtw/Cargo.toml --release --locked --features native-checkpoints --example native_checkpoint
-          CARGO_TARGET_DIR="$RUNNER_TEMP/dtw-cua-build/dtw" cargo +1.98.0 build --manifest-path cmd/dtw/Cargo.toml --release --locked --features app-protocol --bin dtw
-          DTW_TEST_BINARY="$RUNNER_TEMP/dtw-plugin-slim/bin/dtw" DTW_TEST_WORKER="$RUNNER_TEMP/dtw-plugin-slim/libexec/cua-driver" CARGO_TARGET_DIR="$RUNNER_TEMP/dtw-cua-build/dtw" cargo +1.98.0 test --manifest-path cmd/dtw/Cargo.toml --release --locked recovery_tests -- --ignored --test-threads=1
-
-  windows-package:
-    needs: [release-versions, source-contract]
-    if: ${{ always() && github.event_name == 'pull_request' }}
-    name: Windows source, package, and MCP
-    runs-on: windows-latest
-    timeout-minutes: 75
-    steps:
-      - name: Require successful source checks
-        shell: bash
-        env:
-          VERSION_RESULT: ${{ needs.release-versions.result }}
-          SOURCE_RESULT: ${{ needs.source-contract.result }}
-        run: |
-          test "$VERSION_RESULT" = success
-          test "$SOURCE_RESULT" = success
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.98.0
-          components: rustfmt
-      - name: Restore pinned Rust build cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ${{ runner.temp }}/dtw-cua-build
-          key: dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-2d2f992-${{ hashFiles('cmd/dtw/Cargo.lock', 'cmd/dtw/**/*.rs', 'cmd/dtw/**/*.swift') }}
-          restore-keys: |
-            dtw-rust-${{ runner.os }}-${{ runner.arch }}-1.98.0-2d2f992-
-      - name: Build package from pinned CUA source
-        shell: pwsh
-        env:
-          DTW_BUILD_DIR: ${{ runner.temp }}/dtw-cua-build
-          DTW_CUA_SOURCE_DIR: ${{ runner.temp }}/dtw-cua-source
-        run: |
-          $package = Join-Path $env:RUNNER_TEMP 'dtw-plugin'
-          ./scripts/build-plugin.ps1 $package
-          "DTW_PACKAGE=$package" >> $env:GITHUB_ENV
-      - name: Verify package and desktop-independent MCP
-        shell: pwsh
-        run: |
-          $required = @('bin/dtw.exe', 'libexec/cua-driver.exe', 'LICENSE',
-                        'NOTICE', 'CUA-MIT-LICENSE.txt', 'CUA-THIRD_PARTY_NOTICES.md',
-                        'skills/desktop-world/SKILL.md')
-          foreach ($name in $required) {
-            if (-not (Test-Path -LiteralPath (Join-Path $env:DTW_PACKAGE $name))) {
-              throw "Package file missing: $name"
-            }
-          }
-          $mcp = Get-Content -LiteralPath (Join-Path $env:DTW_PACKAGE 'mcp.json') -Raw | ConvertFrom-Json
-          if ($mcp.mcpServers.'desktop-world'.command -ne './bin/dtw.exe') {
-            throw 'Windows MCP command does not name dtw.exe'
-          }
-          foreach ($line in Get-Content -LiteralPath (Join-Path $env:DTW_PACKAGE 'SHA256SUMS')) {
-            if ($line -notmatch '^([0-9a-f]{64})  (.+)$') { throw "Invalid checksum line: $line" }
-            $file = Join-Path $env:DTW_PACKAGE $Matches[2]
-            $actual = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($actual -ne $Matches[1]) { throw "Checksum mismatch: $file" }
-          }
-          python tests/acceptance/mcp_smoke.py (Join-Path $env:DTW_PACKAGE 'bin/dtw.exe')
-          if ($LASTEXITCODE -ne 0) { throw "MCP smoke failed with exit code $LASTEXITCODE" }
-          $slim = Join-Path $env:RUNNER_TEMP 'dtw-plugin-slim/bin/dtw.exe'
-          python tests/acceptance/mcp_smoke.py $slim
-          if ($LASTEXITCODE -ne 0) { throw 'Slim MCP failed' }
-          python tests/acceptance/runtime_probe.py $slim
-          if ($LASTEXITCODE -ne 0) { throw 'Slim runtime failed' }
-          python tests/acceptance/lifecycle_probe.py $slim
-          if ($LASTEXITCODE -ne 0) { throw 'Bounded stop failed' }
-          python tests/acceptance/licenses_probe.py $env:DTW_PACKAGE
-          if ($LASTEXITCODE -ne 0) { throw "License check failed with exit code $LASTEXITCODE" }
-          python tests/acceptance/contract_probe.py (Join-Path $env:DTW_PACKAGE 'bin/dtw.exe')
-          if ($LASTEXITCODE -ne 0) { throw "Contract probe failed with exit code $LASTEXITCODE" }
-          python tests/acceptance/click_contract_probe.py (Join-Path $env:DTW_PACKAGE 'bin/dtw.exe')
-          if ($LASTEXITCODE -ne 0) { throw "Click contract probe failed with exit code $LASTEXITCODE" }
-          python tests/acceptance/native_tools_probe.py (Join-Path $env:DTW_PACKAGE 'bin/dtw.exe')
-          python tests/acceptance/observation_probe.py (Join-Path $env:DTW_PACKAGE 'bin/dtw.exe')
-          if ($LASTEXITCODE -ne 0) { throw 'Native tools probe failed' }
-          python tests/acceptance/authorization_probe.py (Join-Path $env:DTW_PACKAGE 'bin/dtw.exe')
-          if ($LASTEXITCODE -ne 0) { throw 'Authorization probe failed' }
-          python tests/acceptance/runtime_probe.py (Join-Path $env:DTW_PACKAGE 'bin/dtw.exe')
-          if ($LASTEXITCODE -ne 0) { throw "Runtime probe failed with exit code $LASTEXITCODE" }
-          python tests/acceptance/package_install_probe.py $env:DTW_PACKAGE --output (Join-Path $env:RUNNER_TEMP 'install-probe')
-          if ($LASTEXITCODE -ne 0) { throw "Installation probe failed with exit code $LASTEXITCODE" }
-          $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'dtw-cua-build/dtw'
-          cargo +1.98.0 test --manifest-path cmd/dtw/Cargo.toml --release --locked
-          if ($LASTEXITCODE -ne 0) { throw "Adapter regression test failed with exit code $LASTEXITCODE" }
-          cargo +1.98.0 test --manifest-path cmd/dtw/Cargo.toml --release --locked --features app-protocol --lib
-          if ($LASTEXITCODE -ne 0) { throw 'Native checkpoint contracts failed (not GUI evidence)' }
-          $env:DTW_TEST_BINARY = $slim
-          $env:DTW_TEST_WORKER = Join-Path $env:RUNNER_TEMP 'dtw-plugin-slim/libexec/cua-driver.exe'
-          cargo +1.98.0 test --manifest-path cmd/dtw/Cargo.toml --release --locked recovery_tests -- --ignored --test-threads=1
-          if ($LASTEXITCODE -ne 0) { throw 'Idle/cancellation/grant-expiry regression failed' }
+      - run: python3 tests/ci/run_native_inventory_tests.py

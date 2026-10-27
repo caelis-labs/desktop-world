@@ -1,97 +1,51 @@
 # Releasing Desktop World
 
-After successful main source CI, Release Please opens a version PR from Conventional Commits. Merging
-that PR creates a `vX.Y.Z` tag and a **draft** GitHub Release, then calls the same
-signed candidate workflow used by manual releases. Both platform jobs must pass
-before candidate assets are attached to the draft. Publishing remains a maintainer
-action after acceptance; an empty or failed draft is not a shipped release.
+The next release will contain the usable rewrite only. It will not ship the old
+script facade, CUA worker, or a compatibility runtime. Existing tags and released
+assets remain historical versions.
 
-| Event | Validation |
+## Current development checks
+
+PR and main CI run two bounded jobs:
+
+| Check | Scope |
 | --- | --- |
-| PR | Version/source checks once, then full macOS and Windows package/MCP checks |
-| main push | Version/source checks; no redundant unsigned platform packages |
-| Successful main CI | Release Please may update its version PR or create the tag/draft |
-| Candidate | Reuse source checks only from that exact successful main CI SHA; always verify final packages and signed macOS bytes |
+| Source checks | Version consistency, rustfmt, dependency-free Core/IPC tests, Python syntax and rewrite acceptance negative controls |
+| macOS inventory controls | Compile and run the Swift inventory classification controls without GUI access |
 
-The candidate gate queries the triggering run and its explicit `Source contract`
-and version jobs. A different SHA, missing/failed/skipped job or unavailable proof
-runs source checks again on the candidate commit. Manual candidates also run them.
-An overlapping main push cannot lend an older SHA's success to a newer tag.
-Each platform checkout must match the source gate's recorded revision; a moved
-tag fails before building or signing.
-Required check names stay stable; on PR source failure the platform guards fail,
-so dependency skips cannot masquerade as successful required platform checks.
-Historical tags without these helpers should use their immutable historical
-workflow, for example `gh workflow run release.yml --ref v0.1.1 -f tag=v0.1.1`.
+Neither job downloads CUA source, builds Cargo dependencies, packages DTW, or
+operates a desktop. Each has a five-minute timeout. The required checks are
+`Source checks` and `macOS inventory controls`; strict up-to-date branch checking
+remains enabled. The old platform package check names must be removed from branch
+protection when the replacement checks pass on the CI transition PR.
 
-## One-time repository setup
+This is intentionally an early development gate. Protocol, QuickJS and Rust
+native-bridge code is feature-gated and is not compiled by the std-only tests.
+Changes to those areas require the relevant local build/tests and checkpoint
+acceptance. Add CI coverage when a concrete, stable behavior needs protection;
+do not recreate the old full-package matrix.
 
-Make the organization Actions secret `RELEASE_PLEASE_TOKEN` available to this
-repository, or configure a repository secret with a dedicated GitHub App
-installation token or a fine-grained PAT authorized for this repository, with
-Contents and Pull requests write access (and Issues write access for labels).
-Include Workflows write access when the generated PR contains workflow changes.
-App installation tokens must be refreshed by the caller before use; do not store
-a short-lived installation token as a permanent secret.
-The checked-in workflow expects a PAT stored in that secret unless you adapt it
-to mint an App token. Keep the existing Apple signing/notary secrets and team ID
-available to the reusable candidate workflow.
+## Next release checkpoint
 
-The dedicated token lets generated PRs trigger normal pull-request CI. The
-default `GITHUB_TOKEN` suppresses those events. The dedicated token does not
-depend on enabling PR creation by the repository's default Actions token. See the
-[Release Please Action credential guidance](https://github.com/googleapis/release-please-action#github-credentials).
+1. Choose the supported workflows and platforms from the [product matrix](product-matrix.md).
+   Record unsupported and unverified cases explicitly.
+2. Remove the old default runtime, SDK/worker dependencies and installation/package
+   paths. Verify that the single rewritten entry builds and runs without them.
+   This cleanup is still pending; removing old CI does not establish it.
+3. Complete the selected real-app and Harness workflows, including independent
+   effect readback, authorization refusal and uncertain/cancelled outcomes.
+4. Define the new package/install contract and implement a candidate workflow for
+   those products. Validate final installed bytes, dependencies, signing,
+   permissions/TCC and child-process identity on supported platforms.
+5. Record source revision, CI scope, artifact hashes and actual native acceptance.
+   Publish the same reviewed bytes without rebuilding.
 
-## Local configuration checks
+The old `release-please.yml` and `release.yml` workflows have been removed.
+Successful development CI no longer opens a version PR, creates a tag/draft, or
+builds/uploads old CUA-based candidates. There is no replacement legacy workflow.
+Release automation will be added with the rewritten package contract.
 
-Run `python3 scripts/release-artifacts.py check` to check all six version files
-without creating a tag; CI runs the same guard. The root `simple` strategy is
-intentional: limiting a Rust release component to `cmd/dtw` would omit Skill-only
-commits under `packaging/`. Extra-file updaters keep the Rust and Plugin versions
-in sync. The Cargo.lock JSONPath uses `name.value` because Release Please's TOML
-parser wraps scalar values with source positions; it targets only DTW's entry,
-leaving dependency versions untouched. Verify this updater when upgrading
-Release Please, including an actual increment beyond the current version.
-
-## Normal release
-
-1. Merge reviewed changes using Conventional Commit titles. Before 1.0,
-   `feat` and `fix` increment the patch; breaking changes increment the minor.
-   The root component includes Skill, packaging and documentation changes.
-2. Review the generated release PR: `version.txt`, Cargo package/lock versions,
-   all three Plugin manifests, the release manifest and `CHANGELOG.md` must agree
-   on the intended release. The manifest records the previous version until the
-   release PR updates it. Do not bump these files by hand for normal releases.
-3. Merge the version PR. The `Release please` workflow creates the tag/draft,
-   builds the exact tag, signs/notarizes macOS binaries, runs package/contract
-   probes, checks asset hashes, and uploads both platform candidates to the draft.
-4. Download the draft assets, compare each `BUILD-*.json` source revision to the
-   tag, verify checksums, and complete the native/real-host checks in
-   [release readiness](release-readiness.md#promotion). Record actual coverage
-   and limitations in the draft notes.
-5. Publish that draft with its accepted bytes. Do not rebuild accepted assets.
-   Update README/install download links to the published version. Bot/Core
-   dependency updates are separate work with their own artifact pins.
-
-Do not merge another release PR while the previous draft is awaiting acceptance.
-After a candidate failure, rerun the failed jobs in the original workflow run.
-Uploads intentionally omit `--clobber`: existing assets are never silently
-replaced. If the attach job partially succeeds, inspect existing asset hashes
-before uploading only the missing files.
-
-## Existing and manual releases
-
-When onboarding an existing repository, seed `.release-please-manifest.json`
-with the most recent public version. A local version bump or local-only tag is
-not a published release. Keep stale local tags out of pushes: Release Please
-creates the remote tag from the reviewed release PR. Never reuse a public tag
-for different source.
-
-## Manual candidates and recovery
-
-`Release candidates` still accepts an existing tag through `workflow_dispatch`.
-It verifies tag/package version consistency and uploads `candidate-darwin-arm64`
-and `candidate-windows-amd64` workflow artifacts. Manual dispatch does not create
-or publish a GitHub Release. Use this path for existing/manual tags or recovery;
-verify exact source and hashes before attaching files to a draft. A successful
-workflow or notarization check alone is not native desktop acceptance.
+Version files remain consistent through `python3 scripts/release-artifacts.py check`;
+the existing release metadata and old build scripts are cleanup inputs, not a
+supported release route. The historical package guarantees are recorded in
+[release readiness](release-readiness.md); they do not certify the rewrite.

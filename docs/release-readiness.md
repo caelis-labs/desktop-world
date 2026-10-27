@@ -1,5 +1,11 @@
 # Release readiness
 
+Historical CUA-based release contract. This page records the old product and its
+acceptance boundaries; it is not the next release gate. The next release contains
+the rewrite only. See [releasing](releasing.md) and the [product matrix](product-matrix.md).
+The old candidate workflows have been retired; references below describe their
+historical behavior.
+
 The first stable release is `v0.1.0`. It uses CUA source `d74a9cab3fb2e80ab7f0cef47025ec828586ea75` for both the SDK and worker. Windows upstream limitations are non-blocking and tracked in [#36](https://github.com/caelis-labs/desktop-world/issues/36); affected Windows flows remain limited support.
 
 ## Distribution contract
