@@ -48,7 +48,9 @@ impl Session {
                     return Some(rpc_error(id, -32602, "protocolVersion is required"));
                 };
                 let version = match requested {
-                    "2024-11-05" | "2025-03-26" | CURRENT_VERSION => requested,
+                    // 2025-03-26 requires receiving batches, which this
+                    // bounded single-message transport does not implement.
+                    "2024-11-05" | CURRENT_VERSION => requested,
                     _ => CURRENT_VERSION,
                 };
                 self.initialized = true;

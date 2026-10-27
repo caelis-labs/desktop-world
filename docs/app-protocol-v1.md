@@ -33,7 +33,7 @@ CARGO_TARGET_DIR=/private/tmp/dtw49-target cargo +1.98.0 build \
 
 ## MCP 和请求
 
-使用标准 stdio JSON-RPC，先 `initialize`，再 `notifications/initialized`。支持 MCP `2025-06-18`、`2025-03-26`、`2024-11-05`；未知版本返回当前支持的 `2025-06-18`，由客户端决定是否继续。只公开一个 `exec` tool；`tools/list` 的 JSON Schema 与严格解析器接受相同请求集合。未知字段和版本拒绝，标识符为 1–128 个 Unicode 字符的字符串，坐标必须有限。
+使用标准 stdio JSON-RPC，先 `initialize`，再 `notifications/initialized`。支持 MCP `2025-06-18`、`2024-11-05`；其他版本（包括 `2025-03-26`）返回当前支持的 `2025-06-18`，由客户端决定是否继续。`2025-03-26` [要求接收 batch](https://modelcontextprotocol.io/specification/2025-03-26/basic#batching)，本切片不实现批请求，因此不宣称该版本兼容。只公开一个 `exec` tool；`tools/list` 的 JSON Schema 与严格解析器接受相同请求集合。未知字段和版本拒绝，标识符为 1–128 个 Unicode 字符的字符串，坐标必须有限。
 
 | exec 操作 | 字段 | 行为 |
 | --- | --- | --- |

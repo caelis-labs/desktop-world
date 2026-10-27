@@ -759,6 +759,14 @@ fn ready(owner: &Arc<Coordinator<MockBackend>>, version: &str) -> mcp::Session {
         )
         .unwrap();
     assert!(init["error"].is_null(), "{init}");
+    assert_eq!(
+        init["result"]["protocolVersion"],
+        if version == "2024-11-05" {
+            "2024-11-05"
+        } else {
+            "2025-06-18"
+        }
+    );
     assert!(session
         .handle(
             owner,
@@ -822,9 +830,9 @@ fn mcp_requires_the_handshake_and_exposes_only_one_exec_tool() {
     );
 }
 #[test]
-fn mcp_old_versions_keep_text_results_and_current_version_adds_structured_content() {
+fn mcp_negotiates_only_implemented_versions_and_preserves_their_result_format() {
     let (owner, _) = coordinator();
-    for version in ["2024-11-05", "2025-03-26", "2025-06-18"] {
+    for version in ["2024-11-05", "2025-03-26", "2025-06-18", "future"] {
         let mut session = ready(&owner, version);
         let response = session
             .handle(
@@ -840,7 +848,7 @@ fn mcp_old_versions_keep_text_results_and_current_version_adds_structured_conten
         assert_eq!(content[0]["type"], "text");
         let text: Value = serde_json::from_str(content[0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(text["grant"]["grant_id"], "host-approved");
-        if version == "2025-06-18" {
+        if version != "2024-11-05" {
             assert_eq!(response["result"]["structuredContent"], text);
         } else {
             assert!(response["result"].get("structuredContent").is_none());
