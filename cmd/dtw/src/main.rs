@@ -22,6 +22,7 @@ mod installer;
 mod lifecycle;
 mod native_tools;
 mod observation;
+mod recovery;
 
 const MAX_STATE_BYTES: usize = 32 * 1024;
 const MODEL_TEXT_BYTES: usize = 12 * 1024;
@@ -626,6 +627,9 @@ impl Server {
             .filter(|n| observation::allowed(n))
         {
             return observation::presentation(name, result, id).to_string();
+        }
+        if result.native_operation.as_deref() == Some("focus") {
+            return recovery::presentation(&result.structured, id, &self.discovery).to_string();
         }
         if result
             .native_operation
@@ -1266,13 +1270,7 @@ impl Server {
         }
         let code = match work {
             Work::Observation(request) => {
-                let result = native
-                    .call_tool(
-                        request.tool().into(),
-                        request.native_arguments().to_string(),
-                    )
-                    .await?;
-                return Ok((request.finish(save(result)), None, true));
+                return Ok((request.execute(&native).await?, None, true));
             }
             Work::Native { name, arguments } => {
                 let result = if name == "browser_download" {
@@ -1302,7 +1300,7 @@ impl Server {
                 let result = native
                     .call_tool("bring_to_front".into(), args.to_string())
                     .await?;
-                return Ok((save(result), None, true));
+                return Ok((recovery::focus(save(result), pid, window_id), None, true));
             }
             Work::Menu {
                 pid,

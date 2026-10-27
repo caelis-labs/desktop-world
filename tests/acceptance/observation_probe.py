@@ -18,6 +18,9 @@ try:
     for i, args in enumerate([
         {'operation':'windows'}, {'operation':'windows','arguments':{'pid':1,'app':'Ambiguous'}},
         {'operation':'observe','arguments':{'pid':1}},
+        {'operation':'observe','arguments':{'pid':1,'window_id':2,'ready_timeout_ms':1}},
+        {'operation':'observe','arguments':{'pid':1,'window_id':2,'ready_when':'x','ready_timeout_ms':5001}},
+        {'operation':'observe','arguments':{'pid':1,'window_id':2,'ready_when':' '}},
         {'operation':'apps','arguments':{'running':'false'}},
         {'operation':'apps','arguments':{'session':'forged'}},
         {'operation':'apps','arguments':{'limit':0}},

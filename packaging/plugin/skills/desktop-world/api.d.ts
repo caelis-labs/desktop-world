@@ -200,7 +200,7 @@ type NativeArguments = { [key: string]: Json } & {
 type ExecInput =
   | { operation: "apps"; arguments?: { running?: boolean; query?: string; offset?: number; limit?: number }; wait_ms?: number }
   | { operation: "windows"; arguments: ({ pid: number; app?: never } | { app: string; pid?: never }) & { title?: string; on_screen_only?: boolean; offset?: number; limit?: number }; wait_ms?: number }
-  | { operation: "observe"; arguments: { pid: number; window_id: number; query?: string; max_elements?: number; max_depth?: number; include_screenshot?: boolean; max_image_dimension?: number; timeout_ms?: number }; wait_ms?: number; include_image?: boolean }
+  | { operation: "observe"; arguments: { pid: number; window_id: number; query?: string; max_elements?: number; max_depth?: number; include_screenshot?: boolean; max_image_dimension?: number; timeout_ms?: number; ready_when?: string; ready_timeout_ms?: number }; wait_ms?: number; include_image?: boolean }
   | { operation: "describe"; name?: BrowserOperation | "health_report" | "get_guide" | "apps" | "windows" | "observe" }
   | { operation: BrowserOperation; arguments: NativeArguments;
       wait_ms?: number; include_image?: boolean }

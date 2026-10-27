@@ -2,7 +2,8 @@
 
 First-batch implementation and macOS acceptance, 2026-10-27. Tracks
 [#49](https://github.com/caelis-labs/desktop-world/issues/49); the focus recovery
-and AX readiness work remains separate.
+and AX readiness work is documented in the subsequent
+[second-batch report](issue49-native-recovery.md).
 
 ## Contract
 

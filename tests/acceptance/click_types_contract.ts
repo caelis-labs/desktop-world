@@ -69,6 +69,7 @@ const discoveryInputs: ExecInput[] = [
   {operation:"windows",arguments:{pid:123,title:"Settings"}},
   {operation:"windows",arguments:{app:"Editor",on_screen_only:true}},
   {operation:"observe",arguments:{pid:123,window_id:456,max_elements:80}},
+  {operation:"observe",arguments:{pid:123,window_id:456,ready_when:"Save",ready_timeout_ms:2000}},
   {operation:"app",pid:123,window_id:456,include_image:true},
 ];
 // @ts-expect-error An observation must pin a window.
