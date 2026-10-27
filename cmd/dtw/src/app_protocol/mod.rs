@@ -678,26 +678,18 @@ fn context_state(state: &State) -> &'static str {
     }
 }
 
-/// Called synchronously before the legacy Tokio runtime or CUA worker startup.
-pub fn entry() -> bool {
+/// Run the app-scoped transport. Unsupported platforms never start another backend.
+pub fn run(args: &[String]) -> Result<(), WireError> {
     #[cfg(target_os = "macos")]
-    if crate::backends::macos::worker_entry() {
-        return true;
+    {
+        transport::run(args)
     }
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().map(String::as_str) != Some("app") {
-        return false;
-    }
-    #[cfg(target_os = "macos")]
-    let result = transport::run(&args[1..]);
     #[cfg(not(target_os = "macos"))]
-    let result: Result<(), WireError> = Err(WireError {
-        code: "unsupported_platform".into(),
-        message: "C4 native app protocol currently requires macOS".into(),
-    });
-    if let Err(error) = result {
-        eprintln!("{}", Reply::error(error).data);
-        std::process::exit(2);
+    {
+        let _ = args;
+        Err(WireError {
+            code: "unsupported_platform".into(),
+            message: "Native app operations currently require macOS".into(),
+        })
     }
-    true
 }

@@ -2,11 +2,12 @@ Desktop World
 
 Copyright (c) 2026 Caelis Labs.
 
-The current DTW adapter source is licensed under the MIT License in LICENSE.
-It links Cua Driver SDK and packages a private Cua Driver worker from
-trycua/cua commit 85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19. Their
-copyright and MIT license are preserved separately in packaged artifacts as
-CUA-MIT-LICENSE.txt. See THIRD_PARTY_NOTICES.md for additional attribution.
+The DTW source is licensed under the MIT License in LICENSE. Selected native
+and script-engine mechanisms are adapted from trycua/cua commit
+85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19. The full CUA MIT notice and source
+mapping are retained in docs/native-source-provenance.md. DTW does not link
+the CUA SDK or package the CUA worker. See THIRD_PARTY_NOTICES.md for
+additional attribution.
 
 Earlier, removed DTW source revisions remain governed by the license notices
 that accompanied those revisions. This notice does not change their terms.

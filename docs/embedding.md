@@ -1,41 +1,74 @@
-# Embed the Desktop World Agent Plugin
+# Integrating the DTW app runtime
 
-Prefer the platform `desktop-world-plugin-*` archive for host embedding. It contains a slim runtime without the redundant self-extracting payload. Verify its archive and runtime digests separately using the release BUILD file.
+DTW currently provides a source-built executable and a versioned single-app MCP
+protocol. There is no rewritten Agent plugin archive, Skill payload, installer
+or embedded-runtime exporter. Hosts integrate the explicit CLI entry below;
+launching bare `dtw` displays help rather than serving MCP.
 
-The per-platform `dtw` release executable is also a Plugin exporter. At application packaging or installation time, run `dtw install plugin --to NEW_DIRECTORY`. This needs no DTW build toolchain or network access. The output is a complete, relocatable Plugin for that platform:
+## Approval and startup
 
-```text
-plugin.json                   Agent Plugin 1.0 identity
-mcp.json                      one stdio MCP server: desktop-world
-skills/desktop-world/         Skill and authoring references
-bin/dtw                       MCP executable (dtw.exe on Windows)
-libexec/cua-driver            private native worker (cua-driver.exe on Windows)
-LICENSING/                    dependency inventory, notices, and source materials
-.claude-plugin/plugin.json    Claude-compatible identity
-.mcp.json                     Claude-compatible MCP declaration
-```
+The trusted Host owns the approval decision and process configuration:
 
-The standard `mcp.json` launches `./bin/dtw` from the Plugin root. The CLI finds `libexec/cua-driver` beside itself at runtime. Keep the directory together; copying only `bin/dtw` out of it loses the private worker. On Windows the exported `mcp.json` uses `./bin/dtw.exe`. The host should treat the package as a single versioned unit and keep an active MCP process on its original version until that process exits.
+1. Run `dtw app catalog` to discover app instances. Catalog access does not grant
+   window reads, screenshots or input.
+2. Present the exact app identity, PID, generation and requested capabilities to
+   the Host's approval policy. Freeze the approved proposal before execution.
+3. Create a private grant file with that exact instance, selected capabilities
+   and an absolute expiry. Start one context with:
 
-## Runtime context ownership
+   ```sh
+   /absolute/path/to/dtw app serve --grant /absolute/host-grant.json
+   ```
 
-Launch one stdio MCP process per independent Agent context. The Runtime owns its
-CUA session, script state, observation bindings and receipt IDs; the Agent sends
-no `session` argument. Legacy named-session calls are rejected. A shared MCP
-connection is a shared execution context: the host must not multiplex unrelated
-Agents into it without an authenticated context boundary. Coordinate pointer and
-focus access across processes because the physical desktop remains shared.
-Process restart or context expiry requires a new observation; do not replay an
-unreconciled action. See [architecture](architecture.md) for expiry and busy rules.
+4. Initialize MCP, discover its one `exec` tool and use `describe` to verify the
+   context's app, capabilities and limits before submitting work.
 
-Cancellation permanently stops execution in that Runtime and retains the original receipt as unknown when an action may have been dispatched. Hosts should close/restart the MCP process after cancellation, preserve the receipt in their own task history, and observe before deciding on further input. EOF and parent death also stop child processes. Payloads have 64 MiB / 64 result / 15 minute bounds; `result_expired` never authorizes replay.
+The grant schema and loader rules are specified in [app protocol v1](app-protocol-v1.md).
+On macOS the file must be a current-user-owned regular file with mode `0600`,
+at most 16 KiB, and an expiry within 24 hours. A grant file that is itself a
+symlink, or a grant that has expired, is rejected. Agent arguments cannot supply approval, change the instance or extend
+capabilities/expiry. File permissions separate OS users; they are not a sandbox
+against arbitrary code running as the trusted Host's user.
 
-## Caelis Bot integration boundary
+## Context and result ownership
 
-Caelis Bot can stage the platform-specific Plugin during its own build or installation, verify the release executable's published SHA-256, and load the exported directory through the standard Agent Plugin interface in Caelis Core. Core already recognizes root `plugin.json`, root `mcp.json`, and `skills/`. The Bot remains responsible for enabling the Plugin, obtaining user authorization, providing its own lifecycle and update policy, and starting new MCP processes after an update. DTW exposes only the single MCP `exec` tool; the Bot should not add a second desktop-control bridge for this package.
+One MCP process owns one approved app context, its script state, observations and
+request records. Use separate contexts for independent grants. The runtime admits
+one active request; a script uses the same slot and checks every Host Call through
+Core. The Host still coordinates access to the shared physical desktop.
 
-Bot consumes a separately pinned DTW dependency; publishing DTW alone does not update installed Bot copies. A Bot acceptance run must verify Plugin registration, Skill discovery, MCP initialization, `exec` availability, and native worker startup from its actual application bundle on each platform.
+Use `submit` once with a unique request ID, then `result` with that same ID.
+Completed means execution ended, not that the requested business effect was
+confirmed. Preserve the action receipt and provider evidence; uncertain outcomes
+must not cause an automatic replay. Scripts may have applied earlier actions
+before an error; JSON state commit is not a rollback of desktop effects.
 
-## Validation from one downloaded file
+Use the protocol's `cancel` or `close` operations when withdrawing work or
+revoking a context. MCP request cancellation alone does not cancel native work.
+An accepted cancellation is terminal for the context, and a script's total timeout
+also closes it. An expired grant cannot admit further work. Retain the original
+receipts and perform a fresh approved observation before deciding on further input.
+The Host owns MCP stdin/stdout and must close the process boundary when replacing
+or revoking it; EOF and parent loss also initiate runtime shutdown. Cleanup errors
+must remain visible. See [protocol lifecycle](app-protocol-v1.md) and
+[script semantics](app-script-v1.md) for the exact receipt and shutdown rules.
 
-Copy the downloaded executable to a clean location without any sibling files, then export the Plugin and run the MCP protocol smoke test against the exported `bin/dtw`. The release pipeline does this with isolated homes and paths containing spaces. It also verifies that the embedded worker extracted from a signed macOS CLI matches the worker submitted to Apple for notarization. See [release readiness](release-readiness.md).
+DTW starts its own supervised native worker from the same executable. It does
+not locate or unpack an upstream CUA worker. Native macOS execution is the only
+implemented platform; consult the [product matrix](product-matrix.md) for actual
+GUI coverage rather than inferring support from MCP initialization.
+
+## Product integration and distribution
+
+The Caelis production Host path has been exercised locally through real approval
+and native GUI calls. Its accompanying changes remain local and unpublished;
+that evidence does not establish availability in current Caelis/Bot releases or
+other Agent hosts. A reference Host's prewritten grant is also not a substitute
+for validating a product's actual approval flow.
+
+Before distributing an integration, define the rewritten package contract and
+verify the final bytes, permissions, child-process identity, lifecycle and actual
+Host workflow on each advertised platform. No historical plugin layout or
+installer is carried forward. The prior embedding contract is retained at
+[`c553486`](https://github.com/caelis-labs/desktop-world/blob/c55348610071e2b26e10ce490744065b0cdd08b7/docs/embedding.md).
+See [release checkpoints](releasing.md).

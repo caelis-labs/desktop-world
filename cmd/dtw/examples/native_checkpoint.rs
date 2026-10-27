@@ -1,4 +1,4 @@
-//! Internal, feature-gated acceptance harness. Not installed or a public protocol.
+//! Internal acceptance harness. Not installed or a public protocol.
 #[cfg(not(target_os = "macos"))]
 fn main() {
     eprintln!("Native checkpoint GUI harness currently requires macOS");

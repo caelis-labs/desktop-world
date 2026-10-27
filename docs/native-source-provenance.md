@@ -6,7 +6,8 @@ The macOS checkpoint provider in
 fixed at commit `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`. It uses the native
 kernel and AX mechanisms described below directly. The checkpoint worker is a
 DTW process boundary; it does not run the CUA worker or ToolRegistry for these
-operations. Existing production CUA integration remains a separate backend.
+operations. The rewritten provider is now the only runtime; no CUA SDK or
+upstream worker remains in the dependency graph.
 
 This record covers source origin and deliberate adaptations. It does not assert
 that a compile, fixture run, or generated implementation constitutes C2 or C3
@@ -119,10 +120,11 @@ yabai, Windows paths to trope-cua/Interface-Agent, JS engine paths to
 QuickJS-ng/rquickjs, and named SDK/Linux paths to T3 Code. The native macOS port
 does not use those named source paths; the separate C5 engine port below does
 use the named JS engine dependencies. This is a source mapping, not a
-legal conclusion. Existing release packaging of the complete pinned CUA worker
-must continue to include its unchanged `CUA-MIT-LICENSE.txt` and
-`CUA-THIRD_PARTY_NOTICES.md`, as described by the repository's
-`THIRD_PARTY_NOTICES.md`; this record does not replace those files.
+legal conclusion. Historical packages of the complete pinned CUA worker retain
+their accompanying notices. The rewrite does not redistribute that worker;
+its adapted source retains the full CUA MIT text below and the attributions in
+`THIRD_PARTY_NOTICES.md`. A future rewritten package needs its own dependency
+inventory and license payload.
 
 ## Updating the donor baseline
 
@@ -226,8 +228,8 @@ is recorded in [C2/C3 macOS acceptance](native-checkpoint-acceptance.md).
 
 ## C5 bounded app script port
 
-The opt-in `app-protocol` feature directly uses rquickjs **0.14.0** (the same
-version already locked through CUA), with only its `std` feature. Its bundled
+The default app protocol directly uses rquickjs **0.14.0**, with only its `std`
+feature. The dependency no longer comes through the CUA SDK. Its bundled
 QuickJS-ng is **0.16.2**. No custom allocator, module loader, OS binding or extra
 JavaScript parser is introduced. The fixed CUA donor remains
 `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19` / 0.38.0.
@@ -248,6 +250,7 @@ a caught allocation failure may be recovered from within that unchanged budget.
 The upstream notice attributes QuickJS-ng to Fabrice Bellard (2017–2026), Charlie
 Gordon (2017–2024), Ben Noordhuis (2023–2026), and Saúl Ibarra Corretgé
 (2023–2026); rquickjs to Mees Delzenne (2020) and the rquickjs contributors
-(2025). Original license/copyright files are retained by the existing dependency
-audit, in addition to the CUA MIT notice above. Validate this port's VM, Core and
+(2025). Original license/copyright files remain in the dependency sources; the
+rquickjs-core license copy and provenance are retained under
+`packaging/third-party/`, in addition to the CUA MIT notice above. Validate this port's VM, Core and
 real GUI gates independently when updating any of these pinned sources.

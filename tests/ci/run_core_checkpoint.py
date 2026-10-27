@@ -9,11 +9,12 @@ import tempfile
 def main():
     root = Path(__file__).resolve().parents[2]
     with tempfile.TemporaryDirectory(prefix="dtw-core-checkpoint-") as scratch:
-        for name, source in [("core", "lib.rs"), ("ipc", "backends/process.rs")]:
+        for name, source in [("core", "tests/ci/core_checkpoint.rs"),
+                             ("ipc", "cmd/dtw/src/backends/process.rs")]:
             binary = Path(scratch) / (name + ("-tests.exe" if os.name == "nt" else "-tests"))
             subprocess.run(
                 ["rustc", "+1.98.0", "--edition=2021", "--test",
-                 str(root / "cmd/dtw/src" / source), "-D", "warnings", "-o", str(binary)],
+                 str(root / source), "-D", "warnings", "-o", str(binary)],
                 check=True,
             )
             subprocess.run([str(binary)], check=True)

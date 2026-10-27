@@ -688,16 +688,19 @@ def check_caelis(binary, host, fixture, peer, repository):
     workspace.mkdir()
     write_json(store / "config.json", config)
     os.chmod(store / "config.json", 0o600)
-    shutil.copytree(repository / "packaging/plugin", plugin)
-    (plugin / "bin").mkdir(exist_ok=True)
+    (plugin / "bin").mkdir(parents=True)
+    write_json(plugin / "plugin.json", {
+        "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        "name": "desktop-world", "version": (repository / "version.txt").read_text().strip(),
+        "description": "Owned DTW app-protocol acceptance fixture", "license": "MIT",
+    })
     shutil.copy2(binary, plugin / "bin/dtw")
     grant = host.grant("caelis", seconds=360)
     require(grant is not None, "Host denied Caelis session")
     write_json(plugin / "mcp.json", {"$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
                "mcpServers": {"desktop-world": {"type": "stdio", "command": "./bin/dtw",
                "args": ["app", "serve", "--grant", str(grant)]}}})
-    # This is a fixture plugin; old CUA skill instructions do not describe C4.
-    shutil.rmtree(plugin / "skills")
+    # Fixture metadata is independent of any product packaging contract.
     skill = plugin / "skills/desktop-world/SKILL.md"
     skill.parent.mkdir(parents=True)
     skill.write_text("""---

@@ -143,4 +143,9 @@ private func checkInventory() throws {
     }
 }
 try checkInventory()
+let missingPixelTarget = dtwValidatePixelTarget([
+    "deadline_unix_ms": UInt64((Date().timeIntervalSince1970 + 5) * 1_000)
+])
+expect(missingPixelTarget?["error"] as? String == "invalid_request",
+       "pixel guard accepted a legacy request without a typed target")
 print("Native inventory controls passed (\(inventoryAssertions) assertions; no GUI access)")

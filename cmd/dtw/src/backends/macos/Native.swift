@@ -843,9 +843,8 @@ private final class NativeStore: @unchecked Sendable {
 private let nativeStore = NativeStore()
 
 // Scene.swift calls this immediately before its own admitted pixel dispatch.
-// Legacy requests without a typed target retain their existing validation path.
-func dtwCheckpointValidate(_ request: [String: Any]) -> [String: Any]? {
-    guard request["target"] != nil else { return nil }
+// Every pixel operation requires the same typed target as the semantic provider.
+func dtwValidatePixelTarget(_ request: [String: Any]) -> [String: Any]? {
     nativeStore.lock.lock()
     defer { nativeStore.lock.unlock() }
     do {

@@ -1,5 +1,7 @@
 # Application observation extension
 
+> Historical archive. This page describes the earlier CUA wrapper and its acceptance tools; it is not a guide to the current rewrite-only runtime. The original files remain available at [the pre-removal revision](https://github.com/caelis-labs/desktop-world/tree/c55348610071e2b26e10ce490744065b0cdd08b7/poc/associated-capture). See the [current README](../../README.md) for supported entry points.
+
 This worktree now implements the runtime-owned session and application-observation
 contract described in [architecture](../../docs/architecture.md), including DTW
 ScreenCaptureKit fallback and guarded pixel input. CUA remains the unmodified
