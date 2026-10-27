@@ -4,6 +4,8 @@
 
 日期：2026-10-27。基线为 #56 合并提交 `87a6e9fb12584f5a3c315255c9232919d619a5d4`；CUA 来源仍固定 0.38.0。**C5-macOS.2a 的归属诊断、负控和冷启动/后台/前台 fixture 复验通过；C5-macOS.2b 的历史自然偶发触发原因仍未闭环。** 默认入口不切换，C6 批量扩展不准入。
 
+> 后续取证修正：本文闭窗 fixture 用例曾调用 `setAccessibilityWindows([])`，只能证明关闭后 CG 表面可能残留，不能据此断言真实应用自然 AX0。未干预 AXWindows 的 TextEdit 闭窗及 Space 对照见 [C5.2b.1](window-inventory-real-app-acceptance.md)。
+
 ## 确证问题与限定修复
 
 旧路径把非标准窗口、无法取得精确 AX ID、无法匹配 WindowServer owner 等不同原因都过滤掉；Rust Backend 只消费窗口数组，丢弃原生 coverage。真实负控让自有应用通过 `setAccessibilityWindows([])` 返回空 AXWindows，但独立状态仍有两个可见窗口，CG 仍有 6 个同 PID 合格表面。原子与脚本均返回成功的 `windows=[]`，脚本还提交 state。这证明空成功无法表达未证明的归属，**不证明 #56 时自然偶发的触发原因就是这个负控**。

@@ -1,6 +1,6 @@
 # DTW 下一阶段架构基线
 
-状态：方向已确认，按检查点实施；C1 至 C5-macOS.2a 的限定切片已有验证记录，Windows 切片尚未实施。日期：2026 年 10 月 27 日。进度、验收证据与下一步准入见 [实施检查点](implementation-checkpoints.md)。
+状态：方向已确认，按检查点实施；C1 至 C5-macOS.2a、D1 单一重写版基线与 C5-macOS.2b.1 TextEdit 边界切片已有验证记录；历史偶发根因仍待定位，Windows 切片尚未实施。日期：2026 年 10 月 27 日。进度、验收证据与下一步准入见 [实施检查点](implementation-checkpoints.md)。
 
 发布方向已更新：下一次 release 只交付重写后的可用版本，旧兼容路径彻底退出，不保留旧 facade、CUA worker 或双运行模式作为发行内容。早期先完成可验证的功能切片和[产品矩阵](product-matrix.md)，再按实际需要为稳定的核心行为增加 CI。日常 CI 不再构建或回归旧发行包。
 
