@@ -22,6 +22,8 @@ pub struct WindowTarget {
 pub enum Capability {
     Observe,
     Press,
+    Capture,
+    Click,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,11 +51,50 @@ pub struct ObservationRef {
     pub(crate) generation: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObservationKind {
+    Semantic,
+    Pixels,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImageFrame {
+    pub width: u32,
+    pub height: u32,
+    pub png: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PixelPoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowInfo {
+    pub target: WindowTarget,
+    pub title: String,
+    pub visible: bool,
+}
+
+/// A live view of the execution authority; providers poll it during IPC waits.
+/// Remaining time is a monotonic budget, not authority the provider can extend.
+pub struct CallContext<'a> {
+    pub(crate) poll: &'a (dyn Fn() -> Result<std::time::Duration, Error> + Sync),
+}
+impl CallContext<'_> {
+    pub fn remaining(&self) -> Result<std::time::Duration, Error> {
+        (self.poll)()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Observation {
     pub reference: ObservationRef,
     pub target: WindowTarget,
     pub elements: Vec<Element>,
+    pub image: Option<ImageFrame>,
+    pub kind: ObservationKind,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,6 +110,7 @@ pub enum Error {
     WrongProvider,
     TargetChanged,
     InvalidObservation,
+    InvalidPoint,
     ElementNotFound,
     ElementNotPressable,
     TimedOut,
@@ -122,28 +164,58 @@ pub struct BackendObservation<B> {
     /// Actual verified target, checked against the requested target on return.
     pub target: WindowTarget,
     pub elements: Vec<Element>,
+    pub image: Option<ImageFrame>,
     pub binding: B,
 }
 
-/// One statically selected semantic capability group. No generic tool escape.
+/// Statically selected capability groups; no generic tool escape.
 ///
-/// Implementations must revalidate native instance/window ownership at the
-/// operation, retain native handles through completion, and report uncertain
-/// effects honestly. `stamp` and `supports` are nonblocking metadata reads.
-/// Binding cleanup must be safe on the calling thread (native thread ownership
-/// belongs in the provider). Production native adapters require a separate
-/// bounded IPC/process-lifecycle gate; these synchronous calls do not cancel
-/// or isolate a blocked OS API. C1 implements only a controlled test backend.
+/// Implementations revalidate OS ownership and retain handles through completion.
+/// Native adapters isolate blocking APIs in supervised workers and poll the call
+/// context. Cancellation cannot undo dispatched input. `stamp` and `supports`
+/// are nonblocking. Binding cleanup must be bounded and safe on any calling thread.
 pub trait Backend: Send + Sync {
     type Binding: Send;
 
+    /// Stop and reap native resources. Failure does not reopen admission.
+    fn shutdown(&self) -> Result<(), Error> {
+        Ok(())
+    }
     fn stamp(&self) -> ProviderStamp;
     fn supports(&self, capability: Capability) -> bool;
-    fn observe(&self, target: &WindowTarget) -> Result<BackendObservation<Self::Binding>, Error>;
+    fn windows(
+        &self,
+        _app: &AppInstance,
+        _call: &CallContext<'_>,
+    ) -> Result<Vec<WindowInfo>, Error> {
+        Err(Error::UnsupportedCapability)
+    }
+    fn observe(
+        &self,
+        target: &WindowTarget,
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservation<Self::Binding>, Error>;
     fn press(
         &self,
         target: &WindowTarget,
         binding: &Self::Binding,
         element: ElementId,
+        call: &CallContext<'_>,
     ) -> ActionOutcome;
+    fn capture(
+        &self,
+        _target: &WindowTarget,
+        _call: &CallContext<'_>,
+    ) -> Result<BackendObservation<Self::Binding>, Error> {
+        Err(Error::UnsupportedCapability)
+    }
+    fn click(
+        &self,
+        _target: &WindowTarget,
+        _binding: &Self::Binding,
+        _point: PixelPoint,
+        _call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        ActionOutcome::rejected(Error::UnsupportedCapability)
+    }
 }

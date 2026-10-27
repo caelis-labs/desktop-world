@@ -1020,6 +1020,7 @@ dependencies = [
 name = "desktop-world"
 version = "0.1.3"
 dependencies = [
+ "base64",
  "cua-driver-sdk",
  "flate2",
  "libc",

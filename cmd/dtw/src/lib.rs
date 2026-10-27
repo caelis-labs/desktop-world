@@ -5,3 +5,6 @@
 
 pub mod computer;
 pub mod runtime;
+
+#[cfg(feature = "native-checkpoints")]
+pub mod backends;

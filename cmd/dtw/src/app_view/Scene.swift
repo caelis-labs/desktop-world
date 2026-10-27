@@ -211,11 +211,17 @@ private func click(_ request: [String:Any]) -> [String:Any] {
           let up = CGEvent(mouseEventSource:source,mouseType:.leftMouseUp,mouseCursorPosition:point,mouseButton:.left) else {
         return fail("input_unavailable","Cannot create pointer events")
     }
+    #if DTW_NATIVE_CHECKPOINTS
+    if let error=dtwCheckpointValidate(request) { return error }
+    if request["target"] != nil, (request["deadline_unix_ms"] as? Double ?? 0)/1000-Date().timeIntervalSince1970 < 0.3 {
+        return fail("deadline_exceeded","Insufficient budget for pointer placement and click release")
+    }
+    #endif
     // This is visible-point input: AppKit can hit-test against the physical
     // cursor rather than only the event location. Never activate or retry.
     guard CGWarpMouseCursorPosition(point) == .success,
           CGAssociateMouseAndMouseCursorPosition(1) == .success else {
-        return fail("input_unavailable","Cannot position the pointer; no click posted")
+        return ["error":"input_unavailable","message":"Cannot position the pointer; no click posted","pointer_moved":true]
     }
     Thread.sleep(forTimeInterval:0.04)
     let settled=windows()
@@ -223,8 +229,14 @@ private func click(_ request: [String:Any]) -> [String:Any] {
           signature(after)==signature(settled),
           let pointer=CGEvent(source:nil)?.location,
           abs(pointer.x-point.x)<=2,abs(pointer.y-point.y)<=2 else {
-        return fail("stale_observation","Window, hit stack or pointer changed after pointer placement; no click posted")
+        return ["error":"stale_observation","message":"Window, hit stack or pointer changed after pointer placement; no click posted","pointer_moved":true]
     }
+    #if DTW_NATIVE_CHECKPOINTS
+    if var error=dtwCheckpointValidate(request) { error["pointer_moved"]=true; return error }
+    if request["target"] != nil, (request["deadline_unix_ms"] as? Double ?? 0)/1000-Date().timeIntervalSince1970 < 0.1 {
+        return ["error":"deadline_exceeded","message":"Insufficient budget to complete click release","pointer_moved":true]
+    }
+    #endif
     // A normal click has clickState=1. Zero can be delivered without activating
     // an NSButton. Separate press/release so tracking controls see both phases.
     down.flags=[];up.flags=[]
@@ -240,7 +252,7 @@ private func click(_ request: [String:Any]) -> [String:Any] {
 public func dtwSceneCall(_ raw: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>? {
     autoreleasepool {
         _ = CGMainDisplayID()
-        let result: [String:Any]
+        var result: [String:Any]
         do {
             let request = try JSONSerialization.jsonObject(with:Data(String(cString:raw).utf8)) as? [String:Any] ?? [:]
             switch request["operation"] as? String {
@@ -252,6 +264,13 @@ public func dtwSceneCall(_ raw: UnsafePointer<CChar>) -> UnsafeMutablePointer<CC
             default: result = fail("invalid_operation","Unknown native extension operation")
             }
         } catch { result = fail("invalid_request",String(describing:error)) }
+        #if DTW_NATIVE_CHECKPOINTS
+        // The producer owns dispatch classification, including pointer-only effects.
+        if let request = try? JSONSerialization.jsonObject(with:Data(String(cString:raw).utf8)) as? [String:Any], request["operation"] as? String == "click" {
+            result["dispatch"] = result["delivery"] as? String == "posted" ? "dispatched" : (result["pointer_moved"] as? Bool == true ? "unknown" : "not_dispatched")
+            result["evidence"] = "unverified"
+        }
+        #endif
         let data = (try? JSONSerialization.data(withJSONObject:result,options:[.sortedKeys])) ?? Data("{}".utf8)
         return strdup(String(decoding:data,as:UTF8.self))
     }
