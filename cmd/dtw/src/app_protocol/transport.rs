@@ -1,4 +1,4 @@
-//! Opt-in macOS CLI and bounded stdio lifecycle. Never starts the CUA bridge.
+//! App-scoped macOS CLI and bounded stdio lifecycle.
 use super::{grant, mcp, wire::WireError, Coordinator};
 use crate::{backends::macos::NativeBackend, computer::Backend};
 use serde_json::{json, Value};

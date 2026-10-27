@@ -1,5 +1,7 @@
 # Acceptance status
 
+> Historical checkpoint record. Build flags, default entry points and release plans below belong to the recorded revision. The current rewrite-only build is described in [building](building.md); this evidence does not validate a newly built binary.
+
 This file records earlier release acceptance. The current independent worktree changes the session contract and adds macOS app observation; its exact-package evidence and unresolved cold-start failure are in [runtime acceptance](runtime-acceptance.md). Earlier GUI and Windows passes are not evidence for the new binary.
 
 Evidence categories: **source** means code inspection, **contract** means an isolated protocol or fixture check, **live** means a real UI effect with independent readback, and **Agent** means a fresh Gemini session used the installed Skill and sole DTW `exec` for desktop operations. The detailed chronological POC record remains in Git history at `cd20319b6b6e842bc5b4587788e76070e82e4a11:docs/cua-thin-final-poc.md`; evidence artifacts from that run are under `/private/tmp/dtw-cua-*` on the test machine. They do not prove a new formal build until this tree is tested separately.

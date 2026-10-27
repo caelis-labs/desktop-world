@@ -1,5 +1,7 @@
 # C4-macOS 验收记录
 
+> 历史检查点记录：下文构建参数、默认入口和发行安排属于所记录的版本。当前源码已收敛为重写版，使用方式见 [构建说明](building.md)；既有证据不等于新构建二进制已重新验收。
+
 本文件先保留 C4-macOS.1 的历史记录，文末记录 C4-macOS.2；后续脚本验收见 [C5 记录](app-script-acceptance.md)。
 
 日期：2026-10-27。C4-macOS.1 只交付 [单 app 协议 v1](app-protocol-v1.md)、可信宿主启动配置及显式选择的新 MCP 入口。实现主体提交 `8c741d740da76758e8f431b8bb934009e3dc0465`，MCP 兼容性修正提交 `fd562fee764781e22f5bfa47183f7bd51ff32b4c`，基线 `eafd12e629a89a19fd3b4bbfdebb5f27d76d2767`；另有验收脚本与文档提交。CUA 来源仍固定 0.38.0 / `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`，没有追加迁移原子能力。

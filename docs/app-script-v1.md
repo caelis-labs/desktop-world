@@ -1,8 +1,8 @@
 # 单 app 脚本 v1（C5）
 
-本扩展在 [单 app 协议 v1](app-protocol-v1.md) 的显式选择入口中增加 `command.kind = "script"`。外层协议仍为 `version: 1`，不增加 MCP tool，也不增加授权能力。`exec.describe` 的 `script` 对象广告 `version: 1`、`language: "javascript"`、五个方法、限制和 state/receipt/image 语义；客户端先读取它，再决定是否提交脚本。旧版没有这个广告时不能假定支持脚本。
+当前重写版的 [单 app 协议 v1](app-protocol-v1.md) 默认包含 `command.kind = "script"`。外层协议仍为 `version: 1`，不增加 MCP tool，也不增加授权能力。`exec.describe` 的 `script` 对象广告 `version: 1`、`language: "javascript"`、五个方法、限制和 state/receipt/image 语义；客户端先读取它，再决定是否提交脚本。旧版没有这个广告时不能假定支持脚本。
 
-执行平台、可信启动 grant、app 实例、opaque 引用和原生覆盖范围沿用原协议。默认发布入口继续使用既有路径；本文件定义当前 opt-in 实现合同，不是 C5 GUI 验收或发行声明。C4-macOS.2 的真实 Caelis 产品代码本地接入见 [既有验收记录](app-protocol-acceptance.md#c4-macos2实际-harness-授权入口2026-10-27) 及 [证据索引](evidence/c4-host-authorization-20261027.json)；配套 Caelis 按用户要求未推送、未发布，不能视为线上入口。
+执行平台、可信启动 grant、app 实例、opaque 引用和原生覆盖范围沿用原协议。协议和脚本随默认源码构建启用，无需 feature；启动服务仍需可信 Host grant。本文件定义实现合同，不替代具体构建的 GUI 验收或发行记录；当前尚无重写版发行包。C4-macOS.2 的真实 Caelis 产品代码本地接入见 [既有验收记录](app-protocol-acceptance.md#c4-macos2实际-harness-授权入口2026-10-27) 及 [证据索引](evidence/c4-host-authorization-20261027.json)；配套 Caelis 按用户要求未推送、未发布，不能视为线上入口。
 
 ## 提交与执行范围
 

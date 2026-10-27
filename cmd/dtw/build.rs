@@ -1,13 +1,4 @@
 fn main() {
-    let output =
-        std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("embedded-bundle.tar.gz");
-    println!("cargo:rerun-if-env-changed=DTW_EMBED_BUNDLE");
-    if let Ok(source) = std::env::var("DTW_EMBED_BUNDLE") {
-        println!("cargo:rerun-if-changed={source}");
-        std::fs::copy(source, output).expect("copy embedded runtime bundle");
-    } else {
-        std::fs::write(output, []).expect("write empty development bundle");
-    }
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
         let target = std::env::var("TARGET").unwrap();
@@ -17,7 +8,8 @@ fn main() {
             "x86_64"
         };
         let swift_target = format!("{arch}-apple-macosx14.0");
-        println!("cargo:rerun-if-changed=src/app_view/Scene.swift");
+        println!("cargo:rerun-if-changed=src/backends/macos/Scene.swift");
+        println!("cargo:rerun-if-changed=src/backends/macos/Native.swift");
         let mut command = std::process::Command::new("xcrun");
         command.args([
             "swiftc",
@@ -33,16 +25,9 @@ fn main() {
             out.join("swift-cache").to_str().unwrap(),
             "-o",
             out.join("libdtw_scene.a").to_str().unwrap(),
-            "src/app_view/Scene.swift",
+            "src/backends/macos/Scene.swift",
+            "src/backends/macos/Native.swift",
         ]);
-        if std::env::var_os("CARGO_FEATURE_NATIVE_CHECKPOINTS").is_some() {
-            println!("cargo:rerun-if-changed=src/backends/macos/Native.swift");
-            command.args([
-                "-D",
-                "DTW_NATIVE_CHECKPOINTS",
-                "src/backends/macos/Native.swift",
-            ]);
-        }
         let status = command
             .status()
             .expect("launch Swift compiler for DTW scene extension");
@@ -58,7 +43,7 @@ fn main() {
         ] {
             println!("cargo:rustc-link-lib=framework={framework}");
         }
-        // CUA's static Swift bridges need the system Swift runtime at the final
+        // DTW's static Swift bridges need the system Swift runtime at the final
         // Rust link, including test executables and independently installed CLI.
         println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
     }

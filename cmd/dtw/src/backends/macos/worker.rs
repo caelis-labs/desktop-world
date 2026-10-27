@@ -124,8 +124,7 @@ mod tests {
         );
     }
 }
-/// Must be called at the start of the internal executable, on its main thread.
-/// This entry is not installed or reachable from production MCP.
+/// Called at executable startup on its main thread for private worker processes.
 pub fn worker_entry() -> bool {
     if std::env::args().nth(1).as_deref() != Some("--dtw-native-worker") {
         return false;

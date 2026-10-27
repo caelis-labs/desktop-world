@@ -1,5 +1,7 @@
 # C5-macOS.1 验收记录
 
+> 历史检查点记录：下文构建参数、默认入口和发行安排属于所记录的版本。当前源码已收敛为重写版，使用方式见 [构建说明](building.md)；既有证据不等于新构建二进制已重新验收。
+
 日期：2026-10-27；基线为 #55 合并提交 `95c7bb3f304d852e591f87109f8122e801abc85b`。本检查点完成 [单 app 脚本 v1](app-script-v1.md) 的最小切片：五个既有原子方法、一个脚本任务槽、逐次 Core 校验、有界 VM、JSON state 和不可随 payload 驱逐的步骤回执。CUA 来源保持 0.38.0 / `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`；没有扩展额外原子能力或切换默认 MCP。
 
 [C4-macOS.2](app-protocol-acceptance.md#c4-macos2实际-harness-授权入口2026-10-27) 已取得实际产品代码的审批接线和原生 GUI 证据。Caelis 配套本地提交为 `96b1ffe9`（授权 Host）与 `e63a0fc7`（C5 描述和真实 Harness 验收）。用户指定保留本地，均未推送/发布；不能把本地测试通过解释为已发布 Caelis 支持此入口。

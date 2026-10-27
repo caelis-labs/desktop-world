@@ -1,5 +1,7 @@
 # RC.9 integration acceptance
 
+> Historical checkpoint record. Build flags, default entry points and release plans below belong to the recorded revision. The current rewrite-only build is described in [building](building.md); this evidence does not validate a newly built binary.
+
 Candidate: `v0.1.0-rc.9`, following checkpoint `f07a4d5`. Local exact-package
 verification passed; CI/signing gates remain separately recorded below. Publication is not implied. CUA remains unmodified
 at component prerelease 0.35.4, revision

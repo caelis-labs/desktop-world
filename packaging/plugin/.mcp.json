@@ -1,5 +1,0 @@
-{
-  "mcpServers": {
-    "desktop-world": {"command": "${CLAUDE_PLUGIN_ROOT}/bin/dtw"}
-  }
-}

@@ -1,5 +1,7 @@
 # Runtime-owned sessions and application observation acceptance
 
+> Historical checkpoint record. Build flags, default entry points and release plans below belong to the recorded revision. The current rewrite-only build is described in [building](building.md); this evidence does not validate a newly built binary.
+
 Checkpoint `f07a4d5` evidence is retained below. The subsequent multi-instance fix and RC.9 validation are recorded separately in [RC.9 acceptance](rc9-acceptance.md).
 
 Date: 2026-10-16. This is an uncommitted independent-worktree candidate, **not a

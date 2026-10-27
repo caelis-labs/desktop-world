@@ -4,51 +4,9 @@ import ScreenCaptureKit
 import ImageIO
 import UniformTypeIdentifiers
 
-// Small public-API bridge. No CUA types, private AX symbols or app-specific rules.
-private func attr(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
-    var value: CFTypeRef?
-    return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value : nil
-}
-private func frame(_ element: AXUIElement) -> CGRect? {
-    guard let p = attr(element, kAXPositionAttribute), let s = attr(element, kAXSizeAttribute),
-          CFGetTypeID(p) == AXValueGetTypeID(), CFGetTypeID(s) == AXValueGetTypeID() else { return nil }
-    var point = CGPoint.zero; var size = CGSize.zero
-    guard AXValueGetValue(p as! AXValue, .cgPoint, &point), AXValueGetValue(s as! AXValue, .cgSize, &size) else { return nil }
-    return CGRect(origin: point, size: size)
-}
-private func hit(_ point: CGPoint, client: pid_t) -> (pid_t, CGRect?, String)? {
-    let system = AXUIElementCreateSystemWide()
-    AXUIElementSetMessagingTimeout(system, 0.15)
-    var result: AXUIElement?
-    guard AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &result) == .success,
-          let element = result else { return nil }
-    var pid: pid_t = 0
-    guard AXUIElementGetPid(element, &pid) == .success, pid == client else { return nil }
-    AXUIElementSetMessagingTimeout(element, 0.15)
-    // A remote menu's AXWindow is its chooser, not the menu surface. Walk
-    // public ancestors to the nearest menu/window before following AXWindow.
-    var current=element
-    for _ in 0..<12 {
-        AXUIElementSetMessagingTimeout(current, 0.15)
-        let role=attr(current,kAXRoleAttribute) as? String ?? ""
-        if role == kAXMenuRole || role == kAXWindowRole || role == kAXMenuBarRole {
-            return (pid,frame(current),role)
-        }
-        guard let next=attr(current,kAXParentAttribute),CFGetTypeID(next)==AXUIElementGetTypeID() else {break}
-        current=next as! AXUIElement
-    }
-    let window = attr(element, kAXWindowAttribute) ?? attr(element, kAXTopLevelUIElementAttribute)
-    if let window, CFGetTypeID(window) == AXUIElementGetTypeID() {
-        return (pid, frame(window as! AXUIElement), attr(window as! AXUIElement, kAXRoleAttribute) as? String ?? "")
-    }
-    return (pid, frame(element), attr(element,kAXRoleAttribute) as? String ?? "")
-}
+// DTW screenshot/input bridge; linked only with the native provider's guards.
 private struct Window {
     let pid: pid_t; let id: CGWindowID; let layer: Int; let rank: Int; let rect: CGRect
-    func json(_ association: String) -> [String: Any] {
-        ["pid": Int(pid), "id": Int(id), "layer": layer, "rank": rank,
-         "bounds": [rect.minX,rect.minY,rect.width,rect.height], "association": association]
-    }
 }
 private func windows() -> [Window] {
     let rows = CGWindowListCopyWindowInfo([.optionOnScreenOnly,.excludeDesktopElements],0) as? [[String:Any]] ?? []
@@ -65,33 +23,6 @@ private func near(_ a: CGRect, _ b: CGRect) -> Bool {
     abs(a.minX-b.minX) <= 2 && abs(a.minY-b.minY) <= 2 && abs(a.width-b.width) <= 2 && abs(a.height-b.height) <= 2
 }
 private func fail(_ code: String, _ message: String) -> [String:Any] { ["error":code,"message":message] }
-private func discover(_ pid: pid_t) -> [String:Any] {
-    guard AXIsProcessTrusted(), CGPreflightScreenCaptureAccess() else { return fail("permission_denied","Accessibility and Screen Recording are required") }
-    guard let app = NSRunningApplication(processIdentifier:pid), !app.isTerminated else { return fail("app_closed","Target application exited") }
-    let all = windows()
-    let owned = all.filter { $0.pid == pid }
-    var selected: [[String:Any]] = []
-    let deadline=Date().addingTimeInterval(10)
-    for w in all {
-        if Date()>deadline {return fail("discovery_timeout","Window attribution timed out; no partial inventory returned")}
-        if w.pid == pid { selected.append(w.json("same_pid")); continue }
-        // A public AX hit test identifies the client; exact AX window geometry
-        // binds that client to this visible WindowServer surface, not a neighbor.
-        let points = [CGPoint(x:w.rect.midX,y:w.rect.midY),CGPoint(x:w.rect.minX+12,y:w.rect.minY+12),CGPoint(x:w.rect.maxX-12,y:w.rect.maxY-12)]
-        if points.contains(where: { p in
-            guard let (client, rect, role) = hit(p,client:pid), client == pid, role != kAXMenuBarRole, let rect else { return false }
-            return near(rect,w.rect) && visibleAt(p, target:w, all:all)
-        }) { selected.append(w.json("public_ax_client_geometry")) }
-    }
-    let ids = Set(selected.compactMap { $0["id"] as? Int })
-    let frontRank = selected.compactMap { $0["rank"] as? Int }.min() ?? Int.max
-    let possible = all.filter { w in
-        !ids.contains(Int(w.id)) && w.rank < frontRank && owned.contains(where: { $0.rect.intersects(w.rect) })
-    }.map { $0.json("unattributed_occluder") }
-    return ["windows":selected,"occluders":possible,"association_complete":false,
-            "process_identity":"\(pid):\(app.launchDate?.timeIntervalSince1970 ?? 0)"]
-}
-
 @available(macOS 14.0, *)
 private func capture(_ request: [String:Any]) -> [String:Any] {
     guard CGPreflightScreenCaptureAccess() else { return fail("permission_denied","Screen Recording is required") }
@@ -205,18 +136,15 @@ private func click(_ request: [String:Any]) -> [String:Any] {
         list.prefix(while: {$0.id != id}).filter {$0.rect.contains(point)}.map {"\($0.pid):\($0.id):\($0.layer):\($0.rect)"}
     }
     guard signature(all)==signature(after) else {return fail("stale_observation","Hit stack changed during visibility validation")}
-    if request["operation"] as? String == "validate_point" { return ["validated":true] }
     guard let source = CGEventSource(stateID:.hidSystemState),
           let down = CGEvent(mouseEventSource:source,mouseType:.leftMouseDown,mouseCursorPosition:point,mouseButton:.left),
           let up = CGEvent(mouseEventSource:source,mouseType:.leftMouseUp,mouseCursorPosition:point,mouseButton:.left) else {
         return fail("input_unavailable","Cannot create pointer events")
     }
-    #if DTW_NATIVE_CHECKPOINTS
-    if let error=dtwCheckpointValidate(request) { return error }
-    if request["target"] != nil, (request["deadline_unix_ms"] as? Double ?? 0)/1000-Date().timeIntervalSince1970 < 0.3 {
+    if let error=dtwValidatePixelTarget(request) { return error }
+    if (request["deadline_unix_ms"] as? Double ?? 0)/1000-Date().timeIntervalSince1970 < 0.3 {
         return fail("deadline_exceeded","Insufficient budget for pointer placement and click release")
     }
-    #endif
     // This is visible-point input: AppKit can hit-test against the physical
     // cursor rather than only the event location. Never activate or retry.
     guard CGWarpMouseCursorPosition(point) == .success,
@@ -231,12 +159,10 @@ private func click(_ request: [String:Any]) -> [String:Any] {
           abs(pointer.x-point.x)<=2,abs(pointer.y-point.y)<=2 else {
         return ["error":"stale_observation","message":"Window, hit stack or pointer changed after pointer placement; no click posted","pointer_moved":true]
     }
-    #if DTW_NATIVE_CHECKPOINTS
-    if var error=dtwCheckpointValidate(request) { error["pointer_moved"]=true; return error }
-    if request["target"] != nil, (request["deadline_unix_ms"] as? Double ?? 0)/1000-Date().timeIntervalSince1970 < 0.1 {
+    if var error=dtwValidatePixelTarget(request) { error["pointer_moved"]=true; return error }
+    if (request["deadline_unix_ms"] as? Double ?? 0)/1000-Date().timeIntervalSince1970 < 0.1 {
         return ["error":"deadline_exceeded","message":"Insufficient budget to complete click release","pointer_moved":true]
     }
-    #endif
     // A normal click has clickState=1. Zero can be delivered without activating
     // an NSButton. Separate press/release so tracking controls see both phases.
     down.flags=[];up.flags=[]
@@ -256,21 +182,18 @@ public func dtwSceneCall(_ raw: UnsafePointer<CChar>) -> UnsafeMutablePointer<CC
         do {
             let request = try JSONSerialization.jsonObject(with:Data(String(cString:raw).utf8)) as? [String:Any] ?? [:]
             switch request["operation"] as? String {
-            case "discover": result = discover(Int32(request["pid"] as? Int ?? 0))
             case "capture":
                 if #available(macOS 14.0, *) { result = capture(request) }
                 else { result = fail("unsupported_platform","SCK screenshots require macOS 14+") }
-            case "click", "validate_point": result = click(request)
+            case "click": result = click(request)
             default: result = fail("invalid_operation","Unknown native extension operation")
             }
         } catch { result = fail("invalid_request",String(describing:error)) }
-        #if DTW_NATIVE_CHECKPOINTS
         // The producer owns dispatch classification, including pointer-only effects.
         if let request = try? JSONSerialization.jsonObject(with:Data(String(cString:raw).utf8)) as? [String:Any], request["operation"] as? String == "click" {
             result["dispatch"] = result["delivery"] as? String == "posted" ? "dispatched" : (result["pointer_moved"] as? Bool == true ? "unknown" : "not_dispatched")
             result["evidence"] = "unverified"
         }
-        #endif
         let data = (try? JSONSerialization.data(withJSONObject:result,options:[.sortedKeys])) ?? Data("{}".utf8)
         return strdup(String(decoding:data,as:UTF8.self))
     }

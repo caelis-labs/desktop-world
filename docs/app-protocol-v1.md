@@ -1,15 +1,15 @@
-# 单 app 协议 v1（显式选择入口）
+# 单 app 协议 v1
 
-C4-macOS.1 在 `eafd12e629a89a19fd3b4bbfdebb5f27d76d2767`（#53、#54 合并后）上增加显式选择的 MCP 入口。DTW 持有 wire 类型、请求记录及执行语义；每个需授权的窗口读取与动作仍经过 C1–C3 的同一个 Core（低权限 catalog 直达原生 discovery）。当前实现增加 [C5 单 app 脚本 v1](app-script-v1.md)，复用同一授权和五个原子能力。现有发布包和默认 MCP 入口继续使用既有路径，不随此 opt-in 扩展切换。
+当前 DTW 源码仅提供单 app 协议入口。DTW 持有 wire 类型、请求记录及执行语义；每个需授权的窗口读取与动作经过同一个 Core（低权限 catalog 直达原生 discovery）。[单 app 脚本 v1](app-script-v1.md) 复用同一授权和五个原子能力。裸 `dtw` 和 `dtw --help` 显示新版帮助；MCP 服务由 `dtw app serve --grant` 显式启动，启动 grant 由可信 Host 提供。
 
 ```sh
 CARGO_TARGET_DIR=/private/tmp/dtw49-target cargo +1.98.0 build \
-  --manifest-path cmd/dtw/Cargo.toml --locked --features app-protocol --bin dtw
+  --manifest-path cmd/dtw/Cargo.toml --locked --bin dtw
 /private/tmp/dtw49-target/debug/dtw app catalog
 /private/tmp/dtw49-target/debug/dtw app serve --grant /absolute/host-grant.json
 ```
 
-`app-protocol` 包含 `native-checkpoints`，目前执行平台只有 macOS；其他平台明确返回 `unsupported_platform`。新入口直接启动自有原生 worker，不解析/启动 CUA worker，也不回退到旧执行器；构建仍共享现有 Cargo/CUA SDK 依赖，尚未拆成独立发行包。
+协议、脚本和原生后端随默认构建启用，无需 Cargo feature。原生执行平台目前只有 macOS；其他平台的 app 操作明确返回 `unsupported_platform`。执行只使用 DTW 自有原生 worker，CUA SDK、CUA worker 和旧执行器依赖已移除。当前没有重写版发行包；历史发布包不代表当前源码，构建及发行边界见 [构建说明](building.md) 和 [发行说明](releasing.md)。
 
 ## 授权入口和身份
 
