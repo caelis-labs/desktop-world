@@ -100,6 +100,7 @@ struct Model {
     press_gate: Option<WorkerGate>,
     drop_gate: Option<WorkerGate>,
     panic_on_press: bool,
+    shutdown_error: Option<Error>,
 }
 
 struct Shared {
@@ -132,6 +133,7 @@ impl TestBackend {
                 press_gate: None,
                 drop_gate: None,
                 panic_on_press: false,
+                shutdown_error: None,
             }),
             observations: AtomicUsize::new(0),
             presses: AtomicUsize::new(0),
@@ -156,6 +158,15 @@ impl TestBackend {
 
 impl Backend for TestBackend {
     type Binding = NativeBinding;
+    fn shutdown(&self) -> Result<(), Error> {
+        self.0
+            .model
+            .lock()
+            .unwrap()
+            .shutdown_error
+            .clone()
+            .map_or(Ok(()), Err)
+    }
 
     fn stamp(&self) -> ProviderStamp {
         self.0.model.lock().unwrap().provider.clone()
@@ -166,10 +177,15 @@ impl Backend for TestBackend {
         match capability {
             Capability::Observe => model.supports_observe,
             Capability::Press => model.supports_press,
+            Capability::Capture | Capability::Click => false,
         }
     }
 
-    fn observe(&self, target: &WindowTarget) -> Result<BackendObservation<NativeBinding>, Error> {
+    fn observe(
+        &self,
+        target: &WindowTarget,
+        _call: &CallContext<'_>,
+    ) -> Result<BackendObservation<NativeBinding>, Error> {
         self.0.observations.fetch_add(1, Ordering::SeqCst);
         let (observed, gate) = {
             let mut model = self.0.model.lock().unwrap();
@@ -189,6 +205,7 @@ impl Backend for TestBackend {
                     .clone()
                     .unwrap_or_else(|| target.clone()),
                 elements,
+                image: None,
                 binding: NativeBinding {
                     drops: self.0.drops.clone(),
                     drop_gate: model.drop_gate.take(),
@@ -207,6 +224,7 @@ impl Backend for TestBackend {
         _target: &WindowTarget,
         _binding: &NativeBinding,
         element: ElementId,
+        _call: &CallContext<'_>,
     ) -> ActionOutcome {
         assert_eq!(element, ElementId(7));
         self.0.presses.fetch_add(1, Ordering::SeqCst);
@@ -634,7 +652,7 @@ fn observation_replacement_rechecks_authority_after_retired_binding_cleanup() {
             let (done_tx, done_rx) = mpsc::channel();
             let cancelling_runtime = runtime.clone();
             canceller = Some(thread::spawn(move || {
-                cancelling_runtime.cancel();
+                cancelling_runtime.cancel().unwrap();
                 let _ = done_tx.send(());
             }));
             cancelled_before_cleanup = done_rx.recv_timeout(Duration::from_secs(5)).is_ok();
@@ -704,10 +722,10 @@ fn cancel_and_close_before_dispatch_are_terminal_and_drop_live_binding_once() {
         let (runtime, backend, _) = fixture();
         let observation = runtime.observe(&target()).unwrap();
         let expected = if close {
-            runtime.close();
+            runtime.close().unwrap();
             Error::Closed
         } else {
-            runtime.cancel();
+            runtime.cancel().unwrap();
             Error::Cancelled
         };
         assert_rejected(
@@ -715,8 +733,8 @@ fn cancel_and_close_before_dispatch_are_terminal_and_drop_live_binding_once() {
             expected.clone(),
         );
         assert_eq!(runtime.observe(&target()), Err(expected));
-        runtime.cancel();
-        runtime.close();
+        runtime.cancel().unwrap();
+        runtime.close().unwrap();
         assert_eq!(backend.counts(), (1, 0, 0, 1));
     }
 }
@@ -756,10 +774,10 @@ fn cancellation_or_close_during_dispatch_preserves_busy_and_late_unknown_effect(
         });
         gate.wait_until_entered();
         let expected = if close {
-            runtime.close();
+            runtime.close().unwrap();
             Error::Closed
         } else {
-            runtime.cancel();
+            runtime.cancel().unwrap();
             Error::Cancelled
         };
         assert_eq!(runtime.observe(&target()), Err(Error::Busy));
@@ -837,7 +855,7 @@ fn late_observations_are_rejected_after_cancel_expiry_or_provider_replacement() 
         assert_eq!(runtime.observe(&target()), Err(Error::Busy));
         let expected = match scenario {
             0 => {
-                runtime.cancel();
+                runtime.cancel().unwrap();
                 Error::Cancelled
             }
             1 => {
@@ -877,7 +895,7 @@ fn rejected_observation_binding_cleanup_does_not_hold_runtime_lock() {
     let (done_tx, done_rx) = mpsc::channel();
     let cancelling_runtime = runtime.clone();
     let canceller = thread::spawn(move || {
-        cancelling_runtime.cancel();
+        cancelling_runtime.cancel().unwrap();
         let _ = done_tx.send(());
     });
     let cancel_finished_before_cleanup = done_rx.recv_timeout(Duration::from_secs(5)).is_ok();
@@ -912,7 +930,7 @@ fn press_binding_cleanup_remains_exclusive_but_allows_cancellation() {
     let (done_tx, done_rx) = mpsc::channel();
     let cancelling_runtime = runtime.clone();
     let canceller = thread::spawn(move || {
-        cancelling_runtime.cancel();
+        cancelling_runtime.cancel().unwrap();
         let _ = done_tx.send(());
     });
     let cancelled_before_cleanup = done_rx.recv_timeout(Duration::from_secs(5)).is_ok();
@@ -950,11 +968,11 @@ fn known_no_dispatch_is_preserved_even_when_context_is_interrupted() {
         gate.wait_until_entered();
         let interruption = match scenario {
             0 => {
-                runtime.cancel();
+                runtime.cancel().unwrap();
                 Error::Cancelled
             }
             1 => {
-                runtime.close();
+                runtime.close().unwrap();
                 Error::Closed
             }
             2 => {
@@ -1007,7 +1025,7 @@ fn interruption_preserves_provider_error_and_effect_evidence_without_retry() {
             worker_runtime.press(&target(), observation.reference, ElementId(7))
         });
         gate.wait_until_entered();
-        runtime.cancel();
+        runtime.cancel().unwrap();
         gate.release();
         assert_interrupted(worker.join().unwrap(), Error::Cancelled, provider);
         assert_rejected(
@@ -1061,15 +1079,23 @@ fn dropping_runtime_cleans_native_binding_before_backend_resources() {
         fn observe(
             &self,
             target: &WindowTarget,
+            _call: &CallContext<'_>,
         ) -> Result<BackendObservation<Self::Binding>, Error> {
             Ok(BackendObservation {
                 target: target.clone(),
                 elements: Vec::new(),
+                image: None,
                 binding: OrderedBinding(self.0.clone()),
             })
         }
 
-        fn press(&self, _: &WindowTarget, _: &Self::Binding, _: ElementId) -> ActionOutcome {
+        fn press(
+            &self,
+            _: &WindowTarget,
+            _: &Self::Binding,
+            _: ElementId,
+            _: &CallContext<'_>,
+        ) -> ActionOutcome {
             ActionOutcome::rejected(Error::UnsupportedCapability)
         }
     }
@@ -1109,4 +1135,225 @@ fn backend_panic_releases_binding_and_closes_context_instead_of_retrying() {
         Error::Closed,
     );
     assert_eq!(backend.counts(), (1, 1, 0, 1));
+}
+
+// The pixel group shares admission and reference lifetime, never native geometry.
+struct PixelBackend(TestBackend);
+impl Backend for PixelBackend {
+    type Binding = NativeBinding;
+    fn stamp(&self) -> ProviderStamp {
+        self.0.stamp()
+    }
+    fn supports(&self, _: Capability) -> bool {
+        true
+    }
+    fn observe(
+        &self,
+        target: &WindowTarget,
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservation<Self::Binding>, Error> {
+        self.0.observe(target, call)
+    }
+    fn press(
+        &self,
+        target: &WindowTarget,
+        binding: &Self::Binding,
+        element: ElementId,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        self.0.press(target, binding, element, call)
+    }
+    fn capture(
+        &self,
+        target: &WindowTarget,
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservation<Self::Binding>, Error> {
+        let mut observed = self.0.observe(target, call)?;
+        observed.elements.clear();
+        observed.image = Some(ImageFrame {
+            width: 100,
+            height: 80,
+            png: vec![1],
+        });
+        Ok(observed)
+    }
+    fn click(
+        &self,
+        target: &WindowTarget,
+        binding: &Self::Binding,
+        _: PixelPoint,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        self.0.press(target, binding, ElementId(7), call)
+    }
+    fn windows(&self, app: &AppInstance, call: &CallContext<'_>) -> Result<Vec<WindowInfo>, Error> {
+        call.remaining()?;
+        Ok(vec![WindowInfo {
+            target: WindowTarget {
+                app: app.clone(),
+                native_id: 99,
+                generation: 1,
+            },
+            title: "test".into(),
+            visible: true,
+        }])
+    }
+}
+fn pixel_runtime(backend: TestBackend, capabilities: Vec<Capability>) -> Runtime<PixelBackend> {
+    Runtime::new(
+        PixelBackend(backend),
+        Grant::new(
+            target().app,
+            capabilities,
+            Instant::now() + Duration::from_secs(60),
+        ),
+        Duration::from_secs(30),
+    )
+}
+#[test]
+fn observation_kind_cannot_cross_semantic_and_pixel_actions() {
+    let backend = TestBackend::new();
+    let runtime = pixel_runtime(
+        backend.clone(),
+        vec![
+            Capability::Observe,
+            Capability::Press,
+            Capability::Capture,
+            Capability::Click,
+        ],
+    );
+    let pixels = runtime.capture(&target()).unwrap();
+    assert_eq!(
+        runtime
+            .press(&target(), pixels.reference, ElementId(7))
+            .outcome,
+        ActionOutcome::rejected(Error::InvalidObservation)
+    );
+    assert_eq!(
+        runtime
+            .click(&target(), pixels.reference, PixelPoint { x: 50.0, y: 40.0 })
+            .outcome
+            .dispatch,
+        DispatchState::Dispatched
+    );
+    assert_eq!(
+        runtime
+            .click(&target(), pixels.reference, PixelPoint { x: 50.0, y: 40.0 })
+            .outcome,
+        ActionOutcome::rejected(Error::StaleObservation)
+    );
+    let semantic = runtime.observe(&target()).unwrap();
+    assert_eq!(
+        runtime
+            .click(&target(), semantic.reference, PixelPoint { x: 1.0, y: 1.0 })
+            .outcome,
+        ActionOutcome::rejected(Error::InvalidObservation)
+    );
+    assert_eq!(backend.counts().1, 1);
+}
+#[test]
+fn pixel_bounds_are_rejected_before_dispatch_and_preserve_valid_reference() {
+    let backend = TestBackend::new();
+    let runtime = pixel_runtime(
+        backend.clone(),
+        vec![Capability::Capture, Capability::Click],
+    );
+    let pixels = runtime.capture(&target()).unwrap();
+    for point in [
+        PixelPoint {
+            x: f64::NAN,
+            y: 0.0,
+        },
+        PixelPoint {
+            x: 0.0,
+            y: f64::INFINITY,
+        },
+        PixelPoint { x: -1.0, y: 0.0 },
+        PixelPoint { x: 100.0, y: 0.0 },
+        PixelPoint { x: 0.0, y: 80.0 },
+    ] {
+        assert_eq!(
+            runtime.click(&target(), pixels.reference, point).outcome,
+            ActionOutcome::rejected(Error::InvalidPoint)
+        );
+    }
+    assert_eq!(backend.counts().1, 0);
+    assert_eq!(
+        runtime
+            .click(&target(), pixels.reference, PixelPoint { x: 0.0, y: 0.0 })
+            .outcome
+            .dispatch,
+        DispatchState::Dispatched
+    );
+}
+#[test]
+fn capture_and_click_need_separate_grants_and_discovery_retires_observations() {
+    let backend = TestBackend::new();
+    let runtime = pixel_runtime(
+        backend.clone(),
+        vec![Capability::Observe, Capability::Capture],
+    );
+    let pixels = runtime.capture(&target()).unwrap();
+    assert_eq!(
+        runtime
+            .click(&target(), pixels.reference, PixelPoint { x: 1.0, y: 1.0 })
+            .outcome,
+        ActionOutcome::rejected(Error::CapabilityDenied)
+    );
+    assert_eq!(runtime.windows().unwrap()[0].target.app, target().app);
+    assert_eq!(backend.counts().3, 1);
+    let denied = pixel_runtime(backend.clone(), vec![Capability::Click]);
+    assert_eq!(denied.capture(&target()), Err(Error::CapabilityDenied));
+    assert_eq!(denied.windows(), Err(Error::CapabilityDenied));
+    assert_eq!(backend.counts().0, 1);
+}
+#[test]
+fn switching_observation_groups_invalidates_the_previous_reference() {
+    let backend = TestBackend::new();
+    let runtime = pixel_runtime(
+        backend.clone(),
+        vec![Capability::Observe, Capability::Capture, Capability::Click],
+    );
+    let pixels = runtime.capture(&target()).unwrap();
+    runtime.observe(&target()).unwrap();
+    assert_eq!(
+        runtime
+            .click(&target(), pixels.reference, PixelPoint { x: 1.0, y: 1.0 })
+            .outcome,
+        ActionOutcome::rejected(Error::StaleObservation)
+    );
+    assert_eq!(backend.counts().3, 1);
+}
+
+#[test]
+fn action_deadline_retains_the_late_provider_evidence_without_accepting_success() {
+    let (runtime, backend, clock) = fixture();
+    let observation = runtime.observe(&target()).unwrap();
+    let (gate, control) = TestGate::pair();
+    backend.0.model.lock().unwrap().press_gate = Some(gate);
+    let active = runtime.clone();
+    let worker =
+        thread::spawn(move || active.press(&target(), observation.reference, ElementId(7)));
+    control.wait_until_entered();
+    clock.advance(Duration::from_secs(3));
+    control.release();
+    assert_interrupted(worker.join().unwrap(), Error::TimedOut, successful_press());
+    assert_eq!(backend.counts().1, 1);
+}
+
+#[test]
+fn shutdown_failure_is_reported_without_reopening_execution() {
+    let (runtime, backend, _) = fixture();
+    let observation = runtime.observe(&target()).unwrap();
+    let failure = Error::BackendFailed("controlled stop failure".into());
+    backend.0.model.lock().unwrap().shutdown_error = Some(failure.clone());
+    assert_eq!(runtime.cancel(), Err(failure.clone()));
+    assert_eq!(runtime.observe(&target()), Err(Error::Cancelled));
+    assert_rejected(
+        runtime.press(&target(), observation.reference, ElementId(7)),
+        Error::Cancelled,
+    );
+    assert_eq!(runtime.close(), Err(failure));
+    assert_eq!(runtime.windows(), Err(Error::Closed));
+    assert_eq!(backend.counts(), (1, 0, 0, 1));
 }

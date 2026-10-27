@@ -18,23 +18,32 @@ fn main() {
         };
         let swift_target = format!("{arch}-apple-macosx14.0");
         println!("cargo:rerun-if-changed=src/app_view/Scene.swift");
-        let status = std::process::Command::new("xcrun")
-            .args([
-                "swiftc",
-                "-parse-as-library",
-                "-emit-library",
-                "-static",
-                "-O",
-                "-module-name",
-                "DTWScene",
-                "-target",
-                &swift_target,
-                "-module-cache-path",
-                out.join("swift-cache").to_str().unwrap(),
-                "-o",
-                out.join("libdtw_scene.a").to_str().unwrap(),
-                "src/app_view/Scene.swift",
-            ])
+        let mut command = std::process::Command::new("xcrun");
+        command.args([
+            "swiftc",
+            "-parse-as-library",
+            "-emit-library",
+            "-static",
+            "-O",
+            "-module-name",
+            "DTWScene",
+            "-target",
+            &swift_target,
+            "-module-cache-path",
+            out.join("swift-cache").to_str().unwrap(),
+            "-o",
+            out.join("libdtw_scene.a").to_str().unwrap(),
+            "src/app_view/Scene.swift",
+        ]);
+        if std::env::var_os("CARGO_FEATURE_NATIVE_CHECKPOINTS").is_some() {
+            println!("cargo:rerun-if-changed=src/backends/macos/Native.swift");
+            command.args([
+                "-D",
+                "DTW_NATIVE_CHECKPOINTS",
+                "src/backends/macos/Native.swift",
+            ]);
+        }
+        let status = command
             .status()
             .expect("launch Swift compiler for DTW scene extension");
         assert!(status.success(), "DTW scene extension compilation failed");

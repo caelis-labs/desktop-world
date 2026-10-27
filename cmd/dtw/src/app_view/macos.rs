@@ -3,15 +3,15 @@
 use serde_json::Value;
 use std::{
     ffi::{CStr, CString},
-    fs::{File, OpenOptions},
     io::{Read, Write},
-    os::{
-        fd::AsRawFd,
-        unix::fs::{MetadataExt, OpenOptionsExt},
-    },
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
+#[path = "../scene_lease.rs"]
+mod scene_lease;
+use scene_lease::lock_scene;
+#[cfg(test)]
+use scene_lease::lock_scene_at;
 const HELPER: &str = "--dtw-scene-helper";
 const MAX_REPLY: u64 = 24 * 1024 * 1024;
 unsafe extern "C" {
@@ -73,43 +73,6 @@ pub(super) fn helper_entry() -> bool {
         }
     }
     true
-}
-fn lock_scene() -> Result<File, String> {
-    let uid = unsafe { libc::geteuid() };
-    // Stable across host-specific TMPDIRs and installed versions. No symlink,
-    // foreign-owned file, or group/world-accessible lock is accepted.
-    let path = format!("/private/tmp/dev.caelis.dtw-scene-{uid}.lock");
-    lock_scene_at(std::path::Path::new(&path), Duration::from_secs(3))
-}
-fn lock_scene_at(path: &std::path::Path, timeout: Duration) -> Result<File, String> {
-    let uid = unsafe { libc::geteuid() };
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-        .map_err(|e| e.to_string())?;
-    let meta = file.metadata().map_err(|e| e.to_string())?;
-    if !meta.is_file() || meta.uid() != uid || meta.mode() & 0o077 != 0 {
-        return Err("Native scene lock has an unexpected owner or mode".into());
-    }
-    let start = Instant::now();
-    loop {
-        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-            return Ok(file);
-        }
-        let error = std::io::Error::last_os_error();
-        if error.kind() != std::io::ErrorKind::WouldBlock {
-            return Err(error.to_string());
-        }
-        if start.elapsed() >= timeout {
-            return Err("native_scene_busy: another Runtime owns the native operation; no new input dispatched".into());
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
 }
 pub(super) fn call(request: Value) -> Result<Value, String> {
     // The helper owns its lease until exit, including after an abnormal parent exit.

@@ -84,7 +84,7 @@ Runtime-owned CUA sessions and macOS application observation with screenshot-bou
 
 ## Source and distribution
 
-The next DTW core is being developed through [implementation checkpoints](docs/implementation-checkpoints.md), guided by the [architecture baseline](docs/next-architecture-baseline.md). C1 is an independently tested internal core; it has not replaced the current MCP runtime or established native GUI support.
+The next DTW core is being developed through [implementation checkpoints](docs/implementation-checkpoints.md), guided by the [architecture baseline](docs/next-architecture-baseline.md). C1 is an independently tested internal core. The feature-gated macOS C2/C3 slice now has [real desktop fixture evidence](docs/native-checkpoint-acceptance.md) for native discovery, SCK capture/click, AX observe/press and cancellation. This internal path has not replaced the current MCP runtime; Windows C2/C3 remain pending.
 
 The [developer build guide](docs/building.md) covers Rust, Python and the macOS Swift toolchain for contributors. The signed macOS release gate signs the worker **before** embedding it, signs the final CLI, notarizes both executables, and verifies the extracted worker. Windows candidate CI validates package and MCP behavior; live Windows GUI acceptance is separate. See [release readiness](docs/release-readiness.md).
 

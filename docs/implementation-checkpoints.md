@@ -1,6 +1,6 @@
 # DTW 实施检查点
 
-本文件把 [架构基线](next-architecture-baseline.md) 转成可评审、可验证的实施步骤。日期：2026 年 10 月 27 日。方向已确认，C1 已通过本地验证和独立代码审阅；下一切片为 C2-macOS.1。后续检查点尚未完成。
+本文件把 [架构基线](next-architecture-baseline.md) 转成可评审、可验证的实施步骤。日期：2026 年 10 月 27 日。方向已确认；C1、C2-macOS 和 C3-macOS 的限定切片已通过本地验证与独立审阅，后两项包含真实交互桌面 fixture。下一步可进入 C4-macOS 协议切片；Windows C2/C3 独立待办。详细证据见 [原生验收记录](native-checkpoint-acceptance.md)。
 
 当前行为回归参照为 DTW `a1833a1fbc80de6e14fc86a0972782a00706de33`，首批 CUA 来源固定为 Driver 0.38.0 / `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`。检查点编号只用于记录实施与验收，不引入新运行框架或新的授权状态机。
 
@@ -21,9 +21,11 @@
 | 检查点 | 架构阶段 | 状态 | 评审对象 |
 | --- | --- | --- | --- |
 | C0 | B0 | 已确认方向 | 分层、内部不变量、固定来源与 app 脚本边界 |
-| C1 | B1a | 本地验证和审阅通过 | std-only 类型与执行内核，测试后端闭环 |
-| C2-macOS / C2-Windows | B1b + B2a | 未开始，分平台验收 | 原生进程边界、首批 discovery/身份迁移；macOS 接入 SCK |
-| C3-macOS / C3-Windows | B2b | 未开始，分平台验收 | 最小真实语义动作与像素能力闭环 |
+| C1 | B1a | 本地、CI 和审阅通过 | std-only 类型与执行内核，测试后端闭环 |
+| C2-macOS.1 / .2 | B1b + B2a | 限定内部切片实机通过 | 原生进程、discovery/身份、SCK capture/click |
+| C2-Windows.1 | B1b + B2a | 未实施 | 进程/HWND discovery 与实例身份 |
+| C3-macOS | B2b | 限定内部切片实机通过 | AX snapshot/advertised AXPress、迟到效果读回 |
+| C3-Windows | B2b | 未实施 | UIA 与选定 WGC/像素路径，需 Windows GUI |
 | C4 | B3 | 未开始 | 稳定外部协议与 Harness 集成 |
 | C5 | B4 | 未开始 | app 级脚本及全部 Host Call 边界 |
 | C6-能力组-平台 | B5 | 未开始，逐组验收 | 选定能力批量扩展及过渡路径收敛 |
@@ -71,9 +73,11 @@ NPM_CONFIG_USERCONFIG=/dev/null NPM_CONFIG_REGISTRY=https://registry.npmjs.org C
 python3 scripts/release-artifacts.py check
 ```
 
-首次 source-check 在本机 npm 镜像取得 TypeScript 5.9.3 时返回 404；通过命令级公共 registry 覆盖后完整检查通过，未修改用户 npm 配置。Rust ignored 项为既有 `recovery_tests::idle_and_cancel_recovery_preserve_runtime_and_native_expiry`，需要配置原生 binary/worker，未在本轮运行。
+首次 source-check 在本机 npm 镜像取得 TypeScript 5.9.3 时返回 404；通过命令级公共 registry 覆盖后完整检查通过，未修改用户 npm 配置。C1 最初未运行既有的 `recovery_tests::idle_and_cancel_recovery_preserve_runtime_and_native_expiry`；C2/C3 本轮已配置真实 binary/固定 worker 并单独运行通过。
 
-C1 只有语义观察和 press；像素观察的 kind/几何隔离留在 C2。取消对本次执行上下文是终态，忙标记覆盖后端调用和绑定清理；不能据此推断 OS API 已终止。同步 Backend 是内部检查点接口，C2 接入生产前必须加入有界 IPC、原生派发准入和进程生命周期验证；没有默认将阻塞原生调用放到 MCP 线程。Rust 类型与不透明进程内引用尚不是稳定 wire protocol。
+C1 后续修复了新增 library target 后 macOS CLI 丢失 Swift 链接元数据的问题（`c72672e455cdfdc3c9d2d9e1b6b6c9dd21c32ba6`）。[该提交的 CI](https://github.com/caelis-labs/desktop-world/actions/runs/40448827415) 四项成功：版本、源码契约、macOS 包/MCP、Windows 包/MCP。这不补足任何原生 GUI 证据。
+
+C1 原始切片只有语义观察和 press；C2 已加入像素观察的 kind/几何隔离。取消对本次执行上下文是终态，忙标记覆盖后端调用和绑定清理；不能据此推断 OS API 已终止。同步 Backend 是内部检查点接口，C2 接入生产前必须加入有界 IPC、原生派发准入和进程生命周期验证；没有默认将阻塞原生调用放到 MCP 线程。Rust 类型与不透明进程内引用尚不是稳定 wire protocol。
 
 **停止条件**：独立编译依赖 CUA 类型，越权请求到达后端，旧引用被接受，取消后的未知结果被改成成功或触发重发，均阻止 C1 通过。测试后端模拟不了的真实平台事实留到 C2，不扩充虚构的“已验证”覆盖。
 
@@ -85,7 +89,7 @@ C1 只有语义观察和 press；像素观察的 kind/几何隔离留在 C2。�
 
 | 平台切片 | 通过条件与必需证据 |
 | --- | --- |
-| C2-macOS | 运行应用/窗口 discovery 与实例证据不依赖 CUA worker；声明公共 API 子集和覆盖限制。现有 SCK capture/click 成组进入统一授权和引用边界；真实 GUI 覆盖多窗口、隐藏/关闭、移动、遮挡、旧截图拒绝及输入后的独立读回，并复用相关 #49 场景 |
+| C2-macOS | 运行应用/窗口 discovery 与实例证据不依赖 CUA worker；声明采用的公共 API、隔离的私有窗口映射及覆盖限制。现有 SCK capture/click 成组进入统一授权和引用边界；真实 GUI 覆盖多窗口、隐藏/关闭、移动、遮挡、旧截图拒绝及输入后的独立读回，并复用相关 #49 场景 |
 | C2-Windows | 进程/HWND 基础 discovery 和可核验实例身份完成窄迁移；在真实 Windows 上核验多实例、窗口归属、关闭与部分覆盖。先完成基础只读组；本切片通过不授予 UIA/WGC 动作组完成状态 |
 | 每个平台的进程边界 | 自动化进程测试及该平台实机证据证明停止接收、终止、等待和回收；覆盖启动失败、阻塞、取消、超时与父进程退出。派发后未知保留原状态，不自动恢复后重放；终止 worker 不被解释为撤销已发送的 OS 输入 |
 
@@ -115,6 +119,18 @@ C2 进一步按独立可评审的小切片推进，不把表中全部能力放�
 **停止条件**：snapshot 与 action 的状态所有者不一致、精确窗口关联无法证明、采用未经授权的自动 focus/selection/pixel fallback、或原生调用失败掩盖部分效果，均阻止该能力通过。
 
 **下一步准入**：至少一个目标平台的最小真实闭环完成并明确能力覆盖后，才以其实际语义制定 C4。未完成迁移的组保持独立状态，不能进入对应 C6 批量扩展。
+
+## C2/C3 本轮结论与下一次循环
+
+代码版本 `a606d33`，完整 SHA、环境、命令、结果与原始证据 hash 见 [验收记录](native-checkpoint-acceptance.md)。
+
+- C2-macOS.1：真实应用/窗口身份、同名多窗口、隐藏/恢复，以及 close/cancel/EOF/父进程退出后的 worker 回收通过。
+- C2-macOS.2：SCK 截图后一次点击由 fixture 独立计数确认；重放、移动、遮挡、隐藏及关闭均拒绝派发。
+- C3-macOS：AX 观察 → 一次 AXPress → 新观察读回；错误窗口、旧引用和 attached sheet 拒绝；普通非模态浮窗共存、AX 延迟和内容不可用时像素读取通过。
+- 派发中取消：约 159 ms 返回 Unknown + Cancelled，worker 已回收；目标应用约 2 秒后完成一次动作，独立新上下文读回。取消没有撤销已经进入目标应用的工作，也没有重放。
+- Windows C2/C3、新路径分发包、公开协议和 app 脚本均未完成；生产 MCP 仍使用原有执行器。
+
+下一次只选择 **C4-macOS.1 协议契约切片**：冻结 request/receipt、能力与目标声明、可信 grant 入口和 cancel/result 语义；让 Harness 适配器能展示并批准单 app 范围，再沿已验收的 macOS 路径运行一次端到端闭环。需要确定性协议测试、真实 Harness 流程及 GUI 读回三类证据；证据不足时不接入脚本和额外动作。Windows C2.1 可以独立推进，必须另取 Windows 原生进程及桌面证据。
 
 ## C4：稳定外部协议（B3）
 
