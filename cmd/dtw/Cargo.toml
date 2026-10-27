@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [features]
 native-checkpoints = ["dep:base64"]
+app-protocol = ["native-checkpoints"]
 
 [[example]]
 name = "native_checkpoint"

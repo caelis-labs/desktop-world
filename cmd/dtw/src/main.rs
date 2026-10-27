@@ -1513,8 +1513,16 @@ fn save(result: ToolResult) -> SavedResult {
     }
 }
 
+fn main() {
+    #[cfg(feature = "app-protocol")]
+    if desktop_world::app_protocol::entry() {
+        return;
+    }
+    legacy_main();
+}
+
 #[tokio::main(flavor = "multi_thread")]
-async fn main() {
+async fn legacy_main() {
     if lifecycle::supervisor_entry() || app_view::helper_entry() {
         return;
     }
