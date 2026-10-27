@@ -10,6 +10,7 @@ fn main() {
         let swift_target = format!("{arch}-apple-macosx14.0");
         println!("cargo:rerun-if-changed=src/backends/macos/Scene.swift");
         println!("cargo:rerun-if-changed=src/backends/macos/Native.swift");
+        println!("cargo:rerun-if-changed=src/backends/macos/Input.swift");
         let mut command = std::process::Command::new("xcrun");
         command.args([
             "swiftc",
@@ -27,6 +28,7 @@ fn main() {
             out.join("libdtw_scene.a").to_str().unwrap(),
             "src/backends/macos/Scene.swift",
             "src/backends/macos/Native.swift",
+            "src/backends/macos/Input.swift",
         ]);
         let status = command
             .status()

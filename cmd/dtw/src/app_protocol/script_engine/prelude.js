@@ -109,6 +109,7 @@
     if (!reply.ok) {
       const error = new ErrorClass(`${op} failed: ${reply.error}`);
       error.name = "DtwError"; error.op = op; error.code = reply.code;
+      error.details = reply.details ?? null;
       error.call = reply.call; error.line = line;
       throw error;
     }

@@ -140,6 +140,10 @@ private func checkInventory() throws {
     catch let error as NativeFailure {
         expect(!error.message.contains("DO_NOT_INCLUDE_THIS_TITLE"), "window title leaked into diagnostic")
         expect(!error.message.contains("200"), "peer PID leaked into diagnostic")
+        let inventory = error.details?["inventory"] as? [String: Any]
+        let counters = inventory?["diagnostics"] as? [String: Int]
+        expect(counters?["ax_window_count"] == 0, "structured AX count missing")
+        expect(counters?["window_server_count"] == missingAX.counts["window_server_count"], "structured CG count missing")
     }
 }
 try checkInventory()

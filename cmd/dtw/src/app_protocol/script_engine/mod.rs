@@ -37,12 +37,14 @@ pub(super) struct HostCall {
 pub(super) struct HostError {
     pub message: String,
     pub code: Option<String>,
+    pub details: Option<Value>,
 }
 impl HostError {
     pub fn new(message: impl Into<String>, code: impl Into<String>) -> Self {
         Self {
             message: message.into(),
             code: Some(code.into()),
+            details: None,
         }
     }
 }
@@ -442,17 +444,19 @@ fn host_call(
                             ),
                         }
                     }
-                    Err(error) => failure_reply(
-                        Failure {
-                            kind: "exception".into(),
-                            message: bounded_message(error.message),
-                            line: Some(line),
-                            op: Some(op.into()),
-                            code: error.code.map(|s| s.chars().take(128).collect()),
-                            call: Some(number),
-                        },
-                        false,
-                    ),
+                    Err(error) => {
+                        let envelope = json!({"ok":false,"error":bounded_message(error.message),
+                            "code":error.code.map(|s| s.chars().take(128).collect::<String>()),
+                            "call":number,"details":error.details});
+                        bounded_json(&envelope, HOST_REPLY_LIMIT).unwrap_or_else(|_| {
+                            failure_reply(
+                                Failure::new("internal", "host error exceeds reply limit")
+                                    .code("host_result_limit")
+                                    .at(op, line, number),
+                                false,
+                            )
+                        })
+                    }
                 };
             }
             Err(RecvTimeoutError::Timeout) => continue,

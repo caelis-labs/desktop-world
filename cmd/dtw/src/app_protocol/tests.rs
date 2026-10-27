@@ -53,7 +53,9 @@ struct Model {
     panic_action: bool,
     poll_action: bool,
     shutdown_error: Option<Error>,
+    shutdown_gate: Option<(WorkerGate, Error)>,
     windows_error: Option<Error>,
+    inventory: Option<WindowInventory>,
 }
 struct Shared {
     model: Mutex<Model>,
@@ -79,7 +81,9 @@ impl MockBackend {
                 panic_action: false,
                 poll_action: false,
                 shutdown_error: None,
+                shutdown_gate: None,
                 windows_error: None,
+                inventory: None,
             }),
             windows: AtomicUsize::new(0),
             observes: AtomicUsize::new(0),
@@ -171,6 +175,11 @@ impl Backend for MockBackend {
     }
     fn shutdown(&self) -> Result<(), Error> {
         self.0.shutdowns.fetch_add(1, Ordering::SeqCst);
+        let gate = self.0.model.lock().unwrap().shutdown_gate.take();
+        if let Some((gate, error)) = gate {
+            gate.wait();
+            return Err(error);
+        }
         self.0
             .model
             .lock()
@@ -179,23 +188,28 @@ impl Backend for MockBackend {
             .clone()
             .map_or(Ok(()), Err)
     }
-    fn windows(&self, app: &AppInstance, _: &CallContext<'_>) -> Result<Vec<WindowInfo>, Error> {
+    fn windows(&self, app: &AppInstance, _: &CallContext<'_>) -> Result<WindowInventory, Error> {
         self.0.windows.fetch_add(1, Ordering::SeqCst);
         if let Some(error) = self.0.model.lock().unwrap().windows_error.clone() {
             return Err(error);
         }
-        Ok([101, 202]
-            .into_iter()
-            .map(|native_id| WindowInfo {
-                target: WindowTarget {
-                    app: app.clone(),
-                    native_id,
-                    generation: 3,
-                },
-                title: format!("Window {native_id}"),
-                visible: true,
-            })
-            .collect())
+        if let Some(inventory) = self.0.model.lock().unwrap().inventory.clone() {
+            return Ok(inventory);
+        }
+        Ok(test_inventory(
+            [101, 202]
+                .into_iter()
+                .map(|native_id| WindowInfo {
+                    target: WindowTarget {
+                        app: app.clone(),
+                        native_id,
+                        generation: 3,
+                    },
+                    title: format!("Window {native_id}"),
+                    visible: true,
+                })
+                .collect(),
+        ))
     }
     fn observe(
         &self,
@@ -1080,3 +1094,9 @@ fn mcp_request_ids_accept_integer_valued_numbers_and_preserve_the_received_value
 
 #[path = "script_tests.rs"]
 mod script_tests;
+
+#[path = "inventory_tests.rs"]
+mod inventory_tests;
+
+#[path = "lifecycle_tests.rs"]
+mod lifecycle_tests;

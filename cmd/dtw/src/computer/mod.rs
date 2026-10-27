@@ -77,6 +77,61 @@ pub struct WindowInfo {
     pub visible: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InventoryScope {
+    SameProcessStandardWindows,
+}
+
+/// Bounded provider evidence, not an authorization or a retry instruction.
+/// Names and error codes are provider-specific; no native handles or titles.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InventoryDiagnostics {
+    pub provider: String,
+    pub counters: Vec<(String, u64)>,
+    pub error_codes: Vec<i32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InventoryReport {
+    pub scope: InventoryScope,
+    pub candidate_count: u32,
+    pub supported_count: u32,
+    pub excluded_count: u32,
+    pub diagnostics: InventoryDiagnostics,
+}
+
+impl InventoryReport {
+    pub(crate) fn valid(&self) -> bool {
+        let names = &self.diagnostics.counters;
+        let valid_name = |name: &str| {
+            !name.is_empty()
+                && name.len() <= 64
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        };
+        self.candidate_count <= 256
+            && u64::from(self.supported_count) + u64::from(self.excluded_count)
+                <= u64::from(self.candidate_count)
+            && valid_name(&self.diagnostics.provider)
+            && names.len() <= 32
+            && names.iter().enumerate().all(|(index, (name, count))| {
+                valid_name(name)
+                    && *count <= 1_000_000
+                    && !names[..index].iter().any(|(previous, _)| previous == name)
+            })
+            && self.diagnostics.error_codes.len() <= 8
+    }
+}
+
+/// A successful inventory proves its declared subset, never that an app has
+/// no windows. Unsupported windows may remain even when `windows` is empty.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowInventory {
+    pub windows: Vec<WindowInfo>,
+    pub report: InventoryReport,
+}
+
 /// A live view of the execution authority; providers poll it during IPC waits.
 /// Remaining time is a monotonic budget, not authority the provider can extend.
 pub struct CallContext<'a> {
@@ -114,6 +169,7 @@ pub enum Error {
     ElementNotFound,
     ElementNotPressable,
     TimedOut,
+    InventoryUnproven(InventoryReport),
     BackendFailed(String),
 }
 
@@ -187,7 +243,7 @@ pub trait Backend: Send + Sync {
         &self,
         _app: &AppInstance,
         _call: &CallContext<'_>,
-    ) -> Result<Vec<WindowInfo>, Error> {
+    ) -> Result<WindowInventory, Error> {
         Err(Error::UnsupportedCapability)
     }
     fn observe(
@@ -217,5 +273,23 @@ pub trait Backend: Send + Sync {
         _call: &CallContext<'_>,
     ) -> ActionOutcome {
         ActionOutcome::rejected(Error::UnsupportedCapability)
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_inventory(windows: Vec<WindowInfo>) -> WindowInventory {
+    WindowInventory {
+        report: InventoryReport {
+            scope: InventoryScope::SameProcessStandardWindows,
+            candidate_count: windows.len() as u32,
+            supported_count: windows.len() as u32,
+            excluded_count: 0,
+            diagnostics: InventoryDiagnostics {
+                provider: "test".into(),
+                counters: vec![],
+                error_codes: vec![],
+            },
+        },
+        windows,
     }
 }

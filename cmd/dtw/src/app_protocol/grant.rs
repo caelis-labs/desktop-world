@@ -39,6 +39,7 @@ impl HostGrant {
 
 fn error(code: &str, message: impl Into<String>) -> WireError {
     WireError {
+        details: None,
         code: code.into(),
         message: message.into(),
     }

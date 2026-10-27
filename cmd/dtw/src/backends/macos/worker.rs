@@ -3,6 +3,7 @@ use serde_json::{json, Value};
 use std::{
     ffi::{CStr, CString},
     io::{BufRead, Read, Write},
+    sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 #[path = "../../scene_lease.rs"]
@@ -12,6 +13,44 @@ unsafe extern "C" {
     fn dtw_native_free(reply: *mut std::ffi::c_char);
     fn dtw_scene_call(request: *const std::ffi::c_char) -> *mut std::ffi::c_char;
     fn dtw_scene_free(reply: *mut std::ffi::c_char);
+    fn dtw_input_quiesce(timeout_milliseconds: u32) -> bool;
+}
+
+static TERMINATING: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn request_termination(_: libc::c_int) {
+    // A signal handler only touches a lock-free atomic. No Swift, locks, IO,
+    // allocation, or AppKit calls are permitted here.
+    TERMINATING.store(true, Ordering::Relaxed);
+}
+
+fn install_termination_handler() -> std::io::Result<()> {
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = request_termination as *const () as usize;
+        libc::sigemptyset(&mut action.sa_mask);
+        action.sa_flags = libc::SA_RESTART;
+        if libc::sigaction(libc::SIGTERM, &action, std::ptr::null_mut()) == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+}
+
+fn shutdown_worker() -> ! {
+    TERMINATING.store(true, Ordering::Relaxed);
+    // Also bounded when the parent has died and can no longer enforce its
+    // 500 ms grace. Reads never enter the input gate and cannot delay this drain.
+    let clean = unsafe { dtw_input_quiesce(400) };
+    if !clean {
+        eprintln!("dtw native input cleanup did not complete before shutdown");
+    }
+    std::process::exit(if clean {
+        0
+    } else {
+        super::super::process::INPUT_QUIESCE_FAILED_EXIT_CODE
+    });
 }
 fn native(request: &Value, scene: bool) -> Value {
     let input = CString::new(request.to_string()).expect("JSON has no literal NUL");
@@ -129,13 +168,16 @@ pub fn worker_entry() -> bool {
     if std::env::args().nth(1).as_deref() != Some("--dtw-native-worker") {
         return false;
     }
+    if install_termination_handler().is_err() {
+        std::process::exit(1);
+    }
     let parent = unsafe { libc::getppid() };
     if parent <= 1 {
         std::process::exit(1);
     }
     std::thread::spawn(move || loop {
-        if unsafe { libc::getppid() } != parent {
-            std::process::exit(1);
+        if TERMINATING.load(Ordering::Relaxed) || unsafe { libc::getppid() } != parent {
+            shutdown_worker();
         }
         std::thread::sleep(Duration::from_millis(10));
     });
@@ -160,6 +202,9 @@ pub fn worker_entry() -> bool {
             Err(_) => break,
         };
         let request_id = request["request_id"].clone();
+        if TERMINATING.load(Ordering::Relaxed) {
+            break;
+        }
         let result = json!({"request_id":request_id,"result":dispatch(request,&mut leased)});
         if writeln!(output, "{result}")
             .and_then(|_| output.flush())
@@ -168,5 +213,7 @@ pub fn worker_entry() -> bool {
             break;
         }
     }
-    true
+    // EOF, malformed input and broken output use the same closed admission and
+    // input drain as SIGTERM and parent death.
+    shutdown_worker()
 }

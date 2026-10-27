@@ -23,6 +23,7 @@ def main():
     parser.add_argument("--stage", required=True)
     parser.add_argument("--cold", action="store_true")
     parser.add_argument("--samples", type=int, default=3)
+    parser.add_argument("--expected", choices=("available", "empty_within_scope", "unproven"))
     args = parser.parse_args()
     require(1 <= args.samples <= 10, "bounded sample count required")
     output = args.output.absolute()
@@ -40,7 +41,7 @@ def main():
     require(len(matches) == 1, "owned PID is absent or ambiguous")
     app = {key: matches[0][key] for key in ("identity", "pid", "generation")}
     host = Host(output, app, "approve")
-    result = {"stage": args.stage, "app": app, "cold": args.cold,
+    result = {"stage": args.stage, "app": app, "cold": args.cold, "expected": args.expected,
               "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
               "observer_sha256": hashlib.sha256(observer.read_bytes()).hexdigest(),
               "probe_source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
@@ -65,6 +66,22 @@ def main():
                     reply = session.run(target, command)
                     sample["replies"].append({"kind": kind, "reply": reply})
                     write_json(output / "result.json", result)
+                    if args.expected == "unproven":
+                        failure = reply["error"] if kind == "atomic" else reply["script"]["steps"][0]["error"]
+                        require(failure["code"] == "window_inventory_unproven", reply)
+                        require(failure["details"]["coverage"]["status"] == "unproven", reply)
+                        require(failure["details"]["coverage"]["complete_within_scope"] is False, reply)
+                        if kind == "script":
+                            require(reply["script"]["state_committed"] is False, reply)
+                    elif args.expected:
+                        inventory = Wire.value(reply)
+                        if kind == "script":
+                            inventory = inventory["result"]
+                            require(reply["script"]["steps"][0]["inventory"]["coverage"] == inventory["coverage"], reply)
+                        require(inventory["coverage"]["status"] == args.expected, reply)
+                        require(inventory["coverage"]["complete_within_scope"] is True, reply)
+                        require(len(inventory["windows"]) == inventory["coverage"]["supported_count"], reply)
+                        require(bool(inventory["windows"]) == (args.expected == "available"), reply)
             finally:
                 session.close()
                 sample["after"] = snapshot("inspect")

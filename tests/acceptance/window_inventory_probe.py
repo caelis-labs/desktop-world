@@ -19,7 +19,7 @@ from app_protocol_probe import Fixture, Host, Wire, catalog_app, new_session, re
 
 def validate_reply(reply, kind, count, error):
     if error:
-        require(reply.get("error") and error in reply["error"]["message"], reply)
+        require(reply.get("error"), reply)
         if kind == "windows":
             require(reply["value"] is None, "unproven inventory published a value")
         else:
@@ -28,12 +28,23 @@ def validate_reply(reply, kind, count, error):
             require(reply["script"]["state_committed"] is False, reply)
             steps = reply["script"]["steps"]
             require(len(steps) == 1 and steps[0]["operation"] == "windows"
-                    and error in steps[0]["error"]["message"], reply)
+                    and steps[0]["error"]["code"] == error, reply)
+        failure = reply["script"]["steps"][0]["error"] if kind == "script" else reply["error"]
+        require(failure.get("code") == error, reply)
+        if error == "window_inventory_unproven":
+            evidence = failure.get("details", {})
+            require(evidence.get("coverage", {}).get("status") == "unproven", reply)
+            require(evidence["coverage"]["complete_within_scope"] is False, reply)
+            require(isinstance(evidence.get("diagnostics", {}).get("counters"), dict), reply)
         return
     value = Wire.value(reply)
     inventory = value["result"] if kind == "script" else value
     windows = inventory["windows"]
     require(len(windows) == count, inventory)
+    coverage = inventory.get("coverage", {})
+    require(coverage.get("status") == ("available" if count else "empty_within_scope"), inventory)
+    require(coverage.get("complete_within_scope") is True, inventory)
+    require(coverage.get("supported_count") == count, inventory)
     if count == 2:
         require(sorted(w["title"] for w in windows) == ["DTW Native Peer", "DTW Native Target"], inventory)
         require(len({w["window_ref"] for w in windows}) == 2, inventory)

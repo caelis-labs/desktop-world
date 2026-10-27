@@ -85,6 +85,7 @@ pub fn run(args: &[String]) -> Result<(), WireError> {
 }
 fn failure(code: &str, message: &str) -> WireError {
     WireError {
+        details: None,
         code: code.into(),
         message: message.into(),
     }
@@ -101,16 +102,21 @@ fn serve(
 ) -> Result<mpsc::Receiver<()>, WireError> {
     let done = Arc::new(AtomicBool::new(false));
     let _watchdog = Watchdog(done.clone());
-    let watched = owner.clone();
+    let watched = Arc::downgrade(&owner);
     std::thread::Builder::new()
         .name("dtw-app-parent".into())
         .spawn(move || {
             while !done.load(Ordering::Acquire) {
+                let Some(watched) = watched.upgrade() else {
+                    break;
+                };
                 if unsafe { libc::getppid() } != parent {
                     watched.close();
                     watched.wait_idle(STOP_TIMEOUT);
                     std::process::exit(0);
                 }
+                watched.expire_if_needed();
+                drop(watched);
                 std::thread::sleep(Duration::from_millis(50));
             }
         })

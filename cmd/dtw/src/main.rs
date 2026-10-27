@@ -26,6 +26,7 @@ fn run(args: &[String]) -> Result<(), WireError> {
         ["app", ..] => return app_protocol::run(&args[1..]),
         _ => {
             return Err(WireError {
+                details: None,
                 code: "invalid_arguments".into(),
                 message: "Unknown command; use dtw --help for the app-scoped entry".into(),
             })

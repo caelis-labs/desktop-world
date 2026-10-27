@@ -168,9 +168,13 @@ private func click(_ request: [String:Any]) -> [String:Any] {
     down.flags=[];up.flags=[]
     down.setIntegerValueField(.mouseEventClickState,value:1)
     up.setIntegerValueField(.mouseEventClickState,value:1)
-    down.post(tap:.cghidEventTap)
-    Thread.sleep(forTimeInterval:0.028)
-    up.post(tap:.cghidEventTap)
+    // A graceful worker shutdown closes input admission, then waits for this
+    // pair's single release. Validation and SCK work stay outside the gate.
+    guard dtwWithPairedInput(press: { down.post(tap:.cghidEventTap) },
+                             release: { up.post(tap:.cghidEventTap) },
+                             between: { Thread.sleep(forTimeInterval:0.028) }) else {
+        return ["error":"native_stopping","message":"Input admission is closed; no click posted","pointer_moved":true]
+    }
     Thread.sleep(forTimeInterval:0.04)
     return ["delivery":"posted","effect":"unverified","route":"dtw_visible_point","window_id":Int(id),"pointer_moved":true]
 }

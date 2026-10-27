@@ -40,3 +40,4 @@ jobs:
         with:
           python-version: '3.11'
       - run: python3 tests/ci/run_native_inventory_tests.py
+      - run: python3 tests/ci/run_native_input_tests.py

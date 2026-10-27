@@ -191,16 +191,16 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
     }
 
     /// Window discovery reads AX metadata only after app-scoped Observe admission.
-    pub fn windows(&self) -> Result<Vec<WindowInfo>, Error> {
+    pub fn windows(&self) -> Result<WindowInventory, Error> {
         self.list_windows(None)
     }
 
     /// Tightens this call's budget without changing the context's grant.
-    pub fn windows_until(&self, deadline: Instant) -> Result<Vec<WindowInfo>, Error> {
+    pub fn windows_until(&self, deadline: Instant) -> Result<WindowInventory, Error> {
         self.list_windows(Some(deadline))
     }
 
-    fn list_windows(&self, deadline: Option<Instant>) -> Result<Vec<WindowInfo>, Error> {
+    fn list_windows(&self, deadline: Option<Instant>) -> Result<WindowInventory, Error> {
         let (flight, retired, provider) = {
             let mut state = self.state();
             if state.busy {
@@ -227,11 +227,34 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         if self.backend.stamp() != provider {
             return Err(Error::WrongProvider);
         }
-        let windows = result?;
+        let inventory = match result {
+            Err(Error::InventoryUnproven(report)) if !report.valid() => {
+                return Err(Error::BackendFailed("Invalid inventory diagnostics".into()));
+            }
+            other => other?,
+        };
+        let windows = &inventory.windows;
         if windows.iter().any(|w| w.target.app != self.grant.app) {
             return Err(Error::WrongApp);
         }
-        Ok(windows)
+        let report = &inventory.report;
+        if !report.valid()
+            || windows.len() != report.supported_count as usize
+            || report.supported_count + report.excluded_count != report.candidate_count
+            || windows.iter().enumerate().any(|(index, window)| {
+                window.target.native_id == 0
+                    || window.target.generation == 0
+                    || window.title.len() > 4096
+                    || windows[..index]
+                        .iter()
+                        .any(|prior| prior.target.native_id == window.target.native_id)
+            })
+        {
+            return Err(Error::BackendFailed(
+                "Invalid or incomplete window inventory".into(),
+            ));
+        }
+        Ok(inventory)
     }
 
     pub fn observe(&self, target: &WindowTarget) -> Result<Observation, Error> {
@@ -545,6 +568,17 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             state.cancelled = true;
             state.observation.take()
         };
+        drop(retired);
+        self.backend.shutdown()
+    }
+
+    /// Retire resources after the immutable grant deadline without replacing
+    /// GrantExpired with a generic Closed interruption on an in-flight receipt.
+    pub fn expire(&self) -> Result<(), Error> {
+        if self.clock.now() < self.grant.expires_at {
+            return Ok(());
+        }
+        let retired = self.state().observation.take();
         drop(retired);
         self.backend.shutdown()
     }

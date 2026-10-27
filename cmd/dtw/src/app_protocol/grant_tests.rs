@@ -248,8 +248,8 @@ impl crate::computer::Backend for ReadBackend {
         &self,
         _: &AppInstance,
         _: &crate::computer::CallContext<'_>,
-    ) -> Result<Vec<crate::computer::WindowInfo>, crate::computer::Error> {
-        Ok(vec![])
+    ) -> Result<crate::computer::WindowInventory, crate::computer::Error> {
+        Ok(crate::computer::test_inventory(vec![]))
     }
     fn observe(
         &self,
@@ -285,7 +285,10 @@ fn core_grant_copies_the_original_capabilities_and_deadline() {
         Duration::from_secs(5),
         FixedClock(now),
     );
-    assert_eq!(before.windows(), Ok(vec![]));
+    assert_eq!(
+        before.windows(),
+        Ok(crate::computer::test_inventory(vec![]))
+    );
     let expired = crate::runtime::Runtime::with_clock(
         ReadBackend,
         host.core_grant(),
