@@ -1,7 +1,8 @@
 //! Small, explicit observation routes. Native evidence stays in the receipt;
 //! only its model-facing presentation is projected, filtered and bounded.
-use crate::SavedResult;
+use crate::{recovery, SavedResult};
 use serde_json::{json, Value};
+use std::time::{Duration, Instant};
 
 pub fn allowed(name: &str) -> bool {
     matches!(name, "apps" | "windows" | "observe")
@@ -31,7 +32,9 @@ pub fn description(name: &str) -> Value {
             "max_depth":{"type":"integer","minimum":1,"maximum":100,"default":25},
             "include_screenshot":{"type":"boolean","default":false},
             "max_image_dimension":{"type":"integer","minimum":0,"default":1600},
-            "timeout_ms":{"type":"integer","minimum":1,"maximum":30000}
+            "timeout_ms":{"type":"integer","minimum":1,"maximum":30000},
+            "ready_when":{"type":"string","description":"Case-insensitive substring expected in a non-window/menu AX element label/name/value/text. Opt-in read-only polling; a match does not prove application-wide readiness."},
+            "ready_timeout_ms":{"type":"integer","minimum":0,"maximum":5000,"default":2000,"description":"Polling budget when ready_when is supplied. Zero means one read. At most 20 reads; an already-started native read may finish after the budget."}
         }),
     };
     let required = if name == "observe" {
@@ -43,7 +46,7 @@ pub fn description(name: &str) -> Value {
     "usage":match name {
         "apps" => "Discover running apps with compact records. Filtering is after native enumeration; it does not reduce upstream scan cost. next_call reads a new live page; result,part=structured preserves this receipt's native inventory.",
         "windows" => "Require pid or app. Inspect all candidates before choosing an exact window_id. layer_hint describes OS stacking only, not an AX role or proof of a main window. Pagination re-enumerates live state.",
-        _ => "Read one exact window. The summary has one tree plus snapshot/diagnostic metadata; full native evidence and elements are in result,part=structured. Every AX read may invalidate previous element tokens. No readiness retry or foreground input."
+        _ => "Read one exact window. The summary has one tree plus snapshot/diagnostic metadata; full native evidence and elements are in result,part=structured. Every AX read may invalidate previous element tokens. Optional ready_when polls only this exact window; no foreground input or action replay."
     }})
 }
 
@@ -85,6 +88,9 @@ impl Request {
         if name == "observe" && (!object.contains_key("pid") || !object.contains_key("window_id")) {
             return Err("observe requires exact pid and window_id".into());
         }
+        if object.contains_key("ready_timeout_ms") && !object.contains_key("ready_when") {
+            return Err("ready_timeout_ms requires ready_when".into());
+        }
         Ok(Self {
             name: name.into(),
             args,
@@ -112,6 +118,8 @@ impl Request {
             _ => {
                 let mut args = self.args.clone();
                 let object = args.as_object_mut().unwrap();
+                object.remove("ready_when");
+                object.remove("ready_timeout_ms");
                 object.insert("tree_format".into(), json!("both"));
                 object.insert("verbose".into(), json!(true));
                 object.entry("max_elements").or_insert(json!(250));
@@ -121,6 +129,76 @@ impl Request {
                 args
             }
         }
+    }
+
+    pub async fn execute(
+        &self,
+        native: &crate::authorization::NativeSession,
+    ) -> Result<SavedResult, cua_driver_sdk::DriverError> {
+        let Some(expected) = self.args["ready_when"].as_str() else {
+            let result = native
+                .call_tool(self.tool().into(), self.native_arguments().to_string())
+                .await?;
+            return Ok(self.finish(crate::save(result)));
+        };
+        let began = Instant::now();
+        let budget = Duration::from_millis(self.args["ready_timeout_ms"].as_u64().unwrap_or(2000));
+        let mut samples = Vec::new();
+        let (mut result, status) = loop {
+            let mut arguments = self.native_arguments();
+            let remaining = budget.saturating_sub(began.elapsed()).as_millis() as u64;
+            let timeout = arguments["timeout_ms"].as_u64().unwrap_or(1000);
+            // Even zero-budget requests perform one normal bounded observation.
+            arguments["timeout_ms"] = json!(if budget.is_zero() {
+                timeout
+            } else {
+                timeout.min(remaining.max(1)).min(1000)
+            });
+            let result = crate::save(
+                native
+                    .call_tool(self.tool().into(), arguments.to_string())
+                    .await?,
+            );
+            let value = serde_json::from_str::<Value>(&result.structured).unwrap_or(Value::Null);
+            let is_blocked = result.is_error || recovery::blocked(&value);
+            let is_matched = !is_blocked && recovery::matched(&value, expected);
+            samples.push(json!({"elapsed_ms":began.elapsed().as_millis(),"element_count":value["element_count"],
+                "degraded_reason":value["degraded_reason"],"truncated":value["truncated"],"truncation_reason":value["truncation_reason"],"is_error":result.is_error}));
+            let exhausted = began.elapsed() >= budget || samples.len() >= 20;
+            if is_matched || is_blocked || exhausted {
+                break (
+                    result,
+                    if is_blocked {
+                        "blocked"
+                    } else if is_matched {
+                        "matched"
+                    } else {
+                        "not_observed"
+                    },
+                );
+            }
+            tokio::time::sleep(
+                Duration::from_millis(250).min(budget.saturating_sub(began.elapsed())),
+            )
+            .await;
+            // The previous receipt is the only complete snapshot if the sleep
+            // exhausted the budget; never dispatch an extra read after deadline.
+            if began.elapsed() >= budget {
+                break (result, "not_observed");
+            }
+        };
+        recovery::annotate(
+            &mut result,
+            "dtw_readiness",
+            json!({
+                "status":status,"expected":expected,"attempts":samples.len(),"elapsed_ms":began.elapsed().as_millis(),
+                "budget_ms":budget.as_millis(),"samples":samples,
+                "scope":"last exact-window AX snapshot; a missing match does not establish unsupported accessibility",
+                "next_call":{"operation":"windows","arguments":{"pid":self.args["pid"]}}
+            }),
+        );
+        result.native_operation = Some("observe".into());
+        Ok(result)
     }
 
     pub fn finish(&self, mut result: SavedResult) -> SavedResult {
@@ -268,7 +346,12 @@ pub fn presentation(name: &str, result: &SavedResult, id: &str) -> Value {
     }
     if view.to_string().len() > 12 * 1024 {
         // Unknown large diagnostic fields are not silently discarded.
-        return json!({"pid":view["pid"],"window_id":view["window_id"],"snapshot_id":view["snapshot_id"],"dtw_truncated":true,"more":more});
+        let mut readiness = view["dtw_readiness"].clone();
+        if let Some(object) = readiness.as_object_mut() {
+            object.remove("samples");
+            object.insert("samples_omitted".into(), json!(true));
+        }
+        return json!({"pid":view["pid"],"window_id":view["window_id"],"snapshot_id":view["snapshot_id"],"dtw_readiness":readiness,"dtw_truncated":true,"more":more});
     }
     view
 }
@@ -318,6 +401,31 @@ mod tests {
         assert!(args.get("full_output").is_none());
     }
     #[test]
+    fn readiness_options_stay_in_dtw_and_survive_summary_truncation() {
+        let request = Request::parse(
+            "observe",
+            Some(&json!({"pid":1,"window_id":2,"ready_when":"加载完成","ready_timeout_ms":5000})),
+        )
+        .unwrap();
+        let args = request.native_arguments();
+        assert!(args.get("ready_when").is_none());
+        assert!(args.get("ready_timeout_ms").is_none());
+        assert_eq!(args["pid"], 1);
+        assert_eq!(args["window_id"], 2);
+        let metadata =
+            json!({"status":"not_observed","attempts":20,"expected":"加载完成","samples":[]});
+        let saved = result(
+            json!({"pid":1,"window_id":2,"snapshot_id":"last","huge_native_field":"x".repeat(20000),"dtw_readiness":metadata}),
+        );
+        let view = presentation("observe", &saved, "r");
+        assert_eq!(view["dtw_truncated"], true);
+        assert_eq!(view["dtw_readiness"]["status"], metadata["status"]);
+        assert_eq!(view["dtw_readiness"]["samples_omitted"], true);
+        assert!(view.to_string().len() < 12000);
+        assert_eq!(view["snapshot_id"], "last");
+    }
+
+    #[test]
     fn windows_preserve_ambiguity_and_raw_titles() {
         let request =
             Request::parse("windows", Some(&json!({"pid":1,"title":"settings"}))).unwrap();
@@ -352,6 +460,14 @@ mod tests {
             ("apps", json!({"limit":0})),
             ("apps", json!({"session":"other"})),
             ("observe", json!({"pid":1,"window_id":0})),
+            (
+                "observe",
+                json!({"pid":1,"window_id":2,"ready_timeout_ms":2000}),
+            ),
+            (
+                "observe",
+                json!({"pid":1,"window_id":2,"ready_when":"x","ready_timeout_ms":5001}),
+            ),
         ] {
             assert!(Request::parse(name, Some(&args)).is_err(), "{name}: {args}");
         }

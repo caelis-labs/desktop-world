@@ -40,6 +40,28 @@ the complete native structure, including element tokens, without a new AX read.
 Optional `include_screenshot:true` captures an image; use outer `include_image:true`
 to display it inline. A new AX observation can invalidate earlier element tokens.
 
+If the window is still loading and you know a specific expected control or text,
+opt into read-only polling:
+
+```json
+{"operation":"observe","arguments":{"pid":PID,"window_id":WID,"ready_when":"Save changes","ready_timeout_ms":2000}}
+```
+
+`dtw_readiness.status` is `matched`, `not_observed`, or `blocked`. A match is a
+case-insensitive substring in a returned content element, not proof that the
+whole app is ready. Window titles and menu elements do not satisfy the condition.
+Only the final snapshot and its tokens are returned. The default polling budget
+is 2000 ms, maximum 5000 ms, at most 20 reads; zero performs one read. An in-flight
+native read may finish after this scheduling budget. A query or truncated walk
+can hide the expected content. No match does not establish unsupported AX.
+
+`focus` preserves native verification/error evidence and adds `dtw_recovery` with
+a `windows` call. If exact focus is unverified, enumerate again and reconcile the
+same window ID, title and visibility before deciding what to do. A hidden window
+may need user restoration. Do not automatically repeat focus, choose another
+window or replay input. Observe again after any focus attempt.
+
+
 For native controls, scripts run in CUA QuickJS with `cua` and persistent JSON
 `state`; Node, filesystem, network and process APIs are unavailable.
 
