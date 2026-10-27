@@ -26,9 +26,9 @@ The Host grants one exact app instance and selected capabilities. Agent tool arg
 
 ## Current capability scope
 
-The macOS rewrite has checkpoint evidence for window discovery, AX observation and advertised AXPress, precise-window screenshots and pixel clicks, bounded app scripts, and cancellation with uncertain-effect receipts. The five script methods are `app.windows`, `app.observe`, `app.capture`, `app.press` and `app.click`.
+The macOS rewrite completes the C5 core: app authority and identity, typed window inventory, AX observation and advertised AXPress, precise-window screenshots and pixel clicks, bounded app scripts, grant expiry and input cleanup. The five script methods are `app.windows`, `app.observe`, `app.capture`, `app.press` and `app.click`. `exec.describe` publishes their schemas and reference rules; [TypeScript declarations](docs/app-script-api.d.ts) describe the same API.
 
-This is a limited development baseline. Real-app inventory boundaries remain under investigation; Windows native support, text/keyboard operations, Browser/DOM control and new distribution packages are not implemented. A failed or uncertain action is never automatically replayed. The [product matrix](docs/product-matrix.md) records each verified slice and its remaining work.
+The [C5 acceptance report](docs/c5-completion-acceptance.md) records real GUI, TextEdit window/Space boundaries, and local Harness results. Inventory distinguishes an empty supported scope from unproven coverage. Windows native support, text/keyboard operations, Browser/DOM control and new distribution packages remain future work. A failed or uncertain action is never automatically replayed. C6 can extend capability groups on this baseline; the [product matrix](docs/product-matrix.md) records the verified scope.
 
 Caelis has a local, unpublished Host integration with actual approval and GUI evidence. It is not an installed Caelis/Bot feature or a general Agent plugin release. Hosts must validate their own startup, permissions and lifecycle boundary.
 

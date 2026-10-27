@@ -1,12 +1,12 @@
 # DTW 下一阶段架构基线
 
-状态：方向已确认，按检查点实施；C1 至 C5-macOS.2a、D1 单一重写版基线与 C5-macOS.2b.1 TextEdit 边界切片已有验证记录；历史偶发根因仍待定位，Windows 切片尚未实施。日期：2026 年 10 月 27 日。进度、验收证据与下一步准入见 [实施检查点](implementation-checkpoints.md)。
+状态：方向已确认；#59 合并后的单一重写版已完成 C5 核心与 macOS 五方法验收，不再追加 C5 细分检查点。C6 可沿现有合同批量扩展选定能力组与 Windows 原生。日期：2026 年 10 月 28 日。证据见 [C5 完整验收](c5-completion-acceptance.md)，准入见 [实施检查点](implementation-checkpoints.md)。
 
 发布方向已更新：下一次 release 只交付重写后的可用版本，旧兼容路径彻底退出，不保留旧 facade、CUA worker 或双运行模式作为发行内容。早期先完成可验证的功能切片和[产品矩阵](product-matrix.md)，再按实际需要为稳定的核心行为增加 CI。日常 CI 不再构建或回归旧发行包。
 
 DTW 的目标是拥有独立的 Computer Use 能力模型、执行语义和演进权。底层尽量复用 CUA 的成熟代码，按有明确状态边界的能力组迁入；平台差异留在适配器内。Agent 面对少量 MCP 方法、Skills 和按应用操作的脚本入口。
 
-实施采用“确定内核契约 → 可运行骨架 → 少量核心能力迁移 → 稳定外部协议 → app 脚本 → 批量扩展”的顺序。目标身份、授权、绑定与动作结果语义必须先确定。当前 C1 已建立 DTW 自有类型与执行内核；C2/C3-macOS 通过受监管的 DTW 原生 worker 完成 discovery、SCK capture/click、窄范围 AX snapshot/AXPress 的真实闭环；C4/C5 已接入单 app 协议、Harness 和有界脚本。代码来源、窗口覆盖、取消后的迟到效果及验证边界见各检查点证据。新路径仍需显式 feature 与 `dtw app` 入口，旧默认入口和 Cargo 依赖是待删除的残留，不是兼容承诺；本轮 CI 瘦身不代表已完成这项代码清理。
+实施采用“确定内核契约 → 可运行骨架 → 少量核心能力迁移 → 稳定外部协议 → app 脚本 → 批量扩展”的顺序。目标身份、授权、绑定与动作结果语义必须先确定。当前 C1 已建立 DTW 自有类型与执行内核；C2/C3-macOS 通过受监管的 DTW 原生 worker 完成 discovery、SCK capture/click、窄范围 AX snapshot/AXPress 的真实闭环；C4/C5 已接入单 app 协议、Harness 和有界脚本。代码来源、窗口覆盖、取消后的迟到效果及验证边界见各检查点证据。重写版已是唯一默认构建与 `dtw app` 入口；旧默认入口、CUA SDK/worker 依赖、legacy feature 和旧打包链已在 #59 删除。
 
 ## 源码基线与研究取舍
 
@@ -24,9 +24,9 @@ DTW 的目标是拥有独立的 Computer Use 能力模型、执行语义和演�
 
 上游 main 已继续变化，2026 年 10 月 27 日架构调研时的快照为 `92706b2a01c0558a5ec34cee55aa4995cb76fb05`；它不进入首批基线。0.38.0 的 GitHub release 标为 prerelease，本文将其称为已采用的组件版本，不将其等同于正式稳定版认证。长期稳定指不变量和版本化契约，不指依赖、目录或实现永远不变。
 
-## 当前需要切断的耦合
+## 历史耦合与已实施约束
 
-| 当前事实 | 对新架构的约束 |
+| 重写前事实（历史基线） | 已实施的新架构约束 |
 | --- | --- |
 | 脚本整体交给 CUA `run_script`，内部原子调用绕过 DTW 分派 | 新 app 脚本必须由 DTW 持有 Host Call 入口 |
 | CUA 实际执行资源授权和 grant expiry，DTW discovery 主要展示范围 | 新能力必须在 DTW 内完整执行授权，不可只复制 manifest 展示 |
@@ -35,7 +35,7 @@ DTW 的目标是拥有独立的 Computer Use 能力模型、执行语义和演�
 | CUA `ToolResult`、错误、图片类型穿透 DTW 多层 | 核心数据类型由 DTW 定义，转换限制在边界 |
 | 每个 Runtime 同时只接纳一个执行，忙时返回 `runtime_busy` | 首版保留此行为，不误称已有 FIFO 队列，也不提前增加调度系统 |
 
-事实入口见 [脚本分派](https://github.com/caelis-labs/desktop-world/blob/a1833a1fbc80de6e14fc86a0972782a00706de33/cmd/dtw/src/main.rs#L1362)、[授权权威](https://github.com/caelis-labs/desktop-world/blob/a1833a1fbc80de6e14fc86a0972782a00706de33/cmd/dtw/src/authorization.rs#L143)、[SCK 限制](https://github.com/caelis-labs/desktop-world/blob/a1833a1fbc80de6e14fc86a0972782a00706de33/cmd/dtw/src/main.rs#L742)、[执行准入](https://github.com/caelis-labs/desktop-world/blob/a1833a1fbc80de6e14fc86a0972782a00706de33/cmd/dtw/src/main.rs#L1063)。
+以下链接固定在重写前提交，仅用于追溯问题来源；不描述当前代码。历史事实入口见 [脚本分派](https://github.com/caelis-labs/desktop-world/blob/a1833a1fbc80de6e14fc86a0972782a00706de33/cmd/dtw/src/main.rs#L1362)、[授权权威](https://github.com/caelis-labs/desktop-world/blob/a1833a1fbc80de6e14fc86a0972782a00706de33/cmd/dtw/src/authorization.rs#L143)、[SCK 限制](https://github.com/caelis-labs/desktop-world/blob/a1833a1fbc80de6e14fc86a0972782a00706de33/cmd/dtw/src/main.rs#L742)、[执行准入](https://github.com/caelis-labs/desktop-world/blob/a1833a1fbc80de6e14fc86a0972782a00706de33/cmd/dtw/src/main.rs#L1063)。
 
 ## 分层与职责
 

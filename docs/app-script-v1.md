@@ -1,6 +1,6 @@
 # 单 app 脚本 v1（C5）
 
-当前重写版的 [单 app 协议 v1](app-protocol-v1.md) 默认包含 `command.kind = "script"`。外层协议仍为 `version: 1`，不增加 MCP tool，也不增加授权能力。`exec.describe` 的 `script` 对象广告 `version: 1`、`language: "javascript"`、五个方法、限制和 state/receipt/image 语义；客户端先读取它，再决定是否提交脚本。旧版没有这个广告时不能假定支持脚本。
+当前重写版的 [单 app 协议 v1](app-protocol-v1.md) 默认包含 `command.kind = "script"`。外层协议仍为 `version: 1`，不增加 MCP tool，也不增加授权能力。`exec.describe` 的 `script` 对象广告 `version: 1`、`language: "javascript"`、五个方法的参数/返回 schema、所需能力、引用规则、组合例、限制和 state/receipt/image 语义；客户端先读取它，再决定是否提交脚本。旧版没有这个广告时不能假定支持脚本。
 
 执行平台、可信启动 grant、app 实例、opaque 引用和原生覆盖范围沿用原协议。协议和脚本随默认源码构建启用，无需 feature；启动服务仍需可信 Host grant。本文件定义实现合同，不替代具体构建的 GUI 验收或发行记录；当前尚无重写版发行包。C4-macOS.2 的真实 Caelis 产品代码本地接入见 [既有验收记录](app-protocol-acceptance.md#c4-macos2实际-harness-授权入口2026-10-27) 及 [证据索引](evidence/c4-host-authorization-20261027.json)；配套 Caelis 按用户要求未推送、未发布，不能视为线上入口。
 
@@ -31,7 +31,7 @@
 
 | 方法 | 返回值 | Core 能力与绑定 |
 | --- | --- | --- |
-| `await app.windows()` | `{windows:[{window_ref,title,visible}]}` | `observe`；发现当前 app 的窗口 |
+| `await app.windows()` | `{windows:[{window_ref,title,visible}],coverage,diagnostics}` | `observe`；发现当前 app 的窗口 |
 | `await app.observe({window_ref})` | `{window_ref,observation_ref,kind:"semantic",elements:[{element_ref,label,can_press}]}` | `observe`；创建语义观察 |
 | `await app.capture({window_ref})` | `{window_ref,observation_ref,kind:"pixels",image:{width,height,coordinate_space:"image_pixels"}}` | `capture`；返回像素观察元数据，图片字节在 VM 外 |
 | `await app.press({window_ref,observation_ref,element_ref})` | 原协议的动作 receipt | `press`；当前语义观察中的可按元素 |
@@ -45,11 +45,13 @@ macOS 窗口归属未证明时，`app.windows()` 保留与原子入口相同的�
 
 ```javascript
 const inventory = await app.windows();
-const window = inventory.windows.find(w => w.title === "Target window");
-if (!window) throw new Error("Target window is unavailable");
+const matches = inventory.windows.filter(w => w.title === "Target window");
+if (matches.length !== 1) throw new Error("Target window is unavailable or ambiguous");
+const window = matches[0];
 const before = await app.observe({window_ref: window.window_ref});
-const button = before.elements.find(e => e.label === "Increment" && e.can_press);
-if (!button) throw new Error("Target control is unavailable");
+const buttons = before.elements.filter(e => e.label === "Increment" && e.can_press);
+if (buttons.length !== 1) throw new Error("Target control is unavailable or ambiguous");
+const button = buttons[0];
 await app.press({
   window_ref: window.window_ref,
   observation_ref: before.observation_ref,
@@ -120,3 +122,11 @@ capture 只把尺寸、坐标系和 opaque observation_ref 交给 VM；PNG 字�
 首个上下文终态保留。已经进入 TimedOut/GrantExpired/Closed 收尾阶段时，后续 cancel 返回 `cancel_requested: false, context_state: "closed"`，不能改报 cancelled。动作可能在取消后才产生外部效果；关闭 worker 或 join VM 都不证明效果被撤销。普通被捕获的 Host 错误或脚本异常本身不必关闭上下文；后续脚本仍须使用新的 ID，并遵守剩余 grant、引用和总记录限额。
 
 实现位于 `cmd/dtw/src/app_protocol/{wire.rs,scripts.rs,script_engine/}`，Core 预算入口位于 `cmd/dtw/src/runtime/mod.rs`。窄脚本引擎与 prelude 基于固定 CUA 0.38.0 donor 做 DTW 适配，第三方来源见 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)；不会调用既有 CUA 脚本执行器或开放其完整能力表。
+
+## 可发现合同与库存证据
+
+客户端以 `describe.script.methods` 的 parameters/returns/capabilities/reference rules 为准；其中的最小组合例经过执行测试。编辑器可参考 [TypeScript 声明](app-script-api.d.ts)，提交的仍是 JavaScript 函数体，不需要类型编译器或安装旧插件。
+
+`app.windows()` 的成功 coverage 与原子入口相同；`empty_within_scope` 不等于应用无窗口。失败可通过 `e.code === "window_inventory_unproven"` 与 `e.details.coverage/diagnostics` 处理，无须解析 message。每次成功 windows 的 `script.steps[].inventory` 保留 coverage 与诊断，即使脚本随后抛错或 value/image 被驱逐，仍可调查首次读到空清单的原因。它不重复保存标题、图片或原生窗口 ID；失败步骤保持完整 error/details。
+
+grant 到期统一关闭上下文且归因为 `grant_expired`，包括无 Host Call 的纯 JS。state 不提交、已发生动作及步骤证据不抹去；后来的 close/cancel 不覆盖先发生的终态原因。

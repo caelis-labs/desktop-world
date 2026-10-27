@@ -56,7 +56,9 @@ C4-macOS.1 的参考 Host 记录 proposal/decision，真实 Caelis 验收当时�
 
 窗口 discovery 需要 `observe`，Host 应明确授予所需组合；DTW 不自动补充能力。平台覆盖继承 C2/C3：同 PID、标准 layer-0 AX 窗口；无 sheet/menu/helper routing 或自动聚焦。窗口 discovery 或新观察一经 Core 准入，旧观察即失效，即使后端读取失败也不能恢复；新观察成功才发布新的引用。动作消费其观察。错误 app、错误窗口或无效坐标等准入失败不自动消费仍有效的观察；Core 决定是否仍可使用。AXPress 或输入派发返回成功不等于效果已确认，必须独立读回。
 
-macOS `windows` 仅在归属可证明时发布集合。AX 库存为空但仍有合格同 PID CG 表面、精确 ID/owner 无法证明或部分候选不明时，既有 `backend_failed` 消息保留有界 provider 诊断，不发布部分或伪空集合。明确范围排除仍可得到空集合。闭窗后 CG 残留也可能报未证明，不能据此断言 AX 损坏；详见 [C5.2 库存边界](window-inventory-acceptance.md)。
+`windows` 返回 `{windows, coverage, diagnostics}`。`coverage.scope` 为 `same_process_standard_windows`；成功的 `complete_within_scope=true` 只证明声明的子集，`status` 为 `available` 或 `empty_within_scope`。`candidate_count/supported_count/excluded_count` 分别统计 AX 候选、纳入和明确排除的候选；CG 表面数在 provider 诊断里，不能与 AX 窗口数等同。排除范围为 `helper_processes/non_standard_windows/non_default_layers`。空成功不声明应用没有窗口。
+
+macOS AX 库存为空但仍有同 PID layer-0 CG 表面、精确 ID/owner 无法证明或部分候选不明时，返回稳定 code `window_inventory_unproven`，不发布部分或伪空集合。`error.details` 包含同形 `coverage/diagnostics`，但 `status=unproven`、`complete_within_scope=false`。`diagnostics` 有 provider 名称、有界固定数值 counters 和最多 8 个 error_codes；它不含标题、原生句柄或其他应用数据，不参与授权，不指示重试。明确排除原因细分为 role、subrole、open/save panel 与 layer；不增加 AX 读取。闭窗 CG 残留和其他 Space 仍可能未证明，不能根据这些诊断猜测不存在；[真实应用边界](window-inventory-real-app-acceptance.md)保留原始证据。
 
 请求示例：
 
@@ -82,7 +84,7 @@ macOS `windows` 仅在归属可证明时发布集合。AX 库存为空但仍有�
 
 取消检查活动 ID 与关闭准入在同一锁内完成，旧 ID 的迟到取消不能停止新的任务。cancel/close、超时或授权到期的首个终态保留；关闭不会重新开放上下文。已有非取消终态时，后续 cancel 返回 `cancel_requested: false` 与真实的 `context_state: "closed"`。`cancel_requested: true` 只说明关闭请求命中了活动记录，最终效果以原子任务的 `result.receipt` 或脚本的 `result.script.steps[].receipt` 为准：若 Core 已完成而记录尚未发布，不改写已经返回的真实回执。`shutdown_error` 明确报告清理失败。MCP `notifications/cancelled` 不作为原生任务取消，因为对应的提交/查询传输调用已经完成；必须调用 `exec.cancel`。
 
-`error` codes 包括 Core 的 `closed, cancelled, busy, grant_expired, wrong_app, capability_denied, unsupported_capability, stale_observation, wrong_provider, target_changed, invalid_observation, invalid_point, element_not_found, element_not_pressable, timed_out, backend_failed`，以及协议的 `invalid_request, unsupported_version, request_conflict, request_limit, unknown_request`。脚本的 `script_*` 及细分 failure codes 见 [脚本错误与账本](app-script-v1.md#查询步骤账本与图像)。启动及主读取循环的传输错误通过 stderr 的版本化 error 对象与非零退出码报告；输出断管直接清理并以 2 退出，不保证附带 stderr 对象。
+`error` codes 包括 Core 的 `closed, cancelled, busy, grant_expired, wrong_app, capability_denied, unsupported_capability, stale_observation, wrong_provider, target_changed, invalid_observation, invalid_point, element_not_found, element_not_pressable, timed_out, window_inventory_unproven, backend_failed`，以及协议的 `invalid_request, unsupported_version, request_conflict, request_limit, unknown_request`。脚本的 `script_*` 及细分 failure codes 见 [脚本错误与账本](app-script-v1.md#查询步骤账本与图像)。启动及主读取循环的传输错误通过 stderr 的版本化 error 对象与非零退出码报告；输出断管直接清理并以 2 退出，不保证附带 stderr 对象。
 
 结果的 MCP text 内容是协议 JSON；`2025-06-18` 同时返回相同 `structuredContent`。截图通过额外 image content 携带，文本只有尺寸/坐标元数据。旧 MCP 版本只返回 text/image，不附 structuredContent。
 
@@ -95,3 +97,9 @@ macOS `windows` 仅在归属可证明时发布集合。AX 库存为空但仍有�
 C4-macOS.1 的协议/并发、真实 MCP + GUI 和 Harness 预授权证据，以及 C4-macOS.2 实际产品代码的本地授权闭环，均保留在 [C4 验收记录](app-protocol-acceptance.md)。C5 以此基线增加 [单 app 脚本](app-script-v1.md)，本协议说明不替代其独立验收。Windows C2/C3、额外能力组、配套 Caelis 发布和新入口分发包验收均独立后置。
 
 MCP 依据：[生命周期](https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle)、[工具、文本与图片结果](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)。本次验证见 [C4 验收记录](app-protocol-acceptance.md)。
+
+## 到期与输入收尾
+
+`describe.context` 提供 `state/terminal_reason/shutdown_error`。可信 grant 到期后关闭准入，原因保持 `grant_expired`；stdio watcher 每 50 ms 检查 idle expiry（受系统调度和清理耗时影响），旧 job 仍可查询。嵌入式 Coordinator 在入口检查，也提供 `expire_if_needed` 给 Host 生命周期调用；不续期、不新建每请求计时线程。worker 异常退出、强杀或清理 API 失败会保留清理诊断；后续重复关闭不能把首次失败改成清理成功。
+
+原生 worker 收到 TERM、EOF 或父进程退出后先关闭输入准入，再有界等待已开始的按下/释放对完成。AXPress 最后派发也经过同一闸门。worker 排空预算 400 ms，父 supervisor 先给 500 ms graceful grace，再强杀并 reap；排空超时或强杀保留清理失败诊断。此保证不覆盖外部直接 SIGKILL 或 OS 停滞，也不撤销已派发效果。中断原动作仍保留 unknown 和 provider evidence，不重新点击。
