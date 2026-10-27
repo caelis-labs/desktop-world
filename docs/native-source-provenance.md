@@ -171,8 +171,8 @@ During initial GUI acceptance, AXWindows returned `cannotComplete` at the 0.2
 second messaging timeout three times; the final source rebuild subsequently
 read the same fixture successfully. The cause remains unproven. This observed
 limit is retained separately from the AXChildren `illegalArgument` observation; neither
-case justifies automatic retries or a focus/title fallback. Modal rejection
-itself requires the dedicated live sheet fixture acceptance.
+case justifies automatic retries or a focus/title fallback. The dedicated live sheet refusal and nonmodal floating-peer coexistence checks
+have passed; their scope and evidence are recorded in the acceptance report below.
 
 ## Retained CUA license
 

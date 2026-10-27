@@ -1,0 +1,213 @@
+{
+  "date": "2026-10-27",
+  "source_commit": "a606d3320eb3ca8a78d70d72daf9e89bc94f0532",
+  "platform": "macOS 27.0.1 (26A434), arm64",
+  "scope": "Real AppKit fixture on an interactive desktop; internal feature-gated native path",
+  "binary_sha256": "b77043faef3aba347384a326b39c88f441a038bab3fd9f9607edca1806060937",
+  "raw_evidence_directory": "/private/tmp/dtw-c2c3-evidence/final2",
+  "results": {
+    "readonly": {
+      "checkpoint": "C2-macOS.1",
+      "app": {
+        "generation": 1793076554268294,
+        "identity": "macos:[\"\\/tmp\\/dtw-c2c3-final2-c2\\/DTWNativeFixture.app\",\"dev.dtw.native-fixture\",\"\\/tmp\\/dtw-c2c3-final2-c2\\/DTWNativeFixture.app\\/Contents\\/MacOS\\/DTWNativeFixture\"]",
+        "name": "DTWNativeFixture",
+        "pid": 68581
+      },
+      "windows": [
+        209999,
+        210000
+      ],
+      "clicks_unchanged": true
+    },
+    "lifecycle": {
+      "checkpoint": "C2 macOS native lifecycle",
+      "cases": [
+        {
+          "operation": "close",
+          "worker": 68609,
+          "reaped": true
+        },
+        {
+          "operation": "cancel",
+          "worker": 68626,
+          "reaped": true
+        },
+        {
+          "operation": "eof",
+          "worker": 68630,
+          "reaped": true
+        },
+        {
+          "operation": "parent_death",
+          "worker": 68634,
+          "reaped": true
+        }
+      ]
+    },
+    "pixels": {
+      "checkpoint": "C2-macOS.2",
+      "successful_clicks": 1,
+      "independent_counter_before": 0,
+      "independent_counter_after": 1,
+      "rejected": [
+        "replay",
+        "move",
+        "occlude",
+        "hide",
+        "close"
+      ]
+    },
+    "semantic": {
+      "checkpoint": "C3-macOS semantic",
+      "counter_before": 0,
+      "counter_after": 1,
+      "rejected": [
+        "wrong window",
+        "replay",
+        "attached sheet"
+      ],
+      "ax_delay_bounded": {
+        "elapsed_ms": 223,
+        "error": "BackendFailed(\"ax_unavailable: AX array AXChildren failed: -25204\")"
+      },
+      "pixels_available_with_ax_content_absent": true,
+      "nonmodal_floating_peer_allowed": true
+    },
+    "cancel-inflight": {
+      "checkpoint": "C3-macOS cancellation",
+      "action": {
+        "dispatch": "Unknown",
+        "elapsed_ms": 159,
+        "error": "Cancelled",
+        "evidence": "Unverified",
+        "interruption": "Cancelled",
+        "provider_outcome": "ActionOutcome { dispatch: Unknown, evidence: Unverified, error: Some(Cancelled) }"
+      },
+      "counter_before": 1,
+      "counter_after": 2,
+      "late_effect_readback": true,
+      "worker_reaped": true,
+      "replayed": false,
+      "closed_window_rejected": true
+    }
+  },
+  "artifacts": [
+    {
+      "path": "cancel-inflight/cancelled/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "cancel-inflight/cancelled/transcript.json",
+      "sha256": "98ffec555b1cf6f4102b60920f80b1441aa7efc9b62d40d5fcf3b93cca72ae26"
+    },
+    {
+      "path": "cancel-inflight/independent-readback/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "cancel-inflight/independent-readback/transcript.json",
+      "sha256": "be6be9f731e30020a207e5197f8505cca71d61882bb40a9f876fd8dc13c15d6d"
+    },
+    {
+      "path": "cancel-inflight/result.json",
+      "sha256": "85f2ddcc5e0db70c0e8c1bf509049481fa45532fef802d24b08e3b7136cbf905"
+    },
+    {
+      "path": "lifecycle/cancel/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "lifecycle/cancel/transcript.json",
+      "sha256": "e33f7d4014d60de57b990cd78f0e26326c75e9191df4b0539d25a3e22cba52c4"
+    },
+    {
+      "path": "lifecycle/close/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "lifecycle/close/transcript.json",
+      "sha256": "b84e88f28e476ddb7c41c76d8074088d88efca417d93e212508a607ebd714f5a"
+    },
+    {
+      "path": "lifecycle/eof/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "lifecycle/eof/transcript.json",
+      "sha256": "82726c3ae9fc62440c96f930180ba5490ed63cb9adebc4e3302f18ed8d6743f1"
+    },
+    {
+      "path": "lifecycle/parent_death/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "lifecycle/parent_death/transcript.json",
+      "sha256": "a0be53413e8a36cad98501bd109f0c0d70b994a3131c8bf37cd04af91feb68c0"
+    },
+    {
+      "path": "lifecycle/result.json",
+      "sha256": "9dc3cac72ddb95f8659b8907da9bebd95cae1f6a12f09f716d3b786cb3774ca9"
+    },
+    {
+      "path": "pixels/observation-0.png",
+      "sha256": "2924bc8972673b8d28d7e1f0406073bcd5fed7878a1440d4d18013175d3d44f8"
+    },
+    {
+      "path": "pixels/observation-1.png",
+      "sha256": "51fec115ad9fb4459b885d5adf8a732d95f8853aac64082f5934b5aea1315436"
+    },
+    {
+      "path": "pixels/observation-2.png",
+      "sha256": "51fec115ad9fb4459b885d5adf8a732d95f8853aac64082f5934b5aea1315436"
+    },
+    {
+      "path": "pixels/observation-3.png",
+      "sha256": "51fec115ad9fb4459b885d5adf8a732d95f8853aac64082f5934b5aea1315436"
+    },
+    {
+      "path": "pixels/observation-4.png",
+      "sha256": "7ac833dbdb5a5037551d170674beaeda1764528ad67813b5219c69d76ff29001"
+    },
+    {
+      "path": "pixels/result.json",
+      "sha256": "2228579fe7ca86149342708d58e29b5e5fe6cfcd2db43eb1805ce9ff6dfa0f54"
+    },
+    {
+      "path": "pixels/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "pixels/transcript.json",
+      "sha256": "e1cbba055f24ae22585954a9e1a8a708e9a6360c7ca6a6f4ae38473fab11a4f8"
+    },
+    {
+      "path": "readonly/result.json",
+      "sha256": "67008ad2d2d036f06743a64e5db69c19acf4f48a5cfcfb4eaf814164d281f7bc"
+    },
+    {
+      "path": "readonly/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "readonly/transcript.json",
+      "sha256": "7cd72b0df0fbe9a8a6aeee3c2d997049648452386e060a3b53224fd9959e96a8"
+    },
+    {
+      "path": "semantic/observation-3.png",
+      "sha256": "e666db30056ebf4a4a97b8ebb5d9334e2f16d71f00c755dec697b383790dc254"
+    },
+    {
+      "path": "semantic/result.json",
+      "sha256": "87a6f550ee3f6621303fcc15840eff8b4b539e42fbbdf8735b739555420606e2"
+    },
+    {
+      "path": "semantic/stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "semantic/transcript.json",
+      "sha256": "49f7b43239d23941924817d2b23e429acedcf074d361e05ab209b42055c41299"
+    }
+  ]
+}
