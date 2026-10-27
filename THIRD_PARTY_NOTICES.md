@@ -35,3 +35,13 @@ target OS/runtime installation and are not redistributed in the package.
 The optional Cua perception extension and Cua Spaces are not linked or
 distributed by Desktop World. Their separate licenses do not become part of
 this MIT package.
+
+
+The opt-in DTW app script engine in `cmd/dtw/src/app_protocol/script_engine/`
+is a narrow adapted source port of the same pinned CUA `script_tool/engine.rs`
+and `prelude.js`. CUA's unrestricted desktop facade is excluded. The donor
+hashes, source mapping, and full CUA MIT text are retained in
+[`docs/native-source-provenance.md`](docs/native-source-provenance.md).
+It directly uses locked rquickjs 0.14.0 / QuickJS-ng 0.16.2, whose original
+credits and licenses remain in the dependency inventory and upstream notices.
+This optional source entry does not change the default packaged MCP executor.

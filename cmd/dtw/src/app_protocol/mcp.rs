@@ -62,7 +62,7 @@ impl Session {
             "ping" => json!({}),
             _ if !self.ready => return Some(rpc_error(id, -32002, "Initialize the session first")),
             "tools/list" => json!({"tools":[{"name":"exec",
-                "description":"Execute the versioned single-app protocol. describe reports Host authority and limits. submit starts one typed command; result reads its original record; cancel terminates the context for the active request; close releases resources. Reuse an accepted request_id only with the identical command. No scripts or raw native tools.",
+                "description":"Execute the versioned single-app protocol. describe reports Host authority and limits. submit starts one typed command; result reads its original record; cancel terminates the context for the active request; close releases resources. Reuse an accepted request_id only with the identical command. Scripts expose only the bound app facade and every native step passes the same Core admission. No raw native tools.",
                 "inputSchema":wire::input_schema(),
                 "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}}]}),
             "tools/call" => {

@@ -33,6 +33,11 @@ pub struct Target {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
+    Script {
+        source: String,
+        timeout_ms: u64,
+        max_calls: u32,
+    },
     Windows,
     Observe,
     Capture,
@@ -106,6 +111,39 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
     let command = object(value, "command")?;
     let kind = string(command, "kind", "command")?;
     match kind.as_str() {
+        "script" => {
+            fields(
+                command,
+                &["kind", "source", "timeout_ms", "max_calls"],
+                "command",
+            )?;
+            let source = command
+                .get("source")
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid("command.source must be a string"))?;
+            if source.len() > super::scripts::MAX_SOURCE_BYTES {
+                return Err(invalid("command.source exceeds 64 KiB of UTF-8"));
+            }
+            let bounded = |key: &str, max: u64| -> Result<u64, WireError> {
+                match command.get(key) {
+                    None => Ok(max),
+                    Some(value) => value
+                        .as_f64()
+                        .filter(|v| {
+                            v.is_finite() && v.fract() == 0.0 && *v >= 1.0 && *v <= max as f64
+                        })
+                        .map(|v| v as u64)
+                        .ok_or_else(|| {
+                            invalid(format!("command.{key} must be an integer in 1..={max}"))
+                        }),
+                }
+            };
+            Ok(Command::Script {
+                source: source.into(),
+                timeout_ms: bounded("timeout_ms", super::scripts::MAX_TIMEOUT_MS)?,
+                max_calls: bounded("max_calls", super::scripts::MAX_CALLS as u64)? as u32,
+            })
+        }
         "windows" | "observe" | "capture" => {
             fields(command, &["kind"], "command")?;
             Ok(match kind.as_str() {
@@ -179,7 +217,7 @@ pub fn parse_request(value: Value) -> Result<Request, WireError> {
             )?;
             let command = parse_command(request.get("command").unwrap_or(&Value::Null))?;
             let target = object(request.get("target").unwrap_or(&Value::Null), "target")?;
-            let window_ref = if command == Command::Windows {
+            let window_ref = if matches!(command, Command::Windows | Command::Script { .. }) {
                 fields(target, &["app_ref"], "target")?;
                 None
             } else {
@@ -334,8 +372,16 @@ fn submit_schema(kind: &str) -> Value {
         command["properties"]["y"] = json!({"type": "number"});
         command["required"] = json!(["kind", "observation_ref", "x", "y"]);
     }
+    if kind == "script" {
+        command["properties"]["source"] = json!({"type":"string","maxLength":super::scripts::MAX_SOURCE_BYTES,"description":"JavaScript function body; also limited to 64 KiB UTF-8 and the complete transport input bound"});
+        command["properties"]["timeout_ms"] =
+            json!({"type":"integer","minimum":1,"maximum":super::scripts::MAX_TIMEOUT_MS});
+        command["properties"]["max_calls"] =
+            json!({"type":"integer","minimum":1,"maximum":super::scripts::MAX_CALLS});
+        command["required"] = json!(["kind", "source"]);
+    }
     let mut target = object_schema(json!({"app_ref": identifier_schema()}), &["app_ref"]);
-    if kind != "windows" {
+    if kind != "windows" && kind != "script" {
         target["properties"]["window_ref"] = identifier_schema();
         target["required"] = json!(["app_ref", "window_ref"]);
     }
@@ -356,7 +402,7 @@ pub fn input_schema() -> Value {
         control_schema("cancel"),
         request_schema("close"),
     ];
-    for kind in ["windows", "observe", "capture", "press", "click"] {
+    for kind in ["windows", "observe", "capture", "press", "click", "script"] {
         variants.push(submit_schema(kind));
     }
     json!({

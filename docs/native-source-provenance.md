@@ -116,8 +116,9 @@ evidence says nothing about Windows acceptance.
 
 The reviewed upstream notice attributes the focus-without-raise sequence to
 yabai, Windows paths to trope-cua/Interface-Agent, JS engine paths to
-QuickJS-ng/rquickjs, and named SDK/Linux paths to T3 Code. None of those named
-source paths is part of this narrow macOS port. This is a source mapping, not a
+QuickJS-ng/rquickjs, and named SDK/Linux paths to T3 Code. The native macOS port
+does not use those named source paths; the separate C5 engine port below does
+use the named JS engine dependencies. This is a source mapping, not a
 legal conclusion. Existing release packaging of the complete pinned CUA worker
 must continue to include its unchanged `CUA-MIT-LICENSE.txt` and
 `CUA-THIRD_PARTY_NOTICES.md`, as described by the repository's
@@ -204,3 +205,32 @@ SOFTWARE.
 
 Real fixture evidence for discovery, SCK, AX, sheet refusal and cancellation
 is recorded in [C2/C3 macOS acceptance](native-checkpoint-acceptance.md).
+
+
+## C5 bounded app script port
+
+The opt-in `app-protocol` feature directly uses rquickjs **0.14.0** (the same
+version already locked through CUA), with only its `std` feature. Its bundled
+QuickJS-ng is **0.16.2**. No custom allocator, module loader, OS binding or extra
+JavaScript parser is introduced. The fixed CUA donor remains
+`85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19` / 0.38.0.
+
+| Donor path (under `libs/cua-driver/rust/crates/cua-driver-core/src/script_tool/`) | Original SHA-256 | DTW adaptation |
+| --- | --- | --- |
+| `engine.rs` | `fa61393ba5b685df34858a81e8e32e8fbdab77e17f2e1094514b43510891242d` | QuickJS runtime/context setup, memory/stack limits, interrupt and job draining; `script_engine/mod.rs` uses bounded std channels and an absolute Core deadline |
+| `prelude.js` | `af23eaf9c7c198f7feb6ac38e26c94d5b4d76bc0b794c491b80adb9933ed2865` | Hidden bridge, console/error/settlement mechanics; the facade is replaced with five methods bound to the existing app context, with strict JSON state/result encoding |
+
+The complete upstream `App`, `Locator`, raw invocation, global discovery/launch,
+file/network/process and unrestricted platform objects are excluded. DTW owns
+scope, protocol parsing, sequential Core dispatch, per-step receipt retention,
+state commit and cleanup; the VM is not an authorization authority. Unlike the
+donor's execution path, every native operation goes through the same Core used
+by atomic app requests. The memory budget uses QuickJS's native allocator limit;
+a caught allocation failure may be recovered from within that unchanged budget.
+
+The upstream notice attributes QuickJS-ng to Fabrice Bellard (2017–2026), Charlie
+Gordon (2017–2024), Ben Noordhuis (2023–2026), and Saúl Ibarra Corretgé
+(2023–2026); rquickjs to Mees Delzenne (2020) and the rquickjs contributors
+(2025). Original license/copyright files are retained by the existing dependency
+audit, in addition to the CUA MIT notice above. Validate this port's VM, Core and
+real GUI gates independently when updating any of these pinned sources.
