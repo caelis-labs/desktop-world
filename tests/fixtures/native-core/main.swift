@@ -22,6 +22,8 @@ final class Delegate:NSObject,NSApplicationDelegate {
   if label==nil {label=text}
   w.makeKeyAndOrderFront(nil);return w
  }
+ func applicationDidBecomeActive(_ n:Notification){if label != nil {save()}}
+ func applicationDidResignActive(_ n:Notification){if label != nil {save()}}
  func applicationDidFinishLaunching(_ n:Notification){
   windows=[make("DTW Native Target",200),make("DTW Native Peer",600)]
   windows[0].makeKeyAndOrderFront(nil);app.activate(ignoringOtherApps:true);save()
@@ -33,6 +35,11 @@ final class Delegate:NSObject,NSApplicationDelegate {
     case "restore":windows[0].setFrameOrigin(NSPoint(x:200,y:300));windows[0].orderFront(nil)
     case "occlude":windows[1].setFrameOrigin(windows[0].frame.origin);windows[1].orderFront(nil)
     case "uncover":windows[1].setFrameOrigin(NSPoint(x:600,y:300));windows[0].makeKeyAndOrderFront(nil);app.activate(ignoringOtherApps:true)
+    case "snapshot":break
+    case "ax_empty":app.setAccessibilityWindows([])
+    case "ax_restore":app.setAccessibilityWindows(windows.filter{$0.isVisible})
+    case "close_all":windows.forEach{$0.close()}
+    case "release_windows":windows.forEach{$0.close()};windows=[];label=nil;app.setAccessibilityWindows([])
     case "hide":windows[0].orderOut(nil)
     case "show":windows[0].orderFront(nil)
     case "duplicate":windows[1].title="DTW Native Target"

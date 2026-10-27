@@ -175,6 +175,23 @@ limit is retained separately from the AXChildren `illegalArgument` observation; 
 case justifies automatic retries or a focus/title fallback. The dedicated live sheet refusal and nonmodal floating-peer coexistence checks
 have passed; their scope and evidence are recorded in the acceptance report below.
 
+## C5.2 inventory attribution adaptation
+
+DTW now classifies discovery exclusions separately from unresolved PID, role,
+subrole, exact ID and CG owner evidence. Any unresolved candidate rejects the
+whole inventory; no partial registry is published. Empty AX inventory alongside
+eligible same-PID CG surfaces also rejects. Fixed counters and at most eight AX
+SPI error codes reach the existing backend error message; no titles or foreign
+app metadata are included. Explicit nonzero layers remain excluded, and extra
+CG decoration surfaces alone do not establish missing AX windows. This is a
+DTW-owned fail-closed adaptation, not a new donor migration or Space resolver.
+
+Real closed-window fixtures may retain CG surfaces after AXWindows becomes
+empty. They remain unresolved under this limited provider; offscreen status is
+not proof of closure. [C5.2 acceptance](window-inventory-acceptance.md) separates
+this observed limit, controlled AX-empty failures, and successful foreground /
+background fixture reads from the still-unresolved historical intermittent case.
+
 ## Retained CUA license
 
 The following is the original `LICENSE.md` text at the pinned commit.

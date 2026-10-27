@@ -1,0 +1,470 @@
+{
+  "checkpoint": "C5-macOS.2a",
+  "date": "2026-10-27",
+  "base_commit": "87a6e9fb12584f5a3c315255c9232919d619a5d4",
+  "platform": "27.0.1",
+  "binary_sha256": "3d2d3599cbd7d06e168f3294e01efd52faa59aed699f7aaa0c655cf596270f3a",
+  "source_sha256": "c34d0d1402ba3a8e13136fdb960c9d56cb57d9af99d46288128c57fba76f05f2",
+  "scope": "owned standard AppKit windows, same bundle ID different exact app instances, development opt-in app-protocol; deterministic model and approval Surface with production Caelis Harness",
+  "matrix": [
+    {
+      "case": "cold-reference-windows-1",
+      "fixture_pid": 90547,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "83450c148bc238679cadde32cfa93048873fd5beb426682921b7cd48e41940db"
+    },
+    {
+      "case": "cold-reference-windows-2",
+      "fixture_pid": 90560,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "5923e8747fe91005f1239759074f4f7eb84e749805c219008ce3d95cdb672b6a"
+    },
+    {
+      "case": "cold-reference-windows-3",
+      "fixture_pid": 90570,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "8286d9cb315d907aca67925148195678b28496933356d1e3f7556f54b03f772b"
+    },
+    {
+      "case": "cold-reference-script-1",
+      "fixture_pid": 90582,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "0c9c93eed3eac865e2dca58177966e9c209e19b3c28e5b37c4cde08f29a1ab50"
+    },
+    {
+      "case": "cold-reference-script-2",
+      "fixture_pid": 90593,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "b1f501159ddfff061839e90f016b103a8cb6a57ddfecd846c9f71f37b9eff94b"
+    },
+    {
+      "case": "cold-reference-script-3",
+      "fixture_pid": 90642,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "6817f1e013110511a1b543e577e1d90795404879832c5d519991b065233e355d"
+    },
+    {
+      "case": "cold-harness-windows-1",
+      "fixture_pid": 90691,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "db6cac86af067c3736750893f4d22b6dd05aca7b52f8505e5c91fbd78b47ab91"
+    },
+    {
+      "case": "cold-harness-windows-2",
+      "fixture_pid": 91697,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "7e877ecb70f278d823f79a3e2bd37800a2b5396952daf31eabc02d6d0feb1ec4"
+    },
+    {
+      "case": "cold-harness-windows-3",
+      "fixture_pid": 91845,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "8d8dbd39bf146ec8159da4e8a96f932bac3e4ed978630b37207c2de6cd32b31a"
+    },
+    {
+      "case": "cold-harness-script-1",
+      "fixture_pid": 91888,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "af1a16bb8d9cfa4f267e4d417785bbde8d0ae99b00185444e0232de89045d21a"
+    },
+    {
+      "case": "cold-harness-script-2",
+      "fixture_pid": 91921,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "80356241a2a1b4ff1dcdf35aa47226ead3dbd67493239a31763a4b83ad26cf92"
+    },
+    {
+      "case": "cold-harness-script-3",
+      "fixture_pid": 91978,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "8c2a9e893dfc8c49ba8afbeb3e2fc3b99dca9734b29fe14463fcc7643ee0707e"
+    },
+    {
+      "case": "background-reference-windows-1",
+      "fixture_pid": 92036,
+      "active_before": false,
+      "active_after": false,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "a51ebedfc3ea7cc458d458b4a5f5b5429d415a6bfe778b771cc68eedffeef5fa"
+    },
+    {
+      "case": "background-reference-windows-2",
+      "fixture_pid": 92036,
+      "active_before": false,
+      "active_after": false,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "a8d98917c2ffeef65634600afb4da6db3e47fb67584f8558b9f4883b56f7c934"
+    },
+    {
+      "case": "background-reference-windows-3",
+      "fixture_pid": 92036,
+      "active_before": false,
+      "active_after": false,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "7626361331890202718a7d96add60bada867063dbc5dd15a9145c948f32b203f"
+    },
+    {
+      "case": "background-reference-script-1",
+      "fixture_pid": 92036,
+      "active_before": false,
+      "active_after": false,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "cae4521d515af0a8cac52082158c84b9ae55c263afea1a81e673924e7d5f6bdb"
+    },
+    {
+      "case": "background-reference-script-2",
+      "fixture_pid": 92036,
+      "active_before": false,
+      "active_after": false,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "ada9317af796550fc2b383ae252100b2168a529780cdfdb123508b527f31d019"
+    },
+    {
+      "case": "background-reference-script-3",
+      "fixture_pid": 92036,
+      "active_before": false,
+      "active_after": false,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "75deba19096d2f20f7b67a0e51e395272e8a5f25501f3ecc4559f728ca8d1883"
+    },
+    {
+      "case": "background-harness-windows-1",
+      "fixture_pid": 92036,
+      "active_before": false,
+      "active_after": false,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "5767bc302e2909b030826365038ffa1f7b3b6a4426e6e4201712d25148da9b7f"
+    },
+    {
+      "case": "background-harness-windows-2",
+      "fixture_pid": 92036,
+      "active_before": false,
+      "active_after": false,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "b4cb34492481f3a7afec8c0fd68874adb1995149a61435e002876e6074d1e81e"
+    },
+    {
+      "case": "background-harness-windows-3",
+      "fixture_pid": 92036,
+      "active_before": false,
+      "active_after": false,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "05af0d503237fc45d697659759ca75722c53d9bce556508b8a3fbcad47504163"
+    },
+    {
+      "case": "background-harness-script-1",
+      "fixture_pid": 92036,
+      "active_before": false,
+      "active_after": false,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "59b6764dc6f2b15d1c31a9687f69ae929a49e080bc07b0250237fd36b3c18fc9"
+    },
+    {
+      "case": "background-harness-script-2",
+      "fixture_pid": 92036,
+      "active_before": false,
+      "active_after": false,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "c5cefa89055278a70b0f2e1835407ac02cb896fe238b19716d50c790ddd892be"
+    },
+    {
+      "case": "background-harness-script-3",
+      "fixture_pid": 92036,
+      "active_before": false,
+      "active_after": false,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "4c1bc87c660817d73ea70f5d5a0bd4ae45340e46bc93d8051cd7dfd88e3a9ae3"
+    },
+    {
+      "case": "foreground-reference-windows-1",
+      "fixture_pid": 92036,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "1ce9530b24b28e96913d7abc82a603856f82139e8f21e095f5a61f0fe5c8526c"
+    },
+    {
+      "case": "foreground-reference-windows-2",
+      "fixture_pid": 92036,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "4def060254ce5e355074013b53a5430e37dfaacecddb18f66125e0c19507b425"
+    },
+    {
+      "case": "foreground-reference-windows-3",
+      "fixture_pid": 92036,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "b08854f38c114093b3fb3d5beeb73cf3f1ea08d3328e6a21c8e1e142134c66ff"
+    },
+    {
+      "case": "foreground-reference-script-1",
+      "fixture_pid": 92036,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "4836d129849b86f16f5d15782617a8f0bb140e5eb2dd95ef210045e610e348fd"
+    },
+    {
+      "case": "foreground-reference-script-2",
+      "fixture_pid": 92036,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "cdc5a7a478b39a58cd2643a465ff3d7e080ae8429a2027bef6fe99dc6985451b"
+    },
+    {
+      "case": "foreground-reference-script-3",
+      "fixture_pid": 92036,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "b24368b5e58aa2dc9cbc1316df5ca50d492de9d246d6d82f9524e307c3599da5"
+    },
+    {
+      "case": "foreground-harness-windows-1",
+      "fixture_pid": 92036,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "dceb9e5dc38b055b4f6c8940df0bf9e737dde9add1115fd94a6df0ae96c26b2f"
+    },
+    {
+      "case": "foreground-harness-windows-2",
+      "fixture_pid": 92036,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "131dd1b4448b58bf24089a1022cf3c57d4c7d17a13d774704b6d45a4b4e82bd8"
+    },
+    {
+      "case": "foreground-harness-windows-3",
+      "fixture_pid": 92036,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "860deb7cffb2a5b2297b39d6382def057a22bb972f5af624788426b99019c457"
+    },
+    {
+      "case": "foreground-harness-script-1",
+      "fixture_pid": 93022,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "d6bce6ae105e539c6e44ac0d0c0e09afb300bd3d0227b7aa27fd2c287b9e092e"
+    },
+    {
+      "case": "foreground-harness-script-2",
+      "fixture_pid": 93022,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "eb504acc6fb3be77d237ee727597dd202a0bfff6d33d7d1d51084ce3030b41aa"
+    },
+    {
+      "case": "foreground-harness-script-3",
+      "fixture_pid": 93022,
+      "active_before": true,
+      "active_after": true,
+      "counter_delta": 0,
+      "actions_started_delta": 0,
+      "windows_per_read": 2,
+      "planned_reads": 3,
+      "evidence_sha256": "a6bc796b8b107bf24b0f45f7327d35131dce1996be843aa0927cafa8eadd7a03"
+    }
+  ],
+  "unproven_control": {
+    "before": {
+      "path": "/private/tmp/dtw-c52-baseline-forced-empty/result.json",
+      "sha256": "bb14c18b902fcda93e0656e9d8318d7faa329a3543c10fb5062b55e369550e89"
+    },
+    "after": {
+      "path": "/private/tmp/dtw-c52-unproven-fixed/result.json",
+      "sha256": "551bd2844c921e04bce0b7bd36d29a431faf0edf0872fd40b17063cbf686e06f"
+    },
+    "native_diagnostic": {
+      "error": "window_inventory_unproven",
+      "message": "Window inventory unproven: ax_pid_unproven=0,ax_role_unproven=0,ax_subrole_unproven=0,ax_window_count=0,cg_app_raw=6,cg_invalid_metadata=0,cg_non_layer_zero=0,cg_owner_unmatched=0,duplicate_id=0,exact_id_unproven=0,exact_id_zero=0,excluded_scope=0,supported_count=0,window_server_count=6; ax_id_errors=[]"
+    },
+    "new_contexts": 3,
+    "reads": 9,
+    "before_behavior": "atomic and script succeed with empty array; script commits state",
+    "after_behavior": "atomic backend_failed; script_exception with original backend_failed step, state not committed; zero effects"
+  },
+  "failed_or_limited_attempts": [
+    {
+      "path": "/private/tmp/dtw-c52-harness-baseline",
+      "cause": "test expected flat context_state; actual describe uses context.state; fixed test and added negative controls",
+      "effects": 0
+    },
+    {
+      "path": "/private/tmp/dtw-c52-true-empty-fixed",
+      "cause": "close_all retained six CG surfaces and zero AX windows; attempted empty-success expectation failed nine times; correct outcome is unproven",
+      "effects": 0
+    },
+    {
+      "path": "/private/tmp/dtw-c52-released-empty",
+      "cause": "clearing fixture window references still retained six CG surfaces; all nine reads unproven; no claim of real empty-CG acceptance",
+      "effects": 0
+    },
+    {
+      "path": "/private/tmp/dtw-c52-matrix/foreground-harness-script-3",
+      "cause": "operator started another owned fixture during final foreground case; activation changed at catalog before approval/windows; no product inventory failure; isolated three-context repeat passed",
+      "effects": 0
+    }
+  ],
+  "cleanup": {
+    "path": "/private/tmp/dtw-c52-cleanup.json",
+    "sha256": "306c7bda0d783c6b64384b8daa061d0ff1cd6d98bb7c1d1eb03612dd5ac68947"
+  },
+  "automated": {
+    "rust_library": 139,
+    "legacy_executor_passed": 26,
+    "legacy_executor_ignored": 1,
+    "native_swift_assertions": 71,
+    "pure_core": 40,
+    "ipc": 12,
+    "python": 16,
+    "pinned_cua_prelude": 70
+  },
+  "not_claimed": [
+    "historical spontaneous empty-inventory trigger identified",
+    "real macOS empty-CG case",
+    "general background/Space/hidden/minimized support",
+    "Windows native GUI",
+    "installed app-protocol distribution",
+    "published Caelis integration",
+    "default MCP switch or C6 admission"
+  ]
+}

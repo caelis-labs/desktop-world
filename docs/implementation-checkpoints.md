@@ -1,6 +1,6 @@
 # DTW 实施检查点
 
-本文件把 [架构基线](next-architecture-baseline.md) 转成可评审、可验证的实施步骤。日期：2026 年 10 月 27 日。方向已确认；C1、C2-macOS 和 C3-macOS 的限定切片已通过本地验证与独立审阅，后两项包含真实交互桌面 fixture。C4-macOS.1 已完成显式选择的单 app 协议、可信启动 grant 与实际 Caelis 预授权闭环；C4-macOS.2 的生产 Harness 本地授权接线和 C5-macOS.1 的前台 fixture 最小脚本闭环已通过；Caelis 配套按用户要求仅本地提交。下一步为 C5-macOS.2 空窗口枚举可靠性检查点，Windows C2/C3 独立待办。详细证据见 [原生验收记录](native-checkpoint-acceptance.md)、[C4 验收记录](app-protocol-acceptance.md)和 [C5 验收记录](app-script-acceptance.md)。
+本文件把 [架构基线](next-architecture-baseline.md) 转成可评审、可验证的实施步骤。日期：2026 年 10 月 27 日。方向已确认；C1、C2-macOS 和 C3-macOS 的限定切片已通过本地验证与独立审阅，后两项包含真实交互桌面 fixture。C4-macOS.1 已完成显式选择的单 app 协议、可信启动 grant 与实际 Caelis 预授权闭环；C4-macOS.2 的生产 Harness 本地授权接线和 C5-macOS.1 的前台 fixture 最小脚本闭环已通过；Caelis 配套按用户要求仅本地提交。C5-macOS.2a 的归属诊断与受控库存矩阵已通过；下一步为 C5-macOS.2b 真实应用与自然空库存定位，Windows C2/C3 独立待办。详细证据见 [原生验收记录](native-checkpoint-acceptance.md)、[C4 验收记录](app-protocol-acceptance.md)和 [C5 验收记录](app-script-acceptance.md)。
 
 当前行为回归参照为 DTW `a1833a1fbc80de6e14fc86a0972782a00706de33`，首批 CUA 来源固定为 Driver 0.38.0 / `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`。检查点编号只用于记录实施与验收，不引入新运行框架或新的授权状态机。
 
@@ -29,7 +29,8 @@
 | C4-macOS.1 | B3a | 本地、实机与预授权 Harness 闭环通过 | v1 request/receipt、固定 Host grant、cancel/result、单 exec |
 | C4-macOS.2 | B3b | 本地产品代码与真实 GUI 通过，Caelis 未发布 | 生产 Harness app/能力审批、上下文建立与撤销 |
 | C5-macOS.1 | B4a | 最小前台 fixture 切片通过 | 五方法、有界 VM、逐次 Core、state/步骤回执、原生超时/取消 |
-| C5-macOS.2 | B4b | 待定位与复验 | 偶发空窗口列表的冷启动/后台/前台支持边界与诊断 |
+| C5-macOS.2a | B4b | 归属诊断和受控复验通过 | 明确未证明错误、负控、三状态/双入口/双 Host 矩阵 |
+| C5-macOS.2b | B4b | 待真实应用定位 | 历史自然空列表、闭窗/隐藏/Space 的支持边界 |
 | C6-能力组-平台 | B5 | 未开始，逐组验收 | 选定能力批量扩展及过渡路径收敛 |
 
 ## C0：架构方向与来源基线
@@ -162,7 +163,9 @@ C2 进一步按独立可评审的小切片推进，不把表中全部能力放�
 
 C5-macOS.1 的五个既有原子方法已接入同一 Core，137 项库测试及 26 项既有执行器测试通过；实际生产 Harness 完成同脚本语义/像素组合、图片输入、动作后异常、state 保留、原 ID 去重和撤销，另有真实超时/取消与迟到效果读回。来源、限额、失败和未覆盖项见 [协议](app-script-v1.md)与[验收记录](app-script-acceptance.md)。Caelis 的 `96b1ffe9`、`e63a0fc7` 均只保留本地。
 
-C5-macOS.2 的明确目标是解释偶发 `inventory=[]`，建立冷启动/后台/前台的支持边界和有界诊断，再按每种受支持状态至少三个新上下文复验。当前前台 fixture 通过不替代这项可靠性证据；零窗口必须不派发、不猜测、不自动 focus。完成前不切换默认入口，不进入 C6 批量扩展；这是一条限定的验证循环，不追加全部原子能力。
+C5-macOS.2a 已修复无法证明归属被静默过滤为空成功的问题，新增固定计数和有界 AX 错误诊断；36 个新上下文/108 次冷启动、后台、前台原子与生产 Harness 读取通过，AX 空/CG 非空负控明确拒绝。详细成功、失败与限制见 [库存验收](window-inventory-acceptance.md)。Caelis 新配套 `ec6d463b` 仅本地保留。
+
+C5-macOS.2b 仍需在真实目标应用捕获自然空库存及关闭/隐藏/Space 状态，解释历史偶发触发原因。已观察到闭窗后 CG 合法残留仍会保守报未证明；未取得可靠证据前不按离屏状态猜测不存在。每种支持状态至少三个新上下文对照，失败必须留存。完成前不切换默认入口、不进入 C6；本轮通过的是诊断与受控可靠性切片，不是全应用支持声明。
 
 ## C6：按能力组扩展（B5）
 

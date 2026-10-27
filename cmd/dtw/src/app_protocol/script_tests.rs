@@ -476,3 +476,32 @@ fn script_call_limit_preserves_prior_effect_and_rejects_further_calls() {
     assert_eq!(backend.0.observes.load(Ordering::SeqCst), 1);
     assert_eq!(backend.0.actions.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn unproven_inventory_preserves_diagnostics_without_state_or_retry() {
+    let (owner, backend) = coordinator();
+    let message = "window_inventory_unproven: ax_windows=0, cg_eligible=6";
+    backend.0.model.lock().unwrap().windows_error = Some(Error::BackendFailed(message.into()));
+    let atomic = run(&owner, "atomic-inventory", None, Command::Windows);
+    assert!(atomic.is_error);
+    assert!(atomic.data["value"].is_null());
+    let source = "state.changed=true; return await app.windows();";
+    let scripted = run_script(&owner, "script-inventory", source);
+    last_step_error(&scripted, "backend_failed");
+    assert_eq!(steps(&scripted)[0]["error"], atomic.data["error"]);
+    assert!(steps(&scripted)[0]["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains(message));
+    assert_eq!(operation_list(&scripted), ["windows"]);
+    assert_eq!(backend.0.windows.load(Ordering::SeqCst), 2);
+    let duplicate = start(
+        &owner,
+        submit(&owner, "script-inventory", None, script(source)),
+    );
+    assert_eq!(duplicate.data, scripted.data);
+    assert_eq!(backend.0.windows.load(Ordering::SeqCst), 2);
+    assert_eq!(backend.0.actions.load(Ordering::SeqCst), 0);
+    let state = run_script(&owner, "read-state", "return state;");
+    assert_eq!(state.data["value"]["result"], json!({}));
+}

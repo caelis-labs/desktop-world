@@ -56,6 +56,8 @@ C4-macOS.1 的参考 Host 记录 proposal/decision，真实 Caelis 验收当时�
 
 窗口 discovery 需要 `observe`，Host 应明确授予所需组合；DTW 不自动补充能力。平台覆盖继承 C2/C3：同 PID、标准 layer-0 AX 窗口；无 sheet/menu/helper routing 或自动聚焦。窗口 discovery 或新观察一经 Core 准入，旧观察即失效，即使后端读取失败也不能恢复；新观察成功才发布新的引用。动作消费其观察。错误 app、错误窗口或无效坐标等准入失败不自动消费仍有效的观察；Core 决定是否仍可使用。AXPress 或输入派发返回成功不等于效果已确认，必须独立读回。
 
+macOS `windows` 仅在归属可证明时发布集合。AX 库存为空但仍有合格同 PID CG 表面、精确 ID/owner 无法证明或部分候选不明时，既有 `backend_failed` 消息保留有界 provider 诊断，不发布部分或伪空集合。明确范围排除仍可得到空集合。闭窗后 CG 残留也可能报未证明，不能据此断言 AX 损坏；详见 [C5.2 库存边界](window-inventory-acceptance.md)。
+
 请求示例：
 
 ```json
