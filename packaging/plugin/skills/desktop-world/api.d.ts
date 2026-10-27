@@ -171,7 +171,7 @@ interface CuaScriptAPI {
                           app?: string; title?: string }): Promise<CuaApp>;
   launch(which: string | Json, options?: Json): Promise<CuaApp | Json>;
   listApps(options?: Json): Promise<Json[]>;
-  listWindows(options?: { pid?: number }): Promise<WindowInfo[]>;
+  listWindows(options?: { pid?: number; app?: string; on_screen_only?: boolean }): Promise<WindowInfo[]>;
   sleep(ms: number): Promise<void>;
   /** Upstream run_script allowlist only. Not invoke_menu, get_desktop_state,
    * run_steps, browser_*, configuration, or another run_script. */
@@ -198,7 +198,10 @@ type NativeArguments = { [key: string]: Json } & {
   _session_id?: never; _permission_mode?: never; _authorization_context?: never;
 };
 type ExecInput =
-  | { operation: "describe"; name?: BrowserOperation | "health_report" | "get_guide" }
+  | { operation: "apps"; arguments?: { running?: boolean; query?: string; offset?: number; limit?: number }; wait_ms?: number }
+  | { operation: "windows"; arguments: ({ pid: number; app?: never } | { app: string; pid?: never }) & { title?: string; on_screen_only?: boolean; offset?: number; limit?: number }; wait_ms?: number }
+  | { operation: "observe"; arguments: { pid: number; window_id: number; query?: string; max_elements?: number; max_depth?: number; include_screenshot?: boolean; max_image_dimension?: number; timeout_ms?: number }; wait_ms?: number; include_image?: boolean }
+  | { operation: "describe"; name?: BrowserOperation | "health_report" | "get_guide" | "apps" | "windows" | "observe" }
   | { operation: BrowserOperation; arguments: NativeArguments;
       wait_ms?: number; include_image?: boolean }
   | { operation: "health_report"; arguments?: { include?: string[]; skip?: string[] };
@@ -213,7 +216,7 @@ type ExecInput =
   | { operation: "focus"; pid: number; window_id?: number;
       wait_ms?: number }
   | { operation: "cursor"; enabled?: boolean; wait_ms?: number }
-  | { operation: "app"; pid: number; max_windows?: number;
+  | { operation: "app"; pid: number; window_id?: number; max_windows?: number;
       max_image_dimension?: number; wait_ms?: number; include_image?: boolean }
   | { operation: "click"; observation_id: string; image_index: number;
       x: number; y: number; wait_ms?: number }

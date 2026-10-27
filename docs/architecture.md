@@ -11,7 +11,7 @@ options, regression evidence and upstream limitations are in [the click contract
 
 ## Runtime-owned execution context
 
-The public surface remains one `exec` tool with `run`, `app`, `click`, small native
+The public surface remains one `exec` tool with `apps`, `windows`, `observe`, `run`, `app`, `click`, small native
 pass-through operations, and `status/result/cancel`. There is no public session
 parameter. Legacy named-session requests fail explicitly; their state is never
 silently merged. Each stdio MCP process owns one private native MCP session,
@@ -145,3 +145,25 @@ separate. Upgrade official release/prerelease candidates as SDK+worker pairs,
 lock the exact revision/checksum, run contract and real GUI gates, and keep the
 previous tested pair available. Remove an extension only when the upstream path
 passes the same cases. See [checkpoint acceptance](runtime-acceptance.md) and [RC.9 acceptance](rc9-acceptance.md).
+
+## Native observation presentation
+
+`apps` and `windows` use the same serialized native session as scripts. They
+validate a small typed argument set, filter/project native records and return
+bounded live pages with totals and continuation calls. `apps` defaults to running
+processes; `windows` requires a PID or app filter and never picks a candidate.
+Layer hints describe OS stacking, not inferred AX roles. Filtering does not
+reduce upstream enumeration cost. The receipt preserves its full native inventory;
+continuation calls re-enumerate and may shift if the desktop changes.
+
+`observe` reads an exact PID/window through CUA. Only this explicit native route
+projects one tree into its summary; arbitrary script values retain their original
+semantics. Raw structured output, tokens and diagnostics remain paged on demand.
+Summary truncation is explicit and links to the original receipt. No new observation
+is needed to retrieve its full payload.
+
+`app` accepts an optional exact `window_id`. Selection takes place within the
+attributed visible inventory before the image limit; an absent ID fails without
+fallback. Existing full-inventory, geometry, expiry and occlusion checks continue
+to govern the resulting screenshot-bound click. Without an ID the legacy
+front-to-back selection remains unchanged.

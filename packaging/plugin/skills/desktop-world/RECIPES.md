@@ -197,3 +197,25 @@ sessions and some Windows controls still require explicit foreground delivery.
 Inspect the result and UI before changing route. `getState({verbose:true})`
 exposes the native macOS `background_input` report when troubleshooting;
 `full_output:true` expands tree metadata and should not be combined with `since`.
+
+## Compact native discovery and exact capture
+
+Use `apps` with `arguments:{query:"Editor",limit:20}` for running apps, or
+`running:false` to include installed apps. Filter and paginate before returning
+records to the model; upstream still enumerates the application inventory.
+`windows` requires `pid` or `app` and supports a title substring, visibility filter,
+and pagination. Each next page is a fresh enumeration: if windows change, restart
+from offset zero. For stable evidence use the original receipt's `more` page.
+
+Do not infer a main window from size, array order or `layer_hint`. Choose an
+observed window ID; titles can be identical. `observe` requires exact `pid` and
+`window_id`, retains one tree in its summary, and keeps complete native metadata
+and elements under `result,part=structured`. Its default is AX only.
+
+For DTW screenshot-bound input, call `operation:app,pid:PID,window_id:WID`.
+The one returned frame records the exact captured ID, selection policy and
+original dimensions. All attributable candidates remain in `windows`;
+`omitted_count` counts candidates without an image. Filtering never changes
+the full scene inventory used for stale/occlusion checks. If the window is
+hidden, closed or no longer attributed, enumerate again; capture never falls
+back to the next window.

@@ -98,12 +98,13 @@ pub(super) async fn capture(
     pid: u32,
     cap: u32,
     limit: usize,
+    window_id: Option<u32>,
 ) -> Result<SavedResult, DriverError> {
     // WindowServer may advertise a newly opened sheet before SCK can share it.
     // Retry only a whole read-only observation, never an action or a partial
     // image set. Permission, timeout and geometry-contract errors fail directly.
     for attempt in 0..3 {
-        let result = capture_once(runtime, pid, cap, limit).await?;
+        let result = capture_once(runtime, pid, cap, limit, window_id).await?;
         let transitioning = matches!(
             result.error_code.as_deref(),
             Some("window_unavailable" | "app_windows_changed")
@@ -121,6 +122,7 @@ async fn capture_once(
     pid: u32,
     cap: u32,
     limit: usize,
+    window_id: Option<u32>,
 ) -> Result<SavedResult, DriverError> {
     runtime.invalidate();
     let before = match platform(json!({"operation":"discover","pid":pid})).await {
@@ -139,7 +141,15 @@ async fn capture_once(
     }
     let mut frames = Vec::new();
     let mut images = Vec::new();
-    for w in windows.iter().take(limit) {
+    let selected: Vec<_> = windows
+        .iter()
+        .filter(|w| window_id.is_none_or(|id| w["id"].as_u64() == Some(u64::from(id))))
+        .take(if window_id.is_some() { 1 } else { limit })
+        .collect();
+    if selected.is_empty() {
+        return Ok(refusal("window_not_attributed", "Requested window is not an attributable visible candidate; enumerate windows again. No fallback capture."));
+    }
+    for w in selected {
         // One image/coordinate contract for all attributed surfaces. CUA's
         // outer-dimension validity check does not detect composed sheet images.
         let v=match platform(json!({"operation":"capture","pid":w["pid"],"window_id":w["id"],"max_image_dimension":cap})).await { Ok(v)=>v,Err(e)=>return Ok(refusal("app_capture_incomplete",&e)) };
@@ -173,7 +183,12 @@ async fn capture_once(
         ));
     }
     let id = uuid::Uuid::new_v4().simple().to_string();
-    let summary = json!({"pid":pid,"observation_id":id,"scope":"app","frames":frames,"windows":windows,"occluders":after["occluders"],"omitted_count":windows.len().saturating_sub(frames.len()),"association_complete":false,"coverage":"attributed_visible_windows","discovery":"public_os_best_effort","expires_in_seconds":30});
+    let selection = if window_id.is_some() {
+        "exact_window_id"
+    } else {
+        "front_to_back"
+    };
+    let summary = json!({"pid":pid,"observation_id":id,"scope":"app","frames":frames,"windows":windows,"occluders":after["occluders"],"selection":selection,"requested_window_id":window_id,"omitted_count":windows.len().saturating_sub(frames.len()),"association_complete":false,"coverage":"attributed_visible_windows","discovery":"public_os_best_effort","expires_in_seconds":30});
     *runtime.observation.lock().unwrap() = Some(Observation {
         id: id.clone(),
         pid,
@@ -181,7 +196,7 @@ async fn capture_once(
         inventory: after,
         frames,
     });
-    Ok(SavedResult{native_operation:None,text:format!("App {pid}: {} observed window(s), {} image(s), front to back. observation_id={id}. Fetch image_index; use operation=click with observation_id, image_index, x, y. Attribution is best effort; inspect occluders and omitted_count. Reobserve after input.",windows.len(),images.len()),structured:summary.to_string(),images,is_error:false,error_code:None})
+    Ok(SavedResult{native_operation:Some("app".into()),text:format!("App {pid}: {} observed window(s), {} image(s), selection={selection}. observation_id={id}. Fetch image_index; use operation=click with observation_id, image_index, x, y. Attribution is best effort; inspect occluders and omitted_count. Reobserve after input.",windows.len(),images.len()),structured:summary.to_string(),images,is_error:false,error_code:None})
 }
 pub(super) async fn click(
     runtime: &Runtime,
