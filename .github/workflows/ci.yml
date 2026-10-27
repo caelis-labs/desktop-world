@@ -98,8 +98,9 @@ jobs:
           python3 tests/acceptance/native_lifecycle_probe.py "$RUNNER_TEMP/dtw-plugin-slim/bin/dtw"
           python3 tests/acceptance/package_install_probe.py "$RUNNER_TEMP/dtw-plugin" --output "$RUNNER_TEMP/install-probe"
           CARGO_TARGET_DIR="$RUNNER_TEMP/dtw-cua-build/dtw" cargo +1.98.0 test --manifest-path cmd/dtw/Cargo.toml --release --locked
-          CARGO_TARGET_DIR="$RUNNER_TEMP/dtw-cua-build/dtw" cargo +1.98.0 test --manifest-path cmd/dtw/Cargo.toml --release --locked --features native-checkpoints --lib
+          CARGO_TARGET_DIR="$RUNNER_TEMP/dtw-cua-build/dtw" cargo +1.98.0 test --manifest-path cmd/dtw/Cargo.toml --release --locked --features app-protocol --lib
           CARGO_TARGET_DIR="$RUNNER_TEMP/dtw-cua-build/dtw" cargo +1.98.0 build --manifest-path cmd/dtw/Cargo.toml --release --locked --features native-checkpoints --example native_checkpoint
+          CARGO_TARGET_DIR="$RUNNER_TEMP/dtw-cua-build/dtw" cargo +1.98.0 build --manifest-path cmd/dtw/Cargo.toml --release --locked --features app-protocol --bin dtw
           DTW_TEST_BINARY="$RUNNER_TEMP/dtw-plugin-slim/bin/dtw" DTW_TEST_WORKER="$RUNNER_TEMP/dtw-plugin-slim/libexec/cua-driver" CARGO_TARGET_DIR="$RUNNER_TEMP/dtw-cua-build/dtw" cargo +1.98.0 test --manifest-path cmd/dtw/Cargo.toml --release --locked recovery_tests -- --ignored --test-threads=1
 
   windows-package:
@@ -192,7 +193,7 @@ jobs:
           $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'dtw-cua-build/dtw'
           cargo +1.98.0 test --manifest-path cmd/dtw/Cargo.toml --release --locked
           if ($LASTEXITCODE -ne 0) { throw "Adapter regression test failed with exit code $LASTEXITCODE" }
-          cargo +1.98.0 test --manifest-path cmd/dtw/Cargo.toml --release --locked --features native-checkpoints --lib
+          cargo +1.98.0 test --manifest-path cmd/dtw/Cargo.toml --release --locked --features app-protocol --lib
           if ($LASTEXITCODE -ne 0) { throw 'Native checkpoint contracts failed (not GUI evidence)' }
           $env:DTW_TEST_BINARY = $slim
           $env:DTW_TEST_WORKER = Join-Path $env:RUNNER_TEMP 'dtw-plugin-slim/libexec/cua-driver.exe'

@@ -8,6 +8,7 @@ python3 tests/ci/run_core_checkpoint.py
 python3 -m compileall -q scripts tests/acceptance tests/ci
 python3 -m unittest discover -s tests/acceptance -p test_click_native_probe.py
 python3 -m unittest discover -s tests/ci -p 'test_*.py'
+python3 -m unittest discover -s tests -p test_app_protocol_probe.py
 npm exec --yes --package typescript@5.9.3 -- tsc --strict --lib es2020 --noEmit tests/acceptance/click_types_contract.ts
 owned_source=
 trap 'if [ -n "$owned_source" ]; then rm -rf -- "$owned_source"; fi' 0
