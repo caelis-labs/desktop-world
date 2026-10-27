@@ -15,18 +15,36 @@ change authorization mode or try another input route.
 ## Observe, act, verify
 
 For browser pages, use a configured target's `next_call`. With no configured
-target, discover the task's app with `{"script":"return await cua.listApps();"}`,
-then its windows with `cua.listWindows({pid:PID})`, if `run` is available.
+target, discover the task's app with `{"operation":"apps"}`, then list its
+windows with `{"operation":"windows","arguments":{"pid":PID}}`. If the app
+name is already known, use `windows` with `arguments:{"app":"Name"}` directly.
+`apps` defaults to running apps; `running:false` includes installed apps. Read
+`describe` with `name:"apps"` or `name:"windows"` for filters and pagination.
+Follow `next_call` for a new live page; fetch `more` for the original inventory.
+Inspect titles, visibility and layer hints, then select an exact window ID.
+Layer hints are stacking evidence, not proof of a main window; duplicate titles
+remain separate candidates. Do not choose by list order or size alone.
 Read [BROWSER.md](BROWSER.md) for exact-tab operations. Browser results include
 bindings, tabs, refs and recovery calls directly; normal use needs no separate
 structured-result fetch. Use `describe` with `name` when an operation's arguments
 are unfamiliar.
 
+For a native observation, prefer the compact exact-window route:
+
+```json
+{"operation":"observe","arguments":{"pid":PID,"window_id":WID,"max_elements":80}}
+```
+
+The summary retains one tree and snapshot/diagnostic metadata. `more` retrieves
+the complete native structure, including element tokens, without a new AX read.
+Optional `include_screenshot:true` captures an image; use outer `include_image:true`
+to display it inline. A new AX observation can invalidate earlier element tokens.
+
 For native controls, scripts run in CUA QuickJS with `cua` and persistent JSON
 `state`; Node, filesystem, network and process APIs are unavailable.
 
 ```json
-{"script":"const app = await cua.getApp({pid:PID}); const view = await app.getState({query:'Save',max_elements:80,include_screenshot:false}); return {window_id:app.windowId,tree:view.tree_markdown};"}
+{"script":"const app = await cua.getApp({pid:PID,windowId:WID}); const view = await app.getState({query:'Save',max_elements:80,include_screenshot:false}); return {window_id:app.windowId,tree:view.tree_markdown};"}
 ```
 
 Replace PID and selectors with observed values. An unpinned app follows its
@@ -48,7 +66,10 @@ input; never replay the failed action automatically.
 
 For macOS popups or canvas controls, `{"operation":"app","pid":PID,
 "include_image":true}` returns attributed windows and visible frames. Inspect
-`frames`, `occluders` and `omitted_count`, then click a visible point:
+`frames`, `occluders` and `omitted_count`. Without `window_id`, capture follows
+front-to-back stacking; `max_windows:1` does not mean the main window. Add
+`window_id:WID` to capture just that attributable visible window. An unavailable
+ID fails without selecting a different window. Then click a visible point:
 
 ```json
 {"operation":"click","observation_id":"RETURNED_ID","image_index":0,"x":123,"y":45}

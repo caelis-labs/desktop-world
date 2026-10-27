@@ -29,8 +29,9 @@ final class Delegate:NSObject,NSApplicationDelegate {
   timer=Timer.scheduledTimer(withTimeInterval:0.1,repeats:true){[self] _ in
    guard let text=try? String(contentsOf:root.appendingPathComponent("command"),encoding:.utf8),text != command else{return};command=text
    switch text.trimmingCharacters(in:.whitespacesAndNewlines){
+    case "duplicate_titles":panels[1].title="DTW duplicate";panels[2].title="DTW duplicate"
     case "move":panels.last!.setFrameOrigin(NSPoint(x:650,y:400))
-    case "restore":panels.last!.setFrameOrigin(NSPoint(x:600,y:400));panels.last!.orderFront(nil)
+    case "restore":panels[1].title="DTW middle";panels[2].title="DTW top";panels.last!.setFrameOrigin(NSPoint(x:600,y:400));panels.last!.orderFront(nil)
     case "close":panels.last!.orderOut(nil)
     case "quit":app.terminate(nil)
     default:break

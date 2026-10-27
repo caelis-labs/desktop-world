@@ -145,11 +145,11 @@ pub fn normalize_download(args: &mut Value) -> Result<(), String> {
 pub fn discovery(manifest: Option<&str>) -> Result<Value, String> {
     let Some(path) = manifest else {
         let mut info = json!({"mode":"standard", "targets":[],
-            "operations":["run","app","click","desktop","focus","menu","cursor","permissions",
+            "operations":["apps","windows","observe","run","app","click","desktop","focus","menu","cursor","permissions",
                 "get_browser_state","browser_prepare","browser_navigate","browser_click","browser_type",
                 "browser_select","browser_pointer","browser_dialog","browser_set_input_files","browser_download",
                 "health_report","get_guide","describe","result","status","cancel"],
-            "next_call":{"operation":"run","script":"return await cua.listApps();"},
+            "next_call":{"operation":"apps"},
             "guidance":"Discover the task's application, then observe its window. Existing-profile access requires Harness configuration; an explicitly requested isolated browser needs no profile manifest."});
         if !cfg!(target_os = "macos") {
             info["operations"]
@@ -181,6 +181,9 @@ pub fn discovery(manifest: Option<&str>) -> Result<Value, String> {
         .iter()
         .map(|name| (*name, *name))
         .chain([
+            ("apps", "list_apps"),
+            ("windows", "list_windows"),
+            ("observe", "get_window_state"),
             ("run", "run_script"),
             ("focus", "bring_to_front"),
             ("menu", "invoke_menu"),

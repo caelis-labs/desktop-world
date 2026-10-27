@@ -62,3 +62,16 @@ const health: ExecInput = { operation: "health_report", arguments: { include: ["
 const forgedBrowserSession: ExecInput = { operation: "browser_click", arguments: { session: "forged" } };
 // @ts-expect-error No generic native tool passthrough.
 const arbitraryNative: ExecInput = { operation: "set_config", arguments: {} };
+
+// Native discovery and exact observation are typed separately from scripts.
+const discoveryInputs: ExecInput[] = [
+  {operation:"apps",arguments:{query:"Editor",running:true,limit:10}},
+  {operation:"windows",arguments:{pid:123,title:"Settings"}},
+  {operation:"windows",arguments:{app:"Editor",on_screen_only:true}},
+  {operation:"observe",arguments:{pid:123,window_id:456,max_elements:80}},
+  {operation:"app",pid:123,window_id:456,include_image:true},
+];
+// @ts-expect-error An observation must pin a window.
+const missingWindow: ExecInput = {operation:"observe",arguments:{pid:123}};
+// @ts-expect-error Window discovery requires one scope.
+const unscopedWindows: ExecInput = {operation:"windows",arguments:{}};

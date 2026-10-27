@@ -88,6 +88,7 @@ jobs:
           python3 tests/acceptance/contract_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
           python3 tests/acceptance/click_contract_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
           python3 tests/acceptance/native_tools_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
+          python3 tests/acceptance/observation_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
           python3 tests/acceptance/authorization_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
           python3 tests/acceptance/runtime_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
           python3 tests/acceptance/lifecycle_probe.py "$RUNNER_TEMP/dtw-plugin/bin/dtw"
@@ -178,6 +179,7 @@ jobs:
           python tests/acceptance/click_contract_probe.py (Join-Path $env:DTW_PACKAGE 'bin/dtw.exe')
           if ($LASTEXITCODE -ne 0) { throw "Click contract probe failed with exit code $LASTEXITCODE" }
           python tests/acceptance/native_tools_probe.py (Join-Path $env:DTW_PACKAGE 'bin/dtw.exe')
+          python tests/acceptance/observation_probe.py (Join-Path $env:DTW_PACKAGE 'bin/dtw.exe')
           if ($LASTEXITCODE -ne 0) { throw 'Native tools probe failed' }
           python tests/acceptance/authorization_probe.py (Join-Path $env:DTW_PACKAGE 'bin/dtw.exe')
           if ($LASTEXITCODE -ne 0) { throw 'Authorization probe failed' }

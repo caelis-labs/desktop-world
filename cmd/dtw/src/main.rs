@@ -21,6 +21,7 @@ mod authorization;
 mod installer;
 mod lifecycle;
 mod native_tools;
+mod observation;
 
 const MAX_STATE_BYTES: usize = 32 * 1024;
 const MODEL_TEXT_BYTES: usize = 12 * 1024;
@@ -63,6 +64,7 @@ struct SavedResult {
 
 enum Work {
     Script(String),
+    Observation(observation::Request),
     Native {
         name: String,
         arguments: Value,
@@ -71,6 +73,7 @@ enum Work {
         pid: u32,
         max_image_dimension: u32,
         max_windows: usize,
+        window_id: Option<u32>,
     },
     Cursor(Option<bool>),
     Focus {
@@ -617,6 +620,13 @@ impl Server {
     }
 
     fn model_body(&self, result: &SavedResult, id: &str) -> String {
+        if let Some(name) = result
+            .native_operation
+            .as_deref()
+            .filter(|n| observation::allowed(n))
+        {
+            return observation::presentation(name, result, id).to_string();
+        }
         if result
             .native_operation
             .as_deref()
@@ -655,7 +665,7 @@ impl Server {
                 id,
                 json!({"tools":[{
                     "name":"exec",
-                    "description":"Run CUA scripts, observe apps or use its typed browser tools. operation=app returns attributed window images; click consumes observation_id and image pixels. Browser operations use native arguments nested under arguments; describe with name returns the current worker schema. health_report diagnoses readiness. Runtime owns sessions; Harness owns approval. Start with describe to discover available operations and configured targets; native observations return actionable data. No automatic input replay. Fetch images with result,part=image.",
+                    "description":"Discover apps/windows, observe an exact window, run CUA scripts or use typed browser tools. operation=app returns attributed window images; click consumes observation_id and image pixels. Browser operations use native arguments nested under arguments; describe with name returns the current worker schema. health_report diagnoses readiness. Runtime owns sessions; Harness owns approval. Start with describe to discover available operations and configured targets; native observations return actionable data. No automatic input replay. Fetch images with result,part=image.",
                     "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true},
                     "inputSchema":{
                         "type":"object",
@@ -663,16 +673,16 @@ impl Server {
                             "observation_id":{"type":"string","description":"With click, the one-use application observation binding."},
                             "x":{"type":"number","minimum":0},
                             "y":{"type":"number","minimum":0},
-                            "max_windows":{"type":"integer","minimum":1,"maximum":8,"description":"With app, number of upper windows to capture, default 2; all attributed candidates are listed."},
+                            "max_windows":{"type":"integer","minimum":1,"maximum":8,"description":"With app, number of upper windows to capture, default 2; ignored for exact window_id (one image). All attributed candidates are listed."},
                             "script":{"type":"string","description":"Async CUA run_script body. Use cua.getApp, getState, query, click, typeText, pressKey, zoom and return; see packaged api.d.ts."},
-                            "operation":{"type":"string","enum":["run","status","result","cancel","permissions","cursor","focus","menu","desktop","app","click","describe","health_report","get_guide","get_browser_state","browser_prepare","browser_navigate","browser_click","browser_type","browser_select","browser_dialog","browser_pointer","browser_set_input_files","browser_download"]},
-                            "name":{"type":"string","description":"With describe, omit name for available operations and configured targets; name a browser operation, health_report or get_guide for its schema."},
-                            "arguments":{"type":"object","description":"Native browser/health arguments. Read describe first. Never provide session or private context fields; exact target/tab/ref bindings and upstream authorization are enforced."},
+                            "operation":{"type":"string","enum":["apps","windows","observe","run","status","result","cancel","permissions","cursor","focus","menu","desktop","app","click","describe","health_report","get_guide","get_browser_state","browser_prepare","browser_navigate","browser_click","browser_type","browser_select","browser_dialog","browser_pointer","browser_set_input_files","browser_download"]},
+                            "name":{"type":"string","description":"With describe, name apps/windows/observe for native observation schemas; omit name for available operations and configured targets; name a browser operation, health_report or get_guide for its schema."},
+                            "arguments":{"type":"object","description":"Native observation/browser/health arguments. Read describe first. Never provide session or private context fields; exact target/tab/ref bindings and upstream authorization are enforced."},
                             "wait_ms":{"type":"integer","minimum":0,"maximum":5000,"description":"Wait briefly for a terminal receipt in the same exec call (default 4000 ms). If still running, query the original id with operation=result."},
                             "include_image":{"type":"boolean","description":"If this execution completes within wait_ms and has an image, return the first image with its summary. Default false; later result,part=image still works."},
                             "enabled":{"type":"boolean","description":"With operation=cursor, show or hide the runtime virtual cursor. Omit to read cursor state."},
                             "pid":{"type":"integer","minimum":1,"description":"With focus/menu/app, exact app PID."},
-                            "window_id":{"type":"integer","minimum":1,"description":"With menu, exact target window; with focus, optional ordinary window ID."},
+                            "window_id":{"type":"integer","minimum":1,"description":"With app, capture this exact attributed visible window only; with menu, exact target window; with focus, optional ordinary window ID."},
                             "path":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string"},"description":"With menu, exact observed menu labels from menu bar to command (macOS or Windows)."},
                             "max_image_dimension":{"type":"integer","minimum":0,"description":"With desktop/app, optional screenshot long-edge cap (default 1600, 0 for original size); image is retained for result,part=image."},
                             "id":{"type":"string","description":"The original short receipt ID for status, result, or cancel."},
@@ -735,6 +745,15 @@ impl Server {
                 if obj.get("name").is_none() {
                     return mcp_text(self.discovery.clone(), false);
                 }
+                if let Some(name) = obj
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .filter(|n| observation::allowed(n))
+                {
+                    let mut schema = observation::description(name);
+                    schema["available"] = json!(native_tools::available(&self.discovery, name));
+                    return mcp_text(schema, false);
+                }
                 let Some(name) = obj
                     .get("name")
                     .and_then(Value::as_str)
@@ -749,6 +768,19 @@ impl Server {
                     },
                     Err(error) => mcp_plain(error.to_string(), true),
                 }
+            }
+            name if observation::allowed(name) => {
+                let request = match observation::Request::parse(name, obj.get("arguments")) {
+                    Ok(request) => request,
+                    Err(error) => return mcp_plain(error, true),
+                };
+                self.run(
+                    request_id,
+                    Work::Observation(request),
+                    wait_ms,
+                    include_image,
+                )
+                .await
             }
             name if native_tools::allowed(name) => {
                 let mut arguments = match native_tools::arguments(obj.get("arguments")) {
@@ -914,12 +946,24 @@ impl Server {
                 else {
                     return mcp_plain("max_windows must be 1..8", true);
                 };
+                let window_id = match obj.get("window_id") {
+                    None => None,
+                    Some(value) => match value
+                        .as_u64()
+                        .and_then(|n| u32::try_from(n).ok())
+                        .filter(|n| *n > 0)
+                    {
+                        Some(id) => Some(id),
+                        None => return mcp_plain("window_id must be positive u32", true),
+                    },
+                };
                 self.run(
                     request_id,
                     Work::App {
                         pid,
                         max_image_dimension: cap,
                         max_windows: max_windows as usize,
+                        window_id,
                     },
                     wait_ms,
                     include_image,
@@ -1221,6 +1265,15 @@ impl Server {
             self.app_view.invalidate();
         }
         let code = match work {
+            Work::Observation(request) => {
+                let result = native
+                    .call_tool(
+                        request.tool().into(),
+                        request.native_arguments().to_string(),
+                    )
+                    .await?;
+                return Ok((request.finish(save(result)), None, true));
+            }
             Work::Native { name, arguments } => {
                 let result = if name == "browser_download" {
                     native.approved_download(arguments).await?
@@ -1291,10 +1344,17 @@ impl Server {
                 pid,
                 max_image_dimension,
                 max_windows,
+                window_id,
             } => {
                 return Ok((
-                    app_view::capture(&self.app_view, pid, max_image_dimension, max_windows)
-                        .await?,
+                    app_view::capture(
+                        &self.app_view,
+                        pid,
+                        max_image_dimension,
+                        max_windows,
+                        window_id,
+                    )
+                    .await?,
                     None,
                     true,
                 ));
