@@ -1,6 +1,6 @@
 # DTW 实施检查点
 
-本文件把 [架构基线](next-architecture-baseline.md) 转成可评审、可验证的实施步骤。日期：2026 年 10 月 27 日。方向已确认；C1、C2-macOS 和 C3-macOS 的限定切片已通过本地验证与独立审阅，后两项包含真实交互桌面 fixture。下一步可进入 C4-macOS 协议切片；Windows C2/C3 独立待办。详细证据见 [原生验收记录](native-checkpoint-acceptance.md)。
+本文件把 [架构基线](next-architecture-baseline.md) 转成可评审、可验证的实施步骤。日期：2026 年 10 月 27 日。方向已确认；C1、C2-macOS 和 C3-macOS 的限定切片已通过本地验证与独立审阅，后两项包含真实交互桌面 fixture。C4-macOS.1 已完成显式选择的单 app 协议、可信启动 grant 与实际 Caelis 预授权闭环；下一步是 C4-macOS.2 生产 Harness 授权接线，Windows C2/C3 独立待办。详细证据见 [原生验收记录](native-checkpoint-acceptance.md)和 [C4 验收记录](app-protocol-acceptance.md)。
 
 当前行为回归参照为 DTW `a1833a1fbc80de6e14fc86a0972782a00706de33`，首批 CUA 来源固定为 Driver 0.38.0 / `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`。检查点编号只用于记录实施与验收，不引入新运行框架或新的授权状态机。
 
@@ -26,7 +26,8 @@
 | C2-Windows.1 | B1b + B2a | 未实施 | 进程/HWND discovery 与实例身份 |
 | C3-macOS | B2b | 限定内部切片实机通过 | AX snapshot/advertised AXPress、迟到效果读回 |
 | C3-Windows | B2b | 未实施 | UIA 与选定 WGC/像素路径，需 Windows GUI |
-| C4 | B3 | 未开始 | 稳定外部协议与 Harness 集成 |
+| C4-macOS.1 | B3a | 本地、实机与预授权 Harness 闭环通过 | v1 request/receipt、固定 Host grant、cancel/result、单 exec |
+| C4-macOS.2 | B3b | 未实施 | 生产 Harness app/能力审批、上下文建立与撤销；通过后才进入 C5 |
 | C5 | B4 | 未开始 | app 级脚本及全部 Host Call 边界 |
 | C6-能力组-平台 | B5 | 未开始，逐组验收 | 选定能力批量扩展及过渡路径收敛 |
 
@@ -130,7 +131,7 @@ C2 进一步按独立可评审的小切片推进，不把表中全部能力放�
 - 派发中取消：约 159 ms 返回 Unknown + Cancelled，worker 已回收；目标应用约 2 秒后完成一次动作，独立新上下文读回。取消没有撤销已经进入目标应用的工作，也没有重放。
 - Windows C2/C3、新路径分发包、公开协议和 app 脚本均未完成；生产 MCP 仍使用原有执行器。
 
-下一次只选择 **C4-macOS.1 协议契约切片**：冻结 request/receipt、能力与目标声明、可信 grant 入口和 cancel/result 语义；让 Harness 适配器能展示并批准单 app 范围，再沿已验收的 macOS 路径运行一次端到端闭环。需要确定性协议测试、真实 Harness 流程及 GUI 读回三类证据；证据不足时不接入脚本和额外动作。Windows C2.1 可以独立推进，必须另取 Windows 原生进程及桌面证据。
+后续已选择并完成 **C4-macOS.1 协议契约切片**：冻结 request/receipt、能力与目标声明、可信 grant 入口和 cancel/result 语义；让 Harness 适配器能展示并批准单 app 范围，再沿已验收的 macOS 路径运行一次端到端闭环。确定性协议测试、实际 Caelis 预授权流程及 GUI 读回三类证据已记录在 [C4 验收记录](app-protocol-acceptance.md)。生产动态审批仍属于 C4-macOS.2；在该门槛完成前不接入脚本和额外动作。Windows C2.1 可以独立推进，必须另取 Windows 原生进程及桌面证据。
 
 ## C4：稳定外部协议（B3）
 
@@ -140,6 +141,12 @@ C2 进一步按独立可评审的小切片推进，不把表中全部能力放�
 - **证据**：协议契约和自动化集成测试、真实 Harness 适配流程，以及已通过平台的端到端验证。逐平台报告支持能力，不能统一标记未验证平台可用。
 - **停止条件**：协议接受模型自证授权、compact 结果改变效果语义、或丢失原生未知状态，先修正契约再扩展入口。
 - **下一步准入**：Harness 的审批与执行范围一致、回执可追溯、兼容/版本边界明确后进入 C5；不为脚本临时创建第二套协议或授权权威。
+
+### C4 分阶段准入
+
+1. **C4-macOS.1（本轮）**：显式选择 `app-protocol` feature；单 `exec` 的版本化 typed requests、opaque refs、单活动请求、原 ID 查询/去重及原始 receipt；可信启动 grant 与请求隔离，实际 Caelis 预授权 + 原生 GUI 闭环。见 [协议 v1](app-protocol-v1.md)。既有发布包未切换。
+2. **C4-macOS.2（下一检查点）**：生产 Harness 在执行前展示完整 app 实例和能力，由自己的审批政策建立/撤销上下文；覆盖拒绝、到期、app 重启、并发审批、取消和上下文更换，审计记录与实际 grant 一致。模型字段始终不能构造审批事实。需要真实集成入口及 GUI 证据，不以参考 Host 文件替代。
+3. 只有上述生产授权闭环和本轮协议都稳定后，才选择最小 C5 app 脚本切片；Windows 与新入口分发验收独立记录。
 
 ## C5：App 级脚本（B4）
 

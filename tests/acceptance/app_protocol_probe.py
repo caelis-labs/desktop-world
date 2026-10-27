@@ -388,30 +388,84 @@ def check_semantic(binary, host, fixture, peer):
     return result
 
 
+def capture_image(session, target):
+    value = Wire.value(session.run(target, {"kind": "capture"}))
+    require(value["kind"] == "pixels" and value["image"]["coordinate_space"] == "image_pixels", value)
+    require(len(session.last_images) == 1, "capture result must carry one MCP image")
+    image = session.last_images[0]
+    require(image["mimeType"] == "image/png", image.get("mimeType"))
+    pixels = base64.b64decode(image["data"], validate=True)
+    require(len(pixels) >= 24 and pixels.startswith(b"\x89PNG\r\n\x1a\n")
+            and pixels[12:16] == b"IHDR", "capture has no PNG IHDR")
+    width, height = int.from_bytes(pixels[16:20], "big"), int.from_bytes(pixels[20:24], "big")
+    require(width > 0 and height > 0, "PNG dimensions must be positive")
+    require((width, height) == (value["image"]["width"], value["image"]["height"]), value)
+    path = session.output / "capture.png"
+    path.write_bytes(pixels)
+    return value, {"image": str(path), "sha256": hashlib.sha256(pixels).hexdigest(), "image_size": [width, height]}
+
+
+def fixture_increment_point(width, height):
+    # tests/fixtures/native-core/main.swift: 320x220 content; Increment's
+    # center is (160, 90) measured from the content's bottom left. The SCK
+    # image includes the title bar, so convert from the image's bottom edge.
+    scale = width / 320
+    x, y = width / 2, height - 90 * scale
+    require(width > 0 and height > 0 and 0 <= x < width and 0 <= y < height,
+            "fixture Increment center is outside captured image")
+    return x, y
+
+
 def check_capture(binary, host, fixture, peer):
     fixture.command("uncover")
     before, peer_before = fixture.counters(), peer.counters()
     session = new_session(binary, host, "capture", ["observe", "capture"])
     try:
         _, target = session.scope()
-        result = session.run(target, {"kind": "capture"})
-        value = Wire.value(result)
-        require(value["kind"] == "pixels" and value["image"]["coordinate_space"] == "image_pixels", value)
-        require(len(session.last_images) == 1, "capture result must carry one MCP image")
-        image = session.last_images[0]
-        require(image["mimeType"] == "image/png", image.get("mimeType"))
-        pixels = base64.b64decode(image["data"], validate=True)
-        require(len(pixels) >= 24 and pixels.startswith(b"\x89PNG\r\n\x1a\n")
-                and pixels[12:16] == b"IHDR", "capture has no PNG IHDR")
-        width, height = int.from_bytes(pixels[16:20], "big"), int.from_bytes(pixels[20:24], "big")
-        require(width > 0 and height > 0, "PNG dimensions must be positive")
-        require((width, height) == (value["image"]["width"], value["image"]["height"]), value)
-        path = session.output / "capture.png"
-        path.write_bytes(pixels)
+        _, image = capture_image(session, target)
         require(fixture.counters() == before and peer.counters() == peer_before, "capture changed an app")
-        return {"stage": "capture", "image": str(path), "sha256": hashlib.sha256(pixels).hexdigest(),
-                "image_size": [width, height], "both_apps_unchanged": True,
+        return {"stage": "capture", **image, "both_apps_unchanged": True,
                 "visual_inspection": "pending independent reviewer; PNG validity is not a visual verdict"}
+    finally:
+        session.close()
+
+
+def check_pixel(binary, host, fixture, peer):
+    # The fixture only handles a changed command. Restore first so uncover is
+    # executed even when the previous stage left its command set to uncover.
+    fixture.command("restore")
+    fixture.command("uncover")
+    before, peer_before = fixture.counters(), peer.counters()
+    session = new_session(binary, host, "pixel", ["observe", "capture", "click"])
+    try:
+        _, target = session.scope()
+        captured, image = capture_image(session, target)
+        x, y = fixture_increment_point(*image["image_size"])
+        command = {"kind": "click", "observation_ref": captured["observation_ref"], "x": x, "y": y}
+        invalid = session.run(target, {**command, "x": -1})
+        Wire.rejection_code(invalid, "invalid_point")
+        require(Wire.receipt(invalid)["provider_outcome"] is None, invalid)
+        require(fixture.counters() == before and peer.counters() == peer_before,
+                "invalid pixel point changed an app")
+        action = session.run(target, command)
+        Wire.dispatched(action)
+        count = before["clicks"] + 1
+        wait_until(lambda: fixture.state()["clicks"] == count)
+        # Reuse under a new request ID before observing again: a fresh observe
+        # would itself invalidate the old ref and mask a consumption defect.
+        replay = session.run(target, command)
+        Wire.rejection_code(replay, "stale_observation")
+        require(Wire.receipt(replay)["provider_outcome"] is None, replay)
+        after = Wire.value(session.run(target, {"kind": "observe"}))
+        require(any(f"Count: {count}" in element["label"].split(" | ") for element in after["elements"]), after)
+        require(fixture.counters() == {"clicks": count, "actions_started": before["actions_started"] + 1},
+                "pixel action was not performed exactly once")
+        require(peer.counters() == peer_before, "unapproved app changed")
+        return {"stage": "pixel", **image, "pixel_point": [x, y],
+                "request_id": action["request_id"], "receipt": Wire.receipt(action),
+                "invalid_point_rejected_without_consuming_ref": True, "consumed_ref_rejected": True,
+                "counter_before": before, "counter_after": fixture.counters(), "ax_count": count,
+                "other_app_unchanged": True}
     finally:
         session.close()
 
@@ -714,7 +768,7 @@ def main():
     parser.add_argument("other_fixture", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--host-decision", choices=("approve", "deny"), required=True)
-    parser.add_argument("--stage", choices=("semantic", "capture", "cancel", "lifecycle"), default="semantic")
+    parser.add_argument("--stage", choices=("semantic", "capture", "pixel", "cancel", "lifecycle"), default="semantic")
     parser.add_argument("--caelis", action="store_true")
     parser.add_argument("--repository", type=Path, default=Path(__file__).resolve().parents[2])
     args = parser.parse_args()
@@ -733,7 +787,7 @@ def main():
         require(fixture.counters() == before and peer.counters() == peer_before, "denial changed an app")
         result = {"stage": "host-denied", "grant_files": 0, "mcp_started": False, "both_apps_unchanged": True}
     else:
-        stage = {"semantic": check_semantic, "capture": check_capture,
+        stage = {"semantic": check_semantic, "capture": check_capture, "pixel": check_pixel,
                  "cancel": check_cancel, "lifecycle": check_lifecycle}[args.stage]
         result = stage(binary, host, fixture, peer)
         if args.caelis:

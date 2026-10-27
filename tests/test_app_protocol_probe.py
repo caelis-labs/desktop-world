@@ -16,6 +16,13 @@ SPEC.loader.exec_module(probe)
 
 
 class AcceptanceAssertions(unittest.TestCase):
+    def test_pixel_point_tracks_fixture_scale_and_title_bar(self):
+        self.assertEqual(probe.fixture_increment_point(320, 248), (160, 158))
+        self.assertEqual(probe.fixture_increment_point(640, 496), (320, 316))
+        for dimensions in ((0, 248), (320, 0), (320, 80)):
+            with self.subTest(dimensions=dimensions), self.assertRaises(AssertionError):
+                probe.fixture_increment_point(*dimensions)
+
     def test_conflicting_text_and_structured_receipts_fail(self):
         value = {"version": 1, "receipt": {"outcome": {"dispatch": "unknown"}}}
         result = {"structuredContent": value, "content": [{"type": "text", "text": json.dumps(value)}]}
