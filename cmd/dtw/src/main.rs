@@ -1,3 +1,6 @@
+// Keep native link metadata when this package also has a library target.
+extern crate desktop_world as _;
+
 use cua_driver_sdk::{
     ConfiguredDriverOptions, CuaDriver, DriverError, EmbeddedEnvironmentVariable,
     PrivateWorkerOptions, RuntimeAuthorizationOptions, SessionPermissionMode, ToolResult,
