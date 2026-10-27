@@ -4,6 +4,7 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 cd "$repo_root"
 cargo +1.98.0 fmt --manifest-path cmd/dtw/Cargo.toml --check
+python3 tests/ci/run_core_checkpoint.py
 python3 -m compileall -q scripts tests/acceptance tests/ci
 python3 -m unittest discover -s tests/acceptance -p test_click_native_probe.py
 python3 -m unittest discover -s tests/ci -p 'test_*.py'
