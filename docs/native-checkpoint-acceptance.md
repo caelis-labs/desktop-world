@@ -14,7 +14,7 @@ AX snapshot 和 advertised AXPress 共享原生状态所有者；只暴露启用
 
 已有 SCK capture/click 进入同一 Core 的独立像素 kind、grant、引用和几何校验。截图、动作前均核验窗口身份，鼠标移动后再次校验；发生指针移动却无法确认点击时保留 Unknown。SCK 租约复用原有稳定锁，持有到 worker 退出。生产路径仍沿用既有执行器；共享改动是锁逻辑抽取和增加指针已移动的诊断。
 
-原生调用使用父端单调时限（每次最多 15 秒），Swift 将收到的期限一次转换为单调预算；AX 单次消息最多 0.2 秒。测试上下文 grant 为 180 秒、观察 TTL 为 15 秒。example 自行构造这些可信测试 grant，不能作为生产 Harness 授权入口。取消/强制退出不承诺撤销应用已接收的工作；像素输入预算预留正常 down/up 时间，也不保证任意 SIGKILL 时点都完成 mouse-up。
+原生调用由父端单调计时监控整体 IPC 期限（每次最多 15 秒）；每个 AX RequestContext 将收到的期限转换为单调预算，AX 单次消息最多 0.2 秒。像素流程会多次建立验证上下文，其短时间输入预算仍使用墙钟检查，不能据此宣称整条 Swift 路径只做一次转换。测试上下文 grant 为 180 秒、观察 TTL 为 15 秒。example 自行构造这些可信测试 grant，不能作为生产 Harness 授权入口。取消/强制退出不承诺撤销应用已接收的工作；像素输入预算预留正常 down/up 时间，也不保证任意 SIGKILL 时点都完成 mouse-up。
 
 ## 自动化验证
 
@@ -52,7 +52,7 @@ DTW_TEST_BINARY=/absolute/default/dtw DTW_TEST_WORKER=/absolute/pinned/cua-drive
 | pixels | 新截图 → 单次点击，独立 counter 0 → 1；重放、移动后旧截图、遮挡、隐藏、关闭均 NotDispatched |
 | semantic | AX 观察 → 单次 AXPress → 新观察读回 Count，独立 counter 0 → 1；错误窗口、重放、attached sheet 均拒绝；普通非模态浮窗共存通过 |
 | degraded AX | fixture 暂时没有 AX 内容时仍能取得 SCK 图像；2 秒 AX 延迟在约 223 ms 内返回 cannotComplete，随后独立新观察可用 |
-| cancel-inflight | 证明动作已进入应用后取消，约 159 ms 返回 Unknown + Cancelled；worker 已回收；应用约 2 秒后 counter 1 → 2，新上下文独立 AX 读回；没有重放，关闭窗口后的旧 element 亦拒绝 |
+| cancel-inflight | 按预设 150 ms 定时取消，约 159 ms 返回 Unknown + Cancelled；返回后确认应用已开始动作且 worker 已回收；应用约 2 秒后 counter 1 → 2，新上下文独立 AX 读回；没有重放，关闭窗口后的旧 element 亦拒绝 |
 
 动作返回 Dispatched/Unverified 不会自行变成 Confirmed；成功效果由测试另一次观察和 fixture 独立计数判断。取消用例同时保存上下文 outcome、provider 原始 outcome 与 interruption；晚到的效果不会被取消响应抹去。另一轮相同取消试验曾得到 provider UnexpectedEof，最终轮得到 provider Cancelled，两者都保留 Unknown 和原始诊断。
 
