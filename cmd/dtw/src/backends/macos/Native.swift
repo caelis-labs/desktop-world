@@ -258,23 +258,81 @@ private struct CGRecord {
     var coordinates: [Double] { [bounds.minX, bounds.minY, bounds.width, bounds.height] }
 }
 
-private func cgWindows(_ deadline: Deadline) throws -> [CGRecord] {
+// Fixed counters contain only facts about the requested PID. No titles, raw AX
+// values or other applications enter the failure message. Error samples are capped.
+private struct WindowInventoryDiagnostics {
+    var counts = Dictionary(uniqueKeysWithValues: [
+        "cg_app_raw", "window_server_count", "cg_non_layer_zero", "cg_invalid_metadata",
+        "ax_window_count", "excluded_scope", "ax_pid_unproven", "ax_role_unproven",
+        "ax_subrole_unproven", "exact_id_unproven", "exact_id_zero", "cg_owner_unmatched",
+        "duplicate_id", "supported_count"
+    ].map { ($0, 0) })
+    var axErrors: [Int32] = []
+
+    mutating func increment(_ key: String) { counts[key]! += 1 }
+    mutating func exactIDFailure(_ result: AXError) {
+        increment(result == .success ? "exact_id_zero" : "exact_id_unproven")
+        if result != .success && axErrors.count < 8 { axErrors.append(result.rawValue) }
+    }
+    func requireProven() throws {
+        let unresolved = ["cg_invalid_metadata", "ax_pid_unproven", "ax_role_unproven",
+                          "ax_subrole_unproven", "exact_id_unproven", "exact_id_zero",
+                          "cg_owner_unmatched", "duplicate_id"].contains { counts[$0]! > 0 }
+        let missingAX = counts["ax_window_count"] == 0 && counts["window_server_count"]! > 0
+        guard !unresolved && !missingAX else {
+            let fields = counts.keys.sorted().map { "\($0)=\(counts[$0]!)" }.joined(separator: ",")
+            throw failure("window_inventory_unproven",
+                          "Window inventory unproven: \(fields); ax_id_errors=\(axErrors)")
+        }
+    }
+}
+
+private func cgWindowRows(_ deadline: Deadline) throws -> [[String: Any]] {
     try deadline.check()
     guard let rows = CGWindowListCopyWindowInfo([.excludeDesktopElements], 0) as? [[String: Any]] else {
         throw failure("windows_unavailable", "WindowServer metadata unavailable")
     }
     try deadline.check()
-    return rows.compactMap { row in
-        guard let id = row[kCGWindowNumber as String] as? UInt32, id != 0,
-              let pid = row[kCGWindowOwnerPID as String] as? Int32, pid > 0,
-              (row[kCGWindowLayer as String] as? Int) == 0,
-              let dictionary = row[kCGWindowBounds as String] as? NSDictionary,
-              let bounds = CGRect(dictionaryRepresentation: dictionary),
-              bounds.minX.isFinite, bounds.minY.isFinite, bounds.width.isFinite, bounds.height.isFinite,
-              bounds.width > 0, bounds.height > 0 else { return nil }
-        return CGRecord(id: id, pid: pid, bounds: bounds,
-                        onscreen: (row[kCGWindowIsOnscreen as String] as? Bool) ?? false)
+    return rows
+}
+
+private func cgRecord(_ row: [String: Any]) -> CGRecord? {
+    guard let id = row[kCGWindowNumber as String] as? UInt32, id != 0,
+          let pid = row[kCGWindowOwnerPID as String] as? Int32, pid > 0,
+          (row[kCGWindowLayer as String] as? Int) == 0,
+          let dictionary = row[kCGWindowBounds as String] as? NSDictionary,
+          let bounds = CGRect(dictionaryRepresentation: dictionary),
+          bounds.minX.isFinite, bounds.minY.isFinite, bounds.width.isFinite, bounds.height.isFinite,
+          bounds.width > 0, bounds.height > 0 else { return nil }
+    return CGRecord(id: id, pid: pid, bounds: bounds,
+                    onscreen: (row[kCGWindowIsOnscreen as String] as? Bool) ?? false)
+}
+
+private func cgWindows(_ deadline: Deadline) throws -> [CGRecord] {
+    try cgWindowRows(deadline).compactMap(cgRecord)
+}
+
+// Keep explicitly excluded layer IDs so a mapped AX window on another layer is
+// excluded, rather than being mislabeled as an unproven owner. Extra CG surfaces
+// alone do not establish a missing AX window (one AX window may have several).
+private func appCGInventory(_ rows: [[String: Any]], pid: Int32,
+                            diagnostics: inout WindowInventoryDiagnostics) -> ([CGRecord], Set<CGWindowID>) {
+    var records: [CGRecord] = []
+    var excluded: Set<CGWindowID> = []
+    for row in rows where row[kCGWindowOwnerPID as String] as? Int32 == pid {
+        diagnostics.increment("cg_app_raw")
+        guard let layer = row[kCGWindowLayer as String] as? Int else {
+            diagnostics.increment("cg_invalid_metadata"); continue
+        }
+        if layer != 0 {
+            diagnostics.increment("cg_non_layer_zero")
+            if let id = row[kCGWindowNumber as String] as? UInt32, id > 0 { excluded.insert(id) }
+        } else if let record = cgRecord(row) {
+            records.append(record)
+            diagnostics.increment("window_server_count")
+        } else { diagnostics.increment("cg_invalid_metadata") }
     }
+    return (records, excluded)
 }
 
 private typealias AXGetWindow = @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
@@ -318,7 +376,7 @@ private func axPID(_ element: AXUIElement, _ deadline: Deadline) throws -> Int32
     return pid
 }
 
-private func axWindowID(_ element: AXUIElement, _ deadline: Deadline) throws -> CGWindowID {
+private func axWindowIdentity(_ element: AXUIElement, _ deadline: Deadline) throws -> (AXError, CGWindowID) {
     guard let function = exactWindowSymbol.function else {
         throw failure("unsupported_platform", "Exact AX window identity SPI is unavailable")
     }
@@ -326,8 +384,13 @@ private func axWindowID(_ element: AXUIElement, _ deadline: Deadline) throws -> 
     var id: CGWindowID = 0
     let result = function(element, &id)
     try deadline.check()
+    return (result, id)
+}
+
+private func axWindowID(_ element: AXUIElement, _ deadline: Deadline) throws -> CGWindowID {
+    let (result, id) = try axWindowIdentity(element, deadline)
     guard result == .success, id > 0 else {
-        throw failure("window_unproven", "AX element has no exact WindowServer identity")
+        throw failure("window_unproven", "AX exact window identity unresolved: AXError=\(result.rawValue), id=\(id)")
     }
     return id
 }
@@ -375,13 +438,34 @@ private func actions(_ element: AXUIElement, _ deadline: Deadline) throws -> [St
     return names as? [String] ?? []
 }
 
+private enum WindowClassification: String {
+    case supported, excluded = "excluded_scope"
+    case pidUnproven = "ax_pid_unproven", roleUnproven = "ax_role_unproven", subroleUnproven = "ax_subrole_unproven"
+}
+
+// Closures preserve the existing short-circuit AX reads and allow pure negative
+// controls. Missing/malformed metadata differs from an explicitly unsupported role.
+private func classifyWindow(actualPID: Int32, expectedPID: Int32,
+                            role: () throws -> String?, subrole: () throws -> String?,
+                            identifier: () throws -> String?) throws -> WindowClassification {
+    guard actualPID == expectedPID else { return .pidUnproven }
+    guard let role = try role(), !role.isEmpty else { return .roleUnproven }
+    guard role == kAXWindowRole else { return .excluded }
+    guard let subrole = try subrole(), !subrole.isEmpty else { return .subroleUnproven }
+    guard subrole == kAXStandardWindowSubrole else { return .excluded }
+    let identifier = try identifier()
+    return identifier == "open-panel" || identifier == "save-panel" ? .excluded : .supported
+}
+
+private func windowClassification(_ element: AXUIElement, pid: Int32, deadline: Deadline) throws -> WindowClassification {
+    try classifyWindow(actualPID: axPID(element, deadline), expectedPID: pid,
+                       role: { try axAttribute(element, kAXRoleAttribute, deadline) as? String },
+                       subrole: { try axAttribute(element, kAXSubroleAttribute, deadline) as? String },
+                       identifier: { try axAttribute(element, kAXIdentifierAttribute, deadline) as? String })
+}
+
 private func ordinaryWindow(_ element: AXUIElement, pid: Int32, deadline: Deadline) throws -> Bool {
-    guard try axPID(element, deadline) == pid,
-          try axAttribute(element, kAXRoleAttribute, deadline) as? String == kAXWindowRole,
-          try axAttribute(element, kAXSubroleAttribute, deadline) as? String == kAXStandardWindowSubrole else { return false }
-    let identifier = try axAttribute(element, kAXIdentifierAttribute, deadline) as? String
-    if identifier == "open-panel" || identifier == "save-panel" { return false }
-    return true
+    try windowClassification(element, pid: pid, deadline: deadline) == .supported
 }
 
 private func requireNonModalWindow(_ element: AXUIElement, _ deadline: Deadline) throws {
@@ -488,7 +572,7 @@ private final class NativeStore: @unchecked Sendable {
         return next
     }
 
-    private func candidates(_ app: NativeApp, _ context: RequestContext) throws -> ([CandidateWindow], Int) {
+    private func candidates(_ app: NativeApp, _ context: RequestContext) throws -> ([CandidateWindow], WindowInventoryDiagnostics) {
         try context.verify(app)
         guard AXIsProcessTrusted() else {
             throw failure("permission_denied", "Accessibility permission is required; no prompt was requested")
@@ -496,30 +580,52 @@ private final class NativeStore: @unchecked Sendable {
         guard exactWindowSymbol.function != nil else {
             throw failure("unsupported_platform", "Exact AX window identity SPI is unavailable")
         }
-        let cg = try cgWindows(context.deadline).filter { $0.pid == app.pid }
+        var diagnostics = WindowInventoryDiagnostics()
+        let (cg, excludedCG) = appCGInventory(try cgWindowRows(context.deadline), pid: app.pid,
+                                            diagnostics: &diagnostics)
+        try context.deadline.check()
         let application = AXUIElementCreateApplication(app.pid)
         let elements = try axList(application, kAXWindowsAttribute, limit: 129, context.deadline, required: true)
         guard elements.count <= 128 else { throw failure("window_limit", "More than 128 AX windows; narrow scope required") }
         try requireAppWithoutModal(application, windows: elements, context: context)
+        diagnostics.counts["ax_window_count"] = elements.count
         var candidates: [CandidateWindow] = []
         var seen: Set<CGWindowID> = []
         for element in elements {
-            guard try ordinaryWindow(element, pid: app.pid, deadline: context.deadline) else { continue }
+            let classification = try windowClassification(element, pid: app.pid, deadline: context.deadline)
+            guard classification == .supported else {
+                diagnostics.increment(classification.rawValue)
+                continue
+            }
             try requireWindowWithoutSheet(element, context)
-            let id: CGWindowID
-            do { id = try axWindowID(element, context.deadline) }
-            catch let error as NativeFailure where error.code == "window_unproven" { continue }
-            guard let record = cg.first(where: { $0.id == id }) else { continue }
-            guard seen.insert(id).inserted else { throw failure("window_unproven", "Multiple AX windows claim the same native ID") }
+            let (result, id) = try axWindowIdentity(element, context.deadline)
+            guard result == .success, id > 0 else {
+                diagnostics.exactIDFailure(result)
+                continue
+            }
+            if excludedCG.contains(id) {
+                diagnostics.increment("excluded_scope")
+                continue
+            }
+            guard let record = cg.first(where: { $0.id == id }) else {
+                diagnostics.increment("cg_owner_unmatched")
+                continue
+            }
+            guard seen.insert(id).inserted else {
+                diagnostics.increment("duplicate_id")
+                continue
+            }
+            diagnostics.increment("supported_count")
             let title = try axAttribute(element, kAXTitleAttribute, context.deadline) as? String ?? ""
             candidates.append(CandidateWindow(cg: record, element: element, title: String(title.prefix(512))))
         }
         try context.verify(app)
-        return (candidates, cg.count)
+        try diagnostics.requireProven()
+        return (candidates, diagnostics)
     }
 
     private func listWindows(_ app: NativeApp, _ context: RequestContext) throws -> [String: Any] {
-        let (candidates, cgCount) = try candidates(app, context)
+        let (candidates, diagnostics) = try candidates(app, context)
         let active = Set(candidates.map { WindowSlot(app: app, id: $0.cg.id) })
         windows = windows.filter {
             $0.key.app.pid != app.pid || ($0.key.app == app && active.contains($0.key))
@@ -542,7 +648,8 @@ private final class NativeStore: @unchecked Sendable {
         }
         return ["windows": rows, "coverage": [
             "scope": "same_pid_layer_zero_standard_ax_windows", "complete": false,
-            "window_server_count": cgCount, "supported_count": rows.count,
+            "window_server_count": diagnostics.counts["window_server_count"]!, "supported_count": rows.count,
+            "diagnostics": diagnostics.counts, "ax_id_errors": diagnostics.axErrors,
             "excludes": ["helpers", "sheets", "dialogs", "menus", "unproven_ax_windows"],
             "identity": "retained_ax_window_equal_and_exact_cg_owner"
         ]]

@@ -53,6 +53,7 @@ struct Model {
     panic_action: bool,
     poll_action: bool,
     shutdown_error: Option<Error>,
+    windows_error: Option<Error>,
 }
 struct Shared {
     model: Mutex<Model>,
@@ -78,6 +79,7 @@ impl MockBackend {
                 panic_action: false,
                 poll_action: false,
                 shutdown_error: None,
+                windows_error: None,
             }),
             windows: AtomicUsize::new(0),
             observes: AtomicUsize::new(0),
@@ -179,6 +181,9 @@ impl Backend for MockBackend {
     }
     fn windows(&self, app: &AppInstance, _: &CallContext<'_>) -> Result<Vec<WindowInfo>, Error> {
         self.0.windows.fetch_add(1, Ordering::SeqCst);
+        if let Some(error) = self.0.model.lock().unwrap().windows_error.clone() {
+            return Err(error);
+        }
         Ok([101, 202]
             .into_iter()
             .map(|native_id| WindowInfo {

@@ -310,6 +310,18 @@ fn action_reply(reply: &Value) -> ActionOutcome {
 mod tests {
     use super::*;
     #[test]
+    fn inventory_attribution_error_keeps_bounded_native_diagnostics() {
+        let message =
+            "AX inventory unresolved; diagnostics={\"ax_window_count\":0,\"cg_eligible\":6}";
+        assert_eq!(
+            reply_error(&json!({"error":"window_inventory_unproven","message":message})),
+            Some(Error::BackendFailed(format!(
+                "window_inventory_unproven: {message}"
+            )))
+        );
+    }
+
+    #[test]
     fn shutdown_failure_is_not_hidden_by_context_cancellation() {
         let error = TransportError {
             kind: TransportErrorKind::Shutdown("kill failed".into()),

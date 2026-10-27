@@ -72,3 +72,7 @@ python3 tests/acceptance/app_script_probe.py /path/to/dtw \
 因此 C5-macOS.1 只通过本次前台 fixture 的限定脚本闭环。下一检查点 **C5-macOS.2**：在固定代码/权限/fixture 下控制冷启动、后台、前台转换，分别经原子入口与生产 Harness 留存窗口归属各筛选阶段的有界诊断，解释空列表；每种受支持状态至少三个新上下文复验，失败原始结果必须留存。不能通过 sleep、标题猜测、自动 focus 或动作重放掩盖失败。若属于支持范围外，明确区分“无窗口”和“归属未证明”，再决定最小契约调整。
 
 在这条可靠性检查点完成前，不切换默认入口、不宣称普遍后台可用、不推进 C6 批量扩展。Windows C2/C3、新入口安装包/签名/TCC、自主模型、交互 TUI 和已发布 Caelis 均未验收。
+
+## C5.2 后续
+
+归属诊断和受控复验现已完成 C5-macOS.2a，详见 [库存验收记录](window-inventory-acceptance.md)。上文历史失败保留；自然偶发触发原因仍在 C5-macOS.2b 定位，不以新的 fixture 成功覆盖旧限制。
