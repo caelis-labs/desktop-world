@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Real Chrome business UI + TextEdit, through standard DTW only.
 
-Development-artifact usability evidence, not installed/release acceptance.
+Development-artifact usability evidence, or opt-in installed candidate evidence.
+An unpublished candidate is never reported as a formal release.
 Each invocation owns a fresh local dataset/document. Agent actions are never
 replayed. Raw transcripts remain private; only derived metrics belong in reports.
 """
@@ -10,7 +11,7 @@ import base64
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
 import shlex
@@ -24,6 +25,110 @@ from standard_agent_probe import Mcp, require, successful, wait_until, write_jso
 REPORT = 'Inventory review\nDTW-0088 | target 37 | reviewed\nDTW-0240 | target 52 | reviewed\n备注：已核对 🐦\n下一步：安排补货\n'
 NOTES = {'DTW-0088': '第一批：已核对 🐦\n待补货', 'DTW-0240': '第二批：已核对 🐦\n待补货'}
 QUANTITIES = {'DTW-0088': 37, 'DTW-0240': 52}
+
+
+def file_sha256(path):
+    with path.open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def verify_installed_package(package, dtw):
+    """Verify an extracted candidate without executing or changing any file."""
+    package = package.resolve(strict=True)
+    require(package.is_dir(), '--installed-package must be an extracted package directory')
+    binary = package/'bin/dtw'
+    require(dtw.resolve(strict=True) == binary, '--dtw must be this installed package\'s bin/dtw')
+    files = set()
+    for path in package.rglob('*'):
+        require(not path.is_symlink() and (path.is_file() or path.is_dir()),
+                'Installed package contains a symlink or special file')
+        if path.is_file(): files.add(path.relative_to(package).as_posix())
+    require('SHA256SUMS' in files, 'Installed package lacks SHA256SUMS')
+    expected = {}
+    for line in (package/'SHA256SUMS').read_text(encoding='utf-8').splitlines():
+        require(re.fullmatch(r'[0-9a-f]{64}  .+', line), 'Invalid installed SHA256SUMS entry')
+        checksum, name = line.split('  ', 1)
+        relative = PurePosixPath(name)
+        require(not relative.is_absolute() and '..' not in relative.parts
+                and relative.as_posix() == name and '\\' not in name and ':' not in name,
+                'Unsafe installed SHA256SUMS path')
+        require(name not in expected, 'Duplicate installed checksum entry')
+        expected[name] = checksum
+    require(set(expected) == files - {'SHA256SUMS'}, 'Installed package inventory differs from SHA256SUMS')
+    for name, checksum in expected.items():
+        require(file_sha256(package/name) == checksum, 'Installed package hash mismatch: '+name)
+    require({'BUILD.json','bin/dtw','skills/desktop-world/SKILL.md','.claude-plugin/plugin.json'} <= files,
+            'Installed package lacks required candidate assets')
+    build = json_object((package/'BUILD.json').read_text(encoding='utf-8'))
+    require(build.get('schema') == 1 and build.get('kind') == 'unpublished-rewrite-candidate',
+            'Expected an unpublished rewrite candidate BUILD manifest')
+    require(build.get('target') == 'aarch64-apple-darwin', 'This probe requires the macOS arm64 candidate')
+    require(isinstance(build.get('binary'), dict) and build['binary'].get('path') == 'bin/dtw'
+            and build['binary'].get('sha256') == expected['bin/dtw'], 'BUILD binary identity mismatch')
+    require(build.get('skill_sha256') == expected['skills/desktop-world/SKILL.md'], 'BUILD Skill identity mismatch')
+    source = build.get('source')
+    require(isinstance(source, dict)
+            and all(isinstance(source.get(key), str) and re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', source[key])
+                    for key in ('commit','tree'))
+            and isinstance(source.get('cargo_lock_sha256'), str)
+            and re.fullmatch(r'[0-9a-f]{64}', source['cargo_lock_sha256'])
+            and isinstance(build.get('source_archive_sha256'), str)
+            and re.fullmatch(r'[0-9a-f]{64}', build['source_archive_sha256']), 'BUILD source identity missing')
+    require(binary.is_file() and os.access(binary, os.X_OK), 'Installed bin/dtw is not executable')
+    return {'artifact_kind':build['kind'], 'release_artifact':False, 'installed_artifact':True,
+            'binary_path':str(binary), 'binary_sha256':expected['bin/dtw'],
+            'skill_sha256':build['skill_sha256'],
+            'installed_package':{'path':str(package), 'build_manifest_sha256':expected['BUILD.json'],
+                'manifest_evidence':'installed-BUILD.json', 'checksums_evidence':'installed-SHA256SUMS',
+                'sha256sums_sha256':file_sha256(package/'SHA256SUMS'), 'file_count':len(files),
+                'source':source, 'source_archive_sha256':build['source_archive_sha256'],
+                'version':build.get('version'), 'target':build['target']}}
+
+
+def prepare_runtime(repo, root, dtw, installed_package=None):
+    if installed_package is not None:
+        identity = verify_installed_package(installed_package, dtw)
+        package = Path(identity['installed_package']['path'])
+        require(not root.resolve().is_relative_to(package), 'Output must be outside the installed package')
+        # Keep the original manifests as evidence even if final revalidation fails.
+        for name in ('BUILD.json','SHA256SUMS'):
+            shutil.copy2(package/name, root/('installed-'+name))
+        return Path(identity['binary_path']), identity
+    binary = root/'dtw'
+    shutil.copy2(dtw.resolve(strict=True), binary)
+    return binary, {'artifact_kind':'local-development-artifact', 'release_artifact':False,
+                    'installed_artifact':False, 'binary_path':str(binary),
+                    'binary_sha256':file_sha256(binary),
+                    'skill_sha256':file_sha256(repo/'skills/desktop-world/SKILL.md')}
+
+
+def stage_agent_plugin(repo, root, binary, name, installed_package=None):
+    stage = root/'plugin'
+    if installed_package is None:
+        with (root/'stage.json').open('w') as log:
+            subprocess.run(['python3',str(repo/'scripts/stage-agent-plugin.py'),'--binary',str(binary),
+                            '--output',str(stage)],check=True,stdout=log)
+    else:
+        # The isolated plugin supplies only package-owned metadata/Skill. Both
+        # Agents register MCP explicitly against the original installed binary.
+        stage.mkdir()
+        shutil.copytree(installed_package/'.claude-plugin', stage/'.claude-plugin')
+        shutil.copytree(installed_package/'skills/desktop-world', stage/'skills/desktop-world')
+    manifest = stage/'.claude-plugin/plugin.json'
+    data = json_object(manifest.read_text()); data['name'] = name; write_json(manifest, data)
+    skill = stage/'skills/desktop-world'
+    skill.rename(stage/'skills'/name)
+    skill = stage/'skills'/name/'SKILL.md'
+    text = skill.read_text()
+    require(text.count('\nname: desktop-world\n') == 1, 'Canonical Skill name is missing or ambiguous')
+    skill.write_text(text.replace('\nname: desktop-world\n', '\nname: '+name+'\n', 1))
+    return stage, skill
+
+
+def recheck_installed_package(identity):
+    current = verify_installed_package(Path(identity['installed_package']['path']), Path(identity['binary_path']))
+    require(current == identity, 'Installed package identity changed during acceptance')
+    return {'unchanged':True, **current}
 
 
 class SupervisorMcp(Mcp):
@@ -599,6 +704,8 @@ return await app.observe({{window_ref:state.w,text:'Saved {sku}',limit:3}});
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dtw', type=Path, required=True)
+    parser.add_argument('--installed-package', type=Path,
+                        help='Extracted unpublished macOS candidate; execute its bin/dtw in place')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--client', choices=['native','claude','agy'], required=True)
     parser.add_argument('--acp-adapter', type=Path)
@@ -606,15 +713,19 @@ def main():
     args = parser.parse_args()
     browser_app, browser_name = {'chrome':('com.google.Chrome','Google Chrome'),'safari':('com.apple.Safari','Safari')}[args.browser]
     repo = Path(__file__).resolve().parents[2]
-    root = args.output.absolute(); root.mkdir(mode=0o700)
+    root = args.output.absolute()
+    if args.installed_package is not None:
+        require(not root.resolve().is_relative_to(args.installed_package.resolve(strict=True)),
+                'Output must be outside the installed package')
+    root.mkdir(mode=0o700)
     case = 'case-'+uuid.uuid4().hex[:10]; name = 'dtw-workbench-'+case
     title = 'DTW Workbench '+case
-    binary = root/'dtw'; shutil.copy2(args.dtw.resolve(strict=True), binary)
+    binary, artifact = prepare_runtime(repo, root, args.dtw, args.installed_package)
+    package = Path(artifact['installed_package']['path']) if args.installed_package is not None else None
     document = root/('DTW-Report-'+case+'.txt'); document.write_text('Pending review\n')
     evidence = {'kind':'real-browser-and-TextEdit-business-task','browser':browser_name,'client':args.client,
-                'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'case':case,
-                'skill_sha256':hashlib.sha256((repo/'skills/desktop-world/SKILL.md').read_bytes()).hexdigest(),
-                'release_artifact':False,'passed':False,'business_passed':None,'usability_passed':None,
+                **artifact,'case':case,
+                'passed':False,'business_passed':None,'usability_passed':None,
                 'business_initial_passed':None,'business_final_passed':None,
                 'owned_windows':{},'owned_window_epochs':{},'window_cleanup':{},
                 'started_unix_ms':int(time.time()*1000)}
@@ -672,11 +783,7 @@ def main():
             start = time.monotonic(); native_task(client,title,document.stem,evidence,browser_app)
             evidence['agent_wall_seconds'] = round(time.monotonic()-start,3)
         else:
-            stage = root/'plugin'
-            subprocess.run(['python3',str(repo/'scripts/stage-agent-plugin.py'),'--binary',str(binary),'--output',str(stage)],check=True,stdout=(root/'stage.json').open('w'))
-            manifest = stage/'.claude-plugin/plugin.json'; data=json.loads(manifest.read_text());data['name']=name;write_json(manifest,data)
-            skill=stage/'skills/desktop-world';skill.rename(stage/'skills'/name);skill=stage/'skills'/name/'SKILL.md'
-            skill.write_text(skill.read_text().replace('name: desktop-world','name: '+name,1))
+            stage, skill = stage_agent_plugin(repo, root, binary, name, package)
             env = os.environ.copy()
             if args.client == 'claude':
                 require(args.acp_adapter is not None,'Official ACP adapter executable required')
@@ -689,7 +796,7 @@ def main():
             else:
                 # agy currently needs its ordinary absolute-path MCP registration;
                 # a plugin's CLAUDE_PLUGIN_ROOT placeholder is not portable to it.
-                (stage/'.mcp.json').unlink()
+                (stage/'.mcp.json').unlink(missing_ok=True)
                 with (root/'setup.log').open('w') as log:
                     subprocess.run(['agy','plugin','install',str(stage)],check=True,stdout=log,stderr=log);installed=True
                     subprocess.run(['agy','mcp','add',name,str(binary),'mcp'],check=True,stdout=log,stderr=log);registered=True
@@ -770,6 +877,8 @@ def main():
             steps.append(('agy_mcp', lambda:unregister(['agy','mcp','remove',name]), process_cleaned))
         if installed:
             steps.append(('agy_plugin', lambda:unregister(['agy','plugin','uninstall',name]), process_cleaned))
+        if package is not None:
+            steps.append(('installed_package_integrity', lambda:recheck_installed_package(artifact), None))
         cleanup_steps(evidence, steps)
         evidence['finished_unix_ms']=int(time.time()*1000);write_json(root/'evidence.json',evidence)
     print(json.dumps({k:evidence.get(k) for k in ['passed','business_passed','usability_passed','cleanup_passed','client','agent_wall_seconds','metrics','failure']},ensure_ascii=False))

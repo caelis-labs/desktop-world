@@ -1,0 +1,67 @@
+name: Rewrite Windows candidate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+# Explicit candidate construction only. Normal PR changes keep the two light CI jobs.
+jobs:
+  windows-candidate:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.label.name == 'build-windows-candidate' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: windows-2025
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+          components: rust-docs
+      - name: Build one fixed native Windows candidate and run source tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dtwCandidateOutput = Join-Path $env:RUNNER_TEMP 'dtw-rewrite-candidate'
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $vs) { throw 'Native MSVC installation not found' }
+          & "$vs\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          $dtwFixtureOutput = Join-Path $env:RUNNER_TEMP 'dtw-windows-fixture-compile'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/acceptance/windows/smoke.ps1 -CompileOnly -OutputDirectory $dtwFixtureOutput
+          if ($LASTEXITCODE -ne 0) { throw 'Windows acceptance fixture compilation failed' }
+          python scripts/build-rewrite-candidate.py --target x86_64-pc-windows-msvc --output $dtwCandidateOutput
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate construction failed; original output retained' }
+          $env:CARGO_TARGET_DIR = Join-Path $dtwCandidateOutput 'target'
+          $env:RUSTFLAGS = '-C target-feature=+crt-static'
+          $dtwRustSysroot = & rustup run 1.98.0 rustc --print sysroot
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot identify fixed Rust compiler' }
+          $env:RUSTC = Join-Path $dtwRustSysroot 'bin\rustc.exe'
+          $manifest = Join-Path $dtwCandidateOutput 'source\cmd\dtw\Cargo.toml'
+          rustup run 1.98.0 cargo test --release --locked --manifest-path $manifest --target x86_64-pc-windows-msvc --lib --bins --tests
+          if ($LASTEXITCODE -ne 0) { throw 'Windows source tests failed; candidate is not accepted' }
+      - name: Retain candidate and original construction evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dtw-windows-candidate-${{ github.event.pull_request.head.sha || github.sha }}
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/dtw-rewrite-candidate/*.zip
+            ${{ runner.temp }}/dtw-rewrite-candidate/*.sha256
+            ${{ runner.temp }}/dtw-rewrite-candidate/CANDIDATE.json
+            ${{ runner.temp }}/dtw-rewrite-candidate/FAILURE.json
+            ${{ runner.temp }}/dtw-rewrite-candidate/commands.json
+            ${{ runner.temp }}/dtw-rewrite-candidate/logs

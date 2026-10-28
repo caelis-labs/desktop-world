@@ -2,6 +2,7 @@
 """Pure transcript/cleanup tests. No Agent, MCP, native process, or GUI is started."""
 import base64
 import copy
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -30,6 +31,133 @@ def call(output, images=0):
 
 def measure(output, images=0):
     return probe.metrics([call(output, images)], NAME)
+
+
+class InstalledPackageTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.package = self.root/'candidate'
+        self.package.mkdir()
+        self.output = self.root/'run'; self.output.mkdir()
+        self.repo = self.root/'different-development-tree'
+        self.repo.mkdir()
+        self.binary = self.put('bin/dtw', b'candidate executable')
+        self.binary.chmod(0o755)
+        self.canonical_skill = '---\nname: desktop-world\ndescription: Candidate only\n---\nCandidate instructions.\n'
+        self.put('skills/desktop-world/SKILL.md', self.canonical_skill)
+        self.put('skills/desktop-world/support.txt', 'Package-owned resource')
+        self.put('.claude-plugin/plugin.json', json.dumps({'name':'desktop-world','version':'0.2.0','description':'Package metadata'}))
+        self.build = {'schema':1, 'kind':'unpublished-rewrite-candidate', 'version':'0.2.0',
+                      'target':'aarch64-apple-darwin', 'binary':{'path':'bin/dtw','sha256':probe.file_sha256(self.binary)},
+                      'skill_sha256':probe.file_sha256(self.package/'skills/desktop-world/SKILL.md'),
+                      'source':{'commit':'a'*40,'tree':'b'*40,'cargo_lock_sha256':'c'*64},
+                      'source_archive_sha256':'d'*64}
+        self.put('BUILD.json', json.dumps(self.build))
+        self.checksums()
+
+    def put(self, name, content):
+        path = self.package/name; path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content if isinstance(content, bytes) else content.encode())
+        return path
+
+    def checksums(self):
+        files = sorted(path for path in self.package.rglob('*') if path.is_file() and path.name != 'SHA256SUMS')
+        self.put('SHA256SUMS', ''.join(hashlib.sha256(path.read_bytes()).hexdigest()+'  '
+                                    +path.relative_to(self.package).as_posix()+'\n' for path in files))
+
+    def test_installed_runtime_and_skill_use_package_without_copying_binary_or_developer_stage(self):
+        with patch.object(probe.subprocess, 'run', side_effect=AssertionError('No developer staging subprocess')):
+            binary, identity = probe.prepare_runtime(self.repo, self.output, self.binary, self.package)
+            stage, skill = probe.stage_agent_plugin(self.repo, self.output, binary, NAME, self.package)
+        self.assertEqual(binary, self.binary.resolve())
+        self.assertFalse((self.output/'dtw').exists())
+        self.assertFalse((stage/'bin').exists())
+        self.assertFalse((stage/'.mcp.json').exists())
+        self.assertEqual(skill.read_text(), self.canonical_skill.replace('name: desktop-world','name: '+NAME))
+        self.assertEqual((skill.parent/'support.txt').read_text(), 'Package-owned resource')
+        manifest = json.loads((stage/'.claude-plugin/plugin.json').read_text())
+        self.assertEqual(manifest, {'name':NAME,'version':'0.2.0','description':'Package metadata'})
+        self.assertEqual((self.package/'skills/desktop-world/SKILL.md').read_text(), self.canonical_skill)
+        self.assertEqual((self.output/'installed-BUILD.json').read_bytes(), (self.package/'BUILD.json').read_bytes())
+        self.assertEqual((self.output/'installed-SHA256SUMS').read_bytes(), (self.package/'SHA256SUMS').read_bytes())
+        self.assertTrue(identity['installed_artifact'])
+        self.assertFalse(identity['release_artifact'])
+        self.assertEqual(identity['artifact_kind'], 'unpublished-rewrite-candidate')
+        self.assertEqual(identity['installed_package']['source'], self.build['source'])
+        self.assertTrue(probe.recheck_installed_package(identity)['unchanged'])
+
+    def test_same_bytes_at_another_path_and_output_inside_package_are_rejected(self):
+        other = self.root/'same-dtw'; other.write_bytes(self.binary.read_bytes()); other.chmod(0o755)
+        with self.assertRaisesRegex(AssertionError, '--dtw'):
+            probe.verify_installed_package(self.package, other)
+        output = self.package/'run'; output.mkdir()
+        with self.assertRaisesRegex(AssertionError, 'outside'):
+            probe.prepare_runtime(self.repo, output, self.binary, self.package)
+        self.assertEqual(list(output.iterdir()), [])
+
+    def test_development_mode_still_copies_binary_and_uses_repository_skill(self):
+        skill = self.repo/'skills/desktop-world/SKILL.md'
+        skill.parent.mkdir(parents=True); skill.write_text('Different development Skill')
+        binary, identity = probe.prepare_runtime(self.repo, self.output, self.binary)
+        self.assertEqual(binary, self.output/'dtw')
+        self.assertEqual(binary.read_bytes(), self.binary.read_bytes())
+        self.assertFalse(identity['installed_artifact'])
+        self.assertEqual(identity['skill_sha256'], probe.file_sha256(skill))
+        self.assertNotEqual(identity['skill_sha256'], self.build['skill_sha256'])
+
+    def test_candidate_mode_does_not_claim_an_arbitrary_manifest_is_a_release(self):
+        self.build['kind'] = 'release'
+        self.put('BUILD.json', json.dumps(self.build)); self.checksums()
+        with self.assertRaisesRegex(AssertionError, 'unpublished rewrite candidate'):
+            probe.verify_installed_package(self.package, self.binary)
+
+    def test_changed_bytes_and_unlisted_or_missing_files_are_rejected(self):
+        original = self.binary.read_bytes()
+        self.binary.write_bytes(b'modified executable')
+        with self.assertRaisesRegex(AssertionError, 'hash mismatch'):
+            probe.verify_installed_package(self.package, self.binary)
+        self.binary.write_bytes(original)
+        extra = self.put('unlisted.txt', 'Unexpected file')
+        with self.assertRaisesRegex(AssertionError, 'inventory'):
+            probe.verify_installed_package(self.package, self.binary)
+        extra.unlink()
+        support = self.package/'skills/desktop-world/support.txt'; support.unlink()
+        with self.assertRaisesRegex(AssertionError, 'inventory'):
+            probe.verify_installed_package(self.package, self.binary)
+
+    def test_recomputed_checksums_do_not_bypass_build_binary_or_skill_identity(self):
+        for key, file in (('binary','bin/dtw'), ('Skill','skills/desktop-world/SKILL.md')):
+            with self.subTest(asset=key):
+                path = self.package/file; original = path.read_bytes()
+                path.write_bytes(original+b'changed'); self.checksums()
+                with self.assertRaisesRegex(AssertionError, 'BUILD '+key):
+                    probe.verify_installed_package(self.package, self.binary)
+                path.write_bytes(original); self.checksums()
+
+    def test_final_recheck_rejects_consistently_rewritten_inventory_and_keeps_initial_evidence(self):
+        _, identity = probe.prepare_runtime(self.repo, self.output, self.binary, self.package)
+        original_sums = (self.output/'installed-SHA256SUMS').read_bytes()
+        self.put('skills/desktop-world/support.txt', 'Changed after acceptance'); self.checksums()
+        # The new package is internally consistent but is not the one admitted.
+        probe.verify_installed_package(self.package, self.binary)
+        evidence = {'passed':True,'business_passed':True}
+        probe.cleanup_steps(evidence, [('installed_package_integrity', lambda:probe.recheck_installed_package(identity), None)])
+        self.assertFalse(evidence['passed'])
+        self.assertIn('identity changed', evidence['cleanup'][0]['error']['message'])
+        self.assertEqual((self.output/'installed-SHA256SUMS').read_bytes(), original_sums)
+
+    def test_symlink_and_duplicate_or_unsafe_manifest_paths_are_rejected(self):
+        checksums = (self.package/'SHA256SUMS').read_text()
+        for appended in (checksums.splitlines()[0]+'\n', 'e'*64+'  ../outside\n'):
+            self.put('SHA256SUMS', checksums+appended)
+            with self.assertRaises(AssertionError):
+                probe.verify_installed_package(self.package, self.binary)
+        self.put('SHA256SUMS', checksums)
+        (self.package/'alias').symlink_to(self.binary)
+        with self.assertRaisesRegex(AssertionError, 'symlink'):
+            probe.verify_installed_package(self.package, self.binary)
 
 
 class RouteTests(unittest.TestCase):
