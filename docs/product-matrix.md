@@ -6,7 +6,7 @@
 
 | 能力 / 工作流 | 当前实现与支持边界 | 验证与后续工作 |
 | --- | --- | --- |
-| 标准 Agent MCP 接入 | `dtw mcp`；`apps` / 同步等待的 `exec` / 只读 `result`；每次显式 app ID，标准取消与断连清理；无定制 Host 前置条件 | [#61 接入验收](standard-agent-acceptance.md)及[本轮骨架验收](multi-app-foundation-acceptance.md)：协议、原始回执、生命周期及自有原生 GUI；[合同](app-protocol-v1.md) |
+| 标准 Agent MCP 接入 | `dtw mcp`；`apps` / 同步等待的 `exec` / 只读 `result`；exec 只需 app/source，执行编号内部生成；result 默认按 app 查最近接受执行，标准取消与断连清理；无定制 Host 前置条件 | [#61 接入验收](standard-agent-acceptance.md)及[本轮骨架验收](multi-app-foundation-acceptance.md)：协议、原始回执、生命周期及自有原生 GUI；[合同](app-protocol-v1.md) |
 | App 身份、运行实例与窗口发现 | macOS typed coverage/diagnostics；语义/脚本同一 Core；Windows 原生未实现 | TextEdit 12 状态矩阵[历史通过](c5-completion-acceptance.md)；支持范围内为空与归属未证明分开，历史偶发仍缺原始现场 |
 | AX 观察 → AXPress → 独立读回 | macOS 窄范围 AXPress；结构化 role/name/value/enabled/actions；attached sheet 等边界受限 | [本轮原生验收](multi-app-foundation-acceptance.md)：按钮字段与独立计数器读回通过；更广边界见 [C3 历史验收](native-checkpoint-acceptance.md) |
 | 截图 → 像素点击 → 独立读回 | macOS SCK 精确窗口、自有前台 fixture；短命 scene owner，切 app 保留原逻辑上下文与 AX 引用；基础路径仍依赖 AX 窗口校验；遮挡等拒绝 | [本轮验收](multi-app-foundation-acceptance.md)：PNG、一次像素点击读回及同连接 A→B→A 截图通过；其他场景保留 [C5.1 历史证据](app-script-acceptance.md) |

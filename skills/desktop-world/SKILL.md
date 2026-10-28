@@ -15,7 +15,7 @@ Every execution requires an explicit stable app ID so the Harness can inspect or
 
 ## Execute and verify
 
-Call `exec` with `app`, a fresh descriptive `request_id`, and JavaScript `source`. The source is an async function body; use `await` and `return`. `exec` waits for the bounded result, so no submit/poll loop is needed.
+Call `exec` with only the required `app` and JavaScript `source`. DTW assigns execution identity internally; do not generate or supply a request ID. The source is an async function body; use `await` and `return`. `exec` waits for the bounded result, so no submit/poll loop is needed.
 
 Start with a small observation, for example:
 
@@ -40,8 +40,8 @@ Scripts default to a 30-second execution deadline; set `timeout_ms` to a larger 
 
 ## Interruption and recovery
 
-Keep the original app ID, request ID and receipts. Standard MCP cancellation or connection closure stops work and releases resources; already dispatched input may still have effects.
+Standard execution needs no bookkeeping ID. Retain a returned `execution_id` only when you need to look up that specific historical execution. Standard MCP cancellation or connection closure stops work and releases resources; already dispatched input may still have effects.
 
-Use `result({app, request_id})` to read the original record after interruption or an uncertain response. Do not submit the script under a new ID to recover a missing result. If the connection or receipt is gone, keep the outcome unknown and independently observe before deciding on another action.
+After an uncertain response, use `result({app})` for this MCP connection’s latest accepted execution; use the returned `execution_id` only to select a specific older record. A rejected or unreceived call may leave an older record as latest. Do not resubmit to recover a result: each new exec is new work, even with identical source. If the connection or receipt is gone, keep the outcome unknown and independently observe before deciding on another action.
 
 `target_changed` means the running instance or window changed. Observe again before deciding on a new action; never reuse the old instance’s references or assume its state survived a restart. `context_reset` means native refs must be rediscovered; committed JSON state survives, including any now-stale ref strings in it. `state_reset` means the app instance changed and its state was cleared. OS permission and unsupported-surface errors are execution conditions: report the structured cause instead of repeatedly retrying the same action or switching input routes.

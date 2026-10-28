@@ -1,22 +1,19 @@
 # 单 app 脚本 v1
 
-脚本通过标准 MCP `exec` 工具运行，外层必填当前 `apps` 返回的稳定 app ID 字符串。DTW 只验证目标和执行边界，审批与授权属于 Harness。[MCP 合同](app-protocol-v1.md)定义发现、调用和标准取消；`apps` 的 `script` 描述广告五个方法的参数/返回 schema、引用规则、限制和 state/receipt/image 语义。
+脚本通过标准 MCP `exec` 工具运行，外层必填当前 `apps` 返回的稳定 app ID 字符串。DTW 只验证目标和执行边界，审批与授权属于 Harness。[MCP 合同](app-protocol-v1.md)定义发现、调用和标准取消；`apps` 的 `script` 描述提供五个方法的参数/返回 schema、引用规则、限制和 state/receipt/image 语义。
 
 ## 调用与执行范围
 
 ```json
 {
   "app": "com.apple.TextEdit",
-  "request_id": "script-1",
-  "source": "const inventory = await app.windows(); return inventory.windows;",
-  "timeout_ms": 5000,
-  "max_calls": 32
+  "source": "const inventory = await app.windows(); return inventory.windows;"
 }
 ```
 
-示例 app ID 必须与 `apps` 返回的目标应用一致。`source` 是 JavaScript 异步函数体，可直接使用 `await` 和 `return`，不是模块或文件路径。未知字段拒绝；`timeout_ms`、`max_calls` 可省略，分别默认 5000 和 32，只能缩小。没有 grant、approved、授权能力集合或续期参数。
+示例 app ID 必须与 `apps` 返回的目标应用一致。`source` 是 JavaScript 异步函数体，可直接使用 `await` 和 `return`，不是模块或文件路径。DTW 自动分配执行标识；模型只需提供 `app` 和 `source`。未知字段拒绝；可选 `timeout_ms` 默认 30000，可调大或调小；省略 `max_calls` 不设调用次数配额，显式提供时按调用方配额执行。没有 grant、approved、授权能力集合或续期参数。
 
-脚本在一个执行上下文内串行运行；Host bridge 调用进入同一个 Core，不递归提交新任务。`exec` 等待该脚本收尾。相同已接受 ID 和相同参数返回已有记录，更换参数得到 `request_conflict`，失败也不释放 ID 供重放。`result` 仅用于读取原记录；正常执行无需轮询。标准 MCP cancellation 使用外层 JSON-RPC request ID。
+脚本在一个执行上下文内串行运行；Host bridge 调用进入同一个 Core，不递归提交新任务。`exec` 等待该脚本收尾。每次新的 `exec` 都代表新工作，即使脚本相同也会再次执行。已接受执行的相同标准传输请求与参数复用原执行，改换参数得到 `request_conflict`；这部分由客户端传输层管理，不是模型入参。`result({app})` 读取该 app 最近接受的执行，可选 `execution_id` 精确选择历史记录；正常执行无需轮询。标准 MCP cancellation 使用外层 JSON-RPC request ID。
 
 ## 五个 app 方法
 
@@ -91,7 +88,7 @@ state 提交不是桌面事务。动作一旦派发，之后的异常、取消�
 
 ## 查询、步骤账本与图像
 
-任务结果回显 `app` 字符串，并包含 `request_id, status, value, error, receipt, payload_expired` 等执行信息；脚本的 `operation` 为 `script`，外层 `receipt` 通常为 null，动作证据在附加的 `script.steps` 中：
+任务结果回显 `app` 字符串，并包含 `execution_id, status, value, error, receipt, payload_expired` 等执行信息；脚本的 `operation` 为 `script`，外层 `receipt` 通常为 null，动作证据在附加的 `script.steps` 中：
 
 | 字段 | 含义 |
 | --- | --- |
@@ -108,13 +105,13 @@ state 提交不是桌面事务。动作一旦派发，之后的异常、取消�
 
 成功解析为动作的步骤保存完整 `outcome/provider_outcome/interruption`；在 Coordinator 的协议解析阶段被拒绝的步骤只记录 error，receipt 为 null；读步骤也保留错误。普通异常和 provider panic 后，之前的步骤及 receipt 不丢失；panic 时尚无最终回执的动作记为未知效果。脚本失败后的 `completed` 只表示任务已收尾，不能据此推断没有桌面效果。`error.code` 可为 `script_syntax / script_exception / script_memory / script_timeout / script_cancelled / script_stalled / script_internal`，也可能是 Core/协议收尾错误；细分原因如 `call_limit`、`receipt_limit`、`invalid_args`、`invalid_json` 在 `script.failure.code` 中，原生动作事实以步骤 receipt 为准。
 
-一个连接保留多个 app 上下文，A→B→A 不重置 state 或窗口引用。每个 app 的 AX worker 与短命 scene worker 分开：只有 capture/click 才占用 scene 资源，完成后停止并回收该子进程，空闲 app 不持有 scene lease。当前同一连接一次执行一个脚本，多个连接保持独立 state、引用和回执。连接保留最多 512 个原始请求 ID，不再每 64 次重建 app owner。value/image 共享 64 MiB payload 预算；驱逐后 `payload_expired: true`，`value` 和 image 消失，但 `script.steps`、failure、state_committed、shutdown_error、提交身份和动作 receipt 保留至进程退出，不重新执行以恢复 payload。回执准入阈值为 16 MiB：保留最后一份完整回执后停止接收新执行，不截断该回执。此时仍可读取原结果；重连不会恢复旧账本，也不是重放未知效果的许可。
+一个连接保留多个 app 上下文，A→B→A 不重置 state 或窗口引用。每个 app 的 AX worker 与短命 scene worker 分开：只有 capture/click 才占用 scene 资源，完成后停止并回收该子进程，空闲 app 不持有 scene lease。当前同一连接一次执行一个脚本，多个连接保持独立 state、引用和回执。连接保留最多 512 份已接受执行记录，不再每 64 次重建 app owner。value/image 共享 64 MiB payload 预算；驱逐后 `payload_expired: true`，`value` 和 image 消失，但 `script.steps`、failure、state_committed、shutdown_error、提交身份和动作 receipt 保留至进程退出，不重新执行以恢复 payload。回执准入阈值为 16 MiB：保留最后一份完整回执后停止接收新执行，不截断该回执。此时仍可读取原结果；重连不会恢复旧账本，也不是重放未知效果的许可。
 
 capture 只把尺寸、坐标系和 opaque observation_ref 交给 VM；PNG 字节始终在 VM 外。常规结算只返回最后一次 capture 的 MCP image，并用 `value.last_capture` 指明来源步骤。此前截图不会全部累计。保留的图片及引用可能已被后续操作取代或消费，不能当作仍然有效的点击依据。
 
 ## 中断与所有权
 
-总 deadline、标准 MCP 取消或连接关闭会中止相应执行并收尾原生资源，清理失败独立记录在 `shutdown_error`。VM 线程由任务所有者 join；provider panic 的 unwind 路径同样通知并 join，不能留下脱离任务生命周期的线程。`result` 仍可读取原 ID 的最终账本。
+总 deadline、标准 MCP 取消或连接关闭会中止相应执行并收尾原生资源，清理失败独立记录在 `shutdown_error`。VM 线程由任务所有者 join；provider panic 的 unwind 路径同样通知并 join，不能留下脱离任务生命周期的线程。`result({app})` 可读取该 app 最近接受的执行；返回的 `execution_id` 可用于精确查询其最终账本。
 
 首个终态原因保留。动作可能在取消后才产生外部效果；关闭 worker 或 join VM 都不证明效果已撤销。普通被捕获的 Host 错误或脚本异常本身不必关闭上下文。取消、超时或资源回收导致上下文更换时，后续新执行会报告 `context_reset`；已提交 state 继续保留，其中保存的原生 refs 可能已失效，需要重新发现。真实 app 实例替换额外报告 `state_reset` 并清空旧实例 state；旧回执仍保留。
 

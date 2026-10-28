@@ -33,7 +33,7 @@ flowchart TD
 | Computer Core | 类型化操作、身份/引用校验、能力路由、效果模型 | 不导入 CUA ToolRegistry、SDK Session 或 Manifest |
 | 平台能力组 | OS 操作、对象保活、原生证据、线程与资源清理 | 不决定工具审批、不将失败自动切换为另一输入路线 |
 
-一个 Agent 会话持有多个逻辑 App 上下文；每个 App 上下文绑定自己的运行实例、已提交 JSON state 和引用生命周期。一次 exec 仍显式指定一个 app，便于 Harness 解析普通参数；这不限制整个 Agent 会话只能操作一个应用。Provider 可以保存 AX/COM 对象以及原生 token，不能自行把目标换成另一个应用。继续使用一个 Cargo package、Rust 内核和已有 Swift 桥；阻塞原生操作留在可终止的私有子进程内。模块边界由依赖与责任体现，不用 crate 数量衡量架构完成度。
+一个 MCP 会话持有多个逻辑 App 上下文；每个 App 上下文绑定自己的运行实例、已提交 JSON state 和引用生命周期。一次 exec 仍显式指定一个 app，便于 Harness 解析普通参数；这不限制整个 Agent 会话只能操作一个应用。Provider 可以保存 AX/COM 对象以及原生 token，不能自行把目标换成另一个应用。继续使用一个 Cargo package、Rust 内核和已有 Swift 桥；阻塞原生操作留在可终止的私有子进程内。模块边界由依赖与责任体现，不用 crate 数量衡量架构完成度。
 
 ## 稳定 app ID 与内部实例绑定
 
@@ -43,14 +43,17 @@ app ID 是目标身份，不是权限 token。DTW 不要求、接收或验证用
 
 ```text
 apps() -> [{app: 稳定平台 ID, name: 展示名称}] + 方法/schema/限制
-exec(app = 稳定平台 ID, request_id, source)
-    -> 内部解析唯一可操作运行实例
+exec(app = 稳定平台 ID, source)
+    -> 内部分配执行标识，解析唯一可操作运行实例
     -> 注入只绑定该实例的 app 对象
     -> 每次原生调用校验实例、窗口、provider 与 observation
     -> 等待执行收尾，回显 app ID、结果、回执与图像
-result(app = 原 app ID, request_id)
-    -> 只读原记录，不执行、不解析新实例替代原回执
+result(app = 原 app ID, execution_id = 可选历史引用)
+    -> 默认读取该 app 最近接受的执行；指定引用时读取原记录
+    -> 不执行、不解析新实例替代原回执
 ```
+
+模型只需要指定 app 和脚本；执行编号、传输去重、取消关联和回执归档由 DTW/标准传输内部管理。正常工作流不需要生成 ID 或提交后轮询；历史查询才按需使用返回引用。不同的新调用不按脚本内容去重。
 
 没有隐式默认 app。普通 Chrome helper 不作为独立可操作应用；执行时同一 ID 对应多个独立实例则返回 `ambiguous_app`，不按名称、前台状态或 PID 猜选。应用重启不改变稳定 app ID，但会使旧实例引用失效；state 和观察不能移植到另一个进程。实例绑定是 DTW 内部执行正确性要求，不增加外部参数。
 
@@ -74,7 +77,7 @@ result(app = 原 app ID, request_id)
 
 同一连接可以保留多个 App 上下文。普通 A→B→A 切换不回收 A、不清空其 state，也不使其窗口引用失效。已提交 JSON state 归逻辑 App 上下文，原生对象归可回收的 worker；取消/超时只停止本次执行并退休受影响的原生 owner，既有已提交 state 保留，其他 app 不受影响。`context_reset` 表示原生引用重建；只有实际 app 实例替换才报告 `state_reset` 并清空原实例 state。连接退出结束该会话，不提供跨进程持久恢复。
 
-当前实现仍在每个 MCP 连接内串行执行脚本，不承诺同一连接的并行 exec。不同 MCP 连接有独立 state、引用和回执，可以操作不同应用。普通 app/AX worker 常驻；SCK 与当前共享鼠标路线在由 MCP 主进程直接拥有的短命 scene worker 中执行，锁保持到子进程真实退出。空闲 app 不占 scene 锁；两个会话的 scene 操作在锁内串行，但无需销毁 app 上下文。清理失败保留 owner，关闭后续准入；不能提前解锁仍活跃的 SCK client。
+当前实现仍在每个 MCP 连接内串行执行脚本，不承诺同一连接的并行 exec。不同 MCP 连接有独立 state、引用和回执，可以操作不同应用。DTW 的会话边界就是 MCP 连接：多个 Agent 若共享一条连接，也共享它的 app state/最近执行；独立隔离使用标准的独立连接，不增加模型身份参数。普通 app/AX worker 常驻；SCK 与当前共享鼠标路线在由 MCP 主进程直接拥有的短命 scene worker 中执行，锁保持到子进程真实退出。空闲 app 不占 scene 锁；两个会话的 scene 操作在锁内串行，但无需销毁 app 上下文。清理失败保留 owner，关闭后续准入；不能提前解锁仍活跃的 SCK client。
 
 **长期调度原则**是按资源冲突串行，而不是按整个桌面或整个会话串行：语义/确切目标动作按 app/窗口调度，共享键鼠动作按桌面资源调度；不相关 app 可以独立推进。当前 scene 锁只是已接入路径的资源边界，不是所有输入的完整仲裁器。同一 app 跨会话写入仲裁、同连接并行和后续输入资源声明仍需实现，不能把现有多进程隔离等同于这些能力已经完成。
 

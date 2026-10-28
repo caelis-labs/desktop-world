@@ -41,6 +41,7 @@ pub trait Factory: Send + Sync + 'static {
 }
 struct Record {
     id: String,
+    rpc_id: Value,
     app: String,
     input: Value,
     reply: Option<Reply>,
@@ -56,7 +57,7 @@ struct AppContext<B: Backend> {
     owner: Option<Arc<Coordinator<B>>>,
 }
 struct State<B: Backend> {
-    // One logical entry per used app; bounded by accepted session request IDs.
+    // One logical entry per used app; bounded by accepted session executions.
     // Includes preparing and failed-to-retire owners until cleanup succeeds.
     contexts: VecDeque<AppContext<B>>,
     records: VecDeque<Record>,
@@ -73,7 +74,7 @@ pub struct Call<B: Backend> {
     pub rpc_id: Value,
     pub cancelled: AtomicBool,
     owner: Mutex<Option<Arc<Coordinator<B>>>>,
-    request_id: Option<String>,
+    execution_id: Option<String>,
     command: ToolCall,
     run_finished: AtomicBool,
     context_reset: AtomicBool,
@@ -84,7 +85,6 @@ enum ToolCall {
     Apps,
     Exec {
         app: String,
-        id: String,
         source: String,
         timeout_ms: u64,
         max_calls: u32,
@@ -93,6 +93,8 @@ enum ToolCall {
 pub enum Started<B: Backend> {
     Reply(Reply),
     Call(Arc<Call<B>>),
+    // The original accepted call will produce the response for this RPC ID.
+    InFlight,
 }
 
 impl<F: Factory> Server<F> {
@@ -111,28 +113,38 @@ impl<F: Factory> Server<F> {
     }
     /// Reserve before spawning. Neither cancellation nor a burst can overtake admission.
     pub fn begin(&self, rpc_id: Value, name: &str, args: Value) -> Started<F::Provider> {
+        let mut state = self.state.lock().unwrap();
+        self.refresh(&mut state);
+        // Standard MCP request identity is transport-owned. Repeated frames
+        // refer to one accepted execution, including while it is still running.
+        // A new RPC ID always admits new work, even for the same source text.
+        if let Some(record) = state.records.iter().find(|record| record.rpc_id == rpc_id) {
+            if name != "exec" || record.input != args {
+                return Started::Reply(problem(
+                    "request_conflict",
+                    "This MCP request ID already belongs to different input in this session",
+                ));
+            }
+            if state.active.as_ref().is_some_and(|call| {
+                call.rpc_id == rpc_id && !call.run_finished.load(Ordering::Acquire)
+            }) {
+                return Started::InFlight;
+            }
+            return Started::Reply(self.record_reply(&state, record));
+        }
         if name == "result" {
+            drop(state);
             return Started::Reply(self.result(args));
         }
         let command = match parse_call(name, &args) {
             Ok(c) => c,
             Err(e) => return Started::Reply(Reply::error(e)),
         };
-        let mut state = self.state.lock().unwrap();
-        self.refresh(&mut state);
         if state.active.as_ref().is_some_and(|c| c.rpc_id == rpc_id) {
             return Started::Reply(problem(
                 "duplicate_rpc_id",
                 "The MCP request ID is already active",
             ));
-        }
-        if let ToolCall::Exec { app, id, .. } = &command {
-            if let Some(record) = state.records.iter().find(|r| r.id == *id) {
-                if record.app != *app || record.input != args {
-                    return Started::Reply(problem("request_conflict", "This request_id already belongs to different input; it will not execute again"));
-                }
-                return Started::Reply(self.record_reply(&state, record));
-            }
         }
         if !state.shutdown_errors.is_empty() {
             return Started::Reply(shutdown_reply(&state.shutdown_errors));
@@ -146,17 +158,19 @@ impl<F: Factory> Server<F> {
                 "Another desktop call is active or has not settled; no operation was queued",
             ));
         }
-        let request_id = match &command {
+        let execution_id = match &command {
             ToolCall::Apps => None,
-            ToolCall::Exec { app, id, .. } => {
+            ToolCall::Exec { app, .. } => {
                 if state.records.len() >= MAX_RECORDS
                     || state.records.iter().map(|r| r.receipt_bytes).sum::<usize>()
                         >= MAX_RECEIPT_BYTES
                 {
                     return Started::Reply(problem("request_limit", "Retained receipt capacity is exhausted. Reconnect for new work; do not replay uncertain operations"));
                 }
+                let id = super::reference("execution");
                 state.records.push_back(Record {
                     id: id.clone(),
+                    rpc_id: rpc_id.clone(),
                     app: app.clone(),
                     input: args,
                     reply: None,
@@ -170,7 +184,7 @@ impl<F: Factory> Server<F> {
             rpc_id,
             cancelled: AtomicBool::new(false),
             owner: Mutex::new(None),
-            request_id,
+            execution_id,
             command,
             run_finished: AtomicBool::new(false),
             context_reset: AtomicBool::new(false),
@@ -184,11 +198,19 @@ impl<F: Factory> Server<F> {
             ToolCall::Apps => self.apps(call),
             ToolCall::Exec {
                 app,
-                id,
                 source,
                 timeout_ms,
                 max_calls,
-            } => self.execute(call, app, id, source, *timeout_ms, *max_calls),
+            } => self.execute(
+                call,
+                app,
+                call.execution_id
+                    .as_deref()
+                    .expect("accepted execution has an ID"),
+                source,
+                *timeout_ms,
+                *max_calls,
+            ),
         };
         let stopping = call.cancelled.load(Ordering::Acquire) || self.state.lock().unwrap().closed;
         if stopping {
@@ -207,7 +229,7 @@ impl<F: Factory> Server<F> {
             .as_ref()
             .is_some_and(|owner| inspect_owner(&mut state, owner));
         if !unsettled {
-            if let Some((owner, id)) = owner.as_ref().zip(call.request_id.as_ref()) {
+            if let Some((owner, id)) = owner.as_ref().zip(call.execution_id.as_ref()) {
                 let current = owner.result(id);
                 if current.data["error"]["code"] != "unknown_request" {
                     // The job may have completed after execute took a running
@@ -216,7 +238,7 @@ impl<F: Factory> Server<F> {
                 }
             }
         }
-        if call.request_id.is_some() && !unsettled {
+        if call.execution_id.is_some() && !unsettled {
             // Accepted requests rejected before Core submission still have a
             // terminal record (for example cancellation during discovery).
             reply.data["status"] = json!("completed");
@@ -225,7 +247,7 @@ impl<F: Factory> Server<F> {
         // A timeout of the outer wait is not a terminal native receipt. Keep the
         // owner and global reservation until its actual job has finished.
         if !unsettled {
-            if let Some(id) = &call.request_id {
+            if let Some(id) = &call.execution_id {
                 cache_reply(&mut state, id, &reply);
                 if let Some(owner) = &owner {
                     owner.release_result_payload(id);
@@ -256,7 +278,7 @@ impl<F: Factory> Server<F> {
             if inspect_owner(state, &owner) {
                 return;
             }
-            if let Some(id) = &call.request_id {
+            if let Some(id) = &call.execution_id {
                 let mut reply = owner.result(id);
                 self.annotate(state, &call, &mut reply);
                 cache_reply(state, id, &reply);
@@ -266,9 +288,8 @@ impl<F: Factory> Server<F> {
         state.active = None;
     }
     fn annotate(&self, state: &State<F::Provider>, call: &Call<F::Provider>, reply: &mut Reply) {
-        if let ToolCall::Exec { app, id, .. } = &call.command {
-            reply.data["app"] = json!(app);
-            reply.data["request_id"] = json!(id);
+        if let ToolCall::Exec { app, .. } = &call.command {
+            public_execution(reply, app, call.execution_id.as_deref().unwrap());
             reply.data["context_reset"] = json!(call.context_reset.load(Ordering::Acquire));
             reply.data["state_reset"] = json!(call.state_reset.load(Ordering::Acquire));
         }
@@ -284,9 +305,9 @@ impl<F: Factory> Server<F> {
                 Reply::plain(json!({"version":1,
                 "apps":apps,"backend":self.factory.description(),
                 "script":scripts::description(),
-                "limits":{"retained_request_ids":MAX_RECORDS,"payload_bytes":MAX_PAYLOAD_BYTES,
+                "limits":{"retained_executions":MAX_RECORDS,"payload_bytes":MAX_PAYLOAD_BYTES,
                     "receipt_admission_bytes":MAX_RECEIPT_BYTES,"max_steps_per_request":scripts::MAX_CALLS},
-                "semantics":"Every exec requires a stable application identifier. Multiple running instances of that application must be resolved before execution. Each app keeps its own logical context and committed JSON state. Switching apps preserves state and native references. Native owner replacement invalidates references and sets context_reset; an actual app instance change also clears committed state and sets state_reset. This connection executes one call at a time. Results preserve their original app and request_id. Receipt capacity stops new work without dropping the last receipt."}))
+                "semantics":"Every exec requires a stable application identifier. Multiple running instances of that application must be resolved before execution. Each app keeps its own logical context and committed JSON state. Switching apps preserves state and native references. Native owner replacement invalidates references and sets context_reset; an actual app instance change also clears committed state and sets state_reset. This connection executes one call at a time. DTW assigns execution_id automatically. result(app) reads this session's most recently accepted execution for that app; optional execution_id selects an older record. Only repeated MCP request IDs with identical exec arguments reuse an execution. New MCP request IDs always execute again; there is no cross-connection deduplication. Receipt capacity stops new work without dropping the last receipt."}))
             }
             Ok(_) => problem("cancelled", "Application discovery was cancelled"),
             Err(e) => Reply::error(wire::core_error(&e)),
@@ -482,7 +503,7 @@ impl<F: Factory> Server<F> {
             state
                 .active
                 .as_ref()
-                .filter(|active| active.request_id.as_deref() == Some(&record.id))
+                .filter(|active| active.execution_id.as_deref() == Some(&record.id))
                 .and_then(|active| {
                     active
                         .owner
@@ -494,15 +515,15 @@ impl<F: Factory> Server<F> {
                 .filter(|reply| reply.data["error"]["code"] != "unknown_request")
                 .unwrap_or_else(|| Reply::plain(json!({"version":1,"status":"running"})))
         };
-        reply.data["app"] = json!(record.app);
-        reply.data["request_id"] = json!(record.id);
+        public_execution(&mut reply, &record.app, &record.id);
         append_shutdown_errors(&mut reply, &state.shutdown_errors);
         reply
     }
     fn result(&self, args: Value) -> Reply {
         let parsed = (|| {
-            exact_object(&args, &["app", "request_id"])?;
-            Ok::<_, WireError>((app_id::parse(&args["app"])?, request_id(&args)?))
+            exact_object(&args, &["app", "execution_id"])?;
+            let id = args.get("execution_id").map(execution_id).transpose()?;
+            Ok::<_, WireError>((app_id::parse(&args["app"])?, id))
         })();
         let (app, id) = match parsed {
             Ok(value) => value,
@@ -510,10 +531,21 @@ impl<F: Factory> Server<F> {
         };
         let mut state = self.state.lock().unwrap();
         self.refresh(&mut state);
-        match state.records.iter().find(|record| record.id == id) {
-            Some(record) if record.app == app => self.record_reply(&state, record),
-            Some(_) => problem("wrong_app", "The request belongs to a different app identifier"),
-            None => problem("unknown_request", "No retained request has this ID. Absence does not prove an operation had no effect"),
+        if let Some(id) = id {
+            match state.records.iter().find(|record| record.id == id) {
+                Some(record) if record.app == app => self.record_reply(&state, record),
+                Some(_) => problem("wrong_app", "The execution belongs to a different app identifier"),
+                None => problem("unknown_execution", "This MCP session has no retained execution with this ID. Absence does not prove an operation had no effect"),
+            }
+        } else {
+            match state.records.iter().rev().find(|record| record.app == app) {
+                Some(record) => {
+                    let mut reply = self.record_reply(&state, record);
+                    reply.data["selection"] = json!("latest_accepted");
+                    reply
+                }
+                None => problem("no_execution", "This MCP session has no accepted execution for this app. Absence does not prove an operation had no effect"),
+            }
         }
     }
     pub fn cancel(&self, rpc_id: &Value) {
@@ -524,7 +556,7 @@ impl<F: Factory> Server<F> {
                 let owner = call.owner.lock().unwrap();
                 owner
                     .as_ref()
-                    .zip(call.request_id.as_ref())
+                    .zip(call.execution_id.as_ref())
                     .map(|(owner, id)| owner.cancel(id))
             };
             if let Some(error) = cancelled.as_ref().and_then(cleanup_error) {
@@ -602,6 +634,14 @@ impl<F: Factory> Server<F> {
         }
     }
 }
+// Internal Coordinator jobs still use request_id; the public tool boundary owns
+// execution identifiers and never asks the model to manufacture one.
+fn public_execution(reply: &mut Reply, app: &str, id: &str) {
+    reply.data.as_object_mut().unwrap().remove("request_id");
+    reply.data["app"] = json!(app);
+    reply.data["execution_id"] = json!(id);
+}
+
 // These helpers run under the Server lock. Coordinator never calls back into
 // Server, preserving the state -> owner -> Coordinator lock order.
 fn inspect_owner<B: Backend>(state: &mut State<B>, owner: &Coordinator<B>) -> bool {
@@ -734,12 +774,12 @@ fn exact_object<'a>(
     }
     Ok(map)
 }
-fn request_id(args: &Value) -> Result<String, WireError> {
-    args["request_id"]
+fn execution_id(value: &Value) -> Result<String, WireError> {
+    value
         .as_str()
         .filter(|s| !s.is_empty() && s.chars().count() <= 128)
         .map(str::to_owned)
-        .ok_or_else(|| invalid("request_id must contain 1 to 128 characters"))
+        .ok_or_else(|| invalid("execution_id must contain 1 to 128 characters"))
 }
 fn parse_call(name: &str, args: &Value) -> Result<ToolCall, WireError> {
     match name {
@@ -748,12 +788,8 @@ fn parse_call(name: &str, args: &Value) -> Result<ToolCall, WireError> {
             Ok(ToolCall::Apps)
         }
         "exec" => {
-            exact_object(
-                args,
-                &["app", "request_id", "source", "timeout_ms", "max_calls"],
-            )?;
+            exact_object(args, &["app", "source", "timeout_ms", "max_calls"])?;
             let app = app_id::parse(&args["app"])?;
-            let id = request_id(args)?;
             let source = args["source"]
                 .as_str()
                 .filter(|s| !s.is_empty() && s.len() <= scripts::MAX_SOURCE_BYTES)
@@ -764,7 +800,6 @@ fn parse_call(name: &str, args: &Value) -> Result<ToolCall, WireError> {
             let (timeout_ms, max_calls) = scripts::budgets(args.as_object().unwrap())?;
             Ok(ToolCall::Exec {
                 app,
-                id,
                 source,
                 timeout_ms,
                 max_calls,
@@ -977,23 +1012,31 @@ mod lifecycle_tests {
         (Server::new(factory.clone()), factory)
     }
     fn begin(server: &Server<Arc<TestFactory>>, id: &str, source: &str) -> Arc<Call<Provider>> {
-        match server.begin(
-            json!(id),
-            "exec",
-            json!({"app":APP,"request_id":id,"source":source}),
-        ) {
+        match server.begin(json!(id), "exec", json!({"app":APP,"source":source})) {
             Started::Call(call) => call,
             Started::Reply(reply) => panic!("unexpected rejection: {}", reply.data),
+            Started::InFlight => panic!("unexpected duplicate frame"),
         }
     }
     fn reply(started: Started<Provider>) -> Reply {
         match started {
             Started::Reply(reply) => reply,
             Started::Call(_) => panic!("unexpected dispatch"),
+            Started::InFlight => panic!("unexpected pending response"),
         }
     }
     fn result(server: &Server<Arc<TestFactory>>, id: &str) -> Reply {
-        server.result(json!({"app":APP,"request_id":id}))
+        let execution_id = server
+            .state
+            .lock()
+            .unwrap()
+            .records
+            .iter()
+            .find(|record| record.rpc_id == json!(id))
+            .unwrap()
+            .id
+            .clone();
+        server.result(json!({"app":APP,"execution_id":execution_id}))
     }
 
     #[test]
@@ -1013,7 +1056,7 @@ mod lifecycle_tests {
             owner: Some(owner.clone()),
         });
         let admitted = owner.handle(Request::Submit(Submit {
-            request_id: "original".into(),
+            request_id: call.execution_id.clone().unwrap(),
             target: Target {
                 app_ref: owner.app_ref.clone(),
                 window_ref: None,
@@ -1026,16 +1069,16 @@ mod lifecycle_tests {
         }));
         assert_eq!(admitted.data["status"], "running");
         control.entered();
-        owner.cancel("original");
+        owner.cancel(call.execution_id.as_deref().unwrap());
         // Exercise the outer-wait completion boundary without spending ten seconds
         // on a production timeout. The original native action is still blocked.
-        server.finish_run(&call, owner.result("original"));
+        server.finish_run(&call, owner.result(call.execution_id.as_deref().unwrap()));
         assert_eq!(result(&server, "original").data["status"], "running");
         assert_eq!(
             reply(server.begin(
                 json!("next"),
                 "exec",
-                json!({"app":APP,"request_id":"next","source":"return 1;"})
+                json!({"app":APP,"source":"return 1;"})
             ))
             .data["error"]["code"],
             "busy"
@@ -1206,7 +1249,7 @@ mod lifecycle_tests {
             reply(server.begin(
                 json!("new"),
                 "exec",
-                json!({"app":APP,"request_id":"new","source":"return 2;"})
+                json!({"app":APP,"source":"return 2;"})
             ))
             .data["error"]["code"],
             "request_limit"
@@ -1260,7 +1303,7 @@ mod lifecycle_tests {
                 owner: Some(owner.clone()),
             });
             let admitted = owner.handle(Request::Submit(Submit {
-                request_id: "sampled".into(),
+                request_id: call.execution_id.clone().unwrap(),
                 target: Target {
                     app_ref: owner.app_ref.clone(),
                     window_ref: None,

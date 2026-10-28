@@ -163,6 +163,7 @@ fn serve(server: Arc<Server<NativeFactory>>) -> Result<(), WireError> {
                     args,
                     structured,
                 } => match server.begin(id.clone(), &name, args) {
+                    Started::InFlight => None,
                     Started::Reply(reply) => Some(mcp::response(id, reply, structured)),
                     Started::Call(call) => {
                         let server = server.clone();

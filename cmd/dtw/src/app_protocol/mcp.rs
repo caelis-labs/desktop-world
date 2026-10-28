@@ -23,13 +23,11 @@ pub enum Event {
 }
 impl Session {
     pub fn handle(&mut self, input: Value) -> Event {
-        let id = input.get("id").cloned();
+        let id = input.get("id").and_then(rpc_id);
         if !input.is_object()
             || input["jsonrpc"] != "2.0"
             || !input["method"].is_string()
-            || id
-                .as_ref()
-                .is_some_and(|v| !(v.is_string() || v.as_f64().is_some_and(|n| n.fract() == 0.0)))
+            || (input.get("id").is_some() && id.is_none())
         {
             return Event::Reply(rpc_error(Value::Null, -32600, "Invalid JSON-RPC request"));
         }
@@ -40,11 +38,8 @@ impl Session {
                 self.ready = true;
             }
             if method == "notifications/cancelled" && self.ready {
-                if let Some(id) = params
-                    .get("requestId")
-                    .filter(|v| v.is_string() || v.as_f64().is_some_and(|n| n.fract() == 0.0))
-                {
-                    return Event::Cancel(id.clone());
+                if let Some(id) = params.get("requestId").and_then(rpc_id) {
+                    return Event::Cancel(id);
                 }
             }
             return Event::None;
@@ -64,7 +59,7 @@ impl Session {
                 self.initialized = true;
                 self.structured = version == CURRENT_VERSION;
                 json!({"protocolVersion":version,"capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"desktop-world","version":env!("CARGO_PKG_VERSION")},
-                    "instructions":"Call apps for application identifiers and script API. Every exec includes an app identifier and unique request_id; it waits for completion. Standard MCP cancellation stops the matching call. result retrieves the original receipt without replay. DTW validates targets and confines execution."})
+                    "instructions":"Call apps for application identifiers and script API. Call exec with app and source; DTW assigns execution_id and waits for completion. Standard MCP cancellation stops the matching call. result with app alone reads this session's latest accepted execution; optional execution_id selects an older receipt without replay. Repeated MCP request IDs reuse the original execution only within this connection; new request IDs execute new work. DTW validates targets and confines execution."})
             }
             "ping" => json!({}),
             _ if !self.ready => {
@@ -93,15 +88,25 @@ impl Session {
         Event::Reply(json!({"jsonrpc":"2.0","id":id,"result":result}))
     }
 }
+// JSON-RPC integer IDs can arrive as `1` or `1.0`; they must identify the
+// same call for both retransmission and cancellation. Do not round a floating
+// point value outside the exact integer range into a different request ID.
+fn rpc_id(value: &Value) -> Option<Value> {
+    if value.is_string() || value.is_i64() || value.is_u64() {
+        return Some(value.clone());
+    }
+    let number = value.as_f64()?;
+    (number.fract() == 0.0 && number.abs() <= 9_007_199_254_740_991.0).then(|| json!(number as i64))
+}
 pub fn tools() -> Value {
-    let id = json!({"type":"string","minLength":1,"maxLength":128,"description":"Unique operation ID within this connection. Reusing identical input returns the original receipt, never repeats effects."});
+    let id = json!({"type":"string","minLength":1,"maxLength":128,"description":"Optional DTW-generated execution ID from an earlier response in this MCP session. Omit to read this app's latest accepted execution."});
     let read = json!({"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true});
     json!([
         {"name":"apps","description":"List running applications with stable identifiers and discover the supported app script API, schemas and limits. No window contents or screenshots are read.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":read},
-        {"name":"exec","description":"Run JavaScript in exactly the app identified by the required app identifier. Use app.windows(), app.observe({window_ref}), app.capture({window_ref}), app.press({window_ref,observation_ref,element_ref}), app.click({window_ref,observation_ref,x,y}); await methods sequentially. apps provides full schemas. The call waits for completion, returns original per-step receipts and the last PNG outside JS. state persists within a resident app context. Inspect effects independently; cancellation is not undo.",
-            "inputSchema":{"type":"object","additionalProperties":false,"properties":{"app":app_id::schema(),"request_id":id,"source":{"type":"string","minLength":1,"maxLength":65536,"description":"JavaScript async function body, at most 64 KiB UTF-8; supports await and return. No imports, filesystem, network or process APIs."},"timeout_ms":{"type":"integer","minimum":1,"maximum":super::scripts::MAX_TIMEOUT_MS,"default":super::scripts::DEFAULT_TIMEOUT_MS,"description":"Optional caller deadline; overrides the default in either direction. Standard MCP cancellation remains available."},"max_calls":{"type":"integer","minimum":1,"maximum":super::scripts::MAX_CALLS,"description":"Optional caller-selected bridge attempt budget. Omit for no call-count quota; deadline, VM memory and receipt byte budgets still apply."}},"required":["app","request_id","source"]},
+        {"name":"exec","description":"Run JavaScript in exactly the app identified by the required app identifier. Use app.windows(), app.observe({window_ref}), app.capture({window_ref}), app.press({window_ref,observation_ref,element_ref}), app.click({window_ref,observation_ref,x,y}); await methods sequentially. apps provides full schemas. The call waits for completion, returns original per-step receipts and the last PNG outside JS. state persists separately for each app in this MCP session. DTW generates execution_id; callers supply only app and source plus optional budgets. A new MCP request ID executes new work even when source is identical. Inspect effects independently; cancellation is not undo.",
+            "inputSchema":{"type":"object","additionalProperties":false,"properties":{"app":app_id::schema(),"source":{"type":"string","minLength":1,"maxLength":65536,"description":"JavaScript async function body, at most 64 KiB UTF-8; supports await and return. No imports, filesystem, network or process APIs."},"timeout_ms":{"type":"integer","minimum":1,"maximum":super::scripts::MAX_TIMEOUT_MS,"default":super::scripts::DEFAULT_TIMEOUT_MS,"description":"Optional caller deadline; overrides the default in either direction. Standard MCP cancellation remains available."},"max_calls":{"type":"integer","minimum":1,"maximum":super::scripts::MAX_CALLS,"description":"Optional caller-selected bridge attempt budget. Omit for no call-count quota; deadline, VM memory and receipt byte budgets still apply."}},"required":["app","source"]},
             "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}},
-        {"name":"result","description":"Read an original request receipt using its app identifier and request_id, including after cancellation or app exit. Does not execute or require the app to remain alive. Missing records never prove absence of effects.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"app":app_id::schema(),"request_id":id},"required":["app","request_id"]},"annotations":read}
+        {"name":"result","description":"Read this MCP session's latest accepted execution for the app, including a running or failed execution, cancellation and app exit. Optionally pass a DTW-generated execution_id to retrieve an older record. This is read-only and never replays work. Records do not cross connections; missing records never prove absence of effects.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"app":app_id::schema(),"execution_id":id},"required":["app"]},"annotations":read}
     ])
 }
 pub fn response(id: Value, reply: super::Reply, structured: bool) -> Value {

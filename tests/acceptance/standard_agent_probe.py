@@ -153,6 +153,9 @@ class Mcp:
         self.serial = 0
         self.messages = queue.Queue()
         self.pending = {}
+        # Fixture case names never go over the tool boundary. DTW supplies IDs.
+        self.executions = {}
+        self.exec_frames = {}
         self.lock = threading.Lock()
         self.transcript = (output / "mcp.jsonl").open("w")
         self.stderr = (output / "dtw-stderr.log").open("w")
@@ -235,17 +238,32 @@ class Mcp:
         result = self.rpc("tools/call", {"name": name, "arguments": arguments})
         return self.decode(result), result
 
-    def execute(self, app, request_id, source, **options):
-        data, result = self.tool("exec", {"app": app, "request_id": request_id,
-                                          "source": source, **options})
-        require(data.get("app") == app and data.get("request_id") == request_id,
-                "exec did not echo original app and request ID")
+    def execute(self, app, case, source, **options):
+        params = {"name": "exec", "arguments": {"app": app, "source": source, **options}}
+        rpc_id = self.begin("tools/call", params)
+        response = self.receive(rpc_id)
+        require("error" not in response, response)
+        result = response["result"]
+        data = self.decode(result)
+        require(data.get("app") == app and isinstance(data.get("execution_id"), str),
+                "exec did not return its app and generated execution ID")
+        require("request_id" not in data, "internal request ID leaked")
+        self.executions[(app, case)] = data["execution_id"]
+        self.exec_frames[(app, case)] = {"jsonrpc": "2.0", "id": rpc_id, "method": "tools/call", "params": params}
         return data, result
 
-    def receipt(self, app, request_id):
-        data, _ = self.tool("result", {"app": app, "request_id": request_id})
-        require(data.get("app") == app and data.get("request_id") == request_id,
-                "result did not preserve original app and request ID")
+    def receipt(self, app, case=None):
+        arguments = {"app": app}
+        execution_id = self.executions.get((app, case)) if case is not None else None
+        if execution_id is not None:
+            arguments["execution_id"] = execution_id
+        data, _ = self.tool("result", arguments)
+        require(data.get("app") == app and isinstance(data.get("execution_id"), str),
+                "result did not identify the recorded execution")
+        if execution_id is not None:
+            require(data["execution_id"] == execution_id, "result changed the execution identity")
+        elif case is not None:
+            self.executions[(app, case)] = data["execution_id"]
         return data
 
     def close(self):
@@ -349,6 +367,9 @@ def run_checks(mcp, target, peer, output, pixel_click, evidence):
     for name in ("exec", "result"):
         schema = by_name[name]["inputSchema"]
         require(schema["properties"]["app"]["type"] == "string" and "app" in schema["required"], schema)
+    require(set(by_name["exec"]["inputSchema"]["required"]) == {"app", "source"}, "exec requires bookkeeping")
+    require("request_id" not in by_name["exec"]["inputSchema"]["properties"], "request_id is still public input")
+    require(by_name["result"]["inputSchema"]["required"] == ["app"], "latest result requires an execution ID")
     discovered, _ = mcp.tool("apps", {})
     entries = discovered["apps"]
     ids = [entry["app"] for entry in entries]
@@ -373,8 +394,18 @@ def run_checks(mcp, target, peer, output, pixel_click, evidence):
             "semantic action repeated")
     require(peer.counters() == peer_before, "semantic action changed the other owned app")
     require(mcp.receipt(target.app_id, "semantic") == semantic, "original semantic receipt changed")
+    latest = mcp.receipt(target.app_id)
+    require(latest.pop("selection", None) == "latest_accepted", "latest lookup is not explicitly identified")
+    require(latest == semantic, "latest result differs from the accepted execution")
+    # Transport retry reuses the standard RPC id, without a model-supplied key.
+    frame = mcp.exec_frames[(target.app_id, "semantic")]
+    mcp._send(frame)
+    replay = mcp.decode(mcp.receive(frame["id"])["result"])
+    require(replay == semantic and target.counters()["clicks"] == before["clicks"] + 1,
+            "same RPC frame executed the action again")
     evidence["semantic"] = {"record": semantic, "before": before, "after": target.counters(),
-                            "peer_unchanged": True, "original_result_preserved": True}
+                            "peer_unchanged": True, "original_result_preserved": True,
+                            "same_rpc_replay_preserved": True, "latest_lookup_preserved": True}
     write_json(output / "evidence.json", evidence)
 
     stable = target.counters()
@@ -425,7 +456,7 @@ def run_checks(mcp, target, peer, output, pixel_click, evidence):
     require(successful(persisted) == "before-cancel", persisted)
     unchanged = target.counters()
     rpc_id = mcp.begin("tools/call", {"name": "exec", "arguments": {
-        "app": target.app_id, "request_id": "cancel-original", "source": CANCEL, "timeout_ms": 5000}})
+        "app": target.app_id, "source": CANCEL, "timeout_ms": 5000}})
     def native_read_finished():
         record = mcp.receipt(target.app_id, "cancel-original")
         require(record.get("status") == "running", f"cancel sample ended before notification: {record}")
@@ -452,6 +483,14 @@ def run_checks(mcp, target, peer, output, pixel_click, evidence):
             "cancel or recovery performed an action")
     evidence["cancellation"] = {"rpc_id": rpc_id, "entered": entered, "original": original,
                                 "recovery": restored, "committed_state_preserved": True, "counters_unchanged": True}
+
+    repeated_source = "state.repeated=(state.repeated??0)+1;return state.repeated;"
+    first, _ = mcp.execute(target.app_id, "same-source-1", repeated_source)
+    second, _ = mcp.execute(target.app_id, "same-source-2", repeated_source)
+    require(successful(first) == 1 and successful(second) == 2, "new call was deduplicated by script content")
+    require(first["execution_id"] != second["execution_id"], "execution ID reused for a new call")
+    evidence["execution_identity"] = {"model_supplied_ids": False, "same_source_runs_twice": True,
+                                      "ids_distinct": True}
 
     # Logical app state and window refs survive A→B→A. Each short-lived scene
     # owner is reaped independently of the resident app/AX context.
@@ -592,7 +631,7 @@ def main():
         evidence["finished_unix_ms"] = int(time.time() * 1000)
         write_json(output / "evidence.json", evidence)
     print(json.dumps({"passed": failure is None, "evidence": str(output / "evidence.json"),
-                      "checks": [key for key in ("semantic", "negative_controls", "capture", "pixel_click",
+                      "checks": [key for key in ("semantic", "execution_identity", "negative_controls", "capture", "pixel_click",
                                                  "cancellation", "app_switch_capture", "independent_sessions") if key in evidence],
                       "pixel_click": args.pixel_click, "failure": failure}, ensure_ascii=False))
     return 0 if failure is None else 1
