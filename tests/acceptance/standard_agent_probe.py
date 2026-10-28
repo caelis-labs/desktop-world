@@ -156,6 +156,8 @@ class Mcp:
         # Fixture case names never go over the tool boundary. DTW supplies IDs.
         self.executions = {}
         self.exec_frames = {}
+        self.exec_summaries = {}
+        self.projection_checks = []
         self.lock = threading.Lock()
         self.transcript = (output / "mcp.jsonl").open("w")
         self.stderr = (output / "dtw-stderr.log").open("w")
@@ -250,7 +252,22 @@ class Mcp:
         require("request_id" not in data, "internal request ID leaked")
         self.executions[(app, case)] = data["execution_id"]
         self.exec_frames[(app, case)] = {"jsonrpc": "2.0", "id": rpc_id, "method": "tools/call", "params": params}
-        return data, result
+        self.exec_summaries[(app, case)] = data
+        # Acceptance inspects the authoritative ledger explicitly. Ordinary
+        # Agent workflows consume exec directly and do not need this query.
+        full = self.receipt(app, case)
+        require("steps" not in data.get("script", {}), "exec leaked the full ledger")
+        for key in ("app", "execution_id", "status", "value", "error", "context_reset", "state_reset", "payload_expired"):
+            require(data.get(key) == full.get(key), f"projection changed {key}")
+        if "script" in full:
+            require(data["script"]["summary"]["steps"] == len(full["script"]["steps"]), "summary lost steps")
+            for key in ("failure", "state_committed", "shutdown_error"):
+                require(data["script"].get(key) == full["script"].get(key), f"projection changed {key}")
+        self.projection_checks.append({"case":case, "app":app,
+            "compact_json_bytes":len(json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode()),
+            "full_json_bytes":len(json.dumps(full, separators=(",", ":"), ensure_ascii=False).encode()),
+            "summary":data.get("script", {}).get("summary")})
+        return full, result
 
     def receipt(self, app, case=None):
         arguments = {"app": app}
@@ -380,6 +397,7 @@ def run_checks(mcp, target, peer, output, pixel_click, evidence):
         require(ids.count(fixture.app_id) == 1, f"owned fixture missing from apps: {fixture.app_id}")
     require(set(discovered["script"]["methods"]) == {"windows", "observe", "capture", "press", "click"},
             "script methods are not discoverable")
+    require("request_id" not in discovered["script"]["entry"], "discovery advertised a model request ID")
     evidence["initialize"], evidence["tools"], evidence["apps"] = initialized, tools, discovered
     write_json(output / "evidence.json", evidence)
 
@@ -401,7 +419,7 @@ def run_checks(mcp, target, peer, output, pixel_click, evidence):
     frame = mcp.exec_frames[(target.app_id, "semantic")]
     mcp._send(frame)
     replay = mcp.decode(mcp.receive(frame["id"])["result"])
-    require(replay == semantic and target.counters()["clicks"] == before["clicks"] + 1,
+    require(replay == mcp.exec_summaries[(target.app_id, "semantic")] and target.counters()["clicks"] == before["clicks"] + 1,
             "same RPC frame executed the action again")
     evidence["semantic"] = {"record": semantic, "before": before, "after": target.counters(),
                             "peer_unchanged": True, "original_result_preserved": True,
@@ -625,6 +643,8 @@ def main():
             except BaseException as error:
                 cleanup.append({"resource": name, "error": str(error)})
                 failure = failure or {"type": "CleanupFailure", "message": str(error)}
+        if mcp is not None:
+            evidence["exec_projection"] = mcp.projection_checks
         evidence["cleanup"] = cleanup
         evidence["failure"] = failure
         evidence["passed"] = failure is None

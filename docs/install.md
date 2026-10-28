@@ -62,7 +62,7 @@ Do not install both a manually configured server and the plugin's copy into the 
 
 ## First execution
 
-Start the configured MCP connection, call `apps`, choose a returned app, then call `exec` with its returned `app` ID string, a new request ID and a small script such as `return await app.windows();`. `exec` returns when the script settles. `result` reads an original receipt when needed; it is not a normal polling step. Detailed tool arguments and cancellation are in the [MCP contract](app-protocol-v1.md).
+Start the configured MCP connection, call `apps`, choose a returned app, then call `exec` with only its returned `app` ID string and a small `source` script such as `return await app.windows();`. `exec` returns when the script settles. `result` reads an original receipt when needed; it is not a normal polling step. Detailed tool arguments and cancellation are in the [MCP contract](app-protocol-v1.md).
 
 Native execution currently targets macOS. Accessibility and Screen Recording access are OS prerequisites for the relevant operations. Grant those OS permissions to the actual process identity used in your environment when macOS requires them; changing an unsigned build's path or bytes may require rechecking that identity. No capability approval token is supplied to DTW.
 
