@@ -33,12 +33,14 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dtw',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True)
+    parser.add_argument('--warmup',action='store_true',help='Explicitly read and capture before discovery; reported separately from cold-start acceptance')
     args=parser.parse_args()
     output=args.output.absolute();output.mkdir(mode=0o700)
     binary=args.dtw.resolve(strict=True)
     source=Path(__file__).resolve().parents[1]/'fixtures/native-discovery-web/main.swift'
     evidence={'kind':'owned-wkwebview-native-ax','binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),
               'fixture_source_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),
+              'explicit_read_capture_warmup':args.warmup,
               'started_unix_ms':int(time.time()*1000),'accepted':False}
     fixture=mcp=None;failure=None
     try:
@@ -49,6 +51,9 @@ def main():
         mcp.rpc('initialize',{'protocolVersion':'2025-06-18','capabilities':{},'clientInfo':{'name':'web-discovery-probe','version':'1'}})
         mcp.notify('notifications/initialized')
         evidence['app']=fixture.app_id
+        if args.warmup:
+            warmup,_=mcp.execute(fixture.app_id,'warmup',"const w=(await app.windows()).windows.find(w=>w.title==='DTW Discovery Browser').window_ref;const sample=await app.observe({window_ref:w,limit:5});await app.capture({window_ref:w});return {coverage:sample.coverage,next:sample.next};")
+            evidence['warmup']=successful(warmup)
         record,_=mcp.execute(fixture.app_id,'find',FIND)
         found=successful(record);evidence['discovery']=found
         require(fixture.counters()=={'clicks':0,'actions_started':0},'Read changed the page')

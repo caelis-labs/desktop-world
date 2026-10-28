@@ -26,12 +26,18 @@
 | 方法 | 返回值 | 执行范围与绑定 |
 | --- | --- | --- |
 | `await app.windows()` | `{windows:[{window_ref,title,visible}],coverage,diagnostics}` | 发现当前 app 的窗口 |
-| `await app.observe({window_ref})` | `{window_ref,observation_ref,kind:"semantic",elements:[{element_ref,role,name,value,enabled,actions,label,can_press}]}` | 创建语义观察 |
+| `await app.observe({window_ref,role?,text?,limit?})` 或 `await app.observe({cursor})` | `{window_ref,observation_ref,kind:"semantic",elements:[{element_ref,role,name,value,enabled,actions,label,can_press}],next,coverage:{complete,reason,visited}}` | 创建或继续原生语义查询，返回当前页 |
 | `await app.capture({window_ref})` | `{window_ref,observation_ref,kind:"pixels",image:{width,height,coordinate_space:"image_pixels"}}` | 返回像素观察元数据，图片字节在 VM 外 |
 | `await app.press({window_ref,observation_ref,element_ref})` | 原协议的动作 receipt | 当前语义观察中的可按元素 |
 | `await app.click({window_ref,observation_ref,x,y})` | 原协议的动作 receipt | 当前像素观察及有效图片坐标 |
 
 语义元素的 `role` 是 DTW 规范角色；`name`、`value` 为字符串或 null，`enabled` 为 Boolean 或 null。不可读信息保留 null。`actions` 列出当前已实现且可用的操作，本轮仅可能包含 `press`。`label` 用于展示；不能从拼接 label 反推结构化值或状态。
+
+查询按原生遍历过程筛选：`role` 精确匹配，`text` 对名称、值和描述做不区分大小写的子串匹配，两者同时提供时取交集。默认每页 40 个匹配元素，`limit` 为 1–100。原生节点、时间和字节边界也可能提前结束一页，所以零匹配仍可能返回 `next`。续页只传 `{cursor: page.next}`，不重复窗口或筛选条件；游标使用一次，保留原生 frontier，不从根重扫。
+
+每个窗口独立保留一条语义查询和一份像素绑定。所有查询页共用 `observation_ref`，早先页的 `element_ref` 仍可操作；读取其他窗口、刷新未变化窗口清单、同窗截图不会清空该查询。新同窗同类读取替换旧绑定，失败的替换或续页也使对应查询失效；获准执行的动作消费本窗两类绑定。引用自初次获取起最多保留 15 秒，续页不延长期限。
+
+`coverage.visited` 是查询累计访问节点数。`next=null` 仅表示无法继续，不保证完整；资源上限和已知读取缺口会保留 `complete=false` 与 `reason`。`complete=true` 只表示本次暴露出的活树遍历无已知缺口，不是 UI 原子快照或目标不存在的证明。WebKit 冷启动可能延迟发布内容树，现有接口尚未封装该就绪过程，见[分页验收边界](paged-discovery-acceptance.md)。
 
 `windows` 不接受参数，其他方法恰好接受一个上述字段构成的对象。多余 app_ref/PID、未知方法或 raw native 参数在 bridge 拒绝；跨上下文引用、伪窗口和未实现的能力由协议/Core 拒绝。每次原生调用重新校验完整 app 实例、目标、provider、观察种类和生命周期。窗口发现、新观察和动作对旧引用的影响与原子调用完全相同；不能用 state 中保存的字符串恢复失效引用。
 
@@ -44,19 +50,31 @@ const inventory = await app.windows();
 const matches = inventory.windows.filter(w => w.title === "Target window");
 if (matches.length !== 1) throw new Error("Target window is unavailable or ambiguous");
 const window = matches[0];
-const before = await app.observe({window_ref: window.window_ref});
-const buttons = before.elements.filter(e =>
-  e.role === "button" && e.name === "Increment" && e.actions.includes("press"));
-if (buttons.length !== 1) throw new Error("Target control is unavailable or ambiguous");
+let page = await app.observe({window_ref: window.window_ref, role: "button", text: "Increment"});
+const buttons = [];
+while (true) {
+  buttons.push(...page.elements.filter(e =>
+    e.name === "Increment" && e.enabled === true && e.can_press));
+  if (!page.next) break;
+  page = await app.observe({cursor: page.next});
+}
+if (!page.coverage.complete || buttons.length !== 1)
+  throw new Error("Target discovery is incomplete or ambiguous");
 const button = buttons[0];
 await app.press({
   window_ref: window.window_ref,
-  observation_ref: before.observation_ref,
+  observation_ref: page.observation_ref,
   element_ref: button.element_ref
 });
-const after = await app.observe({window_ref: window.window_ref});
-state.completedRuns = (state.completedRuns ?? 0) + 1;
-return after.elements;
+// 在已知的计数器 fixture 上读回；业务应用应替换为自己的效果判据。
+let after = await app.observe({window_ref: window.window_ref, text: "Count:"});
+const counts = [];
+while (true) {
+  counts.push(...after.elements.map(e => ({name:e.name, value:e.value})));
+  if (!after.next) break;
+  after = await app.observe({cursor:after.next});
+}
+return {counts, coverage:after.coverage};
 ```
 
 标题和标签只是脚本对当前 app 观察结果的选择条件，不构成应用或窗口的唯一身份。动作回执中的 `dispatched` 也不证明预期效果；调用者必须检查独立读回的内容。
@@ -125,7 +143,7 @@ capture 只把尺寸、坐标系和 opaque observation_ref 交给 VM；PNG 字�
 
 ## 可发现合同与库存证据
 
-客户端以 `apps` 返回的 `script.methods` 的 parameters/returns/执行条件/reference rules 为准；其中的最小组合例经过执行测试。`dtw api` 从同一 Rust schemas 生成 TypeScript；仓库中的 [TypeScript 声明](app-script-api.d.ts) 是生成文件，提交的仍是 JavaScript 函数体，不需要类型编译器或安装旧插件。
+客户端以 `apps` 返回的 `script.methods` 的 parameters/returns/执行条件/reference rules 为准；组合行为有 Core/VM 回归与真实原生验收。`dtw api` 从同一 Rust schemas 生成 TypeScript；仓库中的 [TypeScript 声明](app-script-api.d.ts) 是生成文件，提交的仍是 JavaScript 函数体，不需要类型编译器或安装旧插件。
 
 `app.windows()` 的成功 coverage 与原子入口相同；`empty_within_scope` 不等于应用无窗口。失败可通过 `e.code === "window_inventory_unproven"` 与 `e.details.coverage/diagnostics` 处理，无须解析 message。每次成功 windows 的 `script.steps[].inventory` 保留 coverage 与诊断，即使脚本随后抛错或 value/image 被驱逐，仍可调查首次读到空清单的原因。它不重复保存标题、图片或原生窗口 ID；失败步骤保持完整 error/details。
 
