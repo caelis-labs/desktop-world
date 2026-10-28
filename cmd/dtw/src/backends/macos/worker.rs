@@ -74,9 +74,57 @@ fn native(request: &Value, scene: bool) -> Value {
         result
     }
 }
-fn dispatch(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value {
+fn input_operation(op: &str) -> bool {
+    matches!(
+        op,
+        "press" | "set_value" | "focus" | "type_text" | "keypress" | "scroll" | "click"
+    )
+}
+fn dispatch(request: Value, leased: &mut bool, scene_worker: bool) -> Value {
+    let op = request["operation"].as_str().unwrap_or("");
+    if matches!(op, "capture" | "click" | "scroll") && !scene_worker {
+        return rejected(
+            json!({"error":"invalid_request","message":"Scene operations require a short-lived scene owner"}),
+            op,
+        );
+    }
+    // Includes all validation, focus establishment, native dispatch and key/button
+    // release. No second DTW process can move focus inside an admitted transaction.
+    let _input_lease = if input_operation(op) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let left = request["deadline_unix_ms"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_sub(now);
+        if left == 0 || TERMINATING.load(Ordering::Relaxed) {
+            return rejected(
+                json!({"error":"deadline_exceeded","message":"Input deadline elapsed before global admission"}),
+                op,
+            );
+        }
+        match scene_lease::lock_input(Duration::from_millis(left)) {
+            Ok(lease) => Some(lease),
+            Err(message) => {
+                return rejected(json!({"error":"native_input_busy","message":message}), op)
+            }
+        }
+    } else {
+        None
+    };
+    if TERMINATING.load(Ordering::Relaxed) {
+        return rejected(
+            json!({"error":"native_stopping","message":"Input admission is closed"}),
+            op,
+        );
+    }
+    dispatch_owned(request, leased, scene_worker)
+}
+fn dispatch_owned(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value {
     let op = request["operation"].as_str().unwrap_or("").to_owned();
-    if op != "capture" && op != "click" {
+    if !matches!(op.as_str(), "capture" | "click" | "scroll") {
         return native(&request, false);
     }
     if !scene_worker {
@@ -118,8 +166,11 @@ fn dispatch(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value 
     }
     request["pid"] = request["target"]["app"]["pid"].clone();
     request["window_id"] = request["target"]["native_id"].clone();
-    let mut result = native(&request, true);
-    if op == "click" {
+    // Scroll establishes focus and posts its wheel event in the same input
+    // transaction, but shares Scene.swift's SCK transparency proof. Keep SCK
+    // in this short-lived owner and retain both scene/input leases until exit.
+    let mut result = native(&request, op != "scroll");
+    if op == "click" || op == "scroll" {
         return result;
     }
     if result.get("error").is_some() {
@@ -136,7 +187,7 @@ fn dispatch(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value 
     result
 }
 fn rejected(mut result: Value, operation: &str) -> Value {
-    if operation == "click" {
+    if input_operation(operation) {
         result["dispatch"] = json!("not_dispatched");
         result["evidence"] = json!("unverified");
     }
@@ -186,12 +237,12 @@ mod tests {
 
     #[test]
     fn resident_ax_worker_never_acquires_a_scene_or_dispatches_pixel_input() {
-        for operation in ["capture", "click"] {
+        for operation in ["capture", "click", "scroll"] {
             let mut leased = false;
             let reply = dispatch(json!({"operation":operation}), &mut leased, false);
             assert_eq!(reply["error"], "invalid_request");
             assert!(!leased);
-            if operation == "click" {
+            if input_operation(operation) {
                 assert_eq!(reply["dispatch"], "not_dispatched");
             }
         }

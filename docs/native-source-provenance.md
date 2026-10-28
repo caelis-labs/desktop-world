@@ -24,7 +24,7 @@ short paths is `libs/cua-driver/rust/crates/platform-macos/src/`.
 | --- | --- | --- |
 | `apps/mod.rs` | `ef76ce2eb70c857e571db5251b12ad3693e96c770a4998dbbfaa327d57b5368e` | `RequestContext.catalog`, `executable`, `bundle`: kernel PID enumeration, executable lookup, innermost application bundle classification |
 | `windows.rs` | `60958be50493d4e3e52243dfdf6e39d765423f2059cb4cb7f8d3f2428948da87` | `cgWindows`: public WindowServer owner/ID/geometry metadata; no SkyLight enumeration path |
-| `ax/enablement.rs` | `0c254408f71684bf8687cda4754ab5f9d99d6d3076579b7b656b17b87ae10c90` | `RequestContext.startStamp`: exact-size `proc_pidinfo(PROC_PIDTBSDINFO)` birth timestamp; browser AX enablement is excluded |
+| `ax/enablement.rs` | `0c254408f71684bf8687cda4754ab5f9d99d6d3076579b7b656b17b87ae10c90` | `RequestContext.startStamp`: exact-size `proc_pidinfo(PROC_PIDTBSDINFO)` birth timestamp; browser AX opt-in and window-local readiness are adapted in the first release core batch |
 | `ax/bindings.rs` | `00b68eaab97fdbef71402bc48e37941f84940e02facbb89362355aaeaa484df7` | AX attributes/actions, PID lookup, retained window arrays, exact `_AXUIElementGetWindow` identity and bounded parent ascent |
 | `ax/exact_target.rs` | `a06cd9602add11130935a6d6777031b0aefccc2d50ffbe94f48ac4a171def3a7` | `NativeStore.candidates`, `validate`, `owned`: exact window ID and element/window relationship; no title/geometry identity guesses |
 | `ax/window_scope.rs` | `e01d85f0218cb8bc38004489bb444479dd4b10d29bd5068e1a94896ebe5f3f39` | `ordinaryWindow`: window roles/subroles and explicit open/save-panel identifiers; transient/helper resolution is excluded |
@@ -126,15 +126,17 @@ window verification for the existing SCK capture and visible pixel-click path.
 The SCK implementation is not sourced from CUA by this port. Its geometry and hit
 stack checks remain separate from native app/window identity validation.
 
-## Explicitly deferred source groups
+## Initial C2 deferrals (historical)
 
-This slice does not migrate the full CUA snapshot store, ToolRegistry, SDK,
+This paragraph records the original C2 boundary. Later C5/C6 and first-release-core
+sections below record the additional engine, enablement, input and platform groups.
+The initial slice did not migrate the full CUA snapshot store, ToolRegistry, SDK,
 QuickJS bridge, browser session lifecycle, browser AX enablement, menu activation,
 selection, set-value, helper/modal window correlation, focus activation or input
-fallbacks. It does not import SkyLight enumeration or the
-`input/skylight.rs::activate_without_raise` sequence. Windows UIA and Windows
-Graphics Capture are separate future provider groups; macOS compilation or GUI
-evidence says nothing about Windows acceptance.
+fallbacks. The current implementation still does not import SkyLight enumeration or the
+`input/skylight.rs::activate_without_raise` sequence. Windows UIA is now recorded separately in the cross-platform manifest; Windows
+Graphics Capture remains deferred. macOS compilation or GUI evidence says nothing
+about Windows acceptance.
 
 The reviewed upstream notice attributes the focus-without-raise sequence to
 yabai, Windows paths to trope-cua/Interface-Agent, JS engine paths to
@@ -258,7 +260,7 @@ JavaScript parser is introduced. The fixed CUA donor remains
 | Donor path (under `libs/cua-driver/rust/crates/cua-driver-core/src/script_tool/`) | Original SHA-256 | DTW adaptation |
 | --- | --- | --- |
 | `engine.rs` | `fa61393ba5b685df34858a81e8e32e8fbdab77e17f2e1094514b43510891242d` | QuickJS runtime/context setup, memory/stack limits, interrupt and job draining; `script_engine/mod.rs` uses bounded std channels and an absolute Core deadline |
-| `prelude.js` | `af23eaf9c7c198f7feb6ac38e26c94d5b4d76bc0b794c491b80adb9933ed2865` | Hidden bridge, console/error/settlement mechanics; the facade is replaced with five methods bound to the existing app context, with strict JSON state/result encoding |
+| `prelude.js` | `af23eaf9c7c198f7feb6ac38e26c94d5b4d76bc0b794c491b80adb9933ed2865` | Hidden bridge, console/error/settlement mechanics; the initial C5 facade replaces upstream methods with five app-bound methods (now expanded to ten), with strict JSON state/result encoding |
 
 The complete upstream `App`, `Locator`, raw invocation, global discovery/launch,
 file/network/process and unrestricted platform objects are excluded. DTW owns
@@ -305,3 +307,49 @@ to compile all upstream CUA. Before adding a capability group:
 The detailed capability-group owner matrix is in the
 [current architecture baseline](next-architecture-baseline.md). This procedure
 adds no new public capability and makes no claim that C6 has already shipped.
+
+
+## First release core: macOS surfaces and common input
+
+The donor commit remains `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`.
+`platform-macos/src/input/keyboard.rs` SHA-256 is
+`5ed07b20a5f378c8429cd09b5a5cf608ddcd1a6a840888d23d37e30ca800514a`.
+The previously listed `ax/enablement.rs` and `ax/bindings.rs` supply the native
+opt-in/attribute references; no upstream worker, SDK or full event orchestrator
+is linked. Unicode pairs, keycode/chord mapping and release ordering are adapted
+to DTW's bounded owner. CRLF is one Return; physical input checks the exact target
+between complete input segments.
+
+DTW additionally retains each private CoreGraphics event source through release
+acknowledgement. It compares the private and combined-session baselines with
+actually posted release counts and both tables' progress, held keys/buttons and
+touched modifier flags. Private progress can precede combined-session progress;
+combined counters alone cannot attribute physical input to this source.
+Normal completion and worker shutdown use the same bounded pending-input
+drain; a temporarily empty global key table is insufficient. Counter reads run
+through at most one asynchronous probe per source so a stalled getter cannot
+trap the shutdown thread. A drain timeout permanently closes admission and
+retains cleanup failure, including across concurrent shutdown attempts. This
+is internal delivery/cleanup evidence, not application-effect verification.
+
+`platform-macos/src/input/mouse.rs` SHA-256 is
+`66d728101546a4de74fe4bfab5c302922c1ec45d7f77ac9ba940f85a5a7a85d8`.
+Lines 269–301 inform pointer warp/tracking; 304–343 document upstream scroll
+routing uncertainty; 1696–1773 provide the targeted line-scroll reference.
+DTW uses one line event after pointer settling, retains the source through a
+bounded drain and revalidates the target. It does not import the donor's private
+event stamps, multiple dispatch routes, primer events or pixel conversion.
+Dispatch still requires independent application-effect readback.
+
+The WindowServer surface registry, separate SemanticBinding, per-window cold
+content readiness, process-wide input lease, exact target revalidation and
+semantic setter are DTW-owned native-SDK integrations. macOS string setters
+are limited to writable AXTextField/AXTextArea/AXComboBox controls; a broad
+AXValue-settable response on a structural node is not text-edit capability. Surface enumeration no
+longer requires AX windows; semantic and keyboard operations retain their own AX
+and focus conditions. Per-point ScreenCaptureKit visibility checks are owned by
+a short-lived scene process, including wheel input. These changes do not promise
+background, lock-screen or pointer-independent input.
+
+Windows and experimental X11 donor hashes, changes and additional notices are
+recorded in [the cross-platform manifest](native-source-provenance-cross-platform.md).

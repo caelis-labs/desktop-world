@@ -22,7 +22,7 @@ mod scripts;
 pub mod server;
 #[cfg(test)]
 mod tests;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod transport;
 pub mod wire;
 
@@ -90,11 +90,20 @@ fn operation(command: &Command) -> &'static str {
         }
         Command::Capture => "capture",
         Command::Press { .. } => "press",
-        Command::Click { .. } => "click",
+        Command::Click { .. } | Command::ClickWithOptions { .. } => "click",
+        Command::SetValue { .. } => "setValue",
+        Command::Input(input) => input.capability().as_str(),
     }
 }
 fn is_action(command: &Command) -> bool {
-    matches!(command, Command::Press { .. } | Command::Click { .. })
+    matches!(
+        command,
+        Command::Press { .. }
+            | Command::Click { .. }
+            | Command::ClickWithOptions { .. }
+            | Command::SetValue { .. }
+            | Command::Input(_)
+    )
 }
 
 struct Snapshot {
@@ -178,6 +187,7 @@ struct State {
     terminal: Option<Error>,
     shutdown_error: Option<WireError>,
     active: Option<String>,
+    reconciling: bool,
     jobs: Vec<Job>,
     windows: HashMap<String, WindowTarget>,
     observations: Vec<Snapshot>,
@@ -187,7 +197,6 @@ struct State {
 }
 pub struct Coordinator<B: Backend> {
     runtime: Runtime<B>,
-    app: AppInstance,
     coverage: &'static str,
     conditions: &'static [&'static str],
     app_name: String,
@@ -208,6 +217,16 @@ impl<B: Backend + 'static> Coordinator<B> {
         app_name: String,
         script_state: Arc<Mutex<Value>>,
     ) -> Arc<Self> {
+        Self::with_app_instances(backend, vec![app], app_name, script_state)
+            .expect("single application instance is valid")
+    }
+
+    pub fn with_app_instances(
+        backend: B,
+        apps: Vec<AppInstance>,
+        app_name: String,
+        script_state: Arc<Mutex<Value>>,
+    ) -> Result<Arc<Self>, Error> {
         let supported = Capability::ALL
             .into_iter()
             .filter(|c| backend.supports(*c))
@@ -215,8 +234,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         let coverage = backend.coverage();
         let conditions = backend.conditions();
         let owner = Arc::new(Self {
-            runtime: Runtime::new(backend, app.clone(), OBSERVATION_TTL),
-            app,
+            runtime: Runtime::with_apps(backend, apps, OBSERVATION_TTL)?,
             coverage,
             conditions,
             app_name,
@@ -226,6 +244,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 terminal: None,
                 shutdown_error: None,
                 active: None,
+                reconciling: false,
                 jobs: Vec::new(),
                 windows: HashMap::new(),
                 observations: Vec::new(),
@@ -235,7 +254,63 @@ impl<B: Backend + 'static> Coordinator<B> {
             max_requests: MAX_REQUESTS,
             max_payload_bytes: MAX_PAYLOAD_BYTES,
         });
-        owner
+        Ok(owner)
+    }
+
+    pub fn instances(&self) -> Vec<AppInstance> {
+        self.runtime.instances()
+    }
+
+    pub fn reconcile_instances(&self, apps: Vec<AppInstance>) -> Result<(), Error> {
+        {
+            let mut state = self.state.lock().unwrap();
+            if let Some(error) = &state.terminal {
+                return Err(error.clone());
+            }
+            if state.active.is_some() || state.reconciling {
+                return Err(Error::Busy);
+            }
+            state.reconciling = true;
+        }
+        let result = catch_unwind(AssertUnwindSafe(|| self.runtime.reconcile_instances(apps)));
+        let (result, panicked) = match result {
+            Ok(result) => (result, false),
+            Err(_) => (
+                Err(Error::BackendFailed(
+                    "Instance reconciliation panicked".into(),
+                )),
+                true,
+            ),
+        };
+        let cleanup = self.runtime.cleanup_error().or_else(|| {
+            panicked.then(|| Error::NativeFailure {
+                code: "shutdown_failed".into(),
+                message: "Instance binding cleanup panicked; native resource settlement is unknown"
+                    .into(),
+            })
+        });
+        if cleanup.is_some() || panicked {
+            self.record_shutdown_error(cleanup.clone(), None);
+            self.close();
+        }
+        let members = self.runtime.instances();
+        let mut state = self.state.lock().unwrap();
+        if result.is_ok() && state.terminal.is_none() {
+            state
+                .windows
+                .retain(|_, target| members.contains(&target.app));
+            let windows = &state.windows.keys().cloned().collect::<Vec<_>>();
+            state
+                .observations
+                .retain(|snapshot| windows.contains(&snapshot.window_ref));
+        }
+        state.reconciling = false;
+        self.finished.notify_all();
+        if let Some(error) = cleanup {
+            return Err(error);
+        }
+        result?;
+        state.terminal.clone().map_or(Ok(()), Err)
     }
     pub fn handle(self: &Arc<Self>, request: Request) -> Reply {
         match request {
@@ -329,7 +404,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         if let Some(error) = &state.terminal {
             return Reply::error(wire::core_error(error));
         }
-        if state.active.is_some() {
+        if state.active.is_some() || state.reconciling {
             return Reply::error(wire::core_error(&Error::Busy));
         }
         if submitted.target.app_ref != self.app_ref {
@@ -483,14 +558,28 @@ impl<B: Backend + 'static> Coordinator<B> {
             return match self.runtime.windows_until(deadline) {
                 Err(error) => Work::read_error(error),
                 Ok(inventory) => {
+                    let mut value = app_inventory_report(&inventory);
+                    let proven: Vec<_> = inventory
+                        .instances
+                        .iter()
+                        .filter(|instance| instance.report.is_ok())
+                        .map(|instance| instance.app.clone())
+                        .collect();
                     let windows = inventory.windows;
                     if windows.len() > 256 {
                         return Work::read_error(Error::BackendFailed(
                             "Window inventory exceeds protocol limit".into(),
                         ));
                     }
-                    let mut bound = HashMap::new();
                     let state = self.state.lock().unwrap();
+                    // A failed member's inventory is not proof of disappearance.
+                    // Keep those private mappings, but return only freshly proven windows.
+                    let mut bound: HashMap<_, _> = state
+                        .windows
+                        .iter()
+                        .filter(|(_, target)| !proven.contains(&target.app))
+                        .map(|(key, target)| (key.clone(), target.clone()))
+                        .collect();
                     let rows:Vec<_>=windows.into_iter().map(|window| {
                         let key=state.windows.iter().find(|(_, target)| **target == window.target)
                             .map(|(key, _)| key.clone()).unwrap_or_else(|| reference("window"));
@@ -500,7 +589,6 @@ impl<B: Backend + 'static> Coordinator<B> {
                     Work {
                         completed: Completed {
                             value: Some({
-                                let mut value = wire::inventory_report(&inventory.report, true);
                                 value["windows"] = json!(rows);
                                 value
                             }),
@@ -568,6 +656,11 @@ impl<B: Backend + 'static> Coordinator<B> {
             Command::Press {
                 observation_ref,
                 element_ref,
+            }
+            | Command::SetValue {
+                observation_ref,
+                element_ref,
+                ..
             } => {
                 let bound = {
                     let state = self.state.lock().unwrap();
@@ -590,12 +683,18 @@ impl<B: Backend + 'static> Coordinator<B> {
                     }
                 };
                 match bound {
-                    Some((observation, element)) => Work::action(self.runtime.press_until(
-                        &target,
-                        observation,
-                        element,
-                        deadline,
-                    )),
+                    Some((observation, element)) => Work::action(match &submitted.command {
+                        Command::SetValue { value, .. } => self.runtime.set_value_until(
+                            &target,
+                            observation,
+                            element,
+                            value,
+                            deadline,
+                        ),
+                        _ => self
+                            .runtime
+                            .press_until(&target, observation, element, deadline),
+                    }),
                     None => Work::rejected(&submitted.command, Error::InvalidObservation),
                 }
             }
@@ -603,6 +702,12 @@ impl<B: Backend + 'static> Coordinator<B> {
                 observation_ref,
                 x,
                 y,
+            }
+            | Command::ClickWithOptions {
+                observation_ref,
+                x,
+                y,
+                ..
             } => {
                 let bound = {
                     let state = self.state.lock().unwrap();
@@ -616,14 +721,24 @@ impl<B: Backend + 'static> Coordinator<B> {
                         .map(|o| o.core)
                 };
                 match bound {
-                    Some(observation) => Work::action(self.runtime.click_until(
-                        &target,
-                        observation,
-                        PixelPoint { x: *x, y: *y },
-                        deadline,
-                    )),
+                    Some(observation) => {
+                        let options = match submitted.command {
+                            Command::ClickWithOptions { options, .. } => options,
+                            _ => ClickOptions::default(),
+                        };
+                        Work::action(self.runtime.click_with_options_until(
+                            &target,
+                            observation,
+                            PixelPoint { x: *x, y: *y },
+                            options,
+                            deadline,
+                        ))
+                    }
                     None => Work::rejected(&submitted.command, Error::InvalidObservation),
                 }
+            }
+            Command::Input(input) => {
+                Work::action(self.runtime.input_until(&target, input, deadline))
             }
             Command::Windows | Command::Script { .. } | Command::ContinueObservation { .. } => {
                 unreachable!()
@@ -850,7 +965,7 @@ impl<B: Backend + 'static> Coordinator<B> {
     pub fn wait_idle(&self, timeout: Duration) -> bool {
         let until = Instant::now() + timeout;
         let mut state = self.state.lock().unwrap();
-        while state.active.is_some() {
+        while state.active.is_some() || state.reconciling {
             let left = until.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 return false;
@@ -882,6 +997,91 @@ fn apply_publication(state: &mut State, publication: Publication) {
     }
 }
 
+fn app_inventory_report(inventory: &AppWindowInventory) -> Value {
+    if inventory.instances.len() == 1 {
+        if let Ok(report) = &inventory.instances[0].report {
+            return wire::inventory_report(report, true);
+        }
+    }
+    let reports: Vec<_> = inventory
+        .instances
+        .iter()
+        .filter_map(|instance| instance.report.as_ref().ok())
+        .collect();
+    let errors: Vec<_> = inventory
+        .instances
+        .iter()
+        .filter_map(|instance| instance.report.as_ref().err())
+        .collect();
+    aggregate_inventory_report(&reports, &errors, inventory.windows.len())
+}
+
+fn unavailable_app_inventory(errors: &[Error]) -> Value {
+    aggregate_inventory_report(&[], &errors.iter().collect::<Vec<_>>(), 0)
+}
+
+fn aggregate_inventory_report(
+    reports: &[&InventoryReport],
+    failures: &[&Error],
+    window_count: usize,
+) -> Value {
+    let mut errors: Vec<_> = failures.iter().map(|error| core_error(error)).collect();
+    for error in &mut errors {
+        if let Some(message) = error["message"].as_str() {
+            if message.len() > 1024 {
+                let mut end = 1024;
+                while !message.is_char_boundary(end) {
+                    end -= 1;
+                }
+                error["message"] = json!(&message[..end]);
+                error["message_truncated"] = json!(true);
+            }
+        }
+    }
+    // At most 32 validated members, each with 32 counters and 8 error codes.
+    // Same-provider counters retain their names; heterogeneous providers are
+    // namespaced so unrelated counters are never combined under one meaning.
+    let same_provider = reports.first().is_some_and(|first| {
+        reports
+            .iter()
+            .all(|report| report.diagnostics.provider == first.diagnostics.provider)
+    });
+    let provider = if same_provider {
+        reports[0].diagnostics.provider.as_str()
+    } else {
+        "dtw.instance_inventory"
+    };
+    let mut counters = std::collections::BTreeMap::<String, u64>::new();
+    let mut error_codes = Vec::new();
+    for report in reports {
+        for (name, count) in &report.diagnostics.counters {
+            let key = if same_provider {
+                name.clone()
+            } else {
+                format!("{}:{name}", report.diagnostics.provider)
+            };
+            *counters.entry(key).or_default() += count;
+        }
+        for code in &report.diagnostics.error_codes {
+            if !error_codes.contains(code) {
+                error_codes.push(*code);
+            }
+        }
+    }
+    let complete = errors.is_empty();
+    let candidates: u32 = reports.iter().map(|report| report.candidate_count).sum();
+    let excluded: u32 = reports.iter().map(|report| report.excluded_count).sum();
+    json!({"coverage":{
+        "scope":"application_instances", "complete_within_scope":complete,
+        "status":if reports.is_empty() {"unproven"} else if !complete {"partial"} else if window_count == 0 {"empty_within_scope"} else {"available"},
+        "instance_count":reports.len() + errors.len(), "available_instances":reports.len(),
+        "unavailable_instances":errors.len(),
+        "candidate_count":complete.then_some(candidates),
+        "supported_count":window_count, "excluded_count":complete.then_some(excluded),
+        "excludes":["provider_excluded_windows","unavailable_instance_windows"]
+    }, "diagnostics":{"provider":provider,"counters":counters,"error_codes":error_codes,"errors":errors}})
+}
+
 fn context_state(state: &State) -> &'static str {
     match state.terminal {
         Some(Error::Cancelled) => "cancelled",
@@ -892,17 +1092,17 @@ fn context_state(state: &State) -> &'static str {
 
 /// Run the app-scoped transport. Unsupported platforms never start another backend.
 pub fn run(args: &[String]) -> Result<(), WireError> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
         transport::run(args)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = args;
         Err(WireError {
             details: None,
             code: "unsupported_platform".into(),
-            message: "Native app operations currently require macOS".into(),
+            message: "This platform has no DTW native provider".into(),
         })
     }
 }

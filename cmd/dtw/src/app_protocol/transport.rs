@@ -4,10 +4,13 @@ use super::{
     server::{Application, Factory, Server},
     wire::{self, WireError},
 };
-use crate::{
-    backends::macos::NativeBackend,
-    computer::{Backend, Error},
-};
+#[cfg(target_os = "linux")]
+use crate::backends::linux::NativeBackend;
+#[cfg(target_os = "macos")]
+use crate::backends::macos::NativeBackend;
+#[cfg(target_os = "windows")]
+use crate::backends::windows::NativeBackend;
+use crate::computer::{Backend, Error};
 use serde_json::{json, Value};
 use std::{
     io::{self, Write},
@@ -100,10 +103,17 @@ impl Drop for Watchdog {
     }
 }
 fn serve(server: Arc<Server<NativeFactory>>) -> Result<(), WireError> {
-    let parent = unsafe { libc::getppid() };
-    if parent <= 1 {
-        return Err(error("parent_lost", "MCP client parent is unavailable"));
-    }
+    #[cfg(unix)]
+    let parent_alive: Box<dyn Fn() -> bool + Send> = {
+        let parent = unsafe { libc::getppid() };
+        if parent <= 1 {
+            return Err(error("parent_lost", "MCP client parent is unavailable"));
+        }
+        Box::new(move || unsafe { libc::getppid() } == parent)
+    };
+    #[cfg(target_os = "windows")]
+    let parent_alive = crate::backends::windows::parent_alive_check()
+        .map_err(|_| error("parent_lost", "Cannot retain MCP client parent identity"))?;
     let done = Arc::new(AtomicBool::new(false));
     let _watchdog = Watchdog(done.clone());
     let watched = Arc::downgrade(&server);
@@ -111,7 +121,7 @@ fn serve(server: Arc<Server<NativeFactory>>) -> Result<(), WireError> {
         .name("dtw-client-parent".into())
         .spawn(move || {
             while !done.load(Ordering::Acquire) {
-                if unsafe { libc::getppid() } != parent {
+                if !parent_alive() {
                     let status = watched.upgrade().map_or(0, |s| cleanup_for_exit(&s));
                     std::process::exit(status);
                 }

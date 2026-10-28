@@ -13,7 +13,8 @@ Usage:
   dtw --version
 
 Every execution names an app identifier, such as com.google.Chrome.
-Native app operations currently require macOS.";
+Native providers: macOS, Windows, and experimental Linux X11.
+Use apps to inspect current platform conditions; Linux desktop support is unverified.";
 
 fn run(args: &[String]) -> Result<(), WireError> {
     match args
@@ -41,6 +42,14 @@ fn run(args: &[String]) -> Result<(), WireError> {
 fn main() -> ExitCode {
     #[cfg(target_os = "macos")]
     if desktop_world::backends::macos::worker_entry() {
+        return ExitCode::SUCCESS;
+    }
+    #[cfg(target_os = "windows")]
+    if desktop_world::backends::windows::worker_entry() {
+        return ExitCode::SUCCESS;
+    }
+    #[cfg(target_os = "linux")]
+    if desktop_world::backends::linux::worker_entry() {
         return ExitCode::SUCCESS;
     }
     match run(&std::env::args().skip(1).collect::<Vec<_>>()) {

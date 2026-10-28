@@ -50,9 +50,9 @@ struct Record {
 }
 struct AppContext<B: Backend> {
     app_id: String,
-    app: AppInstance,
-    // The logical app context owns committed JSON data. A native owner can be
-    // retired without discarding it; only an actual instance change resets it.
+    instances: Vec<AppInstance>,
+    // One surviving native instance preserves logical app data. Replacing
+    // every member resets it; individual joins/exits only retire their refs.
     script_state: Arc<Mutex<Value>>,
     owner: Option<Arc<Coordinator<B>>>,
 }
@@ -154,6 +154,15 @@ impl<F: Factory> Server<F> {
         if name == "result" {
             drop(state);
             return Started::Reply(self.result(args));
+        }
+        if name == "api" {
+            if state.closed {
+                return Started::Reply(problem("closed", "The MCP server is shutting down"));
+            }
+            return Started::Reply(match super::description::requested(&args) {
+                Ok(value) => Reply::plain(value),
+                Err(error) => Reply::error(error),
+            });
         }
         let command = match parse_call(name, &args) {
             Ok(c) => c,
@@ -326,10 +335,10 @@ impl<F: Factory> Server<F> {
                 let apps = public_apps(apps);
                 Reply::plain(json!({"version":1,
                 "apps":apps,"backend":self.factory.description(),
-                "script":scripts::description(),
+                "script":super::description::index(),
                 "limits":{"retained_executions":MAX_RECORDS,"payload_bytes":MAX_PAYLOAD_BYTES,
                     "receipt_admission_bytes":MAX_RECEIPT_BYTES,"max_steps_per_request":scripts::MAX_CALLS},
-                "semantics":"Every exec requires a stable application identifier. Multiple running instances of that application must be resolved before execution. Each app keeps its own logical context and committed JSON state. Switching apps preserves state and native references. Native owner replacement invalidates references and sets context_reset; an actual app instance change also clears committed state and sets state_reset. This connection executes one call at a time. DTW assigns execution_id automatically. result(app) reads this session's most recently accepted execution for that app; optional execution_id selects an older record. Only repeated MCP request IDs with identical exec arguments reuse an execution. New MCP request IDs always execute again; there is no cross-connection deduplication. Receipt capacity stops new work without dropping the last receipt."}))
+                "semantics":"Every exec requires a stable application identifier. Windows from all its running instances are aggregated; window_ref routes each action to its exact native owner. Membership refreshes before each exec. Switching apps preserves logical state and native references. Instance joins/exits preserve surviving references and committed state; replacing every instance clears state and sets state_reset. Native owner replacement invalidates references and sets context_reset. This connection executes one call at a time. DTW assigns execution_id automatically. result(app) reads this session's most recently accepted execution for that app; optional execution_id selects an older record. Only repeated MCP request IDs with identical exec arguments reuse an execution. New MCP request IDs always execute again; there is no cross-connection deduplication. Receipt capacity stops new work without dropping the last receipt."}))
             }
             Ok(_) => problem("cancelled", "Application discovery was cancelled"),
             Err(e) => Reply::error(wire::core_error(&e)),
@@ -347,43 +356,70 @@ impl<F: Factory> Server<F> {
         if call.cancelled.load(Ordering::Acquire) {
             return problem("cancelled", "Cancelled before script admission");
         }
-        let entry = match self.factory.catalog() {
-            Ok(apps) => {
-                let mut matches = apps.into_iter().filter(|entry| entry.app_id == app_id);
-                let Some(entry) = matches.next() else {
-                    return problem(
-                        "app_unavailable",
-                        "The application is not running. Discover again; no script was dispatched",
-                    );
-                };
-                if matches.next().is_some() {
-                    return problem("ambiguous_app", "More than one running instance has this application identifier; no script was dispatched");
-                }
-                entry
-            }
+        let entries = match self.factory.catalog() {
+            Ok(apps) => apps
+                .into_iter()
+                .filter(|entry| entry.app_id == app_id)
+                .collect::<Vec<_>>(),
             Err(e) => return Reply::error(wire::core_error(&e)),
         };
+        let Some(first) = entries.first() else {
+            return problem(
+                "app_unavailable",
+                "The application is not running. Discover again; no script was dispatched",
+            );
+        };
+        let app_name = first.name.clone();
+        let mut instances = Vec::new();
+        for entry in entries {
+            if !instances.contains(&entry.app) {
+                instances.push(entry.app);
+            }
+        }
+        if let Err(error) = crate::runtime::validate_app_instances(&instances) {
+            return Reply::error(wire::core_error(&error));
+        }
         if call.cancelled.load(Ordering::Acquire) {
             return problem("cancelled", "Cancelled before script admission");
         }
-        let app = &entry.app;
-        let candidate = self
-            .state
-            .lock()
-            .unwrap()
-            .contexts
-            .iter()
-            .find(|context| context.app_id == app_id)
-            .and_then(|context| context.owner.clone());
+        let (candidate, continuous) = {
+            let state = self.state.lock().unwrap();
+            match state
+                .contexts
+                .iter()
+                .find(|context| context.app_id == app_id)
+            {
+                Some(context) => (
+                    context.owner.clone(),
+                    context.instances.iter().any(|app| instances.contains(app)),
+                ),
+                None => (None, false),
+            }
+        };
         let existing = match candidate {
             Some(owner) => {
                 let reusable = {
                     let state = owner.state.lock().unwrap();
-                    owner.app == *app
-                        && state.terminal.is_none()
-                        && state.jobs.len() < owner.max_requests
+                    continuous && state.terminal.is_none() && state.jobs.len() < owner.max_requests
                 };
                 if reusable {
+                    // Reconciliation never closes the shared native provider or
+                    // changes committed state when another member is still live.
+                    if let Err(error) = owner.reconcile_instances(instances.clone()) {
+                        let cleanup = owner.state.lock().unwrap().shutdown_error.clone();
+                        if let Some(cleanup) = cleanup {
+                            self.remember_shutdown(cleanup);
+                        }
+                        return Reply::error(wire::core_error(&error));
+                    }
+                    self.state
+                        .lock()
+                        .unwrap()
+                        .contexts
+                        .iter_mut()
+                        .find(|context| context.app_id == app_id)
+                        .unwrap()
+                        .instances = instances.clone();
                     Some(owner)
                 } else {
                     if let Err(reply) = self.retire(&owner) {
@@ -408,17 +444,17 @@ impl<F: Factory> Server<F> {
                 }
                 if let Some(context) = state.contexts.iter_mut().find(|c| c.app_id == app_id) {
                     call.context_reset.store(true, Ordering::Release);
-                    if context.app != *app {
-                        context.app = app.clone();
+                    if !continuous {
                         context.script_state = Arc::new(Mutex::new(json!({})));
                         call.state_reset.store(true, Ordering::Release);
                     }
+                    context.instances = instances.clone();
                     context.script_state.clone()
                 } else {
                     let script_state = Arc::new(Mutex::new(json!({})));
                     state.contexts.push_back(AppContext {
                         app_id: app_id.into(),
-                        app: app.clone(),
+                        instances: instances.clone(),
                         script_state: script_state.clone(),
                         owner: None,
                     });
@@ -430,7 +466,10 @@ impl<F: Factory> Server<F> {
                 Err(error) => return Reply::error(wire::core_error(&error)),
             };
             let mut owner =
-                Coordinator::with_script_state(backend, app.clone(), entry.name, script_state);
+                match Coordinator::with_app_instances(backend, instances, app_name, script_state) {
+                    Ok(owner) => owner,
+                    Err(error) => return Reply::error(wire::core_error(&error)),
+                };
             // The session owns request retention. Reaching the old standalone
             // coordinator quota must not silently invalidate an app's refs.
             Arc::get_mut(&mut owner).unwrap().max_requests = MAX_RECORDS;
@@ -948,7 +987,9 @@ mod lifecycle_tests {
         press: Mutex<Option<Arc<Gate>>>,
         shutdowns: AtomicUsize,
         actions: AtomicUsize,
+        action_targets: Mutex<Vec<WindowTarget>>,
         shutdown_fails: AtomicBool,
+        cleanup_fails: AtomicBool,
     }
     #[derive(Clone)]
     struct Provider(Arc<Probe>);
@@ -961,7 +1002,10 @@ mod lifecycle_tests {
             }
         }
         fn supports(&self, capability: Capability) -> bool {
-            matches!(capability, Capability::Observe | Capability::Press)
+            matches!(
+                capability,
+                Capability::Windows | Capability::Observe | Capability::Press
+            )
         }
         fn shutdown(&self) -> Result<(), Error> {
             self.0.shutdowns.fetch_add(1, Ordering::SeqCst);
@@ -973,6 +1017,15 @@ mod lifecycle_tests {
             } else {
                 Ok(())
             }
+        }
+        fn cleanup_error(&self) -> Option<Error> {
+            self.0
+                .cleanup_fails
+                .load(Ordering::SeqCst)
+                .then(|| Error::NativeFailure {
+                    code: "binding_release_failed".into(),
+                    message: "Original binding cleanup failure".into(),
+                })
         }
         fn windows(
             &self,
@@ -1013,7 +1066,7 @@ mod lifecycle_tests {
         }
         fn press(
             &self,
-            _: &WindowTarget,
+            target: &WindowTarget,
             _: &(),
             _: ElementId,
             _: &CallContext<'_>,
@@ -1023,6 +1076,7 @@ mod lifecycle_tests {
                 gate.enter();
             }
             self.0.actions.fetch_add(1, Ordering::SeqCst);
+            self.0.action_targets.lock().unwrap().push(target.clone());
             ActionOutcome {
                 dispatch: DispatchState::Dispatched,
                 evidence: EffectEvidence::Unverified,
@@ -1153,7 +1207,7 @@ mod lifecycle_tests {
         *call.owner.lock().unwrap() = Some(owner.clone());
         server.state.lock().unwrap().contexts.push_back(AppContext {
             app_id: APP.into(),
-            app: owner.app.clone(),
+            instances: owner.instances(),
             script_state: owner.state.lock().unwrap().script_state.clone(),
             owner: Some(owner.clone()),
         });
@@ -1210,7 +1264,7 @@ mod lifecycle_tests {
         Arc::get_mut(&mut owner).unwrap().max_requests = 0;
         server.state.lock().unwrap().contexts.push_back(AppContext {
             app_id: APP.into(),
-            app: owner.app.clone(),
+            instances: owner.instances(),
             script_state: owner.state.lock().unwrap().script_state.clone(),
             owner: Some(owner.clone()),
         });
@@ -1245,7 +1299,7 @@ mod lifecycle_tests {
         owner.state.lock().unwrap().script_state = script_state.clone();
         server.state.lock().unwrap().contexts.push_back(AppContext {
             app_id: APP.into(),
-            app: owner.app.clone(),
+            instances: owner.instances(),
             script_state,
             owner: Some(owner.clone()),
         });
@@ -1456,13 +1510,56 @@ mod lifecycle_tests {
     }
 
     #[test]
-    fn stable_app_identity_hides_instances_and_rejects_ambiguous_dispatch() {
+    fn reconciliation_cleanup_failure_blocks_admission_in_other_apps() {
+        let (server, factory) = fixture();
+        {
+            let mut apps = factory.applications.lock().unwrap();
+            let mut sibling = apps[0].clone();
+            sibling.app.pid = 101;
+            let mut other = apps[0].clone();
+            other.app_id = "com.example.Other".into();
+            other.app.pid = 102;
+            apps.extend([sibling, other]);
+        }
+        let first = server.run(&begin(&server, "before", "const w=(await app.windows()).windows[0];return await app.observe({window_ref:w.window_ref});"));
+        assert_eq!(first.data["status"], "completed");
+        factory
+            .applications
+            .lock()
+            .unwrap()
+            .retain(|entry| entry.app.pid != 100);
+        factory
+            .provider
+            .0
+            .cleanup_fails
+            .store(true, Ordering::SeqCst);
+        let failed = server.run(&begin(&server, "reconcile", "return 1;"));
+        assert!(failed.is_error, "{}", failed.data);
+        assert!(failed.data.to_string().contains("binding_release_failed"));
+        let blocked = reply(server.begin(
+            json!("other"),
+            "exec",
+            json!({"app":"com.example.Other","source":"return 2;"}),
+        ));
+        assert!(blocked.is_error, "{}", blocked.data);
+        assert!(blocked.data.to_string().contains("binding_release_failed"));
+        assert_eq!(factory.connects.load(Ordering::SeqCst), 1);
+        assert_eq!(factory.provider.0.actions.load(Ordering::SeqCst), 0);
+        assert!(server.close().is_err());
+    }
+
+    #[test]
+    fn stable_app_aggregates_instances_and_routes_identical_native_window_ids() {
         let (server, factory) = fixture();
         {
             let mut apps = factory.applications.lock().unwrap();
             let mut other = apps[0].clone();
             other.app.pid += 1;
+            other.app.identity = AppIdentity("another-install-path".into());
             apps.push(other);
+            // Duplicate catalog records do not create phantom instances.
+            let duplicate = apps[0].clone();
+            apps.push(duplicate);
         }
         let call = match server.begin(json!("apps"), "apps", json!({})) {
             Started::Call(call) => call,
@@ -1477,14 +1574,72 @@ mod lifecycle_tests {
             .data
             .to_string()
             .contains("private-instance-identity"));
-        let call = begin(&server, "ambiguous", "return 1;");
-        assert_eq!(server.run(&call).data["error"]["code"], "ambiguous_app");
-        assert_eq!(factory.connects.load(Ordering::SeqCst), 0);
-        factory.applications.lock().unwrap().clear();
-        assert_eq!(
-            result(&server, "ambiguous").data["error"]["code"],
-            "ambiguous_app"
+        let call = begin(
+            &server,
+            "both",
+            "state.count=7;state.windows=(await app.windows()).windows;return state.windows;",
         );
+        let first = server.run(&call);
+        assert_eq!(first.data["status"], "completed", "{}", first.data);
+        let rows = first.data["value"]["result"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_ne!(rows[0]["window_ref"], rows[1]["window_ref"]);
+        let source = "const w=state.windows[1].window_ref;const o=await app.observe({window_ref:w});await app.press({window_ref:w,observation_ref:o.observation_ref,element_ref:o.elements[0].element_ref});return {count:state.count,w};";
+        let second = server.run(&begin(&server, "second", source));
+        assert_eq!(second.data["status"], "completed", "{}", second.data);
+        assert_eq!(
+            factory.provider.0.action_targets.lock().unwrap()[0].app.pid,
+            101
+        );
+        assert_eq!(factory.connects.load(Ordering::SeqCst), 1);
+
+        // Exiting the first instance retains both B's ref and app JSON state.
+        factory
+            .applications
+            .lock()
+            .unwrap()
+            .retain(|entry| entry.app.pid == 101);
+        let surviving = server.run(&begin(&server, "surviving", source));
+        assert_eq!(surviving.data["status"], "completed", "{}", surviving.data);
+        assert_eq!(surviving.data["value"]["result"]["count"], 7);
+        assert_eq!(
+            surviving.data["value"]["result"]["w"],
+            rows[1]["window_ref"]
+        );
+        assert_eq!(surviving.data["context_reset"], false);
+        assert_eq!(surviving.data["state_reset"], false);
+        assert_eq!(factory.provider.0.shutdowns.load(Ordering::SeqCst), 0);
+        let gone = server.run(&begin(&server, "gone", "try {await app.observe({window_ref:state.windows[0].window_ref});return 'incorrect';} catch(e){return e.code;}"));
+        assert_eq!(gone.data["value"]["result"], "target_changed");
+
+        // A restarted sibling gets a fresh reference without resetting B.
+        {
+            let mut apps = factory.applications.lock().unwrap();
+            let mut restarted = apps[0].clone();
+            restarted.app.pid = 100;
+            restarted.app.generation = 2;
+            apps.insert(0, restarted);
+        }
+        let joined = server.run(&begin(
+            &server,
+            "joined",
+            "return {count:state.count,windows:(await app.windows()).windows};",
+        ));
+        assert_eq!(joined.data["status"], "completed", "{}", joined.data);
+        assert_eq!(joined.data["value"]["result"]["count"], 7);
+        let new_rows = joined.data["value"]["result"]["windows"]
+            .as_array()
+            .unwrap();
+        assert_eq!(new_rows.len(), 2);
+        assert!(new_rows
+            .iter()
+            .any(|row| row["window_ref"] == rows[1]["window_ref"]));
+        assert!(!new_rows
+            .iter()
+            .any(|row| row["window_ref"] == rows[0]["window_ref"]));
+        assert_eq!(factory.connects.load(Ordering::SeqCst), 1);
+        assert_eq!(result(&server, "both").data, first.data);
+        server.close().unwrap();
     }
     #[test]
     fn completed_owner_replaces_a_stale_running_snapshot_and_exposes_internal_cleanup_errors() {
@@ -1496,7 +1651,7 @@ mod lifecycle_tests {
             *call.owner.lock().unwrap() = Some(owner.clone());
             server.state.lock().unwrap().contexts.push_back(AppContext {
                 app_id: APP.into(),
-                app: owner.app.clone(),
+                instances: owner.instances(),
                 script_state: owner.state.lock().unwrap().script_state.clone(),
                 owner: Some(owner.clone()),
             });
@@ -1591,17 +1746,20 @@ mod lifecycle_tests {
 
 /// Discovery presents logical app IDs, while execution resolves instances internally.
 pub(super) fn public_apps(apps: Vec<Application>) -> Vec<Value> {
-    let mut grouped: Vec<(String, String, usize)> = Vec::new();
+    let mut grouped: Vec<(String, String, Vec<AppInstance>)> = Vec::new();
     for entry in apps {
-        if let Some((_, _, count)) = grouped.iter_mut().find(|(id, _, _)| *id == entry.app_id) {
-            *count += 1;
+        if let Some((_, _, instances)) = grouped.iter_mut().find(|(id, _, _)| *id == entry.app_id) {
+            if !instances.contains(&entry.app) {
+                instances.push(entry.app);
+            }
         } else {
-            grouped.push((entry.app_id, entry.name, 1));
+            grouped.push((entry.app_id, entry.name, vec![entry.app]));
         }
     }
     grouped
         .into_iter()
-        .map(|(id, name, count)| {
+        .map(|(id, name, instances)| {
+            let count = instances.len();
             let mut row = json!({"app":id,"name":name});
             if count > 1 {
                 row["instances"] = json!(count);

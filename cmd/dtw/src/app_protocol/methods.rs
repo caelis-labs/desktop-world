@@ -7,14 +7,24 @@ pub(super) enum Method {
     Capture,
     Press,
     Click,
+    TypeText,
+    Keypress,
+    Scroll,
+    Focus,
+    SetValue,
 }
 impl Method {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 10] = [
         Self::Windows,
         Self::Observe,
         Self::Capture,
         Self::Press,
         Self::Click,
+        Self::TypeText,
+        Self::Keypress,
+        Self::Scroll,
+        Self::Focus,
+        Self::SetValue,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -23,6 +33,11 @@ impl Method {
             Self::Capture => "capture",
             Self::Press => "press",
             Self::Click => "click",
+            Self::TypeText => "typeText",
+            Self::Keypress => "keypress",
+            Self::Scroll => "scroll",
+            Self::Focus => "focus",
+            Self::SetValue => "setValue",
         }
     }
     pub fn arity(self) -> usize {
@@ -33,17 +48,20 @@ impl Method {
         }
     }
     pub fn window_target(self) -> bool {
-        match self {
-            Self::Windows => false,
-            Self::Observe | Self::Capture | Self::Press | Self::Click => true,
-        }
+        !matches!(self, Self::Windows)
     }
     pub fn capability(self) -> Capability {
         match self {
-            Self::Windows | Self::Observe => Capability::Observe,
+            Self::Windows => Capability::Windows,
+            Self::Observe => Capability::Observe,
             Self::Capture => Capability::Capture,
             Self::Press => Capability::Press,
             Self::Click => Capability::Click,
+            Self::TypeText => Capability::TypeText,
+            Self::Keypress => Capability::Keypress,
+            Self::Scroll => Capability::Scroll,
+            Self::Focus => Capability::Focus,
+            Self::SetValue => Capability::SetValue,
         }
     }
     pub fn parse(name: &str) -> Option<Self> {

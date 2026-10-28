@@ -98,9 +98,11 @@ fn ordinary_discovery_and_exec_need_no_custom_host_or_grant() {
     let (server, catalog) = server();
     let apps = call(&server, "apps", json!({}));
     assert_eq!(apps.data["apps"], json!([{"app":APP,"name":"Controlled"}]));
+    assert!(apps.data["script"]["methods"]["observe"].is_string());
+    let api = call(&server, "api", json!({"methods":["observe"]}));
     assert!(
-        apps.data["script"]["methods"]["observe"]["returns"]["properties"]["elements"]["items"]
-            ["properties"]["role"]
+        api.data["methods"]["observe"]["returns"]["properties"]["elements"]["items"]["properties"]
+            ["role"]
             .is_object()
     );
     assert_eq!(catalog.connects.load(Ordering::SeqCst), 0);
@@ -130,15 +132,20 @@ fn no_missing_or_unlisted_app_can_dispatch_even_pure_javascript() {
     server.close().unwrap();
 }
 #[test]
-fn ambiguous_bundle_id_is_listed_once_and_never_selects_a_pid() {
+fn multiple_instances_are_one_public_app_and_share_one_script_scope() {
     let (server, catalog) = server();
     let mut duplicate = catalog.entries.lock().unwrap()[0].clone();
     duplicate.app.pid += 1;
     catalog.entries.lock().unwrap().push(duplicate);
     let apps = call(&server, "apps", json!({}));
     assert_eq!(apps.data["apps"].as_array().unwrap().len(), 1);
-    assert_code(&exec(&server, "ambiguous", "return 1"), "ambiguous_app");
-    assert_eq!(catalog.connects.load(Ordering::SeqCst), 0);
+    let reply = exec(
+        &server,
+        "multiple",
+        "return (await app.windows()).windows.length",
+    );
+    assert_eq!(success(&reply), 4);
+    assert_eq!(catalog.connects.load(Ordering::SeqCst), 1);
     server.close().unwrap();
 }
 #[test]
@@ -718,3 +725,93 @@ fn execution_lookup_and_transport_deduplication_are_session_and_app_scoped() {
 
 #[path = "mcp_tests.rs"]
 mod mcp_tests;
+
+#[test]
+fn default_discovery_is_bounded_and_method_details_are_opt_in_without_native_access() {
+    let (server, catalog) = server();
+    let mut apps = call(&server, "apps", json!({}));
+    apps.data["apps"] = json!([]);
+    assert!(
+        apps.data.to_string().len() <= 4096,
+        "{}",
+        apps.data.to_string().len()
+    );
+    let details = call(&server, "api", json!({"methods":["typeText","keypress"]}));
+    assert!(!details.is_error);
+    assert_eq!(details.data["methods"].as_object().unwrap().len(), 2);
+    assert_eq!(
+        details.data["methods"]["typeText"]["parameters"]["required"],
+        json!(["window_ref", "text"])
+    );
+    assert!(details.data["methods"].get("observe").is_none());
+    assert!(call(&server, "api", json!({"methods":["shell"]})).is_error);
+    assert_eq!(catalog.connects.load(Ordering::SeqCst), 0);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn window_input_scripts_use_the_same_action_ledger_without_observe_round_trips() {
+    let (server, catalog) = server();
+    let reply = exec(
+        &server,
+        "input",
+        r#"
+        const window_ref=(await app.windows()).windows[0].window_ref;
+        await app.focus({window_ref});
+        await app.typeText({window_ref,text:'中文 🐦\nSecond line'});
+        await app.keypress({window_ref,keys:['META','A']});
+        await app.scroll({window_ref,delta_y:3});
+        return {done:true};
+    "#,
+    );
+    assert_eq!(success(&reply), &json!({"done":true}));
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 4);
+    assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 0);
+    assert_eq!(reply.data["script"]["steps"].as_array().unwrap().len(), 5);
+    let original = receipt(&server, &reply);
+    assert_eq!(original.data["script"], reply.data["script"]);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 4);
+}
+
+#[test]
+fn invalid_input_arguments_reject_before_native_dispatch_and_leave_read_bindings_live() {
+    let (server, catalog) = server();
+    let reply = exec(
+        &server,
+        "invalid-input",
+        r#"
+        const window_ref=(await app.windows()).windows[0].window_ref;
+        const observed=await app.observe({window_ref});
+        const failures=[];
+        for (const bad of [()=>app.keypress({window_ref,keys:[]}),()=>app.scroll({window_ref,delta_y:0}),()=>app.typeText({window_ref,text:'\0'})]) {
+            try { await bad(); } catch(e) { failures.push(e.code); }
+        }
+        await app.press({window_ref,observation_ref:observed.observation_ref,element_ref:observed.elements[0].element_ref});
+        return failures;
+    "#,
+    );
+    assert_eq!(
+        success(&reply),
+        &json!(["invalid_args", "invalid_args", "invalid_args"])
+    );
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn unicode_and_json_expansion_are_rejected_before_input_admission() {
+    let (server, catalog) = server();
+    let reply = exec(
+        &server,
+        "text-bounds",
+        r#"
+        const window_ref=(await app.windows()).windows[0].window_ref;
+        const errors=[];
+        for(const text of ['🐦'.repeat(4097),'\x01'.repeat(8192)]) {
+            try { await app.typeText({window_ref,text}); } catch(e) { errors.push(e.code); }
+        }
+        return errors;
+    "#,
+    );
+    assert_eq!(success(&reply), &json!(["invalid_args", "invalid_args"]));
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+}

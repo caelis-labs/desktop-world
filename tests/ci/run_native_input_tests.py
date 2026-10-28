@@ -15,7 +15,8 @@ def main():
         directory = Path(scratch)
         source = directory / "main.swift"
         source.write_text((root / "cmd/dtw/src/backends/macos/Input.swift").read_text()
-                          + "\n" + (root / "tests/fixtures/native-input-tests.swift").read_text())
+                          + "\n" + (root / "tests/fixtures/native-input-tests.swift").read_text()
+                          + "\n" + (root / "cmd/dtw/src/backends/macos/input_contract_tests.swift").read_text())
         binary = directory / "native-input-tests"
         subprocess.run(["swiftc", "-warnings-as-errors", "-module-cache-path",
                         str(directory / "module-cache"), str(source), "-o", str(binary)],

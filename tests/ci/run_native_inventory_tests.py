@@ -13,11 +13,16 @@ def main():
     root = Path(__file__).resolve().parents[2]
     native = root / "cmd/dtw/src/backends/macos/Native.swift"
     admission = root / "cmd/dtw/src/backends/macos/Input.swift"
+    scene = root / "cmd/dtw/src/backends/macos/Scene.swift"
     controls = root / "tests/fixtures/native-inventory-tests.swift"
     with tempfile.TemporaryDirectory(prefix="dtw-native-inventory-") as scratch:
         directory = Path(scratch)
         source = directory / "main.swift"
-        source.write_text(admission.read_text() + "\n" + native.read_text() + "\n" + controls.read_text())
+        source.write_text("\n".join(path.read_text() for path in [
+            admission, native, scene, controls,
+            native.with_name("surface_contract_tests.swift"),
+            native.with_name("scene_contract_tests.swift"),
+        ]))
         binary = directory / "native-inventory-tests"
         subprocess.run(
             ["swiftc", "-warnings-as-errors", "-module-cache-path", str(directory / "module-cache"),

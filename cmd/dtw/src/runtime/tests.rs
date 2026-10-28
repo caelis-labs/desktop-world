@@ -184,7 +184,8 @@ impl Backend for TestBackend {
         match capability {
             Capability::Observe => model.supports_observe,
             Capability::Press => model.supports_press,
-            Capability::Capture | Capability::Click => false,
+            Capability::Windows => true,
+            _ => false,
         }
     }
 
@@ -2427,4 +2428,327 @@ fn call_deadline_interrupts_a_native_style_wait_without_context_expiry() {
     );
     assert_eq!(model.counts(), (1, 0, 0, 1));
     runtime.observe(&target()).unwrap();
+}
+
+#[derive(Clone)]
+struct MultiInstanceBackend {
+    inner: TestBackend,
+    inventories: Arc<Mutex<Vec<(AppInstance, Result<WindowInventory, Error>)>>>,
+    routed: Arc<Mutex<Vec<WindowTarget>>>,
+    shutdowns: Arc<AtomicUsize>,
+}
+impl MultiInstanceBackend {
+    fn new() -> Self {
+        Self {
+            inner: TestBackend::new(),
+            inventories: Arc::new(Mutex::new(Vec::new())),
+            routed: Arc::new(Mutex::new(Vec::new())),
+            shutdowns: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+    fn set_inventory(&self, app: AppInstance, result: Result<WindowInventory, Error>) {
+        let mut inventories = self.inventories.lock().unwrap();
+        inventories.retain(|(member, _)| *member != app);
+        inventories.push((app, result));
+    }
+}
+impl Backend for MultiInstanceBackend {
+    type Binding = NativeBinding;
+    fn stamp(&self) -> ProviderStamp {
+        self.inner.stamp()
+    }
+    fn supports(&self, _: Capability) -> bool {
+        true
+    }
+    fn cleanup_error(&self) -> Option<Error> {
+        self.inner.cleanup_error()
+    }
+    fn shutdown(&self) -> Result<(), Error> {
+        self.shutdowns.fetch_add(1, Ordering::SeqCst);
+        self.inner.shutdown()
+    }
+    fn windows(&self, app: &AppInstance, call: &CallContext<'_>) -> Result<WindowInventory, Error> {
+        call.remaining()?;
+        if let Some((_, result)) = self
+            .inventories
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(member, _)| member == app)
+        {
+            return result.clone();
+        }
+        Ok(test_inventory(vec![WindowInfo {
+            target: WindowTarget {
+                app: app.clone(),
+                ..target()
+            },
+            title: "same title".into(),
+            visible: true,
+        }]))
+    }
+    fn observe(
+        &self,
+        target: &WindowTarget,
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservation<Self::Binding>, Error> {
+        self.inner.observe(target, call)
+    }
+    fn capture(
+        &self,
+        target: &WindowTarget,
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservation<Self::Binding>, Error> {
+        PixelBackend(self.inner.clone()).capture(target, call)
+    }
+    fn press(
+        &self,
+        target: &WindowTarget,
+        binding: &Self::Binding,
+        element: ElementId,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        self.routed.lock().unwrap().push(target.clone());
+        self.inner.press(target, binding, element, call)
+    }
+    fn click(
+        &self,
+        target: &WindowTarget,
+        binding: &Self::Binding,
+        _: PixelPoint,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        self.press(target, binding, ElementId(7), call)
+    }
+}
+fn second_instance() -> WindowTarget {
+    let mut second = target();
+    second.app.pid += 1;
+    second.app.identity = AppIdentity("different-install-path/same-public-app".into());
+    second
+}
+
+#[test]
+fn multi_instance_same_native_window_ids_route_by_complete_target_and_keep_intersection() {
+    let backend = MultiInstanceBackend::new();
+    let second = second_instance();
+    let runtime = Runtime::with_apps(
+        backend.clone(),
+        vec![target().app, second.app.clone(), target().app],
+        Duration::from_secs(30),
+    )
+    .unwrap();
+    assert_eq!(runtime.instances().len(), 2);
+    assert_eq!(runtime.windows().unwrap().windows.len(), 2);
+    let a = runtime.observe(&target()).unwrap();
+    let b = runtime.capture(&second).unwrap();
+    let mut added = second.app.clone();
+    added.pid += 1;
+    runtime
+        .reconcile_instances(vec![second.app.clone(), added, target().app])
+        .unwrap();
+    assert!(runtime.retains_observation(a.reference));
+    assert!(runtime.retains_observation(b.reference));
+    assert_eq!(
+        runtime
+            .press(&target(), a.reference, ElementId(7))
+            .outcome
+            .dispatch,
+        DispatchState::Dispatched
+    );
+    assert_eq!(
+        runtime
+            .click(&second, b.reference, PixelPoint { x: 1.0, y: 1.0 })
+            .outcome
+            .dispatch,
+        DispatchState::Dispatched
+    );
+    assert_eq!(*backend.routed.lock().unwrap(), vec![target(), second]);
+    assert_eq!(backend.shutdowns.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn multi_instance_removal_and_pid_reuse_retire_only_original_member() {
+    let backend = MultiInstanceBackend::new();
+    let second = second_instance();
+    let runtime = Runtime::with_apps(
+        backend.clone(),
+        vec![target().app, second.app.clone()],
+        Duration::from_secs(30),
+    )
+    .unwrap();
+    let a = runtime.observe(&target()).unwrap();
+    let b = runtime.capture(&second).unwrap();
+    let mut replacement = second.app.clone();
+    replacement.generation += 1;
+    runtime
+        .reconcile_instances(vec![target().app, replacement])
+        .unwrap();
+    assert!(runtime.retains_observation(a.reference));
+    assert!(!runtime.retains_observation(b.reference));
+    assert_eq!(backend.inner.counts().3, 1);
+    assert_rejected(
+        runtime.click(&second, b.reference, PixelPoint { x: 1.0, y: 1.0 }),
+        Error::WrongApp,
+    );
+    assert_eq!(
+        runtime
+            .press(&target(), a.reference, ElementId(7))
+            .outcome
+            .dispatch,
+        DispatchState::Dispatched
+    );
+    assert_eq!(backend.shutdowns.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn multi_instance_partial_inventory_preserves_failed_member_and_retires_proven_missing() {
+    let backend = MultiInstanceBackend::new();
+    let second = second_instance();
+    let runtime = Runtime::with_apps(
+        backend.clone(),
+        vec![target().app, second.app.clone()],
+        Duration::from_secs(30),
+    )
+    .unwrap();
+    let a = runtime.capture(&target()).unwrap();
+    let b = runtime.observe(&second).unwrap();
+    backend.set_inventory(
+        second.app.clone(),
+        Err(Error::NativeFailure {
+            code: "member_unavailable".into(),
+            message: "native member failed".into(),
+        }),
+    );
+    let partial = runtime.windows().unwrap();
+    assert_eq!(partial.windows.len(), 1);
+    assert_eq!(partial.windows[0].target, target());
+    assert!(partial.instances[0].report.is_ok());
+    assert!(partial.instances[1].report.is_err());
+    assert!(runtime.retains_observation(a.reference));
+    assert!(runtime.retains_observation(b.reference));
+    backend.set_inventory(target().app, Ok(test_inventory(vec![])));
+    assert!(runtime.windows().unwrap().windows.is_empty());
+    assert!(!runtime.retains_observation(a.reference));
+    assert!(runtime.retains_observation(b.reference));
+    assert_eq!(
+        runtime
+            .press(&second, b.reference, ElementId(7))
+            .outcome
+            .dispatch,
+        DispatchState::Dispatched
+    );
+}
+
+#[test]
+fn multi_instance_all_failures_are_errors_and_member_spoofing_is_excluded() {
+    let backend = MultiInstanceBackend::new();
+    let second = second_instance();
+    let runtime = Runtime::with_apps(
+        backend.clone(),
+        vec![target().app, second.app.clone()],
+        Duration::from_secs(30),
+    )
+    .unwrap();
+    backend.set_inventory(
+        target().app,
+        Ok(test_inventory(vec![WindowInfo {
+            target: second.clone(),
+            title: "spoofed".into(),
+            visible: true,
+        }])),
+    );
+    let partial = runtime.windows().unwrap();
+    assert_eq!(partial.instances[0].report, Err(Error::WrongApp));
+    assert_eq!(partial.windows.len(), 1);
+    assert_eq!(partial.windows[0].target, second);
+    backend.set_inventory(second.app, Err(Error::TimedOut));
+    assert_eq!(
+        runtime.windows(),
+        Err(Error::AppInventoryUnproven(vec![
+            Error::WrongApp,
+            Error::TimedOut
+        ]))
+    );
+}
+
+#[test]
+fn multi_instance_invalid_reconciliation_preserves_members_and_observations() {
+    let backend = MultiInstanceBackend::new();
+    let runtime = Runtime::with_apps(backend, vec![target().app], Duration::from_secs(30)).unwrap();
+    let a = runtime.observe(&target()).unwrap();
+    let mut reused = target().app;
+    reused.generation += 1;
+    assert!(runtime
+        .reconcile_instances(vec![target().app, reused])
+        .is_err());
+    assert!(runtime.reconcile_instances(vec![]).is_err());
+    let mut contradictory = target().app;
+    contradictory.identity = AppIdentity("same-pid-birth-other-path".into());
+    assert!(runtime
+        .reconcile_instances(vec![target().app, contradictory])
+        .is_err());
+    assert_eq!(runtime.instances(), vec![target().app]);
+    assert!(runtime.retains_observation(a.reference));
+    let too_many = (0..33)
+        .map(|index| AppInstance {
+            pid: index + 100,
+            ..target().app
+        })
+        .collect::<Vec<_>>();
+    assert!(validate_app_instances(&too_many).is_err());
+}
+
+#[test]
+fn multi_instance_reconciliation_holds_admission_through_binding_cleanup_and_cancel() {
+    let backend = MultiInstanceBackend::new();
+    let second = second_instance();
+    let runtime = Arc::new(
+        Runtime::with_apps(
+            backend.clone(),
+            vec![target().app, second.app.clone()],
+            Duration::from_secs(30),
+        )
+        .unwrap(),
+    );
+    let (worker_gate, gate) = TestGate::pair();
+    backend
+        .inner
+        .edit(|model| model.drop_gate = Some(worker_gate));
+    runtime.observe(&target()).unwrap();
+    let b = runtime.observe(&second).unwrap();
+    let active = runtime.clone();
+    let remaining = second.app.clone();
+    let worker = thread::spawn(move || active.reconcile_instances(vec![remaining]));
+    gate.wait_until_entered();
+    assert_eq!(runtime.windows(), Err(Error::Busy));
+    assert_eq!(
+        runtime.reconcile_instances(vec![second.app.clone()]),
+        Err(Error::Busy)
+    );
+    assert!(runtime.retains_observation(b.reference));
+    runtime.cancel().unwrap();
+    gate.release();
+    assert_eq!(worker.join().unwrap(), Err(Error::Cancelled));
+    assert_rejected(
+        runtime.press(&second, b.reference, ElementId(7)),
+        Error::Cancelled,
+    );
+    assert!(backend.routed.lock().unwrap().is_empty());
+}
+
+#[test]
+fn multi_instance_fatal_context_errors_never_become_partial_inventory() {
+    for error in [Error::Closed, Error::Cancelled, Error::WrongProvider] {
+        let backend = MultiInstanceBackend::new();
+        let second = second_instance();
+        let runtime = Runtime::with_apps(
+            backend.clone(),
+            vec![target().app, second.app.clone()],
+            Duration::from_secs(30),
+        )
+        .unwrap();
+        backend.set_inventory(second.app, Err(error.clone()));
+        assert_eq!(runtime.windows(), Err(error));
+    }
 }

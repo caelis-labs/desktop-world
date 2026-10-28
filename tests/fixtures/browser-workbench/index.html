@@ -1,0 +1,28 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>DTW Workbench __CASE__</title>
+<style>
+body{font:15px system-ui;margin:24px;color:#18232b;background:#f4f6f8}header,main{max-width:1100px;margin:auto}h1{font-size:26px}label{display:block;margin:12px 0}input,textarea,button{font:inherit;padding:8px}input[type=text]{min-width:260px}button{cursor:pointer;margin:2px}table{width:100%;background:white;border-collapse:collapse;margin:16px 0}td,th{padding:9px 12px;text-align:left;border-bottom:1px solid #ddd}th{background:#e9eef2}nav{display:flex;gap:12px;align-items:center}dialog{border:1px solid #aaa;border-radius:12px;min-width:460px;box-shadow:0 20px 60px #0004}dialog::backdrop{background:#0005}textarea{display:block;min-width:420px;height:90px}.status{min-height:28px;color:#165b3b;font-weight:600}
+</style>
+<header><h1>Inventory review — __CASE__</h1><p>Review stock targets and leave a handoff note. Changes are saved to this disposable local workspace.</p></header>
+<main><label>Search inventory <input id="search" type="text" placeholder="SKU or product name" autocomplete="off"></label>
+<p id="summary" aria-live="polite"></p><div id="status" class="status" role="status"></div>
+<table aria-label="Inventory records"><thead><tr><th>SKU</th><th>Product</th><th>Warehouse</th><th>Target quantity</th><th>Reviewed</th><th>Action</th></tr></thead><tbody id="rows"></tbody></table>
+<nav aria-label="Inventory pages"><button id="previous">Previous page</button><span id="page"></span><button id="next">Next page</button></nav></main>
+<dialog id="editor" aria-labelledby="edit-title"><form id="edit-form"><h2 id="edit-title"></h2>
+<label>Target quantity <input id="quantity" type="text" inputmode="numeric" required></label>
+<label><input id="reviewed" type="checkbox"> Reviewed</label>
+<label>Handoff note <textarea id="note"></textarea></label>
+<button type="submit">Save changes</button><button id="cancel" type="button">Cancel</button></form></dialog>
+<script>
+const byId=id=>document.getElementById(id);let items=[],page=0,editing=null;
+async function event(type,details={}) { await fetch('/api/event',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type,...details})}); }
+function render(){const query=byId('search').value.toLowerCase(),filtered=items.filter(x=>(x.sku+' '+x.name).toLowerCase().includes(query));const pages=Math.max(1,Math.ceil(filtered.length/100));page=Math.min(page,pages-1);byId('rows').replaceChildren();
+for(const item of filtered.slice(page*100,(page+1)*100)){const row=document.createElement('tr');for(const value of [item.sku,item.name,item.warehouse,item.quantity,item.reviewed?'Yes':'No']){const cell=document.createElement('td');cell.textContent=value;row.append(cell);}const cell=document.createElement('td'),button=document.createElement('button');button.textContent='Edit '+item.sku;button.addEventListener('click',()=>openEditor(item));cell.append(button);row.append(cell);byId('rows').append(row);}
+byId('summary').textContent=filtered.length+' matching records';byId('page').textContent='Page '+(page+1)+' of '+pages;byId('previous').disabled=page===0;byId('next').disabled=page===pages-1;}
+function openEditor(item){editing=item;byId('edit-title').textContent='Edit '+item.sku;byId('quantity').value=item.quantity;byId('reviewed').checked=item.reviewed;byId('note').value=item.note;byId('editor').showModal();event('dialog_opened',{sku:item.sku});}
+byId('search').addEventListener('input',()=>{page=0;render();event('search',{value:byId('search').value});});
+byId('previous').onclick=()=>{page--;render();event('page',{page:page+1});};byId('next').onclick=()=>{page++;render();event('page',{page:page+1});};
+byId('cancel').onclick=()=>byId('editor').close();
+for(const id of ['quantity','reviewed','note'])byId(id).addEventListener('input',()=>event('input',{control:id,value:id==='reviewed'?byId(id).checked:byId(id).value}));
+byId('edit-form').onsubmit=async e=>{e.preventDefault();const response=await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sku:editing.sku,quantity:Number(byId('quantity').value),reviewed:byId('reviewed').checked,note:byId('note').value})});if(!response.ok){byId('status').textContent='Save failed';return;}const result=await response.json();items=items.map(x=>x.sku===result.sku?result:x);byId('editor').close();render();byId('status').textContent='Saved '+result.sku+': quantity '+result.quantity+'; reviewed '+(result.reviewed?'yes':'no');};
+fetch('/api/items').then(r=>r.json()).then(data=>{items=data;render();event('ready');});
+</script></html>

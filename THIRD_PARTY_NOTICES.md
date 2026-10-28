@@ -1,10 +1,13 @@
 # Third-party notices
 
-DTW's native macOS provider and bounded app script engine include narrow adapted
+DTW's native macOS, Windows and experimental Linux providers and bounded app script engine include narrow adapted
 source ports from MIT-licensed [Cua Driver 0.38.0](https://github.com/trycua/cua/tree/85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19),
 commit `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`. The full CUA copyright and MIT
 license, donor file hashes, adaptations and excluded mechanisms are retained in
-[native source provenance](docs/native-source-provenance.md). Removing the SDK
+[native source provenance](docs/native-source-provenance.md) and
+[Windows/Linux source provenance](docs/native-source-provenance-cross-platform.md).
+The latter also retains the donor’s Victor Vannara and Francesco Bonacci MIT
+notices for adapted Windows source groups. Removing the SDK
 and upstream worker does not remove this source attribution.
 
 The script engine directly uses rquickjs 0.14.0 and its bundled QuickJS-ng

@@ -38,13 +38,16 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
     );
     let coverage = object(
         json!({
-            "scope":{"const":"same_process_standard_windows"},
-            "status":{"enum":["available","empty_within_scope"]},
-            "complete_within_scope":{"const":true},
-            "candidate_count":{"type":"integer","minimum":0},
+            "scope":{"enum":["same_process_standard_windows","same_process_layer_zero_surfaces","application_instances"]},
+            "status":{"enum":["available","empty_within_scope","partial"]},
+            "complete_within_scope":{"type":"boolean"},
+            "candidate_count":{"type":["integer","null"],"minimum":0},
             "supported_count":{"type":"integer","minimum":0},
-            "excluded_count":{"type":"integer","minimum":0},
-            "excludes":{"const":["helper_processes","non_standard_windows","non_default_layers"]}
+            "excluded_count":{"type":["integer","null"],"minimum":0},
+            "excludes":{"type":"array","items":{"type":"string"}},
+            "instance_count":{"type":"integer","minimum":1,"maximum":32},
+            "available_instances":{"type":"integer","minimum":0,"maximum":32},
+            "unavailable_instances":{"type":"integer","minimum":0,"maximum":32}
         }),
         &[
             "scope",
@@ -60,7 +63,8 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
         json!({
             "provider":{"type":"string"},
             "counters":{"type":"object","additionalProperties":{"type":"integer","minimum":0}},
-            "error_codes":{"type":"array","items":{"type":"integer"}}
+            "error_codes":{"type":"array","items":{"type":"integer"}},
+            "errors":{"type":"array","maxItems":32,"items":object(json!({"code":{"type":"string"},"message":{"type":"string"},"details":{},"message_truncated":{"type":"boolean"}}), &["code","message"])}
         }),
         &["provider", "counters", "error_codes"],
     );
@@ -89,7 +93,7 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
             "coverage":object(json!({"complete":{"type":"boolean"},"reason":{"type":["string","null"]},"visited":{"type":"integer","minimum":0,"maximum":8192}}), &["complete","reason","visited"]),
             "elements":{"type":"array","items":object(json!({
                 "element_ref":reference,"label":{"type":"string"},"can_press":{"type":"boolean"},
-                "role":{"type":"string"},"name":{"type":["string","null"]},"value":{"type":["string","null"]},
+                "role":{"type":"string"},"name":{"type":["string","null"],"description":"Bounded native name excerpt, or null when unavailable."},"value":{"type":["string","null"],"description":"Bounded native value excerpt, or null when unavailable; not a complete document read."},
                 "enabled":{"type":["boolean","null"]},"actions":{"type":"array","items":{"type":"string"}}
             }), &["element_ref","label","can_press","role","name","value","enabled","actions"])}
         }),
@@ -117,17 +121,20 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
     let click = object(
         json!({"window_ref":reference,"observation_ref":reference,
         "x":{"type":"number","minimum":0,"description":"Finite image-pixel coordinate; less than capture width."},
-        "y":{"type":"number","minimum":0,"description":"Finite image-pixel coordinate; less than capture height."}}),
+        "y":{"type":"number","minimum":0,"description":"Finite image-pixel coordinate; less than capture height."},
+        "button":{"enum":["left","right"],"default":"left"},"count":{"type":"integer","minimum":1,"maximum":2,"default":1}}),
         &["window_ref", "observation_ref", "x", "y"],
     );
     json!({
         "version":1,"language":"javascript",
         "entry":"exec({app: 'com.example.App', source}); source is an async function body with app and state",
         "facade":{"windows":"app.windows()","observe":"app.observe({window_ref, role?, text?, limit?}) or app.observe({cursor})","capture":"app.capture({window_ref})",
-            "press":"app.press({window_ref,observation_ref,element_ref})","click":"app.click({window_ref,observation_ref,x,y})"},
+            "press":"app.press({window_ref,observation_ref,element_ref})","click":"app.click({window_ref,observation_ref,x,y,button?,count?})",
+            "typeText":"app.typeText({window_ref,text})","keypress":"app.keypress({window_ref,keys})","scroll":"app.scroll({window_ref,delta_x?,delta_y?})",
+            "focus":"app.focus({window_ref})","setValue":"app.setValue({window_ref,observation_ref,element_ref,value})"},
         "methods":{
-            (Method::Windows.name()):{"parameters":null,"returns":inventory,"requires":[Method::Observe.capability().as_str()],
-                "semantics":"No arguments. Returns all proven windows within coverage. Unchanged exact window targets keep their refs and observations; removed or replaced targets retire theirs. Unproven inventory throws window_inventory_unproven, never success []."},
+            (Method::Windows.name()):{"parameters":null,"returns":inventory,"requires":[Method::Windows.capability().as_str()],
+                "semantics":"No arguments. Aggregates proven windows from the app instances discovered before this exec. Each window_ref routes to its exact native instance. Unchanged targets keep refs and observations; proven removed targets retire theirs. A failed instance does not discard proven sibling windows: partial coverage reports unavailable_instances and bounded errors. When no instance can be inventoried the call throws; an unproven inventory is never success []."},
             (Method::Observe.name()):{"parameters":query,"returns":observation,"requires":[Method::Observe.capability().as_str()],
                 "semantics":"Starts a native filtered semantic query on one window, retiring only that window's previous semantic query. Return elements are one bounded page. Continue with only {cursor: page.next}; each cursor advances once, and earlier page element refs share the same observation_ref. Filters run during native traversal, which retains its frontier. A failed continuation retires the query. next=null does not imply complete: inspect coverage. complete describes a live traversal without known gaps, not an atomic UI snapshot or proof that an element does not exist."},
             (Method::Capture.name()):{"parameters":window,"returns":capture,"requires":[Method::Capture.capability().as_str()],
@@ -135,11 +142,21 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
             (Method::Press.name()):{"parameters":press,"returns":receipt,"requires":[Method::Press.capability().as_str()],
                 "semantics":"Use a fresh semantic observation and one of its can_press=true element refs from any page of that query. Core action admission consumes both observation kinds on this window; other windows survive. Reobserve before another action on this window."},
             (Method::Click.name()):{"parameters":click,"returns":receipt,"requires":[Method::Click.capability().as_str()],
-                "semantics":"Use a fresh pixel capture of this window and coordinates within its image dimensions. Core action admission consumes both observation kinds on this window; other windows survive. Never uses display/global coordinates."}
+                "semantics":"Use a fresh pixel capture of this window and coordinates within its image dimensions. button defaults to left; count is 1 or 2. Core action admission consumes both observation kinds on this window; other windows survive. Never uses display/global coordinates."},
+            (Method::TypeText.name()):{"parameters":object(json!({"window_ref":reference,"text":{"type":"string","minLength":1,"description":"Literal Unicode text, at most 16 KiB UTF-8 (48 KiB after JSON encoding); no NUL. Inserts into the target window's focused control, not a clipboard paste."}}), &["window_ref","text"]),"returns":receipt,"requires":["typeText"],
+                "semantics":"DTW coordinates input and verifies the selected window's focus before inserting literal text. Select the intended editable control first. No held keys escape the call. All observations on this window retire; read back independently."},
+            (Method::Keypress.name()):{"parameters":object(json!({"window_ref":reference,"keys":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"string","minLength":1,"maxLength":32},"description":"One chord, for example ['META','A'], ['CTRL','S'], ['RETURN'], ['TAB'], ['SHIFT','TAB']; META is Command on macOS and Windows key on Windows. Use typeText for literal Unicode."}}), &["window_ref","keys"]),"returns":receipt,"requires":["keypress"],
+                "semantics":"Press and release one complete chord within DTW's input transaction after target focus verification. No persistent key-down API. All target-window observations retire. Independently inspect effects; never retry uncertain input."},
+            (Method::Scroll.name()):{"parameters":object(json!({"window_ref":reference,"delta_x":{"type":"integer","minimum":-100,"maximum":100,"default":0},"delta_y":{"type":"integer","minimum":-100,"maximum":100,"default":0}}), &["window_ref"]),"returns":receipt,"requires":["scroll"],
+                "semantics":"Scroll the selected window in signed wheel steps: positive x right, positive y down. Distance depends on the OS and application, not a pixel guarantee. At least one delta must be nonzero. Native routing/visibility conditions apply; multiple nested scroll regions may need a coordinate click to select focus first. All target-window observations retire."},
+            (Method::Focus.name()):{"parameters":window,"returns":receipt,"requires":["focus"],
+                "semantics":"Bring the exact selected app window to the foreground and verify focus under DTW's input coordination. This affects the user's foreground. It does not grant an input lease to later scripts; each later input independently checks its target. All target-window observations retire."},
+            (Method::SetValue.name()):{"parameters":object(json!({"window_ref":reference,"observation_ref":reference,"element_ref":reference,"value":{"type":"string","description":"Replacement value, at most 16 KiB UTF-8 (48 KiB after JSON encoding), no NUL; empty clears the field."}}), &["window_ref","observation_ref","element_ref","value"]),"returns":receipt,"requires":["setValue"],
+                "semantics":"Set literal text only on an editable text control whose returned actions include setValue. Native setters may not emit the same events as typing; independently check application state. Consumes both observation kinds on this window. For ordinary user typing use typeText after selecting an editable control."}
         },
         "references":{
-            "app":"Selected by the exec app identifier; DTW binds the live instance internally. Scripts cannot select another app or pass app_ref, PID, native IDs or provider handles.",
-            "window":"Opaque context-local refs returned by app.windows(). An unchanged exact target keeps its ref across inventory refreshes; context retirement or target change invalidates it.",
+            "app":"Selected by the exec app identifier; DTW discovers its live instances and binds each window to its exact native owner internally. Scripts cannot select another app or pass app_ref, PID, native IDs or provider handles.",
+            "window":"Opaque context-local refs returned by app.windows(), each bound to one exact native app instance and window. An unchanged target keeps its ref across refreshes and sibling instance changes; context retirement or that target changing invalidates it.",
             "observation":"One semantic query and one pixel binding per window, at most 15000 ms from initial acquisition; continuation does not extend life. New reads retire only the same window and kind, including failed replacements. Accepted actions consume both kinds on their target window. Script deadlines can shorten calls but never extend binding life.",
             "element":"Opaque ref belonging to one live semantic query; earlier pages remain usable until query expiry, replacement, failure or action consumption. Cannot be used with pixels or another window.",
             "cursor":"Opaque context-local single-use continuation. Pass it alone to observe; do not add window_ref or repeat filters. Empty pages with next can occur while filtering. Inspect coverage.complete and coverage.reason even when next is null."
@@ -170,6 +187,48 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
             "source":"const inventory = await app.windows();\nconst candidates = inventory.windows.filter(w => w.title === 'Target window');\nif (candidates.length !== 1) throw new Error('Expected one chosen window');\nconst window_ref = candidates[0].window_ref;\nlet page = await app.observe({window_ref, role:'button', text:'Target control'});\nconst controls = [];\nwhile (true) {\n  controls.push(...page.elements.filter(e => e.name === 'Target control' && e.enabled === true && e.can_press));\n  if (!page.next) break;\n  page = await app.observe({cursor:page.next});\n}\nif (!page.coverage.complete || controls.length !== 1) throw new Error('Expected one chosen control in complete discovery');\nconst receipt = await app.press({window_ref, observation_ref:page.observation_ref, element_ref:controls[0].element_ref});\nconst after = await app.observe({window_ref, limit:10});\nconst capture = await app.capture({window_ref});\nreturn {receipt, after, capture};"
         }
     })
+}
+
+/// Small default catalog; expensive schemas are opt-in through the api tool.
+pub(super) fn index() -> Value {
+    let full = super::scripts::description();
+    json!({"language":"javascript", "entry":"exec({app, source}); await app methods sequentially; state persists per app",
+        "methods":full["facade"], "details":"Call api({methods:[name,...]}) for argument/return schemas and semantics. api({}) lists method signatures.",
+        "references":"Keep window_ref in state. Observations expire after 15s; actions retire observations on that window. Read/act/verify in one script; never replay uncertain actions.",
+        "limits":{"default_timeout_ms":super::scripts::DEFAULT_TIMEOUT_MS,"max_source_utf8_bytes":super::scripts::MAX_SOURCE_BYTES,"max_calls":null}})
+}
+
+pub(super) fn requested(args: &Value) -> Result<Value, super::wire::WireError> {
+    let invalid = |message: &str| super::wire::WireError {
+        code: "invalid_arguments".into(),
+        message: message.into(),
+        details: None,
+    };
+    let fields = args
+        .as_object()
+        .ok_or_else(|| invalid("api arguments must be an object"))?;
+    if fields.keys().any(|name| name != "methods") {
+        return Err(invalid("api accepts only methods"));
+    }
+    let Some(names) = fields.get("methods") else {
+        return Ok(index());
+    };
+    let names = names
+        .as_array()
+        .filter(|names| !names.is_empty() && names.len() <= Method::ALL.len())
+        .ok_or_else(|| invalid("methods must be a nonempty array of known method names"))?;
+    let full = super::scripts::description();
+    let mut selected = serde_json::Map::new();
+    for name in names {
+        let name = name
+            .as_str()
+            .filter(|name| Method::parse(name).is_some())
+            .ok_or_else(|| invalid("Unknown script method"))?;
+        selected.insert(name.into(), full["methods"][name].clone());
+    }
+    Ok(
+        json!({"methods":selected,"references":full["references"],"errors":full["errors"]["catch"],"execution":full["execution"],"images":full["images"]}),
+    )
 }
 
 /// Generate the distributable declaration from discoverable return/argument schemas.

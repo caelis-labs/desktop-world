@@ -2,11 +2,11 @@
 
 Desktop World (DTW) lets an Agent inspect and operate desktop applications through standard MCP tools and an app-scoped JavaScript API. Every execution names a stable platform app ID, such as `com.apple.TextEdit`. DTW verifies the running instance, window and observation references, executes the operation, and reports its outcome. Tool approval and task policy belong to the Agent/Harness.
 
-The source tree contains the rewrite only, with no CUA SDK, upstream worker or old script facade. Native execution currently supports the macOS subset in the [product matrix](docs/product-matrix.md). Existing [release assets](https://github.com/caelis-labs/desktop-world/releases) are historical products; they do not install this implementation.
+The source tree contains the rewrite only, with no CUA SDK, upstream worker or old script facade. The [product matrix](docs/product-matrix.md) separates locally validated macOS behavior, Windows native implementation awaiting independent desktop acceptance, and experimental Linux X11 code. Existing [release assets](https://github.com/caelis-labs/desktop-world/releases) are historical products; they do not install this implementation.
 
 ## Connect an Agent
 
-Build with Rust 1.98.0 and, on macOS, Xcode/Swift:
+Build with Rust 1.98.0 and, on macOS 14.2+, Xcode/Swift:
 
 ```sh
 cargo +1.98.0 build --manifest-path cmd/dtw/Cargo.toml --locked --bin dtw
@@ -33,18 +33,19 @@ If `CARGO_TARGET_DIR` is set, use its executable instead. Add the repository's [
 | Tool | Purpose |
 | --- | --- |
 | `apps` | Discover running applications, their stable app IDs, the script API and current support conditions |
+| `api` | Read detailed schemas for selected script methods when needed |
 | `exec` | Execute a bounded script against the required `app` ID and return its result and receipts |
 | `result` | Read the app’s latest accepted execution; optionally select a historical `execution_id`; never execute it again |
 
-Select an entry from `apps` and pass its `app` string unchanged, for example `exec({app: "com.apple.TextEdit", source: "return await app.windows();"})`. The Harness can inspect that app ID through ordinary tool arguments. DTW resolves and verifies the running instance internally; process IDs and generations are not Agent parameters. Multiple independent instances of the same app ID produce `ambiguous_app`.
+Select an entry from `apps` and pass its `app` string unchanged, for example `exec({app: "com.apple.TextEdit", source: "return await app.windows();"})`. The Harness can inspect that app ID through ordinary tool arguments. DTW aggregates windows across all running instances of that app ID and routes each `window_ref` to its exact native instance. Process IDs and generations remain internal. A single script can operate multiple windows, including windows in different instances.
 
-The script API provides `app.windows()`, `app.observe()`, `app.capture()`, `app.press()` and `app.click()`. `apps` publishes their descriptions and limits; [TypeScript declarations](docs/app-script-api.d.ts) and the [script contract](docs/app-script-v1.md) describe the same API. DTW generates execution IDs internally; the Agent supplies only an app and its script. A script stays within its supplied app; the conversation can retain and alternate between multiple app contexts. Switching apps preserves committed JSON state and native refs. DTW currently applies a 30-second script deadline internally, with no call-count quota; the public input remains exactly app and source. A dispatched action is not proof of its intended effect: read the application back independently.
+The script API provides `windows`, `observe`, `capture`, `press`, `click`, `focus`, `typeText`, `keypress`, `scroll` and `setValue`. `apps` returns a compact index and support conditions; `api({methods:["typeText","keypress"]})` returns selected detailed schemas; [TypeScript declarations](docs/app-script-api.d.ts) and the [script contract](docs/app-script-v1.md) describe the same API. DTW generates execution IDs internally; the Agent supplies only an app and its script. A script stays within its supplied app; the conversation can retain and alternate between multiple app contexts. Switching apps preserves committed JSON state and native refs. DTW currently applies a 30-second script deadline internally, with no call-count quota; the public input remains exactly app and source. A dispatched action is not proof of its intended effect: read the application back independently.
 
 `exec` waits for its bounded execution; normal use needs no job-polling loop. Standard MCP cancellation addresses the active request. Closing the connection closes its native resources. Unknown outcomes remain unknown and are never automatically replayed. See the [MCP contract](docs/app-protocol-v1.md).
 
 ## Development and evidence
 
-The [architecture baseline](docs/next-architecture-baseline.md) owns DTW's identity, execution and native-provider contracts. [Build instructions](docs/building.md) separate fast checks, local product builds and real GUI acceptance. The foundation separates session/app state from native resource ownership. Basic window surfaces, bounded semantic discovery, and background/pointer/locked-session modes have explicit [evolution contracts](docs/next-architecture-baseline.md); their unimplemented portions are not advertised as supported. C6 extends complete capability groups on this foundation; Windows, text/keyboard operations and Browser/DOM control are not yet implemented.
+The [architecture baseline](docs/next-architecture-baseline.md) owns DTW's identity, execution and native-provider contracts. [Build instructions](docs/building.md) separate fast checks, local product builds and real GUI acceptance. The foundation separates session/app state from native resource ownership. Basic window surfaces, bounded semantic discovery, and background/pointer/locked-session modes have explicit [evolution contracts](docs/next-architecture-baseline.md); their unimplemented portions are not advertised as supported. Common input and native Windows/X11 providers now extend this foundation. Browser DOM, app launch/quit, drag, background pointer-independent input and locked-session operation remain outside this batch. Cross-session physical input is serialized internally; distinct app contexts do not imply independent OS keyboards or pointers.
 
 The [app/source acceptance report](docs/app-source-acceptance.md) verifies the current two-field entry, receipt recovery, native GUI and a real Claude Code workflow. The [multi-app foundation report](docs/multi-app-foundation-acceptance.md) records retained state/refs, caller-selected budgets, native resource cleanup and two independent MCP sessions using real test windows. The [standard Agent acceptance report](docs/standard-agent-acceptance.md) records the #61 baseline through ordinary agy and Claude Code MCP/Skills. The [C5 report](docs/c5-completion-acceptance.md) retains earlier window-boundary evidence; the [product matrix](docs/product-matrix.md) separates current and historical coverage.
 

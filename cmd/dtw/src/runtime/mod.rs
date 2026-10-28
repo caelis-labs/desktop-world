@@ -3,6 +3,7 @@
 //! This module owns app identity, reference lifetime and execution admission.
 //! Harness approval policy is outside DTW; no authorization state is kept here.
 
+pub use crate::computer::validate_app_instances;
 use crate::computer::*;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
@@ -10,6 +11,8 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+mod input_tests;
 #[cfg(test)]
 mod tests;
 
@@ -80,6 +83,7 @@ struct LiveObservation<B> {
 }
 
 struct State<B> {
+    apps: Vec<AppInstance>,
     busy: bool,
     cancelled: bool,
     closed: bool,
@@ -92,7 +96,6 @@ pub struct Runtime<B: Backend, C: Clock = MonotonicClock> {
     // shutting down the provider they may need for cleanup.
     state: Mutex<State<B::Binding>>,
     backend: B,
-    app: AppInstance,
     clock: C,
     observation_ttl: Duration,
     context: u64,
@@ -102,31 +105,75 @@ impl<B: Backend> Runtime<B> {
     pub fn new(backend: B, app: AppInstance, observation_ttl: Duration) -> Self {
         Self::with_clock(backend, app, observation_ttl, MonotonicClock)
     }
+
+    pub fn with_apps(
+        backend: B,
+        apps: Vec<AppInstance>,
+        observation_ttl: Duration,
+    ) -> Result<Self, Error> {
+        Self::with_apps_and_clock(backend, apps, observation_ttl, MonotonicClock)
+    }
 }
 
 impl<B: Backend, C: Clock> Runtime<B, C> {
     pub fn with_clock(backend: B, app: AppInstance, observation_ttl: Duration, clock: C) -> Self {
+        Self::with_apps_and_clock(backend, vec![app], observation_ttl, clock)
+            .expect("single application instance is valid")
+    }
+
+    pub fn with_apps_and_clock(
+        backend: B,
+        apps: Vec<AppInstance>,
+        observation_ttl: Duration,
+        clock: C,
+    ) -> Result<Self, Error> {
+        let apps = normalized_instances(apps)?;
         let context = NEXT_CONTEXT
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .expect("execution context identity exhausted");
-        Self {
+        Ok(Self {
             backend,
-            app,
             clock,
             observation_ttl,
             context,
             state: Mutex::new(State {
+                apps,
                 busy: false,
                 cancelled: false,
                 closed: false,
                 generation: 0,
                 observations: Vec::new(),
             }),
-        }
+        })
     }
 
     fn state(&self) -> MutexGuard<'_, State<B::Binding>> {
         self.state.lock().expect("execution state poisoned")
+    }
+
+    pub fn instances(&self) -> Vec<AppInstance> {
+        self.state().apps.clone()
+    }
+
+    /// Reconciliation is an admission operation. Retiring one native member
+    /// neither resets logical app state nor shuts down the shared provider.
+    pub fn reconcile_instances(&self, apps: Vec<AppInstance>) -> Result<(), Error> {
+        let apps = normalized_instances(apps)?;
+        let (flight, retired) = {
+            let mut state = self.state();
+            self.live_context(&state)?;
+            if state.busy {
+                return Err(Error::Busy);
+            }
+            state.busy = true;
+            let retired = take_observations(&mut state, |o| !apps.contains(&o.target.app));
+            state.apps = apps;
+            (Flight::new(&self.state), retired)
+        };
+        drop(retired);
+        let state = flight.finish();
+        self.live_context(&state)?;
+        self.backend.cleanup_error().map_or(Ok(()), Err)
     }
 
     /// Resource cleanup diagnostics remain separate from native action evidence.
@@ -153,7 +200,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         capability: Capability,
     ) -> Result<(), Error> {
         self.live_context(state)?;
-        if self.app != *app {
+        if !state.apps.contains(app) {
             return Err(Error::WrongApp);
         }
         if !self.backend.supports(capability) {
@@ -197,73 +244,104 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         }
     }
 
-    /// Discovers windows for the bound app using the provider's Observe support.
-    pub fn windows(&self) -> Result<WindowInventory, Error> {
+    /// Discovers surfaces independently of semantic observation support.
+    pub fn windows(&self) -> Result<AppWindowInventory, Error> {
         self.list_windows(None)
     }
 
     /// Tightens this call's execution budget.
-    pub fn windows_until(&self, deadline: Instant) -> Result<WindowInventory, Error> {
+    pub fn windows_until(&self, deadline: Instant) -> Result<AppWindowInventory, Error> {
         self.list_windows(Some(deadline))
     }
 
-    fn list_windows(&self, deadline: Option<Instant>) -> Result<WindowInventory, Error> {
+    fn list_windows(&self, deadline: Option<Instant>) -> Result<AppWindowInventory, Error> {
         let deadline = self.bounded_deadline(deadline);
-        let (flight, retired, provider) = {
+        let (flight, retired, provider, apps) = {
             let mut state = self.state();
             if state.busy {
                 return Err(Error::Busy);
             }
-            self.validate_target(&state, &self.app, Capability::Observe)?;
+            self.live_context(&state)?;
+            if !self.backend.supports(Capability::Windows) {
+                return Err(Error::UnsupportedCapability);
+            }
             self.check_deadline(deadline)?;
             state.busy = true;
             let now = self.clock.now();
             let retired = take_observations(&mut state, |o| o.expires_at <= now);
-            (Flight::new(&self.state), retired, self.backend.stamp())
+            (
+                Flight::new(&self.state),
+                retired,
+                self.backend.stamp(),
+                state.apps.clone(),
+            )
         };
         drop(retired);
         let poll = || self.remaining(deadline.expect("bounded call deadline"), deadline);
         let call = CallContext { poll: &poll };
-        let result = call
-            .remaining()
-            .and_then(|_| {
+        let mut inventory = AppWindowInventory {
+            windows: Vec::new(),
+            instances: Vec::new(),
+        };
+        let mut fatal = None;
+        for app in apps {
+            // Context cancellation, provider replacement and the overall deadline
+            // terminate the operation. A member's own inventory failure does not.
+            let admission = call.remaining().and_then(|_| {
                 if self.backend.stamp() == provider {
                     Ok(())
                 } else {
                     Err(Error::WrongProvider)
                 }
-            })
-            .and_then(|_| self.backend.windows(&self.app, &call));
-        let validated = (|| {
-            let inventory = match result {
-                Err(Error::InventoryUnproven(report)) if !report.valid() => {
-                    return Err(Error::BackendFailed("Invalid inventory diagnostics".into()));
-                }
-                other => other?,
-            };
-            let windows = &inventory.windows;
-            if windows.iter().any(|w| w.target.app != self.app) {
-                return Err(Error::WrongApp);
+            });
+            if let Err(error) = admission {
+                fatal = Some(error);
+                break;
             }
-            let report = &inventory.report;
-            if !report.valid()
-                || windows.len() != report.supported_count as usize
-                || report.supported_count + report.excluded_count != report.candidate_count
-                || windows.iter().enumerate().any(|(index, window)| {
-                    window.target.native_id == 0
-                        || window.target.generation == 0
-                        || window.title.len() > 4096
-                        || windows[..index]
-                            .iter()
-                            .any(|prior| prior.target.native_id == window.target.native_id)
-                })
+            let report = match self
+                .backend
+                .windows(&app, &call)
+                .and_then(|value| validate_inventory(&app, value))
             {
-                return Err(Error::BackendFailed(
-                    "Invalid or incomplete window inventory".into(),
-                ));
+                Ok(value) if inventory.windows.len() + value.windows.len() <= 256 => {
+                    inventory.windows.extend(value.windows);
+                    Ok(value.report)
+                }
+                Ok(_) => Err(resource_limit(
+                    "Aggregate window inventory exceeds 256 windows",
+                )),
+                Err(Error::InventoryUnproven(report)) if !report.valid() => {
+                    Err(Error::BackendFailed("Invalid inventory diagnostics".into()))
+                }
+                Err(error) => Err(error),
+            };
+            if let Err(error @ (Error::Closed | Error::Cancelled | Error::WrongProvider)) = &report
+            {
+                fatal = Some(error.clone());
+                break;
             }
-            Ok(inventory)
-        })();
+            inventory.instances.push(InstanceInventory { app, report });
+        }
+        let validated = match fatal {
+            Some(error) => Err(error),
+            None if inventory
+                .instances
+                .iter()
+                .all(|instance| instance.report.is_err()) =>
+            {
+                let errors: Vec<_> = inventory
+                    .instances
+                    .into_iter()
+                    .map(|instance| instance.report.unwrap_err())
+                    .collect();
+                if errors.len() == 1 {
+                    Err(errors.into_iter().next().unwrap())
+                } else {
+                    Err(Error::AppInventoryUnproven(errors))
+                }
+            }
+            None => Ok(inventory),
+        };
         let mut state = self.state();
         let result = self
             .live_context(&state)
@@ -276,17 +354,21 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                 }
             })
             .and(validated);
-        // Only a complete validated inventory proves a target disappeared.
-        let retired = match &result {
-            Ok(inventory) => take_observations(&mut state, |o| {
-                o.expires_at <= self.clock.now()
-                    || !inventory
-                        .windows
-                        .iter()
-                        .any(|window| window.target == o.target)
-            }),
-            Err(_) => Vec::new(),
-        };
+        // Only a member's complete validated inventory proves that member's
+        // target disappeared. An unavailable sibling retains its live references.
+        let retired =
+            match &result {
+                Ok(inventory) => take_observations(&mut state, |o| {
+                    o.expires_at <= self.clock.now()
+                        || (inventory.instances.iter().any(|instance| {
+                            instance.app == o.target.app && instance.report.is_ok()
+                        }) && !inventory
+                            .windows
+                            .iter()
+                            .any(|window| window.target == o.target))
+                }),
+                Err(_) => Vec::new(),
+            };
         drop(state);
         drop(retired);
         let state = flight.finish();
@@ -644,7 +726,12 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         reference: ObservationRef,
         point: PixelPoint,
     ) -> ActionReceipt {
-        self.act(target, reference, Action::Click(point), None)
+        self.act(
+            target,
+            reference,
+            Action::Click(point, ClickOptions::default()),
+            None,
+        )
     }
 
     pub fn click_until(
@@ -654,14 +741,99 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         point: PixelPoint,
         deadline: Instant,
     ) -> ActionReceipt {
-        self.act(target, reference, Action::Click(point), Some(deadline))
+        self.act(
+            target,
+            reference,
+            Action::Click(point, ClickOptions::default()),
+            Some(deadline),
+        )
+    }
+
+    pub fn set_value_until(
+        &self,
+        target: &WindowTarget,
+        reference: ObservationRef,
+        element: ElementId,
+        value: &str,
+        deadline: Instant,
+    ) -> ActionReceipt {
+        self.act(
+            target,
+            reference,
+            Action::SetValue(element, value),
+            Some(deadline),
+        )
+    }
+
+    pub fn click_with_options_until(
+        &self,
+        target: &WindowTarget,
+        reference: ObservationRef,
+        point: PixelPoint,
+        options: ClickOptions,
+        deadline: Instant,
+    ) -> ActionReceipt {
+        self.act(
+            target,
+            reference,
+            Action::Click(point, options),
+            Some(deadline),
+        )
+    }
+
+    /// Window-targeted input needs no semantic or pixel binding. Native input
+    /// owns focus and the shared desktop through completion of the transaction.
+    pub fn input_until(
+        &self,
+        target: &WindowTarget,
+        input: &WindowInput,
+        deadline: Instant,
+    ) -> ActionReceipt {
+        let deadline = self.bounded_deadline(Some(deadline));
+        let prepared = (|| {
+            let mut state = self.state();
+            if state.busy {
+                return Err(Error::Busy);
+            }
+            self.validate_target(&state, &target.app, input.capability())?;
+            self.check_deadline(deadline)?;
+            let provider = self.backend.stamp();
+            let retired = take_observations(&mut state, |o| o.target == *target);
+            state.busy = true;
+            Ok((Flight::new(&self.state), provider, retired))
+        })();
+        let (flight, provider, retired) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => return ActionReceipt::rejected(error),
+        };
+        drop(retired);
+        let poll = || self.remaining(deadline.unwrap(), deadline);
+        let call = CallContext { poll: &poll };
+        let ready = call.remaining().and_then(|_| {
+            if self.backend.stamp() == provider {
+                Ok(())
+            } else {
+                Err(Error::WrongProvider)
+            }
+        });
+        let outcome = match ready {
+            Ok(()) => self.backend.input(target, input, &call),
+            Err(error) => ActionOutcome::rejected(error),
+        };
+        let state = flight.finish();
+        let interruption = self
+            .live_context(&state)
+            .err()
+            .or_else(|| self.check_deadline(deadline).err())
+            .or_else(|| (self.backend.stamp() != provider).then_some(Error::WrongProvider));
+        ActionReceipt::from_provider(outcome, interruption)
     }
 
     fn act(
         &self,
         target: &WindowTarget,
         reference: ObservationRef,
-        action: Action,
+        action: Action<'_>,
         deadline: Option<Instant>,
     ) -> ActionReceipt {
         let deadline = self.bounded_deadline(deadline);
@@ -690,10 +862,17 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                     self.backend
                         .press(target, &observation.native, element, &call)
                 }
-                Action::Click(point) => {
+                Action::SetValue(element, value) => {
                     self.backend
-                        .click(target, &observation.native, point, &call)
+                        .set_value(target, &observation.native, element, value, &call)
                 }
+                Action::Click(point, options) => self.backend.click_with_options(
+                    target,
+                    &observation.native,
+                    point,
+                    options,
+                    &call,
+                ),
             },
         };
         let provider = observation.provider.clone();
@@ -715,7 +894,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         state: &mut State<B::Binding>,
         target: &WindowTarget,
         reference: ObservationRef,
-        action: Action,
+        action: Action<'_>,
         deadline: Option<Instant>,
     ) -> Result<
         (
@@ -730,7 +909,8 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         }
         let (capability, kind) = match action {
             Action::Press(_) => (Capability::Press, ObservationKind::Semantic),
-            Action::Click(_) => (Capability::Click, ObservationKind::Pixels),
+            Action::Click(_, _) => (Capability::Click, ObservationKind::Pixels),
+            Action::SetValue(_, _) => (Capability::SetValue, ObservationKind::Semantic),
         };
         self.validate_target(state, &target.app, capability)?;
         self.check_deadline(deadline)?;
@@ -763,7 +943,20 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                     return Err(Error::ElementNotPressable);
                 }
             }
-            Action::Click(point) => {
+            Action::SetValue(element, _) => {
+                let found = live
+                    .elements
+                    .iter()
+                    .find(|e| e.id == element)
+                    .ok_or(Error::ElementNotFound)?;
+                if !found.actions.iter().any(|action| action == "setValue") {
+                    return Err(Error::UnsupportedCapability);
+                }
+            }
+            Action::Click(point, options) => {
+                if !(1..=2).contains(&options.count) {
+                    return Err(Error::InvalidPoint);
+                }
                 let (width, height) = live.image_size.ok_or(Error::InvalidObservation)?;
                 if !point.x.is_finite()
                     || !point.y.is_finite()
@@ -806,6 +999,45 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         drop(retired);
         self.backend.shutdown()
     }
+}
+
+fn normalized_instances(apps: Vec<AppInstance>) -> Result<Vec<AppInstance>, Error> {
+    let mut unique = Vec::new();
+    for app in apps {
+        if !unique.contains(&app) {
+            unique.push(app);
+        }
+    }
+    validate_app_instances(&unique)?;
+    Ok(unique)
+}
+
+fn validate_inventory(
+    app: &AppInstance,
+    inventory: WindowInventory,
+) -> Result<WindowInventory, Error> {
+    let windows = &inventory.windows;
+    if windows.iter().any(|window| window.target.app != *app) {
+        return Err(Error::WrongApp);
+    }
+    let report = &inventory.report;
+    if !report.valid()
+        || windows.len() != report.supported_count as usize
+        || report.supported_count + report.excluded_count != report.candidate_count
+        || windows.iter().enumerate().any(|(index, window)| {
+            window.target.native_id == 0
+                || window.target.generation == 0
+                || window.title.len() > 4096
+                || windows[..index]
+                    .iter()
+                    .any(|prior| prior.target.native_id == window.target.native_id)
+        })
+    {
+        return Err(Error::BackendFailed(
+            "Invalid or incomplete window inventory".into(),
+        ));
+    }
+    Ok(inventory)
 }
 
 fn resource_limit(message: &str) -> Error {
@@ -906,9 +1138,10 @@ fn observation_bytes<B>(state: &State<B>) -> usize {
 }
 
 #[derive(Clone, Copy)]
-enum Action {
+enum Action<'a> {
     Press(ElementId),
-    Click(PixelPoint),
+    SetValue(ElementId, &'a str),
+    Click(PixelPoint, ClickOptions),
 }
 
 /// Releases admission on every return path. A panicking backend closes the

@@ -540,3 +540,58 @@ fn control_can_borrow_non_send_state() {
     );
     assert!(polls.get() >= 3);
 }
+
+#[cfg(target_os = "windows")]
+fn cooperative_windows_fixture(fixture: &Fixture, fail_cleanup: bool) -> Worker {
+    let python = std::env::var_os("DTW_TEST_PYTHON").unwrap_or_else(|| "python".into());
+    Worker::spawn_cooperative(
+        Path::new(&python),
+        &[
+            "-u",
+            "-c",
+            r#"
+import ctypes, os, pathlib, sys
+from ctypes import wintypes
+k=ctypes.WinDLL('kernel32', use_last_error=True)
+k.CreateEventW.argtypes=[ctypes.c_void_p,wintypes.BOOL,wintypes.BOOL,wintypes.LPCWSTR]
+k.CreateEventW.restype=wintypes.HANDLE
+k.WaitForSingleObject.argtypes=[wintypes.HANDLE,wintypes.DWORD]
+k.WaitForSingleObject.restype=wintypes.DWORD
+h=k.CreateEventW(None,True,False,'Local\\DesktopWorld.NativeStop.'+str(os.getpid()))
+if not h: raise ctypes.WinError(ctypes.get_last_error())
+pathlib.Path(sys.argv[1]).write_text('ready')
+if k.WaitForSingleObject(h,10000)!=0: os._exit(2)
+os._exit(74 if sys.argv[2]=='fail' else 0)
+"#,
+            fixture.path.join("ready").to_str().unwrap(),
+            if fail_cleanup { "fail" } else { "clean" },
+        ],
+    )
+    .unwrap()
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_native_stop_event_is_cooperative_and_reaped() {
+    let fixture = Fixture::new();
+    let worker = cooperative_windows_fixture(&fixture, false);
+    fixture.wait_ready();
+    worker.stop().unwrap();
+    assert_eq!(worker.cleanup_error(), None);
+    assert!(worker.process.child.lock().unwrap().is_none());
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_failed_native_drain_stays_visible_after_reaping() {
+    let fixture = Fixture::new();
+    let worker = cooperative_windows_fixture(&fixture, true);
+    fixture.wait_ready();
+    assert!(matches!(
+        worker.stop().unwrap_err().kind,
+        TransportErrorKind::Shutdown(_)
+    ));
+    assert!(worker.cleanup_error().is_some());
+    assert!(worker.process.child.lock().unwrap().is_none());
+    assert!(worker.stop().is_err());
+}

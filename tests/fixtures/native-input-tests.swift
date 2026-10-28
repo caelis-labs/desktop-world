@@ -29,7 +29,8 @@ do {
     }
     expect(entered.wait(timeout: .now() + 2) == .success, "pair entered")
     expect(events.all() == ["down"], "barrier is after down and before up")
-    expect(!gate.quiesce(milliseconds: 0), "closing does not claim active input drained")
+    gate.closeAdmission()
+    expect(gate.isClosing, "closing admission makes no claim that active input drained")
     let late = gate.withPair(press: { events.add("extra down") }, release: { events.add("extra up") }) { true }
     expect(late == nil, "closed gate refuses the entire new pair")
     expect(gate.withAdmission { events.add("late AX"); return true } == nil, "AX and pointer input share the closed admission")

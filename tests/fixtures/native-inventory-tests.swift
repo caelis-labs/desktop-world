@@ -166,7 +166,7 @@ private func checkSemanticSerialization() throws {
     for enabled: Bool? in [nil, false, true] {
         let element = NativeElement(id: 1, element: native, label: "display-only text",
                                     role: "button", name: "Action", value: "current value",
-                                    enabled: enabled, canPress: enabled == true)
+                                    enabled: enabled, canPress: enabled == true, canSetValue: false)
         let bytes = try JSONSerialization.data(withJSONObject: element.json)
         let wire = try JSONSerialization.jsonObject(with: bytes) as! [String: Any]
         expect(wire["role"] as? String == "button", "semantic role was derived from label")
@@ -180,7 +180,7 @@ private func checkSemanticSerialization() throws {
         expect(wire["can_press"] as? Bool == (enabled == true), "legacy can_press disagrees with actions")
     }
     let unnamed = NativeElement(id: 2, element: native, label: "AXGroup", role: "group",
-                                name: nil, value: nil, enabled: nil, canPress: false).json
+                                name: nil, value: nil, enabled: nil, canPress: false, canSetValue: false).json
     expect(unnamed["name"] is NSNull && unnamed["value"] is NSNull,
            "missing semantic values must remain null, without label inference")
 }

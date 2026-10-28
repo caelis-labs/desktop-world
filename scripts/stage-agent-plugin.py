@@ -32,7 +32,8 @@ def stage(binary, output, repo):
         for name in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
             shutil.copy2(repo / name, output / name)
         (output / "docs").mkdir()
-        shutil.copy2(repo / "docs/native-source-provenance.md", output / "docs/native-source-provenance.md")
+        for name in ("native-source-provenance.md", "native-source-provenance-cross-platform.md"):
+            shutil.copy2(repo / "docs" / name, output / "docs" / name)
         shutil.copytree(repo / "packaging/third-party", output / "packaging/third-party")
         with (output / "bin/dtw").open("rb") as executable:
             binary_sha256 = hashlib.file_digest(executable, "sha256").hexdigest()
