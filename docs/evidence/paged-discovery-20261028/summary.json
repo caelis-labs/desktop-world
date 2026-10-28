@@ -1,0 +1,674 @@
+{
+  "source_commit": "53ef00473b33f4dc282dcea3d40a963dae8fe3a2",
+  "binary_sha256": "f381cd433ed109c44eb2ad6f8f37485cd0b06f53baf875aae3b6e78d9f39187a",
+  "automated": {
+    "rust_library": 225,
+    "cli": 4,
+    "macos_stdio_process": 3,
+    "source_core": 52,
+    "source_ipc": 20,
+    "source_python": 12,
+    "native_inventory_assertions": 111
+  },
+  "appkit": {
+    "binary_sha256": "f381cd433ed109c44eb2ad6f8f37485cd0b06f53baf875aae3b6e78d9f39187a",
+    "passed": true,
+    "failure": null,
+    "started_unix_ms": 1793188544099,
+    "finished_unix_ms": 1793188550430,
+    "cleanup": [
+      {
+        "resource": "dtw",
+        "pid": 92444,
+        "returncode": 0,
+        "forced": [],
+        "native_workers": [
+          92450,
+          92454
+        ],
+        "native_workers_reaped": true
+      },
+      {
+        "resource": "fixture",
+        "pid": 92431,
+        "returncode": 0,
+        "forced": []
+      }
+    ],
+    "tail": {
+      "coverage": {
+        "complete": true,
+        "reason": null,
+        "visited": 428
+      },
+      "matches": [
+        {
+          "can_press": true,
+          "name": "Discovery Tail",
+          "role": "button"
+        }
+      ],
+      "pages": 4,
+      "visited": [
+        125,
+        249,
+        373,
+        428
+      ]
+    },
+    "composition": {
+      "action": {
+        "interruption": null,
+        "outcome": {
+          "dispatch": "dispatched",
+          "error": null,
+          "evidence": {
+            "kind": "unverified"
+          }
+        },
+        "provider_outcome": {
+          "dispatch": "dispatched",
+          "error": null,
+          "evidence": {
+            "kind": "unverified"
+          }
+        }
+      },
+      "count": [
+        "Count: 2"
+      ],
+      "coverage": {
+        "complete": true,
+        "reason": null,
+        "visited": 429
+      },
+      "firstElement": {
+        "name": "Discovery item 000",
+        "role": "button"
+      },
+      "pages": 17,
+      "peerAction": {
+        "interruption": null,
+        "outcome": {
+          "dispatch": "dispatched",
+          "error": null,
+          "evidence": {
+            "kind": "unverified"
+          }
+        },
+        "provider_outcome": {
+          "dispatch": "dispatched",
+          "error": null,
+          "evidence": {
+            "kind": "unverified"
+          }
+        }
+      },
+      "screenshot": {
+        "image": {
+          "coordinate_space": "image_pixels",
+          "height": 504,
+          "width": 640
+        },
+        "kind": "pixels",
+        "observation_ref": "observation_11d44cf2-b2d6-4c92-9154-c3819f006d04",
+        "window_ref": "window_e6e54e06-4cbb-4086-86a2-440631011449"
+      },
+      "total": 420,
+      "visited": [
+        28,
+        53,
+        78,
+        103,
+        128,
+        153,
+        178,
+        203,
+        228,
+        253,
+        278,
+        303,
+        328,
+        353,
+        378,
+        403,
+        429
+      ]
+    },
+    "exec_projection": [
+      {
+        "case": "tail",
+        "app": "dev.dtw.discovery.bd80ae60e51540378fe5276d5ff4cff6",
+        "compact_json_bytes": 608,
+        "full_json_bytes": 1927,
+        "summary": {
+          "failed": 0,
+          "pending": 0,
+          "steps": 5
+        }
+      },
+      {
+        "case": "compose",
+        "app": "dev.dtw.discovery.bd80ae60e51540378fe5276d5ff4cff6",
+        "compact_json_bytes": 1717,
+        "full_json_bytes": 6095,
+        "summary": {
+          "actions": {
+            "dispatch": {
+              "dispatched": 2
+            },
+            "evidence": {
+              "unverified": 2
+            },
+            "interrupted": 0,
+            "provider_dispatch": {
+              "dispatched": 2
+            },
+            "provider_evidence": {
+              "unverified": 2
+            }
+          },
+          "failed": 0,
+          "pending": 0,
+          "steps": 24
+        }
+      }
+    ],
+    "capture": {
+      "path": "/private/tmp/dtw-paged-gui-release-20261028/capture.png",
+      "sha256": "de12803928c0aaf306258c7f2d47af78fc76e201e027394479d781a0c4bf1041",
+      "bytes": 88135,
+      "width": 640,
+      "height": 504
+    },
+    "fixture_after": {
+      "clicks": 2,
+      "actions_started": 2,
+      "action_events": [
+        {
+          "current_event_timestamp": -1,
+          "current_event_type": -1,
+          "title": "Discovery item 000",
+          "uptime": 2356113.2031103335
+        },
+        {
+          "current_event_timestamp": -1,
+          "current_event_type": -1,
+          "title": "Increment",
+          "uptime": 2356113.3181372085
+        }
+      ]
+    }
+  },
+  "webkit_warm": {
+    "binary_sha256": "f381cd433ed109c44eb2ad6f8f37485cd0b06f53baf875aae3b6e78d9f39187a",
+    "passed": true,
+    "failure": null,
+    "started_unix_ms": 1793188550705,
+    "finished_unix_ms": 1793188556392,
+    "cleanup": [
+      {
+        "resource": "dtw",
+        "pid": 92477,
+        "returncode": 0,
+        "forced": [],
+        "native_workers": [
+          92478,
+          92480
+        ],
+        "native_workers_reaped": true
+      },
+      {
+        "resource": "fixture",
+        "pid": 92468,
+        "returncode": 0,
+        "forced": []
+      }
+    ],
+    "warmup": {
+      "coverage": {
+        "complete": false,
+        "reason": null,
+        "visited": 5
+      },
+      "next": "cursor_82ea195d-8cad-4ee1-8c46-388304cc5cd9"
+    },
+    "discovery": {
+      "coverage": {
+        "complete": true,
+        "reason": null,
+        "visited": 437
+      },
+      "matches": [
+        {
+          "actions": [
+            "press"
+          ],
+          "can_press": true,
+          "element_ref": "element_684a32bf-00c0-494d-87f1-eca4da2dcce7",
+          "enabled": true,
+          "label": "Discovery Tail",
+          "name": "Discovery Tail",
+          "role": "button",
+          "value": ""
+        }
+      ],
+      "pages": 4
+    },
+    "action": {
+      "counts": [
+        "Count: 1"
+      ],
+      "coverage": {
+        "complete": true,
+        "reason": null,
+        "visited": 437
+      },
+      "receipt": {
+        "interruption": null,
+        "outcome": {
+          "dispatch": "dispatched",
+          "error": null,
+          "evidence": {
+            "kind": "unverified"
+          }
+        },
+        "provider_outcome": {
+          "dispatch": "dispatched",
+          "error": null,
+          "evidence": {
+            "kind": "unverified"
+          }
+        }
+      },
+      "screenshot": {
+        "image": {
+          "coordinate_space": "image_pixels",
+          "height": 1195,
+          "width": 1600
+        },
+        "kind": "pixels",
+        "observation_ref": "observation_f24732d4-6e25-4f00-9bca-5f1a9b6fea5c",
+        "window_ref": "window_a697273a-31e2-4df5-a985-10da597a6813"
+      }
+    },
+    "explicit_read_capture_warmup": true,
+    "accepted": true,
+    "capture": {
+      "path": "/private/tmp/dtw-web-warm-final-20261028/capture.png",
+      "sha256": "cfec0cfa0aa720d8282d1c592da1409026474855dba8cb42772b667402fc0403",
+      "bytes": 332225,
+      "width": 1600,
+      "height": 1195
+    },
+    "fixture_after": {
+      "clicks": 1,
+      "actions_started": 1,
+      "last_button": "Discovery Tail"
+    }
+  },
+  "webkit_cold_boundary": {
+    "binary_sha256": "cc7cf303bfac7f08320f550db975052b47daef868e6b499d662cb1e44cf78979",
+    "passed": false,
+    "failure": null,
+    "started_unix_ms": 1793187803689,
+    "finished_unix_ms": 1793187808486,
+    "cleanup": [
+      {
+        "resource": "dtw",
+        "pid": 90878,
+        "returncode": 0,
+        "forced": [],
+        "native_workers": [
+          90880,
+          90881
+        ],
+        "native_workers_reaped": true
+      },
+      {
+        "resource": "fixture",
+        "pid": 90873,
+        "returncode": 0,
+        "forced": []
+      }
+    ],
+    "discovery": {
+      "coverage": {
+        "complete": true,
+        "reason": null,
+        "visited": 7
+      },
+      "matches": [],
+      "pages": 1
+    },
+    "boundary": "Tail target not uniquely actionable through the current exact-process AX route; no input attempted",
+    "boundary_sample": {
+      "coverage": {
+        "complete": false,
+        "reason": null,
+        "visited": 12
+      },
+      "elements": [
+        {
+          "actions": [],
+          "can_press": false,
+          "element_ref": "element_0597e53e-fc38-40c4-a94d-01bbb300a0d2",
+          "enabled": null,
+          "label": "DTW Discovery Browser",
+          "name": "DTW Discovery Browser",
+          "role": "window",
+          "value": null
+        },
+        {
+          "actions": [],
+          "can_press": false,
+          "element_ref": "element_f8ccad1c-e203-4242-afc9-7be6764f3400",
+          "enabled": true,
+          "label": "AXGroup",
+          "name": null,
+          "role": "group",
+          "value": null
+        },
+        {
+          "actions": [],
+          "can_press": false,
+          "element_ref": "element_23b24b7f-a5be-4385-afdf-92cdbd0ce20c",
+          "enabled": null,
+          "label": "AXGroup",
+          "name": null,
+          "role": "group",
+          "value": null
+        },
+        {
+          "actions": [],
+          "can_press": false,
+          "element_ref": "element_e15abdf6-3fb5-46a2-8d65-11588be054c7",
+          "enabled": true,
+          "label": "AXScrollArea",
+          "name": "",
+          "role": "scroll_area",
+          "value": ""
+        },
+        {
+          "actions": [],
+          "can_press": false,
+          "element_ref": "element_a637ef06-6aee-41b1-8d78-a7639a86a0cd",
+          "enabled": true,
+          "label": "DTW Discovery Browser",
+          "name": "DTW Discovery Browser",
+          "role": "unknown",
+          "value": ""
+        },
+        {
+          "actions": [],
+          "can_press": false,
+          "element_ref": "element_45bae0dc-88eb-4be3-aa88-594383593e43",
+          "enabled": true,
+          "label": "DTW owned discovery fixture | 1",
+          "name": "DTW owned discovery fixture",
+          "role": "heading",
+          "value": "1"
+        },
+        {
+          "actions": [],
+          "can_press": false,
+          "element_ref": "element_da563118-0d1c-4fd5-8f54-efdffa55a87f",
+          "enabled": true,
+          "label": "DTW owned discovery fixture",
+          "name": "",
+          "role": "static_text",
+          "value": "DTW owned discovery fixture"
+        },
+        {
+          "actions": [],
+          "can_press": false,
+          "element_ref": "element_106ad636-89b6-44e8-a59b-0a5709c4359c",
+          "enabled": true,
+          "label": "AXGroup",
+          "name": "",
+          "role": "group",
+          "value": ""
+        },
+        {
+          "actions": [],
+          "can_press": false,
+          "element_ref": "element_7323211f-4572-45ce-a64b-8e9b91ea3c48",
+          "enabled": true,
+          "label": "Count: 0",
+          "name": "",
+          "role": "static_text",
+          "value": "Count: 0"
+        },
+        {
+          "actions": [],
+          "can_press": false,
+          "element_ref": "element_2a453f18-e82f-4022-95cf-6d7daad1148b",
+          "enabled": true,
+          "label": "Discovery controls | Discovery controls",
+          "name": "Discovery controls",
+          "role": "group",
+          "value": ""
+        },
+        {
+          "actions": [
+            "press"
+          ],
+          "can_press": true,
+          "element_ref": "element_b8dbd6fc-16f6-4a01-82fa-57f3a93d71fb",
+          "enabled": true,
+          "label": "Discovery Button 000",
+          "name": "Discovery Button 000",
+          "role": "button",
+          "value": ""
+        },
+        {
+          "actions": [
+            "press"
+          ],
+          "can_press": true,
+          "element_ref": "element_9a4c6b0a-2d12-4e7a-bd79-8406195ab5bc",
+          "enabled": true,
+          "label": "Discovery Button 001",
+          "name": "Discovery Button 001",
+          "role": "button",
+          "value": ""
+        }
+      ],
+      "kind": "semantic",
+      "next": "cursor_cbfe31af-c8c7-49ec-8299-278cfc137a04",
+      "observation_ref": "observation_212fff6f-52d0-4b30-81a2-fa17e2181c97",
+      "window_ref": "window_5ab34041-40e2-40e2-97ca-e562cdbdc814"
+    },
+    "accepted": false,
+    "capture": {
+      "path": "/private/tmp/dtw-web-boundary-20261028/capture.png",
+      "sha256": "fbb389d4f0cbaa274cf10e8d4e674f358f463f3f24fd4b280956fab69d2e41e0",
+      "bytes": 322557,
+      "width": 1600,
+      "height": 1195
+    },
+    "source_commit": "c6c2d1865f374a99990a7ba02fdcac9b2980e93c",
+    "fixture_after": {
+      "clicks": 0,
+      "actions_started": 0,
+      "last_button": null
+    }
+  },
+  "regression": {
+    "binary_sha256": "f381cd433ed109c44eb2ad6f8f37485cd0b06f53baf875aae3b6e78d9f39187a",
+    "passed": true,
+    "failure": null,
+    "started_unix_ms": 1793188556506,
+    "finished_unix_ms": 1793188564830,
+    "cleanup": [
+      {
+        "resource": "dtw",
+        "pid": 92499,
+        "returncode": 0,
+        "forced": [],
+        "native_workers": [
+          92505,
+          92509,
+          92510
+        ],
+        "native_workers_reaped": true
+      },
+      {
+        "resource": "dev.dtw.standard.peer.1300bfc89b254c27b66101f541e0a455",
+        "pid": 92497,
+        "returncode": 0,
+        "forced": []
+      },
+      {
+        "resource": "dev.dtw.standard.target.1300bfc89b254c27b66101f541e0a455",
+        "pid": 92495,
+        "returncode": 0,
+        "forced": []
+      }
+    ],
+    "checks": [
+      "semantic",
+      "execution_identity",
+      "negative_controls",
+      "capture",
+      "pixel_click",
+      "cancellation",
+      "app_switch_capture",
+      "independent_sessions"
+    ],
+    "pixel_click": {
+      "before": {
+        "clicks": 1,
+        "actions_started": 1
+      },
+      "after": {
+        "clicks": 2,
+        "actions_started": 2
+      }
+    },
+    "target_after": {
+      "clicks": 2,
+      "actions_started": 2,
+      "action_events": [
+        {
+          "current_event_timestamp": -1,
+          "current_event_type": -1,
+          "title": "Increment",
+          "uptime": 2356123.5669612917
+        },
+        {
+          "current_event_timestamp": 2356124.435659083,
+          "current_event_type": 2,
+          "title": "Increment",
+          "uptime": 2356124.4367848337
+        }
+      ]
+    },
+    "peer_after": {
+      "clicks": 0,
+      "actions_started": 0,
+      "action_events": []
+    }
+  },
+  "ordinary_claude": {
+    "binary_sha256": "f381cd433ed109c44eb2ad6f8f37485cd0b06f53baf875aae3b6e78d9f39187a",
+    "passed": true,
+    "started_unix_ms": 1793188565839,
+    "finished_unix_ms": 1793188593176,
+    "cleanup": {
+      "pid": 92538,
+      "returncode": 0,
+      "forced": []
+    },
+    "route": "ordinary Claude Code plugin/Skill and stdio MCP; no custom Host",
+    "model": "codex/gpt-6.1-terra",
+    "returncode": 0,
+    "exec_summaries": [
+      {
+        "execution_id": "execution_f56fd1b9-4912-4093-99fa-47a624a67470",
+        "calls": 5,
+        "summary": {
+          "failed": 0,
+          "pending": 0,
+          "steps": 5
+        },
+        "json_bytes": 697
+      },
+      {
+        "execution_id": "execution_c11dc7e8-7915-4e9f-af7a-7273d6f67933",
+        "calls": 10,
+        "summary": {
+          "actions": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0,
+            "provider_dispatch": {
+              "dispatched": 1
+            },
+            "provider_evidence": {
+              "unverified": 1
+            }
+          },
+          "failed": 0,
+          "pending": 0,
+          "steps": 10
+        },
+        "json_bytes": 1019
+      }
+    ],
+    "extra_result_queries": 0,
+    "capture": {
+      "sha256": "a3b5fffb3fcbc72d36ed89a93c7f068baae587063e956eb4a580de09d45d0c7a",
+      "width": 640,
+      "height": 504
+    },
+    "agent_started_unix_ms": 1793188566428,
+    "agent_finished_unix_ms": 1793188593095,
+    "tool_calls": [
+      "Skill",
+      "mcp__dtw-paged-20261028__apps",
+      "mcp__dtw-paged-20261028__exec",
+      "mcp__dtw-paged-20261028__exec"
+    ],
+    "exec_arguments": [
+      [
+        "app",
+        "source"
+      ],
+      [
+        "app",
+        "source"
+      ]
+    ],
+    "result": {
+      "duration_ms": 23502,
+      "duration_api_ms": 22222,
+      "is_error": false,
+      "permission_denials": [],
+      "num_turns": 6
+    },
+    "fixture_before": {
+      "clicks": 0,
+      "actions_started": 0,
+      "action_events": []
+    },
+    "fixture_after": {
+      "clicks": 1,
+      "actions_started": 1,
+      "action_events": [
+        {
+          "current_event_timestamp": -1,
+          "current_event_type": -1,
+          "title": "Discovery Tail",
+          "uptime": 2356151.7000789586
+        }
+      ]
+    }
+  },
+  "process_cleanup": "No owned DTW binary or final fixture path remained in process list after acceptance.",
+  "omitted": "Raw apps inventory, full Agent conversation and local plugin configuration stay private."
+}
