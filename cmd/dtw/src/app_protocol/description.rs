@@ -74,16 +74,33 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
         &["windows", "coverage", "diagnostics"],
     );
     let window = object(json!({"window_ref":reference}), &["window_ref"]);
+    let query = json!({"oneOf":[
+        object(json!({"window_ref":reference,
+            "role":{"type":"string","minLength":1,"maxLength":64,"description":"Exact returned semantic role, for example button."},
+            "text":{"type":"string","minLength":1,"maxLength":256,"description":"Case-insensitive substring of label, name or value. Combined with role using AND."},
+            "limit":{"type":"integer","minimum":1,"maximum":100,"default":40}
+        }), &["window_ref"]),
+        object(json!({"cursor":reference}), &["cursor"])
+    ]});
     let observation = object(
         json!({
             "window_ref":reference,"observation_ref":reference,"kind":{"const":"semantic"},
+            "next":{"anyOf":[reference,{"type":"null"}]},
+            "coverage":object(json!({"complete":{"type":"boolean"},"reason":{"type":["string","null"]},"visited":{"type":"integer","minimum":0,"maximum":8192}}), &["complete","reason","visited"]),
             "elements":{"type":"array","items":object(json!({
                 "element_ref":reference,"label":{"type":"string"},"can_press":{"type":"boolean"},
                 "role":{"type":"string"},"name":{"type":["string","null"]},"value":{"type":["string","null"]},
                 "enabled":{"type":["boolean","null"]},"actions":{"type":"array","items":{"type":"string"}}
             }), &["element_ref","label","can_press","role","name","value","enabled","actions"])}
         }),
-        &["window_ref", "observation_ref", "kind", "elements"],
+        &[
+            "window_ref",
+            "observation_ref",
+            "kind",
+            "elements",
+            "next",
+            "coverage",
+        ],
     );
     let capture = object(
         json!({
@@ -106,25 +123,26 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
     json!({
         "version":1,"language":"javascript",
         "entry":"exec({app: 'com.example.App', source}); source is an async function body with app and state",
-        "facade":{"windows":"app.windows()","observe":"app.observe({window_ref})","capture":"app.capture({window_ref})",
+        "facade":{"windows":"app.windows()","observe":"app.observe({window_ref, role?, text?, limit?}) or app.observe({cursor})","capture":"app.capture({window_ref})",
             "press":"app.press({window_ref,observation_ref,element_ref})","click":"app.click({window_ref,observation_ref,x,y})"},
         "methods":{
             (Method::Windows.name()):{"parameters":null,"returns":inventory,"requires":[Method::Observe.capability().as_str()],
-                "semantics":"No arguments. Returns all proven windows within coverage; replaces prior window refs and invalidates the current observation. Unproven inventory throws window_inventory_unproven, never success []."},
-            (Method::Observe.name()):{"parameters":window,"returns":observation,"requires":[Method::Observe.capability().as_str()],
-                "semantics":"Read semantic elements of this window. Replaces the previous semantic or pixel observation; only current elements with can_press=true can be pressed."},
+                "semantics":"No arguments. Returns all proven windows within coverage. Unchanged exact window targets keep their refs and observations; removed or replaced targets retire theirs. Unproven inventory throws window_inventory_unproven, never success []."},
+            (Method::Observe.name()):{"parameters":query,"returns":observation,"requires":[Method::Observe.capability().as_str()],
+                "semantics":"Starts a native filtered semantic query on one window, retiring only that window's previous semantic query. Return elements are one bounded page. Continue with only {cursor: page.next}; each cursor advances once, and earlier page element refs share the same observation_ref. Filters run during native traversal, which retains its frontier. A failed continuation retires the query. next=null does not imply complete: inspect coverage. complete describes a live traversal without known gaps, not an atomic UI snapshot or proof that an element does not exist."},
             (Method::Capture.name()):{"parameters":window,"returns":capture,"requires":[Method::Capture.capability().as_str()],
-                "semantics":"Capture this window. Replaces the previous semantic or pixel observation. Only metadata enters the VM; the last image is attached outside the VM."},
+                "semantics":"Capture this window. Replaces only this window's previous pixel binding; semantic queries and other windows survive. Only metadata enters the VM; the last image is attached outside the VM."},
             (Method::Press.name()):{"parameters":press,"returns":receipt,"requires":[Method::Press.capability().as_str()],
-                "semantics":"Use a fresh semantic observation and one of its can_press=true element refs for this window. Consumes the observation on Core action admission; reobserve before another action."},
+                "semantics":"Use a fresh semantic observation and one of its can_press=true element refs from any page of that query. Core action admission consumes both observation kinds on this window; other windows survive. Reobserve before another action on this window."},
             (Method::Click.name()):{"parameters":click,"returns":receipt,"requires":[Method::Click.capability().as_str()],
-                "semantics":"Use a fresh pixel capture of this window and coordinates within its image dimensions. Consumes the observation on Core action admission; never uses display/global coordinates."}
+                "semantics":"Use a fresh pixel capture of this window and coordinates within its image dimensions. Core action admission consumes both observation kinds on this window; other windows survive. Never uses display/global coordinates."}
         },
         "references":{
             "app":"Selected by the exec app identifier; DTW binds the live instance internally. Scripts cannot select another app or pass app_ref, PID, native IDs or provider handles.",
-            "window":"Opaque context-local refs returned by the latest successful app.windows(). Invalid after another inventory, context retirement or target change.",
-            "observation":"One current binding across semantic and pixels; at most 15000 ms. Reads and accepted actions invalidate prior observations. Script time budgets can shorten calls but never extend binding life.",
-            "element":"Opaque ref belonging to one current semantic observation; cannot be used with pixels or another window."
+            "window":"Opaque context-local refs returned by app.windows(). An unchanged exact target keeps its ref across inventory refreshes; context retirement or target change invalidates it.",
+            "observation":"One semantic query and one pixel binding per window, at most 15000 ms from initial acquisition; continuation does not extend life. New reads retire only the same window and kind, including failed replacements. Accepted actions consume both kinds on their target window. Script deadlines can shorten calls but never extend binding life.",
+            "element":"Opaque ref belonging to one live semantic query; earlier pages remain usable until query expiry, replacement, failure or action consumption. Cannot be used with pixels or another window.",
+            "cursor":"Opaque context-local single-use continuation. Pass it alone to observe; do not add window_ref or repeat filters. Empty pages with next can occur while filtering. Inspect coverage.complete and coverage.reason even when next is null."
         },
         "limits":{"max_source_utf8_bytes":super::scripts::MAX_SOURCE_BYTES,"default_timeout_ms":super::scripts::DEFAULT_TIMEOUT_MS,
             "max_calls":null,
@@ -149,7 +167,7 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
         "lifecycle":"Cancellation or script timeout closes the context, stops native resources and joins the VM before job completion. Cancellation cannot prove an already dispatched action did not occur. A later new exec rebuilds affected native references as needed (context_reset) while retaining committed JSON state. Only an actual application instance change clears state (state_reset). Retained jobs remain queryable within this MCP connection.",
         "example":{
             "purpose":"Choose one explicitly named window and enabled control, press once, independently reobserve, then capture. Replace the two exact names with the intended target's observed names; do not infer success from dispatch alone.",
-            "source":"const inventory = await app.windows();\nconst candidates = inventory.windows.filter(w => w.title === 'Target window');\nif (candidates.length !== 1) throw new Error('Expected one chosen window');\nconst window_ref = candidates[0].window_ref;\nconst before = await app.observe({window_ref});\nconst controls = before.elements.filter(e => e.label === 'Target control' && e.can_press);\nif (controls.length !== 1) throw new Error('Expected one chosen control');\nconst receipt = await app.press({window_ref, observation_ref: before.observation_ref, element_ref: controls[0].element_ref});\nconst after = await app.observe({window_ref});\nconst capture = await app.capture({window_ref});\nstate.completed = (state.completed || 0) + 1;\nreturn {coverage: inventory.coverage, receipt, after, capture};"
+            "source":"const inventory = await app.windows();\nconst candidates = inventory.windows.filter(w => w.title === 'Target window');\nif (candidates.length !== 1) throw new Error('Expected one chosen window');\nconst window_ref = candidates[0].window_ref;\nlet page = await app.observe({window_ref, role:'button', text:'Target control'});\nconst controls = [];\nwhile (true) {\n  controls.push(...page.elements.filter(e => e.name === 'Target control' && e.enabled === true && e.can_press));\n  if (!page.next) break;\n  page = await app.observe({cursor:page.next});\n}\nif (!page.coverage.complete || controls.length !== 1) throw new Error('Expected one chosen control in complete discovery');\nconst receipt = await app.press({window_ref, observation_ref:page.observation_ref, element_ref:controls[0].element_ref});\nconst after = await app.observe({window_ref, limit:10});\nconst capture = await app.capture({window_ref});\nreturn {receipt, after, capture};"
         }
     })
 }

@@ -995,6 +995,7 @@ mod lifecycle_tests {
             _: &CallContext<'_>,
         ) -> Result<BackendObservation<()>, Error> {
             Ok(BackendObservation {
+                discovery: None,
                 target: target.clone(),
                 binding: (),
                 image: None,

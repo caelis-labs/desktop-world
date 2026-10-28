@@ -40,6 +40,10 @@ pub enum Command {
     },
     Windows,
     Observe,
+    ObserveQuery(computer::ObserveQuery),
+    ContinueObservation {
+        cursor: String,
+    },
     Capture,
     Press {
         observation_ref: String,
@@ -109,6 +113,35 @@ fn coordinate(object: &Map<String, Value>, key: &str) -> Result<f64, WireError> 
         .ok_or_else(|| invalid(format!("command.{key} must be a finite number")))
 }
 
+/// Shared argument parser for the VM bridge and the bound coordinator. Parsing
+/// does not resolve references; each caller retains its own execution admission.
+pub(super) fn script_submit(
+    app_ref: &str,
+    id: &str,
+    op: &str,
+    args: &Value,
+) -> Result<Submit, WireError> {
+    let failure = || invalid("Only bound app operations and their declared fields are permitted");
+    let method = super::methods::Method::parse(op).ok_or_else(failure)?;
+    let mut command = args.as_object().cloned().ok_or_else(failure)?;
+    if command.contains_key("kind") {
+        return Err(failure());
+    }
+    let mut target = json!({"app_ref":app_ref});
+    if method.window_target()
+        && !(matches!(method, super::methods::Method::Observe) && command.contains_key("cursor"))
+    {
+        target["window_ref"] = command.remove("window_ref").ok_or_else(failure)?;
+    }
+    command.insert("kind".into(), json!(op));
+    match parse_request(
+        json!({"version":1,"operation":"submit","request_id":id,"target":target,"command":command}),
+    )? {
+        Request::Submit(submit) => Ok(submit),
+        _ => Err(failure()),
+    }
+}
+
 fn parse_command(value: &Value) -> Result<Command, WireError> {
     let command = object(value, "command")?;
     let kind = string(command, "kind", "command")?;
@@ -133,11 +166,51 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
                 max_calls,
             })
         }
-        "windows" | "observe" | "capture" => {
+        "observe" => {
+            if command.contains_key("cursor") {
+                fields(command, &["kind", "cursor"], "command")?;
+                return Ok(Command::ContinueObservation {
+                    cursor: string(command, "cursor", "command")?,
+                });
+            }
+            fields(command, &["kind", "role", "text", "limit"], "command")?;
+            if command.len() == 1 {
+                return Ok(Command::Observe);
+            }
+            let filter = |key: &str, maximum: usize| -> Result<Option<String>, WireError> {
+                command
+                    .get(key)
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .filter(|text| (1..=maximum).contains(&text.chars().count()))
+                            .map(str::to_owned)
+                            .ok_or_else(|| {
+                                invalid(format!(
+                                    "command.{key} must contain 1 to {maximum} characters"
+                                ))
+                            })
+                    })
+                    .transpose()
+            };
+            let limit = match command.get("limit") {
+                None => computer::ObserveQuery::default().limit,
+                Some(value) => value
+                    .as_u64()
+                    .filter(|n| (1..=100).contains(n))
+                    .ok_or_else(|| invalid("command.limit must be an integer from 1 to 100"))?
+                    as u32,
+            };
+            Ok(Command::ObserveQuery(computer::ObserveQuery {
+                role: filter("role", 64)?,
+                text: filter("text", 256)?,
+                limit,
+            }))
+        }
+        "windows" | "capture" => {
             fields(command, &["kind"], "command")?;
             Ok(match kind.as_str() {
                 "windows" => Command::Windows,
-                "observe" => Command::Observe,
                 _ => Command::Capture,
             })
         }
@@ -207,7 +280,10 @@ pub fn parse_request(value: Value) -> Result<Request, WireError> {
             )?;
             let command = parse_command(request.get("command").unwrap_or(&Value::Null))?;
             let target = object(request.get("target").unwrap_or(&Value::Null), "target")?;
-            let window_ref = if matches!(command, Command::Windows | Command::Script { .. }) {
+            let window_ref = if matches!(
+                command,
+                Command::Windows | Command::Script { .. } | Command::ContinueObservation { .. }
+            ) {
                 fields(target, &["app_ref"], "target")?;
                 None
             } else {

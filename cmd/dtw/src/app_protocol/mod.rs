@@ -85,7 +85,9 @@ fn operation(command: &Command) -> &'static str {
     match command {
         Command::Script { .. } => "script",
         Command::Windows => "windows",
-        Command::Observe => "observe",
+        Command::Observe | Command::ObserveQuery(_) | Command::ContinueObservation { .. } => {
+            "observe"
+        }
         Command::Capture => "capture",
         Command::Press { .. } => "press",
         Command::Click { .. } => "click",
@@ -99,6 +101,12 @@ struct Snapshot {
     core: ObservationRef,
     elements: HashMap<String, ElementId>,
     public: String,
+    window_ref: String,
+    kind: ObservationKind,
+    cursor: Option<String>,
+    retired: bool,
+    // Bounds the public lookup cache only. Core owns the earlier, authoritative TTL.
+    expires_at: Instant,
 }
 enum Publication {
     None,
@@ -172,7 +180,7 @@ struct State {
     active: Option<String>,
     jobs: Vec<Job>,
     windows: HashMap<String, WindowTarget>,
-    observation: Option<Snapshot>,
+    observations: Vec<Snapshot>,
     // Committed logical app data outlives this native execution owner.
     // Lock order is Coordinator state, then this cell; never the reverse.
     script_state: Arc<Mutex<Value>>,
@@ -220,7 +228,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 active: None,
                 jobs: Vec::new(),
                 windows: HashMap::new(),
-                observation: None,
+                observations: Vec::new(),
                 script_state,
             }),
             finished: Condvar::new(),
@@ -298,7 +306,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             "coverage":self.coverage,"conditions":self.conditions,
             "semantics":{"cancel":"terminal for the context; obtain the original receipt with result",
                 "retry":"same accepted request_id and command returns the existing record, never replays",
-                "references":"opaque and context-local; windows and new observations retire prior observation",
+                "references":"opaque and context-local; stable windows, one semantic query and pixel binding per window; actions consume both kinds on the target window",
                 "effects":"dispatched does not mean confirmed; observe independently"}
         }))
     }
@@ -449,10 +457,28 @@ impl<B: Backend + 'static> Coordinator<B> {
     // Called under the outer job reservation, including every script Host Call.
     fn execute_atomic(&self, submitted: &Submit, deadline: Instant) -> Work {
         let work = self.execute_atomic_inner(submitted, deadline);
+        // Core is the authority on admission and consumption. Keep only a light
+        // tombstone for stale-ref diagnostics after it has released a binding.
+        // In particular, an invalid point must not consume a still-live image.
+        let mut state = self.state.lock().unwrap();
+        state
+            .observations
+            .retain(|snapshot| snapshot.expires_at > Instant::now());
+        for snapshot in &mut state.observations {
+            if !snapshot.retired && !self.runtime.retains_observation(snapshot.core) {
+                snapshot.elements = HashMap::new();
+                snapshot.cursor = None;
+                snapshot.retired = true;
+            }
+        }
+        drop(state);
         self.observe_cleanup_failure(&submitted.request_id);
         work
     }
     fn execute_atomic_inner(&self, submitted: &Submit, deadline: Instant) -> Work {
+        if let Command::ContinueObservation { cursor } = &submitted.command {
+            return self.continue_observation(cursor, deadline);
+        }
         if submitted.command == Command::Windows {
             return match self.runtime.windows_until(deadline) {
                 Err(error) => Work::read_error(error),
@@ -464,8 +490,10 @@ impl<B: Backend + 'static> Coordinator<B> {
                         ));
                     }
                     let mut bound = HashMap::new();
+                    let state = self.state.lock().unwrap();
                     let rows:Vec<_>=windows.into_iter().map(|window| {
-                        let key=reference("window");
+                        let key=state.windows.iter().find(|(_, target)| **target == window.target)
+                            .map(|(key, _)| key.clone()).unwrap_or_else(|| reference("window"));
                         let row=json!({"window_ref":key,"title":window.title,"visible":window.visible});
                         bound.insert(key,window.target); row
                     }).collect();
@@ -504,15 +532,37 @@ impl<B: Backend + 'static> Coordinator<B> {
             return Work::rejected(&submitted.command, Error::TargetChanged);
         };
         match &submitted.command {
-            Command::Observe | Command::Capture => {
-                let read = if submitted.command == Command::Observe {
-                    self.runtime.observe_until(&target, deadline)
+            Command::Observe | Command::ObserveQuery(_) | Command::Capture => {
+                let window_ref = submitted
+                    .target
+                    .window_ref
+                    .as_deref()
+                    .expect("resolved window");
+                let kind = if matches!(submitted.command, Command::Capture) {
+                    ObservationKind::Pixels
                 } else {
-                    self.runtime.capture_until(&target, deadline)
+                    ObservationKind::Semantic
+                };
+                // New reads retire only their own slot, including a failed replacement.
+                self.state
+                    .lock()
+                    .unwrap()
+                    .observations
+                    .retain(|snapshot| snapshot.window_ref != window_ref || snapshot.kind != kind);
+                let read = match &submitted.command {
+                    Command::Observe => self.runtime.observe_query_until(
+                        &target,
+                        &ObserveQuery::default(),
+                        deadline,
+                    ),
+                    Command::ObserveQuery(query) => {
+                        self.runtime.observe_query_until(&target, query, deadline)
+                    }
+                    _ => self.runtime.capture_until(&target, deadline),
                 };
                 match read {
                     Err(error) => Work::read_error(error),
-                    Ok(observation) => self.observation(submitted, observation),
+                    Ok(observation) => self.observation(window_ref, observation, None),
                 }
             }
             Command::Press {
@@ -524,15 +574,20 @@ impl<B: Backend + 'static> Coordinator<B> {
                     if let Some(error) = &state.terminal {
                         return Work::rejected(&submitted.command, error.clone());
                     }
-                    state
-                        .observation
-                        .as_ref()
-                        .filter(|o| o.public == *observation_ref)
-                        .and_then(|o| {
-                            o.elements
-                                .get(element_ref)
-                                .map(|element| (o.core, *element))
-                        })
+                    let snapshot = state
+                        .observations
+                        .iter()
+                        .find(|o| o.public == *observation_ref);
+                    match snapshot {
+                        Some(o) if o.retired => {
+                            return Work::rejected(&submitted.command, Error::StaleObservation)
+                        }
+                        Some(o) => o
+                            .elements
+                            .get(element_ref)
+                            .map(|element| (o.core, *element)),
+                        None => None,
+                    }
                 };
                 match bound {
                     Some((observation, element)) => Work::action(self.runtime.press_until(
@@ -555,9 +610,9 @@ impl<B: Backend + 'static> Coordinator<B> {
                         return Work::rejected(&submitted.command, error.clone());
                     }
                     state
-                        .observation
-                        .as_ref()
-                        .filter(|o| o.public == *observation_ref)
+                        .observations
+                        .iter()
+                        .find(|o| o.public == *observation_ref)
                         .map(|o| o.core)
                 };
                 match bound {
@@ -570,12 +625,62 @@ impl<B: Backend + 'static> Coordinator<B> {
                     None => Work::rejected(&submitted.command, Error::InvalidObservation),
                 }
             }
-            Command::Windows | Command::Script { .. } => unreachable!(),
+            Command::Windows | Command::Script { .. } | Command::ContinueObservation { .. } => {
+                unreachable!()
+            }
         }
     }
-    fn observation(&self, submitted: &Submit, observation: Observation) -> Work {
-        let public = reference("observation");
-        let mut elements = HashMap::new();
+    fn continue_observation(&self, cursor: &str, deadline: Instant) -> Work {
+        let (previous, target) = {
+            let mut state = self.state.lock().unwrap();
+            if let Some(error) = &state.terminal {
+                return Work::read_error(error.clone());
+            }
+            let Some(index) = state
+                .observations
+                .iter()
+                .position(|snapshot| snapshot.cursor.as_deref() == Some(cursor))
+            else {
+                return Work::read_error(Error::NativeFailure {
+                    code: "stale_cursor".into(),
+                    message:
+                        "Cursor is unknown, consumed, or no longer current; start a new observation"
+                            .into(),
+                });
+            };
+            // A cursor advances once. Failure retires this query; never retry a partially advanced native frontier.
+            let previous = state.observations.remove(index);
+            let Some(target) = state.windows.get(&previous.window_ref).cloned() else {
+                return Work::read_error(Error::TargetChanged);
+            };
+            (previous, target)
+        };
+        match self
+            .runtime
+            .continue_observation_until(&target, previous.core, deadline)
+        {
+            Ok(observation) => {
+                self.observation(&previous.window_ref.clone(), observation, Some(previous))
+            }
+            Err(error) => Work::read_error(error),
+        }
+    }
+    fn observation(
+        &self,
+        window_ref: &str,
+        observation: Observation,
+        previous: Option<Snapshot>,
+    ) -> Work {
+        let mut snapshot = previous.unwrap_or_else(|| Snapshot {
+            core: observation.reference,
+            elements: HashMap::new(),
+            public: reference("observation"),
+            window_ref: window_ref.into(),
+            kind: observation.kind,
+            cursor: None,
+            retired: false,
+            expires_at: Instant::now() + OBSERVATION_TTL,
+        });
         let rows: Vec<_> = observation
             .elements
             .into_iter()
@@ -583,12 +688,18 @@ impl<B: Backend + 'static> Coordinator<B> {
                 let id = reference("element");
                 let row =
                     json!({"element_ref":id,"label":element.label,"can_press":element.can_press,"role":element.role,"name":element.name,"value":element.value,"enabled":element.enabled,"actions":element.actions});
-                elements.insert(id, element.id);
+                snapshot.elements.insert(id, element.id);
                 row
             })
             .collect();
-        let mut value = json!({"window_ref":submitted.target.window_ref,"observation_ref":public,
+        let mut value = json!({"window_ref":window_ref,"observation_ref":snapshot.public,
             "kind":match observation.kind {ObservationKind::Semantic=>"semantic",ObservationKind::Pixels=>"pixels"}});
+        if let Some(page) = observation.discovery {
+            snapshot.cursor = page.has_more.then(|| reference("cursor"));
+            value["next"] = json!(snapshot.cursor);
+            value["coverage"] =
+                json!({"complete":page.complete,"reason":page.reason,"visited":page.visited});
+        }
         let image = if let Some(frame) = observation.image {
             value["image"] = json!({"width":frame.width,"height":frame.height,"coordinate_space":"image_pixels"});
             Some(Arc::new(
@@ -607,11 +718,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 payload_bytes: 0,
                 payload_expired: false,
             },
-            publication: Publication::Observation(Snapshot {
-                core: observation.reference,
-                elements,
-                public,
-            }),
+            publication: Publication::Observation(snapshot),
             state_update: None,
         }
     }
@@ -707,7 +814,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             }
             scripts::cancel_active(&state);
             state.windows.clear();
-            state.observation = None;
+            state.observations.clear();
         }
         let error = self.cleanup_terminal();
         Reply {
@@ -728,7 +835,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 scripts::cancel_active(&state);
             }
             state.windows.clear();
-            state.observation = None;
+            state.observations.clear();
         }
         self.cleanup_terminal();
         let state = self.state.lock().unwrap();
@@ -760,9 +867,17 @@ fn apply_publication(state: &mut State, publication: Publication) {
     match publication {
         Publication::Windows(windows) => {
             state.windows = windows;
-            state.observation = None;
+            state
+                .observations
+                .retain(|snapshot| state.windows.contains_key(&snapshot.window_ref));
         }
-        Publication::Observation(observation) => state.observation = Some(observation),
+        Publication::Observation(observation) => {
+            state.observations.retain(|old| {
+                old.expires_at > Instant::now()
+                    && (old.window_ref != observation.window_ref || old.kind != observation.kind)
+            });
+            state.observations.push(observation);
+        }
         Publication::None => {}
     }
 }

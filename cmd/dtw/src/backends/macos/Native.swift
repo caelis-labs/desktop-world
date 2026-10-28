@@ -4,6 +4,7 @@
 // The worker owns this registry. No CUA ToolRegistry, focus or input fallback.
 import Foundation
 import ApplicationServices
+import AppKit
 import Darwin
 
 private struct NativeFailure: Error {
@@ -32,6 +33,12 @@ private func integer(_ value: Any?, _ field: String) throws -> UInt64 {
 
 private struct Deadline {
     let uptime: TimeInterval
+
+    private init(uptime: TimeInterval) { self.uptime = uptime }
+
+    func limited(to value: TimeInterval) -> Deadline {
+        Deadline(uptime: min(uptime, value))
+    }
 
     init(_ request: [String: Any]) throws {
         let milliseconds = try integer(request["deadline_unix_ms"], "deadline_unix_ms")
@@ -141,8 +148,8 @@ private final class RequestContext {
 
     func admitModalVisit() throws {
         try deadline.check()
-        guard modalVisits < 128 else {
-            throw failure("modal_state_unproven", "Modal verification exceeded 128 element visits in this request")
+        guard modalVisits < 4_096 else {
+            throw failure("modal_state_unproven", "Modal verification exceeded 4096 element visits in this request")
         }
         modalVisits += 1
     }
@@ -514,16 +521,14 @@ private func requireAppWithoutModal(_ application: AXUIElement, windows: [AXUIEl
                                     context: RequestContext) throws {
     // AXWindows alone need not contain a top-level consent sheet (the donor's
     // window_scope explicitly inspects application children for that case).
-    let children = try axList(application, kAXChildrenAttribute, limit: 129, context.deadline, required: true)
-    guard children.count <= 128 else {
-        throw failure("modal_state_unproven", "Application AX child inventory exceeds the supported limit")
-    }
     var seen: [AXUIElement] = []
-    for element in windows + children {
-        guard !seen.contains(where: { CFEqual($0, element) }) else { continue }
+    func inspect(_ element: AXUIElement) throws {
+        guard !seen.contains(where: { CFEqual($0, element) }) else { return }
         seen.append(element)
         try rejectModalSurface(element, context)
     }
+    for element in windows { try inspect(element) }
+    try inspectModalChildren(application, context: context, inspect: inspect)
 }
 
 private func requireWindowWithoutSheet(_ element: AXUIElement, _ context: RequestContext) throws {
@@ -540,11 +545,39 @@ private func requireWindowWithoutSheet(_ element: AXUIElement, _ context: Reques
             throw failure("unsupported_modal", "The target window has an attached sheet")
         }
     }
-    let children = try axList(element, kAXChildrenAttribute, limit: 129, deadline, required: true)
-    guard children.count <= 128 else {
-        throw failure("modal_state_unproven", "Window AX child inventory exceeds the supported limit")
+    try inspectModalChildren(element, context: context) { try rejectModalSurface($0, context) }
+}
+
+private func inspectModalChildren(_ element: AXUIElement, context: RequestContext,
+                                  inspect: (AXUIElement) throws -> Void) throws {
+    let count = try axChildCount(element, context.deadline, required: true)
+    guard count <= 4_096 else {
+        throw failure("modal_state_unproven", "Modal child inventory exceeds the supported limit")
     }
-    for child in children { try rejectModalSurface(child, context) }
+    var index = 0
+    var previous: AXUIElement?
+    while index < count {
+        guard try axChildCount(element, context.deadline, required: true) == count else {
+            throw failure("modal_state_unproven", "Modal child inventory changed during validation")
+        }
+        let start = previous == nil ? index : index - 1
+        var children = try axChildRange(element, index: start, count: min(16 + index - start, count - start), context.deadline)
+        if let previous {
+            guard CFEqual(children[0], previous) else {
+                throw failure("modal_state_unproven", "Modal child inventory order changed during validation")
+            }
+            children.removeFirst()
+        }
+        guard !children.isEmpty else {
+            throw failure("modal_state_unproven", "Modal child range became empty during validation")
+        }
+        for child in children { try inspect(child) }
+        index += children.count
+        previous = children.last
+    }
+    guard try axChildCount(element, context.deadline, required: true) == count else {
+        throw failure("modal_state_unproven", "Modal child inventory changed before validation completed")
+    }
 }
 
 private struct WindowSlot: Hashable {
@@ -565,7 +598,9 @@ private struct CandidateWindow {
 
 // Roles have a small platform-independent vocabulary. The legacy display label
 // retains native text where no normalized role is available.
-private func semanticRole(_ role: String) -> String {
+private func semanticRole(_ role: String, subrole: String? = nil) -> String {
+    if [kAXButtonRole, kAXRadioButtonRole].contains(role),
+       subrole == NSAccessibility.Subrole.tabButtonSubrole.rawValue { return "tab" }
     switch role {
     case kAXButtonRole: return "button"
     case kAXCheckBoxRole: return "checkbox"
@@ -578,6 +613,15 @@ private func semanticRole(_ role: String) -> String {
     case kAXScrollAreaRole: return "scroll_area"
     case kAXImageRole: return "image"
     case kAXToolbarRole: return "toolbar"
+    case NSAccessibility.Role.link.rawValue: return "link"
+    case kAXTableRole: return "table"
+    case kAXRowRole: return "row"
+    case kAXCellRole: return "cell"
+    case kAXListRole: return "list"
+    case kAXTabGroupRole: return "tab_group"
+    case kAXPopUpButtonRole: return "pop_up_button"
+    case kAXMenuItemRole: return "menu_item"
+    case kAXHeadingRole: return "heading"
     default: return "unknown"
     }
 }
@@ -601,7 +645,108 @@ private struct NativeElement {
 
 private struct NativeObservation {
     let target: NativeTarget
-    let elements: [NativeElement]
+    let root: AXUIElement
+    let query: NativeQuery
+    var elements: [NativeElement] = []
+    var pending: [DiscoveryFrame]
+    var visited: [CFHashCode: [AXUIElement]] = [:]
+    var visits = 0
+    var edges = 0
+    var buffered: NativeElement?
+    var reason: String?
+
+    mutating func note(_ value: String) { if reason == nil { reason = value } }
+    mutating func enter(_ element: AXUIElement) -> Bool {
+        let hash = CFHash(element)
+        if visited[hash]?.contains(where: { CFEqual($0, element) }) == true { return false }
+        visited[hash, default: []].append(element)
+        visits += 1
+        return true
+    }
+    mutating func deferVisit(_ element: AXUIElement) {
+        let hash = CFHash(element)
+        visited[hash]?.removeAll(where: { CFEqual($0, element) })
+        if visited[hash]?.isEmpty == true { visited.removeValue(forKey: hash) }
+        visits -= 1
+    }
+}
+
+private struct NativeQuery {
+    let role: String?
+    let text: String?
+    let limit: Int
+
+    init(_ value: Any?) throws {
+        if let value, !(value is [String: Any]) {
+            throw failure("invalid_request", "Discovery query must be an object")
+        }
+        let object = value as? [String: Any] ?? [:]
+        func optional(_ field: String) throws -> String? {
+            guard let value = object[field], !(value is NSNull) else { return nil }
+            guard let text = value as? String, !text.isEmpty,
+                  text.unicodeScalars.count <= (field == "role" ? 64 : 256) else {
+                throw failure("invalid_request", "Discovery \(field) exceeds its declared bound")
+            }
+            return text
+        }
+        role = try optional("role")
+        text = try optional("text")
+        let requested = try object["limit"].map { try integer($0, "query.limit") } ?? 40
+        guard requested > 0, requested <= 100 else {
+            throw failure("invalid_request", "Discovery limit must be in 1...100")
+        }
+        limit = Int(requested)
+    }
+}
+
+// A child-array offset is part of the native frontier. Never materialize a
+// complete AXChildren array merely to discard most of it after filtering.
+private enum DiscoveryFrame {
+    case node(AXUIElement, Int, Int)
+    case children(AXUIElement, Int, Int, Int?, AXUIElement?)
+}
+
+private func axChildCount(_ element: AXUIElement, _ deadline: Deadline, required: Bool = false) throws -> Int {
+    try deadline.prepare(element)
+    var count: CFIndex = 0
+    let result = AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &count)
+    try deadline.check()
+    if result == .attributeUnsupported || result == .noValue {
+        if required { throw failure("modal_state_unproven", "Required AXChildren inventory is unavailable") }
+        return 0
+    }
+    guard result == .success, count >= 0 else {
+        throw failure("children_unavailable", "AX child count failed: \(result.rawValue)")
+    }
+    return count
+}
+
+private func axChildRange(_ element: AXUIElement, index: Int, count: Int,
+                          _ deadline: Deadline) throws -> [AXUIElement] {
+    precondition(index >= 0 && count > 0 && count <= 17)
+    try deadline.prepare(element)
+    var value: CFArray?
+    let result = AXUIElementCopyAttributeValues(element, kAXChildrenAttribute as CFString,
+                                               index, count, &value)
+    try deadline.check()
+    guard result == .success, let value, CFArrayGetCount(value) > 0,
+          CFArrayGetCount(value) <= count else {
+        // A count/range race or illegalArgument is a coverage gap, never an
+        // empty subtree. In particular, count zero never calls this function.
+        throw failure("children_unavailable", "AX child range failed: \(result.rawValue)")
+    }
+    var children: [AXUIElement] = []
+    for offset in 0..<CFArrayGetCount(value) {
+        guard let pointer = CFArrayGetValueAtIndex(value, offset) else {
+            throw failure("children_unavailable", "Null AX child")
+        }
+        let item = Unmanaged<AnyObject>.fromOpaque(pointer).takeUnretainedValue()
+        guard CFGetTypeID(item) == AXUIElementGetTypeID() else {
+            throw failure("children_unavailable", "Non-element AX child")
+        }
+        children.append(item as! AXUIElement)
+    }
+    return children
 }
 
 private final class NativeStore: @unchecked Sendable {
@@ -634,7 +779,9 @@ private final class NativeStore: @unchecked Sendable {
         let application = AXUIElementCreateApplication(app.pid)
         let elements = try axList(application, kAXWindowsAttribute, limit: 129, context.deadline, required: true)
         guard elements.count <= 128 else { throw failure("window_limit", "More than 128 AX windows; narrow scope required") }
-        try requireAppWithoutModal(application, windows: elements, context: context)
+        // Listing and discovery prove identity, not permission to dispatch
+        // input. Large/unreadable child trees must not prevent a read-only
+        // window inventory. Input validates the modal boundary separately.
         diagnostics.counts["ax_window_count"] = elements.count
         var candidates: [CandidateWindow] = []
         var seen: Set<CGWindowID> = []
@@ -645,7 +792,6 @@ private final class NativeStore: @unchecked Sendable {
                 diagnostics.increment(classification.rawValue)
                 continue
             }
-            try requireWindowWithoutSheet(element, context)
             let (result, id) = try axWindowIdentity(element, context.deadline)
             guard result == .success, id > 0 else {
                 diagnostics.exactIDFailure(result)
@@ -698,7 +844,8 @@ private final class NativeStore: @unchecked Sendable {
         return ["windows": rows, "coverage": diagnostics.coverage]
     }
 
-    fileprivate func validate(_ target: NativeTarget, _ context: RequestContext) throws -> CandidateWindow {
+    fileprivate func validate(_ target: NativeTarget, _ context: RequestContext,
+                              input: Bool = true) throws -> CandidateWindow {
         let slot = WindowSlot(app: target.app, id: target.nativeID)
         guard let registered = windows[slot], registered.target == target else {
             throw failure("stale_window", "Target was not registered in this worker generation")
@@ -713,7 +860,7 @@ private final class NativeStore: @unchecked Sendable {
         let application = AXUIElementCreateApplication(target.app.pid)
         let current = try axList(application, kAXWindowsAttribute, limit: 129, context.deadline, required: true)
         guard current.count <= 128 else { throw failure("window_limit", "AX window inventory exceeds the supported limit") }
-        try requireAppWithoutModal(application, windows: current, context: context)
+        if input { try requireAppWithoutModal(application, windows: current, context: context) }
         var matched: [AXUIElement] = []
         for element in current {
             do {
@@ -726,7 +873,7 @@ private final class NativeStore: @unchecked Sendable {
             windows.removeValue(forKey: slot)
             throw failure("target_changed", "Current AX window identity or WindowServer ownership differs")
         }
-        try requireWindowWithoutSheet(element, context)
+        if input { try requireWindowWithoutSheet(element, context) }
         try context.verify(target.app)
         try context.deadline.check()
         return CandidateWindow(cg: record, element: element, title: "")
@@ -765,53 +912,190 @@ private final class NativeStore: @unchecked Sendable {
         return try owned(element, by: window, target: target, deadline: deadline)
     }
 
-    private func observe(_ target: NativeTarget, _ context: RequestContext) throws -> [String: Any] {
-        observations.removeAll()
-        let window = try validate(target, context)
-        var pending: [(AXUIElement, Int)] = [(window.element, 0)]
-        var elements: [NativeElement] = []
-        var visited: [AXUIElement] = []
-        var truncated = false
-        while let (element, depth) = pending.popLast() {
-            try context.deadline.check()
-            if elements.count >= 128 { truncated = true; break }
-            guard !visited.contains(where: { CFEqual($0, element) }) else { continue }
-            visited.append(element)
-            guard try axPID(element, context.deadline) == target.app.pid else { continue }
-            let role = try axAttribute(element, kAXRoleAttribute, context.deadline) as? String ?? ""
-            if [kAXSheetRole, kAXMenuRole, kAXMenuBarRole].contains(role) { continue }
-            func text(_ attribute: String) throws -> String? {
-                let value = try axAttribute(element, attribute, context.deadline)
-                guard let text = (value as? String) ?? (value as? NSNumber)?.stringValue else { return nil }
-                return String(text.prefix(256))
-            }
-            let title = try text(kAXTitleAttribute)
-            let value = try text(kAXValueAttribute)
-            let description = try text(kAXDescriptionAttribute)
-            let labels = [title, value, description].compactMap { $0 }.filter { !$0.isEmpty }
-            let rawEnabled = try axAttribute(element, kAXEnabledAttribute, context.deadline)
-            let enabled: Bool? = rawEnabled.flatMap {
-                CFGetTypeID($0) == CFBooleanGetTypeID() ? ($0 as? Bool) : nil
-            }
-            let canPress = try pressable(element, role: role, enabled: enabled == true, window: window.element,
-                                         target: target, deadline: context.deadline)
-            elements.append(NativeElement(id: UInt64(elements.count + 1), element: element,
-                                          label: labels.isEmpty ? role : labels.joined(separator: " | "),
-                                          role: semanticRole(role), name: title?.isEmpty == false ? title : description,
-                                          value: value, enabled: enabled, canPress: canPress))
-            if depth >= 16 { truncated = true; continue }
-            let remaining = max(0, 128 - elements.count - pending.count)
-            let children = try axList(element, kAXChildrenAttribute, limit: remaining + 1, context.deadline)
-            if children.count > remaining { truncated = true }
-            pending.append(contentsOf: children.prefix(remaining).reversed().map { ($0, depth + 1) })
+    private func discoveryPage(_ observation: inout NativeObservation,
+                               binding: String, context: RequestContext) throws -> [String: Any] {
+        let window = try validate(observation.target, context, input: false)
+        guard CFEqual(window.element, observation.root) else {
+            throw failure("target_changed", "Discovery root was replaced")
         }
-        // Both the app and the retained window must still agree at publication.
-        let final = try validate(target, context)
-        guard CFEqual(final.element, window.element) else { throw failure("target_changed", "Window changed while observing") }
+        // Cooperative page budget is separate from the enclosing RPC deadline.
+        // A stuck AX provider is still terminated by the parent worker owner.
+        let pageDeadline = context.deadline.limited(to: ProcessInfo.processInfo.systemUptime + 0.75)
+        var rows: [NativeElement] = []
+        var bytes = 2
+        var work = 0
+        func rowBytes(_ row: NativeElement) throws -> Int {
+            try JSONSerialization.data(withJSONObject: row.json).count + 1
+        }
+        if let buffered = observation.buffered {
+            rows.append(buffered)
+            observation.elements.append(buffered)
+            bytes += try rowBytes(buffered)
+            observation.buffered = nil
+        }
+        pageLoop: while !observation.pending.isEmpty && rows.count < observation.query.limit && work < 256 {
+            if ProcessInfo.processInfo.systemUptime >= pageDeadline.uptime { break }
+            if observation.visits >= 8_192 || observation.elements.count >= 4_096 || observation.edges >= 32_768 {
+                observation.note("scan_limit")
+                observation.pending.removeAll()
+                break
+            }
+            work += 1
+            let frame = observation.pending.removeLast()
+            switch frame {
+            case let .node(element, depth, attempt):
+                guard observation.enter(element) else { continue }
+                var scheduledChildren = false
+                do {
+                    guard try axPID(element, pageDeadline) == observation.target.app.pid else {
+                        observation.note("ownership_unproven")
+                        continue
+                    }
+                    let role = try axAttribute(element, kAXRoleAttribute, pageDeadline) as? String ?? ""
+                    if [kAXSheetRole, kAXMenuRole, kAXMenuBarRole].contains(role) { continue }
+                    observation.pending.append(.children(element, depth, 0, nil, nil))
+                    scheduledChildren = true
+                    let subrole = [kAXButtonRole, kAXRadioButtonRole].contains(role)
+                        ? try axAttribute(element, kAXSubroleAttribute, pageDeadline) as? String : nil
+                    let normalizedRole = semanticRole(role, subrole: subrole)
+                    // A nonmatching parent is still traversed. Expensive name,
+                    // value and pressability reads are needed only for matches.
+                    if let required = observation.query.role, required != normalizedRole { continue }
+                    var matched = observation.query.text == nil
+                    func text(_ attribute: String) throws -> String? {
+                        let value = try axAttribute(element, attribute, pageDeadline)
+                        guard let text = (value as? String) ?? (value as? NSNumber)?.stringValue else { return nil }
+                        if let needle = observation.query.text {
+                            let source = text as NSString
+                            let length = min(source.length, 4_096)
+                            if source.length > length { observation.note("text_limit") }
+                            if source.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive],
+                                            range: NSRange(location: 0, length: length)).location != NSNotFound {
+                                matched = true
+                            }
+                        }
+                        return String(String.UnicodeScalarView(text.unicodeScalars.prefix(256)))
+                    }
+                    let title = try text(kAXTitleAttribute)
+                    let value = try text(kAXValueAttribute)
+                    let description = try text(kAXDescriptionAttribute)
+                    guard matched else { continue }
+                    let labels = [title, value, description].compactMap { $0 }.filter { !$0.isEmpty }
+                    let rawEnabled = try axAttribute(element, kAXEnabledAttribute, pageDeadline)
+                    let enabled: Bool? = rawEnabled.flatMap {
+                        CFGetTypeID($0) == CFBooleanGetTypeID() ? ($0 as? Bool) : nil
+                    }
+                    // Advisory support only. Press performs full modal, current
+                    // ownership and enabled-state checks immediately before input.
+                    let canPress = try pressable(element, role: role, enabled: enabled == true,
+                                                 window: window.element, target: observation.target,
+                                                 deadline: pageDeadline)
+                    let row = NativeElement(id: UInt64(observation.elements.count + 1), element: element,
+                                            label: labels.isEmpty ? String(String.UnicodeScalarView(role.unicodeScalars.prefix(256))) : labels.joined(separator: " | "),
+                                            role: normalizedRole, name: title?.isEmpty == false ? title : description,
+                                            value: value, enabled: enabled, canPress: canPress)
+                    let size = try rowBytes(row)
+                    if bytes + size > 12 * 1_024 {
+                        observation.buffered = row
+                        break
+                    }
+                    rows.append(row)
+                    observation.elements.append(row)
+                    bytes += size
+                } catch {
+                    if let native = error as? NativeFailure, native.code == "deadline_exceeded",
+                       ProcessInfo.processInfo.systemUptime < context.deadline.uptime, attempt == 0 {
+                        // Yield rather than lose the node at a page boundary.
+                        // One fresh-page retry is enough to distinguish boundary
+                        // pressure from an individually unresponsive node.
+                        if scheduledChildren { observation.pending.removeLast() }
+                        observation.deferVisit(element)
+                        observation.pending.append(.node(element, depth, 1))
+                        break pageLoop
+                    }
+                    // One unreadable/changing node must not hide other branches.
+                    // The saved child frame, if any, is visited on a later page.
+                    observation.note("node_unavailable")
+                }
+            case let .children(element, depth, index, expectedCount, previous):
+                do {
+                    let count = try axChildCount(element, pageDeadline)
+                    if let expectedCount, expectedCount != count { observation.note("tree_changed") }
+                    guard index < count else { continue } // Includes count == 0.
+                    guard depth < 64 else { observation.note("depth_limit"); continue }
+                    // Overlap one element to detect common insertion/reorder
+                    // races. AX has no cross-page snapshot guarantee; even a
+                    // successful walk is explicitly a live traversal.
+                    let start = previous == nil ? index : index - 1
+                    var children = try axChildRange(element, index: start,
+                                                     count: min(16 + (index - start), count - start), pageDeadline)
+                    if let previous {
+                        if !CFEqual(children[0], previous) { observation.note("tree_changed") }
+                        children.removeFirst()
+                    }
+                    guard !children.isEmpty else { observation.note("tree_changed"); continue }
+                    observation.edges += children.count
+                    guard observation.pending.count + children.count + 1 <= 256 else {
+                        observation.note("frontier_limit")
+                        observation.pending.removeAll()
+                        break
+                    }
+                    observation.pending.append(.children(element, depth, index + children.count, count, children.last))
+                    observation.pending.append(contentsOf: children.reversed().map { .node($0, depth + 1, 0) })
+                } catch {
+                    if let native = error as? NativeFailure, native.code == "deadline_exceeded",
+                       ProcessInfo.processInfo.systemUptime < context.deadline.uptime {
+                        observation.pending.append(frame)
+                        break pageLoop
+                    }
+                    observation.note("children_unavailable")
+                }
+            }
+            if observation.buffered != nil { break }
+        }
+        let final = try validate(observation.target, context, input: false)
+        guard CFEqual(final.element, observation.root) else {
+            throw failure("target_changed", "Discovery root changed during page construction")
+        }
         try context.deadline.check()
+        let hasMore = !observation.pending.isEmpty || observation.buffered != nil
+        return ["target": observation.target.json, "binding": binding, "elements": rows.map(\.json),
+                "discovery": ["has_more": hasMore, "complete": !hasMore && observation.reason == nil,
+                              "reason": observation.reason as Any? ?? NSNull(), "visited": observation.visits]]
+    }
+
+    private func observe(_ request: [String: Any], _ context: RequestContext) throws -> [String: Any] {
+        let target = try NativeTarget(request["target"])
+        observations = observations.filter { $0.value.target != target }
+        guard observations.count < 8 else {
+            throw failure("registry_exhausted", "At most eight live semantic queries may be retained")
+        }
+        let query = try NativeQuery(request["query"])
+        guard let window = windows[WindowSlot(app: target.app, id: target.nativeID)], window.target == target else {
+            throw failure("stale_window", "Discovery target is not registered")
+        }
         let binding = UUID().uuidString
-        observations[binding] = NativeObservation(target: target, elements: elements)
-        return ["target": target.json, "binding": binding, "elements": elements.map(\.json), "truncated": truncated]
+        var observation = NativeObservation(target: target, root: window.element, query: query,
+                                            pending: [.node(window.element, 0, 0)])
+        let page = try discoveryPage(&observation, binding: binding, context: context)
+        observations[binding] = observation
+        return page
+    }
+
+    private func observeNext(_ request: [String: Any], _ context: RequestContext) throws -> [String: Any] {
+        guard let binding = request["binding"] as? String,
+              var observation = observations.removeValue(forKey: binding) else {
+            throw failure("stale_observation", "Discovery query was retired or consumed")
+        }
+        guard observation.target == (try NativeTarget(request["target"])) else {
+            throw failure("target_changed", "Discovery query belongs to another target")
+        }
+        guard !observation.pending.isEmpty || observation.buffered != nil else {
+            throw failure("stale_observation", "Discovery query has no remaining pages")
+        }
+        let page = try discoveryPage(&observation, binding: binding, context: context)
+        observations[binding] = observation
+        return page
     }
 
     private func press(_ request: [String: Any]) -> [String: Any] {
@@ -822,6 +1106,7 @@ private final class NativeStore: @unchecked Sendable {
             }
             let context = try RequestContext(request)
             let target = try NativeTarget(request["target"])
+            observations = observations.filter { $0.value.target != target }
             let id = try integer(request["element"], "element")
             guard observation.target == target else { throw failure("target_changed", "Binding belongs to another target") }
             guard let element = observation.elements.first(where: { $0.id == id }), element.canPress else {
@@ -878,7 +1163,8 @@ private final class NativeStore: @unchecked Sendable {
             switch operation {
             case "catalog": return try context.catalog()
             case "windows": return try listWindows(NativeApp(request["app"]), context)
-            case "observe": return try observe(NativeTarget(request["target"]), context)
+            case "observe": return try observe(request, context)
+            case "observe_next": return try observeNext(request, context)
             case "validate":
                 let target = try NativeTarget(request["target"])
                 let current = try validate(target, context)

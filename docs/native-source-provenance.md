@@ -54,8 +54,10 @@ cache nor AX, screenshot capture or permission prompts.
 Swift ARC strong references replace the donor's explicit `CFRetain`/`CFRelease`
 wrappers. A registered window holds its native AX object; a published observation
 holds its own element objects. Native bindings are opaque UUIDs, scoped to the
-worker, replaced by the next semantic observation, consumed before a press
-attempt and released by `release`. Cleanup is permitted after a deadline because
+worker and exact target window. A new semantic query replaces only that
+window's previous semantic query; continuation retains its binding and earlier
+elements. Input admission consumes both binding kinds on its own window.
+Bindings are released by their Core owner and `release`. Cleanup is permitted after a deadline because
 it only drops retained objects. There is no implicit action, focus change or
 re-observation during cleanup.
 
@@ -70,19 +72,38 @@ authorization tokens.
 `_AXUIElementGetWindow` remains a private macOS SPI. It is dynamically resolved
 from HIServices and failure is explicit `unsupported_platform`; there is no
 replacement based on titles, bounds, focused windows or a different process.
-The donor's single `AXUIElementCopyAttributeValue` array read is retained. An
-initial adaptation to indexed `AXUIElementCopyAttributeValues` returned
-`illegalArgument` while reading AXChildren in a real fixture. That error is not
-treated as proof of an empty child array: the indexed API was removed in favor
-of the donor's array read rather than retried.
-The complete native CFArray exists temporarily; only the bounded prefix is
-retained as Swift elements. Thus tree/response limits do not bound the native
-allocation needed to receive an individual AX array. Standard-window discovery
-is limited to 128 AX windows and 512 retained window registrations. Observation
-is limited to 128 nodes and depth 16; bounded traversal reports truncation.
-The Rust adapter rejects truncated or unmarked snapshots and releases their
-retained binding rather than publishing a silently partial tree.
-These limits are DTW policy, not copied CUA limits.
+Window inventory still uses the donor's single `AXUIElementCopyAttributeValue`
+read of AXWindows (128 windows, 512 registered identities). Semantic discovery
+now uses `AXUIElementGetAttributeValueCount` followed by indexed
+[`AXUIElementCopyAttributeValues`](https://developer.apple.com/documentation/applicationservices/1462060-axuielementcopyattributevalues) ranges of at most 17 objects: 16 new children
+and one overlap anchor. An earlier adaptation encountered `illegalArgument`;
+this implementation skips empty ranges, clamps to the current count, and reports
+unavailable or changing ranges as incomplete coverage without a full-array
+fallback. Count and overlap changes are detected; a live AX walk is not an
+atomic snapshot and may miss changes outside its anchors.
+
+Filtering happens while traversing native objects. A query retains its frontier,
+child offsets, visited objects and already returned actionable elements. Each
+page is bounded independently by match count (40 default, 100 maximum), 256
+frontier steps, a 750 ms cooperative traversal budget and 12 KiB of native element
+JSON. Identity verification still uses the enclosing call deadline. A row that
+does not fit is buffered once for the next page, so it is not skipped. Each
+query retains at most 8192 visited nodes, 4096 returned elements, 256 frontier
+frames, 32768 child edges and depth 64; one worker retains at most eight semantic
+queries. Known read gaps and exhausted scan bounds set `complete=false` and a
+reason. Exhausted traversal may keep earlier elements actionable. Core and
+protocol retain semantic and pixel observations independently per window, with
+an unchanged 15-second lifetime from initial acquisition. Cursor continuation
+does not extend it. Consumed public bindings release their element lookup maps.
+
+These are DTW policies, not copied CUA limits. Native providers may still allocate
+an AX string or the complete AXWindows CFArray before DTW bounds retained data.
+The native element-byte cap does not include public UUID refs and envelopes, or
+arbitrary values explicitly returned by a script. Read-only identity discovery
+does not scan modal child trees. Input still requires exact window identity,
+current enabled/action/ancestry checks and a proven modal boundary; its direct
+child inventory uses checked indexed batches and a 4096-node cap. Unsupported
+or failed mandatory child reads reject input.
 
 Each admitted request converts its absolute deadline once to a monotonic budget
 (at most 30 seconds); each AX call checks it and sets an element messaging timeout

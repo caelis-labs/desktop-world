@@ -21,6 +21,52 @@ fn commands() -> Vec<Value> {
 }
 
 #[test]
+fn observe_query_and_cursor_forms_are_strict_and_bounded() {
+    let query = parse_request(submit(
+        json!({"kind":"observe","role":"AXButton","text":"提交","limit":1}),
+    ))
+    .unwrap();
+    assert!(matches!(
+        query,
+        Request::Submit(Submit {
+            command: Command::ObserveQuery(computer::ObserveQuery { limit: 1, .. }),
+            ..
+        })
+    ));
+    for command in [
+        json!({"kind":"observe","limit":0}),
+        json!({"kind":"observe","limit":101}),
+        json!({"kind":"observe","limit":1.5}),
+        json!({"kind":"observe","text":""}),
+        json!({"kind":"observe","role":"x".repeat(65)}),
+        json!({"kind":"observe","text":"中".repeat(257)}),
+        json!({"kind":"observe","region":{}}),
+    ] {
+        assert!(parse_request(submit(command)).is_err());
+    }
+    let cursor = json!({"version":1,"operation":"submit","request_id":"r","target":{"app_ref":"app-a"},"command":{"kind":"observe","cursor":"opaque"}});
+    assert!(matches!(
+        parse_request(cursor.clone()).unwrap(),
+        Request::Submit(Submit {
+            command: Command::ContinueObservation { .. },
+            ..
+        })
+    ));
+    for (key, value) in [
+        ("role", json!("AXButton")),
+        ("text", json!("x")),
+        ("limit", json!(1)),
+    ] {
+        let mut invalid = cursor.clone();
+        invalid["command"][key] = value;
+        assert!(parse_request(invalid).is_err());
+    }
+    let mut invalid = cursor;
+    invalid["target"]["window_ref"] = json!("window-a");
+    assert!(parse_request(invalid).is_err());
+}
+
+#[test]
 fn parses_the_complete_public_request_union() {
     for (operation, expected) in [("describe", Request::Describe), ("close", Request::Close)] {
         assert_eq!(

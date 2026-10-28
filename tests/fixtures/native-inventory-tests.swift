@@ -151,6 +151,15 @@ private func checkSemanticSerialization() throws {
     expect(semanticRole(kAXButtonRole) == "button", "native button role was not normalized")
     expect(semanticRole(kAXCheckBoxRole) == "checkbox", "native checkbox role was not normalized")
     expect(semanticRole(kAXTextFieldRole) == "text_field", "native text field role was not normalized")
+    for (native, expected) in [(NSAccessibility.Role.link.rawValue, "link"), (kAXTableRole, "table"),
+                               (kAXRowRole, "row"), (kAXCellRole, "cell"), (kAXListRole, "list"),
+                               (kAXTabGroupRole, "tab_group"), (kAXPopUpButtonRole, "pop_up_button"),
+                               (kAXMenuItemRole, "menu_item"), (kAXHeadingRole, "heading")] {
+        expect(semanticRole(native) == expected, "known native role was not normalized: \(expected)")
+    }
+    expect(semanticRole(kAXRadioButtonRole, subrole: NSAccessibility.Subrole.tabButtonSubrole.rawValue) == "tab",
+           "native tab subrole was not normalized")
+    expect(semanticRole(kAXButtonRole, subrole: "unrecognized") == "button", "unknown subrole changed role")
     expect(semanticRole("provider-specific role") == "unknown", "unknown role was guessed from prose")
     // Creating an opaque AX object makes no attribute requests or desktop reads.
     let native = AXUIElementCreateApplication(0)

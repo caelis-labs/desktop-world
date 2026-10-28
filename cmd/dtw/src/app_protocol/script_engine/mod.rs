@@ -562,31 +562,11 @@ fn host_call(
     }
 }
 fn valid_args(op: &str, args: &Value) -> bool {
-    let Some(object) = args.as_object() else {
-        return false;
-    };
-    use super::methods::Method;
-    let Some(method) = Method::parse(op) else {
-        return false;
-    };
-    let keys: &[&str] = match method {
-        Method::Windows => &[],
-        Method::Observe | Method::Capture => &["window_ref"],
-        Method::Press => &["window_ref", "observation_ref", "element_ref"],
-        Method::Click => &["window_ref", "observation_ref", "x", "y"],
-    };
-    object.len() == keys.len()
-        && keys.iter().all(|key| match *key {
-            "x" | "y" => object
-                .get(*key)
-                .and_then(Value::as_f64)
-                .is_some_and(f64::is_finite),
-            _ => object
-                .get(*key)
-                .and_then(Value::as_str)
-                .is_some_and(|s| !s.is_empty()),
-        })
+    // Use the coordinator's exact parser so the VM cannot advertise a different
+    // argument shape. These placeholders never resolve or dispatch a target.
+    super::wire::script_submit("bound-app", "bridge-check", op, args).is_ok()
 }
+
 fn latch(terminal: &Mutex<Option<Failure>>, failure: Failure) {
     let mut slot = terminal.lock().unwrap_or_else(|e| e.into_inner());
     if slot.is_none() {

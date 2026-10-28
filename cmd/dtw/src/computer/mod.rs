@@ -85,6 +85,33 @@ pub enum ObservationKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObserveQuery {
+    pub role: Option<String>,
+    pub text: Option<String>,
+    pub limit: u32,
+}
+
+impl Default for ObserveQuery {
+    fn default() -> Self {
+        Self {
+            role: None,
+            text: None,
+            limit: 40,
+        }
+    }
+}
+
+/// Progress through a live native traversal, not an atomic UI snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiscoveryPage {
+    pub has_more: bool,
+    pub complete: bool,
+    pub reason: Option<String>,
+    /// Cumulative native nodes visited by this query, including prior pages.
+    pub visited: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImageFrame {
     pub width: u32,
     pub height: u32,
@@ -177,6 +204,7 @@ pub struct Observation {
     pub elements: Vec<Element>,
     pub image: Option<ImageFrame>,
     pub kind: ObservationKind,
+    pub discovery: Option<DiscoveryPage>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -248,6 +276,14 @@ pub struct BackendObservation<B> {
     pub elements: Vec<Element>,
     pub image: Option<ImageFrame>,
     pub binding: B,
+    pub discovery: Option<DiscoveryPage>,
+}
+
+/// A continuation updates the original binding; ownership is never duplicated.
+pub struct BackendObservationPage {
+    pub target: WindowTarget,
+    pub elements: Vec<Element>,
+    pub discovery: DiscoveryPage,
 }
 
 /// Statically selected capability groups; no generic tool escape.
@@ -292,6 +328,37 @@ pub trait Backend: Send + Sync {
         target: &WindowTarget,
         call: &CallContext<'_>,
     ) -> Result<BackendObservation<Self::Binding>, Error>;
+    fn observe_page(
+        &self,
+        target: &WindowTarget,
+        query: &ObserveQuery,
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservation<Self::Binding>, Error> {
+        if query.role.is_some() || query.text.is_some() {
+            return Err(Error::UnsupportedCapability);
+        }
+        let mut observed = self.observe(target, call)?;
+        if observed.elements.len() > query.limit as usize {
+            return Err(Error::UnsupportedCapability);
+        }
+        if observed.discovery.is_none() {
+            observed.discovery = Some(DiscoveryPage {
+                has_more: false,
+                complete: true,
+                reason: None,
+                visited: observed.elements.len() as u32,
+            });
+        }
+        Ok(observed)
+    }
+    fn continue_observation(
+        &self,
+        _target: &WindowTarget,
+        _binding: &Self::Binding,
+        _call: &CallContext<'_>,
+    ) -> Result<BackendObservationPage, Error> {
+        Err(Error::UnsupportedCapability)
+    }
     fn press(
         &self,
         target: &WindowTarget,

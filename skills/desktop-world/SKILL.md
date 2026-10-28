@@ -29,12 +29,15 @@ return inventory;
 Available methods return Promises:
 
 - `app.windows()` returns the proven window inventory and its coverage.
-- `app.observe({window_ref})` returns semantic elements and an observation reference.
+- `app.observe({window_ref, role?, text?, limit?})` starts native semantic discovery. Use a returned semantic `role` (for example `button`) and/or case-insensitive `text` to narrow it. Pages default to 40 matching elements (maximum 100).
+- `app.observe({cursor: page.next})` continues that query with only its returned cursor. It retains the native traversal position; do not restart from the root for each page.
 - `app.capture({window_ref})` returns image metadata; the MCP response carries the image.
 - `app.press({window_ref, observation_ref, element_ref})` acts on a currently pressable semantic element.
 - `app.click({window_ref, observation_ref, x, y})` uses pixels in the referenced image.
 
-Choose an unambiguous window and element from current observations. Read structured roles, names, values, enabled state and actions where available; `label` is display text. Never invent refs or use coordinates from another image. `windows`, new observations and admitted actions retire the prior observation; refs also expire. A stale reference requires a fresh observation.
+Choose an unambiguous window and element from current observations. Read structured roles, names, values, enabled state and actions where available; `label` is display text. Never invent refs or use coordinates from another image. An unchanged window keeps its ref across `windows()` refreshes. Each window retains one semantic query and one pixel capture independently; reading another window or capturing this window does not retire its semantic refs. All pages of a query share an observation ref, so an earlier page element can still be pressed. A new same-window semantic query replaces the old query. An admitted action consumes both kinds on its window. Refs expire after 15 seconds from acquisition; continuation does not extend that time. A stale reference requires fresh discovery.
+
+Check `page.next` and `page.coverage`. A page may have zero matches and still have more traversal work. Continue with only `{cursor: page.next}`; a cursor advances once, and a failed continuation retires the query. `coverage.complete=false` means discovery is incomplete, even if `next` is null because a resource or tree-read boundary stopped it. Never treat a partial empty result as proof of absence. The tree is live, so even complete traversal is not an atomic snapshot. Stop once the intended target is unambiguous for the task; return the relevant fields instead of collecting an entire large tree in `state` or the result.
 
 The normal exec result retains `value.result`, console output and the last capture. `script.summary` provides step and action counts instead of the full step list. Its dispatch/evidence counts and `last_issue` are diagnostics, not proof of success. A caught action error can leave the script successful while an action remains unknown; inspect the summary even when `isError` is false. `last_issue` is only the last diagnostic sample. Use `result({app})`, or a returned `execution_id` when selecting history, only when you need the original `script.steps` ledger. Do not add a result query to every successful call.
 

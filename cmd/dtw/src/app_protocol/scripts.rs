@@ -363,27 +363,7 @@ impl<B: Backend + 'static> Coordinator<B> {
     }
 
     fn parse_script_call(&self, id: &str, call: &engine::HostCall) -> Result<Submit, WireError> {
-        let failure = || WireError {
-            details: None,
-            code: "invalid_host_call".into(),
-            message: "Only bound app operations and their declared fields are permitted".into(),
-        };
-        let method = super::methods::Method::parse(&call.op).ok_or_else(failure)?;
-        let mut command = call.args.as_object().cloned().ok_or_else(failure)?;
-        if command.contains_key("kind") {
-            return Err(failure());
-        }
-        let mut target = json!({"app_ref":self.app_ref});
-        if method.window_target() {
-            target["window_ref"] = command.remove("window_ref").ok_or_else(failure)?;
-        }
-        command.insert("kind".into(), json!(call.op));
-        match wire::parse_request(
-            json!({"version":1,"operation":"submit","request_id":id,"target":target,"command":command}),
-        )? {
-            wire::Request::Submit(submit) => Ok(submit),
-            _ => Err(failure()),
-        }
+        wire::script_submit(&self.app_ref, id, &call.op, &call.args)
     }
 
     pub(super) fn stop_script(&self, id: &str, reason: Error) {
@@ -398,7 +378,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 cancel_active(&state);
             }
             state.windows.clear();
-            state.observation = None;
+            state.observations.clear();
         }
         let shutdown = self.cleanup_terminal();
         let mut state = self.state.lock().unwrap();
