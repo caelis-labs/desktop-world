@@ -9,12 +9,17 @@ import Darwin
 private struct NativeFailure: Error {
     let code: String
     let message: String
+    let details: [String: Any]?
 
-    var json: [String: Any] { ["error": code, "message": message] }
+    var json: [String: Any] {
+        var value: [String: Any] = ["error": code, "message": message]
+        if let details { value["details"] = details }
+        return value
+    }
 }
 
-private func failure(_ code: String, _ message: String) -> NativeFailure {
-    NativeFailure(code: code, message: message)
+private func failure(_ code: String, _ message: String, details: [String: Any]? = nil) -> NativeFailure {
+    NativeFailure(code: code, message: message, details: details)
 }
 
 private func integer(_ value: Any?, _ field: String) throws -> UInt64 {
@@ -265,9 +270,18 @@ private struct WindowInventoryDiagnostics {
         "cg_app_raw", "window_server_count", "cg_non_layer_zero", "cg_invalid_metadata",
         "ax_window_count", "excluded_scope", "ax_pid_unproven", "ax_role_unproven",
         "ax_subrole_unproven", "exact_id_unproven", "exact_id_zero", "cg_owner_unmatched",
-        "duplicate_id", "supported_count"
+        "duplicate_id", "supported_count", "excluded_non_window_role", "excluded_non_standard_subrole",
+        "excluded_open_save_panel", "excluded_non_layer_zero"
     ].map { ($0, 0) })
     var axErrors: [Int32] = []
+
+    var coverage: [String: Any] {
+        ["scope": "same_pid_layer_zero_standard_ax_windows", "complete": false,
+         "window_server_count": counts["window_server_count"]!, "supported_count": counts["supported_count"]!,
+         "diagnostics": counts, "ax_id_errors": axErrors,
+         "excludes": ["helpers", "sheets", "dialogs", "menus", "unproven_ax_windows"],
+         "identity": "retained_ax_window_equal_and_exact_cg_owner"]
+    }
 
     mutating func increment(_ key: String) { counts[key]! += 1 }
     mutating func exactIDFailure(_ result: AXError) {
@@ -282,7 +296,8 @@ private struct WindowInventoryDiagnostics {
         guard !unresolved && !missingAX else {
             let fields = counts.keys.sorted().map { "\($0)=\(counts[$0]!)" }.joined(separator: ",")
             throw failure("window_inventory_unproven",
-                          "Window inventory unproven: \(fields); ax_id_errors=\(axErrors)")
+                          "Window inventory unproven: \(fields); ax_id_errors=\(axErrors)",
+                          details: ["inventory": coverage])
         }
     }
 }
@@ -447,21 +462,26 @@ private enum WindowClassification: String {
 // controls. Missing/malformed metadata differs from an explicitly unsupported role.
 private func classifyWindow(actualPID: Int32, expectedPID: Int32,
                             role: () throws -> String?, subrole: () throws -> String?,
-                            identifier: () throws -> String?) throws -> WindowClassification {
+                            identifier: () throws -> String?,
+                            excluded: (String) -> Void = { _ in }) throws -> WindowClassification {
     guard actualPID == expectedPID else { return .pidUnproven }
     guard let role = try role(), !role.isEmpty else { return .roleUnproven }
-    guard role == kAXWindowRole else { return .excluded }
+    guard role == kAXWindowRole else { excluded("excluded_non_window_role"); return .excluded }
     guard let subrole = try subrole(), !subrole.isEmpty else { return .subroleUnproven }
-    guard subrole == kAXStandardWindowSubrole else { return .excluded }
+    guard subrole == kAXStandardWindowSubrole else { excluded("excluded_non_standard_subrole"); return .excluded }
     let identifier = try identifier()
-    return identifier == "open-panel" || identifier == "save-panel" ? .excluded : .supported
+    if identifier == "open-panel" || identifier == "save-panel" {
+        excluded("excluded_open_save_panel"); return .excluded
+    }
+    return .supported
 }
 
-private func windowClassification(_ element: AXUIElement, pid: Int32, deadline: Deadline) throws -> WindowClassification {
+private func windowClassification(_ element: AXUIElement, pid: Int32, deadline: Deadline,
+                                  excluded: (String) -> Void = { _ in }) throws -> WindowClassification {
     try classifyWindow(actualPID: axPID(element, deadline), expectedPID: pid,
                        role: { try axAttribute(element, kAXRoleAttribute, deadline) as? String },
                        subrole: { try axAttribute(element, kAXSubroleAttribute, deadline) as? String },
-                       identifier: { try axAttribute(element, kAXIdentifierAttribute, deadline) as? String })
+                       identifier: { try axAttribute(element, kAXIdentifierAttribute, deadline) as? String }, excluded: excluded)
 }
 
 private func ordinaryWindow(_ element: AXUIElement, pid: Int32, deadline: Deadline) throws -> Bool {
@@ -592,7 +612,8 @@ private final class NativeStore: @unchecked Sendable {
         var candidates: [CandidateWindow] = []
         var seen: Set<CGWindowID> = []
         for element in elements {
-            let classification = try windowClassification(element, pid: app.pid, deadline: context.deadline)
+            let classification = try windowClassification(element, pid: app.pid, deadline: context.deadline,
+                                                        excluded: { diagnostics.increment($0) })
             guard classification == .supported else {
                 diagnostics.increment(classification.rawValue)
                 continue
@@ -604,6 +625,7 @@ private final class NativeStore: @unchecked Sendable {
                 continue
             }
             if excludedCG.contains(id) {
+                diagnostics.increment("excluded_non_layer_zero")
                 diagnostics.increment("excluded_scope")
                 continue
             }
@@ -646,13 +668,7 @@ private final class NativeStore: @unchecked Sendable {
             rows.append(["target": target.json, "title": candidate.title,
                          "bounds": candidate.cg.coordinates, "onscreen": candidate.cg.onscreen])
         }
-        return ["windows": rows, "coverage": [
-            "scope": "same_pid_layer_zero_standard_ax_windows", "complete": false,
-            "window_server_count": diagnostics.counts["window_server_count"]!, "supported_count": rows.count,
-            "diagnostics": diagnostics.counts, "ax_id_errors": diagnostics.axErrors,
-            "excludes": ["helpers", "sheets", "dialogs", "menus", "unproven_ax_windows"],
-            "identity": "retained_ax_window_equal_and_exact_cg_owner"
-        ]]
+        return ["windows": rows, "coverage": diagnostics.coverage]
     }
 
     fileprivate func validate(_ target: NativeTarget, _ context: RequestContext) throws -> CandidateWindow {
@@ -790,7 +806,9 @@ private final class NativeStore: @unchecked Sendable {
             // From this point onward, AX may already have delivered a side
             // effect. No error, timeout, retry or alternative route is labelled
             // not_dispatched, including AX errors whose effect is unknowable.
-            let result = AXUIElementPerformAction(element.element, kAXPressAction as CFString)
+            guard let result = dtwWithInputAdmission({
+                AXUIElementPerformAction(element.element, kAXPressAction as CFString)
+            }) else { throw failure("closed", "Native input admission is closed") }
             do { try context.deadline.check() }
             catch {
                 return ["dispatch": "unknown", "evidence": "unverified",

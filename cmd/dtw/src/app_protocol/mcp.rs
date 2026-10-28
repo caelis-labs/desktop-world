@@ -92,6 +92,7 @@ pub fn read_frame<R: BufRead>(reader: &mut R) -> Result<Option<Vec<u8>>, wire::W
     std::io::Read::take(&mut *reader, (MAX_INPUT_BYTES + 1) as u64)
         .read_until(b'\n', &mut line)
         .map_err(|_| wire::WireError {
+            details: None,
             code: "transport_error".into(),
             message: "Cannot read MCP input".into(),
         })?;
@@ -100,6 +101,7 @@ pub fn read_frame<R: BufRead>(reader: &mut R) -> Result<Option<Vec<u8>>, wire::W
     }
     if line.len() > MAX_INPUT_BYTES || line.last() != Some(&b'\n') {
         return Err(wire::WireError {
+            details: None,
             code: "invalid_frame".into(),
             message: "MCP input must be a complete line of at most 64 KiB".into(),
         });

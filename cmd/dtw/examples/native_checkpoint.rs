@@ -92,7 +92,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let started = Instant::now();
         let result = (|| -> Result<Value, String> {
             if operation == "windows" {
-                let list = runtime.windows().map_err(|e| format!("{e:?}"))?;
+                let list = runtime.windows().map_err(|e| format!("{e:?}"))?.windows;
                 let rows=list.iter().map(|w|json!({"id":w.target.native_id,"generation":w.target.generation,"title":w.title,"visible":w.visible})).collect::<Vec<_>>();
                 for w in list {
                     targets.insert(w.target.native_id, w.target);

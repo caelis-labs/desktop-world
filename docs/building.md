@@ -15,13 +15,14 @@ sh scripts/check-source.sh
 This checks the Cargo/lockfile/version.txt versions, formatting, std-only Core/IPC
 and Python acceptance negative controls. It needs no CUA checkout, Node, Cargo
 dependency build, package or desktop. macOS contributors with Xcode can also run
-the pure Swift inventory controls:
+the pure Swift inventory and input controls:
 
 ```sh
 python3 tests/ci/run_native_inventory_tests.py
+python3 tests/ci/run_native_input_tests.py
 ```
 
-The macOS CI job runs this separately; non-macOS local runs explicitly skip it.
+The existing macOS CI job runs both; non-macOS local runs explicitly skip them.
 These controls do not compile the complete protocol, script engine or Rust native
 bridge. Relevant changes also require the local build/tests below.
 
@@ -30,16 +31,20 @@ bridge. Relevant changes also require the local build/tests below.
 No feature flag selects the rewrite. Build and test the normal package:
 
 ```sh
-cargo +1.98.0 test --manifest-path cmd/dtw/Cargo.toml --locked --lib
+cargo +1.98.0 test --manifest-path cmd/dtw/Cargo.toml --locked
 cargo +1.98.0 build --manifest-path cmd/dtw/Cargo.toml --locked --bin dtw
 cmd/dtw/target/debug/dtw --help
+python3 tests/ci/run_native_worker_tests.py cmd/dtw/target/debug/dtw
 ```
 
 Cargo uses the locked DTW dependencies, including rquickjs; it does not fetch or
 build the CUA SDK or upstream worker. Use a persistent `CARGO_TARGET_DIR` for local
 iteration and adjust the executable path above when setting it. Native macOS
 builds require Xcode/Swift. Other platforms do not yet have a native execution
-backend; a successful build does not establish desktop support.
+backend; a successful build does not establish desktop support. The worker runner
+checks TERM, EOF, malformed input and parent death using only release of an
+unknown binding; it does not touch AX, screenshots or desktop input. It requires
+the already-built executable and is a local integration check, not a CI build.
 
 The public commands are `dtw app catalog` and `dtw app serve --grant /absolute/host-grant.json`.
 The Host prepares the grant after approval; see [Host integration](embedding.md).
@@ -51,6 +56,10 @@ Library tests do not replace the [app protocol](app-protocol-acceptance.md),
 Run relevant GUI checks when changing native behavior, on an owned test desktop
 and with independent effect readback. Previous evidence applies to its recorded
 source and binary, not automatically to a newly built executable.
+The [C5 report](c5-completion-acceptance.md) also includes an opt-in mouse-pair
+cleanup probe and real TextEdit window/Space matrix. These require owned apps,
+serial desktop access and independent OS/effect observations; do not run them
+automatically in CI.
 
 ## Distribution status
 

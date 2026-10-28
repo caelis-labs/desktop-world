@@ -1,5 +1,7 @@
 # C5-macOS.2b.1：TextEdit 自然窗口状态与边界取证
 
+本文保留 #59 的历史现场与当时返回格式；当前 typed coverage、稳定错误及 C5 完整复验见 [C5 完整验收](c5-completion-acceptance.md)。
+
 日期：2026-10-27。实现提交 `9aad23cc941470e8419142f98df4350e99068979`，
 运行环境与二进制 hash 见 [D1 验收](rewrite-baseline-acceptance.md)。
 **本切片取得了真实应用的自然空清单、闭窗与 Space 边界证据；

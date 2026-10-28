@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in C5 native deadline/cancel acceptance on two explicitly owned fixtures.
+"""Opt-in C5 native deadline/cancel and idle grant expiry on owned fixtures.
 
 This reference Host checks native lifetime boundaries; the production Harness
 semantic/pixel/state flow is a separate Caelis test. Each case intentionally
@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 import sys
 import time
-from app_protocol_probe import (Fixture, Host, Wire, catalog_app, gone,
+from app_protocol_probe import (Fixture, Host, Session, Wire, catalog_app, gone,
                                 new_session, require, wait_until, worker_pids, write_json)
 
 SETUP = """
@@ -107,6 +107,42 @@ def check_case(binary, host, fixture, peer, mode):
             "late_effect_independently_confirmed": True}
 
 
+def check_idle_expiry(binary, host, fixture, peer):
+    before, peer_before = fixture.counters(), peer.counters()
+    grant = host.grant("idle-expiry", capabilities=["observe"], seconds=2)
+    session = Session(binary, grant, host.output / "idle-expiry")
+    try:
+        description = session.exec("describe")
+        target = {"app_ref": Wire.app_ref(description)}
+        workers = worker_pids(session.server_pid)
+        require(len(workers) == 1, workers)
+        command = {"kind": "script", "source": "state.saved=true; return (await app.windows()).coverage;"}
+        request_id = "before-idle-expiry"
+        session.submit(target, command, request_id)
+        original = session.finish(request_id)
+        require(not original["error"] and original["script"]["state_committed"], original)
+        # No MCP traffic until the native worker disappears. Only the existing
+        # stdio lifetime watcher can observe the deadline during this interval.
+        wait_until(lambda: gone(workers[0]))
+        deadline = json.loads(grant.read_text())["expires_at_unix_ms"]
+        cleanup_delay_ms = int(time.time() * 1000) - deadline
+        require(0 <= cleanup_delay_ms < 1000, cleanup_delay_ms)
+        context = session.exec("describe")["context"]
+        require(context["state"] == "closed"
+                and context["terminal_reason"]["code"] == "grant_expired", context)
+        require(session.result(request_id) == original, "expiry rewrote stored evidence")
+        require(session.start(target, command, request_id) == original, "expiry lost dedup evidence")
+        Wire.rejection_code(session.run(target, {"kind": "script", "source": "return 1;"}), "grant_expired")
+        Wire.rejection_code(session.run(target, {"kind": "windows"}), "grant_expired")
+        require(fixture.counters() == before and peer.counters() == peer_before, "read-only expiry changed an app")
+        return {"mode": "idle_expiry", "worker_gone_without_mcp_traffic": True,
+                "cleanup_after_deadline_ms": cleanup_delay_ms, "context": context,
+                "original_result": original, "stored_result_and_dedup_unchanged": True,
+                "atomic_and_pure_js_rejected": "grant_expired", "both_apps_unchanged": True}
+    finally:
+        session.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("binary", "fixture", "other_fixture", "output"):
@@ -124,7 +160,8 @@ def main():
     for mode in ("timeout", "cancel"):
         cases.append(check_case(binary, host, fixture, peer, mode))
         write_json(output / "result.json", {"cases": cases})
-    result = {"checkpoint": "C5-macOS.1-native-lifetime", "cases": cases,
+    cases.append(check_idle_expiry(binary, host, fixture, peer))
+    result = {"checkpoint": "C5-native-lifetime", "cases": cases,
               "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
               "authority": "reference Host operator policy; production Harness tested separately"}
     write_json(output / "result.json", result)

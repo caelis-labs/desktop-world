@@ -24,15 +24,7 @@ const MEMORY_BYTES: usize = 32 * 1024 * 1024;
 const STACK_BYTES: usize = 512 * 1024;
 
 pub(super) fn description() -> Value {
-    json!({"version":1,"language":"javascript","entry":"submit command.kind=script; target has app_ref only",
-        "facade":{"windows":"app.windows()","observe":"app.observe({window_ref})","capture":"app.capture({window_ref})",
-            "press":"app.press({window_ref,observation_ref,element_ref})","click":"app.click({window_ref,observation_ref,x,y})"},
-        "limits":{"max_source_utf8_bytes":MAX_SOURCE_BYTES,"max_timeout_ms":MAX_TIMEOUT_MS,"max_calls":MAX_CALLS,
-            "memory_bytes":MEMORY_BYTES,"stack_bytes":STACK_BYTES,"max_result_bytes":65536,"max_state_bytes":65536},
-        "state":"JSON root bound to this context; modify object/array fields; committed only on successful completion before cancellation/expiry; never rolls back desktop effects",
-        "receipts":"script.steps persists independently of evictable value/image payloads, including effects before an exception",
-        "images":"only the last capture image is returned outside the VM, with its source step and observation metadata",
-        "scope":"one app; all Host Calls revalidate Core grant, instance, target and binding; no process/files/network/modules/launch/raw calls"})
+    super::description::script(MEMORY_BYTES, STACK_BYTES)
 }
 
 struct Step {
@@ -43,12 +35,14 @@ struct Step {
     completed: bool,
     receipt: Option<ActionReceipt>,
     error: Option<WireError>,
+    inventory: Option<Value>,
 }
 impl Step {
     fn json(&self) -> Value {
         json!({"number":self.number,"line":self.line,"operation":self.operation,
             "status":if self.completed {"completed"} else {"running"},
-            "receipt":self.receipt.as_ref().map(wire::receipt),"error":self.error.as_ref().map(error_json)})
+            "receipt":self.receipt.as_ref().map(wire::receipt),"error":self.error.as_ref().map(error_json),
+            "inventory":self.inventory})
     }
 }
 
@@ -58,7 +52,7 @@ pub(super) struct ScriptRun {
     steps: Vec<Step>,
     failure: Option<Value>,
     pub state_committed: bool,
-    shutdown_error: Option<WireError>,
+    pub(super) shutdown_error: Option<WireError>,
 }
 impl ScriptRun {
     pub fn new(deadline: Instant) -> Self {
@@ -209,7 +203,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 value["result"] = success.value;
                 state_update = Some(success.state);
             }
-            Err(failure) => {
+            Err(mut failure) => {
                 if failure.kind == "timeout" || failure.kind == "cancelled" {
                     self.stop_script(
                         id,
@@ -222,11 +216,20 @@ impl<B: Backend + 'static> Coordinator<B> {
                         },
                     );
                 }
-                completed.error = Some(WireError {
-                    code: format!("script_{}", failure.kind),
-                    message: failure.message.clone(),
-                });
                 let mut state = self.state.lock().unwrap();
+                completed.error = if matches!(state.terminal, Some(Error::GrantExpired)) {
+                    let error = wire::core_error(&Error::GrantExpired);
+                    failure.kind = "grant_expired".into();
+                    failure.code = Some(error.code.clone());
+                    failure.message = error.message.clone();
+                    Some(error)
+                } else {
+                    Some(WireError {
+                        details: None,
+                        code: format!("script_{}", failure.kind),
+                        message: failure.message.clone(),
+                    })
+                };
                 let run = state
                     .jobs
                     .iter_mut()
@@ -282,6 +285,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 completed: false,
                 receipt: None,
                 error: None,
+                inventory: None,
             });
         }
         let mut work = match parsed {
@@ -300,7 +304,11 @@ impl<B: Backend + 'static> Coordinator<B> {
             },
         };
         let response = if let Some(error) = &work.completed.error {
-            Err(engine::HostError::new(error.message.clone(), &error.code))
+            Err(engine::HostError {
+                message: error.message.clone(),
+                code: Some(error.code.clone()),
+                details: error.details.clone(),
+            })
         } else if let Some(receipt) = &work.completed.receipt {
             Ok(wire::receipt(receipt))
         } else {
@@ -320,6 +328,12 @@ impl<B: Backend + 'static> Coordinator<B> {
             .as_mut()
             .unwrap();
         let step = run.steps.last_mut().unwrap();
+        if call.op == "windows" && work.completed.error.is_none() {
+            if let Some(value) = &work.completed.value {
+                step.inventory =
+                    Some(json!({"coverage":value["coverage"],"diagnostics":value["diagnostics"]}));
+            }
+        }
         step.receipt = work.completed.receipt;
         step.error = work.completed.error;
         step.completed = true;
@@ -329,6 +343,7 @@ impl<B: Backend + 'static> Coordinator<B> {
 
     fn parse_script_call(&self, id: &str, call: &engine::HostCall) -> Result<Submit, WireError> {
         let failure = || WireError {
+            details: None,
             code: "invalid_host_call".into(),
             message: "Only bound app operations and their declared fields are permitted".into(),
         };
@@ -366,7 +381,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             state.windows.clear();
             state.observation = None;
         }
-        let shutdown = self.runtime.close().err().as_ref().map(wire::core_error);
+        let shutdown = self.cleanup_terminal();
         let mut state = self.state.lock().unwrap();
         if let Some(run) = state
             .jobs

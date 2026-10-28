@@ -161,9 +161,14 @@ impl Backend for NativeBackend {
     fn supports(&self, _: Capability) -> bool {
         true
     }
-    fn windows(&self, app: &AppInstance, call: &CallContext<'_>) -> Result<Vec<WindowInfo>, Error> {
+    fn windows(&self, app: &AppInstance, call: &CallContext<'_>) -> Result<WindowInventory, Error> {
         let result = self.read_rpc(json!({"operation":"windows","app":app_json(app)}), call)?;
-        array(&result, "windows")?
+        let report = parse_inventory_report(&result["coverage"], true)?;
+        let rows = array(&result, "windows")?;
+        if rows.len() > 256 || rows.len() != report.supported_count as usize {
+            return Err(failed("Native inventory row/count mismatch"));
+        }
+        let windows = rows
             .iter()
             .map(|row| {
                 Ok(WindowInfo {
@@ -172,7 +177,8 @@ impl Backend for NativeBackend {
                     visible: row["onscreen"].as_bool().ok_or(Error::InvalidObservation)?,
                 })
             })
-            .collect()
+            .collect::<Result<_, Error>>()?;
+        Ok(WindowInventory { windows, report })
     }
     fn observe(
         &self,
@@ -310,15 +316,50 @@ fn action_reply(reply: &Value) -> ActionOutcome {
 mod tests {
     use super::*;
     #[test]
-    fn inventory_attribution_error_keeps_bounded_native_diagnostics() {
-        let message =
-            "AX inventory unresolved; diagnostics={\"ax_window_count\":0,\"cg_eligible\":6}";
+    fn inventory_requires_structured_evidence_and_never_interprets_message_text() {
+        let mut coverage = json!({"scope":"same_pid_layer_zero_standard_ax_windows","complete":false,
+            "window_server_count":6,"supported_count":0,"ax_id_errors":[],"diagnostics":{
+                "cg_app_raw":6,"window_server_count":6,"cg_non_layer_zero":0,"cg_invalid_metadata":0,
+                "ax_window_count":0,"excluded_scope":0,"ax_pid_unproven":0,"ax_role_unproven":0,
+                "ax_subrole_unproven":0,"exact_id_unproven":0,"exact_id_zero":0,"cg_owner_unmatched":0,
+                "duplicate_id":0,"supported_count":0,"excluded_non_window_role":0,"excluded_non_standard_subrole":0,
+                "excluded_open_save_panel":0,"excluded_non_layer_zero":0}});
+        let failure = |value: &Value| {
+            reply_error(&json!({"error":"window_inventory_unproven",
+            "message":"not used for decisions","details":{"inventory":value}}))
+        };
+        assert!(matches!(
+            failure(&coverage),
+            Some(Error::InventoryUnproven(_))
+        ));
+        assert!(parse_inventory_report(&coverage, true).is_err());
+        coverage["window_server_count"] = json!(0);
+        coverage["diagnostics"]["window_server_count"] = json!(0);
+        coverage["diagnostics"]["cg_app_raw"] = json!(0);
+        assert!(parse_inventory_report(&coverage, true).is_ok());
+        assert!(matches!(failure(&coverage), Some(Error::BackendFailed(_))));
+        coverage["diagnostics"]["ax_window_count"] = json!(1);
+        coverage["diagnostics"]["excluded_scope"] = json!(1);
+        coverage["diagnostics"]["excluded_non_standard_subrole"] = json!(1);
         assert_eq!(
-            reply_error(&json!({"error":"window_inventory_unproven","message":message})),
-            Some(Error::BackendFailed(format!(
-                "window_inventory_unproven: {message}"
-            )))
+            parse_inventory_report(&coverage, true)
+                .unwrap()
+                .excluded_count,
+            1
         );
+        for field in ["ax_pid_unproven", "ax_role_unproven", "cg_invalid_metadata"] {
+            let mut invalid = coverage.clone();
+            invalid["diagnostics"][field] = json!(1);
+            assert!(parse_inventory_report(&invalid, true).is_err());
+        }
+        coverage["diagnostics"]["ax_window_count"] = json!("1");
+        assert!(parse_inventory_report(&coverage, true).is_err());
+        assert!(matches!(
+            reply_error(
+                &json!({"error":"window_inventory_unproven","message":"window_server_count=6"})
+            ),
+            Some(Error::BackendFailed(_))
+        ));
     }
 
     #[test]
@@ -442,6 +483,12 @@ fn parse_target(v: &Value) -> Result<WindowTarget, Error> {
 }
 fn reply_error(v: &Value) -> Option<Error> {
     v["error"].as_str().map(|code| match code {
+        "window_inventory_unproven" => {
+            match parse_inventory_report(&v["details"]["inventory"], false) {
+                Ok(report) => Error::InventoryUnproven(report),
+                Err(error) => error,
+            }
+        }
         "target_changed" | "app_closed" | "window_closed" => Error::TargetChanged,
         "stale_observation" => Error::StaleObservation,
         "timed_out" | "deadline_exceeded" => Error::TimedOut,
@@ -452,4 +499,91 @@ fn reply_error(v: &Value) -> Option<Error> {
             v["message"].as_str().unwrap_or("native error")
         )),
     })
+}
+
+fn parse_inventory_report(value: &Value, proven: bool) -> Result<InventoryReport, Error> {
+    const COUNTERS: [&str; 18] = [
+        "cg_app_raw",
+        "window_server_count",
+        "cg_non_layer_zero",
+        "cg_invalid_metadata",
+        "ax_window_count",
+        "excluded_scope",
+        "ax_pid_unproven",
+        "ax_role_unproven",
+        "ax_subrole_unproven",
+        "exact_id_unproven",
+        "exact_id_zero",
+        "cg_owner_unmatched",
+        "duplicate_id",
+        "supported_count",
+        "excluded_non_window_role",
+        "excluded_non_standard_subrole",
+        "excluded_open_save_panel",
+        "excluded_non_layer_zero",
+    ];
+    let invalid = || failed("Malformed native inventory evidence");
+    if value["scope"] != "same_pid_layer_zero_standard_ax_windows" || value["complete"] != false {
+        return Err(invalid());
+    }
+    let counts = value["diagnostics"].as_object().ok_or_else(invalid)?;
+    if counts.len() != COUNTERS.len() {
+        return Err(invalid());
+    }
+    let counters = COUNTERS
+        .iter()
+        .map(|name| {
+            let count = counts
+                .get(*name)
+                .and_then(Value::as_u64)
+                .filter(|n| *n <= 1_000_000)
+                .ok_or_else(invalid)?;
+            Ok(((*name).into(), count))
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    let count = |name: &str| counts[name].as_u64().unwrap();
+    let codes = value["ax_id_errors"]
+        .as_array()
+        .filter(|a| a.len() <= 8)
+        .ok_or_else(invalid)?;
+    let error_codes = codes
+        .iter()
+        .map(|code| {
+            code.as_i64()
+                .and_then(|n| i32::try_from(n).ok())
+                .filter(|n| *n != 0)
+                .ok_or_else(invalid)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let report = InventoryReport {
+        scope: InventoryScope::SameProcessStandardWindows,
+        candidate_count: count("ax_window_count") as u32,
+        supported_count: count("supported_count") as u32,
+        excluded_count: count("excluded_scope") as u32,
+        diagnostics: InventoryDiagnostics {
+            provider: "macos.ax-cg".into(),
+            counters,
+            error_codes,
+        },
+    };
+    let unresolved = COUNTERS[6..13].iter().any(|name| count(name) > 0)
+        || count("cg_invalid_metadata") > 0
+        || (report.candidate_count == 0 && count("window_server_count") > 0);
+    if !report.valid()
+        || proven == unresolved
+        || COUNTERS[6..14].iter().map(|name| count(name)).sum::<u64>() + count("excluded_scope")
+            != count("ax_window_count")
+        || COUNTERS[14..].iter().map(|name| count(name)).sum::<u64>() != count("excluded_scope")
+        || count("window_server_count") + count("cg_non_layer_zero") + count("cg_invalid_metadata")
+            != count("cg_app_raw")
+        || report.diagnostics.error_codes.len() as u64 != count("exact_id_unproven").min(8)
+        || value["supported_count"].as_u64() != Some(count("supported_count"))
+        || value["window_server_count"].as_u64() != Some(count("window_server_count"))
+        || (proven
+            && (report.supported_count + report.excluded_count != report.candidate_count
+                || !report.diagnostics.error_codes.is_empty()))
+    {
+        return Err(invalid());
+    }
+    Ok(report)
 }

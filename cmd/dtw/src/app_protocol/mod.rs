@@ -11,6 +11,7 @@ use std::{
     sync::{Arc, Condvar, Mutex},
     time::{Duration, Instant},
 };
+mod description;
 pub mod grant;
 pub mod mcp;
 mod script_engine;
@@ -57,13 +58,18 @@ impl Reply {
     }
 }
 fn error_json(error: &WireError) -> Value {
-    json!({"code":error.code,"message":error.message})
+    let mut value = json!({"code":error.code,"message":error.message});
+    if let Some(details) = &error.details {
+        value["details"] = details.clone();
+    }
+    value
 }
 fn core_error(error: &Error) -> Value {
     error_json(&wire::core_error(error))
 }
 fn problem(code: &str, message: &str) -> Reply {
     Reply::error(WireError {
+        details: None,
         code: code.into(),
         message: message.into(),
     })
@@ -157,6 +163,7 @@ struct Job {
 }
 struct State {
     terminal: Option<Error>,
+    shutdown_error: Option<WireError>,
     active: Option<String>,
     jobs: Vec<Job>,
     windows: HashMap<String, WindowTarget>,
@@ -185,7 +192,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         .into_iter()
         .filter(|c| backend.supports(*c))
         .collect();
-        Arc::new(Self {
+        let owner = Arc::new(Self {
             runtime: Runtime::new(backend, authority.core_grant(), OBSERVATION_TTL),
             authority,
             app_name,
@@ -193,6 +200,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             supported,
             state: Mutex::new(State {
                 terminal: None,
+                shutdown_error: None,
                 active: None,
                 jobs: Vec::new(),
                 windows: HashMap::new(),
@@ -202,9 +210,12 @@ impl<B: Backend + 'static> Coordinator<B> {
             finished: Condvar::new(),
             max_requests: MAX_REQUESTS,
             max_payload_bytes: MAX_PAYLOAD_BYTES,
-        })
+        });
+        owner.expire_if_needed();
+        owner
     }
     pub fn handle(self: &Arc<Self>, request: Request) -> Reply {
+        self.expire_if_needed();
         match request {
             Request::Describe => self.describe(),
             Request::Submit(submit) => self.submit(submit),
@@ -213,8 +224,69 @@ impl<B: Backend + 'static> Coordinator<B> {
             Request::Close => self.close(),
         }
     }
+    /// Check idle expiry without renewing the Host's immutable deadline.
+    /// Stdio calls this from its lifecycle watcher; embedded Hosts may call it
+    /// directly. Every protocol entry also checks before reading or admitting.
+    pub fn expire_if_needed(&self) {
+        if Instant::now() < self.authority.expires_at {
+            return;
+        }
+        let active = {
+            let mut state = self.state.lock().unwrap();
+            if state.terminal.is_some() {
+                return;
+            }
+            state.terminal = Some(Error::GrantExpired);
+            state.windows.clear();
+            state.observation = None;
+            // The VM shares this deadline. Its cancellation flag must not turn
+            // expiry into an explicit cancellation.
+            state.active.clone()
+        };
+        self.record_shutdown_error(self.runtime.expire().err(), active.as_deref());
+    }
+    fn record_shutdown_error(
+        &self,
+        error: Option<Error>,
+        active: Option<&str>,
+    ) -> Option<WireError> {
+        let error = error.map(|error| wire::core_error(&error))?;
+        let mut state = self.state.lock().unwrap();
+        state.shutdown_error = Some(error.clone());
+        if let Some(run) = state
+            .jobs
+            .iter_mut()
+            .find(|job| Some(job.submitted.request_id.as_str()) == active)
+            .and_then(|job| job.script.as_mut())
+        {
+            run.shutdown_error = Some(error.clone());
+        }
+        Some(error)
+    }
+    fn cleanup_terminal(&self) -> Option<WireError> {
+        let (reason, active) = {
+            let state = self.state.lock().unwrap();
+            (state.terminal.clone(), state.active.clone())
+        };
+        let result = match reason {
+            Some(Error::GrantExpired) => self.runtime.expire(),
+            Some(Error::Cancelled) => self.runtime.cancel(),
+            _ => self.runtime.close(),
+        };
+        self.record_shutdown_error(result.err(), active.as_deref())
+    }
+    fn checked_state(&self) -> std::sync::MutexGuard<'_, State> {
+        loop {
+            let state = self.state.lock().unwrap();
+            if state.terminal.is_some() || Instant::now() < self.authority.expires_at {
+                return state;
+            }
+            drop(state);
+            self.expire_if_needed();
+        }
+    }
     fn describe(&self) -> Reply {
-        let state = self.state.lock().unwrap();
+        let state = self.checked_state();
         let mut app = grant::app_json(&self.authority.app);
         app["app_ref"] = json!(self.app_ref);
         app["name"] = json!(self.app_name);
@@ -224,7 +296,9 @@ impl<B: Backend + 'static> Coordinator<B> {
                 "capabilities":grant::capabilities_json(&self.authority.capabilities),
                 "expires_at_unix_ms":self.authority.expires_at_unix_ms},
             "supported_capabilities":grant::capabilities_json(&self.supported),
-            "context":{"state":context_state(&state)},
+            "context":{"state":context_state(&state),"terminal_reason":state.terminal.as_ref().map(core_error),
+                "shutdown_error":state.shutdown_error.as_ref().map(error_json),
+                "expiry":"absolute Host deadline; stdio lifecycle watcher polls idle expiry every 50 ms, subject to scheduling and cleanup; embedded coordinators check on entry or expire_if_needed; no renewal"},
             "script":scripts::description(),
             "limits":{"max_requests":self.max_requests,"max_payload_bytes":self.max_payload_bytes,
                 "observation_ttl_ms":OBSERVATION_TTL.as_millis(),
@@ -237,7 +311,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         }))
     }
     fn submit(self: &Arc<Self>, submitted: Submit) -> Reply {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.checked_state();
         if let Some(job) = state
             .jobs
             .iter()
@@ -366,7 +440,8 @@ impl<B: Backend + 'static> Coordinator<B> {
         if submitted.command == Command::Windows {
             return match self.runtime.windows_until(deadline) {
                 Err(error) => Work::read_error(error),
-                Ok(windows) => {
+                Ok(inventory) => {
+                    let windows = inventory.windows;
                     if windows.len() > 256 {
                         return Work::read_error(Error::BackendFailed(
                             "Window inventory exceeds protocol limit".into(),
@@ -380,7 +455,11 @@ impl<B: Backend + 'static> Coordinator<B> {
                     }).collect();
                     Work {
                         completed: Completed {
-                            value: Some(json!({"windows":rows})),
+                            value: Some({
+                                let mut value = wire::inventory_report(&inventory.report, true);
+                                value["windows"] = json!(rows);
+                                value
+                            }),
                             image: None,
                             receipt: None,
                             error: None,
@@ -521,6 +600,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         }
     }
     fn complete(&self, id: &str, mut work: Work) {
+        self.expire_if_needed();
         // Recheck immediately at the state commit boundary. A script that
         // finishes on the deadline must not commit state or retain an idle worker.
         let mut state = loop {
@@ -533,8 +613,13 @@ impl<B: Backend + 'static> Coordinator<B> {
             if let Some(script) = script {
                 if state.terminal.is_none() && Instant::now() >= script.deadline {
                     drop(state);
-                    self.stop_script(id, Error::TimedOut);
-                    work.completed.error = Some(wire::core_error(&Error::TimedOut));
+                    let reason = if Instant::now() >= self.authority.expires_at {
+                        Error::GrantExpired
+                    } else {
+                        Error::TimedOut
+                    };
+                    self.stop_script(id, reason.clone());
+                    work.completed.error = Some(wire::core_error(&reason));
                     work.state_update = None;
                     continue;
                 }
@@ -595,12 +680,13 @@ impl<B: Backend + 'static> Coordinator<B> {
     }
     fn cancel(&self, id: &str) -> Reply {
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.checked_state();
             if state.active.as_deref() != Some(id)
                 || (state.terminal.is_some() && !matches!(state.terminal, Some(Error::Cancelled)))
             {
                 return Reply::plain(json!({"version":1,"request_id":id,"cancel_requested":false,
-                    "context_state":context_state(&state),"shutdown_error":null}));
+                    "context_state":context_state(&state),"terminal_reason":state.terminal.as_ref().map(core_error),
+                    "shutdown_error":state.shutdown_error.as_ref().map(error_json)}));
             }
             // Compare the active ID and close admission atomically. A stale cancel
             // can never stop a new job admitted between this check and Core.cancel.
@@ -611,36 +697,36 @@ impl<B: Backend + 'static> Coordinator<B> {
             state.windows.clear();
             state.observation = None;
         }
-        let error = self.runtime.cancel().err();
+        let error = self.cleanup_terminal();
         Reply {
             data: json!({"version":1,"request_id":id,"cancel_requested":true,
-            "context_state":"cancelled","shutdown_error":error.as_ref().map(core_error)}),
+            "context_state":"cancelled","terminal_reason":core_error(&Error::Cancelled),
+            "shutdown_error":error.as_ref().map(error_json)}),
             image: None,
             is_error: error.is_some(),
         }
     }
     pub fn close(&self) -> Reply {
-        let cancelled = {
-            let mut state = self.state.lock().unwrap();
+        self.expire_if_needed();
+        {
+            let mut state = self.checked_state();
             if state.terminal.is_none() {
                 state.terminal = Some(Error::Closed);
             }
-            scripts::cancel_active(&state);
+            if !matches!(state.terminal, Some(Error::GrantExpired | Error::TimedOut)) {
+                scripts::cancel_active(&state);
+            }
             state.windows.clear();
             state.observation = None;
-            matches!(state.terminal, Some(Error::Cancelled))
-        };
-        let error = if cancelled {
-            self.runtime.cancel().err()
-        } else {
-            self.runtime.close().err()
-        };
+        }
+        self.cleanup_terminal();
         let state = self.state.lock().unwrap();
         Reply {
             data: json!({"version":1,"context_state":context_state(&state),
-            "shutdown_error":error.as_ref().map(core_error)}),
+            "terminal_reason":state.terminal.as_ref().map(core_error),
+            "shutdown_error":state.shutdown_error.as_ref().map(error_json)}),
             image: None,
-            is_error: error.is_some(),
+            is_error: state.shutdown_error.is_some(),
         }
     }
     pub fn wait_idle(&self, timeout: Duration) -> bool {
@@ -688,6 +774,7 @@ pub fn run(args: &[String]) -> Result<(), WireError> {
     {
         let _ = args;
         Err(WireError {
+            details: None,
             code: "unsupported_platform".into(),
             message: "Native app operations currently require macOS".into(),
         })

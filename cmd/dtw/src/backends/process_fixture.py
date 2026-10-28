@@ -1,9 +1,23 @@
 """Owned child fixture for the std-only transport tests; no GUI or network."""
 import pathlib
+import os
+import signal
 import sys
 import time
 
 mode, ready_path = sys.argv[1:3]
+stop_requested = False
+
+
+def terminate_requested(_signal, _frame):
+    global stop_requested
+    stop_requested = True
+
+
+if mode == "graceful_input":
+    signal.signal(signal.SIGTERM, terminate_requested)
+elif mode == "ignore_term":
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
 
 def ready():
@@ -19,9 +33,33 @@ if mode == "idle_exit":
     ready()
     sys.exit(0)
 
-for line in sys.stdin.buffer:
+if mode == "cleanup_failed":
     ready()
-    if mode == "hang":
+    sys.exit(74)
+
+if mode == "idle_nonzero":
+    ready()
+    os._exit(17)
+
+for line in sys.stdin.buffer:
+    if mode == "graceful_input":
+        root = pathlib.Path(ready_path).parent
+        (root / "events").write_text("down\n", encoding="utf-8")
+        ready()
+        while not stop_requested:
+            time.sleep(0.002)
+        (root / "closing").write_text("closing", encoding="utf-8")
+        # The test explicitly releases the admitted operation. SIGTERM alone
+        # must not skip its sole cleanup event or cause the request to replay.
+        while not (root / "release").exists():
+            time.sleep(0.002)
+        with (root / "events").open("a", encoding="utf-8") as events:
+            events.write("up\n")
+        sys.exit(0)
+    ready()
+    if mode == "nonzero":
+        os._exit(17)
+    elif mode in ("hang", "ignore_term"):
         while True:
             time.sleep(60)
     elif mode == "oversize":

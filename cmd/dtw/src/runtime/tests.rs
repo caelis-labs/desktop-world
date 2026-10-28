@@ -1186,9 +1186,9 @@ impl Backend for PixelBackend {
     ) -> ActionOutcome {
         self.0.press(target, binding, ElementId(7), call)
     }
-    fn windows(&self, app: &AppInstance, call: &CallContext<'_>) -> Result<Vec<WindowInfo>, Error> {
+    fn windows(&self, app: &AppInstance, call: &CallContext<'_>) -> Result<WindowInventory, Error> {
         call.remaining()?;
-        Ok(vec![WindowInfo {
+        Ok(test_inventory(vec![WindowInfo {
             target: WindowTarget {
                 app: app.clone(),
                 native_id: 99,
@@ -1196,7 +1196,7 @@ impl Backend for PixelBackend {
             },
             title: "test".into(),
             visible: true,
-        }])
+        }]))
     }
 }
 fn pixel_runtime(backend: TestBackend, capabilities: Vec<Capability>) -> Runtime<PixelBackend> {
@@ -1300,7 +1300,10 @@ fn capture_and_click_need_separate_grants_and_discovery_retires_observations() {
             .outcome,
         ActionOutcome::rejected(Error::CapabilityDenied)
     );
-    assert_eq!(runtime.windows().unwrap()[0].target.app, target().app);
+    assert_eq!(
+        runtime.windows().unwrap().windows[0].target.app,
+        target().app
+    );
     assert_eq!(backend.counts().3, 1);
     let denied = pixel_runtime(backend.clone(), vec![Capability::Click]);
     assert_eq!(denied.capture(&target()), Err(Error::CapabilityDenied));
@@ -1405,20 +1408,20 @@ impl Backend for BudgetBackend {
     fn supports(&self, capability: Capability) -> bool {
         self.inner.supports(capability)
     }
-    fn windows(&self, app: &AppInstance, call: &CallContext<'_>) -> Result<Vec<WindowInfo>, Error> {
+    fn windows(&self, app: &AppInstance, call: &CallContext<'_>) -> Result<WindowInventory, Error> {
         self.enter(call)?;
         let gate = self.windows_gate.lock().unwrap().take();
         if let Some(gate) = gate {
             gate.wait();
         }
-        Ok(vec![WindowInfo {
+        Ok(test_inventory(vec![WindowInfo {
             target: WindowTarget {
                 app: app.clone(),
                 ..target()
             },
             title: "budget window".into(),
             visible: true,
-        }])
+        }]))
     }
     fn observe(
         &self,

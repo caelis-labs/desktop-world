@@ -54,6 +54,7 @@ pub enum Command {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WireError {
+    pub details: Option<Value>,
     pub code: String,
     pub message: String,
 }
@@ -67,6 +68,7 @@ impl std::error::Error for WireError {}
 
 fn invalid(message: impl Into<String>) -> WireError {
     WireError {
+        details: None,
         code: "invalid_request".into(),
         message: message.into(),
     }
@@ -186,6 +188,7 @@ pub fn parse_request(value: Value) -> Result<Request, WireError> {
     // JSON numbers 1 and 1.0 denote the same schema version.
     if version.as_f64() != Some(1.0) {
         return Err(WireError {
+            details: None,
             code: "unsupported_version".into(),
             message: "Only protocol version 1 is supported".into(),
         });
@@ -289,9 +292,17 @@ pub fn core_error(error: &computer::Error) -> WireError {
             "The observed element cannot be pressed",
         ),
         Error::TimedOut => ("timed_out", "The operation deadline elapsed"),
+        Error::InventoryUnproven(_) => (
+            "window_inventory_unproven",
+            "The supported window inventory could not be proven; no absence or replay is implied",
+        ),
         Error::BackendFailed(message) => ("backend_failed", message.as_str()),
     };
     WireError {
+        details: match error {
+            Error::InventoryUnproven(report) => Some(inventory_report(report, false)),
+            _ => None,
+        },
         code: code.into(),
         message: message.into(),
     }
@@ -299,7 +310,25 @@ pub fn core_error(error: &computer::Error) -> WireError {
 
 fn error_value(error: &computer::Error) -> Value {
     let error = core_error(error);
-    json!({"code": error.code, "message": error.message})
+    super::error_json(&error)
+}
+
+pub(crate) fn inventory_report(report: &computer::InventoryReport, proven: bool) -> Value {
+    let scope = match report.scope {
+        computer::InventoryScope::SameProcessStandardWindows => "same_process_standard_windows",
+    };
+    let counters: serde_json::Map<String, Value> = report
+        .diagnostics
+        .counters
+        .iter()
+        .map(|(name, count)| (name.clone(), json!(count)))
+        .collect();
+    json!({"coverage": {
+        "scope":scope,"complete_within_scope":proven,
+        "status":if !proven {"unproven"} else if report.supported_count == 0 {"empty_within_scope"} else {"available"},
+        "candidate_count":report.candidate_count,"supported_count":report.supported_count,"excluded_count":report.excluded_count,
+        "excludes":["helper_processes","non_standard_windows","non_default_layers"]
+    }, "diagnostics":{"provider":report.diagnostics.provider,"counters":counters,"error_codes":report.diagnostics.error_codes}})
 }
 
 fn outcome(outcome: &computer::ActionOutcome) -> Value {

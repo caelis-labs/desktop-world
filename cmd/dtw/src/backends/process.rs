@@ -24,6 +24,25 @@ pub const MAX_REQUEST_BYTES: usize = 64 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 24 * 1024 * 1024;
 const POLL: Duration = Duration::from_millis(5);
 const THREAD_CLEANUP_BUDGET: Duration = Duration::from_millis(200);
+#[cfg(unix)]
+const TERMINATION_GRACE: Duration = Duration::from_millis(500);
+// Private worker exit status: admitted input could not drain before shutdown.
+pub(crate) const INPUT_QUIESCE_FAILED_EXIT_CODE: i32 = 74;
+
+#[cfg(unix)]
+fn request_termination(child: &Child) -> std::io::Result<()> {
+    // Keep this transport std-only (also compiled directly with rustc in CI).
+    unsafe extern "C" {
+        fn kill(pid: std::ffi::c_int, signal: std::ffi::c_int) -> std::ffi::c_int;
+    }
+    // SIGTERM is 15 on the Unix targets supported by DTW. The unreaped Child
+    // remains exclusively owned under Process.child, so its PID cannot recycle.
+    if unsafe { kill(child.id() as std::ffi::c_int, 15) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StopReason {
@@ -80,6 +99,7 @@ impl TransportError {
 struct Process {
     child: Mutex<Option<Child>>,
     stopped: AtomicBool,
+    shutdown_failure: Mutex<Option<String>>,
 }
 
 impl Process {
@@ -88,14 +108,18 @@ impl Process {
             let mut slot = self.child.lock().expect("worker process lock poisoned");
             match slot.as_mut() {
                 None => Ok(true),
-                Some(child) => child.try_wait().map(|status| {
-                    if status.is_some() {
-                        slot.take();
-                        true
-                    } else {
-                        false
-                    }
-                }),
+                Some(child) => child
+                    .try_wait()
+                    .map(|status| {
+                        if let Some(status) = status {
+                            self.record_exit(status, false);
+                            slot.take();
+                            true
+                        } else {
+                            false
+                        }
+                    })
+                    .map_err(|error| self.shutdown_error(error)),
             }
         };
         match status {
@@ -115,26 +139,137 @@ impl Process {
         self.stopped.store(true, Ordering::SeqCst);
         let mut child_slot = self.child.lock().expect("worker process lock poisoned");
         let Some(child) = child_slot.as_mut() else {
-            return Ok(());
+            return self.shutdown_result();
         };
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| self.shutdown_error(error))?
+        {
+            self.record_exit(status, false);
+            child_slot.take();
+            return self.shutdown_result();
+        }
+        #[cfg(unix)]
+        {
+            let requested = request_termination(child);
+            if requested.is_ok() {
+                let until = Instant::now() + TERMINATION_GRACE;
+                loop {
+                    if let Some(status) = child
+                        .try_wait()
+                        .map_err(|error| self.shutdown_error(error))?
+                    {
+                        self.record_exit(status, true);
+                        child_slot.take();
+                        return self.shutdown_result();
+                    }
+                    let left = until.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        break;
+                    }
+                    thread::sleep(left.min(POLL));
+                }
+                self.record_shutdown_failure("Worker did not exit within the 500 ms termination grace; forced termination cannot confirm input cleanup".into());
+            } else {
+                self.record_shutdown_failure(format!(
+                    "Cannot request graceful worker termination: {}; input cleanup is unconfirmed",
+                    requested.unwrap_err()
+                ));
+            }
+        }
         // The process is owned, never looked up again by PID. Reap it even when
         // kill reports that it has already exited. Do not wait on a live process
         // after a failed kill; retain ownership so stop/Drop can retry cleanup.
         if let Err(kill_error) = child.kill() {
             match child.try_wait() {
-                Ok(Some(_)) => {
+                Ok(Some(status)) => {
+                    self.record_exit(status, false);
                     child_slot.take();
-                    return Ok(());
+                    return self.shutdown_result();
                 }
-                Ok(None) => return Err(TransportErrorKind::Shutdown(kill_error.to_string())),
-                Err(error) => return Err(TransportErrorKind::Shutdown(error.to_string())),
+                Ok(None) => return Err(self.shutdown_error(kill_error)),
+                Err(error) => {
+                    self.shutdown_error(kill_error);
+                    return Err(self.shutdown_error(error));
+                }
             }
         }
-        child
-            .wait()
-            .map_err(|error| TransportErrorKind::Shutdown(error.to_string()))?;
+        let status = child.wait().map_err(|error| self.shutdown_error(error))?;
+        #[cfg(unix)]
+        self.record_exit(status, false);
+        // Windows has no cooperative native-input backend. Its successful,
+        // explicitly requested TerminateProcess is expected transport cleanup.
+        #[cfg(not(unix))]
+        let _ = status;
         child_slot.take();
-        Ok(())
+        self.shutdown_result()
+    }
+
+    fn record_shutdown_failure(&self, message: String) {
+        self.shutdown_failure
+            .lock()
+            .expect("worker shutdown lock poisoned")
+            .get_or_insert(message);
+    }
+
+    fn shutdown_error(&self, error: std::io::Error) -> TransportErrorKind {
+        // Callers still hold child while recording this failure. Another stop
+        // cannot finish a successful retry before the first fault is durable.
+        let mut failure = self
+            .shutdown_failure
+            .lock()
+            .expect("worker shutdown lock poisoned");
+        let message = failure.get_or_insert_with(|| {
+            format!("Worker cleanup failed: {error}; input cleanup is unconfirmed")
+        });
+        TransportErrorKind::Shutdown(message.clone())
+    }
+
+    fn record_exit(&self, status: std::process::ExitStatus, expected_sigterm: bool) {
+        if status.success() {
+            return;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            // Only the grace loop after our own successful SIGTERM request can
+            // expect this status. Idle reaping must not excuse external SIGTERM.
+            if expected_sigterm && status.signal() == Some(15) {
+                return;
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = expected_sigterm;
+        let message = if status.code() == Some(INPUT_QUIESCE_FAILED_EXIT_CODE) {
+            format!("Native worker could not drain admitted input before shutdown ({status}); input cleanup is unconfirmed")
+        } else {
+            format!("Worker exited unexpectedly ({status}); input cleanup is unconfirmed")
+        };
+        let mut failure = self
+            .shutdown_failure
+            .lock()
+            .expect("worker shutdown lock poisoned");
+        // Exit is recorded once while consuming the owned Child. If a grace or
+        // kill failure already exists, retain it and append the actual status.
+        match failure.as_mut() {
+            Some(previous) => {
+                previous.push_str("; ");
+                previous.push_str(&message);
+            }
+            None => *failure = Some(message),
+        }
+    }
+
+    fn shutdown_result(&self) -> Result<(), TransportErrorKind> {
+        match self
+            .shutdown_failure
+            .lock()
+            .expect("worker shutdown lock poisoned")
+            .clone()
+        {
+            Some(error) => Err(TransportErrorKind::Shutdown(error)),
+            None => Ok(()),
+        }
     }
 }
 
@@ -170,6 +305,7 @@ impl Worker {
         let process = Arc::new(Process {
             child: Mutex::new(Some(child)),
             stopped: AtomicBool::new(false),
+            shutdown_failure: Mutex::new(None),
         });
         let (sender, receiver) = mpsc::sync_channel::<Request>(1);
         let io_process = process.clone();
@@ -223,11 +359,12 @@ impl Worker {
         let _admission = Admission(self);
         let sent = Arc::new(AtomicBool::new(false));
         let fail = |kind| {
-            let shutdown = self.stop();
-            // Preserve the request's failure classification. A cleanup failure
-            // is reported as shutdown failure rather than claiming it was reaped.
+            // Preserve the primary transport/control failure and dispatch
+            // uncertainty. Cleanup diagnostics remain persistent on Process and
+            // are returned by stop/close, including after the child is reaped.
+            let _ = self.stop();
             TransportError {
-                kind: shutdown.err().map_or(kind, |error| error.kind),
+                kind,
                 request_may_have_been_sent: sent.load(Ordering::SeqCst),
             }
         };
@@ -281,7 +418,8 @@ impl Worker {
         }
     }
 
-    /// Permanently retire this instance and reap its owned child. Reader/writer
+    /// Permanently retire this instance and reap its owned child. Unix workers
+    /// receive a bounded SIGTERM grace before the forced-kill fallback. Reader/writer
     /// thread joins are bounded; an inherited pipe held by an unrelated process
     /// cannot make this control path join forever.
     pub fn stop(&self) -> Result<(), TransportError> {

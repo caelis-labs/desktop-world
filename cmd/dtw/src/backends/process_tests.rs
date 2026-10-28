@@ -43,8 +43,12 @@ impl Fixture {
     }
 
     fn wait_ready(&self) {
+        self.wait_file("ready");
+    }
+
+    fn wait_file(&self, name: &str) {
         let deadline = Instant::now() + Duration::from_secs(5);
-        while !self.path.join("ready").exists() {
+        while !self.path.join(name).exists() {
             assert!(
                 Instant::now() < deadline,
                 "worker did not reach fixture handshake"
@@ -52,6 +56,198 @@ impl Fixture {
             thread::sleep(Duration::from_millis(2));
         }
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn termination_drains_an_admitted_pair_once_before_reaping() {
+    let fixture = Fixture::new();
+    let worker = Arc::new(fixture.worker("graceful_input"));
+    let calling_worker = worker.clone();
+    let caller = thread::spawn(move || calling_worker.call(b"{}", budget()));
+    fixture.wait_ready();
+    let stopping_worker = worker.clone();
+    let stopper = thread::spawn(move || stopping_worker.stop());
+    fixture.wait_file("closing");
+    assert_eq!(
+        fs::read_to_string(fixture.path.join("events")).unwrap(),
+        "down\n"
+    );
+    let late = worker.call(b"{}", budget()).unwrap_err();
+    assert!(!late.request_may_have_been_sent);
+    fs::write(fixture.path.join("release"), "release").unwrap();
+    stopper.join().unwrap().unwrap();
+    let original = caller.join().unwrap().unwrap_err();
+    assert!(original.request_may_have_been_sent);
+    assert_eq!(
+        fs::read_to_string(fixture.path.join("events")).unwrap(),
+        "down\nup\n"
+    );
+    assert_reaped(&worker);
+}
+
+#[cfg(unix)]
+#[test]
+fn ignored_termination_has_a_bounded_forced_kill_and_reports_uncertain_cleanup() {
+    let fixture = Fixture::new();
+    let worker = Arc::new(fixture.worker("ignore_term"));
+    let calling_worker = worker.clone();
+    let caller = thread::spawn(move || calling_worker.call(b"{}", budget()));
+    fixture.wait_ready();
+    let began = Instant::now();
+    let error = worker.stop().unwrap_err();
+    assert!(
+        matches!(error.kind, TransportErrorKind::Shutdown(ref text) if text.contains("forced termination"))
+    );
+    assert!(began.elapsed() >= TERMINATION_GRACE);
+    assert!(began.elapsed() < Duration::from_secs(2));
+    assert!(
+        caller
+            .join()
+            .unwrap()
+            .unwrap_err()
+            .request_may_have_been_sent
+    );
+    assert_reaped(&worker);
+    // Reaping does not erase an earlier failure to confirm native cleanup.
+    assert_eq!(worker.stop().unwrap_err().kind, error.kind);
+}
+
+#[test]
+fn failed_native_drain_survives_idle_reaping_and_repeated_stop() {
+    let fixture = Fixture::new();
+    let worker = fixture.worker("cleanup_failed");
+    fixture.wait_ready();
+    let until = Instant::now() + Duration::from_secs(5);
+    while !worker.process.stopped.load(Ordering::SeqCst) {
+        assert!(Instant::now() < until);
+        thread::sleep(Duration::from_millis(2));
+    }
+    assert_reaped(&worker);
+    for _ in 0..2 {
+        let error = worker.stop().unwrap_err();
+        assert!(
+            matches!(error.kind, TransportErrorKind::Shutdown(ref text) if text.contains("drain admitted input"))
+        );
+    }
+}
+
+fn wait_for_idle_reaping(worker: &Worker) {
+    let until = Instant::now() + Duration::from_secs(5);
+    while !worker.process.stopped.load(Ordering::SeqCst) {
+        assert!(Instant::now() < until, "idle child was not reaped");
+        thread::sleep(Duration::from_millis(2));
+    }
+    assert_reaped(worker);
+}
+
+fn assert_cleanup_failure_persists(worker: &Worker, status: &str) {
+    let first = worker.stop().unwrap_err();
+    assert!(
+        matches!(first.kind, TransportErrorKind::Shutdown(ref text)
+        if text.contains(status) && text.contains("input cleanup is unconfirmed")),
+        "{first:?}"
+    );
+    assert_eq!(worker.stop().unwrap_err().kind, first.kind);
+}
+
+#[test]
+fn external_kill_is_not_silently_cleaned_up_by_idle_reaping() {
+    let fixture = Fixture::new();
+    let worker = fixture.worker("no_read");
+    fixture.wait_ready();
+    // Bypass Process.stop: this is an external kill from the supervisor's
+    // perspective, not a requested graceful termination.
+    worker
+        .process
+        .child
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .kill()
+        .unwrap();
+    wait_for_idle_reaping(&worker);
+    #[cfg(unix)]
+    assert_cleanup_failure_persists(&worker, "signal: 9");
+    #[cfg(not(unix))]
+    assert_cleanup_failure_persists(&worker, "exit code:");
+}
+
+#[cfg(unix)]
+#[test]
+fn only_supervisor_requested_sigterm_is_expected_cleanup() {
+    let fixture = Fixture::new();
+    let worker = fixture.worker("no_read");
+    fixture.wait_ready();
+    {
+        let child = worker.process.child.lock().unwrap();
+        request_termination(child.as_ref().unwrap()).unwrap();
+    }
+    wait_for_idle_reaping(&worker);
+    assert_cleanup_failure_persists(&worker, "signal: 15");
+
+    let requested_fixture = Fixture::new();
+    let requested = requested_fixture.worker("no_read");
+    requested_fixture.wait_ready();
+    requested.stop().unwrap();
+    assert_reaped(&requested);
+    requested.stop().unwrap();
+}
+
+#[test]
+fn nonzero_exit_survives_idle_reaping_and_repeated_stop() {
+    let fixture = Fixture::new();
+    let worker = fixture.worker("idle_nonzero");
+    fixture.wait_ready();
+    wait_for_idle_reaping(&worker);
+    assert_cleanup_failure_persists(&worker, "17");
+}
+
+#[test]
+fn in_flight_nonzero_exit_preserves_primary_failure_and_cleanup_diagnostic() {
+    let fixture = Fixture::new();
+    let worker = fixture.worker("nonzero");
+    let error = worker.call(b"{}", budget()).unwrap_err();
+    assert_eq!(error.kind, TransportErrorKind::UnexpectedEof);
+    assert!(error.request_may_have_been_sent);
+    assert_reaped(&worker);
+    assert_cleanup_failure_persists(&worker, "17");
+}
+
+#[cfg(unix)]
+#[test]
+fn external_reaper_os_error_is_a_persistent_cleanup_failure() {
+    let fixture = Fixture::new();
+    let worker = fixture.worker("no_read");
+    fixture.wait_ready();
+    {
+        // A competing waitpid-based reaper is a real embedding failure: it can
+        // consume our child without updating std::process::Child's cached state.
+        // Hold the ownership lock so the fixture reaps first, deterministically.
+        let mut child = worker.process.child.lock().unwrap();
+        child.as_mut().unwrap().kill().unwrap();
+        unsafe extern "C" {
+            fn waitpid(
+                pid: std::ffi::c_int,
+                status: *mut std::ffi::c_int,
+                options: std::ffi::c_int,
+            ) -> std::ffi::c_int;
+        }
+        let mut status = 0;
+        assert_eq!(
+            unsafe { waitpid(worker.id() as std::ffi::c_int, &mut status, 0) },
+            worker.id() as std::ffi::c_int
+        );
+    }
+    let first = worker.stop().unwrap_err();
+    assert!(
+        matches!(first.kind, TransportErrorKind::Shutdown(ref message)
+        if message.contains("Worker cleanup failed:") && message.contains("input cleanup is unconfirmed"))
+    );
+    // Check the durable diagnostic, independently of another failed OS call.
+    assert_eq!(worker.process.shutdown_result(), Err(first.kind.clone()));
+    assert_eq!(worker.stop().unwrap_err().kind, first.kind);
 }
 
 impl Drop for Fixture {
