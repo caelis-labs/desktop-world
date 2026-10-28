@@ -1,0 +1,135 @@
+{
+  "source_commit": "d6bccad22d579feae8e03f395d1de9d844c51f8d",
+  "baseline": "f818d4b7192bd42db85c6af0a73168ee64088979",
+  "binary_sha256": "a76ecf12f118b75851fa36d2473742be8dd2d763dad2d5e683156c926da28072",
+  "fixture_source_sha256": "3fd71bf67e5e971d1e4754c51756819ed7d86918be0cc94310d34670a9696036",
+  "platform": {
+    "os": "macOS 27.0.1",
+    "build": "26A434",
+    "arch": "arm64"
+  },
+  "tests": {
+    "cargo_library": 187,
+    "cargo_cli": 4,
+    "source_core": 41,
+    "source_ipc": 20,
+    "python_negative_controls": 12
+  },
+  "native_gui": {
+    "passed": true,
+    "duration_ms": 15646,
+    "semantic": {
+      "before": {
+        "clicks": 0,
+        "actions_started": 0
+      },
+      "after": {
+        "clicks": 1,
+        "actions_started": 1
+      },
+      "peer_unchanged": true,
+      "original_result_preserved": true,
+      "same_rpc_replay_preserved": true,
+      "latest_lookup_preserved": true
+    },
+    "execution_identity": {
+      "model_supplied_ids": false,
+      "same_source_runs_twice": true,
+      "ids_distinct": true
+    },
+    "pixel_click": {
+      "before": {
+        "clicks": 1,
+        "actions_started": 1
+      },
+      "after": {
+        "clicks": 2,
+        "actions_started": 2
+      }
+    },
+    "cancellation": {
+      "committed_state_preserved": true,
+      "counters_unchanged": true
+    },
+    "app_switch": {
+      "old_receipt_preserved": true,
+      "state_and_window_refs_preserved": true,
+      "counters_unchanged": true
+    },
+    "independent_sessions": {
+      "same_app_state_isolated": true,
+      "captures_completed": 6,
+      "survives_peer_close": true,
+      "clean_exit_and_native_workers_reaped": true
+    }
+  },
+  "claude": {
+    "version": "2.1.312",
+    "model": "codex/gpt-6.1-terra",
+    "route": "temporary local plugin + standard MCP + Skill; no custom Host",
+    "passed": true,
+    "cli_returncode": 0,
+    "model_workflow_ms": 20418,
+    "cli_reported_api_ms": 18921,
+    "tool_sequence": [
+      "Skill",
+      "apps",
+      "exec",
+      "exec"
+    ],
+    "exec_argument_keys": [
+      [
+        "app",
+        "source"
+      ],
+      [
+        "app",
+        "source"
+      ]
+    ],
+    "script_method_calls": [
+      2,
+      4
+    ],
+    "generated_ids_in_model_input": false,
+    "result_poll_calls": 0,
+    "button": {
+      "role": "button",
+      "name": "Increment",
+      "enabled": true,
+      "actions": [
+        "press"
+      ]
+    },
+    "before": {
+      "clicks": 0,
+      "actions_started": 0
+    },
+    "after": {
+      "clicks": 1,
+      "actions_started": 1
+    },
+    "independent_observation": [
+      "Count: 0",
+      "Count: 1"
+    ],
+    "capture": {
+      "width": 640,
+      "height": 504
+    },
+    "tool_errors": 0,
+    "permission_denials": 0,
+    "action_retries": 0,
+    "fixture_clean_exit": true,
+    "stream_reviewed": true,
+    "remaining_owned_processes_after_exit": 0
+  },
+  "images": [
+    {
+      "file": "claude-count-one.png",
+      "sha256": "a2588fb3526cb1681cdc28c39dd65853c0bfeb17c62e3e5620a56f6278db3362",
+      "width": 640,
+      "height": 504
+    }
+  ]
+}

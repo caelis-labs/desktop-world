@@ -101,6 +101,7 @@ struct Model {
     drop_gate: Option<WorkerGate>,
     panic_on_press: bool,
     shutdown_error: Option<Error>,
+    cleanup_error: Option<Error>,
 }
 
 struct Shared {
@@ -134,6 +135,7 @@ impl TestBackend {
                 drop_gate: None,
                 panic_on_press: false,
                 shutdown_error: None,
+                cleanup_error: None,
             }),
             observations: AtomicUsize::new(0),
             presses: AtomicUsize::new(0),
@@ -158,6 +160,9 @@ impl TestBackend {
 
 impl Backend for TestBackend {
     type Binding = NativeBinding;
+    fn cleanup_error(&self) -> Option<Error> {
+        self.0.model.lock().unwrap().cleanup_error.clone()
+    }
     fn shutdown(&self) -> Result<(), Error> {
         self.0
             .model
@@ -1310,6 +1315,28 @@ fn action_deadline_retains_the_late_provider_evidence_without_accepting_success(
     control.release();
     assert_interrupted(worker.join().unwrap(), Error::TimedOut, successful_press());
     assert_eq!(backend.counts().1, 1);
+}
+
+#[test]
+fn cleanup_error_is_independent_of_native_receipts_and_has_no_side_effects() {
+    let (runtime, backend, _) = fixture();
+    assert_eq!(runtime.cleanup_error(), None);
+    let observation = runtime.observe(&target()).unwrap();
+    let native = ActionOutcome::unknown(Error::NativeFailure {
+        code: "native_condition".into(),
+        message: "original native failure".into(),
+    });
+    backend.edit(|model| model.press_outcome = Some(native.clone()));
+    let receipt = runtime.press(&target(), observation.reference, ElementId(7));
+    let counts = backend.counts();
+    let cleanup = Error::BackendFailed("independent resource cleanup failure".into());
+    backend.edit(|model| model.cleanup_error = Some(cleanup.clone()));
+    assert_eq!(runtime.cleanup_error(), Some(cleanup.clone()));
+    assert_eq!(runtime.cleanup_error(), Some(cleanup));
+    assert_eq!(backend.counts(), counts);
+    assert_eq!(receipt.outcome, native);
+    assert_eq!(receipt.provider_outcome, Some(native));
+    assert_eq!(receipt.interruption, None);
 }
 
 #[test]

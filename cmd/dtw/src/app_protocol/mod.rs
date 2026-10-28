@@ -14,6 +14,7 @@ use std::{
 pub mod app_id;
 mod description;
 pub mod mcp;
+mod mcp_io;
 mod methods;
 mod script_engine;
 mod scripts;
@@ -162,6 +163,7 @@ struct Job {
     submitted: Submit,
     completed: Option<Completed>,
     script: Option<scripts::ScriptRun>,
+    shutdown_error: Option<WireError>,
 }
 struct State {
     terminal: Option<Error>,
@@ -170,7 +172,9 @@ struct State {
     jobs: Vec<Job>,
     windows: HashMap<String, WindowTarget>,
     observation: Option<Snapshot>,
-    script_state: Value,
+    // Committed logical app data outlives this native execution owner.
+    // Lock order is Coordinator state, then this cell; never the reverse.
+    script_state: Arc<Mutex<Value>>,
 }
 pub struct Coordinator<B: Backend> {
     runtime: Runtime<B>,
@@ -187,6 +191,14 @@ pub struct Coordinator<B: Backend> {
 }
 impl<B: Backend + 'static> Coordinator<B> {
     pub fn new(backend: B, app: AppInstance, app_name: String) -> Arc<Self> {
+        Self::with_script_state(backend, app, app_name, Arc::new(Mutex::new(json!({}))))
+    }
+    fn with_script_state(
+        backend: B,
+        app: AppInstance,
+        app_name: String,
+        script_state: Arc<Mutex<Value>>,
+    ) -> Arc<Self> {
         let supported = Capability::ALL
             .into_iter()
             .filter(|c| backend.supports(*c))
@@ -208,7 +220,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 jobs: Vec::new(),
                 windows: HashMap::new(),
                 observation: None,
-                script_state: json!({}),
+                script_state,
             }),
             finished: Condvar::new(),
             max_requests: MAX_REQUESTS,
@@ -232,16 +244,29 @@ impl<B: Backend + 'static> Coordinator<B> {
     ) -> Option<WireError> {
         let error = error.map(|error| wire::core_error(&error))?;
         let mut state = self.state.lock().unwrap();
-        state.shutdown_error = Some(error.clone());
-        if let Some(run) = state
+        let error = state.shutdown_error.get_or_insert(error).clone();
+        if let Some(job) = state
             .jobs
             .iter_mut()
             .find(|job| Some(job.submitted.request_id.as_str()) == active)
-            .and_then(|job| job.script.as_mut())
         {
-            run.shutdown_error = Some(error.clone());
+            job.shutdown_error.get_or_insert_with(|| error.clone());
+            if let Some(run) = &mut job.script {
+                run.shutdown_error.get_or_insert_with(|| error.clone());
+            }
         }
         Some(error)
+    }
+    fn observe_cleanup_failure(&self, id: &str) {
+        if let Some(error) = self.runtime.cleanup_error() {
+            // Preserve cleanup independently from the already-produced native
+            // result. A JS catch must not reopen execution or commit state.
+            self.record_shutdown_error(Some(error), Some(id));
+            let open = self.state.lock().unwrap().terminal.is_none();
+            if open {
+                self.close();
+            }
+        }
     }
     fn cleanup_terminal(&self) -> Option<WireError> {
         let (reason, active) = {
@@ -312,6 +337,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         state.jobs.push(Job {
             submitted: submitted.clone(),
             completed: None,
+            shutdown_error: None,
             script: match &submitted.command {
                 Command::Script { timeout_ms, .. } => Some(scripts::ScriptRun::new(
                     Instant::now() + Duration::from_millis(*timeout_ms),
@@ -375,6 +401,22 @@ impl<B: Backend + 'static> Coordinator<B> {
                 )
             })
     }
+    // The public session ledger takes ownership of evictable results. Keeping
+    // a second payload cache in every resident app would multiply its memory cap.
+    fn release_result_payload(&self, id: &str) {
+        let mut state = self.state.lock().unwrap();
+        if let Some(done) = state
+            .jobs
+            .iter_mut()
+            .find(|job| job.submitted.request_id == id)
+            .and_then(|job| job.completed.as_mut())
+        {
+            done.value = None;
+            done.image = None;
+            done.payload_bytes = 0;
+            done.payload_expired = true;
+        }
+    }
     fn job_reply(&self, job: &Job) -> Reply {
         let done = job.completed.as_ref();
         let error = done.and_then(|d| d.error.as_ref());
@@ -388,10 +430,13 @@ impl<B: Backend + 'static> Coordinator<B> {
         if let Some(script) = &job.script {
             data["script"] = script.json();
         }
+        if let Some(error) = &job.shutdown_error {
+            data["shutdown_error"] = error_json(error);
+        }
         Reply {
             data,
             image: done.and_then(|d| d.image.clone()),
-            is_error: error.is_some(),
+            is_error: error.is_some() || job.shutdown_error.is_some(),
         }
     }
     fn execute(&self, submitted: &Submit) -> Work {
@@ -402,6 +447,11 @@ impl<B: Backend + 'static> Coordinator<B> {
     }
     // Called under the outer job reservation, including every script Host Call.
     fn execute_atomic(&self, submitted: &Submit, deadline: Instant) -> Work {
+        let work = self.execute_atomic_inner(submitted, deadline);
+        self.observe_cleanup_failure(&submitted.request_id);
+        work
+    }
+    fn execute_atomic_inner(&self, submitted: &Submit, deadline: Instant) -> Work {
         if submitted.command == Command::Windows {
             return match self.runtime.windows_until(deadline) {
                 Err(error) => Work::read_error(error),
@@ -565,6 +615,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         }
     }
     fn complete(&self, id: &str, mut work: Work) {
+        self.observe_cleanup_failure(id);
         // Recheck immediately at the state commit boundary. A script that
         // finishes on the deadline must not commit state or retain an idle worker.
         let mut state = loop {
@@ -588,7 +639,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         };
         if let Some(next) = work.state_update.take() {
             if state.terminal.is_none() && work.completed.error.is_none() {
-                state.script_state = next;
+                *state.script_state.lock().unwrap() = next;
                 state
                     .jobs
                     .iter_mut()

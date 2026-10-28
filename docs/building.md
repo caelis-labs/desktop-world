@@ -78,7 +78,7 @@ python3 tests/acceptance/standard_agent_probe.py \
 
 It records structured semantic press and independent fixture counters, PNG
 capture, original receipts, stale/cross-app rejection, standard cancellation and
-clean-context recovery. Add `--pixel-click` only when the owned window can stay
+committed-state recovery, A→B→A retained window refs, and concurrent captures from two independent MCP sessions. Add `--pixel-click` only when the owned window can stay
 foreground and unobscured. Output must be a new directory. The script closes its
 exact server and fixture PIDs and retains evidence even on failure. It does not
 install Agent configuration or retry actions. This proves a standard external

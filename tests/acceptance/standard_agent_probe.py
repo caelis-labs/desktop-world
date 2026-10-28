@@ -153,6 +153,9 @@ class Mcp:
         self.serial = 0
         self.messages = queue.Queue()
         self.pending = {}
+        # Fixture case names never go over the tool boundary. DTW supplies IDs.
+        self.executions = {}
+        self.exec_frames = {}
         self.lock = threading.Lock()
         self.transcript = (output / "mcp.jsonl").open("w")
         self.stderr = (output / "dtw-stderr.log").open("w")
@@ -235,22 +238,38 @@ class Mcp:
         result = self.rpc("tools/call", {"name": name, "arguments": arguments})
         return self.decode(result), result
 
-    def execute(self, app, request_id, source, **options):
-        data, result = self.tool("exec", {"app": app, "request_id": request_id,
-                                          "source": source, **options})
-        require(data.get("app") == app and data.get("request_id") == request_id,
-                "exec did not echo original app and request ID")
+    def execute(self, app, case, source, **options):
+        params = {"name": "exec", "arguments": {"app": app, "source": source, **options}}
+        rpc_id = self.begin("tools/call", params)
+        response = self.receive(rpc_id)
+        require("error" not in response, response)
+        result = response["result"]
+        data = self.decode(result)
+        require(data.get("app") == app and isinstance(data.get("execution_id"), str),
+                "exec did not return its app and generated execution ID")
+        require("request_id" not in data, "internal request ID leaked")
+        self.executions[(app, case)] = data["execution_id"]
+        self.exec_frames[(app, case)] = {"jsonrpc": "2.0", "id": rpc_id, "method": "tools/call", "params": params}
         return data, result
 
-    def receipt(self, app, request_id):
-        data, _ = self.tool("result", {"app": app, "request_id": request_id})
-        require(data.get("app") == app and data.get("request_id") == request_id,
-                "result did not preserve original app and request ID")
+    def receipt(self, app, case=None):
+        arguments = {"app": app}
+        execution_id = self.executions.get((app, case)) if case is not None else None
+        if execution_id is not None:
+            arguments["execution_id"] = execution_id
+        data, _ = self.tool("result", arguments)
+        require(data.get("app") == app and isinstance(data.get("execution_id"), str),
+                "result did not identify the recorded execution")
+        if execution_id is not None:
+            require(data["execution_id"] == execution_id, "result changed the execution identity")
+        elif case is not None:
+            self.executions[(app, case)] = data["execution_id"]
         return data
 
     def close(self):
         workers = {pid: command for pid, (parent, command) in process_table().items()
-                   if parent == self.child.pid and "--dtw-native-worker" in command}
+                   if parent == self.child.pid and any(flag in command for flag in
+                        ("--dtw-native-worker", "--dtw-scene-worker"))}
         try:
             try:
                 self.child.stdin.close()
@@ -348,6 +367,9 @@ def run_checks(mcp, target, peer, output, pixel_click, evidence):
     for name in ("exec", "result"):
         schema = by_name[name]["inputSchema"]
         require(schema["properties"]["app"]["type"] == "string" and "app" in schema["required"], schema)
+    require(set(by_name["exec"]["inputSchema"]["required"]) == {"app", "source"}, "exec requires bookkeeping")
+    require(set(by_name["exec"]["inputSchema"]["properties"]) == {"app", "source"}, "exec exposes extra input")
+    require(by_name["result"]["inputSchema"]["required"] == ["app"], "latest result requires an execution ID")
     discovered, _ = mcp.tool("apps", {})
     entries = discovered["apps"]
     ids = [entry["app"] for entry in entries]
@@ -372,8 +394,18 @@ def run_checks(mcp, target, peer, output, pixel_click, evidence):
             "semantic action repeated")
     require(peer.counters() == peer_before, "semantic action changed the other owned app")
     require(mcp.receipt(target.app_id, "semantic") == semantic, "original semantic receipt changed")
+    latest = mcp.receipt(target.app_id)
+    require(latest.pop("selection", None) == "latest_accepted", "latest lookup is not explicitly identified")
+    require(latest == semantic, "latest result differs from the accepted execution")
+    # Transport retry reuses the standard RPC id, without a model-supplied key.
+    frame = mcp.exec_frames[(target.app_id, "semantic")]
+    mcp._send(frame)
+    replay = mcp.decode(mcp.receive(frame["id"])["result"])
+    require(replay == semantic and target.counters()["clicks"] == before["clicks"] + 1,
+            "same RPC frame executed the action again")
     evidence["semantic"] = {"record": semantic, "before": before, "after": target.counters(),
-                            "peer_unchanged": True, "original_result_preserved": True}
+                            "peer_unchanged": True, "original_result_preserved": True,
+                            "same_rpc_replay_preserved": True, "latest_lookup_preserved": True}
     write_json(output / "evidence.json", evidence)
 
     stable = target.counters()
@@ -424,7 +456,7 @@ def run_checks(mcp, target, peer, output, pixel_click, evidence):
     require(successful(persisted) == "before-cancel", persisted)
     unchanged = target.counters()
     rpc_id = mcp.begin("tools/call", {"name": "exec", "arguments": {
-        "app": target.app_id, "request_id": "cancel-original", "source": CANCEL, "timeout_ms": 5000}})
+        "app": target.app_id, "source": CANCEL}})
     def native_read_finished():
         record = mcp.receipt(target.app_id, "cancel-original")
         require(record.get("status") == "running", f"cancel sample ended before notification: {record}")
@@ -442,32 +474,45 @@ def run_checks(mcp, target, peer, output, pixel_click, evidence):
     require(original["script"].get("shutdown_error") is None, original)
     require(mcp.receipt(target.app_id, "cancel-original") == original, "cancel receipt changed")
     restored, _ = mcp.execute(target.app_id, "after-cancel",
-                              "const keys=Object.keys(state); return {keys,inventory:await app.windows()};")
+                              "const keys=Object.keys(state); return {keys,saved:state.saved,inventory:await app.windows()};")
     restored_value = successful(restored)
-    require(restored_value["keys"] == [] and restored.get("context_reset") is True, restored)
+    require(restored_value["saved"] == "before-cancel" and "uncommitted" not in restored_value["keys"], restored)
+    require(restored.get("context_reset") is True and restored.get("state_reset") is False, restored)
     require(mcp.receipt(target.app_id, "cancel-original") == original, "new context replaced old receipt")
     require(target.counters() == unchanged and peer.counters() == peer_before,
             "cancel or recovery performed an action")
     evidence["cancellation"] = {"rpc_id": rpc_id, "entered": entered, "original": original,
-                                "recovery": restored, "state_reset": True, "counters_unchanged": True}
+                                "recovery": restored, "committed_state_preserved": True, "counters_unchanged": True}
 
-    # A captured scene is owned until its native worker exits. A→B→A must
-    # retire the old owner before opening another app, not keep an idle lease.
+    repeated_source = "state.repeated=(state.repeated??0)+1;return state.repeated;"
+    first, _ = mcp.execute(target.app_id, "same-source-1", repeated_source)
+    second, _ = mcp.execute(target.app_id, "same-source-2", repeated_source)
+    require(successful(first) == 1 and successful(second) == 2, "new call was deduplicated by script content")
+    require(first["execution_id"] != second["execution_id"], "execution ID reused for a new call")
+    evidence["execution_identity"] = {"model_supplied_ids": False, "same_source_runs_twice": True,
+                                      "ids_distinct": True}
+
+    # Logical app state and window refs survive A→B→A. Each short-lived scene
+    # owner is reaped independently of the resident app/AX context.
     sequence = []
     for index, fixture in enumerate((target, peer, target)):
         fixture.command("snapshot")
         fixture.command("uncover")
         request_id = f"app-switch-capture-{index}"
-        source = "const priorKeys=Object.keys(state);\n" + SELECT_WINDOW + """
+        source = "const previous=state.switchMarker ?? null;\n" + (
+            SELECT_WINDOW if index < 2 else "const window_ref=state.switchWindow;\n") + """
 const shot=await app.capture({window_ref});
-state.switchMarker=true;
-return {priorKeys,shot};
+state.switchMarker=true; state.switchWindow=window_ref;
+return {previous,shot};
 """
         record, response = mcp.execute(fixture.app_id, request_id, source)
         returned = successful(record)
-        require(returned["priorKeys"] == [], "app switch carried state across native owners")
-        if index:
-            require(record.get("context_reset") is True, "returning app did not report context reset")
+        require(returned["previous"] == (True if index == 2 else None), "app state lost or leaked")
+        require(record.get("context_reset") is False, "app switch unnecessarily retired native refs")
+        require(record.get("state_reset") is False, "app switch reset logical state")
+        if index == 2:
+            require(returned["shot"]["window_ref"] == sequence[0]["record"]["value"]["result"]["shot"]["window_ref"],
+                    "app switch replaced the retained window ref")
         directory = output / request_id
         directory.mkdir()
         picture = save_png(directory, response, returned["shot"])
@@ -477,13 +522,61 @@ return {priorKeys,shot};
     require(target.counters() == unchanged and peer.counters() == peer_before,
             "cross-app capture performed an action")
     evidence["app_switch_capture"] = {"sequence": sequence, "old_receipt_preserved": True,
-                                      "state_reset": True, "counters_unchanged": True}
+                                      "state_and_window_refs_preserved": True, "counters_unchanged": True}
+    run_session_checks(mcp, target, peer, output, evidence)
     expected = {key: before[key] + 1 + int(pixel_click) for key in before}
     require(target.counters() == expected and peer.counters() == peer_before,
             "final independent counters show an extra or missing effect")
     evidence["fixture_final"] = {"target": target.state(), "peer": peer.state(),
                                  "expected_target_counters": expected}
     write_json(output / "evidence.json", evidence)
+
+
+def run_session_checks(first, target, peer, output, evidence):
+    """Two ordinary MCP processes; no Host-specific coordination or input."""
+    from concurrent.futures import ThreadPoolExecutor
+    root = output / "second-session"
+    root.mkdir()
+    second = Mcp(Path(evidence["binary"]), root)
+    record = {"second_pid": second.child.pid}
+    counters = (target.counters(), peer.counters())
+    evidence["independent_sessions"] = record
+    try:
+        second.rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                   "clientInfo": {"name": "dtw-second-session-probe", "version": "1"}})
+        second.notify("notifications/initialized")
+        isolated, _ = second.execute(target.app_id, "after-cancel", "const before=Object.keys(state);state.otherSession=true;return before;")
+        require(successful(isolated) == [], "second session inherited first session state")
+        original = successful(first.execute(target.app_id, "session-isolation", "return {saved:state.saved,leaked:state.otherSession??null};")[0])
+        require(original == {"saved": "before-cancel", "leaked": None}, original)
+        setup, _ = second.execute(peer.app_id, "second-window", SELECT_WINDOW + "state.window=window_ref;return window_ref;")
+        successful(setup)
+        captures = []
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            for round_number in range(3):
+                requests = [(first, target, "state.switchWindow"), (second, peer, "state.window")]
+                futures = [pool.submit(client.execute, fixture.app_id, f"concurrent-{round_number}",
+                           f"return await app.capture({{window_ref:{window}}});")
+                           for client, fixture, window in requests]
+                for index, future in enumerate(futures):
+                    result, response = future.result(timeout=35)
+                    metadata = successful(result)
+                    destination = root / f"capture-{round_number}-{index}"
+                    destination.mkdir()
+                    captures.append({"session": index, "round": round_number,
+                                     "png": save_png(destination, response, metadata)})
+        record.update({"same_app_state_isolated": True, "distinct_app_captures": captures})
+    finally:
+        record["cleanup"] = second.close()
+        write_json(output / "evidence.json", evidence)
+    require(not record["cleanup"].get("forced") and record["cleanup"].get("returncode", 0) == 0,
+            "second session did not close cleanly")
+    surviving, response = first.execute(target.app_id, "after-second-session-close",
+                                        "return await app.capture({window_ref:state.switchWindow});")
+    destination = root / "first-session-after-peer-close"
+    destination.mkdir()
+    record["first_session_survives_peer_close"] = save_png(destination, response, successful(surviving))
+    require((target.counters(), peer.counters()) == counters, "read-only session checks changed fixture counters")
 
 
 def main():
@@ -538,8 +631,8 @@ def main():
         evidence["finished_unix_ms"] = int(time.time() * 1000)
         write_json(output / "evidence.json", evidence)
     print(json.dumps({"passed": failure is None, "evidence": str(output / "evidence.json"),
-                      "checks": [key for key in ("semantic", "negative_controls", "capture", "pixel_click",
-                                                 "cancellation", "app_switch_capture") if key in evidence],
+                      "checks": [key for key in ("semantic", "execution_identity", "negative_controls", "capture", "pixel_click",
+                                                 "cancellation", "app_switch_capture", "independent_sessions") if key in evidence],
                       "pixel_click": args.pixel_click, "failure": failure}, ensure_ascii=False))
     return 0 if failure is None else 1
 

@@ -358,7 +358,7 @@ fn shutdown_failure_remains_separate_from_the_cancellation_reason() {
 }
 
 #[test]
-fn scripts_are_app_bound_and_have_only_reducible_limits() {
+fn scripts_are_app_bound_with_caller_selected_execution_budgets() {
     let request = submit(json!({"kind":"script","source":"return 42;"}));
     assert_eq!(
         parse_request(request.clone()),
@@ -370,8 +370,8 @@ fn scripts_are_app_bound_and_have_only_reducible_limits() {
             },
             command: Command::Script {
                 source: "return 42;".into(),
-                timeout_ms: 5000,
-                max_calls: 32
+                timeout_ms: crate::app_protocol::scripts::DEFAULT_TIMEOUT_MS,
+                max_calls: crate::app_protocol::scripts::UNLIMITED_CALLS
             }
         }))
     );
@@ -381,7 +381,7 @@ fn scripts_are_app_bound_and_have_only_reducible_limits() {
             vec![
                 json!(0),
                 json!(-1),
-                json!(5001),
+                json!(u32::MAX as u64 + 1),
                 json!(1.5),
                 json!("1"),
                 json!(null),
@@ -389,7 +389,13 @@ fn scripts_are_app_bound_and_have_only_reducible_limits() {
         ),
         (
             "max_calls",
-            vec![json!(0), json!(33), json!(1.5), json!(true), json!(null)],
+            vec![
+                json!(0),
+                json!(u32::MAX as u64 + 1),
+                json!(1.5),
+                json!(true),
+                json!(null),
+            ],
         ),
     ] {
         for value in values {
@@ -398,7 +404,11 @@ fn scripts_are_app_bound_and_have_only_reducible_limits() {
             assert!(parse_request(bad).is_err());
         }
     }
-    for (time, calls) in [(json!(1), json!(1)), (json!(5000.0), json!(32.0))] {
+    for (time, calls) in [
+        (json!(1), json!(1)),
+        (json!(5000.0), json!(32.0)),
+        (json!(120000), json!(1000)),
+    ] {
         let mut valid = request.clone();
         valid["command"]["timeout_ms"] = time;
         valid["command"]["max_calls"] = calls;
@@ -440,10 +450,10 @@ fn scripts_are_app_bound_and_have_only_reducible_limits() {
     );
     assert_eq!(
         schema["properties"]["command"]["properties"]["timeout_ms"]["maximum"],
-        5000
+        crate::app_protocol::scripts::MAX_TIMEOUT_MS
     );
     assert_eq!(
         schema["properties"]["command"]["properties"]["max_calls"]["maximum"],
-        32
+        crate::app_protocol::scripts::MAX_CALLS
     );
 }

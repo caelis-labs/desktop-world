@@ -1,6 +1,6 @@
 # 标准 MCP App 协议 v1
 
-产品入口为 `dtw mcp`。Agent 使用普通 stdio MCP 配置和可选的 [DTW Skill](../skills/desktop-world/SKILL.md)，无需 DTW 专用 Host。审批与授权完全属于 Harness；DTW 只要求显式平台稳定 app ID，并执行目标、引用、预算和生命周期校验。
+产品入口为 `dtw mcp`，使用官方 `rmcp 3.8.0` 的 stdio transport、协议协商、消息类型和服务分发；不维护另一套 MCP 解析器。Agent 使用普通 stdio MCP 配置和可选的 [DTW Skill](../skills/desktop-world/SKILL.md)，无需 DTW 专用 Host。审批与授权完全属于 Harness；DTW 只要求显式平台稳定 app ID，并执行目标、引用、预算和生命周期校验。
 
 ## 应用发现与稳定 app ID
 
@@ -21,24 +21,27 @@
 | 工具 | 参数 | 返回行为 |
 | --- | --- | --- |
 | `apps` | `{}` | 应用列表、稳定 app IDs 和当前脚本合同 |
-| `exec` | `app, request_id, source`；可选 `timeout_ms, max_calls` | 等待有界脚本执行收尾，返回结果、回执和最后一张截图 |
-| `result` | `app, request_id` | 只读原请求记录，不执行、不重放 |
+| `exec` | `app, source`（仅这两项） | 等待有界脚本执行收尾，返回结果、回执和最后一张截图 |
+| `result` | `app`；可选 `execution_id` | 只读本会话该 app 最近接受的执行，或指定原记录，不执行、不重放 |
 
-`app` 必须是平台稳定 ID 字符串。`exec` 的 `source` 是 JavaScript 异步函数体，可使用 `await` 和 `return`。`request_id` 是调用者提供的 1–128 字符操作标识，应为每项新工作选择新值。可选预算只能缩小默认上限：总执行时间 5000 ms、最多 32 次 Host bridge 调用。其余预算见[脚本合同](app-script-v1.md)。未知参数拒绝。源码仍限 64 KiB UTF-8；完整换行 MCP JSON 输入帧限 512 KiB，以容纳转义。
+`app` 必须是平台稳定 ID 字符串。`exec` 的 `source` 是 JavaScript 异步函数体，可使用 `await` 和 `return`。DTW 在接受执行时自动生成 `execution_id`；模型不生成、传入或维护请求编号。当前内部总执行期限为 30 秒，不设调用次数配额；公开工具不接受预算、文件路径或请求编号。其余预算见[脚本合同](app-script-v1.md)。未知参数拒绝。源码仍限 64 KiB UTF-8；完整换行 MCP JSON 输入帧限 512 KiB，以容纳转义。
 
 一次发现后执行窗口查询的工具参数示意：
 
 ```json
 {
   "app": "com.apple.TextEdit",
-  "request_id": "inspect-windows-1",
   "source": "const inventory = await app.windows(); return inventory;"
 }
 ```
 
 每次执行都显式携带 `app`，不存在隐式默认应用。结果回显该 app ID，Harness 可以从普通工具入参与输出识别目标。脚本中的所有原子调用复用同一 app 绑定；窗口或 observation 字符串不能改变绑定。
 
-同一已接受 request ID 与相同请求返回原记录；更换内容得到冲突错误，不重新执行。重复查询不会刷新观察、切换目标或延长执行期限。`result` 读取原请求记录；即使 app 已退出或重启，也不会解析新实例来替代旧回执。
+对于已接受的执行，标准传输层同一个 JSON-RPC ID 与相同 exec 参数的重复帧复用原执行；仍在运行时合并等待，完成后返回原记录。同 ID 改换输入得到冲突错误。busy、参数错误等未接受调用不占执行记录，之后是否接受仍由当次准入决定。新的 JSON-RPC 调用始终代表新工作，即便 app/source 完全相同也会再次执行；不按脚本内容去重。这只用于同一存活连接内的传输识别，不提供跨连接 exactly-once 保证，也不要求定制 Host。
+
+`result({app})` 只读此连接中该 app 最近接受的执行（包含 running、failed 或 completed），返回 `selection: "latest_accepted"`；`result({app, execution_id})` 选择指定历史记录。即使 app 已退出或重启，也不会解析新实例替代旧回执；不同会话记录不互通。这里的会话指 MCP 连接；复用同一连接的 Agent 也会共享该连接的 app state 和最近记录，DTW 不猜测模型对话身份。重复查询不会刷新观察、切换目标或延长期限。
+
+“最近接受”不等于“最后尝试”：若新调用未收到或未被接受，最近记录仍可能是上一次执行。无记录或旧记录都不能证明不确定的新操作没有产生效果；需要结合客户端传输事实或独立观察判断，不能自动重放。
 
 ## 结果、效果与图像
 
@@ -50,7 +53,7 @@ MCP 工具响应同时提供文本 JSON，并在协议版本支持时提供 `str
 
 ## 标准 MCP 取消和连接关闭
 
-JSON-RPC 的 `id` 标识传输请求；`exec.request_id` 标识操作回执。工具执行期间可按 [MCP 取消规范](https://modelcontextprotocol.io/specification/2025-06-18/basic/utilities/cancellation)发送：
+JSON-RPC 的 `id` 由标准客户端管理并标识传输请求；DTW 内部生成的 `execution_id` 标识保留的执行回执。模型不需要提供它们。工具执行期间可按 [MCP 取消规范](https://modelcontextprotocol.io/specification/2025-06-18/basic/utilities/cancellation)发送：
 
 ```json
 {
@@ -60,12 +63,12 @@ JSON-RPC 的 `id` 标识传输请求；`exec.request_id` 标识操作回执。�
 }
 ```
 
-取消针对该活动执行，不能证明已派发输入被撤销。客户端可能不接收被取消调用的最终响应；保留原 app ID 和 `request_id`，使用 `result` 查询其记录。不要用新的 ID 重提未确认效果的脚本。
+取消针对该活动执行，不能证明已派发输入被撤销。客户端可能不接收被取消调用的最终响应；可用 `result({app})` 查询最近接受的执行，无需在提交脚本时预先指定 ID；已获得的 `execution_id` 可用于随后精确查询原记录。不要重提未确认效果的脚本来代替结果查询。
 
-EOF、断管、背压和父进程退出关闭原生资源；应用上下文的关闭使旧 observation 和 state 不再可用。新进程不继承旧账本。若连接丢失且无原始结果，只能将效果保留为未知并独立重观测。过程内回执不是跨进程持久审计系统。
+取消/超时可能重建受影响 app 的原生 owner（`context_reset: true`），已提交 state 继续保留，旧原生 refs 需重建；实际 app 实例更换才清空 state（`state_reset: true`）。普通 app 切换保留各自上下文。EOF、断管、背压和父进程退出关闭整个会话及其原生资源；新进程不继承旧 state、refs 或账本。若连接丢失且无原始结果，只能将效果保留为未知并独立重观测。过程内回执不是跨进程持久审计系统。
 
 ## 兼容与证据
 
-普通 MCP 初始化、工具发现和调用遵循服务器广告的协议版本。该合同不要求 elicitation、专用审批扩展或客户端自定义回调。MCP tool annotations 是提示，不是 DTW 的授权策略。
+协议协商和消息编码由官方 SDK 管理；当前验收覆盖 2024-11-05、2025-06-18 的初始化流程，以及 2026-07-28 的逐请求 metadata 流程。超长帧由 SDK 丢弃后继续读取，未完成尾帧不执行；无效 JSON 和非法消息按 SDK 的标准行为处理。DTW 的 I/O 生命周期包装只负责 EOF、读写失败、输出持续停滞时取消执行并等待原生收尾，不参与协议解析。该合同不要求 elicitation、专用审批扩展或客户端自定义回调。MCP tool annotations 是提示，不是 DTW 的授权策略。
 
 C4/C5 的 `dtw app serve --grant`、`exec.describe/submit/cancel/close` 流程属于前一接入设计，已退出产品入口。其[历史验收](app-protocol-acceptance.md)只适用于记录的代码和二进制，不证明当前入口已经通过相同验收。当前支持范围见[产品矩阵](product-matrix.md)。

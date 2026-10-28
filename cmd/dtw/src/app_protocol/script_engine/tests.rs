@@ -121,6 +121,43 @@ fn ordinary_host_error_can_be_caught_and_later_call_has_its_own_number() {
     assert_eq!(seen.len(), 2);
 }
 #[test]
+fn omitted_call_quota_allows_more_than_thirty_two_operations() {
+    let mut budget = limits();
+    budget.max_calls = super::super::scripts::UNLIMITED_CALLS;
+    let (out, seen) = execute(
+        "for(let i=0;i<80;i++) await app.windows(); return 80;",
+        json!({}),
+        budget,
+        |_| Ok(json!({"windows":[]})),
+    );
+    assert_eq!(out.result.unwrap().value, 80);
+    assert_eq!(seen.len(), 80);
+}
+#[test]
+fn caller_deadline_can_exceed_the_old_five_second_limit() {
+    let mut budget = limits();
+    budget.deadline = Instant::now() + Duration::from_secs(10);
+    let (out, seen) = execute("return await app.windows();", json!({}), budget, |_| {
+        thread::sleep(Duration::from_millis(5100));
+        Ok(json!({"finished":true}))
+    });
+    assert_eq!(out.result.unwrap().value, json!({"finished":true}));
+    assert_eq!(seen.len(), 1);
+}
+#[test]
+fn receipt_resource_exhaustion_cannot_be_caught_to_report_success() {
+    let (out, seen) = execute(
+        "try { await app.windows(); } catch(e) {} state.saved=true; return 'ok';",
+        json!({}),
+        limits(),
+        |_| Err(HostError::new("receipt budget exhausted", "receipt_limit")),
+    );
+    let failure = out.result.unwrap_err();
+    assert_eq!(failure.kind, "resource_limit");
+    assert_eq!(failure.code.as_deref(), Some("receipt_limit"));
+    assert_eq!(seen.len(), 1);
+}
+#[test]
 fn uncaught_host_error_retains_line_operation_code_and_number() {
     let (out,seen)=execute("state.mutated=true;\nawait app.press({window_ref:'w',observation_ref:'o',element_ref:'e'});",json!({}),limits(), |_|Err(HostError::new("reference consumed","stale_observation")));
     let failure = out.result.unwrap_err();

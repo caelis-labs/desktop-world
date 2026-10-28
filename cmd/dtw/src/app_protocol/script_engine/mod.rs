@@ -438,7 +438,9 @@ fn host_call(
     if let Some(failure) = stop_reason(cancel, deadline, terminal) {
         return failure_reply(failure.at(op, line, number), true);
     }
-    if used.load(Ordering::SeqCst) >= max_calls {
+    if (max_calls != super::scripts::UNLIMITED_CALLS && used.load(Ordering::SeqCst) >= max_calls)
+        || used.load(Ordering::SeqCst) == u32::MAX
+    {
         return failure_reply(
             Failure::new(
                 "exception",
@@ -526,6 +528,12 @@ fn host_call(
                             ),
                         }
                     }
+                    Err(error) if error.code.as_deref() == Some("receipt_limit") => failure_reply(
+                        Failure::new("resource_limit", error.message)
+                            .code("receipt_limit")
+                            .at(op, line, number),
+                        true,
+                    ),
                     Err(error) => {
                         let envelope = json!({"ok":false,"error":bounded_message(error.message),
                             "code":error.code.map(|s| s.chars().take(128).collect::<String>()),

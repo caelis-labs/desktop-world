@@ -259,6 +259,14 @@ pub struct BackendObservation<B> {
 pub trait Backend: Send + Sync {
     type Binding: Send;
 
+    /// Sticky failure to settle owned native resources after an operation.
+    /// Reading this never performs cleanup and never replaces the operation's
+    /// original result. Execution owners must seal admission and report it
+    /// separately, including when a script catches the operation's own error.
+    fn cleanup_error(&self) -> Option<Error> {
+        None
+    }
+
     /// Stop and reap native resources. Failure does not reopen admission.
     fn shutdown(&self) -> Result<(), Error> {
         Ok(())

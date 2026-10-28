@@ -16,6 +16,11 @@ The exact-revision rquickjs-core license omitted by that crate's published
 archive is also retained in `packaging/third-party/rquickjs-core-0.14.0/LICENSE`,
 with its source URL and SHA-256 in `packaging/third-party/overrides.json`.
 
+The standard MCP entry uses the official MIT-licensed rmcp 3.8.0 crate with
+only server and stdio transport features, plus Tokio for its local async
+runtime. It does not vendor or modify SDK source. Their license and copyright
+texts remain in the locked dependency sources.
+
 Other locked Rust dependencies retain their own licenses. `cmd/dtw/Cargo.lock`
 is the rewrite's sole dependency lockfile; its resolved graph contains no CUA
 SDK or upstream worker. Apple system/Swift libraries are provided by macOS.

@@ -52,6 +52,9 @@ struct Model {
     panic_action: bool,
     poll_action: bool,
     shutdown_error: Option<Error>,
+    cleanup_error: Option<Error>,
+    cleanup_after_capture: Option<Error>,
+    cleanup_after_action: Option<Error>,
     shutdown_gate: Option<(WorkerGate, Error)>,
     windows_error: Option<Error>,
     inventory: Option<WindowInventory>,
@@ -80,6 +83,9 @@ impl MockBackend {
                 panic_action: false,
                 poll_action: false,
                 shutdown_error: None,
+                cleanup_error: None,
+                cleanup_after_capture: None,
+                cleanup_after_action: None,
                 shutdown_gate: None,
                 windows_error: None,
                 inventory: None,
@@ -133,6 +139,10 @@ impl MockBackend {
             }
         }
         assert!(!panic, "controlled provider panic");
+        let mut model = self.0.model.lock().unwrap();
+        if let Some(error) = model.cleanup_after_action.take() {
+            model.cleanup_error.get_or_insert(error);
+        }
         outcome
     }
     fn read(&self, target: &WindowTarget, pixels: bool) -> BackendObservation<()> {
@@ -176,6 +186,9 @@ impl Backend for MockBackend {
     }
     fn supports(&self, _: Capability) -> bool {
         true
+    }
+    fn cleanup_error(&self) -> Option<Error> {
+        self.0.model.lock().unwrap().cleanup_error.clone()
     }
     fn shutdown(&self) -> Result<(), Error> {
         self.0.shutdowns.fetch_add(1, Ordering::SeqCst);
@@ -229,7 +242,12 @@ impl Backend for MockBackend {
         _: &CallContext<'_>,
     ) -> Result<BackendObservation<()>, Error> {
         self.0.captures.fetch_add(1, Ordering::SeqCst);
-        Ok(self.read(target, true))
+        let observation = self.read(target, true);
+        let mut model = self.0.model.lock().unwrap();
+        if let Some(error) = model.cleanup_after_capture.take() {
+            model.cleanup_error.get_or_insert(error);
+        }
+        Ok(observation)
     }
     fn press(
         &self,
@@ -776,47 +794,6 @@ fn provider_panic_finishes_the_job_as_unknown_and_seals_the_context() {
         "closed",
     );
     assert_eq!(backend.0.actions.load(Ordering::SeqCst), 1);
-}
-
-#[test]
-fn mcp_frames_require_complete_lines_and_never_accumulate_past_the_frame_limit() {
-    use std::io::{BufReader, Cursor, Read};
-    let mut exact = vec![b' '; mcp::MAX_INPUT_BYTES - 1];
-    exact.push(b'\n');
-    assert_eq!(
-        mcp::read_frame(&mut Cursor::new(exact.clone()))
-            .unwrap()
-            .unwrap(),
-        exact
-    );
-    let mut oversized = Cursor::new(vec![b'x'; mcp::MAX_INPUT_BYTES * 3]);
-    assert_eq!(
-        mcp::read_frame(&mut oversized).unwrap_err().code,
-        "invalid_frame"
-    );
-    assert_eq!(oversized.position(), (mcp::MAX_INPUT_BYTES + 1) as u64);
-    assert_eq!(
-        mcp::read_frame(&mut Cursor::new(b"{}".to_vec()))
-            .unwrap_err()
-            .code,
-        "invalid_frame"
-    );
-    let mut two = Cursor::new(b"{}\n[]\n".to_vec());
-    assert_eq!(mcp::read_frame(&mut two).unwrap(), Some(b"{}\n".to_vec()));
-    assert_eq!(mcp::read_frame(&mut two).unwrap(), Some(b"[]\n".to_vec()));
-    assert_eq!(mcp::read_frame(&mut two).unwrap(), None);
-    struct Broken;
-    impl Read for Broken {
-        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
-            Err(std::io::Error::other("controlled input failure"))
-        }
-    }
-    assert_eq!(
-        mcp::read_frame(&mut BufReader::new(Broken))
-            .unwrap_err()
-            .code,
-        "transport_error"
-    );
 }
 
 #[test]

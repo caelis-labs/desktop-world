@@ -18,10 +18,36 @@ use std::{
 };
 
 pub(super) const MAX_SOURCE_BYTES: usize = 64 * 1024;
-pub(super) const MAX_TIMEOUT_MS: u64 = 5000;
-pub(super) const MAX_CALLS: u32 = 32;
+pub(super) const DEFAULT_TIMEOUT_MS: u64 = 30_000;
+// Wire representation bounds, not a workflow-sized operation quota. A caller
+// may replace the default deadline and optionally supply its own call budget.
+pub(super) const MAX_TIMEOUT_MS: u64 = u32::MAX as u64;
+pub(super) const MAX_CALLS: u32 = u32::MAX;
+pub(super) const UNLIMITED_CALLS: u32 = 0;
+pub(super) const MAX_STEP_RECEIPT_BYTES: usize = 1024 * 1024;
 const MEMORY_BYTES: usize = 32 * 1024 * 1024;
 const STACK_BYTES: usize = 512 * 1024;
+
+pub(super) fn budgets(values: &serde_json::Map<String, Value>) -> Result<(u64, u32), WireError> {
+    let integer = |key: &str, default: u64, maximum: u64| match values.get(key) {
+        None => Ok(default),
+        Some(value) => value
+            .as_f64()
+            .filter(|v| v.is_finite() && v.fract() == 0.0 && *v >= 1.0 && *v <= maximum as f64)
+            .map(|v| v as u64)
+            .ok_or_else(|| WireError {
+                code: "invalid_arguments".into(),
+                details: None,
+                message: format!(
+                    "{key} must be a positive integer within the wire range 1..={maximum}"
+                ),
+            }),
+    };
+    Ok((
+        integer("timeout_ms", DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS)?,
+        integer("max_calls", UNLIMITED_CALLS as u64, MAX_CALLS as u64)? as u32,
+    ))
+}
 
 pub(super) fn description() -> Value {
     super::description::script(MEMORY_BYTES, STACK_BYTES)
@@ -50,6 +76,7 @@ pub(super) struct ScriptRun {
     pub deadline: Instant,
     cancel: Arc<AtomicBool>,
     steps: Vec<Step>,
+    receipt_bytes: usize,
     failure: Option<Value>,
     pub state_committed: bool,
     pub(super) shutdown_error: Option<WireError>,
@@ -60,6 +87,7 @@ impl ScriptRun {
             deadline,
             cancel: Arc::new(AtomicBool::new(false)),
             steps: Vec::new(),
+            receipt_bytes: 0,
             failure: None,
             state_committed: false,
             shutdown_error: None,
@@ -120,7 +148,8 @@ impl<B: Backend + 'static> Coordinator<B> {
                 .script
                 .as_ref()
                 .unwrap();
-            (run.deadline, run.cancel.clone(), state.script_state.clone())
+            let initial = state.script_state.lock().unwrap().clone();
+            (run.deadline, run.cancel.clone(), initial)
         };
         let (sender, receiver) = mpsc::sync_channel(1);
         let source = source.clone();
@@ -259,10 +288,10 @@ impl<B: Backend + 'static> Coordinator<B> {
                 .script
                 .as_mut()
                 .unwrap();
-            if run.steps.len() >= MAX_CALLS as usize {
+            if run.receipt_bytes >= MAX_STEP_RECEIPT_BYTES {
                 return Err(engine::HostError::new(
-                    "Host call ledger limit reached",
-                    "call_limit",
+                    "Step receipt memory budget exhausted; prior receipts are retained and no new operation was dispatched",
+                    "receipt_limit",
                 ));
             }
             run.steps.push(Step {
@@ -325,6 +354,10 @@ impl<B: Backend + 'static> Coordinator<B> {
         step.receipt = work.completed.receipt;
         step.error = work.completed.error;
         step.completed = true;
+        // Preserve the complete terminal receipt, including the step that fills
+        // the budget. Stop before the next native operation, never truncate an
+        // action's evidence or let a caught resource error reopen admission.
+        run.receipt_bytes += step.json().to_string().len();
         apply_publication(&mut state, work.publication);
         response
     }

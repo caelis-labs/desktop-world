@@ -7,7 +7,7 @@ use super::{
 use crate::computer::{AppInstance, Backend, Error};
 use serde_json::{json, Value};
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::VecDeque,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Condvar, Mutex,
@@ -15,9 +15,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-// A native worker retains its scene lease while its capture client is alive.
-// Switching apps must finish retiring that worker before another can connect.
-const MAX_CONTEXTS: usize = 1;
 const MAX_RECORDS: usize = 512;
 const MAX_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
 // Receipts and step inventory evidence cannot be evicted like images/results.
@@ -44,6 +41,7 @@ pub trait Factory: Send + Sync + 'static {
 }
 struct Record {
     id: String,
+    rpc_id: Value,
     app: String,
     input: Value,
     reply: Option<Reply>,
@@ -52,12 +50,16 @@ struct Record {
 }
 struct AppContext<B: Backend> {
     app_id: String,
-    owner: Arc<Coordinator<B>>,
+    app: AppInstance,
+    // The logical app context owns committed JSON data. A native owner can be
+    // retired without discarding it; only an actual instance change resets it.
+    script_state: Arc<Mutex<Value>>,
+    owner: Option<Arc<Coordinator<B>>>,
 }
 struct State<B: Backend> {
+    // One logical entry per used app; bounded by accepted session executions.
     // Includes preparing and failed-to-retire owners until cleanup succeeds.
     contexts: VecDeque<AppContext<B>>,
-    retired_apps: HashSet<String>,
     records: VecDeque<Record>,
     active: Option<Arc<Call<B>>>,
     closed: bool,
@@ -72,17 +74,20 @@ pub struct Call<B: Backend> {
     pub rpc_id: Value,
     pub cancelled: AtomicBool,
     owner: Mutex<Option<Arc<Coordinator<B>>>>,
-    request_id: Option<String>,
+    execution_id: Option<String>,
     command: ToolCall,
     run_finished: AtomicBool,
+    completion: tokio::sync::Notify,
+    // Set and cleared under Server state; pins admission while shared cleanup runs.
+    stopping: AtomicBool,
     context_reset: AtomicBool,
+    state_reset: AtomicBool,
 }
 #[derive(Clone)]
 enum ToolCall {
     Apps,
     Exec {
         app: String,
-        id: String,
         source: String,
         timeout_ms: u64,
         max_calls: u32,
@@ -91,6 +96,22 @@ enum ToolCall {
 pub enum Started<B: Backend> {
     Reply(Reply),
     Call(Arc<Call<B>>),
+    // The original accepted call will produce the response for this RPC ID.
+    InFlight(Arc<Call<B>>),
+}
+
+impl<B: Backend> Call<B> {
+    pub(super) async fn wait_finished(&self) {
+        loop {
+            // notify_waiters observes futures created before notification,
+            // even before they are polled. Check the sole state after creating it.
+            let finished = self.completion.notified();
+            if self.run_finished.load(Ordering::Acquire) {
+                return;
+            }
+            finished.await;
+        }
+    }
 }
 
 impl<F: Factory> Server<F> {
@@ -99,7 +120,6 @@ impl<F: Factory> Server<F> {
             factory,
             state: Mutex::new(State {
                 contexts: VecDeque::new(),
-                retired_apps: HashSet::new(),
                 records: VecDeque::new(),
                 active: None,
                 closed: false,
@@ -110,28 +130,40 @@ impl<F: Factory> Server<F> {
     }
     /// Reserve before spawning. Neither cancellation nor a burst can overtake admission.
     pub fn begin(&self, rpc_id: Value, name: &str, args: Value) -> Started<F::Provider> {
+        let mut state = self.state.lock().unwrap();
+        self.refresh(&mut state);
+        // Standard MCP request identity is transport-owned. Repeated frames
+        // refer to one accepted execution, including while it is still running.
+        // A new RPC ID always admits new work, even for the same source text.
+        if let Some(record) = state.records.iter().find(|record| record.rpc_id == rpc_id) {
+            if name != "exec" || record.input != args {
+                return Started::Reply(problem(
+                    "request_conflict",
+                    "This MCP request ID already belongs to different input in this session",
+                ));
+            }
+            if let Some(call) = state
+                .active
+                .as_ref()
+                .filter(|call| call.rpc_id == rpc_id && !call.run_finished.load(Ordering::Acquire))
+            {
+                return Started::InFlight(call.clone());
+            }
+            return Started::Reply(self.record_reply(&state, record));
+        }
         if name == "result" {
+            drop(state);
             return Started::Reply(self.result(args));
         }
         let command = match parse_call(name, &args) {
             Ok(c) => c,
             Err(e) => return Started::Reply(Reply::error(e)),
         };
-        let mut state = self.state.lock().unwrap();
-        self.refresh(&mut state);
         if state.active.as_ref().is_some_and(|c| c.rpc_id == rpc_id) {
             return Started::Reply(problem(
                 "duplicate_rpc_id",
                 "The MCP request ID is already active",
             ));
-        }
-        if let ToolCall::Exec { app, id, .. } = &command {
-            if let Some(record) = state.records.iter().find(|r| r.id == *id) {
-                if record.app != *app || record.input != args {
-                    return Started::Reply(problem("request_conflict", "This request_id already belongs to different input; it will not execute again"));
-                }
-                return Started::Reply(self.record_reply(&state, record));
-            }
         }
         if !state.shutdown_errors.is_empty() {
             return Started::Reply(shutdown_reply(&state.shutdown_errors));
@@ -145,17 +177,19 @@ impl<F: Factory> Server<F> {
                 "Another desktop call is active or has not settled; no operation was queued",
             ));
         }
-        let request_id = match &command {
+        let execution_id = match &command {
             ToolCall::Apps => None,
-            ToolCall::Exec { app, id, .. } => {
+            ToolCall::Exec { app, .. } => {
                 if state.records.len() >= MAX_RECORDS
                     || state.records.iter().map(|r| r.receipt_bytes).sum::<usize>()
                         >= MAX_RECEIPT_BYTES
                 {
                     return Started::Reply(problem("request_limit", "Retained receipt capacity is exhausted. Reconnect for new work; do not replay uncertain operations"));
                 }
+                let id = super::reference("execution");
                 state.records.push_back(Record {
                     id: id.clone(),
+                    rpc_id: rpc_id.clone(),
                     app: app.clone(),
                     input: args,
                     reply: None,
@@ -169,10 +203,13 @@ impl<F: Factory> Server<F> {
             rpc_id,
             cancelled: AtomicBool::new(false),
             owner: Mutex::new(None),
-            request_id,
+            execution_id,
             command,
             run_finished: AtomicBool::new(false),
+            completion: tokio::sync::Notify::new(),
+            stopping: AtomicBool::new(false),
             context_reset: AtomicBool::new(false),
+            state_reset: AtomicBool::new(false),
         });
         state.active = Some(call.clone());
         Started::Call(call)
@@ -182,11 +219,19 @@ impl<F: Factory> Server<F> {
             ToolCall::Apps => self.apps(call),
             ToolCall::Exec {
                 app,
-                id,
                 source,
                 timeout_ms,
                 max_calls,
-            } => self.execute(call, app, id, source, *timeout_ms, *max_calls),
+            } => self.execute(
+                call,
+                app,
+                call.execution_id
+                    .as_deref()
+                    .expect("accepted execution has an ID"),
+                source,
+                *timeout_ms,
+                *max_calls,
+            ),
         };
         let stopping = call.cancelled.load(Ordering::Acquire) || self.state.lock().unwrap().closed;
         if stopping {
@@ -205,7 +250,7 @@ impl<F: Factory> Server<F> {
             .as_ref()
             .is_some_and(|owner| inspect_owner(&mut state, owner));
         if !unsettled {
-            if let Some((owner, id)) = owner.as_ref().zip(call.request_id.as_ref()) {
+            if let Some((owner, id)) = owner.as_ref().zip(call.execution_id.as_ref()) {
                 let current = owner.result(id);
                 if current.data["error"]["code"] != "unknown_request" {
                     // The job may have completed after execute took a running
@@ -214,7 +259,7 @@ impl<F: Factory> Server<F> {
                 }
             }
         }
-        if call.request_id.is_some() && !unsettled {
+        if call.execution_id.is_some() && !unsettled {
             // Accepted requests rejected before Core submission still have a
             // terminal record (for example cancellation during discovery).
             reply.data["status"] = json!("completed");
@@ -223,27 +268,31 @@ impl<F: Factory> Server<F> {
         // A timeout of the outer wait is not a terminal native receipt. Keep the
         // owner and global reservation until its actual job has finished.
         if !unsettled {
-            if let Some(id) = &call.request_id {
+            if let Some(id) = &call.execution_id {
                 cache_reply(&mut state, id, &reply);
             }
-            if state
-                .active
-                .as_ref()
-                .is_some_and(|active| Arc::ptr_eq(active, call))
-            {
-                state.active = None;
+            if !call.stopping.load(Ordering::Acquire) {
+                if let Some((owner, id)) = owner.as_ref().zip(call.execution_id.as_ref()) {
+                    owner.release_result_payload(id);
+                }
+                if state
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| Arc::ptr_eq(active, call))
+                {
+                    state.active = None;
+                }
             }
         }
         call.run_finished.store(true, Ordering::Release);
+        call.completion.notify_waiters();
         self.finished.notify_all();
         reply
     }
     fn refresh(&self, state: &mut State<F::Provider>) {
-        let Some(call) = state
-            .active
-            .clone()
-            .filter(|call| call.run_finished.load(Ordering::Acquire))
-        else {
+        let Some(call) = state.active.clone().filter(|call| {
+            call.run_finished.load(Ordering::Acquire) && !call.stopping.load(Ordering::Acquire)
+        }) else {
             return;
         };
         let owner = call.owner.lock().unwrap().clone();
@@ -251,19 +300,20 @@ impl<F: Factory> Server<F> {
             if inspect_owner(state, &owner) {
                 return;
             }
-            if let Some(id) = &call.request_id {
+            if let Some(id) = &call.execution_id {
                 let mut reply = owner.result(id);
                 self.annotate(state, &call, &mut reply);
                 cache_reply(state, id, &reply);
+                owner.release_result_payload(id);
             }
         }
         state.active = None;
     }
     fn annotate(&self, state: &State<F::Provider>, call: &Call<F::Provider>, reply: &mut Reply) {
-        if let ToolCall::Exec { app, id, .. } = &call.command {
-            reply.data["app"] = json!(app);
-            reply.data["request_id"] = json!(id);
+        if let ToolCall::Exec { app, .. } = &call.command {
+            public_execution(reply, app, call.execution_id.as_deref().unwrap());
             reply.data["context_reset"] = json!(call.context_reset.load(Ordering::Acquire));
+            reply.data["state_reset"] = json!(call.state_reset.load(Ordering::Acquire));
         }
         append_shutdown_errors(reply, &state.shutdown_errors);
     }
@@ -277,9 +327,9 @@ impl<F: Factory> Server<F> {
                 Reply::plain(json!({"version":1,
                 "apps":apps,"backend":self.factory.description(),
                 "script":scripts::description(),
-                "limits":{"resident_app_contexts":MAX_CONTEXTS,"retained_request_ids":MAX_RECORDS,"payload_bytes":MAX_PAYLOAD_BYTES,
+                "limits":{"retained_executions":MAX_RECORDS,"payload_bytes":MAX_PAYLOAD_BYTES,
                     "receipt_admission_bytes":MAX_RECEIPT_BYTES,"max_steps_per_request":scripts::MAX_CALLS},
-                "semantics":"Every exec requires a stable application identifier. Multiple running instances of that application must be resolved before execution. DTW validates identity and confines execution. State and references belong to one resident app context; cancellation, timeout or cache replacement clears them. Results preserve their original app and request_id. Receipt capacity stops new work without dropping the last receipt."}))
+                "semantics":"Every exec requires a stable application identifier. Multiple running instances of that application must be resolved before execution. Each app keeps its own logical context and committed JSON state. Switching apps preserves state and native references. Native owner replacement invalidates references and sets context_reset; an actual app instance change also clears committed state and sets state_reset. This connection executes one call at a time. DTW assigns execution_id automatically. result(app) reads this session's most recently accepted execution for that app; optional execution_id selects an older record. Only repeated MCP request IDs with identical exec arguments reuse an execution. New MCP request IDs always execute again; there is no cross-connection deduplication. Receipt capacity stops new work without dropping the last receipt."}))
             }
             Ok(_) => problem("cancelled", "Application discovery was cancelled"),
             Err(e) => Reply::error(wire::core_error(&e)),
@@ -324,7 +374,7 @@ impl<F: Factory> Server<F> {
             .contexts
             .iter()
             .find(|context| context.app_id == app_id)
-            .map(|context| context.owner.clone());
+            .and_then(|context| context.owner.clone());
         let existing = match candidate {
             Some(owner) => {
                 let reusable = {
@@ -343,46 +393,57 @@ impl<F: Factory> Server<F> {
                     None
                 }
             }
-            None => {
-                if self.state.lock().unwrap().retired_apps.contains(app_id) {
-                    call.context_reset.store(true, Ordering::Release);
-                }
-                None
-            }
+            None => None,
         };
         let owner = if let Some(owner) = existing {
             owner
         } else {
-            // Free capacity before connecting; a failed retirement remains owned
-            // and closes new admission instead of being replaced by another worker.
-            let evicted = {
-                let state = self.state.lock().unwrap();
+            let script_state = {
+                let mut state = self.state.lock().unwrap();
                 if !state.shutdown_errors.is_empty() {
                     return shutdown_reply(&state.shutdown_errors);
                 }
                 if state.closed || call.cancelled.load(Ordering::Acquire) {
                     return problem("cancelled", "Stopped before creating an app context");
                 }
-                (state.contexts.len() >= MAX_CONTEXTS)
-                    .then(|| state.contexts.front().unwrap().owner.clone())
-            };
-            if let Some(evicted) = evicted {
-                if let Err(reply) = self.retire(&evicted) {
-                    return reply;
+                if let Some(context) = state.contexts.iter_mut().find(|c| c.app_id == app_id) {
+                    call.context_reset.store(true, Ordering::Release);
+                    if context.app != *app {
+                        context.app = app.clone();
+                        context.script_state = Arc::new(Mutex::new(json!({})));
+                        call.state_reset.store(true, Ordering::Release);
+                    }
+                    context.script_state.clone()
+                } else {
+                    let script_state = Arc::new(Mutex::new(json!({})));
+                    state.contexts.push_back(AppContext {
+                        app_id: app_id.into(),
+                        app: app.clone(),
+                        script_state: script_state.clone(),
+                        owner: None,
+                    });
+                    script_state
                 }
-            }
+            };
             let backend = match self.factory.connect() {
                 Ok(backend) => backend,
                 Err(error) => return Reply::error(wire::core_error(&error)),
             };
-            let mut owner = Coordinator::new(backend, app.clone(), entry.name);
-            Arc::get_mut(&mut owner).unwrap().max_payload_bytes = MAX_PAYLOAD_BYTES / MAX_CONTEXTS;
+            let mut owner =
+                Coordinator::with_script_state(backend, app.clone(), entry.name, script_state);
+            // The session owns request retention. Reaching the old standalone
+            // coordinator quota must not silently invalidate an app's refs.
+            Arc::get_mut(&mut owner).unwrap().max_requests = MAX_RECORDS;
             // Register even if close/cancel won during connect. close() waits for
             // this run and performs a second pass over all registered owners.
-            self.state.lock().unwrap().contexts.push_back(AppContext {
-                app_id: app_id.into(),
-                owner: owner.clone(),
-            });
+            self.state
+                .lock()
+                .unwrap()
+                .contexts
+                .iter_mut()
+                .find(|context| context.app_id == app_id)
+                .expect("logical app context was registered before connecting")
+                .owner = Some(owner.clone());
             owner
         };
         let admitted = {
@@ -444,28 +505,43 @@ impl<F: Factory> Server<F> {
             return Err(Reply::error(error));
         }
         let mut state = self.state.lock().unwrap();
-        if let Some(index) = state
-            .contexts
-            .iter()
-            .position(|entry| Arc::ptr_eq(&entry.owner, owner))
-        {
-            let retired = state.contexts.remove(index).unwrap();
-            // At most one ID per accepted exec; bounded by MAX_RECORDS.
-            state.retired_apps.insert(retired.app_id);
+        if let Some(context) = state.contexts.iter_mut().find(|entry| {
+            entry
+                .owner
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, owner))
+        }) {
+            context.owner = None;
         }
         Ok(())
     }
     fn remember_shutdown(&self, error: WireError) {
         remember_shutdown(&mut self.state.lock().unwrap(), error);
     }
+    pub(super) fn completed_reply(&self, call: &Call<F::Provider>) -> Reply {
+        let mut state = self.state.lock().unwrap();
+        self.refresh(&mut state);
+        match call
+            .execution_id
+            .as_ref()
+            .and_then(|id| state.records.iter().find(|record| record.id == *id))
+        {
+            Some(record) => self.record_reply(&state, record),
+            None => problem(
+                "unknown_execution",
+                "The original execution record is unavailable; no work was replayed",
+            ),
+        }
+    }
     fn record_reply(&self, state: &State<F::Provider>, record: &Record) -> Reply {
+        let active = state
+            .active
+            .as_ref()
+            .filter(|active| active.execution_id.as_deref() == Some(&record.id));
         let mut reply = if let Some(reply) = &record.reply {
             reply.clone()
         } else {
-            state
-                .active
-                .as_ref()
-                .filter(|active| active.request_id.as_deref() == Some(&record.id))
+            active
                 .and_then(|active| {
                     active
                         .owner
@@ -477,15 +553,21 @@ impl<F: Factory> Server<F> {
                 .filter(|reply| reply.data["error"]["code"] != "unknown_request")
                 .unwrap_or_else(|| Reply::plain(json!({"version":1,"status":"running"})))
         };
-        reply.data["app"] = json!(record.app);
-        reply.data["request_id"] = json!(record.id);
-        append_shutdown_errors(&mut reply, &state.shutdown_errors);
+        if let Some(active) = active {
+            // Core can finish before the Server worker publishes its cache.
+            // Project the same app metadata on both sides of that boundary.
+            self.annotate(state, active, &mut reply);
+        } else {
+            public_execution(&mut reply, &record.app, &record.id);
+            append_shutdown_errors(&mut reply, &state.shutdown_errors);
+        }
         reply
     }
     fn result(&self, args: Value) -> Reply {
         let parsed = (|| {
-            exact_object(&args, &["app", "request_id"])?;
-            Ok::<_, WireError>((app_id::parse(&args["app"])?, request_id(&args)?))
+            exact_object(&args, &["app", "execution_id"])?;
+            let id = args.get("execution_id").map(execution_id).transpose()?;
+            Ok::<_, WireError>((app_id::parse(&args["app"])?, id))
         })();
         let (app, id) = match parsed {
             Ok(value) => value,
@@ -493,30 +575,80 @@ impl<F: Factory> Server<F> {
         };
         let mut state = self.state.lock().unwrap();
         self.refresh(&mut state);
-        match state.records.iter().find(|record| record.id == id) {
-            Some(record) if record.app == app => self.record_reply(&state, record),
-            Some(_) => problem("wrong_app", "The request belongs to a different app identifier"),
-            None => problem("unknown_request", "No retained request has this ID. Absence does not prove an operation had no effect"),
+        if let Some(id) = id {
+            match state.records.iter().find(|record| record.id == id) {
+                Some(record) if record.app == app => self.record_reply(&state, record),
+                Some(_) => problem("wrong_app", "The execution belongs to a different app identifier"),
+                None => problem("unknown_execution", "This MCP session has no retained execution with this ID. Absence does not prove an operation had no effect"),
+            }
+        } else {
+            match state.records.iter().rev().find(|record| record.app == app) {
+                Some(record) => {
+                    let mut reply = self.record_reply(&state, record);
+                    reply.data["selection"] = json!("latest_accepted");
+                    reply
+                }
+                None => problem("no_execution", "This MCP session has no accepted execution for this app. Absence does not prove an operation had no effect"),
+            }
         }
     }
     pub fn cancel(&self, rpc_id: &Value) {
         let active = self.state.lock().unwrap().active.clone();
         if let Some(call) = active.filter(|call| call.rpc_id == *rpc_id) {
-            call.cancelled.store(true, Ordering::Release);
-            let cancelled = {
-                let owner = call.owner.lock().unwrap();
-                owner
-                    .as_ref()
-                    .zip(call.request_id.as_ref())
-                    .map(|(owner, id)| owner.cancel(id))
-            };
-            if let Some(error) = cancelled.as_ref().and_then(cleanup_error) {
-                self.remember_shutdown(error);
-            }
-            if let Err(error) = self.factory.close_catalog() {
-                self.remember_shutdown(wire::core_error(&error));
-            }
+            self.cancel_call(&call);
         }
+    }
+    /// A dropped SDK handler may finish cleanup late; only stop its own call.
+    pub(super) fn cancel_call(&self, call: &Arc<Call<F::Provider>>) {
+        {
+            let state = self.state.lock().unwrap();
+            if !state
+                .active
+                .as_ref()
+                .is_some_and(|active| Arc::ptr_eq(active, call))
+                || call.stopping.load(Ordering::Acquire)
+            {
+                return;
+            }
+            // finish_run and refresh keep this reservation until the shared
+            // catalog cleanup ends. No native I/O runs under the Server lock.
+            call.stopping.store(true, Ordering::Release);
+            call.cancelled.store(true, Ordering::Release);
+        }
+        let cancelled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let owner = call.owner.lock().unwrap().clone();
+            owner
+                .as_ref()
+                .zip(call.execution_id.as_ref())
+                .map(|(owner, id)| owner.cancel(id))
+        }));
+        // Try both cleanups even if one panics; retain failure before releasing
+        // the reservation so a panic cannot silently reopen admission.
+        let catalog = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.factory.close_catalog()
+        }));
+        let mut state = self.state.lock().unwrap();
+        match cancelled {
+            Ok(reply) => {
+                if let Some(error) = reply.as_ref().and_then(cleanup_error) {
+                    remember_shutdown(&mut state, error);
+                }
+            }
+            Err(_) => remember_shutdown(
+                &mut state,
+                shutdown_error("Application cancellation panicked; native outcome remains unknown"),
+            ),
+        }
+        match catalog {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => remember_shutdown(&mut state, wire::core_error(&error)),
+            Err(_) => remember_shutdown(
+                &mut state,
+                shutdown_error("Catalog cancellation panicked; native outcome remains unknown"),
+            ),
+        }
+        call.stopping.store(false, Ordering::Release);
+        self.finished.notify_all();
     }
     pub fn close(&self) -> Result<(), WireError> {
         let active = {
@@ -534,18 +666,21 @@ impl<F: Factory> Server<F> {
         if let Some(call) = active {
             let until = Instant::now() + STOP_TIMEOUT;
             let mut state = self.state.lock().unwrap();
-            while !call.run_finished.load(Ordering::Acquire) {
+            while !call.run_finished.load(Ordering::Acquire)
+                || call.stopping.load(Ordering::Acquire)
+            {
                 let left = until.saturating_duration_since(Instant::now());
                 if left.is_zero() {
                     break;
                 }
                 state = self.finished.wait_timeout(state, left).unwrap().0;
             }
-            let unfinished = !call.run_finished.load(Ordering::Acquire);
+            let unfinished =
+                !call.run_finished.load(Ordering::Acquire) || call.stopping.load(Ordering::Acquire);
             drop(state);
             if unfinished {
                 self.remember_shutdown(shutdown_error(
-                    "Preparing or running tool call did not settle",
+                    "Preparing, running or cancellation cleanup did not settle",
                 ));
             }
         }
@@ -572,7 +707,7 @@ impl<F: Factory> Server<F> {
             .unwrap()
             .contexts
             .iter()
-            .map(|context| context.owner.clone())
+            .filter_map(|context| context.owner.clone())
             .collect();
         for owner in owners {
             let reply = owner.close();
@@ -585,6 +720,14 @@ impl<F: Factory> Server<F> {
         }
     }
 }
+// Internal Coordinator jobs still use request_id; the public tool boundary owns
+// execution identifiers and never asks the model to manufacture one.
+fn public_execution(reply: &mut Reply, app: &str, id: &str) {
+    reply.data.as_object_mut().unwrap().remove("request_id");
+    reply.data["app"] = json!(app);
+    reply.data["execution_id"] = json!(id);
+}
+
 // These helpers run under the Server lock. Coordinator never calls back into
 // Server, preserving the state -> owner -> Coordinator lock order.
 fn inspect_owner<B: Backend>(state: &mut State<B>, owner: &Coordinator<B>) -> bool {
@@ -717,12 +860,12 @@ fn exact_object<'a>(
     }
     Ok(map)
 }
-fn request_id(args: &Value) -> Result<String, WireError> {
-    args["request_id"]
+fn execution_id(value: &Value) -> Result<String, WireError> {
+    value
         .as_str()
         .filter(|s| !s.is_empty() && s.chars().count() <= 128)
         .map(str::to_owned)
-        .ok_or_else(|| invalid("request_id must contain 1 to 128 characters"))
+        .ok_or_else(|| invalid("execution_id must contain 1 to 128 characters"))
 }
 fn parse_call(name: &str, args: &Value) -> Result<ToolCall, WireError> {
     match name {
@@ -731,12 +874,8 @@ fn parse_call(name: &str, args: &Value) -> Result<ToolCall, WireError> {
             Ok(ToolCall::Apps)
         }
         "exec" => {
-            exact_object(
-                args,
-                &["app", "request_id", "source", "timeout_ms", "max_calls"],
-            )?;
+            exact_object(args, &["app", "source"])?;
             let app = app_id::parse(&args["app"])?;
-            let id = request_id(args)?;
             let source = args["source"]
                 .as_str()
                 .filter(|s| !s.is_empty() && s.len() <= scripts::MAX_SOURCE_BYTES)
@@ -744,15 +883,12 @@ fn parse_call(name: &str, args: &Value) -> Result<ToolCall, WireError> {
                     invalid("source must be a nonempty JavaScript function body of at most 64 KiB")
                 })?
                 .to_owned();
-            let number = |key: &str, default: u64| {
-                match args.get(key) { None=>Ok(default),Some(v)=>v.as_u64().filter(|n|*n>0&&*n<=default).ok_or_else(||invalid("Execution limits must be positive integers within the advertised bounds"))}
-            };
+            let (timeout_ms, max_calls) = scripts::budgets(args.as_object().unwrap())?;
             Ok(ToolCall::Exec {
                 app,
-                id,
                 source,
-                timeout_ms: number("timeout_ms", scripts::MAX_TIMEOUT_MS)?,
-                max_calls: number("max_calls", scripts::MAX_CALLS as u64)? as u32,
+                timeout_ms,
+                max_calls,
             })
         }
         _ => Err(invalid("Unknown tool")),
@@ -900,7 +1036,11 @@ mod lifecycle_tests {
         catalog: Mutex<Option<Arc<Gate>>>,
         catalog_open: AtomicBool,
         connects: AtomicUsize,
+        connect_fails: AtomicBool,
         catalog_close_fails: AtomicBool,
+        catalog_close_panics: AtomicBool,
+        catalog_close: Mutex<Option<Arc<Gate>>>,
+        catalog_closes: AtomicUsize,
         closing: Mutex<Option<mpsc::SyncSender<()>>>,
     }
     impl Factory for Arc<TestFactory> {
@@ -919,9 +1059,21 @@ mod lifecycle_tests {
             if let Some(gate) = gate {
                 gate.enter();
             }
+            if self.connect_fails.load(Ordering::SeqCst) {
+                return Err(Error::BackendFailed("connect failed".into()));
+            }
             Ok(self.provider.clone())
         }
         fn close_catalog(&self) -> Result<(), Error> {
+            self.catalog_closes.fetch_add(1, Ordering::SeqCst);
+            let gate = self.catalog_close.lock().unwrap().take();
+            if let Some(gate) = gate {
+                gate.enter();
+            }
+            assert!(
+                !self.catalog_close_panics.swap(false, Ordering::SeqCst),
+                "controlled catalog close panic"
+            );
             self.catalog_open.store(false, Ordering::SeqCst);
             let closing = self.closing.lock().unwrap().take();
             if let Some(closing) = closing {
@@ -951,29 +1103,41 @@ mod lifecycle_tests {
             catalog: Mutex::new(None),
             catalog_open: AtomicBool::new(false),
             connects: AtomicUsize::new(0),
+            connect_fails: AtomicBool::new(false),
             catalog_close_fails: AtomicBool::new(false),
+            catalog_close_panics: AtomicBool::new(false),
+            catalog_close: Mutex::new(None),
+            catalog_closes: AtomicUsize::new(0),
             closing: Mutex::new(None),
         });
         (Server::new(factory.clone()), factory)
     }
     fn begin(server: &Server<Arc<TestFactory>>, id: &str, source: &str) -> Arc<Call<Provider>> {
-        match server.begin(
-            json!(id),
-            "exec",
-            json!({"app":APP,"request_id":id,"source":source}),
-        ) {
+        match server.begin(json!(id), "exec", json!({"app":APP,"source":source})) {
             Started::Call(call) => call,
             Started::Reply(reply) => panic!("unexpected rejection: {}", reply.data),
+            Started::InFlight(_) => panic!("unexpected duplicate frame"),
         }
     }
     fn reply(started: Started<Provider>) -> Reply {
         match started {
             Started::Reply(reply) => reply,
             Started::Call(_) => panic!("unexpected dispatch"),
+            Started::InFlight(_) => panic!("unexpected pending response"),
         }
     }
     fn result(server: &Server<Arc<TestFactory>>, id: &str) -> Reply {
-        server.result(json!({"app":APP,"request_id":id}))
+        let execution_id = server
+            .state
+            .lock()
+            .unwrap()
+            .records
+            .iter()
+            .find(|record| record.rpc_id == json!(id))
+            .unwrap()
+            .id
+            .clone();
+        server.result(json!({"app":APP,"execution_id":execution_id}))
     }
 
     #[test]
@@ -988,10 +1152,12 @@ mod lifecycle_tests {
         *call.owner.lock().unwrap() = Some(owner.clone());
         server.state.lock().unwrap().contexts.push_back(AppContext {
             app_id: APP.into(),
-            owner: owner.clone(),
+            app: owner.app.clone(),
+            script_state: owner.state.lock().unwrap().script_state.clone(),
+            owner: Some(owner.clone()),
         });
         let admitted = owner.handle(Request::Submit(Submit {
-            request_id: "original".into(),
+            request_id: call.execution_id.clone().unwrap(),
             target: Target {
                 app_ref: owner.app_ref.clone(),
                 window_ref: None,
@@ -1004,16 +1170,16 @@ mod lifecycle_tests {
         }));
         assert_eq!(admitted.data["status"], "running");
         control.entered();
-        owner.cancel("original");
+        owner.cancel(call.execution_id.as_deref().unwrap());
         // Exercise the outer-wait completion boundary without spending ten seconds
         // on a production timeout. The original native action is still blocked.
-        server.finish_run(&call, owner.result("original"));
+        server.finish_run(&call, owner.result(call.execution_id.as_deref().unwrap()));
         assert_eq!(result(&server, "original").data["status"], "running");
         assert_eq!(
             reply(server.begin(
                 json!("next"),
                 "exec",
-                json!({"app":APP,"request_id":"next","source":"return 1;"})
+                json!({"app":APP,"source":"return 1;"})
             ))
             .data["error"]["code"],
             "busy"
@@ -1043,13 +1209,18 @@ mod lifecycle_tests {
         Arc::get_mut(&mut owner).unwrap().max_requests = 0;
         server.state.lock().unwrap().contexts.push_back(AppContext {
             app_id: APP.into(),
-            owner: owner.clone(),
+            app: owner.app.clone(),
+            script_state: owner.state.lock().unwrap().script_state.clone(),
+            owner: Some(owner.clone()),
         });
         let call = begin(&server, "retire", "return 1;");
         let failed = server.run(&call);
         assert_eq!(failed.data["shutdown_errors"][0]["code"], "drain_failed");
         assert!(Arc::ptr_eq(
-            &server.state.lock().unwrap().contexts[0].owner,
+            server.state.lock().unwrap().contexts[0]
+                .owner
+                .as_ref()
+                .unwrap(),
             &owner
         ));
         assert_eq!(factory.connects.load(Ordering::SeqCst), 0);
@@ -1061,6 +1232,44 @@ mod lifecycle_tests {
             result(&server, "retire").data["shutdown_errors"][0]["message"],
             "original drain message"
         );
+    }
+
+    #[test]
+    fn failed_native_reconnect_retains_the_logical_state_and_original_failure() {
+        let (server, factory) = fixture();
+        let app = factory.applications.lock().unwrap()[0].app.clone();
+        let mut owner = Coordinator::new(factory.provider.clone(), app, "App".into());
+        Arc::get_mut(&mut owner).unwrap().max_requests = 0;
+        let script_state = Arc::new(Mutex::new(json!({"kept":7})));
+        owner.state.lock().unwrap().script_state = script_state.clone();
+        server.state.lock().unwrap().contexts.push_back(AppContext {
+            app_id: APP.into(),
+            app: owner.app.clone(),
+            script_state,
+            owner: Some(owner.clone()),
+        });
+        factory.connect_fails.store(true, Ordering::SeqCst);
+        let failed = server.run(&begin(&server, "failed-connect", "return state.kept;"));
+        assert!(failed.is_error);
+        assert_eq!(failed.data["context_reset"], true);
+        assert_eq!(failed.data["state_reset"], false);
+        {
+            let state = server.state.lock().unwrap();
+            assert!(state.contexts[0].owner.is_none());
+            assert_eq!(
+                *state.contexts[0].script_state.lock().unwrap(),
+                json!({"kept":7})
+            );
+        }
+        factory.connect_fails.store(false, Ordering::SeqCst);
+        let recovered = server.run(&begin(&server, "connected", "return state.kept;"));
+        assert!(!recovered.is_error, "{}", recovered.data);
+        assert_eq!(recovered.data["value"]["result"], 7);
+        assert_eq!(recovered.data["context_reset"], true);
+        assert_eq!(recovered.data["state_reset"], false);
+        assert_eq!(result(&server, "failed-connect").data, failed.data);
+        assert_eq!(factory.connects.load(Ordering::SeqCst), 2);
+        server.close().unwrap();
     }
 
     #[test]
@@ -1107,6 +1316,102 @@ mod lifecycle_tests {
     }
 
     #[test]
+    fn cancellation_cleanup_keeps_admission_until_shared_reader_is_retired() {
+        let (server, factory) = fixture();
+        let call = begin(&server, "cancel-owner", "return 7;");
+        let (gate, control) = gate();
+        *factory.catalog_close.lock().unwrap() = Some(gate);
+        let canceller = {
+            let server = server.clone();
+            let call = call.clone();
+            std::thread::spawn(move || server.cancel_call(&call))
+        };
+        control.entered();
+        let completed = server.run(&call);
+        assert_eq!(completed.data["error"]["code"], "cancelled");
+        assert!(call.run_finished.load(Ordering::Acquire));
+        assert_eq!(
+            reply(server.begin(json!("during-cleanup"), "apps", json!({}))).data["error"]["code"],
+            "busy"
+        );
+        let closes = factory.catalog_closes.load(Ordering::SeqCst);
+        server.cancel_call(&call);
+        assert_eq!(factory.catalog_closes.load(Ordering::SeqCst), closes);
+        assert!(call.stopping.load(Ordering::Acquire));
+        control.release();
+        canceller.join().unwrap();
+        let next = match server.begin(json!("after-cleanup"), "apps", json!({})) {
+            Started::Call(call) => call,
+            _ => panic!("cleanup did not release admission"),
+        };
+        assert!(!server.run(&next).is_error);
+        assert!(factory.catalog_open.load(Ordering::SeqCst));
+        let closes = factory.catalog_closes.load(Ordering::SeqCst);
+        server.cancel_call(&call);
+        assert!(factory.catalog_open.load(Ordering::SeqCst));
+        assert_eq!(factory.catalog_closes.load(Ordering::SeqCst), closes);
+        assert_eq!(result(&server, "cancel-owner").data, completed.data);
+        server.close().unwrap();
+    }
+
+    #[test]
+    fn close_waits_for_cancellation_cleanup_after_execution_has_finished() {
+        let (server, factory) = fixture();
+        let call = begin(&server, "cancel-owner", "return 7;");
+        let (gate, control) = gate();
+        *factory.catalog_close.lock().unwrap() = Some(gate);
+        let canceller = {
+            let server = server.clone();
+            let call = call.clone();
+            std::thread::spawn(move || server.cancel_call(&call))
+        };
+        control.entered();
+        server.run(&call);
+        assert!(call.run_finished.load(Ordering::Acquire));
+        let (closing, noticed) = mpsc::sync_channel(0);
+        *factory.closing.lock().unwrap() = Some(closing);
+        let (closed, finished) = mpsc::channel();
+        let closer = {
+            let server = server.clone();
+            std::thread::spawn(move || closed.send(server.close()).unwrap())
+        };
+        noticed.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(matches!(
+            finished.recv_timeout(Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        control.release();
+        canceller.join().unwrap();
+        finished
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        closer.join().unwrap();
+    }
+
+    #[test]
+    fn cancellation_cleanup_panic_preserves_failure_and_closes_new_admission() {
+        let (server, factory) = fixture();
+        factory.catalog_close_panics.store(true, Ordering::SeqCst);
+        let call = begin(&server, "cancel-panic", "return 7;");
+        server.cancel_call(&call);
+        assert!(!call.stopping.load(Ordering::Acquire));
+        let completed = server.run(&call);
+        assert_eq!(completed.data["error"]["code"], "cancelled");
+        assert_eq!(
+            completed.data["shutdown_errors"][0]["code"],
+            "shutdown_failed"
+        );
+        assert_eq!(
+            reply(server.begin(json!("after-panic"), "apps", json!({}))).data["error"]["code"],
+            "shutdown_failed"
+        );
+        assert_eq!(result(&server, "cancel-panic").data, completed.data);
+        assert_eq!(factory.connects.load(Ordering::SeqCst), 0);
+        assert!(server.close().is_err());
+    }
+
+    #[test]
     fn catalog_cleanup_failure_on_cancel_remains_visible_in_original_result() {
         let (server, factory) = fixture();
         factory.catalog_close_fails.store(true, Ordering::SeqCst);
@@ -1141,7 +1446,7 @@ mod lifecycle_tests {
             reply(server.begin(
                 json!("new"),
                 "exec",
-                json!({"app":APP,"request_id":"new","source":"return 2;"})
+                json!({"app":APP,"source":"return 2;"})
             ))
             .data["error"]["code"],
             "request_limit"
@@ -1182,7 +1487,7 @@ mod lifecycle_tests {
     }
     #[test]
     fn completed_owner_replaces_a_stale_running_snapshot_and_exposes_internal_cleanup_errors() {
-        for fail in [false, true] {
+        for (fail, stopping) in [(false, false), (false, true), (true, false), (true, true)] {
             let (server, factory) = fixture();
             let call = begin(&server, "sampled", "return 7;");
             let app = factory.applications.lock().unwrap()[0].app.clone();
@@ -1190,10 +1495,12 @@ mod lifecycle_tests {
             *call.owner.lock().unwrap() = Some(owner.clone());
             server.state.lock().unwrap().contexts.push_back(AppContext {
                 app_id: APP.into(),
-                owner: owner.clone(),
+                app: owner.app.clone(),
+                script_state: owner.state.lock().unwrap().script_state.clone(),
+                owner: Some(owner.clone()),
             });
             let admitted = owner.handle(Request::Submit(Submit {
-                request_id: "sampled".into(),
+                request_id: call.execution_id.clone().unwrap(),
                 target: Target {
                     app_ref: owner.app_ref.clone(),
                     window_ref: None,
@@ -1206,6 +1513,10 @@ mod lifecycle_tests {
             }));
             assert_eq!(admitted.data["status"], "running");
             assert!(owner.wait_idle(Duration::from_secs(5)));
+            let before_cache = result(&server, "sampled");
+            assert_eq!(before_cache.data["status"], "completed");
+            assert_eq!(before_cache.data["context_reset"], false);
+            assert_eq!(before_cache.data["state_reset"], false);
             if fail {
                 factory
                     .provider
@@ -1214,10 +1525,40 @@ mod lifecycle_tests {
                     .store(true, Ordering::SeqCst);
                 assert!(owner.close().is_error);
             }
+            let cancellation = stopping.then(|| {
+                let (gate, control) = gate();
+                *factory.catalog_close.lock().unwrap() = Some(gate);
+                let canceller = {
+                    let server = server.clone();
+                    let call = call.clone();
+                    std::thread::spawn(move || server.cancel_call(&call))
+                };
+                control.entered();
+                (control, canceller)
+            });
             let completed = server.finish_run(&call, admitted);
             assert_eq!(completed.data["status"], "completed");
             assert_eq!(completed.data["value"]["result"], 7);
+            if !fail {
+                assert_eq!(before_cache.data, completed.data);
+            }
             assert_eq!(result(&server, "sampled").data["status"], "completed");
+            assert_eq!(result(&server, "sampled").data, completed.data);
+            if let Some((control, canceller)) = cancellation {
+                control.release();
+                canceller.join().unwrap();
+                // Refresh after cancellation must retain the original payload,
+                // not overwrite it with an already-released owner payload.
+                assert_eq!(result(&server, "sampled").data, completed.data);
+            }
+            // Completed native owners retain receipts but hand their payloads
+            // to the one session cache, avoiding a second cache for every app.
+            let owned = owner.state.lock().unwrap();
+            let done = owned.jobs[0].completed.as_ref().unwrap();
+            assert!(done.value.is_none());
+            assert!(done.image.is_none());
+            assert_eq!(done.payload_bytes, 0);
+            drop(owned);
             if fail {
                 assert_eq!(completed.data["shutdown_errors"][0]["code"], "drain_failed");
                 assert_eq!(

@@ -10,5 +10,5 @@ interface App {
   click(args: { observation_ref: string; window_ref: string; x: number; y: number }): Promise<{ interruption: { code: string; details?: Json; message: string } | null; outcome: { dispatch: "not_dispatched" | "dispatched" | "unknown"; error: { code: string; details?: Json; message: string } | null; evidence: { kind: "unverified" } | { kind: "confirmed"; postcondition: string } | { expected: string; kind: "mismatch"; observed: string } }; provider_outcome: { dispatch: "not_dispatched" | "dispatched" | "unknown"; error: { code: string; details?: Json; message: string } | null; evidence: { kind: "unverified" } | { kind: "confirmed"; postcondition: string } | { expected: string; kind: "mismatch"; observed: string } } | null }>;
 }
 declare const app: Readonly<App>;
-/** JSON data persists in this resident app context; commits on successful completion only. */
+/** JSON data persists per session and app instance, independently of native workers; commits on successful completion only. */
 declare const state: { [key: string]: Json };

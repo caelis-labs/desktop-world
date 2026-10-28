@@ -1,137 +1,185 @@
-//! MCP messages only. Application execution and cleanup live in Server.
-use super::{app_id, wire};
-use serde_json::{json, Value};
-use std::io::BufRead;
-pub const MAX_INPUT_BYTES: usize = 512 * 1024;
-const CURRENT_VERSION: &str = "2025-06-18";
-#[derive(Default)]
-pub struct Session {
-    initialized: bool,
-    ready: bool,
-    structured: bool,
-}
-pub enum Event {
-    None,
-    Reply(Value),
-    Cancel(Value),
-    Call {
-        id: Value,
-        name: String,
-        args: Value,
-        structured: bool,
+//! Official MCP SDK adapter. Desktop state and effects remain owned by Server.
+use super::{
+    app_id,
+    mcp_io::Lifecycle,
+    problem,
+    server::{Call, Factory, Server, Started},
+    Reply,
+};
+use rmcp::{
+    model::{
+        CallToolRequestParams, CallToolResponse, CallToolResult, CancelledNotificationParam,
+        ContentBlock, Implementation, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
+        ServerConfig,
     },
+    service::{NotificationContext, RequestContext},
+    ErrorData, RoleServer, ServerHandler,
+};
+use serde_json::{json, Value};
+use std::sync::Arc;
+
+pub use super::mcp_io::{serve_io, MAX_INPUT_BYTES};
+
+pub(super) struct Handler<F: Factory> {
+    pub server: Arc<Server<F>>,
+    pub lifecycle: Arc<Lifecycle>,
 }
-impl Session {
-    pub fn handle(&mut self, input: Value) -> Event {
-        let id = input.get("id").cloned();
-        if !input.is_object()
-            || input["jsonrpc"] != "2.0"
-            || !input["method"].is_string()
-            || id
-                .as_ref()
-                .is_some_and(|v| !(v.is_string() || v.as_f64().is_some_and(|n| n.fract() == 0.0)))
-        {
-            return Event::Reply(rpc_error(Value::Null, -32600, "Invalid JSON-RPC request"));
+
+impl<F: Factory> ServerHandler for Handler<F> {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new("desktop-world", env!("CARGO_PKG_VERSION")))
+            .with_instructions("Call apps for application identifiers and script API. Call exec with app and source; DTW assigns execution_id and waits for completion. Standard MCP cancellation stops the matching call. result with app alone reads this session's latest accepted execution; optional execution_id selects an older receipt without replay. New MCP requests execute new work. DTW validates targets and confines execution.")
+    }
+
+    async fn list_tools(
+        &self,
+        _: Option<PaginatedRequestParams>,
+        _: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        let mut result = ListToolsResult::default();
+        result.tools = serde_json::from_value(tools()).expect("static DTW tool definitions");
+        Ok(result)
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        if context.ct.is_cancelled() || self.lifecycle.stopped.is_cancelled() {
+            return Ok(result(problem(
+                "cancelled",
+                "Call cancelled before admission",
+            )));
         }
-        let method = input["method"].as_str().unwrap();
-        let params = &input["params"];
-        let Some(id) = id else {
-            if method == "notifications/initialized" && self.initialized {
-                self.ready = true;
+        let id = context.id.into_json_value();
+        let args = Value::Object(request.arguments.unwrap_or_default());
+        let call = match self.server.begin(id, &request.name, args) {
+            Started::Reply(reply) => return Ok(result(reply)),
+            // Every duplicate waits for the same owner. Do not depend solely
+            // on the SDK token: another duplicate can replace it for this ID.
+            Started::InFlight(call) => {
+                return tokio::select! {
+                    _ = call.wait_finished() => Ok(result(self.server.completed_reply(&call))),
+                    _ = context.ct.cancelled() => Ok(result(problem("cancelled", "Original call owns this response"))),
+                };
             }
-            if method == "notifications/cancelled" && self.ready {
-                if let Some(id) = params
-                    .get("requestId")
-                    .filter(|v| v.is_string() || v.as_f64().is_some_and(|n| n.fract() == 0.0))
-                {
-                    return Event::Cancel(id.clone());
-                }
-            }
-            return Event::None;
+            Started::Call(call) => call,
         };
-        let result = match method {
-            "initialize" => {
-                if self.initialized {
-                    return Event::Reply(rpc_error(id, -32600, "Already initialized"));
-                }
-                let Some(requested) = params["protocolVersion"].as_str() else {
-                    return Event::Reply(rpc_error(id, -32602, "protocolVersion is required"));
-                };
-                let version = match requested {
-                    "2024-11-05" | CURRENT_VERSION => requested,
-                    _ => CURRENT_VERSION,
-                };
-                self.initialized = true;
-                self.structured = version == CURRENT_VERSION;
-                json!({"protocolVersion":version,"capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"desktop-world","version":env!("CARGO_PKG_VERSION")},
-                    "instructions":"Call apps for application identifiers and script API. Every exec includes an app identifier and unique request_id; it waits for completion. Standard MCP cancellation stops the matching call. result retrieves the original receipt without replay. DTW validates targets and confines execution."})
-            }
-            "ping" => json!({}),
-            _ if !self.ready => {
-                return Event::Reply(rpc_error(id, -32002, "Initialize the session first"))
-            }
-            "tools/list" => json!({"tools":tools()}),
-            "tools/call" => {
-                let Some(name) = params["name"]
-                    .as_str()
-                    .filter(|n| ["apps", "exec", "result"].contains(n))
-                else {
-                    return Event::Reply(rpc_error(id, -32602, "Unknown tool"));
-                };
-                return Event::Call {
-                    id,
-                    name: name.into(),
-                    args: params
-                        .get("arguments")
-                        .cloned()
-                        .unwrap_or_else(|| json!({})),
-                    structured: self.structured,
-                };
-            }
-            _ => return Event::Reply(rpc_error(id, -32601, "Method not found")),
+        let mut guard = CancelOnDrop {
+            server: self.server.clone(),
+            lifecycle: self.lifecycle.clone(),
+            call: Some(call.clone()),
         };
-        Event::Reply(json!({"jsonrpc":"2.0","id":id,"result":result}))
+        let server = self.server.clone();
+        let token = context.ct.clone();
+        let mut worker = tokio::task::spawn_blocking(move || {
+            if token.is_cancelled() {
+                server.cancel_call(&call);
+            }
+            // Even pre-dispatch cancellation must settle the accepted record.
+            server.run(&call)
+        });
+        let completed = tokio::select! {
+            completed = &mut worker => completed,
+            _ = context.ct.cancelled() => {
+                guard.cancel().await;
+                worker.await
+            }
+        };
+        guard.call = None;
+        match completed {
+            Ok(reply) => Ok(result(reply)),
+            Err(_) => {
+                self.lifecycle.fail(
+                    "execution_panicked",
+                    "Tool worker failed; original effects may be unknown",
+                );
+                Err(ErrorData::internal_error(
+                    "Desktop execution failed; connection is closing",
+                    None,
+                ))
+            }
+        }
+    }
+
+    async fn on_cancelled(
+        &self,
+        notification: CancelledNotificationParam,
+        _: NotificationContext<RoleServer>,
+    ) {
+        // A repeated RPC frame can replace rmcp's token for the ID. Forward
+        // cancellation to the execution owner as well, never replay its work.
+        if let Some(id) = notification.request_id {
+            let server = self.server.clone();
+            if tokio::task::spawn_blocking(move || server.cancel(&id.into_json_value()))
+                .await
+                .is_err()
+            {
+                self.lifecycle
+                    .fail("shutdown_failed", "Cancellation cleanup panicked");
+            }
+        }
     }
 }
+
+struct CancelOnDrop<F: Factory> {
+    server: Arc<Server<F>>,
+    lifecycle: Arc<Lifecycle>,
+    call: Option<Arc<Call<F::Provider>>>,
+}
+impl<F: Factory> CancelOnDrop<F> {
+    async fn cancel(&self) {
+        if let Some(call) = self.call.clone() {
+            let server = self.server.clone();
+            if tokio::task::spawn_blocking(move || server.cancel_call(&call))
+                .await
+                .is_err()
+            {
+                self.lifecycle
+                    .fail("shutdown_failed", "Cancellation cleanup panicked");
+            }
+        }
+    }
+}
+impl<F: Factory> Drop for CancelOnDrop<F> {
+    fn drop(&mut self) {
+        if let Some(call) = self.call.take() {
+            let server = self.server.clone();
+            let lifecycle = self.lifecycle.clone();
+            tokio::task::spawn_blocking(move || {
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    server.cancel_call(&call)
+                }))
+                .is_err()
+                {
+                    lifecycle.fail("shutdown_failed", "Dropped handler cleanup panicked");
+                }
+            });
+        }
+    }
+}
+
+fn result(reply: Reply) -> CallToolResponse {
+    let mut result = CallToolResult::structured(reply.data);
+    result.is_error = Some(reply.is_error);
+    if let Some(image) = reply.image {
+        result
+            .content
+            .push(ContentBlock::image(image.as_ref().clone(), "image/png"));
+    }
+    result.into()
+}
+
 pub fn tools() -> Value {
-    let id = json!({"type":"string","minLength":1,"maxLength":128,"description":"Unique operation ID within this connection. Reusing identical input returns the original receipt, never repeats effects."});
+    let id = json!({"type":"string","minLength":1,"maxLength":128,"description":"Optional DTW-generated execution ID from an earlier response in this MCP session. Omit to read this app's latest accepted execution."});
     let read = json!({"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true});
     json!([
         {"name":"apps","description":"List running applications with stable identifiers and discover the supported app script API, schemas and limits. No window contents or screenshots are read.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":read},
-        {"name":"exec","description":"Run JavaScript in exactly the app identified by the required app identifier. Use app.windows(), app.observe({window_ref}), app.capture({window_ref}), app.press({window_ref,observation_ref,element_ref}), app.click({window_ref,observation_ref,x,y}); await methods sequentially. apps provides full schemas. The call waits for completion, returns original per-step receipts and the last PNG outside JS. state persists within a resident app context. Inspect effects independently; cancellation is not undo.",
-            "inputSchema":{"type":"object","additionalProperties":false,"properties":{"app":app_id::schema(),"request_id":id,"source":{"type":"string","minLength":1,"maxLength":65536,"description":"JavaScript async function body, at most 64 KiB UTF-8; supports await and return. No imports, filesystem, network or process APIs."},"timeout_ms":{"type":"integer","minimum":1,"maximum":5000,"default":5000},"max_calls":{"type":"integer","minimum":1,"maximum":32,"default":32}},"required":["app","request_id","source"]},
+        {"name":"exec","description":"Run JavaScript in exactly the app identified by the required app identifier. Use app.windows(), app.observe({window_ref}), app.capture({window_ref}), app.press({window_ref,observation_ref,element_ref}), app.click({window_ref,observation_ref,x,y}); await methods sequentially. apps provides full schemas. The call waits for completion, returns original per-step receipts and the last PNG outside JS. state persists separately for each app in this MCP session. DTW generates execution_id; callers supply only app and source. A new MCP request ID executes new work even when source is identical. Inspect effects independently; cancellation is not undo.",
+            "inputSchema":{"type":"object","additionalProperties":false,"properties":{"app":app_id::schema(),"source":{"type":"string","minLength":1,"maxLength":65536,"description":"JavaScript async function body, at most 64 KiB UTF-8; supports await and return. No imports, filesystem, network or process APIs."}},"required":["app","source"]},
             "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}},
-        {"name":"result","description":"Read an original request receipt using its app identifier and request_id, including after cancellation or app exit. Does not execute or require the app to remain alive. Missing records never prove absence of effects.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"app":app_id::schema(),"request_id":id},"required":["app","request_id"]},"annotations":read}
+        {"name":"result","description":"Read this MCP session's latest accepted execution for the app, including a running or failed execution, cancellation and app exit. Optionally pass a DTW-generated execution_id to retrieve an older record. This is read-only and never replays work. Records do not cross connections; missing records never prove absence of effects.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"app":app_id::schema(),"execution_id":id},"required":["app"]},"annotations":read}
     ])
-}
-pub fn response(id: Value, reply: super::Reply, structured: bool) -> Value {
-    let mut value = reply.mcp();
-    if !structured {
-        value.as_object_mut().unwrap().remove("structuredContent");
-    }
-    json!({"jsonrpc":"2.0","id":id,"result":value})
-}
-pub fn rpc_error(id: Value, code: i64, message: &str) -> Value {
-    json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
-}
-pub fn read_frame<R: BufRead>(reader: &mut R) -> Result<Option<Vec<u8>>, wire::WireError> {
-    let mut line = Vec::new();
-    std::io::Read::take(&mut *reader, (MAX_INPUT_BYTES + 1) as u64)
-        .read_until(b'\n', &mut line)
-        .map_err(|_| wire::WireError {
-            code: "transport_error".into(),
-            message: "Cannot read MCP input".into(),
-            details: None,
-        })?;
-    if line.is_empty() {
-        return Ok(None);
-    }
-    if line.len() > MAX_INPUT_BYTES || line.last() != Some(&b'\n') {
-        return Err(wire::WireError {
-            code: "invalid_frame".into(),
-            message: "MCP input must be a complete line of at most 512 KiB".into(),
-            details: None,
-        });
-    }
-    Ok(Some(line))
 }
