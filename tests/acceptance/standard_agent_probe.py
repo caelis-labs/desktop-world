@@ -497,10 +497,14 @@ def run_checks(mcp, target, peer, output, pixel_click, evidence):
     require(restored_value["saved"] == "before-cancel" and "uncommitted" not in restored_value["keys"], restored)
     require(restored.get("context_reset") is True and restored.get("state_reset") is False, restored)
     require(mcp.receipt(target.app_id, "cancel-original") == original, "new context replaced old receipt")
-    require(target.counters() == unchanged and peer.counters() == peer_before,
-            "cancel or recovery performed an action")
+    counters = {"target_before": unchanged, "target_after": target.counters(),
+                "peer_before": peer_before, "peer_after": peer.counters()}
+    counters_unchanged = counters["target_before"] == counters["target_after"] and counters["peer_before"] == counters["peer_after"]
     evidence["cancellation"] = {"rpc_id": rpc_id, "entered": entered, "original": original,
-                                "recovery": restored, "committed_state_preserved": True, "counters_unchanged": True}
+                                "recovery": restored, "committed_state_preserved": True,
+                                "counters": counters, "counters_unchanged": counters_unchanged}
+    write_json(output / "evidence.json", evidence)
+    require(counters_unchanged, f"cancel or recovery counter change: {counters}")
 
     repeated_source = "state.repeated=(state.repeated??0)+1;return state.repeated;"
     first, _ = mcp.execute(target.app_id, "same-source-1", repeated_source)
