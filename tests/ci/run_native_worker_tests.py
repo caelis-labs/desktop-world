@@ -50,19 +50,19 @@ def read_output(stream, messages):
         messages.put(EOFError("worker closed output"))
 
 
-def check(binary, mode, directory):
+def check(binary, mode, directory, worker_role):
     pid_file = directory / "worker.pid"
-    command = [str(binary), "--dtw-native-worker"]
+    command = [str(binary), worker_role]
     if mode == "parent_death":
         # Inherited pipes stay open in this controller when the intermediate
         # parent is killed. This isolates the actual getppid watchdog from EOF.
         command = [sys.executable, "-c", """
 from pathlib import Path
 import subprocess, sys
-worker = subprocess.Popen([sys.argv[1], '--dtw-native-worker'])
+worker = subprocess.Popen([sys.argv[1], sys.argv[3]])
 Path(sys.argv[2]).write_text(str(worker.pid))
 raise SystemExit(worker.wait())
-""", str(binary), str(pid_file)]
+""", str(binary), str(pid_file), worker_role]
     with (directory / "stderr.log").open("w") as error:
         process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=error, text=True, bufsize=1)
@@ -101,7 +101,7 @@ raise SystemExit(worker.wait())
             require(isinstance(messages.get(timeout=2), EOFError), "unexpected extra worker reply")
             elapsed = time.monotonic() - started
             require(elapsed < 2, {"mode": mode, "elapsed": elapsed})
-            return {"mode": mode, "parent_pid": process.pid, "worker_pid": worker,
+            return {"mode": mode, "role": worker_role, "parent_pid": process.pid, "worker_pid": worker,
                     "exit_code": code, "elapsed_seconds": elapsed,
                     "worker_gone": gone(worker), "native_calls": ["release_unknown_binding"]}
         finally:
@@ -128,10 +128,11 @@ def main():
     binary = args.binary.resolve(strict=True)
     with tempfile.TemporaryDirectory(prefix="dtw-native-worker-controls-") as scratch:
         cases = []
-        for mode in ("sigterm", "eof", "malformed", "parent_death"):
-            directory = Path(scratch) / mode
-            directory.mkdir()
-            cases.append(check(binary, mode, directory))
+        for worker_role in ("--dtw-native-worker", "--dtw-scene-worker"):
+            for mode in ("sigterm", "eof", "malformed", "parent_death"):
+                directory = Path(scratch) / (worker_role + "-" + mode)
+                directory.mkdir()
+                cases.append(check(binary, mode, directory, worker_role))
         print(json.dumps({"native_worker_controls": cases, "desktop_access": False}))
 
 

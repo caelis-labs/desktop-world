@@ -4,7 +4,7 @@ use std::{
     ffi::{CStr, CString},
     io::{BufRead, Read, Write},
     sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 #[path = "../../scene_lease.rs"]
 mod scene_lease;
@@ -74,10 +74,17 @@ fn native(request: &Value, scene: bool) -> Value {
         result
     }
 }
-fn dispatch(mut request: Value, leased: &mut bool) -> Value {
+fn dispatch(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value {
     let op = request["operation"].as_str().unwrap_or("").to_owned();
     if op != "capture" && op != "click" {
         return native(&request, false);
+    }
+    if !scene_worker {
+        return rejected(
+            json!({"error":"invalid_request",
+            "message":"Scene operations require a short-lived scene owner"}),
+            &op,
+        );
     }
     let check = json!({"operation":"validate","target":request["target"],"deadline_unix_ms":request["deadline_unix_ms"]});
     let before = native(&check, false);
@@ -85,7 +92,21 @@ fn dispatch(mut request: Value, leased: &mut bool) -> Value {
         return rejected(error, &op);
     }
     if !*leased {
-        match scene_lease::lock_scene() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let left = request["deadline_unix_ms"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_sub(now as u64);
+        if left == 0 {
+            return rejected(
+                json!({"error":"deadline_exceeded","message":"Scene operation deadline expired before admission"}),
+                &op,
+            );
+        }
+        match scene_lease::lock_scene(Duration::from_millis(left)) {
             Ok(lease) => {
                 std::mem::forget(lease);
                 *leased = true;
@@ -121,7 +142,7 @@ fn rejected(mut result: Value, operation: &str) -> Value {
     }
     result
 }
-fn validate_reply(reply: &Value, target: &Value) -> Result<(), Value> {
+pub(super) fn validate_reply(reply: &Value, target: &Value) -> Result<(), Value> {
     if reply["error"].is_string() {
         return Err(reply.clone());
     }
@@ -162,12 +183,27 @@ mod tests {
             validate_reply(&json!({"target":target,"bounds":[-100,2,300,400]}), &target).is_ok()
         );
     }
+
+    #[test]
+    fn resident_ax_worker_never_acquires_a_scene_or_dispatches_pixel_input() {
+        for operation in ["capture", "click"] {
+            let mut leased = false;
+            let reply = dispatch(json!({"operation":operation}), &mut leased, false);
+            assert_eq!(reply["error"], "invalid_request");
+            assert!(!leased);
+            if operation == "click" {
+                assert_eq!(reply["dispatch"], "not_dispatched");
+            }
+        }
+    }
 }
 /// Called at executable startup on its main thread for private worker processes.
 pub fn worker_entry() -> bool {
-    if std::env::args().nth(1).as_deref() != Some("--dtw-native-worker") {
-        return false;
-    }
+    let scene_worker = match std::env::args().nth(1).as_deref() {
+        Some("--dtw-native-worker") => false,
+        Some("--dtw-scene-worker") => true,
+        _ => return false,
+    };
     if install_termination_handler().is_err() {
         std::process::exit(1);
     }
@@ -205,7 +241,8 @@ pub fn worker_entry() -> bool {
         if TERMINATING.load(Ordering::Relaxed) {
             break;
         }
-        let result = json!({"request_id":request_id,"result":dispatch(request,&mut leased)});
+        let result =
+            json!({"request_id":request_id,"result":dispatch(request,&mut leased,scene_worker)});
         if writeln!(output, "{result}")
             .and_then(|_| output.flush())
             .is_err()

@@ -7,7 +7,7 @@ use super::{
 use crate::computer::{AppInstance, Backend, Error};
 use serde_json::{json, Value};
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::VecDeque,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Condvar, Mutex,
@@ -15,9 +15,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-// A native worker retains its scene lease while its capture client is alive.
-// Switching apps must finish retiring that worker before another can connect.
-const MAX_CONTEXTS: usize = 1;
 const MAX_RECORDS: usize = 512;
 const MAX_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
 // Receipts and step inventory evidence cannot be evicted like images/results.
@@ -52,12 +49,16 @@ struct Record {
 }
 struct AppContext<B: Backend> {
     app_id: String,
-    owner: Arc<Coordinator<B>>,
+    app: AppInstance,
+    // The logical app context owns committed JSON data. A native owner can be
+    // retired without discarding it; only an actual instance change resets it.
+    script_state: Arc<Mutex<Value>>,
+    owner: Option<Arc<Coordinator<B>>>,
 }
 struct State<B: Backend> {
+    // One logical entry per used app; bounded by accepted session request IDs.
     // Includes preparing and failed-to-retire owners until cleanup succeeds.
     contexts: VecDeque<AppContext<B>>,
-    retired_apps: HashSet<String>,
     records: VecDeque<Record>,
     active: Option<Arc<Call<B>>>,
     closed: bool,
@@ -76,6 +77,7 @@ pub struct Call<B: Backend> {
     command: ToolCall,
     run_finished: AtomicBool,
     context_reset: AtomicBool,
+    state_reset: AtomicBool,
 }
 #[derive(Clone)]
 enum ToolCall {
@@ -99,7 +101,6 @@ impl<F: Factory> Server<F> {
             factory,
             state: Mutex::new(State {
                 contexts: VecDeque::new(),
-                retired_apps: HashSet::new(),
                 records: VecDeque::new(),
                 active: None,
                 closed: false,
@@ -173,6 +174,7 @@ impl<F: Factory> Server<F> {
             command,
             run_finished: AtomicBool::new(false),
             context_reset: AtomicBool::new(false),
+            state_reset: AtomicBool::new(false),
         });
         state.active = Some(call.clone());
         Started::Call(call)
@@ -225,6 +227,9 @@ impl<F: Factory> Server<F> {
         if !unsettled {
             if let Some(id) = &call.request_id {
                 cache_reply(&mut state, id, &reply);
+                if let Some(owner) = &owner {
+                    owner.release_result_payload(id);
+                }
             }
             if state
                 .active
@@ -255,6 +260,7 @@ impl<F: Factory> Server<F> {
                 let mut reply = owner.result(id);
                 self.annotate(state, &call, &mut reply);
                 cache_reply(state, id, &reply);
+                owner.release_result_payload(id);
             }
         }
         state.active = None;
@@ -264,6 +270,7 @@ impl<F: Factory> Server<F> {
             reply.data["app"] = json!(app);
             reply.data["request_id"] = json!(id);
             reply.data["context_reset"] = json!(call.context_reset.load(Ordering::Acquire));
+            reply.data["state_reset"] = json!(call.state_reset.load(Ordering::Acquire));
         }
         append_shutdown_errors(reply, &state.shutdown_errors);
     }
@@ -277,9 +284,9 @@ impl<F: Factory> Server<F> {
                 Reply::plain(json!({"version":1,
                 "apps":apps,"backend":self.factory.description(),
                 "script":scripts::description(),
-                "limits":{"resident_app_contexts":MAX_CONTEXTS,"retained_request_ids":MAX_RECORDS,"payload_bytes":MAX_PAYLOAD_BYTES,
+                "limits":{"retained_request_ids":MAX_RECORDS,"payload_bytes":MAX_PAYLOAD_BYTES,
                     "receipt_admission_bytes":MAX_RECEIPT_BYTES,"max_steps_per_request":scripts::MAX_CALLS},
-                "semantics":"Every exec requires a stable application identifier. Multiple running instances of that application must be resolved before execution. DTW validates identity and confines execution. State and references belong to one resident app context; cancellation, timeout or cache replacement clears them. Results preserve their original app and request_id. Receipt capacity stops new work without dropping the last receipt."}))
+                "semantics":"Every exec requires a stable application identifier. Multiple running instances of that application must be resolved before execution. Each app keeps its own logical context and committed JSON state. Switching apps preserves state and native references. Native owner replacement invalidates references and sets context_reset; an actual app instance change also clears committed state and sets state_reset. This connection executes one call at a time. Results preserve their original app and request_id. Receipt capacity stops new work without dropping the last receipt."}))
             }
             Ok(_) => problem("cancelled", "Application discovery was cancelled"),
             Err(e) => Reply::error(wire::core_error(&e)),
@@ -324,7 +331,7 @@ impl<F: Factory> Server<F> {
             .contexts
             .iter()
             .find(|context| context.app_id == app_id)
-            .map(|context| context.owner.clone());
+            .and_then(|context| context.owner.clone());
         let existing = match candidate {
             Some(owner) => {
                 let reusable = {
@@ -343,46 +350,57 @@ impl<F: Factory> Server<F> {
                     None
                 }
             }
-            None => {
-                if self.state.lock().unwrap().retired_apps.contains(app_id) {
-                    call.context_reset.store(true, Ordering::Release);
-                }
-                None
-            }
+            None => None,
         };
         let owner = if let Some(owner) = existing {
             owner
         } else {
-            // Free capacity before connecting; a failed retirement remains owned
-            // and closes new admission instead of being replaced by another worker.
-            let evicted = {
-                let state = self.state.lock().unwrap();
+            let script_state = {
+                let mut state = self.state.lock().unwrap();
                 if !state.shutdown_errors.is_empty() {
                     return shutdown_reply(&state.shutdown_errors);
                 }
                 if state.closed || call.cancelled.load(Ordering::Acquire) {
                     return problem("cancelled", "Stopped before creating an app context");
                 }
-                (state.contexts.len() >= MAX_CONTEXTS)
-                    .then(|| state.contexts.front().unwrap().owner.clone())
-            };
-            if let Some(evicted) = evicted {
-                if let Err(reply) = self.retire(&evicted) {
-                    return reply;
+                if let Some(context) = state.contexts.iter_mut().find(|c| c.app_id == app_id) {
+                    call.context_reset.store(true, Ordering::Release);
+                    if context.app != *app {
+                        context.app = app.clone();
+                        context.script_state = Arc::new(Mutex::new(json!({})));
+                        call.state_reset.store(true, Ordering::Release);
+                    }
+                    context.script_state.clone()
+                } else {
+                    let script_state = Arc::new(Mutex::new(json!({})));
+                    state.contexts.push_back(AppContext {
+                        app_id: app_id.into(),
+                        app: app.clone(),
+                        script_state: script_state.clone(),
+                        owner: None,
+                    });
+                    script_state
                 }
-            }
+            };
             let backend = match self.factory.connect() {
                 Ok(backend) => backend,
                 Err(error) => return Reply::error(wire::core_error(&error)),
             };
-            let mut owner = Coordinator::new(backend, app.clone(), entry.name);
-            Arc::get_mut(&mut owner).unwrap().max_payload_bytes = MAX_PAYLOAD_BYTES / MAX_CONTEXTS;
+            let mut owner =
+                Coordinator::with_script_state(backend, app.clone(), entry.name, script_state);
+            // The session owns request retention. Reaching the old standalone
+            // coordinator quota must not silently invalidate an app's refs.
+            Arc::get_mut(&mut owner).unwrap().max_requests = MAX_RECORDS;
             // Register even if close/cancel won during connect. close() waits for
             // this run and performs a second pass over all registered owners.
-            self.state.lock().unwrap().contexts.push_back(AppContext {
-                app_id: app_id.into(),
-                owner: owner.clone(),
-            });
+            self.state
+                .lock()
+                .unwrap()
+                .contexts
+                .iter_mut()
+                .find(|context| context.app_id == app_id)
+                .expect("logical app context was registered before connecting")
+                .owner = Some(owner.clone());
             owner
         };
         let admitted = {
@@ -444,14 +462,13 @@ impl<F: Factory> Server<F> {
             return Err(Reply::error(error));
         }
         let mut state = self.state.lock().unwrap();
-        if let Some(index) = state
-            .contexts
-            .iter()
-            .position(|entry| Arc::ptr_eq(&entry.owner, owner))
-        {
-            let retired = state.contexts.remove(index).unwrap();
-            // At most one ID per accepted exec; bounded by MAX_RECORDS.
-            state.retired_apps.insert(retired.app_id);
+        if let Some(context) = state.contexts.iter_mut().find(|entry| {
+            entry
+                .owner
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, owner))
+        }) {
+            context.owner = None;
         }
         Ok(())
     }
@@ -572,7 +589,7 @@ impl<F: Factory> Server<F> {
             .unwrap()
             .contexts
             .iter()
-            .map(|context| context.owner.clone())
+            .filter_map(|context| context.owner.clone())
             .collect();
         for owner in owners {
             let reply = owner.close();
@@ -744,15 +761,13 @@ fn parse_call(name: &str, args: &Value) -> Result<ToolCall, WireError> {
                     invalid("source must be a nonempty JavaScript function body of at most 64 KiB")
                 })?
                 .to_owned();
-            let number = |key: &str, default: u64| {
-                match args.get(key) { None=>Ok(default),Some(v)=>v.as_u64().filter(|n|*n>0&&*n<=default).ok_or_else(||invalid("Execution limits must be positive integers within the advertised bounds"))}
-            };
+            let (timeout_ms, max_calls) = scripts::budgets(args.as_object().unwrap())?;
             Ok(ToolCall::Exec {
                 app,
                 id,
                 source,
-                timeout_ms: number("timeout_ms", scripts::MAX_TIMEOUT_MS)?,
-                max_calls: number("max_calls", scripts::MAX_CALLS as u64)? as u32,
+                timeout_ms,
+                max_calls,
             })
         }
         _ => Err(invalid("Unknown tool")),
@@ -900,6 +915,7 @@ mod lifecycle_tests {
         catalog: Mutex<Option<Arc<Gate>>>,
         catalog_open: AtomicBool,
         connects: AtomicUsize,
+        connect_fails: AtomicBool,
         catalog_close_fails: AtomicBool,
         closing: Mutex<Option<mpsc::SyncSender<()>>>,
     }
@@ -918,6 +934,9 @@ mod lifecycle_tests {
             let gate = self.connect.lock().unwrap().take();
             if let Some(gate) = gate {
                 gate.enter();
+            }
+            if self.connect_fails.load(Ordering::SeqCst) {
+                return Err(Error::BackendFailed("connect failed".into()));
             }
             Ok(self.provider.clone())
         }
@@ -951,6 +970,7 @@ mod lifecycle_tests {
             catalog: Mutex::new(None),
             catalog_open: AtomicBool::new(false),
             connects: AtomicUsize::new(0),
+            connect_fails: AtomicBool::new(false),
             catalog_close_fails: AtomicBool::new(false),
             closing: Mutex::new(None),
         });
@@ -988,7 +1008,9 @@ mod lifecycle_tests {
         *call.owner.lock().unwrap() = Some(owner.clone());
         server.state.lock().unwrap().contexts.push_back(AppContext {
             app_id: APP.into(),
-            owner: owner.clone(),
+            app: owner.app.clone(),
+            script_state: owner.state.lock().unwrap().script_state.clone(),
+            owner: Some(owner.clone()),
         });
         let admitted = owner.handle(Request::Submit(Submit {
             request_id: "original".into(),
@@ -1043,13 +1065,18 @@ mod lifecycle_tests {
         Arc::get_mut(&mut owner).unwrap().max_requests = 0;
         server.state.lock().unwrap().contexts.push_back(AppContext {
             app_id: APP.into(),
-            owner: owner.clone(),
+            app: owner.app.clone(),
+            script_state: owner.state.lock().unwrap().script_state.clone(),
+            owner: Some(owner.clone()),
         });
         let call = begin(&server, "retire", "return 1;");
         let failed = server.run(&call);
         assert_eq!(failed.data["shutdown_errors"][0]["code"], "drain_failed");
         assert!(Arc::ptr_eq(
-            &server.state.lock().unwrap().contexts[0].owner,
+            server.state.lock().unwrap().contexts[0]
+                .owner
+                .as_ref()
+                .unwrap(),
             &owner
         ));
         assert_eq!(factory.connects.load(Ordering::SeqCst), 0);
@@ -1061,6 +1088,44 @@ mod lifecycle_tests {
             result(&server, "retire").data["shutdown_errors"][0]["message"],
             "original drain message"
         );
+    }
+
+    #[test]
+    fn failed_native_reconnect_retains_the_logical_state_and_original_failure() {
+        let (server, factory) = fixture();
+        let app = factory.applications.lock().unwrap()[0].app.clone();
+        let mut owner = Coordinator::new(factory.provider.clone(), app, "App".into());
+        Arc::get_mut(&mut owner).unwrap().max_requests = 0;
+        let script_state = Arc::new(Mutex::new(json!({"kept":7})));
+        owner.state.lock().unwrap().script_state = script_state.clone();
+        server.state.lock().unwrap().contexts.push_back(AppContext {
+            app_id: APP.into(),
+            app: owner.app.clone(),
+            script_state,
+            owner: Some(owner.clone()),
+        });
+        factory.connect_fails.store(true, Ordering::SeqCst);
+        let failed = server.run(&begin(&server, "failed-connect", "return state.kept;"));
+        assert!(failed.is_error);
+        assert_eq!(failed.data["context_reset"], true);
+        assert_eq!(failed.data["state_reset"], false);
+        {
+            let state = server.state.lock().unwrap();
+            assert!(state.contexts[0].owner.is_none());
+            assert_eq!(
+                *state.contexts[0].script_state.lock().unwrap(),
+                json!({"kept":7})
+            );
+        }
+        factory.connect_fails.store(false, Ordering::SeqCst);
+        let recovered = server.run(&begin(&server, "connected", "return state.kept;"));
+        assert!(!recovered.is_error, "{}", recovered.data);
+        assert_eq!(recovered.data["value"]["result"], 7);
+        assert_eq!(recovered.data["context_reset"], true);
+        assert_eq!(recovered.data["state_reset"], false);
+        assert_eq!(result(&server, "failed-connect").data, failed.data);
+        assert_eq!(factory.connects.load(Ordering::SeqCst), 2);
+        server.close().unwrap();
     }
 
     #[test]
@@ -1190,7 +1255,9 @@ mod lifecycle_tests {
             *call.owner.lock().unwrap() = Some(owner.clone());
             server.state.lock().unwrap().contexts.push_back(AppContext {
                 app_id: APP.into(),
-                owner: owner.clone(),
+                app: owner.app.clone(),
+                script_state: owner.state.lock().unwrap().script_state.clone(),
+                owner: Some(owner.clone()),
             });
             let admitted = owner.handle(Request::Submit(Submit {
                 request_id: "sampled".into(),
@@ -1218,6 +1285,15 @@ mod lifecycle_tests {
             assert_eq!(completed.data["status"], "completed");
             assert_eq!(completed.data["value"]["result"], 7);
             assert_eq!(result(&server, "sampled").data["status"], "completed");
+            assert_eq!(result(&server, "sampled").data, completed.data);
+            // Completed native owners retain receipts but hand their payloads
+            // to the one session cache, avoiding a second cache for every app.
+            let owned = owner.state.lock().unwrap();
+            let done = owned.jobs[0].completed.as_ref().unwrap();
+            assert!(done.value.is_none());
+            assert!(done.image.is_none());
+            assert_eq!(done.payload_bytes, 0);
+            drop(owned);
             if fail {
                 assert_eq!(completed.data["shutdown_errors"][0]["code"], "drain_failed");
                 assert_eq!(

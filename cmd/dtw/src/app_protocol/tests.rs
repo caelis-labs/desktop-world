@@ -52,6 +52,9 @@ struct Model {
     panic_action: bool,
     poll_action: bool,
     shutdown_error: Option<Error>,
+    cleanup_error: Option<Error>,
+    cleanup_after_capture: Option<Error>,
+    cleanup_after_action: Option<Error>,
     shutdown_gate: Option<(WorkerGate, Error)>,
     windows_error: Option<Error>,
     inventory: Option<WindowInventory>,
@@ -80,6 +83,9 @@ impl MockBackend {
                 panic_action: false,
                 poll_action: false,
                 shutdown_error: None,
+                cleanup_error: None,
+                cleanup_after_capture: None,
+                cleanup_after_action: None,
                 shutdown_gate: None,
                 windows_error: None,
                 inventory: None,
@@ -133,6 +139,10 @@ impl MockBackend {
             }
         }
         assert!(!panic, "controlled provider panic");
+        let mut model = self.0.model.lock().unwrap();
+        if let Some(error) = model.cleanup_after_action.take() {
+            model.cleanup_error.get_or_insert(error);
+        }
         outcome
     }
     fn read(&self, target: &WindowTarget, pixels: bool) -> BackendObservation<()> {
@@ -176,6 +186,9 @@ impl Backend for MockBackend {
     }
     fn supports(&self, _: Capability) -> bool {
         true
+    }
+    fn cleanup_error(&self) -> Option<Error> {
+        self.0.model.lock().unwrap().cleanup_error.clone()
     }
     fn shutdown(&self) -> Result<(), Error> {
         self.0.shutdowns.fetch_add(1, Ordering::SeqCst);
@@ -229,7 +242,12 @@ impl Backend for MockBackend {
         _: &CallContext<'_>,
     ) -> Result<BackendObservation<()>, Error> {
         self.0.captures.fetch_add(1, Ordering::SeqCst);
-        Ok(self.read(target, true))
+        let observation = self.read(target, true);
+        let mut model = self.0.model.lock().unwrap();
+        if let Some(error) = model.cleanup_after_capture.take() {
+            model.cleanup_error.get_or_insert(error);
+        }
+        Ok(observation)
     }
     fn press(
         &self,

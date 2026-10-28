@@ -24,7 +24,7 @@
 | `exec` | `app, request_id, source`；可选 `timeout_ms, max_calls` | 等待有界脚本执行收尾，返回结果、回执和最后一张截图 |
 | `result` | `app, request_id` | 只读原请求记录，不执行、不重放 |
 
-`app` 必须是平台稳定 ID 字符串。`exec` 的 `source` 是 JavaScript 异步函数体，可使用 `await` 和 `return`。`request_id` 是调用者提供的 1–128 字符操作标识，应为每项新工作选择新值。可选预算只能缩小默认上限：总执行时间 5000 ms、最多 32 次 Host bridge 调用。其余预算见[脚本合同](app-script-v1.md)。未知参数拒绝。源码仍限 64 KiB UTF-8；完整换行 MCP JSON 输入帧限 512 KiB，以容纳转义。
+`app` 必须是平台稳定 ID 字符串。`exec` 的 `source` 是 JavaScript 异步函数体，可使用 `await` 和 `return`。`request_id` 是调用者提供的 1–128 字符操作标识，应为每项新工作选择新值。默认总执行期限为 30 秒，可通过 `timeout_ms` 调大或调小；省略 `max_calls` 不设调用次数配额，显式提供时按调用方配额执行。两者均为正整数，编码范围为 u32。其余预算见[脚本合同](app-script-v1.md)。未知参数拒绝。源码仍限 64 KiB UTF-8；完整换行 MCP JSON 输入帧限 512 KiB，以容纳转义。
 
 一次发现后执行窗口查询的工具参数示意：
 
@@ -62,7 +62,7 @@ JSON-RPC 的 `id` 标识传输请求；`exec.request_id` 标识操作回执。�
 
 取消针对该活动执行，不能证明已派发输入被撤销。客户端可能不接收被取消调用的最终响应；保留原 app ID 和 `request_id`，使用 `result` 查询其记录。不要用新的 ID 重提未确认效果的脚本。
 
-EOF、断管、背压和父进程退出关闭原生资源；应用上下文的关闭使旧 observation 和 state 不再可用。新进程不继承旧账本。若连接丢失且无原始结果，只能将效果保留为未知并独立重观测。过程内回执不是跨进程持久审计系统。
+取消/超时可能重建受影响 app 的原生 owner（`context_reset: true`），已提交 state 继续保留，旧原生 refs 需重建；实际 app 实例更换才清空 state（`state_reset: true`）。普通 app 切换保留各自上下文。EOF、断管、背压和父进程退出关闭整个会话及其原生资源；新进程不继承旧 state、refs 或账本。若连接丢失且无原始结果，只能将效果保留为未知并独立重观测。过程内回执不是跨进程持久审计系统。
 
 ## 兼容与证据
 

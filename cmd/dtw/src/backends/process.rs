@@ -418,6 +418,14 @@ impl Worker {
         }
     }
 
+    /// Read an already-recorded cleanup failure without reaping or touching IO.
+    pub fn cleanup_error(&self) -> Option<TransportError> {
+        self.process
+            .shutdown_result()
+            .err()
+            .map(TransportError::local)
+    }
+
     /// Permanently retire this instance and reap its owned child. Unix workers
     /// receive a bounded SIGTERM grace before the forced-kill fallback. Reader/writer
     /// thread joins are bounded; an inherited pipe held by an unrelated process

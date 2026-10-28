@@ -123,6 +123,11 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         self.state.lock().expect("execution state poisoned")
     }
 
+    /// Resource cleanup diagnostics remain separate from native action evidence.
+    pub fn cleanup_error(&self) -> Option<Error> {
+        self.backend.cleanup_error()
+    }
+
     fn validate_target(
         &self,
         state: &State<B::Binding>,

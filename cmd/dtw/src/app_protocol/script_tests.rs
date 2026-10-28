@@ -31,6 +31,189 @@ fn operation_list(reply: &Reply) -> Vec<&str> {
         .map(|s| s["operation"].as_str().unwrap())
         .collect()
 }
+
+#[test]
+fn capture_cleanup_failure_cannot_be_caught_to_commit_state_or_change_prior_results() {
+    let (owner, backend) = coordinator();
+    let seed = "state.kept=7;return 'before cleanup';";
+    let prior = run_script(&owner, "prior", seed);
+    {
+        let mut model = backend.0.model.lock().unwrap();
+        model.cleanup_after_capture = Some(Error::NativeFailure {
+            code: "scene_cleanup_failed".into(),
+            message: "original scene cleanup failure".into(),
+        });
+        model.shutdown_error = Some(Error::BackendFailed("later close failure".into()));
+    }
+    let completed = run_script(
+        &owner,
+        "failed-capture",
+        r#"
+const window_ref=(await app.windows()).windows[0].window_ref;
+try { await app.capture({window_ref}); } catch (_) {}
+state.invalid=true;
+await app.windows();
+return 'pretend success';
+"#,
+    );
+    assert!(completed.is_error, "{}", completed.data);
+    assert_eq!(
+        completed.data["shutdown_error"]["code"],
+        "scene_cleanup_failed"
+    );
+    assert_eq!(
+        completed.data["script"]["shutdown_error"],
+        completed.data["shutdown_error"]
+    );
+    assert_eq!(completed.data["script"]["state_committed"], false);
+    assert_eq!(
+        *owner.state.lock().unwrap().script_state.lock().unwrap(),
+        json!({"kept":7})
+    );
+    assert_eq!(operation_list(&completed), ["windows", "capture"]);
+    assert_eq!(steps(&completed)[1]["error"], Value::Null);
+    assert_eq!(backend.0.windows.load(Ordering::SeqCst), 1);
+    assert_eq!(backend.0.captures.load(Ordering::SeqCst), 1);
+    assert_code(
+        &start(&owner, submit(&owner, "blocked", None, script("return 1;"))),
+        "closed",
+    );
+    owner.close();
+    assert_eq!(result(&owner, "failed-capture").data, completed.data);
+    assert_eq!(result(&owner, "prior").data, prior.data);
+    assert_eq!(
+        start(&owner, submit(&owner, "prior", None, script(seed))).data,
+        prior.data
+    );
+}
+
+#[test]
+fn click_cleanup_failure_keeps_the_original_native_outcome_and_step_receipt() {
+    for provider in [
+        ActionOutcome {
+            dispatch: DispatchState::Dispatched,
+            evidence: EffectEvidence::Unverified,
+            error: None,
+        },
+        ActionOutcome::unknown(Error::NativeFailure {
+            code: "native_click_failed".into(),
+            message: "original native click failure".into(),
+        }),
+    ] {
+        let (owner, backend) = coordinator();
+        {
+            let mut model = backend.0.model.lock().unwrap();
+            model.outcome = provider.clone();
+            model.cleanup_after_action = Some(Error::NativeFailure {
+                code: "scene_cleanup_failed".into(),
+                message: "original scene cleanup failure".into(),
+            });
+            model.shutdown_error = Some(Error::BackendFailed("later close failure".into()));
+        }
+        let completed = run_script(
+            &owner,
+            "click-cleanup",
+            r#"
+const window_ref=(await app.windows()).windows[0].window_ref;
+const o=await app.capture({window_ref});
+try { await app.click({window_ref,observation_ref:o.observation_ref,x:1,y:1}); } catch (_) {}
+state.invalid=true;return 'pretend success';
+"#,
+        );
+        assert!(completed.is_error, "{}", completed.data);
+        assert_eq!(
+            completed.data["shutdown_error"]["code"],
+            "scene_cleanup_failed"
+        );
+        assert_eq!(completed.data["script"]["state_committed"], false);
+        assert_eq!(operation_list(&completed), ["windows", "capture", "click"]);
+        assert_eq!(
+            steps(&completed)[2]["receipt"],
+            wire::receipt(&ActionReceipt {
+                outcome: provider.clone(),
+                provider_outcome: Some(provider),
+                interruption: None,
+            })
+        );
+        assert_eq!(backend.0.actions.load(Ordering::SeqCst), 1);
+        assert_eq!(result(&owner, "click-cleanup").data, completed.data);
+    }
+}
+
+#[test]
+fn atomic_cleanup_failure_is_separate_from_a_successful_native_read() {
+    let (owner, backend) = coordinator();
+    let window = windows(&owner, "windows").remove(0);
+    backend.0.model.lock().unwrap().cleanup_after_capture = Some(Error::NativeFailure {
+        code: "scene_cleanup_failed".into(),
+        message: "original scene cleanup failure".into(),
+    });
+    let completed = run(&owner, "atomic-capture", Some(&window), Command::Capture);
+    assert!(completed.is_error, "{}", completed.data);
+    assert_eq!(
+        completed.data["shutdown_error"]["code"],
+        "scene_cleanup_failed"
+    );
+    assert_eq!(completed.data["error"], Value::Null);
+    assert!(completed.image.is_some());
+    assert_eq!(completed.data["value"]["kind"], "pixels");
+    assert_eq!(result(&owner, "atomic-capture").data, completed.data);
+}
+
+#[test]
+fn receipt_byte_budget_stops_before_another_dispatch_without_losing_prior_steps() {
+    let (owner, backend) = coordinator();
+    let completed = run(&owner, "receipt-resource", None, Command::Script {
+        source: "for(let i=0;i<10000;i++) { try { await app.windows(); } catch(e) { break; } } state.invalid=true; return 'pretend success';".into(),
+        timeout_ms: 30_000,
+        max_calls: scripts::UNLIMITED_CALLS,
+    });
+    assert!(completed.is_error, "{}", completed.data);
+    assert_eq!(completed.data["script"]["failure"]["code"], "receipt_limit");
+    assert_eq!(completed.data["script"]["state_committed"], false);
+    let recorded = steps(&completed);
+    assert!(recorded.len() > 32);
+    assert_eq!(recorded.len(), backend.0.windows.load(Ordering::SeqCst));
+    assert!(recorded.iter().all(|step| step["status"] == "completed"));
+    let bytes: usize = recorded.iter().map(|step| step.to_string().len()).sum();
+    assert!(bytes >= scripts::MAX_STEP_RECEIPT_BYTES);
+    assert!(bytes - recorded.last().unwrap().to_string().len() < scripts::MAX_STEP_RECEIPT_BYTES);
+    assert_eq!(
+        *owner.state.lock().unwrap().script_state.lock().unwrap(),
+        json!({})
+    );
+}
+
+#[test]
+fn final_action_over_receipt_threshold_keeps_unknown_provider_evidence() {
+    let (owner, backend) = coordinator();
+    let native_error = Error::BackendFailed("controlled unknown effect; ".repeat(24 * 1024));
+    backend.0.model.lock().unwrap().outcome = ActionOutcome::unknown(native_error.clone());
+    let source = format!("{SETUP} try {{ {PRESS} }} catch(e) {{}} try {{ await app.windows(); }} catch(e) {{}} state.invalid=true;return 'pretend success';");
+    let completed = run(
+        &owner,
+        "action-receipt-resource",
+        None,
+        Command::Script {
+            source,
+            timeout_ms: 30_000,
+            max_calls: scripts::UNLIMITED_CALLS,
+        },
+    );
+    assert!(completed.is_error);
+    assert_eq!(completed.data["script"]["failure"]["code"], "receipt_limit");
+    assert_eq!(completed.data["script"]["state_committed"], false);
+    assert_eq!(operation_list(&completed), ["windows", "observe", "press"]);
+    assert_eq!(backend.0.actions.load(Ordering::SeqCst), 1);
+    assert_eq!(backend.0.windows.load(Ordering::SeqCst), 1);
+    let receipt = &steps(&completed)[2]["receipt"];
+    assert_eq!(receipt["outcome"]["dispatch"], "unknown");
+    assert_eq!(receipt["provider_outcome"], receipt["outcome"]);
+    assert_eq!(
+        receipt["outcome"]["error"],
+        error_json(&wire::core_error(&native_error))
+    );
+}
 fn last_step_error(reply: &Reply, code: &str) {
     assert!(reply.is_error, "{}", reply.data);
     assert_eq!(
@@ -240,7 +423,10 @@ fn script_cancel_and_close_keep_late_provider_evidence_without_replay() {
         let done = finish(&owner, "stopping");
         assert!(done.is_error);
         assert_eq!(done.data["script"]["state_committed"], false);
-        assert_eq!(owner.state.lock().unwrap().script_state, json!({}));
+        assert_eq!(
+            *owner.state.lock().unwrap().script_state.lock().unwrap(),
+            json!({})
+        );
         assert_eq!(
             steps(&done)[2]["receipt"],
             wire::receipt(&ActionReceipt {
@@ -293,7 +479,7 @@ fn cancelling_a_script_already_stopping_keeps_the_first_terminal_cause() {
         assert_eq!(done.data["script"]["state_committed"], false);
         let state = owner.state.lock().unwrap();
         assert_eq!(state.terminal, Some(reason));
-        assert_eq!(state.script_state, json!({}));
+        assert_eq!(*state.script_state.lock().unwrap(), json!({}));
         assert_eq!(backend.0.actions.load(Ordering::SeqCst), 0);
     }
 }
@@ -324,7 +510,10 @@ fn script_deadline_stops_a_polling_native_call_and_reports_shutdown_failure() {
         gate.release();
         assert!(done.is_error, "{}", done.data);
         assert_eq!(done.data["script"]["state_committed"], false);
-        assert_eq!(owner.state.lock().unwrap().script_state, json!({}));
+        assert_eq!(
+            *owner.state.lock().unwrap().script_state.lock().unwrap(),
+            json!({})
+        );
         assert_eq!(steps(&done)[2]["receipt"]["outcome"]["dispatch"], "unknown");
         assert_eq!(
             steps(&done)[2]["receipt"]["provider_outcome"]["error"]["code"],

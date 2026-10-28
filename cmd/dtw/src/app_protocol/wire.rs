@@ -126,24 +126,11 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
             if source.len() > super::scripts::MAX_SOURCE_BYTES {
                 return Err(invalid("command.source exceeds 64 KiB of UTF-8"));
             }
-            let bounded = |key: &str, max: u64| -> Result<u64, WireError> {
-                match command.get(key) {
-                    None => Ok(max),
-                    Some(value) => value
-                        .as_f64()
-                        .filter(|v| {
-                            v.is_finite() && v.fract() == 0.0 && *v >= 1.0 && *v <= max as f64
-                        })
-                        .map(|v| v as u64)
-                        .ok_or_else(|| {
-                            invalid(format!("command.{key} must be an integer in 1..={max}"))
-                        }),
-                }
-            };
+            let (timeout_ms, max_calls) = super::scripts::budgets(command)?;
             Ok(Command::Script {
                 source: source.into(),
-                timeout_ms: bounded("timeout_ms", super::scripts::MAX_TIMEOUT_MS)?,
-                max_calls: bounded("max_calls", super::scripts::MAX_CALLS as u64)? as u32,
+                timeout_ms,
+                max_calls,
             })
         }
         "windows" | "observe" | "capture" => {

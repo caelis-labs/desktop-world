@@ -111,6 +111,7 @@ fn ignored_termination_has_a_bounded_forced_kill_and_reports_uncertain_cleanup()
     assert_reaped(&worker);
     // Reaping does not erase an earlier failure to confirm native cleanup.
     assert_eq!(worker.stop().unwrap_err().kind, error.kind);
+    assert_eq!(worker.cleanup_error(), Some(error));
 }
 
 #[test]
@@ -129,6 +130,7 @@ fn failed_native_drain_survives_idle_reaping_and_repeated_stop() {
         assert!(
             matches!(error.kind, TransportErrorKind::Shutdown(ref text) if text.contains("drain admitted input"))
         );
+        assert_eq!(worker.cleanup_error(), Some(error));
     }
 }
 
@@ -247,6 +249,7 @@ fn external_reaper_os_error_is_a_persistent_cleanup_failure() {
     );
     // Check the durable diagnostic, independently of another failed OS call.
     assert_eq!(worker.process.shutdown_result(), Err(first.kind.clone()));
+    assert_eq!(worker.cleanup_error(), Some(first.clone()));
     assert_eq!(worker.stop().unwrap_err().kind, first.kind);
 }
 

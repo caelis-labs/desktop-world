@@ -4,7 +4,7 @@ use crate::computer::*;
 use base64::Engine;
 use serde_json::{json, Value};
 use std::{
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 mod worker;
@@ -17,8 +17,113 @@ pub struct AppInfo {
 }
 pub struct NativeBackend {
     worker: Arc<Worker>,
+    scene: SceneOwner,
     stamp: ProviderStamp,
 }
+
+#[derive(Default)]
+struct SceneState {
+    closed: bool,
+    worker: Option<Arc<Worker>>,
+    failure: Option<Error>,
+}
+
+/// Owns a short-lived child of the MCP process, never a child of its AX worker.
+/// The slot is retained until cleanup succeeds; stopping cannot miss a spawn.
+#[derive(Default)]
+struct SceneOwner {
+    state: Mutex<SceneState>,
+}
+impl SceneOwner {
+    fn cleanup_error(&self) -> Option<Error> {
+        self.state.lock().unwrap().failure.clone()
+    }
+
+    fn check(&self) -> Result<(), Error> {
+        let state = self.state.lock().unwrap();
+        if let Some(error) = &state.failure {
+            Err(error.clone())
+        } else if state.closed {
+            Err(Error::Closed)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn start(
+        &self,
+        spawn: impl FnOnce() -> Result<Worker, Error>,
+    ) -> Result<SceneFlight<'_>, Error> {
+        let mut state = self.state.lock().unwrap();
+        if let Some(error) = &state.failure {
+            return Err(error.clone());
+        }
+        if state.closed {
+            return Err(Error::Closed);
+        }
+        if state.worker.is_some() {
+            return Err(Error::Busy);
+        }
+        // Spawn and publication share the close lock. The spawned process is
+        // either recorded here or returned as an owned transport spawn failure.
+        let worker = Arc::new(spawn()?);
+        state.worker = Some(worker.clone());
+        Ok(SceneFlight {
+            owner: self,
+            worker,
+            finished: false,
+        })
+    }
+
+    fn finish(&self, worker: &Arc<Worker>) -> Result<(), Error> {
+        let result = worker.stop().map_err(transport_error);
+        let mut state = self.state.lock().unwrap();
+        if let Err(error) = &result {
+            state.failure.get_or_insert_with(|| error.clone());
+            state.closed = true;
+        } else if state
+            .worker
+            .as_ref()
+            .is_some_and(|owned| Arc::ptr_eq(owned, worker))
+        {
+            state.worker = None;
+        }
+        result
+    }
+
+    fn close(&self) -> Result<(), Error> {
+        let worker = {
+            let mut state = self.state.lock().unwrap();
+            state.closed = true;
+            state.worker.clone()
+        };
+        if let Some(worker) = worker {
+            self.finish(&worker)?;
+        }
+        let state = self.state.lock().unwrap();
+        state.failure.clone().map_or(Ok(()), Err)
+    }
+}
+
+struct SceneFlight<'a> {
+    owner: &'a SceneOwner,
+    worker: Arc<Worker>,
+    finished: bool,
+}
+impl SceneFlight<'_> {
+    fn finish(mut self) -> Result<(), Error> {
+        self.finished = true;
+        self.owner.finish(&self.worker)
+    }
+}
+impl Drop for SceneFlight<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self.owner.finish(&self.worker);
+        }
+    }
+}
+
 pub struct NativeBinding {
     worker: Arc<Worker>,
     semantic: Option<String>,
@@ -72,6 +177,7 @@ impl NativeBackend {
         let worker = Worker::spawn(&exe, &["--dtw-native-worker"]).map_err(transport_error)?;
         Ok(Self {
             worker: Arc::new(worker),
+            scene: SceneOwner::default(),
             stamp: ProviderStamp {
                 id: "dtw-macos-native".into(),
                 generation: unique_generation(),
@@ -101,7 +207,17 @@ impl NativeBackend {
             })
             .collect()
     }
-    fn rpc(&self, mut request: Value, call: &CallContext<'_>) -> Result<Value, (Error, bool)> {
+    fn rpc(&self, request: Value, call: &CallContext<'_>) -> Result<Value, (Error, bool)> {
+        self.scene.check().map_err(|error| (error, false))?;
+        self.rpc_on(&self.worker, request, call)
+    }
+
+    fn rpc_on(
+        &self,
+        worker: &Worker,
+        mut request: Value,
+        call: &CallContext<'_>,
+    ) -> Result<Value, (Error, bool)> {
         let request_id = unique_generation();
         request["request_id"] = json!(request_id);
         let left = call
@@ -115,8 +231,7 @@ impl NativeBackend {
             + left;
         request["deadline_unix_ms"] = json!(wall.as_millis() as u64);
         let stop = std::sync::Mutex::new(None);
-        let bytes = self
-            .worker
+        let bytes = worker
             .call(request.to_string().as_bytes(), || match call.remaining() {
                 Ok(left) => {
                     let left = left.min(deadline.saturating_duration_since(Instant::now()));
@@ -136,17 +251,12 @@ impl NativeBackend {
                 (transport_cause(error, stop.lock().unwrap().take()), sent)
             })?;
         let reply: Value =
-            serde_json::from_slice(&bytes).map_err(|e| (self.retire(failed(e)), true))?;
-        envelope_reply(&reply, request_id).map_err(|error| (self.retire(error), true))
+            serde_json::from_slice(&bytes).map_err(|e| (retire_worker(worker, failed(e)), true))?;
+        envelope_reply(&reply, request_id).map_err(|error| (retire_worker(worker, error), true))
     }
 
     fn retire(&self, error: Error) -> Error {
-        match self.worker.stop() {
-            Ok(()) => error,
-            Err(shutdown) => Error::BackendFailed(format!(
-                "{error:?}; native worker shutdown failed: {shutdown}"
-            )),
-        }
+        retire_worker(&self.worker, error)
     }
     fn read_rpc(&self, request: Value, call: &CallContext<'_>) -> Result<Value, Error> {
         let reply = self.rpc(request, call).map_err(|e| e.0)?;
@@ -171,11 +281,128 @@ impl NativeBackend {
         }
         outcome
     }
+
+    fn validate_window(&self, target: &Value, call: &CallContext<'_>) -> Result<Value, Error> {
+        let reply = self.read_rpc(json!({"operation":"validate","target":target}), call)?;
+        worker::validate_reply(&reply, target)
+            .map_err(|error| reply_error(&error).unwrap_or(Error::InvalidObservation))?;
+        Ok(reply["bounds"].clone())
+    }
+
+    fn scene_rpc(
+        &self,
+        mut request: Value,
+        call: &CallContext<'_>,
+    ) -> Result<Value, (Error, bool)> {
+        let original = request["target"].clone();
+        // This first validation rejects stale refs before spawning a scene.
+        self.validate_window(&original, call)
+            .map_err(|error| (error, false))?;
+        let scene = self
+            .scene
+            .start(|| {
+                let exe = std::env::current_exe().map_err(failed)?;
+                Worker::spawn(&exe, &["--dtw-scene-worker"]).map_err(transport_error)
+            })
+            .map_err(|error| (error, false))?;
+        let result = (|| {
+            // A scene retains its own AX window object. Revalidate the resident
+            // binding AFTER that object is acquired, linking both identities.
+            // A reused numeric ID cannot silently replace either retained window.
+            let inventory = self
+                .rpc_on(
+                    &scene.worker,
+                    json!({"operation":"windows","app":original["app"]}),
+                    call,
+                )
+                .map_err(|(error, _)| (error, false))?;
+            if inventory
+                .get("error")
+                .is_some_and(|error| !error.is_string())
+            {
+                return Err((Error::InvalidObservation, false));
+            }
+            if let Some(error) = reply_error(&inventory) {
+                return Err((error, false));
+            }
+            let local =
+                select_scene_target(&inventory, &original).map_err(|error| (error, false))?;
+            let before = self
+                .validate_window(&original, call)
+                .map_err(|error| (error, false))?;
+            request["target"] = local.clone();
+            let capture = request["operation"] == "capture";
+            let mut reply = self.rpc_on(&scene.worker, request, call)?;
+            if capture && reply.get("error").is_some_and(|error| !error.is_string()) {
+                return Err((Error::InvalidObservation, false));
+            }
+            if capture && reply.get("error").is_none() {
+                if reply["target"] != local {
+                    return Err((Error::InvalidObservation, false));
+                }
+                let after = self
+                    .validate_window(&original, call)
+                    .map_err(|error| (error, false))?;
+                if before != after || reply["bounds"] != after {
+                    return Err((Error::StaleObservation, false));
+                }
+                reply["target"] = original;
+            }
+            Ok(reply)
+        })();
+        // The owner retains any cleanup failure for the independent diagnostic
+        // channel. Never replace a native outcome with that later failure.
+        let _ = scene.finish();
+        result
+    }
+}
+
+fn retire_worker(worker: &Worker, error: Error) -> Error {
+    match worker.stop() {
+        Ok(()) => error,
+        Err(shutdown) => Error::BackendFailed(format!(
+            "{error:?}; native worker shutdown failed: {shutdown}"
+        )),
+    }
+}
+
+fn select_scene_target(inventory: &Value, original: &Value) -> Result<Value, Error> {
+    let original = parse_target(original)?;
+    let report = parse_inventory_report(&inventory["coverage"], true)?;
+    let rows = array(inventory, "windows")?;
+    if rows.len() != report.supported_count as usize || rows.len() > 256 {
+        return Err(Error::InvalidObservation);
+    }
+    let mut matched = None;
+    for row in rows {
+        let target = parse_target(&row["target"])?;
+        if target.app != original.app {
+            return Err(Error::WrongApp);
+        }
+        if target.native_id == original.native_id {
+            if matched.is_some() {
+                return Err(Error::InvalidObservation);
+            }
+            matched = Some(row["target"].clone());
+        }
+    }
+    matched.ok_or(Error::TargetChanged)
 }
 impl Backend for NativeBackend {
     type Binding = NativeBinding;
+    fn cleanup_error(&self) -> Option<Error> {
+        self.scene
+            .cleanup_error()
+            .or_else(|| self.worker.cleanup_error().map(transport_error))
+    }
     fn shutdown(&self) -> Result<(), Error> {
-        self.worker.stop().map_err(transport_error)
+        let scene = self.scene.close();
+        let native = self.worker.stop().map_err(transport_error);
+        match (scene, native) {
+            (Err(scene), Err(native)) => Err(failed(format!("{scene:?}; {native:?}"))),
+            (Err(error), _) | (_, Err(error)) => Err(error),
+            _ => Ok(()),
+        }
     }
     fn stamp(&self) -> ProviderStamp {
         self.stamp.clone()
@@ -256,10 +483,15 @@ impl Backend for NativeBackend {
         target: &WindowTarget,
         call: &CallContext<'_>,
     ) -> Result<BackendObservation<NativeBinding>, Error> {
-        let reply = self.read_rpc(
-            json!({"operation":"capture","target":target_json(target)}),
-            call,
-        )?;
+        let reply = self
+            .scene_rpc(
+                json!({"operation":"capture","target":target_json(target)}),
+                call,
+            )
+            .map_err(|(error, _)| error)?;
+        if let Some(error) = reply_error(&reply) {
+            return Err(error);
+        }
         let width = u32::try_from(number(&reply, "width")?).map_err(failed)?;
         let height = u32::try_from(number(&reply, "height")?).map_err(failed)?;
         let png = base64::engine::general_purpose::STANDARD
@@ -303,7 +535,12 @@ impl Backend for NativeBackend {
             bounds[0].as_f64().unwrap() + point.x / *width as f64 * bounds[2].as_f64().unwrap();
         let screen_y =
             bounds[1].as_f64().unwrap() + point.y / *height as f64 * bounds[3].as_f64().unwrap();
-        self.action(json!({"operation":"click","target":target_json(target),"bounds":bounds,"screen_x":screen_x,"screen_y":screen_y}),call)
+        let scene = self.scene_rpc(json!({"operation":"click","target":target_json(target),"bounds":bounds,"screen_x":screen_x,"screen_y":screen_y}),call);
+        match scene {
+            Ok(reply) => action_reply(&reply),
+            Err((error, true)) => ActionOutcome::unknown(error),
+            Err((error, false)) => ActionOutcome::rejected(error),
+        }
     }
 }
 fn envelope_reply(reply: &Value, request_id: u64) -> Result<Value, Error> {
@@ -337,6 +574,185 @@ fn action_reply(reply: &Value) -> ActionOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scene_fixture(code: &str) -> Result<Worker, Error> {
+        Worker::spawn(std::path::Path::new("python3"), &["-u", "-c", code]).map_err(transport_error)
+    }
+
+    fn echo_scene() -> Result<Worker, Error> {
+        scene_fixture(
+            "import sys\nfor line in sys.stdin:\n sys.stdout.write(line); sys.stdout.flush()",
+        )
+    }
+
+    fn assert_gone(worker: &Worker) {
+        assert_eq!(unsafe { libc::kill(worker.id() as i32, 0) }, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+    }
+
+    #[test]
+    fn scene_owner_reaps_before_a_new_scene_can_start() {
+        let owner = SceneOwner::default();
+        let scene = owner.start(echo_scene).unwrap();
+        let worker = scene.worker.clone();
+        assert!(matches!(owner.start(echo_scene), Err(Error::Busy)));
+        scene.finish().unwrap();
+        assert_gone(&worker);
+        let next = owner.start(echo_scene).unwrap();
+        let next_worker = next.worker.clone();
+        drop(next); // Unwinding/early return uses the same cleanup path.
+        assert_gone(&next_worker);
+        assert!(owner.state.lock().unwrap().worker.is_none());
+    }
+
+    #[test]
+    fn closing_scene_owner_reaps_and_prevents_late_spawn() {
+        let owner = SceneOwner::default();
+        let scene = owner.start(echo_scene).unwrap();
+        let worker = scene.worker.clone();
+        owner.close().unwrap();
+        assert_gone(&worker);
+        assert!(matches!(
+            owner.start(|| panic!("closed owner spawned")),
+            Err(Error::Closed)
+        ));
+        drop(scene);
+    }
+
+    #[test]
+    fn close_racing_spawn_cannot_lose_the_published_child() {
+        use std::sync::mpsc;
+        let owner = Arc::new(SceneOwner::default());
+        let (started, starting) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let (closing, closed) = mpsc::channel();
+        let starter_owner = owner.clone();
+        let starter = std::thread::spawn(move || {
+            let scene = starter_owner
+                .start(|| {
+                    started.send(()).unwrap();
+                    wait.recv().unwrap();
+                    echo_scene()
+                })
+                .unwrap();
+            let worker = scene.worker.clone();
+            // Keep the child registered until the concurrent close consumes it.
+            closed.recv().unwrap();
+            assert_gone(&worker);
+            drop(scene);
+        });
+        starting.recv().unwrap();
+        let closer_owner = owner.clone();
+        let closer = std::thread::spawn(move || {
+            closer_owner.close().unwrap();
+            closing.send(()).unwrap();
+        });
+        release.send(()).unwrap();
+        starter.join().unwrap();
+        closer.join().unwrap();
+        assert!(matches!(owner.check(), Err(Error::Closed)));
+    }
+
+    #[test]
+    fn failed_scene_cleanup_keeps_owner_and_closes_admission() {
+        let owner = SceneOwner::default();
+        let scene = owner
+            .start(|| scene_fixture("import sys\nsys.stdin.readline()\nsys.exit(74)"))
+            .unwrap();
+        let worker = scene.worker.clone();
+        assert!(worker.call(b"{}", || Ok(Duration::from_secs(2))).is_err());
+        let original = scene.finish().unwrap_err();
+        assert_gone(&worker);
+        assert!(owner
+            .state
+            .lock()
+            .unwrap()
+            .worker
+            .as_ref()
+            .is_some_and(|held| Arc::ptr_eq(held, &worker)));
+        assert_eq!(owner.check(), Err(original.clone()));
+        assert_eq!(owner.cleanup_error(), Some(original.clone()));
+        assert_eq!(owner.close(), Err(original.clone()));
+        assert!(owner
+            .start(|| panic!("cleanup failure admitted a new child"))
+            .is_err());
+        let backend = NativeBackend {
+            worker: Arc::new(echo_scene().unwrap()),
+            scene: owner,
+            stamp: ProviderStamp {
+                id: "cleanup-test".into(),
+                generation: 1,
+            },
+        };
+        assert_eq!(backend.cleanup_error(), Some(original.clone()));
+        assert_eq!(backend.shutdown(), Err(original.clone()));
+        assert_eq!(backend.cleanup_error(), Some(original));
+    }
+
+    #[test]
+    fn resident_worker_cleanup_error_is_visible_without_a_scene() {
+        let backend = NativeBackend {
+            worker: Arc::new(
+                scene_fixture("import sys\nsys.stdin.readline()\nsys.exit(74)").unwrap(),
+            ),
+            scene: SceneOwner::default(),
+            stamp: ProviderStamp {
+                id: "resident-cleanup-test".into(),
+                generation: 1,
+            },
+        };
+        assert_eq!(backend.cleanup_error(), None);
+        assert!(backend
+            .worker
+            .call(b"{}", || Ok(Duration::from_secs(2)))
+            .is_err());
+        let original = transport_error(backend.worker.cleanup_error().unwrap());
+        assert_eq!(backend.scene.cleanup_error(), None);
+        assert_eq!(backend.cleanup_error(), Some(original.clone()));
+        assert_eq!(backend.shutdown(), Err(original.clone()));
+        assert_eq!(backend.cleanup_error(), Some(original));
+    }
+
+    #[test]
+    fn scene_target_selection_requires_the_same_app_and_one_exact_native_id() {
+        let original = json!({"app":{"identity":"example.app","pid":21,"generation":30},
+            "native_id":42,"generation":55});
+        let mut local = original.clone();
+        local["generation"] = json!(99);
+        let inventory = |targets: &[Value]| {
+            let n = targets.len();
+            json!({"windows":targets.iter().map(|target| json!({"target":target})).collect::<Vec<_>>(),
+                "coverage":{"scope":"same_pid_layer_zero_standard_ax_windows","complete":false,
+                    "window_server_count":n,"supported_count":n,"ax_id_errors":[],"diagnostics":{
+                        "cg_app_raw":n,"window_server_count":n,"cg_non_layer_zero":0,"cg_invalid_metadata":0,
+                        "ax_window_count":n,"excluded_scope":0,"ax_pid_unproven":0,"ax_role_unproven":0,
+                        "ax_subrole_unproven":0,"exact_id_unproven":0,"exact_id_zero":0,"cg_owner_unmatched":0,
+                        "duplicate_id":0,"supported_count":n,"excluded_non_window_role":0,"excluded_non_standard_subrole":0,
+                        "excluded_open_save_panel":0,"excluded_non_layer_zero":0}}})
+        };
+        assert_eq!(
+            select_scene_target(&inventory(&[local.clone()]), &original),
+            Ok(local.clone())
+        );
+        assert_eq!(
+            select_scene_target(&inventory(&[]), &original),
+            Err(Error::TargetChanged)
+        );
+        assert_eq!(
+            select_scene_target(&inventory(&[local.clone(), local.clone()]), &original),
+            Err(Error::InvalidObservation)
+        );
+        let mut wrong_app = local;
+        wrong_app["app"]["generation"] = json!(31);
+        assert_eq!(
+            select_scene_target(&inventory(&[wrong_app]), &original),
+            Err(Error::WrongApp)
+        );
+    }
+
     #[test]
     fn inventory_requires_structured_evidence_and_never_interprets_message_text() {
         let mut coverage = json!({"scope":"same_pid_layer_zero_standard_ax_windows","complete":false,

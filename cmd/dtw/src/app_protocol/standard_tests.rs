@@ -162,6 +162,7 @@ fn stable_id_survives_restart_but_state_and_refs_do_not() {
     let reply = exec(&server, "restart", "return Object.keys(state)");
     assert_eq!(success(&reply), &json!([]));
     assert_eq!(reply.data["context_reset"], true);
+    assert_eq!(reply.data["state_reset"], true);
     assert_eq!(catalog.connects.load(Ordering::SeqCst), 2);
     assert!(!receipt(&server, "first").is_error);
     server.close().unwrap();
@@ -183,12 +184,20 @@ fn cancellation_before_run_does_not_connect_or_dispatch() {
     server.close().unwrap();
 }
 #[test]
-fn standard_cancel_targets_rpc_id_and_new_exec_uses_a_clean_context() {
+fn standard_cancel_preserves_committed_state_and_other_app_contexts() {
     let (server, catalog) = server();
     catalog.backend.0.model.lock().unwrap().poll_action = true;
     let gate = catalog.backend.action_gate();
+    add_app(&catalog, "org.example.Other", 43);
+    success(&call(
+        &server,
+        "exec",
+        json!({"app":"org.example.Other","request_id":"peer-seed",
+        "source":"state.peer=true;state.window=(await app.windows()).windows[0].window_ref;return 1;"}),
+    ));
     success(&exec(&server, "state", "state.before=true;return 1"));
-    let Started::Call(active) = server.begin(json!(123), "exec", input("original-action", PRESS))
+    let source = format!("state.uncommitted=true;{PRESS}");
+    let Started::Call(active) = server.begin(json!(123), "exec", input("original-action", &source))
     else {
         panic!("not admitted")
     };
@@ -213,10 +222,65 @@ fn standard_cancel_targets_rpc_id_and_new_exec_uses_a_clean_context() {
     );
     assert_eq!(receipt(&server, "original-action").data, reply.data);
     let next = exec(&server, "fresh", "return Object.keys(state)");
-    assert_eq!(success(&next), &json!([]));
+    assert_eq!(success(&next), &json!(["before"]));
     assert_eq!(next.data["context_reset"], true);
+    assert_eq!(next.data["state_reset"], false);
+    let peer = call(
+        &server,
+        "exec",
+        json!({"app":"org.example.Other","request_id":"peer-read",
+        "source":"await app.capture({window_ref:state.window});return state.peer;"}),
+    );
+    assert_eq!(success(&peer), true);
+    assert_eq!(peer.data["context_reset"], false);
+    assert_eq!(catalog.connects.load(Ordering::SeqCst), 3);
     assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
     server.close().unwrap();
+}
+
+#[test]
+fn native_cleanup_failure_closes_dispatch_for_every_app_and_keeps_original_receipts() {
+    let (server, catalog) = server();
+    add_app(&catalog, "org.example.Other", 43);
+    let other = json!({"app":"org.example.Other","request_id":"other-seed","source":"state.kept=true;return 'peer';"});
+    let peer = call(&server, "exec", other.clone());
+    success(&peer);
+    catalog
+        .backend
+        .0
+        .model
+        .lock()
+        .unwrap()
+        .cleanup_after_capture = Some(Error::NativeFailure {
+        code: "scene_cleanup_failed".into(),
+        message: "original scene cleanup failure".into(),
+    });
+    let source = "const w=(await app.windows()).windows[0].window_ref;try { await app.capture({window_ref:w}); } catch (_) {} state.invalid=true;return 'pretend success';";
+    let original = exec(&server, "capture-cleanup", source);
+    assert!(original.is_error, "{}", original.data);
+    assert_eq!(
+        original.data["shutdown_errors"][0]["code"],
+        "scene_cleanup_failed"
+    );
+    assert_eq!(original.data["script"]["state_committed"], false);
+    let blocked = call(
+        &server,
+        "exec",
+        json!({"app":"org.example.Other","request_id":"blocked-peer","source":"return app.windows();"}),
+    );
+    assert_code(&blocked, "shutdown_failed");
+    assert_eq!(catalog.connects.load(Ordering::SeqCst), 2);
+    assert_eq!(catalog.backend.0.windows.load(Ordering::SeqCst), 1);
+    assert_eq!(catalog.backend.0.captures.load(Ordering::SeqCst), 1);
+    assert_eq!(receipt(&server, "capture-cleanup").data, original.data);
+    assert_eq!(exec(&server, "capture-cleanup", source).data, original.data);
+    // Earlier app results retain their payload and per-job outcome; session
+    // shutdown diagnostics are appended independently by the public Server.
+    let prior = call(&server, "exec", other);
+    assert_eq!(prior.data["value"], peer.data["value"]);
+    assert_eq!(prior.data["script"], peer.data["script"]);
+    assert!(prior.data.get("shutdown_error").is_none());
+    assert!(server.close().is_err());
 }
 fn message(id: Value, method: &str, params: Value) -> Value {
     json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})
@@ -291,26 +355,28 @@ fn generated_types_are_the_distributed_contract() {
     );
 }
 
+fn add_app(catalog: &Catalog, app_id: &str, pid: u32) {
+    let mut app = application();
+    app.identity = AppIdentity(app_id.into());
+    app.pid = pid;
+    catalog.entries.lock().unwrap().push(Application {
+        app_id: app_id.into(),
+        app,
+        name: app_id.into(),
+    });
+}
+
 #[test]
-fn switching_apps_retires_each_owner_before_connecting_and_preserves_original_receipts() {
+fn switching_apps_preserves_each_apps_state_refs_and_original_receipts() {
     let (server, catalog) = server();
-    let apps = call(&server, "apps", json!({}));
-    assert_eq!(apps.data["limits"]["resident_app_contexts"], 1);
     let original_action = exec(&server, "original-action", PRESS);
     success(&original_action);
     let original_pixels = exec(&server, "original-pixels",
-        "state.old='A'; const window_ref=(await app.windows()).windows[0].window_ref; return await app.capture({window_ref});");
+        "state.old='A'; state.window=(await app.windows()).windows[0].window_ref; return await app.capture({window_ref:state.window});");
     let old = success(&original_pixels).clone();
     assert!(original_pixels.image.is_some());
 
-    let mut other = application();
-    other.identity = AppIdentity("org.example.Other".into());
-    other.pid += 1;
-    catalog.entries.lock().unwrap().push(Application {
-        app_id: "org.example.Other".into(),
-        app: other,
-        name: "Other".into(),
-    });
+    add_app(&catalog, "org.example.Other", 43);
     let switched = call(
         &server,
         "exec",
@@ -319,7 +385,7 @@ fn switching_apps_retires_each_owner_before_connecting_and_preserves_original_re
     );
     success(&switched);
     assert!(switched.image.is_some());
-    assert_eq!(catalog.backend.0.shutdowns.load(Ordering::SeqCst), 1);
+    assert_eq!(catalog.backend.0.shutdowns.load(Ordering::SeqCst), 0);
     assert_eq!(catalog.connects.load(Ordering::SeqCst), 2);
 
     let returned = exec(
@@ -328,29 +394,25 @@ fn switching_apps_retires_each_owner_before_connecting_and_preserves_original_re
         &format!(
             r#"
 const old = {old};
-let staleCode = null;
-try {{ await app.click({{window_ref:old.window_ref,observation_ref:old.observation_ref,x:1,y:1}}); }}
-catch(error) {{ staleCode=error.code; }}
-const keys = Object.keys(state);
-const window_ref = (await app.windows()).windows[0].window_ref;
-const fresh = await app.capture({{window_ref}});
-return {{keys,staleCode,fresh}};
+await app.click({{window_ref:old.window_ref,observation_ref:old.observation_ref,x:1,y:1}});
+const fresh = await app.capture({{window_ref:state.window}});
+return {{old:state.old, fresh}};
 "#
         ),
     );
     let value = success(&returned);
-    assert_eq!(returned.data["context_reset"], true);
-    assert_eq!(value["keys"], json!([]));
-    assert_eq!(value["staleCode"], "target_changed");
-    assert_ne!(value["fresh"]["window_ref"], old["window_ref"]);
+    assert_eq!(returned.data["context_reset"], false);
+    assert_eq!(returned.data["state_reset"], false);
+    assert_eq!(value["old"], "A");
+    assert_eq!(value["fresh"]["window_ref"], old["window_ref"]);
     assert_ne!(value["fresh"]["observation_ref"], old["observation_ref"]);
-    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 2);
     assert_eq!(catalog.backend.0.captures.load(Ordering::SeqCst), 3);
-    assert_eq!(catalog.connects.load(Ordering::SeqCst), 3);
-    assert_eq!(catalog.backend.0.shutdowns.load(Ordering::SeqCst), 2);
+    assert_eq!(catalog.connects.load(Ordering::SeqCst), 2);
+    assert_eq!(catalog.backend.0.shutdowns.load(Ordering::SeqCst), 0);
     assert_eq!(
         *catalog.shutdowns_before_connect.lock().unwrap(),
-        vec![0, 1, 2]
+        vec![0, 0]
     );
     assert_eq!(
         receipt(&server, "original-action").data,
@@ -368,6 +430,94 @@ return {{keys,staleCode,fresh}};
         .data,
         switched.data
     );
+    server.close().unwrap();
+}
+
+#[test]
+fn ordinary_requests_do_not_rotate_the_native_owner_at_sixty_four_jobs() {
+    let (server, catalog) = server();
+    let capacity = call(&server, "apps", json!({})).data["limits"]["retained_request_ids"]
+        .as_u64()
+        .unwrap() as usize;
+    let seed = exec(&server, "seed", "state.count=0;state.window=(await app.windows()).windows[0].window_ref;return state.window;");
+    let original_ref = success(&seed).clone();
+    assert!(capacity > MAX_REQUESTS + 2);
+    for index in 1..capacity - 1 {
+        let reply = exec(&server, &format!("count-{index}"), "return ++state.count;");
+        assert_eq!(success(&reply), index);
+        assert_eq!(reply.data["context_reset"], false);
+        assert_eq!(reply.data["state_reset"], false);
+    }
+    let next = exec(&server, "retained-window", "const shot=await app.capture({window_ref:state.window});return {count:state.count,window:shot.window_ref};");
+    assert_eq!(success(&next)["count"], capacity - 2);
+    assert_eq!(success(&next)["window"], original_ref);
+    assert_eq!(catalog.connects.load(Ordering::SeqCst), 1);
+    assert_eq!(catalog.backend.0.shutdowns.load(Ordering::SeqCst), 0);
+    let exhausted = exec(
+        &server,
+        "past-session-capacity",
+        "state.count=0;return await app.windows();",
+    );
+    assert_code(&exhausted, "request_limit");
+    assert_eq!(receipt(&server, "retained-window").data, next.data);
+    assert_eq!(receipt(&server, "seed").data, seed.data);
+    assert_eq!(catalog.connects.load(Ordering::SeqCst), 1);
+    assert_eq!(catalog.backend.0.windows.load(Ordering::SeqCst), 1);
+    server.close().unwrap();
+}
+
+#[test]
+fn independent_sessions_never_share_json_state_or_native_refs() {
+    let (first, _) = server();
+    let (second, _) = server();
+    let original = exec(&first, "seed", "state.owner='first';state.window=(await app.windows()).windows[0].window_ref;return state.window;");
+    let foreign_ref = success(&original).clone();
+    assert_eq!(
+        success(&exec(&second, "seed", "return Object.keys(state);")),
+        &json!([])
+    );
+    let foreign = exec(
+        &second,
+        "foreign",
+        &format!("return await app.capture({{window_ref:{foreign_ref}}});"),
+    );
+    assert!(foreign.is_error);
+    assert_eq!(
+        foreign.data["script"]["steps"][0]["error"]["code"],
+        "target_changed"
+    );
+    first.close().unwrap();
+    let live = exec(&second, "live", "state.owner='second';const w=(await app.windows()).windows[0].window_ref;await app.capture({window_ref:w});return state.owner;");
+    assert_eq!(success(&live), "second");
+    assert_eq!(live.data["context_reset"], false);
+    second.close().unwrap();
+}
+
+#[test]
+fn app_switches_do_not_evict_a_small_working_set() {
+    let (server, catalog) = server();
+    for index in 0..8 {
+        let app_id = format!("org.example.Peer{index}");
+        add_app(&catalog, &app_id, 100 + index);
+        success(&call(
+            &server,
+            "exec",
+            json!({"app":app_id,"request_id":format!("seed-{index}"),
+            "source":format!("state.index={index};state.window=(await app.windows()).windows[0].window_ref;return state.index;")}),
+        ));
+    }
+    for index in 0..8 {
+        let value = call(
+            &server,
+            "exec",
+            json!({"app":format!("org.example.Peer{index}"),"request_id":format!("read-{index}"),
+            "source":"await app.capture({window_ref:state.window});return state.index;"}),
+        );
+        assert_eq!(success(&value), index);
+        assert_eq!(value.data["context_reset"], false);
+    }
+    assert_eq!(catalog.connects.load(Ordering::SeqCst), 8);
+    assert_eq!(catalog.backend.0.shutdowns.load(Ordering::SeqCst), 0);
     server.close().unwrap();
 }
 #[test]

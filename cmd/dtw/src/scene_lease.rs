@@ -7,12 +7,12 @@ use std::{
     },
     time::{Duration, Instant},
 };
-pub(crate) fn lock_scene() -> Result<File, String> {
+pub(crate) fn lock_scene(timeout: Duration) -> Result<File, String> {
     let uid = unsafe { libc::geteuid() };
     // Stable across host-specific TMPDIRs and installed versions. No symlink,
     // foreign-owned file, or group/world-accessible lock is accepted.
     let path = format!("/private/tmp/dev.caelis.dtw-scene-{uid}.lock");
-    lock_scene_at(std::path::Path::new(&path), Duration::from_secs(3))
+    lock_scene_at(std::path::Path::new(&path), timeout)
 }
 pub(crate) fn lock_scene_at(path: &std::path::Path, timeout: Duration) -> Result<File, String> {
     let uid = unsafe { libc::geteuid() };
@@ -39,7 +39,7 @@ pub(crate) fn lock_scene_at(path: &std::path::Path, timeout: Duration) -> Result
             return Err(error.to_string());
         }
         if start.elapsed() >= timeout {
-            return Err("native_scene_busy: another Runtime owns the native operation; no new input dispatched".into());
+            return Err("native_scene_busy: another scene operation did not finish within this call's budget; no new input dispatched".into());
         }
         std::thread::sleep(Duration::from_millis(10));
     }

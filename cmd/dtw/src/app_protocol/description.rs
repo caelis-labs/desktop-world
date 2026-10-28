@@ -126,8 +126,9 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
             "observation":"One current binding across semantic and pixels; at most 15000 ms. Reads and accepted actions invalidate prior observations. Script time budgets can shorten calls but never extend binding life.",
             "element":"Opaque ref belonging to one current semantic observation; cannot be used with pixels or another window."
         },
-        "limits":{"max_source_utf8_bytes":super::scripts::MAX_SOURCE_BYTES,"default_timeout_ms":5000,
-            "max_timeout_ms":super::scripts::MAX_TIMEOUT_MS,"default_max_calls":32,"max_calls":super::scripts::MAX_CALLS,
+        "limits":{"max_source_utf8_bytes":super::scripts::MAX_SOURCE_BYTES,"default_timeout_ms":super::scripts::DEFAULT_TIMEOUT_MS,
+            "max_timeout_ms":super::scripts::MAX_TIMEOUT_MS,"default_max_calls":null,"max_calls":super::scripts::MAX_CALLS,
+            "step_receipt_admission_bytes":super::scripts::MAX_STEP_RECEIPT_BYTES,
             "memory_bytes":memory_bytes,"stack_bytes":stack_bytes,"max_result_bytes":65536,"max_state_bytes":65536,
             "max_unhandled_rejections":super::script_engine::MAX_UNHANDLED_REJECTIONS,"max_json_depth":64,"max_json_nodes":32768,"max_console_lines":200,"max_console_utf8_bytes":32768,
             "console_line_content_characters_before_truncation":2000},
@@ -173,7 +174,7 @@ pub(super) fn typescript() -> String {
             ts_type(&shape["returns"])
         ));
     }
-    out.push_str("}\ndeclare const app: Readonly<App>;\n/** JSON data persists in this resident app context; commits on successful completion only. */\ndeclare const state: { [key: string]: Json };\n");
+    out.push_str("}\ndeclare const app: Readonly<App>;\n/** JSON data persists per session and app instance, independently of native workers; commits on successful completion only. */\ndeclare const state: { [key: string]: Json };\n");
     out
 }
 fn ts_type(schema: &Value) -> String {
