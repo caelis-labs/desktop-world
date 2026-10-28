@@ -7,7 +7,7 @@ Agent / Harness tool policy
     | standard MCP tools + optional Agent Skill
     v
 DTW Agent interface: apps / exec / result
-    | explicit stable app ID + script + request ID
+    | explicit stable app ID + script source
     v
 Agent session: multiple app contexts, JSON state, jobs, receipts, cancellation
     | typed operations bound to the same running App instance

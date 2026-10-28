@@ -21,8 +21,8 @@
 | 工具 | 参数 | 返回行为 |
 | --- | --- | --- |
 | `apps` | `{}` | 应用列表、稳定 app IDs 和当前脚本合同 |
-| `exec` | `app, source`（仅这两项） | 等待有界脚本执行收尾，返回结果、回执和最后一张截图 |
-| `result` | `app`；可选 `execution_id` | 只读本会话该 app 最近接受的执行，或指定原记录，不执行、不重放 |
+| `exec` | `app, source`（仅这两项） | 等待有界脚本执行收尾，返回结果、步骤/动作摘要和最后一张截图 |
+| `result` | `app`；可选 `execution_id` | 只读本会话该 app 最近接受执行的完整原始账本，或指定历史记录，不执行、不重放 |
 
 `app` 必须是平台稳定 ID 字符串。`exec` 的 `source` 是 JavaScript 异步函数体，可使用 `await` 和 `return`。DTW 在接受执行时自动生成 `execution_id`；模型不生成、传入或维护请求编号。当前内部总执行期限为 30 秒，不设调用次数配额；公开工具不接受预算、文件路径或请求编号。其余预算见[脚本合同](app-script-v1.md)。未知参数拒绝。源码仍限 64 KiB UTF-8；完整换行 MCP JSON 输入帧限 512 KiB，以容纳转义。
 
@@ -46,6 +46,12 @@
 ## 结果、效果与图像
 
 MCP 工具响应同时提供文本 JSON，并在协议版本支持时提供 `structuredContent`。截图作为 MCP image content 返回，图片字节不进入脚本 VM。脚本结果与步骤账本见[脚本返回合同](app-script-v1.md#查询步骤账本与图像)。
+
+`exec` 保留 `value`（脚本结果、console、调用数和最后截图元数据）、错误、状态提交及重建/驱逐信息。默认省略内部 `app_ref`、冗余 operation 和空 receipt；`script.steps` 替换为 `script.summary`，不改变保留的原始记录、`isError` 或实际派发。`result` 继续返回完整原记录，包括所有 `script.steps`、错误、原生回执和库存诊断；正常执行无需追加查询。
+
+摘要包含 `steps`（记录步骤数）、`failed`（有 step.error 的步骤数）、`pending`（尚未完成数）。存在动作回执时，`actions` 按 dispatch、evidence、provider_dispatch、provider_evidence 累计计数，并报告 interrupted 数；不存在的状态键表示零。尚无回执不代表动作未派发，应同时查看 pending。`last_issue` 仅为最后一个错误/未知效果/证据不符/中断/未完成步骤的诊断样本，既不是全部问题，也不一定是脚本失败根因；较早问题仍计入汇总，完整详情在原账本中。脚本捕获动作错误后可能成功提交 state，摘要不能将它改写为未发生错误。
+
+投影层不会再次截断脚本返回值、console 或截图（原有 VM/console 限制仍有效）；这次改动控制的是默认账本展开量，并不承诺整个响应固定小于某个字节数。
 
 执行完成与业务效果分开：动作记录 `not_dispatched / dispatched / unknown`，并单独记录 `confirmed / unverified / mismatch`。`dispatched` 不能证明保存、输入或点击达成预期；调用者检查独立观察。脚本先前的动作不会因后续异常、取消或 JSON state 未提交而回滚。
 

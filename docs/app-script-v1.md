@@ -92,7 +92,9 @@ state 提交不是桌面事务。动作一旦派发，之后的异常、取消�
 
 ## 查询、步骤账本与图像
 
-任务结果回显 `app` 字符串，并包含 `execution_id, status, value, error, receipt, payload_expired` 等执行信息；脚本的 `operation` 为 `script`，外层 `receipt` 通常为 null，动作证据在附加的 `script.steps` 中：
+`exec` 回显 `app` 和内部生成的 `execution_id`，保留 `status/value/error/payload_expired`、状态提交和恢复标记；默认返回 `script.summary`，不展开步骤列表。摘要累计步骤、失败、派发、证据和中断，`last_issue` 只代表最后一个注意项。详见 [MCP 结果合同](app-protocol-v1.md#结果效果与图像)。正常流程无需追加查询。
+
+`result({app})` 或带历史 `execution_id` 的查询返回完整原始记录，其中 `operation` 为 `script`，外层 `receipt` 通常为 null，动作证据在 `script.steps` 中：
 
 | 字段 | 含义 |
 | --- | --- |

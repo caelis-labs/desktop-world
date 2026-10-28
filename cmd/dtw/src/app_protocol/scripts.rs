@@ -19,8 +19,8 @@ use std::{
 
 pub(super) const MAX_SOURCE_BYTES: usize = 64 * 1024;
 pub(super) const DEFAULT_TIMEOUT_MS: u64 = 30_000;
-// Wire representation bounds, not a workflow-sized operation quota. A caller
-// may replace the default deadline and optionally supply its own call budget.
+// Internal wire bounds, not a workflow-sized operation quota. Public MCP
+// callers supply only app/source; execution policy owns these budgets.
 pub(super) const MAX_TIMEOUT_MS: u64 = u32::MAX as u64;
 pub(super) const MAX_CALLS: u32 = u32::MAX;
 pub(super) const UNLIMITED_CALLS: u32 = 0;

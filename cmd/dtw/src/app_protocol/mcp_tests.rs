@@ -177,6 +177,9 @@ async fn sdk_lists_three_tools_and_exec_accepts_only_app_and_source() {
     assert_eq!(tools[2]["inputSchema"]["required"], json!(["app"]));
     let apps = decoded(&client.tool("apps", json!({})).await);
     assert_eq!(apps["apps"], json!([{"app":APP,"name":"Controlled"}]));
+    let entry = apps["script"]["entry"].as_str().unwrap();
+    assert!(entry.contains("exec"));
+    assert!(!entry.contains("request_id"), "{entry}");
     assert_eq!(catalog.connects.load(Ordering::SeqCst), 0);
     for field in [
         "request_id",
@@ -246,9 +249,19 @@ async fn sdk_returns_png_as_content_beside_matching_text_and_structured_result()
     use base64::Engine;
     let (server, catalog) = server();
     let mut client = Client::new(server).await;
-    let result = client.tool("exec", input("const w=(await app.windows()).windows[0].window_ref;await app.capture({window_ref:w});return 'captured';")).await;
+    let result = client.tool("exec", input("const w=(await app.windows()).windows[0].window_ref;await app.capture({window_ref:w});console.log('captured 中文🙂');return {label:'captured',nested:[1,true,null]};")).await;
     assert_eq!(result["isError"], false, "{result}");
-    assert_eq!(decoded(&result)["value"]["result"], "captured");
+    let compact = decoded(&result);
+    assert_eq!(
+        compact["value"]["result"],
+        json!({"label":"captured","nested":[1,true,null]})
+    );
+    assert_eq!(compact["value"]["calls"], 2);
+    assert_eq!(compact["value"]["last_capture"]["step"], 2);
+    assert_eq!(compact["value"]["console_truncated"], false);
+    let console = compact["value"]["console"].as_array().unwrap();
+    assert_eq!(console.len(), 1);
+    assert!(console[0].as_str().unwrap().contains("captured 中文🙂"));
     let image = &result["content"][1];
     assert_eq!(image["type"], "image");
     assert_eq!(image["mimeType"], "image/png");
@@ -258,7 +271,283 @@ async fn sdk_returns_png_as_content_beside_matching_text_and_structured_result()
             .unwrap(),
         vec![7; 4096]
     );
+    let retained = client
+        .tool(
+            "result",
+            json!({"app":APP,"execution_id":compact["execution_id"]}),
+        )
+        .await;
+    let full = decoded(&retained);
+    assert_eq!(retained["isError"], result["isError"]);
+    assert_eq!(full["value"], compact["value"]);
+    assert_eq!(retained["content"][1], result["content"][1]);
+    assert_eq!(full["script"]["steps"].as_array().unwrap().len(), 2);
+    assert!(compact["script"].get("steps").is_none());
     assert_eq!(catalog.backend.0.captures.load(Ordering::SeqCst), 1);
+    client.close().await;
+}
+
+#[tokio::test]
+async fn sdk_exec_compacts_repeated_reads_while_result_retains_the_original_ledger() {
+    let (server, catalog) = server();
+    let mut client = Client::new(server.clone()).await;
+    let response = client
+        .tool(
+            "exec",
+            input(
+                "const w=(await app.windows()).windows[0].window_ref;\n\
+                 let observed;\n\
+                 for(let i=0;i<24;i++) observed=await app.observe({window_ref:w});\n\
+                 return {label:observed.elements[0].label,reads:24};",
+            ),
+        )
+        .await;
+    assert_eq!(response["isError"], false);
+    let compact = decoded(&response);
+    assert_eq!(compact["app"], APP);
+    assert_eq!(compact["status"], "completed");
+    assert!(compact["execution_id"].is_string());
+    assert_eq!(
+        compact["value"]["result"],
+        json!({"label":"Increment","reads":24})
+    );
+    assert_eq!(compact["value"]["calls"], 25);
+    assert_eq!(
+        compact["script"]["summary"],
+        json!({"steps":25,"failed":0,"pending":0})
+    );
+    assert_eq!(compact["script"]["state_committed"], true);
+    assert!(compact["script"]["failure"].is_null());
+    assert!(compact["script"].get("steps").is_none());
+    for field in ["app_ref", "operation", "receipt"] {
+        assert!(compact.get(field).is_none(), "{field}: {compact}");
+    }
+
+    let result_args = json!({"app":APP,"execution_id":compact["execution_id"]});
+    let retained = client.tool("result", result_args.clone()).await;
+    let full = decoded(&retained);
+    assert_eq!(retained["isError"], response["isError"]);
+    assert_eq!(full, call(&server, "result", result_args.clone()).data);
+    let steps = full["script"]["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 25);
+    assert_eq!(steps[0]["operation"], "windows");
+    assert!(steps[0]["inventory"].is_object());
+    assert!(steps[1..].iter().all(|step| step["operation"] == "observe"));
+    assert!(full["script"].get("summary").is_none());
+    for field in [
+        "app",
+        "execution_id",
+        "status",
+        "error",
+        "value",
+        "context_reset",
+        "state_reset",
+        "payload_expired",
+    ] {
+        assert_eq!(compact.get(field), full.get(field), "{field}");
+    }
+    for field in ["failure", "state_committed", "shutdown_error"] {
+        assert_eq!(compact["script"].get(field), full["script"].get(field));
+    }
+    assert_eq!(client.tool("result", result_args).await, retained);
+    let mut selected = decoded(&client.tool("result", json!({"app":APP})).await);
+    assert!(selected
+        .as_object_mut()
+        .unwrap()
+        .remove("selection")
+        .is_some());
+    assert_eq!(selected, full);
+
+    let compact_bytes = serde_json::to_vec(&compact).unwrap().len();
+    let full_bytes = serde_json::to_vec(&full).unwrap().len();
+    eprintln!(
+        "25 read steps, same execution: exec={compact_bytes} bytes, result={full_bytes} bytes, ratio={:.3}",
+        compact_bytes as f64 / full_bytes as f64
+    );
+    assert!(compact_bytes * 2 < full_bytes);
+    assert_eq!(catalog.backend.0.windows.load(Ordering::SeqCst), 1);
+    assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 24);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+    client.close().await;
+}
+
+#[tokio::test]
+async fn sdk_exec_keeps_caught_unknown_and_mismatch_evidence_in_the_summary() {
+    for (provider, failed, caught) in [
+        (
+            ActionOutcome::unknown(Error::BackendFailed("controlled unknown action".into())),
+            1,
+            json!("backend_failed"),
+        ),
+        (
+            ActionOutcome {
+                dispatch: DispatchState::Unknown,
+                evidence: EffectEvidence::Unverified,
+                error: None,
+            },
+            0,
+            Value::Null,
+        ),
+        (
+            ActionOutcome {
+                dispatch: DispatchState::Dispatched,
+                evidence: EffectEvidence::Mismatch {
+                    expected: "counter=1".into(),
+                    observed: "counter=2".into(),
+                },
+                error: None,
+            },
+            0,
+            Value::Null,
+        ),
+    ] {
+        let (server, catalog) = server();
+        catalog.backend.0.model.lock().unwrap().outcome = provider.clone();
+        let mut client = Client::new(server).await;
+        let response = client
+            .tool(
+                "exec",
+                input(
+                    "const w=(await app.windows()).windows[0].window_ref;\n\
+                     const o=await app.observe({window_ref:w});\n\
+                     let caught=null;\n\
+                     try {await app.press({window_ref:w,observation_ref:o.observation_ref,element_ref:o.elements[0].element_ref});}\n\
+                     catch(e) {caught=e.code;}\n\
+                     await app.windows();\n\
+                     return {caught};",
+                ),
+            )
+            .await;
+        assert_eq!(response["isError"], false, "{response}");
+        let compact = decoded(&response);
+        assert_eq!(compact["value"]["result"]["caught"], caught);
+        assert_eq!(compact["script"]["state_committed"], true);
+        assert!(compact["script"]["failure"].is_null());
+        let summary = &compact["script"]["summary"];
+        assert_eq!(summary["steps"], 4);
+        assert_eq!(summary["failed"], failed);
+        assert_eq!(summary["pending"], 0);
+        let full = decoded(
+            &client
+                .tool(
+                    "result",
+                    json!({"app":APP,"execution_id":compact["execution_id"]}),
+                )
+                .await,
+        );
+        let issue = &summary["last_issue"];
+        let step = &full["script"]["steps"][2];
+        assert_eq!(issue["number"], 3);
+        assert_eq!(issue["operation"], "press");
+        for field in ["number", "line", "operation", "status", "error", "receipt"] {
+            assert_eq!(issue.get(field), step.get(field), "{field}");
+        }
+        assert_eq!(
+            issue["receipt"],
+            wire::receipt(&crate::runtime::ActionReceipt {
+                outcome: provider.clone(),
+                provider_outcome: Some(provider),
+                interruption: None,
+            })
+        );
+        let dispatch = issue["receipt"]["outcome"]["dispatch"].as_str().unwrap();
+        assert_eq!(summary["actions"]["dispatch"][dispatch], 1);
+        assert_eq!(summary["actions"]["provider_dispatch"][dispatch], 1);
+        let evidence = issue["receipt"]["outcome"]["evidence"]["kind"]
+            .as_str()
+            .unwrap();
+        assert_eq!(summary["actions"]["evidence"][evidence], 1);
+        assert_eq!(summary["actions"]["provider_evidence"][evidence], 1);
+        assert_eq!(full["script"]["steps"][3]["operation"], "windows");
+        assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+        assert_eq!(catalog.backend.0.windows.load(Ordering::SeqCst), 2);
+        client.close().await;
+    }
+}
+
+#[tokio::test]
+async fn sdk_later_caught_read_error_does_not_hide_an_earlier_unknown_action() {
+    let (server, catalog) = server();
+    catalog.backend.0.model.lock().unwrap().outcome =
+        ActionOutcome::unknown(Error::BackendFailed("original action failure".into()));
+    let mut client = Client::new(server).await;
+    let response = client
+        .tool(
+            "exec",
+            input(
+                "const w=(await app.windows()).windows[0].window_ref;\n\
+                 const o=await app.observe({window_ref:w});\n\
+                 try {await app.press({window_ref:w,observation_ref:o.observation_ref,element_ref:o.elements[0].element_ref});} catch(e) {}\n\
+                 try {await app.observe({window_ref:'not-an-issued-window'});} catch(e) {}\n\
+                 return 'caught both';",
+            ),
+        )
+        .await;
+    assert_eq!(response["isError"], false);
+    let compact = decoded(&response);
+    assert_eq!(compact["value"]["result"], "caught both");
+    let summary = &compact["script"]["summary"];
+    assert_eq!(summary["steps"], 4);
+    assert_eq!(summary["failed"], 2);
+    assert_eq!(summary["actions"]["dispatch"]["unknown"], 1);
+    assert_eq!(summary["actions"]["provider_dispatch"]["unknown"], 1);
+    assert_eq!(summary["last_issue"]["number"], 4);
+    assert_eq!(summary["last_issue"]["operation"], "observe");
+    assert_eq!(summary["last_issue"]["error"]["code"], "target_changed");
+    assert!(summary["last_issue"]["receipt"].is_null());
+    let full = decoded(
+        &client
+            .tool(
+                "result",
+                json!({"app":APP,"execution_id":compact["execution_id"]}),
+            )
+            .await,
+    );
+    let original_action = &full["script"]["steps"][2];
+    assert_eq!(original_action["receipt"]["outcome"]["dispatch"], "unknown");
+    assert_eq!(
+        original_action["receipt"]["provider_outcome"]["error"]["message"],
+        "original action failure"
+    );
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+    // The invalid read fails before native dispatch; reading result adds no work.
+    assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 1);
+    client.close().await;
+}
+
+#[tokio::test]
+async fn sdk_completed_exec_retransmission_returns_the_same_summary_without_dispatch() {
+    let (server, catalog) = server();
+    let mut client = Client::new(server).await;
+    let params = json!({"name":"exec","arguments":input(PRESS)});
+    let id = client.begin("tools/call", params.clone()).await;
+    let original = client.reply(id.clone()).await;
+    let compact = decoded(&original["result"]);
+    assert_eq!(original["result"]["isError"], false);
+    assert_eq!(
+        compact["script"]["summary"]["actions"]["dispatch"]["dispatched"],
+        1
+    );
+    assert!(compact["script"]["summary"].get("last_issue").is_none());
+    for _ in 0..3 {
+        client
+            .send(json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":params}))
+            .await;
+        assert_eq!(client.reply(id.clone()).await, original);
+    }
+    let full = decoded(
+        &client
+            .tool(
+                "result",
+                json!({"app":APP,"execution_id":compact["execution_id"]}),
+            )
+            .await,
+    );
+    assert_eq!(full["value"], compact["value"]);
+    assert_eq!(full["script"]["steps"].as_array().unwrap().len(), 3);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+    assert_eq!(catalog.backend.0.windows.load(Ordering::SeqCst), 1);
+    assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 1);
     client.close().await;
 }
 
@@ -360,6 +649,92 @@ async fn sdk_cancellation_preserves_original_receipt_and_allows_later_work() {
     let mut original = original;
     original.as_object_mut().unwrap().remove("selection");
     assert_eq!(retained, original);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+    client.close().await;
+}
+
+#[tokio::test]
+async fn sdk_cancelled_exec_retransmission_preserves_provider_evidence_and_interruption() {
+    let (server, catalog) = server();
+    let provider = ActionOutcome {
+        dispatch: DispatchState::Dispatched,
+        evidence: EffectEvidence::Mismatch {
+            expected: "counter=1".into(),
+            observed: "counter=2".into(),
+        },
+        error: Some(Error::BackendFailed("late provider diagnostic".into())),
+    };
+    catalog.backend.0.model.lock().unwrap().outcome = provider.clone();
+    let gate = catalog.backend.action_gate();
+    let mut client = Client::new(server).await;
+    let params = json!({"name":"exec","arguments":input(PRESS)});
+    let id = client.begin("tools/call", params.clone()).await;
+    let gate = reached(gate).await;
+    client
+        .send(json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":id}}))
+        .await;
+    // Hold the provider reply until the real MCP cancellation has reached Core.
+    // Its eventual diagnostic must coexist with the terminal interruption.
+    tokio::time::timeout(RESPONSE_TIMEOUT, async {
+        while catalog.backend.0.shutdowns.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("cancellation did not reach the native owner");
+    gate.release();
+    // The SDK may suppress a cancelled response. Settle through the original
+    // record, then retransmit the same RPC frame to inspect its exec projection.
+    let original = tokio::time::timeout(RESPONSE_TIMEOUT, async {
+        loop {
+            let current = decoded(&client.tool("result", json!({"app":APP})).await);
+            if current["status"] == "completed" {
+                break current;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("cancelled execution did not settle");
+    client
+        .send(json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":params}))
+        .await;
+    let response = client.reply(id).await;
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let compact = decoded(&response["result"]);
+    assert_eq!(compact["execution_id"], original["execution_id"]);
+    assert_eq!(compact["status"], "completed");
+    assert_eq!(compact["script"]["state_committed"], false);
+    let summary = &compact["script"]["summary"];
+    assert_eq!(summary["steps"], 3);
+    assert_eq!(summary["failed"], 1);
+    assert_eq!(summary["pending"], 0);
+    assert_eq!(summary["actions"]["dispatch"]["unknown"], 1);
+    assert_eq!(summary["actions"]["provider_dispatch"]["dispatched"], 1);
+    assert_eq!(summary["actions"]["provider_evidence"]["mismatch"], 1);
+    assert_eq!(summary["actions"]["interrupted"], 1);
+    assert_eq!(
+        summary["last_issue"]["receipt"],
+        wire::receipt(&crate::runtime::ActionReceipt {
+            outcome: ActionOutcome::unknown(Error::Cancelled),
+            provider_outcome: Some(provider),
+            interruption: Some(Error::Cancelled),
+        })
+    );
+    let retained = client
+        .tool(
+            "result",
+            json!({"app":APP,"execution_id":compact["execution_id"]}),
+        )
+        .await;
+    assert_eq!(retained["isError"], response["result"]["isError"]);
+    let full = decoded(&retained);
+    assert_eq!(full["error"], compact["error"]);
+    assert_eq!(full["script"]["failure"], compact["script"]["failure"]);
+    assert_eq!(
+        full["script"]["steps"][2]["receipt"],
+        summary["last_issue"]["receipt"]
+    );
     assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
     client.close().await;
 }

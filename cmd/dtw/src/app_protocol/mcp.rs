@@ -47,22 +47,23 @@ impl<F: Factory> ServerHandler for Handler<F> {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        let compact = request.name == "exec";
         if context.ct.is_cancelled() || self.lifecycle.stopped.is_cancelled() {
-            return Ok(result(problem(
-                "cancelled",
-                "Call cancelled before admission",
-            )));
+            return Ok(result(
+                problem("cancelled", "Call cancelled before admission"),
+                compact,
+            ));
         }
         let id = context.id.into_json_value();
         let args = Value::Object(request.arguments.unwrap_or_default());
         let call = match self.server.begin(id, &request.name, args) {
-            Started::Reply(reply) => return Ok(result(reply)),
+            Started::Reply(reply) => return Ok(result(reply, compact)),
             // Every duplicate waits for the same owner. Do not depend solely
             // on the SDK token: another duplicate can replace it for this ID.
             Started::InFlight(call) => {
                 return tokio::select! {
-                    _ = call.wait_finished() => Ok(result(self.server.completed_reply(&call))),
-                    _ = context.ct.cancelled() => Ok(result(problem("cancelled", "Original call owns this response"))),
+                    _ = call.wait_finished() => Ok(result(self.server.completed_reply(&call), compact)),
+                    _ = context.ct.cancelled() => Ok(result(problem("cancelled", "Original call owns this response"), compact)),
                 };
             }
             Started::Call(call) => call,
@@ -90,7 +91,7 @@ impl<F: Factory> ServerHandler for Handler<F> {
         };
         guard.call = None;
         match completed {
-            Ok(reply) => Ok(result(reply)),
+            Ok(reply) => Ok(result(reply, compact)),
             Err(_) => {
                 self.lifecycle.fail(
                     "execution_panicked",
@@ -161,7 +162,12 @@ impl<F: Factory> Drop for CancelOnDrop<F> {
     }
 }
 
-fn result(reply: Reply) -> CallToolResponse {
+fn result(reply: Reply, compact: bool) -> CallToolResponse {
+    let reply = if compact {
+        super::projection::execution(reply)
+    } else {
+        reply
+    };
     let mut result = CallToolResult::structured(reply.data);
     result.is_error = Some(reply.is_error);
     if let Some(image) = reply.image {
@@ -177,9 +183,9 @@ pub fn tools() -> Value {
     let read = json!({"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true});
     json!([
         {"name":"apps","description":"List running applications with stable identifiers and discover the supported app script API, schemas and limits. No window contents or screenshots are read.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":read},
-        {"name":"exec","description":"Run JavaScript in exactly the app identified by the required app identifier. Use app.windows(), app.observe({window_ref}), app.capture({window_ref}), app.press({window_ref,observation_ref,element_ref}), app.click({window_ref,observation_ref,x,y}); await methods sequentially. apps provides full schemas. The call waits for completion, returns original per-step receipts and the last PNG outside JS. state persists separately for each app in this MCP session. DTW generates execution_id; callers supply only app and source. A new MCP request ID executes new work even when source is identical. Inspect effects independently; cancellation is not undo.",
+        {"name":"exec","description":"Run JavaScript in exactly the app identified by the required app identifier. Use app.windows(), app.observe({window_ref}), app.capture({window_ref}), app.press({window_ref,observation_ref,element_ref}), app.click({window_ref,observation_ref,x,y}); await methods sequentially. apps provides full schemas. The call waits for completion, returns a compact step/effect summary and the last PNG outside JS; result retrieves the full original ledger. state persists separately for each app in this MCP session. DTW generates execution_id; callers supply only app and source. A new MCP request ID executes new work even when source is identical. Inspect effects independently; cancellation is not undo.",
             "inputSchema":{"type":"object","additionalProperties":false,"properties":{"app":app_id::schema(),"source":{"type":"string","minLength":1,"maxLength":65536,"description":"JavaScript async function body, at most 64 KiB UTF-8; supports await and return. No imports, filesystem, network or process APIs."}},"required":["app","source"]},
             "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}},
-        {"name":"result","description":"Read this MCP session's latest accepted execution for the app, including a running or failed execution, cancellation and app exit. Optionally pass a DTW-generated execution_id to retrieve an older record. This is read-only and never replays work. Records do not cross connections; missing records never prove absence of effects.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"app":app_id::schema(),"execution_id":id},"required":["app"]},"annotations":read}
+        {"name":"result","description":"Read the full original execution ledger for this MCP session's latest accepted execution for the app, including a running or failed execution, cancellation and app exit. Optionally pass a DTW-generated execution_id to retrieve an older record. This is read-only and never replays work. Records do not cross connections; missing records never prove absence of effects.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"app":app_id::schema(),"execution_id":id},"required":["app"]},"annotations":read}
     ])
 }

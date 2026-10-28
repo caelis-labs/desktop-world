@@ -16,6 +16,7 @@ mod description;
 pub mod mcp;
 mod mcp_io;
 mod methods;
+mod projection;
 mod script_engine;
 mod scripts;
 pub mod server;
