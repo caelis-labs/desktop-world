@@ -104,6 +104,13 @@ def source_identity(repo, run):
             "cargo_lock_sha256": hashlib.sha256(lock_blob.encode("utf-8")).hexdigest()}
 
 
+def export_source(repo, archive, commit, run):
+    # git archive also applies core.autocrlf. Export committed text consistently
+    # on Windows without rewriting intentionally binary/-text notice files.
+    run(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "archive",
+         "--format=tar", f"--output={archive}", commit], cwd=repo)
+
+
 def extract_source(archive, destination):
     destination.mkdir()
     with tarfile.open(archive) as tar:
@@ -436,7 +443,7 @@ def build(repo, output, target, signing_identity=None, notary_profile=None):
         require(signing_identity != "-", "An ad-hoc identity cannot establish a signed distribution candidate")
         identity = source_identity(repo, commands.run)
         source_tar = output / "source.tar"
-        commands.run(["git", "archive", "--format=tar", f"--output={source_tar}", identity["commit"]], cwd=repo)
+        export_source(repo, source_tar, identity["commit"], commands.run)
         source = output / "source"
         extract_source(source_tar, source)
         version, locked = check_version(source)

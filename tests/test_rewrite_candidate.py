@@ -1,4 +1,4 @@
-"""Pure candidate-package gates; no Git, Cargo, signing, network, or GUI commands."""
+"""Candidate gates: local temporary Git regression, no Cargo/signing/network/GUI."""
 
 import hashlib
 import importlib.util
@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import stat
 import struct
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -89,6 +90,8 @@ class Fixture(unittest.TestCase):
         def run(owner, args, *, cwd, env=None, check=True):
             args = list(map(str, args))
             calls.append(args)
+            while args[:2] == ["git", "-c"]:
+                args = ["git"] + args[3:]
             owner.rows.append({"argv": args, "cwd": str(cwd), "returncode": 0})
             if args[:2] == ["git", "rev-parse"]:
                 return ({"--show-toplevel": str(self.repo), "HEAD": "a" * 40, "HEAD^{tree}": "b" * 40}[args[2]], "")
@@ -151,6 +154,27 @@ class Fixture(unittest.TestCase):
 
 
 class SourceAndOutputTests(Fixture):
+    def test_real_git_archive_is_independent_of_autocrlf(self):
+        def run(args, *, cwd):
+            result = subprocess.run(args, cwd=cwd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            return result.stdout.decode("utf-8"), result.stderr.decode("utf-8")
+        hooks = self.root / "empty-hooks"
+        hooks.mkdir()
+        run(["git", "init", "--quiet"], cwd=self.repo)
+        run(["git", "config", "core.autocrlf", "true"], cwd=self.repo)
+        put(self.repo, ".gitattributes", "preserved-notice -text\n")
+        put(self.repo, "preserved-notice", b"Original notice\r\nMust stay byte-identical\r\n")
+        run(["git", "add", "."], cwd=self.repo)
+        run(["git", "-c", "commit.gpgsign=false", "-c", f"core.hooksPath={hooks}",
+             "-c", "user.name=Package test", "-c", "user.email=package@example.invalid",
+             "commit", "--quiet", "-m", "local archive fixture"], cwd=self.repo)
+        archive = self.root / "fixed-source.tar"
+        candidate.export_source(self.repo, archive, "HEAD", run)
+        with tarfile.open(archive) as exported:
+            for name in ("cmd/dtw/Cargo.lock", "preserved-notice"):
+                blob = subprocess.check_output(["git", "show", "HEAD:" + name], cwd=self.repo)
+                self.assertEqual(exported.extractfile(name).read(), blob)
+
     def test_clean_crlf_checkout_hashes_committed_lf_blob(self):
         lock = self.repo / "cmd/dtw/Cargo.lock"
         canonical = lock.read_bytes()
