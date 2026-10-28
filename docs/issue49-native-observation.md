@@ -1,5 +1,7 @@
 # Issue #49: native discovery and exact-window observation
 
+> Historical evidence: this report applies only to its named source revision, binary and entry point. The current product uses [standard MCP and explicit app IDs](app-protocol-v1.md); any grant, manifest, SDK/worker or custom Host setup below is superseded and is not a current installation instruction. No acceptance result here is claimed to have been rerun for the new entry.
+
 First-batch implementation and macOS acceptance, 2026-10-27. Tracks
 [#49](https://github.com/caelis-labs/desktop-world/issues/49); the focus recovery
 and AX readiness work is documented in the subsequent

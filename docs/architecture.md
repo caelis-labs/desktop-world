@@ -1,169 +1,29 @@
-# DTW runtime and desktop extensions
+# DTW architecture
 
-DTW is a Rust Agent Plugin: MCP + Skills, linked to the official CUA SDK and one
-supervised private worker. CUA owns QuickJS `run_script`, accessibility, ordinary
-screenshots and general desktop actions. DTW does not copy the JS engine, modify
-CUA, or require Node. The SDK and worker are locked to the same released component
-revision (currently the 0.38.0 stable component release).
-DTW checks click options and translates its documented `modifiers` alias to
-CUA's `modifier` array; the native prelude and driver stay unmodified. Per-method
-options, regression evidence and upstream limitations are in [the click contract](click-contract.md).
+The canonical architecture is [next-architecture-baseline.md](next-architecture-baseline.md). This page is the short implementation map.
 
-## Runtime-owned execution context
+```text
+Agent / Harness tool policy
+    | standard MCP tools + optional Agent Skill
+    v
+DTW Agent interface: apps / exec / result
+    | explicit stable app ID + script + request ID
+    v
+Execution context: bounded VM, jobs, JSON state, receipts, cancellation
+    | typed operations bound to the same running App instance
+    v
+Computer Core: target/reference checks, dispatch and effect evidence
+    | native-provider contract
+    v
+DTW supervised native worker: macOS AX + capture/input capability groups
+```
 
-The public surface remains one `exec` tool with `apps`, `windows`, `observe`, `run`, `app`, `click`, small native
-pass-through operations, and `status/result/cancel`. There is no public session
-parameter. Legacy named-session requests fail explicitly; their state is never
-silently merged. Each stdio MCP process owns one private native MCP session,
-created lazily with unpredictable host-generated session and transport labels, plus JSON script state
-and receipts. One admitted execution runs at a time; control requests remain
-available. Successful scripts commit bounded JSON state; failures do not.
+DTW does not own approval or authorization policy. Its boundary is concrete target identity and execution correctness. The public `app` field is a stable platform ID string. PID and process generation belong to internal instance resolution, not the Agent interface. Providers retain their native objects and prove window ownership; Core rejects wrong-instance, stale or incompatible references before dispatch.
 
-After 25 idle minutes, DTW invalidates old handles, ends the idle native session,
-and returns `runtime_context_reset` without dispatching the requested action.
-The next observation starts a fresh session in the same worker and immutable
-native authorization context. Continuous use has no absolute-age cutoff. Native
-manifest expiry/idle limits remain authoritative and are never renewed. Worker
-failure is surfaced on the original receipt; unknown actions are never replayed.
-Process restart loses receipts and native tokens. Independent tasks require
-independent MCP processes or a host-provided authenticated context boundary; DTW
-cannot infer chat IDs from a shared connection. Multiple processes still share
-one physical desktop, so their input must be coordinated by the host.
+CUA is a source donor, not a runtime dependency. The fixed source baseline is recorded in [native-source-provenance.md](native-source-provenance.md). DTW uses its own operation types and script facade. It does not load the CUA SDK, registry or upstream worker, and does not expose a generic native-tool escape.
 
-## Application observation extension
+The current script subset is window discovery, semantic observation, window capture, semantic press and pixel click. Methods are Promise-returning and execute through the same Core boundary. Script state commits only on success; desktop effects are not transactional. See [script v1](app-script-v1.md).
 
-`app_view.rs` contains the observation/point contract; `app_view/Scene.swift` is a
-small statically linked public macOS API bridge. Each native operation runs in a
-bounded child of the same signed DTW executable, without starting another CUA
-worker. The MCP parent owns a per-user file lease until the child exits. This
-releases its SCK client before another Runtime uses the bridge; multiple live
-SCScreenshotManager clients of one executable reproduced missing image callbacks
-on the test machine. The lease waits at most three seconds; child execution is
-bounded to 25 seconds. Receipts and script state stay private to each MCP process.
-There is no shared daemon or separate helper installation. These modules are compiled
-extensions, not a dynamic plugin ABI. There are no app-specific WPS/Obsidian rules
-or private AX symbols. WindowServer supplies visible stacking; same-PID windows
-are associated directly. Remote surfaces additionally require public AX client
-attribution, matching window geometry and visible-point checks. The inventory
-keeps all attributable visible candidates; default output retains the upper two
-images (`max_windows` can expand to eight). Potential unrelated occluders are
-reported as metadata, without their titles or screenshots.
+C6 extends complete capability groups with their state ownership and cleanup. It does not require a new plugin framework or a split into more crates. The [product matrix](product-matrix.md) records actual support; dated acceptance reports establish evidence only for their named revisions and binaries.
 
-All application-extension windows use ScreenCaptureKit's exact single-window
-filter, with shadows and child-window composition excluded. The filter's content
-rectangle must match the observed window and the output must match configured
-pixel dimensions. This avoids CUA 0.38's parent-plus-sheet composition passing an
-outer-dimension validity check. Discovery is checked
-again after capture; incomplete/changed frames return an error, never a misleading
-successful partial observation. This is sequential capture, not an atomic frame.
-Window-unavailable or changed-inventory transitions allow at most two additional
-whole read-only attempts, separated by 150 ms. No partial frame set is reused;
-permissions, helper timeouts and geometry-contract errors are not retried.
-
-## Screenshot-bound input
-
-An app observation returns a runtime-private 32-hex binding, exact image sizes,
-window identities, capture backend and input route. Only one observation is live;
-it expires after 30 seconds, is consumed by a click attempt, and is invalidated by
-new observations, scripts, other operations or context reset. Retrieving receipt
-pages does not invalidate it. No caller-supplied PID or global coordinate overrides
-are accepted by `operation=click`.
-
-Before input DTW checks process identity, associated windows and geometry, then
-validates the point against current visible stacking. WindowServer can include
-transparent full-display surfaces; bounded SCK alpha checks examine only the
-point locally and never disclose unrelated pixels. Unknown or opaque coverage
-refuses input. Application frames use DTW's CGEvent left-click route at a visible,
-verified point; no activation, hidden-window delivery or automatic fallback.
-The real pointer is positioned first, then geometry, hit stack and pointer are
-revalidated. Events carry clickState=1 and separated down/up timing. This route
-does move the physical pointer; CUA's separate script capture route is unchanged.
-If a native input child times out or exits without a complete reply, its receipt
-is `unknown`; no input is replayed. A delivered event is not proof of effect. Agent must reobserve; stale/failed/unknown
-actions are not replayed. Races with another controller cannot be eliminated.
-
-## Capability and integration limits
-
-The application extension needs macOS 14.2+, Accessibility and Screen Recording.
-Other platforms retain the CUA path and report the extension unavailable. Public
-APIs cannot prove ownership for every helper app, inaccessible modal, protected
-surface, minimized window or other Space. `association_complete` is always false.
-Top2 is a focus policy, not a completeness claim. Reobserve or explicitly widen
-scope when the expected surface is missing; never infer that the modal closed.
-
-## Native browser and diagnostics bridge
-
-The single `exec` MCP exposes the ten typed browser operations, `health_report`
-and `get_guide` through a fixed allowlist. `describe` reads the linked worker's
-canonical schema and removes its session parameter. Native arguments are nested
-under `arguments`; session/private-context overrides are rejected before dispatch.
-Calls run in the existing serialized job queue and native authorization context.
-Completed native receipts contain actionable JSON: tabs, bindings, refs, outline,
-continuations and adapted `next_call` arguments without session/private fields.
-Large responses advertise a result page; raw native diagnostics and images remain
-retrievable through existing receipt pagination. `describe` without a name exposes
-configured targets so a bounded browser task never needs a script scout. Structured
-browser refusals map to failed jobs even when upstream MCP isError is false;
-successful health diagnostics can still report degraded individual checks.
-
-Profile, endpoint, file-transfer authorization and opaque target/tab/ref lifetimes
-remain upstream-owned. A host can launch DTW with an explicitly approved native
-capability manifest, enabling CUA bounded mode with exact profile/window/origin
-and file grants. DTW snapshots the bytes before worker initialization. Its custom
-SCK app/click routes are disabled in bounded mode because they cannot enforce a
-native manifest. The default remains standard mode, without an existing-profile grant.
-
-The Harness decides whether to dispatch a tool call. DTW has no separate form,
-approval timeout or permission cache. Like CUA's native MCP server, its trusted
-adapter supplies native download approval evidence for an admitted `tools/call`.
-All native calls use the same private session/transport identity and immutable
-manifest. Caller-supplied private fields are rejected, and CUA still validates
-resource scope, current refs and destinations. Ordinary absolute download paths
-are canonicalized at the adapter boundary. The single exec tool conservatively
-advertises potentially destructive, non-idempotent, open-world behavior; nested
-operation schemas are descriptive, not a substitute for Harness policy.
-
-MCP request IDs track their admitted job. Cancellation before job admission only
-removes that request; a late/read-only cancellation cannot kill unrelated work.
-Cancelling an admitted running job retains the conservative worker stop and
-unknown-effect receipt. Inputs are never replayed automatically.
-
-The private worker still has no dynamic `DriverAuthorizationHost` callback bridge;
-ordinary MCP elicitation must never substitute for that protected profile callback.
-The implemented profile path is CUA's native launch-approved bounded manifest.
-Arbitrary tools, legacy page mutations,
-session/configuration management and automatic input replay remain unavailable.
-On normal idle shutdown, DTW closes admission and gives the native session up to
-two seconds to end and release session-owned browsers before stopping the worker.
-Busy/cancelled shutdown keeps the immediate supervisor stop. Hard crashes and
-forced interruption cannot promise graceful browser/profile cleanup.
-
-Distribution remains one platform executable embedding the official worker,
-Skills, manifests and notices. The Swift bridge is statically linked, so it adds
-no separately installed runtime. OS-extension tests and CUA upgrade tests are
-separate. Upgrade official release/prerelease candidates as SDK+worker pairs,
-lock the exact revision/checksum, run contract and real GUI gates, and keep the
-previous tested pair available. Remove an extension only when the upstream path
-passes the same cases. See [checkpoint acceptance](runtime-acceptance.md) and [RC.9 acceptance](rc9-acceptance.md).
-
-## Native observation presentation
-
-`apps` and `windows` use the same serialized native session as scripts. They
-validate a small typed argument set, filter/project native records and return
-bounded live pages with totals and continuation calls. `apps` defaults to running
-processes; `windows` requires a PID or app filter and never picks a candidate.
-Layer hints describe OS stacking, not inferred AX roles. Filtering does not
-reduce upstream enumeration cost. The receipt preserves its full native inventory;
-continuation calls re-enumerate and may shift if the desktop changes.
-
-`observe` reads an exact PID/window through CUA. Only this explicit native route
-projects one tree into its summary; arbitrary script values retain their original
-semantics. Raw structured output, tokens and diagnostics remain paged on demand.
-Summary truncation is explicit and links to the original receipt. No new observation
-is needed to retrieve its full payload.
-
-`app` accepts an optional exact `window_id`. Selection takes place within the
-attributed visible inventory before the image limit; an absent ID fails without
-fallback. Existing full-inventory, geometry, expiry and occlusion checks continue
-to govern the resulting screenshot-bound click. Without an ID the legacy
-front-to-back selection remains unchanged.
+The SDK/worker architecture formerly described at this path is historical. Its source is retained at [the last C5 baseline](https://github.com/caelis-labs/desktop-world/blob/d0d8279130b74a58496e13b7f6a4c4565f6f00cf/docs/architecture.md).

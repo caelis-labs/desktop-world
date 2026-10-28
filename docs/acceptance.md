@@ -1,5 +1,7 @@
 # Acceptance status
 
+> Historical evidence: this report applies only to its named source revision, binary and entry point. The current product uses [standard MCP and explicit app IDs](app-protocol-v1.md); any grant, manifest, SDK/worker or custom Host setup below is superseded and is not a current installation instruction. No acceptance result here is claimed to have been rerun for the new entry.
+
 > Historical checkpoint record. Build flags, default entry points and release plans below belong to the recorded revision. The current rewrite-only build is described in [building](building.md); this evidence does not validate a newly built binary.
 
 This file records earlier release acceptance. The current independent worktree changes the session contract and adds macOS app observation; its exact-package evidence and unresolved cold-start failure are in [runtime acceptance](runtime-acceptance.md). Earlier GUI and Windows passes are not evidence for the new binary.

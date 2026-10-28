@@ -11,6 +11,7 @@ mod worker;
 pub use worker::worker_entry;
 
 pub struct AppInfo {
+    pub app_id: String,
     pub app: AppInstance,
     pub name: String,
 }
@@ -26,8 +27,8 @@ pub struct NativeBinding {
 impl Drop for NativeBinding {
     fn drop(&mut self) {
         if let Some(token) = self.semantic.take() {
-            // Cleanup is authority-free: it only releases objects. It cannot
-            // extend a grant or invoke input, and a failed worker is never revived.
+            // Cleanup only releases objects. It cannot invoke input, and a failed
+            // worker is never revived.
             let until = Instant::now() + Duration::from_millis(300);
             let _ = self.worker.call(
                 json!({"operation":"release","binding":token,"request_id":unique_generation()})
@@ -45,7 +46,27 @@ impl Drop for NativeBinding {
         }
     }
 }
+const COVERAGE: &str =
+    "same-PID standard layer-0 AX windows; no sheet/menu/helper routing or automatic focus";
+const CONDITIONS: &[&str] = &[
+    "observe and press require macOS Accessibility permission",
+    "capture and click require macOS Screen Recording permission",
+    "click requires a visible, unobstructed point in the captured window",
+    "modal windows and attached sheets are currently unsupported",
+];
 impl NativeBackend {
+    fn supports_capability(capability: Capability) -> bool {
+        match capability {
+            Capability::Observe | Capability::Press | Capability::Capture | Capability::Click => {
+                true
+            }
+        }
+    }
+    pub fn description() -> Value {
+        json!({"provider":"dtw-macos-native", "coverage":COVERAGE,"conditions":CONDITIONS,
+            "supported_capabilities":Capability::ALL.into_iter().filter(|c|Self::supports_capability(*c)).map(Capability::as_str).collect::<Vec<_>>()})
+    }
+
     pub fn spawn() -> Result<Self, Error> {
         let exe = std::env::current_exe().map_err(failed)?;
         let worker = Worker::spawn(&exe, &["--dtw-native-worker"]).map_err(transport_error)?;
@@ -73,6 +94,7 @@ impl NativeBackend {
             .iter()
             .map(|entry| {
                 Ok(AppInfo {
+                    app_id: string(entry, "bundle_id")?.into(),
                     app: parse_app(&entry["app"])?,
                     name: string(entry, "name")?.into(),
                 })
@@ -158,8 +180,14 @@ impl Backend for NativeBackend {
     fn stamp(&self) -> ProviderStamp {
         self.stamp.clone()
     }
-    fn supports(&self, _: Capability) -> bool {
-        true
+    fn supports(&self, capability: Capability) -> bool {
+        Self::supports_capability(capability)
+    }
+    fn coverage(&self) -> &'static str {
+        COVERAGE
+    }
+    fn conditions(&self) -> &'static [&'static str] {
+        CONDITIONS
     }
     fn windows(&self, app: &AppInstance, call: &CallContext<'_>) -> Result<WindowInventory, Error> {
         let result = self.read_rpc(json!({"operation":"windows","app":app_json(app)}), call)?;
@@ -202,13 +230,7 @@ impl Backend for NativeBackend {
         }
         let elements = array(&reply, "elements")?
             .iter()
-            .map(|e| {
-                Ok(Element {
-                    id: ElementId(number(e, "id")?),
-                    label: string(e, "label")?.into(),
-                    can_press: e["can_press"].as_bool().ok_or(Error::InvalidObservation)?,
-                })
-            })
+            .map(parse_element)
             .collect::<Result<_, Error>>()?;
         Ok(BackendObservation {
             target: parse_target(&reply["target"])?,
@@ -363,6 +385,54 @@ mod tests {
     }
 
     #[test]
+    fn native_conditions_preserve_codes_separately_from_prose_and_dispatch() {
+        for code in [
+            "permission_denied",
+            "unsupported_modal",
+            "future_native_condition",
+        ] {
+            let error = Error::NativeFailure {
+                code: code.into(),
+                message: "not a classification input".into(),
+            };
+            assert_eq!(
+                reply_error(&json!({"error":code,"message":"not a classification input"})),
+                Some(error.clone())
+            );
+            assert_eq!(
+                action_reply(
+                    &json!({"dispatch":"unknown","evidence":"unverified","error":code,"message":"not a classification input"})
+                ),
+                ActionOutcome::unknown(error)
+            );
+        }
+    }
+
+    #[test]
+    fn semantic_fields_are_read_independently_and_invalid_action_claims_are_rejected() {
+        let mut value = json!({"id":1,"label":"display string unrelated to role or value",
+            "role":"text_field","name":"Search","value":"hello","enabled":true,"actions":[],"can_press":false});
+        let element = parse_element(&value).unwrap();
+        assert_eq!(element.role, "text_field");
+        assert_eq!(element.name.as_deref(), Some("Search"));
+        assert_eq!(element.value.as_deref(), Some("hello"));
+        assert!(element.actions.is_empty());
+        value["enabled"] = Value::Null;
+        assert_eq!(parse_element(&value).unwrap().enabled, None);
+        value["can_press"] = json!(true);
+        assert_eq!(parse_element(&value), Err(Error::InvalidObservation));
+        value["actions"] = json!(["press"]);
+        assert_eq!(parse_element(&value), Err(Error::InvalidObservation));
+        value["enabled"] = json!(true);
+        assert_eq!(parse_element(&value).unwrap().actions, vec!["press"]);
+        value["actions"] = json!(["set_value"]);
+        assert_eq!(parse_element(&value), Err(Error::InvalidObservation));
+        value["actions"] = json!(["press"]);
+        value.as_object_mut().unwrap().remove("role");
+        assert_eq!(parse_element(&value), Err(Error::InvalidObservation));
+    }
+
+    #[test]
     fn shutdown_failure_is_not_hidden_by_context_cancellation() {
         let error = TransportError {
             kind: TransportErrorKind::Shutdown("kill failed".into()),
@@ -377,8 +447,8 @@ mod tests {
             request_may_have_been_sent: true,
         };
         assert_eq!(
-            transport_cause(control, Some(Error::GrantExpired)),
-            Error::GrantExpired
+            transport_cause(control, Some(Error::TimedOut)),
+            Error::TimedOut
         );
     }
     #[test]
@@ -461,6 +531,46 @@ fn number(v: &Value, key: &str) -> Result<u64, Error> {
 fn array<'a>(v: &'a Value, key: &str) -> Result<&'a Vec<Value>, Error> {
     v[key].as_array().ok_or(Error::InvalidObservation)
 }
+fn optional_text(value: &Value, key: &str) -> Result<Option<String>, Error> {
+    match value.get(key) {
+        Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) if text.chars().count() <= 256 => Ok(Some(text.clone())),
+        _ => Err(Error::InvalidObservation),
+    }
+}
+fn parse_element(value: &Value) -> Result<Element, Error> {
+    let can_press = value["can_press"]
+        .as_bool()
+        .ok_or(Error::InvalidObservation)?;
+    let actions = array(value, "actions")?;
+    if actions.len() > 1
+        || actions.iter().any(|action| action != "press")
+        || can_press != !actions.is_empty()
+    {
+        return Err(Error::InvalidObservation);
+    }
+    let enabled = match value.get("enabled") {
+        Some(Value::Null) => None,
+        Some(Value::Bool(value)) => Some(*value),
+        _ => return Err(Error::InvalidObservation),
+    };
+    if can_press && enabled != Some(true) {
+        return Err(Error::InvalidObservation);
+    }
+    Ok(Element {
+        id: ElementId(number(value, "id")?),
+        label: string(value, "label")?.into(),
+        role: string(value, "role")?.into(),
+        name: optional_text(value, "name")?,
+        value: optional_text(value, "value")?,
+        enabled,
+        actions: actions
+            .iter()
+            .map(|action| action.as_str().unwrap().into())
+            .collect(),
+        can_press,
+    })
+}
 fn app_json(app: &AppInstance) -> Value {
     json!({"identity":app.identity.0,"pid":app.pid,"generation":app.generation})
 }
@@ -494,10 +604,10 @@ fn reply_error(v: &Value) -> Option<Error> {
         "timed_out" | "deadline_exceeded" => Error::TimedOut,
         "unsupported_capability" | "unsupported_platform" => Error::UnsupportedCapability,
         "invalid_point" => Error::InvalidPoint,
-        _ => Error::BackendFailed(format!(
-            "{code}: {}",
-            v["message"].as_str().unwrap_or("native error")
-        )),
+        _ => Error::NativeFailure {
+            code: code.into(),
+            message: v["message"].as_str().unwrap_or("native error").into(),
+        },
     })
 }
 

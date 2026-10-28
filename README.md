@@ -1,41 +1,51 @@
 # Desktop World
 
-Desktop World (DTW) lets an Agent inspect and operate one authorized desktop app through a versioned MCP `exec` tool. DTW owns app identity, observation bindings, execution budgets and action receipts; the Harness owns user approval.
+Desktop World (DTW) lets an Agent inspect and operate desktop applications through standard MCP tools and an app-scoped JavaScript API. Every execution names a stable platform app ID, such as `com.apple.TextEdit`. DTW verifies the running instance, window and observation references, executes the operation, and reports its outcome. Tool approval and task policy belong to the Agent/Harness.
 
-This repository contains the rewrite only. The former CUA SDK/worker runtime, unrestricted script facade, plugin exporter and Agent installers have been removed. The rewrite has no release package or automatic installation path yet. Existing [releases](https://github.com/caelis-labs/desktop-world/releases) are historical products and do not install this implementation.
+The source tree contains the rewrite only, with no CUA SDK, upstream worker or old script facade. Native execution currently supports the macOS subset in the [product matrix](docs/product-matrix.md). Existing [release assets](https://github.com/caelis-labs/desktop-world/releases) are historical products; they do not install this implementation.
 
-## Development entry
+## Connect an Agent
 
-Build with Rust 1.98.0; native macOS builds also require Xcode and its Swift toolchain:
+Build with Rust 1.98.0 and, on macOS, Xcode/Swift:
 
 ```sh
 cargo +1.98.0 build --manifest-path cmd/dtw/Cargo.toml --locked --bin dtw
 cmd/dtw/target/debug/dtw --help
-cmd/dtw/target/debug/dtw app catalog
 ```
 
-If `CARGO_TARGET_DIR` is set, use the executable from that directory instead. Bare `dtw` and `dtw --help` display help; they do not start an MCP session.
+Configure the Agent's ordinary stdio MCP connection to launch `/absolute/path/to/dtw mcp`. For clients using `mcpServers` JSON:
 
-`app catalog` discovers running app instances. Discovery does not authorize access to their windows. After approval, the trusted Host starts a context with its own grant file:
-
-```sh
-/absolute/path/to/dtw app serve --grant /absolute/host-grant.json
+```json
+{
+  "mcpServers": {
+    "desktop-world": {
+      "command": "/absolute/path/to/dtw",
+      "args": ["mcp"]
+    }
+  }
+}
 ```
 
-The Host grants one exact app instance and selected capabilities. Agent tool arguments cannot create or extend that grant. See [Host integration](docs/embedding.md) and the [app protocol](docs/app-protocol-v1.md).
+If `CARGO_TARGET_DIR` is set, use its executable instead. Add the repository's [desktop-world Skill](skills/desktop-world/SKILL.md) through the Agent's normal Skills extension point. [Installation instructions](docs/install.md) include Codex configuration and a locally staged Claude plugin. No grant file, approval callback or DTW-specific Host integration is needed.
 
-## Current capability scope
+## Use the tools
 
-The macOS rewrite completes the C5 core: app authority and identity, typed window inventory, AX observation and advertised AXPress, precise-window screenshots and pixel clicks, bounded app scripts, grant expiry and input cleanup. The five script methods are `app.windows`, `app.observe`, `app.capture`, `app.press` and `app.click`. `exec.describe` publishes their schemas and reference rules; [TypeScript declarations](docs/app-script-api.d.ts) describe the same API.
+| Tool | Purpose |
+| --- | --- |
+| `apps` | Discover running applications, their stable app IDs, the script API and current support conditions |
+| `exec` | Execute a bounded script against the required `app` ID and return its result and receipts |
+| `result` | Read an original request's receipt using its `app` ID and `request_id`; never execute it again |
 
-The [C5 acceptance report](docs/c5-completion-acceptance.md) records real GUI, TextEdit window/Space boundaries, and local Harness results. Inventory distinguishes an empty supported scope from unproven coverage. Windows native support, text/keyboard operations, Browser/DOM control and new distribution packages remain future work. A failed or uncertain action is never automatically replayed. C6 can extend capability groups on this baseline; the [product matrix](docs/product-matrix.md) records the verified scope.
+Select an entry from `apps` and pass its `app` string unchanged, for example `exec({app: "com.apple.TextEdit", request_id: "inspect-1", source: "return await app.windows();"})`. The Harness can inspect that app ID through ordinary tool arguments. DTW resolves and verifies the running instance internally; process IDs and generations are not Agent parameters. Multiple independent instances of the same app ID produce `ambiguous_app`.
 
-Caelis has a local, unpublished Host integration with actual approval and GUI evidence. It is not an installed Caelis/Bot feature or a general Agent plugin release. Hosts must validate their own startup, permissions and lifecycle boundary.
+The script API provides `app.windows()`, `app.observe()`, `app.capture()`, `app.press()` and `app.click()`. `apps` publishes their descriptions and limits; [TypeScript declarations](docs/app-script-api.d.ts) and the [script contract](docs/app-script-v1.md) describe the same API. A script stays within its supplied app. A dispatched action is not proof of its intended effect: read the application back independently.
 
-## Development and release
+`exec` waits for its bounded execution; normal use needs no job-polling loop. Standard MCP cancellation addresses the active request. Closing the connection closes its native resources. Unknown outcomes remain unknown and are never automatically replayed. See the [MCP contract](docs/app-protocol-v1.md).
 
-[Build instructions](docs/building.md) separate lightweight checks from product builds and real GUI acceptance. [Implementation checkpoints](docs/implementation-checkpoints.md) record evidence and next steps. CI does not establish complete application or release readiness.
+## Development and evidence
 
-The next release will contain only the usable rewrite. Its package and installation contract will be defined after selecting and validating supported workflows; see [releasing](docs/releasing.md) and [installation status](docs/install.md).
+The [architecture baseline](docs/next-architecture-baseline.md) owns DTW's identity, execution and native-provider contracts. [Build instructions](docs/building.md) separate fast checks, local product builds and real GUI acceptance. C6 extends complete capability groups on this foundation; Windows, text/keyboard operations and Browser/DOM control are not yet implemented.
 
-DTW is [MIT licensed](LICENSE). Adapted source and dependencies retain their own terms and attribution in [third-party notices](THIRD_PARTY_NOTICES.md).
+The [current acceptance report](docs/standard-agent-acceptance.md) records standard MCP, native GUI, app switching, cancellation and cleanup checks, plus successful model-driven workflows through ordinary agy and Claude Code MCP/Skills. The [C5 report](docs/c5-completion-acceptance.md) retains earlier window-boundary evidence; the [product matrix](docs/product-matrix.md) separates current and historical coverage.
+
+Local plugin staging is available for development. Signed installation packages and public release delivery remain separate work; see [releasing](docs/releasing.md). DTW is [MIT licensed](LICENSE), with adapted-source attribution in [third-party notices](THIRD_PARTY_NOTICES.md).

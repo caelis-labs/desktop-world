@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# HISTORICAL: this probe targets the retired C4/C5 grant/custom-Host entry.
+# Preserve it as dated evidence; use standard_agent_probe.py for current MCP acceptance.
 """Opt-in, one-click macOS input shutdown acceptance on two owned fixtures.
 
 Requires exclusive control of the desktop. Each mode submits exactly one click

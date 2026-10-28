@@ -1,4 +1,4 @@
-use super::{ActionReceipt, Clock, Grant, Runtime};
+use super::{ActionReceipt, Clock, Runtime};
 use crate::computer::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -196,6 +196,11 @@ impl Backend for TestBackend {
                 vec![Element {
                     id: ElementId(7),
                     label: if model.pressed { "on" } else { "off" }.into(),
+                    role: "button".into(),
+                    name: None,
+                    value: None,
+                    enabled: Some(true),
+                    actions: vec!["press".into()],
                     can_press: true,
                 }]
             });
@@ -266,10 +271,10 @@ fn target() -> WindowTarget {
     }
 }
 
-fn runtime(backend: &TestBackend, clock: &ManualClock, caps: Vec<Capability>) -> Arc<TestRuntime> {
+fn runtime(backend: &TestBackend, clock: &ManualClock) -> Arc<TestRuntime> {
     Arc::new(Runtime::with_clock(
         backend.clone(),
-        Grant::new(target().app, caps, clock.now() + Duration::from_secs(10)),
+        target().app,
         Duration::from_secs(3),
         clock.clone(),
     ))
@@ -278,11 +283,7 @@ fn runtime(backend: &TestBackend, clock: &ManualClock, caps: Vec<Capability>) ->
 fn fixture() -> (Arc<TestRuntime>, TestBackend, ManualClock) {
     let backend = TestBackend::new();
     let clock = ManualClock::new();
-    let runtime = runtime(
-        &backend,
-        &clock,
-        vec![Capability::Observe, Capability::Press],
-    );
+    let runtime = runtime(&backend, &clock);
     (runtime, backend, clock)
 }
 
@@ -333,7 +334,7 @@ fn observe_press_reobserve_changes_real_backend_state_once() {
 }
 
 #[test]
-fn wrong_app_or_instance_never_dispatches_or_consumes_authorized_reference() {
+fn wrong_app_or_instance_never_dispatches_or_consumes_bound_reference() {
     let (runtime, backend, _) = fixture();
     let observation = runtime.observe(&target()).unwrap();
     let mut different_app = target();
@@ -387,11 +388,7 @@ fn wrong_window_and_window_generation_do_not_consume_valid_reference() {
 #[test]
 fn observation_cannot_cross_contexts_even_with_same_backend_and_generation() {
     let (first, backend, clock) = fixture();
-    let second = runtime(
-        &backend,
-        &clock,
-        vec![Capability::Observe, Capability::Press],
-    );
+    let second = runtime(&backend, &clock);
     let a = first.observe(&target()).unwrap();
     let b = second.observe(&target()).unwrap();
     assert_ne!(a.reference, b.reference);
@@ -471,37 +468,26 @@ fn replacement_observation_releases_old_binding_and_stales_old_reference() {
 }
 
 #[test]
-fn capabilities_are_authorized_separately_from_backend_support() {
-    let backend = TestBackend::new();
-    let clock = ManualClock::new();
-    let observe_only = runtime(&backend, &clock, vec![Capability::Observe]);
-    let observation = observe_only.observe(&target()).unwrap();
-    assert_rejected(
-        observe_only.press(&target(), observation.reference, ElementId(7)),
-        Error::CapabilityDenied,
-    );
-    let press_only = runtime(&backend, &clock, vec![Capability::Press]);
-    assert_eq!(press_only.observe(&target()), Err(Error::CapabilityDenied));
-    assert_eq!(backend.counts(), (1, 0, 0, 0));
-
-    let both = runtime(
-        &backend,
-        &clock,
-        vec![Capability::Observe, Capability::Press],
-    );
+fn backend_support_is_checked_before_dispatch_without_consuming_reference() {
+    let (runtime, backend, _) = fixture();
     backend.edit(|model| model.supports_observe = false);
-    assert_eq!(both.observe(&target()), Err(Error::UnsupportedCapability));
+    assert_eq!(
+        runtime.observe(&target()),
+        Err(Error::UnsupportedCapability)
+    );
+    assert_eq!(backend.counts(), (0, 0, 0, 0));
     backend.edit(|model| model.supports_observe = true);
-    let observation = both.observe(&target()).unwrap();
+    let observation = runtime.observe(&target()).unwrap();
     backend.edit(|model| model.supports_press = false);
     assert_rejected(
-        both.press(&target(), observation.reference, ElementId(7)),
+        runtime.press(&target(), observation.reference, ElementId(7)),
         Error::UnsupportedCapability,
     );
-    assert_eq!(backend.counts(), (2, 0, 0, 0));
+    assert_eq!(backend.counts(), (1, 0, 0, 0));
     backend.edit(|model| model.supports_press = true);
     assert_eq!(
-        both.press(&target(), observation.reference, ElementId(7))
+        runtime
+            .press(&target(), observation.reference, ElementId(7))
             .outcome
             .error,
         None
@@ -509,7 +495,7 @@ fn capabilities_are_authorized_separately_from_backend_support() {
 }
 
 #[test]
-fn grant_and_observation_expiry_reject_at_exact_deadline_without_dispatch() {
+fn observation_expiry_rejects_stale_input_without_expiring_the_app_context() {
     let (runtime, backend, clock) = fixture();
     let observation = runtime.observe(&target()).unwrap();
     clock.advance(Duration::from_secs(3));
@@ -518,15 +504,16 @@ fn grant_and_observation_expiry_reject_at_exact_deadline_without_dispatch() {
         Error::StaleObservation,
     );
     assert_eq!(backend.counts(), (1, 0, 0, 0));
-    clock.advance(Duration::from_secs(5));
+    clock.advance(Duration::from_secs(30));
     let fresh = runtime.observe(&target()).unwrap();
-    clock.advance(Duration::from_secs(2));
-    assert_rejected(
-        runtime.press(&target(), fresh.reference, ElementId(7)),
-        Error::GrantExpired,
+    assert_eq!(
+        runtime
+            .press(&target(), fresh.reference, ElementId(7))
+            .outcome
+            .dispatch,
+        DispatchState::Dispatched
     );
-    assert_eq!(runtime.observe(&target()), Err(Error::GrantExpired));
-    assert_eq!(backend.counts(), (2, 0, 0, 1));
+    assert_eq!(backend.counts(), (2, 1, 1, 2));
 }
 
 #[test]
@@ -537,11 +524,21 @@ fn element_validation_rejects_before_dispatch_without_consuming_reference() {
             Element {
                 id: ElementId(7),
                 label: "button".into(),
+                role: "button".into(),
+                name: None,
+                value: None,
+                enabled: Some(true),
+                actions: vec!["press".into()],
                 can_press: true,
             },
             Element {
                 id: ElementId(8),
                 label: "label".into(),
+                role: "static_text".into(),
+                name: None,
+                value: None,
+                enabled: None,
+                actions: vec![],
                 can_press: false,
             },
         ]);
@@ -574,6 +571,11 @@ fn invalid_backend_observations_are_not_published_and_bindings_are_released() {
                 let element = Element {
                     id: ElementId(7),
                     label: "duplicate".into(),
+                    role: "button".into(),
+                    name: None,
+                    value: None,
+                    enabled: Some(true),
+                    actions: vec!["press".into()],
                     can_press: true,
                 };
                 model.elements = Some(vec![element.clone(), element]);
@@ -630,8 +632,8 @@ fn observation_errors_release_admission_but_do_not_restore_retired_reference() {
 }
 
 #[test]
-fn observation_replacement_rechecks_authority_after_retired_binding_cleanup() {
-    for expire_grant in [false, true] {
+fn observation_replacement_rechecks_execution_budget_after_retired_binding_cleanup() {
+    for expire_call in [false, true] {
         let (runtime, backend, clock) = fixture();
         let (worker_gate, gate) = TestGate::pair();
         backend.edit(|model| model.drop_gate = Some(worker_gate));
@@ -645,9 +647,9 @@ fn observation_replacement_rechecks_authority_after_retired_binding_cleanup() {
 
         let mut canceller = None;
         let mut cancelled_before_cleanup = true;
-        let expected = if expire_grant {
-            clock.advance(Duration::from_secs(10));
-            Error::GrantExpired
+        let expected = if expire_call {
+            clock.advance(Duration::from_secs(15));
+            Error::TimedOut
         } else {
             let (done_tx, done_rx) = mpsc::channel();
             let cancelling_runtime = runtime.clone();
@@ -674,7 +676,11 @@ fn observation_replacement_rechecks_authority_after_retired_binding_cleanup() {
         assert_eq!(backend.counts(), (1, 0, 0, 1));
         assert_rejected(
             runtime.press(&target(), old.reference, ElementId(7)),
-            expected,
+            if expire_call {
+                Error::StaleObservation
+            } else {
+                expected
+            },
         );
         assert_eq!(backend.counts(), (1, 0, 0, 1));
     }
@@ -795,13 +801,9 @@ fn cancellation_or_close_during_dispatch_preserves_busy_and_late_unknown_effect(
         );
         assert_eq!(backend.counts(), (1, 1, 1, 1));
 
-        // A trusted embedding must create a new context. It can see the actual
+        // A new execution context can see the actual
         // late effect, but cannot reuse the cancelled context's reference.
-        let fresh_runtime = self::runtime(
-            &backend,
-            &clock,
-            vec![Capability::Observe, Capability::Press],
-        );
+        let fresh_runtime = self::runtime(&backend, &clock);
         let after = fresh_runtime.observe(&target()).unwrap();
         assert_eq!(after.elements[0].label, "on");
         assert_rejected(
@@ -814,7 +816,7 @@ fn cancellation_or_close_during_dispatch_preserves_busy_and_late_unknown_effect(
 
 #[test]
 fn expiry_or_provider_replacement_during_dispatch_keeps_late_success_unknown() {
-    for expire_grant in [false, true] {
+    for expire_call in [false, true] {
         let (runtime, backend, clock) = fixture();
         let observation = runtime.observe(&target()).unwrap();
         let (worker_gate, gate) = TestGate::pair();
@@ -824,9 +826,9 @@ fn expiry_or_provider_replacement_during_dispatch_keeps_late_success_unknown() {
             worker_runtime.press(&target(), observation.reference, ElementId(7))
         });
         gate.wait_until_entered();
-        let expected = if expire_grant {
-            clock.advance(Duration::from_secs(10));
-            Error::GrantExpired
+        let expected = if expire_call {
+            clock.advance(Duration::from_secs(15));
+            Error::TimedOut
         } else {
             backend.edit(|model| model.provider.generation += 1);
             Error::WrongProvider
@@ -863,8 +865,8 @@ fn late_observations_are_rejected_after_cancel_expiry_or_provider_replacement() 
                 Error::StaleObservation
             }
             2 => {
-                clock.advance(Duration::from_secs(10));
-                Error::GrantExpired
+                clock.advance(Duration::from_secs(15));
+                Error::TimedOut
             }
             _ => {
                 backend.edit(|model| model.provider.generation += 1);
@@ -976,8 +978,8 @@ fn known_no_dispatch_is_preserved_even_when_context_is_interrupted() {
                 Error::Closed
             }
             2 => {
-                clock.advance(Duration::from_secs(10));
-                Error::GrantExpired
+                clock.advance(Duration::from_secs(15));
+                Error::TimedOut
             }
             _ => {
                 backend.edit(|model| model.provider.generation += 1);
@@ -1104,11 +1106,7 @@ fn dropping_runtime_cleans_native_binding_before_backend_resources() {
     let clock = ManualClock::new();
     let runtime = Runtime::with_clock(
         OrderedBackend(events.clone()),
-        Grant::new(
-            target().app,
-            vec![Capability::Observe],
-            clock.now() + Duration::from_secs(10),
-        ),
+        target().app,
         Duration::from_secs(3),
         clock,
     );
@@ -1199,29 +1197,13 @@ impl Backend for PixelBackend {
         }]))
     }
 }
-fn pixel_runtime(backend: TestBackend, capabilities: Vec<Capability>) -> Runtime<PixelBackend> {
-    Runtime::new(
-        PixelBackend(backend),
-        Grant::new(
-            target().app,
-            capabilities,
-            Instant::now() + Duration::from_secs(60),
-        ),
-        Duration::from_secs(30),
-    )
+fn pixel_runtime(backend: TestBackend) -> Runtime<PixelBackend> {
+    Runtime::new(PixelBackend(backend), target().app, Duration::from_secs(30))
 }
 #[test]
 fn observation_kind_cannot_cross_semantic_and_pixel_actions() {
     let backend = TestBackend::new();
-    let runtime = pixel_runtime(
-        backend.clone(),
-        vec![
-            Capability::Observe,
-            Capability::Press,
-            Capability::Capture,
-            Capability::Click,
-        ],
-    );
+    let runtime = pixel_runtime(backend.clone());
     let pixels = runtime.capture(&target()).unwrap();
     assert_eq!(
         runtime
@@ -1254,10 +1236,7 @@ fn observation_kind_cannot_cross_semantic_and_pixel_actions() {
 #[test]
 fn pixel_bounds_are_rejected_before_dispatch_and_preserve_valid_reference() {
     let backend = TestBackend::new();
-    let runtime = pixel_runtime(
-        backend.clone(),
-        vec![Capability::Capture, Capability::Click],
-    );
+    let runtime = pixel_runtime(backend.clone());
     let pixels = runtime.capture(&target()).unwrap();
     for point in [
         PixelPoint {
@@ -1287,36 +1266,25 @@ fn pixel_bounds_are_rejected_before_dispatch_and_preserve_valid_reference() {
     );
 }
 #[test]
-fn capture_and_click_need_separate_grants_and_discovery_retires_observations() {
+fn discovery_retires_pixel_observations_before_another_action() {
     let backend = TestBackend::new();
-    let runtime = pixel_runtime(
-        backend.clone(),
-        vec![Capability::Observe, Capability::Capture],
-    );
+    let runtime = pixel_runtime(backend.clone());
     let pixels = runtime.capture(&target()).unwrap();
-    assert_eq!(
-        runtime
-            .click(&target(), pixels.reference, PixelPoint { x: 1.0, y: 1.0 })
-            .outcome,
-        ActionOutcome::rejected(Error::CapabilityDenied)
-    );
     assert_eq!(
         runtime.windows().unwrap().windows[0].target.app,
         target().app
     );
     assert_eq!(backend.counts().3, 1);
-    let denied = pixel_runtime(backend.clone(), vec![Capability::Click]);
-    assert_eq!(denied.capture(&target()), Err(Error::CapabilityDenied));
-    assert_eq!(denied.windows(), Err(Error::CapabilityDenied));
-    assert_eq!(backend.counts().0, 1);
+    assert_rejected(
+        runtime.click(&target(), pixels.reference, PixelPoint { x: 1.0, y: 1.0 }),
+        Error::StaleObservation,
+    );
+    assert_eq!(backend.counts().1, 0);
 }
 #[test]
 fn switching_observation_groups_invalidates_the_previous_reference() {
     let backend = TestBackend::new();
-    let runtime = pixel_runtime(
-        backend.clone(),
-        vec![Capability::Observe, Capability::Capture, Capability::Click],
-    );
+    let runtime = pixel_runtime(backend.clone());
     let pixels = runtime.capture(&target()).unwrap();
     runtime.observe(&target()).unwrap();
     assert_eq!(
@@ -1473,16 +1441,7 @@ fn budget_fixture() -> (
     let clock = ManualClock::new();
     let runtime = Runtime::with_clock(
         BudgetBackend::new(model.clone()),
-        Grant::new(
-            target().app,
-            vec![
-                Capability::Observe,
-                Capability::Press,
-                Capability::Capture,
-                Capability::Click,
-            ],
-            clock.now() + Duration::from_secs(10),
-        ),
+        target().app,
         Duration::from_secs(3),
         clock.clone(),
     );
@@ -1519,7 +1478,7 @@ fn elapsed_call_deadlines_reject_all_operations_before_native_dispatch() {
     );
     assert_eq!(model.counts().1, 0);
     assert_eq!(runtime.backend.entries.load(Ordering::SeqCst), 1);
-    // An expired call budget neither consumes a valid reference nor expires the grant.
+    // An expired call budget neither consumes a valid reference nor expires the app context.
     assert_eq!(
         runtime
             .press(&target(), semantic.reference, ElementId(7))
@@ -1586,7 +1545,7 @@ fn shared_call_deadline_shrinks_across_every_native_operation() {
 }
 
 #[test]
-fn longer_call_deadline_cannot_extend_observation_or_grant_lifetime() {
+fn longer_call_deadline_cannot_extend_atomic_budget_or_observation_lifetime() {
     let (runtime, _, clock) = budget_fixture();
     let deadline = clock.now() + Duration::from_secs(60);
     runtime.windows_until(deadline).unwrap();
@@ -1601,7 +1560,7 @@ fn longer_call_deadline_cannot_extend_observation_or_grant_lifetime() {
     );
     assert_eq!(
         *runtime.backend.budgets.lock().unwrap(),
-        [10, 3, 1].map(Duration::from_secs)
+        [15, 3, 1].map(Duration::from_secs)
     );
     let pixels = runtime.capture_until(&target(), deadline).unwrap();
     clock.advance(Duration::from_secs(3));
@@ -1615,11 +1574,8 @@ fn longer_call_deadline_cannot_extend_observation_or_grant_lifetime() {
         Error::StaleObservation,
     );
     clock.advance(Duration::from_secs(5));
-    assert_eq!(runtime.windows_until(deadline), Err(Error::GrantExpired));
-    assert_eq!(
-        runtime.observe_until(&target(), deadline),
-        Err(Error::GrantExpired)
-    );
+    assert!(runtime.windows_until(deadline).is_ok());
+    assert!(runtime.observe_until(&target(), deadline).is_ok());
 }
 
 #[test]
@@ -1790,15 +1746,11 @@ fn rejected_native_binding_cleanup_rechecks_call_deadline() {
 }
 
 #[test]
-fn call_deadline_interrupts_a_native_style_wait_without_grant_expiry() {
+fn call_deadline_interrupts_a_native_style_wait_without_context_expiry() {
     let model = TestBackend::new();
     let runtime = Arc::new(Runtime::new(
         BudgetBackend::new(model.clone()),
-        Grant::new(
-            target().app,
-            vec![Capability::Observe, Capability::Press],
-            Instant::now() + Duration::from_secs(60),
-        ),
+        target().app,
         Duration::from_secs(30),
     ));
     let observation = runtime.observe(&target()).unwrap();

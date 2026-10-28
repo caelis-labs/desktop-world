@@ -130,21 +130,6 @@ fn scripts_cannot_supply_another_app_or_forge_context_window_references() {
 }
 
 #[test]
-fn script_host_calls_enforce_capabilities_after_discovery() {
-    let backend = MockBackend::new();
-    let mut grant = authority();
-    grant.capabilities = vec![Capability::Observe];
-    let owner = Coordinator::new(backend.clone(), grant, "Controlled".into());
-    let completed = run_script(&owner, "denied", format!("{SETUP}{PRESS}return true;"));
-    last_step_error(&completed, "capability_denied");
-    assert_eq!(operation_list(&completed), ["windows", "observe", "press"]);
-    let receipt = &steps(&completed)[2]["receipt"];
-    assert_eq!(receipt["outcome"]["dispatch"], "not_dispatched");
-    assert!(receipt["provider_outcome"].is_null());
-    assert_eq!(backend.0.actions.load(Ordering::SeqCst), 0);
-}
-
-#[test]
 fn exception_keeps_prior_effect_receipt_but_only_success_commits_state() {
     let (owner, backend) = coordinator();
     let seeded = run_script(&owner, "seed", "state.total=7; return state.total;");
@@ -272,10 +257,7 @@ fn script_cancel_and_close_keep_late_provider_evidence_without_replay() {
 
 #[test]
 fn cancelling_a_script_already_stopping_keeps_the_first_terminal_cause() {
-    for (reason, code) in [
-        (Error::TimedOut, "timed_out"),
-        (Error::GrantExpired, "grant_expired"),
-    ] {
+    for (reason, code) in [(Error::TimedOut, "timed_out")] {
         let (owner, backend) = coordinator();
         let gate = backend.read_gate();
         start(
@@ -337,7 +319,7 @@ fn script_deadline_stops_a_polling_native_call_and_reports_shutdown_failure() {
         start(&owner, submit(&owner, "timeout", None, command));
         gate.entered();
         // Keep the simulated native reply withheld. Only CallContext's budget
-        // can release this operation; the grant itself still has almost a minute.
+        // can release this operation; no later script may reuse this context.
         let done = finish(&owner, "timeout");
         gate.release();
         assert!(done.is_error, "{}", done.data);
@@ -504,4 +486,30 @@ fn unproven_inventory_preserves_diagnostics_without_state_or_retry() {
     assert_eq!(backend.0.actions.load(Ordering::SeqCst), 0);
     let state = run_script(&owner, "read-state", "return state;");
     assert_eq!(state.data["value"]["result"], json!({}));
+}
+
+#[test]
+fn omitted_await_does_not_hide_failed_action_or_commit_state() {
+    let (owner, backend) = coordinator();
+    backend.0.model.lock().unwrap().outcome = ActionOutcome::rejected(Error::NativeFailure {
+        code: "permission_denied".into(),
+        message: "controlled native condition".into(),
+    });
+    let source=format!("{SETUP} app.press({{window_ref,observation_ref:observation.observation_ref,element_ref:observation.elements[0].element_ref}}); state.falseSuccess=true; return 123;");
+    let failed = run_script(&owner, "unawaited", source);
+    assert!(failed.is_error, "{}", failed.data);
+    assert_eq!(
+        failed.data["script"]["failure"]["code"],
+        "permission_denied"
+    );
+    assert_eq!(failed.data["script"]["failure"]["operation"], "press");
+    assert_eq!(failed.data["script"]["state_committed"], false);
+    assert_eq!(
+        steps(&failed).last().unwrap()["receipt"]["outcome"]["dispatch"],
+        "not_dispatched"
+    );
+    assert_eq!(result(&owner, "unawaited").data, failed.data);
+    let state = run_script(&owner, "state-read", "return Object.keys(state)");
+    assert_eq!(state.data["value"]["result"], json!([]));
+    assert_eq!(backend.0.actions.load(Ordering::SeqCst), 1);
 }

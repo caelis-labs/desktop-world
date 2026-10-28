@@ -1,5 +1,7 @@
 # C4-macOS 验收记录
 
+> Historical evidence: this report applies only to its named source revision, binary and entry point. The current product uses [standard MCP and explicit app IDs](app-protocol-v1.md); any grant, manifest, SDK/worker or custom Host setup below is superseded and is not a current installation instruction. No acceptance result here is claimed to have been rerun for the new entry.
+
 > 历史检查点记录：下文构建参数、默认入口和发行安排属于所记录的版本。当前源码已收敛为重写版，使用方式见 [构建说明](building.md)；既有证据不等于新构建二进制已重新验收。
 
 本文件先保留 C4-macOS.1 的历史记录，文末记录 C4-macOS.2；后续脚本验收见 [C5 记录](app-script-acceptance.md)。

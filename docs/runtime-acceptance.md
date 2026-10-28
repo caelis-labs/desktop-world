@@ -1,5 +1,7 @@
 # Runtime-owned sessions and application observation acceptance
 
+> Historical evidence: this report applies only to its named source revision, binary and entry point. The current product uses [standard MCP and explicit app IDs](app-protocol-v1.md); any grant, manifest, SDK/worker or custom Host setup below is superseded and is not a current installation instruction. No acceptance result here is claimed to have been rerun for the new entry.
+
 > Historical checkpoint record. Build flags, default entry points and release plans below belong to the recorded revision. The current rewrite-only build is described in [building](building.md); this evidence does not validate a newly built binary.
 
 Checkpoint `f07a4d5` evidence is retained below. The subsequent multi-instance fix and RC.9 validation are recorded separately in [RC.9 acceptance](rc9-acceptance.md).

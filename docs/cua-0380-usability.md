@@ -1,5 +1,7 @@
 # CUA 0.38.0 upgrade and usability audit
 
+> Historical evidence: this report applies only to its named source revision, binary and entry point. The current product uses [standard MCP and explicit app IDs](app-protocol-v1.md); any grant, manifest, SDK/worker or custom Host setup below is superseded and is not a current installation instruction. No acceptance result here is claimed to have been rerun for the new entry.
+
 This is the **pre-repair baseline** from the first audit. The SCK repair and
 native browser/diagnostic bridge are recorded in [the follow-up acceptance](cua-0380-repairs.md).
 Capability gaps and candidate hashes below describe the baseline, not the repaired tree.

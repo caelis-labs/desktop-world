@@ -1,5 +1,7 @@
 # Issue #49: native focus recovery and bounded AX readiness
 
+> Historical evidence: this report applies only to its named source revision, binary and entry point. The current product uses [standard MCP and explicit app IDs](app-protocol-v1.md); any grant, manifest, SDK/worker or custom Host setup below is superseded and is not a current installation instruction. No acceptance result here is claimed to have been rerun for the new entry.
+
 Second batch after [#50](https://github.com/caelis-labs/desktop-world/pull/50),
 merged as `26247c4998bb31ce334930a80616711f11381ebf`. Tracks
 [#49](https://github.com/caelis-labs/desktop-world/issues/49). CUA stays at 0.38.0,

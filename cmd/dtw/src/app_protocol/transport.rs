@@ -1,93 +1,96 @@
-//! App-scoped macOS CLI and bounded stdio lifecycle.
-use super::{grant, mcp, wire::WireError, Coordinator};
-use crate::{backends::macos::NativeBackend, computer::Backend};
+//! Standard stdio CLI, lazy native factory and process lifecycle.
+use super::{
+    mcp::{self, Event},
+    server::{Application, Factory, Server, Started},
+    wire::{self, WireError},
+};
+use crate::{
+    backends::macos::NativeBackend,
+    computer::{Backend, Error},
+};
 use serde_json::{json, Value};
 use std::{
     io::{self, BufReader, BufWriter, Write},
-    path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc,
+        mpsc, Arc, Mutex,
     },
     time::Duration,
 };
-
-const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(8);
-const STOP_TIMEOUT: Duration = Duration::from_secs(2);
-
-pub fn run(args: &[String]) -> Result<(), WireError> {
-    match args {
-        [command] if command == "catalog" => {
-            let backend = NativeBackend::spawn().map_err(|e| super::wire::core_error(&e))?;
-            let result = backend.catalog(DISCOVERY_TIMEOUT);
-            let shutdown = backend.shutdown();
-            let apps = result.map_err(|e| super::wire::core_error(&e))?;
-            shutdown.map_err(|e| super::wire::core_error(&e))?;
-            let apps: Vec<_> = apps
-                .into_iter()
-                .map(|entry| {
-                    let mut value = grant::app_json(&entry.app);
-                    value["name"] = json!(entry.name);
-                    value
+#[derive(Default)]
+struct NativeFactory {
+    catalog: Mutex<Option<Arc<NativeBackend>>>,
+}
+impl Factory for NativeFactory {
+    type Provider = NativeBackend;
+    fn description(&self) -> Value {
+        NativeBackend::description()
+    }
+    fn catalog(&self) -> Result<Vec<Application>, Error> {
+        let reader = {
+            let mut slot = self.catalog.lock().unwrap();
+            if slot.is_none() {
+                *slot = Some(Arc::new(NativeBackend::spawn()?));
+            }
+            slot.as_ref().unwrap().clone()
+        };
+        reader.catalog(Duration::from_secs(8)).map(|apps| {
+            apps.into_iter()
+                .map(|a| Application {
+                    app_id: a.app_id,
+                    app: a.app,
+                    name: a.name,
                 })
-                .collect();
-            println!("{}", json!({"version":1,"apps":apps}));
-            Ok(())
-        }
-        [command, flag, path] if command == "serve" && flag == "--grant" => {
-            if !Path::new(path).is_absolute() {
-                return Err(failure("invalid_grant", "Host grant path must be absolute"));
-            }
-            let authority = grant::load(Path::new(path))?;
-            let parent = unsafe { libc::getppid() };
-            if parent <= 1 {
-                return Err(failure("parent_lost", "Host parent is unavailable"));
-            }
-            let backend = NativeBackend::spawn().map_err(|e| super::wire::core_error(&e))?;
-            let apps = backend
-                .catalog(DISCOVERY_TIMEOUT)
-                .map_err(|e| super::wire::core_error(&e))?;
-            let Some(app) = apps.into_iter().find(|entry| entry.app == authority.app) else {
-                backend
-                    .shutdown()
-                    .map_err(|e| super::wire::core_error(&e))?;
-                return Err(failure(
-                    "wrong_app",
-                    "The granted app instance is no longer available",
-                ));
-            };
-            let owner = Coordinator::new(backend, authority, app.name);
-            let outcome = serve(owner.clone(), parent);
-            let stopped = owner.close();
-            if !owner.wait_idle(STOP_TIMEOUT) {
-                return Err(failure(
-                    "shutdown_failed",
-                    "Execution did not settle during shutdown",
-                ));
-            }
-            if stopped.is_error {
-                return Err(failure("shutdown_failed", &stopped.data.to_string()));
-            }
-            match outcome {
-                Ok(drained) => {
-                    // Best-effort drain only, after native resources are closed.
-                    let _ = drained.recv_timeout(Duration::from_millis(200));
-                    Ok(())
-                }
-                Err(error) => Err(error),
+                .collect()
+        })
+    }
+    fn connect(&self) -> Result<NativeBackend, Error> {
+        NativeBackend::spawn()
+    }
+    fn close_catalog(&self) -> Result<(), Error> {
+        let reader = self.catalog.lock().unwrap().clone();
+        if let Some(reader) = reader {
+            reader.shutdown()?;
+            let mut slot = self.catalog.lock().unwrap();
+            if slot
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &reader))
+            {
+                *slot = None;
             }
         }
-        _ => Err(failure(
-            "invalid_arguments",
-            "Usage: dtw app catalog | dtw app serve --grant /absolute/host-grant.json",
-        )),
+        Ok(())
     }
 }
-fn failure(code: &str, message: &str) -> WireError {
+fn error(code: &str, message: &str) -> WireError {
     WireError {
-        details: None,
         code: code.into(),
         message: message.into(),
+        details: None,
+    }
+}
+pub fn run(args: &[String]) -> Result<(), WireError> {
+    match args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        ["catalog"] => {
+            let factory = NativeFactory::default();
+            let apps = factory.catalog();
+            factory.close_catalog().map_err(|e| wire::core_error(&e))?;
+            println!(
+                "{}",
+                json!({"version":1,"apps":super::server::public_apps(apps.map_err(|e|wire::core_error(&e))?)})
+            );
+            Ok(())
+        }
+        ["mcp"] => serve(Server::new(NativeFactory::default())),
+        _ => Err(error(
+            "invalid_arguments",
+            "Usage: dtw mcp | dtw app catalog",
+        )),
     }
 }
 struct Watchdog(Arc<AtomicBool>);
@@ -96,38 +99,31 @@ impl Drop for Watchdog {
         self.0.store(true, Ordering::Release);
     }
 }
-fn serve(
-    owner: Arc<Coordinator<NativeBackend>>,
-    parent: libc::pid_t,
-) -> Result<mpsc::Receiver<()>, WireError> {
+fn serve(server: Arc<Server<NativeFactory>>) -> Result<(), WireError> {
+    let parent = unsafe { libc::getppid() };
+    if parent <= 1 {
+        return Err(error("parent_lost", "MCP client parent is unavailable"));
+    }
     let done = Arc::new(AtomicBool::new(false));
     let _watchdog = Watchdog(done.clone());
-    let watched = Arc::downgrade(&owner);
+    let watched = Arc::downgrade(&server);
     std::thread::Builder::new()
-        .name("dtw-app-parent".into())
+        .name("dtw-client-parent".into())
         .spawn(move || {
             while !done.load(Ordering::Acquire) {
-                let Some(watched) = watched.upgrade() else {
-                    break;
-                };
                 if unsafe { libc::getppid() } != parent {
-                    watched.close();
-                    watched.wait_idle(STOP_TIMEOUT);
-                    std::process::exit(0);
+                    let status = watched.upgrade().map_or(0, |s| cleanup_for_exit(&s));
+                    std::process::exit(status);
                 }
-                watched.expire_if_needed();
-                drop(watched);
                 std::thread::sleep(Duration::from_millis(50));
             }
         })
-        .map_err(|_| failure("transport_error", "Cannot start Host lifecycle watcher"))?;
-    // A stalled receiver cannot block stdin cancellation or EOF. Saturation
-    // closes the context; an unanswered action must be treated as uncertain.
+        .map_err(|_| error("transport_error", "Cannot start lifecycle watcher"))?;
     let (output, responses) = mpsc::sync_channel::<Value>(8);
     let (written, drained) = mpsc::sync_channel(1);
-    let writer_owner = owner.clone();
+    let writer_server = server.clone();
     std::thread::Builder::new()
-        .name("dtw-app-output".into())
+        .name("dtw-mcp-output".into())
         .spawn(move || {
             let mut stdout = BufWriter::new(io::stdout().lock());
             for response in responses {
@@ -136,33 +132,113 @@ fn serve(
                     .and_then(|()| stdout.write_all(b"\n"))
                     .and_then(|()| stdout.flush());
                 if result.is_err() {
-                    writer_owner.close();
-                    writer_owner.wait_idle(STOP_TIMEOUT);
-                    std::process::exit(2);
+                    terminate_transport(
+                        &writer_server,
+                        "transport_error",
+                        "Cannot write MCP response",
+                    );
                 }
             }
             let _ = written.send(());
         })
-        .map_err(|_| failure("transport_error", "Cannot start MCP output writer"))?;
+        .map_err(|_| error("transport_error", "Cannot start output writer"))?;
     let mut session = mcp::Session::default();
     let mut input = BufReader::new(io::stdin().lock());
     let outcome = (|| {
         while let Some(line) = mcp::read_frame(&mut input)? {
-            let response = match serde_json::from_slice(&line) {
-                Ok(request) => session.handle(&owner, request),
-                Err(_) => Some(mcp::rpc_error(Value::Null, -32700, "Invalid JSON")),
+            let event = match serde_json::from_slice(&line) {
+                Ok(value) => session.handle(value),
+                Err(_) => Event::Reply(mcp::rpc_error(Value::Null, -32700, "Invalid JSON")),
+            };
+            let response = match event {
+                Event::None => None,
+                Event::Reply(value) => Some(value),
+                Event::Cancel(id) => {
+                    server.cancel(&id);
+                    None
+                }
+                Event::Call {
+                    id,
+                    name,
+                    args,
+                    structured,
+                } => match server.begin(id.clone(), &name, args) {
+                    Started::Reply(reply) => Some(mcp::response(id, reply, structured)),
+                    Started::Call(call) => {
+                        let server = server.clone();
+                        let output = output.clone();
+                        std::thread::Builder::new()
+                            .name("dtw-mcp-call".into())
+                            .spawn(move || {
+                                let reply = match std::panic::catch_unwind(
+                                    std::panic::AssertUnwindSafe(|| server.run(&call)),
+                                ) {
+                                    Ok(reply) => reply,
+                                    Err(_) => terminate_transport(
+                                        &server,
+                                        "execution_panicked",
+                                        "Tool worker panicked; original effects may be unknown",
+                                    ),
+                                };
+                                if !call.cancelled.load(Ordering::Acquire)
+                                    && output
+                                        .try_send(mcp::response(id, reply, structured))
+                                        .is_err()
+                                {
+                                    terminate_transport(
+                                        &server,
+                                        "output_backpressure",
+                                        "MCP output is stalled; stopping native work",
+                                    );
+                                }
+                            })
+                            .map_err(|_| error("transport_error", "Cannot start tool call"))?;
+                        None
+                    }
+                },
             };
             if let Some(response) = response {
                 output.try_send(response).map_err(|_| {
-                    failure(
+                    error(
                         "output_backpressure",
-                        "MCP output is stalled; context closed",
+                        "MCP output is stalled; stopping native work",
                     )
                 })?;
             }
         }
         Ok(())
     })();
+    let cleanup = server.close();
     drop(output);
-    outcome.map(|()| drained)
+    let _ = drained.recv_timeout(Duration::from_millis(200));
+    cleanup.and(outcome)
+}
+
+/// Background I/O failure must also stop a reader blocked on an open stdin.
+/// Panics in cleanup are an unknown outcome; process exit still triggers each
+/// owned native worker's parent-loss cleanup instead of leaving input alive.
+fn report_error(failure: WireError) {
+    // A client may close stderr along with stdout. Diagnostics cannot prevent cleanup.
+    let _ = writeln!(io::stderr().lock(), "{}", super::Reply::error(failure).data);
+}
+fn cleanup_for_exit(server: &Server<NativeFactory>) -> i32 {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| server.close())) {
+        Ok(Ok(())) => 0,
+        Ok(Err(failure)) => {
+            report_error(failure);
+            2
+        }
+        Err(_) => {
+            report_error(error(
+                "shutdown_failed",
+                "Cleanup panicked; native outcome remains unknown",
+            ));
+            2
+        }
+    }
+}
+fn terminate_transport(server: &Server<NativeFactory>, code: &str, message: &str) -> ! {
+    report_error(error(code, message));
+    cleanup_for_exit(server);
+    std::process::exit(2)
 }

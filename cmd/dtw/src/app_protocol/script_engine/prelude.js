@@ -27,7 +27,10 @@
   const slice = String.prototype.slice;
   const charAt = String.prototype.charCodeAt;
   const root = parse(globalThis.__initial_state);
+  const methods = parse(globalThis.__methods);
+  delete globalThis.__methods;
   let accepting = true;
+  let phaseViolation = false;
   delete globalThis.__host;
   delete globalThis.__done;
   delete globalThis.__log;
@@ -103,7 +106,10 @@
     return text;
   };
   const call = (op, args) => {
-    if (!accepting) fail("app calls are unavailable during script settlement", "invalid_phase");
+    if (!accepting) {
+      phaseViolation = true;
+      fail("app calls are unavailable during script settlement", "invalid_phase");
+    }
     const line = lineOf(new ErrorClass().stack);
     const reply = parse(host(op, encode(args, "host arguments", 65536), line));
     if (!reply.ok) {
@@ -116,9 +122,10 @@
     return reply.result;
   };
   const app = create(null);
-  for (const op of ["windows", "observe", "capture", "press", "click"]) {
-    const method = (...args) => {
-      if (op === "windows") {
+  for (const metadata of methods) {
+    const op = metadata.name;
+    const method = async (...args) => {
+      if (metadata.arity === 0) {
         if (args.length !== 0) fail("app.windows takes no arguments", "invalid_args");
         return call(op, {});
       }
@@ -152,7 +159,7 @@
     return stringify(out);
   };
   const clip = (text, limit) => text.length > limit ? apply(slice,text,[0,limit-15]) + "… [truncated]" : text;
-  const reject = (error) => {
+  const rejectionEnvelope = (error) => {
     accepting = false;
     let name = null, message = "script error", stack = "", op = null, code = null, call = null, line = null;
     try {
@@ -164,14 +171,18 @@
       call = typeof error?.call === "number" ? error.call : null;
       line = lineOf(stack) || (typeof error?.line === "number" ? error.line : null);
     } catch (_) { message = "exception could not be inspected"; }
-    finish(envelope({ok:false, name:name === null ? null : apply(slice,name,[0,128]), message:clip(message,4000), line, op:op === null ? null : apply(slice,op,[0,128]), code:code === null ? null : apply(slice,code,[0,128]), call}));
+    return envelope({ok:false, name:name === null ? null : apply(slice,name,[0,128]), message:clip(message,4000), line, op:op === null ? null : apply(slice,op,[0,128]), code:code === null ? null : apply(slice,code,[0,128]), call});
   };
+  const reject = (error) => finish(rejectionEnvelope(error));
+  // Captured and removed by Rust before user code can execute.
+  globalThis.__reject_unhandled = rejectionEnvelope;
   globalThis.__settle = (promise) => apply(then, promise, [
     (value) => {
       accepting = false;
       try {
         const value_json = encode(value === undefined ? null : value, "result", 65536);
         const state_json = encode(root, "state", 65536);
+        if (phaseViolation) fail("app calls are unavailable during script settlement", "invalid_phase");
         finish(envelope({ok:true, value_json, state_json}));
       } catch (error) { reject(error); }
     }, reject,

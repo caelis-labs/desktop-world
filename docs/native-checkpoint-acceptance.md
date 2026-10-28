@@ -1,5 +1,7 @@
 # C2/C3 macOS 原生检查点验收
 
+> Historical evidence: this report applies only to its named source revision, binary and entry point. The current product uses [standard MCP and explicit app IDs](app-protocol-v1.md); any grant, manifest, SDK/worker or custom Host setup below is superseded and is not a current installation instruction. No acceptance result here is claimed to have been rerun for the new entry.
+
 > 历史检查点记录：下文构建参数、默认入口和发行安排属于所记录的版本。当前源码已收敛为重写版，使用方式见 [构建说明](building.md)；既有证据不等于新构建二进制已重新验收。
 
 日期：2026-10-27。实现提交：`a606d3320eb3ca8a78d70d72daf9e89bc94f0532`；后续文档提交仅整理本记录。环境：macOS 27.0.1 (26A434)、arm64、Rust 1.98.0，真实交互桌面。CUA 来源固定为 Driver 0.38.0 / `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`，迁入文件、依赖闭包、原始 hash 和 MIT notices 见 [来源记录](native-source-provenance.md)。

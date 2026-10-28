@@ -1,5 +1,7 @@
 # Browser integration and review acceptance
 
+> Historical evidence: this report applies only to its named source revision, binary and entry point. The current product uses [standard MCP and explicit app IDs](app-protocol-v1.md); any grant, manifest, SDK/worker or custom Host setup below is superseded and is not a current installation instruction. No acceptance result here is claimed to have been rerun for the new entry.
+
 Checked on macOS arm64, 2026-10-25, using the unmodified CUA 0.38.0 worker at
 `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`. This record supersedes the initial
 form-elicitation design in PR #47. The current adapter delegates tool approval

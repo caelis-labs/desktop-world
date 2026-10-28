@@ -1,5 +1,7 @@
 # C5-macOS.2b.1：TextEdit 自然窗口状态与边界取证
 
+> Historical evidence: this report applies only to its named source revision, binary and entry point. The current product uses [standard MCP and explicit app IDs](app-protocol-v1.md); any grant, manifest, SDK/worker or custom Host setup below is superseded and is not a current installation instruction. No acceptance result here is claimed to have been rerun for the new entry.
+
 本文保留 #59 的历史现场与当时返回格式；当前 typed coverage、稳定错误及 C5 完整复验见 [C5 完整验收](c5-completion-acceptance.md)。
 
 日期：2026-10-27。实现提交 `9aad23cc941470e8419142f98df4350e99068979`，

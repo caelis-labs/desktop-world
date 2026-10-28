@@ -1,7 +1,7 @@
 //! One app-bound execution context, with a single live observation.
 //!
-//! This module owns grants, reference lifetime and admission. Trusted embedding
-//! code creates grants; this API is not yet exposed to agent-controlled input.
+//! This module owns app identity, reference lifetime and execution admission.
+//! Harness approval policy is outside DTW; no authorization state is kept here.
 
 use crate::computer::*;
 use std::sync::{
@@ -15,23 +15,8 @@ mod tests;
 
 static NEXT_CONTEXT: AtomicU64 = AtomicU64::new(1);
 
-/// Immutable authority supplied by a trusted Harness integration.
-/// Discovery must prove `app`; constructing this value does not prove OS identity.
-pub struct Grant {
-    app: AppInstance,
-    capabilities: Vec<Capability>,
-    expires_at: Instant,
-}
-
-impl Grant {
-    pub fn new(app: AppInstance, capabilities: Vec<Capability>, expires_at: Instant) -> Self {
-        Self {
-            app,
-            capabilities,
-            expires_at,
-        }
-    }
-}
+/// Maximum budget of one atomic backend call; scripts may tighten it further.
+const MAX_CALL_DURATION: Duration = Duration::from_secs(15);
 
 /// Context-level conclusion plus the provider's original evidence. A cancelled
 /// context can be uncertain even when a late provider reply reports success.
@@ -101,26 +86,26 @@ pub struct Runtime<B: Backend, C: Clock = MonotonicClock> {
     // shutting down the provider they may need for cleanup.
     state: Mutex<State<B::Binding>>,
     backend: B,
-    grant: Grant,
+    app: AppInstance,
     clock: C,
     observation_ttl: Duration,
     context: u64,
 }
 
 impl<B: Backend> Runtime<B> {
-    pub fn new(backend: B, grant: Grant, observation_ttl: Duration) -> Self {
-        Self::with_clock(backend, grant, observation_ttl, MonotonicClock)
+    pub fn new(backend: B, app: AppInstance, observation_ttl: Duration) -> Self {
+        Self::with_clock(backend, app, observation_ttl, MonotonicClock)
     }
 }
 
 impl<B: Backend, C: Clock> Runtime<B, C> {
-    pub fn with_clock(backend: B, grant: Grant, observation_ttl: Duration, clock: C) -> Self {
+    pub fn with_clock(backend: B, app: AppInstance, observation_ttl: Duration, clock: C) -> Self {
         let context = NEXT_CONTEXT
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .expect("execution context identity exhausted");
         Self {
             backend,
-            grant,
+            app,
             clock,
             observation_ttl,
             context,
@@ -138,18 +123,15 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         self.state.lock().expect("execution state poisoned")
     }
 
-    fn authorize(
+    fn validate_target(
         &self,
         state: &State<B::Binding>,
         app: &AppInstance,
         capability: Capability,
     ) -> Result<(), Error> {
         self.live_context(state)?;
-        if self.grant.app != *app {
+        if self.app != *app {
             return Err(Error::WrongApp);
-        }
-        if !self.grant.capabilities.contains(&capability) {
-            return Err(Error::CapabilityDenied);
         }
         if !self.backend.supports(capability) {
             return Err(Error::UnsupportedCapability);
@@ -164,10 +146,12 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         if state.cancelled {
             return Err(Error::Cancelled);
         }
-        if self.clock.now() >= self.grant.expires_at {
-            return Err(Error::GrantExpired);
-        }
         Ok(())
+    }
+
+    fn bounded_deadline(&self, requested: Option<Instant>) -> Option<Instant> {
+        let maximum = self.clock.now() + MAX_CALL_DURATION;
+        Some(requested.map_or(maximum, |deadline| deadline.min(maximum)))
     }
 
     // This check takes no state lock: callers also use it while holding admission.
@@ -190,23 +174,24 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         }
     }
 
-    /// Window discovery reads AX metadata only after app-scoped Observe admission.
+    /// Discovers windows for the bound app using the provider's Observe support.
     pub fn windows(&self) -> Result<WindowInventory, Error> {
         self.list_windows(None)
     }
 
-    /// Tightens this call's budget without changing the context's grant.
+    /// Tightens this call's execution budget.
     pub fn windows_until(&self, deadline: Instant) -> Result<WindowInventory, Error> {
         self.list_windows(Some(deadline))
     }
 
     fn list_windows(&self, deadline: Option<Instant>) -> Result<WindowInventory, Error> {
+        let deadline = self.bounded_deadline(deadline);
         let (flight, retired, provider) = {
             let mut state = self.state();
             if state.busy {
                 return Err(Error::Busy);
             }
-            self.authorize(&state, &self.grant.app, Capability::Observe)?;
+            self.validate_target(&state, &self.app, Capability::Observe)?;
             self.check_deadline(deadline)?;
             state.busy = true;
             (
@@ -216,11 +201,11 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             )
         };
         drop(retired);
-        let poll = || self.remaining(self.grant.expires_at, deadline);
+        let poll = || self.remaining(deadline.expect("bounded call deadline"), deadline);
         let call = CallContext { poll: &poll };
         let result = call
             .remaining()
-            .and_then(|_| self.backend.windows(&self.grant.app, &call));
+            .and_then(|_| self.backend.windows(&self.app, &call));
         let state = flight.finish();
         self.live_context(&state)?;
         self.check_deadline(deadline)?;
@@ -234,7 +219,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             other => other?,
         };
         let windows = &inventory.windows;
-        if windows.iter().any(|w| w.target.app != self.grant.app) {
+        if windows.iter().any(|w| w.target.app != self.app) {
             return Err(Error::WrongApp);
         }
         let report = &inventory.report;
@@ -287,6 +272,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         kind: ObservationKind,
         deadline: Option<Instant>,
     ) -> Result<Observation, Error> {
+        let deadline = self.bounded_deadline(deadline);
         let capability = match kind {
             ObservationKind::Semantic => Capability::Observe,
             ObservationKind::Pixels => Capability::Capture,
@@ -296,7 +282,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             if state.busy {
                 return Err(Error::Busy);
             }
-            self.authorize(&state, &target.app, capability)?;
+            self.validate_target(&state, &target.app, capability)?;
             self.check_deadline(deadline)?;
             state.generation = state
                 .generation
@@ -320,16 +306,15 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         };
         let expires_at = started_at
             .checked_add(self.observation_ttl)
-            .unwrap_or(self.grant.expires_at)
-            .min(self.grant.expires_at);
+            .unwrap_or(started_at);
         // Native bindings can have meaningful destructors. Never drop them under
         // the state lock; cancellation must remain able to acquire that lock.
         drop(retired);
-        // Cleanup can block. Recheck authority before starting a new native read,
+        // Cleanup can block. Recheck the target before starting a new native read,
         // rather than reading after cancellation and merely discarding its data.
         let ready = {
             let state = self.state();
-            self.authorize(&state, &target.app, capability)
+            self.validate_target(&state, &target.app, capability)
                 .and_then(|_| self.check_deadline(deadline))
                 .and_then(|_| {
                     if self.backend.stamp() != provider {
@@ -463,6 +448,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         action: Action,
         deadline: Option<Instant>,
     ) -> ActionReceipt {
+        let deadline = self.bounded_deadline(deadline);
         let prepared = {
             let mut state = self.state();
             self.prepare_action(&mut state, target, reference, action, deadline)
@@ -515,7 +501,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             Action::Press(_) => (Capability::Press, ObservationKind::Semantic),
             Action::Click(_) => (Capability::Click, ObservationKind::Pixels),
         };
-        self.authorize(state, &target.app, capability)?;
+        self.validate_target(state, &target.app, capability)?;
         self.check_deadline(deadline)?;
         let live = state.observation.as_ref().ok_or(Error::StaleObservation)?;
         if live.reference != reference || self.clock.now() >= live.expires_at {
@@ -568,17 +554,6 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             state.cancelled = true;
             state.observation.take()
         };
-        drop(retired);
-        self.backend.shutdown()
-    }
-
-    /// Retire resources after the immutable grant deadline without replacing
-    /// GrantExpired with a generic Closed interruption on an in-flight receipt.
-    pub fn expire(&self) -> Result<(), Error> {
-        if self.clock.now() < self.grant.expires_at {
-            return Ok(());
-        }
-        let retired = self.state().observation.take();
         drop(retired);
         self.backend.shutdown()
     }

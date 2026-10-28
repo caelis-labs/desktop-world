@@ -151,9 +151,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         let mut stopped = false;
         loop {
             if !stopped && (cancel.load(Ordering::Acquire) || Instant::now() >= deadline) {
-                let reason = if Instant::now() >= self.authority.expires_at {
-                    Error::GrantExpired
-                } else if cancel.load(Ordering::Acquire) {
+                let reason = if cancel.load(Ordering::Acquire) {
                     Error::Cancelled
                 } else {
                     Error::TimedOut
@@ -203,13 +201,11 @@ impl<B: Backend + 'static> Coordinator<B> {
                 value["result"] = success.value;
                 state_update = Some(success.state);
             }
-            Err(mut failure) => {
+            Err(failure) => {
                 if failure.kind == "timeout" || failure.kind == "cancelled" {
                     self.stop_script(
                         id,
-                        if Instant::now() >= self.authority.expires_at {
-                            Error::GrantExpired
-                        } else if failure.kind == "timeout" {
+                        if failure.kind == "timeout" {
                             Error::TimedOut
                         } else {
                             Error::Cancelled
@@ -217,19 +213,11 @@ impl<B: Backend + 'static> Coordinator<B> {
                     );
                 }
                 let mut state = self.state.lock().unwrap();
-                completed.error = if matches!(state.terminal, Some(Error::GrantExpired)) {
-                    let error = wire::core_error(&Error::GrantExpired);
-                    failure.kind = "grant_expired".into();
-                    failure.code = Some(error.code.clone());
-                    failure.message = error.message.clone();
-                    Some(error)
-                } else {
-                    Some(WireError {
-                        details: None,
-                        code: format!("script_{}", failure.kind),
-                        message: failure.message.clone(),
-                    })
-                };
+                completed.error = Some(WireError {
+                    details: None,
+                    code: format!("script_{}", failure.kind),
+                    message: failure.message.clone(),
+                });
                 let run = state
                     .jobs
                     .iter_mut()
@@ -347,15 +335,13 @@ impl<B: Backend + 'static> Coordinator<B> {
             code: "invalid_host_call".into(),
             message: "Only bound app operations and their declared fields are permitted".into(),
         };
-        if !["windows", "observe", "capture", "press", "click"].contains(&call.op.as_str()) {
-            return Err(failure());
-        }
+        let method = super::methods::Method::parse(&call.op).ok_or_else(failure)?;
         let mut command = call.args.as_object().cloned().ok_or_else(failure)?;
         if command.contains_key("kind") {
             return Err(failure());
         }
         let mut target = json!({"app_ref":self.app_ref});
-        if call.op != "windows" {
+        if method.window_target() {
             target["window_ref"] = command.remove("window_ref").ok_or_else(failure)?;
         }
         command.insert("kind".into(), json!(call.op));
@@ -375,7 +361,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             }
             // The VM already observes this absolute deadline. Do not turn a
             // timeout into a cancellation merely to wake its interrupt handler.
-            if !matches!(state.terminal, Some(Error::TimedOut | Error::GrantExpired)) {
+            if !matches!(state.terminal, Some(Error::TimedOut)) {
                 cancel_active(&state);
             }
             state.windows.clear();
