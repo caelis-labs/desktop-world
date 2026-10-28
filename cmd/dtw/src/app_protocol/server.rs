@@ -77,6 +77,9 @@ pub struct Call<B: Backend> {
     execution_id: Option<String>,
     command: ToolCall,
     run_finished: AtomicBool,
+    completion: tokio::sync::Notify,
+    // Set and cleared under Server state; pins admission while shared cleanup runs.
+    stopping: AtomicBool,
     context_reset: AtomicBool,
     state_reset: AtomicBool,
 }
@@ -94,7 +97,21 @@ pub enum Started<B: Backend> {
     Reply(Reply),
     Call(Arc<Call<B>>),
     // The original accepted call will produce the response for this RPC ID.
-    InFlight,
+    InFlight(Arc<Call<B>>),
+}
+
+impl<B: Backend> Call<B> {
+    pub(super) async fn wait_finished(&self) {
+        loop {
+            // notify_waiters observes futures created before notification,
+            // even before they are polled. Check the sole state after creating it.
+            let finished = self.completion.notified();
+            if self.run_finished.load(Ordering::Acquire) {
+                return;
+            }
+            finished.await;
+        }
+    }
 }
 
 impl<F: Factory> Server<F> {
@@ -125,10 +142,12 @@ impl<F: Factory> Server<F> {
                     "This MCP request ID already belongs to different input in this session",
                 ));
             }
-            if state.active.as_ref().is_some_and(|call| {
-                call.rpc_id == rpc_id && !call.run_finished.load(Ordering::Acquire)
-            }) {
-                return Started::InFlight;
+            if let Some(call) = state
+                .active
+                .as_ref()
+                .filter(|call| call.rpc_id == rpc_id && !call.run_finished.load(Ordering::Acquire))
+            {
+                return Started::InFlight(call.clone());
             }
             return Started::Reply(self.record_reply(&state, record));
         }
@@ -187,6 +206,8 @@ impl<F: Factory> Server<F> {
             execution_id,
             command,
             run_finished: AtomicBool::new(false),
+            completion: tokio::sync::Notify::new(),
+            stopping: AtomicBool::new(false),
             context_reset: AtomicBool::new(false),
             state_reset: AtomicBool::new(false),
         });
@@ -249,28 +270,29 @@ impl<F: Factory> Server<F> {
         if !unsettled {
             if let Some(id) = &call.execution_id {
                 cache_reply(&mut state, id, &reply);
-                if let Some(owner) = &owner {
+            }
+            if !call.stopping.load(Ordering::Acquire) {
+                if let Some((owner, id)) = owner.as_ref().zip(call.execution_id.as_ref()) {
                     owner.release_result_payload(id);
                 }
-            }
-            if state
-                .active
-                .as_ref()
-                .is_some_and(|active| Arc::ptr_eq(active, call))
-            {
-                state.active = None;
+                if state
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| Arc::ptr_eq(active, call))
+                {
+                    state.active = None;
+                }
             }
         }
         call.run_finished.store(true, Ordering::Release);
+        call.completion.notify_waiters();
         self.finished.notify_all();
         reply
     }
     fn refresh(&self, state: &mut State<F::Provider>) {
-        let Some(call) = state
-            .active
-            .clone()
-            .filter(|call| call.run_finished.load(Ordering::Acquire))
-        else {
+        let Some(call) = state.active.clone().filter(|call| {
+            call.run_finished.load(Ordering::Acquire) && !call.stopping.load(Ordering::Acquire)
+        }) else {
             return;
         };
         let owner = call.owner.lock().unwrap().clone();
@@ -496,14 +518,30 @@ impl<F: Factory> Server<F> {
     fn remember_shutdown(&self, error: WireError) {
         remember_shutdown(&mut self.state.lock().unwrap(), error);
     }
+    pub(super) fn completed_reply(&self, call: &Call<F::Provider>) -> Reply {
+        let mut state = self.state.lock().unwrap();
+        self.refresh(&mut state);
+        match call
+            .execution_id
+            .as_ref()
+            .and_then(|id| state.records.iter().find(|record| record.id == *id))
+        {
+            Some(record) => self.record_reply(&state, record),
+            None => problem(
+                "unknown_execution",
+                "The original execution record is unavailable; no work was replayed",
+            ),
+        }
+    }
     fn record_reply(&self, state: &State<F::Provider>, record: &Record) -> Reply {
+        let active = state
+            .active
+            .as_ref()
+            .filter(|active| active.execution_id.as_deref() == Some(&record.id));
         let mut reply = if let Some(reply) = &record.reply {
             reply.clone()
         } else {
-            state
-                .active
-                .as_ref()
-                .filter(|active| active.execution_id.as_deref() == Some(&record.id))
+            active
                 .and_then(|active| {
                     active
                         .owner
@@ -515,8 +553,14 @@ impl<F: Factory> Server<F> {
                 .filter(|reply| reply.data["error"]["code"] != "unknown_request")
                 .unwrap_or_else(|| Reply::plain(json!({"version":1,"status":"running"})))
         };
-        public_execution(&mut reply, &record.app, &record.id);
-        append_shutdown_errors(&mut reply, &state.shutdown_errors);
+        if let Some(active) = active {
+            // Core can finish before the Server worker publishes its cache.
+            // Project the same app metadata on both sides of that boundary.
+            self.annotate(state, active, &mut reply);
+        } else {
+            public_execution(&mut reply, &record.app, &record.id);
+            append_shutdown_errors(&mut reply, &state.shutdown_errors);
+        }
         reply
     }
     fn result(&self, args: Value) -> Reply {
@@ -551,21 +595,60 @@ impl<F: Factory> Server<F> {
     pub fn cancel(&self, rpc_id: &Value) {
         let active = self.state.lock().unwrap().active.clone();
         if let Some(call) = active.filter(|call| call.rpc_id == *rpc_id) {
-            call.cancelled.store(true, Ordering::Release);
-            let cancelled = {
-                let owner = call.owner.lock().unwrap();
-                owner
-                    .as_ref()
-                    .zip(call.execution_id.as_ref())
-                    .map(|(owner, id)| owner.cancel(id))
-            };
-            if let Some(error) = cancelled.as_ref().and_then(cleanup_error) {
-                self.remember_shutdown(error);
-            }
-            if let Err(error) = self.factory.close_catalog() {
-                self.remember_shutdown(wire::core_error(&error));
-            }
+            self.cancel_call(&call);
         }
+    }
+    /// A dropped SDK handler may finish cleanup late; only stop its own call.
+    pub(super) fn cancel_call(&self, call: &Arc<Call<F::Provider>>) {
+        {
+            let state = self.state.lock().unwrap();
+            if !state
+                .active
+                .as_ref()
+                .is_some_and(|active| Arc::ptr_eq(active, call))
+                || call.stopping.load(Ordering::Acquire)
+            {
+                return;
+            }
+            // finish_run and refresh keep this reservation until the shared
+            // catalog cleanup ends. No native I/O runs under the Server lock.
+            call.stopping.store(true, Ordering::Release);
+            call.cancelled.store(true, Ordering::Release);
+        }
+        let cancelled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let owner = call.owner.lock().unwrap().clone();
+            owner
+                .as_ref()
+                .zip(call.execution_id.as_ref())
+                .map(|(owner, id)| owner.cancel(id))
+        }));
+        // Try both cleanups even if one panics; retain failure before releasing
+        // the reservation so a panic cannot silently reopen admission.
+        let catalog = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.factory.close_catalog()
+        }));
+        let mut state = self.state.lock().unwrap();
+        match cancelled {
+            Ok(reply) => {
+                if let Some(error) = reply.as_ref().and_then(cleanup_error) {
+                    remember_shutdown(&mut state, error);
+                }
+            }
+            Err(_) => remember_shutdown(
+                &mut state,
+                shutdown_error("Application cancellation panicked; native outcome remains unknown"),
+            ),
+        }
+        match catalog {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => remember_shutdown(&mut state, wire::core_error(&error)),
+            Err(_) => remember_shutdown(
+                &mut state,
+                shutdown_error("Catalog cancellation panicked; native outcome remains unknown"),
+            ),
+        }
+        call.stopping.store(false, Ordering::Release);
+        self.finished.notify_all();
     }
     pub fn close(&self) -> Result<(), WireError> {
         let active = {
@@ -583,18 +666,21 @@ impl<F: Factory> Server<F> {
         if let Some(call) = active {
             let until = Instant::now() + STOP_TIMEOUT;
             let mut state = self.state.lock().unwrap();
-            while !call.run_finished.load(Ordering::Acquire) {
+            while !call.run_finished.load(Ordering::Acquire)
+                || call.stopping.load(Ordering::Acquire)
+            {
                 let left = until.saturating_duration_since(Instant::now());
                 if left.is_zero() {
                     break;
                 }
                 state = self.finished.wait_timeout(state, left).unwrap().0;
             }
-            let unfinished = !call.run_finished.load(Ordering::Acquire);
+            let unfinished =
+                !call.run_finished.load(Ordering::Acquire) || call.stopping.load(Ordering::Acquire);
             drop(state);
             if unfinished {
                 self.remember_shutdown(shutdown_error(
-                    "Preparing or running tool call did not settle",
+                    "Preparing, running or cancellation cleanup did not settle",
                 ));
             }
         }
@@ -788,7 +874,7 @@ fn parse_call(name: &str, args: &Value) -> Result<ToolCall, WireError> {
             Ok(ToolCall::Apps)
         }
         "exec" => {
-            exact_object(args, &["app", "source", "timeout_ms", "max_calls"])?;
+            exact_object(args, &["app", "source"])?;
             let app = app_id::parse(&args["app"])?;
             let source = args["source"]
                 .as_str()
@@ -952,6 +1038,9 @@ mod lifecycle_tests {
         connects: AtomicUsize,
         connect_fails: AtomicBool,
         catalog_close_fails: AtomicBool,
+        catalog_close_panics: AtomicBool,
+        catalog_close: Mutex<Option<Arc<Gate>>>,
+        catalog_closes: AtomicUsize,
         closing: Mutex<Option<mpsc::SyncSender<()>>>,
     }
     impl Factory for Arc<TestFactory> {
@@ -976,6 +1065,15 @@ mod lifecycle_tests {
             Ok(self.provider.clone())
         }
         fn close_catalog(&self) -> Result<(), Error> {
+            self.catalog_closes.fetch_add(1, Ordering::SeqCst);
+            let gate = self.catalog_close.lock().unwrap().take();
+            if let Some(gate) = gate {
+                gate.enter();
+            }
+            assert!(
+                !self.catalog_close_panics.swap(false, Ordering::SeqCst),
+                "controlled catalog close panic"
+            );
             self.catalog_open.store(false, Ordering::SeqCst);
             let closing = self.closing.lock().unwrap().take();
             if let Some(closing) = closing {
@@ -1007,6 +1105,9 @@ mod lifecycle_tests {
             connects: AtomicUsize::new(0),
             connect_fails: AtomicBool::new(false),
             catalog_close_fails: AtomicBool::new(false),
+            catalog_close_panics: AtomicBool::new(false),
+            catalog_close: Mutex::new(None),
+            catalog_closes: AtomicUsize::new(0),
             closing: Mutex::new(None),
         });
         (Server::new(factory.clone()), factory)
@@ -1015,14 +1116,14 @@ mod lifecycle_tests {
         match server.begin(json!(id), "exec", json!({"app":APP,"source":source})) {
             Started::Call(call) => call,
             Started::Reply(reply) => panic!("unexpected rejection: {}", reply.data),
-            Started::InFlight => panic!("unexpected duplicate frame"),
+            Started::InFlight(_) => panic!("unexpected duplicate frame"),
         }
     }
     fn reply(started: Started<Provider>) -> Reply {
         match started {
             Started::Reply(reply) => reply,
             Started::Call(_) => panic!("unexpected dispatch"),
-            Started::InFlight => panic!("unexpected pending response"),
+            Started::InFlight(_) => panic!("unexpected pending response"),
         }
     }
     fn result(server: &Server<Arc<TestFactory>>, id: &str) -> Reply {
@@ -1215,6 +1316,102 @@ mod lifecycle_tests {
     }
 
     #[test]
+    fn cancellation_cleanup_keeps_admission_until_shared_reader_is_retired() {
+        let (server, factory) = fixture();
+        let call = begin(&server, "cancel-owner", "return 7;");
+        let (gate, control) = gate();
+        *factory.catalog_close.lock().unwrap() = Some(gate);
+        let canceller = {
+            let server = server.clone();
+            let call = call.clone();
+            std::thread::spawn(move || server.cancel_call(&call))
+        };
+        control.entered();
+        let completed = server.run(&call);
+        assert_eq!(completed.data["error"]["code"], "cancelled");
+        assert!(call.run_finished.load(Ordering::Acquire));
+        assert_eq!(
+            reply(server.begin(json!("during-cleanup"), "apps", json!({}))).data["error"]["code"],
+            "busy"
+        );
+        let closes = factory.catalog_closes.load(Ordering::SeqCst);
+        server.cancel_call(&call);
+        assert_eq!(factory.catalog_closes.load(Ordering::SeqCst), closes);
+        assert!(call.stopping.load(Ordering::Acquire));
+        control.release();
+        canceller.join().unwrap();
+        let next = match server.begin(json!("after-cleanup"), "apps", json!({})) {
+            Started::Call(call) => call,
+            _ => panic!("cleanup did not release admission"),
+        };
+        assert!(!server.run(&next).is_error);
+        assert!(factory.catalog_open.load(Ordering::SeqCst));
+        let closes = factory.catalog_closes.load(Ordering::SeqCst);
+        server.cancel_call(&call);
+        assert!(factory.catalog_open.load(Ordering::SeqCst));
+        assert_eq!(factory.catalog_closes.load(Ordering::SeqCst), closes);
+        assert_eq!(result(&server, "cancel-owner").data, completed.data);
+        server.close().unwrap();
+    }
+
+    #[test]
+    fn close_waits_for_cancellation_cleanup_after_execution_has_finished() {
+        let (server, factory) = fixture();
+        let call = begin(&server, "cancel-owner", "return 7;");
+        let (gate, control) = gate();
+        *factory.catalog_close.lock().unwrap() = Some(gate);
+        let canceller = {
+            let server = server.clone();
+            let call = call.clone();
+            std::thread::spawn(move || server.cancel_call(&call))
+        };
+        control.entered();
+        server.run(&call);
+        assert!(call.run_finished.load(Ordering::Acquire));
+        let (closing, noticed) = mpsc::sync_channel(0);
+        *factory.closing.lock().unwrap() = Some(closing);
+        let (closed, finished) = mpsc::channel();
+        let closer = {
+            let server = server.clone();
+            std::thread::spawn(move || closed.send(server.close()).unwrap())
+        };
+        noticed.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(matches!(
+            finished.recv_timeout(Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        control.release();
+        canceller.join().unwrap();
+        finished
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        closer.join().unwrap();
+    }
+
+    #[test]
+    fn cancellation_cleanup_panic_preserves_failure_and_closes_new_admission() {
+        let (server, factory) = fixture();
+        factory.catalog_close_panics.store(true, Ordering::SeqCst);
+        let call = begin(&server, "cancel-panic", "return 7;");
+        server.cancel_call(&call);
+        assert!(!call.stopping.load(Ordering::Acquire));
+        let completed = server.run(&call);
+        assert_eq!(completed.data["error"]["code"], "cancelled");
+        assert_eq!(
+            completed.data["shutdown_errors"][0]["code"],
+            "shutdown_failed"
+        );
+        assert_eq!(
+            reply(server.begin(json!("after-panic"), "apps", json!({}))).data["error"]["code"],
+            "shutdown_failed"
+        );
+        assert_eq!(result(&server, "cancel-panic").data, completed.data);
+        assert_eq!(factory.connects.load(Ordering::SeqCst), 0);
+        assert!(server.close().is_err());
+    }
+
+    #[test]
     fn catalog_cleanup_failure_on_cancel_remains_visible_in_original_result() {
         let (server, factory) = fixture();
         factory.catalog_close_fails.store(true, Ordering::SeqCst);
@@ -1290,7 +1487,7 @@ mod lifecycle_tests {
     }
     #[test]
     fn completed_owner_replaces_a_stale_running_snapshot_and_exposes_internal_cleanup_errors() {
-        for fail in [false, true] {
+        for (fail, stopping) in [(false, false), (false, true), (true, false), (true, true)] {
             let (server, factory) = fixture();
             let call = begin(&server, "sampled", "return 7;");
             let app = factory.applications.lock().unwrap()[0].app.clone();
@@ -1316,6 +1513,10 @@ mod lifecycle_tests {
             }));
             assert_eq!(admitted.data["status"], "running");
             assert!(owner.wait_idle(Duration::from_secs(5)));
+            let before_cache = result(&server, "sampled");
+            assert_eq!(before_cache.data["status"], "completed");
+            assert_eq!(before_cache.data["context_reset"], false);
+            assert_eq!(before_cache.data["state_reset"], false);
             if fail {
                 factory
                     .provider
@@ -1324,11 +1525,32 @@ mod lifecycle_tests {
                     .store(true, Ordering::SeqCst);
                 assert!(owner.close().is_error);
             }
+            let cancellation = stopping.then(|| {
+                let (gate, control) = gate();
+                *factory.catalog_close.lock().unwrap() = Some(gate);
+                let canceller = {
+                    let server = server.clone();
+                    let call = call.clone();
+                    std::thread::spawn(move || server.cancel_call(&call))
+                };
+                control.entered();
+                (control, canceller)
+            });
             let completed = server.finish_run(&call, admitted);
             assert_eq!(completed.data["status"], "completed");
             assert_eq!(completed.data["value"]["result"], 7);
+            if !fail {
+                assert_eq!(before_cache.data, completed.data);
+            }
             assert_eq!(result(&server, "sampled").data["status"], "completed");
             assert_eq!(result(&server, "sampled").data, completed.data);
+            if let Some((control, canceller)) = cancellation {
+                control.release();
+                canceller.join().unwrap();
+                // Refresh after cancellation must retain the original payload,
+                // not overwrite it with an already-released owner payload.
+                assert_eq!(result(&server, "sampled").data, completed.data);
+            }
             // Completed native owners retain receipts but hand their payloads
             // to the one session cache, avoiding a second cache for every app.
             let owned = owner.state.lock().unwrap();

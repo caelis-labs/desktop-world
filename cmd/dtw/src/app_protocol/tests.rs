@@ -797,47 +797,6 @@ fn provider_panic_finishes_the_job_as_unknown_and_seals_the_context() {
 }
 
 #[test]
-fn mcp_frames_require_complete_lines_and_never_accumulate_past_the_frame_limit() {
-    use std::io::{BufReader, Cursor, Read};
-    let mut exact = vec![b' '; mcp::MAX_INPUT_BYTES - 1];
-    exact.push(b'\n');
-    assert_eq!(
-        mcp::read_frame(&mut Cursor::new(exact.clone()))
-            .unwrap()
-            .unwrap(),
-        exact
-    );
-    let mut oversized = Cursor::new(vec![b'x'; mcp::MAX_INPUT_BYTES * 3]);
-    assert_eq!(
-        mcp::read_frame(&mut oversized).unwrap_err().code,
-        "invalid_frame"
-    );
-    assert_eq!(oversized.position(), (mcp::MAX_INPUT_BYTES + 1) as u64);
-    assert_eq!(
-        mcp::read_frame(&mut Cursor::new(b"{}".to_vec()))
-            .unwrap_err()
-            .code,
-        "invalid_frame"
-    );
-    let mut two = Cursor::new(b"{}\n[]\n".to_vec());
-    assert_eq!(mcp::read_frame(&mut two).unwrap(), Some(b"{}\n".to_vec()));
-    assert_eq!(mcp::read_frame(&mut two).unwrap(), Some(b"[]\n".to_vec()));
-    assert_eq!(mcp::read_frame(&mut two).unwrap(), None);
-    struct Broken;
-    impl Read for Broken {
-        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
-            Err(std::io::Error::other("controlled input failure"))
-        }
-    }
-    assert_eq!(
-        mcp::read_frame(&mut BufReader::new(Broken))
-            .unwrap_err()
-            .code,
-        "transport_error"
-    );
-}
-
-#[test]
 fn close_after_cancel_keeps_the_original_cancellation_cause_in_late_receipts() {
     let (owner, backend) = coordinator();
     let window = windows(&owner, "windows").remove(0);

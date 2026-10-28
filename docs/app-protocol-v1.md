@@ -1,6 +1,6 @@
 # 标准 MCP App 协议 v1
 
-产品入口为 `dtw mcp`。Agent 使用普通 stdio MCP 配置和可选的 [DTW Skill](../skills/desktop-world/SKILL.md)，无需 DTW 专用 Host。审批与授权完全属于 Harness；DTW 只要求显式平台稳定 app ID，并执行目标、引用、预算和生命周期校验。
+产品入口为 `dtw mcp`，使用官方 `rmcp 3.8.0` 的 stdio transport、协议协商、消息类型和服务分发；不维护另一套 MCP 解析器。Agent 使用普通 stdio MCP 配置和可选的 [DTW Skill](../skills/desktop-world/SKILL.md)，无需 DTW 专用 Host。审批与授权完全属于 Harness；DTW 只要求显式平台稳定 app ID，并执行目标、引用、预算和生命周期校验。
 
 ## 应用发现与稳定 app ID
 
@@ -21,10 +21,10 @@
 | 工具 | 参数 | 返回行为 |
 | --- | --- | --- |
 | `apps` | `{}` | 应用列表、稳定 app IDs 和当前脚本合同 |
-| `exec` | `app, source`；可选 `timeout_ms, max_calls` | 等待有界脚本执行收尾，返回结果、回执和最后一张截图 |
+| `exec` | `app, source`（仅这两项） | 等待有界脚本执行收尾，返回结果、回执和最后一张截图 |
 | `result` | `app`；可选 `execution_id` | 只读本会话该 app 最近接受的执行，或指定原记录，不执行、不重放 |
 
-`app` 必须是平台稳定 ID 字符串。`exec` 的 `source` 是 JavaScript 异步函数体，可使用 `await` 和 `return`。DTW 在接受执行时自动生成 `execution_id`；模型不生成、传入或维护请求编号。默认总执行期限为 30 秒，可通过 `timeout_ms` 调大或调小；省略 `max_calls` 不设调用次数配额，显式提供时按调用方配额执行。两者均为正整数，编码范围为 u32。其余预算见[脚本合同](app-script-v1.md)。未知参数拒绝。源码仍限 64 KiB UTF-8；完整换行 MCP JSON 输入帧限 512 KiB，以容纳转义。
+`app` 必须是平台稳定 ID 字符串。`exec` 的 `source` 是 JavaScript 异步函数体，可使用 `await` 和 `return`。DTW 在接受执行时自动生成 `execution_id`；模型不生成、传入或维护请求编号。当前内部总执行期限为 30 秒，不设调用次数配额；公开工具不接受预算、文件路径或请求编号。其余预算见[脚本合同](app-script-v1.md)。未知参数拒绝。源码仍限 64 KiB UTF-8；完整换行 MCP JSON 输入帧限 512 KiB，以容纳转义。
 
 一次发现后执行窗口查询的工具参数示意：
 
@@ -69,6 +69,6 @@ JSON-RPC 的 `id` 由标准客户端管理并标识传输请求；DTW 内部生�
 
 ## 兼容与证据
 
-普通 MCP 初始化、工具发现和调用遵循服务器广告的协议版本。该合同不要求 elicitation、专用审批扩展或客户端自定义回调。MCP tool annotations 是提示，不是 DTW 的授权策略。
+协议协商和消息编码由官方 SDK 管理；当前验收覆盖 2024-11-05、2025-06-18 的初始化流程，以及 2026-07-28 的逐请求 metadata 流程。超长帧由 SDK 丢弃后继续读取，未完成尾帧不执行；无效 JSON 和非法消息按 SDK 的标准行为处理。DTW 的 I/O 生命周期包装只负责 EOF、读写失败、输出持续停滞时取消执行并等待原生收尾，不参与协议解析。该合同不要求 elicitation、专用审批扩展或客户端自定义回调。MCP tool annotations 是提示，不是 DTW 的授权策略。
 
 C4/C5 的 `dtw app serve --grant`、`exec.describe/submit/cancel/close` 流程属于前一接入设计，已退出产品入口。其[历史验收](app-protocol-acceptance.md)只适用于记录的代码和二进制，不证明当前入口已经通过相同验收。当前支持范围见[产品矩阵](product-matrix.md)。

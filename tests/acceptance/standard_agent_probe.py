@@ -368,7 +368,7 @@ def run_checks(mcp, target, peer, output, pixel_click, evidence):
         schema = by_name[name]["inputSchema"]
         require(schema["properties"]["app"]["type"] == "string" and "app" in schema["required"], schema)
     require(set(by_name["exec"]["inputSchema"]["required"]) == {"app", "source"}, "exec requires bookkeeping")
-    require("request_id" not in by_name["exec"]["inputSchema"]["properties"], "request_id is still public input")
+    require(set(by_name["exec"]["inputSchema"]["properties"]) == {"app", "source"}, "exec exposes extra input")
     require(by_name["result"]["inputSchema"]["required"] == ["app"], "latest result requires an execution ID")
     discovered, _ = mcp.tool("apps", {})
     entries = discovered["apps"]
@@ -456,7 +456,7 @@ def run_checks(mcp, target, peer, output, pixel_click, evidence):
     require(successful(persisted) == "before-cancel", persisted)
     unchanged = target.counters()
     rpc_id = mcp.begin("tools/call", {"name": "exec", "arguments": {
-        "app": target.app_id, "source": CANCEL, "timeout_ms": 5000}})
+        "app": target.app_id, "source": CANCEL}})
     def native_read_finished():
         record = mcp.receipt(target.app_id, "cancel-original")
         require(record.get("status") == "running", f"cancel sample ended before notification: {record}")

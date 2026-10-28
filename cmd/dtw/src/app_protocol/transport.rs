@@ -1,7 +1,7 @@
 //! Standard stdio CLI, lazy native factory and process lifecycle.
 use super::{
-    mcp::{self, Event},
-    server::{Application, Factory, Server, Started},
+    mcp,
+    server::{Application, Factory, Server},
     wire::{self, WireError},
 };
 use crate::{
@@ -10,10 +10,10 @@ use crate::{
 };
 use serde_json::{json, Value};
 use std::{
-    io::{self, BufReader, BufWriter, Write},
+    io::{self, Write},
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc, Mutex,
+        Arc, Mutex,
     },
     time::Duration,
 };
@@ -119,100 +119,20 @@ fn serve(server: Arc<Server<NativeFactory>>) -> Result<(), WireError> {
             }
         })
         .map_err(|_| error("transport_error", "Cannot start lifecycle watcher"))?;
-    let (output, responses) = mpsc::sync_channel::<Value>(8);
-    let (written, drained) = mpsc::sync_channel(1);
-    let writer_server = server.clone();
-    std::thread::Builder::new()
-        .name("dtw-mcp-output".into())
-        .spawn(move || {
-            let mut stdout = BufWriter::new(io::stdout().lock());
-            for response in responses {
-                let result = serde_json::to_writer(&mut stdout, &response)
-                    .map_err(io::Error::other)
-                    .and_then(|()| stdout.write_all(b"\n"))
-                    .and_then(|()| stdout.flush());
-                if result.is_err() {
-                    terminate_transport(
-                        &writer_server,
-                        "transport_error",
-                        "Cannot write MCP response",
-                    );
-                }
-            }
-            let _ = written.send(());
-        })
-        .map_err(|_| error("transport_error", "Cannot start output writer"))?;
-    let mut session = mcp::Session::default();
-    let mut input = BufReader::new(io::stdin().lock());
-    let outcome = (|| {
-        while let Some(line) = mcp::read_frame(&mut input)? {
-            let event = match serde_json::from_slice(&line) {
-                Ok(value) => session.handle(value),
-                Err(_) => Event::Reply(mcp::rpc_error(Value::Null, -32700, "Invalid JSON")),
-            };
-            let response = match event {
-                Event::None => None,
-                Event::Reply(value) => Some(value),
-                Event::Cancel(id) => {
-                    server.cancel(&id);
-                    None
-                }
-                Event::Call {
-                    id,
-                    name,
-                    args,
-                    structured,
-                } => match server.begin(id.clone(), &name, args) {
-                    Started::InFlight => None,
-                    Started::Reply(reply) => Some(mcp::response(id, reply, structured)),
-                    Started::Call(call) => {
-                        let server = server.clone();
-                        let output = output.clone();
-                        std::thread::Builder::new()
-                            .name("dtw-mcp-call".into())
-                            .spawn(move || {
-                                let reply = match std::panic::catch_unwind(
-                                    std::panic::AssertUnwindSafe(|| server.run(&call)),
-                                ) {
-                                    Ok(reply) => reply,
-                                    Err(_) => terminate_transport(
-                                        &server,
-                                        "execution_panicked",
-                                        "Tool worker panicked; original effects may be unknown",
-                                    ),
-                                };
-                                if !call.cancelled.load(Ordering::Acquire)
-                                    && output
-                                        .try_send(mcp::response(id, reply, structured))
-                                        .is_err()
-                                {
-                                    terminate_transport(
-                                        &server,
-                                        "output_backpressure",
-                                        "MCP output is stalled; stopping native work",
-                                    );
-                                }
-                            })
-                            .map_err(|_| error("transport_error", "Cannot start tool call"))?;
-                        None
-                    }
-                },
-            };
-            if let Some(response) = response {
-                output.try_send(response).map_err(|_| {
-                    error(
-                        "output_backpressure",
-                        "MCP output is stalled; stopping native work",
-                    )
-                })?;
-            }
-        }
-        Ok(())
-    })();
-    let cleanup = server.close();
-    drop(output);
-    let _ = drained.recv_timeout(Duration::from_millis(200));
-    cleanup.and(outcome)
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .map_err(|_| error("transport_error", "Cannot start MCP runtime"))?;
+    let outcome = runtime.block_on(async {
+        let (read, write) = rmcp::transport::stdio();
+        mcp::serve_io(server, read, write).await
+    });
+    // Tokio's macOS stdio reader is a blocking task that cannot be aborted.
+    // Native cleanup has completed; an open stdin must not prevent exit after
+    // a write failure. Process exit will end the remaining stdio task.
+    runtime.shutdown_timeout(Duration::from_millis(200));
+    outcome
 }
 
 /// Background I/O failure must also stop a reader blocked on an open stdin.
@@ -237,9 +157,4 @@ fn cleanup_for_exit(server: &Server<NativeFactory>) -> i32 {
             2
         }
     }
-}
-fn terminate_transport(server: &Server<NativeFactory>, code: &str, message: &str) -> ! {
-    report_error(error(code, message));
-    cleanup_for_exit(server);
-    std::process::exit(2)
 }

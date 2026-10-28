@@ -2,7 +2,6 @@
 use super::*;
 use crate::app_protocol::{
     app_id,
-    mcp::{Event, Session},
     server::{Application, Factory, Server, Started},
 };
 const APP: &str = "org.example.Controlled";
@@ -47,7 +46,7 @@ fn call_with_rpc(server: &Arc<Server<Catalog>>, rpc_id: Value, name: &str, args:
     match server.begin(rpc_id, name, args) {
         Started::Reply(reply) => reply,
         Started::Call(call) => server.run(&call),
-        Started::InFlight => panic!("unexpected duplicate frame"),
+        Started::InFlight(_) => panic!("unexpected duplicate frame"),
     }
 }
 fn call(server: &Arc<Server<Catalog>>, name: &str, args: Value) -> Reply {
@@ -309,163 +308,6 @@ fn native_cleanup_failure_closes_dispatch_for_every_app_and_keeps_original_recei
     assert!(prior.data.get("shutdown_error").is_none());
     assert!(server.close().is_err());
 }
-fn message(id: Value, method: &str, params: Value) -> Value {
-    json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})
-}
-fn response(event: Event) -> Value {
-    match event {
-        Event::Reply(value) => value,
-        _ => panic!("expected response"),
-    }
-}
-fn ready(version: &str) -> Session {
-    let mut session = Session::default();
-    let reply=response(session.handle(message(json!(1),"initialize",json!({"protocolVersion":version,"capabilities":{},"clientInfo":{"name":"standard-test","version":"1"}}))));
-    assert_eq!(reply["result"]["protocolVersion"], version);
-    assert!(matches!(
-        session.handle(json!({"jsonrpc":"2.0","method":"notifications/initialized"})),
-        Event::None
-    ));
-    session
-}
-
-fn framed_call(session: &mut Session, mut encoded: Vec<u8>) -> (Value, String, Value) {
-    encoded.push(b'\n');
-    let frame = mcp::read_frame(&mut std::io::Cursor::new(encoded))
-        .unwrap()
-        .unwrap();
-    let Event::Call { id, name, args, .. } =
-        session.handle(serde_json::from_slice(&frame).unwrap())
-    else {
-        panic!("expected a tool call")
-    };
-    (id, name, args)
-}
-
-#[test]
-fn source_json_round_trip_preserves_javascript_and_result_characters() {
-    let source = r#"const text = '中文🙂 "quoted" \'single\' \\';
-const path = String.raw`C:\temp\new`;
-const lines = "first\nsecond\tend";
-const template = `中文🙂
-${path}`;
-return {text, path, lines, template, boundary: /\bword\b/.test("word"), literal: String.raw`\n`, nul: "\0"};"#;
-    let expected = json!({
-        "text": "中文🙂 \"quoted\" 'single' \\",
-        "path": "C:\\temp\\new",
-        "lines": "first\nsecond\tend",
-        "template": "中文🙂\nC:\\temp\\new",
-        "boundary": true,
-        "literal": "\\n",
-        "nul": "\0"
-    });
-    let (server, catalog) = server();
-    let mut session = ready("2025-06-18");
-    for (index, script) in [source.to_owned(), source.replace('\n', "\r\n")]
-        .into_iter()
-        .enumerate()
-    {
-        let request = message(
-            json!(index + 2),
-            "tools/call",
-            json!({"name":"exec","arguments":input(&script)}),
-        );
-        // Exercise both UTF-8 and JSON Unicode escapes, including a surrogate pair.
-        let encoded = serde_json::to_string(&request).unwrap();
-        let encoded = if index == 0 {
-            encoded
-        } else {
-            encoded
-                .replace('中', "\\u4e2d")
-                .replace('🙂', "\\ud83d\\ude42")
-        };
-        let (id, name, args) = framed_call(&mut session, encoded.into_bytes());
-        assert_eq!(
-            args["source"].as_str().unwrap().as_bytes(),
-            script.as_bytes()
-        );
-        let reply = call_with_rpc(&server, id.clone(), &name, args);
-        assert_eq!(success(&reply), &expected);
-        let encoded = serde_json::to_vec(&mcp::response(id, reply, true)).unwrap();
-        let returned: Value = serde_json::from_slice(&encoded).unwrap();
-        assert_eq!(
-            returned["result"]["structuredContent"]["value"]["result"],
-            expected
-        );
-    }
-    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
-    server.close().unwrap();
-}
-
-#[test]
-fn source_json_underescaping_is_not_silently_repaired() {
-    // This is valid JSON, but JSON's backspace escape changes the JS regex.
-    // A receiver cannot infer the author's intended word-boundary expression.
-    let encoded = br#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"exec","arguments":{"app":"org.example.Controlled","source":"return /\bword\b/.test(\"word\");"}}}"#;
-    let mut session = ready("2025-06-18");
-    let (id, name, args) = framed_call(&mut session, encoded.to_vec());
-    assert_eq!(args["source"], "return /\u{8}word\u{8}/.test(\"word\");");
-    let (server, catalog) = server();
-    let reply = call_with_rpc(&server, id, &name, args);
-    assert_eq!(success(&reply), false);
-    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
-    server.close().unwrap();
-}
-
-#[test]
-fn standard_mcp_lists_three_tools_with_simple_app_parameter() {
-    let mut session = ready("2025-06-18");
-    let listed = response(session.handle(message(json!(2), "tools/list", json!({}))));
-    let tools = listed["result"]["tools"].as_array().unwrap();
-    assert_eq!(
-        tools
-            .iter()
-            .map(|t| t["name"].as_str().unwrap())
-            .collect::<Vec<_>>(),
-        vec!["apps", "exec", "result"]
-    );
-    assert_eq!(
-        tools[1]["inputSchema"]["properties"]["app"]["type"],
-        "string"
-    );
-    assert_eq!(
-        tools[1]["inputSchema"]["required"],
-        json!(["app", "source"])
-    );
-    assert!(tools[1]["inputSchema"]["properties"]
-        .get("request_id")
-        .is_none());
-    assert!(tools[1]["inputSchema"]["properties"]
-        .get("execution_id")
-        .is_none());
-    assert_eq!(tools[2]["inputSchema"]["required"], json!(["app"]));
-    assert!(tools[2]["inputSchema"]["properties"]["execution_id"].is_object());
-    assert_eq!(tools[1]["annotations"]["readOnlyHint"], false);
-    let event = session.handle(message(
-        json!(3),
-        "tools/call",
-        json!({"name":"exec","arguments":input("return 1")}),
-    ));
-    assert!(matches!(event,Event::Call{id,..} if id==3));
-    assert!(
-        matches!(session.handle(json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":3}})),Event::Cancel(id) if id==3)
-    );
-}
-#[test]
-fn legacy_mcp_clients_receive_text_without_new_structured_field() {
-    let mut session = ready("2024-11-05");
-    assert!(matches!(
-        session.handle(message(json!(3), "tools/call", json!({"name":"apps"}))),
-        Event::Call {
-            structured: false,
-            ..
-        }
-    ));
-    let reply =
-        crate::app_protocol::mcp::response(json!(3), Reply::plain(json!({"ok":true})), false);
-    assert!(reply["result"].get("structuredContent").is_none());
-    assert_eq!(reply["result"]["content"][0]["type"], "text");
-}
 #[test]
 fn generated_types_are_the_distributed_contract() {
     assert_eq!(
@@ -726,7 +568,7 @@ fn duplicate_active_rpc_frames_share_one_execution_and_original_response() {
     let preparing = latest(&server, APP);
     assert!(matches!(
         server.begin(json!(19), "exec", args.clone()),
-        Started::InFlight
+        Started::InFlight(_)
     ));
     assert_eq!(catalog.connects.load(Ordering::SeqCst), 0);
     let running = server.clone();
@@ -734,7 +576,7 @@ fn duplicate_active_rpc_frames_share_one_execution_and_original_response() {
     gate.entered();
     assert!(matches!(
         server.begin(json!(19), "exec", args.clone()),
-        Started::InFlight
+        Started::InFlight(_)
     ));
     assert_eq!(
         latest(&server, APP).data["execution_id"],
@@ -874,37 +716,5 @@ fn execution_lookup_and_transport_deduplication_are_session_and_app_scoped() {
     right.close().unwrap();
 }
 
-#[test]
-fn numeric_rpc_ids_are_canonical_for_retransmission_and_cancellation() {
-    let mut session = ready("2025-06-18");
-    let params = json!({"name":"exec","arguments":input("return 1")});
-    let Event::Call { id: integer, .. } =
-        session.handle(message(json!(2), "tools/call", params.clone()))
-    else {
-        panic!("missing integer call")
-    };
-    let Event::Call { id: floating, .. } =
-        session.handle(message(json!(2.0), "tools/call", params.clone()))
-    else {
-        panic!("missing floating call")
-    };
-    let Event::Call { id: string, .. } =
-        session.handle(message(json!("2"), "tools/call", params.clone()))
-    else {
-        panic!("missing string call")
-    };
-    assert_eq!(integer, floating);
-    assert_ne!(integer, string);
-    let Event::Cancel(cancel) = session.handle(
-        json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":2.0}}),
-    ) else {
-        panic!("missing cancellation")
-    };
-    assert_eq!(cancel, integer);
-    for id in [json!(null), json!(2.5), json!(9_007_199_254_740_992.0)] {
-        assert_eq!(
-            response(session.handle(message(id, "tools/call", params.clone())))["error"]["code"],
-            -32600
-        );
-    }
-}
+#[path = "mcp_tests.rs"]
+mod mcp_tests;

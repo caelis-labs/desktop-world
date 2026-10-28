@@ -75,7 +75,7 @@ result(app = 原 app ID, execution_id = 可选历史引用)
 
 远程机器通过配置的 MCP 服务端选择；`app` 在该服务端对应的机器内识别应用，不把机器地址塞进 app ID。脚本在远端 DTW 执行，截图与结果沿消息返回。目标机器需有 DTW、可用桌面会话和相应系统能力。网络连接的身份校验属于标准传输/部署，动作审批仍属于 Harness。
 
-首版只做好本地 stdio，远程传输不构成首版阻塞项。协议层明确优先复用 [MCP 官方 Rust SDK rmcp](https://github.com/modelcontextprotocol/rust-sdk#transports)：它提供 stdio、Streamable HTTP 和进程内 transport，按 Cargo feature 选择；不为未来形态预先启用 HTTP、认证或服务部署。当前代码仍是手写的窄 MCP stdio 入口，SDK 迁入尚未实施，不能把 SDK 支持等同于 DTW 已支持远程。
+首版只做好本地 stdio，远程传输不构成首版阻塞项。协议层明确优先复用 [MCP 官方 Rust SDK rmcp](https://github.com/modelcontextprotocol/rust-sdk#transports)：它提供 stdio、Streamable HTTP 和进程内 transport，按 Cargo feature 选择；不为未来形态预先启用 HTTP、认证或服务部署。当前已迁入并锁定 `rmcp 3.8.0`，仅启用 server 与 transport-io；手写协商、消息分发与 framing 已删除。SDK 支持其他传输不等同于 DTW 已支持远程。
 
 扩展点保持为“SDK transport → 薄工具 handler → DTW 执行上下文/Core”。SDK 负责标准消息、协商、序列化和传输，DTW 负责 app 绑定、脚本、state、原始回执与原生资源收尾；将 SDK 的取消/关闭事件接到已有执行生命周期。执行层不直接依赖 stdin、socket 或调用方文件路径。首版验收聚焦内容保真、三工具调用、取消/EOF 清理、真实 GUI 与普通 Agent 接入；未来按需求添加 SDK transport 并完成相应场景验证，不新增必填的模型会话编号或定制 Host。
 
@@ -93,7 +93,7 @@ result(app = 原 app ID, execution_id = 可选历史引用)
 
 **长期调度原则**是按资源冲突串行，而不是按整个桌面或整个会话串行：语义/确切目标动作按 app/窗口调度，共享键鼠动作按桌面资源调度；不相关 app 可以独立推进。当前 scene 锁只是已接入路径的资源边界，不是所有输入的完整仲裁器。同一 app 跨会话写入仲裁、同连接并行和后续输入资源声明仍需实现，不能把现有多进程隔离等同于这些能力已经完成。
 
-执行期限是可覆盖的默认资源策略，不是固定的五秒工作流上限。当前默认 30 秒，调用方可以通过 `timeout_ms` 调大或调小；省略 `max_calls` 不设置调用次数配额，显式提供时按调用方预算执行。正整数的 32 位编码范围只是格式边界。VM 内存、回执字节、单次原生等待和取消仍有实际资源约束；资源耗尽保留已经发生的效果及完整回执，不自动重放，也不静默切换应用。
+执行期限属于 DTW 内部资源策略；当前为 30 秒，不设置调用次数配额。公开 `exec` 严格只有 `app + source`，不暴露预算、文件路径或请求编号。Core 保留内部预算机制，未来策略调整不要求模型维护执行参数。VM 内存、回执字节、单次原生等待和取消仍有实际资源约束；资源耗尽保留已经发生的效果及完整回执，不自动重放，也不静默切换应用。
 
 ## 两条独立的操作路径
 

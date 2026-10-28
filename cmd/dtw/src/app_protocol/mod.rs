@@ -14,6 +14,7 @@ use std::{
 pub mod app_id;
 mod description;
 pub mod mcp;
+mod mcp_io;
 mod methods;
 mod script_engine;
 mod scripts;
