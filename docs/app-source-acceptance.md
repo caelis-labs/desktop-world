@@ -1,5 +1,7 @@
 # app + source 接口验收
 
+此为 rmcp 迁入前的历史记录；当前 SDK 入口、严格两字段 schema 与重新进行的 GUI/Claude 验收见[官方 rmcp 验收](rmcp-acceptance.md)。
+
 日期：2026-10-28。源码提交 `d6bccad22d579feae8e03f395d1de9d844c51f8d`，基于 #61 与本分支的多 app 骨架。本报告及证据在后续文档提交记录，未修改已测运行代码。
 
 正常入口为 `exec({app, source})`。DTW 在接受执行时生成标识，模型不用编造或维护 `request_id`；旧字段直接拒绝。`result({app})` 查询此 MCP 连接该 app 最近接受的执行，可选返回的 `execution_id` 查询指定历史记录。正常调用同步等待，无需轮询。
