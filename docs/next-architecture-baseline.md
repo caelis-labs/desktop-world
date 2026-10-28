@@ -67,6 +67,18 @@ result(app = 原 app ID, execution_id = 可选历史引用)
 
 派发状态为 `not_dispatched / dispatched / unknown`；效果证据为 `confirmed / unverified / mismatch`。`confirmed` 只针对具体后置条件。完成执行不等于完成业务任务。脚本 JSON state 只在成功时提交；已经发生的点击、保存和输入不能回滚。取消、超时或未知效果不触发自动重放。
 
+## 脚本内容、文件输入与远程执行
+
+公共执行合同保持内容输入 `exec({app, source})`，不要求 Agent 和执行机共享文件系统。JSON 字符串由调用程序序列化、服务端解码一次，之后原文进入 JS 引擎；不重复 unescape、猜测修复反斜杠或经过 shell 展开。模型直接构造参数仍可能把正则 `\b` 写成 JSON 退格转义：合法 JSON 不保证表达了原本意图，运行时不能可靠推断或修复。
+
+文件输入保留为可选的客户端/CLI 便利能力：读取调用方文件并固定本次内容，再序列化为同一 `source` 请求发送。文件路径不进入远端执行合同，模型无需计算 Base64、哈希或上传编号；普通 MCP 客户端不依赖这个便利层。文件来源和内容摘要可在客户端内部记录，报错映射回原文件。当前尚未实现该便利入口，标准 MCP 也不会自动读取传入的本地路径。短脚本继续直接提交内容，文件方式用于长脚本和复用流程。
+
+远程机器通过配置的 MCP 服务端选择；`app` 在该服务端对应的机器内识别应用，不把机器地址塞进 app ID。脚本在远端 DTW 执行，截图与结果沿消息返回。目标机器需有 DTW、可用桌面会话和相应系统能力。网络连接的身份校验属于标准传输/部署，动作审批仍属于 Harness。
+
+首版只做好本地 stdio，远程传输不构成首版阻塞项。协议层明确优先复用 [MCP 官方 Rust SDK rmcp](https://github.com/modelcontextprotocol/rust-sdk#transports)：它提供 stdio、Streamable HTTP 和进程内 transport，按 Cargo feature 选择；不为未来形态预先启用 HTTP、认证或服务部署。当前代码仍是手写的窄 MCP stdio 入口，SDK 迁入尚未实施，不能把 SDK 支持等同于 DTW 已支持远程。
+
+扩展点保持为“SDK transport → 薄工具 handler → DTW 执行上下文/Core”。SDK 负责标准消息、协商、序列化和传输，DTW 负责 app 绑定、脚本、state、原始回执与原生资源收尾；将 SDK 的取消/关闭事件接到已有执行生命周期。执行层不直接依赖 stdin、socket 或调用方文件路径。首版验收聚焦内容保真、三工具调用、取消/EOF 清理、真实 GUI 与普通 Agent 接入；未来按需求添加 SDK transport 并完成相应场景验证，不新增必填的模型会话编号或定制 Host。
+
 ## 脚本与标准 MCP 生命周期
 
 五个方法 `windows / observe / capture / press / click` 返回 Promise。脚本顺序组合观察、操作与独立读回。脚本不能切换 app、传任意 PID、启动进程或调用任意 native tool；同名多窗仍需消歧。没有文件、网络、进程或模块加载入口。采用 QuickJS/rquickjs，不自造 JavaScript parser。

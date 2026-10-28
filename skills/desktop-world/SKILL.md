@@ -17,6 +17,8 @@ Every execution requires an explicit stable app ID so the Harness can inspect or
 
 Call `exec` with only the required `app` and JavaScript `source`. DTW assigns execution identity internally; do not generate or supply a request ID. The source is an async function body; use `await` and `return`. `exec` waits for the bounded result, so no submit/poll loop is needed.
 
+Supply script text, not a filename or a JSON-encoded string inside `source`. When constructing requests programmatically, pass the original text to the JSON serializer exactly once; do not pre-escape it. When writing raw tool JSON, account for its string escaping, especially backslashes in JavaScript strings and regular expressions.
+
 Start with a small observation, for example:
 
 ```javascript

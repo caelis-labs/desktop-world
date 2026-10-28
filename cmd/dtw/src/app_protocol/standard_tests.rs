@@ -328,6 +328,90 @@ fn ready(version: &str) -> Session {
     ));
     session
 }
+
+fn framed_call(session: &mut Session, mut encoded: Vec<u8>) -> (Value, String, Value) {
+    encoded.push(b'\n');
+    let frame = mcp::read_frame(&mut std::io::Cursor::new(encoded))
+        .unwrap()
+        .unwrap();
+    let Event::Call { id, name, args, .. } =
+        session.handle(serde_json::from_slice(&frame).unwrap())
+    else {
+        panic!("expected a tool call")
+    };
+    (id, name, args)
+}
+
+#[test]
+fn source_json_round_trip_preserves_javascript_and_result_characters() {
+    let source = r#"const text = '中文🙂 "quoted" \'single\' \\';
+const path = String.raw`C:\temp\new`;
+const lines = "first\nsecond\tend";
+const template = `中文🙂
+${path}`;
+return {text, path, lines, template, boundary: /\bword\b/.test("word"), literal: String.raw`\n`, nul: "\0"};"#;
+    let expected = json!({
+        "text": "中文🙂 \"quoted\" 'single' \\",
+        "path": "C:\\temp\\new",
+        "lines": "first\nsecond\tend",
+        "template": "中文🙂\nC:\\temp\\new",
+        "boundary": true,
+        "literal": "\\n",
+        "nul": "\0"
+    });
+    let (server, catalog) = server();
+    let mut session = ready("2025-06-18");
+    for (index, script) in [source.to_owned(), source.replace('\n', "\r\n")]
+        .into_iter()
+        .enumerate()
+    {
+        let request = message(
+            json!(index + 2),
+            "tools/call",
+            json!({"name":"exec","arguments":input(&script)}),
+        );
+        // Exercise both UTF-8 and JSON Unicode escapes, including a surrogate pair.
+        let encoded = serde_json::to_string(&request).unwrap();
+        let encoded = if index == 0 {
+            encoded
+        } else {
+            encoded
+                .replace('中', "\\u4e2d")
+                .replace('🙂', "\\ud83d\\ude42")
+        };
+        let (id, name, args) = framed_call(&mut session, encoded.into_bytes());
+        assert_eq!(
+            args["source"].as_str().unwrap().as_bytes(),
+            script.as_bytes()
+        );
+        let reply = call_with_rpc(&server, id.clone(), &name, args);
+        assert_eq!(success(&reply), &expected);
+        let encoded = serde_json::to_vec(&mcp::response(id, reply, true)).unwrap();
+        let returned: Value = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(
+            returned["result"]["structuredContent"]["value"]["result"],
+            expected
+        );
+    }
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+    server.close().unwrap();
+}
+
+#[test]
+fn source_json_underescaping_is_not_silently_repaired() {
+    // This is valid JSON, but JSON's backspace escape changes the JS regex.
+    // A receiver cannot infer the author's intended word-boundary expression.
+    let encoded = br#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"exec","arguments":{"app":"org.example.Controlled","source":"return /\bword\b/.test(\"word\");"}}}"#;
+    let mut session = ready("2025-06-18");
+    let (id, name, args) = framed_call(&mut session, encoded.to_vec());
+    assert_eq!(args["source"], "return /\u{8}word\u{8}/.test(\"word\");");
+    let (server, catalog) = server();
+    let reply = call_with_rpc(&server, id, &name, args);
+    assert_eq!(success(&reply), false);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+    server.close().unwrap();
+}
+
 #[test]
 fn standard_mcp_lists_three_tools_with_simple_app_parameter() {
     let mut session = ready("2025-06-18");

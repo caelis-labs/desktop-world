@@ -33,3 +33,9 @@ CLI 报告整个模型流程 20.418 秒，其中 API 时间 18.921 秒；这不�
 ![Claude 通过 DTW 独立读回 Count 1](evidence/app-source-20261028/claude-count-one.png)
 
 本轮未重跑 agy、公开发行包、TextEdit Space/闭窗矩阵或后台/锁屏新路线。原生 Swift 实现没有变更，其纯逻辑及 worker 生命周期专项证据见[先前骨架验收](multi-app-foundation-acceptance.md)。完整步骤账本仍在默认输出中，后续简洁投影工作不包含在本次接口简化里。CI 沿用两项轻量检查，没有增加完整 CUA 构建。
+
+## 内容保真回归补充
+
+后续仅新增两项 JSON/脚本回归及文档/Skill 说明，未修改运行代码。完整本地检查现为 189 项库测试、4 项 CLI 测试，轻量源码检查继续通过。测试覆盖实际 MCP 帧解码 → 工具分发 → QuickJS → JSON 返回的引号、反斜杠、正则、模板字符串、LF/CRLF、中文/emoji、Unicode 转义和控制字符；另保留合法 JSON 因少转义一层而改变脚本含义的负例。它证明内容链路不会二次解码，不能证明模型永不写错转义。
+
+本次构建的二进制 SHA-256 与上述 GUI/Claude 记录一致，未重复真实 GUI。文件读取便利层与官方 rmcp 迁入仍是已明确方向，尚未实现；首版聚焦本地 stdio，远程不作本轮验收条件。
