@@ -1,6 +1,6 @@
 # 多应用执行与资源骨架验收
 
-日期：2026-10-28。基于已合并 #61（`f818d4b7192bd42db85c6af0a73168ee64088979`），实施源码提交 `db24070966e2096676c2d787331661aaa6d9bada`。本报告后续提交仅增加文档与证据，不改动已测试代码。
+日期：2026-10-28。基于已合并 #61（`f818d4b7192bd42db85c6af0a73168ee64088979`），实施源码提交 `db24070966e2096676c2d787331661aaa6d9bada`。记录本次验收的 `fd059c0` 仅增加文档与证据。后续 app/source 接口修订及新二进制、Claude 验收单独记录于[接口验收](app-source-acceptance.md)，不替换下列历史结果。
 
 本轮目标是修正多应用、多会话和原生资源的基础关系，并明确后续能力合同。没有批量迁入新动作，也没有宣称后台、鼠标独立或锁屏路线已经实现。设计与顺序见[架构基线](next-architecture-baseline.md)。
 
@@ -13,7 +13,7 @@
 
 ## 本地自动验证
 
-最终二进制：`/private/tmp/dtw-standard-agent-target/debug/dtw`，SHA-256：
+该次二进制位于 `/private/tmp/dtw-standard-agent-target/debug/dtw`（路径会被后续构建覆盖），SHA-256：
 
 ```text
 693e94f82e34227e9e023c6b2fb2cbc5dc6f85919a00777dd7fccbe4885ffa69

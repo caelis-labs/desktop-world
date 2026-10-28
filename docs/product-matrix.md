@@ -6,13 +6,13 @@
 
 | 能力 / 工作流 | 当前实现与支持边界 | 验证与后续工作 |
 | --- | --- | --- |
-| 标准 Agent MCP 接入 | `dtw mcp`；`apps` / 同步等待的 `exec` / 只读 `result`；exec 只需 app/source，执行编号内部生成；result 默认按 app 查最近接受执行，标准取消与断连清理；无定制 Host 前置条件 | [#61 接入验收](standard-agent-acceptance.md)及[本轮骨架验收](multi-app-foundation-acceptance.md)：协议、原始回执、生命周期及自有原生 GUI；[合同](app-protocol-v1.md) |
+| 标准 Agent MCP 接入 | `dtw mcp`；`apps` / 同步等待的 `exec` / 只读 `result`；exec 只需 app/source，执行编号内部生成；result 默认按 app 查最近接受执行，标准取消与断连清理；无定制 Host 前置条件 | [当前接口验收](app-source-acceptance.md)：app/source、原始回执、取消恢复及自有原生 GUI；[先前骨架验收](multi-app-foundation-acceptance.md)；[合同](app-protocol-v1.md) |
 | App 身份、运行实例与窗口发现 | macOS typed coverage/diagnostics；语义/脚本同一 Core；Windows 原生未实现 | TextEdit 12 状态矩阵[历史通过](c5-completion-acceptance.md)；支持范围内为空与归属未证明分开，历史偶发仍缺原始现场 |
 | AX 观察 → AXPress → 独立读回 | macOS 窄范围 AXPress；结构化 role/name/value/enabled/actions；attached sheet 等边界受限 | [本轮原生验收](multi-app-foundation-acceptance.md)：按钮字段与独立计数器读回通过；更广边界见 [C3 历史验收](native-checkpoint-acceptance.md) |
 | 截图 → 像素点击 → 独立读回 | macOS SCK 精确窗口、自有前台 fixture；短命 scene owner，切 app 保留原逻辑上下文与 AX 引用；基础路径仍依赖 AX 窗口校验；遮挡等拒绝 | [本轮验收](multi-app-foundation-acceptance.md)：PNG、一次像素点击读回及同连接 A→B→A 截图通过；其他场景保留 [C5.1 历史证据](app-script-acceptance.md) |
 | 按 app 的多上下文脚本组合 | 五个实际 Promise 方法；同会话多个 app 的独立 state/refs；调用方可覆盖 deadline、可选调用配额；VM/回执字节受限 | 本轮 Rust 回归验证 Promise、未处理 rejection、schema/类型声明一致性与结构化错误；[脚本合同](app-script-v1.md)，C6 沿同一入口扩展 |
 | 取消、超时与未知效果 | 执行期限、标准 MCP 取消、原生 owner 重建而已提交 state 保留、EOF/父退出回收；未知不重放 | [本轮 GUI](multi-app-foundation-acceptance.md)验证取消、已提交 state 保留与原生 refs 重建和 EOF 后全部原生 worker 回收；迟到效果/输入中断见 [C5 历史证据](c5-completion-acceptance.md)，强杀仍不能保证输入释放 |
-| Agent Skill 与配置样板 | 标准 `SKILL.md`、普通 MCP JSON、Codex TOML、agy MCP CLI、Claude 官方插件 layout 和本地 stage helper | agy 与 Claude Code 2.1.312 的真实模型均完成 Skill→apps→exec→一次 press→独立读回→截图；[记录](standard-agent-acceptance.md)、[安装说明](install.md) |
+| Agent Skill 与配置样板 | 标准 `SKILL.md`、普通 MCP JSON、Codex TOML、agy MCP CLI、Claude 官方插件 layout 和本地 stage helper | 当前 Claude Code + gpt-6.1-terra 仅用 app/source 完成 Skill→apps→两次 exec→一次 press→独立读回→截图，20.4 秒；[新记录](app-source-acceptance.md)。agy 保留 [#61 历史结果](standard-agent-acceptance.md)；[安装说明](install.md) |
 | 不依赖语义树的基础窗口路线 | 现有 list/window/capture/click 已接入，但仍有 AX 归属/模态 guard | WindowSurface 与 SemanticBinding 分离合同已明确；替代身份/窗口复用/坐标证明尚需实现，不能直接删 guard |
 | 简洁模型输出 | 当前 exec/result 仍携带完整步骤账本；单步账本达到字节阈值后停止后续派发 | 简洁默认投影与按需完整诊断属于下一步，不能把资源上限等同于输出已经精简 |
 | 复杂 AX 树按需发现 | 当前有限整树观察仍会拒绝截断；真正过滤/分页未迁入 | 原生 frontier、筛选/区域、部分覆盖、稳定续页与小输出的合同已写入[基线](next-architecture-baseline.md) |
