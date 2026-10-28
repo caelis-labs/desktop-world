@@ -151,6 +151,7 @@ impl MockBackend {
             gate.wait();
         }
         BackendObservation {
+            discovery: None,
             target: target.clone(),
             binding: (),
             elements: if pixels {
@@ -282,8 +283,8 @@ fn coordinator() -> (Arc<Coordinator<MockBackend>>, MockBackend) {
         backend,
     )
 }
-fn submit(
-    owner: &Arc<Coordinator<MockBackend>>,
+fn submit<B: Backend + 'static>(
+    owner: &Arc<Coordinator<B>>,
     id: &str,
     window: Option<&str>,
     command: Command,
@@ -300,15 +301,15 @@ fn submit(
         command,
     }
 }
-fn start(owner: &Arc<Coordinator<MockBackend>>, submitted: Submit) -> Reply {
+fn start<B: Backend + 'static>(owner: &Arc<Coordinator<B>>, submitted: Submit) -> Reply {
     owner.handle(Request::Submit(submitted))
 }
-fn result(owner: &Arc<Coordinator<MockBackend>>, id: &str) -> Reply {
+fn result<B: Backend + 'static>(owner: &Arc<Coordinator<B>>, id: &str) -> Reply {
     owner.handle(Request::Result {
         request_id: id.into(),
     })
 }
-fn finish(owner: &Arc<Coordinator<MockBackend>>, id: &str) -> Reply {
+fn finish<B: Backend + 'static>(owner: &Arc<Coordinator<B>>, id: &str) -> Reply {
     assert!(
         owner.wait_idle(Duration::from_secs(5)),
         "accepted job did not settle"
@@ -317,8 +318,8 @@ fn finish(owner: &Arc<Coordinator<MockBackend>>, id: &str) -> Reply {
     assert_eq!(reply.data["status"], "completed", "{}", reply.data);
     reply
 }
-fn run(
-    owner: &Arc<Coordinator<MockBackend>>,
+fn run<B: Backend + 'static>(
+    owner: &Arc<Coordinator<B>>,
     id: &str,
     window: Option<&str>,
     command: Command,
@@ -327,7 +328,7 @@ fn run(
     assert_eq!(accepted.data["status"], "running", "{}", accepted.data);
     finish(owner, id)
 }
-fn windows(owner: &Arc<Coordinator<MockBackend>>, id: &str) -> Vec<String> {
+fn windows<B: Backend + 'static>(owner: &Arc<Coordinator<B>>, id: &str) -> Vec<String> {
     run(owner, id, None, Command::Windows).data["value"]["windows"]
         .as_array()
         .unwrap()
@@ -335,7 +336,11 @@ fn windows(owner: &Arc<Coordinator<MockBackend>>, id: &str) -> Vec<String> {
         .map(|w| w["window_ref"].as_str().unwrap().into())
         .collect()
 }
-fn observe(owner: &Arc<Coordinator<MockBackend>>, id: &str, window: &str) -> (String, String) {
+fn observe<B: Backend + 'static>(
+    owner: &Arc<Coordinator<B>>,
+    id: &str,
+    window: &str,
+) -> (String, String) {
     let reply = run(owner, id, Some(window), Command::Observe);
     (
         reply.data["value"]["observation_ref"]
@@ -505,7 +510,7 @@ fn wrong_window_rejection_preserves_binding_and_success_consumes_it_once() {
 }
 
 #[test]
-fn new_observation_and_new_window_inventory_retire_old_public_refs() {
+fn replacement_retires_only_its_query_and_inventory_preserves_unchanged_targets() {
     let (owner, backend) = coordinator();
     let first_window = windows(&owner, "windows-1").remove(0);
     let (old_observation, old_element) = observe(&owner, "old", &first_window);
@@ -519,22 +524,18 @@ fn new_observation_and_new_window_inventory_retire_old_public_refs() {
         ),
         "invalid_observation",
     );
-    let new_window = windows(&owner, "windows-2").remove(0);
-    assert_ne!(first_window, new_window);
-    assert_code(
-        &run(&owner, "old-window", Some(&first_window), Command::Observe),
-        "target_changed",
-    );
-    assert_code(
-        &run(
+    let refreshed = windows(&owner, "windows-2").remove(0);
+    assert_eq!(first_window, refreshed);
+    assert!(
+        !run(
             &owner,
-            "retired-ref",
-            Some(&new_window),
-            press(&current_observation, &current_element),
-        ),
-        "invalid_observation",
+            "retained-ref",
+            Some(&refreshed),
+            press(&current_observation, &current_element)
+        )
+        .is_error
     );
-    assert_eq!(backend.0.actions.load(Ordering::SeqCst), 0);
+    assert_eq!(backend.0.actions.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -852,3 +853,6 @@ mod inventory_tests;
 
 #[path = "standard_tests.rs"]
 mod standard_tests;
+
+#[path = "discovery_tests.rs"]
+mod discovery_tests;

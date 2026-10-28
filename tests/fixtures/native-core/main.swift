@@ -11,9 +11,9 @@ final class TestWindow:NSWindow {
  }
 }
 final class Delegate:NSObject,NSApplicationDelegate {
- var windows:[TestWindow]=[];var count=0;var started=0;var slowAction=false;var sheet:NSWindow?;var command="";var timer:Timer?;var label:NSTextField!
- func save(){try! JSONSerialization.data(withJSONObject:["pid":ProcessInfo.processInfo.processIdentifier,"clicks":count,"actions_started":started,"active":app.isActive,"key_window":app.keyWindow?.windowNumber ?? 0,"command":command,"windows":windows.map{["id":$0.windowNumber,"visible":$0.isVisible,"title":$0.title,"x":$0.frame.minX,"y":$0.frame.minY]}],options:[.sortedKeys]).write(to:root.appendingPathComponent("state.json"),options:.atomic)}
- @objc func clicked(){started+=1;save();if slowAction {Thread.sleep(forTimeInterval:2.0)};count+=1;label.stringValue="Count: \(count)";save()}
+ var windows:[TestWindow]=[];var count=0;var started=0;var slowAction=false;var sheet:NSWindow?;var command="";var timer:Timer?;var label:NSTextField!;var events:[[String:Any]]=[];var largeTree=false
+ func save(){try! JSONSerialization.data(withJSONObject:["pid":ProcessInfo.processInfo.processIdentifier,"clicks":count,"actions_started":started,"action_events":events,"large_tree":largeTree,"active":app.isActive,"key_window":app.keyWindow?.windowNumber ?? 0,"command":command,"windows":windows.map{["id":$0.windowNumber,"visible":$0.isVisible,"title":$0.title,"x":$0.frame.minX,"y":$0.frame.minY]}],options:[.sortedKeys]).write(to:root.appendingPathComponent("state.json"),options:.atomic)}
+ @objc func clicked(_ sender:NSButton){started+=1;events.append(["title":sender.title,"uptime":ProcessInfo.processInfo.systemUptime,"current_event_type":app.currentEvent.map{Int($0.type.rawValue)} ?? -1,"current_event_timestamp":app.currentEvent?.timestamp ?? -1]);events=Array(events.suffix(20));save();if slowAction {Thread.sleep(forTimeInterval:2.0)};count+=1;label.stringValue="Count: \(count)";save()}
  func make(_ title:String,_ x:CGFloat)->TestWindow {
   let w=TestWindow(contentRect:NSRect(x:x,y:300,width:320,height:220),styleMask:[.titled,.closable],backing:.buffered,defer:false)
   w.title=title;w.isReleasedWhenClosed=false
@@ -36,6 +36,15 @@ final class Delegate:NSObject,NSApplicationDelegate {
     case "occlude":windows[1].setFrameOrigin(windows[0].frame.origin);windows[1].orderFront(nil)
     case "uncover":windows[1].setFrameOrigin(NSPoint(x:600,y:300));windows[0].makeKeyAndOrderFront(nil);app.activate(ignoringOtherApps:true)
     case "snapshot":break
+    case "big_tree":
+     if !largeTree {
+      for index in 0..<420 {
+       let button=NSButton(title:index == 419 ? "Discovery Tail" : String(format:"Discovery item %03d",index),target:self,action:#selector(clicked))
+       button.frame=NSRect(x:10+(index%7)*42,y:5+(index/7)*18,width:40,height:16)
+       windows[0].contentView!.addSubview(button)
+      }
+      largeTree=true
+     }
     case "ax_empty":app.setAccessibilityWindows([])
     case "ax_restore":app.setAccessibilityWindows(windows.filter{$0.isVisible})
     case "close_all":windows.forEach{$0.close()}

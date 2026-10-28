@@ -207,7 +207,7 @@ class Mcp:
         self._send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
         return request_id
 
-    def receive(self, request_id, timeout=12):
+    def receive(self, request_id, timeout=35):
         if request_id in self.pending:
             return self.pending.pop(request_id)
         deadline = time.monotonic() + timeout

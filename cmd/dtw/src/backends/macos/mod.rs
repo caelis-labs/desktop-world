@@ -440,8 +440,17 @@ impl Backend for NativeBackend {
         target: &WindowTarget,
         call: &CallContext<'_>,
     ) -> Result<BackendObservation<NativeBinding>, Error> {
+        self.observe_page(target, &ObserveQuery::default(), call)
+    }
+    fn observe_page(
+        &self,
+        target: &WindowTarget,
+        query: &ObserveQuery,
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservation<NativeBinding>, Error> {
         let reply = self.read_rpc(
-            json!({"operation":"observe","target":target_json(target)}),
+            json!({"operation":"observe","target":target_json(target),
+                "query":{"role":query.role,"text":query.text,"limit":query.limit}}),
             call,
         )?;
         // Construct the guard before parsing the rest so invalid replies still release it.
@@ -450,21 +459,30 @@ impl Backend for NativeBackend {
             semantic: Some(string(&reply, "binding")?.into()),
             pixels: None,
         };
-        if reply["truncated"].as_bool() != Some(false) {
-            return Err(Error::BackendFailed(
-                "AX snapshot incomplete at the supported node/depth limit".into(),
-            ));
-        }
-        let elements = array(&reply, "elements")?
-            .iter()
-            .map(parse_element)
-            .collect::<Result<_, Error>>()?;
+        let page = parse_discovery_page(&reply)?;
         Ok(BackendObservation {
-            target: parse_target(&reply["target"])?,
-            elements,
+            target: page.target,
+            elements: page.elements,
             image: None,
+            discovery: Some(page.discovery),
             binding,
         })
+    }
+    fn continue_observation(
+        &self,
+        target: &WindowTarget,
+        binding: &NativeBinding,
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservationPage, Error> {
+        let token = binding.semantic.as_ref().ok_or(Error::InvalidObservation)?;
+        let reply = self.read_rpc(
+            json!({"operation":"observe_next","target":target_json(target),"binding":token}),
+            call,
+        )?;
+        if reply["binding"].as_str() != Some(token.as_str()) {
+            return Err(Error::InvalidObservation);
+        }
+        parse_discovery_page(&reply)
     }
     fn press(
         &self,
@@ -514,6 +532,7 @@ impl Backend for NativeBackend {
             target: parse_target(&reply["target"])?,
             elements: vec![],
             image: Some(ImageFrame { width, height, png }),
+            discovery: None,
             binding: NativeBinding {
                 worker: self.worker.clone(),
                 semantic: None,
@@ -849,6 +868,50 @@ mod tests {
     }
 
     #[test]
+    fn native_discovery_pages_preserve_partial_progress_without_claiming_absence() {
+        let mut value = json!({
+            "target":{"app":{"identity":"test","pid":2,"generation":3},"native_id":4,"generation":5},
+            "elements":[],
+            "discovery":{"has_more":true,"complete":false,"reason":null,"visited":256}
+        });
+        let page = parse_discovery_page(&value).unwrap();
+        assert!(page.elements.is_empty());
+        assert!(page.discovery.has_more);
+        assert!(!page.discovery.complete);
+        assert_eq!(page.discovery.visited, 256);
+
+        value["discovery"]["has_more"] = json!(false);
+        assert!(parse_discovery_page(&value).is_err());
+        value["discovery"]["reason"] = json!("scan_limit");
+        assert_eq!(
+            parse_discovery_page(&value)
+                .unwrap()
+                .discovery
+                .reason
+                .as_deref(),
+            Some("scan_limit")
+        );
+        value["discovery"]["complete"] = json!(true);
+        assert!(parse_discovery_page(&value).is_err());
+        value["discovery"]["reason"] = Value::Null;
+        assert!(parse_discovery_page(&value).unwrap().discovery.complete);
+        value["discovery"]["visited"] = json!(8193);
+        assert!(parse_discovery_page(&value).is_err());
+    }
+
+    #[test]
+    fn native_discovery_rejects_oversized_rows_before_retaining_them() {
+        let row = json!({"id":1,"label":"x".repeat(12 * 1024),"role":"button", "name":null,
+            "value":null,"enabled":true,"actions":["press"],"can_press":true});
+        let value = json!({
+            "target":{"app":{"identity":"test","pid":2,"generation":3},"native_id":4,"generation":5},
+            "elements":[row],
+            "discovery":{"has_more":true,"complete":false,"reason":null,"visited":1}
+        });
+        assert!(parse_discovery_page(&value).is_err());
+    }
+
+    #[test]
     fn shutdown_failure_is_not_hidden_by_context_cancellation() {
         let error = TransportError {
             kind: TransportErrorKind::Shutdown("kill failed".into()),
@@ -953,6 +1016,51 @@ fn optional_text(value: &Value, key: &str) -> Result<Option<String>, Error> {
         Some(Value::String(text)) if text.chars().count() <= 256 => Ok(Some(text.clone())),
         _ => Err(Error::InvalidObservation),
     }
+}
+fn parse_discovery_page(value: &Value) -> Result<BackendObservationPage, Error> {
+    let rows = array(value, "elements")?;
+    if rows.len() > 100 || serde_json::to_vec(rows).map_err(failed)?.len() > 12 * 1024 {
+        return Err(Error::InvalidObservation);
+    }
+    let page = &value["discovery"];
+    let has_more = page["has_more"]
+        .as_bool()
+        .ok_or(Error::InvalidObservation)?;
+    let complete = page["complete"]
+        .as_bool()
+        .ok_or(Error::InvalidObservation)?;
+    let visited = u32::try_from(number(page, "visited")?).map_err(failed)?;
+    let reason = optional_text(page, "reason")?;
+    if visited > 8_192
+        || rows.len() > visited as usize
+        || (complete && (has_more || reason.is_some()))
+        || (!complete && !has_more && reason.is_none())
+        || reason.as_ref().is_some_and(|reason| {
+            !matches!(
+                reason.as_str(),
+                "scan_limit"
+                    | "depth_limit"
+                    | "frontier_limit"
+                    | "node_unavailable"
+                    | "children_unavailable"
+                    | "ownership_unproven"
+                    | "tree_changed"
+                    | "text_limit"
+            )
+        })
+    {
+        return Err(Error::InvalidObservation);
+    }
+    Ok(BackendObservationPage {
+        target: parse_target(&value["target"])?,
+        elements: rows.iter().map(parse_element).collect::<Result<_, _>>()?,
+        discovery: DiscoveryPage {
+            has_more,
+            complete,
+            reason,
+            visited,
+        },
+    })
 }
 fn parse_element(value: &Value) -> Result<Element, Error> {
     let can_press = value["can_press"]
