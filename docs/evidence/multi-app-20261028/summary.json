@@ -1,0 +1,97 @@
+{
+  "source_commit": "db24070966e2096676c2d787331661aaa6d9bada",
+  "baseline": "f818d4b7192bd42db85c6af0a73168ee64088979",
+  "binary_sha256": "693e94f82e34227e9e023c6b2fb2cbc5dc6f85919a00777dd7fccbe4885ffa69",
+  "fixture_source_sha256": "3fd71bf67e5e971d1e4754c51756819ed7d86918be0cc94310d34670a9696036",
+  "platform": {
+    "os": "macOS 27.0.1",
+    "build": "26A434",
+    "arch": "arm64"
+  },
+  "evidence_kind": "ordinary MCP client and native AppKit GUI; not live LLM host acceptance",
+  "passed": true,
+  "duration_ms": 9350,
+  "semantic": {
+    "before": {
+      "clicks": 0,
+      "actions_started": 0
+    },
+    "after": {
+      "clicks": 1,
+      "actions_started": 1
+    },
+    "peer_unchanged": true,
+    "original_result_preserved": true
+  },
+  "pixel_click": {
+    "before": {
+      "clicks": 1,
+      "actions_started": 1
+    },
+    "after": {
+      "clicks": 2,
+      "actions_started": 2
+    },
+    "point": {
+      "x": 320.0,
+      "y": 324.0
+    }
+  },
+  "cancellation": {
+    "committed_state_preserved": true,
+    "uncommitted_state_rejected": true,
+    "counters_unchanged": true
+  },
+  "app_switch": {
+    "sequence": [
+      {
+        "request_id": "app-switch-capture-0",
+        "calls": 2,
+        "context_reset": false,
+        "state_reset": false,
+        "elapsed_ms": 275
+      },
+      {
+        "request_id": "app-switch-capture-1",
+        "calls": 2,
+        "context_reset": false,
+        "state_reset": false,
+        "elapsed_ms": 359
+      },
+      {
+        "request_id": "app-switch-capture-2",
+        "calls": 1,
+        "context_reset": false,
+        "state_reset": false,
+        "elapsed_ms": 267
+      }
+    ],
+    "window_ref_preserved": true,
+    "old_receipt_preserved": true,
+    "counters_unchanged": true
+  },
+  "independent_sessions": {
+    "same_app_state_isolated": true,
+    "concurrent_rounds": 3,
+    "captures_completed": 6,
+    "first_session_survives_peer_close": true,
+    "both_servers_closed_cleanly": true,
+    "native_workers_reaped": true
+  },
+  "images": [
+    {
+      "sha256": "b71a34094532c011379d4673c6b6dc3c57613fb897318778ae42943b265017d9",
+      "bytes": 22517,
+      "width": 640,
+      "height": 504,
+      "file": "app-a.png"
+    },
+    {
+      "sha256": "42a76e53224a2d5f364c71c8dca8fe66e5d7707c43cc0de1f0ad5818d4942d07",
+      "bytes": 19648,
+      "width": 640,
+      "height": 504,
+      "file": "app-b.png"
+    }
+  ]
+}
