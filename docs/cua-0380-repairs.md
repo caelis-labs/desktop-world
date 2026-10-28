@@ -1,5 +1,7 @@
 # CUA 0.38.0 repairs and real-machine acceptance
 
+> Historical evidence: this report applies only to its named source revision, binary and entry point. The current product uses [standard MCP and explicit app IDs](app-protocol-v1.md); any grant, manifest, SDK/worker or custom Host setup below is superseded and is not a current installation instruction. No acceptance result here is claimed to have been rerun for the new entry.
+
 Checked 2026-10-25 on macOS arm64. Upstream remains the exact released component
 `cua-driver-rs-v0.38.0`, commit `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`.
 This follows the [pre-repair audit](cua-0380-usability.md). No production install,

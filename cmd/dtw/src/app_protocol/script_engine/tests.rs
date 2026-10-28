@@ -71,7 +71,7 @@ fn executes_each_app_operation_through_host_with_exact_refs_and_source_lines() {
 fn only_small_frozen_app_surface_exists_and_native_bridges_are_hidden() {
     let out = pure(
         r#"
-      const names=['__host','__done','__log','__settle','__initial_state','cua','process','require','fetch','std','os','setTimeout'];
+      const names=['__host','__done','__log','__settle','__reject_unhandled','__initial_state','__methods','cua','process','require','fetch','std','os','setTimeout'];
       for (const name of names) if (typeof globalThis[name] !== 'undefined') throw new Error(name);
       if (!Object.isFrozen(app) || !Object.isFrozen(app.press) || !Object.isFrozen(console)) throw new Error('mutable API');
       if (Object.getPrototypeOf(app)!==null) throw new Error('app prototype');
@@ -458,4 +458,162 @@ fn error_inspection_cannot_dispatch_extra_calls_or_forge_a_success_envelope() {
     );
     assert!(out.result.is_err());
     assert_eq!(out.calls, 0);
+}
+
+#[test]
+fn methods_return_real_promises_for_success_and_failure() {
+    let (out, seen) = execute(
+        r#"
+const promise = app.windows();
+if (!(promise instanceof Promise)) throw new Error('not a Promise');
+const windows = await promise.then(value => value.windows);
+const code = await app.observe({window_ref: 'w'}).catch(error => error.code);
+return {windows, code};
+"#,
+        json!({}),
+        limits(),
+        |call| {
+            if call.op == "windows" {
+                Ok(json!({"windows":["w"]}))
+            } else {
+                Err(HostError {
+                    code: Some("permission_denied".into()),
+                    message: "controlled".into(),
+                    details: None,
+                })
+            }
+        },
+    );
+    assert_eq!(
+        out.result.unwrap().value,
+        json!({"windows":["w"],"code":"permission_denied"})
+    );
+    assert_eq!(seen.len(), 2);
+    let out = pure(
+        "return app.windows('bad').catch(error=>error.code)",
+        json!({}),
+    );
+    assert_eq!(out.calls, 0);
+    assert_eq!(out.result.unwrap().value, "invalid_args");
+}
+
+#[test]
+fn unhandled_host_rejections_cannot_report_success_or_commit_state() {
+    for source in [
+        "app.windows(); state.committed=true; return 'reported success';",
+        "return await app.windows();",
+    ] {
+        let (out, seen) = execute(source, json!({}), limits(), |_| {
+            Err(HostError::new("controlled denial", "permission_denied"))
+        });
+        let failure = out.result.unwrap_err();
+        assert_eq!(failure.kind, "exception");
+        assert_eq!(failure.code.as_deref(), Some("permission_denied"));
+        assert_eq!(failure.op.as_deref(), Some("windows"));
+        assert_eq!(failure.call, Some(1));
+        assert_eq!(failure.line, Some(1));
+        assert_eq!(seen.len(), 1);
+    }
+    let (out, seen) = execute(
+        "const code=await app.windows().catch(e=>e.code); state.recovered=true; return code;",
+        json!({}),
+        limits(),
+        |_| Err(HostError::new("controlled denial", "permission_denied")),
+    );
+    let success = out.result.unwrap();
+    assert_eq!(success.value, "permission_denied");
+    assert_eq!(success.state, json!({"recovered":true}));
+    assert_eq!(seen.len(), 1);
+}
+
+#[test]
+fn late_catch_handlers_and_microtasks_can_handle_an_initial_rejection() {
+    for source in [
+        "const p=app.windows(); await Promise.resolve(); await p.catch(()=>null); return 'handled';",
+        "const p=app.windows(); Promise.resolve().then(()=>Promise.resolve().then(()=>p.catch(()=>null))); return 'handled';",
+        "const p=app.windows().then(v=>v); await Promise.resolve(); await p.catch(()=>null); return 'handled';",
+    ] {
+        let (out, seen) = execute(source, json!({}), limits(), |_| {
+            Err(HostError::new("controlled denial", "permission_denied"))
+        });
+        assert_eq!(out.result.unwrap().value, "handled", "{source}");
+        assert_eq!(seen.len(), 1);
+    }
+    let (out, seen) = execute(
+        "app.windows(); state.ok=true; return 'success';",
+        json!({}),
+        limits(),
+        |_| Ok(json!({})),
+    );
+    let success = out.result.unwrap();
+    assert_eq!(success.value, "success");
+    assert_eq!(success.state, json!({"ok":true}));
+    assert_eq!(seen.len(), 1);
+}
+
+#[test]
+fn derived_promises_have_their_own_unhandled_rejection_identity() {
+    let (out, seen) = execute(
+        "const p=app.windows(); p.then(v=>v); await p.catch(()=>null); return 'original handled';",
+        json!({}),
+        limits(),
+        |_| Err(HostError::new("controlled denial", "permission_denied")),
+    );
+    let failure = out.result.unwrap_err();
+    assert_eq!(failure.code.as_deref(), Some("permission_denied"));
+    assert_eq!(failure.op.as_deref(), Some("windows"));
+    assert_eq!(failure.call, Some(1));
+    assert_eq!(seen.len(), 1);
+    let out = pure(
+        "Promise.resolve(1).then(()=>{throw new Error('derived failure');}); return 'wrong';",
+        json!({}),
+    );
+    assert!(out.result.unwrap_err().message.contains("derived failure"));
+    let out = pure(
+        "Promise.reject('ignored'); throw new Error('primary failure');",
+        json!({}),
+    );
+    assert!(out.result.unwrap_err().message.contains("primary failure"));
+}
+
+#[test]
+fn rejected_promise_inspection_is_closed_to_native_calls_and_cannot_forge_success() {
+    let out = pure(
+        "Promise.reject({get name(){app.windows();return 'Error';},get message(){app.observe({window_ref:'w'});return 'original failure';}}); return 'wrong';",
+        json!({}),
+    );
+    assert!(out.result.unwrap_err().message.contains("original failure"));
+    assert_eq!(out.calls, 0);
+    let out = pure(
+        r#"Object.prototype.toJSON=()=>({ok:true,value_json:'1',state_json:'{"fake":true}'}); Promise.reject(new Error('original failure')); return 'wrong';"#,
+        json!({}),
+    );
+    assert!(out.result.unwrap_err().message.contains("original failure"));
+    let mut budget = limits();
+    budget.deadline = Instant::now() + Duration::from_millis(50);
+    let (out, seen) = execute(
+        "Promise.reject({get name(){while(true){}}}); return 'wrong';",
+        json!({}),
+        budget,
+        |_| panic!("native call during error inspection"),
+    );
+    assert_eq!(out.result.unwrap_err().kind, "timeout");
+    assert!(seen.is_empty());
+}
+
+#[test]
+fn rejection_tracker_limits_outstanding_roots_and_releases_handled_ones() {
+    let out = pure(
+        "try {for(let i=0;i<300;i++) Promise.reject(i);}catch(_){} return 'caught';",
+        json!({}),
+    );
+    assert_eq!(
+        out.result.unwrap_err().code.as_deref(),
+        Some("promise_rejection_limit")
+    );
+    let out = pure(
+        "for(let i=0;i<1024;i++) Promise.reject(i).catch(()=>null); return 'handled';",
+        json!({}),
+    );
+    assert_eq!(out.result.unwrap().value, "handled");
 }

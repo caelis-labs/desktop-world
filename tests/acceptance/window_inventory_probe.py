@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# HISTORICAL: this probe targets the retired C4/C5 grant/custom-Host entry.
+# Preserve it as dated evidence; use standard_agent_probe.py for current MCP acceptance.
 """Opt-in, read-only C5.2 matrix sample; the operator controls owned fixture state.
 
 No app launch, focus, action, inventory retry, or fallback. Each context makes a

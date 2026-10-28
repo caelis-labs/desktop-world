@@ -65,7 +65,7 @@ WindowServer owner/ID and a same-PID AX window's exact ID. Reusing the numeric
 window ID is insufficient: a refreshed AX window must also compare equal to the
 retained object. The Runtime's provider generation adds its separate worker
 lifetime boundary. Tokens and target generations are internal references, not
-standalone permission grants.
+authorization tokens.
 
 `_AXUIElementGetWindow` remains a private macOS SPI. It is dynamically resolved
 from HIServices and failure is explicit `unsupported_platform`; there is no
@@ -241,7 +241,7 @@ JavaScript parser is introduced. The fixed CUA donor remains
 
 The complete upstream `App`, `Locator`, raw invocation, global discovery/launch,
 file/network/process and unrestricted platform objects are excluded. DTW owns
-scope, protocol parsing, sequential Core dispatch, per-step receipt retention,
+target binding, protocol parsing, sequential Core dispatch, per-step receipt retention,
 state commit and cleanup; the VM is not an authorization authority. Unlike the
 donor's execution path, every native operation goes through the same Core used
 by atomic app requests. The memory budget uses QuickJS's native allocator limit;
@@ -254,3 +254,33 @@ Gordon (2017–2024), Ben Noordhuis (2023–2026), and Saúl Ibarra Corretgé
 rquickjs-core license copy and provenance are retained under
 `packaging/third-party/`, in addition to the CUA MIT notice above. Validate this port's VM, Core and
 real GUI gates independently when updating any of these pinned sources.
+
+
+## C6 source verification and resource ownership
+
+The fixed donor revision is evidence, not a runtime dependency or an instruction
+to compile all upstream CUA. Before adding a capability group:
+
+1. Read the relevant file at the recorded donor commit, record its repository
+   path and SHA-256, and compare the original bytes with the recorded hash.
+   Hash `git show <donor-commit>:<path>` output, not a dirty working-tree copy.
+2. Record exactly which behavior is reused and what DTW changes. Preserve the
+   source's copyright/license and inspect later upstream fixes affecting that
+   behavior; a newer upstream release does not automatically change this pin.
+3. Name the persistent resource owner before porting code: Core owns target/ref
+   validation, the provider owns native resources, and the app execution context
+   owns their lifetime. Input sessions must explicitly own event sources, pressed
+   buttons/modifiers and cleanup across success, cancellation, timeout, EOF and
+   parent exit. Browser profiles and UIA/COM threads require their own owners.
+4. Implement one complete vertical example through MCP, script schema, Core,
+   provider, independent effect readback and cleanup before duplicating a group.
+   Never copy CUA's registry, global facade, worker packaging or approval model as
+   a shortcut around these contracts.
+5. Record supported platform/window conditions and real native evidence separately
+   from unit and fixture tests. Update this source ledger and
+   [the product matrix](product-matrix.md). CI should protect demonstrated stable
+   behavior without rebuilding the complete donor.
+
+The detailed capability-group owner matrix is in the
+[current architecture baseline](next-architecture-baseline.md). This procedure
+adds no new public capability and makes no claim that C6 has already shipped.

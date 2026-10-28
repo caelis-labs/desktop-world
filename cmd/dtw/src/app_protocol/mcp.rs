@@ -1,88 +1,115 @@
-//! Small MCP stdio contract. Native jobs have their own IDs and cancellation.
-use super::{wire, Coordinator, Reply};
-use crate::computer::Backend;
+//! MCP messages only. Application execution and cleanup live in Server.
+use super::{app_id, wire};
 use serde_json::{json, Value};
-use std::{io::BufRead, sync::Arc};
-
-pub const MAX_INPUT_BYTES: usize = 64 * 1024;
+use std::io::BufRead;
+pub const MAX_INPUT_BYTES: usize = 512 * 1024;
 const CURRENT_VERSION: &str = "2025-06-18";
-
 #[derive(Default)]
 pub struct Session {
     initialized: bool,
     ready: bool,
     structured: bool,
 }
+pub enum Event {
+    None,
+    Reply(Value),
+    Cancel(Value),
+    Call {
+        id: Value,
+        name: String,
+        args: Value,
+        structured: bool,
+    },
+}
 impl Session {
-    pub fn handle<B: Backend + 'static>(
-        &mut self,
-        owner: &Arc<Coordinator<B>>,
-        input: Value,
-    ) -> Option<Value> {
+    pub fn handle(&mut self, input: Value) -> Event {
         let id = input.get("id").cloned();
         if !input.is_object()
             || input["jsonrpc"] != "2.0"
             || !input["method"].is_string()
-            || id.as_ref().is_some_and(|id| {
-                !(id.is_string() || id.as_f64().is_some_and(|number| number.fract() == 0.0))
-            })
+            || id
+                .as_ref()
+                .is_some_and(|v| !(v.is_string() || v.as_f64().is_some_and(|n| n.fract() == 0.0)))
         {
-            return Some(rpc_error(Value::Null, -32600, "Invalid JSON-RPC request"));
+            return Event::Reply(rpc_error(Value::Null, -32600, "Invalid JSON-RPC request"));
         }
         let method = input["method"].as_str().unwrap();
+        let params = &input["params"];
         let Some(id) = id else {
             if method == "notifications/initialized" && self.initialized {
                 self.ready = true;
             }
-            // MCP cancellation addresses a completed transport request, not a
-            // native job. Only exec.cancel can cancel an accepted request_id.
-            return None;
+            if method == "notifications/cancelled" && self.ready {
+                if let Some(id) = params
+                    .get("requestId")
+                    .filter(|v| v.is_string() || v.as_f64().is_some_and(|n| n.fract() == 0.0))
+                {
+                    return Event::Cancel(id.clone());
+                }
+            }
+            return Event::None;
         };
-        let params = &input["params"];
         let result = match method {
             "initialize" => {
                 if self.initialized {
-                    return Some(rpc_error(id, -32600, "Already initialized"));
+                    return Event::Reply(rpc_error(id, -32600, "Already initialized"));
                 }
                 let Some(requested) = params["protocolVersion"].as_str() else {
-                    return Some(rpc_error(id, -32602, "protocolVersion is required"));
+                    return Event::Reply(rpc_error(id, -32602, "protocolVersion is required"));
                 };
                 let version = match requested {
-                    // 2025-03-26 requires receiving batches, which this
-                    // bounded single-message transport does not implement.
                     "2024-11-05" | CURRENT_VERSION => requested,
                     _ => CURRENT_VERSION,
                 };
                 self.initialized = true;
                 self.structured = version == CURRENT_VERSION;
-                json!({"protocolVersion":version,"capabilities":{"tools":{"listChanged":false}},
-                    "serverInfo":{"name":"dtw-app","version":env!("CARGO_PKG_VERSION")},
-                    "instructions":"This connection has one immutable Host app grant. Start with exec describe. Native jobs use explicit request_id; poll result and preserve the receipt. Cancellation never proves that an effect was undone."})
+                json!({"protocolVersion":version,"capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"desktop-world","version":env!("CARGO_PKG_VERSION")},
+                    "instructions":"Call apps for application identifiers and script API. Every exec includes an app identifier and unique request_id; it waits for completion. Standard MCP cancellation stops the matching call. result retrieves the original receipt without replay. DTW validates targets and confines execution."})
             }
             "ping" => json!({}),
-            _ if !self.ready => return Some(rpc_error(id, -32002, "Initialize the session first")),
-            "tools/list" => json!({"tools":[{"name":"exec",
-                "description":"Execute the versioned single-app protocol. describe reports Host authority and limits. submit starts one typed command; result reads its original record; cancel terminates the context for the active request; close releases resources. Reuse an accepted request_id only with the identical command. Scripts expose only the bound app facade and every native step passes the same Core admission. No raw native tools.",
-                "inputSchema":wire::input_schema(),
-                "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}}]}),
-            "tools/call" => {
-                if params["name"] != "exec" {
-                    return Some(rpc_error(id, -32602, "Unknown tool"));
-                }
-                let reply = match wire::parse_request(params["arguments"].clone()) {
-                    Ok(request) => owner.handle(request),
-                    Err(error) => Reply::error(error),
-                };
-                let mut value = reply.mcp();
-                if !self.structured {
-                    value.as_object_mut().unwrap().remove("structuredContent");
-                }
-                value
+            _ if !self.ready => {
+                return Event::Reply(rpc_error(id, -32002, "Initialize the session first"))
             }
-            _ => return Some(rpc_error(id, -32601, "Method not found")),
+            "tools/list" => json!({"tools":tools()}),
+            "tools/call" => {
+                let Some(name) = params["name"]
+                    .as_str()
+                    .filter(|n| ["apps", "exec", "result"].contains(n))
+                else {
+                    return Event::Reply(rpc_error(id, -32602, "Unknown tool"));
+                };
+                return Event::Call {
+                    id,
+                    name: name.into(),
+                    args: params
+                        .get("arguments")
+                        .cloned()
+                        .unwrap_or_else(|| json!({})),
+                    structured: self.structured,
+                };
+            }
+            _ => return Event::Reply(rpc_error(id, -32601, "Method not found")),
         };
-        Some(json!({"jsonrpc":"2.0","id":id,"result":result}))
+        Event::Reply(json!({"jsonrpc":"2.0","id":id,"result":result}))
     }
+}
+pub fn tools() -> Value {
+    let id = json!({"type":"string","minLength":1,"maxLength":128,"description":"Unique operation ID within this connection. Reusing identical input returns the original receipt, never repeats effects."});
+    let read = json!({"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true});
+    json!([
+        {"name":"apps","description":"List running applications with stable identifiers and discover the supported app script API, schemas and limits. No window contents or screenshots are read.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":read},
+        {"name":"exec","description":"Run JavaScript in exactly the app identified by the required app identifier. Use app.windows(), app.observe({window_ref}), app.capture({window_ref}), app.press({window_ref,observation_ref,element_ref}), app.click({window_ref,observation_ref,x,y}); await methods sequentially. apps provides full schemas. The call waits for completion, returns original per-step receipts and the last PNG outside JS. state persists within a resident app context. Inspect effects independently; cancellation is not undo.",
+            "inputSchema":{"type":"object","additionalProperties":false,"properties":{"app":app_id::schema(),"request_id":id,"source":{"type":"string","minLength":1,"maxLength":65536,"description":"JavaScript async function body, at most 64 KiB UTF-8; supports await and return. No imports, filesystem, network or process APIs."},"timeout_ms":{"type":"integer","minimum":1,"maximum":5000,"default":5000},"max_calls":{"type":"integer","minimum":1,"maximum":32,"default":32}},"required":["app","request_id","source"]},
+            "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}},
+        {"name":"result","description":"Read an original request receipt using its app identifier and request_id, including after cancellation or app exit. Does not execute or require the app to remain alive. Missing records never prove absence of effects.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"app":app_id::schema(),"request_id":id},"required":["app","request_id"]},"annotations":read}
+    ])
+}
+pub fn response(id: Value, reply: super::Reply, structured: bool) -> Value {
+    let mut value = reply.mcp();
+    if !structured {
+        value.as_object_mut().unwrap().remove("structuredContent");
+    }
+    json!({"jsonrpc":"2.0","id":id,"result":value})
 }
 pub fn rpc_error(id: Value, code: i64, message: &str) -> Value {
     json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
@@ -92,18 +119,18 @@ pub fn read_frame<R: BufRead>(reader: &mut R) -> Result<Option<Vec<u8>>, wire::W
     std::io::Read::take(&mut *reader, (MAX_INPUT_BYTES + 1) as u64)
         .read_until(b'\n', &mut line)
         .map_err(|_| wire::WireError {
-            details: None,
             code: "transport_error".into(),
             message: "Cannot read MCP input".into(),
+            details: None,
         })?;
     if line.is_empty() {
         return Ok(None);
     }
     if line.len() > MAX_INPUT_BYTES || line.last() != Some(&b'\n') {
         return Err(wire::WireError {
-            details: None,
             code: "invalid_frame".into(),
-            message: "MCP input must be a complete line of at most 64 KiB".into(),
+            message: "MCP input must be a complete line of at most 512 KiB".into(),
+            details: None,
         });
     }
     Ok(Some(line))

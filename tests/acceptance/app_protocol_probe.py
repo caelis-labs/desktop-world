@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# HISTORICAL: this probe targets the retired C4/C5 grant/custom-Host entry.
+# Preserve it as dated evidence; use standard_agent_probe.py for current MCP acceptance.
 """Opt-in, serial C4 macOS acceptance with a trusted reference Host.
 
 Start two owned native-core fixtures separately; this program never launches an

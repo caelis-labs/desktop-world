@@ -1,25 +1,27 @@
 # 重写版产品矩阵
 
-日期：2026-10-28；基于 #59 合并提交 `579727df5386c708ca4074e5df033aed5f0f7494`，C5 已完整落地共享骨架和 macOS 五方法闭环，见 [C5 验收](c5-completion-acceptance.md)。下一 release 只包含重写版，不包含旧脚本兼容或上游 CUA worker。表中“通过”仅限所列环境与场景；历史旧版本的 Windows、Browser 和安装证据不继承为重写版支持。
+日期：2026-10-28。#60 合并基线为 `d0d8279130b74a58496e13b7f6a4c4565f6f00cf`。C5 报告证明当时共享骨架和 macOS 五方法的限定场景。本轮按用户决定把外部接入改为标准 MCP + Agent Skill：DTW 不承担审批授权，每次执行显式携带平台稳定 app ID。历史 grant/定制 Host 验收不能代替新入口的验证。
 
-| 能力 / 工作流 | macOS 重写路径 | Windows 重写路径 | 证据与下一检查点 |
-| --- | --- | --- | --- |
-| App 身份、运行实例与窗口发现 | typed coverage/diagnostics；原子、JS 与账本一致；TextEdit 12 状态矩阵通过 | 未实施 | [C5 完整验收](c5-completion-acceptance.md)；支持范围内为空与未证明明确区分，历史偶发仍缺原始证据 |
-| AX 观察 → AXPress → 独立读回 | 窄范围 advertised AXPress 已通过；attached sheet 等边界受限 | 未实施 UIA | [C3](native-checkpoint-acceptance.md)；补选定真实应用流程，按支持范围扩展 |
-| 截图 → 像素点击 → 独立读回 | SCK 精确窗口、自有前台 fixture 已通过；遮挡等拒绝 | 未实施 WGC/输入 | [C3](native-checkpoint-acceptance.md)、[C5.1](app-script-acceptance.md)；记录真实应用与权限/窗口状态 |
-| 单 app MCP、可信 grant 与 Harness | 协议、预授权与实际 Caelis 本地接线已验收 | 未完成平台接线 | [C4](app-protocol-acceptance.md)；Caelis 配套仍按要求仅本地提交，未发布 |
-| 单 app 脚本组合观察/动作 | 五方法、可发现 schemas、类型声明、有界 VM、JSON state 和回执已验收 | 未完成原生闭环 | [C5 完整验收](c5-completion-acceptance.md)、[脚本合同](app-script-v1.md)；C6 按同一入口扩展 |
-| 取消、超时与未知效果 | 迟到效果、idle grant 到期、输入中途 cancel/close/父死已验收；异常退出保留清理诊断 | 仅共享逻辑，原生未验收 | [C5 完整验收](c5-completion-acceptance.md)；Unknown 不重放，强杀不能保证输入释放 |
-| 文本、键盘、滚动、拖拽、菜单、focus | 未迁入 | 未迁入 | C6 按工作流所需逐组迁入，不以全量复制为本次目标 |
-| Browser/profile/DOM | 未迁入 | 未迁入 | 后置，需独立资源约束与真实流程验证 |
-| 默认入口与构建依赖 | 仅新版 app 入口；默认编译协议/脚本，无 CUA SDK/worker 或 legacy feature | 共享入口已收敛；原生执行 unavailable，未做 Windows 构建/GUI 验收 | [D1](rewrite-baseline-acceptance.md)：离线构建、CLI、fixture 与实际 Caelis 本地 Harness 通过 |
-| 安装、签名、TCC 与分发 | 新版包合同未完成 | 新版包合同未完成 | 选定发布范围后建立新版候选构建，验收最终产物；旧发行自动化已退出 |
+下一 release 仅包含重写版。表中“历史通过”只指报告中指定源码、二进制、平台和场景；不会继承旧版本 Windows、Browser 或安装支持。
 
-## 分阶段推进
+| 能力 / 工作流 | 当前实现与支持边界 | 验证与后续工作 |
+| --- | --- | --- |
+| 标准 Agent MCP 接入 | `dtw mcp`；`apps` / 同步等待的 `exec` / 只读 `result`；每次显式 app ID，标准取消与断连清理；无定制 Host 前置条件 | [本轮验收通过](standard-agent-acceptance.md)：协议、原始回执、生命周期及自有原生 GUI；[合同](app-protocol-v1.md) |
+| App 身份、运行实例与窗口发现 | macOS typed coverage/diagnostics；语义/脚本同一 Core；Windows 原生未实现 | TextEdit 12 状态矩阵[历史通过](c5-completion-acceptance.md)；支持范围内为空与归属未证明分开，历史偶发仍缺原始现场 |
+| AX 观察 → AXPress → 独立读回 | macOS 窄范围 AXPress；结构化 role/name/value/enabled/actions；attached sheet 等边界受限 | [本轮原生验收](standard-agent-acceptance.md)：按钮字段与独立计数器读回通过；更广边界见 [C3 历史验收](native-checkpoint-acceptance.md) |
+| 截图 → 像素点击 → 独立读回 | macOS SCK 精确窗口、自有前台 fixture；切 app 前关闭旧 owner；遮挡等拒绝 | [本轮验收](standard-agent-acceptance.md)：PNG、一次像素点击读回及同连接 A→B→A 截图通过；其他场景保留 [C5.1 历史证据](app-script-acceptance.md) |
+| 单 app 脚本组合 | 五个实际 Promise 方法、可发现 schema、类型声明、有界 VM、JSON state 和动作回执 | 本轮 Rust 回归验证 Promise、未处理 rejection、schema/类型声明一致性与结构化错误；[脚本合同](app-script-v1.md)，C6 沿同一入口扩展 |
+| 取消、超时与未知效果 | 执行期限、标准 MCP 取消、上下文重建、EOF/父退出回收；未知不重放 | [本轮 GUI](standard-agent-acceptance.md)验证取消、状态重建和 EOF 后全部原生 worker 回收；迟到效果/输入中断见 [C5 历史证据](c5-completion-acceptance.md)，强杀仍不能保证输入释放 |
+| Agent Skill 与配置样板 | 标准 `SKILL.md`、普通 MCP JSON、Codex TOML、agy MCP CLI、Claude 官方插件 layout 和本地 stage helper | agy 与 Claude Code 2.1.312 的真实模型均完成 Skill→apps→exec→一次 press→独立读回→截图；[记录](standard-agent-acceptance.md)、[安装说明](install.md) |
+| 文本、键盘、滚动、拖拽、菜单、focus、启动/退出应用 | 未迁入 | C6 按能力组迁入；先确定资源 owner、清理和回执。启动需另定运行实例建立前的入口与绑定语义 |
+| Browser/profile/DOM | 未迁入 | 独立资源身份、生命周期与真实流程验证，不能继承桌面 app 的范围猜测 |
+| Windows 原生 | 共享模型可复用；原生 provider 尚未实现 | 独立完成 UIA/WGC/输入和真实 GUI 验收后才宣称支持 |
+| 依赖与构建 | rewrite-only；无 CUA SDK、上游 worker 或 legacy feature | [D1 历史证据](rewrite-baseline-acceptance.md)，持续按当前源码检查来源边界 |
+| 签名、TCC 与公开分发 | 本地开发 stage 已提供；新版发行包合同未完成 | 候选打包、最终产物安装、签名、权限与目标 Agent 实际加载仍需独立验证 |
 
-1. **开发反馈**：轻量 CI 检查格式、版本、Core/IPC、验收负控与 Swift 库存/输入纯逻辑；仍是两项作业，无完整 Cargo/CUA 编译。CI 绿色不等于以上产品工作流通过。
-2. **单一新版基线**：D1 已删除旧入口、依赖及包路径，并验证默认 MCP/脚本构建和实际启动；没有 legacy feature 或兼容发行物。新版分发合同仍待实施。
-3. **C6 能力组**：C5 核心已收口。按选定工作流批量迁入能力，沿现有身份、授权、引用、预算和回执合同扩展；完成实现 → 操作 → 独立读回 → 保留失败与证据 → 更新矩阵。Windows 完成原生与 GUI 验收前不宣称支持。
-4. **按需保护与发行**：对稳定且需保护的行为增加针对性 CI；按实际已验证的平台和能力定义 release 范围，再做安装包、签名、权限和真实 Harness 验收。无须先把整个矩阵填满。
+## 推进循环
 
-新增条目先写清任务与成功标准，再实施和验收。矩阵不等同于测试数量清单，也不要求为每一格建立永久 CI。详细执行规则见[实施检查点](implementation-checkpoints.md)，发行准入见[releasing](releasing.md)。
+1. 本轮标准 MCP、五方法、app ID、生命周期和两个普通 Agent 的模型工作流[均已记录](standard-agent-acceptance.md)；结论限于记录中的自有 fixture 场景。
+2. C6 按[架构基线的能力组清单](next-architecture-baseline.md)批量扩展。每组完成“限定场景 → 迁入 → 调用 → 独立读回 → 记录边界”，输入状态和浏览器等资源必须明确 owner 与清理路径。
+3. 两项轻量 CI 继续保护已确定的源码/Core/IPC/Swift 纯逻辑。先验证功能，再为实际回归和稳定合同按需增加 CI，不重新构建完整 CUA。
+4. 根据已验证的平台与工作流选择 release 范围，再执行[发行准入](releasing.md)。不用填满整个矩阵后才交付首版。

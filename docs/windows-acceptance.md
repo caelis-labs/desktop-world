@@ -1,5 +1,7 @@
 # Windows acceptance — 2026-10-11/12
 
+> Historical evidence: this report applies only to its named source revision, binary and entry point. The current product uses [standard MCP and explicit app IDs](app-protocol-v1.md); any grant, manifest, SDK/worker or custom Host setup below is superseded and is not a current installation instruction. No acceptance result here is claimed to have been rerun for the new entry.
+
 > Historical checkpoint record. Build flags, default entry points and release plans below belong to the recorded revision. The current rewrite-only build is described in [building](building.md); this evidence does not validate a newly built binary.
 
 > Historical Windows evidence: the implicit Runtime context and CUA 0.35.4 candidate in this worktree have not been rebuilt or GUI-validated on Windows. See [runtime acceptance](runtime-acceptance.md).

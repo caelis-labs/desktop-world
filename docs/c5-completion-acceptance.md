@@ -1,5 +1,7 @@
 # C5 完整验收：核心合同、生命周期与 macOS 闭环
 
+> Historical evidence: this report applies only to its named source revision, binary and entry point. The current product uses [standard MCP and explicit app IDs](app-protocol-v1.md); any grant, manifest, SDK/worker or custom Host setup below is superseded and is not a current installation instruction. No acceptance result here is claimed to have been rerun for the new entry.
+
 日期：2026-10-28。C5 的共享骨架、五个 macOS 原子方法、单 app 协议、有界脚本和生命周期已完整落地。C6 可以沿这条基线按工作流批量扩展能力；本轮不再增加 C5 细分编号，也没有发布新版安装包。
 
 - 合并基线：#59，`579727df5386c708ca4074e5df033aed5f0f7494`。

@@ -1,4 +1,4 @@
-//! App protocol coordination. Core remains the authority for every native call.
+//! App protocol coordination. Core checks the app binding for every native call.
 use crate::{
     computer::*,
     runtime::{ActionReceipt, Runtime},
@@ -11,24 +11,26 @@ use std::{
     sync::{Arc, Condvar, Mutex},
     time::{Duration, Instant},
 };
+pub mod app_id;
 mod description;
-pub mod grant;
 pub mod mcp;
+mod methods;
 mod script_engine;
 mod scripts;
+pub mod server;
 #[cfg(test)]
 mod tests;
 #[cfg(target_os = "macos")]
 pub mod transport;
 pub mod wire;
 
-use grant::HostGrant;
 use wire::{Command, Request, Submit, WireError};
 
 pub const MAX_REQUESTS: usize = 64;
 pub const MAX_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
 const OBSERVATION_TTL: Duration = Duration::from_secs(15);
 
+#[derive(Clone)]
 pub struct Reply {
     pub data: Value,
     pub image: Option<Arc<String>>,
@@ -172,7 +174,9 @@ struct State {
 }
 pub struct Coordinator<B: Backend> {
     runtime: Runtime<B>,
-    authority: HostGrant,
+    app: AppInstance,
+    coverage: &'static str,
+    conditions: &'static [&'static str],
     app_name: String,
     app_ref: String,
     supported: Vec<Capability>,
@@ -182,19 +186,18 @@ pub struct Coordinator<B: Backend> {
     max_payload_bytes: usize,
 }
 impl<B: Backend + 'static> Coordinator<B> {
-    pub fn new(backend: B, authority: HostGrant, app_name: String) -> Arc<Self> {
-        let supported = [
-            Capability::Observe,
-            Capability::Press,
-            Capability::Capture,
-            Capability::Click,
-        ]
-        .into_iter()
-        .filter(|c| backend.supports(*c))
-        .collect();
+    pub fn new(backend: B, app: AppInstance, app_name: String) -> Arc<Self> {
+        let supported = Capability::ALL
+            .into_iter()
+            .filter(|c| backend.supports(*c))
+            .collect();
+        let coverage = backend.coverage();
+        let conditions = backend.conditions();
         let owner = Arc::new(Self {
-            runtime: Runtime::new(backend, authority.core_grant(), OBSERVATION_TTL),
-            authority,
+            runtime: Runtime::new(backend, app.clone(), OBSERVATION_TTL),
+            app,
+            coverage,
+            conditions,
             app_name,
             app_ref: reference("app"),
             supported,
@@ -211,11 +214,9 @@ impl<B: Backend + 'static> Coordinator<B> {
             max_requests: MAX_REQUESTS,
             max_payload_bytes: MAX_PAYLOAD_BYTES,
         });
-        owner.expire_if_needed();
         owner
     }
     pub fn handle(self: &Arc<Self>, request: Request) -> Reply {
-        self.expire_if_needed();
         match request {
             Request::Describe => self.describe(),
             Request::Submit(submit) => self.submit(submit),
@@ -223,27 +224,6 @@ impl<B: Backend + 'static> Coordinator<B> {
             Request::Cancel { request_id } => self.cancel(&request_id),
             Request::Close => self.close(),
         }
-    }
-    /// Check idle expiry without renewing the Host's immutable deadline.
-    /// Stdio calls this from its lifecycle watcher; embedded Hosts may call it
-    /// directly. Every protocol entry also checks before reading or admitting.
-    pub fn expire_if_needed(&self) {
-        if Instant::now() < self.authority.expires_at {
-            return;
-        }
-        let active = {
-            let mut state = self.state.lock().unwrap();
-            if state.terminal.is_some() {
-                return;
-            }
-            state.terminal = Some(Error::GrantExpired);
-            state.windows.clear();
-            state.observation = None;
-            // The VM shares this deadline. Its cancellation flag must not turn
-            // expiry into an explicit cancellation.
-            state.active.clone()
-        };
-        self.record_shutdown_error(self.runtime.expire().err(), active.as_deref());
     }
     fn record_shutdown_error(
         &self,
@@ -269,41 +249,27 @@ impl<B: Backend + 'static> Coordinator<B> {
             (state.terminal.clone(), state.active.clone())
         };
         let result = match reason {
-            Some(Error::GrantExpired) => self.runtime.expire(),
             Some(Error::Cancelled) => self.runtime.cancel(),
             _ => self.runtime.close(),
         };
         self.record_shutdown_error(result.err(), active.as_deref())
     }
     fn checked_state(&self) -> std::sync::MutexGuard<'_, State> {
-        loop {
-            let state = self.state.lock().unwrap();
-            if state.terminal.is_some() || Instant::now() < self.authority.expires_at {
-                return state;
-            }
-            drop(state);
-            self.expire_if_needed();
-        }
+        self.state.lock().unwrap()
     }
     fn describe(&self) -> Reply {
         let state = self.checked_state();
-        let mut app = grant::app_json(&self.authority.app);
-        app["app_ref"] = json!(self.app_ref);
-        app["name"] = json!(self.app_name);
+        let app = json!({"app_ref":self.app_ref,"name":self.app_name});
         Reply::plain(json!({
             "version":1,"app":app,
-            "grant":{"grant_id":self.authority.grant_id,
-                "capabilities":grant::capabilities_json(&self.authority.capabilities),
-                "expires_at_unix_ms":self.authority.expires_at_unix_ms},
-            "supported_capabilities":grant::capabilities_json(&self.supported),
+            "supported_capabilities":self.supported.iter().map(|c|c.as_str()).collect::<Vec<_>>(),
             "context":{"state":context_state(&state),"terminal_reason":state.terminal.as_ref().map(core_error),
-                "shutdown_error":state.shutdown_error.as_ref().map(error_json),
-                "expiry":"absolute Host deadline; stdio lifecycle watcher polls idle expiry every 50 ms, subject to scheduling and cleanup; embedded coordinators check on entry or expire_if_needed; no renewal"},
+                "shutdown_error":state.shutdown_error.as_ref().map(error_json)},
             "script":scripts::description(),
             "limits":{"max_requests":self.max_requests,"max_payload_bytes":self.max_payload_bytes,
                 "observation_ttl_ms":OBSERVATION_TTL.as_millis(),
                 "result_retention":"receipts until process exit; payloads may be evicted"},
-            "coverage":"same-PID standard layer-0 AX windows; no sheet/menu/helper routing or automatic focus",
+            "coverage":self.coverage,"conditions":self.conditions,
             "semantics":{"cancel":"terminal for the context; obtain the original receipt with result",
                 "retry":"same accepted request_id and command returns the existing record, never replays",
                 "references":"opaque and context-local; windows and new observations retire prior observation",
@@ -348,8 +314,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             completed: None,
             script: match &submitted.command {
                 Command::Script { timeout_ms, .. } => Some(scripts::ScriptRun::new(
-                    (Instant::now() + Duration::from_millis(*timeout_ms))
-                        .min(self.authority.expires_at),
+                    Instant::now() + Duration::from_millis(*timeout_ms),
                 )),
                 _ => None,
             },
@@ -433,7 +398,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         if matches!(&submitted.command, Command::Script { .. }) {
             return self.execute_script(submitted);
         }
-        self.execute_atomic(submitted, self.authority.expires_at)
+        self.execute_atomic(submitted, Instant::now() + Duration::from_secs(15))
     }
     // Called under the outer job reservation, including every script Host Call.
     fn execute_atomic(&self, submitted: &Submit, deadline: Instant) -> Work {
@@ -566,7 +531,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             .map(|element| {
                 let id = reference("element");
                 let row =
-                    json!({"element_ref":id,"label":element.label,"can_press":element.can_press});
+                    json!({"element_ref":id,"label":element.label,"can_press":element.can_press,"role":element.role,"name":element.name,"value":element.value,"enabled":element.enabled,"actions":element.actions});
                 elements.insert(id, element.id);
                 row
             })
@@ -600,7 +565,6 @@ impl<B: Backend + 'static> Coordinator<B> {
         }
     }
     fn complete(&self, id: &str, mut work: Work) {
-        self.expire_if_needed();
         // Recheck immediately at the state commit boundary. A script that
         // finishes on the deadline must not commit state or retain an idle worker.
         let mut state = loop {
@@ -613,11 +577,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             if let Some(script) = script {
                 if state.terminal.is_none() && Instant::now() >= script.deadline {
                     drop(state);
-                    let reason = if Instant::now() >= self.authority.expires_at {
-                        Error::GrantExpired
-                    } else {
-                        Error::TimedOut
-                    };
+                    let reason = Error::TimedOut;
                     self.stop_script(id, reason.clone());
                     work.completed.error = Some(wire::core_error(&reason));
                     work.state_update = None;
@@ -707,13 +667,12 @@ impl<B: Backend + 'static> Coordinator<B> {
         }
     }
     pub fn close(&self) -> Reply {
-        self.expire_if_needed();
         {
             let mut state = self.checked_state();
             if state.terminal.is_none() {
                 state.terminal = Some(Error::Closed);
             }
-            if !matches!(state.terminal, Some(Error::GrantExpired | Error::TimedOut)) {
+            if !matches!(state.terminal, Some(Error::TimedOut)) {
                 scripts::cancel_active(&state);
             }
             state.windows.clear();
@@ -779,4 +738,9 @@ pub fn run(args: &[String]) -> Result<(), WireError> {
             message: "Native app operations currently require macOS".into(),
         })
     }
+}
+
+/// Generated from the same schemas that apps exposes. No native startup.
+pub fn script_api_types() -> String {
+    description::typescript()
 }

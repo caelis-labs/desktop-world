@@ -3,7 +3,7 @@
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppIdentity(pub String);
 
-/// Evidence supplied by trusted discovery, never a PID-only user assertion.
+/// Exact identity returned by discovery; a PID alone cannot identify an instance.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppInstance {
     pub identity: AppIdentity,
@@ -26,6 +26,25 @@ pub enum Capability {
     Click,
 }
 
+impl Capability {
+    pub const ALL: [Self; 4] = [Self::Observe, Self::Press, Self::Capture, Self::Click];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Observe => "observe",
+            Self::Press => "press",
+            Self::Capture => "capture",
+            Self::Click => "click",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|capability| capability.as_str() == name)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProviderStamp {
     pub id: String,
@@ -40,6 +59,14 @@ pub struct ElementId(pub u64);
 pub struct Element {
     pub id: ElementId,
     pub label: String,
+    /// Semantic role reported independently of the human-readable label.
+    pub role: String,
+    pub name: Option<String>,
+    pub value: Option<String>,
+    /// None means the provider did not expose a readable enabled state.
+    pub enabled: Option<bool>,
+    /// DTW operations available on this element, not unimplemented native actions.
+    pub actions: Vec<String>,
     pub can_press: bool,
 }
 
@@ -132,8 +159,8 @@ pub struct WindowInventory {
     pub report: InventoryReport,
 }
 
-/// A live view of the execution authority; providers poll it during IPC waits.
-/// Remaining time is a monotonic budget, not authority the provider can extend.
+/// A live execution budget and cancellation view; providers poll it during IPC waits.
+/// Remaining time is monotonic and cannot be extended by the provider.
 pub struct CallContext<'a> {
     pub(crate) poll: &'a (dyn Fn() -> Result<std::time::Duration, Error> + Sync),
 }
@@ -157,9 +184,7 @@ pub enum Error {
     Closed,
     Cancelled,
     Busy,
-    GrantExpired,
     WrongApp,
-    CapabilityDenied,
     UnsupportedCapability,
     StaleObservation,
     WrongProvider,
@@ -171,6 +196,7 @@ pub enum Error {
     TimedOut,
     InventoryUnproven(InventoryReport),
     BackendFailed(String),
+    NativeFailure { code: String, message: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -239,6 +265,13 @@ pub trait Backend: Send + Sync {
     }
     fn stamp(&self) -> ProviderStamp;
     fn supports(&self, capability: Capability) -> bool;
+    /// Stable provider coverage and runtime conditions for tool discovery.
+    fn coverage(&self) -> &'static str {
+        "Provider-defined application window subset"
+    }
+    fn conditions(&self) -> &'static [&'static str] {
+        &[]
+    }
     fn windows(
         &self,
         _app: &AppInstance,

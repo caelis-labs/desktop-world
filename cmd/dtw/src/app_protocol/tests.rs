@@ -3,7 +3,6 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
     mpsc,
 };
-use std::time::{SystemTime, UNIX_EPOCH};
 use wire::Target;
 
 struct WorkerGate {
@@ -151,6 +150,11 @@ impl MockBackend {
                     id: ElementId(9007199254740993),
                     label: "Increment".into(),
                     can_press: true,
+                    role: "button".into(),
+                    name: Some("Increment".into()),
+                    value: None,
+                    enabled: Some(true),
+                    actions: vec!["press".into()],
                 }]
             },
             // Opaque controlled bytes exercise retention/encoding, not PNG or GUI acceptance.
@@ -246,32 +250,17 @@ impl Backend for MockBackend {
         self.act(call)
     }
 }
-fn authority() -> HostGrant {
-    HostGrant {
-        grant_id: "host-approved".into(),
-        app: AppInstance {
-            identity: AppIdentity("org.example.Controlled".into()),
-            pid: 42,
-            generation: u64::MAX,
-        },
-        capabilities: vec![
-            Capability::Observe,
-            Capability::Press,
-            Capability::Capture,
-            Capability::Click,
-        ],
-        expires_at_unix_ms: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64
-            + 60_000,
-        expires_at: Instant::now() + Duration::from_secs(60),
+fn application() -> AppInstance {
+    AppInstance {
+        identity: AppIdentity("org.example.Controlled".into()),
+        pid: 42,
+        generation: u64::MAX,
     }
 }
 fn coordinator() -> (Arc<Coordinator<MockBackend>>, MockBackend) {
     let backend = MockBackend::new();
     (
-        Coordinator::new(backend.clone(), authority(), "Controlled".into()),
+        Coordinator::new(backend.clone(), application(), "Controlled".into()),
         backend,
     )
 }
@@ -353,25 +342,16 @@ fn assert_code(reply: &Reply, code: &str) {
 }
 
 #[test]
-fn describe_reports_trusted_authority_separately_from_backend_support() {
-    let backend = MockBackend::new();
-    let mut grant = authority();
-    grant.capabilities = vec![Capability::Observe];
-    let owner = Coordinator::new(backend.clone(), grant, "Controlled".into());
+fn describe_reports_the_bound_app_and_backend_support() {
+    let (owner, _) = coordinator();
     let description = owner.handle(Request::Describe).data;
-    assert_eq!(description["version"], 1);
-    assert_eq!(description["app"]["generation"], u64::MAX.to_string());
-    assert_eq!(description["grant"]["capabilities"], json!(["observe"]));
+    assert_eq!(description["app"]["name"], "Controlled");
+    assert!(description["app"].get("pid").is_none());
+    assert!(description.get("grant").is_none());
     assert_eq!(
         description["supported_capabilities"],
         json!(["observe", "press", "capture", "click"])
     );
-    let window = windows(&owner, "windows").remove(0);
-    assert_code(
-        &run(&owner, "capture", Some(&window), Command::Capture),
-        "capability_denied",
-    );
-    assert_eq!(backend.0.captures.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -798,185 +778,8 @@ fn provider_panic_finishes_the_job_as_unknown_and_seals_the_context() {
     assert_eq!(backend.0.actions.load(Ordering::SeqCst), 1);
 }
 
-fn rpc(method: &str, id: u64, params: Value) -> Value {
-    json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})
-}
-fn ready(owner: &Arc<Coordinator<MockBackend>>, version: &str) -> mcp::Session {
-    let mut session = mcp::Session::default();
-    let init = session
-        .handle(
-            owner,
-            rpc("initialize", 1, json!({"protocolVersion":version})),
-        )
-        .unwrap();
-    assert!(init["error"].is_null(), "{init}");
-    assert_eq!(
-        init["result"]["protocolVersion"],
-        if version == "2024-11-05" {
-            "2024-11-05"
-        } else {
-            "2025-06-18"
-        }
-    );
-    assert!(session
-        .handle(
-            owner,
-            json!({"jsonrpc":"2.0","method":"notifications/initialized"})
-        )
-        .is_none());
-    session
-}
 #[test]
-fn mcp_requires_the_handshake_and_exposes_only_one_exec_tool() {
-    let (owner, _) = coordinator();
-    let mut session = mcp::Session::default();
-    let request = rpc("tools/list", 7, json!({}));
-    assert_eq!(
-        session.handle(&owner, request.clone()).unwrap()["error"]["code"],
-        -32002
-    );
-    assert_eq!(
-        session
-            .handle(&owner, rpc("initialize", 1, json!({})))
-            .unwrap()["error"]["code"],
-        -32602
-    );
-    let initialized = session
-        .handle(
-            &owner,
-            rpc("initialize", 2, json!({"protocolVersion":"2025-06-18"})),
-        )
-        .unwrap();
-    assert_eq!(initialized["result"]["protocolVersion"], "2025-06-18");
-    assert_eq!(
-        session.handle(&owner, request.clone()).unwrap()["error"]["code"],
-        -32002
-    );
-    session.handle(
-        &owner,
-        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
-    );
-    let listed = session.handle(&owner, request).unwrap();
-    let tools = listed["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0]["name"], "exec");
-    assert_eq!(tools[0]["inputSchema"], wire::input_schema());
-    assert_eq!(
-        session
-            .handle(
-                &owner,
-                rpc("initialize", 3, json!({"protocolVersion":"2025-06-18"}))
-            )
-            .unwrap()["error"]["code"],
-        -32600
-    );
-    assert_eq!(
-        session
-            .handle(
-                &owner,
-                rpc("tools/call", 4, json!({"name":"raw_native","arguments":{}}))
-            )
-            .unwrap()["error"]["code"],
-        -32602
-    );
-}
-#[test]
-fn mcp_negotiates_only_implemented_versions_and_preserves_their_result_format() {
-    let (owner, _) = coordinator();
-    for version in ["2024-11-05", "2025-03-26", "2025-06-18", "future"] {
-        let mut session = ready(&owner, version);
-        let response = session
-            .handle(
-                &owner,
-                rpc(
-                    "tools/call",
-                    9,
-                    json!({"name":"exec","arguments":{"version":1,"operation":"describe"}}),
-                ),
-            )
-            .unwrap();
-        let content = &response["result"]["content"];
-        assert_eq!(content[0]["type"], "text");
-        let text: Value = serde_json::from_str(content[0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(text["grant"]["grant_id"], "host-approved");
-        if version != "2024-11-05" {
-            assert_eq!(response["result"]["structuredContent"], text);
-        } else {
-            assert!(response["result"].get("structuredContent").is_none());
-        }
-    }
-}
-#[test]
-fn mcp_arguments_cannot_supply_or_expand_host_authority() {
-    let (owner, backend) = coordinator();
-    let mut session = ready(&owner, "2025-06-18");
-    for authority_field in ["grant", "approved", "capabilities", "pid"] {
-        let mut arguments = json!({"version":1,"operation":"describe"});
-        arguments[authority_field] = json!({"capabilities":["click"],"approved":true});
-        let response = session
-            .handle(
-                &owner,
-                rpc(
-                    "tools/call",
-                    9,
-                    json!({"name":"exec","arguments":arguments}),
-                ),
-            )
-            .unwrap();
-        assert_eq!(response["result"]["isError"], true);
-        assert_eq!(
-            response["result"]["structuredContent"]["error"]["code"],
-            "invalid_request"
-        );
-    }
-    assert_eq!(
-        owner.handle(Request::Describe).data["grant"]["grant_id"],
-        "host-approved"
-    );
-    assert_eq!(backend.0.windows.load(Ordering::SeqCst), 0);
-    assert_eq!(backend.0.actions.load(Ordering::SeqCst), 0);
-}
-#[test]
-fn mcp_cancellation_notification_does_not_cancel_an_accepted_native_job() {
-    let (owner, backend) = coordinator();
-    let window = windows(&owner, "windows").remove(0);
-    let mut session = ready(&owner, "2025-06-18");
-    let gate = backend.read_gate();
-    let app = owner.handle(Request::Describe).data["app"]["app_ref"].clone();
-    let accepted = session
-        .handle(
-            &owner,
-            rpc(
-                "tools/call",
-                41,
-                json!({"name":"exec","arguments":{
-                    "version":1,"operation":"submit","request_id":"native-job",
-                    "target":{"app_ref":app,"window_ref":window},"command":{"kind":"observe"}
-                }}),
-            ),
-        )
-        .unwrap();
-    assert_eq!(accepted["result"]["structuredContent"]["status"], "running");
-    gate.entered();
-    assert!(session
-        .handle(
-            &owner,
-            json!({"jsonrpc":"2.0","method":"notifications/cancelled",
-        "params":{"requestId":41,"reason":"Stop waiting","request_id":"native-job"}})
-        )
-        .is_none());
-    assert_eq!(
-        owner.handle(Request::Describe).data["context"]["state"],
-        "open"
-    );
-    assert_eq!(backend.0.shutdowns.load(Ordering::SeqCst), 0);
-    assert_eq!(result(&owner, "native-job").data["status"], "running");
-    gate.release();
-    assert!(!finish(&owner, "native-job").is_error);
-    assert_eq!(backend.0.observes.load(Ordering::SeqCst), 1);
-}
-#[test]
-fn mcp_frames_require_complete_lines_and_never_accumulate_past_64_kib() {
+fn mcp_frames_require_complete_lines_and_never_accumulate_past_the_frame_limit() {
     use std::io::{BufReader, Cursor, Read};
     let mut exact = vec![b' '; mcp::MAX_INPUT_BYTES - 1];
     exact.push(b'\n');
@@ -1064,39 +867,11 @@ fn close_after_cancel_keeps_the_original_cancellation_cause_in_late_receipts() {
     );
 }
 
-#[test]
-fn mcp_request_ids_accept_integer_valued_numbers_and_preserve_the_received_value() {
-    let (owner, _) = coordinator();
-    for literal in ["1", "-2", "1.0", "1e0", "-0.0", "\"rpc-1\""] {
-        // Each independent session uses its ID once. Parse actual JSON so the
-        // float and exponent spellings exercise serde_json's numeric variant.
-        let request: Value = serde_json::from_str(&format!(
-            r#"{{"jsonrpc":"2.0","method":"ping","id":{literal}}}"#
-        ))
-        .unwrap();
-        let received_id = request["id"].clone();
-        let response = mcp::Session::default().handle(&owner, request).unwrap();
-        assert!(response["error"].is_null(), "{literal}: {response}");
-        assert_eq!(response["id"], received_id, "{literal}");
-        assert_eq!(response["result"], json!({}));
-    }
-    for literal in ["1.5", "null", "true", "false", "[]", "{}"] {
-        let request: Value = serde_json::from_str(&format!(
-            r#"{{"jsonrpc":"2.0","method":"ping","id":{literal}}}"#
-        ))
-        .unwrap();
-        let response = mcp::Session::default().handle(&owner, request).unwrap();
-        assert_eq!(response["error"]["code"], -32600, "{literal}: {response}");
-        assert!(response["id"].is_null());
-        assert!(response.get("result").is_none());
-    }
-}
-
 #[path = "script_tests.rs"]
 mod script_tests;
 
 #[path = "inventory_tests.rs"]
 mod inventory_tests;
 
-#[path = "lifecycle_tests.rs"]
-mod lifecycle_tests;
+#[path = "standard_tests.rs"]
+mod standard_tests;

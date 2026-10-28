@@ -177,8 +177,8 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
     }
 }
 
-/// Decode one complete exec argument object. Parsing never creates a grant,
-/// resolves a native target, or invokes an operation.
+/// Decode one internal Core command. Parsing never resolves a native target
+/// or invokes an operation.
 pub fn parse_request(value: Value) -> Result<Request, WireError> {
     let request = object(&value, "request")?;
     let version = request
@@ -250,14 +250,9 @@ pub fn core_error(error: &computer::Error) -> WireError {
             "busy",
             "The execution context already has an active operation",
         ),
-        Error::GrantExpired => ("grant_expired", "The trusted grant has expired"),
         Error::WrongApp => (
             "wrong_app",
-            "The target does not match the granted application instance",
-        ),
-        Error::CapabilityDenied => (
-            "capability_denied",
-            "The trusted grant does not allow this capability",
+            "The target does not match the bound application instance",
         ),
         Error::UnsupportedCapability => (
             "unsupported_capability",
@@ -296,11 +291,13 @@ pub fn core_error(error: &computer::Error) -> WireError {
             "window_inventory_unproven",
             "The supported window inventory could not be proven; no absence or replay is implied",
         ),
+        Error::NativeFailure { code, message } => (code.as_str(), message.as_str()),
         Error::BackendFailed(message) => ("backend_failed", message.as_str()),
     };
     WireError {
         details: match error {
             Error::InventoryUnproven(report) => Some(inventory_report(report, false)),
+            Error::NativeFailure { code, .. } => Some(json!({"provider_code":code})),
             _ => None,
         },
         code: code.into(),

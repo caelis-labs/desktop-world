@@ -7,11 +7,12 @@ DTW — app-scoped desktop operations
 
 Usage:
   dtw app catalog
-  dtw app serve --grant /absolute/host-grant.json
+  dtw mcp
+  dtw api
   dtw --help
   dtw --version
 
-The Harness supplies the trusted app grant. No grant is inferred from MCP input.
+Every execution names an app identifier, such as com.google.Chrome.
 Native app operations currently require macOS.";
 
 fn run(args: &[String]) -> Result<(), WireError> {
@@ -24,6 +25,8 @@ fn run(args: &[String]) -> Result<(), WireError> {
         [] | ["--help" | "-h"] | ["app"] | ["app", "--help" | "-h"] => println!("{HELP}"),
         ["--version" | "-V"] => println!("dtw {}", env!("CARGO_PKG_VERSION")),
         ["app", ..] => return app_protocol::run(&args[1..]),
+        ["mcp"] => return app_protocol::run(args),
+        ["api"] => print!("{}", app_protocol::script_api_types()),
         _ => {
             return Err(WireError {
                 details: None,

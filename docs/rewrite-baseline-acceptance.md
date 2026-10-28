@@ -1,5 +1,7 @@
 # D1：单一重写版运行基线验收
 
+> Historical evidence: this report applies only to its named source revision, binary and entry point. The current product uses [standard MCP and explicit app IDs](app-protocol-v1.md); any grant, manifest, SDK/worker or custom Host setup below is superseded and is not a current installation instruction. No acceptance result here is claimed to have been rerun for the new entry.
+
 日期：2026-10-27。#58 两项 CI 通过后合并为 `c55348610071e2b26e10ce490744065b0cdd08b7`；
 本检查点实现提交为 `9aad23cc941470e8419142f98df4350e99068979`。
 环境为 macOS 27.0.1 (26A434)、arm64、Rust 1.98.0、Xcode Swift。

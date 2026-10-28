@@ -3,15 +3,19 @@
 // Copyright (c) 2025 Cua AI, Inc. MIT; see THIRD_PARTY_NOTICES.md.
 // DTW adaptations: single-app API, strict JSON state, bounded std channels and sticky limits.
 
-use rquickjs::{context::EvalOptions, Context, Function, Runtime, Value as JsValue};
+use rquickjs::{context::EvalOptions, Context, Function, Persistent, Runtime, Value as JsValue};
 use serde_json::{json, Value};
-use std::io::{self, Write};
 use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
     mpsc::{self, RecvTimeoutError, SyncSender, TrySendError},
     Arc, Mutex,
 };
 use std::time::{Duration, Instant};
+use std::{
+    cell::RefCell,
+    io::{self, Write},
+    rc::Rc,
+};
 
 const JSON_LIMIT: usize = 64 * 1024;
 const HOST_REPLY_LIMIT: usize = 1024 * 1024;
@@ -19,6 +23,57 @@ const POLL: Duration = Duration::from_millis(5);
 const CONSOLE_MAX_LINES: usize = 200;
 const CONSOLE_MAX_BYTES: usize = 32 * 1024;
 const CONSOLE_LINE_MAX: usize = 2_000;
+pub(super) const MAX_UNHANDLED_REJECTIONS: usize = 256;
+
+type SavedValue = Persistent<JsValue<'static>>;
+/// Persistent roots preserve identity even if JS drops every reference to an
+/// unhandled promise. The guard removes the callback and roots before Runtime.
+struct PromiseRejections<'rt> {
+    runtime: &'rt Runtime,
+    pending: Rc<RefCell<Vec<(SavedValue, SavedValue)>>>,
+}
+impl<'rt> PromiseRejections<'rt> {
+    fn new(runtime: &'rt Runtime, terminal: Arc<Mutex<Option<Failure>>>) -> Self {
+        let pending = Rc::new(RefCell::new(Vec::<(SavedValue, SavedValue)>::new()));
+        let tracked = pending.clone();
+        runtime.set_host_promise_rejection_tracker(Some(Box::new(
+            move |ctx, promise, reason, handled| {
+                // No JS property access or user callbacks here: error getters may
+                // have effects. Inspect only after script execution is closed.
+                let promise = Persistent::save(&ctx, promise);
+                let mut pending = tracked.borrow_mut();
+                if let Some(index) = pending.iter().position(|(entry, _)| *entry == promise) {
+                    if handled {
+                        pending.remove(index);
+                    }
+                } else if !handled {
+                    if pending.len() == MAX_UNHANDLED_REJECTIONS {
+                        latch(
+                            &terminal,
+                            Failure::new("exception", "too many outstanding rejected promises")
+                                .code("promise_rejection_limit"),
+                        );
+                    } else {
+                        pending.push((promise, Persistent::save(&ctx, reason)));
+                    }
+                }
+            },
+        )));
+        Self { runtime, pending }
+    }
+    fn first(&self) -> Option<SavedValue> {
+        self.pending
+            .borrow()
+            .first()
+            .map(|(_, reason)| reason.clone())
+    }
+}
+impl Drop for PromiseRejections<'_> {
+    fn drop(&mut self) {
+        self.runtime.set_host_promise_rejection_tracker(None);
+        self.pending.borrow_mut().clear();
+    }
+}
 
 pub(super) struct Limits {
     pub deadline: Instant,
@@ -199,80 +254,88 @@ fn run_inner(
                 || terminal.lock().unwrap_or_else(|e| e.into_inner()).is_some()
         })));
     }
+    let rejections = PromiseRejections::new(&runtime, terminal.clone());
     let context = Context::full(&runtime).map_err(internal)?;
     let settled: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    context.with(|ctx| -> Result<(), Failure> {
-        let globals = ctx.globals();
-        let host = {
-            let cancel = cancel.clone();
-            let used = used.clone();
-            let terminal = terminal.clone();
-            let max_calls = limits.max_calls;
-            Function::new(
-                ctx.clone(),
-                move |op: String, args: String, line: u32| -> String {
-                    host_call(
-                        &op, &args, line, deadline, max_calls, &cancel, &used, &calls, &terminal,
-                    )
-                },
-            )
-            .map_err(internal)?
-        };
-        globals.set("__host", host).map_err(internal)?;
-        let done = {
-            let settled = settled.clone();
-            let terminal = terminal.clone();
-            Function::new(ctx.clone(), move |encoded: String| {
-                if encoded.len() > JSON_LIMIT * 4 + 16384 {
-                    latch(
-                        &terminal,
-                        Failure::new("exception", "script output exceeds limit")
-                            .code("output_limit"),
-                    );
-                    return;
-                }
-                let mut slot = settled.lock().unwrap_or_else(|e| e.into_inner());
-                if slot.is_none() {
-                    *slot = Some(encoded);
-                }
-            })
-            .map_err(internal)?
-        };
-        globals.set("__done", done).map_err(internal)?;
-        let log = {
-            let console = console.clone();
-            Function::new(ctx.clone(), move |level: String, text: String| {
-                console
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .push(&level, &text);
-            })
-            .map_err(internal)?
-        };
-        globals.set("__log", log).map_err(internal)?;
-        globals.set("__initial_state", initial).map_err(internal)?;
-        let mut options = EvalOptions::default();
-        options.global = true;
-        options.strict = true;
-        options.filename = Some("prelude.js".into());
-        ctx.eval_with_options::<JsValue, _>(include_str!("prelude.js"), options)
-            .map_err(|_| exception_failure(&ctx, cancel, deadline, terminal, false))?;
-        let settle: Function = globals.get("__settle").map_err(internal)?;
-        globals.remove("__settle").map_err(internal)?;
-        // Keep the caller's first source line on script.js line one.
-        let wrapped = format!("(async () => {{\"use strict\";{script}\n}})()");
-        let mut options = EvalOptions::default();
-        options.global = true;
-        options.strict = true;
-        options.filename = Some("script.js".into());
-        let promise: JsValue = ctx
-            .eval_with_options(wrapped, options)
-            .map_err(|_| exception_failure(&ctx, cancel, deadline, terminal, true))?;
-        settle
-            .call::<_, ()>((promise,))
-            .map_err(|_| exception_failure(&ctx, cancel, deadline, terminal, false))?;
-        Ok(())
-    })?;
+    let reject_unhandled =
+        context.with(|ctx| -> Result<Persistent<Function<'static>>, Failure> {
+            let globals = ctx.globals();
+            let host = {
+                let cancel = cancel.clone();
+                let used = used.clone();
+                let terminal = terminal.clone();
+                let max_calls = limits.max_calls;
+                Function::new(
+                    ctx.clone(),
+                    move |op: String, args: String, line: u32| -> String {
+                        host_call(
+                            &op, &args, line, deadline, max_calls, &cancel, &used, &calls,
+                            &terminal,
+                        )
+                    },
+                )
+                .map_err(internal)?
+            };
+            globals.set("__host", host).map_err(internal)?;
+            let done = {
+                let settled = settled.clone();
+                let terminal = terminal.clone();
+                Function::new(ctx.clone(), move |encoded: String| {
+                    if encoded.len() > JSON_LIMIT * 4 + 16384 {
+                        latch(
+                            &terminal,
+                            Failure::new("exception", "script output exceeds limit")
+                                .code("output_limit"),
+                        );
+                        return;
+                    }
+                    let mut slot = settled.lock().unwrap_or_else(|e| e.into_inner());
+                    if slot.is_none() {
+                        *slot = Some(encoded);
+                    }
+                })
+                .map_err(internal)?
+            };
+            globals.set("__done", done).map_err(internal)?;
+            let log = {
+                let console = console.clone();
+                Function::new(ctx.clone(), move |level: String, text: String| {
+                    console
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push(&level, &text);
+                })
+                .map_err(internal)?
+            };
+            globals.set("__log", log).map_err(internal)?;
+            globals.set("__initial_state", initial).map_err(internal)?;
+            globals
+                .set("__methods", super::methods::facade_metadata())
+                .map_err(internal)?;
+            let mut options = EvalOptions::default();
+            options.global = true;
+            options.strict = true;
+            options.filename = Some("prelude.js".into());
+            ctx.eval_with_options::<JsValue, _>(include_str!("prelude.js"), options)
+                .map_err(|_| exception_failure(&ctx, cancel, deadline, terminal, false))?;
+            let settle: Function = globals.get("__settle").map_err(internal)?;
+            globals.remove("__settle").map_err(internal)?;
+            let reject_unhandled: Function = globals.get("__reject_unhandled").map_err(internal)?;
+            globals.remove("__reject_unhandled").map_err(internal)?;
+            // Keep the caller's first source line on script.js line one.
+            let wrapped = format!("(async () => {{\"use strict\";{script}\n}})()");
+            let mut options = EvalOptions::default();
+            options.global = true;
+            options.strict = true;
+            options.filename = Some("script.js".into());
+            let promise: JsValue = ctx
+                .eval_with_options(wrapped, options)
+                .map_err(|_| exception_failure(&ctx, cancel, deadline, terminal, true))?;
+            settle
+                .call::<_, ()>((promise,))
+                .map_err(|_| exception_failure(&ctx, cancel, deadline, terminal, false))?;
+            Ok(Persistent::save(&ctx, reject_unhandled))
+        })?;
     loop {
         if let Some(failure) = stop_reason(cancel, deadline, terminal) {
             return Err(failure);
@@ -291,8 +354,27 @@ fn run_inner(
         return Err(failure);
     }
     let encoded = settled.lock().unwrap_or_else(|e| e.into_inner()).take().ok_or_else(|| Failure::new("stalled", "the script awaited a promise that never settles; this runtime has no timers or external events"))?;
-    let outcome: Value = serde_json::from_str(&encoded)
+    let mut outcome: Value = serde_json::from_str(&encoded)
         .map_err(|error| Failure::new("internal", format!("bad script settlement: {error}")))?;
+    if outcome["ok"] == true {
+        if let Some(reason) = rejections.first() {
+            // Give subsequent catch handlers and derived promises the entire
+            // microtask drain before deciding. Existing primary failures win.
+            let encoded: String = context.with(|ctx| {
+                let inspect = reject_unhandled.clone().restore(&ctx).map_err(internal)?;
+                let reason = reason.restore(&ctx).map_err(internal)?;
+                inspect
+                    .call((reason,))
+                    .map_err(|_| exception_failure(&ctx, cancel, deadline, terminal, false))
+            })?;
+            if let Some(failure) = stop_reason(cancel, deadline, terminal) {
+                return Err(failure);
+            }
+            outcome = serde_json::from_str(&encoded).map_err(|error| {
+                Failure::new("internal", format!("bad rejection settlement: {error}"))
+            })?;
+        }
+    }
     if outcome["ok"] == true {
         let decode = |field: &str| -> Result<Value, Failure> {
             let text = outcome[field]
@@ -475,12 +557,15 @@ fn valid_args(op: &str, args: &Value) -> bool {
     let Some(object) = args.as_object() else {
         return false;
     };
-    let keys: &[&str] = match op {
-        "windows" => &[],
-        "observe" | "capture" => &["window_ref"],
-        "press" => &["window_ref", "observation_ref", "element_ref"],
-        "click" => &["window_ref", "observation_ref", "x", "y"],
-        _ => return false,
+    use super::methods::Method;
+    let Some(method) = Method::parse(op) else {
+        return false;
+    };
+    let keys: &[&str] = match method {
+        Method::Windows => &[],
+        Method::Observe | Method::Capture => &["window_ref"],
+        Method::Press => &["window_ref", "observation_ref", "element_ref"],
+        Method::Click => &["window_ref", "observation_ref", "x", "y"],
     };
     object.len() == keys.len()
         && keys.iter().all(|key| match *key {

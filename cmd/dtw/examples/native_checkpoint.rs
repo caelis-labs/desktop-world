@@ -19,7 +19,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     use desktop_world::{
         backends::macos::NativeBackend,
         computer::*,
-        runtime::{ActionReceipt, Grant, Runtime},
+        runtime::{ActionReceipt, Runtime},
     };
     use serde_json::{json, Value};
     use std::{
@@ -50,20 +50,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .into_iter()
         .find(|a| a.app.pid == pid)
         .ok_or("PID absent from native app catalog")?;
-    let runtime = Arc::new(Runtime::new(
-        backend,
-        Grant::new(
-            app.app,
-            vec![
-                Capability::Observe,
-                Capability::Press,
-                Capability::Capture,
-                Capability::Click,
-            ],
-            Instant::now() + Duration::from_secs(180),
-        ),
-        Duration::from_secs(15),
-    ));
+    let runtime = Arc::new(Runtime::new(backend, app.app, Duration::from_secs(15)));
     let mut targets = HashMap::new();
     let mut observations = Vec::new();
     fn receipt(r: ActionReceipt) -> Value {

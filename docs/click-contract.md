@@ -1,5 +1,7 @@
 # Click contract and CUA 0.37.0 acceptance
 
+> Historical evidence: this report applies only to its named source revision, binary and entry point. The current product uses [standard MCP and explicit app IDs](app-protocol-v1.md); any grant, manifest, SDK/worker or custom Host setup below is superseded and is not a current installation instruction. No acceptance result here is claimed to have been rerun for the new entry.
+
 Issue [#41](https://github.com/caelis-labs/desktop-world/issues/41), checked
 2026-10-20. SDK, lockfile, worker build scripts and notice inventory now pin
 `2d2f99228d4d2508dc6fcc84c176b296e146714a`, tag

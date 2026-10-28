@@ -1,0 +1,3 @@
+[mcp_servers.desktop-world]
+command = "/absolute/path/to/dtw"
+args = ["mcp"]

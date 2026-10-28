@@ -563,13 +563,40 @@ private struct CandidateWindow {
     let title: String
 }
 
+// Roles have a small platform-independent vocabulary. The legacy display label
+// retains native text where no normalized role is available.
+private func semanticRole(_ role: String) -> String {
+    switch role {
+    case kAXButtonRole: return "button"
+    case kAXCheckBoxRole: return "checkbox"
+    case kAXRadioButtonRole: return "radio_button"
+    case kAXTextFieldRole: return "text_field"
+    case kAXTextAreaRole: return "text_area"
+    case kAXStaticTextRole: return "static_text"
+    case kAXWindowRole: return "window"
+    case kAXGroupRole: return "group"
+    case kAXScrollAreaRole: return "scroll_area"
+    case kAXImageRole: return "image"
+    case kAXToolbarRole: return "toolbar"
+    default: return "unknown"
+    }
+}
+
 private struct NativeElement {
     let id: UInt64
     let element: AXUIElement
     let label: String
+    let role: String
+    let name: String?
+    let value: String?
+    let enabled: Bool?
     let canPress: Bool
 
-    var json: [String: Any] { ["id": id, "label": label, "can_press": canPress] }
+    var json: [String: Any] {
+        ["id": id, "label": label, "role": role,
+         "name": name as Any? ?? NSNull(), "value": value as Any? ?? NSNull(),
+         "enabled": enabled as Any? ?? NSNull(), "actions": canPress ? ["press"] : [], "can_press": canPress]
+    }
 }
 
 private struct NativeObservation {
@@ -731,10 +758,9 @@ private final class NativeStore: @unchecked Sendable {
 
     private let pressRoles: Set<String> = [kAXButtonRole, kAXCheckBoxRole, kAXRadioButtonRole]
 
-    private func pressable(_ element: AXUIElement, role: String, window: AXUIElement,
+    private func pressable(_ element: AXUIElement, role: String, enabled: Bool, window: AXUIElement,
                            target: NativeTarget, deadline: Deadline) throws -> Bool {
-        guard pressRoles.contains(role),
-              try axAttribute(element, kAXEnabledAttribute, deadline) as? Bool == true,
+        guard pressRoles.contains(role), enabled,
               try actions(element, deadline).contains(kAXPressAction) else { return false }
         return try owned(element, by: window, target: target, deadline: deadline)
     }
@@ -754,16 +780,25 @@ private final class NativeStore: @unchecked Sendable {
             guard try axPID(element, context.deadline) == target.app.pid else { continue }
             let role = try axAttribute(element, kAXRoleAttribute, context.deadline) as? String ?? ""
             if [kAXSheetRole, kAXMenuRole, kAXMenuBarRole].contains(role) { continue }
-            var labels: [String] = []
-            for attribute in [kAXTitleAttribute, kAXValueAttribute, kAXDescriptionAttribute] {
+            func text(_ attribute: String) throws -> String? {
                 let value = try axAttribute(element, attribute, context.deadline)
-                let text = (value as? String) ?? (value as? NSNumber)?.stringValue
-                if let text, !text.isEmpty { labels.append(String(text.prefix(256))) }
+                guard let text = (value as? String) ?? (value as? NSNumber)?.stringValue else { return nil }
+                return String(text.prefix(256))
             }
-            let canPress = try pressable(element, role: role, window: window.element,
+            let title = try text(kAXTitleAttribute)
+            let value = try text(kAXValueAttribute)
+            let description = try text(kAXDescriptionAttribute)
+            let labels = [title, value, description].compactMap { $0 }.filter { !$0.isEmpty }
+            let rawEnabled = try axAttribute(element, kAXEnabledAttribute, context.deadline)
+            let enabled: Bool? = rawEnabled.flatMap {
+                CFGetTypeID($0) == CFBooleanGetTypeID() ? ($0 as? Bool) : nil
+            }
+            let canPress = try pressable(element, role: role, enabled: enabled == true, window: window.element,
                                          target: target, deadline: context.deadline)
             elements.append(NativeElement(id: UInt64(elements.count + 1), element: element,
-                                          label: labels.isEmpty ? role : labels.joined(separator: " | "), canPress: canPress))
+                                          label: labels.isEmpty ? role : labels.joined(separator: " | "),
+                                          role: semanticRole(role), name: title?.isEmpty == false ? title : description,
+                                          value: value, enabled: enabled, canPress: canPress))
             if depth >= 16 { truncated = true; continue }
             let remaining = max(0, 128 - elements.count - pending.count)
             let children = try axList(element, kAXChildrenAttribute, limit: remaining + 1, context.deadline)
@@ -794,7 +829,8 @@ private final class NativeStore: @unchecked Sendable {
             }
             let window = try validate(target, context)
             let role = try axAttribute(element.element, kAXRoleAttribute, context.deadline) as? String ?? ""
-            guard try pressable(element.element, role: role, window: window.element,
+            let enabled = try axAttribute(element.element, kAXEnabledAttribute, context.deadline) as? Bool == true
+            guard try pressable(element.element, role: role, enabled: enabled, window: window.element,
                                 target: target, deadline: context.deadline) else {
                 throw failure("element_not_pressable", "Current role, enabled state, ancestry or AXPress support changed")
             }

@@ -1,5 +1,7 @@
 # Release readiness
 
+> Historical evidence: this report applies only to its named source revision, binary and entry point. The current product uses [standard MCP and explicit app IDs](app-protocol-v1.md); any grant, manifest, SDK/worker or custom Host setup below is superseded and is not a current installation instruction. No acceptance result here is claimed to have been rerun for the new entry.
+
 Historical CUA-based release contract. This page records the old product and its
 acceptance boundaries; it is not the next release gate. The next release contains
 the rewrite only. See [releasing](releasing.md) and the [product matrix](product-matrix.md).

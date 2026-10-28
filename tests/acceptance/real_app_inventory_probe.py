@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# HISTORICAL: this probe targets the retired C4/C5 grant/custom-Host entry.
+# Preserve it as dated evidence; use standard_agent_probe.py for current MCP acceptance.
 """Read-only DTW inventory sample for one separately launched, owned real app.
 
 The Swift observer is a separate diagnostic, not part of the provider. The cold

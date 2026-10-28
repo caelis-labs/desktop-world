@@ -46,13 +46,17 @@ checks TERM, EOF, malformed input and parent death using only release of an
 unknown binding; it does not touch AX, screenshots or desktop input. It requires
 the already-built executable and is a local integration check, not a CI build.
 
-The public commands are `dtw app catalog` and `dtw app serve --grant /absolute/host-grant.json`.
-The Host prepares the grant after approval; see [Host integration](embedding.md).
+The MCP product entry is `dtw mcp`; `dtw app catalog` is a diagnostic CLI.
+`dtw api` prints TypeScript generated from the same Rust schemas advertised by
+`apps`; `docs/app-script-api.d.ts` is the checked-in generated contract.
+Connect it using standard Agent MCP configuration; see [installation](install.md).
 Bare `dtw` and `--help` display help instead of starting an old MCP executor.
 
-Library tests do not replace the [app protocol](app-protocol-acceptance.md),
-[app script](app-script-acceptance.md), or
-[window inventory](window-inventory-acceptance.md) acceptance steps.
+Library tests do not replace native acceptance through the current `dtw mcp` entry.
+The historical [app protocol](app-protocol-acceptance.md),
+[app script](app-script-acceptance.md), and
+[window inventory](window-inventory-acceptance.md) reports define useful scenarios,
+but their retired grant/Host commands are not current setup instructions.
 Run relevant GUI checks when changing native behavior, on an owned test desktop
 and with independent effect readback. Previous evidence applies to its recorded
 source and binary, not automatically to a newly built executable.
@@ -61,11 +65,33 @@ cleanup probe and real TextEdit window/Space matrix. These require owned apps,
 serial desktop access and independent OS/effect observations; do not run them
 automatically in CI.
 
+## Current external-client GUI probe
+
+On a macOS test desktop, the opt-in standard probe builds two uniquely identified
+owned fixtures and launches the selected binary through ordinary stdio MCP:
+
+```sh
+python3 tests/acceptance/standard_agent_probe.py \
+  --dtw "$PWD/cmd/dtw/target/debug/dtw" \
+  --output /tmp/dtw-standard-agent-new-run
+```
+
+It records structured semantic press and independent fixture counters, PNG
+capture, original receipts, stale/cross-app rejection, standard cancellation and
+clean-context recovery. Add `--pixel-click` only when the owned window can stay
+foreground and unobscured. Output must be a new directory. The script closes its
+exact server and fixture PIDs and retains evidence even on failure. It does not
+install Agent configuration or retry actions. This proves a standard external
+MCP client plus native GUI, separately from live LLM-host behavior. Historical
+grant probes are marked in their file headers and are not current entry tests.
+
 ## Distribution status
 
-There is no rewritten release package, plugin exporter, installer, signing or
-candidate workflow yet. The old CUA package scripts and plugin payload have been
-removed. Their historical procedure remains in Git at
+A local Claude Code plugin can be staged with `scripts/stage-agent-plugin.py`;
+see [installation](install.md). It copies the supplied binary and canonical Skill
+without building, installing or publishing. There is no rewritten public release
+package, installer, signing or candidate workflow yet. The old CUA package scripts
+and plugin payload have been removed. Their historical procedure remains in Git at
 [`c553486`](https://github.com/caelis-labs/desktop-world/tree/c55348610071e2b26e10ce490744065b0cdd08b7).
 Do not use those old packages as rewrite acceptance evidence.
 See [releasing](releasing.md) for the remaining release work.

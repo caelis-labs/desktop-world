@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# HISTORICAL: this probe targets the retired C4/C5 grant/custom-Host entry.
+# Preserve it as dated evidence; use standard_agent_probe.py for current MCP acceptance.
 """Opt-in C5 native deadline/cancel and idle grant expiry on owned fixtures.
 
 This reference Host checks native lifetime boundaries; the production Harness

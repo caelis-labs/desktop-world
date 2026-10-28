@@ -1,5 +1,7 @@
 # C5-macOS.2：窗口库存归属与受控复验
 
+> Historical evidence: this report applies only to its named source revision, binary and entry point. The current product uses [standard MCP and explicit app IDs](app-protocol-v1.md); any grant, manifest, SDK/worker or custom Host setup below is superseded and is not a current installation instruction. No acceptance result here is claimed to have been rerun for the new entry.
+
 > 历史检查点记录：下文构建参数、默认入口和发行安排属于所记录的版本。当前源码已收敛为重写版，使用方式见 [构建说明](building.md)；既有证据不等于新构建二进制已重新验收。
 
 日期：2026-10-27。基线为 #56 合并提交 `87a6e9fb12584f5a3c315255c9232919d619a5d4`；CUA 来源仍固定 0.38.0。**C5-macOS.2a 的归属诊断、负控和冷启动/后台/前台 fixture 复验通过；C5-macOS.2b 的历史自然偶发触发原因仍未闭环。** 默认入口不切换，C6 批量扩展不准入。

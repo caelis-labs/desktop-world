@@ -1,5 +1,5 @@
 // Appended to Native.swift in one temporary main.swift. These controls exercise
-// inventory classification only: no AX requests, desktop reads or input dispatch.
+// inventory classification and serialization: no AX requests, desktop reads or input dispatch.
 private var inventoryAssertions = 0
 private func expect(_ value: @autoclosure () -> Bool, _ message: String) {
     precondition(value(), message)
@@ -147,6 +147,35 @@ private func checkInventory() throws {
     }
 }
 try checkInventory()
+private func checkSemanticSerialization() throws {
+    expect(semanticRole(kAXButtonRole) == "button", "native button role was not normalized")
+    expect(semanticRole(kAXCheckBoxRole) == "checkbox", "native checkbox role was not normalized")
+    expect(semanticRole(kAXTextFieldRole) == "text_field", "native text field role was not normalized")
+    expect(semanticRole("provider-specific role") == "unknown", "unknown role was guessed from prose")
+    // Creating an opaque AX object makes no attribute requests or desktop reads.
+    let native = AXUIElementCreateApplication(0)
+    for enabled: Bool? in [nil, false, true] {
+        let element = NativeElement(id: 1, element: native, label: "display-only text",
+                                    role: "button", name: "Action", value: "current value",
+                                    enabled: enabled, canPress: enabled == true)
+        let bytes = try JSONSerialization.data(withJSONObject: element.json)
+        let wire = try JSONSerialization.jsonObject(with: bytes) as! [String: Any]
+        expect(wire["role"] as? String == "button", "semantic role was derived from label")
+        expect(wire["name"] as? String == "Action", "semantic name lost its own attribute")
+        expect(wire["value"] as? String == "current value", "semantic value lost its own attribute")
+        expect(wire["label"] as? String == "display-only text", "legacy label changed")
+        if let enabled { expect(wire["enabled"] as? Bool == enabled, "enabled Boolean changed") }
+        else { expect(wire["enabled"] is NSNull, "unknown enabled state was fabricated") }
+        expect(wire["actions"] as? [String] == (enabled == true ? ["press"] : []),
+               "element advertises an unavailable action")
+        expect(wire["can_press"] as? Bool == (enabled == true), "legacy can_press disagrees with actions")
+    }
+    let unnamed = NativeElement(id: 2, element: native, label: "AXGroup", role: "group",
+                                name: nil, value: nil, enabled: nil, canPress: false).json
+    expect(unnamed["name"] is NSNull && unnamed["value"] is NSNull,
+           "missing semantic values must remain null, without label inference")
+}
+try checkSemanticSerialization()
 let missingPixelTarget = dtwValidatePixelTarget([
     "deadline_unix_ms": UInt64((Date().timeIntervalSince1970 + 5) * 1_000)
 ])

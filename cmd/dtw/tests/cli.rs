@@ -15,7 +15,7 @@ fn default_entry_exits_with_app_scoped_help() {
         assert!(output.status.success());
         let text = String::from_utf8(output.stdout).unwrap();
         assert!(text.contains("dtw app catalog"));
-        assert!(text.contains("dtw app serve --grant"));
+        assert!(text.contains("dtw mcp"));
         assert!(output.stderr.is_empty());
     }
 }
@@ -43,9 +43,9 @@ fn legacy_commands_are_rejected() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn serve_requires_a_host_grant_before_native_startup() {
+fn removed_grant_entry_is_rejected() {
     let output = cli(&["app", "serve", "--grant", "relative.json"]);
     assert_eq!(output.status.code(), Some(2));
     let error: Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(error["error"]["code"], "invalid_grant");
+    assert_eq!(error["error"]["code"], "invalid_arguments");
 }

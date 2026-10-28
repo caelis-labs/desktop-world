@@ -1,5 +1,7 @@
 # C5-macOS.1 验收记录
 
+> Historical evidence: this report applies only to its named source revision, binary and entry point. The current product uses [standard MCP and explicit app IDs](app-protocol-v1.md); any grant, manifest, SDK/worker or custom Host setup below is superseded and is not a current installation instruction. No acceptance result here is claimed to have been rerun for the new entry.
+
 > 历史检查点记录：下文构建参数、默认入口和发行安排属于所记录的版本。当前源码已收敛为重写版，使用方式见 [构建说明](building.md)；既有证据不等于新构建二进制已重新验收。
 
 日期：2026-10-27；基线为 #55 合并提交 `95c7bb3f304d852e591f87109f8122e801abc85b`。本检查点完成 [单 app 脚本 v1](app-script-v1.md) 的最小切片：五个既有原子方法、一个脚本任务槽、逐次 Core 校验、有界 VM、JSON state 和不可随 payload 驱逐的步骤回执。CUA 来源保持 0.38.0 / `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`；没有扩展额外原子能力或切换默认 MCP。
