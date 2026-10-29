@@ -197,6 +197,79 @@ async fn sdk_lists_four_tools_and_exec_accepts_only_app_and_source() {
 }
 
 #[tokio::test]
+async fn sdk_omits_only_undefined_host_object_fields_and_preserves_strict_state_results() {
+    let (server, catalog) = server();
+    let mut client = Client::new(server).await;
+    let result = client
+        .tool(
+            "exec",
+            input(
+                r#"
+const window_ref=(await app.windows()).windows[0].window_ref;
+async function q(role,text) { return app.observe({window_ref,role,text,limit:12}); }
+const optional=await q(undefined,undefined);
+const omitted=await app.observe({window_ref,limit:12});
+state.saved=7;
+return {optional:optional.elements.map(e=>e.name),omitted:omitted.elements.map(e=>e.name)};
+"#,
+            ),
+        )
+        .await;
+    assert_eq!(result["isError"], false, "{result}");
+    assert_eq!(
+        decoded(&result)["value"]["result"],
+        json!({"optional":["Increment"],"omitted":["Increment"]})
+    );
+    assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 2);
+    let rejected = client
+        .tool(
+            "exec",
+            input(
+                r#"
+const window_ref=(await app.windows()).windows[0].window_ref;
+const codes=[];
+for(const action of [
+  ()=>app.observe({window_ref:undefined,role:undefined,text:undefined}),
+  ()=>app.keypress({window_ref,keys:['META',undefined]}),
+  ()=>app.observe(undefined),
+  ()=>app.observe({window_ref,role:undefined,unexpected:1})
+]) { try { await action(); } catch(e) { codes.push(e.code); } }
+return codes;
+"#,
+            ),
+        )
+        .await;
+    assert_eq!(rejected["isError"], false, "{rejected}");
+    let rejected = decoded(&rejected);
+    assert_eq!(
+        rejected["value"]["result"],
+        json!([
+            "invalid_args",
+            "invalid_json",
+            "invalid_json",
+            "invalid_args"
+        ])
+    );
+    assert_eq!(rejected["script"]["summary"]["steps"], 1);
+    for source in [
+        "state.saved=8;state.optional=undefined;return true;",
+        "state.saved=8;return {optional:undefined};",
+        "state.saved=8;return [undefined];",
+    ] {
+        let result = client.tool("exec", input(source)).await;
+        assert_eq!(result["isError"], true, "{result}");
+        let result = decoded(&result);
+        assert_eq!(result["script"]["failure"]["code"], "invalid_json");
+        assert_eq!(result["script"]["state_committed"], false);
+    }
+    let final_state = decoded(&client.tool("exec", input("return state;")).await);
+    assert_eq!(final_state["value"]["result"], json!({"saved":7}));
+    assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 2);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+    client.close().await;
+}
+
+#[tokio::test]
 async fn sdk_observe_empty_text_matches_omission_and_keeps_exact_argument_errors() {
     let (server, catalog) = server();
     let mut client = Client::new(server).await;

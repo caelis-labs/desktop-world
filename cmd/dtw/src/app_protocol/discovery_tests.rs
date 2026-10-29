@@ -133,6 +133,56 @@ fn script_run(owner: &Arc<Coordinator<PagedBackend>>, id: &str, source: &str) ->
 }
 
 #[test]
+fn undefined_optional_filters_reach_core_as_omitted_filters_through_all_pages() {
+    let (owner, backend) = setup();
+    let reply = script_run(
+        &owner,
+        "undefined-filters",
+        r#"
+const window_ref=(await app.windows()).windows[0].window_ref;
+async function collect(args) {
+  const first=await app.observe({window_ref,limit:12,...args});
+  let page=first, count=page.elements.length;
+  while(page.next) {
+    page=await app.observe({cursor:page.next});
+    count+=page.elements.length;
+  }
+  return {count,sameQuery:page.observation_ref===first.observation_ref,next:page.next};
+}
+return [await collect({role:undefined,text:'Increment'}),await collect({text:'Increment'}),
+        await collect({role:undefined,text:undefined}),await collect({})];
+"#,
+    );
+    assert!(!reply.is_error, "{}", reply.data);
+    assert_eq!(
+        reply.data["value"]["result"],
+        json!(vec![json!({"count":3,"sameQuery":true,"next":null}); 4])
+    );
+    let queries = backend.queries.lock().unwrap();
+    assert_eq!(queries.len(), 4);
+    assert_eq!(
+        queries[0],
+        ObserveQuery {
+            role: None,
+            text: Some("Increment".into()),
+            limit: 12
+        }
+    );
+    assert_eq!(queries[1], queries[0]);
+    assert_eq!(
+        queries[2],
+        ObserveQuery {
+            role: None,
+            text: None,
+            limit: 12
+        }
+    );
+    assert_eq!(queries[3], queries[2]);
+    assert_eq!(backend.advances.load(Ordering::SeqCst), 8);
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn scripts_normalize_empty_text_before_core_and_keep_the_query_paging_binding() {
     let (owner, backend) = setup();
     let reply = script_run(

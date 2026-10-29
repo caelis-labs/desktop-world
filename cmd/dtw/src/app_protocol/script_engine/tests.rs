@@ -335,6 +335,105 @@ fn state_root_replacement_fails_and_catching_it_preserves_original_root() {
     assert_eq!(out.value, json!([1]));
 }
 #[test]
+fn host_argument_undefined_fields_are_omitted_without_mutating_the_input() {
+    let (out, seen) = execute(
+        r#"
+const args={window_ref:'w',role:undefined,text:undefined,unused:undefined,limit:12};
+await app.observe(args);
+await app.observe({window_ref:'w',limit:12});
+const plain=Object.create(null);
+plain.window_ref='w'; plain.role=undefined; plain.text=undefined; plain.limit=12;
+await app.observe(plain);
+return {roleStillOwned:Object.hasOwn(args,'role'),textStillOwned:Object.hasOwn(plain,'text')};
+"#,
+        json!({}),
+        limits(),
+        |_| Ok(json!({})),
+    );
+    assert_eq!(
+        out.result.unwrap().value,
+        json!({"roleStillOwned":true,"textStillOwned":true})
+    );
+    assert_eq!(seen.len(), 3);
+    for (_, args, _, _) in seen {
+        assert_eq!(args, json!({"window_ref":"w","limit":12}));
+    }
+}
+
+#[test]
+fn host_argument_omission_preserves_schema_and_strict_json_guards() {
+    for args in [
+        "{window_ref:undefined,role:undefined}",
+        "{window_ref:'w',role:''}",
+        "{window_ref:'w',text:null}",
+        "{window_ref:'w',unexpected:true}",
+        "{cursor:'c',window_ref:'w',role:undefined}",
+    ] {
+        let out = pure(&format!("return await app.observe({args});"), json!({}));
+        assert_eq!(
+            out.result.unwrap_err().code.as_deref(),
+            Some("invalid_args"),
+            "{args}"
+        );
+        assert_eq!(out.calls, 1);
+    }
+    for args in [
+        "undefined",
+        "[undefined]",
+        "[,1]",
+        "{window_ref:'w',role:()=>1}",
+        "{window_ref:'w',role:Symbol('role')}",
+        "{window_ref:'w',role:1n}",
+        "{window_ref:'w',role:NaN}",
+        "{window_ref:'w',role:new Date()}",
+        "(()=>{const a={window_ref:'w'};a.self=a;return a;})()",
+        "(()=>{const a={window_ref:'w'};a[Symbol('extra')]=undefined;return a;})()",
+        "Object.defineProperty({window_ref:'w'},'hidden',{value:undefined})",
+        "Object.assign([],{extra:undefined})",
+    ] {
+        let out = pure(&format!("return await app.observe({args});"), json!({}));
+        assert_eq!(
+            out.result.unwrap_err().code.as_deref(),
+            Some("invalid_json"),
+            "{args}"
+        );
+        assert_eq!(out.calls, 0);
+    }
+    let out = pure(
+        "return await app.keypress({window_ref:'w',keys:['META',undefined]});",
+        json!({}),
+    );
+    assert_eq!(
+        out.result.unwrap_err().code.as_deref(),
+        Some("invalid_json")
+    );
+    assert_eq!(out.calls, 0);
+    for definition in [
+        "Object.defineProperty(args,'role',{get(){touched++;return undefined},enumerable:true});",
+        "args.toJSON=()=>{touched++;return {window_ref:'w'}};",
+    ] {
+        let out = pure(&format!("let touched=0;const args={{window_ref:'w'}};{definition}try{{await app.observe(args)}}catch(e){{return {{code:e.code,touched}}}}"),json!({}));
+        assert_eq!(
+            out.result.unwrap().value,
+            json!({"code":"invalid_json","touched":0})
+        );
+        assert_eq!(out.calls, 0);
+    }
+}
+
+#[test]
+fn omitted_host_fields_still_count_toward_json_traversal_limits() {
+    let out = pure("const args={window_ref:'w'};for(let i=0;i<32768;i++)args['unused'+i]=undefined;return await app.observe(args);", json!({}));
+    let failure = out.result.unwrap_err();
+    assert_eq!(failure.code.as_deref(), Some("invalid_json"));
+    assert!(
+        failure.message.contains("JSON traversal limit"),
+        "{failure:?}"
+    );
+    assert_eq!(out.calls, 0);
+}
+
+#[test]
 fn invalid_json_state_or_result_is_never_silently_coerced() {
     for mutation in ["state.x=undefined;", "state.x=()=>1;", "state.x=Symbol('x');", "state.x=NaN;", "state.x=Infinity;", "state.x=1n;", "state.x=state;", "state.x=new Date();", "state.x=[,1];", "state[Symbol('x')]=1;", "Object.defineProperty(state,'x',{get(){throw new Error('accessor executed')},enumerable:true});"] {
         let failure=pure(mutation,json!({})).result.unwrap_err(); assert_eq!(failure.code.as_deref(),Some("invalid_json"),"{mutation}: {failure:?}");

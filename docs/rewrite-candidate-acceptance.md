@@ -42,6 +42,12 @@
 
 该样本 0 次业务保存、报告仍为初始 `Pending review`；两扇窗口经独立核验后单次关闭，另存 `reconciliation.json`，不改写原失败。后续 GUI 序列使用 `caffeinate -di <验收命令>`，断言随该进程结束释放，不修改锁屏设置、不唤醒或解锁会话；这是验收环境控制，不是产品的熄屏/锁屏使用能力。
 
+在显示保持开启的 `/private/tmp/dtw-field-contract-claude-20261029-15/evidence.json` 中，开发二进制 `3e8c2134c2935c651bceeb45a23324611ba2a25efaee12a9ddc642654a7845cb` / Skill `7cc535aec6ad64705a6c6f14a631d820c36e5254436e43f1820251b83b099b6e` 仍未过门槛：10 exec / 11 MCP、11,296 JSON bytes、155.741 秒。通用函数把可选 role 留为 undefined，`execution_978fa705-8593-4c32-abc0-b105e6a95389` 在打开表单后触发 Host 参数非 JSON 错误；恢复后业务正确且恰好两次保存，但该轮保持失败，agy 未启动。已保存报告另行完整读回后单次关闭，不重判原记录。
+
+进一步按 JavaScript 常见参数习惯，仅对 Host 参数普通对象省略自有、可枚举、值为 undefined 的数据属性；共享 schema、必填参数、数组和严格 state/result 边界不变，不执行 getter/toJSON，不修改调用方对象，省略属性仍计遍历预算。新增 5 项有意义控制，相关 82 项测试通过（真实 VM、分页 Core、MCP 与非法参数/状态边界）。
+
+`d356f8e` 的 [macOS 构建](https://github.com/caelis-labs/desktop-world/actions/runs/40819297711) 已通过 272+4+3 测试及签名/公证，原公证 ID `899b7107-91e3-4f2c-8381-cfecb3a78650`；[Windows 构建](https://github.com/caelis-labs/desktop-world/actions/runs/40819298277) 通过 281+3 测试，包括新增复选框控制。它们尚不包含上述 Host undefined 参数修正，不能作为该修正的最终安装包证据。
+
 前一开发组合的 `/private/tmp/dtw-discovery-refresh-{claude,agy}-20261029-13/evidence.json` 都通过：Claude 6 exec / 7 MCP、8,757 JSON bytes、53.425 秒；agy 6 exec / 8 MCP、21,232 JSON bytes、142.838 秒，业务与清理通过。这些样本只证明其开发二进制与 Skill，不能替代上面的安装失败或后续新版本验证。
 
 Windows 同源 [40815204943](https://github.com/caelis-labs/desktop-world/actions/runs/40815204943) 编译与 274+3 测试通过；此时尚不包含空关键词与复选框修正，保留为中间构建记录，不宣称最新 Windows GUI 或最终交付通过。

@@ -36,6 +36,8 @@
 | `await app.scroll({window_ref,delta_x?,delta_y?})` | 动作 receipt | 在指定窗口中心发送整数 wheel steps，每轴 ±100，至少一轴非零；实际距离由 OS/app 决定 |
 | `await app.setValue({window_ref,observation_ref,element_ref,value})` | 动作 receipt | 当前语义观察中明确广告 `setValue` 的可编辑文本控件 |
 
+调用 app 方法时，普通参数对象中自有、可枚举且值为 `undefined` 的数据属性视为未提供；这不会修改调用方对象。随后仍按唯一参数 schema 校验必填字段、长度及互斥规则。数组中的 undefined/空洞、访问器、toJSON、symbols、循环及其他非 JSON 值仍拒绝；已提交 state 与结果对象不会采用此省略规则。
+
 文本按 UTF-8 限 16 KiB，JSON 编码后限 48 KiB，不含 NUL；`setValue` 允许空串清空，`typeText` 不允许空串。键盘输入与语义 setter 的事件语义不同，业务效果必须独立读回。focus/输入动作同样消费目标窗口旧观察；其他窗口和 app 的状态保留。跨进程输入 lease 覆盖聚焦、目标复核和完整输入事务；中断不重放，已按下的键/按钮按原操作清理。
 
 用户或外部程序仍可改变系统焦点。macOS 输入会按事件段重新核验系统级 AX 当前应用和精确窗口；失焦返回 `focus_changed`，无法证明焦点返回原始错误或 `focus_unproven`。已开始的输入保留 `unknown` 与原回执，并停止脚本后续动作；不会在输入中途主动抢回焦点或重发文本。首次执行输入时建立焦点仍是该方法的显式行为。

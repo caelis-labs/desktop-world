@@ -64,14 +64,15 @@
     }
     return size;
   };
-  // Build data-only, null-prototype copies. Accessors, symbols, holes and
-  // non-JSON values must not be silently omitted or converted to null.
-  const encode = (value, label, limit) => {
+  // Build data-only, null-prototype copies. Only host argument objects may
+  // omit undefined data properties; all other JSON checks remain strict.
+  const encode = (value, label, limit, omitUndefinedProperties = false) => {
     const ancestors = [];
     setPrototype(ancestors, null);
     let nodes = 0;
-    const copy = (value, depth) => {
+    const copy = (value, depth, objectField = false) => {
       if (++nodes > 32768 || depth > 64) fail(`${label} exceeds JSON traversal limit`, "invalid_json");
+      if (omitUndefinedProperties && objectField && value === undefined) return undefined;
       if (value === null || typeof value === "string" || typeof value === "boolean") return value;
       if (typeof value === "number") {
         if (!finite(value)) fail(`${label} contains a non-finite number`, "invalid_json");
@@ -94,7 +95,9 @@
         const field = descriptor(value, key);
         if (!field || !descriptor(field, "value") || !field.enumerable) fail(`${label} contains an accessor or hidden property`, "invalid_json");
         if (array && (StringClass(count) !== key)) fail(`${label} contains an array hole or extra property`, "invalid_json");
-        define(out, key, {value: copy(field.value, depth+1), enumerable:true, writable:true, configurable:true});
+        const copied = copy(field.value, depth+1, !array);
+        if (copied !== undefined)
+          define(out, key, {value:copied, enumerable:true, writable:true, configurable:true});
         count++;
       }
       if (array && count !== value.length) fail(`${label} contains an array hole`, "invalid_json");
@@ -111,7 +114,7 @@
       fail("app calls are unavailable during script settlement", "invalid_phase");
     }
     const line = lineOf(new ErrorClass().stack);
-    const reply = parse(host(op, encode(args, "host arguments", 65536), line));
+    const reply = parse(host(op, encode(args, "host arguments", 65536, true), line));
     if (!reply.ok) {
       const error = new ErrorClass(`${op} failed: ${reply.error}`);
       error.name = "DtwError"; error.op = op; error.code = reply.code;

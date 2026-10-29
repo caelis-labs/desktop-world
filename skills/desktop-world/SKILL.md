@@ -15,7 +15,7 @@ Use the configured DTW MCP server's `apps`, `api`, `exec`, `result` tools (the c
 
 **After a known UI transition, retry only the read.** Search setters, opening a form and saving can finish before their controls settle. Use bounded fresh queries for the expected next control, not another setter, press or save. Keep incomplete coverage, missing and disabled results distinct. A complete ambiguous match stops immediately; provider, permission and identity errors propagate without a retry.
 
-Results and committed state must be JSON. Project documented element fields: `role`, `name`, `value`, `enabled`, `actions` and refs. There is no `description` field. Omit absent fields or use `?? null`; returning `undefined` inside an object fails serialization. Continue through the requested edits and saves: an intermediate discovery or screenshot is not task completion.
+Optional host-argument object properties whose value is `undefined` are omitted; required fields are still validated, and array entries cannot be `undefined`. Results and committed state must be JSON. Project documented element fields: `role`, `name`, `value`, `enabled`, `actions` and refs. There is no `description` field. Omit absent fields or use `?? null`; returning `undefined` inside an object fails serialization. Continue through the requested edits and saves: an intermediate discovery or screenshot is not task completion.
 
 ## 1. Discover the relevant controls
 

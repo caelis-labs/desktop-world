@@ -8,11 +8,11 @@
 | 按需 API | apps 紧凑索引；api 可选方法详情；result 原始账本 | 默认输出不展开全方法 schema，不为成功操作追加账本查询 |
 | 窗口基础路线 | macOS 逐实例验证 PID、layer 0、正面积 WindowServer 表面；不要求 AX 语义库存；精确 SCK 截图及可见点点击 | 有归属/生命周期/像素几何证明；模态、遮挡和空间边界按原生条件拒绝，不承诺任意后台点击 |
 | 同 app 多实例 | 稳定 app ID 聚合各实例窗口，window_ref 路由到精确实例；成员变化保留存活兄弟引用与 state | 真实双实例退出/重启通过；部分库存失败保留可用窗口、原错误及摘要提示，不伪装成完整库存 |
-| 语义发现与动作 | 原生 role/text 筛选、分页 frontier；press/setValue 仅在元素广告对应 action 时可用 | 每窗观察独立；动作消费该窗观察；浏览器冷态内容有界就绪；区域/子树过滤后置 |
-| 常用输入 | focus、Unicode typeText、keypress、wheel-step scroll；左/右键及单/双击 | foreground 输入受 OS 权限/焦点/目标复核约束；每次效果独立读回 |
+| 语义发现与动作 | 原生 role/text 筛选、分页 frontier；press/setValue 仅在元素广告对应 action 时可用 | 每窗观察独立；动作消费该窗观察；浏览器冷态内容有界就绪；覆盖诊断与已恢复只读查询保留在账本；区域/子树过滤后置 |
+| 常用输入 | focus、Unicode typeText、keypress、wheel-step scroll；左/右键及单/双击 | foreground 输入逐段复核焦点；失焦返回 focus_changed/unknown 并停止后续输入，已排队事件无法撤回；每次效果独立读回 |
 | 多 app 与多会话 | app state/refs 保留；MCP 会话独立；跨进程物理输入 lease | 串行仲裁共享系统键盘/鼠标；不宣称多个独立后台指针 |
 | 取消和未知效果 | 标准 MCP cancellation、配对释放、原回执、按需 owner 重建 | unknown 不重放；晚到/清理失败保留；强杀不能证明输入释放 |
-| Windows provider | 稳定应用身份、精确 HWND incarnation、UIA 筛选/分页/动作、GDI 可见无覆盖截图、SendInput、独立 worker | Windows x64 候选已完成原生链接、265 个库测试和 3 个 CLI 测试；DPI/焦点/取消与真实 GUI 验收仍由用户独立实机确认 |
+| Windows provider | 稳定应用身份、精确 HWND incarnation、UIA 筛选/分页/动作、GDI 可见无覆盖截图、SendInput、独立 worker | Windows x64 候选已完成原生链接、281 个库测试和 3 个 CLI 测试（d356f8e）；复选框角色与 Toggle 三态已补齐；DPI/焦点/取消与真实 GUI 验收仍由用户独立实机确认 |
 | Linux provider | 实验 X11/XRes 身份、窗口、XGetImage、XTest 输入；只使用当前可证明的键盘映射 | 不支持 Wayland/XWayland，不提供 AT-SPI 语义承诺；仅源码/类型证据，不承诺桌面支持或首版正式发行平台 |
 | 浏览器范围 | 真实浏览器窗口上的原生 AX 和基础像素路线 | DOM、profile、CDP/browser bridge 未接入 |
 | 输入后续组 | 拖拽、复杂菜单、应用启动/退出 | 后置批量能力；不扩张当前已广告方法的语义 |
