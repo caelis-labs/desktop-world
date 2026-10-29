@@ -152,20 +152,28 @@ impl Drop for NativeBinding {
     }
 }
 const COVERAGE: &str =
-    "same-PID standard layer-0 AX windows; no sheet/menu/helper routing or automatic focus";
+    "same-PID layer-0 system surfaces; AX semantics are a separate exact-window capability";
 const CONDITIONS: &[&str] = &[
-    "observe and press require macOS Accessibility permission",
+    "semantic and input operations require macOS Accessibility permission",
     "capture and click require macOS Screen Recording permission",
     "click requires a visible, unobstructed point in the captured window",
-    "modal windows and attached sheets are currently unsupported",
+    "keyboard, focus and semantic input require an exact standard AX window without modal interception",
 ];
 impl NativeBackend {
     fn supports_capability(capability: Capability) -> bool {
-        match capability {
-            Capability::Observe | Capability::Press | Capability::Capture | Capability::Click => {
-                true
-            }
-        }
+        matches!(
+            capability,
+            Capability::Windows
+                | Capability::Observe
+                | Capability::Press
+                | Capability::Capture
+                | Capability::Click
+                | Capability::Focus
+                | Capability::TypeText
+                | Capability::Keypress
+                | Capability::Scroll
+                | Capability::SetValue
+        )
     }
     pub fn description() -> Value {
         json!({"provider":"dtw-macos-native", "coverage":COVERAGE,"conditions":CONDITIONS,
@@ -547,6 +555,16 @@ impl Backend for NativeBackend {
         point: PixelPoint,
         call: &CallContext<'_>,
     ) -> ActionOutcome {
+        self.click_with_options(target, binding, point, ClickOptions::default(), call)
+    }
+    fn click_with_options(
+        &self,
+        target: &WindowTarget,
+        binding: &NativeBinding,
+        point: PixelPoint,
+        options: ClickOptions,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
         let Some((bounds, width, height)) = &binding.pixels else {
             return ActionOutcome::rejected(Error::InvalidObservation);
         };
@@ -554,12 +572,53 @@ impl Backend for NativeBackend {
             bounds[0].as_f64().unwrap() + point.x / *width as f64 * bounds[2].as_f64().unwrap();
         let screen_y =
             bounds[1].as_f64().unwrap() + point.y / *height as f64 * bounds[3].as_f64().unwrap();
-        let scene = self.scene_rpc(json!({"operation":"click","target":target_json(target),"bounds":bounds,"screen_x":screen_x,"screen_y":screen_y}),call);
+        let scene = self.scene_rpc(json!({"operation":"click","target":target_json(target),"bounds":bounds,"screen_x":screen_x,"screen_y":screen_y,"button":match options.button {MouseButton::Left=>"left",MouseButton::Right=>"right"},"count":options.count}),call);
         match scene {
             Ok(reply) => action_reply(&reply),
             Err((error, true)) => ActionOutcome::unknown(error),
             Err((error, false)) => ActionOutcome::rejected(error),
         }
+    }
+    fn input(
+        &self,
+        target: &WindowTarget,
+        input: &WindowInput,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        let mut request = match input {
+            WindowInput::Focus => json!({"operation":"focus"}),
+            WindowInput::TypeText { text } => json!({"operation":"type_text","text":text}),
+            WindowInput::Keypress { keys } => json!({"operation":"keypress","keys":keys}),
+            WindowInput::Scroll { delta_x, delta_y } => {
+                json!({"operation":"scroll","delta_x":delta_x,"delta_y":delta_y})
+            }
+        };
+        request["target"] = target_json(target);
+        if matches!(input, WindowInput::Scroll { .. }) {
+            return match self.scene_rpc(request, call) {
+                Ok(reply) => action_reply(&reply),
+                Err((error, true)) => ActionOutcome::unknown(error),
+                Err((error, false)) => ActionOutcome::rejected(error),
+            };
+        }
+        self.action(request, call)
+    }
+    fn set_value(
+        &self,
+        target: &WindowTarget,
+        binding: &NativeBinding,
+        element: ElementId,
+        value: &str,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        let Some(token) = &binding.semantic else {
+            return ActionOutcome::rejected(Error::InvalidObservation);
+        };
+        self.action(
+            json!({"operation":"set_value","target":target_json(target),"binding":token,
+                           "element":element.0,"value":value}),
+            call,
+        )
     }
 }
 fn envelope_reply(reply: &Value, request_id: u64) -> Result<Value, Error> {
@@ -953,6 +1012,46 @@ mod tests {
         );
     }
     #[test]
+    fn surface_inventory_is_ax_free_and_rejects_missing_or_conflicting_evidence() {
+        let mut value = json!({"scope":"same_pid_layer_zero_surfaces","diagnostics":{
+            "cg_app_raw":4,"supported_count":2,"excluded_non_layer_zero":1,
+            "excluded_zero_area":1,"invalid_metadata":0,"duplicate_id":0}});
+        let report = parse_inventory_report(&value, true).unwrap();
+        assert_eq!(report.scope, InventoryScope::SameProcessLayerZeroSurfaces);
+        assert_eq!(
+            (
+                report.candidate_count,
+                report.supported_count,
+                report.excluded_count
+            ),
+            (4, 2, 2)
+        );
+        assert_eq!(report.diagnostics.provider, "macos.window-server");
+        assert!(parse_inventory_report(&value, false).is_err());
+        value["diagnostics"]["supported_count"] = json!(1);
+        value["diagnostics"]["invalid_metadata"] = json!(1);
+        assert!(parse_inventory_report(&value, true).is_err());
+        assert!(parse_inventory_report(&value, false).is_ok());
+        value["diagnostics"]["extra"] = json!(0);
+        assert!(parse_inventory_report(&value, false).is_err());
+    }
+
+    #[test]
+    fn set_value_claim_is_independent_of_press_and_requires_enabled_evidence() {
+        let mut element = json!({"id":1,"label":"Text","role":"text_field","name":"Text",
+            "value":"old","enabled":true,"actions":["setValue"],"can_press":false});
+        assert_eq!(parse_element(&element).unwrap().actions, vec!["setValue"]);
+        element["enabled"] = Value::Null;
+        assert!(parse_element(&element).is_err());
+        element["enabled"] = json!(true);
+        element["actions"] = json!(["setValue", "setValue"]);
+        assert!(parse_element(&element).is_err());
+        element["actions"] = json!(["press", "setValue"]);
+        element["can_press"] = json!(true);
+        assert!(parse_element(&element).is_ok());
+    }
+
+    #[test]
     fn uncertain_or_malformed_native_replies_never_prove_no_dispatch() {
         for reply in [
             json!({}),
@@ -1046,6 +1145,8 @@ fn parse_discovery_page(value: &Value) -> Result<BackendObservationPage, Error> 
                     | "ownership_unproven"
                     | "tree_changed"
                     | "text_limit"
+                    | "unsupported_semantic_tree"
+                    | "content_unproven"
             )
         })
     {
@@ -1067,9 +1168,16 @@ fn parse_element(value: &Value) -> Result<Element, Error> {
         .as_bool()
         .ok_or(Error::InvalidObservation)?;
     let actions = array(value, "actions")?;
-    if actions.len() > 1
-        || actions.iter().any(|action| action != "press")
-        || can_press != !actions.is_empty()
+    if actions.len() > 2
+        || actions
+            .iter()
+            .any(|action| action != "press" && action != "setValue")
+        || actions
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != actions.len()
+        || can_press != actions.iter().any(|action| action == "press")
     {
         return Err(Error::InvalidObservation);
     }
@@ -1078,7 +1186,7 @@ fn parse_element(value: &Value) -> Result<Element, Error> {
         Some(Value::Bool(value)) => Some(*value),
         _ => return Err(Error::InvalidObservation),
     };
-    if can_press && enabled != Some(true) {
+    if !actions.is_empty() && enabled != Some(true) {
         return Err(Error::InvalidObservation);
     }
     Ok(Element {
@@ -1136,6 +1244,9 @@ fn reply_error(v: &Value) -> Option<Error> {
 }
 
 fn parse_inventory_report(value: &Value, proven: bool) -> Result<InventoryReport, Error> {
+    if value["scope"] == "same_pid_layer_zero_surfaces" {
+        return parse_surface_inventory(value, proven);
+    }
     const COUNTERS: [&str; 18] = [
         "cg_app_raw",
         "window_server_count",
@@ -1217,6 +1328,56 @@ fn parse_inventory_report(value: &Value, proven: bool) -> Result<InventoryReport
             && (report.supported_count + report.excluded_count != report.candidate_count
                 || !report.diagnostics.error_codes.is_empty()))
     {
+        return Err(invalid());
+    }
+    Ok(report)
+}
+
+fn parse_surface_inventory(value: &Value, proven: bool) -> Result<InventoryReport, Error> {
+    const NAMES: [&str; 6] = [
+        "cg_app_raw",
+        "supported_count",
+        "excluded_non_layer_zero",
+        "excluded_zero_area",
+        "invalid_metadata",
+        "duplicate_id",
+    ];
+    let invalid = || failed("Malformed native surface inventory evidence");
+    let counts = value["diagnostics"]
+        .as_object()
+        .filter(|v| v.len() == NAMES.len())
+        .ok_or_else(invalid)?;
+    let counters = NAMES
+        .iter()
+        .map(|name| {
+            let n = counts
+                .get(*name)
+                .and_then(Value::as_u64)
+                .filter(|n| *n <= 1_000_000)
+                .ok_or_else(invalid)?;
+            Ok(((*name).into(), n))
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    let count = |name: &str| counts[name].as_u64().unwrap();
+    let unresolved = count("invalid_metadata") + count("duplicate_id");
+    let excluded = count("excluded_non_layer_zero") + count("excluded_zero_area");
+    if proven != (unresolved == 0)
+        || count("supported_count") + excluded + unresolved != count("cg_app_raw")
+    {
+        return Err(invalid());
+    }
+    let report = InventoryReport {
+        scope: InventoryScope::SameProcessLayerZeroSurfaces,
+        candidate_count: count("cg_app_raw") as u32,
+        supported_count: count("supported_count") as u32,
+        excluded_count: excluded as u32,
+        diagnostics: InventoryDiagnostics {
+            provider: "macos.window-server".into(),
+            counters,
+            error_codes: vec![],
+        },
+    };
+    if !report.valid() {
         return Err(invalid());
     }
     Ok(report)

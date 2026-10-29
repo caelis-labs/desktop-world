@@ -11,9 +11,9 @@ The Agent may also load the ordinary [desktop-world Skill](../skills/desktop-wor
 
 ## Responsibility boundary
 
-The Harness owns tool approval and task policy. DTW is a tool: it receives a request carrying a stable platform app ID, validates that instance, binds all script operations to it, and reports the execution result. An app ID identifies a target; it is not a permission token or evidence of user consent.
+The Harness owns tool approval and task policy. DTW is a tool: it receives a request carrying a stable platform app ID, validates its running instances, binds each window operation to its exact native owner, and reports the execution result. An app ID identifies a target; it is not a permission token or evidence of user consent.
 
-The `app` argument is a string such as `com.google.Chrome`. `apps` discovers available IDs, `exec.app` requires one, and results echo it. Harness implementations can inspect that ordinary argument with their existing policy mechanisms. DTW resolves process instances internally; the Agent never supplies a PID, process generation or composite identity token. If one app ID resolves to multiple independent usable instances, DTW returns `ambiguous_app`.
+The `app` argument is a string such as `com.google.Chrome`. `apps` discovers available IDs, `exec.app` requires one, and results echo it. Harness implementations can inspect that ordinary argument with their existing policy mechanisms. DTW resolves process instances internally; the Agent never supplies a PID, process generation or composite identity token. One app ID can resolve to multiple native instances: `app.windows()` aggregates their windows and each `window_ref` keeps its exact native owner. The script can operate across those windows without an instance parameter.
 
 OS permissions, such as macOS Accessibility and Screen Recording, remain prerequisites of the native APIs. Their errors are execution diagnostics. DTW does not create a second tool-approval workflow around them.
 

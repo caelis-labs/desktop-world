@@ -40,15 +40,18 @@ python3 tests/ci/run_native_worker_tests.py cmd/dtw/target/debug/dtw
 Cargo uses the locked DTW dependencies, including rquickjs; it does not fetch or
 build the CUA SDK or upstream worker. Use a persistent `CARGO_TARGET_DIR` for local
 iteration and adjust the executable path above when setting it. Native macOS
-builds require Xcode/Swift. Other platforms do not yet have a native execution
-backend; a successful build does not establish desktop support. The worker runner
+builds require macOS 14.2+ and Xcode/Swift. Native Windows and experimental Linux X11
+providers are present. `python3 tests/native/check_provider_types.py --target x86_64-pc-windows-msvc`
+(or `--target x86_64-unknown-linux-gnu`) narrowly
+type-checks those providers and their tests using the production lockfile, without
+linking the product or building QuickJS/CUA. This does not establish desktop support. The worker runner
 checks TERM, EOF, malformed input and parent death using only release of an
 unknown binding; it does not touch AX, screenshots or desktop input. It requires
 the already-built executable and is a local integration check, not a CI build.
 
 The MCP product entry is `dtw mcp`; `dtw app catalog` is a diagnostic CLI.
-`dtw api` prints TypeScript generated from the same Rust schemas advertised by
-`apps`; `docs/app-script-api.d.ts` is the checked-in generated contract.
+`dtw api` prints TypeScript generated from the same Rust schemas advertised by the
+`apps` index and detailed `api` tool; `docs/app-script-api.d.ts` is the checked-in generated contract.
 Connect it using standard Agent MCP configuration; see [installation](install.md).
 Bare `dtw` and `--help` display help instead of starting an old MCP executor.
 
@@ -95,3 +98,27 @@ and plugin payload have been removed. Their historical procedure remains in Git 
 [`c553486`](https://github.com/caelis-labs/desktop-world/tree/c55348610071e2b26e10ce490744065b0cdd08b7).
 Do not use those old packages as rewrite acceptance evidence.
 See [releasing](releasing.md) for the remaining release work.
+
+
+## First release core usability loop
+
+The existing fast lane also executes the std-only input sequencing regressions and
+pure Swift surface/readiness/input controls. It still never compiles upstream CUA.
+The optional provider checks above type-check Windows/Linux source and tests only.
+
+Run the native input probe on the owned macOS test desktop before model tasks:
+
+```sh
+python3 tests/acceptance/native_input_probe.py --dtw /absolute/path/to/dtw \
+  --output /tmp/dtw-native-input-new-case --case all
+```
+
+Then use `tests/acceptance/browser_workbench_probe.py` with `--client claude` or
+`--client agy`, `--dtw` and a fresh `--output` directory. Claude additionally takes
+`--acp-adapter /absolute/path/to/claude-agent-acp`; use the current official adapter
+and installed native Claude executable. This probe opens only its disposable
+Chrome workbench and TextEdit document, uses ordinary MCP/Skills, checks saves
+independently, and retains failures. It must run serially with other GUI probes.
+The exact task, metrics and progression gate are in the
+[core acceptance record](release-core-acceptance.md). A local development stage
+is not a signed release candidate or an installed-artifact acceptance result.

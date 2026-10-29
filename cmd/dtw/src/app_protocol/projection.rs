@@ -25,9 +25,10 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
 }
 
 fn summarize(steps: &[Value]) -> Value {
-    let mut summary = json!({"steps":steps.len(),"failed":0,"pending":0});
+    let mut summary = json!({"steps":steps.len(),"failed":0,"pending":0,"incomplete_reads":0});
     let mut failed = 0;
     let mut pending = 0;
+    let mut incomplete_reads = 0;
     let mut dispatch = Map::new();
     let mut evidence = Map::new();
     let mut provider_dispatch = Map::new();
@@ -36,6 +37,8 @@ fn summarize(steps: &[Value]) -> Value {
     for step in steps {
         failed += usize::from(!step["error"].is_null());
         pending += usize::from(step["status"] != "completed");
+        let incomplete = incomplete_inventory(&step["inventory"]);
+        incomplete_reads += usize::from(incomplete);
         let receipt = &step["receipt"];
         if receipt.is_object() {
             count(&mut dispatch, &receipt["outcome"]["dispatch"]);
@@ -57,6 +60,7 @@ fn summarize(steps: &[Value]) -> Value {
             || outcome_issue(&receipt["outcome"])
             || outcome_issue(&receipt["provider_outcome"])
             || !receipt["interruption"].is_null()
+            || incomplete
         {
             // One diagnostic sample, never a replacement for all earlier issues.
             summary["last_issue"] = json!({
@@ -64,16 +68,32 @@ fn summarize(steps: &[Value]) -> Value {
                 "operation":step["operation"],"status":step["status"],
                 "error":step["error"],"receipt":receipt
             });
+            if incomplete {
+                // A successful read can still omit an unavailable app member.
+                // Preserve that evidence even if JS returned only its windows.
+                summary["last_issue"]["inventory"] = step["inventory"].clone();
+            }
         }
     }
     summary["failed"] = json!(failed);
     summary["pending"] = json!(pending);
+    summary["incomplete_reads"] = json!(incomplete_reads);
     if !dispatch.is_empty() {
         summary["actions"] = json!({"dispatch":dispatch,"evidence":evidence,
             "provider_dispatch":provider_dispatch,"provider_evidence":provider_evidence,
             "interrupted":interrupted});
     }
     summary
+}
+
+fn incomplete_inventory(inventory: &Value) -> bool {
+    inventory.is_object()
+        && (inventory["coverage"]["complete_within_scope"] == false
+            || inventory["coverage"]["status"] == "partial"
+            || inventory["coverage"]["status"] == "unproven"
+            || inventory["diagnostics"]["errors"]
+                .as_array()
+                .is_some_and(|errors| !errors.is_empty()))
 }
 
 fn count(counts: &mut Map<String, Value>, kind: &Value) {
@@ -95,6 +115,139 @@ fn outcome_issue(outcome: &Value) -> bool {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    fn inventory_step(number: u32, inventory: Value) -> Value {
+        json!({"number":number,"line":number + 1,"operation":"windows","status":"completed",
+            "error":null,"receipt":null,"inventory":inventory})
+    }
+
+    fn successful_execution(steps: Vec<Value>) -> Reply {
+        Reply {
+            data: json!({"version":1,"app":"example.app","execution_id":"execution_inventory",
+                "status":"completed","value":{"result":[{"window_ref":"healthy_window"}]},
+                "error":null,"payload_expired":false,
+                "script":{"steps":steps,"failure":null,"state_committed":true,"shutdown_error":null}}),
+            image: None,
+            is_error: false,
+        }
+    }
+
+    fn partial_inventory(status: &str) -> Value {
+        json!({"coverage":{"scope":"application_instances","status":status,
+                "complete_within_scope":false,"instance_count":2,
+                "available_instances":1,"unavailable_instances":1},
+            "diagnostics":{"provider":"macos.surface","counters":{"supported_count":1},
+                "error_codes":[-25200],"errors":[{"code":"member_unavailable","message":"original failure",
+                    "details":{"coverage":{"status":"unproven"},"diagnostics":{"error_codes":[-25204]}}}]}})
+    }
+
+    #[test]
+    fn partial_and_unproven_inventory_remain_visible_without_failing_a_successful_script() {
+        for status in ["partial", "unproven"] {
+            let inventory = partial_inventory(status);
+            let original = successful_execution(vec![inventory_step(1, inventory.clone())]);
+            let retained = original.data.clone();
+            let projected = execution(original.clone());
+            let summary = &projected.data["script"]["summary"];
+            assert_eq!(summary["steps"], 1);
+            assert_eq!(summary["failed"], 0);
+            assert_eq!(summary["pending"], 0);
+            assert_eq!(summary["incomplete_reads"], 1);
+            assert_eq!(summary["last_issue"]["inventory"], inventory);
+            assert_eq!(summary["last_issue"]["status"], "completed");
+            assert!(summary["last_issue"]["error"].is_null());
+            assert!(!projected.is_error);
+            assert_eq!(projected.data["status"], "completed");
+            assert_eq!(projected.data["script"]["state_committed"], true);
+            assert_eq!(projected.data["value"], retained["value"]);
+            assert_eq!(
+                original.data, retained,
+                "the original ledger must not be projected in place"
+            );
+        }
+    }
+
+    #[test]
+    fn incomplete_coverage_and_member_errors_each_make_inventory_visible() {
+        for inventory in [
+            json!({"coverage":{"complete_within_scope":false},"diagnostics":{"errors":[]}}),
+            json!({"coverage":{"status":"partial"},"diagnostics":{"errors":[]}}),
+            json!({"coverage":{"status":"unproven"},"diagnostics":{"errors":[]}}),
+            json!({"coverage":{},"diagnostics":{"errors":[{"code":"native_member_failed"}]}}),
+        ] {
+            let projected = execution(successful_execution(vec![inventory_step(
+                1,
+                inventory.clone(),
+            )]));
+            assert_eq!(projected.data["script"]["summary"]["incomplete_reads"], 1);
+            assert_eq!(
+                projected.data["script"]["summary"]["last_issue"]["inventory"],
+                inventory
+            );
+        }
+    }
+
+    #[test]
+    fn complete_and_empty_inventory_do_not_report_incomplete_reads() {
+        for status in ["available", "empty_within_scope"] {
+            let inventory = json!({"coverage":{"status":status,"complete_within_scope":true},
+                "diagnostics":{"counters":{"excluded_count":1},"error_codes":[-25200],"errors":[]}});
+            let projected = execution(successful_execution(vec![inventory_step(1, inventory)]));
+            let summary = &projected.data["script"]["summary"];
+            assert_eq!(summary["incomplete_reads"], 0);
+            assert_eq!(summary["failed"], 0);
+            assert!(summary.get("last_issue").is_none());
+            assert!(!projected.is_error);
+        }
+    }
+
+    #[test]
+    fn latest_issue_changes_without_losing_prior_incomplete_read_counts_or_action_evidence() {
+        let inventory = partial_inventory("partial");
+        let action = json!({"number":2,"line":3,"operation":"press","status":"completed",
+            "error":{"code":"native_outcome_unknown"},"receipt":{
+                "outcome":{"dispatch":"unknown","evidence":{"kind":"unverified"},"error":{"code":"native_outcome_unknown"}},
+                "provider_outcome":{"dispatch":"unknown","evidence":{"kind":"unverified"},"error":{"code":"native_outcome_unknown"}},
+                "interruption":null},"inventory":null});
+        let first = inventory_step(1, inventory.clone());
+        let projected = execution(successful_execution(vec![first.clone(), action.clone()]));
+        let summary = &projected.data["script"]["summary"];
+        assert_eq!(summary["incomplete_reads"], 1);
+        assert_eq!(summary["failed"], 1);
+        assert_eq!(summary["last_issue"]["number"], 2);
+        assert_eq!(summary["last_issue"]["receipt"], action["receipt"]);
+        assert!(summary["last_issue"].get("inventory").is_none());
+
+        let projected = execution(successful_execution(vec![
+            first,
+            action,
+            inventory_step(3, inventory.clone()),
+        ]));
+        let summary = &projected.data["script"]["summary"];
+        assert_eq!(summary["incomplete_reads"], 2);
+        assert_eq!(summary["failed"], 1);
+        assert_eq!(summary["last_issue"]["number"], 3);
+        assert_eq!(summary["last_issue"]["inventory"], inventory);
+        assert_eq!(summary["actions"]["dispatch"]["unknown"], 1);
+        assert_eq!(summary["actions"]["provider_dispatch"]["unknown"], 1);
+        assert_eq!(summary["actions"]["interrupted"], 0);
+    }
+
+    #[test]
+    fn incomplete_inventory_evidence_survives_evicted_return_payload() {
+        let inventory = partial_inventory("partial");
+        let mut original = successful_execution(vec![inventory_step(1, inventory.clone())]);
+        original.data["value"] = Value::Null;
+        original.data["payload_expired"] = json!(true);
+        let projected = execution(original.clone());
+        assert!(projected.data["value"].is_null());
+        assert_eq!(projected.data["payload_expired"], true);
+        assert_eq!(
+            projected.data["script"]["summary"]["last_issue"]["inventory"],
+            inventory
+        );
+        assert_eq!(original.data["script"]["steps"][0]["inventory"], inventory);
+    }
 
     #[test]
     fn eviction_failure_and_recovery_metadata_survive_projection() {

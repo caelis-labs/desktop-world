@@ -259,6 +259,29 @@ impl Backend for MockBackend {
     ) -> ActionOutcome {
         self.act(call)
     }
+    fn input(&self, _: &WindowTarget, _: &WindowInput, call: &CallContext<'_>) -> ActionOutcome {
+        self.act(call)
+    }
+    fn set_value(
+        &self,
+        _: &WindowTarget,
+        _: &(),
+        _: ElementId,
+        _: &str,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        self.act(call)
+    }
+    fn click_with_options(
+        &self,
+        _: &WindowTarget,
+        _: &(),
+        _: PixelPoint,
+        _: ClickOptions,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        self.act(call)
+    }
     fn click(
         &self,
         _: &WindowTarget,
@@ -373,7 +396,10 @@ fn describe_reports_the_bound_app_and_backend_support() {
     assert!(description.get("grant").is_none());
     assert_eq!(
         description["supported_capabilities"],
-        json!(["observe", "press", "capture", "click"])
+        json!([
+            "windows", "observe", "press", "capture", "click", "typeText", "keypress", "scroll",
+            "focus", "setValue"
+        ])
     );
 }
 
@@ -856,3 +882,6 @@ mod standard_tests;
 
 #[path = "discovery_tests.rs"]
 mod discovery_tests;
+
+#[path = "multi_instance_tests.rs"]
+mod multi_instance;

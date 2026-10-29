@@ -14,6 +14,15 @@ pub(crate) fn lock_scene(timeout: Duration) -> Result<File, String> {
     let path = format!("/private/tmp/dev.caelis.dtw-scene-{uid}.lock");
     lock_scene_at(std::path::Path::new(&path), timeout)
 }
+// This separate lease is scoped to one complete atomic input transaction.
+// Worker process exit releases it only after the native input drain (or kill).
+pub(crate) fn lock_input(timeout: Duration) -> Result<File, String> {
+    let uid = unsafe { libc::geteuid() };
+    lock_scene_at(
+        std::path::Path::new(&format!("/private/tmp/dev.caelis.dtw-input-{uid}.lock")),
+        timeout,
+    )
+}
 pub(crate) fn lock_scene_at(path: &std::path::Path, timeout: Duration) -> Result<File, String> {
     let uid = unsafe { libc::geteuid() };
     let file = OpenOptions::new()
@@ -22,12 +31,12 @@ pub(crate) fn lock_scene_at(path: &std::path::Path, timeout: Duration) -> Result
         .create(true)
         .truncate(false)
         .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
         .open(path)
         .map_err(|e| e.to_string())?;
     let meta = file.metadata().map_err(|e| e.to_string())?;
     if !meta.is_file() || meta.uid() != uid || meta.mode() & 0o077 != 0 {
-        return Err("Native scene lock has an unexpected owner or mode".into());
+        return Err("Native resource lock has an unexpected owner or mode".into());
     }
     let start = Instant::now();
     loop {
@@ -39,8 +48,59 @@ pub(crate) fn lock_scene_at(path: &std::path::Path, timeout: Duration) -> Result
             return Err(error.to_string());
         }
         if start.elapsed() >= timeout {
-            return Err("native_scene_busy: another scene operation did not finish within this call's budget; no new input dispatched".into());
+            return Err(
+                "Native resource remained busy within this call budget; no new input dispatched"
+                    .into(),
+            );
         }
         std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+
+    #[test]
+    fn global_input_lease_blocks_other_process_until_its_owner_exits() {
+        let path =
+            std::env::temp_dir().join(format!("dtw-input-lease-{}.lock", uuid::Uuid::new_v4()));
+        let first = lock_scene_at(&path, Duration::from_secs(1)).unwrap();
+        drop(first);
+        let mut holder = Command::new("python3").args(["-u", "-c",
+            "import fcntl,sys\nf=open(sys.argv[1],'r+')\nfcntl.flock(f,fcntl.LOCK_EX)\nprint('owned',flush=True)\nsys.stdin.readline()"])
+            .arg(&path).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let mut ready = String::new();
+        BufReader::new(holder.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready.trim(), "owned");
+        assert!(lock_scene_at(&path, Duration::from_millis(20)).is_err());
+        holder.kill().unwrap();
+        holder.wait().unwrap();
+        let successor = lock_scene_at(&path, Duration::from_secs(1)).unwrap();
+        drop(successor);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn resource_lock_refuses_symlink_fifo_and_public_permissions() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let dir = std::env::temp_dir().join(format!("dtw-resource-lock-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let regular = dir.join("regular");
+        drop(lock_scene_at(&regular, Duration::ZERO).unwrap());
+        let link = dir.join("link");
+        symlink(&regular, &link).unwrap();
+        assert!(lock_scene_at(&link, Duration::ZERO).is_err());
+        std::fs::set_permissions(&regular, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(lock_scene_at(&regular, Duration::ZERO).is_err());
+        let fifo = dir.join("fifo");
+        let name = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        assert!(lock_scene_at(&fifo, Duration::ZERO).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -7,7 +7,7 @@ fn main() {
         } else {
             "x86_64"
         };
-        let swift_target = format!("{arch}-apple-macosx14.0");
+        let swift_target = format!("{arch}-apple-macosx14.2");
         println!("cargo:rerun-if-changed=src/backends/macos/Scene.swift");
         println!("cargo:rerun-if-changed=src/backends/macos/Native.swift");
         println!("cargo:rerun-if-changed=src/backends/macos/Input.swift");
@@ -36,6 +36,8 @@ fn main() {
         assert!(status.success(), "DTW scene extension compilation failed");
         println!("cargo:rustc-link-search=native={}", out.display());
         println!("cargo:rustc-link-lib=static=dtw_scene");
+        // Match the final Mach-O deployment target to the Swift/SCK contract.
+        println!("cargo:rustc-link-arg=-mmacosx-version-min=14.2");
         for framework in [
             "AppKit",
             "ScreenCaptureKit",

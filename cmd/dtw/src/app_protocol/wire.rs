@@ -54,6 +54,18 @@ pub enum Command {
         x: f64,
         y: f64,
     },
+    ClickWithOptions {
+        observation_ref: String,
+        x: f64,
+        y: f64,
+        options: computer::ClickOptions,
+    },
+    SetValue {
+        observation_ref: String,
+        element_ref: String,
+        value: String,
+    },
+    Input(computer::WindowInput),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -142,6 +154,30 @@ pub(super) fn script_submit(
     }
 }
 
+fn text_value(
+    command: &Map<String, Value>,
+    key: &str,
+    allow_empty: bool,
+) -> Result<String, WireError> {
+    command
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|text| {
+            (allow_empty || !text.is_empty())
+                && text.len() <= 16 * 1024
+                && !text.contains('\0')
+                // Keep the complete private worker request within 64 KiB,
+                // including escaped controls and the exact native target.
+                && serde_json::to_string(text).is_ok_and(|encoded| encoded.len() <= 48 * 1024)
+        })
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            invalid(format!(
+                "command.{key} must be a string of at most 16 KiB UTF-8 without NUL (48 KiB after JSON encoding)"
+            ))
+        })
+}
+
 fn parse_command(value: &Value) -> Result<Command, WireError> {
     let command = object(value, "command")?;
     let kind = string(command, "kind", "command")?;
@@ -226,12 +262,111 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
             })
         }
         "click" => {
-            fields(command, &["kind", "observation_ref", "x", "y"], "command")?;
-            Ok(Command::Click {
+            fields(
+                command,
+                &["kind", "observation_ref", "x", "y", "button", "count"],
+                "command",
+            )?;
+            let observation_ref = string(command, "observation_ref", "command")?;
+            let x = coordinate(command, "x")?;
+            let y = coordinate(command, "y")?;
+            let button = match command.get("button") {
+                None => computer::MouseButton::Left,
+                Some(Value::String(value)) if value == "left" => computer::MouseButton::Left,
+                Some(Value::String(value)) if value == "right" => computer::MouseButton::Right,
+                _ => return Err(invalid("command.button must be left or right")),
+            };
+            let count = match command.get("count") {
+                None => 1,
+                Some(value) => value
+                    .as_u64()
+                    .filter(|n| (1..=2).contains(n))
+                    .ok_or_else(|| invalid("command.count must be 1 or 2"))?
+                    as u8,
+            };
+            let options = computer::ClickOptions { button, count };
+            if options == computer::ClickOptions::default() {
+                Ok(Command::Click {
+                    observation_ref,
+                    x,
+                    y,
+                })
+            } else {
+                Ok(Command::ClickWithOptions {
+                    observation_ref,
+                    x,
+                    y,
+                    options,
+                })
+            }
+        }
+        "setValue" => {
+            fields(
+                command,
+                &["kind", "observation_ref", "element_ref", "value"],
+                "command",
+            )?;
+            Ok(Command::SetValue {
                 observation_ref: string(command, "observation_ref", "command")?,
-                x: coordinate(command, "x")?,
-                y: coordinate(command, "y")?,
+                element_ref: string(command, "element_ref", "command")?,
+                value: text_value(command, "value", true)?,
             })
+        }
+        "focus" => {
+            fields(command, &["kind"], "command")?;
+            Ok(Command::Input(computer::WindowInput::Focus))
+        }
+        "typeText" => {
+            fields(command, &["kind", "text"], "command")?;
+            Ok(Command::Input(computer::WindowInput::TypeText {
+                text: text_value(command, "text", false)?,
+            }))
+        }
+        "keypress" => {
+            fields(command, &["kind", "keys"], "command")?;
+            let values = command
+                .get("keys")
+                .and_then(Value::as_array)
+                .filter(|keys| (1..=8).contains(&keys.len()))
+                .ok_or_else(|| invalid("command.keys must contain 1 to 8 key names"))?;
+            let keys = values
+                .iter()
+                .map(|key| {
+                    key.as_str()
+                        .filter(|key| {
+                            !key.is_empty()
+                                && key.len() <= 32
+                                && key.is_ascii()
+                                && !key.chars().any(char::is_control)
+                        })
+                        .map(str::to_owned)
+                        .ok_or_else(|| invalid("command.keys must contain ASCII key names"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Command::Input(computer::WindowInput::Keypress { keys }))
+        }
+        "scroll" => {
+            fields(command, &["kind", "delta_x", "delta_y"], "command")?;
+            let delta = |key: &str| -> Result<i32, WireError> {
+                match command.get(key) {
+                    None => Ok(0),
+                    Some(value) => value
+                        .as_i64()
+                        .filter(|n| (-100..=100).contains(n))
+                        .map(|n| n as i32)
+                        .ok_or_else(|| {
+                            invalid(format!("command.{key} must be an integer from -100 to 100"))
+                        }),
+                }
+            };
+            let (delta_x, delta_y) = (delta("delta_x")?, delta("delta_y")?);
+            if delta_x == 0 && delta_y == 0 {
+                return Err(invalid("scroll requires a nonzero delta"));
+            }
+            Ok(Command::Input(computer::WindowInput::Scroll {
+                delta_x,
+                delta_y,
+            }))
         }
         _ => Err(invalid("Unknown command.kind")),
     }
@@ -354,12 +489,17 @@ pub fn core_error(error: &computer::Error) -> WireError {
             "window_inventory_unproven",
             "The supported window inventory could not be proven; no absence or replay is implied",
         ),
+        Error::AppInventoryUnproven(_) => (
+            "window_inventory_unproven",
+            "No application instance provided a proven window inventory; no absence or replay is implied",
+        ),
         Error::NativeFailure { code, message } => (code.as_str(), message.as_str()),
         Error::BackendFailed(message) => ("backend_failed", message.as_str()),
     };
     WireError {
         details: match error {
             Error::InventoryUnproven(report) => Some(inventory_report(report, false)),
+            Error::AppInventoryUnproven(errors) => Some(super::unavailable_app_inventory(errors)),
             Error::NativeFailure { code, .. } => Some(json!({"provider_code":code})),
             _ => None,
         },
@@ -374,8 +514,23 @@ fn error_value(error: &computer::Error) -> Value {
 }
 
 pub(crate) fn inventory_report(report: &computer::InventoryReport, proven: bool) -> Value {
-    let scope = match report.scope {
-        computer::InventoryScope::SameProcessStandardWindows => "same_process_standard_windows",
+    let (scope, excludes) = match report.scope {
+        computer::InventoryScope::SameProcessStandardWindows => (
+            "same_process_standard_windows",
+            json!([
+                "helper_processes",
+                "non_standard_windows",
+                "non_default_layers"
+            ]),
+        ),
+        computer::InventoryScope::SameProcessLayerZeroSurfaces => (
+            "same_process_layer_zero_surfaces",
+            json!([
+                "helper_processes",
+                "non_default_layers",
+                "zero_area_surfaces"
+            ]),
+        ),
     };
     let counters: serde_json::Map<String, Value> = report
         .diagnostics
@@ -387,7 +542,7 @@ pub(crate) fn inventory_report(report: &computer::InventoryReport, proven: bool)
         "scope":scope,"complete_within_scope":proven,
         "status":if !proven {"unproven"} else if report.supported_count == 0 {"empty_within_scope"} else {"available"},
         "candidate_count":report.candidate_count,"supported_count":report.supported_count,"excluded_count":report.excluded_count,
-        "excludes":["helper_processes","non_standard_windows","non_default_layers"]
+        "excludes":excludes
     }, "diagnostics":{"provider":report.diagnostics.provider,"counters":counters,"error_codes":report.diagnostics.error_codes}})
 }
 

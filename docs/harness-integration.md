@@ -4,7 +4,7 @@ DTW uses standard MCP tools and Agent Skills. Start `dtw mcp` through the Harnes
 
 ## Explicit target for policy inspection
 
-Every `exec` request contains `app: "com.google.Chrome"` or another stable platform app ID returned by `apps`. The result echoes it. Harness policy can inspect this ordinary string before dispatching the tool call. DTW resolves the running instance and keeps every nested script operation bound to it internally; process details are not Agent inputs. Multiple independent instances of the same ID produce `ambiguous_app` rather than selecting one by name or PID.
+Every `exec` request contains `app: "com.google.Chrome"` or another stable platform app ID returned by `apps`. The result echoes it. Harness policy can inspect this ordinary string before dispatching the tool call. DTW resolves all running instances for that stable ID. Window discovery aggregates them, and each nested operation remains bound to the exact native owner of its `window_ref`. Process details are not Agent inputs; the same script can operate across multiple instances.
 
 The Harness is responsible for any approval, allow/deny policy or persistence of decisions. DTW does not accept approval assertions, create grants, request approval callbacks or renew authorization. The app ID is target identity rather than a secret or a permission token. DTW's capability description reports implementation support and execution conditions.
 

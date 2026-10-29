@@ -42,7 +42,7 @@ its normal tool policy; DTW requires no special approval integration.
 
 ## Add the Skill
 
-Copy the `skills/desktop-world` directory to the chosen Agent's documented Skill discovery directory, or include it through that Agent's plugin packaging. The self-contained `SKILL.md` follows the [Agent Skills specification](https://agentskills.io/specification). It contains the observation/action/readback workflow and interruption rules. MCP itself advertises all five script methods and their schemas, so the Skill is useful guidance rather than a hidden API dependency.
+Copy the `skills/desktop-world` directory to the chosen Agent's documented Skill discovery directory, or include it through that Agent's plugin packaging. The self-contained `SKILL.md` follows the [Agent Skills specification](https://agentskills.io/specification). It contains the observation/action/readback workflow and interruption rules. MCP itself advertises the method index through `apps` and detailed schemas through `api`, so the Skill is useful guidance rather than a hidden API dependency.
 
 ## Local Claude Code plugin
 
@@ -66,4 +66,4 @@ Start the configured MCP connection, call `apps`, choose a returned app, then ca
 
 Native execution currently targets macOS. Accessibility and Screen Recording access are OS prerequisites for the relevant operations. Grant those OS permissions to the actual process identity used in your environment when macOS requires them; changing an unsigned build's path or bytes may require rechecking that identity. No capability approval token is supplied to DTW.
 
-Windows native execution and signed/notarized public packages remain separate, uncompleted product work. A successful local stage or manifest validation proves package structure, not native permissions, GUI behavior or a signed release. Old public `0.1.3`/candidate artifacts use the retired CUA runtime and must not be substituted for this build.
+Windows has a native provider in this source tree; linked product builds, independent Windows GUI acceptance and signed/notarized public packages remain separate work. Linux X11 is experimental and has no desktop support commitment. A successful local stage or manifest validation proves package structure, not native permissions, GUI behavior or a signed release. Old public `0.1.3`/candidate artifacts use the retired CUA runtime and must not be substituted for this build.

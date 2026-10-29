@@ -24,7 +24,7 @@ pub const MAX_REQUEST_BYTES: usize = 64 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 24 * 1024 * 1024;
 const POLL: Duration = Duration::from_millis(5);
 const THREAD_CLEANUP_BUDGET: Duration = Duration::from_millis(200);
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 const TERMINATION_GRACE: Duration = Duration::from_millis(500);
 // Private worker exit status: admitted input could not drain before shutdown.
 pub(crate) const INPUT_QUIESCE_FAILED_EXIT_CODE: i32 = 74;
@@ -41,6 +41,33 @@ fn request_termination(child: &Child) -> std::io::Result<()> {
         Ok(())
     } else {
         Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn request_termination(child: &Child) -> std::io::Result<()> {
+    // Keep this transport independently compilable with std-only rustc tests.
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn OpenEventW(access: u32, inherit: i32, name: *const u16) -> *mut std::ffi::c_void;
+        fn SetEvent(handle: *mut std::ffi::c_void) -> i32;
+        fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+    }
+    let name: Vec<u16> = format!("Local\\DesktopWorld.NativeStop.{}\0", child.id())
+        .encode_utf16()
+        .collect();
+    unsafe {
+        let event = OpenEventW(0x0002, 0, name.as_ptr());
+        if event.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        let result = if SetEvent(event) == 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        };
+        CloseHandle(event);
+        result
     }
 }
 
@@ -100,6 +127,8 @@ struct Process {
     child: Mutex<Option<Child>>,
     stopped: AtomicBool,
     shutdown_failure: Mutex<Option<String>>,
+    #[cfg(target_os = "windows")]
+    cooperative_shutdown: bool,
 }
 
 impl Process {
@@ -150,7 +179,11 @@ impl Process {
             return self.shutdown_result();
         }
         #[cfg(unix)]
-        {
+        let cooperative = true;
+        #[cfg(target_os = "windows")]
+        let cooperative = self.cooperative_shutdown;
+        #[cfg(any(unix, target_os = "windows"))]
+        if cooperative {
             let requested = request_termination(child);
             if requested.is_ok() {
                 let until = Instant::now() + TERMINATION_GRACE;
@@ -197,9 +230,11 @@ impl Process {
         let status = child.wait().map_err(|error| self.shutdown_error(error))?;
         #[cfg(unix)]
         self.record_exit(status, false);
-        // Windows has no cooperative native-input backend. Its successful,
-        // explicitly requested TerminateProcess is expected transport cleanup.
-        #[cfg(not(unix))]
+        #[cfg(target_os = "windows")]
+        if self.cooperative_shutdown {
+            self.record_exit(status, false);
+        }
+        #[cfg(not(any(unix, target_os = "windows")))]
         let _ = status;
         child_slot.take();
         self.shutdown_result()
@@ -291,11 +326,31 @@ pub struct Worker {
 
 impl Worker {
     pub fn spawn(program: &Path, args: &[&str]) -> Result<Self, TransportError> {
+        Self::spawn_inner(program, args, false)
+    }
+
+    /// Windows native input workers expose a cooperative stop event. Generic
+    /// subprocess transports keep their existing forced-termination policy.
+    pub fn spawn_cooperative(program: &Path, args: &[&str]) -> Result<Self, TransportError> {
+        Self::spawn_inner(program, args, true)
+    }
+
+    fn spawn_inner(
+        program: &Path,
+        args: &[&str],
+        _cooperative_shutdown: bool,
+    ) -> Result<Self, TransportError> {
         let mut child = Command::new(program)
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(
+                if std::env::var("DTW_AX_READINESS_TRACE").ok().as_deref() == Some("1") {
+                    Stdio::inherit()
+                } else {
+                    Stdio::null()
+                },
+            )
             .spawn()
             .map_err(|error| TransportError::local(TransportErrorKind::Spawn(error.to_string())))?;
         let pid = child.id();
@@ -306,6 +361,8 @@ impl Worker {
             child: Mutex::new(Some(child)),
             stopped: AtomicBool::new(false),
             shutdown_failure: Mutex::new(None),
+            #[cfg(target_os = "windows")]
+            cooperative_shutdown: _cooperative_shutdown,
         });
         let (sender, receiver) = mpsc::sync_channel::<Request>(1);
         let io_process = process.clone();

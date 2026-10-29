@@ -11,6 +11,29 @@ pub struct AppInstance {
     pub generation: u64,
 }
 
+/// Catalog admission is about exact native members, not path equality. A stable
+/// public application ID may cover more than one installed copy of an app.
+pub fn validate_app_instances(apps: &[AppInstance]) -> Result<(), Error> {
+    if apps.is_empty() || apps.len() > 32 {
+        return Err(Error::NativeFailure {
+            code: "invalid_app_instances".into(),
+            message: "An application context requires between 1 and 32 verified instances".into(),
+        });
+    }
+    if apps.iter().enumerate().any(|(index, app)| {
+        apps[..index]
+            .iter()
+            .any(|prior| prior.pid == app.pid && prior != app)
+    }) {
+        return Err(Error::NativeFailure {
+            code: "invalid_app_instances".into(),
+            message: "One process cannot have conflicting native identities in the same catalog"
+                .into(),
+        });
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WindowTarget {
     pub app: AppInstance,
@@ -20,21 +43,44 @@ pub struct WindowTarget {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Capability {
+    Windows,
     Observe,
     Press,
     Capture,
     Click,
+    TypeText,
+    Keypress,
+    Scroll,
+    Focus,
+    SetValue,
 }
 
 impl Capability {
-    pub const ALL: [Self; 4] = [Self::Observe, Self::Press, Self::Capture, Self::Click];
+    pub const ALL: [Self; 10] = [
+        Self::Windows,
+        Self::Observe,
+        Self::Press,
+        Self::Capture,
+        Self::Click,
+        Self::TypeText,
+        Self::Keypress,
+        Self::Scroll,
+        Self::Focus,
+        Self::SetValue,
+    ];
 
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Windows => "windows",
             Self::Observe => "observe",
             Self::Press => "press",
             Self::Capture => "capture",
             Self::Click => "click",
+            Self::TypeText => "typeText",
+            Self::Keypress => "keypress",
+            Self::Scroll => "scroll",
+            Self::Focus => "focus",
+            Self::SetValue => "setValue",
         }
     }
 
@@ -124,6 +170,44 @@ pub struct PixelPoint {
     pub y: f64,
 }
 
+/// One complete input transaction. No held keys or buttons escape an atomic call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WindowInput {
+    Focus,
+    TypeText { text: String },
+    Keypress { keys: Vec<String> },
+    Scroll { delta_x: i32, delta_y: i32 },
+}
+impl WindowInput {
+    pub fn capability(&self) -> Capability {
+        match self {
+            Self::Focus => Capability::Focus,
+            Self::TypeText { .. } => Capability::TypeText,
+            Self::Keypress { .. } => Capability::Keypress,
+            Self::Scroll { .. } => Capability::Scroll,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MouseButton {
+    #[default]
+    Left,
+    Right,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClickOptions {
+    pub button: MouseButton,
+    pub count: u8,
+}
+impl Default for ClickOptions {
+    fn default() -> Self {
+        Self {
+            button: MouseButton::Left,
+            count: 1,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WindowInfo {
     pub target: WindowTarget,
@@ -134,6 +218,7 @@ pub struct WindowInfo {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InventoryScope {
     SameProcessStandardWindows,
+    SameProcessLayerZeroSurfaces,
 }
 
 /// Bounded provider evidence, not an authorization or a retry instruction.
@@ -186,6 +271,20 @@ pub struct WindowInventory {
     pub report: InventoryReport,
 }
 
+/// Each provider inventory retains its exact process owner. A failed member
+/// cannot prove that its previous windows disappeared or erase a healthy peer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstanceInventory {
+    pub app: AppInstance,
+    pub report: Result<InventoryReport, Error>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppWindowInventory {
+    pub windows: Vec<WindowInfo>,
+    pub instances: Vec<InstanceInventory>,
+}
+
 /// A live execution budget and cancellation view; providers poll it during IPC waits.
 /// Remaining time is monotonic and cannot be extended by the provider.
 pub struct CallContext<'a> {
@@ -223,6 +322,7 @@ pub enum Error {
     ElementNotPressable,
     TimedOut,
     InventoryUnproven(InventoryReport),
+    AppInventoryUnproven(Vec<Error>),
     BackendFailed(String),
     NativeFailure { code: String, message: String },
 }
@@ -372,6 +472,38 @@ pub trait Backend: Send + Sync {
         _call: &CallContext<'_>,
     ) -> Result<BackendObservation<Self::Binding>, Error> {
         Err(Error::UnsupportedCapability)
+    }
+    fn input(
+        &self,
+        _target: &WindowTarget,
+        _input: &WindowInput,
+        _call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        ActionOutcome::rejected(Error::UnsupportedCapability)
+    }
+    fn set_value(
+        &self,
+        _target: &WindowTarget,
+        _binding: &Self::Binding,
+        _element: ElementId,
+        _value: &str,
+        _call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        ActionOutcome::rejected(Error::UnsupportedCapability)
+    }
+    fn click_with_options(
+        &self,
+        target: &WindowTarget,
+        binding: &Self::Binding,
+        point: PixelPoint,
+        options: ClickOptions,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        if options == ClickOptions::default() {
+            self.click(target, binding, point, call)
+        } else {
+            ActionOutcome::rejected(Error::UnsupportedCapability)
+        }
     }
     fn click(
         &self,
