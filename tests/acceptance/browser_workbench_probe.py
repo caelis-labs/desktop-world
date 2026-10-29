@@ -309,7 +309,9 @@ def normalize_agy(path):
             if s.get('tool_name') or key in steps:
                 old = steps.setdefault(key, {})
                 info = {**old.get('tool_info', {}), **s.get('tool_info', {})}
+                output_observed = old.get('_output_observed', False) or info.get('output') is not None
                 old.update(s); old['tool_info'] = info
+                old['_output_observed'] = output_observed
         if e.get('event') in ('result', 'done', 'turn_complete'): terminal = e
     rows = []
     for s in steps.values():
@@ -317,6 +319,14 @@ def normalize_agy(path):
         output = info.get('output')
         row = {'name':s['tool_name'],'arguments':info.get('parameters'),
                'output':output,'status':s.get('state'),'image_bytes':None}
+        if 'error' in info:
+            row['client_error'] = info['error']
+            # Only the observed error-only client shape proves that no file
+            # data was exposed, including in earlier partial step updates.
+            row['client_error_no_data'] = (info.get('name') == s['tool_name']
+                and set(info) == {'name','parameters','error'} and not s['_output_observed'])
+        if 'duration_seconds' in s:
+            row['duration_seconds'] = s['duration_seconds']
         if s.get('tool_name') == 'call_mcp_tool':
             # Only this invocation's own step cache, never a path from tool text.
             conversation = str(uuid.UUID(s['conversation_id']))
@@ -410,6 +420,15 @@ def check_execution(data, arguments, compact=True):
             require(not any(counts.get(bad, 0) for bad in ('unknown', 'unrecorded', 'mismatch')), 'Unknown or mismatched action')
 
 
+def metadata_discovery_miss(call, name):
+    """Recognize only this plugin's observed missing root Skill alias lookup."""
+    path = str(Path.home()/'.gemini/config/plugins'/name/'SKILL.md')
+    return (call.get('name') == 'read_file' and call.get('arguments') == {'Path':path}
+            and call.get('status') == 'ERROR' and call.get('output') is None
+            and call.get('client_error_no_data') is True
+            and call.get('client_error') == {'type':'TOOL_ERROR','message':'file does not exist'})
+
+
 def metrics(calls, name, browser_app="com.google.Chrome"):
     selected = []
     for c in calls:
@@ -478,6 +497,9 @@ def metrics(calls, name, browser_app="com.google.Chrome"):
             'image_bytes':images_total if images_complete else None,
             'image_measurement':'complete' if images_complete else 'payload_not_fully_exposed',
             'issues':issues,'read_refreshes':read_refreshes,
+            'metadata_discovery_misses':[{'agent_call':number,'path':c['arguments']['Path'],
+                'client_error':c['client_error'],'duration_seconds':c.get('duration_seconds')}
+                for number, c in enumerate(calls, 1) if metadata_discovery_miss(c, name)],
             'result_queries':sum(c['method']=='result' for c in selected)}
 
 
@@ -528,7 +550,8 @@ def check_routes(calls, name, root):
         if str(tool).startswith(f'mcp__{name}__'): continue
         if tool in ('read_file', 'Read'):
             read = arguments.get('Path', arguments.get('file_path', ''))
-            require(read in reads, 'Agent read task data outside the GUI route'); continue
+            require(read in reads or metadata_discovery_miss(call, name),
+                    'Agent read task data outside the GUI route'); continue
         if tool == 'run_command':
             argv = shlex.split(arguments.get('CommandLine', ''))
             require(argv[:-1] in (['ls', '-la'], ['ls']) and '..' not in Path(argv[-1]).parts

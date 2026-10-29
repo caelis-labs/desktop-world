@@ -33,6 +33,25 @@ def measure(output, images=0):
     return probe.metrics([call(output, images)], NAME)
 
 
+def metadata_miss_events():
+    parameters = {'Path':str(Path.home()/'.gemini/config/plugins'/NAME/'SKILL.md')}
+    base = {'conversation_id':'5fd1c99e-31e0-4804-9131-580fd99ef54e',
+            'step_index':2,'tool_name':'read_file','step_type':'tool'}
+    return [
+        {'step_update':{**base,'state':'ACTIVE','tool_info':{'name':'read_file','parameters':parameters}}},
+        {'step_update':{**base,'state':'ERROR','duration_seconds':0.053335,
+            'tool_info':{'name':'read_file','parameters':parameters,
+                         'error':{'type':'TOOL_ERROR','message':'file does not exist'}}}},
+    ]
+
+
+def normalized_agy(events):
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory)/'agent.jsonl'
+        path.write_text('\n'.join(map(json.dumps, events)))
+        return probe.normalize_agy(path)[0]
+
+
 class InstalledPackageTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -161,6 +180,93 @@ class InstalledPackageTests(unittest.TestCase):
 
 
 class RouteTests(unittest.TestCase):
+    def test_error_only_root_skill_lookup_is_measured_without_replacing_real_skill_loading(self):
+        root = Path('/tmp/owned-case')
+        miss, = normalized_agy(metadata_miss_events())
+        self.assertEqual(miss['client_error'], {'type':'TOOL_ERROR','message':'file does not exist'})
+        self.assertTrue(miss['client_error_no_data'])
+        self.assertIsNone(miss['output'])
+        self.assertEqual(miss['duration_seconds'], 0.053335)
+        probe.check_routes([miss], NAME, root)
+        with self.assertRaisesRegex(AssertionError, 'not successfully loaded'):
+            probe.check_skill_loaded([miss], NAME, root)
+        loaded = {'name':'read_file','arguments':{'Path':str(
+            Path.home()/'.gemini/config/plugins'/NAME/'skills'/NAME/'SKILL.md')},
+            'status':'DONE','output':'201 lines, 19563 bytes'}
+        value = completed(); value['value']['calls'] = 3
+        ordinary = [loaded, call(value)]
+        calls = [miss, *ordinary]
+        probe.check_routes(calls, NAME, root)
+        probe.check_skill_loaded(calls, NAME, root)
+        measured = probe.metrics(calls, NAME); baseline = probe.metrics(ordinary, NAME)
+        self.assertEqual(measured['agent_tool_calls'], baseline['agent_tool_calls'] + 1)
+        self.assertEqual(measured['metadata_discovery_misses'], [{
+            'agent_call':1,'path':miss['arguments']['Path'],'client_error':miss['client_error'],
+            'duration_seconds':0.053335}])
+        for key in ('mcp_calls','exec_calls','script_host_calls','mcp_json_bytes','image_bytes','issues'):
+            self.assertEqual(measured[key], baseline[key], key)
+        self.assertEqual(baseline['metadata_discovery_misses'], [])
+        broken = completed(); broken['error'] = {'code':'native_failure'}
+        self.assertTrue(probe.metrics([miss, call(broken)], NAME)['issues'])
+
+    def test_missing_task_files_or_other_plugin_aliases_are_not_metadata_exceptions(self):
+        root = Path('/tmp/owned-case')
+        alias = str(Path.home()/'.gemini/config/plugins'/NAME/'SKILL.md')
+        for path in ('/tmp/owned-case/DTW-Report.txt', '/tmp/owned-case/data.json',
+                     alias.replace(NAME, NAME+'-other'), alias+'.bak',
+                     alias.replace('/'+NAME+'/', '/'+NAME+'/../'+NAME+'/'),
+                     '~/.gemini/config/plugins/'+NAME+'/SKILL.md'):
+            events = metadata_miss_events()
+            events[-1]['step_update']['tool_info']['parameters'] = {'Path':path}
+            miss, = normalized_agy(events)
+            with self.subTest(path=path), self.assertRaises(AssertionError):
+                probe.check_routes([miss], NAME, root)
+            self.assertEqual(probe.metrics([miss], NAME)['metadata_discovery_misses'], [])
+
+    def test_root_alias_requires_exact_client_error_and_no_output_evidence(self):
+        root = Path('/tmp/owned-case')
+        changes = [
+            ('state', 'DONE'), ('state', 'ACTIVE'),
+            ('error', None), ('error', {'type':'TOOL_ERROR','message':'permission denied'}),
+            ('error', {'type':'OTHER','message':'file does not exist'}),
+            ('error', {'type':'TOOL_ERROR','message':'file does not exist','data':'task text'}),
+            ('name', 'another_tool'), ('parameters', {'Path':str(
+                Path.home()/'.gemini/config/plugins'/NAME/'SKILL.md'),'StartLine':1}),
+            ('content', 'unexpected data'),
+        ] + [('output', output) for output in (None, '', '0 lines, 0 bytes', 'task text', [], {})]
+        for key, value in changes:
+            events = metadata_miss_events()
+            destination = events[-1]['step_update']
+            if key != 'state': destination = destination['tool_info']
+            destination[key] = value
+            miss, = normalized_agy(events)
+            with self.subTest(key=key, value=value), self.assertRaises(AssertionError):
+                probe.check_routes([miss], NAME, root)
+        miss, = normalized_agy(metadata_miss_events())
+        for key in ('client_error', 'client_error_no_data'):
+            absent = {k:v for k,v in miss.items() if k != key}
+            with self.assertRaises(AssertionError): probe.check_routes([absent], NAME, root)
+        with self.assertRaises(AssertionError):
+            probe.check_routes([{**miss, 'name':'Read'}], NAME, root)
+        events = metadata_miss_events()
+        success = events[-1]['step_update']; success['state'] = 'DONE'
+        del success['tool_info']['error']
+        success['tool_info']['output'] = '201 lines, 19563 bytes'
+        loaded_alias, = normalized_agy(events)
+        with self.assertRaises(AssertionError): probe.check_routes([loaded_alias], NAME, root)
+        with self.assertRaises(AssertionError): probe.check_skill_loaded([loaded_alias], NAME, root)
+
+    def test_earlier_read_output_cannot_be_erased_by_later_error_update(self):
+        root = Path('/tmp/owned-case')
+        events = metadata_miss_events()
+        events[0]['step_update']['tool_info']['output'] = 'earlier exposed data'
+        events[-1]['step_update']['tool_info']['output'] = None
+        miss, = normalized_agy(events)
+        self.assertIsNone(miss['output'])
+        self.assertFalse(miss['client_error_no_data'])
+        with self.assertRaises(AssertionError): probe.check_routes([miss], NAME, root)
+        self.assertEqual(probe.metrics([miss], NAME)['metadata_discovery_misses'], [])
+
     def test_skill_loading_requires_exact_identity_success_and_observed_acknowledgement(self):
         root = Path('/tmp/owned-case')
         skill = {'name':'Skill', 'arguments':{'skill':NAME}, 'status':'completed',
