@@ -12,6 +12,7 @@ private struct NativeFailure: Error {
     let message: String
     let details: [String: Any]?
     let attributeFailure: AXAttributeFailure?
+    let focusAbsence: FocusAbsence?
 
     var json: [String: Any] {
         var value: [String: Any] = ["error": code, "message": message]
@@ -25,9 +26,20 @@ private struct AXAttributeFailure {
     let error: AXError
 }
 
+private enum FocusAbsence: Equatable {
+    case application, window
+}
+
 private func failure(_ code: String, _ message: String, details: [String: Any]? = nil,
-                     attributeFailure: AXAttributeFailure? = nil) -> NativeFailure {
-    NativeFailure(code: code, message: message, details: details, attributeFailure: attributeFailure)
+                     attributeFailure: AXAttributeFailure? = nil,
+                     focusAbsence: FocusAbsence? = nil) -> NativeFailure {
+    NativeFailure(code: code, message: message, details: details,
+                  attributeFailure: attributeFailure, focusAbsence: focusAbsence)
+}
+
+private func missingFocus(_ reason: FocusAbsence) -> NativeFailure {
+    let subject = reason == .application ? "System-wide focused application" : "The target application's focused window"
+    return failure("focus_unproven", "\(subject) is unavailable; refresh before further input", focusAbsence: reason)
 }
 
 private func integer(_ value: Any?, _ field: String) throws -> UInt64 {
@@ -465,18 +477,70 @@ private func axPID(_ element: AXUIElement, _ deadline: Deadline) throws -> Int32
 
 // Input needs a fresh system-wide focus read, not AppKit's run-loop-driven
 // application snapshot. Recheck after the window query, which can itself block.
-// Missing focus is unproven, not permission to raise a possibly inactive app.
+// Missing focus cannot authorize another input event. Establishment explicitly
+// handles that state separately, after validating the requested target.
 private func exactInputFocus(expectedPID: Int32, focusedPID: () throws -> Int32?,
                              windowMatches: () throws -> Bool) throws -> Bool {
     func readPID() throws -> Int32 {
         guard let pid = try focusedPID(), pid > 0 else {
-            throw failure("focus_unproven", "System-wide focused application is unavailable; refresh before further input")
+            throw missingFocus(.application)
         }
         return pid
     }
     guard try readPID() == expectedPID else { return false }
     guard try windowMatches() else { return false }
     return try readPID() == expectedPID
+}
+
+// A caller explicitly requesting focus/input need not already have a focused
+// application/window. Only typed absence permits the one requested establishment;
+// actual AX, permission and identity failures still stop before any side effect.
+private func focusedBeforeEstablishment(_ read: () throws -> Bool) throws -> Bool {
+    do { return try read() }
+    catch let error as NativeFailure where error.code == "focus_unproven" && error.focusAbsence != nil {
+        return false
+    }
+}
+
+// Only used after the one accepted raise/activation. These polls are read-only:
+// missing focus or a busy AX provider cannot activate again or replay input.
+// Preserve the unresolved typed error when the readiness budget is exhausted.
+private func waitForEstablishedFocus<T>(remaining: () -> TimeInterval,
+                                        check: () throws -> Void,
+                                        read: () throws -> T?,
+                                        wait: (TimeInterval) -> Void) throws -> T {
+    var firstTransient: NativeFailure?
+    while remaining() > 0 {
+        try check()
+        if remaining() <= 0 { break }
+        var ready: T?
+        do {
+            ready = try read()
+            firstTransient = nil // A successful read proves AX has recovered, even if focus is still false.
+        } catch let error as NativeFailure {
+            let missing = error.code == "focus_unproven" && error.focusAbsence != nil
+            let busyAX = error.code == "ax_unavailable" && error.attributeFailure?.error == .cannotComplete
+            guard missing || busyAX else {
+                throw error
+            }
+            // An available AX read with missing focus has recovered from a prior
+            // AX failure. Likewise, an available app with no focused window must
+            // not retain the obsolete "focused application unavailable" cause.
+            if firstTransient == nil || firstTransient?.focusAbsence != error.focusAbsence {
+                firstTransient = error
+            }
+        }
+        // A read may block; neither successful stale proof nor a transient error
+        // may hide cancellation, an expired request, or a replaced application.
+        try check()
+        let available = remaining()
+        if available <= 0 { break }
+        if let ready { return ready }
+        wait(min(0.02, available))
+    }
+    try check()
+    if let firstTransient { throw firstTransient }
+    throw failure("focus_unproven", "The exact requested window did not become the focused window")
 }
 
 private func axWindowIdentity(_ element: AXUIElement, _ deadline: Deadline) throws -> (AXError, CGWindowID) {
@@ -512,7 +576,8 @@ private func axList(_ element: AXUIElement, _ attribute: String, limit: Int,
         return []
     }
     guard result == .success, let value, CFGetTypeID(value) == CFArrayGetTypeID() else {
-        throw failure("ax_unavailable", "AX array \(attribute) failed: \(result.rawValue)")
+        throw failure("ax_unavailable", "AX array \(attribute) failed: \(result.rawValue)",
+                      attributeFailure: AXAttributeFailure(name: attribute, error: result))
     }
     let array = value as! CFArray
     var elements: [AXUIElement] = []
@@ -1314,7 +1379,7 @@ private final class NativeStore: @unchecked Sendable {
         }, windowMatches: {
             let app = AXUIElementCreateApplication(target.app.pid)
             guard let window = axElement(try axAttribute(app, kAXFocusedWindowAttribute, deadline)) else {
-                throw failure("focus_unproven", "The target application's focused window is unavailable; refresh before further input")
+                throw missingFocus(.window)
             }
             return try CFEqual(window, root) && axWindowID(window, deadline) == target.nativeID
         })
@@ -1322,7 +1387,7 @@ private final class NativeStore: @unchecked Sendable {
 
     private func establishFocus(_ target: NativeTarget, _ context: RequestContext, changed: inout Bool) throws -> CandidateWindow {
         let window = try validate(target, context)
-        if try focused(target, window.element, context.deadline) { return window }
+        if try focusedBeforeEstablishment({ try focused(target, window.element, context.deadline) }) { return window }
         try context.deadline.prepare(window.element)
         // Read-only AX preflight is outside admission. The worker's cross-process
         // input owner still covers all focus checks and the ensuing input.
@@ -1337,16 +1402,21 @@ private final class NativeStore: @unchecked Sendable {
                   app.activate(options: []) else { throw failure("focus_failed", "Application activation was not accepted") }
             return true
         }) else { throw failure("native_stopping", "Native input admission is closed") }
+        // Do not start another poll after 750ms. A poll already in flight keeps
+        // the request's absolute deadline and each AX read's 200ms timeout.
         let until = min(context.deadline.uptime, ProcessInfo.processInfo.systemUptime + 0.75)
-        while ProcessInfo.processInfo.systemUptime < until {
-            try context.verify(target.app)
-            let live = try validate(target, context)
-            if try focused(target, live.element, context.deadline) { return live }
+        return try waitForEstablishedFocus(remaining: {
+            until - ProcessInfo.processInfo.systemUptime
+        }, check: {
+            try context.deadline.check()
             guard !dtwInputStopping() else { throw failure("native_stopping", "Native input admission is closing") }
-            CFRunLoopRunInMode(.defaultMode, min(0.02, max(0, until - ProcessInfo.processInfo.systemUptime)), false)
-        }
-        try context.deadline.check()
-        throw failure("focus_unproven", "The exact requested window did not become the focused window")
+            try context.verify(target.app)
+        }, read: {
+            let live = try validate(target, context)
+            return try focused(target, live.element, context.deadline) ? live : nil
+        }, wait: { interval in
+            CFRunLoopRunInMode(.defaultMode, interval, false)
+        })
     }
 
     private func windowInput(_ request: [String: Any]) -> [String: Any] {

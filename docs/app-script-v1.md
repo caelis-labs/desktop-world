@@ -40,6 +40,8 @@
 
 用户或外部程序仍可改变系统焦点。macOS 输入会按事件段重新核验系统级 AX 当前应用和精确窗口；失焦返回 `focus_changed`，无法证明焦点返回原始错误或 `focus_unproven`。已开始的输入保留 `unknown` 与原回执，并停止脚本后续动作；不会在输入中途主动抢回焦点或重发文本。首次执行输入时建立焦点仍是该方法的显式行为。
 
+首次请求聚焦时，已验证的目标不要求当前已有 focused app/window；缺失焦点允许进行一次请求中的 raise/activate，但不算聚焦成功。之后已有的聚焦等待阶段可对焦点缺失及 AX `CannotComplete` 重查只读状态；不再次激活。其他 AX 错误、身份变化、中止或请求截止立即停止；等待耗尽时保留当前未解决错误。输入阶段不采用这种等待重查。
+
 遇到 `focus_changed`、`focus_unproven`、`stale_observation` 或 `target_changed`，Agent 应刷新受影响窗口的身份/语义观察/截图，核对实际内容，再决定剩余步骤。此机制不是任意业务内容变化的全局版本锁，也不能撤回外部切换前已排入系统队列的事件；其他窗口、实例和 app 的上下文保留。
 
 语义元素的 `role` 是 DTW 规范角色；`name`、`value` 为有界字符串摘录或 null，`enabled` 为 Boolean 或 null。不可读信息保留 null；摘录不能作为完整长文档读回。`actions` 列出当前已实现且可用的操作，当前可能包含 `press`、`setValue`。`label` 用于展示；不能从拼接 label 反推结构化值或状态。
