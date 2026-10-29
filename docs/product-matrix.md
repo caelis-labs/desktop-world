@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | Agent 入口 | 官方 rmcp stdio；apps/api/exec/result；exec 仅 app/source；稳定平台 app ID | 普通 MCP + Skill，无定制 Host；真实模型任务按本轮门槛验证 |
 | 按需 API | apps 紧凑索引；api 可选方法详情；result 原始账本 | 默认输出不展开全方法 schema，不为成功操作追加账本查询 |
-| 窗口基础路线 | macOS 逐实例验证 PID、layer 0、正面积 WindowServer 表面；不要求 AX 语义库存；精确 SCK 截图及可见点点击 | 有归属/生命周期/像素几何证明；模态、遮挡和空间边界按原生条件拒绝，不承诺任意后台点击 |
+| 窗口基础路线 | macOS 逐实例验证 PID、正面积且精确查询可用的 WindowServer 表面（含同 PID 非零 layer 浮层）；不要求 AX 语义库存；精确 SCK 截图及可见点点击 | 有归属/生命周期/像素几何证明；模态、遮挡和空间边界按原生条件拒绝，不承诺任意后台点击 |
 | 同 app 多实例 | 稳定 app ID 聚合各实例窗口，window_ref 路由到精确实例；成员变化保留存活兄弟引用与 state | 真实双实例退出/重启通过；部分库存失败保留可用窗口、原错误及摘要提示，不伪装成完整库存 |
 | 语义发现与动作 | 原生 role/text 筛选、分页 frontier；press/setValue 仅在元素广告对应 action 时可用 | 每窗观察独立；动作消费该窗观察；浏览器冷态内容有界就绪；覆盖诊断与已恢复只读查询保留在账本；区域/子树过滤后置 |
 | 常用输入 | focus、Unicode typeText、keypress、wheel-step scroll；左/右键及单/双击 | macOS 内部优先目标投递，预检不支持时借用前台；按动作复核目标，键盘不依赖无关指针或窗口位置变化。目标失效停止后续输入，已排队事件无法撤回；效果独立读回 |
@@ -16,8 +16,8 @@
 | Linux provider | 实验 X11/XRes 身份、窗口、XGetImage、XTest 输入；只使用当前可证明的键盘映射 | 不支持 Wayland/XWayland，不提供 AT-SPI 语义承诺；仅源码/类型证据，不承诺桌面支持或首版正式发行平台 |
 | 浏览器范围 | 真实浏览器窗口上的原生 AX 和基础像素路线 | DOM、profile、CDP/browser bridge 未接入 |
 | 输入后续组 | 拖拽、复杂菜单、应用启动/退出 | 后置批量能力；不扩张当前已广告方法的语义 |
-| macOS 后台输入（草稿，未通过合并验收） | 固定 CUA Rust 依赖闭包 + 薄适配；内部选择目标投递/前台借用；不增加 delivery 参数 | AppKit 后台文字/左击与跨会话并发已有证据；Chrome 首字符后中断、后台转前台层级与闭窗库存收敛仍阻塞；重复 focus 归还已通过；见[阶段报告](background-input-acceptance.md) |
-| 锁屏、overlay、复杂模态 | 保持独立能力组 | 尚未验证或实现；不从后台输入推导锁屏支持 |
+| macOS 后台输入（本机候选已验收） | 固定 CUA Rust 依赖闭包 + 薄适配；内部选择目标投递/前台借用；不增加 delivery 参数 | L 候选的 AppKit 全套、Chrome 输入/点击/滚动、同 PID 浮层、生命周期与两种外部 Agent 任务均通过；catalog 系统硬链接别名已修正；菜单等价键、控制字符和 Chrome 补充平面文本预检转前台；见[阶段报告](background-input-acceptance.md) |
+| 锁屏、跨 PID overlay、复杂模态 | 保持独立能力组；同 PID 浮层已复用基础路线 | 跨 PID 归属、锁屏尚未验证或实现；不从后台输入推导支持 |
 | 脚本文件、远程传输 | source 原文，经标准 JSON 传输；当前仅 stdio | 文件便利入口和 HTTP 后置，不引入调用方路径耦合 |
 | macOS 基线 | 构建/链接最低 14.2；本机 macOS 27.0.1 的固定签名/公证安装包完成六组原生和六个有效模型任务 | 本机既有权限环境通过不代表全新系统、所有旧系统或 x86_64 平台 |
 | 构建与发行 | rewrite-only、各能力组固定来源 SHA，后台输入来源和差异单列；无全量上游编译 | 保留轻量源码/Core/原生纯控制 CI；固定 macOS/Windows 候选已生成，macOS 签名/公证和安装验收通过；Windows 实机与公开 release 待完成 |

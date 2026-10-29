@@ -66,8 +66,29 @@ class DesktopEvidenceTests(unittest.TestCase):
 
     def test_publication_gap_cannot_claim_continuous_coverage(self):
         rows = self.samples()[:1]+[{'uptime': 10.5, 'frontmost_pid': 4, 'pointer_screen': [300, 200]}]
-        with self.assertRaisesRegex(AssertionError, 'publication gap'):
-            self.verify(rows, end=10.5)
+        result = self.verify(rows, end=10.5)
+        self.assertEqual(result['sampling_coverage']['reason'], 'publication_gap')
+        self.assertEqual(result['background_coverage']['status'], 'not_established')
+        self.assertGreater(result['largest_sample_gap_seconds'], 0.2)
+
+    def test_browser_prefix_cannot_stand_in_for_backspace_completion(self):
+        from background_browser_probe import completed_keyboard_sample
+        events = [
+            {'type':'probe_keydown','probe_seq':1,'control':'note','trusted':True,'key':'a','meta':True},
+            {'type':'probe_input','probe_seq':2,'control':'note','trusted':True},
+            {'type':'probe_snapshot','probe_seq':3,'note':'done','dialog_open':True}]
+        self.assertIsNone(completed_keyboard_sample({'events':events}, 0, 'done'))
+        events.extend([
+            {'type':'probe_keydown','probe_seq':4,'control':'note','trusted':True,'key':'Backspace'},
+            {'type':'probe_keyup','probe_seq':5,'control':'note','trusted':True,'key':'Backspace'}])
+        self.assertIsNone(completed_keyboard_sample({'events':events}, 0, 'done'))
+        events.append({'type':'probe_snapshot','probe_seq':6,'note':'done','dialog_open':True})
+        self.assertIsNotNone(completed_keyboard_sample({'events':events}, 0, 'done'))
+        events[-2]['probe_seq'] = 3
+        self.assertIsNone(completed_keyboard_sample({'events':events}, 0, 'done'))
+        events[-2]['probe_seq'] = 5
+        events[-2]['trusted'] = False
+        self.assertIsNone(completed_keyboard_sample({'events':events}, 0, 'done'))
 
     def test_partial_append_preserves_completed_rows(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -119,11 +140,11 @@ class OwnedInputEvidenceTests(unittest.TestCase):
 
 
 class FocusOwnershipEvidenceTests(unittest.TestCase):
-    def verify(self, pids, final_pid):
+    def verify(self, pids, final_pid, sampling='complete'):
         before = {'frontmost_pid': 4}
         target = SimpleNamespace(child=SimpleNamespace(pid=9))
         rows = [{'uptime': i, 'frontmost_pid': pid} for i, pid in enumerate(pids)]
-        desktop = {'samples': rows, 'activations': []}
+        desktop = {'samples': rows, 'activations': [], 'sampling_coverage': {'status':sampling}}
         with patch.object(probe, 'fresh_end', return_value={'frontmost_pid': final_pid}), \
              patch.object(probe, 'observe_desktop', return_value=desktop):
             return probe.focus_return_coverage(object(), before, target, {})
@@ -132,6 +153,10 @@ class FocusOwnershipEvidenceTests(unittest.TestCase):
         self.assertEqual(self.verify([9, 4], 4)['status'], 'established')
         with self.assertRaisesRegex(AssertionError, 'was not returned'):
             self.verify([9], 9)
+
+    def test_sampling_gap_cannot_claim_uninterrupted_return(self):
+        self.assertEqual(self.verify([9, 4], 4, 'not_established')['status'], 'not_established')
+        self.assertEqual(self.verify([9], 9, 'not_established')['status'], 'not_established')
 
     def test_external_takeover_marks_return_coverage_unproven(self):
         result = self.verify([9, 7], 7)
@@ -144,6 +169,30 @@ class FocusOwnershipEvidenceTests(unittest.TestCase):
     def test_missing_actual_borrow_is_not_silently_accepted(self):
         with self.assertRaisesRegex(AssertionError, 'never independently reached'):
             self.verify([4], 4)
+
+
+class CloseReceiptTests(unittest.TestCase):
+    def record(self, message):
+        error = {'code':'background_input_failed', 'message':message,
+                 'details':{'provider_code':'background_input_failed'}}
+        outcome = {'dispatch':'unknown','error':error}
+        return {'app':'owned','app_ref':'same','status':'completed','context_reset':False,
+                'state_reset':False,'error':{'code':'script_exception','message':'keypress failed: '+message},
+                'script':{'state_committed':False,'shutdown_error':None,
+                          'failure':{'kind':'exception','operation':'keypress','code':'background_input_failed','call':1},
+                          'steps':[{'number':1,'operation':'keypress','status':'completed','error':error,
+                                    'receipt':{'interruption':None,'outcome':outcome,'provider_outcome':outcome}}]}}
+
+    def test_closed_retained_ax_object_keeps_unknown(self):
+        value = self.record('ax_unavailable: AX attribute AXModal failed: -25202')
+        self.assertEqual(probe.close_record_outcome(value,'owned','same'), 'target_changed_unknown')
+        self.assertEqual(value['script']['steps'][0]['receipt']['outcome']['dispatch'], 'unknown')
+
+    def test_busy_or_other_ax_failures_are_not_window_close_proof(self):
+        for message in ['ax_unavailable: AX attribute AXModal failed: -25204',
+                        'ax_unavailable: AX attribute AXChildren failed: -25202']:
+            with self.assertRaisesRegex(AssertionError, 'other than the exact'):
+                probe.close_record_outcome(self.record(message),'owned','same')
 
 
 if __name__ == '__main__':

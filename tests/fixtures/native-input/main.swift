@@ -41,6 +41,12 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     var axHidden = false
     var coverAfterFirst = false
     var overlay: NSWindow?
+    // Opt-in owned application-surface probe. Keep the closed object retained
+    // to distinguish a dead surface from a lingering WindowServer backing row.
+    var applicationSurface: NSWindow?
+    var applicationSurfaceID: Int?
+    var applicationSurfacePad: ClickPad?
+    var applicationSurfaceCounts = ["left_down":0,"left_up":0,"right_down":0,"right_up":0]
     var secondaryWindow: NSWindow?
     var secondaryWindowID: Int?
     var closedWindowIDs: Set<Int> = []
@@ -131,7 +137,40 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                                 ["id":secondaryWindowID ?? secondaryWindow.windowNumber,"title":secondaryWindow.title,"visible":secondaryWindow.isVisible]]
             value["secondary_text"] = (secondaryField.currentEditor() as? NSTextView)?.string ?? secondaryField.stringValue
         }
+        if let surface = applicationSurface, let surfacePad = applicationSurfacePad,
+           let surfaceID = applicationSurfaceID {
+            let surfacePoint = surface.convertPoint(toScreen:surfacePad.convert(
+                NSPoint(x:surfacePad.bounds.midX,y:surfacePad.bounds.midY),to:nil))
+            let surfaceFrame = surface.frame
+            let surfaceRows = CGWindowListCopyWindowInfo(.optionIncludingWindow,CGWindowID(surfaceID)) as? [[String:Any]]
+            let surfaceRow = surfaceRows?.first {
+                ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == ownPID &&
+                ($0[kCGWindowNumber as String] as? NSNumber)?.intValue == surfaceID
+            }
+            value["application_surface"] = ["id":surfaceID,"title":surface.title,"visible":surface.isVisible,
+                "level":surface.level.rawValue,"window_server_present":surfaceRow != nil,
+                "window_server_layer":surfaceRow?[kCGWindowLayer as String] as? NSNumber ?? NSNull(),
+                "bounds":[surfaceFrame.minX,primaryHeight-surfaceFrame.maxY,surfaceFrame.width,surfaceFrame.height],
+                "pad_screen_point":[surfacePoint.x,primaryHeight-surfacePoint.y],"pad":applicationSurfaceCounts]
+        }
         try? JSONSerialization.data(withJSONObject:value,options:[.sortedKeys]).write(to:output.appendingPathComponent("state.json"),options:.atomic)
+    }
+    func openApplicationSurface() {
+        guard applicationSurface == nil else { return } // One setup, no hidden reopen.
+        let surface = NSWindow(contentRect:NSRect(x:window.frame.minX+60,y:window.frame.minY+70,width:260,height:180),
+                               styleMask:[.titled,.closable],backing:.buffered,defer:false)
+        surface.title = fixtureConfiguration["surface_title"] as? String ?? "DTW Owned Raised Surface"
+        surface.isReleasedWhenClosed=false;surface.level = .floating
+        let surfacePad = ClickPad(frame:NSRect(origin:.zero,size:surface.contentView!.bounds.size))
+        surfacePad.setAccessibilityLabel("Owned Surface Click Pad")
+        surfacePad.emit = { [weak self] kind,event in
+            guard let self else { return }
+            self.applicationSurfaceCounts[kind,default:0] += 1
+            self.record("surface_"+kind,event)
+        }
+        surface.contentView=surfacePad
+        applicationSurface=surface;applicationSurfacePad=surfacePad
+        surface.orderFront(nil);applicationSurfaceID=surface.windowNumber
     }
     @objc func saveDocument(_ sender: Any?) {
         saved = text; saves += 1
@@ -215,7 +254,8 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             windowCloseObserver = NotificationCenter.default.addObserver(forName:NSWindow.willCloseNotification,
                 object:nil,queue:.main) { [weak self] notification in
                     guard let self, let closing = notification.object as? NSWindow,
-                          closing === self.window || closing === self.secondaryWindow else { return }
+                          closing === self.window || closing === self.secondaryWindow ||
+                          closing === self.applicationSurface else { return }
                     let id = closing.windowNumber
                     self.closedWindowIDs.insert(id); self.eventCount += 1
                     let entry: [String:Any] = ["sequence":self.eventCount,"kind":"window_closed",
@@ -244,6 +284,8 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                         secondaryWindow.endEditing(for:secondaryField);secondaryField.stringValue=""
                         secondaryWindow.makeFirstResponder(secondaryField)
                     }
+                case "application_surface_open":openApplicationSurface()
+                case "application_surface_close":applicationSurface?.close()
                 case "cover_after_first":coverAfterFirst=true
                 case "ax_empty":fixtureApplication.setAccessibilityWindows([]);axHidden=true
                 case "ax_restore":fixtureApplication.setAccessibilityWindows([window!]);axHidden=false

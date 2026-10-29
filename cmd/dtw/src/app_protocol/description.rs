@@ -38,7 +38,7 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
     );
     let coverage = object(
         json!({
-            "scope":{"enum":["same_process_standard_windows","same_process_layer_zero_surfaces","application_instances"]},
+            "scope":{"enum":["same_process_standard_windows","same_process_application_surfaces","application_instances"]},
             "status":{"enum":["available","empty_within_scope","partial"]},
             "complete_within_scope":{"type":"boolean"},
             "candidate_count":{"type":["integer","null"],"minimum":0},

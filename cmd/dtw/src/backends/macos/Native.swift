@@ -7,12 +7,18 @@ import ApplicationServices
 import AppKit
 import Darwin
 
+@_silgen_name("dtw_set_front_process")
+private func dtwSetFrontProcess(_ pid: Int32, _ window: UInt32) -> Bool
+
 private struct NativeFailure: Error {
     let code: String
     let message: String
     let details: [String: Any]?
     let attributeFailure: AXAttributeFailure?
     let focusAbsence: FocusAbsence?
+    // Private evidence only: a fresh complete parent inventory no longer
+    // contains a non-target AX object read from the previous snapshot.
+    let modalSnapshotExpired: Bool
 
     var json: [String: Any] {
         var value: [String: Any] = ["error": code, "message": message]
@@ -32,9 +38,11 @@ private enum FocusAbsence: Equatable {
 
 private func failure(_ code: String, _ message: String, details: [String: Any]? = nil,
                      attributeFailure: AXAttributeFailure? = nil,
-                     focusAbsence: FocusAbsence? = nil) -> NativeFailure {
+                     focusAbsence: FocusAbsence? = nil,
+                     modalSnapshotExpired: Bool = false) -> NativeFailure {
     NativeFailure(code: code, message: message, details: details,
-                  attributeFailure: attributeFailure, focusAbsence: focusAbsence)
+                  attributeFailure: attributeFailure, focusAbsence: focusAbsence,
+                  modalSnapshotExpired: modalSnapshotExpired)
 }
 
 private func missingFocus(_ reason: FocusAbsence) -> NativeFailure {
@@ -155,15 +163,74 @@ private struct KernelApp {
     }
 }
 
-// Per-request metadata cache only. No NSWorkspace runningApplications cache or
-// fallback, and no persistent cached decision that a PID is still this app.
+private func appBundlePath(_ executable: String) -> String? {
+    // Innermost bundle preserves a nested helper's own classification.
+    guard let marker = executable.range(of: ".app/Contents/MacOS/", options: .backwards) else { return nil }
+    return String(executable[..<executable.index(marker.lowerBound, offsetBy: 4)])
+}
+
+private func sameExecutableFile(_ left: String, _ right: String) -> Bool {
+    var first = stat(), second = stat()
+    guard stat(left, &first) == 0, stat(right, &second) == 0,
+          first.st_mode & S_IFMT == S_IFREG, second.st_mode & S_IFMT == S_IFREG else { return false }
+    return first.st_dev == second.st_dev && first.st_ino == second.st_ino
+}
+
+// proc_pidpath can expose another hard link to the same executable vnode after
+// a read of macOS's code-sign clone. LS supplies only a candidate for this PID:
+// accept it only when its innermost bundle agrees and both paths are one file.
+// Ordinary bundles/helpers retain the kernel path and never consult AppKit.
+private func canonicalAppExecutable(_ kernel: String,
+                                    registered: () -> (bundle: String, executable: String)?) -> String {
+    guard appBundlePath(kernel) == nil, kernel.contains("/Contents/MacOS/"),
+          let candidate = registered(), appBundlePath(candidate.executable) == candidate.bundle,
+          sameExecutableFile(kernel, candidate.executable) else { return kernel }
+    return candidate.executable
+}
+
+// Per-request metadata cache only. Kernel PID enumeration and birth stamps are
+// authoritative; registered URLs only normalize a proven same-file alias.
 private final class RequestContext {
     let deadline: Deadline
     private var metadata: [String: BundleMetadata] = [:]
     private var unreadableBundles: Set<String> = []
     private var modalVisits = 0
+    private let tracedPIDs: Set<Int32>
 
-    init(_ request: [String: Any]) throws { deadline = try Deadline(request) }
+    init(_ request: [String: Any]) throws {
+        deadline = try Deadline(request)
+        tracedPIDs = Set((ProcessInfo.processInfo.environment["DTW_CATALOG_TRACE_PIDS"] ?? "")
+            .split(separator: ",").compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
+            .filter { $0 > 0 })
+    }
+
+    // Opt-in diagnostics for already-known PIDs. Observe only the original
+    // reads; never print paths, bundle names, titles or NSError userInfo.
+    private func traceCatalog(_ pid: Int32, _ stage: String, _ fields: [String: Any] = [:]) {
+        guard tracedPIDs.contains(pid) else { return }
+        var value = fields
+        value["pid"] = pid
+        value["stage"] = stage
+        if let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) {
+            FileHandle.standardError.write(Data("dtw_catalog ".utf8) + data + Data("\n".utf8))
+        }
+    }
+
+    private func metadataRead<T>(_ pid: Int32, _ stage: String, _ read: () throws -> T) -> T? {
+        do { return try read() }
+        catch {
+            let error = error as NSError
+            traceCatalog(pid, stage, ["error_domain": error.domain, "error_code": error.code])
+            return nil
+        }
+    }
+
+    private func unavailableBundle(_ pid: Int32, _ path: String, _ stage: String,
+                                   _ fields: [String: Any] = [:]) -> BundleMetadata? {
+        traceCatalog(pid, stage, fields)
+        unreadableBundles.insert(path)
+        return nil
+    }
 
     func admitModalVisit() throws {
         try deadline.check()
@@ -173,14 +240,21 @@ private final class RequestContext {
         modalVisits += 1
     }
 
-    private func startStamp(_ pid: Int32) throws -> UInt64? {
+    private func startStamp(_ pid: Int32, stage: String = "stamp") throws -> UInt64? {
         try deadline.check()
         var info = proc_bsdinfo()
         let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size,
+        let count = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size)
+        let readErrno = errno
+        traceCatalog(pid, stage, ["return_value": count, "size": size,
+                                 "errno": count == size ? 0 : readErrno,
+                                 "pid_matches": info.pbi_pid == UInt32(pid),
+                                 "microseconds_valid": info.pbi_start_tvusec < 1_000_000])
+        guard count == size,
               info.pbi_pid == UInt32(pid), info.pbi_start_tvusec < 1_000_000 else { return nil }
         let (seconds, overflow) = info.pbi_start_tvsec.multipliedReportingOverflow(by: 1_000_000)
         let (stamp, addedOverflow) = seconds.addingReportingOverflow(info.pbi_start_tvusec)
+        traceCatalog(pid, stage + "_generation", ["overflow": overflow || addedOverflow, "nonzero": stamp != 0])
         return overflow || addedOverflow || stamp == 0 ? nil : stamp
     }
 
@@ -188,31 +262,67 @@ private final class RequestContext {
         try deadline.check()
         var buffer = [UInt8](repeating: 0, count: 4_096)
         let count = buffer.withUnsafeMutableBytes { proc_pidpath(pid, $0.baseAddress, UInt32($0.count)) }
+        let readErrno = errno
+        traceCatalog(pid, "executable", ["return_value": count, "size": buffer.count,
+                                         "errno": count > 0 ? 0 : readErrno])
         guard count > 0, count < buffer.count,
               let zero = buffer.firstIndex(of: 0),
-              let path = String(bytes: buffer[..<zero], encoding: .utf8), !path.isEmpty else { return nil }
-        return URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
-    }
-
-    private func bundle(_ executable: String) throws -> BundleMetadata? {
-        // Use the innermost bundle: Chrome Helper's own LSUIElement flag must
-        // classify the helper, not the outer Chrome application's metadata.
-        guard let marker = executable.range(of: ".app/Contents/MacOS/", options: .backwards) else { return nil }
-        let end = executable.index(marker.lowerBound, offsetBy: 4)
-        let path = String(executable[..<end])
-        if let cached = metadata[path] { return cached }
-        if unreadableBundles.contains(path) { return nil }
-        try deadline.check()
-        let plistURL = URL(fileURLWithPath: path).appendingPathComponent("Contents/Info.plist")
-        guard let size = try? plistURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-              size <= 2 * 1_024 * 1_024,
-              let data = try? Data(contentsOf: plistURL),
-              data.count <= 2 * 1_024 * 1_024,
-              let plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
-              let identifier = plist["CFBundleIdentifier"] as? String, !identifier.isEmpty else {
-            unreadableBundles.insert(path)
+              let path = String(bytes: buffer[..<zero], encoding: .utf8), !path.isEmpty else {
+            traceCatalog(pid, "executable_format", ["valid": false])
             return nil
         }
+        traceCatalog(pid, "executable_format", ["valid": true])
+        let kernel = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+        let canonical = canonicalAppExecutable(kernel) {
+            guard let application = NSRunningApplication(processIdentifier: pid),
+                  let bundle = application.bundleURL, let executable = application.executableURL else { return nil }
+            return (bundle.resolvingSymlinksInPath().standardizedFileURL.path,
+                    executable.resolvingSymlinksInPath().standardizedFileURL.path)
+        }
+        traceCatalog(pid, "executable_alias", ["normalized_same_file": canonical != kernel])
+        return canonical
+    }
+
+    private func bundle(_ executable: String, pid: Int32) throws -> BundleMetadata? {
+        // Use the innermost bundle: Chrome Helper's own LSUIElement flag must
+        // classify the helper, not the outer Chrome application's metadata.
+        guard let path = appBundlePath(executable) else {
+            traceCatalog(pid, "bundle_path", ["valid": false])
+            return nil
+        }
+        if let cached = metadata[path] {
+            traceCatalog(pid, "bundle_cache", ["readable": true])
+            return cached
+        }
+        if unreadableBundles.contains(path) {
+            traceCatalog(pid, "bundle_cache", ["readable": false])
+            return nil
+        }
+        try deadline.check()
+        let plistURL = URL(fileURLWithPath: path).appendingPathComponent("Contents/Info.plist")
+        guard let size = metadataRead(pid, "plist_stat", {
+            try plistURL.resourceValues(forKeys: [.fileSizeKey])
+        })?.fileSize else {
+            return unavailableBundle(pid, path, "plist_stat_result", ["size_present": false])
+        }
+        guard size <= 2 * 1_024 * 1_024 else {
+            return unavailableBundle(pid, path, "plist_stat_result", ["size": size, "within_limit": false])
+        }
+        guard let data = metadataRead(pid, "plist_read", { try Data(contentsOf: plistURL) }) else {
+            return unavailableBundle(pid, path, "plist_read_result", ["readable": false])
+        }
+        guard data.count <= 2 * 1_024 * 1_024 else {
+            return unavailableBundle(pid, path, "plist_read_result", ["size": data.count, "within_limit": false])
+        }
+        guard let plist = metadataRead(pid, "plist_parse", {
+            try PropertyListSerialization.propertyList(from: data, format: nil)
+        }) as? [String: Any] else {
+            return unavailableBundle(pid, path, "plist_parse_result", ["dictionary": false])
+        }
+        guard let identifier = plist["CFBundleIdentifier"] as? String, !identifier.isEmpty else {
+            return unavailableBundle(pid, path, "bundle_identifier", ["valid": false])
+        }
+        traceCatalog(pid, "bundle_metadata", ["readable": true])
         func flag(_ key: String) -> Bool {
             if let number = plist[key] as? NSNumber { return number.boolValue }
             if let text = plist[key] as? String { return ["true", "yes", "1"].contains(text.lowercased()) }
@@ -227,9 +337,13 @@ private final class RequestContext {
     }
 
     func app(_ pid: Int32) throws -> KernelApp? {
-        guard let before = try startStamp(pid), let path = try executable(pid),
-              let bundle = try bundle(path), !bundle.background,
-              try startStamp(pid) == before else { return nil }
+        guard let before = try startStamp(pid, stage: "stamp_before"), let path = try executable(pid),
+              let bundle = try bundle(path, pid: pid) else { return nil }
+        traceCatalog(pid, "bundle_classification", ["background": bundle.background])
+        guard !bundle.background else { return nil }
+        let sameGeneration = try startStamp(pid, stage: "stamp_after") == before
+        traceCatalog(pid, "app_generation", ["matches": sameGeneration])
+        guard sameGeneration else { return nil }
         let identityData = try JSONSerialization.data(withJSONObject: [bundle.path, bundle.identifier, path])
         let identity = "macos:" + String(decoding: identityData, as: UTF8.self)
         return KernelApp(app: NativeApp(identity: identity, pid: pid, generation: before),
@@ -266,11 +380,19 @@ private final class RequestContext {
         let roots = ["/Applications/", "/System/Applications/", "/Users/Shared/Applications/",
                      "/opt/homebrew-cask/Caskroom/", NSHomeDirectory() + "/Applications/"]
         var apps: [KernelApp] = []
-        for pid in Set(pids.prefix(Int(written))).sorted() where pid > 0 {
+        let enumeratedPIDs = Set(pids.prefix(Int(written)))
+        for pid in tracedPIDs.sorted() {
+            traceCatalog(pid, "process_table", ["enumerated": enumeratedPIDs.contains(pid),
+                                                 "return_value": written, "size": pids.count])
+        }
+        for pid in enumeratedPIDs.sorted() where pid > 0 {
             try deadline.check()
             guard let candidate = try app(pid) else { continue }
             let knownRoot = roots.contains { candidate.metadata.path.hasPrefix($0) }
-            if knownRoot || candidate.metadata.identifier == "com.apple.finder" || windowed.contains(pid) {
+            let included = knownRoot || candidate.metadata.identifier == "com.apple.finder" || windowed.contains(pid)
+            traceCatalog(pid, "catalog_filter", ["known_root": knownRoot, "windowed": windowed.contains(pid),
+                                                 "included": included])
+            if included {
                 // Keep every proven process instance. Do not select a lowest PID
                 // or infer an app parent when more than one process qualifies.
                 apps.append(candidate)
@@ -347,7 +469,7 @@ private func cgWindowRows(_ deadline: Deadline, only id: CGWindowID? = nil) thro
 private func cgRecord(_ row: [String: Any]) -> CGRecord? {
     guard let id = row[kCGWindowNumber as String] as? UInt32, id != 0,
           let pid = row[kCGWindowOwnerPID as String] as? Int32, pid > 0,
-          (row[kCGWindowLayer as String] as? Int) == 0,
+          row[kCGWindowLayer as String] is Int,
           let dictionary = row[kCGWindowBounds as String] as? NSDictionary,
           let bounds = CGRect(dictionaryRepresentation: dictionary),
           bounds.minX.isFinite, bounds.minY.isFinite, bounds.width.isFinite, bounds.height.isFinite,
@@ -360,19 +482,32 @@ private func cgWindows(_ deadline: Deadline) throws -> [CGRecord] {
     try cgWindowRows(deadline).compactMap(cgRecord)
 }
 
+// Only an empty exact query proves an unavailable backing surface. A returned
+// row with missing metadata or another identity must never become an exclusion.
+private func exactSurfaceRecord(_ rows: [[String: Any]], expected: CGRecord) throws -> CGRecord? {
+    if rows.isEmpty { return nil }
+    guard rows.count == 1, let record = cgRecord(rows[0]) else {
+        throw failure("window_inventory_unproven", "Exact surface metadata is incomplete or duplicated")
+    }
+    guard record.id == expected.id, record.pid == expected.pid else {
+        throw failure("target_changed", "Window identity changed during exact inventory lookup")
+    }
+    return record
+}
+
 // Pure WindowServer row classification. An AX-free inventory never treats an
 // inaccessible semantic tree as evidence that system surfaces are absent.
-private func surfaceInventory(_ source: [[String: Any]], pid: Int32) throws -> ([(CGRecord, String)], [String: Any]) {
-        var counts = ["cg_app_raw": 0, "supported_count": 0, "excluded_non_layer_zero": 0,
+private func surfaceInventory(_ source: [[String: Any]], pid: Int32,
+                              resolve: (CGRecord) throws -> CGRecord? = { $0 }) throws -> ([(CGRecord, String)], [String: Any]) {
+        var counts = ["cg_app_raw": 0, "supported_count": 0, "excluded_unavailable_surface": 0,
                       "excluded_zero_area": 0, "invalid_metadata": 0, "duplicate_id": 0]
         var candidates: [(CGRecord, String)] = []
         var seen: Set<CGWindowID> = []
         for row in source where row[kCGWindowOwnerPID as String] as? Int32 == pid {
             counts["cg_app_raw"]! += 1
-            guard let layer = row[kCGWindowLayer as String] as? Int else {
+            guard row[kCGWindowLayer as String] is Int else {
                 counts["invalid_metadata"]! += 1; continue
             }
-            if layer != 0 { counts["excluded_non_layer_zero"]! += 1; continue }
             if let dictionary = row[kCGWindowBounds as String] as? NSDictionary,
                let bounds = CGRect(dictionaryRepresentation: dictionary),
                bounds.minX.isFinite, bounds.minY.isFinite,
@@ -383,10 +518,19 @@ private func surfaceInventory(_ source: [[String: Any]], pid: Int32) throws -> (
             }
             guard let record = cgRecord(row) else { counts["invalid_metadata"]! += 1; continue }
             guard seen.insert(record.id).inserted else { counts["duplicate_id"]! += 1; continue }
-            candidates.append((record, String((row[kCGWindowName as String] as? String ?? "").prefix(512))))
+            // The all-window list also contains retained backing stores after
+            // close/orderOut. Exact lookup is the same proof used by actions;
+            // absence is unavailable, not evidence of a different live window.
+            guard let live = try resolve(record) else {
+                counts["excluded_unavailable_surface"]! += 1; continue
+            }
+            guard live.id == record.id, live.pid == record.pid else {
+                throw failure("target_changed", "Window owner changed during inventory")
+            }
+            candidates.append((live, String((row[kCGWindowName as String] as? String ?? "").prefix(512))))
             counts["supported_count"]! += 1
         }
-        let coverage: [String: Any] = ["scope": "same_pid_layer_zero_surfaces", "diagnostics": counts]
+        let coverage: [String: Any] = ["scope": "same_pid_application_surfaces", "diagnostics": counts]
         guard counts["invalid_metadata"] == 0, counts["duplicate_id"] == 0 else {
             throw failure("window_inventory_unproven", "System window metadata is incomplete",
                           details: ["inventory": coverage])
@@ -444,12 +588,16 @@ private func traceSemanticFailure(_ fields: [String: Any]) {
 private func axAttribute(_ element: AXUIElement, _ name: String, _ deadline: Deadline) throws -> CFTypeRef? {
     try deadline.prepare(element)
     var value: CFTypeRef?
+    let started = ProcessInfo.processInfo.systemUptime
     let result = AXUIElementCopyAttributeValue(element, name as CFString, &value)
     try deadline.check()
     if result == .attributeUnsupported || result == .noValue { return nil }
     guard result == .success else {
-        traceSemanticFailure(["operation":"attribute", "attribute":name, "ax_error":result.rawValue])
+        let elapsed = Int((ProcessInfo.processInfo.systemUptime - started) * 1_000)
+        traceSemanticFailure(["operation":"attribute", "attribute":name, "ax_error":result.rawValue,
+                              "elapsed_ms":elapsed])
         throw failure("ax_unavailable", "AX attribute \(name) failed: \(result.rawValue)",
+                      details: ["attribute":name, "ax_error":result.rawValue],
                       attributeFailure: AXAttributeFailure(name: name, error: result))
     }
     return value
@@ -527,7 +675,9 @@ private func waitForEstablishedFocus<T>(remaining: () -> TimeInterval,
         } catch let error as NativeFailure {
             let missing = error.code == "focus_unproven" && error.focusAbsence != nil
             let busyAX = error.code == "ax_unavailable" && error.attributeFailure?.error == .cannotComplete
-            guard missing || busyAX else {
+            let expiredInventory = error.modalSnapshotExpired
+                && error.code == "ax_unavailable" && error.attributeFailure?.error == .invalidUIElement
+            guard missing || busyAX || expiredInventory else {
                 throw error
             }
             // An available AX read with missing focus has recovered from a prior
@@ -679,35 +829,139 @@ private func rejectModalSurface(_ element: AXUIElement, _ context: RequestContex
     if role == kAXWindowRole { try requireNonModalWindow(element, deadline) }
 }
 
+private enum FocusValidationPhase: String {
+    case validation, preRaise = "pre_raise", postRaise = "post_raise"
+}
+private enum ModalReadScope: String {
+    case appWindow = "app_window", appChild = "app_child"
+    case targetRoot = "target_root", targetChild = "target_child"
+}
+
+private func modalReadFailure(_ original: NativeFailure, phase: FocusValidationPhase,
+                              scope: ModalReadScope, expired: Bool = false,
+                              refreshError: String? = nil) -> NativeFailure {
+    var details = original.details ?? [:]
+    details["validation_phase"] = phase.rawValue
+    details["validation_scope"] = scope.rawValue
+    if let refreshError { details["inventory_refresh_error"] = refreshError }
+    var trace: [String: Any] = ["operation":"modal_validation", "phase":phase.rawValue,
+        "scope":scope.rawValue, "code":original.code, "snapshot_expired":expired]
+    if let attribute = original.attributeFailure {
+        trace["attribute"] = attribute.name; trace["ax_error"] = attribute.error.rawValue
+    }
+    traceSemanticFailure(trace)
+    return failure(original.code, original.message + " [" + phase.rawValue + "/" + scope.rawValue + "]",
+                   details: details, attributeFailure: original.attributeFailure,
+                   focusAbsence: original.focusAbsence, modalSnapshotExpired: expired)
+}
+
+// The pure policy seam cannot skip an unreadable element. It either preserves
+// its error or marks the entire read snapshot expired for the existing focus
+// poll to restart. No focus or input function is reachable from this helper.
+private func readModalSnapshot<T>(phase: FocusValidationPhase, scope: ModalReadScope,
+                                  isTarget: Bool, read: () throws -> T,
+                                  checkTarget: () throws -> Void = {},
+                                  parentContains: () throws -> Bool = { true }) throws -> T {
+    do { return try read() }
+    catch let original as NativeFailure {
+        // A nested target-child error already has the most specific provenance.
+        if original.details?["validation_scope"] != nil { throw original }
+        guard phase == .postRaise, scope != .targetRoot, !isTarget,
+              original.code == "ax_unavailable", original.attributeFailure?.error == .invalidUIElement else {
+            throw modalReadFailure(original, phase: phase, scope: scope)
+        }
+        // Target validation is never downgraded to an auxiliary snapshot
+        // error, even when its native failure has another AX status.
+        try checkTarget()
+        let contains: Bool
+        do {
+            contains = try parentContains()
+        } catch let refresh as NativeFailure {
+            // A deadline or actual target loss is stronger evidence than a
+            // stale auxiliary object. An unreadable/incomplete parent is not.
+            if ["deadline_exceeded", "native_stopping", "app_changed", "app_closed",
+                "target_changed", "stale_window", "stale_observation"].contains(refresh.code) {
+                throw modalReadFailure(refresh, phase: phase, scope: scope)
+            }
+            throw modalReadFailure(original, phase: phase, scope: scope, refreshError: refresh.code)
+        }
+        try checkTarget()
+        throw modalReadFailure(original, phase: phase, scope: scope, expired: !contains)
+    }
+}
+
+private struct FocusModalContext {
+    let phase: FocusValidationPhase
+    let originalTarget: AXUIElement?
+    let checkTarget: () throws -> Void
+
+    func inspect(_ element: AXUIElement, scope: ModalReadScope, context: RequestContext,
+                 parentContains: () throws -> Bool) throws {
+        // A missing retained target never grants non-target recovery.
+        let knownTarget = originalTarget.map { CFEqual($0, element) }
+        let isTarget = knownTarget ?? true
+        try readModalSnapshot(phase: phase, scope: knownTarget == true ? .targetRoot : scope, isTarget: isTarget, read: {
+            try rejectModalSurface(element, context)
+        }, checkTarget: checkTarget, parentContains: parentContains)
+    }
+}
+
+private func completeModalChildren(_ parent: AXUIElement, _ context: RequestContext) throws -> [AXUIElement] {
+    // A single copied array proves absence without combining different child
+    // page snapshots. Missing attributes, malformed arrays and a truncated
+    // prefix are all insufficient; leave the original typed error intact.
+    let children = try axList(parent, kAXChildrenAttribute, limit: 4_097, context.deadline, required: true)
+    guard children.count <= 4_096 else {
+        throw failure("modal_state_unproven", "Modal child inventory exceeds the supported limit")
+    }
+    return children
+}
+
 private func requireAppWithoutModal(_ application: AXUIElement, windows: [AXUIElement],
-                                    context: RequestContext) throws {
+                                    context: RequestContext, modal: FocusModalContext) throws {
     // AXWindows alone need not contain a top-level consent sheet (the donor's
     // window_scope explicitly inspects application children for that case).
     var seen: [AXUIElement] = []
-    func inspect(_ element: AXUIElement) throws {
+    for element in windows {
+        guard !seen.contains(where: { CFEqual($0, element) }) else { continue }
+        seen.append(element)
+        try modal.inspect(element, scope: .appWindow, context: context) {
+            let fresh = try axList(application, kAXWindowsAttribute, limit: 129, context.deadline, required: true)
+            guard fresh.count <= 128 else { throw failure("window_limit", "AX window inventory exceeds the supported limit") }
+            return fresh.contains { CFEqual($0, element) }
+        }
+    }
+    try inspectModalChildren(application, context: context) { element in
         guard !seen.contains(where: { CFEqual($0, element) }) else { return }
         seen.append(element)
-        try rejectModalSurface(element, context)
+        try modal.inspect(element, scope: .appChild, context: context) {
+            try completeModalChildren(application, context).contains { CFEqual($0, element) }
+        }
     }
-    for element in windows { try inspect(element) }
-    try inspectModalChildren(application, context: context, inspect: inspect)
 }
 
-private func requireWindowWithoutSheet(_ element: AXUIElement, _ context: RequestContext) throws {
-    try context.admitModalVisit()
-    let deadline = context.deadline
-    try requireNonModalWindow(element, deadline)
-    // Some providers expose AXSheets, but it is not a public SDK constant.
-    // Its absence is inconclusive: the standard AXChildren check is mandatory.
-    if let sheets = try axAttribute(element, "AXSheets", deadline) {
-        guard CFGetTypeID(sheets) == CFArrayGetTypeID() else {
-            throw failure("modal_state_unproven", "AXSheets is not an array")
+private func requireWindowWithoutSheet(_ element: AXUIElement, _ context: RequestContext,
+                                      modal: FocusModalContext) throws {
+    try readModalSnapshot(phase: modal.phase, scope: .targetRoot, isTarget: true, read: {
+        try context.admitModalVisit()
+        let deadline = context.deadline
+        try requireNonModalWindow(element, deadline)
+        // Some providers expose AXSheets, but it is not a public SDK constant.
+        // Its absence is inconclusive: the standard AXChildren check is mandatory.
+        if let sheets = try axAttribute(element, "AXSheets", deadline) {
+            guard CFGetTypeID(sheets) == CFArrayGetTypeID() else {
+                throw failure("modal_state_unproven", "AXSheets is not an array")
+            }
+            if CFArrayGetCount((sheets as! CFArray)) > 0 {
+                throw failure("unsupported_modal", "The target window has an attached sheet")
+            }
         }
-        if CFArrayGetCount((sheets as! CFArray)) > 0 {
-            throw failure("unsupported_modal", "The target window has an attached sheet")
+        try inspectModalChildren(element, context: context) { child in
+            try modal.inspect(child, scope: .targetChild, context: context) {
+                try completeModalChildren(element, context).contains { CFEqual($0, child) }
+            }
         }
-    }
-    try inspectModalChildren(element, context: context) { try rejectModalSurface($0, context) }
+    })
 }
 
 private func inspectModalChildren(_ element: AXUIElement, context: RequestContext,
@@ -1129,9 +1383,66 @@ private final class BackgroundInputValidation {
     func matches(target: NativeTarget, deadlineMilliseconds: UInt64, keyboard: Bool) -> Bool {
         self.target == target && self.deadlineMilliseconds == deadlineMilliseconds && self.keyboard == keyboard
     }
-    func checkModalState() throws {
+    // A busy AX server is not proof that the window changed. Wait only for a
+    // fresh read of the same target, never re-prime or replay an input event.
+    // True identity/modal failures stop immediately and the original action
+    // deadline remains authoritative throughout the bounded read recovery.
+    static func waitForReadableTarget(remaining: () -> TimeInterval,
+                                      check: () throws -> Void,
+                                      read: () throws -> Void,
+                                      wait: (TimeInterval) -> Void) throws {
+        var firstTransient: NativeFailure?
+        while remaining() > 0 {
+            try check()
+            if remaining() <= 0 { break }
+            do {
+                try read()
+                try check()
+                if remaining() > 0 { return }
+                break
+            } catch let error as NativeFailure {
+                // Only the local read budget may expire here. The check below
+                // still gives the original caller deadline/cancellation priority.
+                if error.code == "deadline_exceeded", remaining() <= 0, firstTransient != nil { break }
+                guard error.code == "ax_unavailable", error.attributeFailure?.error == .cannotComplete else {
+                    throw error
+                }
+                if firstTransient == nil { firstTransient = error }
+            }
+            // A blocking read cannot hide closure, replacement, cancellation,
+            // or the caller's deadline even when the AX provider stays busy.
+            try check()
+            let available = remaining()
+            if available > 0 { wait(min(0.02, available)) }
+        }
+        try check()
+        if let firstTransient { throw firstTransient }
+        throw failure("ax_unavailable", "Target AX validation did not complete within its read budget")
+    }
+
+    func checkModalState(revalidate: () throws -> Void) throws {
+        guard window != nil else { return }
+        let started = ProcessInfo.processInfo.systemUptime
+        let deadline = context.deadline.limited(to: started + 0.75)
+        var samples = 0
+        try Self.waitForReadableTarget(remaining: {
+            deadline.uptime - ProcessInfo.processInfo.systemUptime
+        }, check: {
+            guard !dtwInputStopping() else { throw failure("native_stopping", "Input admission is closed") }
+            try self.context.deadline.check()
+            try revalidate()
+        }, read: {
+            samples += 1
+            try self.readModalState(deadline)
+        }, wait: { Thread.sleep(forTimeInterval: $0) })
+        if samples > 1 {
+            traceSemanticFailure(["operation":"background_validation_recovered", "samples":samples,
+                                  "elapsed_ms":Int((ProcessInfo.processInfo.systemUptime - started) * 1_000)])
+        }
+    }
+
+    private func readModalState(_ deadline: Deadline) throws {
         guard let window else { return }
-        let deadline = context.deadline
         try requireNonModalWindow(window, deadline)
         if let sheets = try axAttribute(window, "AXSheets", deadline) {
             guard CFGetTypeID(sheets) == CFArrayGetTypeID() else {
@@ -1222,7 +1533,9 @@ private final class NativeStore: @unchecked Sendable {
         enabledApps = enabledApps.filter { !departed.contains($0.key) }
         if let validation = backgroundValidation, departed.contains(validation.target.app) { backgroundValidation = nil }
         let source = try cgWindowRows(context.deadline)
-        let (candidates, coverage) = try surfaceInventory(source, pid: app.pid)
+        let (candidates, coverage) = try surfaceInventory(source, pid: app.pid, resolve: { record in
+            try exactSurfaceRecord(cgWindowRows(context.deadline, only: record.id), expected: record)
+        })
         guard candidates.count <= 128 else { throw failure("window_limit", "More than 128 system window surfaces") }
         try context.verify(app)
         let active = Set(candidates.map { WindowSlot(app: app, id: $0.0.id) })
@@ -1256,29 +1569,56 @@ private final class NativeStore: @unchecked Sendable {
     }
 
     fileprivate func validate(_ target: NativeTarget, _ context: RequestContext,
-                              input: Bool = true) throws -> CandidateWindow {
+                              input: Bool = true, phase: FocusValidationPhase = .validation,
+                              originalTarget: AXUIElement? = nil) throws -> CandidateWindow {
         let slot = WindowSlot(app: target.app, id: target.nativeID)
         let record = try validateSurface(target, context)
         guard AXIsProcessTrusted() else { throw failure("permission_denied", "Accessibility permission is required") }
         let application = AXUIElementCreateApplication(target.app.pid)
         let current = try axList(application, kAXWindowsAttribute, limit: 129, context.deadline, required: true)
         guard current.count <= 128 else { throw failure("window_limit", "AX window inventory exceeds the supported limit") }
-        if input { try requireAppWithoutModal(application, windows: current, context: context) }
+        func checkOriginalTarget() throws {
+            guard phase == .postRaise else { return }
+            // Prove the retained target root first. A replacement target AX
+            // object must never be mistaken for an expired auxiliary popup.
+            guard let originalTarget, current.contains(where: { CFEqual($0, originalTarget) }) else {
+                throw failure("stale_observation", "Target AX root changed during focus establishment")
+            }
+            let targetStillValid = try readModalSnapshot(phase: phase, scope: .targetRoot, isTarget: true, read: {
+                try axWindowID(originalTarget, context.deadline) == target.nativeID
+                    && ordinaryWindow(originalTarget, pid: target.app.pid, deadline: context.deadline)
+            })
+            guard targetStillValid else {
+                throw failure("stale_observation", "Target AX root identity changed during focus establishment")
+            }
+        }
+        try checkOriginalTarget()
+        let modal = FocusModalContext(phase: phase, originalTarget: originalTarget, checkTarget: {
+            guard !dtwInputStopping() else { throw failure("native_stopping", "Native input admission is closing") }
+            _ = try self.validateSurface(target, context)
+            try checkOriginalTarget()
+        })
+        if input { try requireAppWithoutModal(application, windows: current, context: context, modal: modal) }
         var matched: [AXUIElement] = []
         for element in current {
             do {
                 if try axWindowID(element, context.deadline) == target.nativeID { matched.append(element) }
             } catch let error as NativeFailure where error.code == "window_unproven" { continue }
         }
-        guard matched.count == 1, let element = matched.first,
-              try ordinaryWindow(element, pid: target.app.pid, deadline: context.deadline) else {
+        guard matched.count == 1, let element = matched.first else {
+            throw failure("semantic_window_unavailable", "No unique supported AX window matches this system surface")
+        }
+        let ordinary = try readModalSnapshot(phase: phase, scope: .targetRoot, isTarget: true, read: {
+            try ordinaryWindow(element, pid: target.app.pid, deadline: context.deadline)
+        })
+        guard ordinary else {
             throw failure("semantic_window_unavailable", "No unique supported AX window matches this system surface")
         }
         if let retained = semanticWindows[slot], !CFEqual(retained.element, element) {
             throw failure("stale_observation", "AX window identity changed; observe this surface again")
         }
         semanticWindows[slot] = RegisteredWindow(target: target, element: element)
-        if input { try requireWindowWithoutSheet(element, context) }
+        if input { try requireWindowWithoutSheet(element, context, modal: modal) }
         try context.verify(target.app)
         try context.deadline.check()
         return CandidateWindow(cg: record, element: element, title: "")
@@ -1684,7 +2024,7 @@ private final class NativeStore: @unchecked Sendable {
     }
 
     private func establishFocus(_ target: NativeTarget, _ context: RequestContext, changed: inout Bool) throws -> CandidateWindow {
-        let window = try validate(target, context)
+        let window = try validate(target, context, phase: .preRaise)
         // CUA can establish app-local key/AX focus without raising a window.
         // A selected physical route must perform its own foreground transition;
         // AX focus alone cannot short-circuit the raise.
@@ -1704,6 +2044,13 @@ private final class NativeStore: @unchecked Sendable {
         guard let _: Bool = try dtwWithInputAdmission({
             try context.deadline.check()
             changed = true // Raising itself may have effects even if focus is never proven.
+            // Ported CUA exact-window foreground primitive. App-local AX focus
+            // after background delivery is not WindowServer activation; AppKit
+            // activate() may accept that already-active state without fronting it.
+            trace("front_process_requested")
+            guard dtwSetFrontProcess(target.app.pid, target.nativeID) else {
+                throw failure("focus_failed", "WindowServer did not accept exact foreground activation")
+            }
             trace("raise_requested")
             let raised = AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
             guard raised == .success else { throw failure("focus_failed", "AXRaise did not confirm the requested window") }
@@ -1723,7 +2070,7 @@ private final class NativeStore: @unchecked Sendable {
             guard !dtwInputStopping() else { throw failure("native_stopping", "Native input admission is closing") }
             try context.verify(target.app)
         }, read: {
-            let live = try validate(target, context)
+            let live = try validate(target, context, phase: .postRaise, originalTarget: window.element)
             return try focused(target, live.element, context.deadline) ? live : nil
         }, wait: { interval in
             CFRunLoopRunInMode(.defaultMode, interval, false)
@@ -2055,7 +2402,7 @@ private final class NativeStore: @unchecked Sendable {
                         throw failure("invalid_request", "Background input step has no matching admitted action")
                     }
                     let current = try validateSurface(target, validation.context)
-                    try validation.checkModalState()
+                    try validation.checkModalState { _ = try self.validateSurface(target, validation.context) }
                     try validation.context.verify(target.app)
                     return ["target": target.json, "bounds": current.coordinates]
                 }
@@ -2066,7 +2413,7 @@ private final class NativeStore: @unchecked Sendable {
                 if request["consume"] as? Bool == true {
                     let validation = BackgroundInputValidation(target: target, deadlineMilliseconds: milliseconds,
                         keyboard: keyboard, context: context, window: window)
-                    try validation.checkModalState()
+                    try validation.checkModalState { _ = try self.validateSurface(target, validation.context) }
                     observations = observations.filter { $0.value.target != target }
                     guard let owner = try context.app(target.app.pid), owner.app == target.app else {
                         throw failure("app_changed", "Native app identity changed during input route selection")

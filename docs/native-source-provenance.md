@@ -42,6 +42,16 @@ is read before and after executable/bundle classification. App identity is an
 unambiguous JSON array of canonical bundle path, bundle identifier and executable
 path, with PID and birth generation kept separately.
 
+macOS may report a code-sign-clone hard-link alias (`.app.bundle`) from
+`proc_pidpath`. When that kernel path is not a normal application bundle path,
+DTW obtains only that PID's registered executable/bundle URLs as a candidate.
+It accepts the candidate only if its innermost bundle matches the registered
+bundle and both executable paths are regular files with the same device/inode.
+The surrounding kernel birth-stamp checks remain unchanged. Ordinary app and
+nested helper paths never enter this normalization; no global Launch Services
+lookup, parent-app guess or broad `.app.bundle` admission is used. Real hard-link,
+different-inode, missing-file and helper regression controls cover the boundary.
+
 The per-request metadata cache replaces repeated Info.plist reads within one
 request. It does not cache process existence across requests. Unlike the donor's
 deduplication policy, the catalog retains every qualifying, proven process

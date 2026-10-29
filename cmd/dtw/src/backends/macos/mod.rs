@@ -154,7 +154,7 @@ impl Drop for NativeBinding {
     }
 }
 const COVERAGE: &str =
-    "same-PID layer-0 system surfaces; AX semantics are a separate exact-window capability";
+    "same-PID available application surfaces, including raised panels; AX semantics are a separate exact-window capability";
 const CONDITIONS: &[&str] = &[
     "semantic and input operations require macOS Accessibility permission",
     "capture and click require macOS Screen Recording permission",
@@ -1111,11 +1111,11 @@ mod tests {
     }
     #[test]
     fn surface_inventory_is_ax_free_and_rejects_missing_or_conflicting_evidence() {
-        let mut value = json!({"scope":"same_pid_layer_zero_surfaces","diagnostics":{
-            "cg_app_raw":4,"supported_count":2,"excluded_non_layer_zero":1,
+        let mut value = json!({"scope":"same_pid_application_surfaces","diagnostics":{
+            "cg_app_raw":4,"supported_count":2,"excluded_unavailable_surface":1,
             "excluded_zero_area":1,"invalid_metadata":0,"duplicate_id":0}});
         let report = parse_inventory_report(&value, true).unwrap();
-        assert_eq!(report.scope, InventoryScope::SameProcessLayerZeroSurfaces);
+        assert_eq!(report.scope, InventoryScope::SameProcessApplicationSurfaces);
         assert_eq!(
             (
                 report.candidate_count,
@@ -1342,7 +1342,7 @@ fn reply_error(v: &Value) -> Option<Error> {
 }
 
 fn parse_inventory_report(value: &Value, proven: bool) -> Result<InventoryReport, Error> {
-    if value["scope"] == "same_pid_layer_zero_surfaces" {
+    if value["scope"] == "same_pid_application_surfaces" {
         return parse_surface_inventory(value, proven);
     }
     const COUNTERS: [&str; 18] = [
@@ -1435,7 +1435,7 @@ fn parse_surface_inventory(value: &Value, proven: bool) -> Result<InventoryRepor
     const NAMES: [&str; 6] = [
         "cg_app_raw",
         "supported_count",
-        "excluded_non_layer_zero",
+        "excluded_unavailable_surface",
         "excluded_zero_area",
         "invalid_metadata",
         "duplicate_id",
@@ -1458,14 +1458,14 @@ fn parse_surface_inventory(value: &Value, proven: bool) -> Result<InventoryRepor
         .collect::<Result<Vec<_>, Error>>()?;
     let count = |name: &str| counts[name].as_u64().unwrap();
     let unresolved = count("invalid_metadata") + count("duplicate_id");
-    let excluded = count("excluded_non_layer_zero") + count("excluded_zero_area");
+    let excluded = count("excluded_unavailable_surface") + count("excluded_zero_area");
     if proven != (unresolved == 0)
         || count("supported_count") + excluded + unresolved != count("cg_app_raw")
     {
         return Err(invalid());
     }
     let report = InventoryReport {
-        scope: InventoryScope::SameProcessLayerZeroSurfaces,
+        scope: InventoryScope::SameProcessApplicationSurfaces,
         candidate_count: count("cg_app_raw") as u32,
         supported_count: count("supported_count") as u32,
         excluded_count: excluded as u32,

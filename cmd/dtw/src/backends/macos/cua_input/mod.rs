@@ -105,6 +105,46 @@ impl Request {
     fn keyboard(&self) -> bool {
         matches!(self.operation.as_str(), "type_text" | "keypress")
     }
+    fn foreground_requirement(&self) -> Option<&'static str> {
+        // The donor only encodes a single right click.
+        if self.operation == "click" && self.button == "right" && self.count == 2 {
+            return Some("right double click requires foreground delivery");
+        }
+        // Background TextEdit receives ordinary text but can ignore Return
+        // inside a multiline request. Select the whole control-bearing request
+        // before posting any prefix; never repair it with a replay.
+        if self.operation == "type_text" && self.text.contains(['\n', '\r', '\t']) {
+            return Some("text control characters require foreground delivery");
+        }
+        // Chromium can receive a keydown without multi-unit text insertion.
+        // Decide for the whole request before priming: a delivered prefix must
+        // never be replayed. Standard menu equivalents need AppKit dispatch in
+        // other apps too (TextEdit Cmd+W posted successfully but did not close).
+        if self.chromium
+            && self.operation == "type_text"
+            && self.text.chars().any(|ch| ch.len_utf16() > 1)
+        {
+            return Some("Chromium supplementary Unicode text requires foreground delivery");
+        }
+        if self.operation == "keypress" {
+            let (key, modifiers) = self.key_chord().ok()?;
+            if matches!(keyboard::key_name_to_code(key).ok(), Some(36 | 48 | 76)) {
+                return Some("Return and Tab require foreground delivery");
+            }
+            let mut chars = key.trim().chars();
+            if let (Some(ch), None) = (chars.next(), chars.next()) {
+                if !ch.is_whitespace()
+                    && !ch.is_control()
+                    && modifiers
+                        .iter()
+                        .any(|modifier| keyboard::key_name_to_code(modifier).ok() == Some(55))
+                {
+                    return Some("AppKit menu key equivalents require foreground delivery");
+                }
+            }
+        }
+        None
+    }
 }
 pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
     let request: Request = match serde_json::from_str(json) {
@@ -114,15 +154,10 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
     if let Err(error) = request.validate() {
         return control::rejected("invalid_arguments", &error.to_string(), false);
     }
-    // The public contract supports right-double click, but this donor primitive
-    // only encodes a single right click. Decline before preparation/input so the
-    // worker can use its existing exact-window foreground implementation.
-    if request.operation == "click" && request.button == "right" && request.count == 2 {
-        return control::rejected(
-            "background_unavailable",
-            "right double click requires foreground delivery",
-            true,
-        );
+    // Missing background semantics are known before any native preparation or
+    // input. The worker can then select its single foreground/HID attempt.
+    if let Some(reason) = request.foreground_requirement() {
+        return control::rejected("background_unavailable", reason, true);
     }
     let _pool = AutoreleasePool::new();
     let session = match control::Session::start(
@@ -251,6 +286,14 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
     scope.cleanup();
     session.finish(result, false)
 }
+/// Private foreground bridge. Swift owns target validation, the physical
+/// lease, dispatch uncertainty, and restoration around this single exact-window
+/// sequence (one front-process request followed by paired make-key records).
+#[no_mangle]
+pub extern "C" fn dtw_set_front_process(pid: i32, window_id: u32) -> bool {
+    pid > 0 && window_id > 0 && skylight::make_exact_window_key(pid, window_id)
+}
+
 /// The callback context must remain alive until this synchronous call returns.
 #[no_mangle]
 pub unsafe extern "C" fn dtw_cua_input_call(
@@ -320,6 +363,74 @@ mod tests {
         );
         assert_eq!(result["dispatch"], "not_dispatched");
         assert_eq!(result["fallback_allowed"], true);
+    }
+    #[test]
+    fn menu_equivalents_and_chromium_supplementary_text_decline_before_native_preparation() {
+        extern "C" fn unexpected(_: *mut c_void, _: i32) -> i32 {
+            panic!("unsupported route performed native preparation");
+        }
+        for args in [
+            serde_json::json!({"operation":"keypress", "keys":["META", "A"]}),
+            serde_json::json!({"chromium":false, "operation":"keypress", "keys":["CMD", "W"]}),
+            serde_json::json!({"chromium":false, "operation":"keypress", "keys":["META", "S"]}),
+            serde_json::json!({"operation":"keypress", "keys":["command", "SHIFT", "s"]}),
+            serde_json::json!({"operation":"keypress", "keys":["WIN", ","]}),
+            serde_json::json!({"operation":"type_text", "text":"BMP prefix then 🐦 and suffix"}),
+            serde_json::json!({"chromium":false, "operation":"type_text", "text":"prefix\nsecond line\tsuffix"}),
+            serde_json::json!({"chromium":false, "operation":"type_text", "text":"prefix\r\nsuffix"}),
+            serde_json::json!({"chromium":false, "operation":"keypress", "keys":["RETURN"]}),
+            serde_json::json!({"chromium":false, "operation":"keypress", "keys":["SHIFT", "TAB"]}),
+        ] {
+            let mut request =
+                serde_json::json!({"chromium":true,"pid":5,"window_id":7,"deadline_unix_ms":100});
+            request
+                .as_object_mut()
+                .unwrap()
+                .extend(args.as_object().unwrap().clone());
+            let result = call(&request.to_string(), std::ptr::null_mut(), unexpected);
+            assert_eq!(result["dispatch"], "not_dispatched", "{request}");
+            assert_eq!(result["fallback_allowed"], true, "{request}");
+            assert_eq!(
+                result["error"]["code"], "background_unavailable",
+                "{request}"
+            );
+        }
+    }
+    #[test]
+    fn chromium_preflight_keeps_plain_text_and_non_menu_modifiers_on_background_route() {
+        for args in [
+            serde_json::json!({"operation":"type_text", "text":"后台复核 café"}),
+            serde_json::json!({"operation":"keypress", "keys":["A"]}),
+            serde_json::json!({"operation":"keypress", "keys":["SHIFT", "A"]}),
+            serde_json::json!({"operation":"keypress", "keys":["CTRL", "A"]}),
+            serde_json::json!({"operation":"keypress", "keys":["ALT", "LEFT"]}),
+            serde_json::json!({"operation":"keypress", "keys":["META", "LEFT"]}),
+            serde_json::json!({"operation":"keypress", "keys":["META"]}),
+            serde_json::json!({"operation":"keypress", "keys":["BACKSPACE"]}),
+        ] {
+            let mut request =
+                serde_json::json!({"chromium":true,"pid":5,"window_id":7,"deadline_unix_ms":100});
+            request
+                .as_object_mut()
+                .unwrap()
+                .extend(args.as_object().unwrap().clone());
+            let request: Request = serde_json::from_value(request).unwrap();
+            request.validate().unwrap();
+            assert_eq!(request.foreground_requirement(), None);
+        }
+        for args in [
+            serde_json::json!({"operation":"type_text", "text":"AppKit 😀"}),
+            serde_json::json!({"operation":"keypress", "keys":["CTRL", "A"]}),
+        ] {
+            let mut request = serde_json::json!({"pid":5,"window_id":7,"deadline_unix_ms":100});
+            request
+                .as_object_mut()
+                .unwrap()
+                .extend(args.as_object().unwrap().clone());
+            let request: Request = serde_json::from_value(request).unwrap();
+            request.validate().unwrap();
+            assert_eq!(request.foreground_requirement(), None);
+        }
     }
     #[test]
     fn invalid_arguments_never_reach_the_validator() {

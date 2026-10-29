@@ -1,6 +1,7 @@
 //! Private worker entry; sequential native ownership and a parent-death watchdog.
 use serde_json::{json, Value};
 use std::{
+    cell::RefCell,
     ffi::{c_void, CStr, CString},
     io::{BufRead, Read, Write},
     sync::atomic::{AtomicBool, Ordering},
@@ -132,6 +133,44 @@ struct BackgroundTarget {
     bounds: Value,
     keyboard: bool,
     deadline: u64,
+    failures: RefCell<BackgroundValidationFailures>,
+}
+#[derive(Default)]
+struct BackgroundValidationFailures {
+    action: Option<Value>,
+    cleanup: Option<Value>,
+}
+impl BackgroundValidationFailures {
+    fn record(&mut self, phase: i32, error: Value) {
+        if phase == 0 {
+            &mut self.action
+        } else {
+            &mut self.cleanup
+        }
+        .get_or_insert(error);
+    }
+    fn apply(&self, result: &mut Value) {
+        // The C callback's integer result controls admission, but cannot carry
+        // a native diagnosis. Keep the first action and cleanup causes distinct;
+        // later cleanup must never replace the original uncertain action result.
+        for (cause, field, detail) in [
+            (&self.action, "error", "validation_error"),
+            (&self.cleanup, "cleanup_error", "cleanup_validation_error"),
+        ] {
+            if let Some(cause) = cause {
+                if result[field].is_object() {
+                    result[field]["message"] = json!(format!(
+                        "{}: {}",
+                        cause["error"].as_str().unwrap_or("validation_failed"),
+                        cause["message"]
+                            .as_str()
+                            .unwrap_or("Target validation unavailable")
+                    ));
+                    result[detail] = cause.clone();
+                }
+            }
+        }
+    }
 }
 extern "C" fn validate_background(context: *mut c_void, phase: i32) -> i32 {
     let target = unsafe { &*(context.cast::<BackgroundTarget>()) };
@@ -146,7 +185,16 @@ extern "C" fn validate_background(context: *mut c_void, phase: i32) -> i32 {
             "deadline_unix_ms":now_ms()+150}),
             false,
         );
-        return i32::from(reply.get("error").is_none() && reply["app"] == target.target["app"]);
+        if reply.get("error").is_none() && reply["app"] == target.target["app"] {
+            return 1;
+        }
+        let error = if reply["error"].is_string() {
+            reply
+        } else {
+            json!({"error":"app_changed","message":"Original input owner could not be proven"})
+        };
+        target.failures.borrow_mut().record(phase, error);
+        return 0;
     }
     if !matches!(phase, 0 | 1) {
         return -1;
@@ -157,11 +205,26 @@ extern "C" fn validate_background(context: *mut c_void, phase: i32) -> i32 {
         "target":target.target,"keyboard":target.keyboard,"step":phase == 0,
         "deadline_unix_ms":if phase == 0 {target.deadline} else {now_ms()+150}});
     let reply = native(&check, false);
-    i32::from(background_reply_valid(&reply, target, phase))
+    match background_validation(&reply, target, phase) {
+        Ok(()) => 1,
+        Err(error) => {
+            target.failures.borrow_mut().record(phase, error);
+            0
+        }
+    }
 }
-fn background_reply_valid(reply: &Value, target: &BackgroundTarget, phase: i32) -> bool {
-    validate_reply(reply, &target.target).is_ok()
-        && (phase != 0 || target.keyboard || reply["bounds"] == target.bounds)
+fn background_validation(
+    reply: &Value,
+    target: &BackgroundTarget,
+    phase: i32,
+) -> Result<(), Value> {
+    validate_reply(reply, &target.target)?;
+    if phase == 0 && !target.keyboard && reply["bounds"] != target.bounds {
+        return Err(
+            json!({"error":"stale_observation","message":"Input window geometry changed; capture again before pointer input"}),
+        );
+    }
+    Ok(())
 }
 
 /// None is an explicit, side-effect-free preflight decline, never a retry after
@@ -221,12 +284,14 @@ fn background(request: &mut Value) -> Option<Value> {
         bounds: before["bounds"].clone(),
         keyboard,
         deadline: request["deadline_unix_ms"].as_u64().unwrap_or(0),
+        failures: RefCell::default(),
     };
     let mut result = super::cua_input::call(
         &input.to_string(),
         (&mut target as *mut BackgroundTarget).cast(),
         validate_background,
     );
+    target.failures.borrow().apply(&mut result);
     if result["fallback_allowed"] == true && result["dispatch"] == "not_dispatched" {
         return None;
     }
@@ -479,17 +544,46 @@ mod tests {
             bounds: json!([10, 20, 300, 400]),
             keyboard: true,
             deadline: 0,
+            failures: RefCell::default(),
         };
         let moved = json!({"target":identity,"bounds":[100,200,500,600]});
-        assert!(background_reply_valid(&moved, &target, 0));
+        assert!(background_validation(&moved, &target, 0).is_ok());
         target.keyboard = false;
-        assert!(!background_reply_valid(&moved, &target, 0));
-        assert!(background_reply_valid(&moved, &target, 1));
+        assert!(background_validation(&moved, &target, 0).is_err());
+        assert!(background_validation(&moved, &target, 1).is_ok());
         let replaced = json!({"target":{"app":{"pid":8},"native_id":1,"generation":2},"bounds":[10,20,300,400]});
         for keyboard in [false, true] {
             target.keyboard = keyboard;
-            assert!(!background_reply_valid(&replaced, &target, 0));
+            assert!(background_validation(&replaced, &target, 0).is_err());
         }
+    }
+
+    #[test]
+    fn native_validation_cause_survives_callback_and_cleanup() {
+        let first = json!({"error":"ax_unavailable","message":"AX attribute AXModal failed: -25204",
+            "details":{"attribute":"AXModal","ax_error":-25204}});
+        let later = json!({"error":"target_changed","message":"Window disappeared"});
+        let mut failures = BackgroundValidationFailures::default();
+        failures.record(0, first.clone());
+        failures.record(0, later.clone());
+        failures.record(2, later.clone());
+        let mut reply = json!({"ok":false,"dispatch":"unknown","fallback_allowed":false,
+            "error":{"code":"background_input_failed","message":"input target changed"},
+            "cleanup_error":{"code":"cleanup_failed","message":"release failed"}});
+        failures.apply(&mut reply);
+        assert_eq!(reply["dispatch"], "unknown");
+        assert_eq!(reply["fallback_allowed"], false);
+        assert_eq!(reply["error"]["code"], "background_input_failed");
+        assert_eq!(
+            reply["error"]["message"],
+            "ax_unavailable: AX attribute AXModal failed: -25204"
+        );
+        assert_eq!(reply["validation_error"], first);
+        assert_eq!(reply["cleanup_validation_error"], later);
+        assert_eq!(
+            reply["cleanup_error"]["message"],
+            "target_changed: Window disappeared"
+        );
     }
 
     #[test]

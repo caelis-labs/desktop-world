@@ -99,7 +99,8 @@ def observe_desktop(observer, before, after, proof, *, forbidden_pids=()):
 
     forbidden_pids identifies intended background targets for coverage reporting;
     seeing one in front cannot prove a DTW takeover while the user is active.
-    Missing observation samples remain an evidence failure.
+    Missing final samples remain an evidence failure; publication gaps make
+    background coverage unproven without failing independently verified input.
     """
     start, end = before['published_uptime'], after['published_uptime']
     samples = [row for row in journal(observer, 'desktop.jsonl') if start < row['uptime'] <= end]
@@ -112,7 +113,10 @@ def observe_desktop(observer, before, after, proof, *, forbidden_pids=()):
     gaps = [b-a for a,b in zip(timestamps, timestamps[1:])]
     require(all(gap > 0 for gap in gaps), 'Desktop sample timestamps did not advance')
     proof['largest_sample_gap_seconds'] = max(gaps)
-    require(proof['largest_sample_gap_seconds'] <= 0.2, 'Desktop observation had a publication gap')
+    proof['sampling_coverage'] = {
+        'status': 'complete' if proof['largest_sample_gap_seconds'] <= 0.2 else 'not_established',
+        'maximum_gap_seconds': 0.2,
+        'reason': None if proof['largest_sample_gap_seconds'] <= 0.2 else 'publication_gap'}
     pointer, frontmost = before['pointer_screen'], before['frontmost_pid']
     proof['pointer_deltas'], proof['foreground_changes'] = [], []
     for row in samples:
@@ -130,7 +134,9 @@ def observe_desktop(observer, before, after, proof, *, forbidden_pids=()):
                     for row in rows if row['frontmost_pid'] in targets]
     proof['target_foreground_observations'] = observations
     proof['background_coverage'] = {
-        'status': 'not_requested' if not targets else 'not_established' if observations else 'established',
+        'status': 'not_requested' if not targets else
+                  'not_established' if observations or proof['sampling_coverage']['status'] != 'complete' else 'established',
+        'sampling_coverage': proof['sampling_coverage'],
         'target_pids': sorted(targets),
         'attribution': 'Target foreground observations cannot identify their actor; '
                        'no DTW takeover is inferred from desktop snapshots alone.'}
@@ -337,11 +343,13 @@ def focus_return_coverage(observer, before, target, proof):
         elif pid == original_pid and seen_target:
             seen_return = True
     proof['after'] = after
-    proof['ownership_coverage'] = {'status': 'not_established' if external else 'established',
+    continuous = desktop['sampling_coverage']['status'] == 'complete'
+    proof['ownership_coverage'] = {'status': 'established' if continuous and not external else 'not_established',
+        'sampling_coverage': desktop['sampling_coverage'],
         'external_foreground_observations': external,
         'attribution': 'Unscheduled foreground activity makes the normal return branch unproven; '
                        'pointer movement is unrelated to focus ownership.'}
-    if not external:
+    if continuous and not external:
         require(after['frontmost_pid'] == original_pid, 'Uninterrupted focus borrow was not returned')
     return proof['ownership_coverage']
 
@@ -521,7 +529,15 @@ def close_record_outcome(record, app, app_ref):
                 and all(row.get('dispatch') == 'dispatched' and row.get('error') is None for row in outcomes),
                 'Successful close lacks one clean dispatched receipt')
         return 'completed'
-    expected_message = 'input target changed; refresh app/window state'
+    # Retain the exact original unknown. New candidates preserve the native
+    # diagnosis: an invalid retained AX window after close is distinct from a
+    # busy AX provider (cannotComplete), which is never accepted here.
+    expected_message = (step.get('error') or {}).get('message')
+    require(expected_message in (
+        'input target changed; refresh app/window state',
+        'target_changed: WindowServer no longer proves the requested surface owner',
+        'ax_unavailable: AX attribute AXModal failed: -25202',
+    ), 'Close failed for a reason other than the exact post-input target change')
     expected_code = 'background_input_failed'
     failure, error = script.get('failure') or {}, step.get('error') or {}
     require(record['error'].get('code') == 'script_exception'
@@ -569,15 +585,26 @@ return {{marker:state.closeWindowMarker,window_ref}};
                             and event['kind'] == 'window_closed' and event['window_number'] == secondary]
     require(len(proof['close_events']) == 1, 'Expected one independent NSWindow close notification')
     owned_input_pairs(target, target_before, proof.setdefault('paired_input', {}))
-    state, _ = execute(mcp, target, 'read-after-background-close', f"""
+    # willClose precedes WindowServer's removal/animation. Observe only, retaining
+    # every inventory and its receipt; no close or input is repeated.
+    convergence = proof.setdefault('inventory_convergence', {'samples':[], 'read_only':True, 'budget_seconds':1.0})
+    started = time.monotonic()
+    while True:
+        sample = {'elapsed_seconds':time.monotonic()-started}
+        convergence['samples'].append(sample)
+        state, _ = execute(mcp, target, 'read-after-background-close-'+str(len(convergence['samples'])), f"""
 if(state.closeWindowMarker!=={json.dumps(marker)}) throw new Error('App state was reset');
 if(state.closeWindowRef!=={json.dumps(committed['window_ref'])}) throw new Error('Original window state was reset');
-const windows=(await app.windows()).windows;
-if(windows.some(w=>w.window_ref===state.closeWindowRef || w.title==={json.dumps(SECONDARY)}))
-  throw new Error('Closed window is still live');
-if(windows.filter(w=>w.title==={json.dumps(PRIMARY)}).length!==1) throw new Error('Primary window was lost');
-return {{windows,marker:state.closeWindowMarker}};
-""", proof.setdefault('after_close', {}))
+return {{windows:(await app.windows()).windows,marker:state.closeWindowMarker}};
+""", sample)
+        sample['windows'] = state['windows']
+        require(sum(w['title']==PRIMARY for w in state['windows']) == 1, 'Primary window was lost')
+        if not any(w['window_ref']==committed['window_ref'] or w['title']==SECONDARY for w in state['windows']):
+            convergence['converged_seconds'] = time.monotonic()-started
+            proof['after_close'] = sample
+            break
+        require(time.monotonic()-started < convergence['budget_seconds'], 'Closed surface did not leave WindowServer inventory within the read-only convergence budget')
+        time.sleep(0.05)
     proof['remaining_windows'] = state
     for operation in ('marker_commit', 'close', 'after_close'):
         record = proof[operation]['record']

@@ -218,7 +218,7 @@ pub struct WindowInfo {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InventoryScope {
     SameProcessStandardWindows,
-    SameProcessLayerZeroSurfaces,
+    SameProcessApplicationSurfaces,
 }
 
 /// Bounded provider evidence, not an authorization or a retry instruction.

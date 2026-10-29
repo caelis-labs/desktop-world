@@ -25,6 +25,8 @@ type PostEventRecordToFn = unsafe extern "C" fn(*const c_void, *const u8) -> i32
 
 type GetFrontProcessFn = unsafe extern "C" fn(*mut c_void) -> i32;
 
+type SetFrontProcessFn = unsafe extern "C" fn(*const c_void, u32, u32) -> i32;
+
 type GetProcessForPIDFn = unsafe extern "C" fn(pid_t, *mut c_void) -> i32;
 
 type FactoryMsgSendFn = unsafe extern "C" fn(
@@ -283,6 +285,11 @@ fn post_event_record_to_fn() -> Option<PostEventRecordToFn> {
     *SYM.get_or_init(|| find_sym(b"SLPSPostEventRecordTo\0").map(|p| unsafe { as_fn(p) }))
 }
 
+fn set_front_process_fn() -> Option<SetFrontProcessFn> {
+    static SYM: OnceLock<Option<SetFrontProcessFn>> = OnceLock::new();
+    *SYM.get_or_init(|| find_sym(b"SLPSSetFrontProcessWithOptions\0").map(|p| unsafe { as_fn(p) }))
+}
+
 fn get_front_process_fn() -> Option<GetFrontProcessFn> {
     static SYM: OnceLock<Option<GetFrontProcessFn>> = OnceLock::new();
     *SYM.get_or_init(|| find_sym(b"_SLPSGetFrontProcess\0").map(|p| unsafe { as_fn(p) }))
@@ -476,6 +483,47 @@ pub fn activate_without_raise_with(
     defocus_ok && focus_ok
 }
 
+/// Pinned CUA exact-window foreground primitive. DTW's physical lease owner
+/// validates the target before this call, raises its AX window afterwards, and
+/// proves the resulting focus. No retry or separate foreground owner is added.
+pub fn make_exact_window_key(target_pid: pid_t, target_wid: u32) -> bool {
+    let Some(set_front) = set_front_process_fn() else {
+        return false;
+    };
+    let Some(post) = post_event_record_to_fn() else {
+        return false;
+    };
+    let mut target_psn = [0u8; 8];
+    if !get_process_psn_for_window(target_wid, target_pid, &mut target_psn) {
+        return false;
+    }
+    make_exact_window_key_with(
+        target_wid,
+        |window, options| unsafe {
+            set_front(target_psn.as_ptr() as *const c_void, window, options) == 0
+        },
+        |record| unsafe { post(target_psn.as_ptr() as *const c_void, record.as_ptr()) == 0 },
+    )
+}
+
+fn make_exact_window_key_with(
+    target_wid: u32,
+    set_front: impl FnOnce(u32, u32) -> bool,
+    mut post: impl FnMut(&[u8; 0xF8]) -> bool,
+) -> bool {
+    // kCPSUserGenerated permits the exact NSWindow to become key; 0x400 only
+    // changes the front process and can leave a sibling or no native key window.
+    if !set_front(target_wid, 0x200) {
+        return false;
+    }
+    for kind in [0x01, 0x02] {
+        if !post(&make_key_window_record(target_wid, kind)) {
+            return false;
+        }
+    }
+    true
+}
+
 fn focus_record(wid: u32) -> [u8; 0xF8] {
     let mut buf = [0u8; 0xF8];
     buf[0x04] = 0xF8;
@@ -664,6 +712,39 @@ impl Drop for WindowKeyScope {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn exact_foreground_sequence_targets_one_window_and_stops_on_failure() {
+        use std::cell::RefCell;
+        // Each failure prefix is sent once; no second set-front, alternate
+        // window, or later record can run after a rejected native operation.
+        for reject_at in [None, Some(0), Some(1), Some(2)] {
+            let operations = RefCell::new(Vec::new());
+            let sent = make_exact_window_key_with(
+                0x12345678,
+                |window, options| {
+                    assert_eq!(window, 0x12345678);
+                    assert_eq!(options, 0x200);
+                    operations.borrow_mut().push(0);
+                    reject_at != Some(0)
+                },
+                |record| {
+                    assert_eq!(record.len(), 0xF8);
+                    assert_eq!(record[0x04], 0xF8);
+                    assert_eq!(record[0x3A], 0x10);
+                    assert_eq!(&record[0x3C..0x40], &0x12345678u32.to_le_bytes());
+                    assert!(record[0x20..0x30].iter().all(|byte| *byte == 0xFF));
+                    let kind = record[0x08];
+                    assert_eq!(kind as usize, operations.borrow().len());
+                    operations.borrow_mut().push(kind);
+                    reject_at != Some(kind)
+                },
+            );
+            assert_eq!(sent, reject_at.is_none());
+            let last = reject_at.unwrap_or(2);
+            assert_eq!(*operations.borrow(), (0..=last).collect::<Vec<_>>());
+        }
+    }
+
     #[test]
     fn lost_key_ownership_preserves_current_focus() {
         assert!(should_restore_key_window(Some(7), Some(6), 7));

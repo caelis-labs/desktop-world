@@ -106,6 +106,30 @@ def events_after(state, baseline):
     return [e for e in state['events'] if e.get('probe_seq', 0) > baseline]
 
 
+def completed_keyboard_sample(state, baseline, expected):
+    """Require the final snapshot and trusted release from one journal read.
+
+    The expected text is also an intermediate prefix of expected + sentinel;
+    text equality alone must not end observation before Backspace is delivered.
+    """
+    page = latest_snapshot(state)
+    events = events_after(state, baseline)
+    if not page or page['probe_seq'] <= baseline or page.get('note') != expected or not page.get('dialog_open'):
+        return None
+    keys = [e for e in events if e.get('control') == 'note' and e.get('trusted')]
+    if not any(e['type'] == 'probe_keydown' and e.get('meta') and e.get('key', '').lower() == 'a' for e in keys):
+        return None
+    if not any(e['type'] == 'probe_input' for e in keys):
+        return None
+    pair = [[e for e in keys if e['type'] == kind and e.get('key') == 'Backspace']
+            for kind in ('probe_keydown', 'probe_keyup')]
+    if any(len(events) != 1 for events in pair):
+        return None
+    if not baseline < pair[0][0]['probe_seq'] < pair[1][0]['probe_seq'] < page['probe_seq']:
+        return None
+    return {'page': page, 'events': events}
+
+
 def covered_point(snapshot, image, observer_bounds):
     """Map CSS geometry to window image pixels; never infer successful input."""
     window, rect = snapshot['window'], snapshot['rects']['save']
@@ -224,7 +248,8 @@ def desktop_end(observer, before, proof, target_pid):
     rows = [before, after] + desktop['samples'] + desktop['activations']
     target_front = [row for row in rows if row['frontmost_pid'] == target_pid]
     desktop['background_coverage'] = {
-        'status': 'not_established' if target_front else 'observed',
+        'status': 'not_established' if target_front or desktop['sampling_coverage']['status'] != 'complete' else 'observed',
+        'sampling_coverage': desktop['sampling_coverage'],
         'target_pid': target_pid, 'target_foreground_observations': target_front,
         'basis': 'owned Chrome PID absent from sampled foreground and activation journal',
         'attribution': 'Foreground changes may come from the user; observations alone do not identify their cause'}
@@ -242,11 +267,13 @@ def occlusion_coverage(point, desktop, observer_pid):
     after_covers = x + 4 < sx < x + width - 4 and y + 4 < sy < y + height - 4
     rows = [desktop['before'], desktop['after']] + desktop['samples'] + desktop['activations']
     observer_front = all(row['frontmost_pid'] == observer_pid for row in rows)
-    observed = point['observer_geometry_covers_point'] and after_covers and observer_front
+    continuous = desktop['sampling_coverage']['status'] == 'complete'
+    observed = point['observer_geometry_covers_point'] and after_covers and observer_front and continuous
     return {'status': 'observed_at_boundaries' if observed else 'not_established',
             'observer_geometry_covers_before': point['observer_geometry_covers_point'],
             'observer_geometry_covers_after': after_covers,
             'observer_foreground_through_samples': observer_front,
+            'sampling_coverage': desktop['sampling_coverage'],
             'limitations': 'Geometry is checked at action boundaries; this does not prove continuous occlusion'}
 
 
@@ -272,25 +299,26 @@ return {{deep_button:{{pages:far.pages,coverage:far.coverage}},search_pages:sear
                        'window_ref': evidence['owned_window']['window_ref'],
                        'title': evidence['owned_window']['title']}
 
-    keyboard = evidence.setdefault('background_keyboard', {})
+    seed = evidence.setdefault('background_plain_keyboard', {})
     baseline = latest_snapshot(web_state(path))['probe_seq']
-    execute(client, 'background-unicode-and-shortcuts', f"""
-await app.typeText({{window_ref:state.w,text:'seed-to-replace'}});
+    execute(client, 'background-plain-text', "return await app.typeText({window_ref:state.w,text:'seed-to-replace'});", seed)
+    seed['page'] = snapshot_when(path, lambda s: s['note'] == 'seed-to-replace' and s['dialog_open'], after=baseline)
+    desktop_end(observer, start, seed, target_pid)
+
+    keyboard = evidence.setdefault('automatic_keyboard', {'routing':'Cmd+printable and supplementary Unicode select foreground before input'})
+    start = fresh_end(observer)
+    baseline = latest_snapshot(web_state(path))['probe_seq']
+    execute(client, 'automatic-unicode-and-shortcuts', f"""
 await app.keypress({{window_ref:state.w,keys:['META','A']}});
 await app.typeText({{window_ref:state.w,text:{json.dumps(EXPECTED + 'Z')}}});
 return await app.keypress({{window_ref:state.w,keys:['BACKSPACE']}});
 """, keyboard)
-    keyboard['page'] = snapshot_when(path, lambda s: s['note'] == EXPECTED and s['dialog_open'], after=baseline)
-    keyboard['events'] = events_after(web_state(path), baseline)
-    events = keyboard['events']
-    require(any(e['type'] == 'probe_keydown' and e.get('control') == 'note' and e.get('trusted')
-                and e.get('meta') and e.get('key', '').lower() == 'a' for e in events), 'No trusted select-all key event')
-    for kind in ('probe_keydown', 'probe_keyup'):
-        require(any(e['type'] == kind and e.get('control') == 'note'
-                    and e.get('key') == 'Backspace' and e.get('trusted') for e in events),
-                'No trusted textarea Backspace event: '+kind)
-    require(any(e['type'] == 'probe_input' and e.get('control') == 'note' and e.get('trusted') for e in events),
-            'No trusted textarea input event')
+    def completed_keyboard():
+        state = web_state(path)
+        keyboard['last_observed_page'] = latest_snapshot(state)
+        keyboard['events'] = events_after(state, baseline)
+        return completed_keyboard_sample(state, baseline, EXPECTED)
+    keyboard.update(wait_until(completed_keyboard, timeout=6))
     desktop_end(observer, start, keyboard, target_pid)
 
     click = evidence.setdefault('covered_coordinate_click', {})
@@ -343,7 +371,7 @@ return await app.click({{window_ref:state.w,observation_ref:state.shot.observati
     require(len(final_state['saves']) == saves_before + 1, 'Later input repeated the save')
     evidence['independent_final_save'] = final_state['saves'][-1]
     evidence['background_coverage'] = {name: case['desktop']['background_coverage']['status']
-        for name, case in [('keyboard', keyboard), ('click', click), ('scroll', scroll)]}
+        for name, case in [('plain_keyboard', seed), ('keyboard_with_fallback', keyboard), ('click', click), ('scroll', scroll)]}
     evidence['occlusion_coverage'] = click['occlusion_coverage']['status']
     evidence['all_cases_passed'] = True  # Functional effects; coverage is recorded separately.
 

@@ -19,7 +19,7 @@ Optional host-argument object properties whose value is `undefined` are omitted;
 
 ## 1. Discover the relevant controls
 
-For a browser table/form, start with **window selection plus `role:'text_field'` discovery in the same exec**. Find the search/filter field before searching the entire tree for a record keyword. Do not start by dumping an unfiltered browser window or all matching table rows. Adapt this example to the task:
+For a browser table/form, start with **window selection plus `role:'text_field'` discovery in the same exec**. Find the search/filter field before searching the entire tree for a record keyword. On a first inspection of an unfamiliar window, include its capture in that same return: a cold browser can expose only its toolbar, so this gives the next decision both the visible page and available controls without another round trip. Omit the image when existing context already identifies the page. Do not dump an unfiltered browser window or all table rows. Adapt this example to the task:
 
 ```javascript
 const matches = (await app.windows()).windows.filter(w => w.title === 'Task window');
@@ -32,12 +32,12 @@ for (;;) {
   if (!p.next) break;
   p = await app.observe({cursor:p.next});
 }
-return {fields, coverage:p.coverage};
+return {fields, coverage:p.coverage, capture:await app.capture({window_ref:state.window})};
 ```
 
 If the task provides field labels, skip only their repeated discovery. Identify any unknown form actions before proceeding to section 2. Combine filtering, identifying the edit control, opening the form and discovering the relevant controls in one script. This example uses an observed search label and requires an actually discovered, exact edit label before pressing it. Adapt the action-search keywords to the task; keywords find candidate names and are not exact action labels. Return compact choices when their meaning or uniqueness needs a decision, before changing form values.
 
-Copy the local helpers from section 2 into this script. The task already names its fields, so this example discovers only action labels; for unknown fields, add a query for the relevant role and return only its names/values.
+Copy the local helpers from section 2 into this script. Discover the first form’s action labels and any still-unknown field roles together, in this same exec. Return only relevant names, roles, values and advertised actions. Once those are known, skip this inspection for later records and batch their edits, saves and readback.
 
 ```javascript
 const window_ref = state.window, key = 'Contact A';
@@ -52,10 +52,19 @@ const q = await query('button',closeName ?? 'cancel',
   closeName ? {name:closeName,action:'press',afterTransition:true} : {afterTransition:true});
 const actionChoices = {save:saveChoices,
   close:q.elements.map(e=>({name:e.name,enabled:e.enabled,actions:e.actions}))};
+// Include task-relevant field metadata here when its role is still unknown.
+const fields = [];
+for (const name of ['Display name','Approved','Notes']) {
+  const controls = await query(undefined,name,{afterTransition:true});
+  fields.push(...controls.elements.filter(e=>e.name===name).map(e=>({
+    name:e.name,role:e.role,value:e.value ?? null,enabled:e.enabled,actions:e.actions
+  })));
+}
 // A keyword match alone does not establish what pressing it will do.
-if (!closeName) return {actionChoices,formOpen:true};
-await app.press(ref(q,q.elements[0]));
-return {actionChoices,closedWithoutSaving:true};
+if (!closeName) return {actionChoices,fields,formOpen:true};
+// Field discovery replaced the earlier query: obtain a fresh close ref.
+await press(closeName);
+return {actionChoices,fields,closedWithoutSaving:true};
 ```
 
 Choose the relevant exact action names from the observed controls and store them as `state.formActions = {save: observedSaveName, close: observedCloseName}`; these are names, not reusable refs. A save action may be disabled until values change, so distinguish an observed disabled control from an absent label. If the actions are already clear, continue with the batch in the same script instead of returning only discovery. If a decision was needed, retain whether the form was left open and resume there. A full tree, another row scan or a screenshot is unnecessary when the controls are already identified. If a visible transition is asynchronous, make bounded read-only checks for the expected control inside the script; never repeat the action to wait for it.

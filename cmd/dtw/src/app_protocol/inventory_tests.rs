@@ -139,3 +139,43 @@ fn successful_empty_inventory_remains_in_ledger_after_later_script_exception() {
     assert_eq!(reply.data["script"]["state_committed"], false);
     assert_eq!(backend.0.windows.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn application_surface_scope_reaches_scripts_without_claiming_ax_or_helper_coverage() {
+    let (owner, backend) = coordinator();
+    let mut inventory = test_inventory(vec![WindowInfo {
+        target: WindowTarget {
+            app: application(),
+            native_id: 303,
+            generation: 3,
+        },
+        title: "Raised palette".into(),
+        visible: true,
+    }]);
+    inventory.report.scope = InventoryScope::SameProcessApplicationSurfaces;
+    inventory.report.diagnostics.provider = "macos.window-server".into();
+    backend.0.model.lock().unwrap().inventory = Some(inventory);
+    let result = run(
+        &owner,
+        "raised-surfaces",
+        None,
+        script("return await app.windows();"),
+    );
+    assert!(!result.is_error, "{}", result.data);
+    let value = &result.data["value"]["result"];
+    assert_eq!(
+        value["coverage"]["scope"],
+        "same_process_application_surfaces"
+    );
+    assert_eq!(value["coverage"]["complete_within_scope"], true);
+    assert_eq!(value["coverage"]["supported_count"], 1);
+    let excludes = value["coverage"]["excludes"].as_array().unwrap();
+    assert!(excludes.contains(&json!("helper_processes")));
+    assert!(excludes.contains(&json!("unproven_associations")));
+    assert!(!excludes.contains(&json!("non_default_layers")));
+    assert_eq!(value["windows"][0]["title"], "Raised palette");
+    assert!(value["windows"][0]["window_ref"].as_str().is_some());
+    assert!(value["windows"][0].get("native_id").is_none());
+    assert!(value["windows"][0].get("can_press").is_none());
+    assert_eq!(backend.0.actions.load(Ordering::SeqCst), 0);
+}

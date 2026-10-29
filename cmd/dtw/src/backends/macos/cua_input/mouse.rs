@@ -36,13 +36,16 @@ fn chromium_click_route_plan(
     count: usize,
 ) -> Vec<ChromiumClickRouteStep> {
     let screen_target = (screen_x, screen_y);
-    let _ = (win_local_x, win_local_y);
+    // The CGEvent keeps its desktop point; CGEventSetWindowLocation is the
+    // point inside the addressed window. Chromium otherwise adds the window's
+    // origin twice (verified by independent DOM pointer coordinates).
+    let window_target = (win_local_x, win_local_y);
     let off_screen = (-1.0, -1.0);
     let mut steps = vec![
         ChromiumClickRouteStep {
             kind: ChromiumClickEventKind::Move,
             event_location: screen_target,
-            skylight_window_location: screen_target,
+            skylight_window_location: window_target,
             click_state: 0,
             phase: 2,
             button_number: 0,
@@ -77,7 +80,7 @@ fn chromium_click_route_plan(
         steps.push(ChromiumClickRouteStep {
             kind: ChromiumClickEventKind::Down,
             event_location: screen_target,
-            skylight_window_location: screen_target,
+            skylight_window_location: window_target,
             click_state,
             phase: 3,
             button_number: 0,
@@ -87,7 +90,7 @@ fn chromium_click_route_plan(
         steps.push(ChromiumClickRouteStep {
             kind: ChromiumClickEventKind::Up,
             event_location: screen_target,
-            skylight_window_location: screen_target,
+            skylight_window_location: window_target,
             click_state,
             phase: 3,
             button_number: 0,
@@ -462,11 +465,11 @@ extern "C" {
 mod tests {
     use super::*;
     #[test]
-    fn chromium_recipe_keeps_screen_coordinates_and_pairs() {
+    fn chromium_recipe_keeps_distinct_screen_and_window_coordinates_and_pairs() {
         let plan = chromium_click_route_plan(700.0, 400.0, 10.0, 20.0, 2);
         assert_eq!(plan.len(), 7);
         assert_eq!(plan[0].event_location, (700.0, 400.0));
-        assert_eq!(plan[0].skylight_window_location, (700.0, 400.0));
+        assert_eq!(plan[0].skylight_window_location, (10.0, 20.0));
         assert_eq!(plan[1].event_location, (-1.0, -1.0));
         assert_eq!(plan[1].kind, ChromiumClickEventKind::Down);
         assert_eq!(plan[2].kind, ChromiumClickEventKind::Up);
@@ -474,6 +477,34 @@ mod tests {
         assert_eq!(plan[5].click_state, 2);
         assert_eq!(plan[5].event_location, (700.0, 400.0));
         assert_eq!(plan[6].kind, ChromiumClickEventKind::Up);
+        for step in &plan[1..3] {
+            assert_eq!(step.event_location, (-1.0, -1.0));
+            assert_eq!(step.skylight_window_location, (-1.0, -1.0));
+        }
+        for step in &plan[3..] {
+            assert_eq!(step.event_location, (700.0, 400.0));
+            assert_eq!(step.skylight_window_location, (10.0, 20.0));
+        }
+    }
+    #[test]
+    fn chromium_capture_point_retains_window_local_hit_at_positive_and_negative_origins() {
+        // Candidate F: the 1600x1200 window image covers 1000x750 logical
+        // points. Chrome's content starts 87 points below its window frame.
+        let local = (527.0 * 1000.0 / 1600.0, 895.0 * 750.0 / 1200.0);
+        let expected_client = (329.375, 472.375);
+        for origin in [(230.0, 120.0), (-1450.0, -180.0)] {
+            let screen = (origin.0 + local.0, origin.1 + local.1);
+            let plan = chromium_click_route_plan(screen.0, screen.1, local.0, local.1, 1);
+            for step in [&plan[0], &plan[3], &plan[4]] {
+                assert_eq!(step.event_location, screen);
+                assert_eq!(step.skylight_window_location, local);
+                let client = (
+                    step.skylight_window_location.0,
+                    step.skylight_window_location.1 - 87.0,
+                );
+                assert_eq!(client, expected_client);
+            }
+        }
     }
 }
 

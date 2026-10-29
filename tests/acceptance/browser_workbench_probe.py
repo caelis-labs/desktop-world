@@ -725,18 +725,46 @@ def usability_passed(metrics):
 
 
 def native_task(client, title, report_name, evidence, browser_app):
-    helper = '''
+    helper = """
 async function find(role,text){
- let p=await app.observe({window_ref:state.w,role,text,limit:5});
- while(true){const matches=p.elements.filter(e=>e.name===text);
-  if(matches.length===1)return {window_ref:state.w,observation_ref:p.observation_ref,element_ref:matches[0].element_ref};
+ const started=Date.now(),attempts=[];
+ for(let attempt=0;attempt<4 && (attempt===0 || Date.now()-started<2000);attempt++){
+  let p=await app.observe({window_ref:state.w,role,text,limit:5}),matches=[];
+  const observation_ref=p.observation_ref;
+  for(;;){matches.push(...p.elements.filter(e=>e.name===text));
+   if(!p.next)break;
+   p=await app.observe({cursor:p.next});
+  }
+  attempts.push(p.coverage);
   if(matches.length>1)throw Error('Ambiguous '+text);
-  if(!p.next)throw Error('Missing '+text+' '+JSON.stringify(p.coverage));
-  p=await app.observe({cursor:p.next});
+  if(p.coverage.complete && matches.length===1)
+   return {window_ref:state.w,observation_ref,element_ref:matches[0].element_ref};
  }
+ throw Error('Missing or incomplete '+text+' '+JSON.stringify(attempts));
 }
-'''
+"""
     selected = 'const ws=(await app.windows()).windows.filter(w=>w.title==='+json.dumps(title)+');if(ws.length!==1)throw Error("owned window");state.w=ws[0].window_ref;'
+    # Match the Skill's first-window inspection before task-specific edits.
+    # A cold Chrome AX tree can initially contain browser chrome alone. Keep
+    # that discovery and image, then use bounded fresh reads; never retry input.
+    record, _ = client.execute(browser_app, 'initial-discovery', selected +
+        'const page=await app.observe({window_ref:state.w,role:"text_field",limit:12});'
+        'await app.capture({window_ref:state.w});return {coverage:page.coverage};')
+    evidence['initial_discovery'] = successful(record)
+    readiness = evidence['native_readiness'] = {'attempts':[]}
+    started = time.monotonic()
+    def ready():
+        record, _ = client.execute(browser_app, 'native-readiness',
+            'let p=await app.observe({window_ref:state.w,role:"text_field",text:"Search inventory",limit:5});'
+            'const matches=[];for(;;){matches.push(...p.elements.filter(e=>e.name==="Search inventory"));'
+            'if(!p.next)break;p=await app.observe({cursor:p.next});}'
+            'return {count:matches.length,coverage:p.coverage};')
+        readiness['attempts'].append(record)
+        result = successful(record)
+        require(result['count'] <= 1, 'Native readiness target is ambiguous')
+        return result if result['coverage']['complete'] and result['count'] == 1 else None
+    wait_until(ready, timeout=5)
+    readiness['seconds'] = time.monotonic()-started
     for sku, quantity in QUANTITIES.items():
         source = selected + helper + f'''
 await app.setValue({{...await find('text_field','Search inventory'),value:{json.dumps(sku)}}});
@@ -782,14 +810,21 @@ def main():
                 'business_initial_passed':None,'business_final_passed':None,
                 'owned_windows':{},'owned_window_epochs':{},'window_cleanup':{},
                 'started_unix_ms':int(time.time()*1000)}
-    server = client = agent = None; installed = registered = False
+    server = client = agent = chrome = chrome_log = None; installed = registered = False
     try:
         server = subprocess.Popen(['python3',str(repo/'tests/fixtures/browser-workbench/server.py'),
                                    '--output',str(root/'web'),'--case',case],stdout=subprocess.PIPE,text=True)
         address = json.loads(server.stdout.readline())
         client = initialize(binary, root/'supervisor')
         if args.browser == 'chrome':
-            subprocess.run(['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome','--new-window',address['url']],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=True,timeout=10)
+            profile = root/'chrome-profile'; profile.mkdir()
+            chrome_log = (root/'chrome.log').open('w')
+            chrome_args = ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+                           '--user-data-dir='+str(profile), '--no-first-run', '--no-default-browser-check',
+                           '--disable-background-mode', '--new-window', address['url']]
+            chrome = subprocess.Popen(chrome_args, stdout=chrome_log, stderr=subprocess.STDOUT)
+            evidence['browser_process'] = {'pid':chrome.pid, 'profile':str(profile),
+                                           'ownership':'exact child with fresh unique profile'}
         else:
             subprocess.run(['open','-a','Safari'],check=True,timeout=10)
             def existing_window():
@@ -919,6 +954,14 @@ def main():
                 process_cleaned(result)
                 require(not result.get('signal_error'), 'Could not request server shutdown')
             steps.append(('server', close_server, server_cleaned))
+        if chrome is not None:
+            def close_chrome():
+                if chrome.poll() is None: chrome.terminate()
+                return stop_owned(chrome)
+            def chrome_cleaned(result):
+                require(result.get('returncode') in (0,-15) and result.get('forced') == [],
+                        'Owned Chrome required forced cleanup')
+            steps.append(('owned_chrome_process', close_chrome, chrome_cleaned))
         if (root/'web/state.json').exists():
             steps.append(('final_business', lambda:check_final_business(
                 evidence,root,document,case,browser_app), None))
@@ -933,6 +976,7 @@ def main():
         if package is not None:
             steps.append(('installed_package_integrity', lambda:recheck_installed_package(artifact), None))
         cleanup_steps(evidence, steps)
+        if chrome_log is not None: chrome_log.close()
         evidence['finished_unix_ms']=int(time.time()*1000);write_json(root/'evidence.json',evidence)
     print(json.dumps({k:evidence.get(k) for k in ['passed','business_passed','usability_passed','cleanup_passed','client','agent_wall_seconds','metrics','failure']},ensure_ascii=False))
     return 0 if evidence['passed'] else 1
