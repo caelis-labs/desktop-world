@@ -1,10 +1,10 @@
 //! Private worker entry; sequential native ownership and a parent-death watchdog.
 use serde_json::{json, Value};
 use std::{
-    ffi::{CStr, CString},
+    ffi::{c_void, CStr, CString},
     io::{BufRead, Read, Write},
     sync::atomic::{AtomicBool, Ordering},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 #[path = "../../scene_lease.rs"]
 mod scene_lease;
@@ -14,9 +14,12 @@ unsafe extern "C" {
     fn dtw_scene_call(request: *const std::ffi::c_char) -> *mut std::ffi::c_char;
     fn dtw_scene_free(reply: *mut std::ffi::c_char);
     fn dtw_input_quiesce(timeout_milliseconds: u32) -> bool;
+    fn dtw_focus_quiesce(timeout_milliseconds: u32) -> bool;
+    fn dtw_focus_owner(timeout_milliseconds: u32, pid: *mut u32, generation: *mut u64) -> i32;
 }
 
 static TERMINATING: AtomicBool = AtomicBool::new(false);
+static SHUTDOWN_STARTED: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn request_termination(_: libc::c_int) {
     // A signal handler only touches a lock-free atomic. No Swift, locks, IO,
@@ -38,20 +41,49 @@ fn install_termination_handler() -> std::io::Result<()> {
     }
 }
 
+fn finish_focus_shutdown(until: Instant) -> bool {
+    let left = || until.saturating_duration_since(Instant::now());
+    let (mut pid, mut generation) = (0, 0);
+    match unsafe { dtw_focus_owner(left().as_millis() as u32, &mut pid, &mut generation) } {
+        0 => unsafe { dtw_focus_quiesce(left().as_millis() as u32) },
+        1 => {
+            // An in-flight action in this worker may still own these leases.
+            // Wait only within the shared shutdown budget; never restore unlocked.
+            let Ok(_instance) = scene_lease::lock_instance(pid, generation, left()) else {
+                return false;
+            };
+            let Ok(_physical) = scene_lease::lock_input(left()) else {
+                return false;
+            };
+            unsafe { dtw_focus_quiesce(left().as_millis() as u32) }
+        }
+        _ => false,
+    }
+}
 fn shutdown_worker() -> ! {
     TERMINATING.store(true, Ordering::Relaxed);
-    // Also bounded when the parent has died and can no longer enforce its
-    // 500 ms grace. Reads never enter the input gate and cannot delay this drain.
-    let clean = unsafe { dtw_input_quiesce(400) };
-    if !clean {
+    if SHUTDOWN_STARTED.swap(true, Ordering::AcqRel) {
+        // The watchdog and stdin loop can observe shutdown together. One owner
+        // drains within 400 ms; the other must not race its restoration or exit.
+        loop {
+            std::thread::park_timeout(Duration::from_millis(10));
+        }
+    }
+    let until = Instant::now() + Duration::from_millis(400);
+    let remaining = || until.saturating_duration_since(Instant::now()).as_millis() as u32;
+    let background = super::cua_input::quiesce(remaining());
+    let input = unsafe { dtw_input_quiesce(remaining()) };
+    let focus = finish_focus_shutdown(until);
+    if !(background && input && focus) {
         eprintln!("dtw native input cleanup did not complete before shutdown");
     }
-    std::process::exit(if clean {
+    std::process::exit(if background && input && focus {
         0
     } else {
         super::super::process::INPUT_QUIESCE_FAILED_EXIT_CODE
     });
 }
+
 fn native(request: &Value, scene: bool) -> Value {
     let input = CString::new(request.to_string()).expect("JSON has no literal NUL");
     unsafe {
@@ -80,32 +112,185 @@ fn input_operation(op: &str) -> bool {
         "press" | "set_value" | "focus" | "type_text" | "keypress" | "scroll" | "click"
     )
 }
-fn dispatch(request: Value, leased: &mut bool, scene_worker: bool) -> Value {
-    let op = request["operation"].as_str().unwrap_or("");
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+fn remaining(request: &Value) -> Duration {
+    Duration::from_millis(
+        request["deadline_unix_ms"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_sub(now_ms()),
+    )
+}
+
+struct BackgroundTarget {
+    target: Value,
+    bounds: Value,
+    keyboard: bool,
+    deadline: u64,
+}
+extern "C" fn validate_background(context: *mut c_void, phase: i32) -> i32 {
+    let target = unsafe { &*(context.cast::<BackgroundTarget>()) };
+    if phase == 0 && (TERMINATING.load(Ordering::Relaxed) || now_ms() >= target.deadline) {
+        return -1;
+    }
+    if phase == 2 {
+        // Only owned key-up cleanup uses this phase. A closing window must not
+        // strand keys in its still-running app; a reused PID is never accepted.
+        let reply = native(
+            &json!({"operation":"validate_input_owner", "app":target.target["app"],
+            "deadline_unix_ms":now_ms()+150}),
+            false,
+        );
+        return i32::from(reply.get("error").is_none() && reply["app"] == target.target["app"]);
+    }
+    if !matches!(phase, 0 | 1) {
+        return -1;
+    }
+    // Mouse releases and focus restoration retain the original window proof.
+    // Cleanup ignores normal cancellation, focus and geometry changes.
+    let check = json!({"operation":if phase == 0 {"validate_background"} else {"validate"},
+        "target":target.target,"keyboard":target.keyboard,"step":phase == 0,
+        "deadline_unix_ms":if phase == 0 {target.deadline} else {now_ms()+150}});
+    let reply = native(&check, false);
+    i32::from(background_reply_valid(&reply, target, phase))
+}
+fn background_reply_valid(reply: &Value, target: &BackgroundTarget, phase: i32) -> bool {
+    validate_reply(reply, &target.target).is_ok()
+        && (phase != 0 || target.keyboard || reply["bounds"] == target.bounds)
+}
+
+/// None is an explicit, side-effect-free preflight decline, never a retry after
+/// preparation or event posting. All uncertain outcomes stay on their first route.
+fn background(request: &mut Value) -> Option<Value> {
+    let op = request["operation"].as_str().unwrap_or("").to_owned();
+    if !matches!(op.as_str(), "click" | "scroll" | "type_text" | "keypress") {
+        return None;
+    }
+    let keyboard = matches!(op.as_str(), "type_text" | "keypress");
+    let check = json!({"operation":"validate_background","target":request["target"],
+        "keyboard":keyboard,"consume":true,"deadline_unix_ms":request["deadline_unix_ms"]});
+    let before = native(&check, false);
+    if let Err(error) = validate_reply(&before, &request["target"]) {
+        return Some(rejected(error, &op));
+    }
+    if request.get("bounds").is_some() && request["bounds"] != before["bounds"] {
+        return Some(rejected(
+            json!({"error":"stale_observation","message":"Window geometry changed; capture again before input"}),
+            &op,
+        ));
+    }
+    let bounds = before["bounds"].as_array().unwrap();
+    let left = bounds[0].as_f64().unwrap();
+    let top = bounds[1].as_f64().unwrap();
+    let width = bounds[2].as_f64().unwrap();
+    let height = bounds[3].as_f64().unwrap();
+    let x = request["screen_x"].as_f64().unwrap_or(left + width / 2.0);
+    let y = request["screen_y"].as_f64().unwrap_or(top + height / 2.0);
+    if !x.is_finite()
+        || !y.is_finite()
+        || x < left
+        || y < top
+        || x >= left + width
+        || y >= top + height
+    {
+        return Some(rejected(
+            json!({"error":"invalid_point","message":"Input point must be inside the current target window"}),
+            &op,
+        ));
+    }
+    if !keyboard {
+        request["screen_x"] = json!(x);
+        request["screen_y"] = json!(y);
+    }
+    let mut input = json!({"operation":op,"pid":request["target"]["app"]["pid"],
+        "window_id":request["target"]["native_id"],"deadline_unix_ms":request["deadline_unix_ms"],
+        "chromium":before["chromium"].as_bool().unwrap_or(false),
+        "screen_x":x,"screen_y":y,"window_x":x-left,"window_y":y-top});
+    for key in ["count", "button", "delta_x", "delta_y", "text", "keys"] {
+        if let Some(value) = request.get(key) {
+            input[key] = value.clone();
+        }
+    }
+    let mut target = BackgroundTarget {
+        target: request["target"].clone(),
+        bounds: before["bounds"].clone(),
+        keyboard,
+        deadline: request["deadline_unix_ms"].as_u64().unwrap_or(0),
+    };
+    let mut result = super::cua_input::call(
+        &input.to_string(),
+        (&mut target as *mut BackgroundTarget).cast(),
+        validate_background,
+    );
+    if result["fallback_allowed"] == true && result["dispatch"] == "not_dispatched" {
+        return None;
+    }
+    if result["error"].is_object() {
+        result["message"] = result["error"]["message"].clone();
+        result["error"] = result["error"]["code"].clone();
+    }
+    result["evidence"] = json!("unverified");
+    result["route"] = json!("cua_pid_window");
+    Some(result)
+}
+
+fn dispatch(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value {
+    let op = request["operation"].as_str().unwrap_or("").to_owned();
+    let op = op.as_str();
     if matches!(op, "capture" | "click" | "scroll") && !scene_worker {
         return rejected(
             json!({"error":"invalid_request","message":"Scene operations require a short-lived scene owner"}),
             op,
         );
     }
-    // Includes all validation, focus establishment, native dispatch and key/button
-    // release. No second DTW process can move focus inside an admitted transaction.
-    let _input_lease = if input_operation(op) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-        let left = request["deadline_unix_ms"]
-            .as_u64()
-            .unwrap_or(0)
-            .saturating_sub(now);
-        if left == 0 || TERMINATING.load(Ordering::Relaxed) {
+    let focus_owner = if op == "release_focus" {
+        let (mut pid, mut generation) = (0, 0);
+        match unsafe {
+            dtw_focus_owner(
+                remaining(&request).as_millis().min(150) as u32,
+                &mut pid,
+                &mut generation,
+            )
+        } {
+            0 => None,
+            1 => Some((pid, generation)),
+            _ => {
+                return json!({"error":"focus_cleanup_unavailable","message":"Could not acquire original foreground ownership before cleanup"})
+            }
+        }
+    } else {
+        None
+    };
+    let instance = if input_operation(op) {
+        let (Some(pid), Some(generation)) = (
+            request["target"]["app"]["pid"]
+                .as_u64()
+                .and_then(|pid| u32::try_from(pid).ok()),
+            request["target"]["app"]["generation"].as_u64(),
+        ) else {
             return rejected(
-                json!({"error":"deadline_exceeded","message":"Input deadline elapsed before global admission"}),
+                json!({"error":"invalid_request","message":"Missing native app identity"}),
+                op,
+            );
+        };
+        Some((pid, generation))
+    } else {
+        focus_owner
+    };
+    let _instance = if let Some((pid, generation)) = instance {
+        let left = remaining(&request);
+        if left.is_zero() || TERMINATING.load(Ordering::Relaxed) {
+            return rejected(
+                json!({"error":"deadline_exceeded","message":"Input deadline elapsed before instance admission"}),
                 op,
             );
         }
-        match scene_lease::lock_input(Duration::from_millis(left)) {
+        match scene_lease::lock_instance(pid, generation, left) {
             Ok(lease) => Some(lease),
             Err(message) => {
                 return rejected(json!({"error":"native_input_busy","message":message}), op)
@@ -120,7 +305,48 @@ fn dispatch(request: Value, leased: &mut bool, scene_worker: bool) -> Value {
             op,
         );
     }
-    dispatch_owned(request, leased, scene_worker)
+    if let Some(result) = background(&mut request) {
+        return result;
+    }
+    // Only routes that actually use foreground/HID input need the global lease.
+    // Semantic AX writes and directed input keep their instance lease; unrelated
+    // apps remain concurrent. Physical routes recheck their own target on change.
+    let physical = matches!(op, "focus" | "type_text" | "keypress" | "scroll" | "click")
+        || (op == "release_focus" && focus_owner.is_some());
+    let _input = if physical {
+        match scene_lease::lock_input(remaining(&request)) {
+            Ok(lease) => Some(lease),
+            Err(message) => {
+                return rejected(json!({"error":"native_input_busy","message":message}), op)
+            }
+        }
+    } else {
+        None
+    };
+    if physical && op != "release_focus" {
+        let mut prepare = request.clone();
+        prepare["operation"] = json!("prepare_foreground");
+        let prepared = native(&prepare, false);
+        if prepared.get("error").is_some() {
+            return rejected(prepared, op);
+        }
+    }
+    let mut result = dispatch_owned(request, leased, scene_worker);
+    if physical && op != "focus" && op != "release_focus" {
+        let cleanup = native(
+            &json!({"operation":"release_focus","deadline_unix_ms":now_ms()+300}),
+            false,
+        );
+        if cleanup.get("error").is_some() {
+            result["cleanup_error"] = cleanup.clone();
+            if result.get("error").is_none() {
+                result["error"] = cleanup["error"].clone();
+                result["message"] = cleanup["message"].clone();
+                result["dispatch"] = json!("unknown");
+            }
+        }
+    }
+    result
 }
 fn dispatch_owned(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value {
     let op = request["operation"].as_str().unwrap_or("").to_owned();
@@ -166,6 +392,16 @@ fn dispatch_owned(mut request: Value, leased: &mut bool, scene_worker: bool) -> 
     }
     request["pid"] = request["target"]["app"]["pid"].clone();
     request["window_id"] = request["target"]["native_id"].clone();
+    if op == "click" {
+        let mut focus = request.clone();
+        focus["operation"] = json!("focus");
+        let raised = native(&focus, false);
+        // Preserve the plain visible-point path for surfaces without AX. A
+        // possibly dispatched focus attempt is never followed by another route.
+        if raised.get("error").is_some() && raised["dispatch"] != "not_dispatched" {
+            return raised;
+        }
+    }
     // Scroll establishes focus and posts its wheel event in the same input
     // transaction, but shares Scene.swift's SCK transparency proof. Keep SCK
     // in this short-lived owner and retain both scene/input leases until exit.
@@ -233,6 +469,27 @@ mod tests {
         assert!(
             validate_reply(&json!({"target":target,"bounds":[-100,2,300,400]}), &target).is_ok()
         );
+    }
+
+    #[test]
+    fn keyboard_target_survives_geometry_changes_but_pointer_binding_does_not() {
+        let identity = json!({"app":{"pid":7},"native_id":1,"generation":2});
+        let mut target = BackgroundTarget {
+            target: identity.clone(),
+            bounds: json!([10, 20, 300, 400]),
+            keyboard: true,
+            deadline: 0,
+        };
+        let moved = json!({"target":identity,"bounds":[100,200,500,600]});
+        assert!(background_reply_valid(&moved, &target, 0));
+        target.keyboard = false;
+        assert!(!background_reply_valid(&moved, &target, 0));
+        assert!(background_reply_valid(&moved, &target, 1));
+        let replaced = json!({"target":{"app":{"pid":8},"native_id":1,"generation":2},"bounds":[10,20,300,400]});
+        for keyboard in [false, true] {
+            target.keyboard = keyboard;
+            assert!(!background_reply_valid(&replaced, &target, 0));
+        }
     }
 
     #[test]

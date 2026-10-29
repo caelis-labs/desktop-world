@@ -147,7 +147,7 @@ state 提交不是桌面事务。动作一旦派发，之后的异常、取消�
 
 成功解析为动作的步骤保存完整 `outcome/provider_outcome/interruption`；在 Coordinator 的协议解析阶段被拒绝的步骤只记录 error，receipt 为 null；读步骤也保留错误。普通异常和 provider panic 后，之前的步骤及 receipt 不丢失；panic 时尚无最终回执的动作记为未知效果。脚本失败后的 `completed` 只表示任务已收尾，不能据此推断没有桌面效果。`error.code` 可为 `script_syntax / script_exception / script_memory / script_timeout / script_cancelled / script_stalled / script_internal`，也可能是 Core/协议收尾错误；细分原因如 `call_limit`、`receipt_limit`、`invalid_args`、`invalid_json` 在 `script.failure.code` 中，原生动作事实以步骤 receipt 为准。
 
-一个连接保留多个 app 上下文，A→B→A 不重置 state 或窗口引用。每个 app 的 AX worker 与短命 scene worker 分开：只有 capture/click/scroll 才占用 scene 资源，完成后停止并回收该子进程，空闲 app 不持有 scene lease。当前同一连接一次执行一个脚本，多个连接保持独立 state、引用和回执。连接保留最多 512 份已接受执行记录，不再每 64 次重建 app owner。value/image 共享 64 MiB payload 预算；驱逐后 `payload_expired: true`，`value` 和 image 消失，但 `script.steps`、failure、state_committed、shutdown_error、提交身份和动作 receipt 保留至进程退出，不重新执行以恢复 payload。回执准入阈值为 16 MiB：保留最后一份完整回执后停止接收新执行，不截断该回执。此时仍可读取原结果；重连不会恢复旧账本，也不是重放未知效果的许可。
+一个连接保留多个 app 上下文，A→B→A 不重置 state 或窗口引用。原生 worker、最新 app state/refs 与历史回执分开管理。已完成历史采用滑动窗口：当前默认保留最近 512 条、16 MiB 回执；value/image 另有 64 MiB payload 预算。这些是保留容量，不是累计执行配额，达到容量会淘汰旧记录并继续执行，不重建 app owner。活动和未收尾执行不会被淘汰。payload 单独淘汰时标记 payload_expired；整条历史淘汰后 result 返回 execution_unavailable，不重放原脚本、不保留无限墓碑。默认 result 读取该 app 最新仍保留的已接受执行（包括进行中）；历史回执不是持久审计存储，去重仅覆盖仍被保留的传输记录。macOS 同一实例的写操作跨会话互斥，独立实例的后台输入可并行；前台替代路线占用共享物理输入租约，归还前台/指针也在该租约内。
 
 capture 只把尺寸、坐标系和 opaque observation_ref 交给 VM；PNG 字节始终在 VM 外。常规结算只返回最后一次 capture 的 MCP image，并用 `value.last_capture` 指明来源步骤。此前截图不会全部累计。保留的图片及引用可能已被后续操作取代或消费，不能当作仍然有效的点击依据。
 

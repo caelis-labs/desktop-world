@@ -171,7 +171,7 @@ fn unfinished_pagination_and_failed_continuation_are_not_terminal_incomplete_que
 #[test]
 fn terminal_discovery_metadata_survives_real_result_payload_eviction() {
     let (mut owner, backend) = setup();
-    Arc::get_mut(&mut owner).unwrap().max_payload_bytes = 0;
+    Arc::get_mut(&mut owner).unwrap().retention.payload_bytes = 0;
     let original = script_run(&owner, "evicted", &format!("{READ_ALL}return 'discarded';"));
     assert!(!original.is_error, "{}", original.data);
     assert_eq!(original.data["payload_expired"], true);

@@ -1,0 +1,70 @@
+# macOS background input port
+
+DTW ports a selected native dependency closure from CUA commit `b38360443960a6540685a9a5eb5407f10fe3d03b`. It does not link the CUA SDK, worker, driver registry, overlay renderer, browser stack, or the full `platform-macos` crate. The agent contract remains `exec(app, source)`; route selection is private to the worker.
+
+## Exact source inventory
+
+The hashes below are SHA-256 of the original downloaded bytes, before namespace rewrites, formatting, and the changes listed below.
+
+| Pinned source | Original SHA-256 |
+| --- | --- |
+| [platform-macos/src/input/mouse.rs](https://github.com/trycua/cua/blob/b38360443960a6540685a9a5eb5407f10fe3d03b/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs) | `3ba45abcfe10d3ed01961b7f482362fb5628c07823c35bc995649007e3db9200` |
+| [platform-macos/src/input/keyboard.rs](https://github.com/trycua/cua/blob/b38360443960a6540685a9a5eb5407f10fe3d03b/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs) | `5ed07b20a5f378c8429cd09b5a5cf608ddcd1a6a840888d23d37e30ca800514a` |
+| [platform-macos/src/input/skylight.rs](https://github.com/trycua/cua/blob/b38360443960a6540685a9a5eb5407f10fe3d03b/libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs) | `4f0e7f08ae2955b5e9dd5c2e1c4156f6b50d897297fbe76275c2891ed4775aaa` |
+| [platform-macos/src/ax/bindings.rs](https://github.com/trycua/cua/blob/b38360443960a6540685a9a5eb5407f10fe3d03b/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs) | `00b68eaab97fdbef71402bc48e37941f84940e02facbb89362355aaeaa484df7` |
+
+[Upstream LICENSE.md](https://github.com/trycua/cua/blob/b38360443960a6540685a9a5eb5407f10fe3d03b/LICENSE.md) has SHA-256 `c0779290c1d4783169aa3dbfb55feb505e563ef8a004bbf55298ceffcfbda8d9`. The original MIT notice is retained in `cmd/dtw/src/backends/macos/cua_input/LICENSE-CUA`. The ported files are Copyright (c) 2025 Cua AI, Inc.; DTW additions are covered by the repository license.
+
+| Local module | Ported closure / DTW responsibility |
+| --- | --- |
+| `cua_input/mouse.rs` | Chromium move/off-screen primer/click route plan; window, PID, click-group and event-phase stamps; generic AppKit move/down/up construction, right click and anchored wheel construction. |
+| `cua_input/keyboard.rs` | Unicode payload/control-key conversion; named-key codes and modifiers; PID key press/release construction and upstream 8 ms pacing. |
+| `cua_input/skylight.rs` | Private symbol resolution, authenticated PID delivery, no-raise focus records, exact-window key priming, and key-window restoration. |
+| `cua_input/ax.rs` | Narrow upstream AX focused-window/focused-element/window-list bindings, with retained previous-window evidence. This is not DTW's canonical target resolver. |
+| `cua_input/control.rs` | DTW call admission, deadline/cancellation, per-event target validation, paired-release ownership, explicit cleanup reporting and quiescence. |
+| `cua_input/mod.rs` | Private JSON/C ABI, key-array adaptation, preflight, route execution and autorelease lifetime. |
+
+The native crate dependencies match CUA's `core-graphics 0.24` (`highsierra`, `elcapitan`), `core-foundation 0.10`, and `foreign-types 0.5`, plus `anyhow 1`. The adapter uses `serde 1` with derive; `libc` and `serde_json` already existed. No Objective-C wrapper crate or new framework build is required.
+
+## Deliberate differences from the pinned source
+
+1. Each input event uses one directed delivery selected before input: authenticated keyboard and Chromium pointer events use SkyLight, while the generic AppKit pointer recipe uses public PID delivery. The worker supplies a private app/framework classification; no agent parameter is added. The original scroll path's SkyLight + public PID duplicate and the legacy `Both` route are excluded. No imported route calls HID posting, cursor warping, global key events, window raising, or front-process activation. The `defocus_front` branch is retained inside the imported function but the adapter always passes `false`.
+2. The Chromium recipe keeps its original screen-space `CGEventSetWindowLocation` stamp, including its off-screen down/up primer. `window_x/y` are still supplied by the host as screen point minus window origin; the generic AppKit click, right-click and wheel paths retain CUA's local-window stamping. The original background wrapper always selected Chromium; DTW adds a pre-dispatch framework branch so AppKit uses the existing generic construction and `PublicOnly` route. These app-specific differences require real acceptance, not mathematical normalization during the port.
+3. Scroll input is DTW's existing wheel-step unit, not CUA's 120-unit tool input. Positive DTW deltas (right/down) are inverted for the native CG wheel convention, matching the existing Swift provider. Large requests are split into at most ten lines per native event without losing the remainder. The single-right-click donor declines public right-double clicks during preflight so the existing foreground implementation handles them. CRLF remains one Return, matching the existing DTW text contract. Keys stay in the existing `keys` array; the adapter preserves named-key aliases and modifier-only chords.
+4. All writes and focus records validate the original target immediately before dispatch through the existing worker/Swift bridge. Pacing waits poll cancellation/deadlines without repeating AX traversal; the following post revalidates the target. No extra identity format is exposed. Background keyboard preparation must prove the exact target window; sibling windows are not accepted and there is no app-wide ambiguous-window escape. After priming, every keyboard down rechecks the current AX focused-window ID, so a user switching to a sibling window stops the remaining text/chord. Paired key releases ignore current focus and window closure while validating the original app incarnation. New downs and mouse events retain the full original-window checks. The local deadline/stop gate is checked again after blocking validation, including the exact-key-window AX query, before admitting a new post. Scroll events and mouse-moved primers explicitly clear inherited hardware modifier flags.
+5. A retained previous AX window must be available before background preparation. Restoration uses that original AX object, checks its liveness and window ID before each restoration record, and reports failure if an owned restoration cannot validate its previous window. If the original app remains valid but the target is no longer key, or focus is already back at the previous window, cleanup preserves the current choice and skips restoration without poisoning future admission. It never picks an arbitrary replacement sibling. AX messaging is bounded to 150 ms per native call.
+6. Before a key or mouse down is posted, an owned release event is reserved. Cancellation stops new normal events; the same call owner releases its posted prefix and restores the key window. Terminal cleanup ignores the caller deadline only within its shared two-second budget. Paired KeyUp events use app-incarnation validation so a window closing between down/up does not suppress release; mouse releases and any attempted key-window restoration still require the original process/window identity. A normal KeyUp has a separate bounded release allowance and does not start the terminal cleanup timer on the first character of a long text operation. Every release keeps its originally selected transport. Unverifiable cleanup is visible and fences new admission in that worker.
+7. The upstream authentication selector check queried the instance method table of `SLSEventAuthenticationMessage`; the factory is a class method. DTW checks the metaclass. A read-only Objective-C symbol probe on this host returned instance=false / metaclass=true. A missing authentication capability declines keyboard background input during preflight; a later authentication construction failure stops without posting a plain event. A Rust autorelease pool owns factory messages for each call.
+8. `SLSGetWindowOwner` returning exactly `1002` during the read-only connection preflight is retained as an invalid worker WindowServer connection. DTW returns unavailable immediately instead of masking it with `GetProcessForPID` and discovering it on the first focus post. Other statuses are not misclassified as `1002`.
+9. Upstream window-change tail bookkeeping and cursor-overlay integration are excluded; DTW retains observation invalidation and instance identity ownership. Upstream best-effort `Drop` restoration is replaced with explicit checked cleanup, plus `Drop` as an unwind guard.
+
+## Private worker contract
+
+The preferred Rust call is `call(json, context, validate) -> serde_json::Value`. Equivalent C entry points are:
+
+```c
+char *dtw_cua_input_call(const char *json, void *context,
+                       int32_t (*validate)(void *context, int32_t phase));
+void dtw_cua_input_free(char *json);
+bool dtw_cua_input_quiesce(uint32_t timeout_ms);
+```
+
+The callback/context remain alive until the synchronous call returns. Phase `0` validates the canonical app incarnation, window, cancellation and deadline, plus geometry only for coordinate/pointer input; keyboard input does not depend on the pointer or window position; phase `1` validates the same original target for mouse release/restore while ignoring normal cancellation. Phase `2` validates only the exact original app incarnation for paired key releases and the read-only ownership check before deciding whether restoration is still ours; it must reject process exit/reuse but does not require the old window to exist. Phases `1`/`2` obey the bounded cleanup/release allowance. They never authorize a new down or a replacement window. Returns are `1` valid, `0` stale, and `-1` cancelled/unavailable. The parent owns process-instance locking; this module admits one call per worker.
+
+The private request contains `operation` (`click`, `scroll`, `type_text`, `keypress`), `pid`, `window_id`, `deadline_unix_ms`, and the operation's coordinates/count/button/deltas/text/keys. A private `chromium` framework flag is determined by the host before delivery. None of these implementation details adds an agent-visible delivery or request-ID parameter.
+
+The response has `ok`, `dispatch`, `fallback_allowed`, optional `error`, and optional `cleanup_error`. `not_dispatched + fallback_allowed:true` is restricted to a known missing background precondition before any preparation/input effect. Preparation failure is `unknown` even when no click/key has yet been sent. Any posted or unknown attempt must not be replayed through foreground. Successful OS posting remains **unverified application effect**; independent observation is still required.
+
+`quiesce` permanently closes admission, requests cancellation and waits for the actual call owner. It does not inject releases from a racing watchdog thread. It returns false on timeout or cleanup failure and never equates a cancellation request with completion.
+
+## Foreground boundary
+
+Background app-local key/AX focus does not prove a physical raise. The selected foreground route performs its own single raise/activation, then checks focus. Before the first physical click, the existing point proof may settle for at most 750 ms within the action deadline; app/window identity and geometry changes, cancellation and expiry still stop immediately. No pointer/down is sent during this wait, and the second click retains its strict single check. This does not establish that all foreground transitions work: the combined background-to-foreground case remains blocked in the [stage report](background-input-acceptance.md).
+
+## Evidence and acceptance boundary
+
+Compilation and focused pure tests cover original-key compatibility, unchanged Chromium route geometry/pairs, exact-window priming proof, preflight-only fallback, explicit cleanup errors, post-validation deadline expiry, app-only paired-key release gating, lost-key-ownership restoration decisions, and waiting for the actual owner during quiescence. These tests do not claim GUI delivery or OS compatibility.
+
+Real acceptance must exercise the signed, standard local stdio product route: background Chromium editing and scrolling, AppKit editing, multiple windows of one process, unrelated foreground activity, app/window closure, cancellation/worker exit, and focus restoration. Pointer movement alone is observation, not failure; keyboard tests do not require desktop-wide inactivity. Space changes, interference during a modifier chord and forced release/restoration failures remain separate coverage gates. Record the selected route, independent app result, foreground app, pointer position and cleanup outcome. A foreground fallback case should separately show that its preflight was side-effect-free and focus was returned.
+
+SkyLight authentication, focus records, `_AXUIElementGetWindow`, and opaque CGEvent record offsets are private SPI. Symbol availability does not prove event acceptance; OS releases and app frameworks can reject or reinterpret them. Locked-session use, native menu/dialog traversal, overlay ownership, and Windows WGC are separate acceptance groups. This port does not claim them complete.

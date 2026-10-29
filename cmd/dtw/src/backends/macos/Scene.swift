@@ -159,7 +159,7 @@ private func visibleAt(_ point: CGPoint, target: Window, all: [Window], deadline
                             "screen_x":Double(point.x),"screen_y":Double(point.y)],
                            deadline: deadline, stopping: dtwInputStopping)
         if ProcessInfo.processInfo.environment["DTW_SCENE_TRACE"] == "1" {
-            let message = "dtw_scene visibility target=\(target.id) cover=\(cover.id) pid=\(cover.pid) alpha=\(sample["alpha"] ?? "unknown") error=\(sample["error"] ?? "none")\n"
+            let message = "dtw_scene visibility target=\(target.id) target_pid=\(target.pid) target_rect=\(target.rect) cover=\(cover.id) pid=\(cover.pid) layer=\(cover.layer) rect=\(cover.rect) alpha=\(sample["alpha"] ?? "unknown") error=\(sample["error"] ?? "none")\n"
             FileHandle.standardError.write(Data(message.utf8))
         }
         return sample["alpha"] as? Int
@@ -188,16 +188,80 @@ private func hitStack(_ list: [Window], id: CGWindowID, point: CGPoint) -> [Stri
         .map { "\($0.pid):\($0.id):\($0.layer):\($0.rect)" }
 }
 
+private struct PointReadinessFailure: Error {
+    let result: [String: Any]
+}
+
+// A missing/replaced/moved target is terminal even while presentation is
+// settling. Only visibility or hit-stack readiness may be sampled again.
+private func proveSurfacePoint(_ point: CGPoint, id: CGWindowID, pid: pid_t,
+                               bounds: CGRect, deadline: TimeInterval) throws -> SurfacePointProof? {
+    func trace(_ phase: String) {
+        guard ProcessInfo.processInfo.environment["DTW_SCENE_TRACE"] == "1" else { return }
+        let message = "dtw_scene point phase=\(phase) pid=\(pid) window=\(id) point=\(point) rect=\(bounds) uptime=\(ProcessInfo.processInfo.systemUptime)\n"
+        FileHandle.standardError.write(Data(message.utf8))
+    }
+    func target(in list: [Window], phase: String) throws -> Window {
+        guard let value = list.first(where: { $0.id == id && $0.pid == pid }),
+              value.rect == bounds, bounds.contains(point) else {
+            trace(phase)
+            throw PointReadinessFailure(result: fail("stale_observation", "Window closed or moved; observe again"))
+        }
+        return value
+    }
+    let all = windows()
+    let window = try target(in: all, phase: "target_invalid_before_sample")
+    let visible = visibleAt(point, target: window, all: all, deadline: deadline)
+    let current = windows()
+    _ = try target(in: current, phase: "target_invalid_after_sample")
+    guard visible else { trace("visibility_pending"); return nil }
+    let stack = hitStack(all, id: id, point: point)
+    guard hitStack(current, id: id, point: point) == stack else {
+        trace("hit_stack_changed"); return nil
+    }
+    return SurfacePointProof(target: window, point: point, stack: stack)
+}
+
 // Used by scroll and click in a short-lived scene worker. Bounds alone never
 // authorize a point underneath an unknown/opaque surface.
 func dtwProveSurfacePoint(_ point: CGPoint, id: CGWindowID, pid: pid_t,
                           bounds: CGRect, deadline: TimeInterval) -> SurfacePointProof? {
-    let all = windows()
-    guard let target = all.first(where: { $0.id == id && $0.pid == pid }),
-          target.rect == bounds, bounds.contains(point),
-          visibleAt(point, target: target, all: all, deadline: deadline) else { return nil }
-    let proof = SurfacePointProof(target: target, point: point, stack: hitStack(all, id: id, point: point))
-    return proof.matchesCurrent() ? proof : nil
+    try? proveSurfacePoint(point, id: id, pid: pid, bounds: bounds, deadline: deadline)
+}
+
+// The foreground route has already requested its one raise. This only waits
+// for that presentation to settle, before any pointer movement or down event.
+private func waitForFirstPoint(deadline: TimeInterval, stopping: () -> Bool,
+                               now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+                               validate: (TimeInterval) -> [String: Any]?,
+                               prove: (TimeInterval) throws -> SurfacePointProof?,
+                               wait: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }) throws -> SurfacePointProof {
+    let until = min(deadline, now() + 0.75)
+    func live() throws {
+        if stopping() {
+            throw PointReadinessFailure(result: fail("native_stopping", "Input stopped before point readiness; no click posted"))
+        }
+        let current = now()
+        if current >= deadline {
+            throw PointReadinessFailure(result: fail("deadline_exceeded", "Action deadline elapsed before point readiness; no click posted"))
+        }
+        if current >= until {
+            throw PointReadinessFailure(result: fail("target_occluded", "Point visibility did not settle within the readiness budget; no click posted"))
+        }
+    }
+    while true {
+        try live()
+        let before = validate(until)
+        try live()
+        if let error = before { throw PointReadinessFailure(result: error) }
+        let proof = try prove(until)
+        try live()
+        let after = validate(until)
+        try live()
+        if let error = after { throw PointReadinessFailure(result: error) }
+        if let proof { return proof }
+        wait(min(0.015, max(0, until - now())))
+    }
 }
 // Each additional click is a new dispatch boundary: the earlier pair may
 // already have changed the window stack. This shared sequence also drives the
@@ -225,13 +289,23 @@ private func click(_ request: [String:Any]) -> [String:Any] {
     let expected = CGRect(x:b[0],y:b[1],width:b[2],height:b[3]), point = CGPoint(x:x,y:y)
     let deadline = ProcessInfo.processInfo.systemUptime + max(0,
         (request["deadline_unix_ms"] as? Double ?? 0)/1000-Date().timeIntervalSince1970)
-    guard let current = windows().first(where: { $0.id == id && $0.pid == pid }),
-          current.rect == expected, current.rect.contains(point) else {
-        return fail("stale_observation", "Window closed or moved; observe again")
-    }
-    guard let proof = dtwProveSurfacePoint(point, id: id, pid: pid, bounds: expected, deadline: deadline) else {
-        return fail("target_occluded","Another visible window covers the point or its transparency is unknown; no click posted")
-    }
+    let proof: SurfacePointProof
+    do {
+        proof = try waitForFirstPoint(deadline: deadline, stopping: dtwInputStopping, validate: { until in
+            var validation = request
+            validation["deadline_unix_ms"] = UInt64(max(0,
+                (Date().timeIntervalSince1970 + until - ProcessInfo.processInfo.systemUptime) * 1_000))
+            if let error = dtwValidatePixelTarget(validation) { return error }
+            guard let current = windows().first(where: { $0.id == id && $0.pid == pid }),
+                  current.rect == expected, current.rect.contains(point) else {
+                return fail("stale_observation", "Window closed or moved; observe again")
+            }
+            return nil
+        }, prove: { until in
+            try proveSurfacePoint(point, id: id, pid: pid, bounds: expected, deadline: until)
+        })
+    } catch let error as PointReadinessFailure { return error.result }
+    catch { return fail("native_error", String(describing: error)) }
     // Sampling transparent surfaces takes time. Recheck the exact hit stack
     // immediately before dispatch, rather than trusting pre-sampling geometry.
     let after=windows()

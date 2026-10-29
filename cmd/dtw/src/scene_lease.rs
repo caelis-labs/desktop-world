@@ -1,4 +1,5 @@
-//! Shared SCK lease: held through process exit and Swift client teardown.
+//! Cross-process native resource leases. Lock order: app instance, then physical input.
+//! SCK ownership is held through process exit and Swift client teardown.
 use std::{
     fs::{File, OpenOptions},
     os::{
@@ -20,6 +21,17 @@ pub(crate) fn lock_input(timeout: Duration) -> Result<File, String> {
     let uid = unsafe { libc::geteuid() };
     lock_scene_at(
         std::path::Path::new(&format!("/private/tmp/dev.caelis.dtw-input-{uid}.lock")),
+        timeout,
+    )
+}
+/// Serialize mutations of one process incarnation across independent MCP
+/// sessions, without blocking background work in unrelated applications.
+pub(crate) fn lock_instance(pid: u32, generation: u64, timeout: Duration) -> Result<File, String> {
+    let uid = unsafe { libc::geteuid() };
+    lock_scene_at(
+        std::path::Path::new(&format!(
+            "/private/tmp/dev.caelis.dtw-app-{uid}-{pid}-{generation}.lock"
+        )),
         timeout,
     )
 }
@@ -83,6 +95,25 @@ mod tests {
         let successor = lock_scene_at(&path, Duration::from_secs(1)).unwrap();
         drop(successor);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn instance_leases_allow_independent_apps_but_serialize_one_incarnation() {
+        let generation = (uuid::Uuid::new_v4().as_u128() >> 64) as u64;
+        let pid = std::process::id();
+        let first = lock_instance(pid, generation, Duration::ZERO).unwrap();
+        assert!(lock_instance(pid, generation, Duration::ZERO).is_err());
+        let peer = lock_instance(pid, generation.wrapping_add(1), Duration::ZERO).unwrap();
+        drop(first);
+        drop(lock_instance(pid, generation, Duration::ZERO).unwrap());
+        drop(peer);
+        let uid = unsafe { libc::geteuid() };
+        for value in [generation, generation.wrapping_add(1)] {
+            std::fs::remove_file(format!(
+                "/private/tmp/dev.caelis.dtw-app-{uid}-{pid}-{value}.lock"
+            ))
+            .unwrap();
+        }
     }
 
     #[test]

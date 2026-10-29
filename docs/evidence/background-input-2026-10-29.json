@@ -1,0 +1,134 @@
+{
+  "date": "2026-10-29",
+  "stage": "draft-not-ready-to-merge",
+  "base": "57fc54d6a711af44b4c82bda044a770a6131c57a",
+  "candidate_d_sha256": "0e7386ec48332bf73e3974cbc210cb9ecf106d8a9c180d9237ae97e48069729c",
+  "source_manifest_sha256": "ad92f7efe7bc1964a64a59447a564d94355bbadbeaaa728a496f545c7c1a41ee",
+  "automated": {
+    "rust_library": 301,
+    "lightweight_python": 123,
+    "native_contracts": "passed including 11 first-point readiness scenarios"
+  },
+  "concurrent_d": {
+    "passed": true,
+    "chars_per_app": 192,
+    "calls_per_app": 8,
+    "seconds": [
+      4.384,
+      4.363
+    ],
+    "native_events_overlap": true,
+    "coverage": {
+      "two_mcp_processes_distinct_apps/desktop/background_coverage": "established"
+    }
+  },
+  "focus_d": {
+    "passed": true,
+    "coverage": {
+      "explicit_focus_returns_after_script/ownership_coverage": "established",
+      "repeated_focus_returns_after_script/ownership_coverage": "established",
+      "explicit_sibling_focus_returns_after_script/ownership_coverage": "established"
+    }
+  },
+  "gui": [
+    {
+      "sample": "D combined background then foreground fallback",
+      "candidate_sha256": "0e7386ec48332bf73e3974cbc210cb9ecf106d8a9c180d9237ae97e48069729c",
+      "overall_passed": false,
+      "raw_evidence_sha256": "7fe63fc62966d56df624efc1322280ebc3ec5f7e1017ce408b22b3f548ab0fd6",
+      "coverage": {
+        "background_keyboard_and_click/keyboard/desktop/background_coverage": "established",
+        "background_keyboard_and_click/capture/desktop/background_coverage": "established",
+        "background_keyboard_and_click/click/desktop/background_coverage": "established"
+      },
+      "passed_subcase": "background Unicode/Backspace/left click",
+      "blocked": "foreground point remains covered by owned observer, alpha 255; not_dispatched"
+    },
+    {
+      "sample": "D close-window lifecycle",
+      "candidate_sha256": "0e7386ec48332bf73e3974cbc210cb9ecf106d8a9c180d9237ae97e48069729c",
+      "overall_passed": false,
+      "raw_evidence_sha256": "55d9e7e15b6e896c124c837929414ea47a1a303ba05015ddc7806d559344cfe8",
+      "coverage": {},
+      "blocked": "close observed; follow-up inventory still contains original window",
+      "original_outcome": "unknown preserved, no replay"
+    },
+    {
+      "sample": "C Chrome background input",
+      "candidate_sha256": "077bfb22680a02925bfee722ef055d6fe69cb3e9f55e67dab71a50f61b906929",
+      "overall_passed": false,
+      "raw_evidence_sha256": "0aa61050be7d4ec619a609df881ee7bd5e178f5fd63c52cd22a1f6b51cf43324",
+      "readiness_attempts": 4,
+      "readiness_seconds": 2.442,
+      "deep_ax_pages": 12,
+      "deep_ax_visited": 1213,
+      "delivered_text": "s",
+      "saves": 0,
+      "blocked": "target change after first character; unknown; not replayed"
+    },
+    {
+      "sample": "C cancellation/EOF/parent exit",
+      "candidate_sha256": "077bfb22680a02925bfee722ef055d6fe69cb3e9f55e67dab71a50f61b906929",
+      "overall_passed": true,
+      "raw_evidence_sha256": "3ddf6dde589a7d082135d9106f16eaf387042b68fbf89f923d9b0baa296fd5e7",
+      "cases": {
+        "cancel": {
+          "passed": true,
+          "delivered_prefix_characters": 46,
+          "paired_input": {
+            "down": {
+              "key:0": 46
+            },
+            "up": {
+              "key:0": 46
+            },
+            "unpaired": {},
+            "received_modifier_flags": 0
+          },
+          "dispatch_attempts": 1,
+          "replayed": false
+        },
+        "eof": {
+          "passed": true,
+          "delivered_prefix_characters": 44,
+          "paired_input": {
+            "down": {
+              "key:0": 44
+            },
+            "up": {
+              "key:0": 44
+            },
+            "unpaired": {},
+            "received_modifier_flags": 0
+          },
+          "dispatch_attempts": 1,
+          "replayed": false
+        },
+        "parent-exit": {
+          "passed": true,
+          "delivered_prefix_characters": 45,
+          "paired_input": {
+            "down": {
+              "key:0": 45
+            },
+            "up": {
+              "key:0": 45
+            },
+            "unpaired": {},
+            "received_modifier_flags": 0
+          },
+          "dispatch_attempts": 1,
+          "replayed": false
+        }
+      }
+    }
+  ],
+  "not_claimed": [
+    "release package or notarization",
+    "new external-model acceptance",
+    "locked session",
+    "arbitrary app / OS compatibility",
+    "Windows background input",
+    "Linux supported desktop"
+  ]
+}

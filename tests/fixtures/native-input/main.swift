@@ -41,6 +41,18 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     var axHidden = false
     var coverAfterFirst = false
     var overlay: NSWindow?
+    var secondaryWindow: NSWindow?
+    var secondaryWindowID: Int?
+    var closedWindowIDs: Set<Int> = []
+    var windowCloseObserver: NSObjectProtocol?
+    var secondaryField: NSTextField?
+    var desktopFile: FileHandle?
+    var focusFile: FileHandle?
+    var activationObserver: NSObjectProtocol?
+    func journal(_ value: [String:Any], to file: FileHandle?) {
+        guard let file, let data = try? JSONSerialization.data(withJSONObject:value,options:[.sortedKeys]) else { return }
+        try? file.write(contentsOf:data + Data("\n".utf8))
+    }
     let keys: [CGKeyCode] = [0,1,2,3,4,5,6,7,8,9,11,12,13,14,15,16,17,36,48,55,56,58,59]
     var text: String { (field.currentEditor() as? NSTextView)?.string ?? field.stringValue }
     func record(_ kind: String, _ event: NSEvent) {
@@ -89,7 +101,12 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         ]
         let publishedUptime = max(ProcessInfo.processInfo.systemUptime, lastPublishedUptime.nextUp)
         lastPublishedUptime = publishedUptime
-        let value: [String:Any] = ["pid":ProcessInfo.processInfo.processIdentifier,"ready":true,"command":command,
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
+        let desktop: [String:Any] = ["uptime":publishedUptime,"frontmost_pid":frontmostPID,
+                                     "pointer_screen":[cursor.x,primaryHeight-cursor.y]]
+        journal(desktop,to:desktopFile)
+        var value: [String:Any] = ["pid":ProcessInfo.processInfo.processIdentifier,"ready":true,"command":command,
+            "frontmost_pid":frontmostPID,
             "published_uptime":publishedUptime,
             "window_server":windowServer,
             "active":fixtureApplication.isActive,"key_window":fixtureApplication.keyWindow?.windowNumber ?? 0,
@@ -107,7 +124,13 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             "scroll_screen_bounds":[scrollFrame.minX,primaryHeight-scrollFrame.maxY,scrollFrame.width,scrollFrame.height],
             "window_bounds":[frame.minX,primaryHeight-frame.maxY,frame.width,frame.height],
             "pad_screen_point":[point.x,primaryHeight-point.y],
+            "closed_window_ids":closedWindowIDs.sorted(),
             "windows":[["id":window.windowNumber,"title":window.title,"visible":window.isVisible]]]
+        if let secondaryWindow, let secondaryField {
+            value["windows"] = [["id":window.windowNumber,"title":window.title,"visible":window.isVisible],
+                                ["id":secondaryWindowID ?? secondaryWindow.windowNumber,"title":secondaryWindow.title,"visible":secondaryWindow.isVisible]]
+            value["secondary_text"] = (secondaryField.currentEditor() as? NSTextView)?.string ?? secondaryField.stringValue
+        }
         try? JSONSerialization.data(withJSONObject:value,options:[.sortedKeys]).write(to:output.appendingPathComponent("state.json"),options:.atomic)
     }
     @objc func saveDocument(_ sender: Any?) {
@@ -121,11 +144,29 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         try! FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
         _ = FileManager.default.createFile(atPath:output.appendingPathComponent("events.jsonl").path,contents:nil)
         eventFile = try! FileHandle(forWritingTo:output.appendingPathComponent("events.jsonl"))
+        if fixtureConfiguration["background_probe"] as? Bool == true {
+            for name in ["desktop.jsonl", "focus.jsonl"] {
+                _ = FileManager.default.createFile(atPath:output.appendingPathComponent(name).path,contents:nil)
+            }
+            desktopFile = try! FileHandle(forWritingTo:output.appendingPathComponent("desktop.jsonl"))
+            focusFile = try! FileHandle(forWritingTo:output.appendingPathComponent("focus.jsonl"))
+            activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName:NSWorkspace.didActivateApplicationNotification,object:nil,queue:.main) { [weak self] notification in
+                    guard let self, let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+                    self.journal(["uptime":ProcessInfo.processInfo.systemUptime,"frontmost_pid":app.processIdentifier,
+                                  "app":app.bundleIdentifier ?? ""],to:self.focusFile)
+                }
+        }
         let menu = NSMenu()
         let appItem = NSMenuItem(title:"Fixture",action:nil,keyEquivalent:"");appItem.submenu=NSMenu(title:"Fixture");menu.addItem(appItem)
         let file = NSMenuItem(title:"File",action:nil,keyEquivalent:""); menu.addItem(file)
         let commands = NSMenu(); let save = NSMenuItem(title:"Save",action:#selector(saveDocument),keyEquivalent:"s")
         save.target=self; save.keyEquivalentModifierMask = .command; commands.addItem(save); file.submenu=commands
+        if fixtureConfiguration["background_probe"] as? Bool == true {
+            let close = NSMenuItem(title:"Close Window",action:#selector(NSWindow.performClose(_:)),keyEquivalent:"w")
+            close.keyEquivalentModifierMask = .command
+            commands.addItem(close) // nil target follows the real key-window responder chain.
+        }
         let edit = NSMenuItem(title:"Edit",action:nil,keyEquivalent:"");let editing=NSMenu(title:"Edit")
         let selectAll=NSMenuItem(title:"Select All",action:#selector(NSText.selectAll(_:)),keyEquivalent:"a")
         selectAll.keyEquivalentModifierMask = .command;editing.addItem(selectAll);edit.submenu=editing;menu.addItem(edit)
@@ -162,6 +203,27 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             switch event.type {case .keyDown:kind="key_down";case .keyUp:kind="key_up";case .flagsChanged:kind="flags_changed";default:kind="scroll"}
             self?.record(kind,event);return event
         }
+        if fixtureConfiguration["secondary_window"] as? Bool == true {
+            let other = NSWindow(contentRect:NSRect(x:x+40,y:80,width:480,height:100),styleMask:[.titled,.closable],backing:.buffered,defer:false)
+            other.title="DTW Input Secondary";other.isReleasedWhenClosed=false
+            let otherField=NSTextField(frame:NSRect(x:20,y:35,width:430,height:28))
+            otherField.setAccessibilityLabel("Secondary Fixture Text")
+            other.contentView!.addSubview(otherField);other.makeFirstResponder(otherField);other.orderFront(nil)
+            secondaryWindow=other;secondaryWindowID=other.windowNumber;secondaryField=otherField
+        }
+        if fixtureConfiguration["background_probe"] as? Bool == true {
+            windowCloseObserver = NotificationCenter.default.addObserver(forName:NSWindow.willCloseNotification,
+                object:nil,queue:.main) { [weak self] notification in
+                    guard let self, let closing = notification.object as? NSWindow,
+                          closing === self.window || closing === self.secondaryWindow else { return }
+                    let id = closing.windowNumber
+                    self.closedWindowIDs.insert(id); self.eventCount += 1
+                    let entry: [String:Any] = ["sequence":self.eventCount,"kind":"window_closed",
+                        "uptime":ProcessInfo.processInfo.systemUptime,"window_number":id]
+                    self.journal(entry,to:self.eventFile)
+                    self.events.append(entry); self.events=Array(self.events.suffix(64))
+                }
+        }
         window.makeKeyAndOrderFront(nil);window.makeFirstResponder(field);fixtureApplication.activate()
         timer=Timer.scheduledTimer(withTimeInterval:0.02,repeats:true) { [self] _ in
             if let next=try? String(contentsOf:output.appendingPathComponent("command"),encoding:.utf8),next != command {
@@ -169,12 +231,19 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                 switch next.trimmingCharacters(in:.whitespacesAndNewlines) {
                 case "front":
                     window.makeKeyAndOrderFront(nil)
-                    _ = NSRunningApplication.current.activate(options:[.activateIgnoringOtherApps])
+                    fixtureApplication.activate()
+                case "front_secondary":
+                    secondaryWindow?.makeKeyAndOrderFront(nil)
                 case "park_pointer":
                     let frame=window.frame, height=CGDisplayBounds(CGMainDisplayID()).height
                     _=CGWarpMouseCursorPosition(CGPoint(x:frame.midX,y:height-frame.midY))
                     _=CGAssociateMouseAndMouseCursorPosition(1)
                 case "reset":window.endEditing(for:field);field.stringValue="";window.makeFirstResponder(field)
+                case "reset_secondary":
+                    if let secondaryWindow, let secondaryField {
+                        secondaryWindow.endEditing(for:secondaryField);secondaryField.stringValue=""
+                        secondaryWindow.makeFirstResponder(secondaryField)
+                    }
                 case "cover_after_first":coverAfterFirst=true
                 case "ax_empty":fixtureApplication.setAccessibilityWindows([]);axHidden=true
                 case "ax_restore":fixtureApplication.setAccessibilityWindows([window!]);axHidden=false

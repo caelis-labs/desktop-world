@@ -402,35 +402,32 @@ return {{old:state.old, fresh}};
 }
 
 #[test]
-fn ordinary_requests_do_not_rotate_the_native_owner_at_sixty_four_jobs() {
+fn sliding_history_preserves_the_app_state_and_window_after_more_than_512_calls() {
     let (server, catalog) = server();
     let capacity = call(&server, "apps", json!({})).data["limits"]["retained_executions"]
         .as_u64()
         .unwrap() as usize;
     let seed = exec(&server, "seed", "state.count=0;state.window=(await app.windows()).windows[0].window_ref;return state.window;");
     let original_ref = success(&seed).clone();
-    assert!(capacity > MAX_REQUESTS + 2);
-    for index in 1..capacity - 1 {
+    let total = capacity * 2 + 3;
+    for index in 1..=total {
         let reply = exec(&server, &format!("count-{index}"), "return ++state.count;");
         assert_eq!(success(&reply), index);
         assert_eq!(reply.data["context_reset"], false);
         assert_eq!(reply.data["state_reset"], false);
     }
     let next = exec(&server, "retained-window", "const shot=await app.capture({window_ref:state.window});return {count:state.count,window:shot.window_ref};");
-    assert_eq!(success(&next)["count"], capacity - 2);
+    assert_eq!(success(&next)["count"], total);
     assert_eq!(success(&next)["window"], original_ref);
     assert_eq!(catalog.connects.load(Ordering::SeqCst), 1);
     assert_eq!(catalog.backend.0.shutdowns.load(Ordering::SeqCst), 0);
-    let exhausted = exec(
-        &server,
-        "past-session-capacity",
-        "state.count=0;return await app.windows();",
-    );
-    assert_code(&exhausted, "request_limit");
     assert_eq!(receipt(&server, &next).data, next.data);
-    assert_eq!(receipt(&server, &seed).data, seed.data);
-    assert_eq!(catalog.connects.load(Ordering::SeqCst), 1);
+    assert_eq!(latest(&server, APP).data["value"], next.data["value"]);
+    assert_code(&receipt(&server, &seed), "execution_unavailable");
+    // Read-only history lookup neither repeats the original windows call nor
+    // rebuilds the native owner holding the still-valid window reference.
     assert_eq!(catalog.backend.0.windows.load(Ordering::SeqCst), 1);
+    assert_eq!(catalog.connects.load(Ordering::SeqCst), 1);
     server.close().unwrap();
 }
 
@@ -507,11 +504,11 @@ fn one_method_registry_covers_facade_schemas_and_types() {
 #[test]
 fn execution_ids_are_automatic_and_new_rpc_ids_repeat_the_requested_effects() {
     let (server, catalog) = server();
-    assert_code(&latest(&server, APP), "no_execution");
+    assert_code(&latest(&server, APP), "execution_unavailable");
     let mut obsolete = input("return 1");
     obsolete["request_id"] = json!("model-authored-id");
     assert_code(&call(&server, "exec", obsolete), "invalid_arguments");
-    assert_code(&latest(&server, APP), "no_execution");
+    assert_code(&latest(&server, APP), "execution_unavailable");
 
     let source = format!(
         "state.count=(state.count||0)+1;{}return state.count;",
@@ -559,7 +556,7 @@ fn execution_ids_are_automatic_and_new_rpc_ids_repeat_the_requested_effects() {
             "result",
             json!({"app":APP,"execution_id":"not-in-this-session"}),
         ),
-        "unknown_execution",
+        "execution_unavailable",
     );
     server.close().unwrap();
 }
@@ -705,8 +702,8 @@ fn execution_lookup_and_transport_deduplication_are_session_and_app_scoped() {
         ),
         "wrong_app",
     );
-    assert_code(&latest(&right, APP), "no_execution");
-    assert_code(&receipt(&right, &original), "unknown_execution");
+    assert_code(&latest(&right, APP), "execution_unavailable");
+    assert_code(&receipt(&right, &original), "execution_unavailable");
     let independent = exec(&right, "same-rpc", PRESS);
     success(&independent);
     assert_ne!(
@@ -714,7 +711,7 @@ fn execution_lookup_and_transport_deduplication_are_session_and_app_scoped() {
         original.data["execution_id"]
     );
     assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 2);
-    assert_code(&receipt(&right, &original), "unknown_execution");
+    assert_code(&receipt(&right, &original), "execution_unavailable");
     assert_eq!(
         latest(&right, APP).data["execution_id"],
         independent.data["execution_id"]

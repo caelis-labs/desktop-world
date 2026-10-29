@@ -28,8 +28,19 @@ pub mod wire;
 
 use wire::{Command, Request, Submit, WireError};
 
-pub const MAX_REQUESTS: usize = 64;
-pub const MAX_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
+#[derive(Clone, Copy)]
+struct RetentionPolicy {
+    records: usize,
+    receipt_bytes: usize,
+    payload_bytes: usize,
+}
+impl RetentionPolicy {
+    const DEFAULT: Self = Self {
+        records: 512,
+        receipt_bytes: 16 * 1024 * 1024,
+        payload_bytes: 64 * 1024 * 1024,
+    };
+}
 const OBSERVATION_TTL: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
@@ -204,8 +215,7 @@ pub struct Coordinator<B: Backend> {
     supported: Vec<Capability>,
     state: Mutex<State>,
     finished: Condvar,
-    max_requests: usize,
-    max_payload_bytes: usize,
+    retention: RetentionPolicy,
 }
 impl<B: Backend + 'static> Coordinator<B> {
     pub fn new(backend: B, app: AppInstance, app_name: String) -> Arc<Self> {
@@ -251,8 +261,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 script_state,
             }),
             finished: Condvar::new(),
-            max_requests: MAX_REQUESTS,
-            max_payload_bytes: MAX_PAYLOAD_BYTES,
+            retention: RetentionPolicy::DEFAULT,
         });
         Ok(owner)
     }
@@ -375,12 +384,12 @@ impl<B: Backend + 'static> Coordinator<B> {
             "context":{"state":context_state(&state),"terminal_reason":state.terminal.as_ref().map(core_error),
                 "shutdown_error":state.shutdown_error.as_ref().map(error_json)},
             "script":scripts::description(),
-            "limits":{"max_requests":self.max_requests,"max_payload_bytes":self.max_payload_bytes,
+            "limits":{"retained_executions":self.retention.records,"max_payload_bytes":self.retention.payload_bytes,
                 "observation_ttl_ms":OBSERVATION_TTL.as_millis(),
-                "result_retention":"receipts until process exit; payloads may be evicted"},
+                "result_retention":"bounded completed history; payloads may be evicted before receipts"},
             "coverage":self.coverage,"conditions":self.conditions,
             "semantics":{"cancel":"terminal for the context; obtain the original receipt with result",
-                "retry":"same accepted request_id and command returns the existing record, never replays",
+                "retry":"same retained request_id and command returns the existing record; expired IDs are new work, so never resubmit uncertain actions",
                 "references":"opaque and context-local; stable windows, one semantic query and pixel binding per window; actions consume both kinds on the target window",
                 "effects":"dispatched does not mean confirmed; observe independently"}
         }))
@@ -410,11 +419,13 @@ impl<B: Backend + 'static> Coordinator<B> {
         if submitted.target.app_ref != self.app_ref {
             return Reply::error(wire::core_error(&Error::WrongApp));
         }
-        if state.jobs.len() >= self.max_requests {
-            return problem(
-                "request_limit",
-                "Context request capacity is exhausted; accepted IDs are never recycled",
-            );
+        // History is a sliding window, independent of app state and native refs.
+        // An active job is never evicted; the admission checks above exclude it.
+        while state.jobs.len() >= self.retention.records.max(1) {
+            let Some(index) = state.jobs.iter().position(|job| job.completed.is_some()) else {
+                break;
+            };
+            state.jobs.remove(index);
         }
         let id = submitted.request_id.clone();
         state.active = Some(id.clone());
@@ -481,24 +492,18 @@ impl<B: Backend + 'static> Coordinator<B> {
             .unwrap_or_else(|| {
                 problem(
                     "unknown_request",
-                    "No accepted request has this ID in this context",
+                    "This request is not in retained history; it may have expired or never existed here. Missing history does not prove no effect; no work was replayed",
                 )
             })
     }
-    // The public session ledger takes ownership of evictable results. Keeping
-    // a second payload cache in every resident app would multiply its memory cap.
-    fn release_result_payload(&self, id: &str) {
+    // Once the session has copied a settled result, it owns the only historical
+    // receipt. Removing the Job leaves committed app state and native refs intact.
+    fn release_completed_job(&self, id: &str) {
         let mut state = self.state.lock().unwrap();
-        if let Some(done) = state
-            .jobs
-            .iter_mut()
-            .find(|job| job.submitted.request_id == id)
-            .and_then(|job| job.completed.as_mut())
-        {
-            done.value = None;
-            done.image = None;
-            done.payload_bytes = 0;
-            done.payload_expired = true;
+        if state.active.as_deref() != Some(id) {
+            state
+                .jobs
+                .retain(|job| job.submitted.request_id != id || job.completed.is_none());
         }
     }
     fn job_reply(&self, job: &Job) -> Reply {
@@ -896,7 +901,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             .map(|c| c.payload_bytes)
             .sum();
         for job in &mut state.jobs {
-            if bytes <= self.max_payload_bytes {
+            if bytes <= self.retention.payload_bytes {
                 break;
             }
             if let Some(done) = &mut job.completed {

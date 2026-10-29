@@ -210,7 +210,12 @@ impl<B: Backend + 'static> Coordinator<B> {
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
-        let outcome = match thread.join() {
+        let joined = thread.join();
+        if let Err(error) = self.runtime.finish_execution() {
+            self.record_shutdown_error(Some(error), Some(id));
+            self.close();
+        }
+        let outcome = match joined {
             Ok(outcome) => outcome,
             Err(_) => {
                 self.stop_script(id, Error::Closed);

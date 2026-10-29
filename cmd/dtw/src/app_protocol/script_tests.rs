@@ -543,7 +543,7 @@ fn script_deadline_stops_a_polling_native_call_and_reports_shutdown_failure() {
 #[test]
 fn script_payload_eviction_keeps_step_receipts_and_deduplication() {
     let (mut owner, backend) = coordinator();
-    Arc::get_mut(&mut owner).unwrap().max_payload_bytes = 512;
+    Arc::get_mut(&mut owner).unwrap().retention.payload_bytes = 512;
     let original = submit(
         &owner,
         "evicted-script",
@@ -701,4 +701,56 @@ fn omitted_await_does_not_hide_failed_action_or_commit_state() {
     let state = run_script(&owner, "state-read", "return Object.keys(state)");
     assert_eq!(state.data["value"]["result"], json!([]));
     assert_eq!(backend.0.actions.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn execution_finish_runs_on_success_and_script_failure_without_retiring_the_owner() {
+    let (owner, backend) = coordinator();
+    let first = run_script(&owner, "success", "state.kept=7;return state.kept;");
+    assert!(!first.is_error, "{}", first.data);
+    assert_eq!(backend.0.finishes.load(Ordering::SeqCst), 1);
+    let failed = run_script(&owner, "failure", "state.kept=9;throw new Error('test');");
+    assert!(failed.is_error, "{}", failed.data);
+    assert_eq!(backend.0.finishes.load(Ordering::SeqCst), 2);
+    let next = run_script(&owner, "next", "return state.kept;");
+    assert_eq!(next.data["value"]["result"], 7);
+    assert_eq!(backend.0.finishes.load(Ordering::SeqCst), 3);
+    assert_eq!(backend.0.shutdowns.load(Ordering::SeqCst), 0);
+    assert_eq!(result(&owner, "success").data, first.data);
+    assert_eq!(backend.0.finishes.load(Ordering::SeqCst), 3);
+    owner.close();
+}
+
+#[test]
+fn execution_finish_failure_preserves_action_receipt_and_prevents_state_commit() {
+    let (owner, backend) = coordinator();
+    run_script(&owner, "seed", "state.kept=7;");
+    backend.0.model.lock().unwrap().finish_error = Some(Error::NativeFailure {
+        code: "finish_failed".into(),
+        message: "original execution cleanup failure".into(),
+    });
+    let completed = run_script(
+        &owner,
+        "finish-error",
+        format!("{SETUP}{PRESS}state.kept=9;return true;"),
+    );
+    assert!(completed.is_error, "{}", completed.data);
+    assert_eq!(completed.data["shutdown_error"]["code"], "finish_failed");
+    assert_eq!(completed.data["script"]["state_committed"], false);
+    assert_eq!(
+        *owner.state.lock().unwrap().script_state.lock().unwrap(),
+        json!({"kept":7})
+    );
+    assert_eq!(operation_list(&completed), ["windows", "observe", "press"]);
+    assert_eq!(
+        steps(&completed)[2]["receipt"]["outcome"]["dispatch"],
+        "dispatched"
+    );
+    assert_eq!(backend.0.actions.load(Ordering::SeqCst), 1);
+    assert_code(
+        &start(&owner, submit(&owner, "later", None, script("return 1;"))),
+        "closed",
+    );
+    assert_eq!(result(&owner, "finish-error").data, completed.data);
+    owner.close();
 }

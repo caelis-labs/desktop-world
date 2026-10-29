@@ -403,6 +403,12 @@ pub trait Backend: Send + Sync {
         None
     }
 
+    /// Release temporary resources borrowed by one script, including foreground
+    /// focus. App state and native observations remain available to later scripts.
+    fn finish_execution(&self) -> Result<(), Error> {
+        Ok(())
+    }
+
     /// Stop and reap native resources. Failure does not reopen admission.
     fn shutdown(&self) -> Result<(), Error> {
         Ok(())
