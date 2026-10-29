@@ -208,13 +208,46 @@ fn nonzero_exit_survives_idle_reaping_and_repeated_stop() {
 
 #[test]
 fn in_flight_nonzero_exit_preserves_primary_failure_and_cleanup_diagnostic() {
-    let fixture = Fixture::new();
-    let worker = fixture.worker("nonzero");
-    let error = worker.call(b"{}", budget()).unwrap_err();
-    assert_eq!(error.kind, TransportErrorKind::UnexpectedEof);
-    assert!(error.request_may_have_been_sent);
-    assert_reaped(&worker);
-    assert_cleanup_failure_persists(&worker, "17");
+    for (mode, status) in [("nonzero", "17"), ("nonzero_one", "1")] {
+        let fixture = Fixture::new();
+        let worker = fixture.worker(mode);
+        let error = worker.call(b"{}", budget()).unwrap_err();
+        assert_eq!(error.kind, TransportErrorKind::UnexpectedEof);
+        assert!(error.request_may_have_been_sent);
+        assert_reaped(&worker);
+        assert_cleanup_failure_persists(&worker, status);
+    }
+}
+
+#[test]
+fn natural_exit_between_initial_poll_and_kill_keeps_the_actual_status() {
+    for (mode, code) in [("gated_nonzero", 17), ("gated_exit_one", 1)] {
+        let fixture = Fixture::new();
+        let worker = fixture.worker(mode);
+        // Hold the process owner lock so the idle reaper cannot consume exit.
+        // Explicitly enter the same post-try_wait(None) fallback used by stop,
+        // then make the child finish before kill: kill may still return Ok.
+        let failure = {
+            let mut slot = worker.process.child.lock().unwrap();
+            let child = slot.as_mut().unwrap();
+            fixture.wait_ready();
+            assert!(child.try_wait().unwrap().is_none());
+            fs::write(fixture.path.join("release"), "release").unwrap();
+            let until = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert_eq!(status.code(), Some(code));
+                    break;
+                }
+                assert!(Instant::now() < until, "owned fixture did not exit");
+                thread::sleep(Duration::from_millis(2));
+            }
+            worker.process.force_stop(&mut slot).unwrap_err()
+        };
+        assert_eq!(worker.stop().unwrap_err().kind, failure);
+        assert_reaped(&worker);
+        assert_cleanup_failure_persists(&worker, &code.to_string());
+    }
 }
 
 #[cfg(unix)]
@@ -276,6 +309,37 @@ fn assert_reaped(worker: &Worker) {
     assert!(!late.request_may_have_been_sent);
 }
 
+fn assert_requested_fixture_stop(result: Result<(), TransportError>) {
+    // An idle echo fixture can observe stdin EOF when the IO thread retires
+    // and exit zero before the supervisor kills it. Live fixtures may instead
+    // require forced termination; Windows must retain that nonzero status.
+    #[cfg(target_os = "windows")]
+    if let Err(error) = result {
+        // Generic Python fixtures do not expose the native cooperative stop
+        // event. The owned kill's nonzero exit retains cleanup uncertainty.
+        assert!(
+            matches!(error.kind, TransportErrorKind::Shutdown(ref text)
+            if text.contains("(exit code: 1)") && text.contains("input cleanup is unconfirmed")),
+            "{error:?}"
+        );
+    }
+    #[cfg(not(target_os = "windows"))]
+    result.unwrap();
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn forced_generic_stop_retains_cleanup_uncertainty() {
+    let fixture = Fixture::new();
+    let worker = fixture.worker("no_read");
+    fixture.wait_ready();
+    // This fixture never consumes stdin, so EOF cannot produce a clean exit.
+    let failure = worker.stop().unwrap_err();
+    assert!(matches!(failure.kind, TransportErrorKind::Shutdown(_)));
+    assert_reaped(&worker);
+    assert_cleanup_failure_persists(&worker, "exit code: 1");
+}
+
 #[test]
 fn persistent_worker_exchanges_frames_without_restart() {
     let fixture = Fixture::new();
@@ -290,7 +354,7 @@ fn persistent_worker_exchanges_frames_without_restart() {
         br#"{"request":2}"#
     );
     assert_eq!(worker.id(), pid);
-    worker.stop().unwrap();
+    assert_requested_fixture_stop(worker.stop());
     assert_reaped(&worker);
 }
 
@@ -409,10 +473,10 @@ fn external_stop_interrupts_an_in_flight_request_and_is_idempotent() {
     let calling_worker = worker.clone();
     let caller = thread::spawn(move || calling_worker.call(b"{}", budget()));
     fixture.wait_ready();
-    worker.stop().unwrap();
+    assert_requested_fixture_stop(worker.stop());
     let error = caller.join().unwrap().unwrap_err();
     assert!(error.request_may_have_been_sent);
-    worker.stop().unwrap();
+    assert_requested_fixture_stop(worker.stop());
     assert_reaped(&worker);
 }
 
@@ -449,10 +513,7 @@ fn concurrent_stops_and_cancellation_reap_without_waiting_for_each_other() {
     cancelled.store(true, Ordering::SeqCst);
     barrier.wait();
     for _ in 0..4 {
-        completions
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap()
-            .unwrap();
+        assert_requested_fixture_stop(completions.recv_timeout(Duration::from_secs(5)).unwrap());
     }
     for stopper in stoppers {
         stopper.join().unwrap();
@@ -493,7 +554,7 @@ fn stop_does_not_need_the_callers_control_closure_to_return() {
     let stopped_before_control_returned = completion.recv_timeout(Duration::from_secs(5));
     // Always release the caller, including when the assertion below will fail.
     release.send(()).unwrap();
-    stopped_before_control_returned.unwrap().unwrap();
+    assert_requested_fixture_stop(stopped_before_control_returned.unwrap());
     stopper.join().unwrap();
     let error = caller.join().unwrap().unwrap_err();
     assert!(error.request_may_have_been_sent);
@@ -568,6 +629,27 @@ os._exit(74 if sys.argv[2]=='fail' else 0)
         ],
     )
     .unwrap()
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn generic_windows_forced_stop_preserves_cleanup_uncertainty() {
+    let fixture = Fixture::new();
+    let worker = Arc::new(fixture.worker("hang"));
+    let calling_worker = worker.clone();
+    let caller = thread::spawn(move || calling_worker.call(b"{}", budget()));
+    fixture.wait_ready();
+    let first = worker.stop().unwrap_err();
+    assert!(
+        matches!(first.kind, TransportErrorKind::Shutdown(ref text)
+        if text.contains("(exit code: 1)") && text.contains("input cleanup is unconfirmed")),
+        "{first:?}"
+    );
+    let original = caller.join().unwrap().unwrap_err();
+    assert!(original.request_may_have_been_sent);
+    assert_reaped(&worker);
+    assert_eq!(worker.stop().unwrap_err(), first);
+    assert_eq!(worker.cleanup_error(), Some(first));
 }
 
 #[cfg(target_os = "windows")]
