@@ -88,6 +88,17 @@ def native_host(target):
             f"{target} must be built on its native {expected} host; cross-builds are not candidates")
 
 
+def macos_signing_identity(output, team):
+    """Accept exactly one valid imported identity belonging to the expected team."""
+    require(re.fullmatch(r"[A-Z0-9]{10}", team), "Expected a ten-character Apple Team ID")
+    identities = re.findall(r'^\s*\d+\)\s+([A-Fa-f0-9]{40})\s+"([^"\n]+)"\s*$', output, re.MULTILINE)
+    require(len(identities) == 1, "Temporary keychain must contain exactly one valid signing identity")
+    fingerprint, name = identities[0]
+    require(name.startswith("Developer ID Application: ") and name.endswith(f" ({team})"),
+            "Imported signing identity is not Developer ID Application for the expected team")
+    return fingerprint.upper()
+
+
 def source_identity(repo, run):
     def git(*args):
         return run(["git", *args], cwd=repo)[0].strip()
@@ -432,14 +443,20 @@ def package_assets(source, package, version, target):
         "command": "${CLAUDE_PLUGIN_ROOT}/bin/" + TARGETS[target][2], "args": ["mcp"]}}})
 
 
-def build(repo, output, target, signing_identity=None, notary_profile=None):
+def build(repo, output, target, signing_identity=None, notary_profile=None, notary_keychain=None):
     output = reserve_output(repo, output)
     commands = Commands(output)
     try:
         native_host(target)
-        require(target == "aarch64-apple-darwin" or not (signing_identity or notary_profile),
+        require(target == "aarch64-apple-darwin" or not (signing_identity or notary_profile or notary_keychain),
                 "macOS signing/notarization options cannot be used for Windows")
         require(not notary_profile or signing_identity, "--notary-profile requires --signing-identity")
+        require(not notary_keychain or notary_profile, "--notary-keychain requires --notary-profile")
+        keychain_args = []
+        if notary_keychain:
+            notary_keychain = Path(notary_keychain).resolve(strict=True)
+            require(notary_keychain.is_file(), "--notary-keychain must be an existing keychain file")
+            keychain_args = ["--keychain", str(notary_keychain)]
         require(signing_identity != "-", "An ad-hoc identity cannot establish a signed distribution candidate")
         identity = source_identity(repo, commands.run)
         source_tar = output / "source.tar"
@@ -477,7 +494,9 @@ def build(repo, output, target, signing_identity=None, notary_profile=None):
             text, err = commands.run(["cl.exe", "/Bv"], cwd=source, check=False)
             require("Compiler Version" in text + err or "编译器" in text + err, "Cannot establish native MSVC compiler version; use a Developer Command Prompt")
             toolchain["cl.exe /Bv"] = (text + err).strip()
-            toolchain["windows_sdk"] = {k: env.get(k) for k in ("WindowsSDKVersion", "VCToolsVersion")}
+            # Windows os.environ is case-insensitive, but its dict copy has
+            # uppercase keys. Keep the original labels in recorded metadata.
+            toolchain["windows_sdk"] = {k: env.get(k.upper(), env.get(k)) for k in ("WindowsSDKVersion", "VCToolsVersion")}
         env.update(build_env)
         manifest = source / "cmd/dtw/Cargo.toml"
         cargo = ["rustup", "run", RUST, "cargo"]
@@ -537,18 +556,29 @@ def build(repo, output, target, signing_identity=None, notary_profile=None):
         archive_hash = digest(archive)
         notarization = {"status": "unverified", "requested": bool(notary_profile), "stapled": False}
         if notary_profile:
+            # Persist the original upload ID before waiting. A timeout must be
+            # recoverable by querying this ID, never by uploading another ZIP.
             text, _ = commands.run(["xcrun", "notarytool", "submit", str(archive), "--keychain-profile", notary_profile,
-                                   "--wait", "--output-format", "json"], cwd=output)
+                                   "--output-format", "json"] + keychain_args, cwd=output, check=False)
             receipt = json.loads(text)
             write_json(output / "notarization-submit.json", receipt)
-            require(receipt.get("status") == "Accepted" and isinstance(receipt.get("id"), str) and receipt["id"],
-                    "Notarization did not return Accepted with a submission ID")
+            require(commands.rows[-1]["returncode"] == 0 and isinstance(receipt, dict)
+                    and isinstance(receipt.get("id"), str) and receipt["id"].strip(),
+                    "Notarization upload did not return a successful submission ID; inspect the original receipt/log")
+            text, _ = commands.run(["xcrun", "notarytool", "wait", receipt["id"], "--keychain-profile", notary_profile,
+                                   "--timeout", "20m", "--output-format", "json"] + keychain_args, cwd=output, check=False)
+            waited = json.loads(text)
+            write_json(output / "notarization-wait.json", waited)
+            require(commands.rows[-1]["returncode"] == 0 and isinstance(waited, dict)
+                    and waited.get("id") == receipt["id"] and waited.get("status") == "Accepted",
+                    "Notarization wait did not return Accepted; retain/query the original submission ID without resubmitting")
             text, _ = commands.run(["xcrun", "notarytool", "info", receipt["id"], "--keychain-profile", notary_profile,
-                                   "--output-format", "json"], cwd=output)
+                                   "--output-format", "json"] + keychain_args, cwd=output)
             verified = json.loads(text)
             write_json(output / "notarization-info.json", verified)
             require(verified.get("status") == "Accepted" and verified.get("id") == receipt["id"], "Notarization info did not confirm the original Accepted submission")
-            notarization.update(status="Accepted", submission_id=receipt["id"], receipts=["notarization-submit.json", "notarization-info.json"])
+            notarization.update(status="Accepted", submission_id=receipt["id"],
+                                receipts=["notarization-submit.json", "notarization-wait.json", "notarization-info.json"])
         require(digest(archive) == archive_hash, "Archive changed after validation/submission")
         require(digest(binary) == build_info["binary"]["sha256"], "Packaged binary changed after archival")
         verify_archive(archive, package.name)
@@ -569,9 +599,12 @@ def main():
     parser.add_argument("--output", required=True, type=Path, help="New directory outside the source checkout; parent must exist")
     parser.add_argument("--signing-identity", help="macOS codesign identity; no entitlements are inferred")
     parser.add_argument("--notary-profile", help="Existing macOS notarytool keychain profile; requires signing identity")
+    parser.add_argument("--notary-keychain", type=Path,
+                        help="Existing keychain containing the profile; requires --notary-profile")
     args = parser.parse_args()
     try:
-        summary = build(Path(__file__).resolve().parent.parent, args.output, args.target, args.signing_identity, args.notary_profile)
+        summary = build(Path(__file__).resolve().parent.parent, args.output, args.target,
+                        args.signing_identity, args.notary_profile, args.notary_keychain)
     except (OSError, ValueError, KeyError, RuntimeError) as error:
         parser.exit(1, f"Candidate build failed; inspect the retained output: {error}\n")
     print(json.dumps(summary, indent=2))

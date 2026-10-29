@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import stat
 import struct
@@ -139,7 +140,7 @@ class Fixture(unittest.TestCase):
                 return args[2] + ":\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0)\n", ""
             if args[0] == "codesign":
                 return "", "Identifier=dev.caelis.dtw\nflags=0x10000(runtime)\nAuthority=Developer ID Application: Test\n"
-            if args[:3] in (["xcrun", "notarytool", "submit"], ["xcrun", "notarytool", "info"]):
+            if args[:3] in (["xcrun", "notarytool", "submit"], ["xcrun", "notarytool", "wait"], ["xcrun", "notarytool", "info"]):
                 return json.dumps({"status": notary_status, "id": "original-submission"}), ""
             if args[-1] == "--version" and Path(args[0]).name in ("dtw", "dtw.exe"):
                 return f"dtw {binary_version}\n", ""
@@ -338,6 +339,17 @@ class BinaryAndArchiveTests(Fixture):
 
 
 class WorkflowTests(Fixture):
+    def test_windows_sdk_metadata_handles_uppercase_environment_copy_and_plain_dict(self):
+        values = {"WindowsSDKVersion":"10.0.26100.0\\", "VCToolsVersion":"14.44.35207"}
+        for upper in (True, False):
+            env = {key.upper() if upper else key:value for key, value in values.items()}
+            fake, _ = self.fake_commands(target=WIN)
+            output = self.root / ("sdk-upper" if upper else "sdk-mixed")
+            with patch.dict(os.environ, env, clear=True), patch.object(candidate, "native_host"), patch.object(candidate.Commands, "run", fake):
+                candidate.build(self.repo, output, WIN)
+            manifest = json.loads(next(output.glob("desktop-world-*/BUILD.json")).read_text())
+            self.assertEqual(manifest["toolchain"]["windows_sdk"], values)
+
     def test_windows_uses_static_crt_and_target_specific_graph_and_executable(self):
         fake, calls = self.fake_commands(target=WIN)
         with patch.object(candidate, "native_host"), patch.object(candidate.Commands, "run", fake):
@@ -388,6 +400,8 @@ class WorkflowTests(Fixture):
         self.assertEqual(result["notarization"]["status"], "Accepted")
         self.assertFalse(result["notarization"]["stapled"])
         self.assertEqual(sum(c[:3] == ["xcrun", "notarytool", "submit"] for c in calls), 1)
+        submit = next(c for c in calls if c[:3] == ["xcrun", "notarytool", "submit"])
+        self.assertNotIn("--wait", submit)
         with zipfile.ZipFile(self.root / "signed" / result["archive"]) as archive:
             manifest = json.loads(archive.read(Path(result["archive"]).stem + "/BUILD.json"))
         self.assertEqual(manifest["notarization"]["status"], "unverified")
@@ -403,6 +417,83 @@ class WorkflowTests(Fixture):
         self.assertEqual(len(list(output.glob("*.zip"))), 1)
         self.assertTrue((output / "FAILURE.json").exists())
         self.assertFalse((output / "CANDIDATE.json").exists())
+
+    def test_explicit_notary_keychain_is_used_for_original_submit_and_info(self):
+        fake, calls = self.fake_commands()
+        keychain = put(self.root, "temporary/signing.keychain-db", "keychain fixture")
+        with patch.object(candidate, "native_host"), patch.object(candidate.Commands, "run", fake):
+            candidate.build(self.repo, self.root / "keychain", MAC, "Developer ID: Test", "ci-profile", keychain)
+        notary_calls = [call for call in calls if call[:2] == ["xcrun", "notarytool"]]
+        self.assertEqual([call[2] for call in notary_calls], ["submit", "wait", "info"])
+        for call in notary_calls:
+            self.assertEqual(call[call.index("--keychain") + 1], str(keychain.resolve()))
+            self.assertEqual(call[call.index("--keychain-profile") + 1], "ci-profile")
+            self.assertNotIn("--password", call)
+
+    def test_notary_wait_timeout_preserves_original_id_and_never_reuploads(self):
+        fake, calls = self.fake_commands()
+        output = self.root / "wait-timeout"
+        def timeout(owner, args, **kwargs):
+            value = fake(owner, args, **kwargs)
+            if list(args[:3]) == ["xcrun", "notarytool", "wait"]:
+                # The submission receipt must already exist while wait runs.
+                self.assertEqual(json.loads((output/"notarization-submit.json").read_text())["id"], "original-submission")
+                self.assertEqual(args[args.index("--timeout")+1], "20m")
+                owner.rows[-1]["returncode"] = 75
+                return json.dumps({"id":"original-submission", "status":"In Progress"}), "Timeout"
+            return value
+        with patch.object(candidate, "native_host"), patch.object(candidate.Commands, "run", timeout):
+            with self.assertRaisesRegex(ValueError, "retain/query the original"):
+                candidate.build(self.repo, output, MAC, "Developer ID: Test", "profile")
+        self.assertEqual(json.loads((output/"notarization-submit.json").read_text())["id"], "original-submission")
+        self.assertEqual(json.loads((output/"notarization-wait.json").read_text())["status"], "In Progress")
+        self.assertEqual([call[2] for call in calls if call[:2] == ["xcrun", "notarytool"]], ["submit", "wait"])
+        self.assertTrue((output/"FAILURE.json").exists())
+        self.assertEqual(len(list(output.glob("*.zip"))), 1)
+        self.assertFalse((output/"CANDIDATE.json").exists())
+
+    def test_keychain_without_profile_or_nonexistent_keychain_fails_before_build(self):
+        keychain = put(self.root, "temporary/signing.keychain-db", "keychain fixture")
+        for index, profile, path in ((1, None, keychain), (2, "profile", self.root/"missing.keychain-db")):
+            fake, calls = self.fake_commands()
+            with patch.object(candidate, "native_host"), patch.object(candidate.Commands, "run", fake):
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    candidate.build(self.repo, self.root / f"bad-keychain-{index}", MAC, "Developer ID: Test", profile, path)
+            self.assertFalse(calls)
+
+
+class SigningSetupTests(unittest.TestCase):
+    def test_identity_must_be_unique_developer_id_for_exact_team(self):
+        team = "ABC123DE45"
+        identity = '  1) '+('a'*40)+' "Developer ID Application: Caelis ('+team+')"\n     1 valid identities found\n'
+        self.assertEqual(candidate.macos_signing_identity(identity, team), 'A'*40)
+        for output in ('0 valid identities found', identity+identity,
+                       identity.replace(team, 'ZZZ123DE45'),
+                       identity.replace('Developer ID Application:', 'Apple Development:'),
+                       identity.replace('a'*40, 'a'*39)):
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                candidate.macos_signing_identity(output, team)
+
+    def test_missing_ci_secret_fails_before_build_without_logging_credentials(self):
+        script = Path(__file__).parents[1]/"scripts/sign-rewrite-candidate-macos.sh"
+        names = ('APPLE_DEVELOPER_ID_P12_BASE64', 'APPLE_DEVELOPER_ID_P12_PASSWORD',
+                 'APPLE_NOTARY_APPLE_ID', 'APPLE_NOTARY_PASSWORD')
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)/'candidate'
+            env = os.environ.copy()
+            env.update({name:'private-test-sentinel-'+str(index) for index, name in enumerate(names)})
+            env['APPLE_NOTARY_PASSWORD'] = ''
+            env['APPLE_TEAM_ID'] = 'ABC123DE45'
+            result = subprocess.run(['bash', str(script), str(output)], env=env,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn('Missing candidate signing configuration: APPLE_NOTARY_PASSWORD', result.stderr)
+            self.assertNotIn('private-test-sentinel', result.stdout+result.stderr)
+            self.assertFalse(output.exists())
+            report = json.loads(Path(str(output)+'.signing.json').read_text())
+            self.assertEqual(report['builder_invocations'], 0)
+            self.assertEqual(report['keychain_cleanup'], 'not_created')
+            self.assertFalse(report['raw_credentials_exported_to_builder'])
 
 
 if __name__ == "__main__":

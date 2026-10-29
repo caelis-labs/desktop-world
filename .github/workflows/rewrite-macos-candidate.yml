@@ -1,0 +1,71 @@
+name: Rewrite macOS candidate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+# A separate explicit trigger: this workflow never dispatches a Windows build.
+jobs:
+  macos-candidate:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.label.name == 'build-macos-candidate' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+          components: rust-docs
+      - name: Build, sign and notarize one fixed native macOS candidate
+        shell: bash
+        env:
+          APPLE_DEVELOPER_ID_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
+          APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_NOTARY_APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
+          APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: bash scripts/sign-rewrite-candidate-macos.sh "$RUNNER_TEMP/dtw-macos-candidate"
+      - name: Run source tests against the same exported source and fixed toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/dtw-macos-candidate/target"
+          export MACOSX_DEPLOYMENT_TARGET=14.2
+          export RUSTFLAGS='' RUSTC_WRAPPER='' RUSTC_WORKSPACE_WRAPPER=''
+          unset CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_RUSTC
+          dtwRustSysroot=$(rustup run 1.98.0 rustc --print sysroot)
+          export RUSTC="$dtwRustSysroot/bin/rustc"
+          rustup run 1.98.0 cargo test --release --locked \
+            --manifest-path "$RUNNER_TEMP/dtw-macos-candidate/source/cmd/dtw/Cargo.toml" \
+            --target aarch64-apple-darwin --lib --bins --tests \
+            2>&1 | tee "$RUNNER_TEMP/dtw-macos-candidate/source-tests.log"
+      - name: Retain immutable candidate, original notarization and cleanup evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dtw-macos-candidate-${{ github.event.pull_request.head.sha || github.sha }}
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/dtw-macos-candidate.signing.json
+            ${{ runner.temp }}/dtw-macos-candidate/*.zip
+            ${{ runner.temp }}/dtw-macos-candidate/*.sha256
+            ${{ runner.temp }}/dtw-macos-candidate/CANDIDATE.json
+            ${{ runner.temp }}/dtw-macos-candidate/FAILURE.json
+            ${{ runner.temp }}/dtw-macos-candidate/commands.json
+            ${{ runner.temp }}/dtw-macos-candidate/notarization-*.json
+            ${{ runner.temp }}/dtw-macos-candidate/source-tests.log
+            ${{ runner.temp }}/dtw-macos-candidate/logs

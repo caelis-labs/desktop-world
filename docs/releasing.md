@@ -56,12 +56,21 @@ support is deferred. Version 0.2.0 is reserved for the rewrite candidate, not a 
    Publish the same reviewed bytes without rebuilding.
 
 Ordinary development CI does not open version PRs, create tags/drafts or build
-candidates. The separate `Rewrite Windows candidate` workflow runs only by explicit
-dispatch or by adding the `build-windows-candidate` label to a same-repository PR.
-It checks out that exact PR head, builds the rewrite once with MSVC/static CRT,
+candidates. Separate `Rewrite Windows candidate` and `Rewrite macOS candidate`
+workflows run only by explicit dispatch or their respective `build-windows-candidate`
+and `build-macos-candidate` labels on a same-repository PR. The Windows workflow
+checks out that exact PR head, builds the rewrite once with MSVC/static CRT,
 runs its tests and retains the candidate plus original construction logs. A later
 commit does not automatically repeat this job. It never compiles upstream CUA or
-publishes a release. The old CUA artifact automation remains retired.
+publishes a release. The macOS workflow independently builds/signs/notarizes one
+fixed arm64 candidate and runs tests against its exported source. It reuses the
+existing `APPLE_DEVELOPER_ID_P12_BASE64`, `APPLE_DEVELOPER_ID_P12_PASSWORD`,
+`APPLE_NOTARY_APPLE_ID`, `APPLE_NOTARY_PASSWORD` secrets and `APPLE_TEAM_ID`
+configuration variable. A temporary CI keychain holds that identity/profile; raw
+credentials are removed from the environment before the build. Its private files
+and keychain are removed and the original search list restored even on failure.
+Missing credentials stop before compilation. Neither platform trigger dispatches
+the other platform. The old CUA artifact automation remains retired.
 
 `python3 scripts/release-artifacts.py check` only checks `version.txt`,
 `cmd/dtw/Cargo.toml` and DTW's entry in `cmd/dtw/Cargo.lock`. It does not validate a
@@ -86,12 +95,15 @@ python3 scripts/build-rewrite-candidate.py \
 ```
 
 Add `--notary-profile EXISTING_PROFILE` when an existing keychain credential profile
-is available. The builder never creates credentials. It signs the single runtime
+is available; use `--notary-keychain /absolute/path/to/keychain` when that profile
+lives outside the default keychain. The builder never creates credentials. It signs the single runtime
 with hardened runtime and `dev.caelis.dtw`; the native worker is the same executable.
 No entitlement is inferred. An omitted profile leaves notarization unverified.
 The ZIP is fixed before submission, and its exact digest and original Accepted
-submission/info receipts stay outside the archive in `CANDIDATE.json` and the
-notarization JSON files. Nothing is rebuilt or rewritten after submission.
+submission/wait/info receipts stay outside the archive in `CANDIDATE.json` and the
+notarization JSON files. Submission immediately records its ID before a bounded
+wait; a failed wait retains that original ID and never automatically resubmits.
+Nothing is rebuilt or rewritten after submission.
 Standalone ZIPs are not stapled; offline Gatekeeper behavior remains a separate check.
 
 ```powershell
