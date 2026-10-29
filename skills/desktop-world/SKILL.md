@@ -9,7 +9,7 @@ Use the configured DTW MCP server's `apps`, `api`, `exec`, `result` tools (the c
 
 **Work in complete UI steps.** Return to the model only when new labels, state or an image require a decision. Once the next operations are known, run them sequentially in the same script, including verification. For repeated forms, discover the labels once, then process the requested records in one loop. Do not rediscover the surrounding table between records. Input methods focus internally; a separate focus call is usually unnecessary.
 
-**Use labels supplied by the task.** If the user already names the fields to edit, do not open a form just to list those labels again. The batch's exact-name queries validate them against the live UI before acting. Usually select the window and discover its search field in one exec, then run the whole edit/save/readback loop in the next. Use the optional form-discovery example only for labels or control types that are still unknown.
+**Confirm form actions before changing values.** Task-supplied field labels do not establish save, submit or close button labels. Before the first field or checkbox mutation, discover and validate the relevant action names in the actual form, once per form layout. Do not turn a task verb into a guessed exact label. If interpretation is needed, return compact action choices before editing. Then batch records with fresh exact-name lookups; do not repeat action-label discovery for every record or scan a full tree.
 
 **Finish every query before deciding.** This includes filtered queries for a known, exact label. `limit` limits returned matches; it does not guarantee that the native tree was fully scanned. While `page.next` exists, collect the page and call `app.observe({cursor:page.next})` inside the same script. Only after the last page should you check `coverage.complete` and whether there is exactly one match. A first page with zero or one matches and a continuation is neither missing nor ambiguous. Use the paginated helper in section 2 for every control lookup.
 
@@ -33,7 +33,7 @@ for (;;) {
 return {fields, complete:p.coverage.complete};
 ```
 
-If the task already provides the form labels, go directly to section 2. Otherwise combine filtering, identifying the edit control, opening the form, discovering its fields and closing it without saving in one script. This optional example uses an observed search label and requires an actually discovered, exact edit label before pressing it. If that label is absent or ambiguous, return compact choices for a decision; do not guess a different action.
+If the task provides field labels, skip only their repeated discovery. Identify any unknown form actions before proceeding to section 2. Combine filtering, identifying the edit control, opening the form and discovering the relevant controls in one script. This example uses an observed search label and requires an actually discovered, exact edit label before pressing it. Adapt the action-search keywords to the task; keywords find candidate names and are not exact action labels. Return compact choices when their meaning or uniqueness needs a decision, before changing form values.
 
 ```javascript
 const window_ref = state.window, key = 'Contact A';
@@ -60,28 +60,36 @@ found = q.elements.filter(e => e.name === 'Edit '+key && e.actions.includes('pre
 if (found.length !== 1) return {choices:q.elements.map(e=>e.name)};
 await app.press(ref(q,found[0]));
 const form = {};
+// Omit field roles whose labels and control types are already known.
 for (const role of ['text_field','text_area','checkbox']) {
   const page = await query(role);
   form[role] = page.elements.map(e=>({name:e.name,value:e.value,actions:e.actions}));
 }
-form.saveButtons = (await query('button','save')).elements.map(e=>e.name);
-q = await query('button','Cancel');
-found = q.elements.filter(e=>e.name === 'Cancel' && e.actions.includes('press'));
-if (found.length !== 1) return {form,needsCloseDecision:true};
+const saveChoices = (await query('button','save')).elements
+  .map(e=>({name:e.name,enabled:e.enabled,actions:e.actions}));
+q = await query('button',state.formActions?.close ?? 'cancel');
+const closeChoices = q.elements.filter(e=>e.actions.includes('press') && e.enabled !== false);
+const actionChoices = {save:saveChoices, close:closeChoices.map(e=>e.name)};
+// A keyword match alone does not establish what pressing it will do.
+found = closeChoices.filter(e=>e.name === state.formActions?.close);
+if (found.length !== 1) return {form,actionChoices,formOpen:true};
 await app.press(ref(q,found[0]));
-return {form,closedWithoutSaving:true};
+return {form,actionChoices,closedWithoutSaving:true};
 ```
 
-Once these form labels are known, run the batch below. A full tree, another row scan or a screenshot is unnecessary when the controls are already identified. If a visible transition is asynchronous, make bounded read-only checks for the expected control inside the script; never repeat the action to wait for it.
+Choose the relevant exact action names from the observed controls and store them as `state.formActions = {save: observedSaveName, close: observedCloseName}`; these are names, not reusable refs. A save action may be disabled until values change, so distinguish an observed disabled control from an absent label. If the actions are already clear, continue with the batch in the same script instead of returning only discovery. If a decision was needed, retain whether the form was left open and resume there. A full tree, another row scan or a screenshot is unnecessary when the controls are already identified. If a visible transition is asynchronous, make bounded read-only checks for the expected control inside the script; never repeat the action to wait for it.
 
 Native names/values are bounded excerpts; use field equality checks for short values, not as proof of a whole long document. Keep pages in JavaScript. Follow `next` with `app.observe({cursor:page.next})`; a page can be empty and still have a continuation. Return compact names/values/status, not full trees or arrays of unrelated row buttons. `coverage.complete=false` is incomplete discovery even if `next` is null. Use a screenshot when an unavailable node prevents semantic discovery; another unfiltered tree read adds no proof.
 
 ## 2. Execute the known workflow and verify it
 
-Adapt this complete batch to labels supplied by the task or discovered in the app. Each exact-name query obtains a fresh real control; it never fabricates a ref. It starts from a list, edits and saves each record once, then reopens it to verify persisted values before moving on. The checkbox example uses observed `'0'`/`'1'` values; adapt those to the app's actual representation. Helpers are local to each script; functions cannot be stored in JSON state.
+Adapt this complete batch to task-supplied field labels and `state.formActions` confirmed in the first form. Each exact-name query obtains a fresh real control; it never fabricates a ref. The example starts from a list, edits and saves each record once, then reopens it to verify persisted values before moving on. If discovery left the first form open, begin with its field edits instead of opening it again. The checkbox example uses observed `'0'`/`'1'` values; adapt those to the app's actual representation. Helpers are local to each script; functions cannot be stored in JSON state.
 
 ```javascript
 const window_ref = state.window;
+const actionNames = state.formActions;
+if (!actionNames?.save || !actionNames?.close)
+  return {needsActionDiscovery:true}; // Identify actions before any form mutation.
 async function one(role, name) {
   let p = await app.observe({window_ref, role, text:name, limit:5});
   const found = [];
@@ -95,7 +103,11 @@ async function one(role, name) {
   return {ref:{window_ref, observation_ref:p.observation_ref,
                element_ref:found[0].element_ref}, element:found[0]};
 }
-async function press(name) { await app.press((await one('button',name)).ref); }
+async function press(name) {
+  const control = await one('button',name);
+  if (!control.element.actions.includes('press')) throw Error('Control cannot press: '+name);
+  await app.press(control.ref);
+}
 async function set(role,name,value) {
   await app.setValue({...(await one(role,name)).ref, value});
 }
@@ -112,12 +124,12 @@ for (const row of records) {
   const approved = await one('checkbox','Approved');
   if (!['0','1'].includes(approved.element.value)) throw Error('Interpret checkbox state');
   if (approved.element.value !== '1') await app.press(approved.ref);
-  await press('Save changes');
+  await press(actionNames.save);
   await press('Edit '+row.key);
   const savedName = (await one('text_field','Display name')).element.value;
   const savedNote = (await one('text_area','Notes')).element.value;
   const savedApproved = (await one('checkbox','Approved')).element.value;
-  await press('Cancel');
+  await press(actionNames.close);
   if (savedName !== row.name || savedNote !== row.note || savedApproved !== '1')
     throw Error('Persisted value differs for '+row.key);
   verified.push({key:row.key, verified:true});

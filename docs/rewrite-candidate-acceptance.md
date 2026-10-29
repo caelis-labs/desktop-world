@@ -7,8 +7,8 @@
 | 层级 | 当前状态 |
 | --- | --- |
 | 固定来源与候选脚本 | 导出 clean Git commit/tree，固定 Rust 1.98.0/lockfile；目标依赖 notices、平台格式、版本、归档完整性均有检查 |
-| macOS 候选 | `fb1045e` 已复用现有 CI 认证完成签名、公证和归档；安装 GUI 暴露输入失焦缺口，保留该包，修复后生成新候选 |
-| macOS 最终安装字节 | 首个 CI 包在含中文与空格路径通过完整清单、签名/公证、MCP 发现及多实例 GUI；native all 编辑失败，暂不通过；新候选整体验收待完成 |
+| macOS 候选 | `df7beab` 已签名、公证；安装字节通过六组原生 GUI 验收，修复输入中失焦与首次激活就绪边界 |
+| macOS 安装与 Agent | 完整清单、签名/公证和原生验收通过；首轮 Claude 因猜测保存按钮标签未通过易用性门槛，正在验证通用 Skill 修正，尚未计整体验收通过 |
 | Windows 原生构建 | `a07d1eb` 完成 x64 原生编译、静态 CRT/版本/归档检查、265 个库测试、3 个 CLI 测试及 C# 验收工具编译；下载后重新验证完整归档清单与校验和 |
 | Windows 实机 | 用户独立安排，尚未通过；候选自带标准 MCP 双实例 smoke 与手工矩阵 |
 | 公开 release/tag | 未创建 |
@@ -22,6 +22,22 @@
 - 工具链：Rust 1.98.0、MSVC 19.51.36260 x64；该包的 SDK 环境字段为 null，不推测其版本。PE 导入检查通过，不依赖动态 VC CRT。最低 Windows 系统版本仍须实机验证。
 - 包内 `acceptance/windows/README.md` 和 `smoke.ps1` 用普通 stdio MCP 操作两个同可执行文件实例，检查分别编辑/保存、Unicode/快捷键、窗口截图和释放状态；另有可选指针组。仅需 Windows PowerShell 5.1/.NET，不需 Rust/CUA/VS。
 - 手工矩阵仍包含真实浏览器/Agent、DPI、并发会话、取消/超时、进程退出重启、EOF/父退出、权限与安全桌面，以及截图视觉核验。CI 的 C# 编译不计 GUI smoke 通过。
+
+## macOS 安装字节与模型反馈
+
+原生验收候选：[40804590000](https://github.com/caelis-labs/desktop-world/actions/runs/40804590000)，源 `df7beabdeb007e1256fab00ae0f515713f1f5a31`。259 个库测试、4 个 CLI 测试、3 个 macOS stdio 测试通过；Developer ID 签名、时间戳、Team、临时钥匙串清理及公证 Accepted。原公证 ID 为 `5b37217e-caa2-4078-86de-5bf06509adef`。
+
+- ZIP SHA-256：`180b5517811a27895f3b1c152aac4263ce34014b213ee301d7dc59d8308cc49f`。
+- 二进制 SHA-256：`8d2e493722264cfa89a8c4a7366a38b45c07d7df62f41765b318dbfe06d8e2d7`；包内 Skill SHA-256：`22558b17933ff4ae53303230e32c42033ad0d3dde3b9895203754006f94982cc`。
+- 安装到 `/private/tmp/DTW 安装验收 0.2.0 最终候选/desktop-world-0.2.0-aarch64-apple-darwin`，解包后再次核对归档、完整安装清单、签名和在线公证要求。这是当前开发机的新目录安装，不是全新系统/TCC 或最低系统版本验收。
+- 六组原生验收均通过：`/private/tmp/dtw-installed-final-{native-all,native-focus-intercept,native-eof,native-parent-exit,multi-instance,web-discovery}-20261029-01/evidence.json`。覆盖 Unicode/快捷键/保存、语义动作、滚轮、右键/双击、坐标归属与遮挡、取消、EOF/父退出、双实例重启以及真实 Chrome 原生 AX 发现；截图已视觉核验。
+- 受控输入失焦时，目标收到 20 个字符后返回 `focus_changed/unknown`，后续保存未执行，未抢回焦点。另一窗口仍收到一个已排队的 `q`，两侧均未保存并正常清理。因此保护能及时停止后续输入，但不能撤回已投递的系统事件，也不承诺跨应用零误投或 OS 原子性。
+
+`/private/tmp/dtw-installed-workbench-claude-20261029-01/evidence.json` 的首次安装模型任务未通过：Agent 将未发现的按钮猜为 `Save`，实际为 `Save changes`；原操作 `execution_0c4e52ed-3b2f-43e3-b7ed-3c499c6d3f28` 在五个成功语义动作后出现脚本错误，未执行保存。Agent 随后发现真实标签并完成业务，但该轮仍按零错误门槛判失败：6 exec / 7 MCP、8,135 JSON bytes、55.447 秒。原失败不重跑、不改判；留开的自有文档经独立读回与磁盘比对后单次关闭，另存 `reconciliation.json`。
+
+Skill 修正要求首次改表单值前确认实际保存/关闭动作名，任务给出的字段名不能推导按钮标签；每种表单发现一次，随后批处理并刷新引用。使用同一签名运行时及修订源码 Skill（SHA-256 `6bb1272cdc709d197cf6f9ccac6949db33a9f217ee19886074972f2775e64e75`）的独立样本 `/private/tmp/dtw-skill-tuning-{claude,agy}-20261029-12/evidence.json` 均通过：Claude 为 5 exec / 6 MCP、9,299 JSON bytes、42.911 秒；agy 为 5 exec / 6 MCP、14,540 JSON bytes、228.210 秒。业务、易用性和清理均通过；这是不同模型/客户端的观测，不作客户端速度因果比较。
+
+复核又修正了示例丢弃禁用保存按钮的问题：发现时保留其名称、enabled 与 actions；实际按压前重新确认可用和 advertised press。冻结 Skill SHA-256 为 `46982533d8c5a17b48efaf7723e4a5ec4c4935654e718ed509e46bfb279b01b3`，Skill 校验、4 段脚本语法与禁用按钮纯控制、40 个验收解析控制通过。前述源码 Skill 样本不计为这个最终版本或新包的安装验收；固定候选验证继续进行。
 
 ## 原始失败及修复
 
