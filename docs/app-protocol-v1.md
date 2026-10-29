@@ -50,7 +50,11 @@ MCP 工具响应同时提供文本 JSON，并在协议版本支持时提供 `str
 
 `exec` 保留 `value`（脚本结果、console、调用数和最后截图元数据）、错误、状态提交及重建/驱逐信息。默认省略内部 `app_ref`、冗余 operation 和空 receipt；`script.steps` 替换为 `script.summary`，不改变保留的原始记录、`isError` 或实际派发。`result` 继续返回完整原记录，包括所有 `script.steps`、错误、原生回执和库存诊断；正常执行无需追加查询。
 
-摘要包含 `steps`（记录步骤数）、`failed`（有 step.error 的步骤数）、`pending`（尚未完成数）和 `incomplete_reads`（库存不完整或含原始诊断错误的读取步骤数）。最后一项不是失败成员数，也不改变成功读取的状态；即使脚本只返回窗口数组，部分库存提示也不会消失。存在动作回执时，`actions` 按 dispatch、evidence、provider_dispatch、provider_evidence 累计计数，并报告 interrupted 数；不存在的状态键表示零。尚无回执不代表动作未派发，应同时查看 pending。`last_issue` 仅为最后一个错误/未知效果/证据不符/中断/未完成/不完整读取步骤的诊断样本；最近问题为库存时附上原 `inventory` 的 coverage 和 diagnostics。它既不是全部问题，也不一定是脚本失败根因；较早问题仍计入汇总，完整详情在原账本中。脚本捕获动作错误后可能成功提交 state，摘要不能将它改写为未发生错误。
+摘要包含 `steps`（记录步骤数）、`failed`（有 step.error 的步骤数）、`pending`（尚未完成数）和 `incomplete_reads`（不完整窗口库存，以及没有续页且覆盖不完整的语义查询步骤数）。正常语义分页不计入后者；该计数不改变成功读取的状态，脚本丢弃页面或稍后抛错也不会删除诊断。`result` 的 observe 步骤保留小型 `discovery` 覆盖信息，不保留整棵树。
+
+同一次执行中，只有同一窗口的不同 observation 最终完整、且中间未出现动作回执、错误或未完成步骤，才增加可选的 `recovered_incomplete_reads`。窗口库存不参与此恢复判定，跨执行、其他窗口或复用同一 observation 也不能证明恢复。原 `incomplete_reads` 和 `last_issue` 保留；新字段说明只读刷新已经成立，不改写原读取，也不证明业务效果成功。
+
+存在动作回执时，`actions` 按 dispatch、evidence、provider_dispatch、provider_evidence 累计计数，并报告 interrupted 数；不存在的状态键表示零。尚无回执不代表动作未派发，应同时查看 pending。`last_issue` 仅为最后一个错误/未知效果/证据不符/中断/未完成/不完整读取步骤的诊断样本；库存附上 `inventory`，语义查询附上 `discovery`。它既不是全部问题，也不一定是脚本失败根因；较早问题仍计入汇总，完整详情在原账本中。脚本捕获动作错误后可能成功提交 state，摘要不能将它改写为未发生错误。
 
 投影层不会再次截断脚本返回值、console 或截图（原有 VM/console 限制仍有效）；这次改动控制的是默认账本展开量，并不承诺整个响应固定小于某个字节数。
 

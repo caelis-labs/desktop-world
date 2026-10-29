@@ -1,12 +1,16 @@
 //! Controlled pagination contract tests; native traversal is accepted separately.
 use super::*;
 
+#[path = "discovery_evidence_tests.rs"]
+mod discovery_evidence_tests;
+
 #[derive(Clone)]
 struct PagedBackend {
     base: MockBackend,
     queries: Arc<Mutex<Vec<ObserveQuery>>>,
     advances: Arc<AtomicUsize>,
     fail_next: Arc<std::sync::atomic::AtomicBool>,
+    complete_after_first: Arc<std::sync::atomic::AtomicBool>,
 }
 impl Backend for PagedBackend {
     type Binding = AtomicUsize;
@@ -32,7 +36,11 @@ impl Backend for PagedBackend {
         query: &ObserveQuery,
         _: &CallContext<'_>,
     ) -> Result<BackendObservation<Self::Binding>, Error> {
-        self.queries.lock().unwrap().push(query.clone());
+        let complete = {
+            let mut queries = self.queries.lock().unwrap();
+            queries.push(query.clone());
+            queries.len() > 1 && self.complete_after_first.load(Ordering::SeqCst)
+        };
         let mut read = self.base.read(target, false);
         read.elements[0].id = ElementId(1);
         Ok(BackendObservation {
@@ -41,8 +49,8 @@ impl Backend for PagedBackend {
             image: None,
             binding: AtomicUsize::new(0),
             discovery: Some(DiscoveryPage {
-                has_more: true,
-                complete: false,
+                has_more: !complete,
+                complete,
                 reason: None,
                 visited: 1,
             }),
@@ -104,6 +112,7 @@ fn setup() -> (Arc<Coordinator<PagedBackend>>, PagedBackend) {
         queries: Arc::new(Mutex::new(vec![])),
         advances: Arc::new(AtomicUsize::new(0)),
         fail_next: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        complete_after_first: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
     (
         Coordinator::new(backend.clone(), application(), "Paged".into()),

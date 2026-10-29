@@ -11,7 +11,9 @@ Use the configured DTW MCP server's `apps`, `api`, `exec`, `result` tools (the c
 
 **Confirm form actions before changing values.** Task-supplied field labels do not establish save, submit or close button labels. Before the first field or checkbox mutation, discover and validate the relevant action names in the actual form, once per form layout. Do not turn a task verb into a guessed exact label. If interpretation is needed, return compact action choices before editing. Then batch records with fresh exact-name lookups; do not repeat action-label discovery for every record or scan a full tree.
 
-**Finish every query before deciding.** This includes filtered queries for a known, exact label. `limit` limits returned matches; it does not guarantee that the native tree was fully scanned. While `page.next` exists, collect the page and call `app.observe({cursor:page.next})` inside the same script. Only after the last page should you check `coverage.complete` and whether there is exactly one match. A first page with zero or one matches and a continuation is neither missing nor ambiguous. Use the paginated helper in section 2 for every control lookup.
+**Finish every query before deciding.** This includes filtered queries for a known, exact label. `limit` limits returned matches; it does not guarantee that the native tree was fully scanned. While `page.next` exists, collect the page and call `app.observe({cursor:page.next})` inside the same script. Only after the last page should you check `coverage.complete` and whether there is exactly one match. A first page with zero or one matches and a continuation is neither missing nor ambiguous. Use the query helper in section 2 for every control lookup.
+
+**After a known UI transition, retry only the read.** Search setters, opening a form and saving can finish before their controls settle. Use bounded fresh queries for the expected next control, not another setter, press or save. Keep incomplete coverage, missing and disabled results distinct. A complete ambiguous match stops immediately; provider, permission and identity errors propagate without a retry.
 
 Results and committed state must be JSON. Project documented element fields: `role`, `name`, `value`, `enabled`, `actions` and refs. There is no `description` field. Omit absent fields or use `?? null`; returning `undefined` inside an object fails serialization. Continue through the requested edits and saves: an intermediate discovery or screenshot is not task completion.
 
@@ -30,51 +32,30 @@ for (;;) {
   if (!p.next) break;
   p = await app.observe({cursor:p.next});
 }
-return {fields, complete:p.coverage.complete};
+return {fields, coverage:p.coverage};
 ```
 
 If the task provides field labels, skip only their repeated discovery. Identify any unknown form actions before proceeding to section 2. Combine filtering, identifying the edit control, opening the form and discovering the relevant controls in one script. This example uses an observed search label and requires an actually discovered, exact edit label before pressing it. Adapt the action-search keywords to the task; keywords find candidate names and are not exact action labels. Return compact choices when their meaning or uniqueness needs a decision, before changing form values.
 
+Copy the local helpers from section 2 into this script. The task already names its fields, so this example discovers only action labels; for unknown fields, add a query for the relevant role and return only its names/values.
+
 ```javascript
 const window_ref = state.window, key = 'Contact A';
-async function query(role, text) {
-  let p = await app.observe({window_ref, role, ...(text ? {text} : {}), limit:12});
-  const elements = [];
-  for (;;) {
-    elements.push(...p.elements);
-    if (!p.next) break;
-    p = await app.observe({cursor:p.next});
-  }
-  if (!p.coverage.complete) throw Error('Incomplete control discovery');
-  return {elements, observation_ref:p.observation_ref};
-}
-function ref(q,e) {
-  return {window_ref, observation_ref:q.observation_ref, element_ref:e.element_ref};
-}
-let q = await query('text_field','Search contacts');
-let found = q.elements.filter(e => e.name === 'Search contacts' && e.actions.includes('setValue'));
-if (found.length !== 1) throw Error('Identify the search control');
-await app.setValue({...ref(q,found[0]), value:key});
-q = await query('button',key);
-found = q.elements.filter(e => e.name === 'Edit '+key && e.actions.includes('press'));
-if (found.length !== 1) return {choices:q.elements.map(e=>e.name)};
-await app.press(ref(q,found[0]));
-const form = {};
-// Omit field roles whose labels and control types are already known.
-for (const role of ['text_field','text_area','checkbox']) {
-  const page = await query(role);
-  form[role] = page.elements.map(e=>({name:e.name,value:e.value,actions:e.actions}));
-}
-const saveChoices = (await query('button','save')).elements
+const search = await one('text_field','Search contacts','setValue');
+await app.setValue({...search.ref, value:key});
+const edit = await one('button','Edit '+key,'press',true);
+await app.press(edit.ref);
+const saveChoices = (await query('button','save',{afterTransition:true})).elements
   .map(e=>({name:e.name,enabled:e.enabled,actions:e.actions}));
-q = await query('button',state.formActions?.close ?? 'cancel');
-const closeChoices = q.elements.filter(e=>e.actions.includes('press') && e.enabled !== false);
-const actionChoices = {save:saveChoices, close:closeChoices.map(e=>e.name)};
+const closeName = state.formActions?.close;
+const q = await query('button',closeName ?? 'cancel',
+  closeName ? {name:closeName,action:'press',afterTransition:true} : {afterTransition:true});
+const actionChoices = {save:saveChoices,
+  close:q.elements.map(e=>({name:e.name,enabled:e.enabled,actions:e.actions}))};
 // A keyword match alone does not establish what pressing it will do.
-found = closeChoices.filter(e=>e.name === state.formActions?.close);
-if (found.length !== 1) return {form,actionChoices,formOpen:true};
-await app.press(ref(q,found[0]));
-return {form,actionChoices,closedWithoutSaving:true};
+if (!closeName) return {actionChoices,formOpen:true};
+await app.press(ref(q,q.elements[0]));
+return {actionChoices,closedWithoutSaving:true};
 ```
 
 Choose the relevant exact action names from the observed controls and store them as `state.formActions = {save: observedSaveName, close: observedCloseName}`; these are names, not reusable refs. A save action may be disabled until values change, so distinguish an observed disabled control from an absent label. If the actions are already clear, continue with the batch in the same script instead of returning only discovery. If a decision was needed, retain whether the form was left open and resume there. A full tree, another row scan or a screenshot is unnecessary when the controls are already identified. If a visible transition is asynchronous, make bounded read-only checks for the expected control inside the script; never repeat the action to wait for it.
@@ -90,43 +71,63 @@ const window_ref = state.window;
 const actionNames = state.formActions;
 if (!actionNames?.save || !actionNames?.close)
   return {needsActionDiscovery:true}; // Identify actions before any form mutation.
-async function one(role, name) {
-  let p = await app.observe({window_ref, role, text:name, limit:5});
-  const found = [];
-  for (;;) {
-    found.push(...p.elements.filter(e => e.name === name && e.enabled !== false));
-    if (!p.next) break;
-    p = await app.observe({cursor:p.next});
+async function query(role,text,{name,action,afterTransition=false}={}) {
+  const until = Date.now()+2000, attempts = [];
+  for (let n=0; n<(afterTransition ? 4 : 1); n++) {
+    if (n && Date.now() >= until) break;
+    let p = await app.observe({window_ref,role,...(text === undefined ? {} : {text}),limit:12});
+    const elements = []; // Fresh collection and refs for this whole attempt.
+    for (;;) {
+      elements.push(...p.elements);
+      if (!p.next) break;
+      p = await app.observe({cursor:p.next});
+    }
+    const found = name === undefined ? elements : elements.filter(e=>e.name === name);
+    const status = !p.coverage.complete ? 'incomplete' :
+      name !== undefined && found.length > 1 ? 'ambiguous' :
+      name !== undefined && !found.length ? 'missing' :
+      action && found[0].enabled === false ? 'disabled' :
+      action && !found[0].actions.includes(action) ? 'unsupported_action' : 'ready';
+    attempts.push({status,count:found.length,coverage:p.coverage});
+    if (status === 'ready')
+      return {elements:found,observation_ref:p.observation_ref,attempts};
+    if (status === 'ambiguous' || status === 'unsupported_action') break;
   }
-  if (!p.coverage.complete || found.length !== 1)
-    throw Error('Need one identified control in complete discovery: '+name);
-  return {ref:{window_ref, observation_ref:p.observation_ref,
-               element_ref:found[0].element_ref}, element:found[0]};
+  throw Error(JSON.stringify({query:{role,text,name:name ?? null,action:action ?? null},attempts}));
 }
-async function press(name) {
-  const control = await one('button',name);
-  if (!control.element.actions.includes('press')) throw Error('Control cannot press: '+name);
-  await app.press(control.ref);
+function ref(q,e) {
+  return {window_ref,observation_ref:q.observation_ref,element_ref:e.element_ref};
 }
-async function set(role,name,value) {
-  await app.setValue({...(await one(role,name)).ref, value});
+async function one(role,name,action,afterTransition=false) {
+  const q = await query(role,name,{name,action,afterTransition});
+  return {ref:ref(q,q.elements[0]),element:q.elements[0]};
+}
+async function press(name,afterTransition=false) {
+  await app.press((await one('button',name,'press',afterTransition)).ref);
+}
+async function set(role,name,value,afterTransition=false) {
+  await app.setValue({...(await one(role,name,'setValue',afterTransition)).ref,value});
 }
 const records = [
   {key:'Contact A', name:'Alex', note:'Reviewed\nReady'},
   {key:'Contact B', name:'Sam', note:'Reviewed\nFollow up'}
 ];
 const verified = [];
-for (const row of records) {
-  await set('text_field','Search contacts',row.key);
-  await press('Edit '+row.key);
-  await set('text_field','Display name',row.name);
-  await set('text_area','Notes',row.note);
-  const approved = await one('checkbox','Approved');
+for (const [index,row] of records.entries()) {
+  await set('text_field','Search contacts',row.key,index > 0);
+  await press('Edit '+row.key,true);
+  await set('text_field','Display name',row.name,true);
+  await set('text_area','Notes',row.note,true);
+  const approved = await one('checkbox','Approved',undefined,true);
   if (!['0','1'].includes(approved.element.value)) throw Error('Interpret checkbox state');
-  if (approved.element.value !== '1') await app.press(approved.ref);
-  await press(actionNames.save);
-  await press('Edit '+row.key);
-  const savedName = (await one('text_field','Display name')).element.value;
+  if (approved.element.value !== '1') {
+    if (approved.element.enabled === false || !approved.element.actions.includes('press'))
+      throw Error('Checkbox is disabled or cannot press');
+    await app.press(approved.ref);
+  }
+  await press(actionNames.save,true);
+  await press('Edit '+row.key,true);
+  const savedName = (await one('text_field','Display name',undefined,true)).element.value;
   const savedNote = (await one('text_area','Notes')).element.value;
   const savedApproved = (await one('checkbox','Approved')).element.value;
   await press(actionNames.close);
@@ -136,6 +137,8 @@ for (const row of records) {
 }
 return verified;
 ```
+
+The helper normally makes one whole query. `afterTransition:true` permits at most four fresh whole queries, starting retries only within two seconds; each started query drains its cursors under DTW's overall execution deadline. There are no timer APIs to interrupt a pending native call. It never merges attempts, catches native errors or repeats an action. Exhaustion reports each attempt's original coverage and distinguishes missing, disabled and unsupported actions; do not discard these diagnostics. Discovery without an exact `name` may return a complete empty set: choose another relevant keyword instead of treating an unproven label as required. Disabled controls remain visible in action-name discovery, while an action requires an enabled control that advertises that exact operation.
 
 For a checkbox, read its current value and press only when it differs from the requested state. Interpret values from that app's observed controls; do not use the text setter for booleans. If a save completes asynchronously, observe its status before reopening. Stop on uncertainty; do not rerun the batch to recover a missing receipt.
 
@@ -185,6 +188,6 @@ One exec operates one app. Switching apps preserves each app's committed JSON st
 
 On `focus_changed`, `focus_unproven`, `stale_observation` or `target_changed`, stop the current sequence and refresh the affected window: list windows if its identity changed, observe for semantics, or capture for coordinates. Inspect the actual result before continuing only the unfinished steps. Input may already have partial effects; preserve its original receipt and never replay the whole script/text or repeatedly steal focus back. Other windows and app contexts do not need a reset.
 
-`exec` waits and returns a compact summary. No polling or `result` query is needed after ordinary success. Inspect summary issues even if the script succeeded: `incomplete_reads` means a window inventory was not fully proven, so absence from that list does not prove a window disappeared. For uncertainty, `result({app})` reads this connection's latest accepted execution, or use a **returned** `execution_id` for that original ledger. An unreceived/rejected request may leave an older latest record. Never resubmit an action merely to recover its receipt; retain uncertainty and inspect the target if its original record is unavailable.
+`exec` waits and returns a compact summary. No polling or `result` query is needed after ordinary success. `incomplete_reads` preserves partial window inventories and terminal incomplete semantic queries, even when JS ignores the result. Missing from a partial inventory does not prove disappearance. Optional `recovered_incomplete_reads` counts semantic reads superseded by a new complete observation of the same window before any action/error intervened; the original warning remains. This proves read-only refresh, not business success or identical query filters. Unrecovered reads require fresh discovery before acting. For uncertainty, `result({app})` reads this connection's latest accepted execution, or use a **returned** `execution_id` for that original ledger. An unreceived/rejected request may leave an older latest record. Never resubmit an action merely to recover its receipt; retain uncertainty and inspect the target if its original record is unavailable.
 
 DTW has a 30-second execution deadline without a native-call quota. MCP cancellation stops work; dispatched input may still have effects. Scripts have no filesystem, network, process, timers or arbitrary native-tool APIs. JSON state commits only on successful execution and is not durable. Report permission/unsupported-surface conditions without repeated identical attempts. Foreground input can change focus and coordinate clicks move the system pointer; independent background/lock-screen modes are not provided.

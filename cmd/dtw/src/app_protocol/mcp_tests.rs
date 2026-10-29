@@ -333,6 +333,24 @@ async fn sdk_exec_compacts_repeated_reads_while_result_retains_the_original_ledg
     assert_eq!(steps[0]["operation"], "windows");
     assert!(steps[0]["inventory"].is_object());
     assert!(steps[1..].iter().all(|step| step["operation"] == "observe"));
+    assert!(steps[1..].iter().all(|step| {
+        let discovery = &step["discovery"];
+        discovery["complete"] == true
+            && discovery["reason"].is_null()
+            && discovery["visited"] == 1
+            && discovery["has_more"] == false
+            && discovery["window_ref"].is_string()
+            && discovery["window_ref"] == steps[1]["discovery"]["window_ref"]
+            && discovery["observation_ref"].is_string()
+    }));
+    assert_eq!(
+        steps[1..]
+            .iter()
+            .map(|step| step["discovery"]["observation_ref"].as_str().unwrap())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        24
+    );
     assert!(full["script"].get("summary").is_none());
     for field in [
         "app",

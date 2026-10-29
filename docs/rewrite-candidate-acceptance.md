@@ -39,6 +39,17 @@ Skill 修正要求首次改表单值前确认实际保存/关闭动作名，任�
 
 复核又修正了示例丢弃禁用保存按钮的问题：发现时保留其名称、enabled 与 actions；实际按压前重新确认可用和 advertised press。冻结 Skill SHA-256 为 `46982533d8c5a17b48efaf7723e4a5ec4c4935654e718ed509e46bfb279b01b3`，Skill 校验、4 段脚本语法与禁用按钮纯控制、40 个验收解析控制通过。前述源码 Skill 样本不计为这个最终版本或新包的安装验收；固定候选验证继续进行。
 
+该 Skill 的候选 [40808079382](https://github.com/caelis-labs/desktop-world/actions/runs/40808079382)，源 `44c839eafa6c5fb3fca0b1f5263f36c9007b854f`，构建、259+4+3 源码测试、签名和公证通过，原公证 ID `1369b6e6-18ad-449b-8997-3195f4300a98`。ZIP SHA-256 `e89450175876e5451ee2a1ec3e23041b9c24f957029c90baac8c0cc3d5d083ba`，二进制 `8f84b4f75527df46fb3d7ca96b350e777e5615ba3f6abaaa8b826a2c01c09ae9`。新目录 `/private/tmp/DTW 安装验收 0.2.0 Skill 修正版/desktop-world-0.2.0-aarch64-apple-darwin` 的 146 文件清单、签名与在线公证核验通过。它与前一包的 CodeDirectory hash 同为 `7b49855ddea3928578bc90bdc67e3ffd9cd56047`，`cmd/dtw` 源树同为 `ab5557eefda4d9eb55c42e3d3097a6f1221e1482`；没有把前包六组原生记录改标成新二进制重跑结果。
+
+最终六轮序列在首轮 `/private/tmp/dtw-installed-skill-final-claude-20261029-01/evidence.json` 停止：11 exec / 12 MCP、13,963 JSON bytes、74.775 秒，两次脚本异常，门槛未通过，余下五轮未执行。业务初始核验正确、恰好两次保存；清理按保守规则留开的 TextEdit 后经独立读回和磁盘比对单次关闭，另存 `reconciliation.json`，原失败保持不变。
+
+- `execution_a0482349-98d9-49f8-ae3d-1a7412ee13dd` 在搜索 setter 后、Edit 动作前遇终页覆盖不完整；原脚本丢弃了 coverage.reason，旧账本没有保存它，原因不可恢复。
+- `execution_bc12e111-4d1b-4ab3-bc8f-a9117d3adc24` 保存后查找 Edit，脚本将“覆盖不完整”和“零匹配”合并报错，不能确定是哪一种；稍后的新查询完整并找到目标，不足以证明原失败必由异步页面更新造成。
+
+修正分为观察证据与脚本恢复：账本保留每次查询的覆盖诊断，只有同窗新 observation 完整且动作之前的只读刷新才单独计为恢复；脚本在已知界面转换后有界地重建查询，不复用旧页或重放写入。验收继续阻断脚本/原生错误、unknown、未恢复读取和不完整窗口库存；仅允许 DTW 账本证明已恢复的只读语义查询，并在 `metrics.read_refreshes` 单独保留原诊断。业务正确、恰好两次保存、调用/输出上限和清理门槛不变。后续修改尚待新的固定来源验收，不以此修改重判以上失败。
+
+这轮修改的纯验证已通过：39 项 Rust 诊断/投影/MCP 控制、43 项验收解析控制、源码快速检查，以及 Skill 校验、4 段脚本语法和 9 组有界查询控制。开发二进制 SHA-256 `232402cdcde5ca39f2b7e38204308480d5c4c368fda27f2e1e076c57e2d0dafb`，冻结 Skill `7aeba65bf92c6cbb718cae2582b35ba70dd6b118a9c34ee827598739ee1382b1`。`/private/tmp/dtw-discovery-refresh-{native-all,web-discovery}-20261029-01/evidence.json` 均通过，截图已视觉核验；Native.swift 未改变（SHA-256 `cfb2bfff19cc42cab9af2de89a728b07cefc37ed2eb9d04435b2c3fd2bad9235`）。先验证此固定开发组合的模型任务，再制作新签名候选。
+
 ## 原始失败及修复
 
 - Windows [40764663815](https://github.com/caelis-labs/desktop-world/actions/runs/40764663815)，来源 `6bcd88b`：Git archive 受到 `core.autocrlf` 影响，导出的 lockfile 与提交 blob 不同；在 Rust 编译前停止。`632065c` 显式导出 LF 源码，真实临时 Git 回归同时保护 `.gitattributes -text` 文件的原始字节。

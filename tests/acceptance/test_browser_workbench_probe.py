@@ -232,7 +232,7 @@ class RouteTests(unittest.TestCase):
 
 
 class OutputTests(unittest.TestCase):
-    def test_incomplete_reads_rejects_nonzero_and_invalid_counters_but_keeps_old_logs(self):
+    def test_unrecovered_incomplete_reads_and_invalid_counters_fail_but_old_logs_remain_valid(self):
         self.assertEqual(measure(completed())['issues'], [])
         zero = completed(); zero['script']['summary']['incomplete_reads'] = 0
         self.assertEqual(measure(zero)['issues'], [])
@@ -242,6 +242,49 @@ class OutputTests(unittest.TestCase):
                 issues = measure(value)['issues']
                 self.assertTrue(issues)
                 self.assertIn('incomplete', issues[0]['invalid_output'])
+
+    def recovered(self):
+        value = completed()
+        value['script']['summary'].update(steps=3, incomplete_reads=1, recovered_incomplete_reads=1,
+            last_issue={'number':1,'operation':'observe','status':'completed','error':None,'receipt':None,
+                        'discovery':{'complete':False,'reason':'node_unavailable','visited':20,
+                                     'has_more':False,'window_ref':'w1','observation_ref':'o1'}})
+        return value
+
+    def test_proven_read_refresh_is_retained_as_diagnostic_without_claiming_no_partial_read(self):
+        value = self.recovered(); measured = measure(value)
+        self.assertEqual(measured['issues'], [])
+        self.assertEqual(measured['read_refreshes'], [{'call':1,'execution_id':'execution-test',
+                         'count':1,'diagnostic':value['script']['summary']['last_issue']}])
+        self.assertEqual(value['script']['summary']['incomplete_reads'], 1)
+        self.assertEqual(measure(completed())['read_refreshes'], [])
+
+    def test_recovery_does_not_admit_inventory_gaps_missing_proof_or_invalid_counters(self):
+        variants=[]
+        for count in (0, 2, -1, True, 1.0, '1', None):
+            value=self.recovered();value['script']['summary']['recovered_incomplete_reads']=count;variants.append(value)
+        value=self.recovered();value['script']['summary']['incomplete_reads']=2;variants.append(value)
+        for changed in ({'operation':'windows'}, {'status':'pending'}, {'error':{'code':'native_error'}},
+                        {'receipt':{}}, {'inventory':{}}, {'discovery':None}):
+            value=self.recovered();value['script']['summary']['last_issue'].update(changed);variants.append(value)
+        for changed in ({'complete':True}, {'has_more':True}, {'visited':True},
+                        {'window_ref':None}, {'observation_ref':''}):
+            value=self.recovered();value['script']['summary']['last_issue']['discovery'].update(changed);variants.append(value)
+        for value in variants:
+            with self.subTest(value=value):self.assertTrue(measure(value)['issues'])
+
+    def test_read_recovery_never_clears_script_native_or_input_failure(self):
+        variants=[]
+        for key in ('failed','pending'):
+            value=self.recovered();value['script']['summary'][key]=1;variants.append(value)
+        value=self.recovered();value['error']={'code':'script_exception'};variants.append(value)
+        value=self.recovered();value['script']['failure']={'kind':'exception'};variants.append(value)
+        for key,kind in (('dispatch','unknown'),('provider_dispatch','unknown'),
+                         ('evidence','mismatch'),('provider_evidence','unrecorded')):
+            value=self.recovered();actions={k:{} for k in ('dispatch','provider_dispatch','evidence','provider_evidence')}
+            actions.update(interrupted=0);actions[key][kind]=1;value['script']['summary']['actions']=actions;variants.append(value)
+        for value in variants:
+            with self.subTest(value=value):self.assertTrue(measure(value)['issues'])
 
     def test_objects_and_strings_count_the_same_compact_utf8_payload(self):
         value = completed()

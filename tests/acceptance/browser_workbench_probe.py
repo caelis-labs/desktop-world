@@ -339,6 +339,34 @@ def normalize_agy(path):
     return rows, terminal
 
 
+def checked_read_refreshes(summary):
+    incomplete = summary.get('incomplete_reads', 0)
+    recovered = summary.get('recovered_incomplete_reads', 0)
+    require(type(incomplete) is int and incomplete >= 0,
+            'Invalid summary.incomplete_reads: expected a non-negative integer')
+    require(type(recovered) is int and 0 <= recovered <= incomplete,
+            'Invalid recovered incomplete read counter')
+    require(recovered == incomplete, 'Execution summary contains unrecovered incomplete reads')
+    issue = summary.get('last_issue')
+    if incomplete == 0:
+        require(issue is None, 'Execution summary contains an issue')
+        return 0
+    # This count is produced by DTW from the actual ledger, not by JS return
+    # values: same window, new complete observation, no intervening action/error.
+    require(isinstance(issue, dict) and issue.get('operation') == 'observe'
+            and issue.get('status') == 'completed' and issue.get('error') is None
+            and issue.get('receipt') is None and issue.get('inventory') is None,
+            'Recovered reads cannot hide another issue')
+    discovery = issue.get('discovery')
+    require(isinstance(discovery, dict) and discovery.get('complete') is False
+            and discovery.get('has_more') is False
+            and type(discovery.get('visited')) is int and discovery['visited'] >= 0
+            and all(isinstance(discovery.get(key), str) and discovery[key]
+                    for key in ('window_ref', 'observation_ref')),
+            'Recovered read diagnostic is missing or invalid')
+    return recovered
+
+
 def check_execution(data, arguments, compact=True):
     require(data.get('app') == arguments['app'] and isinstance(data.get('execution_id'), str)
             and data['execution_id'], 'Execution identity is missing or changed')
@@ -368,12 +396,9 @@ def check_execution(data, arguments, compact=True):
     require(isinstance(summary, dict), 'Compact execution summary missing')
     for key in ('steps', 'failed', 'pending'):
         require(type(summary.get(key)) is int and summary[key] >= 0, 'Invalid summary counter: '+key)
-    incomplete_reads = summary.get('incomplete_reads', 0)
-    require(type(incomplete_reads) is int and incomplete_reads >= 0,
-            'Invalid summary.incomplete_reads: incomplete read counter must be a non-negative integer')
-    require(incomplete_reads == 0, 'Execution summary contains incomplete reads')
-    require(summary['failed'] == 0 and summary['pending'] == 0 and summary.get('last_issue') is None,
+    require(summary['failed'] == 0 and summary['pending'] == 0,
             'Execution summary contains failed or pending steps')
+    checked_read_refreshes(summary)
     if 'actions' in summary:
         actions = summary['actions']
         require(isinstance(actions, dict), 'Invalid action summary')
@@ -395,7 +420,7 @@ def metrics(calls, name, browser_app="com.google.Chrome"):
         elif isinstance(c['name'], str) and c['name'].startswith(f'mcp__{name}__'):
             selected.append({**c, 'method':c['name'].split('__')[-1]})
     text_bytes = 0; images_total = 0; issues = []; exec_count = 0; images_complete = True
-    script_calls = []
+    script_calls = []; read_refreshes = []
     for number, c in enumerate(selected, 1):
         if c['method'] == 'exec':
             exec_count += 1
@@ -429,6 +454,10 @@ def metrics(calls, name, browser_app="com.google.Chrome"):
                 require(isinstance(arguments, dict) and set(arguments) == {'app','source'}, 'exec must use exactly app/source')
                 require(arguments['app'] in (browser_app,'com.apple.TextEdit'), 'Unexpected target app')
                 check_execution(data, arguments)
+                recovered = data['script']['summary'].get('recovered_incomplete_reads', 0)
+                if recovered:
+                    read_refreshes.append({'call':number, 'execution_id':data['execution_id'],
+                                          'count':recovered, 'diagnostic':data['script']['summary']['last_issue']})
             elif c['method'] == 'apps':
                 require(data.get('version') == 1 and isinstance(data.get('apps'), list), 'Application catalog missing')
             elif c['method'] == 'api':
@@ -448,7 +477,8 @@ def metrics(calls, name, browser_app="com.google.Chrome"):
             'mcp_json_bytes':text_bytes,'json_measurement':'compact_utf8_dtw_payload_once; image content excluded',
             'image_bytes':images_total if images_complete else None,
             'image_measurement':'complete' if images_complete else 'payload_not_fully_exposed',
-            'issues':issues,'result_queries':sum(c['method']=='result' for c in selected)}
+            'issues':issues,'read_refreshes':read_refreshes,
+            'result_queries':sum(c['method']=='result' for c in selected)}
 
 
 def skill_paths(name, root):

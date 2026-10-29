@@ -123,7 +123,9 @@ state 提交不是桌面事务。动作一旦派发，之后的异常、取消�
 
 ## 查询、步骤账本与图像
 
-`exec` 回显 `app` 和内部生成的 `execution_id`，保留 `status/value/error/payload_expired`、状态提交和恢复标记；默认返回 `script.summary`，不展开步骤列表。摘要累计步骤、失败、不完整库存读取、派发、证据和中断，`last_issue` 只代表最后一个注意项。`incomplete_reads` 非零时，不能用返回窗口列表中缺少某窗口来证明它已消失。详见 [MCP 结果合同](app-protocol-v1.md#结果效果与图像)。正常流程无需追加查询。
+`exec` 回显 `app` 和内部生成的 `execution_id`，保留 `status/value/error/payload_expired`、状态提交和恢复标记；默认返回 `script.summary`，不展开步骤列表。摘要累计步骤、失败、不完整读取、派发、证据和中断，`last_issue` 只代表最后一个注意项。`incomplete_reads` 包含不完整库存，以及已无续页但 `complete=false` 的语义查询；正常尚有续页的观察不计入。对应注意项保留 `inventory` 或 `discovery` 证据，不把成功只读步骤改为失败。此计数非零时，不能依据缺失条目断定窗口或控件不存在。详见 [MCP 结果合同](app-protocol-v1.md#结果效果与图像)。正常流程无需追加查询。
+
+同次执行中，后续同一 `window_ref`、不同 `observation_ref` 的查询以 `complete=true, has_more=false` 结束，可将此前该窗口的不完整查询计入 `recovered_incomplete_reads`。中间一旦出现动作 receipt、失败或未完成步骤，之前尚未恢复的查询永久退出恢复候选。库存、其他窗口或其他执行不参与此恢复判定；该字段仅在非零时输出，原 `incomplete_reads` 和 `last_issue` 不删除。它证明后来的独立查询完整，不证明两次筛选条件相同、原查询已补全或业务动作成功。
 
 `result({app})` 或带历史 `execution_id` 的查询返回完整原始记录，其中 `operation` 为 `script`，外层 `receipt` 通常为 null，动作证据在 `script.steps` 中：
 
@@ -134,6 +136,7 @@ state 提交不是桌面事务。动作一旦派发，之后的异常、取消�
 | `value.calls` | 已计入 Host bridge 预算的尝试数，不一定等于 ledger 长度 |
 | `value.last_capture` | null 或 `{step,observation}`，关联最后返回图片的调用编号及观察元数据 |
 | `script.steps[]` | `{number,line,operation,status,error,receipt}`；进行中也可查询，status 为 running/completed |
+| `script.steps[].discovery` | 成功 observe 的 `{window_ref,observation_ref,complete,reason,visited,has_more}`；保存当页覆盖证据，不保存元素、游标或页面文本 |
 | `script.failure` | null 或 `{kind,message,line,operation,code,call}`；无可定位信息时为 null，内部错误可能只有部分诊断 |
 | `script.state_committed` | 新 state 是否实际提交 |
 | `script.shutdown_error` | 关闭资源失败的独立 `{code,message}`，不覆盖脚本失败或动作 receipt |
@@ -159,6 +162,8 @@ capture 只把尺寸、坐标系和 opaque observation_ref 交给 VM；PNG 字�
 `apps.script.methods` 是紧凑签名索引；参数、返回值、执行条件和引用规则通过 `api({methods:[…]})` 按需查询。组合行为有 Core/VM 回归与真实原生验收。`dtw api` 从同一 Rust schemas 生成 TypeScript；仓库中的 [TypeScript 声明](app-script-api.d.ts) 是生成文件，提交的仍是 JavaScript 函数体，不需要类型编译器或安装旧插件。
 
 `app.windows()` 的成功 coverage 与原子入口相同；`empty_within_scope` 不等于应用无窗口。失败可通过 `e.code === "window_inventory_unproven"` 与 `e.details.coverage/diagnostics` 处理，无须解析 message。每次成功 windows 的 `script.steps[].inventory` 保留 coverage 与诊断，即使脚本随后抛错或 value/image 被驱逐，仍可调查首次读到空清单的原因。它不重复保存标题、图片或原生窗口 ID；失败步骤保持完整 error/details。
+
+成功 observe 同样在 `script.steps[].discovery` 保留覆盖状态；脚本丢弃页面、随后抛错或结果 payload 被驱逐都不删除此证据。`has_more` 表示该页当时是否提供续页，不保证游标当前仍有效；`visited` 是该查询累计访问数。不同新查询的页面及引用不能混合，旧的不完整记录不会因后来另一查询成功而消失。失败 observe 仍保存原始 error，不虚构覆盖状态。
 
 脚本期限同样约束没有 Host Call 的纯 JavaScript。超时不提交 state，已发生动作和步骤证据不抹去；后续取消或关闭不覆盖先发生的终态原因。
 
