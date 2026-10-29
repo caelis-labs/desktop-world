@@ -213,22 +213,23 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
             if command.len() == 1 {
                 return Ok(Command::Observe);
             }
-            let filter = |key: &str, maximum: usize| -> Result<Option<String>, WireError> {
-                command
-                    .get(key)
-                    .map(|value| {
-                        value
-                            .as_str()
-                            .filter(|text| (1..=maximum).contains(&text.chars().count()))
-                            .map(str::to_owned)
-                            .ok_or_else(|| {
-                                invalid(format!(
-                                    "command.{key} must contain 1 to {maximum} characters"
+            let filter =
+                |key: &str, minimum: usize, maximum: usize| -> Result<Option<String>, WireError> {
+                    command
+                        .get(key)
+                        .map(|value| {
+                            value
+                                .as_str()
+                                .filter(|text| (minimum..=maximum).contains(&text.chars().count()))
+                                .map(str::to_owned)
+                                .ok_or_else(|| {
+                                    invalid(format!(
+                                    "command.{key} must contain {minimum} to {maximum} characters"
                                 ))
-                            })
-                    })
-                    .transpose()
-            };
+                                })
+                        })
+                        .transpose()
+                };
             let limit = match command.get("limit") {
                 None => computer::ObserveQuery::default().limit,
                 Some(value) => value
@@ -238,8 +239,8 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
                     as u32,
             };
             Ok(Command::ObserveQuery(computer::ObserveQuery {
-                role: filter("role", 64)?,
-                text: filter("text", 256)?,
+                role: filter("role", 1, 64)?,
+                text: filter("text", 0, 256)?.filter(|text| !text.is_empty()),
                 limit,
             }))
         }

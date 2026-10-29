@@ -81,7 +81,7 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
     let query = json!({"oneOf":[
         object(json!({"window_ref":reference,
             "role":{"type":"string","minLength":1,"maxLength":64,"description":"Exact returned semantic role, for example button."},
-            "text":{"type":"string","minLength":1,"maxLength":256,"description":"Case-insensitive substring of label, name or value. Combined with role using AND."},
+            "text":{"type":"string","minLength":0,"maxLength":256,"description":"Case-insensitive substring of label, name or value. Combined with role using AND. Empty string omits the text filter; whitespace is literal."},
             "limit":{"type":"integer","minimum":1,"maximum":100,"default":40}
         }), &["window_ref"]),
         object(json!({"cursor":reference}), &["cursor"])

@@ -7,8 +7,9 @@ cross-process routing are checked against fixture files/events. Never retries an
 input, releases keys on the user's behalf, or changes Agent configuration.
 Use --case to run one sample in fresh fixtures. This is GUI/MCP evidence, not
 live-model or Harness approval evidence. All initial failures remain on disk.
-The eof and parent-exit cases deliberately end one owned MCP process and are
-opt-in only; neither is included in all.
+The focus-intercept case activates an owned peer during input; eof and
+parent-exit deliberately end one owned MCP process. These are opt-in only
+and are not included in all.
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -276,7 +277,7 @@ def double_intercept(mcp, target, evidence):
     evidence['intercepted_double_independent_state'] = state
 
 
-def begin_inflight_input(mcp, target, peer, evidence, case, prefix):
+def begin_inflight_input(mcp, target, peer, evidence, case, prefix, *, save_after=False):
     proof = evidence.setdefault(case, {})
     proof.update(replayed=False, dispatch_attempts=0, release={})
     proof['reset'] = target.command('reset')
@@ -285,7 +286,9 @@ def begin_inflight_input(mcp, target, peer, evidence, case, prefix):
     payload = prefix + 'q'*1000
     proof['payload_characters'] = len(payload)
     proof['payload_sha256'] = hashlib.sha256(payload.encode()).hexdigest()
-    source = SELECT + f"await app.focus({{window_ref}});return await app.typeText({{window_ref,text:{json.dumps(payload)}}});"
+    source = SELECT + f"await app.focus({{window_ref}});const typed=await app.typeText({{window_ref,text:{json.dumps(payload)}}});"
+    if save_after: source += "await app.keypress({window_ref,keys:['META','S']});"
+    source += "return typed;"
     proof['dispatch_attempts'] = 1
     rpc_id = mcp.begin('tools/call', {'name':'exec','arguments':{'app':target.app_id,'source':source}})
     proof['rpc_id'] = rpc_id
@@ -299,6 +302,47 @@ def begin_inflight_input(mcp, target, peer, evidence, case, prefix):
     proof['execution_id'] = proof['running']['execution_id']
     require(proof['running']['status'] == 'running', 'Input completed before interruption; no retry')
     return proof, payload
+
+
+def assert_focus_interruption(record):
+    require(record.get('error') and record['script']['failure']['code'] == 'focus_changed',
+            'Focus interception did not produce its original refresh error')
+    steps = record['script']['steps']
+    typed = [step for step in steps if step['operation'] == 'typeText']
+    require(len(typed) == 1 and typed[0]['error']['code'] == 'focus_changed', record)
+    receipt = typed[0]['receipt']
+    require(receipt['outcome']['dispatch'] == 'unknown'
+            and receipt['provider_outcome']['dispatch'] == 'unknown', record)
+    require(not any(step['operation'] == 'keypress' for step in steps),
+            'The save suffix ran after focus interception')
+    require(record['script']['state_committed'] is False, 'Interrupted script committed state')
+
+
+def focus_intercept(mcp, target, peer, evidence):
+    proof, payload = begin_inflight_input(mcp, target, peer, evidence, 'focus_interception', 'FOCUS-', save_after=True)
+    # This is an independent, owned AppKit control, not another DTW call that
+    # would wait for its shared input lease. It models user/external focus loss.
+    proof['peer_front_request'] = peer.command('front')
+    def peer_active():
+        state = peer.state()
+        return state if state['active'] and state['key_window'] == state['windows'][0]['id'] else None
+    proof['peer_active'] = wait_until(peer_active)
+    def terminal():
+        record = mcp.receipt(target.app_id, 'focus_interception_original')
+        return record if record.get('status') == 'completed' else None
+    record = wait_until(terminal, timeout=8)
+    proof['record'] = record
+    proof['after'] = released(target, proof['release'])
+    proof['peer_release'] = {}
+    proof['peer_after'] = released(peer, proof['peer_release'])
+    assert_focus_interruption(record)
+    require(0 < len(proof['after']['text']) < len(payload) and payload.startswith(proof['after']['text']),
+            'Input did not stop at a partial original prefix')
+    require(proof['after']['saves'] == 0 and proof['peer_after']['saves'] == 0, 'Save suffix reached an app')
+    require(proof['peer_after']['active'] and not proof['after']['active'], 'DTW stole focus back after interruption')
+    # Already queued events may arrive after the external switch. Preserve the
+    # peer text/events; unknown dispatch never promises an atomic OS transaction.
+    require(mcp.receipt(target.app_id, 'focus_interception_original') == record, 'Original receipt changed')
 
 
 def cancel(mcp, target, peer, evidence):
@@ -451,7 +495,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dtw', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--case', choices=['all','editing','scroll','visual','ownership','surface','cancel','double-intercept','eof','parent-exit'], default='all')
+    parser.add_argument('--case', choices=['all','editing','scroll','visual','ownership','surface','cancel','double-intercept','focus-intercept','eof','parent-exit'], default='all')
     parser.add_argument('--pointer-start-peer', action='store_true', help='Owned setup control: start the physical cursor over the peer app')
     args = parser.parse_args()
     require(sys.platform == 'darwin', 'Requires an exclusive real macOS GUI')
@@ -486,13 +530,22 @@ def main():
         if selected('surface'): surface(clients[0], target, evidence)
         if selected('cancel'): cancel(clients[0], target, peer, evidence)
         if selected('double-intercept'): double_intercept(clients[0], target, evidence)
+        if args.case == 'focus-intercept': focus_intercept(clients[0], target, peer, evidence)
         # These end a client deliberately and never run as part of the all case.
         if args.case in ('eof', 'parent-exit'): transport_exit(clients[0], target, peer, evidence, args.case)
         evidence['after'] = [fixture.state() for fixture in fixtures]
         evidence['key_pairs'] = []
         for fixture in fixtures:
             proof = {}; evidence['key_pairs'].append(proof)
-            event_pairs(fixture, proof)
+            if args.case == 'focus-intercept':
+                # A down/up can legitimately be delivered to different apps
+                # across external activation. Do not invent per-app pairs.
+                proof['release'] = {}
+                released(fixture, proof['release'])
+                proof['events'] = [json.loads(line) for line in (fixture.root/'events.jsonl').read_text().splitlines()]
+                proof['per_app_pair_delivery'] = 'unverified_across_external_focus_change'
+            else:
+                event_pairs(fixture, proof)
     except BaseException as error:
         failure = {'type':type(error).__name__,'message':str(error)}
         (output/'failure.txt').write_text(traceback.format_exc())

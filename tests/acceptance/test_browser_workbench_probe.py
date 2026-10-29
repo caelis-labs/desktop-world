@@ -2,6 +2,7 @@
 """Pure transcript/cleanup tests. No Agent, MCP, native process, or GUI is started."""
 import base64
 import copy
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -32,7 +33,240 @@ def measure(output, images=0):
     return probe.metrics([call(output, images)], NAME)
 
 
+def metadata_miss_events():
+    parameters = {'Path':str(Path.home()/'.gemini/config/plugins'/NAME/'SKILL.md')}
+    base = {'conversation_id':'5fd1c99e-31e0-4804-9131-580fd99ef54e',
+            'step_index':2,'tool_name':'read_file','step_type':'tool'}
+    return [
+        {'step_update':{**base,'state':'ACTIVE','tool_info':{'name':'read_file','parameters':parameters}}},
+        {'step_update':{**base,'state':'ERROR','duration_seconds':0.053335,
+            'tool_info':{'name':'read_file','parameters':parameters,
+                         'error':{'type':'TOOL_ERROR','message':'file does not exist'}}}},
+    ]
+
+
+def normalized_agy(events):
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory)/'agent.jsonl'
+        path.write_text('\n'.join(map(json.dumps, events)))
+        return probe.normalize_agy(path)[0]
+
+
+class InstalledPackageTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.package = self.root/'candidate'
+        self.package.mkdir()
+        self.output = self.root/'run'; self.output.mkdir()
+        self.repo = self.root/'different-development-tree'
+        self.repo.mkdir()
+        self.binary = self.put('bin/dtw', b'candidate executable')
+        self.binary.chmod(0o755)
+        self.canonical_skill = '---\nname: desktop-world\ndescription: Candidate only\n---\nCandidate instructions.\n'
+        self.put('skills/desktop-world/SKILL.md', self.canonical_skill)
+        self.put('skills/desktop-world/support.txt', 'Package-owned resource')
+        self.put('.claude-plugin/plugin.json', json.dumps({'name':'desktop-world','version':'0.2.0','description':'Package metadata'}))
+        self.build = {'schema':1, 'kind':'unpublished-rewrite-candidate', 'version':'0.2.0',
+                      'target':'aarch64-apple-darwin', 'binary':{'path':'bin/dtw','sha256':probe.file_sha256(self.binary)},
+                      'skill_sha256':probe.file_sha256(self.package/'skills/desktop-world/SKILL.md'),
+                      'source':{'commit':'a'*40,'tree':'b'*40,'cargo_lock_sha256':'c'*64},
+                      'source_archive_sha256':'d'*64}
+        self.put('BUILD.json', json.dumps(self.build))
+        self.checksums()
+
+    def put(self, name, content):
+        path = self.package/name; path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content if isinstance(content, bytes) else content.encode())
+        return path
+
+    def checksums(self):
+        files = sorted(path for path in self.package.rglob('*') if path.is_file() and path.name != 'SHA256SUMS')
+        self.put('SHA256SUMS', ''.join(hashlib.sha256(path.read_bytes()).hexdigest()+'  '
+                                    +path.relative_to(self.package).as_posix()+'\n' for path in files))
+
+    def test_installed_runtime_and_skill_use_package_without_copying_binary_or_developer_stage(self):
+        with patch.object(probe.subprocess, 'run', side_effect=AssertionError('No developer staging subprocess')):
+            binary, identity = probe.prepare_runtime(self.repo, self.output, self.binary, self.package)
+            stage, skill = probe.stage_agent_plugin(self.repo, self.output, binary, NAME, self.package)
+        self.assertEqual(binary, self.binary.resolve())
+        self.assertFalse((self.output/'dtw').exists())
+        self.assertFalse((stage/'bin').exists())
+        self.assertFalse((stage/'.mcp.json').exists())
+        self.assertEqual(skill.read_text(), self.canonical_skill.replace('name: desktop-world','name: '+NAME))
+        self.assertEqual((skill.parent/'support.txt').read_text(), 'Package-owned resource')
+        manifest = json.loads((stage/'.claude-plugin/plugin.json').read_text())
+        self.assertEqual(manifest, {'name':NAME,'version':'0.2.0','description':'Package metadata'})
+        self.assertEqual((self.package/'skills/desktop-world/SKILL.md').read_text(), self.canonical_skill)
+        self.assertEqual((self.output/'installed-BUILD.json').read_bytes(), (self.package/'BUILD.json').read_bytes())
+        self.assertEqual((self.output/'installed-SHA256SUMS').read_bytes(), (self.package/'SHA256SUMS').read_bytes())
+        self.assertTrue(identity['installed_artifact'])
+        self.assertFalse(identity['release_artifact'])
+        self.assertEqual(identity['artifact_kind'], 'unpublished-rewrite-candidate')
+        self.assertEqual(identity['installed_package']['source'], self.build['source'])
+        self.assertTrue(probe.recheck_installed_package(identity)['unchanged'])
+
+    def test_same_bytes_at_another_path_and_output_inside_package_are_rejected(self):
+        other = self.root/'same-dtw'; other.write_bytes(self.binary.read_bytes()); other.chmod(0o755)
+        with self.assertRaisesRegex(AssertionError, '--dtw'):
+            probe.verify_installed_package(self.package, other)
+        output = self.package/'run'; output.mkdir()
+        with self.assertRaisesRegex(AssertionError, 'outside'):
+            probe.prepare_runtime(self.repo, output, self.binary, self.package)
+        self.assertEqual(list(output.iterdir()), [])
+
+    def test_development_mode_still_copies_binary_and_uses_repository_skill(self):
+        skill = self.repo/'skills/desktop-world/SKILL.md'
+        skill.parent.mkdir(parents=True); skill.write_text('Different development Skill')
+        binary, identity = probe.prepare_runtime(self.repo, self.output, self.binary)
+        self.assertEqual(binary, self.output/'dtw')
+        self.assertEqual(binary.read_bytes(), self.binary.read_bytes())
+        self.assertFalse(identity['installed_artifact'])
+        self.assertEqual(identity['skill_sha256'], probe.file_sha256(skill))
+        self.assertNotEqual(identity['skill_sha256'], self.build['skill_sha256'])
+
+    def test_candidate_mode_does_not_claim_an_arbitrary_manifest_is_a_release(self):
+        self.build['kind'] = 'release'
+        self.put('BUILD.json', json.dumps(self.build)); self.checksums()
+        with self.assertRaisesRegex(AssertionError, 'unpublished rewrite candidate'):
+            probe.verify_installed_package(self.package, self.binary)
+
+    def test_changed_bytes_and_unlisted_or_missing_files_are_rejected(self):
+        original = self.binary.read_bytes()
+        self.binary.write_bytes(b'modified executable')
+        with self.assertRaisesRegex(AssertionError, 'hash mismatch'):
+            probe.verify_installed_package(self.package, self.binary)
+        self.binary.write_bytes(original)
+        extra = self.put('unlisted.txt', 'Unexpected file')
+        with self.assertRaisesRegex(AssertionError, 'inventory'):
+            probe.verify_installed_package(self.package, self.binary)
+        extra.unlink()
+        support = self.package/'skills/desktop-world/support.txt'; support.unlink()
+        with self.assertRaisesRegex(AssertionError, 'inventory'):
+            probe.verify_installed_package(self.package, self.binary)
+
+    def test_recomputed_checksums_do_not_bypass_build_binary_or_skill_identity(self):
+        for key, file in (('binary','bin/dtw'), ('Skill','skills/desktop-world/SKILL.md')):
+            with self.subTest(asset=key):
+                path = self.package/file; original = path.read_bytes()
+                path.write_bytes(original+b'changed'); self.checksums()
+                with self.assertRaisesRegex(AssertionError, 'BUILD '+key):
+                    probe.verify_installed_package(self.package, self.binary)
+                path.write_bytes(original); self.checksums()
+
+    def test_final_recheck_rejects_consistently_rewritten_inventory_and_keeps_initial_evidence(self):
+        _, identity = probe.prepare_runtime(self.repo, self.output, self.binary, self.package)
+        original_sums = (self.output/'installed-SHA256SUMS').read_bytes()
+        self.put('skills/desktop-world/support.txt', 'Changed after acceptance'); self.checksums()
+        # The new package is internally consistent but is not the one admitted.
+        probe.verify_installed_package(self.package, self.binary)
+        evidence = {'passed':True,'business_passed':True}
+        probe.cleanup_steps(evidence, [('installed_package_integrity', lambda:probe.recheck_installed_package(identity), None)])
+        self.assertFalse(evidence['passed'])
+        self.assertIn('identity changed', evidence['cleanup'][0]['error']['message'])
+        self.assertEqual((self.output/'installed-SHA256SUMS').read_bytes(), original_sums)
+
+    def test_symlink_and_duplicate_or_unsafe_manifest_paths_are_rejected(self):
+        checksums = (self.package/'SHA256SUMS').read_text()
+        for appended in (checksums.splitlines()[0]+'\n', 'e'*64+'  ../outside\n'):
+            self.put('SHA256SUMS', checksums+appended)
+            with self.assertRaises(AssertionError):
+                probe.verify_installed_package(self.package, self.binary)
+        self.put('SHA256SUMS', checksums)
+        (self.package/'alias').symlink_to(self.binary)
+        with self.assertRaisesRegex(AssertionError, 'symlink'):
+            probe.verify_installed_package(self.package, self.binary)
+
+
 class RouteTests(unittest.TestCase):
+    def test_error_only_root_skill_lookup_is_measured_without_replacing_real_skill_loading(self):
+        root = Path('/tmp/owned-case')
+        miss, = normalized_agy(metadata_miss_events())
+        self.assertEqual(miss['client_error'], {'type':'TOOL_ERROR','message':'file does not exist'})
+        self.assertTrue(miss['client_error_no_data'])
+        self.assertIsNone(miss['output'])
+        self.assertEqual(miss['duration_seconds'], 0.053335)
+        probe.check_routes([miss], NAME, root)
+        with self.assertRaisesRegex(AssertionError, 'not successfully loaded'):
+            probe.check_skill_loaded([miss], NAME, root)
+        loaded = {'name':'read_file','arguments':{'Path':str(
+            Path.home()/'.gemini/config/plugins'/NAME/'skills'/NAME/'SKILL.md')},
+            'status':'DONE','output':'201 lines, 19563 bytes'}
+        value = completed(); value['value']['calls'] = 3
+        ordinary = [loaded, call(value)]
+        calls = [miss, *ordinary]
+        probe.check_routes(calls, NAME, root)
+        probe.check_skill_loaded(calls, NAME, root)
+        measured = probe.metrics(calls, NAME); baseline = probe.metrics(ordinary, NAME)
+        self.assertEqual(measured['agent_tool_calls'], baseline['agent_tool_calls'] + 1)
+        self.assertEqual(measured['metadata_discovery_misses'], [{
+            'agent_call':1,'path':miss['arguments']['Path'],'client_error':miss['client_error'],
+            'duration_seconds':0.053335}])
+        for key in ('mcp_calls','exec_calls','script_host_calls','mcp_json_bytes','image_bytes','issues'):
+            self.assertEqual(measured[key], baseline[key], key)
+        self.assertEqual(baseline['metadata_discovery_misses'], [])
+        broken = completed(); broken['error'] = {'code':'native_failure'}
+        self.assertTrue(probe.metrics([miss, call(broken)], NAME)['issues'])
+
+    def test_missing_task_files_or_other_plugin_aliases_are_not_metadata_exceptions(self):
+        root = Path('/tmp/owned-case')
+        alias = str(Path.home()/'.gemini/config/plugins'/NAME/'SKILL.md')
+        for path in ('/tmp/owned-case/DTW-Report.txt', '/tmp/owned-case/data.json',
+                     alias.replace(NAME, NAME+'-other'), alias+'.bak',
+                     alias.replace('/'+NAME+'/', '/'+NAME+'/../'+NAME+'/'),
+                     '~/.gemini/config/plugins/'+NAME+'/SKILL.md'):
+            events = metadata_miss_events()
+            events[-1]['step_update']['tool_info']['parameters'] = {'Path':path}
+            miss, = normalized_agy(events)
+            with self.subTest(path=path), self.assertRaises(AssertionError):
+                probe.check_routes([miss], NAME, root)
+            self.assertEqual(probe.metrics([miss], NAME)['metadata_discovery_misses'], [])
+
+    def test_root_alias_requires_exact_client_error_and_no_output_evidence(self):
+        root = Path('/tmp/owned-case')
+        changes = [
+            ('state', 'DONE'), ('state', 'ACTIVE'),
+            ('error', None), ('error', {'type':'TOOL_ERROR','message':'permission denied'}),
+            ('error', {'type':'OTHER','message':'file does not exist'}),
+            ('error', {'type':'TOOL_ERROR','message':'file does not exist','data':'task text'}),
+            ('name', 'another_tool'), ('parameters', {'Path':str(
+                Path.home()/'.gemini/config/plugins'/NAME/'SKILL.md'),'StartLine':1}),
+            ('content', 'unexpected data'),
+        ] + [('output', output) for output in (None, '', '0 lines, 0 bytes', 'task text', [], {})]
+        for key, value in changes:
+            events = metadata_miss_events()
+            destination = events[-1]['step_update']
+            if key != 'state': destination = destination['tool_info']
+            destination[key] = value
+            miss, = normalized_agy(events)
+            with self.subTest(key=key, value=value), self.assertRaises(AssertionError):
+                probe.check_routes([miss], NAME, root)
+        miss, = normalized_agy(metadata_miss_events())
+        for key in ('client_error', 'client_error_no_data'):
+            absent = {k:v for k,v in miss.items() if k != key}
+            with self.assertRaises(AssertionError): probe.check_routes([absent], NAME, root)
+        with self.assertRaises(AssertionError):
+            probe.check_routes([{**miss, 'name':'Read'}], NAME, root)
+        events = metadata_miss_events()
+        success = events[-1]['step_update']; success['state'] = 'DONE'
+        del success['tool_info']['error']
+        success['tool_info']['output'] = '201 lines, 19563 bytes'
+        loaded_alias, = normalized_agy(events)
+        with self.assertRaises(AssertionError): probe.check_routes([loaded_alias], NAME, root)
+        with self.assertRaises(AssertionError): probe.check_skill_loaded([loaded_alias], NAME, root)
+
+    def test_earlier_read_output_cannot_be_erased_by_later_error_update(self):
+        root = Path('/tmp/owned-case')
+        events = metadata_miss_events()
+        events[0]['step_update']['tool_info']['output'] = 'earlier exposed data'
+        events[-1]['step_update']['tool_info']['output'] = None
+        miss, = normalized_agy(events)
+        self.assertIsNone(miss['output'])
+        self.assertFalse(miss['client_error_no_data'])
+        with self.assertRaises(AssertionError): probe.check_routes([miss], NAME, root)
+        self.assertEqual(probe.metrics([miss], NAME)['metadata_discovery_misses'], [])
+
     def test_skill_loading_requires_exact_identity_success_and_observed_acknowledgement(self):
         root = Path('/tmp/owned-case')
         skill = {'name':'Skill', 'arguments':{'skill':NAME}, 'status':'completed',
@@ -104,7 +338,7 @@ class RouteTests(unittest.TestCase):
 
 
 class OutputTests(unittest.TestCase):
-    def test_incomplete_reads_rejects_nonzero_and_invalid_counters_but_keeps_old_logs(self):
+    def test_unrecovered_incomplete_reads_and_invalid_counters_fail_but_old_logs_remain_valid(self):
         self.assertEqual(measure(completed())['issues'], [])
         zero = completed(); zero['script']['summary']['incomplete_reads'] = 0
         self.assertEqual(measure(zero)['issues'], [])
@@ -114,6 +348,49 @@ class OutputTests(unittest.TestCase):
                 issues = measure(value)['issues']
                 self.assertTrue(issues)
                 self.assertIn('incomplete', issues[0]['invalid_output'])
+
+    def recovered(self):
+        value = completed()
+        value['script']['summary'].update(steps=3, incomplete_reads=1, recovered_incomplete_reads=1,
+            last_issue={'number':1,'operation':'observe','status':'completed','error':None,'receipt':None,
+                        'discovery':{'complete':False,'reason':'node_unavailable','visited':20,
+                                     'has_more':False,'window_ref':'w1','observation_ref':'o1'}})
+        return value
+
+    def test_proven_read_refresh_is_retained_as_diagnostic_without_claiming_no_partial_read(self):
+        value = self.recovered(); measured = measure(value)
+        self.assertEqual(measured['issues'], [])
+        self.assertEqual(measured['read_refreshes'], [{'call':1,'execution_id':'execution-test',
+                         'count':1,'diagnostic':value['script']['summary']['last_issue']}])
+        self.assertEqual(value['script']['summary']['incomplete_reads'], 1)
+        self.assertEqual(measure(completed())['read_refreshes'], [])
+
+    def test_recovery_does_not_admit_inventory_gaps_missing_proof_or_invalid_counters(self):
+        variants=[]
+        for count in (0, 2, -1, True, 1.0, '1', None):
+            value=self.recovered();value['script']['summary']['recovered_incomplete_reads']=count;variants.append(value)
+        value=self.recovered();value['script']['summary']['incomplete_reads']=2;variants.append(value)
+        for changed in ({'operation':'windows'}, {'status':'pending'}, {'error':{'code':'native_error'}},
+                        {'receipt':{}}, {'inventory':{}}, {'discovery':None}):
+            value=self.recovered();value['script']['summary']['last_issue'].update(changed);variants.append(value)
+        for changed in ({'complete':True}, {'has_more':True}, {'visited':True},
+                        {'window_ref':None}, {'observation_ref':''}):
+            value=self.recovered();value['script']['summary']['last_issue']['discovery'].update(changed);variants.append(value)
+        for value in variants:
+            with self.subTest(value=value):self.assertTrue(measure(value)['issues'])
+
+    def test_read_recovery_never_clears_script_native_or_input_failure(self):
+        variants=[]
+        for key in ('failed','pending'):
+            value=self.recovered();value['script']['summary'][key]=1;variants.append(value)
+        value=self.recovered();value['error']={'code':'script_exception'};variants.append(value)
+        value=self.recovered();value['script']['failure']={'kind':'exception'};variants.append(value)
+        for key,kind in (('dispatch','unknown'),('provider_dispatch','unknown'),
+                         ('evidence','mismatch'),('provider_evidence','unrecorded')):
+            value=self.recovered();actions={k:{} for k in ('dispatch','provider_dispatch','evidence','provider_evidence')}
+            actions.update(interrupted=0);actions[key][kind]=1;value['script']['summary']['actions']=actions;variants.append(value)
+        for value in variants:
+            with self.subTest(value=value):self.assertTrue(measure(value)['issues'])
 
     def test_objects_and_strings_count_the_same_compact_utf8_payload(self):
         value = completed()

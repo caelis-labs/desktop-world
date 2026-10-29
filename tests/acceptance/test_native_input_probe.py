@@ -138,6 +138,29 @@ class OwnedChild:
         self.returncode = -probe.signal.SIGTERM
 
 
+class FocusInterruptionTests(unittest.TestCase):
+    def record(self):
+        return {'error':{'code':'script_exception'}, 'script':{
+            'failure':{'code':'focus_changed'}, 'state_committed':False,
+            'steps':[{'operation':'typeText', 'error':{'code':'focus_changed'},
+                      'receipt':{'outcome':{'dispatch':'unknown'},
+                                 'provider_outcome':{'dispatch':'unknown'}}}]}}
+
+    def test_original_focus_error_and_unknown_dispatch_are_required(self):
+        record = self.record(); probe.assert_focus_interruption(record)
+        bad = copy.deepcopy(record); bad['error'] = None
+        with self.assertRaises(AssertionError): probe.assert_focus_interruption(bad)
+        for key in ('outcome','provider_outcome'):
+            bad = copy.deepcopy(record); bad['script']['steps'][0]['receipt'][key]['dispatch'] = 'dispatched'
+            with self.assertRaises(AssertionError): probe.assert_focus_interruption(bad)
+
+    def test_save_suffix_or_state_commit_invalidates_interruption(self):
+        bad = self.record(); bad['script']['steps'].append({'operation':'keypress'})
+        with self.assertRaises(AssertionError): probe.assert_focus_interruption(bad)
+        bad = self.record(); bad['script']['state_committed'] = True
+        with self.assertRaises(AssertionError): probe.assert_focus_interruption(bad)
+
+
 class ExitMcp:
     decode = staticmethod(probe.Mcp.decode)
     def __init__(self, root):

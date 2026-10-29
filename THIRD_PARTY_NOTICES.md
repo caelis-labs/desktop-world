@@ -30,8 +30,11 @@ SDK or upstream worker. Apple system/Swift libraries are provided by macOS.
 The CUA perception extension, Spaces, browser bridge and embedded CUA assets
 are not part of this source build.
 
-There is no rewritten release package yet. Before publishing one, inventory its
-actual target-specific dependencies and redistribute their required license and
-copyright texts, including Rust runtime notices. The deleted legacy audit and
+The rewrite candidate builder inventories the actual target-filtered, reachable
+Cargo dependency graph and copies its license/copyright files, including bundled
+QuickJS and Rust runtime notices, into `notices/`. Its `DEPENDENCIES.json` records
+versions, source checksums and notice hashes. Missing notices stop construction;
+reviewed exact-source overrides are checked against their saved hashes. Source-only
+staging is not this complete binary notice inventory. The deleted legacy audit and
 package inventories do not establish license coverage for a new binary package.
 Historical releases retain their accompanying notices and license terms.

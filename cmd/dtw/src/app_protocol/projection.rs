@@ -29,6 +29,8 @@ fn summarize(steps: &[Value]) -> Value {
     let mut failed = 0;
     let mut pending = 0;
     let mut incomplete_reads = 0;
+    let mut recovered_incomplete_reads = 0;
+    let mut unrecovered_discoveries = Vec::new();
     let mut dispatch = Map::new();
     let mut evidence = Map::new();
     let mut provider_dispatch = Map::new();
@@ -37,9 +39,30 @@ fn summarize(steps: &[Value]) -> Value {
     for step in steps {
         failed += usize::from(!step["error"].is_null());
         pending += usize::from(step["status"] != "completed");
-        let incomplete = incomplete_inventory(&step["inventory"]);
+        let inventory_incomplete = incomplete_inventory(&step["inventory"]);
+        let discovery_incomplete = incomplete_discovery(&step["discovery"]);
+        let incomplete = inventory_incomplete || discovery_incomplete;
         incomplete_reads += usize::from(incomplete);
         let receipt = &step["receipt"];
+        if receipt.is_object() || !step["error"].is_null() || step["status"] != "completed" {
+            // A later read cannot justify proceeding past an action or failure
+            // that happened while earlier discovery was still incomplete.
+            unrecovered_discoveries.clear();
+        } else if step["operation"] == "observe" {
+            let discovery = &step["discovery"];
+            if let Some((window, observation)) = discovery_refs(discovery) {
+                if discovery_incomplete {
+                    unrecovered_discoveries.push((window, observation));
+                } else if discovery["complete"] == true && discovery["has_more"] == false {
+                    unrecovered_discoveries.retain(|(previous_window, previous_observation)| {
+                        let recovered =
+                            *previous_window == window && *previous_observation != observation;
+                        recovered_incomplete_reads += usize::from(recovered);
+                        !recovered
+                    });
+                }
+            }
+        }
         if receipt.is_object() {
             count(&mut dispatch, &receipt["outcome"]["dispatch"]);
             count(&mut evidence, &receipt["outcome"]["evidence"]["kind"]);
@@ -68,16 +91,22 @@ fn summarize(steps: &[Value]) -> Value {
                 "operation":step["operation"],"status":step["status"],
                 "error":step["error"],"receipt":receipt
             });
-            if incomplete {
+            if inventory_incomplete {
                 // A successful read can still omit an unavailable app member.
                 // Preserve that evidence even if JS returned only its windows.
                 summary["last_issue"]["inventory"] = step["inventory"].clone();
+            }
+            if discovery_incomplete {
+                summary["last_issue"]["discovery"] = step["discovery"].clone();
             }
         }
     }
     summary["failed"] = json!(failed);
     summary["pending"] = json!(pending);
     summary["incomplete_reads"] = json!(incomplete_reads);
+    if recovered_incomplete_reads > 0 {
+        summary["recovered_incomplete_reads"] = json!(recovered_incomplete_reads);
+    }
     if !dispatch.is_empty() {
         summary["actions"] = json!({"dispatch":dispatch,"evidence":evidence,
             "provider_dispatch":provider_dispatch,"provider_evidence":provider_evidence,
@@ -94,6 +123,19 @@ fn incomplete_inventory(inventory: &Value) -> bool {
             || inventory["diagnostics"]["errors"]
                 .as_array()
                 .is_some_and(|errors| !errors.is_empty()))
+}
+
+fn incomplete_discovery(discovery: &Value) -> bool {
+    discovery.is_object() && discovery["complete"] == false && discovery["has_more"] == false
+}
+
+fn discovery_refs(discovery: &Value) -> Option<(&str, &str)> {
+    Some((
+        discovery["window_ref"].as_str().filter(|s| !s.is_empty())?,
+        discovery["observation_ref"]
+            .as_str()
+            .filter(|s| !s.is_empty())?,
+    ))
 }
 
 fn count(counts: &mut Map<String, Value>, kind: &Value) {
@@ -139,6 +181,137 @@ mod tests {
             "diagnostics":{"provider":"macos.surface","counters":{"supported_count":1},
                 "error_codes":[-25200],"errors":[{"code":"member_unavailable","message":"original failure",
                     "details":{"coverage":{"status":"unproven"},"diagnostics":{"error_codes":[-25204]}}}]}})
+    }
+
+    fn discovery_step(
+        number: u32,
+        window: &str,
+        observation: &str,
+        complete: bool,
+        has_more: bool,
+    ) -> Value {
+        json!({"number":number,"line":number,"operation":"observe","status":"completed",
+            "error":null,"receipt":null,"discovery":{
+                "window_ref":window,"observation_ref":observation,"complete":complete,
+                "reason":if complete || has_more {None} else {Some("node_unavailable")},
+                "visited":3,"has_more":has_more}})
+    }
+
+    #[test]
+    fn fresh_complete_discovery_counts_recovery_without_erasing_prior_warnings() {
+        let first = discovery_step(1, "window", "old", false, false);
+        let second = discovery_step(2, "window", "second", false, false);
+        let action = json!({"number":4,"line":4,"operation":"press","status":"completed",
+            "error":null,"receipt":{"outcome":{"dispatch":"dispatched","evidence":{"kind":"unverified"},"error":null},
+            "provider_outcome":null,"interruption":null}});
+        // An action after proven recovery must not retroactively hide it.
+        let original = successful_execution(vec![
+            first,
+            second.clone(),
+            discovery_step(3, "window", "fresh", true, false),
+            action,
+        ]);
+        let projected = execution(original.clone());
+        let summary = &projected.data["script"]["summary"];
+        assert_eq!(summary["incomplete_reads"], 2);
+        assert_eq!(summary["recovered_incomplete_reads"], 2);
+        assert_eq!(summary["last_issue"]["number"], 2);
+        assert_eq!(summary["last_issue"]["discovery"], second["discovery"]);
+        assert_eq!(summary["failed"], 0);
+        assert_eq!(summary["actions"]["dispatch"]["dispatched"], 1);
+        assert_eq!(original.data["script"]["steps"][1], second);
+    }
+
+    #[test]
+    fn continuation_other_window_same_query_and_missing_refs_do_not_prove_recovery() {
+        let mut missing_ref = discovery_step(2, "window", "fresh", true, false);
+        missing_ref["discovery"]["observation_ref"] = Value::Null;
+        for later in [
+            discovery_step(2, "window", "fresh", false, true),
+            discovery_step(2, "other_window", "fresh", true, false),
+            discovery_step(2, "window", "old", true, false),
+            missing_ref,
+        ] {
+            let projected = execution(successful_execution(vec![
+                discovery_step(1, "window", "old", false, false),
+                later,
+            ]));
+            let summary = &projected.data["script"]["summary"];
+            assert_eq!(summary["incomplete_reads"], 1);
+            assert!(
+                summary.get("recovered_incomplete_reads").is_none(),
+                "{summary}"
+            );
+            assert_eq!(summary["last_issue"]["number"], 1);
+        }
+    }
+
+    #[test]
+    fn action_error_and_pending_step_barriers_permanently_retire_prior_recovery_eligibility() {
+        let mut barriers = vec![
+            json!({"number":2,"line":2,"operation":"observe","status":"completed",
+                "error":{"code":"permission_denied","message":"original native failure"},"receipt":null}),
+            json!({"number":2,"line":2,"operation":"observe","status":"running","error":null,"receipt":null}),
+        ];
+        for dispatch in ["not_dispatched", "dispatched", "unknown"] {
+            barriers.push(json!({"number":2,"line":2,"operation":"press","status":"completed",
+                "error":null,"receipt":{"outcome":{"dispatch":dispatch,"evidence":{"kind":"unverified"},"error":null},
+                "provider_outcome":null,"interruption":null}}));
+        }
+        for barrier in barriers {
+            let original = successful_execution(vec![
+                discovery_step(1, "window", "old", false, false),
+                barrier.clone(),
+                discovery_step(3, "window", "fresh", true, false),
+                discovery_step(4, "window", "another_fresh", true, false),
+            ]);
+            let projected = execution(original.clone());
+            let summary = &projected.data["script"]["summary"];
+            assert_eq!(summary["incomplete_reads"], 1);
+            assert!(
+                summary.get("recovered_incomplete_reads").is_none(),
+                "{summary}"
+            );
+            assert_eq!(original.data["script"]["steps"][1], barrier);
+            if !barrier["error"].is_null() {
+                assert_eq!(summary["last_issue"]["error"], barrier["error"]);
+                assert_eq!(summary["failed"], 1);
+            }
+        }
+    }
+
+    #[test]
+    fn later_read_recovery_cannot_recover_inventory_or_pre_barrier_discovery() {
+        let inventory = inventory_step(1, partial_inventory("partial"));
+        let before_barrier = discovery_step(2, "window", "old", false, false);
+        let barrier = json!({"number":3,"line":3,"operation":"observe","status":"completed",
+            "error":{"code":"backend_failed"},"receipt":null});
+        let recent = discovery_step(4, "window", "recent", false, false);
+        let projected = execution(successful_execution(vec![
+            inventory,
+            before_barrier,
+            barrier,
+            recent.clone(),
+            discovery_step(5, "window", "fresh", true, false),
+        ]));
+        let summary = &projected.data["script"]["summary"];
+        assert_eq!(summary["incomplete_reads"], 3);
+        assert_eq!(summary["recovered_incomplete_reads"], 1);
+        assert_eq!(summary["failed"], 1);
+        assert_eq!(summary["last_issue"]["discovery"], recent["discovery"]);
+    }
+
+    #[test]
+    fn mixed_inventory_warning_cannot_be_fully_recovered_by_complete_observation() {
+        let projected = execution(successful_execution(vec![
+            inventory_step(1, partial_inventory("partial")),
+            discovery_step(2, "window", "old", false, false),
+            discovery_step(3, "window", "fresh", true, false),
+        ]));
+        let summary = &projected.data["script"]["summary"];
+        assert_eq!(summary["incomplete_reads"], 2);
+        assert_eq!(summary["recovered_incomplete_reads"], 1);
+        assert_eq!(summary["failed"], 0);
     }
 
     #[test]

@@ -1,0 +1,152 @@
+// Compiled locally by Windows PowerShell 5.1. No external packages.
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Web.Script.Serialization;
+using System.Windows.Forms;
+
+namespace DtwWindowsSmoke {
+    public sealed class Pad : Control {
+        public Pad() {
+            SetStyle(ControlStyles.Selectable | ControlStyles.StandardClick |
+                     ControlStyles.StandardDoubleClick | ControlStyles.UserPaint, true);
+            TabStop = true;
+            AccessibleName = "Owned pointer pad";
+            BackColor = Color.LightBlue;
+        }
+        protected override void OnPaint(PaintEventArgs e) {
+            base.OnPaint(e);
+            e.Graphics.DrawString("Owned pointer / wheel pad", Font, Brushes.Black, 12, 12);
+        }
+        protected override void OnMouseDown(MouseEventArgs e) { Focus(); base.OnMouseDown(e); }
+    }
+
+    public sealed class Fixture : Form, IMessageFilter {
+        [StructLayout(LayoutKind.Sequential)] struct Rect { public int Left, Top, Right, Bottom; }
+        [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
+        [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+        [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
+        [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hwnd);
+        [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr context);
+        readonly string root;
+        readonly string label;
+        readonly JavaScriptSerializer json = new JavaScriptSerializer();
+        readonly UTF8Encoding utf8 = new UTF8Encoding(false);
+        readonly Stopwatch clock = Stopwatch.StartNew();
+        readonly TextBox editor = new TextBox();
+        readonly Pad pad = new Pad();
+        readonly Timer timer = new Timer();
+        readonly bool dpiSet;
+        int sequence, increments, saves, leftUps, rightUps, doubles, wheelDelta;
+        string saved = "";
+        bool ready, closed;
+
+        Fixture(string directory, string instance, bool awarenessSet) {
+            root = directory; label = instance; dpiSet = awarenessSet;
+            Text = "DTW Windows Smoke " + label;
+            AccessibleName = Text;
+            AutoScaleMode = AutoScaleMode.None;
+            StartPosition = FormStartPosition.Manual;
+            FormBorderStyle = FormBorderStyle.FixedSingle;
+            MaximizeBox = false;
+            ClientSize = new Size(410, 440);
+            Rectangle area = Screen.PrimaryScreen.WorkingArea;
+            Location = new Point(area.Left + 16 + (label == "A" ? 0 : 446), area.Top + 16);
+            editor.Location = new Point(12, 12); editor.Size = new Size(386, 125);
+            editor.Multiline = true; editor.AcceptsReturn = true;
+            editor.ScrollBars = ScrollBars.Vertical; editor.AccessibleName = "Message";
+            editor.TextChanged += delegate { Record("text_changed", new { length = editor.Text.Length }); };
+            Controls.Add(editor);
+            Button increment = new Button { Text = "Increment", AccessibleName = "Increment", Location = new Point(12, 145), Size = new Size(120, 30) };
+            increment.Click += delegate { increments++; Record("increment", new { count = increments }); editor.Focus(); Publish(); };
+            Button save = new Button { Text = "Save", AccessibleName = "Save", Location = new Point(144, 145), Size = new Size(100, 30) };
+            save.Click += delegate { Save("button"); editor.Focus(); Publish(); };
+            Controls.Add(increment); Controls.Add(save);
+            pad.Location = new Point(12, 185); pad.Size = new Size(386, 210);
+            pad.MouseUp += delegate(object sender, MouseEventArgs e) {
+                if (e.Button == MouseButtons.Left) leftUps++;
+                if (e.Button == MouseButtons.Right) rightUps++;
+                Record("pad_up", new { button = e.Button.ToString(), x = e.X, y = e.Y }); Publish();
+            };
+            pad.MouseDoubleClick += delegate { doubles++; Record("pad_double", new { count = doubles }); Publish(); };
+            pad.MouseWheel += delegate(object sender, MouseEventArgs e) {
+                wheelDelta += e.Delta; Record("pad_wheel", new { delta = e.Delta }); Publish();
+            };
+            Controls.Add(pad);
+            Shown += delegate { ready = true; editor.Focus(); Record("shown", new { }); Publish(); };
+            FormClosed += delegate { closed = true; timer.Stop(); Record("closed", new { }); Publish(); Application.RemoveMessageFilter(this); };
+            timer.Interval = 50;
+            timer.Tick += delegate {
+                if (File.Exists(Path.Combine(root, "stop"))) { Close(); return; }
+                Publish();
+            };
+            Application.AddMessageFilter(this); timer.Start();
+        }
+        void Save(string source) {
+            saved = editor.Text;
+            File.WriteAllText(Path.Combine(root, "saved.txt"), saved, utf8);
+            saves++; Record("save", new { source = source, count = saves }); Publish();
+        }
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData) {
+            if (keyData == (Keys.Control | Keys.S)) { Save("shortcut"); return true; }
+            if (keyData == (Keys.Control | Keys.A) && editor.Focused) { editor.SelectAll(); return true; }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+        public bool PreFilterMessage(ref Message message) {
+            Control control = Control.FromHandle(message.HWnd);
+            if (control == null || (control != this && !Contains(control))) return false;
+            if (message.Msg == 0x100 || message.Msg == 0x104)
+                Record("key_down", new { key = message.WParam.ToInt32() });
+            if (message.Msg == 0x101 || message.Msg == 0x105)
+                Record("key_up", new { key = message.WParam.ToInt32() });
+            return false;
+        }
+        void Record(string kind, object data) {
+            File.AppendAllText(Path.Combine(root, "events.jsonl"),
+                json.Serialize(new { elapsed_ms = clock.Elapsed.TotalMilliseconds, kind = kind, data = data }) + "\n", utf8);
+        }
+        void Publish() {
+            if (!IsHandleCreated) return;
+            Rect bounds;
+            bool boundsOk = GetWindowRect(Handle, out bounds);
+            Point point = pad.PointToScreen(new Point(pad.Width / 2, pad.Height / 2));
+            List<int> held = new List<int>();
+            for (int key = 1; key <= 255; key++) if (GetAsyncKeyState(key) < 0) held.Add(key);
+            string snapshot = json.Serialize(new {
+                pid = Process.GetCurrentProcess().Id, label = label, title = Text,
+                sequence = ++sequence, elapsed_ms = clock.Elapsed.TotalMilliseconds,
+                ready = ready, closed = closed, hwnd = Handle.ToInt64().ToString(),
+                visible = IsWindowVisible(Handle), foreground = GetForegroundWindow() == Handle,
+                dpi_awareness_set = dpiSet, dpi = GetDpiForWindow(Handle), bounds_ok = boundsOk,
+                bounds = new { x = bounds.Left, y = bounds.Top, width = bounds.Right - bounds.Left, height = bounds.Bottom - bounds.Top },
+                pad_point = new { x = point.X, y = point.Y },
+                working_area = new { x = Screen.PrimaryScreen.WorkingArea.X, y = Screen.PrimaryScreen.WorkingArea.Y,
+                    width = Screen.PrimaryScreen.WorkingArea.Width, height = Screen.PrimaryScreen.WorkingArea.Height },
+                editor_focused = editor.Focused, text = editor.Text, saved = saved, saves = saves, increments = increments,
+                left_up = leftUps, right_up = rightUps, double_clicks = doubles, wheel_delta = wheelDelta,
+                keys_down_global = held
+            });
+            string path = Path.Combine(root, "state.json"), temp = path + ".next";
+            File.WriteAllText(temp, snapshot, utf8);
+            if (File.Exists(path)) File.Replace(temp, path, null); else File.Move(temp, path);
+        }
+        [STAThread] public static void Main(string[] args) {
+            if (args.Length != 2 || (args[1] != "A" && args[1] != "B")) return;
+            try {
+                Directory.CreateDirectory(args[0]);
+                bool dpi = SetProcessDpiAwarenessContext(new IntPtr(-4));
+                Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
+                Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
+                using (Fixture form = new Fixture(args[0], args[1], dpi)) Application.Run(form);
+            } catch (Exception error) {
+                File.WriteAllText(Path.Combine(args[0], "fixture-error.txt"), error.ToString());
+                Environment.ExitCode = 1;
+            }
+        }
+    }
+}

@@ -197,6 +197,150 @@ async fn sdk_lists_four_tools_and_exec_accepts_only_app_and_source() {
 }
 
 #[tokio::test]
+async fn sdk_omits_only_undefined_host_object_fields_and_preserves_strict_state_results() {
+    let (server, catalog) = server();
+    let mut client = Client::new(server).await;
+    let result = client
+        .tool(
+            "exec",
+            input(
+                r#"
+const window_ref=(await app.windows()).windows[0].window_ref;
+async function q(role,text) { return app.observe({window_ref,role,text,limit:12}); }
+const optional=await q(undefined,undefined);
+const omitted=await app.observe({window_ref,limit:12});
+state.saved=7;
+return {optional:optional.elements.map(e=>e.name),omitted:omitted.elements.map(e=>e.name)};
+"#,
+            ),
+        )
+        .await;
+    assert_eq!(result["isError"], false, "{result}");
+    assert_eq!(
+        decoded(&result)["value"]["result"],
+        json!({"optional":["Increment"],"omitted":["Increment"]})
+    );
+    assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 2);
+    let rejected = client
+        .tool(
+            "exec",
+            input(
+                r#"
+const window_ref=(await app.windows()).windows[0].window_ref;
+const codes=[];
+for(const action of [
+  ()=>app.observe({window_ref:undefined,role:undefined,text:undefined}),
+  ()=>app.keypress({window_ref,keys:['META',undefined]}),
+  ()=>app.observe(undefined),
+  ()=>app.observe({window_ref,role:undefined,unexpected:1})
+]) { try { await action(); } catch(e) { codes.push(e.code); } }
+return codes;
+"#,
+            ),
+        )
+        .await;
+    assert_eq!(rejected["isError"], false, "{rejected}");
+    let rejected = decoded(&rejected);
+    assert_eq!(
+        rejected["value"]["result"],
+        json!([
+            "invalid_args",
+            "invalid_json",
+            "invalid_json",
+            "invalid_args"
+        ])
+    );
+    assert_eq!(rejected["script"]["summary"]["steps"], 1);
+    for source in [
+        "state.saved=8;state.optional=undefined;return true;",
+        "state.saved=8;return {optional:undefined};",
+        "state.saved=8;return [undefined];",
+    ] {
+        let result = client.tool("exec", input(source)).await;
+        assert_eq!(result["isError"], true, "{result}");
+        let result = decoded(&result);
+        assert_eq!(result["script"]["failure"]["code"], "invalid_json");
+        assert_eq!(result["script"]["state_committed"], false);
+    }
+    let final_state = decoded(&client.tool("exec", input("return state;")).await);
+    assert_eq!(final_state["value"]["result"], json!({"saved":7}));
+    assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 2);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+    client.close().await;
+}
+
+#[tokio::test]
+async fn sdk_observe_empty_text_matches_omission_and_keeps_exact_argument_errors() {
+    let (server, catalog) = server();
+    let mut client = Client::new(server).await;
+    let api = decoded(&client.tool("api", json!({"methods":["observe"]})).await);
+    let fields = &api["methods"]["observe"]["parameters"]["oneOf"][0]["properties"];
+    assert_eq!(fields["text"]["minLength"], 0);
+    assert_eq!(fields["text"]["maxLength"], 256);
+    assert_eq!(fields["role"]["minLength"], 1);
+    let result = client
+        .tool(
+            "exec",
+            input(
+                r#"
+const window_ref=(await app.windows()).windows[0].window_ref;
+const absent=await app.observe({window_ref,limit:1});
+const empty=await app.observe({window_ref,text:'',limit:1});
+return {absent:absent.elements.map(e=>e.name),empty:empty.elements.map(e=>e.name),
+        complete:absent.coverage.complete && empty.coverage.complete};
+"#,
+            ),
+        )
+        .await;
+    assert_eq!(result["isError"], false, "{result}");
+    assert_eq!(
+        decoded(&result)["value"]["result"],
+        json!({"absent":["Increment"],"empty":["Increment"],"complete":true})
+    );
+    assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 2);
+    let rejected = client
+        .tool(
+            "exec",
+            input(
+                r#"
+const window_ref=(await app.windows()).windows[0].window_ref;
+const errors=[];
+for(const args of [{window_ref,role:''},{window_ref,text:null},{window_ref,limit:101},
+                   {window_ref:'',text:''},{cursor:'c',text:''},{window_ref,pid:42,text:''}]) {
+  try { await app.observe(args); throw new Error('unexpectedly accepted'); }
+  catch(e) { errors.push({code:e.code,message:e.message}); }
+}
+return errors;
+"#,
+            ),
+        )
+        .await;
+    assert_eq!(rejected["isError"], false, "{rejected}");
+    let rejected = decoded(&rejected);
+    let errors = rejected["value"]["result"].as_array().unwrap();
+    assert_eq!(errors.len(), 6);
+    for (error, field) in errors.iter().zip([
+        "command.role",
+        "command.text",
+        "command.limit",
+        "target.window_ref",
+        "command.text",
+        "command.pid",
+    ]) {
+        assert_eq!(error["code"], "invalid_args");
+        assert!(
+            error["message"].as_str().unwrap().contains(field),
+            "{error}"
+        );
+    }
+    assert_eq!(rejected["value"]["calls"], 7);
+    assert_eq!(rejected["script"]["summary"]["steps"], 1);
+    assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 2);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+    client.close().await;
+}
+
+#[tokio::test]
 async fn sdk_source_json_round_trip_preserves_javascript_and_result_characters() {
     let source = r#"const text = '中文🙂 "quoted" \'single\' \\';
 const path = String.raw`C:\temp\new`;
@@ -333,6 +477,24 @@ async fn sdk_exec_compacts_repeated_reads_while_result_retains_the_original_ledg
     assert_eq!(steps[0]["operation"], "windows");
     assert!(steps[0]["inventory"].is_object());
     assert!(steps[1..].iter().all(|step| step["operation"] == "observe"));
+    assert!(steps[1..].iter().all(|step| {
+        let discovery = &step["discovery"];
+        discovery["complete"] == true
+            && discovery["reason"].is_null()
+            && discovery["visited"] == 1
+            && discovery["has_more"] == false
+            && discovery["window_ref"].is_string()
+            && discovery["window_ref"] == steps[1]["discovery"]["window_ref"]
+            && discovery["observation_ref"].is_string()
+    }));
+    assert_eq!(
+        steps[1..]
+            .iter()
+            .map(|step| step["discovery"]["observation_ref"].as_str().unwrap())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        24
+    );
     assert!(full["script"].get("summary").is_none());
     for field in [
         "app",

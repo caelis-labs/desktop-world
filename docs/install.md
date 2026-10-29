@@ -2,6 +2,20 @@
 
 The current local product is the rewrite-only `dtw` executable, its standard stdio MCP interface, and an optional [Agent Skill](../skills/desktop-world/SKILL.md). No custom Host adapter, grant file or DTW approval UI is required. The Agent/Harness applies its own tool policy; each `exec` exposes the stable app ID as ordinary tool input.
 
+## Fixed candidates
+
+A rewrite candidate is a ZIP produced by the [candidate builder](releasing.md).
+It contains one executable, Skill, standard configuration examples, dependency
+notices and checksums. Extract the complete package, verify its outer `.sha256`
+and internal `SHA256SUMS`, then register the absolute `bin/dtw[.exe]` path below.
+It requires no Rust, Xcode, CUA or Node installation to run DTW. The same directory
+also supports the optional Claude plugin route without a second binary.
+
+Candidate construction, signature verification, notarization and actual installed
+GUI acceptance are separate results; consult its `BUILD.json`, `CANDIDATE.json` and
+[current acceptance record](rewrite-candidate-acceptance.md). No new public release
+is implied by the 0.2.0 source version. Windows still requires independent acceptance.
+
 ## Build and register MCP
 
 Build from this checkout using [the build instructions](building.md). Use an absolute path to the resulting executable. For clients that accept the usual `mcpServers` JSON configuration, copy and customize [mcp.json](examples/mcp.json):
@@ -64,6 +78,6 @@ Do not install both a manually configured server and the plugin's copy into the 
 
 Start the configured MCP connection, call `apps`, choose a returned app, then call `exec` with only its returned `app` ID string and a small `source` script such as `return await app.windows();`. `exec` returns when the script settles. `result` reads an original receipt when needed; it is not a normal polling step. Detailed tool arguments and cancellation are in the [MCP contract](app-protocol-v1.md).
 
-Native execution currently targets macOS. Accessibility and Screen Recording access are OS prerequisites for the relevant operations. Grant those OS permissions to the actual process identity used in your environment when macOS requires them; changing an unsigned build's path or bytes may require rechecking that identity. No capability approval token is supplied to DTW.
+macOS native GUI workflows are validated locally. Accessibility and Screen Recording access are OS prerequisites for the relevant operations. Grant those OS permissions to the actual process identity used in your environment when macOS requires them; changing an unsigned build's path or bytes may require rechecking that identity. No capability approval token is supplied to DTW.
 
-Windows has a native provider in this source tree; linked product builds, independent Windows GUI acceptance and signed/notarized public packages remain separate work. Linux X11 is experimental and has no desktop support commitment. A successful local stage or manifest validation proves package structure, not native permissions, GUI behavior or a signed release. Old public `0.1.3`/candidate artifacts use the retired CUA runtime and must not be substituted for this build.
+Windows has a native provider and a verified native candidate build; independent Windows GUI acceptance remains pending. The macOS candidate is signed and notarized, with artifact-specific installed acceptance recorded separately; no public release has been created. Linux X11 is experimental and has no desktop support commitment. A successful local stage or manifest validation proves package structure, not native permissions, GUI behavior or a signed release. Old public `0.1.3`/candidate artifacts use the retired CUA runtime and must not be substituted for this build.

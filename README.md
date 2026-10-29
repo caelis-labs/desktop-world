@@ -6,7 +6,9 @@ The source tree contains the rewrite only, with no CUA SDK, upstream worker or o
 
 ## Connect an Agent
 
-Build with Rust 1.98.0 and, on macOS 14.2+, Xcode/Swift:
+For an unpublished fixed candidate, use the [candidate builder and install guide](docs/releasing.md); its extracted runtime needs no development toolchain. Current candidate evidence is recorded [separately](docs/rewrite-candidate-acceptance.md).
+
+To build from source, use Rust 1.98.0 and, on macOS 14.2+, Xcode/Swift:
 
 ```sh
 cargo +1.98.0 build --manifest-path cmd/dtw/Cargo.toml --locked --bin dtw
@@ -49,4 +51,4 @@ The [architecture baseline](docs/next-architecture-baseline.md) owns DTW's ident
 
 The [app/source acceptance report](docs/app-source-acceptance.md) verifies the current two-field entry, receipt recovery, native GUI and a real Claude Code workflow. The [multi-app foundation report](docs/multi-app-foundation-acceptance.md) records retained state/refs, caller-selected budgets, native resource cleanup and two independent MCP sessions using real test windows. The [standard Agent acceptance report](docs/standard-agent-acceptance.md) records the #61 baseline through ordinary agy and Claude Code MCP/Skills. The [C5 report](docs/c5-completion-acceptance.md) retains earlier window-boundary evidence; the [product matrix](docs/product-matrix.md) separates current and historical coverage.
 
-Local plugin staging is available for development. Signed installation packages and public release delivery remain separate work; see the [first rewrite release plan](docs/first-rewrite-release-plan.md) and [releasing](docs/releasing.md). DTW is [MIT licensed](LICENSE), with adapted-source attribution in [third-party notices](THIRD_PARTY_NOTICES.md).
+Local plugin staging is available for development. Fixed candidate construction is explicit; installed GUI acceptance and public release delivery remain separate gates; see the [first rewrite release plan](docs/first-rewrite-release-plan.md) and [releasing](docs/releasing.md). DTW is [MIT licensed](LICENSE), with adapted-source attribution in [third-party notices](THIRD_PARTY_NOTICES.md).

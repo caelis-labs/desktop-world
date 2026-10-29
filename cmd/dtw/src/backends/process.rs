@@ -210,6 +210,13 @@ impl Process {
                 ));
             }
         }
+        self.force_stop(&mut child_slot)
+    }
+
+    fn force_stop(&self, child_slot: &mut Option<Child>) -> Result<(), TransportErrorKind> {
+        let Some(child) = child_slot.as_mut() else {
+            return self.shutdown_result();
+        };
         // The process is owned, never looked up again by PID. Reap it even when
         // kill reports that it has already exited. Do not wait on a live process
         // after a failed kill; retain ownership so stop/Drop can retry cleanup.
@@ -228,14 +235,11 @@ impl Process {
             }
         }
         let status = child.wait().map_err(|error| self.shutdown_error(error))?;
-        #[cfg(unix)]
+        // kill() can also succeed after a natural exit. Always retain the
+        // actual wait status, including for generic Windows subprocesses.
+        // A forced exit code cannot prove graceful cleanup or distinguish a
+        // natural exit with the same code; neither is silently declared clean.
         self.record_exit(status, false);
-        #[cfg(target_os = "windows")]
-        if self.cooperative_shutdown {
-            self.record_exit(status, false);
-        }
-        #[cfg(not(any(unix, target_os = "windows")))]
-        let _ = status;
         child_slot.take();
         self.shutdown_result()
     }
@@ -330,7 +334,8 @@ impl Worker {
     }
 
     /// Windows native input workers expose a cooperative stop event. Generic
-    /// subprocess transports keep their existing forced-termination policy.
+    /// subprocess transports use forced termination; a nonzero exit retains
+    /// the cleanup uncertainty even when the supervisor requested the kill.
     pub fn spawn_cooperative(program: &Path, args: &[&str]) -> Result<Self, TransportError> {
         Self::spawn_inner(program, args, true)
     }

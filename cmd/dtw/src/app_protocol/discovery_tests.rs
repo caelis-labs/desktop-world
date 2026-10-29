@@ -1,12 +1,16 @@
 //! Controlled pagination contract tests; native traversal is accepted separately.
 use super::*;
 
+#[path = "discovery_evidence_tests.rs"]
+mod discovery_evidence_tests;
+
 #[derive(Clone)]
 struct PagedBackend {
     base: MockBackend,
     queries: Arc<Mutex<Vec<ObserveQuery>>>,
     advances: Arc<AtomicUsize>,
     fail_next: Arc<std::sync::atomic::AtomicBool>,
+    complete_after_first: Arc<std::sync::atomic::AtomicBool>,
 }
 impl Backend for PagedBackend {
     type Binding = AtomicUsize;
@@ -32,7 +36,11 @@ impl Backend for PagedBackend {
         query: &ObserveQuery,
         _: &CallContext<'_>,
     ) -> Result<BackendObservation<Self::Binding>, Error> {
-        self.queries.lock().unwrap().push(query.clone());
+        let complete = {
+            let mut queries = self.queries.lock().unwrap();
+            queries.push(query.clone());
+            queries.len() > 1 && self.complete_after_first.load(Ordering::SeqCst)
+        };
         let mut read = self.base.read(target, false);
         read.elements[0].id = ElementId(1);
         Ok(BackendObservation {
@@ -41,8 +49,8 @@ impl Backend for PagedBackend {
             image: None,
             binding: AtomicUsize::new(0),
             discovery: Some(DiscoveryPage {
-                has_more: true,
-                complete: false,
+                has_more: !complete,
+                complete,
                 reason: None,
                 visited: 1,
             }),
@@ -104,6 +112,7 @@ fn setup() -> (Arc<Coordinator<PagedBackend>>, PagedBackend) {
         queries: Arc::new(Mutex::new(vec![])),
         advances: Arc::new(AtomicUsize::new(0)),
         fail_next: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        complete_after_first: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
     (
         Coordinator::new(backend.clone(), application(), "Paged".into()),
@@ -121,6 +130,99 @@ fn script_run(owner: &Arc<Coordinator<PagedBackend>>, id: &str, source: &str) ->
             max_calls: 0,
         },
     )
+}
+
+#[test]
+fn undefined_optional_filters_reach_core_as_omitted_filters_through_all_pages() {
+    let (owner, backend) = setup();
+    let reply = script_run(
+        &owner,
+        "undefined-filters",
+        r#"
+const window_ref=(await app.windows()).windows[0].window_ref;
+async function collect(args) {
+  const first=await app.observe({window_ref,limit:12,...args});
+  let page=first, count=page.elements.length;
+  while(page.next) {
+    page=await app.observe({cursor:page.next});
+    count+=page.elements.length;
+  }
+  return {count,sameQuery:page.observation_ref===first.observation_ref,next:page.next};
+}
+return [await collect({role:undefined,text:'Increment'}),await collect({text:'Increment'}),
+        await collect({role:undefined,text:undefined}),await collect({})];
+"#,
+    );
+    assert!(!reply.is_error, "{}", reply.data);
+    assert_eq!(
+        reply.data["value"]["result"],
+        json!(vec![json!({"count":3,"sameQuery":true,"next":null}); 4])
+    );
+    let queries = backend.queries.lock().unwrap();
+    assert_eq!(queries.len(), 4);
+    assert_eq!(
+        queries[0],
+        ObserveQuery {
+            role: None,
+            text: Some("Increment".into()),
+            limit: 12
+        }
+    );
+    assert_eq!(queries[1], queries[0]);
+    assert_eq!(
+        queries[2],
+        ObserveQuery {
+            role: None,
+            text: None,
+            limit: 12
+        }
+    );
+    assert_eq!(queries[3], queries[2]);
+    assert_eq!(backend.advances.load(Ordering::SeqCst), 8);
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn scripts_normalize_empty_text_before_core_and_keep_the_query_paging_binding() {
+    let (owner, backend) = setup();
+    let reply = script_run(
+        &owner,
+        "empty-text",
+        r#"
+const window_ref=(await app.windows()).windows[0].window_ref;
+async function collect(extra) {
+  const first=await app.observe({window_ref,role:'button',limit:1,...extra});
+  let last=first, count=first.elements.length;
+  while(last.next) {
+    last=await app.observe({cursor:last.next});
+    count+=last.elements.length;
+  }
+  await app.press({window_ref,observation_ref:first.observation_ref,
+                  element_ref:first.elements[0].element_ref});
+  return {count,sameQuery:first.observation_ref===last.observation_ref,next:last.next};
+}
+return {empty:await collect({text:''}),absent:await collect({})};
+"#,
+    );
+    assert!(!reply.is_error, "{}", reply.data);
+    let expected = json!({"count":3,"sameQuery":true,"next":null});
+    assert_eq!(
+        reply.data["value"]["result"],
+        json!({"empty":expected,"absent":expected})
+    );
+    assert_eq!(
+        *backend.queries.lock().unwrap(),
+        vec![
+            ObserveQuery {
+                role: Some("button".into()),
+                text: None,
+                limit: 1,
+            };
+            2
+        ]
+    );
+    assert_eq!(backend.advances.load(Ordering::SeqCst), 4);
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 2);
 }
 
 #[test]

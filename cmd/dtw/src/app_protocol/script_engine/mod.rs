@@ -460,16 +460,20 @@ fn host_call(
             false,
         );
     }
-    let args: Value = match serde_json::from_str(args) {
-        Ok(value) if valid_args(op, &value) => value,
-        _ => {
+    let parsed = serde_json::from_str(args)
+        .map_err(|_| "unsupported app operation or invalid exact arguments".to_owned())
+        .and_then(|value| {
+            validate_args(op, &value)
+                .map(|()| value)
+                .map_err(|error| error.message)
+        });
+    let args: Value = match parsed {
+        Ok(value) => value,
+        Err(message) => {
             return failure_reply(
-                Failure::new(
-                    "exception",
-                    "unsupported app operation or invalid exact arguments",
-                )
-                .code("invalid_args")
-                .at(op, line, number),
+                Failure::new("exception", message)
+                    .code("invalid_args")
+                    .at(op, line, number),
                 false,
             )
         }
@@ -561,10 +565,10 @@ fn host_call(
         }
     }
 }
-fn valid_args(op: &str, args: &Value) -> bool {
+fn validate_args(op: &str, args: &Value) -> Result<(), super::wire::WireError> {
     // Use the coordinator's exact parser so the VM cannot advertise a different
     // argument shape. These placeholders never resolve or dispatch a target.
-    super::wire::script_submit("bound-app", "bridge-check", op, args).is_ok()
+    super::wire::script_submit("bound-app", "bridge-check", op, args).map(|_| ())
 }
 
 fn latch(terminal: &Mutex<Option<Failure>>, failure: Failure) {

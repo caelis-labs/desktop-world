@@ -36,11 +36,19 @@
 | `await app.scroll({window_ref,delta_x?,delta_y?})` | 动作 receipt | 在指定窗口中心发送整数 wheel steps，每轴 ±100，至少一轴非零；实际距离由 OS/app 决定 |
 | `await app.setValue({window_ref,observation_ref,element_ref,value})` | 动作 receipt | 当前语义观察中明确广告 `setValue` 的可编辑文本控件 |
 
+调用 app 方法时，普通参数对象中自有、可枚举且值为 `undefined` 的数据属性视为未提供；这不会修改调用方对象。随后仍按唯一参数 schema 校验必填字段、长度及互斥规则。数组中的 undefined/空洞、访问器、toJSON、symbols、循环及其他非 JSON 值仍拒绝；已提交 state 与结果对象不会采用此省略规则。
+
 文本按 UTF-8 限 16 KiB，JSON 编码后限 48 KiB，不含 NUL；`setValue` 允许空串清空，`typeText` 不允许空串。键盘输入与语义 setter 的事件语义不同，业务效果必须独立读回。focus/输入动作同样消费目标窗口旧观察；其他窗口和 app 的状态保留。跨进程输入 lease 覆盖聚焦、目标复核和完整输入事务；中断不重放，已按下的键/按钮按原操作清理。
 
-语义元素的 `role` 是 DTW 规范角色；`name`、`value` 为有界字符串摘录或 null，`enabled` 为 Boolean 或 null。不可读信息保留 null；摘录不能作为完整长文档读回。`actions` 列出当前已实现且可用的操作，当前可能包含 `press`、`setValue`。`label` 用于展示；不能从拼接 label 反推结构化值或状态。
+用户或外部程序仍可改变系统焦点。macOS 输入会按事件段重新核验系统级 AX 当前应用和精确窗口；失焦返回 `focus_changed`，无法证明焦点返回原始错误或 `focus_unproven`。已开始的输入保留 `unknown` 与原回执，并停止脚本后续动作；不会在输入中途主动抢回焦点或重发文本。首次执行输入时建立焦点仍是该方法的显式行为。
 
-查询按原生遍历过程筛选：`role` 精确匹配，`text` 对名称、值和描述做不区分大小写的子串匹配，两者同时提供时取交集。默认每页 40 个匹配元素，`limit` 为 1–100。原生节点、时间和字节边界也可能提前结束一页，所以零匹配仍可能返回 `next`。续页只传 `{cursor: page.next}`，不重复窗口或筛选条件；游标使用一次，保留原生 frontier，不从根重扫。
+首次请求聚焦时，已验证的目标不要求当前已有 focused app/window；缺失焦点允许进行一次请求中的 raise/activate，但不算聚焦成功。之后已有的聚焦等待阶段可对焦点缺失及 AX `CannotComplete` 重查只读状态；不再次激活。其他 AX 错误、身份变化、中止或请求截止立即停止；等待耗尽时保留当前未解决错误。输入阶段不采用这种等待重查。
+
+遇到 `focus_changed`、`focus_unproven`、`stale_observation` 或 `target_changed`，Agent 应刷新受影响窗口的身份/语义观察/截图，核对实际内容，再决定剩余步骤。此机制不是任意业务内容变化的全局版本锁，也不能撤回外部切换前已排入系统队列的事件；其他窗口、实例和 app 的上下文保留。
+
+语义元素的 `role` 是 DTW 规范角色；例如复选框为 `checkbox`。原生平台未证明单行/多行区别时，编辑控件可以返回 `text_field`，脚本应采用实际观察到的角色。`name`、`value` 为有界字符串摘录或 null，`enabled` 为 Boolean 或 null。不可读信息保留 null；摘录不能作为完整长文档读回。`actions` 列出当前已实现且可用的操作，当前可能包含 `press`、`setValue`。`label` 用于展示；不能从拼接 label 反推结构化值或状态。
+
+查询按原生遍历过程筛选：`role` 精确匹配，`text` 对名称、值和描述做不区分大小写的子串匹配，两者同时提供时取交集。 `text: ""` 与省略关键词等价；非空字符串中的空白按字面匹配，空 `role` 仍为参数错误。参数错误保留具体字段原因，拒绝发生在派发该调用之前；同一脚本中更早的动作不会因此撤销。默认每页 40 个匹配元素，`limit` 为 1–100。原生节点、时间和字节边界也可能提前结束一页，所以零匹配仍可能返回 `next`。续页只传 `{cursor: page.next}`，不重复窗口或筛选条件；游标使用一次，保留原生 frontier，不从根重扫。
 
 每个窗口独立保留一条语义查询和一份像素绑定。所有查询页共用 `observation_ref`，早先页的 `element_ref` 仍可操作；读取其他窗口、刷新未变化窗口清单、同窗截图不会清空该查询。新同窗同类读取替换旧绑定，失败的替换或续页也使对应查询失效；获准执行的动作消费本窗两类绑定。引用自初次获取起最多保留 15 秒，续页不延长期限。
 
@@ -117,7 +125,9 @@ state 提交不是桌面事务。动作一旦派发，之后的异常、取消�
 
 ## 查询、步骤账本与图像
 
-`exec` 回显 `app` 和内部生成的 `execution_id`，保留 `status/value/error/payload_expired`、状态提交和恢复标记；默认返回 `script.summary`，不展开步骤列表。摘要累计步骤、失败、不完整库存读取、派发、证据和中断，`last_issue` 只代表最后一个注意项。`incomplete_reads` 非零时，不能用返回窗口列表中缺少某窗口来证明它已消失。详见 [MCP 结果合同](app-protocol-v1.md#结果效果与图像)。正常流程无需追加查询。
+`exec` 回显 `app` 和内部生成的 `execution_id`，保留 `status/value/error/payload_expired`、状态提交和恢复标记；默认返回 `script.summary`，不展开步骤列表。摘要累计步骤、失败、不完整读取、派发、证据和中断，`last_issue` 只代表最后一个注意项。`incomplete_reads` 包含不完整库存，以及已无续页但 `complete=false` 的语义查询；正常尚有续页的观察不计入。对应注意项保留 `inventory` 或 `discovery` 证据，不把成功只读步骤改为失败。此计数非零时，不能依据缺失条目断定窗口或控件不存在。详见 [MCP 结果合同](app-protocol-v1.md#结果效果与图像)。正常流程无需追加查询。
+
+同次执行中，后续同一 `window_ref`、不同 `observation_ref` 的查询以 `complete=true, has_more=false` 结束，可将此前该窗口的不完整查询计入 `recovered_incomplete_reads`。中间一旦出现动作 receipt、失败或未完成步骤，之前尚未恢复的查询永久退出恢复候选。库存、其他窗口或其他执行不参与此恢复判定；该字段仅在非零时输出，原 `incomplete_reads` 和 `last_issue` 不删除。它证明后来的独立查询完整，不证明两次筛选条件相同、原查询已补全或业务动作成功。
 
 `result({app})` 或带历史 `execution_id` 的查询返回完整原始记录，其中 `operation` 为 `script`，外层 `receipt` 通常为 null，动作证据在 `script.steps` 中：
 
@@ -128,6 +138,7 @@ state 提交不是桌面事务。动作一旦派发，之后的异常、取消�
 | `value.calls` | 已计入 Host bridge 预算的尝试数，不一定等于 ledger 长度 |
 | `value.last_capture` | null 或 `{step,observation}`，关联最后返回图片的调用编号及观察元数据 |
 | `script.steps[]` | `{number,line,operation,status,error,receipt}`；进行中也可查询，status 为 running/completed |
+| `script.steps[].discovery` | 成功 observe 的 `{window_ref,observation_ref,complete,reason,visited,has_more}`；保存当页覆盖证据，不保存元素、游标或页面文本 |
 | `script.failure` | null 或 `{kind,message,line,operation,code,call}`；无可定位信息时为 null，内部错误可能只有部分诊断 |
 | `script.state_committed` | 新 state 是否实际提交 |
 | `script.shutdown_error` | 关闭资源失败的独立 `{code,message}`，不覆盖脚本失败或动作 receipt |
@@ -153,6 +164,8 @@ capture 只把尺寸、坐标系和 opaque observation_ref 交给 VM；PNG 字�
 `apps.script.methods` 是紧凑签名索引；参数、返回值、执行条件和引用规则通过 `api({methods:[…]})` 按需查询。组合行为有 Core/VM 回归与真实原生验收。`dtw api` 从同一 Rust schemas 生成 TypeScript；仓库中的 [TypeScript 声明](app-script-api.d.ts) 是生成文件，提交的仍是 JavaScript 函数体，不需要类型编译器或安装旧插件。
 
 `app.windows()` 的成功 coverage 与原子入口相同；`empty_within_scope` 不等于应用无窗口。失败可通过 `e.code === "window_inventory_unproven"` 与 `e.details.coverage/diagnostics` 处理，无须解析 message。每次成功 windows 的 `script.steps[].inventory` 保留 coverage 与诊断，即使脚本随后抛错或 value/image 被驱逐，仍可调查首次读到空清单的原因。它不重复保存标题、图片或原生窗口 ID；失败步骤保持完整 error/details。
+
+成功 observe 同样在 `script.steps[].discovery` 保留覆盖状态；脚本丢弃页面、随后抛错或结果 payload 被驱逐都不删除此证据。`has_more` 表示该页当时是否提供续页，不保证游标当前仍有效；`visited` 是该查询累计访问数。不同新查询的页面及引用不能混合，旧的不完整记录不会因后来另一查询成功而消失。失败 observe 仍保存原始 error，不虚构覆盖状态。
 
 脚本期限同样约束没有 Host Call 的纯 JavaScript。超时不提交 state，已发生动作和步骤证据不抹去；后续取消或关闭不覆盖先发生的终态原因。
 

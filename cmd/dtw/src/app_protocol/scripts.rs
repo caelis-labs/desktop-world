@@ -62,13 +62,18 @@ struct Step {
     receipt: Option<ActionReceipt>,
     error: Option<WireError>,
     inventory: Option<Value>,
+    discovery: Option<Value>,
 }
 impl Step {
     fn json(&self) -> Value {
-        json!({"number":self.number,"line":self.line,"operation":self.operation,
+        let mut value = json!({"number":self.number,"line":self.line,"operation":self.operation,
             "status":if self.completed {"completed"} else {"running"},
             "receipt":self.receipt.as_ref().map(wire::receipt),"error":self.error.as_ref().map(error_json),
-            "inventory":self.inventory})
+            "inventory":self.inventory});
+        if let Some(discovery) = &self.discovery {
+            value["discovery"] = discovery.clone();
+        }
+        value
     }
 }
 
@@ -303,6 +308,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 receipt: None,
                 error: None,
                 inventory: None,
+                discovery: None,
             });
         }
         let mut work = match parsed {
@@ -349,6 +355,21 @@ impl<B: Backend + 'static> Coordinator<B> {
             if let Some(value) = &work.completed.value {
                 step.inventory =
                     Some(json!({"coverage":value["coverage"],"diagnostics":value["diagnostics"]}));
+            }
+        }
+        if call.op == "observe" && work.completed.error.is_none() {
+            if let Some(value) = &work.completed.value {
+                if let Some(coverage) = value.get("coverage").filter(|v| v.is_object()) {
+                    // Keep the read's coverage even when JS discards its page,
+                    // throws later, or its result payload is evicted. Do not
+                    // retain elements or cursors, or invent terminal coverage.
+                    step.discovery = Some(json!({
+                        "window_ref":value["window_ref"],"observation_ref":value["observation_ref"],
+                        "complete":coverage["complete"],"reason":coverage["reason"],
+                        "visited":coverage["visited"],
+                        "has_more":value.get("next").map(|next| !next.is_null())
+                    }));
+                }
             }
         }
         step.receipt = work.completed.receipt;

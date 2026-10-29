@@ -9,9 +9,11 @@ use std::{
     time::{Duration, Instant},
 };
 use windows::{
-    core::{w, BSTR, PWSTR},
+    core::{w, Interface, BSTR, HRESULT, PWSTR},
     Win32::{
-        Foundation::{CloseHandle, BOOL, FILETIME, HANDLE, HWND, LPARAM, POINT, RECT},
+        Foundation::{
+            CloseHandle, BOOL, E_NOINTERFACE, FILETIME, HANDLE, HWND, LPARAM, POINT, RECT,
+        },
         Graphics::{
             Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED},
             Gdi::*,
@@ -777,7 +779,7 @@ fn runtime_id(element: &IUIAutomationElement) -> Result<Vec<i32>, Error> {
 fn role(id: UIA_CONTROLTYPE_ID) -> &'static str {
     match id.0 {
         50000 => "button",
-        50002 => "check_box",
+        50002 => "checkbox",
         50003 => "combo_box",
         50004 => "text_field",
         50005 => "link",
@@ -800,6 +802,41 @@ fn role(id: UIA_CONTROLTYPE_ID) -> &'static str {
         _ => "unknown",
     }
 }
+// Preserve native failure versus a genuinely unavailable pattern. The typed
+// GetCurrentPatternAs wrapper turns S_OK + null into Err(Error::empty()),
+// so retain the HRESULT and nullable out pointer at this boundary.
+fn toggle_pattern_present(status: HRESULT, is_null: bool) -> windows::core::Result<bool> {
+    if status == E_NOINTERFACE || status.0 as u32 == UIA_E_NOTSUPPORTED {
+        return Ok(false);
+    }
+    status.ok()?;
+    Ok(!is_null)
+}
+unsafe fn toggle_pattern(
+    element: &IUIAutomationElement,
+) -> Result<Option<IUIAutomationTogglePattern>, Error> {
+    let mut pointer = std::ptr::null_mut();
+    let status = (Interface::vtable(element).GetCurrentPatternAs)(
+        Interface::as_raw(element),
+        UIA_TogglePatternId,
+        &IUIAutomationTogglePattern::IID,
+        &mut pointer,
+    );
+    if !toggle_pattern_present(status, pointer.is_null()).map_err(failed)? {
+        return Ok(None);
+    }
+    Ok(Some(IUIAutomationTogglePattern::from_raw(pointer)))
+}
+fn toggle_value(
+    state: windows::core::Result<ToggleState>,
+) -> windows::core::Result<Option<String>> {
+    state.map(|state| match state.0 {
+        0 => Some("0".into()),
+        1 => Some("1".into()),
+        2 => Some("2".into()),
+        _ => None, // Unknown provider values are not evidence that a control is off.
+    })
+}
 fn element_row(e: &IUIAutomationElement, id: u64) -> Result<Value, Error> {
     unsafe {
         let role = role(e.CurrentControlType().map_err(failed)?);
@@ -812,10 +849,10 @@ fn element_row(e: &IUIAutomationElement, id: u64) -> Result<Value, Error> {
             .collect::<String>();
         let enabled = e.CurrentIsEnabled().map_err(failed)?.as_bool();
         let mut actions = Vec::new();
+        let toggle = toggle_pattern(e)?;
         if e.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
             .is_ok()
-            || e.GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId)
-                .is_ok()
+            || toggle.is_some()
             || e.GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(
                 UIA_SelectionItemPatternId,
             )
@@ -823,7 +860,9 @@ fn element_row(e: &IUIAutomationElement, id: u64) -> Result<Value, Error> {
         {
             actions.push("press");
         }
-        let value = if let Ok(pattern) =
+        let value = if let Some(pattern) = toggle {
+            toggle_value(pattern.CurrentToggleState()).map_err(failed)?
+        } else if let Ok(pattern) =
             e.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
         {
             if !pattern.CurrentIsReadOnly().map_err(failed)?.as_bool() {
@@ -1004,4 +1043,50 @@ fn absolute_move(point: POINT) -> Result<INPUT, Error> {
         ((point.x - vx) as i64 * 65535 / (vw - 1) as i64) as i32,
         ((point.y - vy) as i64 * 65535 / (vh - 1) as i64) as i32,
     ))
+}
+
+#[cfg(test)]
+mod semantic_tests {
+    use super::*;
+    use windows::Win32::Foundation::{E_ACCESSDENIED, E_POINTER, S_OK};
+
+    #[test]
+    fn common_checkbox_role_is_canonical_without_guessing_edit_layout() {
+        assert_eq!(role(UIA_CheckBoxControlTypeId), "checkbox");
+        assert_eq!(role(UIA_EditControlTypeId), "text_field");
+        assert_eq!(role(UIA_CONTROLTYPE_ID(-1)), "unknown");
+    }
+
+    #[test]
+    fn toggle_values_preserve_all_three_native_states_and_unknowns() {
+        for (state, value) in [
+            (ToggleState_Off, "0"),
+            (ToggleState_On, "1"),
+            (ToggleState_Indeterminate, "2"),
+        ] {
+            assert_eq!(toggle_value(Ok(state)).unwrap().as_deref(), Some(value));
+        }
+        assert_eq!(toggle_value(Ok(ToggleState(99))).unwrap(), None);
+        assert_eq!(toggle_value(Ok(ToggleState(-1))).unwrap(), None);
+        let failure = windows::core::Error::from_hresult(E_ACCESSDENIED);
+        assert_eq!(
+            toggle_value(Err(failure)).unwrap_err().code(),
+            E_ACCESSDENIED
+        );
+    }
+
+    #[test]
+    fn missing_toggle_pattern_is_distinct_from_a_failed_native_read() {
+        assert!(toggle_pattern_present(S_OK, false).unwrap());
+        assert!(!toggle_pattern_present(S_OK, true).unwrap());
+        assert!(!toggle_pattern_present(E_NOINTERFACE, true).unwrap());
+        assert!(!toggle_pattern_present(HRESULT(UIA_E_NOTSUPPORTED as i32), true).unwrap());
+        for code in [
+            E_POINTER,
+            E_ACCESSDENIED,
+            HRESULT(UIA_E_ELEMENTNOTAVAILABLE as i32),
+        ] {
+            assert_eq!(toggle_pattern_present(code, true).unwrap_err().code(), code);
+        }
+    }
 }

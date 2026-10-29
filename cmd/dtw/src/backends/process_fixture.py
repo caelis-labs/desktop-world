@@ -41,6 +41,12 @@ if mode == "idle_nonzero":
     ready()
     os._exit(17)
 
+if mode in ("gated_nonzero", "gated_exit_one"):
+    ready()
+    while not pathlib.Path(ready_path).with_name("release").exists():
+        time.sleep(0.002)
+    os._exit(17 if mode == "gated_nonzero" else 1)
+
 for line in sys.stdin.buffer:
     if mode == "graceful_input":
         root = pathlib.Path(ready_path).parent
@@ -57,8 +63,8 @@ for line in sys.stdin.buffer:
             events.write("up\n")
         sys.exit(0)
     ready()
-    if mode == "nonzero":
-        os._exit(17)
+    if mode in ("nonzero", "nonzero_one"):
+        os._exit(17 if mode == "nonzero" else 1)
     elif mode in ("hang", "ignore_term"):
         while True:
             time.sleep(60)
