@@ -21,12 +21,12 @@ OS permissions, such as macOS Accessibility and Screen Recording, remain prerequ
 
 1. Initialize the stdio connection and discover tools with `tools/list`.
 2. Call `apps` for app IDs, method descriptions and support conditions.
-3. Call `exec` with the chosen app ID, a request ID and script source. It returns when the bounded execution settles.
+3. Call `exec` with only the chosen `app` ID and `source` script. It returns when the bounded execution settles.
 4. Use `result` to inspect an original receipt after interruption or uncertainty. It is not required for normal successful execution.
 
-Standard `notifications/cancelled` addresses the in-flight MCP request. EOF, broken output and parent loss close native resources. The server retains context-local state and references for app operations; closing the server invalidates them. Cancellation cannot undo desktop effects. If the server dies before the effect is known, preserve the request's identity and independently observe the application before deciding what to do next.
+Standard `notifications/cancelled` addresses the in-flight MCP request. EOF, broken output and parent loss close native resources. The server retains context-local state and references for app operations; closing the server invalidates them. Cancellation cannot undo desktop effects. If the server dies before the effect is known, preserve any returned execution identity and independently observe the application before deciding what to do next.
 
-Multiple DTW processes still share a physical desktop. Input coordination between separate Agent processes belongs to the caller. The server's execution ordering does not claim to arbitrate other desktop automation tools.
+Independent MCP connections isolate their app state and receipts, but still share a physical desktop. DTW currently coordinates scene resources; full input coordination across its sessions is remaining DTW implementation work, tracked in the [release plan](first-rewrite-release-plan.md). The Harness owns approval policy, not DTW’s internal input scheduling. DTW does not claim to arbitrate unrelated desktop automation tools.
 
 See the [protocol](app-protocol-v1.md) and [script semantics](app-script-v1.md) for precise request, receipt and reference behavior.
 

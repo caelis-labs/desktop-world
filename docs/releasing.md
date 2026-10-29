@@ -28,6 +28,11 @@ opt-in features. Changes to these areas require the relevant local build/tests
 and checkpoint acceptance. Add CI coverage when a concrete, stable behavior needs
 protection; do not recreate the old full-package matrix.
 
+The current implementation audit, required work packages and macOS/Windows/Linux
+validation responsibilities are in the [first rewrite release plan](first-rewrite-release-plan.md).
+Windows needs a native provider before independent acceptance; Linux desktop support
+is deferred. This plan does not publish a release or change version metadata.
+
 ## Next release checkpoint
 
 1. Select supported workflows and platforms from the [product matrix](product-matrix.md).
