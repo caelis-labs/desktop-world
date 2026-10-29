@@ -463,6 +463,22 @@ private func axPID(_ element: AXUIElement, _ deadline: Deadline) throws -> Int32
     return pid
 }
 
+// Input needs a fresh system-wide focus read, not AppKit's run-loop-driven
+// application snapshot. Recheck after the window query, which can itself block.
+// Missing focus is unproven, not permission to raise a possibly inactive app.
+private func exactInputFocus(expectedPID: Int32, focusedPID: () throws -> Int32?,
+                             windowMatches: () throws -> Bool) throws -> Bool {
+    func readPID() throws -> Int32 {
+        guard let pid = try focusedPID(), pid > 0 else {
+            throw failure("focus_unproven", "System-wide focused application is unavailable; refresh before further input")
+        }
+        return pid
+    }
+    guard try readPID() == expectedPID else { return false }
+    guard try windowMatches() else { return false }
+    return try readPID() == expectedPID
+}
+
 private func axWindowIdentity(_ element: AXUIElement, _ deadline: Deadline) throws -> (AXError, CGWindowID) {
     guard let function = exactWindowSymbol.function else {
         throw failure("unsupported_platform", "Exact AX window identity SPI is unavailable")
@@ -1291,10 +1307,17 @@ private final class NativeStore: @unchecked Sendable {
     }
 
     private func focused(_ target: NativeTarget, _ root: AXUIElement, _ deadline: Deadline) throws -> Bool {
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.app.pid else { return false }
-        let app = AXUIElementCreateApplication(target.app.pid)
-        guard let focused = axElement(try axAttribute(app, kAXFocusedWindowAttribute, deadline)) else { return false }
-        return try CFEqual(focused, root) && axWindowID(focused, deadline) == target.nativeID
+        try exactInputFocus(expectedPID: target.app.pid, focusedPID: {
+            let system = AXUIElementCreateSystemWide()
+            guard let app = axElement(try axAttribute(system, kAXFocusedApplicationAttribute, deadline)) else { return nil }
+            return try axPID(app, deadline)
+        }, windowMatches: {
+            let app = AXUIElementCreateApplication(target.app.pid)
+            guard let window = axElement(try axAttribute(app, kAXFocusedWindowAttribute, deadline)) else {
+                throw failure("focus_unproven", "The target application's focused window is unavailable; refresh before further input")
+            }
+            return try CFEqual(window, root) && axWindowID(window, deadline) == target.nativeID
+        })
     }
 
     private func establishFocus(_ target: NativeTarget, _ context: RequestContext, changed: inout Bool) throws -> CandidateWindow {
@@ -1374,7 +1397,7 @@ private final class NativeStore: @unchecked Sendable {
                 if focus {
                     try context.verify(target.app)
                     guard try focused(target, window.element, context.deadline) else {
-                        throw failure("focus_changed", "Exact focused window changed before the next input event")
+                        throw failure("focus_changed", "Exact focused window changed before the next input event. Re-observe the target window before continuing; earlier input may have partial effects, so do not replay the entire text or chord")
                     }
                 }
             }

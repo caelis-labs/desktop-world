@@ -71,6 +71,63 @@ for role in [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole] {
 }
 print("String setter excludes structural/action/value controls")
 
+// Inject focus reads; never query system-wide AX or activate an application.
+private var focusAssertions = 0
+private func focusCheck(_ ok: @autoclosure () -> Bool, _ message: String) {
+    precondition(ok(), message)
+    focusAssertions += 1
+}
+private func focusFailure(_ code: String, _ body: () throws -> Bool) {
+    do { _ = try body(); preconditionFailure("Unproven focus was accepted") }
+    catch let error as NativeFailure { focusCheck(error.code == code, "Focus error was replaced: \(error.code)") }
+    catch { preconditionFailure("Unexpected focus error: \(error)") }
+}
+private var focusReads = 0
+private var windowReads = 0
+private let stableFocus = try exactInputFocus(expectedPID: 10, focusedPID: {
+    focusReads += 1; return 10
+}, windowMatches: { windowReads += 1; return true })
+focusCheck(stableFocus && focusReads == 2 && windowReads == 1, "Stable focus requires two fresh application reads")
+focusReads = 0; windowReads = 0
+private let otherApp = try exactInputFocus(expectedPID: 10, focusedPID: {
+    focusReads += 1; return 20
+}, windowMatches: { windowReads += 1; return true })
+focusCheck(!otherApp && focusReads == 1 && windowReads == 0, "Another foreground app must reject a stale target window")
+private var livePID: Int32 = 10
+private let switchedDuringWindowRead = try exactInputFocus(expectedPID: 10, focusedPID: {
+    livePID
+}, windowMatches: { livePID = 20; return true })
+focusCheck(!switchedDuringWindowRead, "Focus changed while the target AX window query was in flight")
+private let changedWindow = try exactInputFocus(expectedPID: 10, focusedPID: { 10 }, windowMatches: { false })
+focusCheck(!changedWindow, "A sibling window in the same process must not match")
+for unavailable: Int32? in [nil, 0, -1] {
+    focusFailure("focus_unproven") {
+        try exactInputFocus(expectedPID: 10, focusedPID: { unavailable }, windowMatches: { true })
+    }
+}
+private var focusAvailable = true
+focusFailure("focus_unproven") {
+    try exactInputFocus(expectedPID: 10, focusedPID: { focusAvailable ? 10 : nil },
+                        windowMatches: { focusAvailable = false; return true })
+}
+focusFailure("ax_unavailable") {
+    try exactInputFocus(expectedPID: 10, focusedPID: { throw failure("ax_unavailable", "original AX failure") },
+                        windowMatches: { true })
+}
+focusFailure("window_unproven") {
+    try exactInputFocus(expectedPID: 10, focusedPID: { 10 },
+                        windowMatches: { throw failure("window_unproven", "original window identity failure") })
+}
+focusReads = 0
+focusFailure("deadline_exceeded") {
+    try exactInputFocus(expectedPID: 10, focusedPID: {
+        focusReads += 1
+        if focusReads == 2 { throw failure("deadline_exceeded", "deadline elapsed during focus read") }
+        return 10
+    }, windowMatches: { true })
+}
+print("Fresh input focus controls passed (\(focusAssertions) assertions; no AX or GUI reads)")
+
 private var descriptionAssertions = 0
 private func descriptionCheck(_ ok: @autoclosure () -> Bool, _ message: String) {
     precondition(ok(), message)
