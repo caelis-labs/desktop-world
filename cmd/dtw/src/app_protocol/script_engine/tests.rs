@@ -116,6 +116,26 @@ fn extra_app_scope_and_raw_operations_never_dispatch() {
     }
 }
 #[test]
+fn exact_argument_errors_keep_the_parser_message_without_host_dispatch() {
+    let out = pure(
+        "return await app.observe({window_ref:'w',role:''});",
+        json!({}),
+    );
+    assert_eq!(out.calls, 1);
+    let failure = out.result.unwrap_err();
+    assert_eq!(failure.code.as_deref(), Some("invalid_args"));
+    assert_eq!(failure.call, Some(1));
+    assert_eq!(failure.op.as_deref(), Some("observe"));
+    assert!(
+        failure
+            .message
+            .contains("command.role must contain 1 to 64 characters"),
+        "{}",
+        failure.message
+    );
+}
+
+#[test]
 fn ordinary_host_error_can_be_caught_and_later_call_has_its_own_number() {
     let (out, seen)=execute("try { await app.observe({window_ref:'bad'}); } catch(e) { state.failure=e.code; }\nreturn await app.windows();",json!({}),limits(),|call| if call.number==1 {Err(HostError::new("no such window","unknown_window"))} else {Ok(json!(["w"]))});
     let success = out.result.unwrap();

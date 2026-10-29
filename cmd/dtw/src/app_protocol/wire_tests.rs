@@ -37,7 +37,9 @@ fn observe_query_and_cursor_forms_are_strict_and_bounded() {
         json!({"kind":"observe","limit":0}),
         json!({"kind":"observe","limit":101}),
         json!({"kind":"observe","limit":1.5}),
-        json!({"kind":"observe","text":""}),
+        json!({"kind":"observe","role":""}),
+        json!({"kind":"observe","text":null}),
+        json!({"kind":"observe","text":42}),
         json!({"kind":"observe","role":"x".repeat(65)}),
         json!({"kind":"observe","text":"中".repeat(257)}),
         json!({"kind":"observe","region":{}}),
@@ -55,6 +57,7 @@ fn observe_query_and_cursor_forms_are_strict_and_bounded() {
     for (key, value) in [
         ("role", json!("AXButton")),
         ("text", json!("x")),
+        ("text", json!("")),
         ("limit", json!(1)),
     ] {
         let mut invalid = cursor.clone();
@@ -64,6 +67,59 @@ fn observe_query_and_cursor_forms_are_strict_and_bounded() {
     let mut invalid = cursor;
     invalid["target"]["window_ref"] = json!("window-a");
     assert!(parse_request(invalid).is_err());
+}
+
+#[test]
+fn empty_observe_text_is_only_an_omitted_text_filter() {
+    for limit in [1, 40, 100] {
+        let empty = json!({"window_ref":"w","role":"button","text":"","limit":limit});
+        let absent = json!({"window_ref":"w","role":"button","limit":limit});
+        let parsed = script_submit("app", "request", "observe", &empty).unwrap();
+        assert_eq!(
+            parsed,
+            script_submit("app", "request", "observe", &absent).unwrap()
+        );
+        assert_eq!(
+            parsed.command,
+            Command::ObserveQuery(computer::ObserveQuery {
+                role: Some("button".into()),
+                text: None,
+                limit,
+            })
+        );
+    }
+    for text in ["", " ", "  target  "] {
+        let parsed = script_submit(
+            "app",
+            "request",
+            "observe",
+            &json!({"window_ref":"w","text":text}),
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.command,
+            Command::ObserveQuery(computer::ObserveQuery {
+                role: None,
+                text: (!text.is_empty()).then(|| text.into()),
+                limit: 40,
+            })
+        );
+    }
+    for invalid in [
+        json!({"window_ref":"","text":""}),
+        json!({"window_ref":"w","role":"","text":""}),
+        json!({"window_ref":"w","text":false}),
+        json!({"window_ref":"w","text":[]}),
+        json!({"window_ref":"w","text":"","pid":42}),
+        json!({"cursor":"","text":""}),
+        json!({"cursor":"c","text":""}),
+        json!({"window_ref":"w","cursor":"c","text":""}),
+    ] {
+        assert!(
+            script_submit("app", "request", "observe", &invalid).is_err(),
+            "{invalid}"
+        );
+    }
 }
 
 #[test]

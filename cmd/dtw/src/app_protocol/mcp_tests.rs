@@ -197,6 +197,77 @@ async fn sdk_lists_four_tools_and_exec_accepts_only_app_and_source() {
 }
 
 #[tokio::test]
+async fn sdk_observe_empty_text_matches_omission_and_keeps_exact_argument_errors() {
+    let (server, catalog) = server();
+    let mut client = Client::new(server).await;
+    let api = decoded(&client.tool("api", json!({"methods":["observe"]})).await);
+    let fields = &api["methods"]["observe"]["parameters"]["oneOf"][0]["properties"];
+    assert_eq!(fields["text"]["minLength"], 0);
+    assert_eq!(fields["text"]["maxLength"], 256);
+    assert_eq!(fields["role"]["minLength"], 1);
+    let result = client
+        .tool(
+            "exec",
+            input(
+                r#"
+const window_ref=(await app.windows()).windows[0].window_ref;
+const absent=await app.observe({window_ref,limit:1});
+const empty=await app.observe({window_ref,text:'',limit:1});
+return {absent:absent.elements.map(e=>e.name),empty:empty.elements.map(e=>e.name),
+        complete:absent.coverage.complete && empty.coverage.complete};
+"#,
+            ),
+        )
+        .await;
+    assert_eq!(result["isError"], false, "{result}");
+    assert_eq!(
+        decoded(&result)["value"]["result"],
+        json!({"absent":["Increment"],"empty":["Increment"],"complete":true})
+    );
+    assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 2);
+    let rejected = client
+        .tool(
+            "exec",
+            input(
+                r#"
+const window_ref=(await app.windows()).windows[0].window_ref;
+const errors=[];
+for(const args of [{window_ref,role:''},{window_ref,text:null},{window_ref,limit:101},
+                   {window_ref:'',text:''},{cursor:'c',text:''},{window_ref,pid:42,text:''}]) {
+  try { await app.observe(args); throw new Error('unexpectedly accepted'); }
+  catch(e) { errors.push({code:e.code,message:e.message}); }
+}
+return errors;
+"#,
+            ),
+        )
+        .await;
+    assert_eq!(rejected["isError"], false, "{rejected}");
+    let rejected = decoded(&rejected);
+    let errors = rejected["value"]["result"].as_array().unwrap();
+    assert_eq!(errors.len(), 6);
+    for (error, field) in errors.iter().zip([
+        "command.role",
+        "command.text",
+        "command.limit",
+        "target.window_ref",
+        "command.text",
+        "command.pid",
+    ]) {
+        assert_eq!(error["code"], "invalid_args");
+        assert!(
+            error["message"].as_str().unwrap().contains(field),
+            "{error}"
+        );
+    }
+    assert_eq!(rejected["value"]["calls"], 7);
+    assert_eq!(rejected["script"]["summary"]["steps"], 1);
+    assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 2);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+    client.close().await;
+}
+
+#[tokio::test]
 async fn sdk_source_json_round_trip_preserves_javascript_and_result_characters() {
     let source = r#"const text = '中文🙂 "quoted" \'single\' \\';
 const path = String.raw`C:\temp\new`;

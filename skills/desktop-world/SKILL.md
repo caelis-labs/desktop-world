@@ -64,7 +64,7 @@ Native names/values are bounded excerpts; use field equality checks for short va
 
 ## 2. Execute the known workflow and verify it
 
-Adapt this complete batch to task-supplied field labels and `state.formActions` confirmed in the first form. Each exact-name query obtains a fresh real control; it never fabricates a ref. The example starts from a list, edits and saves each record once, then reopens it to verify persisted values before moving on. If discovery left the first form open, begin with its field edits instead of opening it again. The checkbox example uses observed `'0'`/`'1'` values; adapt those to the app's actual representation. Helpers are local to each script; functions cannot be stored in JSON state.
+Adapt this complete batch to task-supplied field labels and `state.formActions` confirmed in the first form. Each exact-name query obtains a fresh real control; it never fabricates a ref. The example starts from a list, edits and saves each record once, then reopens it to verify persisted values before moving on. If discovery left the first form open, begin with its field edits instead of opening it again. Do not assume a multiline field has role `text_area`: the targeted `Notes` query below selects an exact-name editable control, captures its observed role and reuses that role with fresh refs. Only recognized static labels without an advertised setter are excluded; unknown roles and disabled controls remain candidates, so multiple potential controls remain ambiguous. The checkbox example uses observed `'0'`/`'1'` values; adapt those to the app's actual representation. Helpers are local to each script; functions cannot be stored in JSON state.
 
 ```javascript
 const window_ref = state.window;
@@ -75,20 +75,25 @@ async function query(role,text,{name,action,afterTransition=false}={}) {
   const until = Date.now()+2000, attempts = [];
   for (let n=0; n<(afterTransition ? 4 : 1); n++) {
     if (n && Date.now() >= until) break;
-    let p = await app.observe({window_ref,role,...(text === undefined ? {} : {text}),limit:12});
+    let p = await app.observe({window_ref,...(role === undefined ? {} : {role}),
+      ...(text === undefined ? {} : {text}),limit:12});
     const elements = []; // Fresh collection and refs for this whole attempt.
     for (;;) {
       elements.push(...p.elements);
       if (!p.next) break;
       p = await app.observe({cursor:p.next});
     }
-    const found = name === undefined ? elements : elements.filter(e=>e.name === name);
+    const named = name === undefined ? elements : elements.filter(e=>e.name === name);
+    // Exclude only recognized static labels without a setter. Unknown roles
+    // and disabled controls may still be the intended field; keep them.
+    const found = role === undefined && action === 'setValue' ? named.filter(e=>
+      e.actions.includes('setValue') || !['static_text','text'].includes(e.role)) : named;
     const status = !p.coverage.complete ? 'incomplete' :
       name !== undefined && found.length > 1 ? 'ambiguous' :
-      name !== undefined && !found.length ? 'missing' :
+      name !== undefined && !found.length ? (named.length ? 'unsupported_action' : 'missing') :
       action && found[0].enabled === false ? 'disabled' :
       action && !found[0].actions.includes(action) ? 'unsupported_action' : 'ready';
-    attempts.push({status,count:found.length,coverage:p.coverage});
+    attempts.push({status,count:found.length,named_count:named.length,coverage:p.coverage});
     if (status === 'ready')
       return {elements:found,observation_ref:p.observation_ref,attempts};
     if (status === 'ambiguous' || status === 'unsupported_action') break;
@@ -106,18 +111,21 @@ async function press(name,afterTransition=false) {
   await app.press((await one('button',name,'press',afterTransition)).ref);
 }
 async function set(role,name,value,afterTransition=false) {
-  await app.setValue({...(await one(role,name,'setValue',afterTransition)).ref,value});
+  const control = await one(role,name,'setValue',afterTransition);
+  await app.setValue({...control.ref,value});
+  return control.element.role;
 }
 const records = [
   {key:'Contact A', name:'Alex', note:'Reviewed\nReady'},
   {key:'Contact B', name:'Sam', note:'Reviewed\nFollow up'}
 ];
 const verified = [];
+let notesRole; // The first targeted setter query discovers the actual native role.
 for (const [index,row] of records.entries()) {
   await set('text_field','Search contacts',row.key,index > 0);
   await press('Edit '+row.key,true);
   await set('text_field','Display name',row.name,true);
-  await set('text_area','Notes',row.note,true);
+  notesRole = await set(notesRole,'Notes',row.note,true);
   const approved = await one('checkbox','Approved',undefined,true);
   if (!['0','1'].includes(approved.element.value)) throw Error('Interpret checkbox state');
   if (approved.element.value !== '1') {
@@ -128,7 +136,7 @@ for (const [index,row] of records.entries()) {
   await press(actionNames.save,true);
   await press('Edit '+row.key,true);
   const savedName = (await one('text_field','Display name',undefined,true)).element.value;
-  const savedNote = (await one('text_area','Notes')).element.value;
+  const savedNote = (await one(notesRole,'Notes')).element.value;
   const savedApproved = (await one('checkbox','Approved')).element.value;
   await press(actionNames.close);
   if (savedName !== row.name || savedNote !== row.note || savedApproved !== '1')

@@ -133,6 +133,49 @@ fn script_run(owner: &Arc<Coordinator<PagedBackend>>, id: &str, source: &str) ->
 }
 
 #[test]
+fn scripts_normalize_empty_text_before_core_and_keep_the_query_paging_binding() {
+    let (owner, backend) = setup();
+    let reply = script_run(
+        &owner,
+        "empty-text",
+        r#"
+const window_ref=(await app.windows()).windows[0].window_ref;
+async function collect(extra) {
+  const first=await app.observe({window_ref,role:'button',limit:1,...extra});
+  let last=first, count=first.elements.length;
+  while(last.next) {
+    last=await app.observe({cursor:last.next});
+    count+=last.elements.length;
+  }
+  await app.press({window_ref,observation_ref:first.observation_ref,
+                  element_ref:first.elements[0].element_ref});
+  return {count,sameQuery:first.observation_ref===last.observation_ref,next:last.next};
+}
+return {empty:await collect({text:''}),absent:await collect({})};
+"#,
+    );
+    assert!(!reply.is_error, "{}", reply.data);
+    let expected = json!({"count":3,"sameQuery":true,"next":null});
+    assert_eq!(
+        reply.data["value"]["result"],
+        json!({"empty":expected,"absent":expected})
+    );
+    assert_eq!(
+        *backend.queries.lock().unwrap(),
+        vec![
+            ObserveQuery {
+                role: Some("button".into()),
+                text: None,
+                limit: 1,
+            };
+            2
+        ]
+    );
+    assert_eq!(backend.advances.load(Ordering::SeqCst), 4);
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 2);
+}
+
+#[test]
 fn scripts_keep_earlier_page_and_other_window_refs_across_capture_and_inventory() {
     let (owner, backend) = setup();
     let reply = script_run(

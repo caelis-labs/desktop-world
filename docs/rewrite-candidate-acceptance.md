@@ -7,9 +7,9 @@
 | 层级 | 当前状态 |
 | --- | --- |
 | 固定来源与候选脚本 | 导出 clean Git commit/tree，固定 Rust 1.98.0/lockfile；目标依赖 notices、平台格式、版本、归档完整性均有检查 |
-| macOS 候选 | `df7beab` 已签名、公证；安装字节通过六组原生 GUI 验收，修复输入中失焦与首次激活就绪边界 |
-| macOS 安装与 Agent | 完整清单、签名/公证和原生验收通过；首轮 Claude 因猜测保存按钮标签未通过易用性门槛，正在验证通用 Skill 修正，尚未计整体验收通过 |
-| Windows 原生构建 | `a07d1eb` 完成 x64 原生编译、静态 CRT/版本/归档检查、265 个库测试、3 个 CLI 测试及 C# 验收工具编译；下载后重新验证完整归档清单与校验和 |
+| macOS 候选 | `3ba108e` 已签名、公证；安装字节六组原生 GUI 通过；后续空查询参数及共用 Skill 修正正在验证 |
+| macOS 安装与 Agent | 完整清单、签名/公证和原生验收通过；最新首轮 Claude 因空关键词参数被拒绝未过门槛，序列停止，尚未计整体验收通过 |
+| Windows 原生构建 | `3ba108e` 原生编译、274 个库测试、3 个 CLI 测试及 C# 工具编译通过；后续复选框与参数修正须重新编译，旧包不作为最新交付 |
 | Windows 实机 | 用户独立安排，尚未通过；候选自带标准 MCP 双实例 smoke 与手工矩阵 |
 | 公开 release/tag | 未创建 |
 
@@ -22,6 +22,29 @@
 - 工具链：Rust 1.98.0、MSVC 19.51.36260 x64；该包的 SDK 环境字段为 null，不推测其版本。PE 导入检查通过，不依赖动态 VC CRT。最低 Windows 系统版本仍须实机验证。
 - 包内 `acceptance/windows/README.md` 和 `smoke.ps1` 用普通 stdio MCP 操作两个同可执行文件实例，检查分别编辑/保存、Unicode/快捷键、窗口截图和释放状态；另有可选指针组。仅需 Windows PowerShell 5.1/.NET，不需 Rust/CUA/VS。
 - 手工矩阵仍包含真实浏览器/Agent、DPI、并发会话、取消/超时、进程退出重启、EOF/父退出、权限与安全桌面，以及截图视觉核验。CI 的 C# 编译不计 GUI smoke 通过。
+
+## 最近的固定候选复核
+
+候选 [40813820899](https://github.com/caelis-labs/desktop-world/actions/runs/40813820899)，源 `3ba108ef98dd97d467b2cb89c72b17b0cb1da4c3`，268 个库测试、4 个 CLI 测试、3 个 macOS stdio 测试通过。Developer ID 签名与公证 Accepted，原公证 ID `8bfcc230-0b81-4455-9d0a-d5bc0ee55506`。
+
+- ZIP SHA-256 `d5f6ba6fb020a2a02f49835e1551af74e5534c62c14c048a98a6a7c11e34ba4f`；二进制 `3be785cccee20e7ba83774b975114c4fe70cc467eeb629fea89ad3c0ffc4393e`；Skill `7aeba65bf92c6cbb718cae2582b35ba70dd6b118a9c34ee827598739ee1382b1`。
+- 在 `/private/tmp/DTW 安装验收 0.2.0 观察恢复版/desktop-world-0.2.0-aarch64-apple-darwin` 核对 146 文件清单。首次 `codesign -R '=notarized'` 未通过；执行 `spctl` 评估后同一字节通过该公证要求。`spctl` 本身返回“有效代码但不是 app”，不将它记为 `.app` Gatekeeper 或全新系统安装通过；原校验结果分别保留，未重签或更改归档。
+- `/private/tmp/dtw-installed-refresh-{native-all,native-focus-intercept,native-parent-exit,multi-instance,web-discovery}-20261029-01/evidence.json` 及 `...-native-eof-20261029-02/evidence.json` 六组通过，截图已视觉核验。EOF 的第一次启动缺少探针要求的 trace 环境，在 GUI 创建前即停止，保留原日志，修正启动配置后才执行独立样本。
+- 受控失焦目标收到 19 字符，另一窗口收到一个 `q`，两边保存数都是 0；原操作 `execution_a521c93e-15db-469f-a7ac-f7ec7cbe8b7a` 返回 `focus_changed/unknown`。保留已排队事件无法撤回的限制。
+
+安装模型序列首轮 `/private/tmp/dtw-installed-refresh-final-claude-20261029-01/evidence.json` 未通过：6 exec / 7 MCP、8,756 JSON bytes、88.028 秒，业务初始正确且恰好两次保存，但脚本 `execution_7a25b469-dbab-491f-a82a-30f39fc6b6f3` 在打开表单后把 `text: ""` 传给 observe，被参数校验拒绝。不是窗口变化或原生查询失败。余下五轮未运行；已保存文档经独立完整读回与磁盘比对后单次关闭，`reconciliation.json` 不改变原失败。
+
+该缺口改为：可选空关键词规范化为无关键词过滤，公开 schema 同步；非空空白、角色/引用、长度、cursor 互斥仍按原合同校验。`invalid_args` 现在保留具体字段原因，拒绝仍发生在派发前，不撤销脚本里更早的动作。77 项定向 Rust 控制通过，包括真实 VM 分页绑定与真实 MCP 的空关键词/省略等价及严格拒绝控制。
+
+同时审计共用 Skill 与 Windows 原生角色：规范复选框应是 `checkbox`；可用 TogglePattern 的 Off/On/Indeterminate 分别读为 `"0"`/`"1"`/`"2"`，未知状态保留 null，原生读取失败不当作 false。新增 3 项 Windows 控制，需在最终 Windows CI 编译执行。多行输入的实际角色可能为 `text_field` 或 `text_area`，Skill 从定向查询取真实角色并复用，保留静态标签排除、禁用控件、歧义与新引用检查，不增加扫描。8 组 JS 边界控制、完整两记录批处理、4 段语法与 Skill 校验通过；随后只排除明确静态标签，避免丢弃同名禁用的 unknown/combo_box 控件；相应 8 组控制通过。冻结 Skill `7cc535aec6ad64705a6c6f14a631d820c36e5254436e43f1820251b83b099b6e`，新模型/安装验收进行中。
+
+开发二进制 `3e8c2134c2935c651bceeb45a23324611ba2a25efaee12a9ddc642654a7845cb` 配合中间 Skill `64724a8884ff4e9b57f846d390ec7821e99927569774b7c1fbd7c7fc74f540fe` 的 `/private/tmp/dtw-empty-filter-claude-20261029-14/evidence.json` 未通过，agy 未启动：12:21:56–12:22:36 的两个 exec 分别遇到 `semantic_window_unavailable` 与 `capture_failed`，任务没有写入；清理按键明确 `not_dispatched`。`pmset` 原始日志证明 12:06:03 熄屏、12:24:48 恢复显示，覆盖该样本。恢复显示后，开发版和签名版对同一自有窗口的独立只读查询均成功；未推断锁屏或其他用户操作。新查询的首个分页仍有 next，不将其当作完整发现。
+
+该样本 0 次业务保存、报告仍为初始 `Pending review`；两扇窗口经独立核验后单次关闭，另存 `reconciliation.json`，不改写原失败。后续 GUI 序列使用 `caffeinate -di <验收命令>`，断言随该进程结束释放，不修改锁屏设置、不唤醒或解锁会话；这是验收环境控制，不是产品的熄屏/锁屏使用能力。
+
+前一开发组合的 `/private/tmp/dtw-discovery-refresh-{claude,agy}-20261029-13/evidence.json` 都通过：Claude 6 exec / 7 MCP、8,757 JSON bytes、53.425 秒；agy 6 exec / 8 MCP、21,232 JSON bytes、142.838 秒，业务与清理通过。这些样本只证明其开发二进制与 Skill，不能替代上面的安装失败或后续新版本验证。
+
+Windows 同源 [40815204943](https://github.com/caelis-labs/desktop-world/actions/runs/40815204943) 编译与 274+3 测试通过；此时尚不包含空关键词与复选框修正，保留为中间构建记录，不宣称最新 Windows GUI 或最终交付通过。
 
 ## macOS 安装字节与模型反馈
 
