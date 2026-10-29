@@ -1,6 +1,6 @@
 # 重写版产品矩阵
 
-日期：2026-10-29。首版[发布计划](first-rewrite-release-plan.md)的第一、二批已通过核心易用性门槛，正在制作和验收固定候选；逐项证据见[核心验收](release-core-acceptance.md)与[候选记录](rewrite-candidate-acceptance.md)。历史 #61–#64 报告只证明其记录的平台、字节和场景；旧 CUA SDK/worker/安装包不属于下一 release。
+日期：2026-10-29。首版[发布计划](first-rewrite-release-plan.md)的第一、二批已通过核心易用性门槛，macOS 固定候选与安装验收已完成，Windows 待用户独立实机验收；逐项证据见[核心验收](release-core-acceptance.md)与[候选记录](rewrite-candidate-acceptance.md)。历史 #61–#64 报告只证明其记录的平台、字节和场景；旧 CUA SDK/worker/安装包不属于下一 release。
 
 | 能力 / 工作流 | 当前实现与条件 | 证据 / 尚待完成 |
 | --- | --- | --- |
@@ -12,13 +12,13 @@
 | 常用输入 | focus、Unicode typeText、keypress、wheel-step scroll；左/右键及单/双击 | foreground 输入逐段复核焦点；失焦返回 focus_changed/unknown 并停止后续输入，已排队事件无法撤回；每次效果独立读回 |
 | 多 app 与多会话 | app state/refs 保留；MCP 会话独立；跨进程物理输入 lease | 串行仲裁共享系统键盘/鼠标；不宣称多个独立后台指针 |
 | 取消和未知效果 | 标准 MCP cancellation、配对释放、原回执、按需 owner 重建 | unknown 不重放；晚到/清理失败保留；强杀不能证明输入释放 |
-| Windows provider | 稳定应用身份、精确 HWND incarnation、UIA 筛选/分页/动作、GDI 可见无覆盖截图、SendInput、独立 worker | Windows x64 候选已完成原生链接、281 个库测试和 3 个 CLI 测试（d356f8e）；复选框角色与 Toggle 三态已补齐；DPI/焦点/取消与真实 GUI 验收仍由用户独立实机确认 |
+| Windows provider | 稳定应用身份、精确 HWND incarnation、UIA 筛选/分页/动作、GDI 可见无覆盖截图、SendInput、独立 worker | Windows x64 候选已完成原生链接、286 个库测试和 3 个 CLI 测试（50dbec3）；复选框角色与 Toggle 三态已补齐；DPI/焦点/取消与真实 GUI 验收仍由用户独立实机确认 |
 | Linux provider | 实验 X11/XRes 身份、窗口、XGetImage、XTest 输入；只使用当前可证明的键盘映射 | 不支持 Wayland/XWayland，不提供 AT-SPI 语义承诺；仅源码/类型证据，不承诺桌面支持或首版正式发行平台 |
 | 浏览器范围 | 真实浏览器窗口上的原生 AX 和基础像素路线 | DOM、profile、CDP/browser bridge 未接入 |
 | 输入后续组 | 拖拽、复杂菜单、应用启动/退出 | 后置批量能力；不扩张当前已广告方法的语义 |
 | 后台、锁屏与鼠标独立 | 架构扩展边界保留 | 尚未实现，不从部分后台 AX 动作推导整机能力 |
 | 脚本文件、远程传输 | source 原文，经标准 JSON 传输；当前仅 stdio | 文件便利入口和 HTTP 后置，不引入调用方路径耦合 |
-| macOS 基线 | 构建/链接最低 14.2；本机 native GUI 与模型验证 | 本机通过不代表所有系统或 x86_64 平台；最终安装字节/TCC 另验 |
-| 构建与发行 | rewrite-only、固定 CUA 0.38 原子源码适配，无全量上游编译 | 保留轻量源码/Core/原生纯控制 CI；签名、公证、独立安装包和公开 release 属于第三、四批 |
+| macOS 基线 | 构建/链接最低 14.2；本机 macOS 27.0.1 的固定签名/公证安装包完成六组原生和六个有效模型任务 | 本机既有权限环境通过不代表全新系统、所有旧系统或 x86_64 平台 |
+| 构建与发行 | rewrite-only、固定 CUA 0.38 原子源码适配，无全量上游编译 | 保留轻量源码/Core/原生纯控制 CI；固定 macOS/Windows 候选已生成，macOS 签名/公证和安装验收通过；Windows 实机与公开 release 待完成 |
 
-开发字节已完成真实模型易用性门槛；最终安装候选按独立证据继续验证。Windows 未经独立验收不标正式支持，Linux 不作支持承诺。详细来源保留在[适配说明](native-source-provenance.md)及[跨平台来源](native-source-provenance-cross-platform.md)。
+开发字节和 macOS 最终安装候选均已通过真实模型易用性门槛：Claude/agy 各 3 个有效任务；Claude 中位 5 exec / 6 MCP、约 52 秒，agy 中位 6 exec / 7 MCP、约 162 秒；元数据误判的原失败独立保留。Windows 未经独立验收不标正式支持，Linux 不作支持承诺。详细来源保留在[适配说明](native-source-provenance.md)及[跨平台来源](native-source-provenance-cross-platform.md)。

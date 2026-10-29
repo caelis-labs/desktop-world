@@ -7,15 +7,53 @@
 | 层级 | 当前状态 |
 | --- | --- |
 | 固定来源与候选脚本 | 导出 clean Git commit/tree，固定 Rust 1.98.0/lockfile；目标依赖 notices、平台格式、版本、归档完整性均有检查 |
-| macOS 候选 | `3ba108e` 已签名、公证；安装字节六组原生 GUI 通过；后续空查询参数及共用 Skill 修正正在验证 |
-| macOS 安装与 Agent | 完整清单、签名/公证和原生验收通过；最新首轮 Claude 因空关键词参数被拒绝未过门槛，序列停止，尚未计整体验收通过 |
-| Windows 原生构建 | `3ba108e` 原生编译、274 个库测试、3 个 CLI 测试及 C# 工具编译通过；后续复选框与参数修正须重新编译，旧包不作为最新交付 |
+| macOS 候选 | `50dbec3` 已签名、公证；146 文件安装清单复核和六组原生 GUI 通过 |
+| macOS 安装与 Agent | 同一安装包六组原生、Claude 3/3、agy 3/3 有效样本通过；另保留 1 次已解释的验收器误判失败 |
+| Windows 原生构建 | `50dbec3` 原生编译、286 个库测试、3 个 CLI 测试及 C# 验收工具编译通过；当前 ZIP 已完整复核 |
 | Windows 实机 | 用户独立安排，尚未通过；候选自带标准 MCP 双实例 smoke 与手工矩阵 |
 | 公开 release/tag | 未创建 |
 
-## Windows 独立验收交付
+## 固定候选与安装验收：50dbec3
 
-成功构建：[40796800484](https://github.com/caelis-labs/desktop-world/actions/runs/40796800484)，源提交 `a07d1eb48ca391d3fe20a37e6beda4f9a584b847`。下载该 run 的 `dtw-windows-candidate-a07d1eb48ca391d3fe20a37e6beda4f9a584b847` artifact，再解开里面的候选 ZIP；不使用前两次失败 run 的文件。
+两个目标的源码均为 `50dbec36dbdcf9f85bbe36f2a092c95fac8fdb84`，冻结 Skill SHA-256 `47131aca267a20acb2de76d46b7568da0035b1caa9920d192264378d3fffb8b6`。后续验收记录更新不改变候选内的源码、运行时或 Skill；本候选尚未公开发布。
+
+- macOS：[构建 40821230632](https://github.com/caelis-labs/desktop-world/actions/runs/40821230632)，[候选 artifact](https://github.com/caelis-labs/desktop-world/actions/runs/40821230632/artifacts/12874787735)。277 个库测试、4 个 CLI 测试、3 个 stdio 测试通过。ZIP SHA-256 `cad422a0020e883ef7cef15bb8c6180cf6da9207c81691927fa78b961a311adb`；二进制 `2ef33daf84aedceea71b69a4e10712f0b291282ae0df81473c8939937ea7bc6b`；BUILD `12ec84cfe92781c80a557f4594cefea8ba5ed3d1fddfc12af5c0dda6aed97453`。
+- 签名为 Developer ID、Team `64KZ67PM5J`、标识 `dev.caelis.dtw`；公证 Accepted，原提交 ID `076ee1aa-025b-4542-9ea3-29415fb6e9ef`。解包后 strict 签名有效；首次 `=notarized` 检查失败，`spctl` 在线评估后同一字节通过该要求。原始两份记录都保留。`spctl` 自身仍返回“有效代码但不是 app”，不把它写为 `.app` Gatekeeper 或全新系统安装通过；未重签、未改包。
+- 安装目录 `/private/tmp/DTW 安装验收 0.2.0 参数归一版/desktop-world-0.2.0-aarch64-apple-darwin`；146 文件的完整清单与哈希通过。本机 macOS 27.0.1，最低编译目标 14.2 不代表旧系统实测。GUI 期间仅以进程绑定的 `caffeinate -di` 防止空闲熄屏，没有改变锁屏设置。
+- Windows：[构建 40821230287](https://github.com/caelis-labs/desktop-world/actions/runs/40821230287)，[候选 artifact](https://github.com/caelis-labs/desktop-world/actions/runs/40821230287/artifacts/12874553873)。286 个库测试、3 个 CLI 测试及验收 C# 编译通过；完整 ZIP 清单与哈希已下载复核。ZIP SHA-256 `bd99733bf50b9d7bb021add97f21da6373ade2af8b6536c87d37f5faea457e41`；二进制 `f98c953c8d54bfbd302dbfd854855231b3550006abf283323ee04ea775e09a29`；BUILD `27bc252dbbf0d938f785da4fc1d85e6c11072b05c1af714c2208f1b19e5cc07b`。该 Windows 候选未签名，真实 GUI 待用户独立验收。
+
+六组 macOS 安装字节原生验收全部通过：`/private/tmp/dtw-installed-host-arguments-{native-all,native-focus-intercept,native-eof,native-parent-exit,multi-instance,web-discovery}-20261029/evidence.json`。覆盖常用输入与释放、EOF/父退出、多实例精确路由和浏览器发现；窗口截图已视觉核对。
+
+受控失焦操作 `execution_e05b6d2a-6d6a-4218-802a-88b1ba4838d9` 在输入 18 字符后返回 `focus_changed/unknown`，提示刷新并确认部分效果，保存后缀未执行；另一窗口保留原 seed，两边保存数 0。此样本没有新增误投字符，但前一签名样本曾有一个已排队的 `q` 落到另一窗口。因此这里只证明检测与停止后续输入，不承诺撤回已投递事件、零误投或 OS 级原子性。同一窗口中的任意业务内容变化也不具备完整版本锁。
+
+Windows 用户应使用上述当前 artifact 中的 `desktop-world-0.2.0-x86_64-pc-windows-msvc.zip`。包内 `acceptance/windows/README.md`、`smoke.ps1` 和手工矩阵通过标准 MCP 验证两个同应用实例、文本/快捷键、截图、释放和可选指针组。Rust 1.98.0、MSVC 19.51.36260、Windows SDK 10.0.26100.0；静态 CRT 和原生导入检查通过。CI 编译不替代 Windows 桌面、DPI、权限、并发和取消验收。
+
+开发预检 `/private/tmp/dtw-host-arguments-{claude,agy}-20261029-16/evidence.json` 均通过：Claude 5 exec / 6 MCP、8,934 JSON bytes、57.976 秒；agy 7 exec / 8 MCP、10,480 JSON bytes、175.273 秒。开发二进制 `dbff5998708938cbe18938934e6066f5a996eb64ba29f78a2c8e15e6525df7bd` 与冻结 Skill 组合仅作预检，不计入安装六轮。
+
+### 安装包的六个有效 Agent 样本
+
+场景是自有的 240 行 Chrome 工作台和真实 TextEdit：只编辑两条指定记录、每条恰好保存一次、其余 238 条不变，再填写/保存/读回报告。业务动作仅走标准 DTW MCP，未使用 DOM、HTTP 或文件编辑代做。六个有效样本均通过完整业务、易用性和清理检查；没有 DTW errors、unknown、未恢复读取或元数据查找失败。末尾再次核对整个 146 文件安装清单，字节未变。该证据不等于生产账号、冷启动或全新系统验收。
+
+| 样本 | Agent 工具总次数 | exec / MCP | JSON bytes | 图片 bytes | Agent 总耗时（秒） |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| claude-01 | 8 | 5 / 6 | 8,324 | 65,555 | 51.924 |
+| agy-01 | 10 | 6 / 7 | 13,133 | 65,245 | 162.299 |
+| claude-02 | 8 | 5 / 6 | 7,860 | 65,744 | 51.219 |
+| agy-02b | 12 | 6 / 7 | 29,740 | 65,114 | 152.022 |
+| claude-03 | 8 | 5 / 6 | 9,426 | 65,316 | 59.279 |
+| agy-03 | 12 | 7 / 8 | 12,815 | 65,010 | 209.306 |
+
+Claude 三轮中位数为 5 exec / 6 MCP、8 次 Agent 工具、8,324 JSON bytes、51.924 秒；agy 为 6 exec / 7 MCP、12 次 Agent 工具、13,133 JSON bytes、162.299 秒。JSON 按紧凑 DTW payload 计一次、图片另计，不代表完整模型 token 成本；耗时包含模型和客户端等待。Claude 显式指定 codex/gpt-6.1-terra，agy 沿用本机客户端配置；这些观测不能作为同模型下的公平速度排名，也不是 SLA。
+
+路径为 `/private/tmp/dtw-installed-host-arguments-<样本>-20261029/evidence.json`，汇总 `/private/tmp/dtw-final-installed-summary.json`。前三轮是在相同候选上取得的通过记录，之后又以最终验收器复核路由和计数；原 agy-02 的元数据误判失败保留在下文，未更名或改判，后续三轮均为新任务。最终验收器的改动与后续文档提交没有改变 `50dbec3` 的运行时、Skill 或打包代码。GUI 已结束，测试资源已清理，桌面已释放。
+
+安装序列的原第四轮 `/private/tmp/dtw-installed-host-arguments-agy-02-20261029/evidence.json` 保持失败：6 exec / 7 MCP、11,964 JSON bytes、226.667 秒，DTW issues 为空。原始 Agent 记录显示它先读本次插件根目录 `SKILL.md`，明确返回 `file does not exist` 且无数据，随后读取实际 `skills/<name>/SKILL.md` 成功；验收器错误地把这个普通元数据查找失败归为读取任务数据。它未通过文件读取业务数据，业务操作均走 DTW。原验收因此未进入初始业务断言，不能将原记录直接改为通过。
+
+保留的完整业务快照经独立核对符合两次保存和报告内容；自有 TextEdit 报告又通过新的完整 GUI 读回与磁盘比对后单次关闭，另存 `reconciliation.json`，原失败文件未改写。验收器仅针对本次精确插件根路径、明确不存在且无输出的元数据查找修正分类，并独立记录该额外步骤；仍要求实际正确 Skill 被加载。任务文件、成功读取别名、其他错误或任何返回数据都不能由此放行；DTW 错误、unknown、业务和调用阈值不变。修正仅在外部验收器，未改安装包或 Skill；余下三轮使用新的自有任务样本。验收器基线为 `c46667fdbc75beea5bf2d378a77ebf0545286175`，探针 SHA-256 `14c48a641ab497e6e9f5a3c5f4249e0314ae08afdda7923338a6abacb0035c01`；47 项纯测试及最终 8 项路由复核通过。前三轮原始调用经新规则复核，其已有计数、字节和通过结论不变；原第四轮另存 `route-review.json` 解释 1 次元数据查找失败，不重判原业务/清理状态。
+
+## 历史 Windows 交付（已由上方候选替代）
+
+成功构建：[40796800484](https://github.com/caelis-labs/desktop-world/actions/runs/40796800484)，源提交 `a07d1eb48ca391d3fe20a37e6beda4f9a584b847`。当时的 artifact 为 `dtw-windows-candidate-a07d1eb48ca391d3fe20a37e6beda4f9a584b847`；该包和更早失败包仅保留历史记录，当前交付使用上方 `50dbec3`。
 
 - ZIP：`desktop-world-0.2.0-x86_64-pc-windows-msvc.zip`，SHA-256 `c1471679ca9e70b29413148eec9eb0decca0b4dba7400be12188b0806ead55b1`。
 - `bin/dtw.exe` SHA-256：`940d21d60cf750c04f41fb5e118952261269ef8bcf21eccf6db742907805cef5`。
@@ -23,7 +61,7 @@
 - 包内 `acceptance/windows/README.md` 和 `smoke.ps1` 用普通 stdio MCP 操作两个同可执行文件实例，检查分别编辑/保存、Unicode/快捷键、窗口截图和释放状态；另有可选指针组。仅需 Windows PowerShell 5.1/.NET，不需 Rust/CUA/VS。
 - 手工矩阵仍包含真实浏览器/Agent、DPI、并发会话、取消/超时、进程退出重启、EOF/父退出、权限与安全桌面，以及截图视觉核验。CI 的 C# 编译不计 GUI smoke 通过。
 
-## 最近的固定候选复核
+## 前一轮固定候选复核
 
 候选 [40813820899](https://github.com/caelis-labs/desktop-world/actions/runs/40813820899)，源 `3ba108ef98dd97d467b2cb89c72b17b0cb1da4c3`，268 个库测试、4 个 CLI 测试、3 个 macOS stdio 测试通过。Developer ID 签名与公证 Accepted，原公证 ID `8bfcc230-0b81-4455-9d0a-d5bc0ee55506`。
 
