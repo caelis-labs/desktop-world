@@ -27,6 +27,8 @@ Window inventory is complete only within its declared scope. `association_comple
 
 `app.capture({window_ref})` returns an image and a pixel observation ref. Coordinates refer to that image, not desktop or CSS coordinates.
 
+Use the returned `image.width` and `image.height` for both axes, even when a viewer displays a resized image. If visual grounding provides 0–1000 normalized coordinates, convert both: `x = nx * image.width / 1000`, `y = ny * image.height / 1000`. Do not mix pixel coordinates on one axis with normalized coordinates on the other.
+
 `app.observe` supports these exclusive scopes, subject to `supported_observe_scopes`:
 
 - Window: `{window_ref, role?, text?, limit?}`.

@@ -38,6 +38,8 @@ An empty page can still have `next`. Continue with `{cursor: next}` when further
 
 If a broad query is incomplete or too costly, use a fresh capture to choose a narrower region, or obtain a container and query its subtree. Reacquire the target after scrolling or any action. A screenshot-backed coordinate action remains a valid route when semantics are unsupported or do not expose the necessary control; use current image coordinates and verify the result.
 
+Some applications expose only window decorations while inactive. If a capture shows controls but semantic discovery returns only the window shell or `content_unproven`, try `focus` followed by `observe` in the same script when foreground delivery is permitted. This can reveal semantic controls without guessing coordinates. If they remain unavailable, use a fresh capture and preserve the partial coverage.
+
 Return a compact decision record: relevant candidates or values, unresolved ambiguity, coverage reasons, and an image only when it helps the next decision. Keep traversal details and unrelated text out of the model response.
 
 ## Menus and focus-dependent interactions
