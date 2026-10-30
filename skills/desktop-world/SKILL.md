@@ -63,7 +63,7 @@ return {elements, coverage: page.coverage};
 
 - `press({window_ref,observation_ref,element_ref})` requires a current semantic element advertising `press`.
 - `setValue({window_ref,observation_ref,element_ref,value})` requires advertised `setValue`. It replaces the native value and may not emit ordinary typing events.
-- `typeText({window_ref,text})` types literal Unicode into the currently selected editing control. It does not locate a field or establish which control has editing focus.
+- `typeText({window_ref,text})` sends Unicode keyboard input to the currently selected editing control. Application formatting can change the resulting text. It does not locate a field or establish which control has editing focus.
 - `keypress({window_ref,keys:[...]})` presses and releases one chord. `META` is Command on macOS and the Windows key on Windows; modifier meanings are platform dependent.
 - `click({window_ref,observation_ref,x,y,button?,count?})` uses a current capture's pixels. Buttons are left/right and counts are 1/2.
 - `scroll({window_ref,delta_y,delta_x?})` uses wheel steps, positive down/right, at the window center. Supported platforms also accept a current capture's `observation_ref,x,y` or semantic `observation_ref,element_ref` as an anchor.

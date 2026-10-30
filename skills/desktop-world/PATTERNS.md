@@ -18,7 +18,7 @@ Confirm once after checking the selected path/name and the enabled control. A cl
 
 Discover a form's controls with role/text filters and, when useful, a subtree or region. Select controls by the observed label, role, enabled state, and advertised action together. A text match can be a label rather than an editable field. If several candidates remain, inspect their container or geometry instead of choosing the first one.
 
-`setValue` replaces a native value without promising ordinary typing/change events. `typeText` sends literal text to the selected editing control, without locating that control. Choose the method supported by the current field, and verify the effect that matters to the application. Do not silently try both methods after an uncertain write.
+`setValue` replaces a native value without promising ordinary typing/change events. `typeText` sends Unicode keyboard input to the selected editing control, without locating that control. On macOS, newline characters generate Return (CRLF once) and tabs generate Tab; rich editors may continue lists, indent text, or move focus. Verify the resulting content, including any automatic formatting. Choose the method supported by the current field, and verify the effect that matters to the application. Do not silently try both methods after an uncertain write.
 
 A semantic press or shortcut can start an asynchronous UI transition. Delivery does not prove that the new editing control is ready or focused. Before dependent text input, observe or capture the relevant control and establish its editing focus. A bounded readiness check may repeat reads; it must not repeatedly press the control or type the text as a waiting strategy.
 
