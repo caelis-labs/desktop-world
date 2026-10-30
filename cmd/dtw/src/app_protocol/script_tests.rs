@@ -142,6 +142,85 @@ state.invalid=true;return 'pretend success';
 }
 
 #[test]
+fn inline_focus_cleanup_failure_preserves_action_and_stops_before_another_input() {
+    for mut provider in [
+        ActionOutcome {
+            delivery: None,
+            dispatch: DispatchState::Dispatched,
+            evidence: EffectEvidence::Unverified,
+            error: None,
+        },
+        ActionOutcome::unknown(Error::NativeFailure {
+            code: "native_keypress_failed".into(),
+            message: "original uncertain keypress".into(),
+        }),
+    ] {
+        let (owner, backend) = coordinator();
+        let prior = run_script(&owner, "prior", "state.kept=7;return 'prior result';");
+        provider.delivery = Some(InputDelivery {
+            route: Some(InputRoute::Foreground),
+            reason: Some("menu_key_equivalent".into()),
+            foreground_borrowed: true,
+            focus_return: Some(FocusReturn::Unconfirmed),
+        });
+        {
+            let mut model = backend.0.model.lock().unwrap();
+            model.outcome = provider.clone();
+            let cleanup = Error::NativeFailure {
+                code: "deadline_exceeded".into(),
+                message: "original focus return deadline".into(),
+            };
+            model.cleanup_after_action = Some(cleanup.clone());
+            model.finish_error = Some(cleanup);
+            model.shutdown_error = Some(Error::BackendFailed("later close failure".into()));
+        }
+        let completed = run_script(
+            &owner,
+            "inline-focus-cleanup",
+            r#"
+const window_ref=(await app.windows()).windows[0].window_ref;
+state.kept=9;
+try { await app.keypress({window_ref,keys:['META','SHIFT','S']}); } catch (_) {}
+await app.keypress({window_ref,keys:['ENTER']});
+return 'pretend success';
+"#,
+        );
+        assert!(completed.is_error, "{}", completed.data);
+        assert_eq!(
+            completed.data["shutdown_error"]["code"],
+            "deadline_exceeded"
+        );
+        assert_eq!(
+            completed.data["shutdown_error"]["message"],
+            "original focus return deadline"
+        );
+        assert_eq!(completed.data["script"]["focus_return"], "unconfirmed");
+        assert_eq!(completed.data["script"]["state_committed"], false);
+        assert_eq!(
+            *owner.state.lock().unwrap().script_state.lock().unwrap(),
+            json!({"kept":7})
+        );
+        assert_eq!(operation_list(&completed), ["windows", "keypress"]);
+        assert_eq!(
+            steps(&completed)[1]["receipt"],
+            wire::receipt(&ActionReceipt {
+                outcome: provider.clone(),
+                provider_outcome: Some(provider),
+                interruption: None,
+            })
+        );
+        assert_eq!(backend.0.actions.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.0.windows.load(Ordering::SeqCst), 1);
+        assert_code(
+            &start(&owner, submit(&owner, "blocked", None, script("return 1;"))),
+            "closed",
+        );
+        assert_eq!(result(&owner, "inline-focus-cleanup").data, completed.data);
+        assert_eq!(result(&owner, "prior").data, prior.data);
+    }
+}
+
+#[test]
 fn atomic_cleanup_failure_is_separate_from_a_successful_native_read() {
     let (owner, backend) = coordinator();
     let window = windows(&owner, "windows").remove(0);

@@ -138,7 +138,7 @@ fn post_key(pid: i32, key_code: u16, key_down: bool, flags: CGEventFlags) -> any
     // state cannot leak into a targeted key press.
     event.set_flags(flags);
     post_keyboard_event(pid, &event);
-    super::control::check()
+    super::control::check_completed()
 }
 
 fn modifier_flags(modifiers: &[&str]) -> CGEventFlags {

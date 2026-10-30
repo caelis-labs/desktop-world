@@ -281,7 +281,7 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
             }
             _ => unreachable!(),
         }
-        control::check()
+        control::check_completed()
     })();
     scope.cleanup();
     session.finish(result, false)

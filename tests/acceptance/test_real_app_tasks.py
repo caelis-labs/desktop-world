@@ -1,6 +1,8 @@
 """Business oracles and failure accounting; no native apps or Agents launched."""
 import copy
 import json
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -17,6 +19,17 @@ class TaskEvidenceTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+
+    def test_native_stderr_capture_preserves_stdio_and_exit_status(self):
+        child = self.root/'fake native.py'
+        child.write_text("import sys\nsys.stdout.write(sys.stdin.read())\n"
+                         "sys.stderr.write('native diagnostic')\nsys.exit(7)\n")
+        command = tasks.recorded_mcp_command(self.root, sys.executable)
+        command[-1] = str(child)
+        payload = '{"source":"return \\\"quoted\\\";"}\n'
+        result = subprocess.run(command, input=payload, text=True, capture_output=True)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (7, payload, ''))
+        self.assertEqual((self.root/'native-stderr.log').read_text(), 'native diagnostic')
 
     def write_docx(self, path, paragraphs):
         with zipfile.ZipFile(path, 'w') as archive:

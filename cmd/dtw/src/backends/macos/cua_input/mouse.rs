@@ -178,7 +178,12 @@ pub fn click_at_xy_chromium(
     };
 
     for step in route_plan {
-        super::control::check()?;
+        // New pointer input still needs the full target proof. A paired up is
+        // admitted by the pending down and original owner in post_event_via;
+        // requiring the old window here would strand a modal-opening down.
+        if step.kind != ChromiumClickEventKind::Up {
+            super::control::check()?;
+        }
         let (event_type, error_label) = match step.kind {
             ChromiumClickEventKind::Move => (CGEventType::MouseMoved, "mouseMoved"),
             ChromiumClickEventKind::Down if step.phase == 1 => {

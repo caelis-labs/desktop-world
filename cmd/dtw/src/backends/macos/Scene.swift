@@ -124,7 +124,7 @@ private func capture(_ request: [String:Any], deadline: TimeInterval? = nil,
     let began = ProcessInfo.processInfo.systemUptime
     func trace(_ phase: String) {
         guard tracing else { return }
-        let message = "dtw_scene capture pid=\(pid) window=\(id) elapsed=\(ProcessInfo.processInfo.systemUptime-began) phase=\(phase)\n"
+        let message = "dtw_scene capture worker_pid=\(getpid()) main_thread=\(Thread.isMainThread) pid=\(pid) window=\(id) elapsed=\(ProcessInfo.processInfo.systemUptime-began) phase=\(phase)\n"
         FileHandle.standardError.write(Data(message.utf8))
     }
     trace("begin")
@@ -183,8 +183,10 @@ private func capture(_ request: [String:Any], deadline: TimeInterval? = nil,
                           "bounds":[window.frame.minX,window.frame.minY,window.frame.width,window.frame.height]]
             semaphore.signal()
         }
+        trace("image_request_returned")
     }
     let until = min(deadline ?? .greatestFiniteMagnitude, ProcessInfo.processInfo.systemUptime + 12)
+    trace("wait_semaphore")
     guard dtwWaitForScene(until: until, stopping: stopping, wait: {
         semaphore.wait(timeout: .now() + $0) == .success
     }) else {
@@ -506,6 +508,7 @@ public func dtwSceneCall(_ raw: UnsafePointer<CChar>) -> UnsafeMutablePointer<CC
                 if #available(macOS 14.2, *) { result = capture(request) }
                 else { result = fail("unsupported_platform","SCK screenshots require macOS 14.2+") }
             case "click": result = click(request)
+            case "prove_associated_surface": result = dtwReadAssociatedSurfaceProof(request)
             default: result = fail("invalid_operation","Unknown native extension operation")
             }
         } catch { result = fail("invalid_request",String(describing:error)) }

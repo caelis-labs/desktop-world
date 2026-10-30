@@ -8,11 +8,15 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 #[path = "../../scene_lease.rs"]
-mod scene_lease;
+pub(super) mod scene_lease;
 unsafe extern "C" {
     fn dtw_native_call(request: *const std::ffi::c_char) -> *mut std::ffi::c_char;
     fn dtw_native_free(reply: *mut std::ffi::c_char);
     fn dtw_set_pointer_presenter(callback: Option<extern "C" fn(f64, f64, i32)>);
+    fn dtw_set_associated_surface_prover(
+        callback: Option<extern "C" fn(*const std::ffi::c_char) -> *mut std::ffi::c_char>,
+        free: Option<extern "C" fn(*mut std::ffi::c_char)>,
+    );
     fn dtw_scene_call(request: *const std::ffi::c_char) -> *mut std::ffi::c_char;
     fn dtw_scene_free(reply: *mut std::ffi::c_char);
     fn dtw_input_quiesce(timeout_milliseconds: u32) -> bool;
@@ -22,6 +26,10 @@ unsafe extern "C" {
 
 static TERMINATING: AtomicBool = AtomicBool::new(false);
 static SHUTDOWN_STARTED: AtomicBool = AtomicBool::new(false);
+
+pub(super) fn stopping() -> bool {
+    TERMINATING.load(Ordering::Relaxed)
+}
 
 extern "C" fn request_termination(_: libc::c_int) {
     // A signal handler only touches a lock-free atomic. No Swift, locks, IO,
@@ -106,7 +114,7 @@ fn shutdown_worker() -> ! {
     });
 }
 
-fn native(request: &Value, scene: bool) -> Value {
+pub(super) fn native(request: &Value, scene: bool) -> Value {
     let input = CString::new(request.to_string()).expect("JSON has no literal NUL");
     unsafe {
         let ptr = if scene {
@@ -140,7 +148,7 @@ fn now_ms() -> u64 {
         .unwrap_or_default()
         .as_millis() as u64
 }
-fn remaining(request: &Value) -> Duration {
+pub(super) fn remaining(request: &Value) -> Duration {
     Duration::from_millis(
         request["deadline_unix_ms"]
             .as_u64()
@@ -199,8 +207,8 @@ extern "C" fn validate_background(context: *mut c_void, phase: i32) -> i32 {
         return -1;
     }
     if phase == 2 {
-        // Only owned key-up cleanup uses this phase. A closing window must not
-        // strand keys in its still-running app; a reused PID is never accepted.
+        // Only releases paired with an admitted down use this phase. A closing
+        // window must not strand input in its app; a reused PID is never accepted.
         let reply = native(
             &json!({"operation":"validate_input_owner", "app":target.target["app"],
             "deadline_unix_ms":now_ms()+150}),
@@ -220,7 +228,7 @@ extern "C" fn validate_background(context: *mut c_void, phase: i32) -> i32 {
     if !matches!(phase, 0 | 1) {
         return -1;
     }
-    // Mouse releases and focus restoration retain the original window proof.
+    // Window-key restoration retains the original window proof.
     // Cleanup ignores normal cancellation, focus and geometry changes.
     let check = json!({"operation":if phase == 0 {"validate_background"} else {"validate"},
         "target":target.target,"keyboard":target.keyboard,"step":phase == 0,
@@ -240,12 +248,12 @@ fn background_validation(
     phase: i32,
 ) -> Result<(), Value> {
     validate_reply(reply, &target.target)?;
-    if phase == 0 && modal_keyboard_requires_foreground(reply, target.keyboard)? {
+    if phase == 0 && modal_input_requires_foreground(reply)? {
         // The initial side-effect-free preflight has already selected a route.
         // A later modal transition stops this sequence; it cannot replay input
         // through the foreground route. Paired cleanup uses phases 1/2.
         return Err(json!({"error":"background_route_changed",
-            "message":"The keyboard target became modal during background input; refresh before new work"}));
+            "message":"The target became modal during background input; refresh before new work"}));
     }
     if phase == 0 && !target.keyboard && reply["bounds"] != target.bounds {
         return Err(
@@ -301,12 +309,10 @@ fn record_foreground_cleanup(result: &mut Value, cleanup: Value) {
         cleanup["focus"].clone()
     };
     if cleanup.get("error").is_some() {
-        result["cleanup_error"] = cleanup.clone();
-        if result.get("error").is_none() {
-            result["error"] = cleanup["error"].clone();
-            result["message"] = cleanup["message"].clone();
-            result["dispatch"] = json!("unknown");
-        }
+        // Returning focus is separate from the already-produced input result.
+        // The provider's cleanup channel closes execution without erasing a
+        // known dispatch or replacing the original action failure.
+        result["cleanup_error"] = cleanup;
     }
 }
 
@@ -352,13 +358,12 @@ fn background_result(mut result: Value) -> BackgroundAttempt {
     BackgroundAttempt::Completed(result)
 }
 
-fn modal_keyboard_requires_foreground(validation: &Value, keyboard: bool) -> Result<bool, Value> {
-    if !keyboard {
-        return Ok(false);
-    }
-    validation["background_keyboard_requires_foreground"].as_bool().ok_or_else(|| {
-        json!({"error":"invalid_response","message":"Missing native modal keyboard preflight"})
-    })
+fn modal_input_requires_foreground(validation: &Value) -> Result<bool, Value> {
+    validation["background_requires_foreground"]
+        .as_bool()
+        .ok_or_else(
+            || json!({"error":"invalid_response","message":"Missing native modal input preflight"}),
+        )
 }
 
 fn background(request: &mut Value) -> BackgroundAttempt {
@@ -410,10 +415,8 @@ fn background(request: &mut Value) -> BackgroundAttempt {
         // CUA cannot direct input to a different process on this app's behalf.
         return BackgroundAttempt::Declined("associated_surface_requires_foreground".into());
     }
-    match modal_keyboard_requires_foreground(&before, keyboard) {
-        Ok(true) => {
-            return BackgroundAttempt::Declined("modal_keyboard_requires_foreground".into())
-        }
+    match modal_input_requires_foreground(&before) {
+        Ok(true) => return BackgroundAttempt::Declined("modal_input_requires_foreground".into()),
         Ok(false) => (),
         Err(error) => return BackgroundAttempt::Completed(rejected(error, &op)),
     }
@@ -456,12 +459,30 @@ fn background(request: &mut Value) -> BackgroundAttempt {
     background_result(result)
 }
 
-fn dispatch(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value {
+fn dispatch(request: Value, leased: &mut bool, scene_worker: bool) -> Value {
+    let proofs = super::associated_proof::Scope::new(scene_worker && *leased, remaining(&request));
+    let mut result = dispatch_request(request, leased, scene_worker);
+    proofs.finish(&mut result);
+    result
+}
+
+fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value {
     let _anchor = super::scroll_guard::Scope::new(&request, remaining(&request), || {
         TERMINATING.load(Ordering::Relaxed)
     });
     let op = request["operation"].as_str().unwrap_or("").to_owned();
     let op = op.as_str();
+    if op == "prove_associated_surface" {
+        if !scene_worker {
+            return json!({"error":"invalid_request","message":"Association pixels require a short-lived Scene owner"});
+        }
+        if let Err(error) = admit_scene(&request, leased) {
+            return error;
+        }
+        // This private read uses exact request identity and geometry directly;
+        // it never inventories windows or recursively starts another helper.
+        return native(&request, true);
+    }
     let background_only = match request["input_policy"].as_str() {
         Some("background_only") => true,
         None | Some("auto") => false,
@@ -570,6 +591,12 @@ fn dispatch(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value 
     let physical = matches!(op, "focus" | "type_text" | "keypress" | "scroll" | "click")
         || (op == "release_focus" && focus_owner.is_some());
     if physical && !known_foreground {
+        // A background preflight may have inspected an associated surface in
+        // its proof child. Reap that Scene owner before waiting for exclusive
+        // coordination: a peer can hold coordination while waiting for Scene.
+        if let Err(error) = super::associated_proof::flush() {
+            return rejected(error, op);
+        }
         // background() declined before preparation/input. Never upgrade a shared
         // lease in place or wait for coordination while holding an instance lock:
         // a peer foreground transaction could be waiting for that same instance.
@@ -643,6 +670,7 @@ fn dispatch(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value 
             super::overlay::PointerRoute::Foreground,
         )
     });
+    let call_deadline = request["deadline_unix_ms"].as_u64().unwrap_or(0);
     let mut result = dispatch_owned(request, leased, scene_worker);
     if physical && op != "release_focus" {
         result["delivery"] =
@@ -657,7 +685,8 @@ fn dispatch(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value 
     }
     if physical && op != "focus" && op != "release_focus" {
         let cleanup = native(
-            &json!({"operation":"release_focus","deadline_unix_ms":now_ms()+300}),
+            &json!({"operation":"release_focus",
+                "deadline_unix_ms":super::focus_return_deadline_ms(now_ms(), Some(call_deadline))}),
             false,
         );
         record_foreground_cleanup(&mut result, cleanup);
@@ -688,30 +717,8 @@ fn dispatch_owned(mut request: Value, leased: &mut bool, scene_worker: bool) -> 
     if let Err(error) = validate_reply(&before, &request["target"]) {
         return rejected(error, &op);
     }
-    if !*leased {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        let left = request["deadline_unix_ms"]
-            .as_u64()
-            .unwrap_or(0)
-            .saturating_sub(now as u64);
-        if left == 0 {
-            return rejected(
-                json!({"error":"deadline_exceeded","message":"Scene operation deadline expired before admission"}),
-                &op,
-            );
-        }
-        match scene_lease::lock_scene(Duration::from_millis(left)) {
-            Ok(lease) => {
-                std::mem::forget(lease);
-                *leased = true;
-            }
-            Err(message) => {
-                return rejected(json!({"error":"native_scene_busy","message":message}), &op)
-            }
-        }
+    if let Err(error) = admit_scene(&request, leased) {
+        return rejected(error, &op);
     }
     request["pid"] = before["surface_owner"]["pid"].clone();
     request["surface_owner"] = before["surface_owner"].clone();
@@ -754,6 +761,37 @@ fn dispatch_owned(mut request: Value, leased: &mut bool, scene_worker: bool) -> 
     result["target"] = after["target"].clone();
     result
 }
+
+fn admit_scene(request: &Value, leased: &mut bool) -> Result<(), Value> {
+    if !*leased {
+        // Bootstrap/foreground preparation can prove an association before this
+        // process has an SCK client. Its child must exit before taking this lock.
+        super::associated_proof::flush()?;
+        if stopping() {
+            return Err(json!({"error":"native_stopping","message":"Scene admission is closed"}));
+        }
+        let left = remaining(request);
+        if left.is_zero() {
+            return Err(
+                json!({"error":"deadline_exceeded","message":"Scene operation deadline expired before admission"}),
+            );
+        }
+        let lease = scene_lease::lock_scene(left)
+            .map_err(|message| json!({"error":"native_scene_busy","message":message}))?;
+        // File ownership deliberately lasts until process exit/SCK teardown,
+        // not merely until the asynchronous frame callback returns.
+        std::mem::forget(lease);
+        *leased = true;
+    }
+    if stopping() || remaining(request).is_zero() {
+        return Err(
+            json!({"error":if stopping() {"native_stopping"} else {"deadline_exceeded"},
+            "message":"Scene admission ended before proof or input"}),
+        );
+    }
+    super::associated_proof::use_local();
+    Ok(())
+}
 fn rejected(mut result: Value, operation: &str) -> Value {
     if input_operation(operation) {
         result["dispatch"] = json!("not_dispatched");
@@ -792,6 +830,23 @@ pub(super) fn validate_reply(reply: &Value, target: &Value) -> Result<(), Value>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn association_pixels_require_scene_role_and_live_admission() {
+        let mut leased = false;
+        let request =
+            json!({"operation":"prove_associated_surface", "deadline_unix_ms":now_ms()+1000});
+        let result = dispatch(request, &mut leased, false);
+        assert_eq!(result["error"], "invalid_request");
+        assert!(!leased);
+        let result = dispatch(
+            json!({"operation":"prove_associated_surface", "deadline_unix_ms":0}),
+            &mut leased,
+            true,
+        );
+        assert_eq!(result["error"], "deadline_exceeded");
+        assert!(!leased);
+    }
 
     #[test]
     fn click_never_bypasses_focus_change_or_unknown_effect() {
@@ -865,6 +920,38 @@ mod tests {
     }
 
     #[test]
+    fn foreground_cleanup_failure_preserves_the_original_action_receipt() {
+        let cleanup = json!({"error":"deadline_exceeded","message":"Return deadline elapsed"});
+        for mut result in [
+            json!({"dispatch":"dispatched","evidence":"unverified"}),
+            json!({"dispatch":"unknown","evidence":"unverified",
+                "error":"input_failed","message":"Original uncertain input"}),
+            json!({"dispatch":"not_dispatched","evidence":"unverified",
+                "error":"focus_changed","message":"Original admission rejection"}),
+        ] {
+            result["delivery"] = foreground_delivery(&result, "keypress", None, true);
+            let original = result.clone();
+            let original_outcome = super::super::action_reply(&original);
+            record_foreground_cleanup(&mut result, cleanup.clone());
+
+            assert_eq!(result["dispatch"], original["dispatch"]);
+            assert_eq!(result.get("error"), original.get("error"));
+            assert_eq!(result.get("message"), original.get("message"));
+            assert_eq!(result["cleanup_error"], cleanup);
+            assert_eq!(result["delivery"]["focus_return"], "unconfirmed");
+            let outcome = super::super::action_reply(&result);
+            assert_eq!(outcome.dispatch, original_outcome.dispatch);
+            assert_eq!(outcome.error, original_outcome.error);
+            assert_eq!(outcome.evidence, original_outcome.evidence);
+            assert!(matches!(
+                super::super::native_cleanup_error(&result),
+                Some(crate::computer::Error::NativeFailure { code, message })
+                    if code == "deadline_exceeded" && message == "Return deadline elapsed"
+            ));
+        }
+    }
+
+    #[test]
     fn strict_focus_rejects_before_any_native_target_read_or_preparation() {
         // Deliberately no native target: this must not call AX, take a lease,
         // prepare foreground, or dispatch an event even without GUI permissions.
@@ -882,36 +969,30 @@ mod tests {
     }
 
     #[test]
-    fn modal_keyboard_preflight_is_typed_and_does_not_disable_pointer_delivery() {
-        let modal = json!({"background_keyboard_requires_foreground":true});
-        assert_eq!(modal_keyboard_requires_foreground(&modal, true), Ok(true));
-        assert_eq!(modal_keyboard_requires_foreground(&modal, false), Ok(false));
+    fn modal_input_preflight_is_typed_and_strict_policy_never_borrows_foreground() {
+        let modal = json!({"background_requires_foreground":true});
+        assert_eq!(modal_input_requires_foreground(&modal), Ok(true));
         assert_eq!(
-            modal_keyboard_requires_foreground(
-                &json!({"background_keyboard_requires_foreground":false}),
-                true
-            ),
+            modal_input_requires_foreground(&json!({"background_requires_foreground":false})),
             Ok(false)
         );
         for malformed in [
             json!({}),
-            json!({"background_keyboard_requires_foreground":1}),
+            json!({"background_requires_foreground":1}),
+            json!({"background_requires_foreground":null}),
+            json!({"background_requires_foreground":"false"}),
         ] {
             assert_eq!(
-                modal_keyboard_requires_foreground(&malformed, true).unwrap_err()["error"],
+                modal_input_requires_foreground(&malformed).unwrap_err()["error"],
                 "invalid_response"
             );
-            assert_eq!(
-                modal_keyboard_requires_foreground(&malformed, false),
-                Ok(false)
-            );
         }
-        let rejected = foreground_required("modal_keyboard_requires_foreground");
+        let rejected = foreground_required("modal_input_requires_foreground");
         assert_eq!(rejected["dispatch"], "not_dispatched");
         assert_eq!(rejected["error"], "foreground_required");
         assert_eq!(
             rejected["delivery"]["reason"],
-            "modal_keyboard_requires_foreground"
+            "modal_input_requires_foreground"
         );
         assert_eq!(rejected["delivery"]["foreground_borrowed"], false);
         assert!(rejected["delivery"]["route"].is_null());
@@ -963,7 +1044,7 @@ mod tests {
             failures: RefCell::default(),
         };
         let moved = json!({"target":identity,"bounds":[100,200,500,600],"surface_owner":{"pid":7,"generation":1},
-            "background_keyboard_requires_foreground":false});
+            "background_requires_foreground":false});
         assert!(background_validation(&moved, &target, 0).is_ok());
         target.keyboard = false;
         assert!(background_validation(&moved, &target, 0).is_err());
@@ -976,9 +1057,9 @@ mod tests {
     }
 
     #[test]
-    fn modal_transition_stops_background_keys_without_selecting_a_second_route() {
+    fn modal_transition_stops_background_input_without_selecting_a_second_route() {
         let identity = json!({"app":{"pid":7},"native_id":1,"generation":2});
-        let target = BackgroundTarget {
+        let mut target = BackgroundTarget {
             target: identity.clone(),
             bounds: json!([0, 0, 100, 100]),
             keyboard: true,
@@ -986,17 +1067,34 @@ mod tests {
             failures: RefCell::default(),
         };
         let modal = json!({"target":identity,"bounds":target.bounds,
-            "surface_owner":{"pid":7,"generation":1},"background_keyboard_requires_foreground":true});
-        let error = background_validation(&modal, &target, 0).unwrap_err();
-        assert_eq!(error["error"], "background_route_changed");
-        assert!(background_validation(&modal, &target, 1).is_ok());
-        for dispatch in ["not_dispatched", "unknown"] {
-            let attempt = background_result(json!({"error":error, "dispatch":dispatch,
-                "fallback_allowed":false}));
-            let BackgroundAttempt::Completed(result) = attempt else {
-                panic!("a modal transition after route selection must not select a second route");
-            };
-            assert_eq!(result["dispatch"], dispatch);
+            "surface_owner":{"pid":7,"generation":1},"background_requires_foreground":true});
+        for keyboard in [false, true] {
+            target.keyboard = keyboard;
+            let error = background_validation(&modal, &target, 0).unwrap_err();
+            assert_eq!(error["error"], "background_route_changed");
+            assert!(background_validation(&modal, &target, 1).is_ok());
+            let mut clear = modal.clone();
+            clear["background_requires_foreground"] = json!(false);
+            assert!(background_validation(&clear, &target, 0).is_ok());
+            clear
+                .as_object_mut()
+                .unwrap()
+                .remove("background_requires_foreground");
+            assert_eq!(
+                background_validation(&clear, &target, 0).unwrap_err()["error"],
+                "invalid_response"
+            );
+            assert!(background_validation(&clear, &target, 1).is_ok());
+            for dispatch in ["not_dispatched", "unknown"] {
+                let attempt = background_result(json!({"error":error, "dispatch":dispatch,
+                    "fallback_allowed":false}));
+                let BackgroundAttempt::Completed(result) = attempt else {
+                    panic!(
+                        "a modal transition after route selection must not select a second route"
+                    );
+                };
+                assert_eq!(result["dispatch"], dispatch);
+            }
         }
     }
 
@@ -1050,6 +1148,10 @@ pub fn worker_entry() -> bool {
     };
     unsafe {
         dtw_set_pointer_presenter(Some(super::pointer_presentation::native_posted));
+        dtw_set_associated_surface_prover(
+            Some(super::associated_proof::callback),
+            Some(super::associated_proof::free),
+        );
     }
     if install_termination_handler().is_err() {
         std::process::exit(1);

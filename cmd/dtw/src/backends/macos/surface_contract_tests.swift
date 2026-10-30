@@ -238,6 +238,62 @@ emptyWeb.add(role:"AXWebArea",children:0,depth:3,parentRole:kAXScrollAreaRole)
 surfaceCheck(emptyWeb.decision(manualOptIn:false,elapsed:0) == .pending)
 print("Empty window content root stays pending; titlebar decoration does not")
 
+// A real cold Electron shape: a nested container shell and only typed native
+// window buttons. It must not become ready simply by adding more group levels.
+private var coldElectronShell = SemanticReadinessSample()
+coldElectronShell.add(role:kAXWindowRole,children:4,depth:0,parentRole:"")
+for depth in 1...5 {
+    coldElectronShell.add(role:kAXGroupRole,children:depth == 5 ? 2 : 1,depth:depth,
+                          parentRole:depth == 1 ? kAXWindowRole : kAXGroupRole)
+}
+for _ in 0..<2 { coldElectronShell.add(role:kAXGroupRole,children:0,depth:6,parentRole:kAXGroupRole) }
+for subrole in [kAXCloseButtonSubrole,kAXMinimizeButtonSubrole,kAXZoomButtonSubrole,kAXFullScreenButtonSubrole] {
+    surfaceCheck(semanticWindowDecoration(role:kAXButtonRole,subrole:subrole))
+    coldElectronShell.add(role:kAXButtonRole,children:0,depth:1,parentRole:kAXWindowRole,
+                          decoration:semanticWindowDecoration(role:kAXButtonRole,subrole:subrole))
+}
+coldElectronShell.add(role:kAXGroupRole,children:0,depth:2,parentRole:kAXButtonRole,decoration:true)
+surfaceCheck(coldElectronShell.shellOnly)
+surfaceCheck(coldElectronShell.decision(manualOptIn:true,elapsed:0.007,materializationRemaining:2.993) == .pending)
+// The final read can complete just as the original attempt expires. Keep the
+// elapsed attempt in the decision rather than reclassifying the shell as ready.
+for now in [13.0,13.001] {
+    surfaceCheck(coldElectronShell.decision(manualOptIn:true,elapsed:now-10,
+        materializationRemaining:13-now) == .emptyContent)
+}
+surfaceCheck(coldElectronShell.decision(manualOptIn:false,elapsed:0.007,materializationRemaining:2.993) == .ready)
+surfaceCheck(coldElectronShell.decision(manualOptIn:true,elapsed:0.007,materializationRemaining:2.993,scanComplete:false) == .ready)
+private var materializedElectron = coldElectronShell
+materializedElectron.add(role:"AXWebArea",children:9,depth:7,parentRole:kAXGroupRole)
+surfaceCheck(materializedElectron.decision(manualOptIn:true,elapsed:2.3,materializationRemaining:2.993) == .ready)
+for role in [kAXButtonRole,kAXTextFieldRole,kAXStaticTextRole] {
+    var nativeContent = coldElectronShell
+    nativeContent.add(role:role,children:0,depth:7,parentRole:kAXGroupRole)
+    surfaceCheck(!nativeContent.shellOnly)
+    surfaceCheck(nativeContent.decision(manualOptIn:true,elapsed:0.007,materializationRemaining:2.993) == .ready)
+}
+surfaceCheck(!semanticWindowDecoration(role:kAXButtonRole,subrole:nil))
+surfaceCheck(!semanticWindowDecoration(role:kAXButtonRole,subrole:"AXUnknown"))
+surfaceCheck(!semanticWindowDecoration(role:kAXButtonRole,subrole:"AXToolbarButton"))
+surfaceCheck(!semanticWindowDecoration(role:kAXTextFieldRole,subrole:kAXCloseButtonSubrole))
+surfaceCheck(semanticMaterializationUntil(attemptedAt:10,now:10.007) == 13)
+surfaceCheck(semanticMaterializationUntil(attemptedAt:10,now:12.3) == 13)
+surfaceCheck(semanticMaterializationUntil(attemptedAt:10,now:13) == nil)
+surfaceCheck(semanticMaterializationUntil(attemptedAt:nil,now:10) == nil)
+// A later query retains the expired attempt for classification, but has no
+// wait budget. The same shell cannot become complete merely by getting older.
+private let cachedManualUntil = 10.0 + semanticReadinessBudget
+for queriedAt in [13.0,14.0,100.0] {
+    surfaceCheck(semanticMaterializationUntil(attemptedAt:10,now:queriedAt) == nil)
+    surfaceCheck(coldElectronShell.decision(manualOptIn:true,elapsed:0.007,
+        materializationRemaining:cachedManualUntil-queriedAt) == .emptyContent)
+    var cachedNativeContent = coldElectronShell
+    cachedNativeContent.add(role:kAXTextFieldRole,children:0,depth:7,parentRole:kAXGroupRole)
+    surfaceCheck(cachedNativeContent.decision(manualOptIn:true,elapsed:0.007,
+        materializationRemaining:cachedManualUntil-queriedAt) == .ready)
+}
+print("Cold accepted Manual shell waits without repoking; native content and fixed attempt budgets remain usable")
+
 // The first filtered empty page may be a cold asynchronous provider result.
 // Re-read only within the original Enhanced attempt's window, without a poke.
 surfaceCheck(emptySemanticRetryUntil(filtered:true,complete:true,matches:0,
@@ -491,26 +547,10 @@ private func focusPhaseFailure(_ expected: NativeFailure, _ body: () throws -> B
                         "Focus phase changed the original failure")
     } catch { preconditionFailure("Unexpected focus phase error: \(error)") }
 }
-private let alreadyFocused = try focusedBeforeEstablishment { true }
-private let otherFocused = try focusedBeforeEstablishment { false }
-focusPhaseCheck(alreadyFocused && !otherFocused, "Initial exact/other focus retains its meaning")
+// Missing input focus remains a typed refusal; cleanup's fresh ownership
+// branch has its own controls and does not reinterpret input failures.
 for absent in [FocusAbsence.application, .window] {
-    let initialMatch = try focusedBeforeEstablishment { throw missingFocus(absent) }
-    focusPhaseCheck(!initialMatch, "Missing initial focus requires establishment, not success")
-    focusPhaseCheck(missingFocus(absent).json.count == 2, "Typed focus absence is private, not a public schema change")
-}
-private let initialAbsentApp = try focusedBeforeEstablishment {
-    try controlExactInputFocus(expectedPID: 10, focusedPID: { nil }, windowMatches: { true })
-}
-focusPhaseCheck(!initialAbsentApp, "The real missing focused-app reader can proceed to establishment")
-for fatal in [
-    busyFocusAX,
-    failure("permission_denied", "Permission denied"),
-    failure("target_changed", "Target changed"),
-    failure("deadline_exceeded", "Request expired"),
-    failure("focus_unproven", "System-wide focused application is unavailable; refresh before further input"),
-] {
-    focusPhaseFailure(fatal) { try focusedBeforeEstablishment { throw fatal } }
+    focusPhaseCheck(missingFocus(absent).json.count == 2, "Typed focus absence remains private")
 }
 focusPhaseFailure(missingFocus(.application)) {
     try controlExactInputFocus(expectedPID: 10, focusedPID: { nil }, windowMatches: { true })
@@ -774,19 +814,19 @@ for role in [kAXWindowRole, kAXSheetRole, kAXMenuBarRole, kAXGroupRole] {
     surfaceCheck(!coordinateMenuSurface(role: role, associated: true))
 }
 surfaceCheck(!coordinateMenuSurface(role: nil, associated: true))
-sheetFocusCheck(try modalKeyboardRequiresForeground(role: kAXSheetRole) { preconditionFailure("Sheet modal state is structural") })
-sheetFocusCheck(try modalKeyboardRequiresForeground(role: kAXWindowRole) { true })
-sheetFocusCheck(try !modalKeyboardRequiresForeground(role: kAXWindowRole) { false })
-sheetFocusCheck(try !modalKeyboardRequiresForeground(role: kAXMenuRole) { preconditionFailure("Menu must not manufacture AXModal") })
+sheetFocusCheck(try modalInputRequiresForeground(role: kAXSheetRole) { preconditionFailure("Sheet modal state is structural") })
+sheetFocusCheck(try modalInputRequiresForeground(role: kAXWindowRole) { true })
+sheetFocusCheck(try !modalInputRequiresForeground(role: kAXWindowRole) { false })
+sheetFocusCheck(try !modalInputRequiresForeground(role: kAXMenuRole) { preconditionFailure("Menu must not manufacture AXModal") })
 do {
-    _ = try modalKeyboardRequiresForeground(role: kAXWindowRole) { nil }
+    _ = try modalInputRequiresForeground(role: kAXWindowRole) { nil }
     preconditionFailure("Missing modal state became background support")
 } catch let error as NativeFailure { surfaceCheck(error.code == "modal_state_unproven") }
 do {
-    _ = try modalKeyboardRequiresForeground(role: kAXWindowRole) { throw inventoryBusy }
+    _ = try modalInputRequiresForeground(role: kAXWindowRole) { throw inventoryBusy }
     preconditionFailure("Typed modal read failure was swallowed")
 } catch let error as NativeFailure { surfaceCheck(error.message == inventoryBusy.message && error.attributeFailure?.error == .cannotComplete) }
-print("Associated-menu routing and modal keyboard preflight controls passed")
+print("Associated-menu routing and modal keyboard/pointer preflight controls passed")
 
 // FilePanel-shaped control: the large directory precedes the filename field.
 // The ROI excludes the known native viewport, so no directory child is loaded.
@@ -961,3 +1001,371 @@ for original in [inventoryBusy, failure("modal_state_unproven", "malformed typed
     catch let error as NativeFailure { surfaceCheck(error.code == original.code && error.message == original.message) }
 }
 print("Focused sibling modal policy preserves descendant blocking and rechecks root/UI evidence")
+
+
+// Exact scene bootstrap cannot spend the selected app's budget on foreign
+// association discovery. Only a selected foreign surface needs that proof.
+private let ownSelected: (record: CGRecord, title: String, association: (birth: UInt64, root: Int)?) =
+    try selectedSurfaceCandidate([surfaceRow(90)], id: 90, pid: 10,
+        birth: { _ in preconditionFailure("Own app birth belongs to caller verification") },
+        associate: { _ in preconditionFailure("Own surface must never probe foreign AX/SCK") },
+        refresh: { _ in preconditionFailure("Own exact lookup must not scan a second inventory") })
+surfaceCheck(ownSelected.record.id == 90 && ownSelected.association == nil)
+private var selectedBirthPIDs: [Int32] = []
+private var selectedAssociatedIDs: [CGWindowID] = []
+private var selectedRefreshIDs: [CGWindowID] = []
+private let foreignSelected = try selectedSurfaceCandidate([surfaceRow(91, pid: 20)], id: 91, pid: 10,
+    birth: { selectedBirthPIDs.append($0); return 700 },
+    associate: { selectedAssociatedIDs.append($0.id); return 901 },
+    refresh: { selectedRefreshIDs.append($0); return [surfaceRow(91, pid: 20)] })
+surfaceCheck(foreignSelected.record.id == 91 && foreignSelected.association?.root == 901 && foreignSelected.association?.birth == 700)
+surfaceCheck(selectedBirthPIDs == [20,20] && selectedAssociatedIDs == [91] && selectedRefreshIDs == [91])
+
+private func selectedFailure(_ code: String, _ read: () throws -> Void) {
+    do { try read(); preconditionFailure("Selected surface failure was accepted") }
+    catch let error as NativeFailure { surfaceCheck(error.code == code) }
+    catch { preconditionFailure("Unexpected selected surface error") }
+}
+for (rows, expectedCode) in [([], "target_changed"), ([surfaceRow(92)], "target_changed"),
+                           ([surfaceRow(91),surfaceRow(91)], "window_unproven"),
+                           ([invalid], "window_unproven")] {
+    selectedFailure(expectedCode) {
+        let _: (CGRecord, String, (UInt64, Int)?) = try selectedSurfaceCandidate(rows, id: 91, pid: 10,
+            birth: { _ in preconditionFailure("Invalid exact rows must fail before birth lookup") },
+            associate: { _ in preconditionFailure("Invalid exact rows must fail before association") },
+            refresh: { _ in preconditionFailure("Invalid exact rows must fail before refresh") })
+    }
+}
+for births: [UInt64?] in [[nil], [700,701], [700,nil]] {
+    var index = 0
+    selectedFailure("stale_window") {
+        _ = try selectedSurfaceCandidate([surfaceRow(91, pid: 20)], id: 91, pid: 10,
+            birth: { _ in defer { index += 1 }; return births[index] },
+            associate: { _ in 901 }, refresh: { _ in [surfaceRow(91, pid: 20)] })
+    }
+}
+selectedFailure("stale_window") {
+    let _: (CGRecord, String, (UInt64, Int)?) = try selectedSurfaceCandidate([surfaceRow(91, pid: 20)], id: 91, pid: 10,
+        birth: { _ in 700 }, associate: { _ in nil },
+        refresh: { _ in preconditionFailure("Unproven relation cannot publish a selected target") })
+}
+private var hiddenSelectedRow = surfaceRow(91, pid: 20)
+hiddenSelectedRow[kCGWindowIsOnscreen as String] = false
+for rows in [[], [surfaceRow(91, pid: 21)], [surfaceRow(91, pid: 20, width: 101)], [hiddenSelectedRow]] {
+    selectedFailure("target_changed") {
+        _ = try selectedSurfaceCandidate([surfaceRow(91, pid: 20)], id: 91, pid: 10,
+            birth: { _ in 700 }, associate: { _ in 901 }, refresh: { _ in rows })
+    }
+}
+for code in ["native_stopping", "deadline_exceeded", "permission_denied", "association_unavailable"] {
+    selectedFailure(code) {
+        let _: (CGRecord, String, (UInt64, Int)?) = try selectedSurfaceCandidate([surfaceRow(91, pid: 20)], id: 91, pid: 10,
+            birth: { _ in 700 }, associate: { _ in throw failure(code, "selected association failed") },
+            refresh: { _ in preconditionFailure("Selected proof failure cannot fall back to another surface") })
+    }
+}
+// Repeated binds always require a new association proof, even for the same ID.
+selectedFailure("stale_window") {
+    let _: (CGRecord, String, (UInt64, Int)?) = try selectedSurfaceCandidate([surfaceRow(91, pid: 20)], id: 91, pid: 10,
+        birth: { _ in 700 }, associate: { _ in nil }, refresh: { _ in [] })
+}
+print("Selected surface bootstrap skips foreign probes for own windows and re-proves only the requested association")
+
+// Scoped pixel proof keeps the app/actual owner/point identity across the
+// helper boundary. The callbacks below allocate JSON only; no native UI work.
+private let proofApp = NativeApp(identity: "pure.associated.proof", pid: 10, generation: 50)
+private let proofRequest: [String: Any] = ["operation": "prove_associated_surface", "app": proofApp.json,
+    "surface_owner": ["pid": 20, "generation": 700], "window_id": 91,
+    "bounds": [0.0,0.0,100.0,100.0], "screen_x": 40.0, "screen_y": 50.0]
+private let proofSnapshot = try AssociatedPointSnapshot(proofRequest)
+private var proofAppChecks = 0
+private var proofOwnerReads: [Int32] = []
+try proofSnapshot.validate(checkApp: { app in surfaceCheck(app == proofApp); proofAppChecks += 1 },
+    birth: { proofOwnerReads.append($0); return 700 },
+    read: { id in surfaceCheck(id == 91); return [surfaceRow(91, pid: 20)] })
+surfaceCheck(proofAppChecks == 2 && proofOwnerReads == [20,20])
+for rows in [[], [surfaceRow(92, pid: 20)], [surfaceRow(91, pid: 21)],
+             [surfaceRow(91, pid: 20, width: 101)], [hiddenSelectedRow]] {
+    selectedFailure("target_changed") {
+        try proofSnapshot.validate(checkApp: { _ in }, birth: { _ in 700 }, read: { _ in rows })
+    }
+}
+for before: UInt64? in [nil, 701] {
+    selectedFailure("target_changed") {
+        try proofSnapshot.validate(checkApp: { _ in }, birth: { _ in before },
+            read: { _ in preconditionFailure("Unproven owner cannot authorize a surface read") })
+    }
+}
+private var proofBirthReads = 0
+selectedFailure("target_changed") {
+    try proofSnapshot.validate(checkApp: { _ in }, birth: { _ in
+        proofBirthReads += 1; return proofBirthReads == 1 ? 700 : 701
+    }, read: { _ in [surfaceRow(91, pid: 20)] })
+}
+proofAppChecks = 0
+selectedFailure("app_changed") {
+    try proofSnapshot.validate(checkApp: { _ in
+        proofAppChecks += 1
+        if proofAppChecks == 2 { throw failure("app_changed", "Logical app changed across exact row read") }
+    }, birth: { _ in 700 }, read: { _ in [surfaceRow(91, pid: 20)] })
+}
+private var outsideProofRequest = proofRequest
+outsideProofRequest["screen_x"] = 101.0
+selectedFailure("invalid_point") { _ = try AssociatedPointSnapshot(outsideProofRequest) }
+private var invalidProofOwner = proofRequest
+invalidProofOwner["surface_owner"] = ["pid":20,"generation":0]
+selectedFailure("invalid_request") { _ = try AssociatedPointSnapshot(invalidProofOwner) }
+for code in ["native_stopping", "deadline_exceeded", "target_changed"] {
+    var checks = 0
+    selectedFailure(code) {
+        _ = try checkedAssociatedPoint(check: {
+            checks += 1
+            if checks == 2 { throw failure(code, "Proof expired before publication") }
+        }, prove: { true })
+    }
+    surfaceCheck(checks == 2)
+}
+private var falseProofChecks = 0
+private let falseProofResult = try checkedAssociatedPoint(check: { falseProofChecks += 1 }, prove: { false })
+surfaceCheck(!falseProofResult && falseProofChecks == 2)
+
+private var proofReply = "{\"proven\":true}"
+private var proofCallbackCalls = 0
+private var proofCallbackFrees = 0
+private func controlAssociationCallback(_ input: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>? {
+    proofCallbackCalls += 1
+    let value = try! JSONSerialization.jsonObject(with: Data(String(cString: input).utf8)) as! [String: Any]
+    surfaceCheck(value["operation"] as? String == "prove_associated_surface")
+    surfaceCheck(value["window_id"] as? Int == 91)
+    return strdup(proofReply)
+}
+private func controlAssociationRelease(_ value: UnsafeMutablePointer<CChar>) {
+    proofCallbackFrees += 1; free(value)
+}
+private let controlAssociationProver = AssociatedSurfaceProver()
+selectedFailure("association_unavailable") { _ = try controlAssociationProver.prove(proofRequest) }
+controlAssociationProver.set(controlAssociationCallback, nil)
+selectedFailure("association_unavailable") { _ = try controlAssociationProver.prove(proofRequest) }
+surfaceCheck(proofCallbackCalls == 0 && proofCallbackFrees == 0)
+controlAssociationProver.set(controlAssociationCallback, controlAssociationRelease)
+private let callbackTrue = try controlAssociationProver.prove(proofRequest)
+surfaceCheck(callbackTrue && proofCallbackCalls == 1 && proofCallbackFrees == 1)
+proofReply = "{\"proven\":false}"
+private let callbackFalse = try controlAssociationProver.prove(proofRequest)
+surfaceCheck(!callbackFalse && proofCallbackCalls == 2 && proofCallbackFrees == 2)
+for code in ["native_scene_busy", "deadline_exceeded", "native_stopping", "target_changed", "shutdown_failed"] {
+    proofReply = "{\"error\":\"\(code)\",\"message\":\"original helper cause\"}"
+    selectedFailure(code) { _ = try controlAssociationProver.prove(proofRequest) }
+}
+for reply in ["{}", "{\"proven\":1}", "{\"proven\":true,\"cleanup_error\":{\"error\":\"shutdown_failed\"}}", "broken"] {
+    proofReply = reply
+    selectedFailure("invalid_response") { _ = try controlAssociationProver.prove(proofRequest) }
+}
+surfaceCheck(proofCallbackCalls == proofCallbackFrees)
+controlAssociationProver.set(nil, nil)
+selectedFailure("association_unavailable") { _ = try controlAssociationProver.prove(proofRequest) }
+print("Scoped association proof requires its helper hook, retains exact identities and releases every producer-owned reply")
+
+// Only the resident guard of an already leased Scene skips pixel acquisition.
+// It still requires a fresh matching root and the original owner birth twice.
+private var ordinaryPixelReads = 0
+private let ordinaryPixelProof = try AssociationProofScope.full.provePixels {
+    ordinaryPixelReads += 1; return true
+}
+surfaceCheck(ordinaryPixelProof && ordinaryPixelReads == 1)
+private let ordinaryPixelFailure = try AssociationProofScope.full.provePixels {
+    ordinaryPixelReads += 1; return false
+}
+surfaceCheck(!ordinaryPixelFailure && ordinaryPixelReads == 2)
+private let guardedPixelProof = try AssociationProofScope.sceneScrollGuard.provePixels {
+    preconditionFailure("Resident guard attempted SCK while its Scene caller holds the scene lease")
+}
+surfaceCheck(guardedPixelProof)
+selectedFailure("association_unavailable") {
+    _ = try AssociationProofScope.full.provePixels { throw failure("association_unavailable", "original point proof error") }
+}
+private var guardRootReads = 0
+private let retainedGuardRoot = try retainedAssociationMatches(901, ownerBirth: 700,
+    birth: { 700 }, root: { guardRootReads += 1; return 901 }, equal: ==)
+surfaceCheck(retainedGuardRoot && guardRootReads == 1)
+for current: Int? in [nil, 902] {
+    let matches = try retainedAssociationMatches(901, ownerBirth: 700, birth: { 700 }, root: { current }, equal: ==)
+    surfaceCheck(!matches)
+}
+for stamps: [UInt64?] in [[nil], [701], [700,nil], [700,701]] {
+    var index = 0
+    let matches = try retainedAssociationMatches(901, ownerBirth: 700, birth: {
+        defer { index += 1 }; return stamps[index]
+    }, root: { 901 }, equal: ==)
+    surfaceCheck(!matches)
+}
+selectedFailure("ax_unavailable") {
+    _ = try retainedAssociationMatches(901, ownerBirth: 700, birth: { 700 }, root: { () -> Int? in
+        throw failure("ax_unavailable", "Fresh retained relation is unreadable",
+                      attributeFailure: AXAttributeFailure(name: "AXElementAtPosition", error: .cannotComplete))
+    }, equal: ==)
+}
+// Existing geometry scope has no permission to accept a moved associated
+// surface merely because its retained AX object continues to exist.
+private let guardedAnchorGeometry = try ScrollAnchorGeometry(element: CGRect(x: 10, y: 10, width: 20, height: 20),
+    window: CGRect(x: 0, y: 0, width: 100, height: 100))
+surfaceCheck(!guardedAnchorGeometry.matches(element: CGRect(x: 10, y: 10, width: 20, height: 20),
+    window: CGRect(x: 1, y: 0, width: 100, height: 100), point: guardedAnchorGeometry.point))
+print("Resident scroll guard preserves fresh root/birth/geometry and cannot acquire the caller's scene lease")
+
+// AXWindowID cannotComplete is typed private evidence, never inferred from
+// the public message. Cleanup starts a complete fresh ownership read again;
+// a replacement current AX root may prove the same captured logical window.
+private func identityReadFailure(_ result: AXError, id: CGWindowID = 0) -> NativeFailure {
+    do {
+        _ = try requireAXWindowID(result, id)
+        preconditionFailure("Unproven identity unexpectedly accepted")
+    } catch let error as NativeFailure { return error }
+    catch { preconditionFailure("Unexpected identity error") }
+}
+private let typedBusyIdentity = identityReadFailure(.cannotComplete)
+surfaceCheck(typedBusyIdentity.code == "window_unproven")
+surfaceCheck(typedBusyIdentity.attributeFailure?.name == "AXWindowID"
+    && typedBusyIdentity.attributeFailure?.error == .cannotComplete)
+surfaceCheck(Set(typedBusyIdentity.json.keys) == Set(["error", "message"]))
+private let provenIdentityID = try requireAXWindowID(.success, 777)
+surfaceCheck(provenIdentityID == 777)
+private let identityCleanupApp = NativeApp(identity: "owned.test.app", pid: 10, generation: 42)
+private var identityAppReads = 0
+private var identityRootReads: [Int] = []
+private var identityWaits = 0
+private let identityRecovered = try waitForBorrowedFocusRead(remaining: { 1 }, check: {}, invalidated: { false }, read: {
+    try borrowedFocusStillOwned(app: identityCleanupApp, windowID: 777, invalidated: { false }, focusedApplication: {
+        identityAppReads += 1
+        return FocusApplication(element: identityAppReads, pid: 10, generation: 42, fromCandidate: false)
+    }, currentWindowID: { root in
+        identityRootReads.append(root)
+        return try requireAXWindowID(root == 1 ? .cannotComplete : .success, root == 1 ? 0 : 777)
+    })
+}, wait: { _ in identityWaits += 1 })
+// The recovered read also repeats the existing post-window app birth proof.
+surfaceCheck(identityRecovered && identityAppReads == 3 && identityRootReads == [1, 2] && identityWaits == 1)
+
+for original in [identityReadFailure(.success), identityReadFailure(.apiDisabled),
+                 identityReadFailure(.invalidUIElement), identityReadFailure(.failure, id: 777),
+                 failure("window_unproven", typedBusyIdentity.message),
+                 failure("window_unproven", "wrong read stage", attributeFailure:
+                    AXAttributeFailure(name: kAXFocusedWindowAttribute, error: .cannotComplete)),
+                 failure("focus_unproven", "wrong error class", attributeFailure:
+                    AXAttributeFailure(name: "AXWindowID", error: .cannotComplete))] {
+    var reads = 0
+    do {
+        _ = try waitForBorrowedFocusRead(remaining: { 1 }, check: {}, invalidated: { false }, read: {
+            reads += 1; throw original
+        }, wait: { _ in preconditionFailure("Unproven or non-busy identity cannot retry") })
+        preconditionFailure("Unproven current identity accepted")
+    } catch let error as NativeFailure {
+        surfaceCheck(reads == 1 && error.code == original.code && error.message == original.message)
+        surfaceCheck(error.attributeFailure?.name == original.attributeFailure?.name
+            && error.attributeFailure?.error == original.attributeFailure?.error)
+    }
+}
+// The identical typed status from the retained previous target does not gain
+// a retry: only fresh-current ownership uses the new narrow classification.
+private var previousIdentityReads = 0
+do {
+    _ = try waitForRestoredFocus(remaining: { 1 }, check: {}, invalidated: { false }, read: {
+        previousIdentityReads += 1; throw typedBusyIdentity
+    }, wait: { _ in preconditionFailure("Previous retained identity gained a retry") })
+    preconditionFailure("Unproven previous identity accepted")
+} catch let error as NativeFailure {
+    surfaceCheck(previousIdentityReads == 1 && error.code == "window_unproven"
+        && error.message == typedBusyIdentity.message)
+}
+print("Cleanup alone resamples typed AXWindowID busy; zero identity, permission, invalid object and previous target errors stay immediate")
+
+// A vanishing association point-hit cannot invalidate independent CG rows or
+// turn partial discovery into an empty/complete result. Recovery takes another
+// whole snapshot and never reuses rows or AX objects from the failed attempt.
+private func expectedDiscoveryFailure(_ read: () throws -> Void) -> NativeFailure {
+    do { try read(); preconditionFailure("Expected discovery error") }
+    catch let error as NativeFailure { return error }
+    catch { preconditionFailure("Unexpected discovery error type") }
+}
+private let expiredPointHit = failure("ax_unavailable", "original AX role read failed",
+    attributeFailure: AXAttributeFailure(name: kAXRoleAttribute, error: .invalidUIElement))
+surfaceCheck(!retryableInventoryFailure(expiredPointHit)) // retained-target paths remain strict.
+private var discoveryCGPasses = 0
+private var discoveryPointObjects: [Int] = []
+private var publishedDiscoveryRows: [[CGWindowID]] = []
+private func completeDiscoveryControl() throws -> [CGWindowID] {
+    discoveryCGPasses += 1
+    let source = discoveryCGPasses == 1 ? [surfaceRow(10), surfaceRow(11)] : [surfaceRow(11), surfaceRow(12)]
+    let (candidates, _) = try surfaceInventory(source, pid: 10)
+    var ids = candidates.map { $0.0.id }
+    let associated: CGWindowID = try readDiscoveryAssociation {
+        discoveryPointObjects.append(discoveryCGPasses)
+        if discoveryCGPasses == 1 { throw expiredPointHit }
+        return 201
+    }
+    ids.append(associated)
+    publishedDiscoveryRows.append(ids)
+    return ids
+}
+private let expiredDiscovery = expectedDiscoveryFailure { _ = try completeDiscoveryControl() }
+surfaceCheck(expiredDiscovery.discoverySnapshotExpired && retryableInventoryFailure(expiredDiscovery))
+surfaceCheck(expiredDiscovery.code == expiredPointHit.code
+    && expiredDiscovery.attributeFailure?.error == .invalidUIElement
+    && expiredDiscovery.attributeFailure?.name == kAXRoleAttribute)
+surfaceCheck(expiredDiscovery.message.contains(expiredPointHit.message)
+    && expiredDiscovery.message.contains("refresh app.windows"))
+surfaceCheck(Set(expiredDiscovery.json.keys) == Set(["error", "message"]))
+surfaceCheck(publishedDiscoveryRows.isEmpty)
+private var discoveryChecks = 0
+private var discoveryWaits = 0
+private let recoveredDiscovery = try retryCompleteInventory(original: expiredDiscovery, remaining: { 0.75 }, check: {
+    discoveryChecks += 1
+}, read: completeDiscoveryControl, wait: { _ in discoveryWaits += 1 })
+surfaceCheck(recoveredDiscovery == [11, 12, 201] && publishedDiscoveryRows == [[11, 12, 201]])
+surfaceCheck(discoveryCGPasses == 2 && discoveryPointObjects == [1, 2] && discoveryChecks >= 3 && discoveryWaits == 1)
+
+private var expiredDiscoveryMS = 0
+private var expiredDiscoveryReads = 0
+private let persistentDiscovery = expectedDiscoveryFailure {
+    let _: [CGWindowID] = try retryCompleteInventory(original: expiredDiscovery,
+        remaining: { Double(300 - expiredDiscoveryMS) / 1_000 }, check: {}, read: {
+            expiredDiscoveryReads += 1; expiredDiscoveryMS += 120
+            return try readDiscoveryAssociation {
+                throw failure("ax_unavailable", "later ancestry read", attributeFailure:
+                    AXAttributeFailure(name: kAXParentAttribute, error: .invalidUIElement))
+            }
+        }, wait: { expiredDiscoveryMS += Int(($0 * 1_000).rounded()) })
+}
+surfaceCheck(expiredDiscoveryReads == 2 && expiredDiscoveryMS == 300)
+surfaceCheck(persistentDiscovery.code == expiredDiscovery.code && persistentDiscovery.message == expiredDiscovery.message
+    && persistentDiscovery.attributeFailure?.name == kAXRoleAttribute)
+
+for fatal in [failure("ax_unavailable", "permission denied", attributeFailure:
+                AXAttributeFailure(name: kAXRoleAttribute, error: .apiDisabled)),
+              failure("ax_unavailable", "untyped invalidUIElement -25202"),
+              failure("app_changed", "kernel birth changed"),
+              failure("native_stopping", "caller cancelled"),
+              failure("deadline_exceeded", "original deadline expired"),
+              failure("window_inventory_unproven", "malformed fresh CG row")] {
+    let unmarked = expectedDiscoveryFailure { let _: Int = try readDiscoveryAssociation { throw fatal } }
+    surfaceCheck(!unmarked.discoverySnapshotExpired && !retryableInventoryFailure(unmarked)
+        && unmarked.code == fatal.code && unmarked.message == fatal.message)
+    var reads = 0
+    let stopped = expectedDiscoveryFailure {
+        let _: [CGWindowID] = try retryCompleteInventory(original: expiredDiscovery, remaining: { 0.75 }, check: {}, read: {
+            reads += 1
+            return try readDiscoveryAssociation { throw fatal }
+        }, wait: { _ in })
+    }
+    surfaceCheck(reads == 1 && stopped.code == fatal.code && stopped.message == fatal.message)
+}
+for stop in ["app_changed", "native_stopping", "deadline_exceeded"] {
+    let stopped = expectedDiscoveryFailure {
+        let _: [CGWindowID] = try retryCompleteInventory(original: expiredDiscovery, remaining: { 0.75 }, check: {
+            throw failure(stop, "caller or identity ended")
+        }, read: { preconditionFailure("Invalid caller cannot take another snapshot") },
+           wait: { _ in preconditionFailure("Invalid caller cannot wait") })
+    }
+    surfaceCheck(stopped.code == stop)
+}
+print("Expired discovery association rebuilds one full snapshot; persistent errors retain cause, while identity/permission/stop remain final")

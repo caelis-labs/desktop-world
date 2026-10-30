@@ -10,7 +10,7 @@ Capture the dialog once to identify the filename/path field, directory contents,
 
 On macOS, a native file chooser commonly supports **Command+Shift+G** to enter a directory path. This can open another sheet. Refresh inventory and inspect it before entering the path; after confirming that navigation, refresh and reacquire the chooser controls. The path-navigation field and the filename field are different targets. Other platforms and custom choosers may use different controls; inspect their actual UI.
 
-For a filename field, prefer `setValue` only when it advertises that action. Otherwise establish its editing focus using a current semantic action or capture-based click, then use the platform's select-all chord and `typeText`. DTW chooses delivery internally, including foreground fallback for native modal keyboard input. Do not assume a delivered keystroke updated the field: read or capture the value before confirming the chooser.
+For a filename field, prefer `setValue` only when it advertises that action. Otherwise establish its editing focus using a current semantic action or capture-based click, then use the platform's select-all chord and `typeText`. DTW chooses delivery internally, including foreground fallback for native modal input. Do not assume a delivered keystroke updated the field: read or capture the value before confirming the chooser.
 
 Confirm once after checking the selected path/name and the enabled control. A closed dialog alone does not prove the requested save, open, or upload completed. Inspect the receiving application's resulting state. If confirmation has an unknown outcome, inspect that state and the original receipt before deciding what new work is needed; do not submit it again automatically.
 
@@ -43,5 +43,7 @@ Return a compact decision record: relevant candidates or values, unresolved ambi
 ## Menus and focus-dependent interactions
 
 Use `scope:'menu'` for the application's menu tree when advertised. App-menu actions apply to the focused window, so establish focus and perform the dependent menu action within the same script. An explicit `focus` does not reserve foreground focus for a later script.
+
+Some controls accept directed input only while their window is active. If a dispatched coordinate action has no visible effect, inspect the current state before deciding the next action; do not repeat clicks to test delivery. When another input is appropriate, establish `focus` and reacquire its target in that same script. This also applies to custom controls whose semantic actions are unavailable.
 
 After an action opens a modal or associated surface, refresh inventory before continuing. DTW resolves target ownership, delivery, and foreground return internally. An unrelated pointer movement does not invalidate keyboard input, but a changed target or unproven focus requires fresh inspection. Keep unknown effects separate from new work, and never replay an earlier script merely because its state did not commit.

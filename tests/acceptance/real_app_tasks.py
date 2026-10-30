@@ -15,6 +15,7 @@ from pathlib import Path
 import plistlib
 import shutil
 import subprocess
+import sys
 import time
 import traceback
 import uuid
@@ -222,8 +223,24 @@ def recovery_metrics(calls, name):
             'retry_measurement': 'Following a failure is a review candidate, not proof of replay; inspect original source and receipt.'}
 
 
+def recorded_mcp_command(root, binary):
+    """Preserve native stderr even when the external Agent consumes its MCP pipe."""
+    launcher = root/'mcp-stdio.py'
+    launcher.write_text(
+        "import os,sys\n"
+        "fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_APPEND,0o600)\n"
+        "os.dup2(fd,2)\n"
+        "os.close(fd)\n"
+        "os.environ['DTW_AX_READINESS_TRACE']='1'\n"
+        "os.execv(sys.argv[2],sys.argv[2:])\n")
+    return [sys.executable, str(launcher), str(root/'native-stderr.log'), str(binary), 'mcp']
+
+
 def run_agent(repo, root, binary, client, adapter, name, prompt, evidence):
     stage, skill = stage_agent_plugin(repo, root, binary, name)
+    mcp = recorded_mcp_command(root, binary)
+    evidence['mcp_stdio'] = {'command': mcp, 'launcher_sha256': file_sha256(root/'mcp-stdio.py'),
+                            'capture': 'stderr only; stdin and stdout inherited unchanged'}
     env = os.environ.copy(); installed = registered = False; process = None; started = None
     try:
         if client == 'claude':
@@ -234,7 +251,7 @@ def run_agent(repo, root, binary, client, adapter, name, prompt, evidence):
                 env.update({k: str(v) for k, v in json.loads(settings.read_text()).get('env', {}).items()})
             env['CLAUDE_CODE_EXECUTABLE'] = shutil.which('claude')
             config = root/'mcp.json'
-            write_json(config, {'mcpServers': [{'name': name, 'command': str(binary), 'args': ['mcp'], 'env': []}]})
+            write_json(config, {'mcpServers': [{'name': name, 'command': mcp[0], 'args': mcp[1:], 'env': []}]})
             command = ['acpx'] + (['--agent', str(adapter)] if adapter else [])
             allowed = ['Skill', f"Read({local/'PATTERNS.md'})"]
             allowed += [f'mcp__{name}__{m}' for m in ('apps','api','exec','result')]
@@ -248,7 +265,7 @@ def run_agent(repo, root, binary, client, adapter, name, prompt, evidence):
             (stage/'.mcp.json').unlink(missing_ok=True)
             with (root/'setup.log').open('w') as log:
                 subprocess.run(['agy','plugin','install',str(stage)],check=True,stdout=log,stderr=log); installed=True
-                subprocess.run(['agy','mcp','add',name,str(binary),'mcp'],check=True,stdout=log,stderr=log); registered=True
+                subprocess.run(['agy','mcp','add',name,*mcp],check=True,stdout=log,stderr=log); registered=True
             command = ['agy','--print',prompt,'--dangerously-skip-permissions',
                        '--output-format','stream-json','--print-timeout','900s',
                        '--log-file',str(root/'agy.log')]
