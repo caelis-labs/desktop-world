@@ -306,6 +306,16 @@ pub extern "C" fn dtw_front_process_matches(pid: i32) -> i32 {
     }
 }
 
+/// Positive PID only after a stable WindowServer PSN/PID/PSN roundtrip.
+/// Negative values preserve a failed identity read; zero is never an app.
+#[no_mangle]
+pub extern "C" fn dtw_front_process_pid() -> i32 {
+    match skylight::front_process_pid() {
+        Ok(pid) => pid,
+        Err(reason) => reason as i32,
+    }
+}
+
 /// The callback context must remain alive until this synchronous call returns.
 #[no_mangle]
 pub unsafe extern "C" fn dtw_cua_input_call(

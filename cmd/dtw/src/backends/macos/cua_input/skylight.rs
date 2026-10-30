@@ -28,6 +28,7 @@ type GetFrontProcessFn = unsafe extern "C" fn(*mut c_void) -> i32;
 type SetFrontProcessFn = unsafe extern "C" fn(*const c_void, u32, u32) -> i32;
 
 type GetProcessForPIDFn = unsafe extern "C" fn(pid_t, *mut c_void) -> i32;
+type GetProcessPIDFn = unsafe extern "C" fn(*const c_void, *mut pid_t) -> i32;
 
 type FactoryMsgSendFn = unsafe extern "C" fn(
     *mut c_void, // Class (receiver)
@@ -300,6 +301,11 @@ fn get_process_for_pid_fn() -> Option<GetProcessForPIDFn> {
     *SYM.get_or_init(|| find_sym(b"GetProcessForPID\0").map(|p| unsafe { as_fn(p) }))
 }
 
+fn get_pid_for_process_fn() -> Option<GetProcessPIDFn> {
+    static SYM: OnceLock<Option<GetProcessPIDFn>> = OnceLock::new();
+    *SYM.get_or_init(|| find_sym(b"GetProcessPID\0").map(|p| unsafe { as_fn(p) }))
+}
+
 /// Read-only WindowServer authority, using the same donor symbols as focus
 /// delivery. AppKit's cached frontmost PID cannot prove a resident worker's
 /// current foreground while its main runloop is blocked on stdin.
@@ -312,6 +318,10 @@ pub enum FrontProcessReadFailure {
     FrontIdentityMissing = -4,
     TargetReadFailed = -5,
     TargetIdentityMissing = -6,
+    PIDReadFailed = -7,
+    PIDIdentityMissing = -8,
+    FrontChanged = -9,
+    PIDRoundtripMismatch = -10,
 }
 
 pub fn front_process_matches(pid: pid_t) -> Result<bool, FrontProcessReadFailure> {
@@ -350,6 +360,60 @@ fn front_process_matches_with(
         return Err(FrontIdentityMissing);
     }
     Ok(before == target && after == target)
+}
+
+/// DTW's inverse lookup for an unknown prior foreground. GetProcessPID is
+/// the read-only inverse of the existing donor GetProcessForPID lookup. No
+/// AppKit cache or CG window ordering can nominate another application.
+pub fn front_process_pid() -> Result<pid_t, FrontProcessReadFailure> {
+    let get_front = get_front_process_fn().ok_or(FrontProcessReadFailure::MissingSymbol)?;
+    let get_pid = get_pid_for_process_fn().ok_or(FrontProcessReadFailure::MissingSymbol)?;
+    let get_psn = get_process_for_pid_fn().ok_or(FrontProcessReadFailure::MissingSymbol)?;
+    front_process_pid_with(
+        || {
+            let mut psn = [0u8; 8];
+            (unsafe { get_front(psn.as_mut_ptr().cast()) } == 0).then_some(psn)
+        },
+        |psn| {
+            let mut pid = 0;
+            (unsafe { get_pid(psn.as_ptr().cast(), &mut pid) } == 0).then_some(pid)
+        },
+        |pid| {
+            let mut psn = [0u8; 8];
+            (unsafe { get_psn(pid, psn.as_mut_ptr().cast()) } == 0).then_some(psn)
+        },
+    )
+}
+
+fn front_process_pid_with(
+    mut front: impl FnMut() -> Option<[u8; 8]>,
+    pid: impl FnOnce(&[u8; 8]) -> Option<i32>,
+    roundtrip: impl FnOnce(i32) -> Option<[u8; 8]>,
+) -> Result<i32, FrontProcessReadFailure> {
+    use FrontProcessReadFailure::*;
+    let before = front().ok_or(FrontReadFailed)?;
+    if before == [0; 8] {
+        return Err(FrontIdentityMissing);
+    }
+    let pid = pid(&before).ok_or(PIDReadFailed)?;
+    if pid <= 0 {
+        return Err(PIDIdentityMissing);
+    }
+    let resolved = roundtrip(pid).ok_or(TargetReadFailed)?;
+    if resolved == [0; 8] {
+        return Err(TargetIdentityMissing);
+    }
+    let after = front().ok_or(FrontReadFailed)?;
+    if after == [0; 8] {
+        return Err(FrontIdentityMissing);
+    }
+    if before != after {
+        return Err(FrontChanged);
+    }
+    if resolved != before {
+        return Err(PIDRoundtripMismatch);
+    }
+    Ok(pid)
 }
 
 pub fn is_available() -> bool {
@@ -787,6 +851,97 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn fresh_foreground_pid_requires_stable_inverse_and_forward_identity() {
+        let a = [1; 8];
+        let b = [2; 8];
+        use FrontProcessReadFailure::*;
+        for (before, pid, roundtrip, after, expected) in [
+            (Some(a), Some(42), Some(a), Some(a), Ok(42)),
+            (None, Some(42), Some(a), Some(a), Err(FrontReadFailed)),
+            (
+                Some([0; 8]),
+                Some(42),
+                Some(a),
+                Some(a),
+                Err(FrontIdentityMissing),
+            ),
+            (Some(a), None, Some(a), Some(a), Err(PIDReadFailed)),
+            (Some(a), Some(0), Some(a), Some(a), Err(PIDIdentityMissing)),
+            (
+                Some(a),
+                Some(-42),
+                Some(a),
+                Some(a),
+                Err(PIDIdentityMissing),
+            ),
+            (Some(a), Some(42), None, Some(a), Err(TargetReadFailed)),
+            (
+                Some(a),
+                Some(42),
+                Some([0; 8]),
+                Some(a),
+                Err(TargetIdentityMissing),
+            ),
+            (
+                Some(a),
+                Some(42),
+                Some(b),
+                Some(a),
+                Err(PIDRoundtripMismatch),
+            ),
+            (Some(a), Some(42), Some(a), None, Err(FrontReadFailed)),
+            (
+                Some(a),
+                Some(42),
+                Some(a),
+                Some([0; 8]),
+                Err(FrontIdentityMissing),
+            ),
+            (Some(a), Some(42), Some(a), Some(b), Err(FrontChanged)),
+            (Some(a), Some(42), Some(b), Some(b), Err(FrontChanged)),
+        ] {
+            let mut reads = [before, after].into_iter();
+            assert_eq!(
+                front_process_pid_with(
+                    || reads.next().expect("No repeat foreground reads"),
+                    |requested| {
+                        assert_eq!(*requested, a);
+                        pid
+                    },
+                    |requested| {
+                        assert_eq!(requested, 42);
+                        roundtrip
+                    },
+                ),
+                expected,
+            );
+        }
+    }
+
+    #[test]
+    fn fresh_foreground_lookup_is_one_readonly_roundtrip() {
+        let calls = std::cell::RefCell::new(Vec::new());
+        assert_eq!(
+            front_process_pid_with(
+                || {
+                    calls.borrow_mut().push("front");
+                    Some([1; 8])
+                },
+                |_| {
+                    calls.borrow_mut().push("pid");
+                    Some(42)
+                },
+                |_| {
+                    calls.borrow_mut().push("roundtrip");
+                    Some([1; 8])
+                },
+            ),
+            Ok(42)
+        );
+        assert_eq!(*calls.borrow(), ["front", "pid", "roundtrip", "front"]);
     }
 
     #[test]

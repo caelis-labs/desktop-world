@@ -11,6 +11,8 @@ import Darwin
 private func dtwSetFrontProcess(_ pid: Int32, _ window: UInt32) -> Bool
 @_silgen_name("dtw_front_process_matches")
 private func dtwFrontProcessMatches(_ pid: Int32) -> Int32
+@_silgen_name("dtw_front_process_pid")
+private func dtwFrontProcessPID() -> Int32
 
 private struct NativeFailure: Error {
     let code: String
@@ -712,14 +714,14 @@ private struct FocusApplication<Element> {
 }
 
 private func resolveFocusedApplication<Element>(system: () throws -> Element,
-    candidate: () -> Element?, pid: (Element) throws -> Int32,
+    candidate: () throws -> Element?, pid: (Element) throws -> Int32,
     birth: (Int32) throws -> UInt64?, frontmost: (Int32) throws -> Bool) throws -> FocusApplication<Element>? {
     let element: Element
     let fromCandidate: Bool
     do { element = try system(); fromCandidate = false }
     catch let error as NativeFailure where error.attributeFailure?.name == kAXFocusedApplicationAttribute
         && (error.attributeFailure?.error == .cannotComplete || error.attributeFailure?.error == .noValue) {
-        guard let proposed = candidate() else { throw error }
+        guard let proposed = try candidate() else { throw error }
         element = proposed; fromCandidate = true
     }
     let process = try pid(element)
@@ -924,6 +926,35 @@ private func windowServerFrontmost(_ pid: Int32, _ deadline: Deadline) throws ->
     return try frontProcessMatch(result)
 }
 
+private func frontProcessPID(_ result: Int32) throws -> Int32 {
+    guard result > 0 else {
+        throw failure("focus_unproven", "WindowServer foreground PID is unavailable or changed during lookup",
+                      details:["native_result":result])
+    }
+    return result
+}
+
+private func foregroundCandidatePID(expectedPID: Int32?, fresh: () throws -> Int32) throws -> Int32 {
+    if let expectedPID { return expectedPID }
+    return try fresh()
+}
+
+private func windowServerForegroundPID(_ deadline: Deadline) throws -> Int32 {
+    try deadline.check()
+    let result = dtwFrontProcessPID()
+    try deadline.check()
+    if ProcessInfo.processInfo.environment["DTW_AX_READINESS_TRACE"] == "1" {
+        // Diagnostic comparison only. A normal lookup never reads this cache,
+        // and even a matching cached candidate cannot influence admission.
+        let cached = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        traceSemanticFailure(["operation":"foreground_pid_lookup", "native_result":result,
+                              "windowserver_pid":result > 0 ? result as Any : NSNull(),
+                              "workspace_candidate_pid":cached as Any? ?? NSNull(),
+                              "stable_psn_roundtrip":result > 0])
+    }
+    return try frontProcessPID(result)
+}
+
 private func nativeFocusedApplication(expectedPID: Int32? = nil,
                                       deadline: Deadline, traceStage: String? = nil) throws -> FocusApplication<AXUIElement>? {
     let context = RequestContext(deadline: deadline)
@@ -945,10 +976,12 @@ private func nativeFocusedApplication(expectedPID: Int32? = nil,
         }
         return try systemFocusValue(result, element: axElement(value))
     }, candidate: {
-        // AppKit supplies only a candidate for an unknown prior app. Known
-        // targets bypass that run-loop cache entirely, including after a raise.
-        guard let pid = expectedPID ?? NSWorkspace.shared.frontmostApplication?.processIdentifier,
-              pid > 0 else { return nil }
+        // Unknown prior focus uses fresh WindowServer identity, never the
+        // resident AppKit cache. Known targets still use the exact requested
+        // PID so a negative PSN proof means a real loss of target ownership.
+        let pid = try foregroundCandidatePID(expectedPID: expectedPID,
+            fresh: { try windowServerForegroundPID(deadline) })
+        guard pid > 0 else { return nil }
         return AXUIElementCreateApplication(pid)
     }, pid: { try axPID($0, deadline) }, birth: { try context.startStamp($0) },
        frontmost: { try windowServerFrontmost($0, deadline) })
@@ -3717,8 +3750,8 @@ private final class NativeStore: @unchecked Sendable {
             // stale application remembered by an earlier focus in this script.
             focusObserver.end(prior.activationEpoch); borrowedFocus = nil
         }
-        // Global AX is preferred; typed global absence may instead use an
-        // AppKit candidate only after fresh WindowServer and birth proof.
+        // Global AX is preferred; typed global absence may instead resolve the
+        // current WindowServer PID, retaining the same birth/window proof.
         guard let previousFocus = try nativeFocusedApplication(deadline: context.deadline) else {
             throw failure("focus_unproven", "Previous foreground candidate is no longer frontmost")
         }

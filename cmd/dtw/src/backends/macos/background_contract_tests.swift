@@ -10,6 +10,11 @@ func dtwFrontProcessMatchesControlStub(_ pid: Int32) -> Int32 {
     preconditionFailure("Pure contracts must not read the real WindowServer")
 }
 
+@_cdecl("dtw_front_process_pid")
+func dtwFrontProcessPIDControlStub() -> Int32 {
+    preconditionFailure("Pure contracts must not resolve the real foreground PID")
+}
+
 // Pure target-read recovery controls; no desktop, AX server or input events.
 private func backgroundCheck(_ value: @autoclosure () -> Bool) { precondition(value()) }
 private func busyAttribute(_ name: String = "AXModal") -> NativeFailure {
@@ -726,6 +731,58 @@ _ = expectedBackgroundError("deadline_exceeded") {
         birth: { _ in throw failure("deadline_exceeded", "same observer budget") }, frontmost: { _ in true })
 }
 print("Typed System AX absence uses exact WindowServer/app-window proof; no CG window guessing or action retries")
+
+// Reproduce the resident-cache failure: System AX is absent, the cached app is
+// A, and stable WindowServer identity is B. Only the fresh B candidate can be
+// used, then birth and exact app/window checks still apply normally.
+private var freshForegroundReads = 0
+for unavailable in [AXError.cannotComplete, .noValue] {
+    let cachedA = try resolveFocusedApplication(system: {
+        try systemFocusValue(unavailable, element: Optional<Int32>.none)
+    }, candidate: { Int32(10) }, pid: { $0 }, birth: { _ in 42 }, frontmost: { $0 == 20 })
+    backgroundCheck(cachedA == nil)
+    freshForegroundReads = 0
+    let freshB = try resolveFocusedApplication(system: {
+        try systemFocusValue(unavailable, element: Optional<Int32>.none)
+    }, candidate: {
+        try foregroundCandidatePID(expectedPID:nil, fresh:{
+            freshForegroundReads += 1; return try frontProcessPID(20)
+        })
+    }, pid: { $0 }, birth: { _ in 42 }, frontmost: { $0 == 20 })
+    backgroundCheck(freshB?.pid == 20 && freshB?.generation == 42 && freshB?.fromCandidate == true)
+    backgroundCheck(freshForegroundReads == 1)
+
+    // A known target A must remain false when B is frontmost. It must not turn
+    // into B's ownership just because a fresh unknown-app resolver is available.
+    let knownA = try resolveFocusedApplication(system: {
+        try systemFocusValue(unavailable, element: Optional<Int32>.none)
+    }, candidate: {
+        try foregroundCandidatePID(expectedPID:10, fresh:{
+            preconditionFailure("Known target must not resolve another foreground application")
+        })
+    }, pid: { $0 }, birth: { _ in 42 }, frontmost: { $0 == 20 })
+    backgroundCheck(knownA == nil)
+}
+for result in [0,-1,-2,-3,-4,-5,-6,-7,-8,-9,-10] as [Int32] {
+    let kept = expectedBackgroundError("focus_unproven") { _ = try frontProcessPID(result) }
+    backgroundCheck(kept.details?["native_result"] as? Int32 == result)
+    backgroundCheck(kept.focusAbsence == nil) // No lookup error invents an absent/closed app.
+}
+for original in [failure("native_stopping", "cancel during foreground lookup"),
+                 failure("deadline_exceeded", "foreground lookup exceeded original deadline"),
+                 failure("focus_unproven", "unstable PSN roundtrip", details:["native_result":-9])] {
+    let kept = expectedBackgroundError(original.code) {
+        let _: FocusApplication<Int32>? = try resolveFocusedApplication(system: {
+            try systemFocusValue(.noValue, element: Optional<Int32>.none)
+        }, candidate: {
+            try foregroundCandidatePID(expectedPID:nil, fresh:{throw original})
+        }, pid: { $0 }, birth: { _ in preconditionFailure("Failed lookup cannot admit birth/window reads") },
+           frontmost: { _ in preconditionFailure("Failed lookup cannot admit input") })
+    }
+    backgroundCheck(kept.message == original.message)
+}
+print("Fresh foreground PID replaces stale cache only for typed global AX absence; known-target and original-error boundaries remain strict")
+
 
 
 // One issued AXRaise may be unconfirmed while exact focus is already valid.
