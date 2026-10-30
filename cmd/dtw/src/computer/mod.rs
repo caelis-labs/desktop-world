@@ -41,6 +41,71 @@ pub struct WindowTarget {
     pub generation: u64,
 }
 
+/// Service launch policy; callers cannot override it in individual scripts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InputPolicy {
+    #[default]
+    Auto,
+    BackgroundOnly,
+}
+impl InputPolicy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::BackgroundOnly => "background_only",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputRoute {
+    Semantic,
+    Background,
+    Foreground,
+}
+impl InputRoute {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Semantic => "semantic",
+            Self::Background => "background",
+            Self::Foreground => "foreground",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FocusReturn {
+    Pending,
+    Restored,
+    ApplicationRestored,
+    ChangedExternally,
+    PreviousAppClosed,
+    Unchanged,
+    Unconfirmed,
+}
+impl FocusReturn {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Restored => "restored",
+            Self::ApplicationRestored => "application_restored",
+            Self::ChangedExternally => "changed_externally",
+            Self::PreviousAppClosed => "previous_app_closed",
+            Self::Unchanged => "unchanged",
+            Self::Unconfirmed => "unconfirmed",
+        }
+    }
+}
+
+/// Provider-reported routing evidence, independent of effect confirmation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InputDelivery {
+    pub route: Option<InputRoute>,
+    pub reason: Option<String>,
+    pub foreground_borrowed: bool,
+    pub focus_return: Option<FocusReturn>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Capability {
     Windows,
@@ -168,6 +233,27 @@ pub struct ImageFrame {
 pub struct PixelPoint {
     pub x: f64,
     pub y: f64,
+}
+
+/// A scroll point bound to a retained observation, never a global coordinate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ScrollAnchor {
+    Pixels(PixelPoint),
+    Element(ElementId),
+}
+impl ScrollAnchor {
+    pub fn kind(self) -> ObservationKind {
+        match self {
+            Self::Pixels(_) => ObservationKind::Pixels,
+            Self::Element(_) => ObservationKind::Semantic,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScrollRequest {
+    pub anchor: ScrollAnchor,
+    pub delta_x: i32,
+    pub delta_y: i32,
 }
 
 /// One complete input transaction. No held keys or buttons escape an atomic call.
@@ -347,6 +433,7 @@ pub enum EffectEvidence {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActionOutcome {
+    pub delivery: Option<InputDelivery>,
     pub dispatch: DispatchState,
     pub evidence: EffectEvidence,
     pub error: Option<Error>,
@@ -355,6 +442,7 @@ pub struct ActionOutcome {
 impl ActionOutcome {
     pub fn rejected(error: Error) -> Self {
         Self {
+            delivery: None,
             dispatch: DispatchState::NotDispatched,
             evidence: EffectEvidence::Unverified,
             error: Some(error),
@@ -363,6 +451,7 @@ impl ActionOutcome {
 
     pub fn unknown(error: Error) -> Self {
         Self {
+            delivery: None,
             dispatch: DispatchState::Unknown,
             evidence: EffectEvidence::Unverified,
             error: Some(error),
@@ -405,8 +494,8 @@ pub trait Backend: Send + Sync {
 
     /// Release temporary resources borrowed by one script, including foreground
     /// focus. App state and native observations remain available to later scripts.
-    fn finish_execution(&self) -> Result<(), Error> {
-        Ok(())
+    fn finish_execution(&self) -> Result<Option<FocusReturn>, Error> {
+        Ok(None)
     }
 
     /// Stop and reap native resources. Failure does not reopen admission.
@@ -483,6 +572,20 @@ pub trait Backend: Send + Sync {
         &self,
         _target: &WindowTarget,
         _input: &WindowInput,
+        _call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        ActionOutcome::rejected(Error::UnsupportedCapability)
+    }
+    /// Separate from center scrolling, so unsupported providers reject before
+    /// Core consumes the observation.
+    fn supports_scroll_anchor(&self, _kind: ObservationKind) -> bool {
+        false
+    }
+    fn scroll_at(
+        &self,
+        _target: &WindowTarget,
+        _binding: &Self::Binding,
+        _scroll: ScrollRequest,
         _call: &CallContext<'_>,
     ) -> ActionOutcome {
         ActionOutcome::rejected(Error::UnsupportedCapability)

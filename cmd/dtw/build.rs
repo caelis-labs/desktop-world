@@ -11,6 +11,7 @@ fn main() {
         println!("cargo:rerun-if-changed=src/backends/macos/Scene.swift");
         println!("cargo:rerun-if-changed=src/backends/macos/Native.swift");
         println!("cargo:rerun-if-changed=src/backends/macos/Input.swift");
+        println!("cargo:rerun-if-changed=src/backends/macos/Overlay.swift");
         let mut command = std::process::Command::new("xcrun");
         command.args([
             "swiftc",
@@ -29,6 +30,7 @@ fn main() {
             "src/backends/macos/Scene.swift",
             "src/backends/macos/Native.swift",
             "src/backends/macos/Input.swift",
+            "src/backends/macos/Overlay.swift",
         ]);
         let status = command
             .status()

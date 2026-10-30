@@ -5,7 +5,7 @@ use super::{
     Coordinator, Error, Publication, State, Submit, WireError, Work,
 };
 use crate::{
-    computer::{ActionOutcome, Backend},
+    computer::{ActionOutcome, Backend, FocusReturn},
     runtime::ActionReceipt,
 };
 use serde_json::{json, Value};
@@ -85,6 +85,7 @@ pub(super) struct ScriptRun {
     failure: Option<Value>,
     pub state_committed: bool,
     pub(super) shutdown_error: Option<WireError>,
+    focus_return: Option<FocusReturn>,
 }
 impl ScriptRun {
     pub fn new(deadline: Instant) -> Self {
@@ -96,10 +97,15 @@ impl ScriptRun {
             failure: None,
             state_committed: false,
             shutdown_error: None,
+            focus_return: None,
         }
     }
     pub fn json(&self) -> Value {
-        json!({"steps":self.steps.iter().map(Step::json).collect::<Vec<_>>(),"failure":self.failure,"state_committed":self.state_committed,"shutdown_error":self.shutdown_error.as_ref().map(error_json)})
+        let mut value = json!({"steps":self.steps.iter().map(Step::json).collect::<Vec<_>>(),"failure":self.failure,"state_committed":self.state_committed,"shutdown_error":self.shutdown_error.as_ref().map(error_json)});
+        if let Some(focus_return) = self.focus_return {
+            value["focus_return"] = json!(focus_return.as_str());
+        }
+        value
     }
 }
 
@@ -211,7 +217,23 @@ impl<B: Backend + 'static> Coordinator<B> {
             }
         }
         let joined = thread.join();
-        if let Err(error) = self.runtime.finish_execution() {
+        let finished = self.runtime.finish_execution();
+        {
+            let mut state = self.state.lock().unwrap();
+            let run = state
+                .jobs
+                .iter_mut()
+                .find(|j| j.submitted.request_id == *id)
+                .unwrap()
+                .script
+                .as_mut()
+                .unwrap();
+            run.focus_return = match &finished {
+                Ok(status) => *status,
+                Err(_) => Some(FocusReturn::Unconfirmed),
+            };
+        }
+        if let Err(error) = finished {
             self.record_shutdown_error(Some(error), Some(id));
             self.close();
         }

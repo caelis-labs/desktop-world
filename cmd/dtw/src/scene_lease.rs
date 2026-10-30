@@ -133,7 +133,9 @@ mod tests {
         assert!(lock_instance(pid, generation, Duration::ZERO).is_err());
         let peer = lock_instance(pid, generation.wrapping_add(1), Duration::ZERO).unwrap();
         drop(first);
-        drop(lock_instance(pid, generation, Duration::ZERO).unwrap());
+        // Parallel tests spawn children. CLOEXEC closes inherited flock FDs at
+        // exec, not at fork; allow that short handover after the parent drops.
+        drop(lock_instance(pid, generation, Duration::from_secs(1)).unwrap());
         drop(peer);
         let uid = unsafe { libc::geteuid() };
         for value in [generation, generation.wrapping_add(1)] {

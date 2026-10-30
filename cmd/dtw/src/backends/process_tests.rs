@@ -125,6 +125,7 @@ fn failed_native_drain_survives_idle_reaping_and_repeated_stop() {
         thread::sleep(Duration::from_millis(2));
     }
     assert_reaped(&worker);
+    assert!(worker.is_reaped()); // Cleanup failure does not undo exact wait evidence.
     for _ in 0..2 {
         let error = worker.stop().unwrap_err();
         assert!(
@@ -132,6 +133,17 @@ fn failed_native_drain_survives_idle_reaping_and_repeated_stop() {
         );
         assert_eq!(worker.cleanup_error(), Some(error));
     }
+}
+
+#[test]
+fn a_stopped_flag_alone_is_not_owned_child_exit_evidence() {
+    let fixture = Fixture::new();
+    let worker = fixture.worker("hang");
+    assert!(!worker.is_reaped());
+    worker.process.stopped.store(true, Ordering::SeqCst);
+    assert!(!worker.is_reaped());
+    worker.stop().unwrap();
+    assert!(worker.is_reaped());
 }
 
 fn wait_for_idle_reaping(worker: &Worker) {

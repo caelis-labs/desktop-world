@@ -26,6 +26,7 @@ pub struct AppInfo {
 pub struct NativeBackend<P: Platform> {
     worker: Arc<Worker>,
     generation: u64,
+    input_policy: InputPolicy,
     cleanup: Mutex<Option<Error>>,
     platform: PhantomData<P>,
 }
@@ -49,12 +50,16 @@ impl Drop for NativeBinding {
 }
 impl<P: Platform> NativeBackend<P> {
     pub fn spawn() -> Result<Self, Error> {
+        Self::spawn_with_policy(InputPolicy::Auto)
+    }
+    pub fn spawn_with_policy(input_policy: InputPolicy) -> Result<Self, Error> {
         let path = std::env::current_exe().map_err(failed)?;
         let args = P::worker_args()?;
         let refs: Vec<_> = args.iter().map(String::as_str).collect();
         Ok(Self {
             worker: Arc::new(Worker::spawn_cooperative(&path, &refs).map_err(transport_error)?),
             generation: nonce(),
+            input_policy,
             cleanup: Mutex::new(None),
             platform: PhantomData,
         })
@@ -169,13 +174,18 @@ impl<P: Platform> NativeBackend<P> {
         }
     }
     fn action(&self, request: Value, call: &CallContext<'_>) -> ActionOutcome {
+        let operation = request["operation"].as_str().unwrap_or("").to_owned();
+        if let Some(rejected) = policy_rejection(self.input_policy, &operation) {
+            return rejected;
+        }
         match self.rpc(request, call) {
             Err((error, true)) => ActionOutcome::unknown(error),
             Err((error, false)) => ActionOutcome::rejected(error),
             Ok(reply) => {
                 let error = reply_error(&reply);
-                match reply["dispatch"].as_str() {
+                let mut outcome = match reply["dispatch"].as_str() {
                     Some("dispatched") => ActionOutcome {
+                        delivery: None,
                         dispatch: DispatchState::Dispatched,
                         evidence: EffectEvidence::Unverified,
                         error,
@@ -188,9 +198,21 @@ impl<P: Platform> NativeBackend<P> {
                     ),
                     _ => {
                         let _ = self.worker.stop();
-                        ActionOutcome::unknown(Error::InvalidObservation)
+                        return ActionOutcome::unknown(Error::InvalidObservation);
                     }
+                };
+                // Both native providers have one physical input path. A native
+                // dispatched/unknown reply proves that path crossed admission;
+                // transport uncertainty alone does not prove any delivery route.
+                if outcome.dispatch != DispatchState::NotDispatched {
+                    outcome.delivery = operation_route(&operation).map(|route| InputDelivery {
+                        route: Some(route),
+                        reason: None,
+                        foreground_borrowed: false,
+                        focus_return: None,
+                    });
                 }
+                outcome
             }
         }
     }
@@ -402,6 +424,37 @@ impl<P: Platform> Backend for NativeBackend<P> {
         self.action(request, call)
     }
 }
+fn operation_route(operation: &str) -> Option<InputRoute> {
+    match operation {
+        // Windows uses UIA Invoke/Toggle/Select and SetValue without an explicit
+        // foreground operation. X11 currently does not advertise these actions.
+        "press" | "setValue" => Some(InputRoute::Semantic),
+        "click" | "focus" | "typeText" | "keypress" | "scroll" => Some(InputRoute::Foreground),
+        _ => None,
+    }
+}
+
+fn policy_rejection(policy: InputPolicy, operation: &str) -> Option<ActionOutcome> {
+    if policy != InputPolicy::BackgroundOnly
+        || operation_route(operation) != Some(InputRoute::Foreground)
+    {
+        return None;
+    }
+    let mut outcome = ActionOutcome::rejected(Error::NativeFailure {
+        code: "foreground_required".into(),
+        message:
+            "This platform requires foreground input; the service allows background operations only"
+                .into(),
+    });
+    outcome.delivery = Some(InputDelivery {
+        route: None,
+        reason: Some("platform_has_no_background_route".into()),
+        foreground_borrowed: false,
+        focus_return: None,
+    });
+    Some(outcome)
+}
+
 pub fn nonce() -> u64 {
     u64::from_ne_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().unwrap()) | 1
 }
@@ -554,6 +607,31 @@ pub fn encode_png(width: u32, height: u32, rgb: &[u8]) -> Result<Value, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn background_only_rejects_every_physical_path_and_preserves_semantics() {
+        for operation in ["click", "focus", "typeText", "keypress", "scroll"] {
+            let rejected = policy_rejection(InputPolicy::BackgroundOnly, operation).unwrap();
+            assert_eq!(rejected.dispatch, DispatchState::NotDispatched);
+            assert_eq!(
+                rejected.delivery,
+                Some(InputDelivery {
+                    route: None,
+                    reason: Some("platform_has_no_background_route".into()),
+                    foreground_borrowed: false,
+                    focus_return: None,
+                })
+            );
+            assert!(
+                matches!(rejected.error, Some(Error::NativeFailure { code, .. }) if code == "foreground_required")
+            );
+            assert!(policy_rejection(InputPolicy::Auto, operation).is_none());
+        }
+        for operation in ["press", "setValue"] {
+            assert!(policy_rejection(InputPolicy::BackgroundOnly, operation).is_none());
+            assert_eq!(operation_route(operation), Some(InputRoute::Semantic));
+        }
+    }
+
     #[test]
     fn returned_target_retains_both_process_and_window_incarnations() {
         let target = WindowTarget {

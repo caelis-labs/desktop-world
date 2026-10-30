@@ -7,6 +7,7 @@ use crate::app_protocol::{
 const APP: &str = "org.example.Controlled";
 #[derive(Clone)]
 struct Catalog {
+    input_policy: InputPolicy,
     entries: Arc<Mutex<Vec<Application>>>,
     backend: MockBackend,
     connects: Arc<AtomicUsize>,
@@ -14,6 +15,9 @@ struct Catalog {
 }
 impl Factory for Catalog {
     type Provider = MockBackend;
+    fn input_policy(&self) -> InputPolicy {
+        self.input_policy
+    }
     fn catalog(&self) -> Result<Vec<Application>, Error> {
         Ok(self.entries.lock().unwrap().clone())
     }
@@ -31,6 +35,7 @@ impl Factory for Catalog {
 }
 fn server() -> (Arc<Server<Catalog>>, Catalog) {
     let catalog = Catalog {
+        input_policy: InputPolicy::Auto,
         entries: Arc::new(Mutex::new(vec![Application {
             app_id: APP.into(),
             app: application(),
@@ -810,5 +815,23 @@ fn unicode_and_json_expansion_are_rejected_before_input_admission() {
     "#,
     );
     assert_eq!(success(&reply), &json!(["invalid_args", "invalid_args"]));
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn service_policy_is_discoverable_in_apps_and_filtered_api_without_connecting() {
+    let (server_auto, mut catalog) = server();
+    let automatic = call(&server_auto, "api", json!({}));
+    assert_eq!(automatic.data["service"]["input_policy"], "auto");
+    catalog.input_policy = InputPolicy::BackgroundOnly;
+    let server = Server::new(catalog.clone());
+    for args in [json!({}), json!({"methods":["click"]})] {
+        let reply = call(&server, "api", args);
+        assert!(!reply.is_error);
+        assert_eq!(reply.data["service"]["input_policy"], "background_only");
+    }
+    let apps = call(&server, "apps", json!({}));
+    assert_eq!(apps.data["service"]["input_policy"], "background_only");
+    assert_eq!(catalog.connects.load(Ordering::SeqCst), 0);
     assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
 }

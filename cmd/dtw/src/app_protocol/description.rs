@@ -24,7 +24,13 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
                 object(json!({"kind":{"const":"confirmed"},"postcondition":{"type":"string"}}), &["kind","postcondition"]),
                 object(json!({"kind":{"const":"mismatch"},"expected":{"type":"string"},"observed":{"type":"string"}}), &["kind","expected","observed"])
             ]},
-            "error":{"anyOf":[error,{"type":"null"}]}
+            "error":{"anyOf":[error,{"type":"null"}]},
+            "delivery":object(json!({
+                "route":{"enum":["semantic","background","foreground",null]},
+                "reason":{"type":["string","null"]},
+                "foreground_borrowed":{"type":"boolean"},
+                "focus_return":{"enum":["pending","restored","application_restored","changed_externally","previous_app_closed","unchanged","unconfirmed",null]}
+            }), &["route","reason","foreground_borrowed","focus_return"])
         }),
         &["dispatch", "evidence", "error"],
     );
@@ -77,6 +83,21 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
         }),
         &["windows", "coverage", "diagnostics"],
     );
+    let scroll_base = json!({"window_ref":reference,
+        "delta_x":{"type":"integer","minimum":-100,"maximum":100,"default":0},
+        "delta_y":{"type":"integer","minimum":-100,"maximum":100,"default":0}});
+    let mut scroll_pixels = scroll_base.clone();
+    scroll_pixels["observation_ref"] = reference.clone();
+    scroll_pixels["x"] = json!({"type":"number","minimum":0});
+    scroll_pixels["y"] = json!({"type":"number","minimum":0});
+    let mut scroll_element = scroll_base.clone();
+    scroll_element["observation_ref"] = reference.clone();
+    scroll_element["element_ref"] = reference.clone();
+    let scroll = json!({"oneOf":[
+        object(scroll_base, &["window_ref"]),
+        object(scroll_pixels, &["window_ref","observation_ref","x","y"]),
+        object(scroll_element, &["window_ref","observation_ref","element_ref"])
+    ]});
     let window = object(json!({"window_ref":reference}), &["window_ref"]);
     let query = json!({"oneOf":[
         object(json!({"window_ref":reference,
@@ -130,7 +151,7 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
         "entry":"exec({app: 'com.example.App', source}); source is an async function body with app and state",
         "facade":{"windows":"app.windows()","observe":"app.observe({window_ref, role?, text?, limit?}) or app.observe({cursor})","capture":"app.capture({window_ref})",
             "press":"app.press({window_ref,observation_ref,element_ref})","click":"app.click({window_ref,observation_ref,x,y,button?,count?})",
-            "typeText":"app.typeText({window_ref,text})","keypress":"app.keypress({window_ref,keys})","scroll":"app.scroll({window_ref,delta_x?,delta_y?})",
+            "typeText":"app.typeText({window_ref,text})","keypress":"app.keypress({window_ref,keys})","scroll":"app.scroll({window_ref,delta_x?,delta_y?,observation_ref?,x?,y?,element_ref?})",
             "focus":"app.focus({window_ref})","setValue":"app.setValue({window_ref,observation_ref,element_ref,value})"},
         "methods":{
             (Method::Windows.name()):{"parameters":null,"returns":inventory,"requires":[Method::Windows.capability().as_str()],
@@ -147,8 +168,8 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
                 "semantics":"DTW verifies the selected window and its editing focus before inserting literal text. On macOS, eligible input is delivered in the background; otherwise DTW may temporarily borrow foreground focus before dispatch. Select the intended editable control first. No held keys escape the call. All observations on this window retire; read back independently."},
             (Method::Keypress.name()):{"parameters":object(json!({"window_ref":reference,"keys":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"string","minLength":1,"maxLength":32},"description":"One chord, for example ['META','A'], ['CTRL','S'], ['RETURN'], ['TAB'], ['SHIFT','TAB']; META is Command on macOS and Windows key on Windows. Use typeText for literal Unicode."}}), &["window_ref","keys"]),"returns":receipt,"requires":["keypress"],
                 "semantics":"Press and release one complete chord within DTW's input transaction after target focus verification. No persistent key-down API. All target-window observations retire. Independently inspect effects; never retry uncertain input."},
-            (Method::Scroll.name()):{"parameters":object(json!({"window_ref":reference,"delta_x":{"type":"integer","minimum":-100,"maximum":100,"default":0},"delta_y":{"type":"integer","minimum":-100,"maximum":100,"default":0}}), &["window_ref"]),"returns":receipt,"requires":["scroll"],
-                "semantics":"Scroll the selected window in signed wheel steps: positive x right, positive y down. Distance depends on the OS and application, not a pixel guarantee. At least one delta must be nonzero. The current native route targets the window center. For nested regions, inspect the result; clicking a different region does not change this wheel anchor. Native routing/visibility conditions apply. All target-window observations retire."},
+            (Method::Scroll.name()):{"parameters":scroll,"returns":receipt,"requires":["scroll"],
+                "semantics":"Scroll in signed wheel steps: positive x right, positive y down. At least one delta must be nonzero; distance depends on OS/application, not a pixel guarantee. Default anchor is the window center. On macOS, supply observation_ref with x/y in capture pixels, or with element_ref from observe; never mix these forms. An element need not support press. DTW verifies the bound object and fixed point before the first wheel; movement caused by that scroll does not invalidate the remaining wheel sequence. Target-window observations are consumed, other windows are preserved. Unsupported anchored providers reject before consuming references. Routing/visibility conditions and uncertain-input handling remain unchanged."},
             (Method::Focus.name()):{"parameters":window,"returns":receipt,"requires":["focus"],
                 "semantics":"Bring the exact selected app window to the foreground and verify focus under DTW's input coordination. This affects the user's foreground. On macOS, borrowed foreground is released when the script ends if DTW still owns it; an external focus change is preserved. It does not grant an input lease to later scripts; each later input independently checks its target. All target-window observations retire."},
             (Method::SetValue.name()):{"parameters":object(json!({"window_ref":reference,"observation_ref":reference,"element_ref":reference,"value":{"type":"string","description":"Replacement value, at most 16 KiB UTF-8 (48 KiB after JSON encoding), no NUL; empty clears the field."}}), &["window_ref","observation_ref","element_ref","value"]),"returns":receipt,"requires":["setValue"],
@@ -179,7 +200,7 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
             "failure":"A Host error throws before returning to JavaScript; its action receipt remains in script.steps. Previously completed effects and receipts survive later exceptions, cancellation, timeout and VM failure.",
             "ledger":"script.steps retains number,line,operation,status,error,receipt and windows inventory coverage/diagnostics independently of evictable value/image payloads. Bridge attempts consume call numbers, so the ledger may have gaps. No automatic replay. DTW keeps the original ledger; repeated accepted MCP transport IDs refer to the same execution, while new requests execute new work."
         },
-        "result":"exec waits until completion and returns value.result plus unchanged console,console_truncated,calls,last_capture. script.summary replaces the step ledger with counts and a last_issue sample; script.failure,state_committed,shutdown_error and all recovery flags remain. result({app}) retrieves the full original record with script.steps; optional execution_id selects a prior returned record. Summary dispatch/evidence counts do not prove business success. Caught errors may coexist with state_committed=true; consult the full ledger for all issues, never replay. Payload eviction sets payload_expired and may clear value/image while retaining errors and receipts.",
+        "result":"exec waits until completion and returns value.result plus unchanged console,console_truncated,calls,last_capture. script.summary replaces the step ledger with counts and a last_issue sample; script.failure,state_committed,shutdown_error,optional focus_return and all recovery flags remain. result({app}) retrieves the full original record with script.steps; optional execution_id selects a prior returned record. Summary dispatch/evidence counts do not prove business success. Optional delivery summaries retain reported routes and focus-return evidence; absent delivery is not inferred. An app.focus receipt may remain pending while script.focus_return records the later execution cleanup. Caught errors may coexist with state_committed=true; consult the full ledger for all issues, never replay. Payload eviction sets payload_expired and may clear value/image while retaining errors and receipts.",
         "images":"value.last_capture identifies the last successful capture's step and metadata. Its PNG is returned as MCP image content outside the VM; scripts cannot access or return image bytes.",
         "lifecycle":"Cancellation or script timeout closes the context, stops native resources and joins the VM before job completion. Cancellation cannot prove an already dispatched action did not occur. A later new exec rebuilds affected native references as needed (context_reset) while retaining committed JSON state. Only an actual application instance change clears state (state_reset). Retained jobs remain queryable within this MCP connection.",
         "example":{

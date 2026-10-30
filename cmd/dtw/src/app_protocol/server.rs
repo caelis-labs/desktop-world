@@ -4,7 +4,7 @@ use super::{
     wire::{self, Command, Request, Submit, Target, WireError},
     Coordinator, Reply,
 };
-use crate::computer::{AppInstance, Backend, Error};
+use crate::computer::{AppInstance, Backend, Error, InputPolicy};
 use serde_json::{json, Value};
 use std::{
     collections::VecDeque,
@@ -31,11 +31,18 @@ pub trait Factory: Send + Sync + 'static {
     type Provider: Backend + 'static;
     fn catalog(&self) -> Result<Vec<Application>, Error>;
     fn connect(&self) -> Result<Self::Provider, Error>;
+    fn input_policy(&self) -> InputPolicy {
+        InputPolicy::Auto
+    }
     fn description(&self) -> Value {
         json!({"coverage":"Provider-defined application window subset","conditions":[]})
     }
     /// Stops a possibly blocked metadata read. A later call may create a new reader.
     fn close_catalog(&self) -> Result<(), Error>;
+    /// Terminal session resources, independent of refreshable catalog/app owners.
+    fn close_session(&self) -> Result<(), Error> {
+        Ok(())
+    }
 }
 struct Record {
     id: String,
@@ -161,7 +168,10 @@ impl<F: Factory> Server<F> {
                 return Started::Reply(problem("closed", "The MCP server is shutting down"));
             }
             return Started::Reply(match super::description::requested(&args) {
-                Ok(value) => Reply::plain(value),
+                Ok(mut value) => {
+                    value["service"] = self.service();
+                    Reply::plain(value)
+                }
                 Err(error) => Reply::error(error),
             });
         }
@@ -325,6 +335,9 @@ impl<F: Factory> Server<F> {
         }
         append_shutdown_errors(reply, &state.shutdown_errors);
     }
+    fn service(&self) -> Value {
+        json!({"input_policy":self.factory.input_policy().as_str()})
+    }
     fn apps(&self, call: &Call<F::Provider>) -> Reply {
         if call.cancelled.load(Ordering::Acquire) {
             return problem("cancelled", "Application discovery was cancelled");
@@ -333,7 +346,7 @@ impl<F: Factory> Server<F> {
             Ok(apps) if !call.cancelled.load(Ordering::Acquire) => {
                 let apps = public_apps(apps);
                 Reply::plain(json!({"version":1,
-                "apps":apps,"backend":self.factory.description(),
+                "apps":apps,"backend":self.factory.description(),"service":self.service(),
                 "script":super::description::index(),
                 "limits":{"retained_executions":RETENTION.records,"payload_bytes":RETENTION.payload_bytes,
                     "receipt_bytes":RETENTION.receipt_bytes,"max_steps_per_request":scripts::MAX_CALLS},
@@ -701,6 +714,9 @@ impl<F: Factory> Server<F> {
             self.remember_shutdown(wire::core_error(&error));
         }
         self.close_contexts();
+        if let Err(error) = self.factory.close_session() {
+            self.remember_shutdown(wire::core_error(&error));
+        }
         if let Some(call) = active {
             let until = Instant::now() + STOP_TIMEOUT;
             let mut state = self.state.lock().unwrap();
@@ -1105,6 +1121,7 @@ mod lifecycle_tests {
             self.0.actions.fetch_add(1, Ordering::SeqCst);
             self.0.action_targets.lock().unwrap().push(target.clone());
             ActionOutcome {
+                delivery: None,
                 dispatch: DispatchState::Dispatched,
                 evidence: EffectEvidence::Unverified,
                 error: None,
@@ -1123,10 +1140,15 @@ mod lifecycle_tests {
         catalog_close_panics: AtomicBool,
         catalog_close: Mutex<Option<Arc<Gate>>>,
         catalog_closes: AtomicUsize,
+        session_closes: AtomicUsize,
         closing: Mutex<Option<mpsc::SyncSender<()>>>,
     }
     impl Factory for Arc<TestFactory> {
         type Provider = Provider;
+        fn close_session(&self) -> Result<(), Error> {
+            self.session_closes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
         fn catalog(&self) -> Result<Vec<Application>, Error> {
             let gate = self.catalog.lock().unwrap().take();
             if let Some(gate) = gate {
@@ -1190,6 +1212,7 @@ mod lifecycle_tests {
             catalog_close_panics: AtomicBool::new(false),
             catalog_close: Mutex::new(None),
             catalog_closes: AtomicUsize::new(0),
+            session_closes: AtomicUsize::new(0),
             closing: Mutex::new(None),
         });
         (Server::new(factory.clone()), factory)
@@ -1200,6 +1223,17 @@ mod lifecycle_tests {
             Started::Reply(reply) => panic!("unexpected rejection: {}", reply.data),
             Started::InFlight(_) => panic!("unexpected duplicate frame"),
         }
+    }
+    #[test]
+    fn cancelled_app_work_keeps_shared_session_resources_until_terminal_close() {
+        let (server, factory) = fixture();
+        let call = begin(&server, "cancelled-before-start", "return 1");
+        server.cancel(&json!("cancelled-before-start"));
+        server.run(&call);
+        assert!(factory.catalog_closes.load(Ordering::SeqCst) > 0);
+        assert_eq!(factory.session_closes.load(Ordering::SeqCst), 0);
+        server.close().unwrap();
+        assert_eq!(factory.session_closes.load(Ordering::SeqCst), 1);
     }
     fn reply(started: Started<Provider>) -> Reply {
         match started {

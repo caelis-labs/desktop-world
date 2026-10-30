@@ -1,0 +1,476 @@
+{
+  "schema_version": 1,
+  "checkpoint": "independent_agent_cursor",
+  "date": "2026-10-30",
+  "base": "e5525d8c815ecf50ab7fdf8302c796b050c4a864",
+  "scope": "Signed local macOS development candidate, owned AppKit fixtures and isolated Chrome profile over standard stdio MCP; not a release or live LLM host acceptance.",
+  "candidate": {
+    "name": "V",
+    "binary_sha256": "cecb146863306007f83a2cadd666e278b94ab71aed031141d4e05d8d51238865",
+    "source_manifest_artifact": "dtw-input-observability-candidate-v/source.json",
+    "source_manifest_sha256": "64e03dfebc07a239dde7af673b339c6ea26964bd804016fd3251b566b719c892",
+    "source_hashes_matched_at_checkpoint": true,
+    "source_sha256": {
+      "cmd/dtw/src/app_protocol/app_id.rs": "a26eef40fa02dd32171ca3e6ef4ce944d34d3489a7df96258397fcd6fe3da173",
+      "cmd/dtw/src/app_protocol/description.rs": "eda32393e45c159ffd08b3b3a1ed86d59926323e55b884194b48aebadd858293",
+      "cmd/dtw/src/app_protocol/discovery_evidence_tests.rs": "bfccb5511783e4185698fc3afc00d8224d918bd907bb48ba7d078d182ccf6dd9",
+      "cmd/dtw/src/app_protocol/discovery_tests.rs": "d028559a6a78021abb6c3ad67b01eb96529a234b332f12ae7cef20e563be937b",
+      "cmd/dtw/src/app_protocol/inventory_tests.rs": "4f764811780b2c5e5076a35f3a89f0027bcfdc0c2858f8966d98a8848dc663cb",
+      "cmd/dtw/src/app_protocol/mcp.rs": "9ebc02272525e6d494a3f3dac23ad749f4ffa7a20a08f7154477f5c514c18db6",
+      "cmd/dtw/src/app_protocol/mcp_io.rs": "c7f154fd4140e7dc1bd03688123e39874004db0866f67bdc95e13402bc569fc7",
+      "cmd/dtw/src/app_protocol/mcp_tests.rs": "9c5c874e2774964a8d9414ed6ff01ad3a344768e91e5f41da697d9afd22a5941",
+      "cmd/dtw/src/app_protocol/methods.rs": "fe9ce499b31ed711e1ac00d4b851c87773f8334162e6c5551a3fac6c348b31f6",
+      "cmd/dtw/src/app_protocol/mod.rs": "b8c01cd41a5d00a82d5e92c16fc1069ac7ed9f434dba7a9a287b4c315bcd656f",
+      "cmd/dtw/src/app_protocol/multi_instance_tests.rs": "7bc8b7d73c591ed9986bf36fbaaf721bf92407744942850ec5762b093b9766b3",
+      "cmd/dtw/src/app_protocol/projection.rs": "df253d7da74090d9183c211e910a5266960f0a87bbeb718d4ab01c3f2eedb6bb",
+      "cmd/dtw/src/app_protocol/script_engine/mod.rs": "1ad637ce679f3ea7a89b0f88bbc0bcc3c1e145da8728a91dbdda4e80b9b9c336",
+      "cmd/dtw/src/app_protocol/script_engine/prelude.js": "f7d5217205ea5fd39215b777b9f7be820f9c613cdf16389bb511618468eeffc8",
+      "cmd/dtw/src/app_protocol/script_engine/tests.rs": "11683a8fe4b160d051bc77e52359c5ebf818c43eb430ec91c32206819f255a2f",
+      "cmd/dtw/src/app_protocol/script_tests.rs": "e12190929dd782101a059926eb2416d6a5334cc3fcad6dc1a66711ebc90f8a9b",
+      "cmd/dtw/src/app_protocol/scripts.rs": "b9a3d6ee6c605ac3d86f97739dffc66b853d44ce731bd906d384f4350a5d0cb0",
+      "cmd/dtw/src/app_protocol/server.rs": "e337c0d3330fb5dfe676485183f0caeaf871c7d1f0d3c6128e40e27a0a68b768",
+      "cmd/dtw/src/app_protocol/standard_tests.rs": "ae5b6aebf2e007dbaff45166efb3d1525b1747b8877f7fa2c3146ebff5df4282",
+      "cmd/dtw/src/app_protocol/tests.rs": "2e4d637d0565742c00cafe636c12a55b5c89cf1a20aad64faa96430e631b8ead",
+      "cmd/dtw/src/app_protocol/transport.rs": "365212fc53a2deb1326f6dd564942ecc0d389b614972b9d0a6157e826d991201",
+      "cmd/dtw/src/app_protocol/wire.rs": "ef4a7d967919d9ef5a843a1c43764d58e420898f6d1b2727ffdca5c503780f08",
+      "cmd/dtw/src/app_protocol/wire_tests.rs": "7cfdbedfa55ca56f51aa46b49d57512bdbf32450642c92af018b932c5f66bfd5",
+      "cmd/dtw/src/backends/input_sequence.rs": "b4a3e88030b2338a8d379de62acf48ae46ea77be3117d05e05d8d60f0a4db744",
+      "cmd/dtw/src/backends/linux/client_pid.rs": "9af4e64b32c04e65215d2ad1d08987a9ec2d93e89361adb8c8b7441546560ef4",
+      "cmd/dtw/src/backends/linux/inventory.rs": "811065cf30d061454ff1675b9feed7ea6233950afbc0308a834e7ed1149a8ccd",
+      "cmd/dtw/src/backends/linux/mod.rs": "da33921dd85ec5a399edfef233c4babdcc4abd20a4a2ebf09c8f3bdc3a85ac9f",
+      "cmd/dtw/src/backends/linux/native.rs": "ae2e04b15532bff3d2c619c6e34e776d2e0bc04505067db38ef7a34d5af37193",
+      "cmd/dtw/src/backends/linux/worker.rs": "f4dcd495d0bbe9bd7752fd3111cbafc82aba4c7897710ac37ec85d1b26f93f3e",
+      "cmd/dtw/src/backends/macos/Input.swift": "3dc3d4b06a18c9e3be4965917ec7afe8bc1a32aac4084506e2a89dd1aad39cfb",
+      "cmd/dtw/src/backends/macos/Native.swift": "c10b06153480459d288b1c32b5d0bb69ebccb118aa620dd42cf9883e658a484c",
+      "cmd/dtw/src/backends/macos/Overlay.swift": "c3f4c929243ab8916f46ca819c03f502f1e1ad1f5c7372ba90261ab6417e476d",
+      "cmd/dtw/src/backends/macos/Scene.swift": "65d5d57debf685c23bacfc388417517124b7879966283ab061a30824029d38c0",
+      "cmd/dtw/src/backends/macos/background_contract_tests.swift": "89beacfa13f4046979ffcd434be0256ca29f1f16033679d1839d1315a753bece",
+      "cmd/dtw/src/backends/macos/cua_input/LICENSE-CUA": "c0779290c1d4783169aa3dbfb55feb505e563ef8a004bbf55298ceffcfbda8d9",
+      "cmd/dtw/src/backends/macos/cua_input/ax.rs": "1d5f1ca5dfb571aa69c1d06731ed536d1d005e0f07769801c10f40f9712e59e0",
+      "cmd/dtw/src/backends/macos/cua_input/control.rs": "78dc92acff5a9ea0e5b733ae48027917f5a60c5f56550e739cf1abb8f4f9578c",
+      "cmd/dtw/src/backends/macos/cua_input/keyboard.rs": "15f2eb3ed6f0098682bc605420e6237a46db15329ee6c416ec5c42472c43305e",
+      "cmd/dtw/src/backends/macos/cua_input/mod.rs": "9671c72eada648837368019a10dd3d20d5189fb77df9aa1160b16f5bcbb5b5c5",
+      "cmd/dtw/src/backends/macos/cua_input/mouse.rs": "5b80fd8bb837b760d1a648a30f2af898b11de7d865741d99c76c0cd2454d3afc",
+      "cmd/dtw/src/backends/macos/cua_input/skylight.rs": "6f2d38406e327e9a94f38d6e5ce40c13d5fc4b5d21cecf78a501f6f6a99047a1",
+      "cmd/dtw/src/backends/macos/cursor_session.rs": "65775c9d361372cae947175fde71d44e5524ae1581e0cd1936f69d4505eaeca9",
+      "cmd/dtw/src/backends/macos/input_contract_tests.swift": "119060ab32dc2bd98f0be80d16fa4e9ea71f720faebabb01a330c4f967478430",
+      "cmd/dtw/src/backends/macos/mod.rs": "98c26590ebef522078282141df5115bfae04c384308c3e7f7ab9c8d88f618a24",
+      "cmd/dtw/src/backends/macos/overlay.rs": "10165e6fd6a6f8306f9f45cfbaf6b95ed1dd006d62d15613a49756be32b44547",
+      "cmd/dtw/src/backends/macos/overlay_contract_tests.swift": "e1d0196a9744bda09c6ae3e282c46815543169ad108045c0731bdefd5ff54f68",
+      "cmd/dtw/src/backends/macos/pointer_presentation.rs": "fc99f7c3411647899767bb5fe7b90a3169de4293b7b622c50af9bf57f34be1df",
+      "cmd/dtw/src/backends/macos/scene_contract_tests.swift": "929c0fec2ee5cb1a5a8abdfaf0046c4deba43134a24692a763e599f65d6096f3",
+      "cmd/dtw/src/backends/macos/surface_contract_tests.swift": "cbb343fd793ada12775728a27034509a0bfa80d92d9fc72a1acab921d69d4c60",
+      "cmd/dtw/src/backends/macos/worker.rs": "ae808eff423c491e74e86b5d36b44de624b5c1eca6cd0a183fd514b36c6e4a46",
+      "cmd/dtw/src/backends/mod.rs": "36028a74cb0620937286a2b4ec60d74e26be4674633832a4d0117b738fe30408",
+      "cmd/dtw/src/backends/native_client.rs": "1275f7cded846349111d261272103b5ff9ecb27fe9b6943f313f2e2fca38d2ec",
+      "cmd/dtw/src/backends/process.rs": "c28da88fa1da9cae61b67b81231fb41c3e0f032e603ef0b0fb478609c7be53c4",
+      "cmd/dtw/src/backends/process_fixture.py": "1bf4fdfb1c00b8b9609f9ff3a0f6dc3cc4508820d374dee8852218e3fa6548e4",
+      "cmd/dtw/src/backends/process_tests.rs": "6ffca1a720a89a11a6849c59698d5dc14a1b87275055bff2618486c327287695",
+      "cmd/dtw/src/backends/windows/input.rs": "96cda9b0b991eab75c7379df4f9a42ae77846619c36acb4a284299c372e3f2d8",
+      "cmd/dtw/src/backends/windows/mod.rs": "9dae4792262b105bf7db91c27e2b753457ccda290b3e4645f591880651adc439",
+      "cmd/dtw/src/backends/windows/native.rs": "fb534f19b27b07ddb61552191f502fb3b069f509252486c707137b80a3ede9b7",
+      "cmd/dtw/src/backends/windows/worker.rs": "72533892ccbdb57b8c65161c112144f59ce90a73411ce50bf797dcb1c0a8be69",
+      "cmd/dtw/src/computer/mod.rs": "2ffaa0e262ea9fb576637bf1457d9a94509ca9a379f362f98c45a89402a927ab",
+      "cmd/dtw/src/lib.rs": "f212bb1c56b3f05f03c570b9a412c0e396812ed5d0fdba3c3026e448b60ba5f4",
+      "cmd/dtw/src/main.rs": "9cad7373edb89dd4be35131e7d583c9c2e677434722cfa94e8b3541004b3ff47",
+      "cmd/dtw/src/runtime/input_tests.rs": "d58923fa52a1f30fbacd0a17276172d5081f334b6c9cc9e4cdde51a0b8ecca69",
+      "cmd/dtw/src/runtime/mod.rs": "cd2e4bd0cb2156fb7c9010a42b18a0936aee014c7ff7191ff76402437c052cc3",
+      "cmd/dtw/src/runtime/tests.rs": "eadc810f6435737fa81874187897b817077802d33cb9132fccaec31b08520621",
+      "cmd/dtw/src/scene_lease.rs": "fd921dd2c3a31cf0480f299ce185aab6c66aa0903b6fa196cf237b26bb20008e",
+      "cmd/dtw/Cargo.toml": "d0f4ee31a7b833cdc20e3414b2a1e78dffedaa8ad190d3ec282e121e5d7a63ef",
+      "cmd/dtw/Cargo.lock": "9187a5cecbfbc16ca95c7ce6f2fe2f2283854d8e71dbf40f22c72bc59083935c",
+      "cmd/dtw/build.rs": "c1b58de03b6fbeab10e82a54ed52863734adf6874bc2840f52d7be53c462e61a"
+    }
+  },
+  "verification": {
+    "rust_lib_tests": 335,
+    "source_check": "passed; includes 160 Python probe/source controls",
+    "native_swift_controls": "passed; inventory, input, focus, scene and overlay state controls",
+    "probe_source_sha256": {
+      "tests/acceptance/cursor_overlay_probe.py": "9f06e8985f791784209cbd39e293b949476a4fdb09e77cd26d840634536ad6a2",
+      "tests/acceptance/test_cursor_overlay_probe.py": "edf5187d7fe2e3407b15f191357ce36babe72217e9f3ccadf50699ef4dcce5aa",
+      "tests/acceptance/background_input_probe.py": "c1719f5593765b13309b0894db5ffb2b935e65707c8ce778af0c9dc63393831b",
+      "tests/acceptance/native_input_probe.py": "cfca09409bd8611ccc11b8b57f3c9797e25f97494fe3c6717c92e978f54e8f98",
+      "tests/acceptance/standard_agent_probe.py": "ad1b8932ba55ed8e27deed4f194e7909062cdf6f8ad65ba046c05c02c2b76181",
+      "tests/acceptance/background_browser_probe.py": "a24c2bbec03477a8cf24103ae86f4e361d519bfaa8c47c9481360086f0037c7a",
+      "tests/fixtures/native-input/main.swift": "8a13fabee1e4062faec338065e6eb8399b158675604dd493dc97e4d4fc0c7312",
+      "tests/fixtures/cursor-overlay-controls.swift": "f377dd4e91dc8c9eea85a1e54b8d5beddd79bf79cbe32adfa49d288f263e060b",
+      "tests/fixtures/cursor-overlay-observer.swift": "ab3625f34ddfd7a6d037e250c782faf101b70317cec5a129404835c61e4d0dad"
+    },
+    "gui_runs": [
+      {
+        "name": "t-overlay",
+        "purpose": "strict rejection oracle confused code with reason",
+        "artifact": "dtw-input-observability-t-overlay/evidence.json",
+        "sha256": "1874ad71b3125c8380203157c45abdcd162873b0a07ca2ed4eab411cc86b0139",
+        "binary_sha256": "267bcc23fd263b3d99c7a706457b122853568802b9145bde10f3c572502a512f",
+        "passed": false,
+        "failure_excerpt": "AssertionError({'delivery': {'focus_return': None, 'foreground_borrowed': False, 'reason': 'explicit_focus', 'route': None}, 'dispatch': 'not_dispatched', 'error': {'code': 'foreground_required', 'details': {'provider_code': 'foreground_required'}, 'message': 'This action requires foreground input; the service is configured for background_only'}, 'evidence': {'kind': 'unverified'}})",
+        "original_failure_retained": true
+      },
+      {
+        "name": "t-overlay-control",
+        "purpose": "probe awaited optional cancelled RPC response",
+        "artifact": "dtw-input-observability-t-overlay-control/evidence.json",
+        "sha256": "a32220fce0342662c770059b11b6fc332ec464ebf72b9f37df81b4602cc9e69c",
+        "binary_sha256": "267bcc23fd263b3d99c7a706457b122853568802b9145bde10f3c572502a512f",
+        "passed": false,
+        "failure_excerpt": "Empty()",
+        "original_failure_retained": true
+      },
+      {
+        "name": "t-overlay-lifecycle",
+        "purpose": "required visible marker precondition not established",
+        "artifact": "dtw-input-observability-t-overlay-lifecycle/evidence.json",
+        "sha256": "b85979a46ebd25dece3d9dea9e49401105bdd7e4ec0d95443cdcbffb753bbd6e",
+        "binary_sha256": "267bcc23fd263b3d99c7a706457b122853568802b9145bde10f3c572502a512f",
+        "passed": false,
+        "failure_excerpt": "AssertionError('Lifecycle began without a visible real-input marker')",
+        "original_failure_retained": true
+      },
+      {
+        "name": "u-overlay",
+        "purpose": "EOF probe missing original RPC ID",
+        "artifact": "dtw-input-observability-u-overlay/evidence.json",
+        "sha256": "0ea56ea0bb8605a40a91db96a24f865d90e3ab3fb8cd0c9fc7701b6bf11df625",
+        "binary_sha256": "3aa83bf90e7ee550ffbf001d401c1e259526b1934e2aa071720439c82aa50a47",
+        "passed": false,
+        "failure_excerpt": "KeyError('rpc_id')",
+        "original_failure_retained": true
+      },
+      {
+        "name": "u-browser",
+        "purpose": "native AXFocusedApplication read failed before cursor startup",
+        "artifact": "dtw-input-observability-u-browser/evidence.json",
+        "sha256": "889bdccf3dd193b1a4c559cf2982abaec72e03af70b07c64c6af398d46761e41",
+        "binary_sha256": "3aa83bf90e7ee550ffbf001d401c1e259526b1934e2aa071720439c82aa50a47",
+        "passed": false,
+        "failure_excerpt": "{'app': 'com.google.Chrome', 'app_ref': 'app_afff9309-6d55-43d3-8f95-43d0112978aa', 'context_reset': False, 'error': {'code': 'script_cancelled', 'message': 'the script was cancelled'}, 'execution_id': 'execution_ca339b5b-54c0-4e35-855e-170d849c3f41', 'operation': 'script', 'payload_expired': False, 'receipt': None, 'script': {'failure': {'call': 1, 'code': 'cancelled', 'kind': 'cancelled', 'line': 2, 'message': 'the script was cancelled', 'operation': 'keypress'}, 'focus_return': 'unconfirmed', 'shutdown_error': {'code': 'ax_unavailable', 'details': {'provider_code': 'ax_unavailable'}, 'messa",
+        "original_failure_retained": true
+      },
+      {
+        "name": "s-browser-control",
+        "purpose": "independent baseline Chrome control",
+        "artifact": "dtw-input-observability-s-browser-control/evidence.json",
+        "sha256": "5f2d5a4c7d513b76aad5b26175b692fb8d8b5d09037df3bd66fc8c1b2cf65f8e",
+        "binary_sha256": "aa6b32b7ad1d0c239c9e6bf0dcfde2fe06fa281657d28c6d22eae4a6f3231ace",
+        "passed": true,
+        "failure_excerpt": null,
+        "original_failure_retained": false
+      },
+      {
+        "name": "u-browser-control",
+        "purpose": "independent U Chrome control",
+        "artifact": "dtw-input-observability-u-browser-control/evidence.json",
+        "sha256": "911fe55bada831b009e26076d5c853cee2e29ea11664b74979d25cd8c034289a",
+        "binary_sha256": "3aa83bf90e7ee550ffbf001d401c1e259526b1934e2aa071720439c82aa50a47",
+        "passed": true,
+        "failure_excerpt": null,
+        "original_failure_retained": false
+      },
+      {
+        "name": "v-overlay",
+        "purpose": "initial semantic lookup failed before any cursor helper",
+        "artifact": "dtw-input-observability-v-overlay/evidence.json",
+        "sha256": "f4bcbb460a598c383b3502c510646674476df5b68bffaa5d018d670974338539",
+        "binary_sha256": "cecb146863306007f83a2cadd666e278b94ab71aed031141d4e05d8d51238865",
+        "passed": false,
+        "failure_excerpt": "AssertionError({'app': 'dev.dtw.overlay.e56bc3595bdc4edbbcc388b6860e0783', 'app_ref': 'app_9b31af37-ab09-4cbe-a623-10fd85ca5715', 'context_reset': False, 'error': {'code': 'script_exception', 'message': 'observe failed: No unique supported AX window matches this system surface'}, 'execution_id': 'execution_561b97fe-7428-4c08-a431-5aa069c392fa', 'operation': 'script', 'payload_expired': False, 'receipt': None, 'script': {'failure': {'call': 2, 'code': 'semantic_window_unavailable', 'kind': 'exception', 'line': 6, 'message': 'observe failed: No unique supported AX window matches this system surf",
+        "original_failure_retained": true
+      },
+      {
+        "name": "v-overlay-control",
+        "purpose": "independent same failure before cursor helper",
+        "artifact": "dtw-input-observability-v-overlay-control/evidence.json",
+        "sha256": "ae6daba327887498f56b9ff75ad39497f78b047fa1fdfdcd557254501f0fbfcc",
+        "binary_sha256": "cecb146863306007f83a2cadd666e278b94ab71aed031141d4e05d8d51238865",
+        "passed": false,
+        "failure_excerpt": "AssertionError({'app': 'dev.dtw.overlay.7f8ddcdea39640bb8345e8cb8a44dab9', 'app_ref': 'app_d131addd-4df1-4ad9-9227-878c891fe13d', 'context_reset': False, 'error': {'code': 'script_exception', 'message': 'observe failed: No unique supported AX window matches this system surface'}, 'execution_id': 'execution_02dac1c5-c9ac-4e21-ace7-013509e5ec60', 'operation': 'script', 'payload_expired': False, 'receipt': None, 'script': {'failure': {'call': 2, 'code': 'semantic_window_unavailable', 'kind': 'exception', 'line': 6, 'message': 'observe failed: No unique supported AX window matches this system surf",
+        "original_failure_retained": true
+      },
+      {
+        "name": "s-overlay-strict-control",
+        "purpose": "checkpoint 1 baseline showed same semantic lookup failure",
+        "artifact": "dtw-input-observability-s-overlay-strict-control/evidence.json",
+        "sha256": "03925d124fa59954671aa582a5514e0606796a2393428ee1c4870cb413a0dd71",
+        "binary_sha256": "aa6b32b7ad1d0c239c9e6bf0dcfde2fe06fa281657d28c6d22eae4a6f3231ace",
+        "passed": false,
+        "failure_excerpt": "AssertionError({'app': 'dev.dtw.overlay.45c73887a14144f9842a3ae1de611593', 'app_ref': 'app_49cb7805-6532-492d-8f51-b794cece2773', 'context_reset': False, 'error': {'code': 'script_exception', 'message': 'observe failed: No unique supported AX window matches this system surface'}, 'execution_id': 'execution_28f7fba1-9801-4af5-bf39-86330bb5dc2a', 'operation': 'script', 'payload_expired': False, 'receipt': None, 'script': {'failure': {'call': 2, 'code': 'semantic_window_unavailable', 'kind': 'exception', 'line': 6, 'message': 'observe failed: No unique supported AX window matches this system surf",
+        "original_failure_retained": true
+      },
+      {
+        "name": "v-overlay-background",
+        "purpose": "foreground setup unavailable; no pointer action admitted",
+        "artifact": "dtw-input-observability-v-overlay-background/evidence.json",
+        "sha256": "008a831d177ae57ebaab45e5d9bac0a9f1f520bd3f0cf67235f5820573b77640",
+        "binary_sha256": "cecb146863306007f83a2cadd666e278b94ab71aed031141d4e05d8d51238865",
+        "passed": false,
+        "failure_excerpt": "AssertionError('condition did not settle before deadline')",
+        "original_failure_retained": true
+      },
+      {
+        "name": "v-overlay-unlocked",
+        "purpose": "full cursor acceptance after user unlocked console",
+        "artifact": "dtw-input-observability-v-overlay-unlocked/evidence.json",
+        "sha256": "576f3174e9da7366cf1072112706074872cf6e2ee02ac19efc1f35b377d1e617",
+        "binary_sha256": "cecb146863306007f83a2cadd666e278b94ab71aed031141d4e05d8d51238865",
+        "passed": true,
+        "failure_excerpt": null,
+        "original_failure_retained": false
+      },
+      {
+        "name": "v-browser",
+        "purpose": "fresh Chrome profile; actual input and independent business readback",
+        "artifact": "dtw-input-observability-v-browser/evidence.json",
+        "sha256": "7c79518072ad59e9f4ebda161510fac2b81f1d6f5986245a114e22303c4fb21c",
+        "binary_sha256": "cecb146863306007f83a2cadd666e278b94ab71aed031141d4e05d8d51238865",
+        "passed": true,
+        "failure_excerpt": null,
+        "original_failure_retained": false
+      }
+    ]
+  },
+  "final_cursor": {
+    "passed": true,
+    "functional_passed": true,
+    "rendering_gaps": [],
+    "pixel_isolation": {
+      "after_rgba_sha256": "dde92ac24fc7e4bf49388a62965b5dddc5dd5bb67415e8f39fda677e0a70f56d",
+      "baseline_opaque_pixels": 25024,
+      "before_rgba_sha256": "dde92ac24fc7e4bf49388a62965b5dddc5dd5bb67415e8f39fda677e0a70f56d",
+      "different_channels": 0,
+      "different_pixels": 0,
+      "maximum_channel_delta": 0,
+      "pixels": 25024,
+      "roi": [
+        832,
+        542,
+        184,
+        136
+      ]
+    },
+    "validated_cases": [
+      "semantic and strict rejection do not spawn a marker",
+      "actual background pointer feedback; same session across apps",
+      "independent session markers; exact own and peer exclusions",
+      "own and peer marker pixels absent from app.capture ROI",
+      "helper termination then new action: new instance, same session/color, no replay",
+      "cancel hides exact operation, keeps session helper",
+      "EOF and parent exit remove owned helper windows/processes",
+      "target move/close ends old marker operation"
+    ],
+    "lifecycle_original_executions": {
+      "cancel": "execution_d9911c05-3298-4406-af24-d14a23a36c6a",
+      "eof": "execution_e8b0d4e7-4afd-4e19-a099-9fb3bf4b7500",
+      "parent-exit": "execution_d08f1c75-e5b2-4e67-b24f-4c73df252bc5"
+    },
+    "cleanup": [
+      {
+        "pid": 45128,
+        "returncode": -15,
+        "forced": [],
+        "native_workers": [],
+        "native_workers_reaped": true,
+        "recorded_worker_exit": {
+          "exited": true,
+          "polls": 2,
+          "exit_status": "unavailable",
+          "meaning": "PID/command disappearance does not establish exit code 0",
+          "remaining": []
+        },
+        "native_worker_stderr": {
+          "path": "/private/tmp/dtw-input-observability-v-overlay-unlocked/mcp-parent-exit/dtw-stderr.log",
+          "trace_enabled": true,
+          "checked_after_recorded_workers_exited": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "cleanup_failure_marker_lines": [],
+          "meaning": "Marker absence is not a worker exit status or proof of exit code 0"
+        },
+        "overlay": {
+          "process_reaped": true,
+          "window_snapshot": {
+            "identity_matches": false,
+            "uptime": 2488816.935614667,
+            "windows": []
+          }
+        }
+      },
+      {
+        "pid": 45111,
+        "returncode": 0,
+        "forced": [],
+        "native_workers": [],
+        "native_workers_reaped": true,
+        "recorded_worker_exit": {
+          "exited": true,
+          "polls": 2,
+          "exit_status": "unavailable",
+          "meaning": "PID/command disappearance does not establish exit code 0",
+          "remaining": []
+        },
+        "native_worker_stderr": {
+          "path": "/private/tmp/dtw-input-observability-v-overlay-unlocked/mcp-eof/dtw-stderr.log",
+          "trace_enabled": true,
+          "checked_after_recorded_workers_exited": true,
+          "bytes": 76,
+          "sha256": "ea893e475cde00f4c4011bbc66066e6159726015b8a4d9164edd35a83c7166d9",
+          "cleanup_failure_marker_lines": [],
+          "meaning": "Marker absence is not a worker exit status or proof of exit code 0"
+        },
+        "overlay": {
+          "process_reaped": true,
+          "window_snapshot": {
+            "identity_matches": false,
+            "uptime": 2488817.033650625,
+            "windows": []
+          }
+        }
+      },
+      {
+        "pid": 45086,
+        "returncode": 0,
+        "forced": [],
+        "native_workers": [],
+        "native_workers_reaped": true,
+        "recorded_worker_exit": {
+          "exited": true,
+          "polls": 2,
+          "exit_status": "unavailable",
+          "meaning": "PID/command disappearance does not establish exit code 0",
+          "remaining": []
+        },
+        "native_worker_stderr": {
+          "path": "/private/tmp/dtw-input-observability-v-overlay-unlocked/mcp-cancel/dtw-stderr.log",
+          "trace_enabled": true,
+          "checked_after_recorded_workers_exited": true,
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "cleanup_failure_marker_lines": [],
+          "meaning": "Marker absence is not a worker exit status or proof of exit code 0"
+        },
+        "overlay": {
+          "process_reaped": true,
+          "window_snapshot": {
+            "identity_matches": false,
+            "uptime": 2488817.132940042,
+            "windows": []
+          }
+        }
+      },
+      {
+        "pid": 45064,
+        "returncode": 0,
+        "forced": [],
+        "native_workers": [
+          45065,
+          45066
+        ],
+        "native_workers_reaped": true,
+        "overlay": {
+          "process_reaped": true,
+          "window_snapshot": {
+            "identity_matches": false,
+            "uptime": 2488817.292599667,
+            "windows": []
+          }
+        }
+      },
+      {
+        "pid": 44989,
+        "returncode": 0,
+        "forced": [],
+        "native_workers": [
+          44992,
+          44995
+        ],
+        "native_workers_reaped": true
+      },
+      {
+        "pid": 44988,
+        "returncode": 0,
+        "forced": [],
+        "native_workers": [
+          45030,
+          45031
+        ],
+        "native_workers_reaped": true,
+        "overlay": {
+          "process_reaped": true,
+          "window_snapshot": {
+            "identity_matches": false,
+            "uptime": 2488817.5167096667,
+            "windows": []
+          }
+        }
+      },
+      {
+        "pid": 44987,
+        "returncode": 0,
+        "forced": [],
+        "native_workers": [
+          45006,
+          45007,
+          45017
+        ],
+        "native_workers_reaped": true,
+        "overlay": {
+          "process_reaped": true,
+          "window_snapshot": {
+            "identity_matches": false,
+            "uptime": 2488817.6744869584,
+            "windows": []
+          }
+        }
+      },
+      {
+        "pid": 44983,
+        "returncode": 0,
+        "forced": []
+      },
+      {
+        "pid": 44974,
+        "returncode": 0,
+        "forced": []
+      },
+      {
+        "pid": 44971,
+        "returncode": 0,
+        "forced": []
+      }
+    ]
+  },
+  "chrome": {
+    "passed": true,
+    "background_coverage": {
+      "plain_keyboard": "observed",
+      "keyboard_with_fallback": "not_established",
+      "click": "observed",
+      "scroll": "observed"
+    },
+    "occlusion_coverage": "observed_at_boundaries"
+  },
+  "environment": {
+    "locked_runs": [
+      "v-overlay",
+      "v-overlay-control",
+      "s-overlay-strict-control",
+      "v-overlay-background"
+    ],
+    "evidence": "Fixture samples recorded frontmost PID 603; subsequent read-only ps identified loginwindow and IOConsoleUsers explicitly reported CGSSessionScreenIsLocked=true. User then unlocked; fresh full run passed. This does not establish the cause of the earlier U Chrome AX read failure.",
+    "post_unlock_snapshot": {
+      "artifact": "dtw-input-observability-v-console-unlocked.json",
+      "sha256": "f545a4cd609cbb2857bdafbd5e8b6948b31ae6c253712fe9213b0f7ec0c43adf",
+      "meaning": "User reported unlocked; system lock key absent, not asserted false. Active GUI behavior is independently validated."
+    }
+  },
+  "limitations": [
+    "No new live LLM host acceptance or release package in this checkpoint.",
+    "Marker-window pixels do not prove visibility through unrelated opaque windows.",
+    "No real multi-display, Space transition, locked-screen, Windows or Linux cursor acceptance.",
+    "The first Chrome AX read failure remains retained; two independent controls passed, but its transient cause is unconfirmed.",
+    "Pixel equality covers the static ClickPad ROI containing the markers, not every screenshot pixel.",
+    "Native worker PID disappearance or absence of cleanup failure logs is not proof of exit code 0.",
+    "Abrupt owner death may leave inert private registry paths; stale paths never grant exclusion."
+  ]
+}

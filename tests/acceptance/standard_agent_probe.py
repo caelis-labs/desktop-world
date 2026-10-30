@@ -148,7 +148,7 @@ def process_table():
 
 
 class Mcp:
-    def __init__(self, binary, output):
+    def __init__(self, binary, output, *, mcp_args=()):
         self.output = output
         self.serial = 0
         self.messages = queue.Queue()
@@ -162,7 +162,7 @@ class Mcp:
         self.transcript = (output / "mcp.jsonl").open("w")
         self.stderr = (output / "dtw-stderr.log").open("w")
         try:
-            self.child = subprocess.Popen([str(binary), "mcp"], stdin=subprocess.PIPE,
+            self.child = subprocess.Popen([str(binary), "mcp", *mcp_args], stdin=subprocess.PIPE,
                                           stdout=subprocess.PIPE, stderr=self.stderr,
                                           text=True, bufsize=1)
         except BaseException:

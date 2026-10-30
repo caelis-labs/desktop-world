@@ -348,11 +348,33 @@ def focus_return_coverage(observer, before, target, proof):
     proof['ownership_coverage'] = {'status': 'established' if continuous and not external else 'not_established',
         'sampling_coverage': desktop['sampling_coverage'],
         'external_foreground_observations': external,
-        'attribution': 'Unscheduled foreground activity makes the normal return branch unproven; '
-                       'pointer movement is unrelated to focus ownership.'}
+        'attribution': 'Independent finite samples describe the observed return interval, not uninterrupted '
+                       'native ownership or the actor responsible for an activation. Native return evidence '
+                       'is recorded separately; pointer movement is unrelated to focus ownership.'}
     if continuous and not external:
-        require(after['frontmost_pid'] == original_pid, 'Uninterrupted focus borrow was not returned')
+        require_exact_return(after, original_pid, before['key_window'])
+        proof['sampled_exact_return_verified'] = True
     return proof['ownership_coverage']
+
+
+def focus_receipt_evidence(proof, count):
+    focus_steps = [step for step in proof['record']['script']['steps'] if step['operation'] == 'focus']
+    require(len(focus_steps) == count, 'Explicit focus ledger changed')
+    for step in focus_steps:
+        delivery = step['receipt']['provider_outcome']['delivery']
+        require(delivery['route'] == 'foreground' and delivery['foreground_borrowed'] is True
+                and delivery['focus_return'] == 'pending', 'Focus receipt guessed its later finalizer result')
+    returned = proof['record']['script'].get('focus_return')
+    require(returned in ('restored','application_restored','changed_externally','previous_app_closed'),
+            'Explicit focus lost its terminal return evidence')
+    # Exact final samples cannot prove that the native observer's epoch remained
+    # valid throughout return. Keep a conservative native branch as reported,
+    # including invalidation by a notification between independent samples.
+    proof['native_return_evidence'] = {
+        'focus_return': returned,
+        'exact_window_return_proven': returned == 'restored',
+        'source': 'native_execution_finalizer',
+        'attribution': 'A conservative native return does not identify a user or another Agent as the cause.'}
 
 
 def foreground_fallback(mcp, target, foreground, evidence):
@@ -407,6 +429,7 @@ await app.focus({{window_ref}});
         owned_input_pairs(target, target_before, proof.setdefault('paired_input', {}))
         no_marker_leak(marker, (foreground,), proof.setdefault('routing', {}))
         focus_return_coverage(foreground, before, target, proof)
+        focus_receipt_evidence(proof, count)
 
 
 def require_exact_return(state, pid, window):

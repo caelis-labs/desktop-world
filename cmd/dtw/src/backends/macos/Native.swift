@@ -1133,6 +1133,57 @@ private struct NativeElement {
     }
 }
 
+// Geometry is sampled before the action and checked once before its first
+// wheel. It proves the retained object's location, not unchanged content pixels.
+struct ScrollAnchorGeometry {
+    let element: CGRect
+    let window: CGRect
+    let point: CGPoint
+    init(element: CGRect, window: CGRect) throws {
+        let values = [element.minX, element.minY, element.width, element.height,
+                      window.minX, window.minY, window.width, window.height]
+        guard values.allSatisfy(\.isFinite), element.width > 0, element.height > 0,
+              window.width > 0, window.height > 0 else { throw failure("element_not_visible", "Scroll anchor has no finite visible geometry") }
+        let visible = element.intersection(window)
+        guard !visible.isNull, !visible.isEmpty else { throw failure("element_not_visible", "Scroll anchor is outside its window") }
+        self.element = element; self.window = window
+        point = CGPoint(x: visible.midX, y: visible.midY)
+    }
+    func matches(element: CGRect, window: CGRect, point: CGPoint) -> Bool {
+        self.element == element && self.window == window && self.point == point
+    }
+}
+private func scrollRect(_ value: Any?, _ name: String) throws -> CGRect {
+    guard let values = value as? [Double], values.count == 4,
+          values.allSatisfy(\.isFinite), values[2] > 0, values[3] > 0 else {
+        throw failure("invalid_request", "Invalid \(name) scroll geometry")
+    }
+    return CGRect(x: values[0], y: values[1], width: values[2], height: values[3])
+}
+func fixedScrollPoint(_ request: [String: Any], current: CGRect) throws -> CGPoint {
+    guard request["bounds"] != nil else { return CGPoint(x: current.midX, y: current.midY) }
+    guard try scrollRect(request["bounds"], "window") == current else {
+        throw failure("stale_observation", "Scroll anchor window geometry changed; observe again")
+    }
+    guard let x = request["screen_x"] as? Double, let y = request["screen_y"] as? Double,
+          x.isFinite, y.isFinite, x >= current.minX, y >= current.minY,
+          x < current.maxX, y < current.maxY else { throw failure("invalid_point", "Bound scroll point is outside its window") }
+    return CGPoint(x: x, y: y)
+}
+@_silgen_name("dtw_scroll_anchor_check") private func scrollAnchorCheck() -> UnsafeMutablePointer<CChar>?
+@_silgen_name("dtw_scroll_anchor_free") private func scrollAnchorFree(_ value: UnsafeMutablePointer<CChar>)
+@_silgen_name("dtw_scroll_anchor_posted") private func scrollAnchorPosted()
+private func admitScrollAnchor() throws {
+    guard let response = scrollAnchorCheck() else { return }
+    defer { scrollAnchorFree(response) }
+    guard let data = String(cString: response).data(using: .utf8),
+          let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let code = value["error"] as? String, let message = value["message"] as? String else {
+        throw failure("scroll_anchor_unavailable", "Scroll anchor proof was unavailable")
+    }
+    throw failure(code, message)
+}
+
 private struct NativeObservation {
     let target: NativeTarget
     let root: AXUIElement
@@ -1240,6 +1291,32 @@ private func axChildRange(_ element: AXUIElement, index: Int, count: Int,
 }
 
 private enum SemanticReadinessDecision: String { case ready, pending, opaque, emptyContent }
+private let semanticReadinessBudget: TimeInterval = 3
+private struct SemanticEnablement {
+    let manual: Bool
+    let manualResult: Int32
+    let enhancedResult: Int32?
+    let enhancedAttemptedAt: TimeInterval?
+}
+
+// A legacy setter can schedule asynchronous materialization even when its
+// return code is notImplemented. Retain the one poke; reasserting it can reset
+// the provider's debounce. Only a fresh, filtered, complete empty first page
+// may spend what remains of that original materialization window.
+private func emptySemanticRetryUntil(filtered: Bool, complete: Bool, matches: Int,
+                                     enhancedAttemptedAt: TimeInterval?, now: TimeInterval) -> TimeInterval? {
+    guard filtered, complete, matches == 0, let attempted = enhancedAttemptedAt,
+          now < attempted + semanticReadinessBudget else { return nil }
+    return attempted + semanticReadinessBudget
+}
+
+private func semanticMaterializationPending(until: TimeInterval?, now: TimeInterval,
+                                            populated: Bool, check: () throws -> Void) throws -> Bool {
+    guard let until else { return false }
+    try check()
+    return !populated && now < until
+}
+
 private struct SemanticReadinessSample {
     var populatedWebArea = false
     var emptyWebArea = false
@@ -1647,7 +1724,9 @@ private final class NativeStore: @unchecked Sendable {
     }
     private var windows: [WindowSlot: NativeTarget] = [:]
     private var semanticWindows: [WindowSlot: RegisteredWindow] = [:]
-    private var enabledApps: [NativeApp: Bool] = [:]
+    // Keep the original opt-in decision and raw diagnostics together so a
+    // later query can distinguish cached enablement from a new setter attempt.
+    private var enabledApps: [NativeApp: SemanticEnablement] = [:]
     private var observations: [String: NativeObservation] = [:]
     // Avoid deterministic generation-one reuse after worker restart. Runtime's
     // separate provider stamp is the authoritative cross-provider ref boundary.
@@ -1984,44 +2063,70 @@ private final class NativeStore: @unchecked Sendable {
     // Source: CUA 0.38.0 AX enablement. Opt-in is process-scoped, but readiness
     // is sampled for every new query. No bundle-name classifier or whole-page
     // loading assertion is used. Unknown custom leaves remain explicitly partial.
-    private func prepareSemantics(_ target: NativeTarget, _ context: RequestContext) throws -> String? {
+    private func prepareSemantics(_ target: NativeTarget, _ context: RequestContext,
+                                  materializationUntil: TimeInterval? = nil) throws -> String? {
         _ = try validateSurface(target, context)
         guard AXIsProcessTrusted() else { throw failure("permission_denied", "Accessibility permission is required") }
         let application = AXUIElementCreateApplication(target.app.pid)
-        let manual: Bool
-        if let cached = enabledApps[target.app] { manual = cached }
+        let enablement: SemanticEnablement
+        let enablementCached = enabledApps[target.app] != nil
+        if let cached = enabledApps[target.app] { enablement = cached }
         else {
             try context.deadline.prepare(application)
             var result = AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-            manual = result == .success
+            let manualResult = result.rawValue
+            let manual = result == .success
+            var enhancedResult: Int32?
+            var enhancedAttemptedAt: TimeInterval?
             if result == .attributeUnsupported {
+                enhancedAttemptedAt = ProcessInfo.processInfo.systemUptime
                 result = AXUIElementSetAttributeValue(application, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+                enhancedResult = result.rawValue
             }
             try context.deadline.check()
             guard [.success, .attributeUnsupported, .notImplemented].contains(result) else {
                 throw failure("semantic_not_ready", "Native accessibility opt-in was not accepted (\(result.rawValue))")
             }
-            enabledApps[target.app] = manual
+            enablement = SemanticEnablement(manual: manual, manualResult: manualResult,
+                                            enhancedResult: enhancedResult, enhancedAttemptedAt: enhancedAttemptedAt)
+            enabledApps[target.app] = enablement
         }
         let started = ProcessInfo.processInfo.systemUptime
-        let until = min(context.deadline.uptime, started + 3)
+        let until = min(context.deadline.uptime, started + semanticReadinessBudget,
+                        materializationUntil ?? .greatestFiniteMagnitude)
         let readiness = context.deadline.limited(to: until)
         var samples = 0
         var probedEmptyRoots: [AXUIElement] = []
         var last: [[String: Any]] = []
         var lastPending = false
+        var waitedOnReady = false
+        var lastFlags: [String: Bool] = [:]
+        var lastScanTruncated = false
         let tracing = ProcessInfo.processInfo.environment["DTW_AX_READINESS_TRACE"] == "1"
         func trace(_ decision: String) {
             guard tracing else { return }
             let value: [String: Any] = ["decision":decision, "samples":samples,
                 "elapsed_ms":Int((ProcessInfo.processInfo.systemUptime-started)*1000),
-                "manual_opt_in":manual, "nodes":last]
+                "manual_opt_in":enablement.manual,
+                "enablement_cached":enablementCached,
+                "manual_setter_result":enablement.manualResult,
+                "enhanced_setter_result":enablement.enhancedResult as Any? ?? NSNull(),
+                "materialization_recheck":materializationUntil != nil,
+                "readiness_flags":lastFlags, "scan_truncated":lastScanTruncated, "nodes":last]
             if let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) {
                 FileHandle.standardError.write(Data("dtw_semantic_readiness ".utf8) + data + Data("\n".utf8))
             }
         }
+        func materializationPending(populated: Bool = false) throws -> Bool {
+            try semanticMaterializationPending(until: materializationUntil,
+                now: ProcessInfo.processInfo.systemUptime, populated: populated, check: {
+                    guard !dtwInputStopping() else { throw failure("native_stopping", "Semantic materialization was cancelled") }
+                    try context.deadline.check()
+                })
+        }
         do {
             while ProcessInfo.processInfo.systemUptime < until {
+                _ = try materializationPending()
                 let window = try validate(target, context, input: false)
                 // Breadth-first and bounded: inspect container roots before a
                 // wide toolbar's descendants. Never materialize an entire array.
@@ -2029,6 +2134,7 @@ private final class NativeStore: @unchecked Sendable {
                 var index = 0
                 var sample = SemanticReadinessSample()
                 last = []
+                lastScanTruncated = false
                 while index < queue.count && index < 400 {
                     let (element, depth, parentRole) = queue[index]; index += 1
                     let role = try axAttribute(element, kAXRoleAttribute, readiness) as? String ?? ""
@@ -2053,19 +2159,30 @@ private final class NativeStore: @unchecked Sendable {
                     if depth < 10 && role != kAXMenuBarRole && count > 0 {
                         var offset = 0
                         let admitted = min(count, max(0, 400-queue.count))
+                        if admitted < count { lastScanTruncated = true }
                         while offset < admitted {
                             let children = try axChildRange(element, index: offset, count: min(16, admitted-offset), readiness)
                             queue.append(contentsOf: children.map { ($0, depth+1, role) }); offset += children.count
                         }
+                    } else if depth >= 10 && role != kAXMenuBarRole && count > 0 {
+                        lastScanTruncated = true
                     }
                 }
+                if index >= 400 && index < queue.count { lastScanTruncated = true }
+                lastFlags = ["populated_web_area":sample.populatedWebArea,
+                    "empty_web_area":sample.emptyWebArea, "shallow_unknown":sample.shallowUnknown,
+                    "empty_content_group":sample.emptyContentGroup]
                 samples += 1
-                let decision = sample.decision(manualOptIn: manual,
+                let decision = sample.decision(manualOptIn: enablement.manual,
                     elapsed: ProcessInfo.processInfo.systemUptime-started)
                 lastPending = decision != .ready
-                if samples == 1 { trace(decision.rawValue) }
+                waitedOnReady = try decision == .ready && materializationPending(populated: sample.populatedWebArea)
+                if samples == 1 { trace(waitedOnReady ? "materialization_pending" : decision.rawValue) }
                 switch decision {
-                case .ready: if samples > 1 { trace("ready") }; return nil
+                case .ready:
+                    if waitedOnReady { break }
+                    if samples > 1 { trace("ready") }
+                    return nil
                 case .opaque: trace("unsupported_semantic_tree"); return "unsupported_semantic_tree"
                 case .emptyContent: trace("content_unproven"); return "content_unproven"
                 case .pending: break
@@ -2075,7 +2192,14 @@ private final class NativeStore: @unchecked Sendable {
         } catch let error as NativeFailure where error.code == "deadline_exceeded" {
             try context.deadline.check()
         }
+        _ = try materializationPending()
         try context.deadline.check()
+        // This bounded second look does not require web content in a native
+        // window. A still-readable, genuinely empty native tree remains valid.
+        if materializationUntil != nil && (waitedOnReady || samples == 0) {
+            trace("materialization_window_elapsed")
+            return nil
+        }
         trace(lastPending ? "semantic_not_ready" : "probe_budget_exhausted")
         throw failure("semantic_not_ready", "Native accessibility roots remained unproven within the readiness budget; capture remains available")
     }
@@ -2094,7 +2218,19 @@ private final class NativeStore: @unchecked Sendable {
         var observation = NativeObservation(target: target, root: window.element, query: query,
                                             pending: [.node(window.element, 0, 0)])
         observation.reason = readinessReason
-        let page = try discoveryPage(&observation, binding: binding, context: context)
+        var page = try discoveryPage(&observation, binding: binding, context: context)
+        let complete = observation.pending.isEmpty && observation.buffered == nil && observation.reason == nil
+        if let until = emptySemanticRetryUntil(filtered: query.role != nil || query.text != nil,
+            complete: complete, matches: observation.elements.count,
+            enhancedAttemptedAt: enabledApps[target.app]?.enhancedAttemptedAt,
+            now: ProcessInfo.processInfo.systemUptime) {
+            let reason = try prepareSemantics(target, context, materializationUntil: until)
+            let refreshed = try validate(target, context, input: false)
+            observation = NativeObservation(target: target, root: refreshed.element, query: query,
+                                            pending: [.node(refreshed.element, 0, 0)])
+            observation.reason = reason
+            page = try discoveryPage(&observation, binding: binding, context: context)
+        }
         observations[binding] = observation
         return page
     }
@@ -2492,20 +2628,23 @@ private final class NativeStore: @unchecked Sendable {
                     return true
                 }) else { throw failure("native_stopping", "Native input admission is closed") }
             } else if let (dx, dy) = scroll {
-                let point = CGPoint(x: window.cg.bounds.midX, y: window.cg.bounds.midY)
+                let point = try fixedScrollPoint(request, current: window.cg.bounds)
                 guard let source = CGEventSource(stateID: .privateState) else {
                     throw failure("input_unavailable", "Cannot allocate scroll event source")
                 }
                 guard let proof = dtwProveSurfacePoint(point, id: target.nativeID, pid: target.app.pid,
-                                                       bounds: window.cg.bounds, deadline: context.deadline.uptime) else {
+                                                       bounds: window.cg.bounds, deadline: context.deadline.uptime,
+                                                       overlayCandidates: dtwSceneOverlayCandidates(request)) else {
                     try check(focus: false)
-                    throw failure("target_occluded", "Scroll center is not a proven visible point of the target window")
+                    throw failure("target_occluded", "Scroll point is not a proven visible point of the target window")
                 }
                 try check()
                 guard proof.matchesCurrent() else { throw failure("stale_observation", "Scroll hit stack changed during focus validation") }
                 guard let positioned = dtwWithInputAdmission({
                     changed = true
-                    return CGWarpMouseCursorPosition(point) == .success && CGAssociateMouseAndMouseCursorPosition(1) == .success
+                    guard CGWarpMouseCursorPosition(point) == .success else { return false }
+                    dtwPresentPostedPointer(point, kind: 0)
+                    return CGAssociateMouseAndMouseCursorPosition(1) == .success
                 }) else { throw failure("native_stopping", "Native input admission is closed") }
                 guard positioned else { throw failure("input_unavailable", "Cannot position scroll pointer") }
                 guard dtwSettleInput(seconds: 0.04, deadline: context.deadline.uptime) else {
@@ -2525,11 +2664,18 @@ private final class NativeStore: @unchecked Sendable {
                     throw failure("native_stopping", "Native input admission is closed")
                 }
                 pendingInput = input
+                try admitScrollAnchor()
+                try check()
+                guard proof.matchesCurrent(requirePointer: true) else {
+                    throw failure("stale_observation", "Scroll target or pointer changed during anchor validation")
+                }
                 guard let _: Bool = try dtwWithInputAdmission({
                     try check(focus: false)
                     event.location = point; event.flags = []
                     input.posted(eventType: CGEventType.scrollWheel.rawValue)
                     event.post(tap: .cghidEventTap)
+                    scrollAnchorPosted()
+                    dtwPresentPostedPointer(point, kind: 3)
                     return true
                 }) else { throw failure("native_stopping", "Native input admission is closed") }
             }
@@ -2539,6 +2685,61 @@ private final class NativeStore: @unchecked Sendable {
             return finished(error.json.merging(["dispatch": changed ? "unknown" : "not_dispatched", "evidence": "unverified"]) { _, new in new })
         } catch {
             return finished(["dispatch": changed ? "unknown" : "not_dispatched", "evidence": "unverified", "error": "native_error", "message": String(describing: error)])
+        }
+    }
+
+    private func scrollAnchor(_ request: [String: Any], _ context: RequestContext, validating: Bool) throws -> [String: Any] {
+        guard let token = request["binding"] as? String, let observation = observations[token] else {
+            throw failure("stale_observation", "Scroll anchor binding was retired or consumed")
+        }
+        let target = try NativeTarget(request["target"])
+        guard observation.target == target else { throw failure("target_changed", "Scroll binding belongs to another window") }
+        let id = try integer(request["element"], "element")
+        guard let retained = observation.elements.first(where: { $0.id == id }) else {
+            throw failure("stale_observation", "Scroll anchor is absent from its retained observation")
+        }
+        do {
+            let window = try validate(target, context)
+            guard CFEqual(window.element, observation.root),
+                  try owned(retained.element, by: window.element, target: target, deadline: context.deadline) else {
+                throw failure("stale_observation", "Retained scroll object or its exact window ancestry changed")
+            }
+            func elementRect() throws -> CGRect {
+                guard let rawPosition = try axAttribute(retained.element, kAXPositionAttribute, context.deadline),
+                  let rawSize = try axAttribute(retained.element, kAXSizeAttribute, context.deadline),
+                  CFGetTypeID(rawPosition) == AXValueGetTypeID(), CFGetTypeID(rawSize) == AXValueGetTypeID() else {
+                    throw failure("element_not_visible", "Retained scroll object has no readable position/size")
+                }
+                let position = unsafeBitCast(rawPosition, to: AXValue.self)
+                let size = unsafeBitCast(rawSize, to: AXValue.self)
+                var origin = CGPoint.zero; var extent = CGSize.zero
+                guard AXValueGetType(position) == .cgPoint, AXValueGetValue(position, .cgPoint, &origin),
+                  AXValueGetType(size) == .cgSize, AXValueGetValue(size, .cgSize, &extent) else {
+                    throw failure("element_not_visible", "Retained scroll object geometry is unavailable")
+                }
+                return CGRect(origin: origin, size: extent)
+            }
+            let geometry = try ScrollAnchorGeometry(element: elementRect(), window: window.cg.bounds)
+            if validating {
+                let expectedElement = try scrollRect(request["element_bounds"], "element")
+                let expectedWindow = try scrollRect(request["bounds"], "window")
+                let point = try fixedScrollPoint(request, current: expectedWindow)
+                guard geometry.matches(element: expectedElement, window: expectedWindow, point: point) else {
+                    throw failure("stale_observation", "Retained scroll anchor geometry changed before the first wheel")
+                }
+            }
+            let final = try validate(target, context)
+            guard CFEqual(final.element, observation.root), final.cg.bounds == geometry.window,
+                  try owned(retained.element, by: final.element, target: target, deadline: context.deadline),
+                  try geometry.matches(element: elementRect(), window: final.cg.bounds, point: geometry.point) else {
+                throw failure("stale_observation", "Scroll anchor ownership changed during its read")
+            }
+            try context.deadline.check()
+            return ["target": target.json, "bounds": final.cg.coordinates,
+                    "element_bounds": [geometry.element.minX, geometry.element.minY, geometry.element.width, geometry.element.height],
+                    "screen_x": geometry.point.x, "screen_y": geometry.point.y]
+        } catch let error as NativeFailure where error.attributeFailure?.error == .invalidUIElement {
+            throw failure("stale_observation", "The retained scroll AX object no longer exists; observe again")
         }
     }
 
@@ -2645,7 +2846,7 @@ private final class NativeStore: @unchecked Sendable {
                     point = CGPoint(x: x, y: y)
                 } else { point = nil }
                 try borrowFocus(target, window?.element, context, inputPoint: point)
-                return ["prepared": true]
+                return ["prepared": true, "borrowed": borrowedFocus != nil]
             case "release_focus": return try releaseFocus(context.deadline)
             case "validate_background":
                 let target = try NativeTarget(request["target"])
@@ -2695,6 +2896,8 @@ private final class NativeStore: @unchecked Sendable {
             case "windows": return try listWindows(NativeApp(request["app"]), context)
             case "observe": return try observe(request, context)
             case "observe_next": return try observeNext(request, context)
+            case "resolve_scroll_anchor": return try scrollAnchor(request, context, validating: false)
+            case "validate_scroll_anchor": return try scrollAnchor(request, context, validating: true)
             case "validate":
                 let target = try NativeTarget(request["target"])
                 let current = try validateSurface(target, context)

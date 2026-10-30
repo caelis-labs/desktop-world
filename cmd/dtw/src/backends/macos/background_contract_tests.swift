@@ -575,3 +575,26 @@ private let frontAbsenceAfterExternalChoice = try waitForRestoredFocus(remaining
 }, wait: { _ in preconditionFailure("No WindowServer reread after external choice") })
 backgroundCheck(!frontAbsenceAfterExternalChoice)
 print("Post-activation WindowServer absence controls passed (read-only; no GUI access)")
+@_cdecl("dtw_scroll_anchor_check")
+func testScrollAnchorCheck() -> UnsafeMutablePointer<CChar>? { nil }
+@_cdecl("dtw_scroll_anchor_free")
+func testScrollAnchorFree(_ value: UnsafeMutablePointer<CChar>) { preconditionFailure("pure geometry controls never allocate a guard response") }
+@_cdecl("dtw_scroll_anchor_posted")
+func testScrollAnchorPosted() { preconditionFailure("pure geometry controls never post a wheel") }
+
+private let scrollWindow = CGRect(x: -1200, y: -100, width: 800, height: 600)
+private let scrollElement = CGRect(x: -1250, y: -50, width: 200, height: 80)
+private let scrollGeometry = try ScrollAnchorGeometry(element: scrollElement, window: scrollWindow)
+backgroundCheck(scrollGeometry.point == CGPoint(x: -1125, y: -10))
+backgroundCheck(scrollGeometry.matches(element: scrollElement, window: scrollWindow, point: scrollGeometry.point))
+backgroundCheck(!scrollGeometry.matches(element: scrollElement.offsetBy(dx: 0, dy: 1), window: scrollWindow, point: scrollGeometry.point))
+backgroundCheck(!scrollGeometry.matches(element: scrollElement, window: scrollWindow.offsetBy(dx: 1, dy: 0), point: scrollGeometry.point))
+backgroundCheck(!scrollGeometry.matches(element: scrollElement, window: scrollWindow, point: .zero))
+private let boundScrollRequest: [String: Any] = ["bounds": [-1200.0, -100.0, 800.0, 600.0], "screen_x": -1125.0, "screen_y": -10.0]
+private let keptScrollPoint = try fixedScrollPoint(boundScrollRequest, current: scrollWindow)
+backgroundCheck(keptScrollPoint == scrollGeometry.point)
+_ = expectedBackgroundError("stale_observation") { _ = try fixedScrollPoint(boundScrollRequest, current: scrollWindow.offsetBy(dx: 20, dy: 0)) }
+_ = expectedBackgroundError("element_not_visible") { _ = try ScrollAnchorGeometry(element: CGRect(x: 0, y: 0, width: 10, height: 10), window: scrollWindow) }
+private let legacyCenter = try fixedScrollPoint([:], current: scrollWindow)
+backgroundCheck(legacyCenter == CGPoint(x: scrollWindow.midX, y: scrollWindow.midY))
+print("Scroll anchor geometry preserves fixed negative points through focus; pure controls only")

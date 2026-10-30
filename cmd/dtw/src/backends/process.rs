@@ -488,6 +488,16 @@ impl Worker {
             .map(TransportError::local)
     }
 
+    /// True only after this exact owned Child was consumed by wait/try_wait.
+    /// A stopped flag or a cleanup error alone is not process-exit evidence.
+    pub fn is_reaped(&self) -> bool {
+        self.process
+            .child
+            .lock()
+            .expect("worker process lock poisoned")
+            .is_none()
+    }
+
     /// Permanently retire this instance and reap its owned child. Unix workers
     /// receive a bounded SIGTERM grace before the forced-kill fallback. Reader/writer
     /// thread joins are bounded; an inherited pipe held by an unrelated process

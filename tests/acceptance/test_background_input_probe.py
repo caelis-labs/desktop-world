@@ -156,17 +156,17 @@ class OwnedInputEvidenceTests(unittest.TestCase):
 
 class FocusOwnershipEvidenceTests(unittest.TestCase):
     def verify(self, pids, final_pid, sampling='complete'):
-        before = {'frontmost_pid': 4}
+        before = {'frontmost_pid': 4, 'key_window': 41}
         target = SimpleNamespace(child=SimpleNamespace(pid=9))
         rows = [{'uptime': i, 'frontmost_pid': pid} for i, pid in enumerate(pids)]
         desktop = {'samples': rows, 'activations': [], 'sampling_coverage': {'status':sampling}}
-        with patch.object(probe, 'fresh_end', return_value={'frontmost_pid': final_pid}), \
+        with patch.object(probe, 'fresh_end', return_value={'pid':4,'frontmost_pid': final_pid,'key_window':41}), \
              patch.object(probe, 'observe_desktop', return_value=desktop):
             return probe.focus_return_coverage(object(), before, target, {})
 
     def test_uninterrupted_borrow_requires_return(self):
         self.assertEqual(self.verify([9, 4], 4)['status'], 'established')
-        with self.assertRaisesRegex(AssertionError, 'was not returned'):
+        with self.assertRaisesRegex(AssertionError, 'exact window'):
             self.verify([9], 9)
 
     def test_sampling_gap_cannot_claim_uninterrupted_return(self):
@@ -184,6 +184,45 @@ class FocusOwnershipEvidenceTests(unittest.TestCase):
     def test_missing_actual_borrow_is_not_silently_accepted(self):
         with self.assertRaisesRegex(AssertionError, 'never independently reached'):
             self.verify([4], 4)
+
+
+class FocusReturnReceiptTests(unittest.TestCase):
+    def proof(self, native_return, window=41):
+        before = {'frontmost_pid':4, 'key_window':41}
+        after = {'pid':4, 'frontmost_pid':4, 'key_window':window}
+        desktop = {'samples':[{'uptime':1,'frontmost_pid':9},{'uptime':2,'frontmost_pid':4}],
+                   'activations':[], 'sampling_coverage':{'status':'complete'}}
+        delivery = {'route':'foreground','foreground_borrowed':True,'focus_return':'pending'}
+        proof = {'record':{'script':{'focus_return':native_return,'steps':[
+            {'operation':'focus','receipt':{'provider_outcome':{'delivery':delivery}}}]}}}
+        with patch.object(probe, 'fresh_end', return_value=after), \
+             patch.object(probe, 'observe_desktop', return_value=desktop):
+            probe.focus_return_coverage(object(), before, SimpleNamespace(child=SimpleNamespace(pid=9)), proof)
+        probe.focus_receipt_evidence(proof, 1)
+        return proof
+
+    def test_exact_sampled_return_does_not_rewrite_conservative_native_result(self):
+        proof = self.proof('changed_externally')
+        self.assertTrue(proof['sampled_exact_return_verified'])
+        self.assertEqual(proof['native_return_evidence']['focus_return'], 'changed_externally')
+        self.assertFalse(proof['native_return_evidence']['exact_window_return_proven'])
+        self.assertEqual(proof['record']['script']['steps'][0]['receipt']['provider_outcome']
+                         ['delivery']['focus_return'], 'pending')
+
+    def test_wrong_sampled_window_still_fails_with_conservative_or_restored_receipt(self):
+        for returned in ['changed_externally','restored']:
+            with self.subTest(returned=returned), self.assertRaisesRegex(AssertionError, 'exact window'):
+                self.proof(returned, window=42)
+
+    def test_restored_native_receipt_keeps_its_distinct_proof(self):
+        proof = self.proof('restored')
+        self.assertTrue(proof['sampled_exact_return_verified'])
+        self.assertTrue(proof['native_return_evidence']['exact_window_return_proven'])
+
+    def test_missing_or_pending_finalizer_receipt_is_not_accepted(self):
+        for returned in [None,'pending','success']:
+            with self.subTest(returned=returned), self.assertRaisesRegex(AssertionError, 'terminal return evidence'):
+                self.proof(returned)
 
 
 class CloseReceiptTests(unittest.TestCase):

@@ -2,6 +2,12 @@
 
 产品入口为 `dtw mcp`，使用官方 `rmcp 3.8.0` 的 stdio transport、协议协商、消息类型和服务分发；不维护另一套 MCP 解析器。Agent 使用普通 stdio MCP 配置和可选的 [DTW Skill](../skills/desktop-world/SKILL.md)，无需 DTW 专用 Host。审批与授权完全属于 Harness；DTW 只要求显式平台稳定 app ID，并执行目标、引用、预算和生命周期校验。
 
+## 服务输入策略
+
+启动参数为 `dtw mcp [--input-policy auto|background-only]`，默认 `auto`。macOS 的 `auto` 优先选择可用的后台投递，只有在尚未准备或派发输入的预检阶段确认后台不可用，才选择前台路径；未知或已派发结果不会换路重试。`background-only` 禁止 DTW 主动取得前台：显式 `focus` 及需要前台投递的动作，在前台准备之前返回 `not_dispatched` / `foreground_required`。Windows/Linux 当前物理输入没有后台路线，因此此模式拒绝 click/focus/typeText/keypress/scroll；已实现的原生语义操作仍可用。
+
+`apps` 和 `api`（包括按方法过滤的返回）包含 `service: {input_policy: "auto" | "background_only"}`。命令行用连字符 `background-only`，返回值用下划线 `background_only`。策略固定于服务启动，脚本不覆盖它；`exec` 参数仍只有 `app + source`。这是工具的输入路由配置，不是授权、审批或 Harness 权限。语义动作可能使应用自行打开窗口或改变焦点，策略不承诺屏蔽应用自身的 UI 效果。Agent 遇到 `foreground_required` 应保留回执并说明当前路线不可用，不通过重试 `focus` 解决。
+
 ## 应用发现与稳定 app ID
 
 `apps` 工具接受空对象，返回去重后的应用列表、紧凑脚本方法索引、引用/限制摘要和原生支持条件。详细 schemas 由只读 `api` 按需提供，无需先绑定应用或连接原生 worker。应用条目形如：
@@ -59,6 +65,21 @@ MCP 工具响应同时提供文本 JSON，并在协议版本支持时提供 `str
 投影层不会再次截断脚本返回值、console 或截图（原有 VM/console 限制仍有效）；这次改动控制的是默认账本展开量，并不承诺整个响应固定小于某个字节数。
 
 执行完成与业务效果分开：动作记录 `not_dispatched / dispatched / unknown`，并单独记录 `confirmed / unverified / mismatch`。`dispatched` 不能证明保存、输入或点击达成预期；调用者检查独立观察。脚本先前的动作不会因后续异常、取消或 JSON state 未提交而回滚。
+
+原生提供证据时，动作 `outcome` 及可选的 `provider_outcome` 保留 `delivery`：
+
+| 字段 | 含义 |
+| --- | --- |
+| `route` | `semantic` / `background` / `foreground`；前台策略预检拒绝时为 null |
+| `reason` | 路线选择或拒绝的诊断字符串，未知时为 null；不是授权依据 |
+| `foreground_borrowed` | 是否保留了需要归还的临时前台所有权；不表示所有可能的焦点变化。Windows/Linux 当前前台输入不提供归还合同 |
+| `focus_return` | `pending`、`restored`、`application_restored`、`changed_externally`、`previous_app_closed`、`unchanged`、`unconfirmed` 或 null |
+
+`restored` 表示原窗口归还已证明；`application_restored` 仅证明原应用；`changed_externally` 表示所有权已被外部选择改变；`previous_app_closed` 表示原应用已退出；`unchanged` 表示没有待归还的借用；`unconfirmed` 表示不能证明收尾状态。缺少整个 `delivery` 时不推断路线或归还状态。路由证据与 `dispatch/evidence` 独立，不能据此前台/后台投递或一次成功归还推断输入业务效果。
+
+显式 `app.focus` 先返回的动作 receipt 可保留 `focus_return: "pending"`；脚本收尾结果通过可选 `script.focus_return` 单独报告，原动作回执不被重写。已知待归还的前台在取消或 worker 关闭后失去精确结果时，保留 `unconfirmed`，不从正常退出码推断 `restored`；收尾错误继续独立出现在 `shutdown_error`。
+
+紧凑投影仅在原生报告 delivery 时加入 `script.summary.actions.delivery`，按 `reported/routes/reasons/foreground_borrowed/focus_returns` 汇总，每个动作只计一次，优先采用 provider 原始证据。`script.summary.last_delivery` 保留最后一个报告样本及其 outcome/provider_outcome delivery；`script.focus_return` 在紧凑与完整记录中均保留。运行中断的 unknown 包装也保留 provider delivery，不伪造缺失证据。
 
 原生诊断保留机器可读 code 和 message。OS 权限不足、窗口类型未支持、目标变化与原生未知错误应可区分；不能通过解析错误文字推断动作没有派发。
 

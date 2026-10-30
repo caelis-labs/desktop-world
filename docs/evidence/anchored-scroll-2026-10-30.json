@@ -1,0 +1,2319 @@
+{
+  "checkpoint": "C3 anchored macOS scroll and acceptance fixes",
+  "date": "2026-10-30",
+  "candidate": "Z",
+  "candidate_binary": {
+    "path": "/private/tmp/dtw-input-observability-candidate-z/dtw",
+    "sha256": "03adcb76ae98328cfa3d05a7ed96db60d731626e58b3e6d2c208111391a9b7dd"
+  },
+  "candidate_manifest": {
+    "path": "/private/tmp/dtw-input-observability-candidate-z/source.json",
+    "sha256": "08068df12c8b53e1b018ce4d008e70b9210cbbce3a6757467883caca97796272"
+  },
+  "source_base_commit": "f07f31508f56b08306c119fbc6fd8f005e68765d",
+  "source_file_count": 71,
+  "source_files_verified_against_worktree": true,
+  "source_files": {
+    "cmd/dtw/src/app_protocol/app_id.rs": "a26eef40fa02dd32171ca3e6ef4ce944d34d3489a7df96258397fcd6fe3da173",
+    "cmd/dtw/src/app_protocol/description.rs": "940538b4e3cf7952bf212e17797b4815a285602642c91b85a7b80d0058eb4528",
+    "cmd/dtw/src/app_protocol/discovery_evidence_tests.rs": "bfccb5511783e4185698fc3afc00d8224d918bd907bb48ba7d078d182ccf6dd9",
+    "cmd/dtw/src/app_protocol/discovery_tests.rs": "d028559a6a78021abb6c3ad67b01eb96529a234b332f12ae7cef20e563be937b",
+    "cmd/dtw/src/app_protocol/inventory_tests.rs": "4f764811780b2c5e5076a35f3a89f0027bcfdc0c2858f8966d98a8848dc663cb",
+    "cmd/dtw/src/app_protocol/mcp.rs": "9ebc02272525e6d494a3f3dac23ad749f4ffa7a20a08f7154477f5c514c18db6",
+    "cmd/dtw/src/app_protocol/mcp_io.rs": "c7f154fd4140e7dc1bd03688123e39874004db0866f67bdc95e13402bc569fc7",
+    "cmd/dtw/src/app_protocol/mcp_tests.rs": "9c5c874e2774964a8d9414ed6ff01ad3a344768e91e5f41da697d9afd22a5941",
+    "cmd/dtw/src/app_protocol/methods.rs": "fe9ce499b31ed711e1ac00d4b851c87773f8334162e6c5551a3fac6c348b31f6",
+    "cmd/dtw/src/app_protocol/mod.rs": "9fe6b7d42df4195f31e9c52f4edca7fef0ac2721b0d632147a1c810e1ac287af",
+    "cmd/dtw/src/app_protocol/multi_instance_tests.rs": "7bc8b7d73c591ed9986bf36fbaaf721bf92407744942850ec5762b093b9766b3",
+    "cmd/dtw/src/app_protocol/projection.rs": "df253d7da74090d9183c211e910a5266960f0a87bbeb718d4ab01c3f2eedb6bb",
+    "cmd/dtw/src/app_protocol/script_engine/mod.rs": "1ad637ce679f3ea7a89b0f88bbc0bcc3c1e145da8728a91dbdda4e80b9b9c336",
+    "cmd/dtw/src/app_protocol/script_engine/prelude.js": "f7d5217205ea5fd39215b777b9f7be820f9c613cdf16389bb511618468eeffc8",
+    "cmd/dtw/src/app_protocol/script_engine/tests.rs": "11683a8fe4b160d051bc77e52359c5ebf818c43eb430ec91c32206819f255a2f",
+    "cmd/dtw/src/app_protocol/script_tests.rs": "866738694ee91d12a7c552423432af24ed31dde9bc06c7f59e4abdcf0d7d84e2",
+    "cmd/dtw/src/app_protocol/scripts.rs": "b9a3d6ee6c605ac3d86f97739dffc66b853d44ce731bd906d384f4350a5d0cb0",
+    "cmd/dtw/src/app_protocol/server.rs": "e337c0d3330fb5dfe676485183f0caeaf871c7d1f0d3c6128e40e27a0a68b768",
+    "cmd/dtw/src/app_protocol/standard_tests.rs": "ae5b6aebf2e007dbaff45166efb3d1525b1747b8877f7fa2c3146ebff5df4282",
+    "cmd/dtw/src/app_protocol/tests.rs": "bab8754a8504446df8680786c607ffe72bbb5efe6407c71d1a1858355de7d626",
+    "cmd/dtw/src/app_protocol/transport.rs": "365212fc53a2deb1326f6dd564942ecc0d389b614972b9d0a6157e826d991201",
+    "cmd/dtw/src/app_protocol/wire.rs": "2f8343e74929429861cca5d94a27c021d31a773338e2aba6dab8ff0d7239f56b",
+    "cmd/dtw/src/app_protocol/wire_tests.rs": "7b930e9260ba4578a913d93e3b3add53e6506cd806ecc58a9152d1413a504d4d",
+    "cmd/dtw/src/backends/input_sequence.rs": "b4a3e88030b2338a8d379de62acf48ae46ea77be3117d05e05d8d60f0a4db744",
+    "cmd/dtw/src/backends/linux/client_pid.rs": "9af4e64b32c04e65215d2ad1d08987a9ec2d93e89361adb8c8b7441546560ef4",
+    "cmd/dtw/src/backends/linux/inventory.rs": "811065cf30d061454ff1675b9feed7ea6233950afbc0308a834e7ed1149a8ccd",
+    "cmd/dtw/src/backends/linux/mod.rs": "da33921dd85ec5a399edfef233c4babdcc4abd20a4a2ebf09c8f3bdc3a85ac9f",
+    "cmd/dtw/src/backends/linux/native.rs": "ae2e04b15532bff3d2c619c6e34e776d2e0bc04505067db38ef7a34d5af37193",
+    "cmd/dtw/src/backends/linux/worker.rs": "f4dcd495d0bbe9bd7752fd3111cbafc82aba4c7897710ac37ec85d1b26f93f3e",
+    "cmd/dtw/src/backends/macos/Input.swift": "3dc3d4b06a18c9e3be4965917ec7afe8bc1a32aac4084506e2a89dd1aad39cfb",
+    "cmd/dtw/src/backends/macos/Native.swift": "af885e287d579d740f0afcd3b410d4328f71c74c18be845257a147303b68e680",
+    "cmd/dtw/src/backends/macos/Overlay.swift": "c8369c050f47cca1846505b50270de3897d7accca85bb9f06a56210d9367ffde",
+    "cmd/dtw/src/backends/macos/Scene.swift": "65d5d57debf685c23bacfc388417517124b7879966283ab061a30824029d38c0",
+    "cmd/dtw/src/backends/macos/background_contract_tests.swift": "faeef24cd660f3f97f89f87825c5f35f57e7dbb7241c1f5a587277d6e3f1866e",
+    "cmd/dtw/src/backends/macos/cua_input/LICENSE-CUA": "c0779290c1d4783169aa3dbfb55feb505e563ef8a004bbf55298ceffcfbda8d9",
+    "cmd/dtw/src/backends/macos/cua_input/ax.rs": "1d5f1ca5dfb571aa69c1d06731ed536d1d005e0f07769801c10f40f9712e59e0",
+    "cmd/dtw/src/backends/macos/cua_input/control.rs": "6dd073a1ff83883d3ba8a1e5a76a649521784de6cde73b6e50d9aeaedc307500",
+    "cmd/dtw/src/backends/macos/cua_input/keyboard.rs": "15f2eb3ed6f0098682bc605420e6237a46db15329ee6c416ec5c42472c43305e",
+    "cmd/dtw/src/backends/macos/cua_input/mod.rs": "9671c72eada648837368019a10dd3d20d5189fb77df9aa1160b16f5bcbb5b5c5",
+    "cmd/dtw/src/backends/macos/cua_input/mouse.rs": "5b80fd8bb837b760d1a648a30f2af898b11de7d865741d99c76c0cd2454d3afc",
+    "cmd/dtw/src/backends/macos/cua_input/skylight.rs": "6f2d38406e327e9a94f38d6e5ce40c13d5fc4b5d21cecf78a501f6f6a99047a1",
+    "cmd/dtw/src/backends/macos/cursor_session.rs": "65775c9d361372cae947175fde71d44e5524ae1581e0cd1936f69d4505eaeca9",
+    "cmd/dtw/src/backends/macos/input_contract_tests.swift": "119060ab32dc2bd98f0be80d16fa4e9ea71f720faebabb01a330c4f967478430",
+    "cmd/dtw/src/backends/macos/local_socket.rs": "8f8ef60830cc3d3b40549ed3e45d9348c5272ceb14476e189b3de37e71d87785",
+    "cmd/dtw/src/backends/macos/mod.rs": "fa2be4e965bbe12d8cfc96333eeea2beceac19b0d5d463abb98c631d4d2dad03",
+    "cmd/dtw/src/backends/macos/overlay.rs": "f6a2a7b8597b3e0eadf609b974603a2aeff1f409bc69ea32c99105947a14d3be",
+    "cmd/dtw/src/backends/macos/overlay_contract_tests.swift": "2ce30b9bebfe0b4d229c4bed9af44f1af6cb1fd8df3ec6b3b10450ac0cdefc4c",
+    "cmd/dtw/src/backends/macos/pointer_presentation.rs": "fc99f7c3411647899767bb5fe7b90a3169de4293b7b622c50af9bf57f34be1df",
+    "cmd/dtw/src/backends/macos/scene_contract_tests.swift": "929c0fec2ee5cb1a5a8abdfaf0046c4deba43134a24692a763e599f65d6096f3",
+    "cmd/dtw/src/backends/macos/scroll_guard.rs": "f0f8ffd02ff1726970cfac539fe1945a251cd71321633f794c9c201a86b0a8db",
+    "cmd/dtw/src/backends/macos/surface_contract_tests.swift": "063e3d5b9b616216a3ab3305bdcf059a43f70273539452f5cf3ed2c92b6d9e27",
+    "cmd/dtw/src/backends/macos/worker.rs": "904d66ddbbb6e4ce5b7c73ffb8e954da8618077dd7fc29eae638cc33a7e2d533",
+    "cmd/dtw/src/backends/mod.rs": "36028a74cb0620937286a2b4ec60d74e26be4674633832a4d0117b738fe30408",
+    "cmd/dtw/src/backends/native_client.rs": "1275f7cded846349111d261272103b5ff9ecb27fe9b6943f313f2e2fca38d2ec",
+    "cmd/dtw/src/backends/process.rs": "cc6f3e51926570abf0a2f1a28b038871c248c295ba105dad591f9711fdfe00ab",
+    "cmd/dtw/src/backends/process_fixture.py": "1bf4fdfb1c00b8b9609f9ff3a0f6dc3cc4508820d374dee8852218e3fa6548e4",
+    "cmd/dtw/src/backends/process_tests.rs": "63b14c02f0d540755780846d73b321817c9e49dbd5a7614b196c7666a7f74189",
+    "cmd/dtw/src/backends/windows/input.rs": "96cda9b0b991eab75c7379df4f9a42ae77846619c36acb4a284299c372e3f2d8",
+    "cmd/dtw/src/backends/windows/mod.rs": "9dae4792262b105bf7db91c27e2b753457ccda290b3e4645f591880651adc439",
+    "cmd/dtw/src/backends/windows/native.rs": "fb534f19b27b07ddb61552191f502fb3b069f509252486c707137b80a3ede9b7",
+    "cmd/dtw/src/backends/windows/worker.rs": "72533892ccbdb57b8c65161c112144f59ce90a73411ce50bf797dcb1c0a8be69",
+    "cmd/dtw/src/computer/mod.rs": "a5cbad6196b99ab8b659b93516b6eeef9a478c7f16c840ee391d01a86bbbb6f3",
+    "cmd/dtw/src/lib.rs": "f212bb1c56b3f05f03c570b9a412c0e396812ed5d0fdba3c3026e448b60ba5f4",
+    "cmd/dtw/src/main.rs": "9cad7373edb89dd4be35131e7d583c9c2e677434722cfa94e8b3541004b3ff47",
+    "cmd/dtw/src/runtime/input_tests.rs": "ab0a633a9ef8c5dd5ff9f4c74e542d88d9497f253c3962119858944d38bc6d88",
+    "cmd/dtw/src/runtime/mod.rs": "9933c4bddb9673ab492fddb9e0ad08a2b698019664f9c14f01d227ab2fa07aee",
+    "cmd/dtw/src/runtime/tests.rs": "eadc810f6435737fa81874187897b817077802d33cb9132fccaec31b08520621",
+    "cmd/dtw/src/scene_lease.rs": "fd921dd2c3a31cf0480f299ce185aab6c66aa0903b6fa196cf237b26bb20008e",
+    "cmd/dtw/Cargo.toml": "d0f4ee31a7b833cdc20e3414b2a1e78dffedaa8ad190d3ec282e121e5d7a63ef",
+    "cmd/dtw/Cargo.lock": "9187a5cecbfbc16ca95c7ce6f2fe2f2283854d8e71dbf40f22c72bc59083935c",
+    "cmd/dtw/build.rs": "c1b58de03b6fbeab10e82a54ed52863734adf6874bc2840f52d7be53c462e61a"
+  },
+  "probe_sources": {
+    "tests/acceptance/anchored_scroll_probe.py": "7533e391363fe1cdd4eed8caa4faa349c3a0a247718f4c87ffe0f7a581299f6c",
+    "tests/acceptance/test_anchored_scroll_probe.py": "407bb285364d3f089568c4594a94ef0dab6f0a7fb7a548d3927a29140f6e4e89",
+    "tests/acceptance/cursor_overlay_probe.py": "9f06e8985f791784209cbd39e293b949476a4fdb09e77cd26d840634536ad6a2",
+    "tests/fixtures/anchored-scroll/main.swift": "a5aef3ca71c8d3e4ef21d487328841caf38f0a0aefa046863c95d7ac4f37aa0e",
+    "tests/fixtures/anchored-scroll/index.html": "b1bf97b4534db1e8cd329eebfd25703e010b57b07e808d3a8f14b98efbe6cf3b"
+  },
+  "checks": {
+    "rust_library": 348,
+    "python_controls": 180,
+    "source_check": "passed",
+    "native_swift_inventory_surface_focus_scene_overlay_controls": "passed",
+    "native_swift_input_controls": "passed",
+    "build": "passed",
+    "codesign_strict": "passed"
+  },
+  "scroll_cases": {
+    "native_pixel_left": {
+      "passed": true,
+      "preparation_execution_id": "execution_533f888b-b533-4fde-9af4-fd466e1c9f5d",
+      "execution_id": "execution_dcd17c38-464d-4e4f-93b8-fea4fe9e863f",
+      "dispatch_attempts": 1,
+      "source": "return await app.scroll({window_ref:state.w,observation_ref:state.shot.observation_ref,...{\"delta_y\": 8, \"x\": 306, \"y\": 182}});",
+      "step": {
+        "error": null,
+        "inventory": null,
+        "line": 1,
+        "number": 1,
+        "operation": "scroll",
+        "receipt": {
+          "interruption": null,
+          "outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          },
+          "provider_outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          }
+        },
+        "status": "completed"
+      },
+      "before_offsets": {
+        "left": 0,
+        "nested": 0,
+        "right": 0
+      },
+      "after_offsets": {
+        "left": 128,
+        "nested": 0,
+        "right": 0
+      },
+      "events": [
+        {
+          "after": 128,
+          "before": 0,
+          "delta_y": -8,
+          "generation": 1,
+          "precise": false,
+          "region": "left",
+          "screen_point": [
+            233,
+            311
+          ],
+          "scrolling_delta_y": -8,
+          "sequence": 1,
+          "source": "NSScrollView.scrollWheel native NSEvent",
+          "timestamp": 2492801.614516166,
+          "uptime": 2492801.6169069586,
+          "window_id": 248365
+        }
+      ],
+      "point_assertion": "within 2 points of exact pixel/default anchor",
+      "expected_point": [
+        233.0,
+        311.0
+      ]
+    },
+    "native_pixel_nested": {
+      "passed": true,
+      "preparation_execution_id": "execution_92067ca1-6f8c-4a22-85ed-27743b63cd98",
+      "execution_id": "execution_1334bb27-2144-4f48-a215-432185d7fe2c",
+      "dispatch_attempts": 1,
+      "source": "return await app.scroll({window_ref:state.w,observation_ref:state.shot.observation_ref,...{\"delta_y\": 8, \"x\": 1272, \"y\": 424}});",
+      "step": {
+        "error": null,
+        "inventory": null,
+        "line": 1,
+        "number": 1,
+        "operation": "scroll",
+        "receipt": {
+          "interruption": null,
+          "outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          },
+          "provider_outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          }
+        },
+        "status": "completed"
+      },
+      "before_offsets": {
+        "left": 0,
+        "nested": 0,
+        "right": 0
+      },
+      "after_offsets": {
+        "left": 0,
+        "nested": 128,
+        "right": 0
+      },
+      "events": [
+        {
+          "after": 128,
+          "before": 0,
+          "delta_y": -8,
+          "generation": 1,
+          "precise": false,
+          "region": "nested",
+          "screen_point": [
+            716,
+            432
+          ],
+          "scrolling_delta_y": -8,
+          "sequence": 2,
+          "source": "NSScrollView.scrollWheel native NSEvent",
+          "timestamp": 2492802.565600625,
+          "uptime": 2492802.5667575416,
+          "window_id": 248365
+        }
+      ],
+      "point_assertion": "within 2 points of exact pixel/default anchor",
+      "expected_point": [
+        716.0,
+        432.0
+      ]
+    },
+    "native_semantic_right": {
+      "passed": true,
+      "preparation_execution_id": "execution_f59a6074-ea88-4816-8906-baeb2637c379",
+      "execution_id": "execution_578067f0-640b-4a85-8d1b-96b9a7c3dbe5",
+      "dispatch_attempts": 1,
+      "source": "return await app.scroll({...state.anchor,delta_y:8});",
+      "step": {
+        "error": null,
+        "inventory": null,
+        "line": 1,
+        "number": 1,
+        "operation": "scroll",
+        "receipt": {
+          "interruption": null,
+          "outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          },
+          "provider_outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          }
+        },
+        "status": "completed"
+      },
+      "before_offsets": {
+        "left": 0,
+        "nested": 0,
+        "right": 0
+      },
+      "after_offsets": {
+        "left": 0,
+        "nested": 0,
+        "right": 128
+      },
+      "events": [
+        {
+          "after": 128,
+          "before": 0,
+          "delta_y": -8,
+          "generation": 1,
+          "precise": false,
+          "region": "right",
+          "screen_point": [
+            695,
+            311
+          ],
+          "scrolling_delta_y": -8,
+          "sequence": 3,
+          "source": "NSScrollView.scrollWheel native NSEvent",
+          "timestamp": 2492803.430265833,
+          "uptime": 2492803.4335275004,
+          "window_id": 248365
+        }
+      ],
+      "point_assertion": "inside independent named label rect",
+      "expected_point": [
+        695.0,
+        311.0
+      ]
+    },
+    "native_semantic_nested": {
+      "passed": true,
+      "preparation_execution_id": "execution_9fa19625-1c5a-4dc6-afbf-a2745641b9d9",
+      "execution_id": "execution_9bba3662-a350-4e9f-874d-5382ea9e9c4c",
+      "dispatch_attempts": 1,
+      "source": "return await app.scroll({...state.anchor,delta_y:8});",
+      "step": {
+        "error": null,
+        "inventory": null,
+        "line": 1,
+        "number": 1,
+        "operation": "scroll",
+        "receipt": {
+          "interruption": null,
+          "outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          },
+          "provider_outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          }
+        },
+        "status": "completed"
+      },
+      "before_offsets": {
+        "left": 0,
+        "nested": 0,
+        "right": 0
+      },
+      "after_offsets": {
+        "left": 0,
+        "nested": 128,
+        "right": 0
+      },
+      "events": [
+        {
+          "after": 128,
+          "before": 0,
+          "delta_y": -8,
+          "generation": 1,
+          "precise": false,
+          "region": "nested",
+          "screen_point": [
+            716,
+            432
+          ],
+          "scrolling_delta_y": -8,
+          "sequence": 4,
+          "source": "NSScrollView.scrollWheel native NSEvent",
+          "timestamp": 2492804.253524375,
+          "uptime": 2492804.2584888753,
+          "window_id": 248365
+        }
+      ],
+      "point_assertion": "inside independent named label rect",
+      "expected_point": [
+        716.0,
+        432.0
+      ]
+    },
+    "native_default_center": {
+      "passed": true,
+      "preparation_execution_id": null,
+      "execution_id": "execution_08d37f5c-acf6-42d2-9c3e-63871b888c30",
+      "dispatch_attempts": 1,
+      "source": "const windows=(await app.windows()).windows.filter(w=>w.title===\"DTW Anchored Scroll\");if(windows.length!==1)throw Error('Owned scroll window is not unique');state.w=windows[0].window_ref;return await app.scroll({window_ref:state.w,delta_y:8});",
+      "step": {
+        "error": null,
+        "inventory": null,
+        "line": 1,
+        "number": 2,
+        "operation": "scroll",
+        "receipt": {
+          "interruption": null,
+          "outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          },
+          "provider_outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          }
+        },
+        "status": "completed"
+      },
+      "before_offsets": {
+        "left": 0,
+        "nested": 0,
+        "right": 0
+      },
+      "after_offsets": {
+        "left": 128,
+        "nested": 0,
+        "right": 0
+      },
+      "events": [
+        {
+          "after": 128,
+          "before": 0,
+          "delta_y": -8,
+          "generation": 1,
+          "precise": false,
+          "region": "left",
+          "screen_point": [
+            480,
+            511
+          ],
+          "scrolling_delta_y": -8,
+          "sequence": 5,
+          "source": "NSScrollView.scrollWheel native NSEvent",
+          "timestamp": 2492804.942708166,
+          "uptime": 2492804.9431303754,
+          "window_id": 248365
+        }
+      ],
+      "point_assertion": "within 2 points of exact pixel/default anchor",
+      "expected_point": [
+        480.0,
+        511.0
+      ]
+    },
+    "native_semantic_content_moves": {
+      "passed": true,
+      "preparation_execution_id": "execution_7d2f0d42-baa1-4d66-9977-e0cb22ecc45e",
+      "execution_id": "execution_874aba98-2fe0-4362-b01c-5eb719d9bd99",
+      "dispatch_attempts": 1,
+      "source": "return await app.scroll({...state.anchor,delta_y:25});",
+      "step": {
+        "error": null,
+        "inventory": null,
+        "line": 1,
+        "number": 1,
+        "operation": "scroll",
+        "receipt": {
+          "interruption": null,
+          "outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          },
+          "provider_outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          }
+        },
+        "status": "completed"
+      },
+      "before_offsets": {
+        "left": 0,
+        "nested": 0,
+        "right": 0
+      },
+      "after_offsets": {
+        "left": 400,
+        "nested": 0,
+        "right": 0
+      },
+      "events": [
+        {
+          "after": 160,
+          "before": 0,
+          "delta_y": -10,
+          "generation": 1,
+          "precise": false,
+          "region": "left",
+          "screen_point": [
+            233,
+            311
+          ],
+          "scrolling_delta_y": -10,
+          "sequence": 6,
+          "source": "NSScrollView.scrollWheel native NSEvent",
+          "timestamp": 2492805.771593208,
+          "uptime": 2492805.775126542,
+          "window_id": 248365
+        },
+        {
+          "after": 320,
+          "before": 160,
+          "delta_y": -10,
+          "generation": 1,
+          "precise": false,
+          "region": "left",
+          "screen_point": [
+            233,
+            311
+          ],
+          "scrolling_delta_y": -10,
+          "sequence": 7,
+          "source": "NSScrollView.scrollWheel native NSEvent",
+          "timestamp": 2492805.820382333,
+          "uptime": 2492805.8208371666,
+          "window_id": 248365
+        },
+        {
+          "after": 400,
+          "before": 320,
+          "delta_y": -5,
+          "generation": 1,
+          "precise": false,
+          "region": "left",
+          "screen_point": [
+            233,
+            311
+          ],
+          "scrolling_delta_y": -5,
+          "sequence": 8,
+          "source": "NSScrollView.scrollWheel native NSEvent",
+          "timestamp": 2492805.8672,
+          "uptime": 2492805.867603875,
+          "window_id": 248365
+        }
+      ],
+      "point_assertion": "inside independent named label rect",
+      "expected_point": [
+        233.0,
+        311.0
+      ]
+    },
+    "native_stale_replacement": {
+      "passed": true,
+      "preparation_execution_id": "execution_4ea3a09d-3821-4cdb-adc5-d1737f2ac9e0",
+      "execution_id": "execution_c7465a0f-1fb8-48e4-a447-92a1e68de163",
+      "dispatch_attempts": 1,
+      "source": "return await app.scroll({...state.anchor,delta_y:8});",
+      "step": {
+        "error": {
+          "code": "stale_observation",
+          "message": "The observation is expired, consumed or no longer current"
+        },
+        "inventory": null,
+        "line": 1,
+        "number": 1,
+        "operation": "scroll",
+        "receipt": {
+          "interruption": null,
+          "outcome": {
+            "dispatch": "not_dispatched",
+            "error": {
+              "code": "stale_observation",
+              "message": "The observation is expired, consumed or no longer current"
+            },
+            "evidence": {
+              "kind": "unverified"
+            }
+          },
+          "provider_outcome": {
+            "dispatch": "not_dispatched",
+            "error": {
+              "code": "stale_observation",
+              "message": "The observation is expired, consumed or no longer current"
+            },
+            "evidence": {
+              "kind": "unverified"
+            }
+          }
+        },
+        "status": "completed"
+      },
+      "before_offsets": {
+        "left": 0,
+        "nested": 0,
+        "right": 0
+      },
+      "after_offsets": {
+        "left": 0,
+        "nested": 0,
+        "right": 0
+      },
+      "events": [
+        {
+          "after": 128,
+          "before": 0,
+          "delta_y": -8,
+          "generation": 1,
+          "precise": false,
+          "region": "left",
+          "screen_point": [
+            233,
+            311
+          ],
+          "scrolling_delta_y": -8,
+          "sequence": 1,
+          "source": "NSScrollView.scrollWheel native NSEvent",
+          "timestamp": 2492801.614516166,
+          "uptime": 2492801.6169069586,
+          "window_id": 248365
+        },
+        {
+          "after": 128,
+          "before": 0,
+          "delta_y": -8,
+          "generation": 1,
+          "precise": false,
+          "region": "nested",
+          "screen_point": [
+            716,
+            432
+          ],
+          "scrolling_delta_y": -8,
+          "sequence": 2,
+          "source": "NSScrollView.scrollWheel native NSEvent",
+          "timestamp": 2492802.565600625,
+          "uptime": 2492802.5667575416,
+          "window_id": 248365
+        },
+        {
+          "after": 128,
+          "before": 0,
+          "delta_y": -8,
+          "generation": 1,
+          "precise": false,
+          "region": "right",
+          "screen_point": [
+            695,
+            311
+          ],
+          "scrolling_delta_y": -8,
+          "sequence": 3,
+          "source": "NSScrollView.scrollWheel native NSEvent",
+          "timestamp": 2492803.430265833,
+          "uptime": 2492803.4335275004,
+          "window_id": 248365
+        },
+        {
+          "after": 128,
+          "before": 0,
+          "delta_y": -8,
+          "generation": 1,
+          "precise": false,
+          "region": "nested",
+          "screen_point": [
+            716,
+            432
+          ],
+          "scrolling_delta_y": -8,
+          "sequence": 4,
+          "source": "NSScrollView.scrollWheel native NSEvent",
+          "timestamp": 2492804.253524375,
+          "uptime": 2492804.2584888753,
+          "window_id": 248365
+        },
+        {
+          "after": 128,
+          "before": 0,
+          "delta_y": -8,
+          "generation": 1,
+          "precise": false,
+          "region": "left",
+          "screen_point": [
+            480,
+            511
+          ],
+          "scrolling_delta_y": -8,
+          "sequence": 5,
+          "source": "NSScrollView.scrollWheel native NSEvent",
+          "timestamp": 2492804.942708166,
+          "uptime": 2492804.9431303754,
+          "window_id": 248365
+        },
+        {
+          "after": 160,
+          "before": 0,
+          "delta_y": -10,
+          "generation": 1,
+          "precise": false,
+          "region": "left",
+          "screen_point": [
+            233,
+            311
+          ],
+          "scrolling_delta_y": -10,
+          "sequence": 6,
+          "source": "NSScrollView.scrollWheel native NSEvent",
+          "timestamp": 2492805.771593208,
+          "uptime": 2492805.775126542,
+          "window_id": 248365
+        },
+        {
+          "after": 320,
+          "before": 160,
+          "delta_y": -10,
+          "generation": 1,
+          "precise": false,
+          "region": "left",
+          "screen_point": [
+            233,
+            311
+          ],
+          "scrolling_delta_y": -10,
+          "sequence": 7,
+          "source": "NSScrollView.scrollWheel native NSEvent",
+          "timestamp": 2492805.820382333,
+          "uptime": 2492805.8208371666,
+          "window_id": 248365
+        },
+        {
+          "after": 400,
+          "before": 320,
+          "delta_y": -5,
+          "generation": 1,
+          "precise": false,
+          "region": "left",
+          "screen_point": [
+            233,
+            311
+          ],
+          "scrolling_delta_y": -5,
+          "sequence": 8,
+          "source": "NSScrollView.scrollWheel native NSEvent",
+          "timestamp": 2492805.8672,
+          "uptime": 2492805.867603875,
+          "window_id": 248365
+        }
+      ],
+      "point_assertion": null,
+      "expected_point": null
+    },
+    "chrome_pixel_left": {
+      "passed": true,
+      "preparation_execution_id": "execution_fdaed17f-abcb-49dc-a2ee-2e3d96305355",
+      "execution_id": "execution_b77839ad-a1e5-4912-9f54-fd746c8eb994",
+      "dispatch_attempts": 1,
+      "source": "return await app.scroll({window_ref:state.w,observation_ref:state.shot.observation_ref,delta_y:8,...{\"x\": 468, \"y\": 698}});",
+      "step": {
+        "error": null,
+        "inventory": null,
+        "line": 1,
+        "number": 1,
+        "operation": "scroll",
+        "receipt": {
+          "interruption": null,
+          "outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          },
+          "provider_outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          }
+        },
+        "status": "completed"
+      },
+      "before_offsets": {
+        "left": 0,
+        "right": 0,
+        "nested": 0
+      },
+      "after_offsets": {
+        "left": 320,
+        "right": 0,
+        "nested": 0
+      },
+      "events": [
+        {
+          "type": "wheel",
+          "sequence": 14,
+          "region": "left",
+          "trusted": true,
+          "delta_x": 0,
+          "delta_y": 320,
+          "delta_mode": 0,
+          "wheel_delta_y": -960,
+          "client_point": [
+            292,
+            349
+          ],
+          "timestamp": 1425.5999999046326,
+          "unix_ms": 1793337294884
+        }
+      ],
+      "point_assertion": "within 2 CSS pixels of exact pixel/default anchor",
+      "expected_point": [
+        292.73828125,
+        349.0
+      ]
+    },
+    "chrome_semantic_nested": {
+      "passed": true,
+      "preparation_execution_id": "execution_4b295408-14ce-4523-a00e-2deba10a31ad",
+      "execution_id": "execution_377d025c-6fd5-4b5d-96f5-9b4506e40e50",
+      "dispatch_attempts": 1,
+      "source": "return await app.scroll({...state.anchor,delta_y:8});",
+      "step": {
+        "error": null,
+        "inventory": null,
+        "line": 1,
+        "number": 1,
+        "operation": "scroll",
+        "receipt": {
+          "interruption": null,
+          "outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          },
+          "provider_outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          }
+        },
+        "status": "completed"
+      },
+      "before_offsets": {
+        "left": 320,
+        "right": 0,
+        "nested": 0
+      },
+      "after_offsets": {
+        "left": 320,
+        "right": 0,
+        "nested": 320
+      },
+      "events": [
+        {
+          "type": "wheel",
+          "sequence": 46,
+          "region": "nested",
+          "trusted": true,
+          "delta_x": 0,
+          "delta_y": 320,
+          "delta_mode": 0,
+          "wheel_delta_y": -960,
+          "client_point": [
+            714,
+            177
+          ],
+          "timestamp": 4385.199999809265,
+          "unix_ms": 1793337297840
+        }
+      ],
+      "point_assertion": "inside independent named label rect",
+      "expected_point": [
+        784.73828125,
+        176.75
+      ]
+    },
+    "chrome_pixel_nested": {
+      "passed": true,
+      "preparation_execution_id": "execution_65c1c19e-a250-4213-9513-1a98861e9a3d",
+      "execution_id": "execution_3177fcf6-f688-41b5-90ac-9beccb514efc",
+      "dispatch_attempts": 1,
+      "source": "return await app.scroll({window_ref:state.w,observation_ref:state.shot.observation_ref,delta_y:8,...{\"x\": 1256, \"y\": 549}});",
+      "step": {
+        "error": null,
+        "inventory": null,
+        "line": 1,
+        "number": 1,
+        "operation": "scroll",
+        "receipt": {
+          "interruption": null,
+          "outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          },
+          "provider_outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          }
+        },
+        "status": "completed"
+      },
+      "before_offsets": {
+        "left": 320,
+        "right": 0,
+        "nested": 320
+      },
+      "after_offsets": {
+        "left": 320,
+        "right": 0,
+        "nested": 640
+      },
+      "events": [
+        {
+          "type": "wheel",
+          "sequence": 59,
+          "region": "nested",
+          "trusted": true,
+          "delta_x": 0,
+          "delta_y": 320,
+          "delta_mode": 0,
+          "wheel_delta_y": -960,
+          "client_point": [
+            785,
+            256
+          ],
+          "timestamp": 5481.900000095367,
+          "unix_ms": 1793337298936
+        }
+      ],
+      "point_assertion": "within 2 CSS pixels of exact pixel/default anchor",
+      "expected_point": [
+        784.73828125,
+        256.0
+      ]
+    },
+    "chrome_semantic_right": {
+      "passed": true,
+      "preparation_execution_id": "execution_2879085b-0a2b-43ec-ac75-6ab9a8ac6c42",
+      "execution_id": "execution_053e9cb6-c9c9-40d5-95bb-a8ca85563a59",
+      "dispatch_attempts": 1,
+      "source": "return await app.scroll({...state.anchor,delta_y:8});",
+      "step": {
+        "error": null,
+        "inventory": null,
+        "line": 1,
+        "number": 1,
+        "operation": "scroll",
+        "receipt": {
+          "interruption": null,
+          "outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          },
+          "provider_outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          }
+        },
+        "status": "completed"
+      },
+      "before_offsets": {
+        "left": 320,
+        "right": 0,
+        "nested": 640
+      },
+      "after_offsets": {
+        "left": 320,
+        "right": 320,
+        "nested": 640
+      },
+      "events": [
+        {
+          "type": "wheel",
+          "sequence": 69,
+          "region": "right",
+          "trusted": true,
+          "delta_x": 0,
+          "delta_y": 320,
+          "delta_mode": 0,
+          "wheel_delta_y": -960,
+          "client_point": [
+            671,
+            89
+          ],
+          "timestamp": 6358.099999904633,
+          "unix_ms": 1793337299814
+        }
+      ],
+      "point_assertion": "inside independent named label rect",
+      "expected_point": [
+        784.73828125,
+        89.25
+      ]
+    },
+    "chrome_default_center": {
+      "passed": true,
+      "preparation_execution_id": null,
+      "execution_id": "execution_5c0c692a-75b6-48e8-a2d4-3185fc7b98e4",
+      "dispatch_attempts": 1,
+      "source": "const windows=(await app.windows()).windows.filter(w=>w.title===\"DTW Scroll anchor-5c81ab97f8\");if(windows.length!==1)throw Error('Owned scroll window is not unique');state.w=windows[0].window_ref;return await app.scroll({window_ref:state.w,delta_y:8});",
+      "step": {
+        "error": null,
+        "inventory": null,
+        "line": 1,
+        "number": 2,
+        "operation": "scroll",
+        "receipt": {
+          "interruption": null,
+          "outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          },
+          "provider_outcome": {
+            "delivery": {
+              "focus_return": null,
+              "foreground_borrowed": false,
+              "reason": "background_supported",
+              "route": "background"
+            },
+            "dispatch": "dispatched",
+            "error": null,
+            "evidence": {
+              "kind": "unverified"
+            }
+          }
+        },
+        "status": "completed"
+      },
+      "before_offsets": {
+        "left": 320,
+        "right": 320,
+        "nested": 640
+      },
+      "after_offsets": {
+        "left": 640,
+        "right": 320,
+        "nested": 640
+      },
+      "events": [
+        {
+          "type": "wheel",
+          "sequence": 79,
+          "region": "left",
+          "trusted": true,
+          "delta_x": 0,
+          "delta_y": 320,
+          "delta_mode": 0,
+          "wheel_delta_y": -960,
+          "client_point": [
+            500,
+            288
+          ],
+          "timestamp": 7123.299999713898,
+          "unix_ms": 1793337300581
+        }
+      ],
+      "point_assertion": "within 2 CSS pixels of exact pixel/default anchor",
+      "expected_point": [
+        500.0,
+        288.0
+      ]
+    }
+  },
+  "cleanup": [
+    {
+      "pid": 65614,
+      "returncode": 0,
+      "forced": [],
+      "native_workers": [
+        65617,
+        65618
+      ],
+      "native_workers_reaped": true
+    },
+    {
+      "pid": 65561,
+      "returncode": 0,
+      "forced": [],
+      "native_workers": [
+        65568,
+        65570
+      ],
+      "native_workers_reaped": true
+    },
+    {
+      "pid": 65596,
+      "returncode": 0,
+      "forced": [],
+      "profile_processes_reaped": true
+    },
+    {
+      "pid": 65595,
+      "returncode": 0,
+      "forced": []
+    },
+    {
+      "pid": 65554,
+      "returncode": 0,
+      "forced": []
+    },
+    {
+      "pid": 65552,
+      "returncode": 0,
+      "forced": []
+    }
+  ],
+  "cold_chrome": {
+    "installed_version": "156.0.8078.76",
+    "final_trace": [
+      {
+        "decision": "ready",
+        "elapsed_ms": 13,
+        "enablement_cached": false,
+        "enhanced_setter_result": -25208,
+        "manual_opt_in": false,
+        "manual_setter_result": -25205,
+        "materialization_recheck": false,
+        "readiness_flags": {
+          "empty_content_group": false,
+          "empty_web_area": false,
+          "populated_web_area": false,
+          "shallow_unknown": false
+        },
+        "samples": 1,
+        "scan_truncated": false
+      },
+      {
+        "decision": "materialization_pending",
+        "elapsed_ms": 4,
+        "enablement_cached": true,
+        "enhanced_setter_result": -25208,
+        "manual_opt_in": false,
+        "manual_setter_result": -25205,
+        "materialization_recheck": true,
+        "readiness_flags": {
+          "empty_content_group": false,
+          "empty_web_area": false,
+          "populated_web_area": false,
+          "shallow_unknown": false
+        },
+        "samples": 1,
+        "scan_truncated": false
+      },
+      {
+        "decision": "ready",
+        "elapsed_ms": 2058,
+        "enablement_cached": true,
+        "enhanced_setter_result": -25208,
+        "manual_opt_in": false,
+        "manual_setter_result": -25205,
+        "materialization_recheck": true,
+        "readiness_flags": {
+          "empty_content_group": false,
+          "empty_web_area": false,
+          "populated_web_area": true,
+          "shallow_unknown": false
+        },
+        "samples": 33,
+        "scan_truncated": false
+      },
+      {
+        "decision": "ready",
+        "elapsed_ms": 4,
+        "enablement_cached": true,
+        "enhanced_setter_result": -25208,
+        "manual_opt_in": false,
+        "manual_setter_result": -25205,
+        "materialization_recheck": false,
+        "readiness_flags": {
+          "empty_content_group": false,
+          "empty_web_area": false,
+          "populated_web_area": true,
+          "shallow_unknown": false
+        },
+        "samples": 1,
+        "scan_truncated": false
+      }
+    ],
+    "trace_file": {
+      "path": "/private/tmp/dtw-input-observability-z-scroll/mcp-chrome/dtw-stderr.log",
+      "sha256": "a8b972558c2c7b5947f3ca72c1da9c3e0052d01014ca581415d2acc87fcfdad4"
+    },
+    "controls": [
+      {
+        "name": "v-control",
+        "path": "/private/tmp/dtw-scroll-cold-v-control/evidence.json",
+        "sha256": "d5984af403cad0835fe96939e37a67429c64f83e37cc88bcfa909fc30fa657da",
+        "binary_sha256": "cecb146863306007f83a2cadd666e278b94ab71aed031141d4e05d8d51238865",
+        "readonly": true,
+        "diagnostic_failure": "KeyError('value')",
+        "diagnostic_failure_scope": "Probe decoding only; original read remains recorded",
+        "reads": {
+          "filtered": {
+            "execution_id": "execution_e80a372c-6074-44de-80ca-e448340590c1",
+            "error": null,
+            "coverage": {
+              "complete": true,
+              "reason": null,
+              "visited": 53
+            },
+            "pages": null,
+            "element_count": 0,
+            "has_more": false,
+            "exact_nested_matches": []
+          }
+        },
+        "cleanup": [
+          {
+            "pid": 53249,
+            "returncode": 0,
+            "forced": [],
+            "native_workers": [
+              53250,
+              53251
+            ],
+            "native_workers_reaped": true
+          },
+          {
+            "pid": 53232,
+            "returncode": 0,
+            "forced": []
+          },
+          {
+            "pid": 53231,
+            "returncode": 0,
+            "forced": []
+          }
+        ]
+      },
+      {
+        "name": "v-control2",
+        "path": "/private/tmp/dtw-scroll-cold-v-control2/evidence.json",
+        "sha256": "e1f41a410f75c81157eb409d1d5cb4bc5de6629d8ea23fa40ed7771b19e2e610",
+        "binary_sha256": "cecb146863306007f83a2cadd666e278b94ab71aed031141d4e05d8d51238865",
+        "readonly": true,
+        "diagnostic_failure": "KeyError('result')",
+        "diagnostic_failure_scope": "Probe decoding only; original read remains recorded",
+        "reads": {
+          "filtered": {
+            "execution_id": "execution_ed940cba-b7e0-42d7-b25b-ac448953d5cd",
+            "error": null,
+            "coverage": {
+              "complete": true,
+              "reason": null,
+              "visited": 53
+            },
+            "pages": null,
+            "element_count": 0,
+            "has_more": false,
+            "exact_nested_matches": []
+          }
+        },
+        "cleanup": [
+          {
+            "pid": 53420,
+            "returncode": 0,
+            "forced": [],
+            "native_workers": [
+              53421,
+              53422
+            ],
+            "native_workers_reaped": true
+          },
+          {
+            "pid": 53403,
+            "returncode": 0,
+            "forced": []
+          },
+          {
+            "pid": 53402,
+            "returncode": 0,
+            "forced": []
+          }
+        ]
+      },
+      {
+        "name": "v-control3",
+        "path": "/private/tmp/dtw-scroll-cold-v-control3/evidence.json",
+        "sha256": "ff024092c4f04f971f66f70067ae5110071c420b42fce0b423574216d175f417",
+        "binary_sha256": "cecb146863306007f83a2cadd666e278b94ab71aed031141d4e05d8d51238865",
+        "readonly": true,
+        "diagnostic_failure": null,
+        "diagnostic_failure_scope": null,
+        "reads": {
+          "filtered": {
+            "execution_id": "execution_d83205a6-b998-4f03-94b3-2f80f22f690a",
+            "error": null,
+            "coverage": {
+              "complete": true,
+              "reason": null,
+              "visited": 53
+            },
+            "pages": null,
+            "element_count": 0,
+            "has_more": false,
+            "exact_nested_matches": []
+          },
+          "unfiltered": {
+            "execution_id": "execution_39cfe217-7444-4a20-9ad7-d41c181af0f0",
+            "error": null,
+            "coverage": {
+              "complete": true,
+              "reason": null,
+              "visited": 53
+            },
+            "pages": null,
+            "element_count": 53,
+            "has_more": false,
+            "exact_nested_matches": []
+          }
+        },
+        "cleanup": [
+          {
+            "pid": 53475,
+            "returncode": 0,
+            "forced": [],
+            "native_workers": [
+              53476,
+              53477
+            ],
+            "native_workers_reaped": true
+          },
+          {
+            "pid": 53458,
+            "returncode": 0,
+            "forced": []
+          },
+          {
+            "pid": 53457,
+            "returncode": 0,
+            "forced": []
+          }
+        ]
+      },
+      {
+        "name": "x-control",
+        "path": "/private/tmp/dtw-scroll-cold-x-control/evidence.json",
+        "sha256": "365c251db26955dc56e07259cf6c99ace518527e0643d3993892e01bfcc969da",
+        "binary_sha256": "7f3b1063fae29622ac09814b4aec7c95b2b57017015e138937f5bb0b4f8c5e46",
+        "readonly": true,
+        "diagnostic_failure": null,
+        "diagnostic_failure_scope": null,
+        "reads": {
+          "filtered": {
+            "execution_id": "execution_5f846aa0-4783-461a-a9a6-6b09b75048bc",
+            "error": null,
+            "coverage": {
+              "complete": true,
+              "reason": null,
+              "visited": 53
+            },
+            "pages": null,
+            "element_count": 0,
+            "has_more": false,
+            "exact_nested_matches": []
+          },
+          "unfiltered": {
+            "execution_id": "execution_4c5a19ee-20aa-4900-b26c-a360810fe89e",
+            "error": null,
+            "coverage": {
+              "complete": true,
+              "reason": null,
+              "visited": 53
+            },
+            "pages": null,
+            "element_count": 53,
+            "has_more": false,
+            "exact_nested_matches": []
+          }
+        },
+        "cleanup": [
+          {
+            "pid": 53833,
+            "returncode": 0,
+            "forced": [],
+            "native_workers": [
+              53836,
+              53839
+            ],
+            "native_workers_reaped": true
+          },
+          {
+            "pid": 53816,
+            "returncode": 0,
+            "forced": []
+          },
+          {
+            "pid": 53815,
+            "returncode": 0,
+            "forced": []
+          }
+        ]
+      },
+      {
+        "name": "x-delayed",
+        "path": "/private/tmp/dtw-scroll-cold-x-delayed/evidence.json",
+        "sha256": "e283d9e5ee82006bb689de20553308bf03a95d45ff3e4567a905dbee4b159720",
+        "binary_sha256": "7f3b1063fae29622ac09814b4aec7c95b2b57017015e138937f5bb0b4f8c5e46",
+        "readonly": true,
+        "diagnostic_failure": null,
+        "diagnostic_failure_scope": null,
+        "reads": {
+          "filtered": {
+            "execution_id": "execution_a24d1a79-20e1-4121-a2c5-e143851b04f7",
+            "error": null,
+            "coverage": {
+              "complete": true,
+              "reason": null,
+              "visited": 53
+            },
+            "pages": null,
+            "element_count": 0,
+            "has_more": false,
+            "exact_nested_matches": []
+          },
+          "unfiltered": {
+            "execution_id": "execution_41b38de0-4e1a-476e-9735-85b6b4501e19",
+            "error": null,
+            "coverage": {
+              "complete": true,
+              "reason": null,
+              "visited": 53
+            },
+            "pages": null,
+            "element_count": 53,
+            "has_more": false,
+            "exact_nested_matches": []
+          },
+          "delayed": {
+            "execution_id": "execution_ba7ac1db-958b-4552-8602-f8cdd6c1be99",
+            "error": null,
+            "coverage": {
+              "complete": false,
+              "reason": null,
+              "visited": 105
+            },
+            "pages": null,
+            "element_count": 0,
+            "has_more": true,
+            "exact_nested_matches": []
+          }
+        },
+        "cleanup": [
+          {
+            "pid": 54307,
+            "returncode": 0,
+            "forced": [],
+            "native_workers": [
+              54308,
+              54309
+            ],
+            "native_workers_reaped": true
+          },
+          {
+            "pid": 54290,
+            "returncode": 0,
+            "forced": []
+          },
+          {
+            "pid": 54289,
+            "returncode": 0,
+            "forced": []
+          }
+        ]
+      },
+      {
+        "name": "x-paged",
+        "path": "/private/tmp/dtw-scroll-cold-x-paged/evidence.json",
+        "sha256": "c5665bb9fa55162c824e31450315778b120193d80302e05ea4af34bd9dd2fcde",
+        "binary_sha256": "7f3b1063fae29622ac09814b4aec7c95b2b57017015e138937f5bb0b4f8c5e46",
+        "readonly": true,
+        "diagnostic_failure": null,
+        "diagnostic_failure_scope": null,
+        "reads": {
+          "filtered": {
+            "execution_id": "execution_a99791ca-1f5a-41a3-82ed-4fb61c0c7b35",
+            "error": null,
+            "coverage": {
+              "complete": true,
+              "reason": null,
+              "visited": 53
+            },
+            "pages": 1,
+            "element_count": 0,
+            "has_more": false,
+            "exact_nested_matches": []
+          },
+          "unfiltered": {
+            "execution_id": "execution_8a5ea89c-4406-4c7e-b270-6330491edb11",
+            "error": null,
+            "coverage": {
+              "complete": true,
+              "reason": null,
+              "visited": 53
+            },
+            "pages": 1,
+            "element_count": 53,
+            "has_more": false,
+            "exact_nested_matches": []
+          },
+          "delayed": {
+            "execution_id": "execution_7d146c1c-bfbd-492f-9083-c3a3cb3e5a8a",
+            "error": null,
+            "coverage": {
+              "complete": true,
+              "reason": null,
+              "visited": 668
+            },
+            "pages": 7,
+            "element_count": 1,
+            "has_more": false,
+            "exact_nested_matches": [
+              {
+                "role": "static_text",
+                "name": "",
+                "value": "Nested anchor",
+                "label": "Nested anchor"
+              }
+            ]
+          }
+        },
+        "cleanup": [
+          {
+            "pid": 54874,
+            "returncode": 0,
+            "forced": [],
+            "native_workers": [
+              54875,
+              54876
+            ],
+            "native_workers_reaped": true
+          },
+          {
+            "pid": 54848,
+            "returncode": 0,
+            "forced": []
+          },
+          {
+            "pid": 54847,
+            "returncode": 0,
+            "forced": []
+          }
+        ]
+      }
+    ],
+    "explanatory_source": "https://raw.githubusercontent.com/chromium/chromium/main/chrome/browser/chrome_browser_application_mac.mm",
+    "source_boundary": "Current main explains asynchronous enablement but is not verified source of the installed Chrome binary."
+  },
+  "cursor_regression": {
+    "passed": true,
+    "functional_passed": true,
+    "rendering_gaps": 0,
+    "static_roi_comparison": {
+      "after_rgba_sha256": "939c85c80879ed4bb10b77d56a0ec451fcbf25daee0a5fd9ab4165db813bc88f",
+      "baseline_opaque_pixels": 25024,
+      "before_rgba_sha256": "939c85c80879ed4bb10b77d56a0ec451fcbf25daee0a5fd9ab4165db813bc88f",
+      "different_channels": 0,
+      "different_pixels": 0,
+      "maximum_channel_delta": 0,
+      "pixels": 25024,
+      "roi": [
+        832,
+        542,
+        184,
+        136
+      ]
+    },
+    "marker_images": [
+      {
+        "colored_pixels": 4472,
+        "dominant_color_bin": "6,13,10",
+        "exact_owned_window": 248426,
+        "height": 128,
+        "opaque_pixels": 5725,
+        "path": "/private/tmp/dtw-input-observability-z-overlay/session-a-marker.png",
+        "status": "captured",
+        "width": 176,
+        "sha256": "cb4b1fd7c8ccc208a3aa5d315130d7bbcbaff1416a3c02970268886c908a79f4"
+      },
+      {
+        "colored_pixels": 4540,
+        "dominant_color_bin": "4,12,14",
+        "exact_owned_window": 248433,
+        "height": 128,
+        "opaque_pixels": 5725,
+        "path": "/private/tmp/dtw-input-observability-z-overlay/session-b-marker.png",
+        "status": "captured",
+        "width": 176,
+        "sha256": "bf18352a92591c0c1370b67e48aaa093e3c6042cf936460ac53eb8717da4d74d"
+      }
+    ],
+    "visual_inspection": "Session A arrow and four hex vector glyphs readable; same glyph dimensions controlled in Swift.",
+    "lifecycle_cases": [
+      "cancel",
+      "eof",
+      "parent-exit"
+    ],
+    "raw": {
+      "path": "/private/tmp/dtw-input-observability-z-overlay/evidence.json",
+      "sha256": "146117faa565b7d60f44e5ac0602ca395570380a80b3aab753334678fb87be66"
+    }
+  },
+  "historical_runs": [
+    {
+      "name": "w-scroll",
+      "path": "/private/tmp/dtw-input-observability-w-scroll/evidence.json",
+      "sha256": "f52f013a96bf502b5e1ba1f22006c2ff4616651b9738433423bdf406dba373ef",
+      "binary_sha256": "94b7e8d20ad9d9ce0c1cdd6251f10a66fec80f67023b5269714067da1a23a13d",
+      "passed": false,
+      "functional_cases_passed": [
+        "native_pixel_left",
+        "native_pixel_nested",
+        "native_semantic_right",
+        "native_semantic_nested",
+        "native_default_center",
+        "native_semantic_content_moves",
+        "native_stale_replacement",
+        "chrome_pixel_left"
+      ],
+      "failure": "AssertionError({'app': 'com.google.Chrome', 'app_ref': 'app_896860cd-c387-4f8b-8a8a-3862036af936', 'context_reset': False, 'error': {'code': 'script_exception', 'message': 'Error: Owned non-pressable anchor not found [{\"elements\":[],\"coverage\":{\"complete\":true,\"reason\":null,\"visited\":53}}]'}, 'execution_id': 'execution_0e83b610-1b18-4428-b4a8-857fed0e5dc7', 'operation': 'script', 'payload_expired': False, 'receipt': None, 'script': {'failure': {'call': None, 'code': None, 'kind': 'exception', 'line': 12, 'message': 'Error: Owned non-pressable anchor not found [{\"elements\":[],\"coverage\":{\"complete\":true,\"reason\":null,\"visited\":53}}]', 'operation': None}, 'shutdown_error': None, 'state_committed': False, 'steps': [{'error': None, 'inventory': {'coverage': {'available_instances': 2, 'candidate_count': 35, 'complete_within_scope': True, 'excluded_count': 31, 'excludes': ['provider_excluded_windows', 'unavailable_instance_windows'], 'instance_count': 2, 'scope': 'application_instances', 'status': 'available', 'supported_count': 4, 'unavailable_instances': 0}, 'diagnostics': {'counters': {'cg_app_raw': 35, 'duplicate_id': 0, 'excluded_unavailable_surface': 31, 'excluded_zero_area': 0, 'invalid_metadata': 0, 'supported_count': 4}, 'error_codes': [], 'errors': [], 'provider': 'macos.window-server'}}, 'line': 1, 'number': 1, 'operation': 'windows', 'receipt': None, 'status': 'completed'}, {'discovery': {'complete': True, 'has_more': False, 'observation_ref': 'observation_85db48aa-3f27-4bd0-9e85-618eafa8aff2', 'reason': None, 'visited': 53, 'window_ref': 'window_11cdcd74-be8f-4322-af9c-583400eeb04f'}, 'error': None, 'inventory': None, 'line': 2, 'number': 2, 'operation': 'observe', 'receipt': None, 'status': 'completed'}]}, 'state_reset': False, 'status': 'completed', 'value': {'calls': 2, 'console': [], 'console_truncated': False, 'last_capture': None}, 'version': 1})",
+      "cleanup": [
+        {
+          "pid": 52879,
+          "returncode": 0,
+          "forced": [],
+          "native_workers": [
+            52882,
+            52883
+          ],
+          "native_workers_reaped": true
+        },
+        {
+          "pid": 52782,
+          "returncode": 0,
+          "forced": [],
+          "native_workers": [
+            52799,
+            52800
+          ],
+          "native_workers_reaped": true
+        },
+        {
+          "pid": 52854,
+          "returncode": 0,
+          "forced": [],
+          "profile_processes_reaped": true
+        },
+        {
+          "pid": 52853,
+          "returncode": 0,
+          "forced": []
+        },
+        {
+          "pid": 52765,
+          "returncode": 0,
+          "forced": []
+        },
+        {
+          "pid": 52756,
+          "returncode": 0,
+          "forced": []
+        }
+      ],
+      "note": "Failed cold Chrome complete-empty filtered query after seven native and one Chrome case passed; original failure retained."
+    },
+    {
+      "name": "y-scroll",
+      "path": "/private/tmp/dtw-input-observability-y-scroll/evidence.json",
+      "sha256": "4e79de37fbef2e2aa0522cd0b5a52e8e7f4a9d33656ba6d8178022588ecdb534",
+      "binary_sha256": "08fcc2401f6fc67ca3395c400c3e35974e7aef3762ad967bbb00416d2bbd7f9e",
+      "passed": false,
+      "functional_cases_passed": [
+        "native_pixel_left",
+        "native_pixel_nested",
+        "native_semantic_right",
+        "native_semantic_nested",
+        "native_default_center",
+        "native_semantic_content_moves",
+        "native_stale_replacement",
+        "chrome_pixel_left",
+        "chrome_semantic_nested",
+        "chrome_pixel_nested",
+        "chrome_semantic_right",
+        "chrome_default_center"
+      ],
+      "failure": "Owned cleanup failed",
+      "cleanup": [
+        {
+          "pid": 63630,
+          "returncode": 0,
+          "forced": [],
+          "native_workers": [
+            63638,
+            63642
+          ],
+          "native_workers_reaped": true
+        },
+        {
+          "error": "AssertionError({'pid': 63437, 'returncode': 2, 'forced': [], 'native_workers': [63449, 63453], 'native_workers_reaped': True})"
+        },
+        {
+          "pid": 63567,
+          "returncode": 0,
+          "forced": [],
+          "profile_processes_reaped": true
+        },
+        {
+          "pid": 63551,
+          "returncode": 0,
+          "forced": []
+        },
+        {
+          "pid": 63422,
+          "returncode": 0,
+          "forced": []
+        },
+        {
+          "pid": 63407,
+          "returncode": 0,
+          "forced": []
+        }
+      ],
+      "note": "All 12 functional cases passed; native MCP cleanup failed after overlay SIGABRT in CoreText drawing. Original failure retained."
+    },
+    {
+      "name": "y-overlay",
+      "path": "/private/tmp/dtw-input-observability-y-overlay/evidence.json",
+      "sha256": "05eba782c74b7807cdaf8c91dbbf29417f45d0e94d32a0c966e4ff58e66b1fa6",
+      "binary_sha256": "08fcc2401f6fc67ca3395c400c3e35974e7aef3762ad967bbb00416d2bbd7f9e",
+      "passed": true,
+      "functional_cases_passed": [],
+      "failure": null,
+      "cleanup": [
+        {
+          "pid": 64771,
+          "returncode": -15,
+          "forced": [],
+          "native_workers": [],
+          "native_workers_reaped": true,
+          "recorded_worker_exit": {
+            "exited": true,
+            "polls": 2,
+            "exit_status": "unavailable",
+            "meaning": "PID/command disappearance does not establish exit code 0",
+            "remaining": []
+          },
+          "native_worker_stderr": {
+            "path": "/private/tmp/dtw-input-observability-y-overlay/mcp-parent-exit/dtw-stderr.log",
+            "trace_enabled": true,
+            "checked_after_recorded_workers_exited": true,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "cleanup_failure_marker_lines": [],
+            "meaning": "Marker absence is not a worker exit status or proof of exit code 0"
+          },
+          "overlay": {
+            "process_reaped": true,
+            "window_snapshot": {
+              "identity_matches": false,
+              "uptime": 2492522.0459355,
+              "windows": []
+            }
+          }
+        },
+        {
+          "pid": 64754,
+          "returncode": 0,
+          "forced": [],
+          "native_workers": [],
+          "native_workers_reaped": true,
+          "recorded_worker_exit": {
+            "exited": true,
+            "polls": 2,
+            "exit_status": "unavailable",
+            "meaning": "PID/command disappearance does not establish exit code 0",
+            "remaining": []
+          },
+          "native_worker_stderr": {
+            "path": "/private/tmp/dtw-input-observability-y-overlay/mcp-eof/dtw-stderr.log",
+            "trace_enabled": true,
+            "checked_after_recorded_workers_exited": true,
+            "bytes": 76,
+            "sha256": "ea893e475cde00f4c4011bbc66066e6159726015b8a4d9164edd35a83c7166d9",
+            "cleanup_failure_marker_lines": [],
+            "meaning": "Marker absence is not a worker exit status or proof of exit code 0"
+          },
+          "overlay": {
+            "process_reaped": true,
+            "window_snapshot": {
+              "identity_matches": false,
+              "uptime": 2492522.1460712086,
+              "windows": []
+            }
+          }
+        },
+        {
+          "pid": 64729,
+          "returncode": 0,
+          "forced": [],
+          "native_workers": [],
+          "native_workers_reaped": true,
+          "recorded_worker_exit": {
+            "exited": true,
+            "polls": 2,
+            "exit_status": "unavailable",
+            "meaning": "PID/command disappearance does not establish exit code 0",
+            "remaining": []
+          },
+          "native_worker_stderr": {
+            "path": "/private/tmp/dtw-input-observability-y-overlay/mcp-cancel/dtw-stderr.log",
+            "trace_enabled": true,
+            "checked_after_recorded_workers_exited": true,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "cleanup_failure_marker_lines": [],
+            "meaning": "Marker absence is not a worker exit status or proof of exit code 0"
+          },
+          "overlay": {
+            "process_reaped": true,
+            "window_snapshot": {
+              "identity_matches": false,
+              "uptime": 2492522.24314775,
+              "windows": []
+            }
+          }
+        },
+        {
+          "pid": 64707,
+          "returncode": 0,
+          "forced": [],
+          "native_workers": [
+            64708,
+            64709
+          ],
+          "native_workers_reaped": true,
+          "overlay": {
+            "process_reaped": true,
+            "window_snapshot": {
+              "identity_matches": false,
+              "uptime": 2492522.405093417,
+              "windows": []
+            }
+          }
+        },
+        {
+          "pid": 64637,
+          "returncode": 0,
+          "forced": [],
+          "native_workers": [
+            64640,
+            64642
+          ],
+          "native_workers_reaped": true
+        },
+        {
+          "pid": 64635,
+          "returncode": 0,
+          "forced": [],
+          "native_workers": [
+            64673,
+            64674
+          ],
+          "native_workers_reaped": true,
+          "overlay": {
+            "process_reaped": true,
+            "window_snapshot": {
+              "identity_matches": false,
+              "uptime": 2492522.635086125,
+              "windows": []
+            }
+          }
+        },
+        {
+          "pid": 64634,
+          "returncode": 0,
+          "forced": [],
+          "native_workers": [
+            64653,
+            64654,
+            64662
+          ],
+          "native_workers_reaped": true,
+          "overlay": {
+            "process_reaped": true,
+            "window_snapshot": {
+              "identity_matches": false,
+              "uptime": 2492522.7966213333,
+              "windows": []
+            }
+          }
+        },
+        {
+          "pid": 64629,
+          "returncode": 0,
+          "forced": []
+        },
+        {
+          "pid": 64624,
+          "returncode": 0,
+          "forced": []
+        },
+        {
+          "pid": 64622,
+          "returncode": 0,
+          "forced": []
+        }
+      ],
+      "note": "Independent fresh cursor run passed; does not erase Y scroll cleanup failure."
+    },
+    {
+      "name": "z-scroll",
+      "path": "/private/tmp/dtw-input-observability-z-scroll/evidence.json",
+      "sha256": "f0aad6ac46d51e39960a8ffd0b8fd00aee12dfa124c6f0abb9cefd17668229b0",
+      "binary_sha256": "03adcb76ae98328cfa3d05a7ed96db60d731626e58b3e6d2c208111391a9b7dd",
+      "passed": true,
+      "functional_cases_passed": [
+        "native_pixel_left",
+        "native_pixel_nested",
+        "native_semantic_right",
+        "native_semantic_nested",
+        "native_default_center",
+        "native_semantic_content_moves",
+        "native_stale_replacement",
+        "chrome_pixel_left",
+        "chrome_semantic_nested",
+        "chrome_pixel_nested",
+        "chrome_semantic_right",
+        "chrome_default_center"
+      ],
+      "failure": null,
+      "cleanup": [
+        {
+          "pid": 65614,
+          "returncode": 0,
+          "forced": [],
+          "native_workers": [
+            65617,
+            65618
+          ],
+          "native_workers_reaped": true
+        },
+        {
+          "pid": 65561,
+          "returncode": 0,
+          "forced": [],
+          "native_workers": [
+            65568,
+            65570
+          ],
+          "native_workers_reaped": true
+        },
+        {
+          "pid": 65596,
+          "returncode": 0,
+          "forced": [],
+          "profile_processes_reaped": true
+        },
+        {
+          "pid": 65595,
+          "returncode": 0,
+          "forced": []
+        },
+        {
+          "pid": 65554,
+          "returncode": 0,
+          "forced": []
+        },
+        {
+          "pid": 65552,
+          "returncode": 0,
+          "forced": []
+        }
+      ],
+      "note": "Final full anchored scroll run passed including cleanup."
+    },
+    {
+      "name": "z-overlay",
+      "path": "/private/tmp/dtw-input-observability-z-overlay/evidence.json",
+      "sha256": "146117faa565b7d60f44e5ac0602ca395570380a80b3aab753334678fb87be66",
+      "binary_sha256": "03adcb76ae98328cfa3d05a7ed96db60d731626e58b3e6d2c208111391a9b7dd",
+      "passed": true,
+      "functional_cases_passed": [],
+      "failure": null,
+      "cleanup": [
+        {
+          "pid": 66011,
+          "returncode": -15,
+          "forced": [],
+          "native_workers": [],
+          "native_workers_reaped": true,
+          "recorded_worker_exit": {
+            "exited": true,
+            "polls": 2,
+            "exit_status": "unavailable",
+            "meaning": "PID/command disappearance does not establish exit code 0",
+            "remaining": []
+          },
+          "native_worker_stderr": {
+            "path": "/private/tmp/dtw-input-observability-z-overlay/mcp-parent-exit/dtw-stderr.log",
+            "trace_enabled": true,
+            "checked_after_recorded_workers_exited": true,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "cleanup_failure_marker_lines": [],
+            "meaning": "Marker absence is not a worker exit status or proof of exit code 0"
+          },
+          "overlay": {
+            "process_reaped": true,
+            "window_snapshot": {
+              "identity_matches": false,
+              "uptime": 2492927.9912619167,
+              "windows": []
+            }
+          }
+        },
+        {
+          "pid": 65994,
+          "returncode": 0,
+          "forced": [],
+          "native_workers": [],
+          "native_workers_reaped": true,
+          "recorded_worker_exit": {
+            "exited": true,
+            "polls": 2,
+            "exit_status": "unavailable",
+            "meaning": "PID/command disappearance does not establish exit code 0",
+            "remaining": []
+          },
+          "native_worker_stderr": {
+            "path": "/private/tmp/dtw-input-observability-z-overlay/mcp-eof/dtw-stderr.log",
+            "trace_enabled": true,
+            "checked_after_recorded_workers_exited": true,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "cleanup_failure_marker_lines": [],
+            "meaning": "Marker absence is not a worker exit status or proof of exit code 0"
+          },
+          "overlay": {
+            "process_reaped": true,
+            "window_snapshot": {
+              "identity_matches": false,
+              "uptime": 2492928.0956527083,
+              "windows": []
+            }
+          }
+        },
+        {
+          "pid": 65969,
+          "returncode": 0,
+          "forced": [],
+          "native_workers": [],
+          "native_workers_reaped": true,
+          "recorded_worker_exit": {
+            "exited": true,
+            "polls": 2,
+            "exit_status": "unavailable",
+            "meaning": "PID/command disappearance does not establish exit code 0",
+            "remaining": []
+          },
+          "native_worker_stderr": {
+            "path": "/private/tmp/dtw-input-observability-z-overlay/mcp-cancel/dtw-stderr.log",
+            "trace_enabled": true,
+            "checked_after_recorded_workers_exited": true,
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "cleanup_failure_marker_lines": [],
+            "meaning": "Marker absence is not a worker exit status or proof of exit code 0"
+          },
+          "overlay": {
+            "process_reaped": true,
+            "window_snapshot": {
+              "identity_matches": false,
+              "uptime": 2492928.1942677503,
+              "windows": []
+            }
+          }
+        },
+        {
+          "pid": 65946,
+          "returncode": 0,
+          "forced": [],
+          "native_workers": [
+            65947,
+            65948
+          ],
+          "native_workers_reaped": true,
+          "overlay": {
+            "process_reaped": true,
+            "window_snapshot": {
+              "identity_matches": false,
+              "uptime": 2492928.351008292,
+              "windows": []
+            }
+          }
+        },
+        {
+          "pid": 65850,
+          "returncode": 0,
+          "forced": [],
+          "native_workers": [
+            65853,
+            65855
+          ],
+          "native_workers_reaped": true
+        },
+        {
+          "pid": 65849,
+          "returncode": 0,
+          "forced": [],
+          "native_workers": [
+            65889,
+            65890
+          ],
+          "native_workers_reaped": true,
+          "overlay": {
+            "process_reaped": true,
+            "window_snapshot": {
+              "identity_matches": false,
+              "uptime": 2492928.577740625,
+              "windows": []
+            }
+          }
+        },
+        {
+          "pid": 65848,
+          "returncode": 0,
+          "forced": [],
+          "native_workers": [
+            65866,
+            65867,
+            65878
+          ],
+          "native_workers_reaped": true,
+          "overlay": {
+            "process_reaped": true,
+            "window_snapshot": {
+              "identity_matches": false,
+              "uptime": 2492928.7380580003,
+              "windows": []
+            }
+          }
+        },
+        {
+          "pid": 65842,
+          "returncode": 0,
+          "forced": []
+        },
+        {
+          "pid": 65835,
+          "returncode": 0,
+          "forced": []
+        },
+        {
+          "pid": 65817,
+          "returncode": 0,
+          "forced": []
+        }
+      ],
+      "note": "Final full cursor regression passed including cleanup; vector badge visually inspected."
+    }
+  ],
+  "original_coretext_failure_log": {
+    "path": "/private/tmp/dtw-input-observability-y-scroll/mcp-native/dtw-stderr.log",
+    "sha256": "a8cc2c77d8ec27b652654eaf7554f75775a77072e2213c6183dc54edaa697910"
+  },
+  "foreground_scroll_real_gui": {
+    "status": "not_established",
+    "reason": "No reliable ordinary fixture preflight decline; foreground point preservation is a separate native source control"
+  },
+  "limitations": [
+    "Owned local layouts, not arbitrary-app or external-Agent acceptance",
+    "Coordinates come from independent fixture layout; not model vision",
+    "20ms foreground/pointer observations cannot attribute ambient user actions or exclude shorter excursions",
+    "No new release, notarization, external LLM Host, Windows/Linux, multi-display, Space or locked-desktop acceptance.",
+    "Semantic geometry is not a proof of all ancestor clipping or internal occlusion, nor an atomic check-to-post guarantee.",
+    "Transport-triggered internal worker retirement remains an existing bounded cleanup boundary; unknown original errors are preserved."
+  ],
+  "global_desktop_idle_required": false,
+  "live_llm_host": false,
+  "release_artifact": false,
+  "replay": false
+}

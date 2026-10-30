@@ -543,6 +543,7 @@ async fn sdk_exec_keeps_caught_unknown_and_mismatch_evidence_in_the_summary() {
         ),
         (
             ActionOutcome {
+                delivery: None,
                 dispatch: DispatchState::Unknown,
                 evidence: EffectEvidence::Unverified,
                 error: None,
@@ -552,6 +553,7 @@ async fn sdk_exec_keeps_caught_unknown_and_mismatch_evidence_in_the_summary() {
         ),
         (
             ActionOutcome {
+                delivery: None,
                 dispatch: DispatchState::Dispatched,
                 evidence: EffectEvidence::Mismatch {
                     expected: "counter=1".into(),
@@ -819,6 +821,7 @@ async fn sdk_cancellation_preserves_original_receipt_and_allows_later_work() {
 async fn sdk_cancelled_exec_retransmission_preserves_provider_evidence_and_interruption() {
     let (server, catalog) = server();
     let provider = ActionOutcome {
+        delivery: None,
         dispatch: DispatchState::Dispatched,
         evidence: EffectEvidence::Mismatch {
             expected: "counter=1".into(),

@@ -18,27 +18,82 @@ private func isSystemCursor(layer: Int, executable: () -> String?) -> Bool {
     layer == Int(CGWindowLevelForKey(.cursorWindow)) &&
         executable() == windowServerExecutable
 }
-private func windows() -> [Window] {
-    let rows = CGWindowListCopyWindowInfo([.optionOnScreenOnly,.excludeDesktopElements],0) as? [[String:Any]] ?? []
-    return rows.enumerated().compactMap { rank, row in
-        guard let pid = row[kCGWindowOwnerPID as String] as? Int32,
-              let id = row[kCGWindowNumber as String] as? UInt32,
-              let bounds = row[kCGWindowBounds as String] as? NSDictionary,
-              let rect = CGRect(dictionaryRepresentation: bounds), rect.width > 1, rect.height > 1,
-              (row[kCGWindowAlpha as String] as? Double ?? 1) > 0.01 else { return nil }
-        let layer = row[kCGWindowLayer as String] as? Int ?? 0
-        if isSystemCursor(layer: layer, executable: {
-            var bytes = [UInt8](repeating: 0, count: 4_096)
-            let count = bytes.withUnsafeMutableBytes { proc_pidpath(pid, $0.baseAddress, UInt32($0.count)) }
-            guard count > 0, count < bytes.count, let zero = bytes.firstIndex(of: 0) else { return nil }
-            return String(bytes: bytes[..<zero], encoding: .utf8)
-        }) {
-            if ProcessInfo.processInfo.environment["DTW_SCENE_TRACE"] == "1" {
-                FileHandle.standardError.write(Data("dtw_scene excluded_system_cursor pid=\(pid) window=\(id)\n".utf8))
-            }
-            return nil
+// Candidates are supplied only by the worker's private peer-helper discovery.
+// They are hints, never a PID-wide, level-wide, or title-based exemption.
+struct SceneOverlayCandidate {
+    let pid: pid_t
+    let birth: UInt64
+    let windows: Set<CGWindowID>
+}
+
+private func overlayUnsigned(_ value: Any?) -> UInt64? {
+    guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+    return UInt64(number.stringValue)
+}
+
+func dtwSceneOverlayCandidates(_ request: [String: Any]) -> [SceneOverlayCandidate] {
+    guard let rows = request["_overlay_candidates"] as? [[String: Any]] else { return [] }
+    return rows.compactMap { row in
+        guard let rawPID = overlayUnsigned(row["pid"]), let pid = Int32(exactly: rawPID), pid > 0,
+              let birth = overlayUnsigned(row["birth"]), birth > 0,
+              let rawWindows = row["windows"] as? [Any], !rawWindows.isEmpty else { return nil }
+        var ids: Set<CGWindowID> = []
+        for raw in rawWindows {
+            guard let value = overlayUnsigned(raw), let id = CGWindowID(exactly: value), id > 0 else { return nil }
+            ids.insert(id)
         }
-        return Window(pid:pid,id:id,layer:layer,rank:rank,rect:rect)
+        return SceneOverlayCandidate(pid: pid, birth: birth, windows: ids)
+    }
+}
+
+private func overlayProcessBirth(_ pid: pid_t) -> UInt64? {
+    var info = proc_bsdinfo()
+    let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+    guard pid > 0, proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size,
+          info.pbi_pid == UInt32(pid), info.pbi_start_tvusec < 1_000_000 else { return nil }
+    let (seconds, overflow) = info.pbi_start_tvsec.multipliedReportingOverflow(by: 1_000_000)
+    let (stamp, addedOverflow) = seconds.addingReportingOverflow(info.pbi_start_tvusec)
+    return overflow || addedOverflow || stamp == 0 ? nil : stamp
+}
+
+// Both birth reads bracket the WindowServer snapshot that proves the owner and
+// exact window. Missing evidence leaves the surface in every visibility check.
+private func withoutVerifiedOverlays(_ candidates: [SceneOverlayCandidate],
+                                    birth: (pid_t) -> UInt64?, read: () -> [Window]) -> [Window] {
+    let before = candidates.map { birth($0.pid) }
+    let rows = read()
+    let after = candidates.map { birth($0.pid) }
+    return rows.filter { window in
+        !candidates.enumerated().contains { index, candidate in
+            window.pid == candidate.pid && candidate.windows.contains(window.id) &&
+                before[index] == candidate.birth && after[index] == candidate.birth
+        }
+    }
+}
+
+private func windows(excluding candidates: [SceneOverlayCandidate] = []) -> [Window] {
+    withoutVerifiedOverlays(candidates, birth: overlayProcessBirth) {
+        let rows = CGWindowListCopyWindowInfo([.optionOnScreenOnly,.excludeDesktopElements],0) as? [[String:Any]] ?? []
+        return rows.enumerated().compactMap { rank, row in
+            guard let pid = row[kCGWindowOwnerPID as String] as? Int32,
+                  let id = row[kCGWindowNumber as String] as? UInt32,
+                  let bounds = row[kCGWindowBounds as String] as? NSDictionary,
+                  let rect = CGRect(dictionaryRepresentation: bounds), rect.width > 1, rect.height > 1,
+                  (row[kCGWindowAlpha as String] as? Double ?? 1) > 0.01 else { return nil }
+            let layer = row[kCGWindowLayer as String] as? Int ?? 0
+            if isSystemCursor(layer: layer, executable: {
+                var bytes = [UInt8](repeating: 0, count: 4_096)
+                let count = bytes.withUnsafeMutableBytes { proc_pidpath(pid, $0.baseAddress, UInt32($0.count)) }
+                guard count > 0, count < bytes.count, let zero = bytes.firstIndex(of: 0) else { return nil }
+                return String(bytes: bytes[..<zero], encoding: .utf8)
+            }) {
+                if ProcessInfo.processInfo.environment["DTW_SCENE_TRACE"] == "1" {
+                    FileHandle.standardError.write(Data("dtw_scene excluded_system_cursor pid=\(pid) window=\(id)\n".utf8))
+                }
+                return nil
+            }
+            return Window(pid:pid,id:id,layer:layer,rank:rank,rect:rect)
+        }
     }
 }
 private func near(_ a: CGRect, _ b: CGRect) -> Bool {
@@ -170,9 +225,10 @@ struct SurfacePointProof {
     fileprivate let target: Window
     fileprivate let point: CGPoint
     fileprivate let stack: [String]
+    fileprivate let overlayCandidates: [SceneOverlayCandidate]
 
     func matchesCurrent(requirePointer: Bool = false) -> Bool {
-        let current = windows()
+        let current = windows(excluding: overlayCandidates)
         guard let live = current.first(where: { $0.id == target.id && $0.pid == target.pid }),
               live.rect == target.rect, hitStack(current, id: target.id, point: point) == stack else { return false }
         if requirePointer {
@@ -195,7 +251,8 @@ private struct PointReadinessFailure: Error {
 // A missing/replaced/moved target is terminal even while presentation is
 // settling. Only visibility or hit-stack readiness may be sampled again.
 private func proveSurfacePoint(_ point: CGPoint, id: CGWindowID, pid: pid_t,
-                               bounds: CGRect, deadline: TimeInterval) throws -> SurfacePointProof? {
+                               bounds: CGRect, deadline: TimeInterval,
+                               overlayCandidates: [SceneOverlayCandidate]) throws -> SurfacePointProof? {
     func trace(_ phase: String) {
         guard ProcessInfo.processInfo.environment["DTW_SCENE_TRACE"] == "1" else { return }
         let message = "dtw_scene point phase=\(phase) pid=\(pid) window=\(id) point=\(point) rect=\(bounds) uptime=\(ProcessInfo.processInfo.systemUptime)\n"
@@ -209,24 +266,26 @@ private func proveSurfacePoint(_ point: CGPoint, id: CGWindowID, pid: pid_t,
         }
         return value
     }
-    let all = windows()
+    let all = windows(excluding: overlayCandidates)
     let window = try target(in: all, phase: "target_invalid_before_sample")
     let visible = visibleAt(point, target: window, all: all, deadline: deadline)
-    let current = windows()
+    let current = windows(excluding: overlayCandidates)
     _ = try target(in: current, phase: "target_invalid_after_sample")
     guard visible else { trace("visibility_pending"); return nil }
     let stack = hitStack(all, id: id, point: point)
     guard hitStack(current, id: id, point: point) == stack else {
         trace("hit_stack_changed"); return nil
     }
-    return SurfacePointProof(target: window, point: point, stack: stack)
+    return SurfacePointProof(target: window, point: point, stack: stack, overlayCandidates: overlayCandidates)
 }
 
 // Used by scroll and click in a short-lived scene worker. Bounds alone never
 // authorize a point underneath an unknown/opaque surface.
 func dtwProveSurfacePoint(_ point: CGPoint, id: CGWindowID, pid: pid_t,
-                          bounds: CGRect, deadline: TimeInterval) -> SurfacePointProof? {
-    try? proveSurfacePoint(point, id: id, pid: pid, bounds: bounds, deadline: deadline)
+                          bounds: CGRect, deadline: TimeInterval,
+                          overlayCandidates: [SceneOverlayCandidate] = []) -> SurfacePointProof? {
+    try? proveSurfacePoint(point, id: id, pid: pid, bounds: bounds, deadline: deadline,
+                           overlayCandidates: overlayCandidates)
 }
 
 // The foreground route has already requested its one raise. This only waits
@@ -287,6 +346,7 @@ private func click(_ request: [String:Any]) -> [String:Any] {
           let x = request["screen_x"] as? Double, let y = request["screen_y"] as? Double,
           x.isFinite, y.isFinite else { return fail("invalid_point","Missing screenshot mapping") }
     let expected = CGRect(x:b[0],y:b[1],width:b[2],height:b[3]), point = CGPoint(x:x,y:y)
+    let overlayCandidates = dtwSceneOverlayCandidates(request)
     let deadline = ProcessInfo.processInfo.systemUptime + max(0,
         (request["deadline_unix_ms"] as? Double ?? 0)/1000-Date().timeIntervalSince1970)
     let proof: SurfacePointProof
@@ -296,19 +356,20 @@ private func click(_ request: [String:Any]) -> [String:Any] {
             validation["deadline_unix_ms"] = UInt64(max(0,
                 (Date().timeIntervalSince1970 + until - ProcessInfo.processInfo.systemUptime) * 1_000))
             if let error = dtwValidatePixelTarget(validation) { return error }
-            guard let current = windows().first(where: { $0.id == id && $0.pid == pid }),
+            guard let current = windows(excluding: overlayCandidates).first(where: { $0.id == id && $0.pid == pid }),
                   current.rect == expected, current.rect.contains(point) else {
                 return fail("stale_observation", "Window closed or moved; observe again")
             }
             return nil
         }, prove: { until in
-            try proveSurfacePoint(point, id: id, pid: pid, bounds: expected, deadline: until)
+            try proveSurfacePoint(point, id: id, pid: pid, bounds: expected, deadline: until,
+                                  overlayCandidates: overlayCandidates)
         })
     } catch let error as PointReadinessFailure { return error.result }
     catch { return fail("native_error", String(describing: error)) }
     // Sampling transparent surfaces takes time. Recheck the exact hit stack
     // immediately before dispatch, rather than trusting pre-sampling geometry.
-    let after=windows()
+    let after=windows(excluding: overlayCandidates)
     guard proof.matchesCurrent(), let fresh=after.first(where: {$0.id==id && $0.pid==pid}),fresh.rect==expected else {
         return fail("stale_observation","Window changed during visibility validation")
     }
@@ -335,13 +396,15 @@ private func click(_ request: [String:Any]) -> [String:Any] {
     // This is visible-point input: AppKit can hit-test against the physical
     // cursor rather than only the event location. Never activate or retry.
     guard let positioned = dtwWithInputAdmission({
-        CGWarpMouseCursorPosition(point) == .success && CGAssociateMouseAndMouseCursorPosition(1) == .success
+        guard CGWarpMouseCursorPosition(point) == .success else { return false }
+        dtwPresentPostedPointer(point, kind: 0)
+        return CGAssociateMouseAndMouseCursorPosition(1) == .success
     }) else { return fail("native_stopping", "Input admission is closed") }
     guard positioned else {
         return ["error":"input_unavailable","message":"Cannot position the pointer; no click posted","pointer_moved":true]
     }
     Thread.sleep(forTimeInterval:0.04)
-    let settled=windows()
+    let settled=windows(excluding: overlayCandidates)
     guard let live=settled.first(where: {$0.id==id && $0.pid==pid}),live.rect==expected,
           signature(after)==signature(settled),
           let pointer=CGEvent(source:nil)?.location,
@@ -364,7 +427,7 @@ private func click(_ request: [String:Any]) -> [String:Any] {
         if (request["deadline_unix_ms"] as? Double ?? 0)/1000-Date().timeIntervalSince1970 < 0.1 {
             return uncertain("deadline_exceeded", "Insufficient budget for the next paired click")
         }
-        let current = windows()
+        let current = windows(excluding: overlayCandidates)
         guard let live = current.first(where: { $0.id == id && $0.pid == pid }),
               live.rect == expected, signature(current) == signature(settled),
               visibleAt(point, target: live, all: current, deadline: deadline) else {
@@ -372,7 +435,7 @@ private func click(_ request: [String:Any]) -> [String:Any] {
         }
         // Alpha sampling is asynchronous. Recheck after it, including the
         // typed surface identity, before admitting another down event.
-        let final = windows()
+        let final = windows(excluding: overlayCandidates)
         guard let last = final.first(where: { $0.id == id && $0.pid == pid }),
               last.rect == expected, signature(final) == signature(current),
               let pointer = CGEvent(source:nil)?.location,
@@ -390,9 +453,11 @@ private func click(_ request: [String:Any]) -> [String:Any] {
         return dtwWithPairedInput(press: {
                                      input.posted(eventType: nil, button: button.rawValue)
                                      down.post(tap:.cghidEventTap)
+                                     dtwPresentPostedPointer(point, kind: 1)
                                  }, release: {
                                      input.posted(eventType: upType.rawValue, button: button.rawValue)
                                      up.post(tap:.cghidEventTap)
+                                     dtwPresentPostedPointer(point, kind: 2)
                                  },
                                  between: { Thread.sleep(forTimeInterval:0.028) })
     }, between: { Thread.sleep(forTimeInterval:0.035) })

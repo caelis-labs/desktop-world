@@ -1,6 +1,6 @@
 # 重写版产品矩阵
 
-日期：2026-10-29。首版[发布计划](first-rewrite-release-plan.md)的第一、二批已通过核心易用性门槛，macOS 固定候选与安装验收已完成，Windows 待用户独立实机验收；逐项证据见[核心验收](release-core-acceptance.md)与[候选记录](rewrite-candidate-acceptance.md)。历史 #61–#64 报告只证明其记录的平台、字节和场景；旧 CUA SDK/worker/安装包不属于下一 release。
+日期：2026-10-30。首版[发布计划](first-rewrite-release-plan.md)的第一、二批已通过核心易用性门槛，macOS 固定候选与安装验收已完成，Windows 待用户独立实机验收；逐项证据见[核心验收](release-core-acceptance.md)与[候选记录](rewrite-candidate-acceptance.md)。历史 #61–#64 报告只证明其记录的平台、字节和场景；旧 CUA SDK/worker/安装包不属于下一 release。
 
 | 能力 / 工作流 | 当前实现与条件 | 证据 / 尚待完成 |
 | --- | --- | --- |
@@ -16,8 +16,11 @@
 | Linux provider | 实验 X11/XRes 身份、窗口、XGetImage、XTest 输入；只使用当前可证明的键盘映射 | 不支持 Wayland/XWayland，不提供 AT-SPI 语义承诺；仅源码/类型证据，不承诺桌面支持或首版正式发行平台 |
 | 浏览器范围 | 真实浏览器窗口上的原生 AX 和基础像素路线 | DOM、profile、CDP/browser bridge 未接入 |
 | 输入后续组 | 拖拽、复杂菜单、应用启动/退出 | 后置批量能力；不扩张当前已广告方法的语义 |
+| 服务级输入约束与回执 | `auto` / `background_only`；`exec(app, source)` 不变；保留实际路线和归还证据 | 签名候选 S 的 AppKit、Chrome 与生命周期验证通过；不把约束等同于所有输入已支持后台，见[验收记录](input-delivery-acceptance.md) |
+| macOS Agent 光标 | 每会话共享一个独立透明窗口；实际 pointer post 驱动；精确窗口排除和有界清理 | 本轮实现与验收边界见[光标迁入说明](cursor-overlay-port.md)；不同于跨 PID 应用浮层能力 |
+| 精确滚动 | macOS 默认窗口中心、截图像素锚点或原 AX 对象锚点；复用既有 wheel steps 与输入 owner | Z 候选 12 项 AppKit/Chrome 真 GUI 与光标回归通过；前台滚动回退未建立真 GUI 样本，Windows/Linux 仅默认中心；见[验收记录](anchored-scroll-acceptance.md) |
 | macOS 后台输入（本机候选已验收） | 固定 CUA Rust 依赖闭包 + 薄适配；内部选择目标投递/前台借用；不增加 delivery 参数 | L 候选的 AppKit 全套、Chrome 输入/点击/滚动、同 PID 浮层、生命周期与两种外部 Agent 任务均通过；catalog 系统硬链接别名已修正；菜单等价键、控制字符和 Chrome 补充平面文本预检转前台；见[阶段报告](background-input-acceptance.md) |
-| 锁屏、跨 PID overlay、复杂模态 | 保持独立能力组；同 PID 浮层已复用基础路线 | 跨 PID 归属、锁屏尚未验证或实现；不从后台输入推导支持 |
+| 锁屏、跨 PID 应用浮层、复杂模态 | 保持独立能力组；同 PID 浮层已复用基础路线 | 跨 PID 归属、锁屏尚未验证或实现；不从后台输入推导支持 |
 | 脚本文件、远程传输 | source 原文，经标准 JSON 传输；当前仅 stdio | 文件便利入口和 HTTP 后置，不引入调用方路径耦合 |
 | macOS 基线 | 构建/链接最低 14.2；本机 macOS 27.0.1 的固定签名/公证安装包完成六组原生和六个有效模型任务 | 本机既有权限环境通过不代表全新系统、所有旧系统或 x86_64 平台 |
 | 构建与发行 | rewrite-only、各能力组固定来源 SHA，后台输入来源和差异单列；无全量上游编译 | 保留轻量源码/Core/原生纯控制 CI；固定 macOS/Windows 候选已生成，macOS 签名/公证和安装验收通过；Windows 实机与公开 release 待完成 |

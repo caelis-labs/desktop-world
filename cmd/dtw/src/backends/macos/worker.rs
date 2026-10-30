@@ -12,6 +12,7 @@ mod scene_lease;
 unsafe extern "C" {
     fn dtw_native_call(request: *const std::ffi::c_char) -> *mut std::ffi::c_char;
     fn dtw_native_free(reply: *mut std::ffi::c_char);
+    fn dtw_set_pointer_presenter(callback: Option<extern "C" fn(f64, f64, i32)>);
     fn dtw_scene_call(request: *const std::ffi::c_char) -> *mut std::ffi::c_char;
     fn dtw_scene_free(reply: *mut std::ffi::c_char);
     fn dtw_input_quiesce(timeout_milliseconds: u32) -> bool;
@@ -70,10 +71,24 @@ fn finish_focus_shutdown(until: Instant) -> bool {
 fn shutdown_worker() -> ! {
     TERMINATING.store(true, Ordering::Relaxed);
     if SHUTDOWN_STARTED.swap(true, Ordering::AcqRel) {
-        // The watchdog and stdin loop can observe shutdown together. One owner
-        // drains within 400 ms; the other must not race its restoration or exit.
+        // One owner drains input and returns focus. AppKit activation on the
+        // watchdog can wait for the main run loop; parking that thread deadlocks
+        // restoration. Dispatch has returned and released its action leases here.
+        // Service native callbacks only, without admitting requests or taking
+        // cleanup ownership. The existing owner/parent deadlines still apply.
+        let main_thread = unsafe { libc::pthread_main_np() } != 0;
         loop {
-            std::thread::park_timeout(Duration::from_millis(10));
+            if main_thread {
+                core_foundation::runloop::CFRunLoop::run_in_mode(
+                    unsafe { core_foundation::runloop::kCFRunLoopDefaultMode },
+                    Duration::from_millis(10),
+                    false,
+                );
+                // An empty or stopped run loop must not busy-spin.
+                std::thread::park_timeout(Duration::from_millis(1));
+            } else {
+                std::thread::park_timeout(Duration::from_millis(10));
+            }
         }
     }
     let until = Instant::now() + Duration::from_millis(400);
@@ -233,22 +248,78 @@ fn background_validation(
     Ok(())
 }
 
-/// None is an explicit, side-effect-free preflight decline, never a retry after
-/// preparation or event posting. All uncertain outcomes stay on their first route.
-fn background(request: &mut Value) -> Option<Value> {
+enum BackgroundAttempt {
+    NotApplicable,
+    Declined(String),
+    Completed(Value),
+}
+
+fn delivery(
+    route: Option<&str>,
+    reason: Option<&str>,
+    borrowed: bool,
+    returned: Option<&str>,
+) -> Value {
+    let mut value = json!({"route":route,"foreground_borrowed":borrowed});
+    if let Some(reason) = reason {
+        value["reason"] = json!(reason);
+    }
+    if let Some(returned) = returned {
+        value["focus_return"] = json!(returned);
+    }
+    value
+}
+
+fn foreground_required(reason: &str) -> Value {
+    let mut result = rejected(
+        json!({"error":"foreground_required",
+        "message":"This action requires foreground input; the service is configured for background_only"}),
+        "focus",
+    );
+    result["delivery"] = delivery(None, Some(reason), false, None);
+    result
+}
+
+/// A decline is an explicit, side-effect-free preflight result. An unknown or
+/// dispatched result never selects another route, even with a malformed flag.
+fn background_result(mut result: Value) -> BackgroundAttempt {
+    if result["fallback_allowed"] == true && result["dispatch"] == "not_dispatched" {
+        return BackgroundAttempt::Declined(
+            result["error"]["message"]
+                .as_str()
+                .unwrap_or("background_route_unavailable")
+                .to_owned(),
+        );
+    }
+    if result["error"].is_object() {
+        result["message"] = result["error"]["message"].clone();
+        result["error"] = result["error"]["code"].clone();
+    }
+    result["evidence"] = json!("unverified");
+    result["route"] = json!("cua_pid_window");
+    result["delivery"] = delivery(
+        Some("background"),
+        Some("background_supported"),
+        false,
+        None,
+    );
+    BackgroundAttempt::Completed(result)
+}
+
+fn background(request: &mut Value) -> BackgroundAttempt {
     let op = request["operation"].as_str().unwrap_or("").to_owned();
     if !matches!(op.as_str(), "click" | "scroll" | "type_text" | "keypress") {
-        return None;
+        return BackgroundAttempt::NotApplicable;
     }
     let keyboard = matches!(op.as_str(), "type_text" | "keypress");
     let check = json!({"operation":"validate_background","target":request["target"],
         "keyboard":keyboard,"consume":true,"deadline_unix_ms":request["deadline_unix_ms"]});
     let before = native(&check, false);
     if let Err(error) = validate_reply(&before, &request["target"]) {
-        return Some(rejected(error, &op));
+        return BackgroundAttempt::Completed(rejected(error, &op));
     }
     if request.get("bounds").is_some() && request["bounds"] != before["bounds"] {
-        return Some(rejected(
+        return BackgroundAttempt::Completed(rejected(
             json!({"error":"stale_observation","message":"Window geometry changed; capture again before input"}),
             &op,
         ));
@@ -267,7 +338,7 @@ fn background(request: &mut Value) -> Option<Value> {
         || x >= left + width
         || y >= top + height
     {
-        return Some(rejected(
+        return BackgroundAttempt::Completed(rejected(
             json!({"error":"invalid_point","message":"Input point must be inside the current target window"}),
             &op,
         ));
@@ -275,6 +346,7 @@ fn background(request: &mut Value) -> Option<Value> {
     if !keyboard {
         request["screen_x"] = json!(x);
         request["screen_y"] = json!(y);
+        request["_pointer_bounds"] = before["bounds"].clone();
     }
     let mut input = json!({"operation":op,"pid":request["target"]["app"]["pid"],
         "window_id":request["target"]["native_id"],"deadline_unix_ms":request["deadline_unix_ms"],
@@ -292,27 +364,48 @@ fn background(request: &mut Value) -> Option<Value> {
         deadline: request["deadline_unix_ms"].as_u64().unwrap_or(0),
         failures: RefCell::default(),
     };
+    let _presentation = (!keyboard).then(|| {
+        super::pointer_presentation::Scope::new(
+            request,
+            &before["bounds"],
+            super::overlay::PointerRoute::Background,
+        )
+    });
     let mut result = super::cua_input::call(
         &input.to_string(),
         (&mut target as *mut BackgroundTarget).cast(),
         validate_background,
     );
     target.failures.borrow().apply(&mut result);
-    if result["fallback_allowed"] == true && result["dispatch"] == "not_dispatched" {
-        return None;
+    if let Some(error) = super::scroll_guard::failure() {
+        if result["error"].is_object() {
+            result["error"]["code"] = error["error"].clone();
+            result["error"]["message"] = error["message"].clone();
+            result["anchor_error"] = error;
+        }
     }
-    if result["error"].is_object() {
-        result["message"] = result["error"]["message"].clone();
-        result["error"] = result["error"]["code"].clone();
-    }
-    result["evidence"] = json!("unverified");
-    result["route"] = json!("cua_pid_window");
-    Some(result)
+    background_result(result)
 }
 
 fn dispatch(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value {
+    let _anchor = super::scroll_guard::Scope::new(&request, remaining(&request), || {
+        TERMINATING.load(Ordering::Relaxed)
+    });
     let op = request["operation"].as_str().unwrap_or("").to_owned();
     let op = op.as_str();
+    let background_only = match request["input_policy"].as_str() {
+        Some("background_only") => true,
+        None | Some("auto") => false,
+        _ => {
+            return rejected(
+                json!({"error":"invalid_request","message":"Unknown service input policy"}),
+                op,
+            )
+        }
+    };
+    if background_only && op == "focus" {
+        return foreground_required("explicit_focus");
+    }
     if matches!(op, "capture" | "click" | "scroll") && !scene_worker {
         return rejected(
             json!({"error":"invalid_request","message":"Scene operations require a short-lived scene owner"}),
@@ -394,8 +487,16 @@ fn dispatch(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value 
             op,
         );
     }
-    if let Some(result) = background(&mut request) {
-        return result;
+    let foreground_reason = match background(&mut request) {
+        BackgroundAttempt::Completed(result) => return result,
+        BackgroundAttempt::Declined(reason) => Some(reason),
+        BackgroundAttempt::NotApplicable if op == "focus" => Some("explicit_focus".to_owned()),
+        BackgroundAttempt::NotApplicable => None,
+    };
+    if background_only {
+        if let Some(reason) = &foreground_reason {
+            return foreground_required(reason);
+        }
     }
     let physical = matches!(op, "focus" | "type_text" | "keypress" | "scroll" | "click")
         || (op == "release_focus" && focus_owner.is_some());
@@ -448,20 +549,51 @@ fn dispatch(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value 
     } else {
         None
     };
+    let mut borrowed = false;
     if physical && op != "release_focus" {
         let mut prepare = request.clone();
         prepare["operation"] = json!("prepare_foreground");
         let prepared = native(&prepare, false);
         if prepared.get("error").is_some() {
-            return rejected(prepared, op);
+            let mut result = rejected(prepared, op);
+            result["delivery"] = delivery(None, foreground_reason.as_deref(), false, None);
+            return result;
         }
+        borrowed = prepared["borrowed"].as_bool().unwrap_or(false);
     }
+    let _presentation = matches!(op, "click" | "scroll").then(|| {
+        super::pointer_presentation::Scope::new(
+            &request,
+            &request["_pointer_bounds"],
+            super::overlay::PointerRoute::Foreground,
+        )
+    });
     let mut result = dispatch_owned(request, leased, scene_worker);
+    if physical && op != "release_focus" {
+        result["delivery"] = delivery(
+            Some("foreground"),
+            foreground_reason.as_deref(),
+            borrowed,
+            if op == "focus" { Some("pending") } else { None },
+        );
+    } else if matches!(op, "press" | "set_value") {
+        result["delivery"] = delivery(
+            Some("semantic"),
+            Some("native_semantic_action"),
+            false,
+            None,
+        );
+    }
     if physical && op != "focus" && op != "release_focus" {
         let cleanup = native(
             &json!({"operation":"release_focus","deadline_unix_ms":now_ms()+300}),
             false,
         );
+        result["delivery"]["focus_return"] = if cleanup.get("error").is_some() {
+            json!("unconfirmed")
+        } else {
+            cleanup["focus"].clone()
+        };
         if cleanup.get("error").is_some() {
             result["cleanup_error"] = cleanup.clone();
             if result.get("error").is_none() {
@@ -587,6 +719,41 @@ pub(super) fn validate_reply(reply: &Value, target: &Value) -> Result<(), Value>
 mod tests {
     use super::*;
     #[test]
+    fn strict_focus_rejects_before_any_native_target_read_or_preparation() {
+        // Deliberately no native target: this must not call AX, take a lease,
+        // prepare foreground, or dispatch an event even without GUI permissions.
+        let mut leased = false;
+        let reply = dispatch(
+            json!({"operation":"focus","input_policy":"background_only"}),
+            &mut leased,
+            false,
+        );
+        assert_eq!(reply["dispatch"], "not_dispatched");
+        assert_eq!(reply["error"], "foreground_required");
+        assert_eq!(reply["delivery"]["foreground_borrowed"], false);
+        assert!(reply["delivery"]["route"].is_null());
+        assert!(!leased);
+    }
+
+    #[test]
+    fn only_undispatched_preflight_declines_allow_another_route() {
+        let reason = "Unicode payload requires foreground input";
+        let declined =
+            background_result(json!({"dispatch":"not_dispatched","fallback_allowed":true,
+            "error":{"code":"background_unavailable","message":reason}}));
+        assert!(matches!(declined, BackgroundAttempt::Declined(value) if value == reason));
+        for dispatch in ["dispatched", "unknown"] {
+            let attempt = background_result(json!({"dispatch":dispatch,"fallback_allowed":true}));
+            let BackgroundAttempt::Completed(result) = attempt else {
+                panic!("uncertain input selected a second route")
+            };
+            assert_eq!(result["dispatch"], dispatch);
+            assert_eq!(result["delivery"]["route"], "background");
+            assert_eq!(result["delivery"]["foreground_borrowed"], false);
+        }
+    }
+
+    #[test]
     fn malformed_validation_never_enters_capture_or_click() {
         let target = json!({"app":{"pid":7},"native_id":1,"generation":2});
         for reply in [
@@ -673,6 +840,9 @@ pub fn worker_entry() -> bool {
         Some("--dtw-scene-worker") => true,
         _ => return false,
     };
+    unsafe {
+        dtw_set_pointer_presenter(Some(super::pointer_presentation::native_posted));
+    }
     if install_termination_handler().is_err() {
         std::process::exit(1);
     }
@@ -691,6 +861,11 @@ pub fn worker_entry() -> bool {
     let mut output = std::io::stdout().lock();
     let mut leased = false;
     loop {
+        // Cancellation can arrive during dispatch. Reach the shutdown run loop
+        // before blocking on another request, even while the parent retains stdin.
+        if TERMINATING.load(Ordering::Relaxed) {
+            break;
+        }
         let mut bytes = Vec::new();
         let size = (&mut input)
             .take(64 * 1024 + 2)

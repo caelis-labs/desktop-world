@@ -36,6 +36,11 @@ fn summarize(steps: &[Value]) -> Value {
     let mut provider_dispatch = Map::new();
     let mut provider_evidence = Map::new();
     let mut interrupted = 0;
+    let mut delivery_routes = Map::new();
+    let mut delivery_reasons = Map::new();
+    let mut focus_returns = Map::new();
+    let mut foreground_borrowed = 0;
+    let mut deliveries = 0;
     for step in steps {
         failed += usize::from(!step["error"].is_null());
         pending += usize::from(step["status"] != "completed");
@@ -77,6 +82,33 @@ fn summarize(steps: &[Value]) -> Value {
                 );
             }
             interrupted += usize::from(!receipt["interruption"].is_null());
+            // Count one provider record per action; uncertainty wrappers may
+            // carry the same delivery but must not double-count its native path.
+            let delivery = if receipt["provider_outcome"]["delivery"].is_object() {
+                &receipt["provider_outcome"]["delivery"]
+            } else {
+                &receipt["outcome"]["delivery"]
+            };
+            if delivery.is_object() {
+                deliveries += 1;
+                if delivery["route"].is_string() {
+                    count(&mut delivery_routes, &delivery["route"]);
+                }
+                if delivery["reason"].is_string() {
+                    count(&mut delivery_reasons, &delivery["reason"]);
+                }
+                if delivery["focus_return"].is_string() {
+                    count(&mut focus_returns, &delivery["focus_return"]);
+                }
+                foreground_borrowed += usize::from(delivery["foreground_borrowed"] == true);
+                let mut sample = json!({"number":step["number"],"operation":step["operation"]});
+                for field in ["outcome", "provider_outcome"] {
+                    if receipt[field]["delivery"].is_object() {
+                        sample[field] = receipt[field]["delivery"].clone();
+                    }
+                }
+                summary["last_delivery"] = sample;
+            }
         }
         if !step["error"].is_null()
             || step["status"] != "completed"
@@ -111,6 +143,11 @@ fn summarize(steps: &[Value]) -> Value {
         summary["actions"] = json!({"dispatch":dispatch,"evidence":evidence,
             "provider_dispatch":provider_dispatch,"provider_evidence":provider_evidence,
             "interrupted":interrupted});
+        if deliveries > 0 {
+            summary["actions"]["delivery"] = json!({"reported":deliveries,
+                "routes":delivery_routes,"reasons":delivery_reasons,
+                "foreground_borrowed":foreground_borrowed,"focus_returns":focus_returns});
+        }
     }
     summary
 }
@@ -195,6 +232,42 @@ mod tests {
                 "window_ref":window,"observation_ref":observation,"complete":complete,
                 "reason":if complete || has_more {None} else {Some("node_unavailable")},
                 "visited":3,"has_more":has_more}})
+    }
+
+    #[test]
+    fn compact_projection_preserves_delivery_without_double_counting_or_inventing_missing_data() {
+        let delivery = json!({"route":"foreground","reason":"background_unavailable",
+            "foreground_borrowed":true,"focus_return":"pending"});
+        let step = json!({"number":1,"line":1,"operation":"focus","status":"completed","error":null,
+            "receipt":{"outcome":{"dispatch":"unknown","error":null,"evidence":{"kind":"unverified"},"delivery":delivery},
+                "provider_outcome":{"dispatch":"dispatched","error":null,"evidence":{"kind":"unverified"},"delivery":delivery},"interruption":null}});
+        let mut original = successful_execution(vec![step]);
+        original.data["script"]["focus_return"] = json!("restored");
+        let compact = execution(original.clone());
+        let summary = &compact.data["script"]["summary"];
+        assert_eq!(summary["actions"]["delivery"]["reported"], 1);
+        assert_eq!(
+            summary["actions"]["delivery"]["routes"],
+            json!({"foreground":1})
+        );
+        assert_eq!(summary["actions"]["delivery"]["foreground_borrowed"], 1);
+        assert_eq!(summary["last_delivery"]["provider_outcome"], delivery);
+        assert_eq!(summary["last_delivery"]["outcome"], delivery);
+        assert_eq!(compact.data["script"]["focus_return"], "restored");
+        assert_eq!(
+            original.data["script"]["steps"][0]["receipt"]["outcome"]["delivery"]["focus_return"],
+            "pending"
+        );
+        let plain = execution(successful_execution(vec![
+            json!({"number":1,"operation":"press","status":"completed","error":null,
+            "receipt":{"outcome":{"dispatch":"dispatched","evidence":{"kind":"unverified"},"error":null},"provider_outcome":null,"interruption":null}}),
+        ]));
+        assert!(plain.data["script"]["summary"]["actions"]
+            .get("delivery")
+            .is_none());
+        assert!(plain.data["script"]["summary"]
+            .get("last_delivery")
+            .is_none());
     }
 
     #[test]

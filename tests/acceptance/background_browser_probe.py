@@ -277,6 +277,29 @@ def occlusion_coverage(point, desktop, observer_pid):
             'limitations': 'Geometry is checked at action boundaries; this does not prove continuous occlusion'}
 
 
+def action_deliveries(record):
+    return [(step['receipt'].get('provider_outcome') or step['receipt']['outcome']).get('delivery')
+            for step in record.get('script', {}).get('steps', []) if step.get('receipt')]
+
+
+def require_delivery(record, routes):
+    values = action_deliveries(record)
+    require(len(values) == len(routes) and all(isinstance(value, dict) for value in values),
+            'Native delivery evidence missing')
+    require([value.get('route') for value in values] == routes, {'unexpected_delivery':values,'expected':routes})
+
+
+def require_rejection(record):
+    steps = record.get('script', {}).get('steps', [])
+    require(len(steps) == 1, 'Strict rejection ran additional host actions')
+    outcome = steps[0]['receipt']['outcome']
+    require(outcome['dispatch'] == 'not_dispatched' and outcome['error']['code'] == 'foreground_required',
+            'Strict action was not refused before dispatch')
+    require(outcome.get('delivery', {}).get('foreground_borrowed') is False
+            and outcome['delivery']['route'] is None and bool(outcome['delivery'].get('reason')),
+            'Strict rejection lacks its route-selection reason')
+
+
 def run_cases(client, observer, path, output, evidence, target_pid):
     # Query a control deep in the original 100-row AX table before filtering.
     await_deep_control(client, output, evidence.setdefault('ax_readiness', {}))
@@ -305,21 +328,58 @@ return {{deep_button:{{pages:far.pages,coverage:far.coverage}},search_pages:sear
     seed['page'] = snapshot_when(path, lambda s: s['note'] == 'seed-to-replace' and s['dialog_open'], after=baseline)
     desktop_end(observer, start, seed, target_pid)
 
-    keyboard = evidence.setdefault('automatic_keyboard', {'routing':'Cmd+printable and supplementary Unicode select foreground before input'})
-    start = fresh_end(observer)
-    baseline = latest_snapshot(web_state(path))['probe_seq']
-    execute(client, 'automatic-unicode-and-shortcuts', f"""
-await app.keypress({{window_ref:state.w,keys:['META','A']}});
-await app.typeText({{window_ref:state.w,text:{json.dumps(EXPECTED + 'Z')}}});
-return await app.keypress({{window_ref:state.w,keys:['BACKSPACE']}});
-""", keyboard)
-    def completed_keyboard():
-        state = web_state(path)
-        keyboard['last_observed_page'] = latest_snapshot(state)
-        keyboard['events'] = events_after(state, baseline)
-        return completed_keyboard_sample(state, baseline, EXPECTED)
-    keyboard.update(wait_until(completed_keyboard, timeout=6))
-    desktop_end(observer, start, keyboard, target_pid)
+    require_delivery(seed['record'], ['background'])
+    if evidence['input_policy'] == 'background_only':
+        strict = evidence.setdefault('strict_rejections', [])
+        for name, action in [
+            ('shortcut', "app.keypress({window_ref:state.w,keys:['META','A']})"),
+            ('supplementary_unicode', "app.typeText({window_ref:state.w,text:'blocked 🐦'})"),
+            ('focus', "app.focus({window_ref:state.w})"),
+        ]:
+            proof = {'operation': name}; strict.append(proof)
+            before = fresh_end(observer)
+            baseline = latest_snapshot(web_state(path))['probe_seq']
+            record, response = client.execute(APP, 'strict-reject-'+name, 'return await '+action+';')
+            proof.update(record=record, response=response)
+            require_rejection(record)
+            # Require a later observer tick and inspect the independent journal,
+            # not the route receipt, for unintended input into this owned page.
+            proof['page'] = snapshot_when(path, lambda page: page['note'] == 'seed-to-replace'
+                and page['dialog_open'], after=baseline+1)
+            proof['events'] = events_after(web_state(path), baseline)
+            require(not any(event['type'] in ('probe_keydown','probe_keyup','probe_input',
+                'probe_pointerdown','probe_pointerup','probe_click','probe_wheel')
+                for event in proof['events']), 'Strict rejection still sent input to the owned page')
+            desktop_end(observer, before, proof, target_pid)
+        keyboard = evidence.setdefault('semantic_unicode_replacement', {})
+        start = fresh_end(observer)
+        execute(client, 'strict-semantic-replacement', FIND +
+            "const note=await find('text_area','Handoff note');return await app.setValue({...note.ref,value:"
+            + json.dumps(EXPECTED) + '});', keyboard)
+        require_delivery(keyboard['record'], ['semantic'])
+        keyboard['page'] = snapshot_when(path, lambda page: page['note'] == EXPECTED and page['dialog_open'])
+        desktop_end(observer, start, keyboard, target_pid)
+    else:
+        keyboard = evidence.setdefault('automatic_keyboard', {'routing':'Cmd+printable and supplementary Unicode select foreground before input'})
+        start = fresh_end(observer)
+        baseline = latest_snapshot(web_state(path))['probe_seq']
+        execute(client, 'automatic-unicode-and-shortcuts', f"""
+    await app.keypress({{window_ref:state.w,keys:['META','A']}});
+    await app.typeText({{window_ref:state.w,text:{json.dumps(EXPECTED + 'Z')}}});
+    return await app.keypress({{window_ref:state.w,keys:['BACKSPACE']}});
+    """, keyboard)
+        def completed_keyboard():
+            state = web_state(path)
+            keyboard['last_observed_page'] = latest_snapshot(state)
+            keyboard['events'] = events_after(state, baseline)
+            return completed_keyboard_sample(state, baseline, EXPECTED)
+        keyboard.update(wait_until(completed_keyboard, timeout=6))
+        desktop_end(observer, start, keyboard, target_pid)
+        require_delivery(keyboard['record'], ['foreground','foreground','background'])
+        for returned in action_deliveries(keyboard['record'])[:2]:
+            require(returned['foreground_borrowed'] is True and returned.get('focus_return') in
+                ('restored','application_restored','changed_externally','previous_app_closed'),
+                'Automatic fallback lost its original foreground-return evidence')
 
     click = evidence.setdefault('covered_coordinate_click', {})
     capture, response = execute(client, 'capture-covered-browser',
@@ -340,6 +400,7 @@ return await app.click({{window_ref:state.w,observation_ref:state.shot.observati
         state = web_state(path)
         return state if len(state['saves']) > saves_before else None
     saved_state = wait_until(saved, timeout=6)
+    require_delivery(click['record'], ['background'])
     click['saved'] = saved_state['saves'][saves_before:]
     require(len(click['saved']) == 1 and click['saved'][0]['sku'] == SKU
             and click['saved'][0]['note'] == EXPECTED, 'Save was missing, incorrect, or repeated')
@@ -362,6 +423,7 @@ return await app.click({{window_ref:state.w,observation_ref:state.shot.observati
     before_scroll = fresh_end(observer)
     execute(client, 'background-default-scroll',
             'return await app.scroll({window_ref:state.w,delta_y:8});', scroll)
+    require_delivery(scroll['record'], ['background'])
     scroll['after'] = snapshot_when(path, lambda s: s['scroll_y'] > initial['scroll_y'], after=baseline)
     scroll['events'] = events_after(web_state(path), baseline)
     require(any(e['type'] == 'probe_wheel' and e.get('trusted') and e.get('delta_y', 0) > 0
@@ -371,7 +433,7 @@ return await app.click({{window_ref:state.w,observation_ref:state.shot.observati
     require(len(final_state['saves']) == saves_before + 1, 'Later input repeated the save')
     evidence['independent_final_save'] = final_state['saves'][-1]
     evidence['background_coverage'] = {name: case['desktop']['background_coverage']['status']
-        for name, case in [('plain_keyboard', seed), ('keyboard_with_fallback', keyboard), ('click', click), ('scroll', scroll)]}
+        for name, case in [('plain_keyboard', seed), ('semantic_replacement' if evidence['input_policy'] == 'background_only' else 'keyboard_with_fallback', keyboard), ('click', click), ('scroll', scroll)]}
     evidence['occlusion_coverage'] = click['occlusion_coverage']['status']
     evidence['all_cases_passed'] = True  # Functional effects; coverage is recorded separately.
 
@@ -380,6 +442,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dtw', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--input-policy', choices=['auto','background-only'], default='auto')
     parser.add_argument('--chrome', type=Path, default=Path('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'))
     args = parser.parse_args()
     require(sys.platform == 'darwin', 'This probe requires macOS')
@@ -392,7 +455,7 @@ def main():
     case = 'bg-' + uuid.uuid4().hex[:12]
     profile = output/'chrome-profile'
     evidence = {'kind':'owned-Chrome-background-input-standard-MCP','live_llm_host':False,
-                'release_artifact':False,'app':APP,'case':case,'binary_path':str(binary),
+                'release_artifact':False,'input_policy':args.input_policy.replace('-','_'),'app':APP,'case':case,'binary_path':str(binary),
                 'passed_scope':'functional actions and owned cleanup; inspect background/occlusion coverage separately',
                 'binary_sha256':file_sha256(binary),'chrome_path':str(chrome_path),
                 'profile':str(profile),'started_unix_ms':int(time.time()*1000),
@@ -438,10 +501,16 @@ def main():
         require(len(web_state(path)['items']) == 240, 'Unexpected workbench dataset')
         (output/'mcp').mkdir()
         # Retain the owner before initialization so a failed handshake is reaped.
-        client = SupervisorMcp(binary, output/'mcp')
+        client = SupervisorMcp(binary, output/'mcp', mcp_args=('--input-policy',args.input_policy))
         client.rpc('initialize', {'protocolVersion':'2025-06-18','capabilities':{},
                                  'clientInfo':{'name':'background-browser-probe','version':'1'}})
         client.notify('notifications/initialized')
+        evidence['service_discovery'] = {}
+        for tool in ('apps','api'):
+            response, _ = client.tool(tool, {})
+            evidence['service_discovery'][tool] = response['service']
+            require(response['service']['input_policy'] == evidence['input_policy'],
+                    'Service discovery did not report the actual launch policy')
         inventory_record, _ = client.execute(APP, 'owned-window-inventory', 'return await app.windows();')
         evidence['window_inventory'] = inventory_record
         windows = checked_windows(inventory_record, APP)

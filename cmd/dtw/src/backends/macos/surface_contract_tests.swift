@@ -60,6 +60,41 @@ emptyWeb.add(role:"AXWebArea",children:0,depth:3,parentRole:kAXScrollAreaRole)
 surfaceCheck(emptyWeb.decision(manualOptIn:false,elapsed:0) == .pending)
 print("Empty window content root stays pending; titlebar decoration does not")
 
+// The first filtered empty page may be a cold asynchronous provider result.
+// Re-read only within the original Enhanced attempt's window, without a poke.
+surfaceCheck(emptySemanticRetryUntil(filtered:true,complete:true,matches:0,
+    enhancedAttemptedAt:10,now:10.2) == 13)
+for (filtered, complete, matches, attempted, now) in [
+    (false, true, 0, Optional(10.0), 10.2),
+    (true, false, 0, Optional(10.0), 10.2),
+    (true, true, 1, Optional(10.0), 10.2),
+    (true, true, 0, Optional<Double>.none, 10.2),
+    (true, true, 0, Optional(10.0), 13.0),
+] {
+    surfaceCheck(emptySemanticRetryUntil(filtered:filtered,complete:complete,matches:matches,
+        enhancedAttemptedAt:attempted,now:now) == nil)
+}
+var materializationChecks = 0
+let coldMaterializationPending = try semanticMaterializationPending(until:13,now:10.2,populated:false,
+    check:{materializationChecks += 1})
+let populatedMaterializationPending = try semanticMaterializationPending(until:13,now:12.3,populated:true,
+    check:{materializationChecks += 1})
+let nativeMaterializationPending = try semanticMaterializationPending(until:13,now:13,populated:false,
+    check:{materializationChecks += 1}) // A native window need not grow WebArea.
+let ordinaryMaterializationPending = try semanticMaterializationPending(until:nil,now:10,populated:false,
+    check:{preconditionFailure("Ordinary matching/native query must not enter the wait")})
+surfaceCheck(coldMaterializationPending && !populatedMaterializationPending
+    && !nativeMaterializationPending && !ordinaryMaterializationPending)
+surfaceCheck(materializationChecks == 3)
+for code in ["native_stopping", "deadline_exceeded", "target_changed", "ax_unavailable"] {
+    do {
+        _ = try semanticMaterializationPending(until:13,now:13,populated:false,
+            check:{throw failure(code, "original control cause")})
+        preconditionFailure("Materialization replaced a terminal cause with an empty result")
+    } catch let error as NativeFailure { surfaceCheck(error.code == code && error.message == "original control cause") }
+}
+print("Cold filtered-empty materialization controls passed; no AX or GUI reads")
+
 // Native string writability alone does not advertise text editing on Chrome's
 // structural/action nodes. The same role gate is used before setter dispatch.
 for role in [kAXGroupRole, kAXToolbarRole, kAXButtonRole, kAXPopUpButtonRole,
