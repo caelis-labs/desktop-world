@@ -1,7 +1,7 @@
 //! Windows desktop provider. Its UIA apartment and all blocking APIs are owned
 //! by a supervised DTW process, never an Agent thread or a CUA runtime.
 use super::native_client::{self, Platform as PlatformContract};
-use crate::computer::{Capability, Error};
+use crate::computer::{Capability, Error, ObserveScopeKind};
 mod input;
 mod native;
 mod worker;
@@ -16,6 +16,8 @@ impl PlatformContract for Platform {
         "Windows interactive user desktop; elevated and secure desktops are unsupported",
         "app IDs are canonical executable paths; window refs route across matching process instances",
         "capture requires an unminimized fully visible window; no occluded WGC capture yet",
+        "semantic scopes: window, retained subtree, capture-pixel region; menu scope is unsupported",
+        "readText pages native UIA TextPattern, ValuePattern or static text; passwords and unsupported controls are not synthesized",
         "input establishes foreground focus and moves the shared pointer for clicks",
         "native Windows GUI acceptance is pending; compilation is not GUI evidence",
     ];
@@ -30,6 +32,12 @@ impl PlatformContract for Platform {
         Capability::Scroll,
         Capability::Focus,
         Capability::SetValue,
+        Capability::ReadText,
+    ];
+    const DISCOVERY_SCOPES: &'static [ObserveScopeKind] = &[
+        ObserveScopeKind::Window,
+        ObserveScopeKind::Subtree,
+        ObserveScopeKind::Region,
     ];
     fn worker_args() -> Result<Vec<String>, Error> {
         Ok(vec![

@@ -258,6 +258,8 @@ def normalize_acp(path):
             key = (e.get('params', {}).get('sessionId'), update['toolCallId'])
             calls.setdefault(key, {}).update(update)
         if 'stopReason' in e.get('result', {}): terminal = e['result']
+        if 'id' in e and isinstance(e.get('error'), dict):
+            terminal = {'error': e['error'], 'response_id': e['id']}
     rows = []
     for (session, _), c in calls.items():
         try: images = image_size(c['content']) if 'content' in c else None
@@ -429,7 +431,9 @@ def metadata_discovery_miss(call, name):
             and call.get('client_error') == {'type':'TOOL_ERROR','message':'file does not exist'})
 
 
-def metrics(calls, name, browser_app="com.google.Chrome"):
+def metrics(calls, name, browser_app="com.google.Chrome", *, allowed_apps=None):
+    if allowed_apps is None:
+        allowed_apps = (browser_app, 'com.apple.TextEdit')
     selected = []
     for c in calls:
         if c['name'] == 'call_mcp_tool':
@@ -471,7 +475,7 @@ def metrics(calls, name, browser_app="com.google.Chrome"):
             if c['method'] == 'exec':
                 arguments = c['arguments']
                 require(isinstance(arguments, dict) and set(arguments) == {'app','source'}, 'exec must use exactly app/source')
-                require(arguments['app'] in (browser_app,'com.apple.TextEdit'), 'Unexpected target app')
+                require(arguments['app'] in allowed_apps, 'Unexpected target app')
                 check_execution(data, arguments)
                 recovered = data['script']['summary'].get('recovered_incomplete_reads', 0)
                 if recovered:
@@ -506,7 +510,8 @@ def metrics(calls, name, browser_app="com.google.Chrome"):
 def skill_paths(name, root):
     return {str(path) for path in (
         Path.home()/'.gemini/config/plugins'/name/'skills'/name/'SKILL.md',
-        root/'plugin/skills'/name/'SKILL.md')}
+        root/'plugin/skills'/name/'SKILL.md',
+        root/'.claude/skills'/name/'SKILL.md')}
 
 
 def check_skill_loaded(calls, name, root):
@@ -531,6 +536,7 @@ def check_routes(calls, name, root):
     reads = {str(metadata/filename) for filename in
              ('instructions.md', 'apps.json', 'api.json', 'exec.json', 'result.json')}
     reads.update(skill_paths(name, root))
+    reads.update(str(Path(path).with_name('PATTERNS.md')) for path in skill_paths(name, root))
     # Only output caches belonging to this run's own DTW calls can be inspected.
     reads.update(c['owned_output_path'] for c in calls
                  if c.get('name') == 'call_mcp_tool'
@@ -875,12 +881,13 @@ def main():
             env = os.environ.copy()
             if args.client == 'claude':
                 require(args.acp_adapter is not None,'Official ACP adapter executable required')
-                local=root/'.claude/skills'/name;local.mkdir(parents=True);shutil.copy2(skill,local/'SKILL.md')
+                local=root/'.claude/skills'/name;local.mkdir(parents=True);shutil.copytree(skill.parent,local,dirs_exist_ok=True)
                 settings=Path.home()/'.claude/settings.json'
                 if settings.exists(): env.update({k:str(v) for k,v in json.loads(settings.read_text()).get('env',{}).items()})
                 env['CLAUDE_CODE_EXECUTABLE']=shutil.which('claude')
                 config=root/'mcp.json';write_json(config,{'mcpServers':[{'name':name,'command':str(binary),'args':['mcp'],'env':[]}]})
-                cmd=['acpx','--agent',str(args.acp_adapter),'--cwd',str(root),'--mcp-config',str(config),'--format','json','--timeout','600','--model','codex/gpt-6.1-terra','--deny-all','--allowed-tools',','.join(['Skill']+[f'mcp__{name}__{m}' for m in ['apps','api','exec','result']]),'--max-turns','18','--no-fs','--no-terminal','exec',prompt]
+                allowed=['Skill',f"Read({local/'PATTERNS.md'})"]+[f'mcp__{name}__{m}' for m in ['apps','api','exec','result']]
+                cmd=['acpx','--agent',str(args.acp_adapter),'--cwd',str(root),'--mcp-config',str(config),'--format','json','--timeout','600','--model','codex/gpt-6.1-terra','--deny-all','--allowed-tools',','.join(allowed),'--max-turns','18','--no-fs','--no-terminal','exec',prompt]
             else:
                 # agy currently needs its ordinary absolute-path MCP registration;
                 # a plugin's CLAUDE_PLUGIN_ROOT placeholder is not portable to it.

@@ -5,6 +5,7 @@ The model uses the rendered app only. The supervisor verifies state.json, which
 is never exposed by HTTP, and retains every save/event rather than replaying.
 """
 import argparse
+import hashlib
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -16,6 +17,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--case', required=True)
+    parser.add_argument('--file-task', action='store_true', help='Enable the real OS file-picker task')
     args = parser.parse_args()
     if not args.case.replace('-', '').isalnum():
         parser.error('case must contain only letters, digits and hyphens')
@@ -23,9 +25,18 @@ def main():
     items = [{'sku': f'DTW-{i:04}', 'name': f'Field kit {i:03}',
               'warehouse': ['North', 'South', 'Central'][i % 3],
               'quantity': 10 + i % 25, 'reviewed': False, 'note': ''} for i in range(1, 241)]
-    state = {'case': args.case, 'items': items, 'saves': [], 'events': [], 'ready': False}
+    state = {'case': args.case, 'items': items, 'saves': [], 'events': [], 'uploads': [], 'ready': False}
     lock = threading.Lock()
-    html = Path(__file__).with_name('index.html').read_text().replace('__CASE__', args.case).encode()
+    html = Path(__file__).with_name('index.html').read_text().replace('__CASE__', args.case)
+    attachment = '''<section aria-label="Review attachment"><h2>Review attachment</h2>
+<label>Attach review evidence <input id="attachment" type="file" accept=".txt"></label>
+<p id="attachment-status" role="status">No attachment received</p></section>'''
+    script = '''byId('attachment').onchange=async()=>{const file=byId('attachment').files[0];if(!file)return;
+const response=await fetch('/api/attachment',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({name:file.name,text:await file.text()})});
+byId('attachment-status').textContent=response.ok?'Received attachment: '+file.name:'Attachment failed';};'''
+    html = html.replace('__ATTACHMENT_SECTION__', attachment if args.file_task else '')
+    html = html.replace('__ATTACHMENT_SCRIPT__', script if args.file_task else '').encode()
 
     def persist():
         path = args.output / 'state.json'
@@ -79,6 +90,15 @@ def main():
                         item.update({key: data[key] for key in ('quantity', 'reviewed', 'note')})
                         state['saves'].append({**item, 'unix_ms': int(time.time() * 1000)})
                         result = dict(item)
+                    elif self.path == '/api/attachment' and args.file_task:
+                        if (not isinstance(data.get('name'), str) or not data['name']
+                                or len(data['name']) > 256 or '/' in data['name'] or '\\' in data['name']
+                                or not isinstance(data.get('text'), str)
+                                or len(data['text'].encode('utf-8')) > 4096):
+                            raise ValueError('attachment')
+                        result = {'name': data['name'],
+                                  'sha256': hashlib.sha256(data['text'].encode('utf-8')).hexdigest()}
+                        state['uploads'].append({**result, 'unix_ms': int(time.time() * 1000)})
                     else:
                         raise ValueError('route')
                     persist()

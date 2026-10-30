@@ -38,6 +38,19 @@ pub enum ScrollLocation {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum DiscoveryScope {
+    Menu,
+    Subtree {
+        observation_ref: String,
+        element_ref: String,
+    },
+    Region {
+        observation_ref: String,
+        region: computer::PixelRegion,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     Script {
         source: String,
@@ -47,6 +60,16 @@ pub enum Command {
     Windows,
     Observe,
     ObserveQuery(computer::ObserveQuery),
+    ObserveScoped {
+        query: computer::ObserveQuery,
+        scope: DiscoveryScope,
+    },
+    ReadText {
+        observation_ref: String,
+        element_ref: String,
+        offset: u32,
+        limit: u32,
+    },
     ContinueObservation {
         cursor: String,
     },
@@ -221,7 +244,20 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
                     cursor: string(command, "cursor", "command")?,
                 });
             }
-            fields(command, &["kind", "role", "text", "limit"], "command")?;
+            fields(
+                command,
+                &[
+                    "kind",
+                    "role",
+                    "text",
+                    "limit",
+                    "scope",
+                    "observation_ref",
+                    "element_ref",
+                    "region",
+                ],
+                "command",
+            )?;
             if command.len() == 1 {
                 return Ok(Command::Observe);
             }
@@ -250,11 +286,79 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
                     .ok_or_else(|| invalid("command.limit must be an integer from 1 to 100"))?
                     as u32,
             };
-            Ok(Command::ObserveQuery(computer::ObserveQuery {
+            let query = computer::ObserveQuery {
                 role: filter("role", 1, 64)?,
                 text: filter("text", 0, 256)?.filter(|text| !text.is_empty()),
                 limit,
-            }))
+            };
+            let scoped = command.contains_key("scope");
+            let bound = command.contains_key("observation_ref");
+            let element = command.contains_key("element_ref");
+            let region = command.contains_key("region");
+            let scope = match (scoped, bound, element, region) {
+                (false, false, false, false) => return Ok(Command::ObserveQuery(query)),
+                (true, false, false, false) if command["scope"] == "menu" => DiscoveryScope::Menu,
+                (false, true, true, false) => DiscoveryScope::Subtree {
+                    observation_ref: string(command, "observation_ref", "command")?,
+                    element_ref: string(command, "element_ref", "command")?,
+                },
+                (false, true, false, true) => {
+                    let rect = object(&command["region"], "region")?;
+                    fields(rect, &["x", "y", "width", "height"], "region")?;
+                    let number = |key| {
+                        rect.get(key)
+                            .and_then(Value::as_f64)
+                            .filter(|v| v.is_finite())
+                            .ok_or_else(|| invalid("region needs four finite pixel coordinates"))
+                    };
+                    let region = computer::PixelRegion {
+                        x: number("x")?,
+                        y: number("y")?,
+                        width: number("width")?,
+                        height: number("height")?,
+                    };
+                    if region.x < 0.0
+                        || region.y < 0.0
+                        || region.width <= 0.0
+                        || region.height <= 0.0
+                    {
+                        return Err(invalid(
+                            "region must have nonnegative origin and positive size",
+                        ));
+                    }
+                    DiscoveryScope::Region {
+                        observation_ref: string(command, "observation_ref", "command")?,
+                        region,
+                    }
+                }
+                _ => {
+                    return Err(invalid(
+                        "observe accepts one menu, element or capture-region scope",
+                    ))
+                }
+            };
+            Ok(Command::ObserveScoped { query, scope })
+        }
+        "readText" => {
+            fields(
+                command,
+                &["kind", "observation_ref", "element_ref", "offset", "limit"],
+                "command",
+            )?;
+            let number = |key: &str, default, minimum, maximum| {
+                command.get(key).map_or(Ok(default), |v| {
+                    v.as_u64()
+                        .filter(|n| *n >= minimum && *n <= maximum)
+                        .map(|n| n as u32)
+                        .ok_or_else(|| invalid(format!("Invalid readText {key}")))
+                })
+            };
+            Ok(Command::ReadText {
+                observation_ref: string(command, "observation_ref", "command")?,
+                element_ref: string(command, "element_ref", "command")?,
+                offset: number("offset", 0, 0, u32::MAX as u64)?,
+                limit: number("limit", 4096, 2, 16384)?,
+            })
         }
         "windows" | "capture" => {
             fields(command, &["kind"], "command")?;
@@ -575,6 +679,14 @@ pub(crate) fn inventory_report(report: &computer::InventoryReport, proven: bool)
                 "zero_area_surfaces"
             ]),
         ),
+        computer::InventoryScope::ApplicationAndProvenAssociatedSurfaces { .. } => (
+            "application_and_proven_associated_surfaces",
+            json!([
+                "unproven_associations",
+                "unavailable_surfaces",
+                "zero_area_surfaces"
+            ]),
+        ),
     };
     let counters: serde_json::Map<String, Value> = report
         .diagnostics
@@ -582,12 +694,17 @@ pub(crate) fn inventory_report(report: &computer::InventoryReport, proven: bool)
         .iter()
         .map(|(name, count)| (name.clone(), json!(count)))
         .collect();
-    json!({"coverage": {
+    let mut value = json!({"coverage": {
         "scope":scope,"complete_within_scope":proven,
         "status":if !proven {"unproven"} else if report.supported_count == 0 {"empty_within_scope"} else {"available"},
         "candidate_count":report.candidate_count,"supported_count":report.supported_count,"excluded_count":report.excluded_count,
         "excludes":excludes
-    }, "diagnostics":{"provider":report.diagnostics.provider,"counters":counters,"error_codes":report.diagnostics.error_codes}})
+    }, "diagnostics":{"provider":report.diagnostics.provider,"counters":counters,"error_codes":report.diagnostics.error_codes}});
+    if let Some(count) = report.scope.associated_count() {
+        value["coverage"]["associated_count"] = json!(count);
+        value["coverage"]["association_complete"] = json!(false);
+    }
+    value
 }
 
 fn outcome(outcome: &computer::ActionOutcome) -> Value {

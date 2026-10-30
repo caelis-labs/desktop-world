@@ -85,7 +85,7 @@ fn only_small_frozen_app_surface_exists_and_native_bridges_are_hidden() {
         out.result.unwrap().value,
         json!([
             "windows", "observe", "capture", "press", "click", "typeText", "keypress", "scroll",
-            "focus", "setValue"
+            "focus", "setValue", "readText"
         ])
     );
 }

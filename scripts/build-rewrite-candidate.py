@@ -391,7 +391,9 @@ requested, are external because they are obtained after this ZIP is fixed.
 
 Extract to a stable location. Run `bin/{executable} --version`, then use the
 absolute extracted binary path in examples/mcp.json or examples/codex.toml.
-The only MCP arguments are ["mcp"]. Register skills/desktop-world using the
+Use MCP arguments ["mcp"] for automatic input routing, or
+["mcp", "--input-policy", "background-only"] to prohibit DTW foreground use.
+Register skills/desktop-world using the
 Agent's ordinary Skill mechanism. Examples are templates; this archive does
 not install anything, edit Agent configuration, or grant OS permissions.
 
@@ -433,6 +435,12 @@ def package_assets(source, package, version, target):
     shutil.copytree(source / "packaging/third-party", package / "packaging/third-party")
     if target.endswith("msvc"):
         shutil.copytree(source / "tests/acceptance/windows", package / "acceptance/windows")
+        shutil.copy2(source / "docs/real-task-closure-plan.md", package / "docs/real-task-closure-plan.md")
+        handoff = package / "acceptance/windows/README.md"
+        handoff_text = handoff.read_text(encoding="utf-8")
+        source_link = "(../../../docs/real-task-closure-plan.md)"
+        require(handoff_text.count(source_link) == 1, "Windows handoff must link the same-source task plan")
+        handoff.write_text(handoff_text.replace(source_link, "(../../docs/real-task-closure-plan.md)"), encoding="utf-8")
     (package / "examples").mkdir()
     for name in ("mcp.json", "codex.toml"):
         shutil.copy2(source / "docs/examples" / name, package / "examples" / name)

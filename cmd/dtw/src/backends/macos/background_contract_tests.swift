@@ -269,7 +269,7 @@ private var returnClock = 0.0
 private var returnReads = 0
 private var returnInvalidated = false
 private func restoredFocusRead(pid: Int32 = 10, sameObject: Bool, sameID: Bool) throws -> Bool {
-    try exactInputFocus(expectedPID: 10, focusedPID: { pid }, windowMatches: { sameObject && sameID })
+    try controlExactInputFocus(expectedPID: 10, focusedPID: { pid }, windowMatches: { sameObject && sameID })
 }
 for mismatch in [(false, true), (true, false), (false, false)] {
     returnClock = 0; returnReads = 0
@@ -291,7 +291,7 @@ backgroundCheck(delayedReturn && returnReads == 3 && returnClock == 0.04)
 // A positively absent original focused window only needs exact app identity.
 // NativeStore labels that successful branch application_restored, not restored.
 private let applicationOnlyReturn = try waitForRestoredFocus(remaining: { 1 }, check: {}, invalidated: { false }, read: {
-    try exactInputFocus(expectedPID: 10, focusedPID: { 10 }, windowMatches: { true })
+    try controlExactInputFocus(expectedPID: 10, focusedPID: { 10 }, windowMatches: { true })
 }, wait: { _ in preconditionFailure("Available application return must not wait") })
 backgroundCheck(applicationOnlyReturn)
 
@@ -372,7 +372,7 @@ returnClock = 0
 _ = expectedBackgroundError("focus_restore_unproven") {
     _ = try waitForRestoredFocus(remaining: { 0.03 - returnClock }, check: {}, invalidated: { false }, read: {
         var pidReads = 0
-        return try exactInputFocus(expectedPID: 10, focusedPID: {
+        return try controlExactInputFocus(expectedPID: 10, focusedPID: {
             pidReads += 1; return pidReads == 1 ? 10 : 20
         }, windowMatches: { true })
     }, wait: { returnClock += $0 })
@@ -598,3 +598,134 @@ _ = expectedBackgroundError("element_not_visible") { _ = try ScrollAnchorGeometr
 private let legacyCenter = try fixedScrollPoint([:], current: scrollWindow)
 backgroundCheck(legacyCenter == CGPoint(x: scrollWindow.midX, y: scrollWindow.midY))
 print("Scroll anchor geometry preserves fixed negative points through focus; pure controls only")
+
+
+// System AX global absence does not erase independently proven app-local AX
+// focus. These controls use only synthetic process/window values, no desktop.
+private var globalCandidateReads = 0
+private func resolveFocusControl(result: AXError, value: Int32? = 10, candidate: Int32? = 10,
+                                 front: Int32 = 1, generation: UInt64? = 42) throws -> FocusApplication<Int32>? {
+    try resolveFocusedApplication(system: { try systemFocusValue(result, element: value) }, candidate: {
+        globalCandidateReads += 1; return candidate
+    }, pid: { $0 }, birth: { _ in generation }, frontmost: { _ in try frontProcessMatch(front) })
+}
+globalCandidateReads = 0
+private let normalGlobalFocus = try resolveFocusControl(result: .success)
+backgroundCheck(normalGlobalFocus?.pid == 10 && normalGlobalFocus?.generation == 42)
+backgroundCheck(normalGlobalFocus?.fromCandidate == false && globalCandidateReads == 0)
+for unavailable in [AXError.cannotComplete, .noValue] {
+    globalCandidateReads = 0
+    var windowReads = 0
+    let matched = try exactInputFocus(expectedPID: 10, focusedApplication: {
+        try resolveFocusControl(result: unavailable)
+    }, windowMatches: { app in
+        windowReads += 1
+        return try exactFocusedSurface(requested: app, requestedWindow: 123,
+            focused: app, equal: ==, windowID: { _ in 123 })
+    })
+    backgroundCheck(matched && globalCandidateReads == 2 && windowReads == 1)
+    let wrongWindow = try exactInputFocus(expectedPID: 10, focusedApplication: {
+        try resolveFocusControl(result: unavailable)
+    }, windowMatches: { _ in
+        try exactFocusedSurface(requested: 1, requestedWindow: 123,
+            focused: 2, equal: ==, windowID: { _ in 123 })
+    })
+    backgroundCheck(!wrongWindow) // Same PID/CG ID never substitutes for AX object identity.
+
+    globalCandidateReads = 0
+    let notFrontmost = try exactInputFocus(expectedPID: 10, focusedApplication: {
+        try resolveFocusControl(result: unavailable, front: 0)
+    }, windowMatches: { _ in preconditionFailure("A negative PSN proof cannot read/accept a window") })
+    backgroundCheck(!notFrontmost && globalCandidateReads == 1)
+
+    let original = expectedBackgroundError(unavailable == .noValue ? "focus_unproven" : "ax_unavailable") {
+        _ = try resolveFocusControl(result: unavailable, candidate: nil)
+    }
+    backgroundCheck(original.attributeFailure?.name == kAXFocusedApplicationAttribute)
+    backgroundCheck(original.attributeFailure?.error == unavailable)
+
+    for native in [-1, -2, -3, -4, -5, -6] as [Int32] {
+        let missingWS = expectedBackgroundError("focus_unproven") {
+            _ = try resolveFocusControl(result: unavailable, front: native)
+        }
+        backgroundCheck(missingWS.focusAbsence != .application && missingWS.focusAbsence != .window)
+    }
+}
+
+// A successful System AX read that conflicts with WindowServer is not a reason
+// to try a different candidate, even if that candidate would be convenient.
+globalCandidateReads = 0
+_ = expectedBackgroundError("focus_unproven") { _ = try resolveFocusControl(result: .success, candidate: 20, front: 0) }
+backgroundCheck(globalCandidateReads == 0)
+for invalid in [AXError.apiDisabled, .attributeUnsupported, .notImplemented, .invalidUIElement, .failure] {
+    globalCandidateReads = 0
+    let kept = expectedBackgroundError("ax_unavailable") { _ = try resolveFocusControl(result: invalid) }
+    backgroundCheck(kept.attributeFailure?.error == invalid && globalCandidateReads == 0)
+}
+globalCandidateReads = 0
+_ = expectedBackgroundError("focus_unproven") { _ = try resolveFocusControl(result: .success, value: nil) }
+backgroundCheck(globalCandidateReads == 0) // A malformed success is not positive noValue.
+for original in [busyAttribute(kAXFocusedWindowAttribute), failure("native_stopping", "original cancel"),
+                 failure("deadline_exceeded", "original deadline")] {
+    let kept = expectedBackgroundError(original.code) {
+        let _: FocusApplication<Int32>? = try resolveFocusedApplication(system: { throw original },
+            candidate: { preconditionFailure("Only the global typed AX failure can select a candidate") },
+            pid: { $0 }, birth: { _ in 42 }, frontmost: { _ in true })
+    }
+    backgroundCheck(kept.message == original.message)
+}
+
+// Process replacement must fail both inside the PSN snapshot and across the
+// intervening app-window read. Missing birth proof is never a cached identity.
+private var focusBirthReads = 0
+_ = expectedBackgroundError("focus_unproven") {
+    _ = try resolveFocusedApplication(system: { Int32(10) }, candidate: { nil }, pid: { $0 }, birth: { _ in
+        focusBirthReads += 1; return focusBirthReads == 1 ? 42 : 43
+    }, frontmost: { _ in true })
+}
+backgroundCheck(focusBirthReads == 2)
+_ = expectedBackgroundError("focus_unproven") { _ = try resolveFocusControl(result: .noValue, generation: nil) }
+focusBirthReads = 0
+_ = expectedBackgroundError("focus_unproven") {
+    _ = try exactInputFocus(expectedPID: 10, focusedApplication: {
+        focusBirthReads += 1
+        return try resolveFocusControl(result: .noValue, generation: focusBirthReads == 1 ? 42 : 43)
+    }, windowMatches: { _ in true })
+}
+for original in [busyAttribute(kAXFocusedWindowAttribute), missingFocus(.window),
+                 failure("focus_unproven", "malformed app window"), failure("deadline_exceeded", "window read exhausted request")] {
+    globalCandidateReads = 0
+    let kept = expectedBackgroundError(original.code) {
+        _ = try exactInputFocus(expectedPID: 10, focusedApplication: {
+            try resolveFocusControl(result: .noValue)
+        }, windowMatches: { _ in throw original })
+    }
+    backgroundCheck(kept.message == original.message && globalCandidateReads == 1)
+}
+
+// The observer can retain only app identity after an app-window failure. No CG
+// ordering can create reachedWindow; fresh exact AX and epoch revision remain
+// required. A later identity or deadline failure suppresses the sample entirely.
+private let observerApp = FocusApplication(element: Int32(10), pid: 10, generation: 42, fromCandidate: true)
+private var pidOnlyEpoch = FocusBorrowEpoch(initialPID: 20, targetPID: 10, targetWindow: 123)
+private let observerAppCurrent = try focusedApplicationStillCurrent(observerApp,
+    birth: { _ in 42 }, frontmost: { _ in true })
+backgroundCheck(observerAppCurrent)
+backgroundCheck(pidOnlyEpoch.sampled(10, window: nil, revision: pidOnlyEpoch.sampleRevision))
+backgroundCheck(pidOnlyEpoch.reachedTarget && !pidOnlyEpoch.reachedWindow && !pidOnlyEpoch.invalidated)
+private let observerWindowRevision = pidOnlyEpoch.sampleRevision
+backgroundCheck(pidOnlyEpoch.sampled(10, window: 123, revision: observerWindowRevision))
+backgroundCheck(pidOnlyEpoch.reachedWindow)
+private let lostObserverApp = try focusedApplicationStillCurrent(observerApp,
+    birth: { _ in 42 }, frontmost: { _ in false })
+backgroundCheck(!lostObserverApp)
+focusBirthReads = 0
+private let changedObserverApp = try focusedApplicationStillCurrent(observerApp, birth: { _ in
+    focusBirthReads += 1; return focusBirthReads == 1 ? 42 : 43
+}, frontmost: { _ in true })
+backgroundCheck(!changedObserverApp)
+_ = expectedBackgroundError("deadline_exceeded") {
+    _ = try focusedApplicationStillCurrent(observerApp,
+        birth: { _ in throw failure("deadline_exceeded", "same observer budget") }, frontmost: { _ in true })
+}
+print("Typed System AX absence uses exact WindowServer/app-window proof; no CG window guessing or action retries")

@@ -16,6 +16,7 @@ pub trait Platform: Send + Sync {
     const COVERAGE: &'static str;
     const CONDITIONS: &'static [&'static str];
     const CAPABILITIES: &'static [Capability];
+    const DISCOVERY_SCOPES: &'static [ObserveScopeKind] = &[ObserveScopeKind::Window];
     fn worker_args() -> Result<Vec<String>, Error>;
 }
 pub struct AppInfo {
@@ -66,7 +67,8 @@ impl<P: Platform> NativeBackend<P> {
     }
     pub fn description() -> Value {
         json!({"provider":P::ID,"coverage":P::COVERAGE,"conditions":P::CONDITIONS,
-            "supported_capabilities":P::CAPABILITIES.iter().map(|c|c.as_str()).collect::<Vec<_>>()})
+            "supported_capabilities":P::CAPABILITIES.iter().map(|c|c.as_str()).collect::<Vec<_>>(),
+            "supported_observe_scopes":P::DISCOVERY_SCOPES.iter().filter(|_|P::CAPABILITIES.contains(&Capability::Observe)).map(|s|s.as_str()).collect::<Vec<_>>()})
     }
     pub fn catalog(&self, timeout: Duration) -> Result<Vec<AppInfo>, Error> {
         let until = Instant::now() + timeout;
@@ -263,6 +265,9 @@ impl<P: Platform> NativeBackend<P> {
 }
 impl<P: Platform> Backend for NativeBackend<P> {
     type Binding = NativeBinding;
+    fn is_available(&self) -> bool {
+        !self.worker.is_stopped()
+    }
     fn stamp(&self) -> ProviderStamp {
         ProviderStamp {
             id: P::ID.into(),
@@ -337,8 +342,63 @@ impl<P: Platform> Backend for NativeBackend<P> {
         query: &ObserveQuery,
         call: &CallContext<'_>,
     ) -> Result<BackendObservation<Self::Binding>, Error> {
-        let reply=self.read(json!({"operation":"observe","target":target_json(target),"query":{"role":query.role,"text":query.text,"limit":query.limit}}),call)?;
+        self.observe_scoped(target, query, ObserveScope::Window, None, call)
+    }
+    fn supports_observe_scope(&self, scope: ObserveScopeKind) -> bool {
+        P::DISCOVERY_SCOPES.contains(&scope)
+    }
+    fn observe_scoped(
+        &self,
+        target: &WindowTarget,
+        query: &ObserveQuery,
+        scope: ObserveScope,
+        binding: Option<&Self::Binding>,
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservation<Self::Binding>, Error> {
+        if !self.supports_observe_scope(scope.kind()) {
+            return Err(Error::UnsupportedCapability);
+        }
+        let scope = match scope {
+            ObserveScope::Window => json!({"kind":"window"}),
+            ObserveScope::Menu => json!({"kind":"menu"}),
+            ObserveScope::Subtree(element) => {
+                json!({"kind":"subtree","binding":binding.ok_or(Error::InvalidObservation)?.token,"element":element.0})
+            }
+            ObserveScope::Region(rect) => {
+                json!({"kind":"region","binding":binding.ok_or(Error::InvalidObservation)?.token,"rect":[rect.x,rect.y,rect.width,rect.height]})
+            }
+        };
+        let reply=self.read(json!({"operation":"observe","target":target_json(target),"query":{"role":query.role,"text":query.text,"limit":query.limit,"scope":scope}}),call)?;
         self.observation(target, reply)
+    }
+    fn read_text(
+        &self,
+        target: &WindowTarget,
+        binding: &Self::Binding,
+        request: TextRequest,
+        call: &CallContext<'_>,
+    ) -> Result<BackendTextPage, Error> {
+        let reply = self.read(
+            json!({"operation":"read_text","target":target_json(target),"binding":binding.token,
+            "element":request.element.0,"offset":request.offset,"limit":request.limit}),
+            call,
+        )?;
+        if reply["unit"] != "utf16" {
+            return Err(Error::InvalidObservation);
+        }
+        Ok(BackendTextPage {
+            target: parse_target(&reply["target"])?,
+            page: TextPage {
+                text: string(&reply, "text")?.into(),
+                offset: u32::try_from(number(&reply, "offset")?).map_err(failed)?,
+                total_length: u32::try_from(number(&reply, "total_length")?).map_err(failed)?,
+                next_offset: if reply["next_offset"].is_null() {
+                    None
+                } else {
+                    Some(u32::try_from(number(&reply, "next_offset")?).map_err(failed)?)
+                },
+            },
+        })
     }
     fn continue_observation(
         &self,
@@ -607,6 +667,33 @@ pub fn encode_png(width: u32, height: u32, rgb: &[u8]) -> Result<Value, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn text_range_and_unsupported_native_errors_keep_their_core_identity() {
+        for (error, code) in [
+            (Error::UnsupportedCapability, "unsupported_capability"),
+            (Error::StaleObservation, "stale_observation"),
+        ] {
+            let reply = error_reply(error.clone(), false);
+            assert_eq!(reply["error"], code);
+            assert_eq!(reply_error(&reply), Some(error));
+            assert!(reply.get("dispatch").is_none());
+        }
+        let native_range = json!({"error":"invalid_text_range","message":"Use a UTF-16 boundary"});
+        let range = reply_error(&native_range).unwrap();
+        assert_eq!(
+            range,
+            Error::NativeFailure {
+                code: "invalid_text_range".into(),
+                message: "Use a UTF-16 boundary".into(),
+            }
+        );
+        let encoded = error_reply(range, false);
+        assert_eq!(encoded["error"], "invalid_text_range");
+        assert!(
+            matches!(reply_error(&encoded), Some(Error::NativeFailure { code, .. }) if code == "invalid_text_range")
+        );
+    }
+
     #[test]
     fn background_only_rejects_every_physical_path_and_preserves_semantics() {
         for operation in ["click", "focus", "typeText", "keypress", "scroll"] {

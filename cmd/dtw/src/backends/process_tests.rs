@@ -441,6 +441,7 @@ fn timeout_controls_a_worker_that_does_not_read_stdin() {
     let fixture = Fixture::new();
     let worker = fixture.worker("no_read");
     fixture.wait_ready();
+    assert!(!worker.is_stopped());
     let deadline = Instant::now() + Duration::from_millis(50);
     let started = Instant::now();
     let error = worker
@@ -457,6 +458,10 @@ fn timeout_controls_a_worker_that_does_not_read_stdin() {
     assert!(error.request_may_have_been_sent);
     assert!(started.elapsed() < Duration::from_secs(2));
     assert_reaped(&worker);
+    assert!(worker.is_stopped());
+    let subsequent = worker.call(b"{}", budget()).unwrap_err();
+    assert_eq!(subsequent.kind, TransportErrorKind::Stopped);
+    assert!(!subsequent.request_may_have_been_sent);
 }
 
 #[test]

@@ -240,6 +240,13 @@ fn background_validation(
     phase: i32,
 ) -> Result<(), Value> {
     validate_reply(reply, &target.target)?;
+    if phase == 0 && modal_keyboard_requires_foreground(reply, target.keyboard)? {
+        // The initial side-effect-free preflight has already selected a route.
+        // A later modal transition stops this sequence; it cannot replay input
+        // through the foreground route. Paired cleanup uses phases 1/2.
+        return Err(json!({"error":"background_route_changed",
+            "message":"The keyboard target became modal during background input; refresh before new work"}));
+    }
     if phase == 0 && !target.keyboard && reply["bounds"] != target.bounds {
         return Err(
             json!({"error":"stale_observation","message":"Input window geometry changed; capture again before pointer input"}),
@@ -268,6 +275,45 @@ fn delivery(
         value["focus_return"] = json!(returned);
     }
     value
+}
+
+fn foreground_delivery(
+    result: &Value,
+    operation: &str,
+    reason: Option<&str>,
+    prepared_borrowed: bool,
+) -> Value {
+    // Native focus may renew its scope after preparation. Report its actual
+    // return obligation, not just the earlier preparation snapshot.
+    let borrowed = result["borrowed"].as_bool().unwrap_or(prepared_borrowed);
+    delivery(
+        Some("foreground"),
+        reason,
+        borrowed,
+        (operation == "focus").then_some(if borrowed { "pending" } else { "unchanged" }),
+    )
+}
+
+fn record_foreground_cleanup(result: &mut Value, cleanup: Value) {
+    result["delivery"]["focus_return"] = if cleanup.get("error").is_some() {
+        json!("unconfirmed")
+    } else {
+        cleanup["focus"].clone()
+    };
+    if cleanup.get("error").is_some() {
+        result["cleanup_error"] = cleanup.clone();
+        if result.get("error").is_none() {
+            result["error"] = cleanup["error"].clone();
+            result["message"] = cleanup["message"].clone();
+            result["dispatch"] = json!("unknown");
+        }
+    }
+}
+
+fn click_can_follow_focus(result: &Value) -> bool {
+    (result["dispatch"] == "dispatched" && result.get("error").is_none())
+        || (result["dispatch"] == "not_dispatched"
+            && result["error"] == "semantic_window_unavailable")
 }
 
 fn foreground_required(reason: &str) -> Value {
@@ -306,6 +352,15 @@ fn background_result(mut result: Value) -> BackgroundAttempt {
     BackgroundAttempt::Completed(result)
 }
 
+fn modal_keyboard_requires_foreground(validation: &Value, keyboard: bool) -> Result<bool, Value> {
+    if !keyboard {
+        return Ok(false);
+    }
+    validation["background_keyboard_requires_foreground"].as_bool().ok_or_else(|| {
+        json!({"error":"invalid_response","message":"Missing native modal keyboard preflight"})
+    })
+}
+
 fn background(request: &mut Value) -> BackgroundAttempt {
     let op = request["operation"].as_str().unwrap_or("").to_owned();
     if !matches!(op.as_str(), "click" | "scroll" | "type_text" | "keypress") {
@@ -318,6 +373,7 @@ fn background(request: &mut Value) -> BackgroundAttempt {
     if let Err(error) = validate_reply(&before, &request["target"]) {
         return BackgroundAttempt::Completed(rejected(error, &op));
     }
+    request["surface_owner"] = before["surface_owner"].clone();
     if request.get("bounds").is_some() && request["bounds"] != before["bounds"] {
         return BackgroundAttempt::Completed(rejected(
             json!({"error":"stale_observation","message":"Window geometry changed; capture again before input"}),
@@ -347,6 +403,19 @@ fn background(request: &mut Value) -> BackgroundAttempt {
         request["screen_x"] = json!(x);
         request["screen_y"] = json!(y);
         request["_pointer_bounds"] = before["bounds"].clone();
+    }
+    if before["surface_owner"]["pid"] != request["target"]["app"]["pid"] {
+        // Preserve the independently proven owner for foreground capture and
+        // pointer presentation, without changing the logical app identity.
+        // CUA cannot direct input to a different process on this app's behalf.
+        return BackgroundAttempt::Declined("associated_surface_requires_foreground".into());
+    }
+    match modal_keyboard_requires_foreground(&before, keyboard) {
+        Ok(true) => {
+            return BackgroundAttempt::Declined("modal_keyboard_requires_foreground".into())
+        }
+        Ok(false) => (),
+        Err(error) => return BackgroundAttempt::Completed(rejected(error, &op)),
     }
     let mut input = json!({"operation":op,"pid":request["target"]["app"]["pid"],
         "window_id":request["target"]["native_id"],"deadline_unix_ms":request["deadline_unix_ms"],
@@ -560,6 +629,12 @@ fn dispatch(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value 
             return result;
         }
         borrowed = prepared["borrowed"].as_bool().unwrap_or(false);
+        if matches!(op, "click" | "scroll") {
+            // Presentation uses the most recent native proof after focus/lease
+            // handover. Input still performs its own target validation below.
+            request["surface_owner"] = prepared["surface_owner"].clone();
+            request["_pointer_bounds"] = prepared["bounds"].clone();
+        }
     }
     let _presentation = matches!(op, "click" | "scroll").then(|| {
         super::pointer_presentation::Scope::new(
@@ -570,12 +645,8 @@ fn dispatch(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value 
     });
     let mut result = dispatch_owned(request, leased, scene_worker);
     if physical && op != "release_focus" {
-        result["delivery"] = delivery(
-            Some("foreground"),
-            foreground_reason.as_deref(),
-            borrowed,
-            if op == "focus" { Some("pending") } else { None },
-        );
+        result["delivery"] =
+            foreground_delivery(&result, op, foreground_reason.as_deref(), borrowed);
     } else if matches!(op, "press" | "set_value") {
         result["delivery"] = delivery(
             Some("semantic"),
@@ -589,19 +660,7 @@ fn dispatch(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value 
             &json!({"operation":"release_focus","deadline_unix_ms":now_ms()+300}),
             false,
         );
-        result["delivery"]["focus_return"] = if cleanup.get("error").is_some() {
-            json!("unconfirmed")
-        } else {
-            cleanup["focus"].clone()
-        };
-        if cleanup.get("error").is_some() {
-            result["cleanup_error"] = cleanup.clone();
-            if result.get("error").is_none() {
-                result["error"] = cleanup["error"].clone();
-                result["message"] = cleanup["message"].clone();
-                result["dispatch"] = json!("unknown");
-            }
-        }
+        record_foreground_cleanup(&mut result, cleanup);
     }
     // Explicit focus is an operation, not a script-wide lease: a later pixel
     // action runs in a sibling scene worker. Its final release_focus acquires
@@ -654,15 +713,18 @@ fn dispatch_owned(mut request: Value, leased: &mut bool, scene_worker: bool) -> 
             }
         }
     }
-    request["pid"] = request["target"]["app"]["pid"].clone();
+    request["pid"] = before["surface_owner"]["pid"].clone();
+    request["surface_owner"] = before["surface_owner"].clone();
     request["window_id"] = request["target"]["native_id"].clone();
+    let mut click_borrowed = None;
     if op == "click" {
         let mut focus = request.clone();
         focus["operation"] = json!("focus");
         let raised = native(&focus, false);
-        // Preserve the plain visible-point path for surfaces without AX. A
-        // possibly dispatched focus attempt is never followed by another route.
-        if raised.get("error").is_some() && raised["dispatch"] != "not_dispatched" {
+        click_borrowed = raised["borrowed"].as_bool();
+        // Only a proven lack of AX preserves the visible-point route. Focus
+        // ownership changes and uncertain attempts must not become a click.
+        if !click_can_follow_focus(&raised) {
             return raised;
         }
     }
@@ -670,6 +732,9 @@ fn dispatch_owned(mut request: Value, leased: &mut bool, scene_worker: bool) -> 
     // transaction, but shares Scene.swift's SCK transparency proof. Keep SCK
     // in this short-lived owner and retain both scene/input leases until exit.
     let mut result = native(&request, op != "scroll");
+    if let Some(borrowed) = click_borrowed {
+        result["borrowed"] = json!(borrowed);
+    }
     if op == "click" || op == "scroll" {
         return result;
     }
@@ -680,7 +745,10 @@ fn dispatch_owned(mut request: Value, leased: &mut bool, scene_worker: bool) -> 
     if let Err(error) = validate_reply(&after, &request["target"]) {
         return error;
     }
-    if before["bounds"] != after["bounds"] || result["bounds"] != after["bounds"] {
+    if before["surface_owner"] != after["surface_owner"]
+        || before["bounds"] != after["bounds"]
+        || result["bounds"] != after["bounds"]
+    {
         return json!({"error":"stale_observation","message":"Window moved during capture"});
     }
     result["target"] = after["target"].clone();
@@ -708,6 +776,12 @@ pub(super) fn validate_reply(reply: &Value, target: &Value) -> Result<(), Value>
         || &reply["target"] != target
         || !target.is_object()
         || !bounds_valid
+        || !reply["surface_owner"]["pid"]
+            .as_u64()
+            .is_some_and(|pid| pid > 0 && pid <= i32::MAX as u64)
+        || !reply["surface_owner"]["generation"]
+            .as_u64()
+            .is_some_and(|birth| birth > 0)
     {
         return Err(
             json!({"error":"invalid_response","message":"Incomplete native target validation"}),
@@ -718,6 +792,78 @@ pub(super) fn validate_reply(reply: &Value, target: &Value) -> Result<(), Value>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn click_never_bypasses_focus_change_or_unknown_effect() {
+        assert!(click_can_follow_focus(&json!({"dispatch":"dispatched"})));
+        assert!(click_can_follow_focus(&json!({"dispatch":"not_dispatched",
+            "error":"semantic_window_unavailable"})));
+        for result in [
+            json!({"dispatch":"not_dispatched","error":"focus_changed"}),
+            json!({"dispatch":"not_dispatched","error":"target_changed"}),
+            json!({"dispatch":"unknown","error":"semantic_window_unavailable"}),
+            json!({"dispatch":"dispatched","error":"focus_changed"}),
+            json!({"dispatch":"unknown"}),
+            json!({"dispatch":"not_dispatched"}),
+            json!({}),
+        ] {
+            assert!(!click_can_follow_focus(&result));
+        }
+    }
+
+    #[test]
+    fn foreground_route_reports_actual_return_obligation() {
+        for operation in ["focus", "click", "keypress", "scroll"] {
+            for (prepared, actual) in [(false, false), (false, true), (true, true)] {
+                let result = foreground_delivery(
+                    &json!({"borrowed": actual}),
+                    operation,
+                    Some("native_preflight"),
+                    prepared,
+                );
+                assert_eq!(result["route"], "foreground");
+                assert_eq!(result["foreground_borrowed"], actual);
+                assert_eq!(result["reason"], "native_preflight");
+                if operation == "focus" {
+                    assert_eq!(
+                        result["focus_return"],
+                        if actual { "pending" } else { "unchanged" }
+                    );
+                } else {
+                    assert!(result.get("focus_return").is_none());
+                }
+            }
+        }
+        assert_eq!(
+            foreground_delivery(&json!({}), "click", None, true)["foreground_borrowed"],
+            true
+        );
+    }
+
+    #[test]
+    fn unchanged_cleanup_preserves_input_outcome_and_primary_errors() {
+        let mut result = json!({"dispatch":"dispatched","evidence":"unverified",
+            "delivery":foreground_delivery(&json!({"borrowed":false}), "click", None, false)});
+        record_foreground_cleanup(&mut result, json!({"released":true,"focus":"unchanged"}));
+        assert_eq!(result["dispatch"], "dispatched");
+        assert_eq!(result["delivery"]["foreground_borrowed"], false);
+        assert_eq!(result["delivery"]["focus_return"], "unchanged");
+        assert!(result.get("error").is_none());
+        assert!(result.get("cleanup_error").is_none());
+
+        result["error"] = json!("input_failed");
+        result["message"] = json!("original input error");
+        result["dispatch"] = json!("unknown");
+        record_foreground_cleanup(
+            &mut result,
+            json!({"error":"return_failed","message":"cleanup failed"}),
+        );
+        assert_eq!(result["error"], "input_failed");
+        assert_eq!(result["message"], "original input error");
+        assert_eq!(result["cleanup_error"]["error"], "return_failed");
+        assert_eq!(result["delivery"]["focus_return"], "unconfirmed");
+    }
+
     #[test]
     fn strict_focus_rejects_before_any_native_target_read_or_preparation() {
         // Deliberately no native target: this must not call AX, take a lease,
@@ -733,6 +879,42 @@ mod tests {
         assert_eq!(reply["delivery"]["foreground_borrowed"], false);
         assert!(reply["delivery"]["route"].is_null());
         assert!(!leased);
+    }
+
+    #[test]
+    fn modal_keyboard_preflight_is_typed_and_does_not_disable_pointer_delivery() {
+        let modal = json!({"background_keyboard_requires_foreground":true});
+        assert_eq!(modal_keyboard_requires_foreground(&modal, true), Ok(true));
+        assert_eq!(modal_keyboard_requires_foreground(&modal, false), Ok(false));
+        assert_eq!(
+            modal_keyboard_requires_foreground(
+                &json!({"background_keyboard_requires_foreground":false}),
+                true
+            ),
+            Ok(false)
+        );
+        for malformed in [
+            json!({}),
+            json!({"background_keyboard_requires_foreground":1}),
+        ] {
+            assert_eq!(
+                modal_keyboard_requires_foreground(&malformed, true).unwrap_err()["error"],
+                "invalid_response"
+            );
+            assert_eq!(
+                modal_keyboard_requires_foreground(&malformed, false),
+                Ok(false)
+            );
+        }
+        let rejected = foreground_required("modal_keyboard_requires_foreground");
+        assert_eq!(rejected["dispatch"], "not_dispatched");
+        assert_eq!(rejected["error"], "foreground_required");
+        assert_eq!(
+            rejected["delivery"]["reason"],
+            "modal_keyboard_requires_foreground"
+        );
+        assert_eq!(rejected["delivery"]["foreground_borrowed"], false);
+        assert!(rejected["delivery"]["route"].is_null());
     }
 
     #[test]
@@ -766,7 +948,7 @@ mod tests {
             assert!(validate_reply(&reply, &target).is_err());
         }
         assert!(
-            validate_reply(&json!({"target":target,"bounds":[-100,2,300,400]}), &target).is_ok()
+            validate_reply(&json!({"target":target,"bounds":[-100,2,300,400],"surface_owner":{"pid":7,"generation":1}}), &target).is_ok()
         );
     }
 
@@ -780,7 +962,8 @@ mod tests {
             deadline: 0,
             failures: RefCell::default(),
         };
-        let moved = json!({"target":identity,"bounds":[100,200,500,600]});
+        let moved = json!({"target":identity,"bounds":[100,200,500,600],"surface_owner":{"pid":7,"generation":1},
+            "background_keyboard_requires_foreground":false});
         assert!(background_validation(&moved, &target, 0).is_ok());
         target.keyboard = false;
         assert!(background_validation(&moved, &target, 0).is_err());
@@ -789,6 +972,31 @@ mod tests {
         for keyboard in [false, true] {
             target.keyboard = keyboard;
             assert!(background_validation(&replaced, &target, 0).is_err());
+        }
+    }
+
+    #[test]
+    fn modal_transition_stops_background_keys_without_selecting_a_second_route() {
+        let identity = json!({"app":{"pid":7},"native_id":1,"generation":2});
+        let target = BackgroundTarget {
+            target: identity.clone(),
+            bounds: json!([0, 0, 100, 100]),
+            keyboard: true,
+            deadline: 0,
+            failures: RefCell::default(),
+        };
+        let modal = json!({"target":identity,"bounds":target.bounds,
+            "surface_owner":{"pid":7,"generation":1},"background_keyboard_requires_foreground":true});
+        let error = background_validation(&modal, &target, 0).unwrap_err();
+        assert_eq!(error["error"], "background_route_changed");
+        assert!(background_validation(&modal, &target, 1).is_ok());
+        for dispatch in ["not_dispatched", "unknown"] {
+            let attempt = background_result(json!({"error":error, "dispatch":dispatch,
+                "fallback_allowed":false}));
+            let BackgroundAttempt::Completed(result) = attempt else {
+                panic!("a modal transition after route selection must not select a second route");
+            };
+            assert_eq!(result["dispatch"], dispatch);
         }
     }
 

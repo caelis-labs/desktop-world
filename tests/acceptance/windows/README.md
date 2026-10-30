@@ -100,7 +100,7 @@ enumerate/kill processes by name, repair permissions or synthesize release input
 On timeout, effects may be unknown: preserve evidence and inspect the owned
 fixture and original receipt. Do not rerun an action to recover its response.
 
-All source files are ASCII. The Unicode sample uses explicit Unicode code
+The smoke's PowerShell and C# sources are ASCII. The Unicode sample uses explicit Unicode code
 points, source reads use UTF-8, MCP writes UTF-8 bytes, and fixture arguments use
 Windows command-line quoting. A locale-dependent decode cannot silently change
 both the expected and actual Chinese/emoji sample.
@@ -118,6 +118,36 @@ It emits `status:compiled_only`, `passed:false`: compilation is not a smoke pass
 The source directory is never modified. No extra CI job is required by this kit.
 
 ## Still required for full Windows acceptance
+
+The real-application closure batch adds subtree/region observation, `readText`
+and full bounded UIA text matching. Rebuild the final batch revision on Windows;
+the earlier linked Windows candidate does not cover these changes. The Windows
+archive includes the same-source batch plan in its docs directory; the plan is
+an acceptance specification, not evidence that these tasks passed. Run the
+existing smoke first, then add these cases against that same binary and Skill:
+
+- Find text beyond the 512-character display excerpt. A search budget limit
+  must return partial coverage, not an empty complete result.
+- Discover a child container and observe its subtree; observe an image region
+  using a fresh capture. Move/replace the source before use and confirm stale
+  state is reported without input. Unsupported capabilities must match `apps`.
+- Read Unicode/emoji text over multiple `readText` pages; verify UTF-16 offsets,
+  the final length and original contents. Edit between pages and require a fresh
+  observation instead of combining revisions. Unsupported UIA text patterns
+  must not fall back to element names or descriptions as document text.
+- Complete the WPS create/edit/Save As/close/reopen, Obsidian new-vault/folder/
+  notes/search/link, and Chrome edit/readback/native-file-selection tasks in
+  [the batch plan](../../../docs/real-task-closure-plan.md) through ordinary
+  Agent + MCP + the shipped Skill. Use the stable Windows app IDs returned by
+  `apps`, not macOS bundle IDs. The current `real_app_tasks.py` launcher is
+  macOS-specific and must not be presented as a runnable Windows harness.
+- Record per-task wall time, MCP/exec/native method counts, failures and recovery
+  calls, every business subgoal, saved-file/server readback, and GUI evidence.
+  A disk result alone does not prove that the Agent reopened or followed a link.
+
+Do not infer Windows app-menu discovery, background input or foreground return
+from the macOS implementation. Windows menu discovery is currently unsupported;
+use its advertised basic window/keyboard/pixel route for those tasks.
 
 Record these separately against the same candidate hash; none is implied by the
 automatic smoke: cancellation during an input pair and a blocked UIA call;

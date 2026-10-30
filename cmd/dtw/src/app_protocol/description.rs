@@ -44,12 +44,14 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
     );
     let coverage = object(
         json!({
-            "scope":{"enum":["same_process_standard_windows","same_process_application_surfaces","application_instances"]},
+            "scope":{"enum":["same_process_standard_windows","same_process_application_surfaces","application_and_proven_associated_surfaces","application_instances"]},
             "status":{"enum":["available","empty_within_scope","partial"]},
             "complete_within_scope":{"type":"boolean"},
             "candidate_count":{"type":["integer","null"],"minimum":0},
             "supported_count":{"type":"integer","minimum":0},
             "excluded_count":{"type":["integer","null"],"minimum":0},
+            "associated_count":{"type":"integer","minimum":0,"maximum":8192},
+            "association_complete":{"const":false},
             "excludes":{"type":"array","items":{"type":"string"}},
             "instance_count":{"type":"integer","minimum":1,"maximum":32},
             "available_instances":{"type":"integer","minimum":0,"maximum":32},
@@ -99,14 +101,38 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
         object(scroll_element, &["window_ref","observation_ref","element_ref"])
     ]});
     let window = object(json!({"window_ref":reference}), &["window_ref"]);
+    let query_base = json!({"window_ref":reference,
+        "role":{"type":"string","minLength":1,"maxLength":64,"description":"Exact returned semantic role, for example button."},
+        "text":{"type":"string","minLength":0,"maxLength":256,"description":"Case-insensitive substring of label, name or value. Combined with role using AND. Empty string omits the text filter; whitespace is literal."},
+        "limit":{"type":"integer","minimum":1,"maximum":100,"default":40}
+    });
+    let mut menu_query = query_base.clone();
+    menu_query["scope"] = json!({"const":"menu"});
+    let mut subtree_query = query_base.clone();
+    subtree_query["observation_ref"] = reference.clone();
+    subtree_query["element_ref"] = reference.clone();
+    let mut region_query = query_base.clone();
+    region_query["observation_ref"] = reference.clone();
+    region_query["region"] = object(
+        json!({"x":{"type":"number","minimum":0},"y":{"type":"number","minimum":0},"width":{"type":"number","exclusiveMinimum":0},"height":{"type":"number","exclusiveMinimum":0}}),
+        &["x", "y", "width", "height"],
+    );
     let query = json!({"oneOf":[
-        object(json!({"window_ref":reference,
-            "role":{"type":"string","minLength":1,"maxLength":64,"description":"Exact returned semantic role, for example button."},
-            "text":{"type":"string","minLength":0,"maxLength":256,"description":"Case-insensitive substring of label, name or value. Combined with role using AND. Empty string omits the text filter; whitespace is literal."},
-            "limit":{"type":"integer","minimum":1,"maximum":100,"default":40}
-        }), &["window_ref"]),
+        object(query_base, &["window_ref"]),
+        object(menu_query, &["window_ref","scope"]),
+        object(subtree_query, &["window_ref","observation_ref","element_ref"]),
+        object(region_query, &["window_ref","observation_ref","region"]),
         object(json!({"cursor":reference}), &["cursor"])
     ]});
+    let text_request = object(
+        json!({"window_ref":reference,"observation_ref":reference,"element_ref":reference,
+        "offset":{"type":"integer","minimum":0,"maximum":4294967295u64,"default":0},"limit":{"type":"integer","minimum":2,"maximum":16384,"default":4096}}),
+        &["window_ref", "observation_ref", "element_ref"],
+    );
+    let text_page = object(
+        json!({"text":{"type":"string"},"offset":{"type":"integer","minimum":0},"next_offset":{"type":["integer","null"],"minimum":0},"total_length":{"type":"integer","minimum":0},"unit":{"const":"utf16"}}),
+        &["text", "offset", "next_offset", "total_length", "unit"],
+    );
     let observation = object(
         json!({
             "window_ref":reference,"observation_ref":reference,"kind":{"const":"semantic"},
@@ -149,15 +175,18 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
     json!({
         "version":1,"language":"javascript",
         "entry":"exec({app: 'com.example.App', source}); source is an async function body with app and state",
-        "facade":{"windows":"app.windows()","observe":"app.observe({window_ref, role?, text?, limit?}) or app.observe({cursor})","capture":"app.capture({window_ref})",
+        "facade":{"windows":"app.windows()","observe":"app.observe({window_ref, role?, text?, limit?}) or add scope:'menu', observation_ref+element_ref (subtree), or observation_ref+region:{x,y,width,height} (capture pixels); continue with app.observe({cursor})","capture":"app.capture({window_ref})",
             "press":"app.press({window_ref,observation_ref,element_ref})","click":"app.click({window_ref,observation_ref,x,y,button?,count?})",
             "typeText":"app.typeText({window_ref,text})","keypress":"app.keypress({window_ref,keys})","scroll":"app.scroll({window_ref,delta_x?,delta_y?,observation_ref?,x?,y?,element_ref?})",
-            "focus":"app.focus({window_ref})","setValue":"app.setValue({window_ref,observation_ref,element_ref,value})"},
+            "focus":"app.focus({window_ref})","setValue":"app.setValue({window_ref,observation_ref,element_ref,value})",
+            "readText":"app.readText({window_ref,observation_ref,element_ref,offset?,limit?})"},
         "methods":{
             (Method::Windows.name()):{"parameters":null,"returns":inventory,"requires":[Method::Windows.capability().as_str()],
                 "semantics":"No arguments. Aggregates proven windows from the app instances discovered before this exec. Each window_ref routes to its exact native instance. Unchanged targets keep refs and observations; proven removed targets retire theirs. A failed instance does not discard proven sibling windows: partial coverage reports unavailable_instances and bounded errors. When no instance can be inventoried the call throws; an unproven inventory is never success []."},
             (Method::Observe.name()):{"parameters":query,"returns":observation,"requires":[Method::Observe.capability().as_str()],
-                "semantics":"Starts a native filtered semantic query on one window, retiring only that window's previous semantic query. Return elements are one bounded page. Continue with only {cursor: page.next}; each cursor advances once, and earlier page element refs share the same observation_ref. Filters run during native traversal, which retains its frontier. A failed continuation retires the query. next=null does not imply complete: inspect coverage. complete describes a live traversal without known gaps, not an atomic UI snapshot or proof that an element does not exist."},
+                "semantics":"Starts a bounded native semantic query. Default scope is the window; scope:'menu' discovers its app menu, observation_ref+element_ref uses a retained subtree, and observation_ref+region uses pixel coordinates of a retained capture. Scopes are exclusive; provider.supported_observe_scopes advertises availability. A region tests native geometry: macOS clips it through proven AXScrollArea ancestor viewports and can skip disjoint scroll contents; Windows uses UIA bounding rectangles. This does not prove pixel visibility or absence of occlusion. Invalid or unsupported scope admission preserves refs. An admitted replacement retires only this window's previous semantic query; the capture and other windows survive. Return elements are one bounded page. Continue with only {cursor: page.next}; each cursor advances once and earlier page refs share the same observation_ref. Filters run during native traversal. Failed continuation retires the query. next=null does not imply complete: inspect coverage. Complete is a live traversal of the selected scope without known gaps, not an atomic snapshot or proof an element does not exist."},
+            (Method::ReadText.name()):{"parameters":text_request,"returns":text_page,"requires":[Method::ReadText.capability().as_str()],
+                "semantics":"Read native text from one retained semantic element; discovery label/name/value are bounded previews, never proof of full text. Offset, limit and total_length use UTF-16 units; pass next_offset unchanged until null. Pages never split surrogate pairs. The provider pins the initial content and rejects replacement or changed text as stale_observation. Success, unsupported_capability and invalid_text_range preserve observations and original expiry; other failures retire the semantic query. Unsupported text providers never substitute screenshots/OCR, titles or summaries for document text."},
             (Method::Capture.name()):{"parameters":window,"returns":capture,"requires":[Method::Capture.capability().as_str()],
                 "semantics":"Capture this window. Replaces only this window's previous pixel binding; semantic queries and other windows survive. Only metadata enters the VM; the last image is attached outside the VM."},
             (Method::Press.name()):{"parameters":press,"returns":receipt,"requires":[Method::Press.capability().as_str()],

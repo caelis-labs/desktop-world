@@ -12,9 +12,10 @@ pub(super) enum Method {
     Scroll,
     Focus,
     SetValue,
+    ReadText,
 }
 impl Method {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Windows,
         Self::Observe,
         Self::Capture,
@@ -25,6 +26,7 @@ impl Method {
         Self::Scroll,
         Self::Focus,
         Self::SetValue,
+        Self::ReadText,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -38,6 +40,7 @@ impl Method {
             Self::Scroll => "scroll",
             Self::Focus => "focus",
             Self::SetValue => "setValue",
+            Self::ReadText => "readText",
         }
     }
     pub fn arity(self) -> usize {
@@ -62,6 +65,7 @@ impl Method {
             Self::Scroll => Capability::Scroll,
             Self::Focus => Capability::Focus,
             Self::SetValue => Capability::SetValue,
+            Self::ReadText => Capability::ReadText,
         }
     }
     pub fn parse(name: &str) -> Option<Self> {

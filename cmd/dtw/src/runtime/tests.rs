@@ -5,6 +5,9 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[path = "scoped_text_tests.rs"]
+mod scoped_text_tests;
+
 // Time advances only when the test asks. Wall time is used solely by the
 // synchronization watchdog, never to arrange an expiry/cancellation race.
 #[derive(Clone)]

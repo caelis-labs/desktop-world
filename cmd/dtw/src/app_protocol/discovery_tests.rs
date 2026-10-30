@@ -20,6 +20,43 @@ impl Backend for PagedBackend {
     fn supports(&self, capability: Capability) -> bool {
         self.base.supports(capability)
     }
+    fn supports_observe_scope(&self, _: ObserveScopeKind) -> bool {
+        true
+    }
+    fn observe_scoped(
+        &self,
+        target: &WindowTarget,
+        query: &ObserveQuery,
+        scope: ObserveScope,
+        binding: Option<&Self::Binding>,
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservation<Self::Binding>, Error> {
+        assert_eq!(binding.is_some(), scope.observation_kind().is_some());
+        self.observe_page(target, query, call)
+    }
+    fn read_text(
+        &self,
+        target: &WindowTarget,
+        _: &Self::Binding,
+        request: TextRequest,
+        _: &CallContext<'_>,
+    ) -> Result<BackendTextPage, Error> {
+        if request.offset != 0 {
+            return Err(Error::NativeFailure {
+                code: "invalid_text_range".into(),
+                message: "controlled range".into(),
+            });
+        }
+        Ok(BackendTextPage {
+            target: target.clone(),
+            page: TextPage {
+                text: "full native text".into(),
+                offset: 0,
+                next_offset: None,
+                total_length: 16,
+            },
+        })
+    }
     fn windows(&self, app: &AppInstance, call: &CallContext<'_>) -> Result<WindowInventory, Error> {
         self.base.windows(app, call)
     }
@@ -130,6 +167,32 @@ fn script_run(owner: &Arc<Coordinator<PagedBackend>>, id: &str, source: &str) ->
             max_calls: 0,
         },
     )
+}
+
+#[test]
+fn scoped_queries_and_text_pages_pass_through_the_script_facade() {
+    let (owner, _) = setup();
+    let reply = script_run(
+        &owner,
+        "scoped-text",
+        r#"
+const window_ref=(await app.windows()).windows[0].window_ref;
+const pixels=await app.capture({window_ref});
+const root=await app.observe({window_ref});
+const subtree=await app.observe({window_ref,observation_ref:root.observation_ref,element_ref:root.elements[0].element_ref});
+const args={window_ref,observation_ref:subtree.observation_ref,element_ref:subtree.elements[0].element_ref};
+let code; try {await app.readText({...args,offset:99});} catch(error) {code=error.code;}
+const text=await app.readText(args);
+const region=await app.observe({window_ref,observation_ref:pixels.observation_ref,region:{x:0,y:0,width:1,height:1}});
+const menu=await app.observe({window_ref,scope:'menu',text:'Save'});
+return {code,text,subtree:subtree.kind,region:region.kind,menu:menu.kind};
+"#,
+    );
+    assert!(!reply.is_error, "{}", reply.data);
+    assert_eq!(
+        reply.data["value"]["result"],
+        json!({"code":"invalid_text_range","text":{"text":"full native text","offset":0,"next_offset":null,"total_length":16,"unit":"utf16"},"subtree":"semantic","region":"semantic","menu":"semantic"})
+    );
 }
 
 #[test]

@@ -84,6 +84,33 @@ struct LiveObservation<B> {
     native: B,
 }
 
+/// Temporarily owns a binding across a native read without holding Core's lock.
+/// Reinstatement never extends its original lifetime or revives a closed context.
+struct HeldObservation<'a, B: Backend, C: Clock> {
+    runtime: &'a Runtime<B, C>,
+    live: Option<LiveObservation<B::Binding>>,
+    preserve: bool,
+}
+impl<B: Backend, C: Clock> Drop for HeldObservation<'_, B, C> {
+    fn drop(&mut self) {
+        let Some(live) = self.live.take() else {
+            return;
+        };
+        let mut state = self.runtime.state();
+        if self.preserve
+            && self.runtime.live_context(&state).is_ok()
+            && live.provider == self.runtime.backend.stamp()
+            && self.runtime.clock.now() < live.expires_at
+            && state.apps.contains(&live.target.app)
+        {
+            state.observations.push(live);
+        } else {
+            drop(state);
+            drop(live);
+        }
+    }
+}
+
 struct State<B> {
     apps: Vec<AppInstance>,
     busy: bool,
@@ -181,6 +208,12 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
     /// Resource cleanup diagnostics remain separate from native action evidence.
     pub fn cleanup_error(&self) -> Option<Error> {
         self.backend.cleanup_error()
+    }
+
+    /// Used only at a new execution boundary. Recovery never replays a call or
+    /// transfers native references from a retired provider to its replacement.
+    pub fn provider_available(&self) -> bool {
+        self.backend.is_available()
     }
 
     pub fn finish_execution(&self) -> Result<Option<FocusReturn>, Error> {
@@ -436,21 +469,81 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         query: Option<&ObserveQuery>,
         deadline: Option<Instant>,
     ) -> Result<Observation, Error> {
+        self.read_scoped(target, kind, query, deadline, ObserveScope::Window, None)
+    }
+
+    pub fn observe_scoped_until(
+        &self,
+        target: &WindowTarget,
+        query: &ObserveQuery,
+        scope: ObserveScope,
+        reference: Option<ObservationRef>,
+        deadline: Instant,
+    ) -> Result<Observation, Error> {
+        self.read_scoped(
+            target,
+            ObservationKind::Semantic,
+            Some(query),
+            Some(deadline),
+            scope,
+            reference,
+        )
+    }
+
+    fn read_scoped(
+        &self,
+        target: &WindowTarget,
+        kind: ObservationKind,
+        query: Option<&ObserveQuery>,
+        deadline: Option<Instant>,
+        scope: ObserveScope,
+        source_ref: Option<ObservationRef>,
+    ) -> Result<Observation, Error> {
         if let Some(query) = query {
             validate_query(query)?;
+        }
+        if kind == ObservationKind::Semantic && !self.backend.supports_observe_scope(scope.kind()) {
+            return Err(Error::UnsupportedCapability);
+        }
+        if scope.observation_kind().is_some() != source_ref.is_some() {
+            return Err(Error::InvalidObservation);
         }
         let deadline = self.bounded_deadline(deadline);
         let capability = match kind {
             ObservationKind::Semantic => Capability::Observe,
             ObservationKind::Pixels => Capability::Capture,
         };
-        let (flight, reference, provider, started_at, retired) = {
+        let (flight, reference, provider, started_at, retired, source) = {
             let mut state = self.state();
             if state.busy {
                 return Err(Error::Busy);
             }
             self.validate_target(&state, &target.app, capability)?;
             self.check_deadline(deadline)?;
+            let source_index = source_ref
+                .map(|reference| {
+                    let index = self.bound_observation(
+                        &state,
+                        target,
+                        reference,
+                        scope.observation_kind().unwrap(),
+                    )?;
+                    let live = &state.observations[index];
+                    match scope {
+                        ObserveScope::Subtree(element)
+                            if !live.elements.iter().any(|e| e.id == element) =>
+                        {
+                            return Err(Error::ElementNotFound)
+                        }
+                        ObserveScope::Region(region) => validate_region(
+                            region,
+                            live.image_size.ok_or(Error::InvalidObservation)?,
+                        )?,
+                        _ => {}
+                    }
+                    Ok(index)
+                })
+                .transpose()?;
             let now = self.clock.now();
             if state
                 .observations
@@ -469,6 +562,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                 context: self.context,
                 generation: state.generation,
             };
+            let source = source_index.map(|index| state.observations.swap_remove(index));
             let retired = take_observations(&mut state, |o| {
                 o.expires_at <= now || (o.target == *target && o.kind == kind)
             });
@@ -481,11 +575,23 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                 provider,
                 started_at,
                 retired,
+                source,
             )
+        };
+        let source = HeldObservation {
+            runtime: self,
+            live: source,
+            preserve: matches!(scope, ObserveScope::Region(_)),
         };
         let expires_at = started_at
             .checked_add(self.observation_ttl)
             .unwrap_or(started_at);
+        // A new query gets its own lifetime, but its source must remain fresh
+        // until this read finishes proving the scope against the native target.
+        let source_expires_at = source
+            .live
+            .as_ref()
+            .map_or(expires_at, |live| live.expires_at.min(expires_at));
         // Native bindings can have meaningful destructors. Never drop them under
         // the state lock; cancellation must remain able to acquire that lock.
         drop(retired);
@@ -498,7 +604,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                 .and_then(|_| {
                     if self.backend.stamp() != provider {
                         Err(Error::WrongProvider)
-                    } else if self.clock.now() >= expires_at {
+                    } else if self.clock.now() >= source_expires_at {
                         Err(Error::StaleObservation)
                     } else {
                         Ok(())
@@ -506,13 +612,20 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                 })
         };
         if let Err(error) = ready {
+            drop(source);
             drop(flight.finish());
             return Err(error);
         }
-        let poll = || self.remaining(expires_at, deadline);
+        let poll = || self.remaining(source_expires_at, deadline);
         let call = CallContext { poll: &poll };
         let received = match kind {
-            ObservationKind::Semantic => self.backend.observe_page(target, query.unwrap(), &call),
+            ObservationKind::Semantic => self.backend.observe_scoped(
+                target,
+                query.unwrap(),
+                scope,
+                source.live.as_ref().map(|live| &live.native),
+                &call,
+            ),
             ObservationKind::Pixels => self.backend.capture(target, &call),
         }
         .and_then(|observed| {
@@ -544,6 +657,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             }
             Ok(observed)
         });
+        drop(source);
         let observed = match received {
             Ok(observed) => observed,
             Err(error) => {
@@ -559,7 +673,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             .err()
             .or_else(|| self.check_deadline(deadline).err())
             .or_else(|| (self.backend.stamp() != provider).then_some(Error::WrongProvider))
-            .or_else(|| (self.clock.now() >= expires_at).then_some(Error::StaleObservation))
+            .or_else(|| (self.clock.now() >= source_expires_at).then_some(Error::StaleObservation))
             .or_else(|| {
                 (observation_bytes(&state) + element_bytes(&observed.elements)
                     > MAX_OBSERVATION_BYTES)
@@ -705,6 +819,99 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         state.observations.push(live);
         flight.finish_locked(&mut state);
         Ok(result)
+    }
+
+    fn bound_observation(
+        &self,
+        state: &State<B::Binding>,
+        target: &WindowTarget,
+        reference: ObservationRef,
+        kind: ObservationKind,
+    ) -> Result<usize, Error> {
+        let index = state
+            .observations
+            .iter()
+            .position(|o| o.reference == reference)
+            .ok_or(Error::StaleObservation)?;
+        let live = &state.observations[index];
+        if self.clock.now() >= live.expires_at {
+            return Err(Error::StaleObservation);
+        }
+        if live.target != *target {
+            return Err(Error::TargetChanged);
+        }
+        if live.provider != self.backend.stamp() {
+            return Err(Error::WrongProvider);
+        }
+        if live.kind != kind {
+            return Err(Error::InvalidObservation);
+        }
+        Ok(index)
+    }
+
+    pub fn read_text_until(
+        &self,
+        target: &WindowTarget,
+        reference: ObservationRef,
+        request: TextRequest,
+        deadline: Instant,
+    ) -> Result<TextPage, Error> {
+        if !(2..=16384).contains(&request.limit) {
+            return Err(Error::InvalidObservation);
+        }
+        let deadline = self.bounded_deadline(Some(deadline));
+        let (flight, live) = {
+            let mut state = self.state();
+            if state.busy {
+                return Err(Error::Busy);
+            }
+            self.validate_target(&state, &target.app, Capability::ReadText)?;
+            self.check_deadline(deadline)?;
+            let index =
+                self.bound_observation(&state, target, reference, ObservationKind::Semantic)?;
+            if !state.observations[index]
+                .elements
+                .iter()
+                .any(|e| e.id == request.element)
+            {
+                return Err(Error::ElementNotFound);
+            }
+            let live = state.observations.swap_remove(index);
+            state.busy = true;
+            (Flight::new(&self.state), live)
+        };
+        let mut held = HeldObservation {
+            runtime: self,
+            live: Some(live),
+            preserve: false,
+        };
+        let live = held.live.as_ref().unwrap();
+        let expires_at = live.expires_at;
+        let poll = || self.remaining(expires_at, deadline);
+        let result = poll()
+            .and_then(|_| {
+                self.backend
+                    .read_text(target, &live.native, request, &CallContext { poll: &poll })
+            })
+            .and_then(|reply| {
+                if reply.target != *target {
+                    return Err(Error::TargetChanged);
+                }
+                validate_text_page(&reply.page, request)?;
+                poll()?;
+                if self.backend.stamp() != live.provider {
+                    return Err(Error::WrongProvider);
+                }
+                Ok(reply.page)
+            });
+        held.preserve = result.is_ok()
+            || matches!(&result, Err(Error::UnsupportedCapability))
+            || matches!(&result, Err(Error::NativeFailure { code, .. }) if code == "invalid_text_range");
+        drop(held);
+        let state = flight.finish();
+        self.live_context(&state)?;
+        self.check_deadline(deadline)?;
+        result
     }
 
     pub fn press(
@@ -1089,6 +1296,36 @@ fn validate_query(query: &ObserveQuery) -> Result<(), Error> {
             code: "invalid_query".into(),
             message: "Observe query exceeds its declared bounds".into(),
         });
+    }
+    Ok(())
+}
+
+fn validate_region(region: PixelRegion, image: (u32, u32)) -> Result<(), Error> {
+    if ![region.x, region.y, region.width, region.height]
+        .iter()
+        .all(|v| v.is_finite())
+        || region.x < 0.0
+        || region.y < 0.0
+        || region.width <= 0.0
+        || region.height <= 0.0
+        || region.x + region.width > image.0 as f64
+        || region.y + region.height > image.1 as f64
+    {
+        return Err(Error::InvalidPoint);
+    }
+    Ok(())
+}
+fn validate_text_page(page: &TextPage, request: TextRequest) -> Result<(), Error> {
+    let length = page.text.encode_utf16().count() as u64;
+    let end = page.offset as u64 + length;
+    if page.offset != request.offset
+        || length > request.limit as u64
+        || end > page.total_length as u64
+        || (end < page.total_length as u64
+            && (length == 0 || page.next_offset.map(u64::from) != Some(end)))
+        || (end == page.total_length as u64 && page.next_offset.is_some())
+    {
+        return Err(Error::InvalidObservation);
     }
     Ok(())
 }

@@ -25,6 +25,184 @@ for rows in [[surfaceRow(1),surfaceRow(1)], [invalid], [[kCGWindowOwnerPID as St
 }
 print("System surface contracts passed (no AX or GUI reads)")
 
+// Live sheet/menu ownership uses object ancestry, never a matching name/frame.
+private let surfaceParents = [3: 2, 2: 1, 5: 4, 4: 0, 1: 0]
+surfaceCheck(boundedAncestor(3, is: 2, equal: ==) { surfaceParents[$0] })
+surfaceCheck(!boundedAncestor(3, is: 4, equal: ==) { surfaceParents[$0] })
+surfaceCheck(!boundedAncestor(3, is: 2, equal: ==) { $0 == 3 ? 4 : surfaceParents[$0] })
+surfaceCheck(!boundedAncestor(3, is: 1, limit: 2, equal: ==) { surfaceParents[$0] })
+surfaceCheck(!boundedAncestor(3, is: 1, equal: ==) { $0 == 3 ? 2 : 3 })
+do {
+    _ = try boundedAncestor(3, is: 1, equal: ==) { _ -> Int? in throw failure("native_stopping", "cancelled") }
+    preconditionFailure("Ancestry read error was swallowed")
+} catch let error as NativeFailure { surfaceCheck(error.code == "native_stopping") }
+
+// Full text pages preserve UTF-16 offsets across emoji and CJK. Offset inside
+// a pair is a non-consuming range refusal, not a malformed replacement string.
+private let pageText = "A😀中文Z"
+private let pageOne = try textPage(pageText, offset: 0, limit: 2)
+surfaceCheck(pageOne.0 == "A" && pageOne.1 == 1)
+private let pageTwo = try textPage(pageText, offset: 1, limit: 2)
+surfaceCheck(pageTwo.0 == "😀" && pageTwo.1 == 3)
+private let pageThree = try textPage(pageText, offset: 3, limit: 3)
+surfaceCheck(pageThree.0 == "中文Z" && pageThree.1 == nil)
+private let endPage = try textPage(pageText, offset: 6, limit: 2)
+surfaceCheck(endPage.0.isEmpty && endPage.1 == nil)
+for offset in [2, 7] {
+    do { _ = try textPage(pageText, offset: offset, limit: 2); preconditionFailure("Invalid range accepted") }
+    catch let error as NativeFailure { surfaceCheck(error.code == "invalid_text_range") }
+}
+surfaceCheck(associatedGeometry(CGRect(x: -900, y: -30, width: 420, height: 300),
+                                CGRect(x: -900, y: -30, width: 420, height: 300)))
+surfaceCheck(!associatedGeometry(CGRect(x: -900, y: -30, width: 420, height: 300),
+                                 CGRect(x: -890, y: -30, width: 420, height: 300)))
+print("Surface ancestry, replacement/cancellation, negative-origin geometry and UTF-16 pages passed")
+
+// Unattributed foreign AX hit failures are partial discovery evidence, never
+// a reason to discard proven same-process windows. Same-app read failures and
+// caller termination retain their exact errors instead of entering that path.
+private let foreignHitUnavailable = failure("association_unavailable", "foreign hit busy",
+    attributeFailure: AXAttributeFailure(name: "AXElementAtPosition", error: .cannotComplete))
+private var associationChecks = 0
+private let failedAssociation: (Int?, Int32?) = try unprovenAssociationProbe(check: {
+    associationChecks += 1
+}, read: { throw foreignHitUnavailable })
+surfaceCheck(failedAssociation.0 == nil && failedAssociation.1 == AXError.cannotComplete.rawValue && associationChecks == 1)
+private let provenAssociation = try unprovenAssociationProbe(check: {
+    preconditionFailure("Successful proof was treated as unavailable")
+}, read: { 41 })
+surfaceCheck(provenAssociation.0 == 41 && provenAssociation.1 == nil)
+private let absentAssociation: (Int?, Int32?) = try unprovenAssociationProbe(check: {
+    preconditionFailure("A successful unrelated hit was treated as an error")
+}, read: { nil })
+surfaceCheck(absentAssociation.0 == nil && absentAssociation.1 == nil)
+for original in [failure("ax_unavailable", "same-app AX read failed",
+                        attributeFailure: AXAttributeFailure(name: kAXRoleAttribute, error: .cannotComplete)),
+                 failure("association_unavailable", "unclassified association failure"),
+                 failure("target_changed", "exact surface changed")] {
+    do {
+        let _: (Int?, Int32?) = try unprovenAssociationProbe(check: {
+            preconditionFailure("A target error entered optional recovery")
+        }, read: { throw original })
+        preconditionFailure("A target error was swallowed")
+    } catch let error as NativeFailure {
+        surfaceCheck(error.code == original.code && error.message == original.message)
+    }
+}
+for code in ["deadline_exceeded", "native_stopping", "app_changed"] {
+    do {
+        let _: (Int?, Int32?) = try unprovenAssociationProbe(check: {
+            throw failure(code, "original caller/target cause")
+        }, read: { throw foreignHitUnavailable })
+        preconditionFailure("Caller/target failure was downgraded")
+    } catch let error as NativeFailure {
+        surfaceCheck(error.code == code && error.message == "original caller/target cause")
+    }
+}
+print("Optional association discovery preserves target and caller errors; no AX or GUI reads")
+
+// The standard Rust bridge now serializes window scope explicitly. Cold AX
+// materialization must retain the same bounded read path as omitted scope.
+private let implicitWindowQuery = try NativeQuery(["text": "body"])
+private let explicitWindowQuery = try NativeQuery(["text": "body", "scope": ["kind": "window"]])
+surfaceCheck(implicitWindowQuery.isWindowScope && explicitWindowQuery.isWindowScope)
+for kind in ["menu", "subtree", "region"] {
+    let scopedQuery = try NativeQuery(["scope": ["kind": kind]])
+    surfaceCheck(!scopedQuery.isWindowScope)
+}
+
+// Chrome's file chooser reports its AXSheet as AXFocusedWindow. Activation
+// goes through the exact parent AXWindow, while focus proof keeps the sheet.
+private func sheetFocusCheck(_ condition: Bool) { surfaceCheck(condition) }
+private let dialogRoles = [1: kAXWindowRole, 2: kAXSheetRole, 3: kAXSheetRole,
+                           4: kAXWindowRole, 5: kAXApplicationRole]
+private let dialogParents = [2: 1, 3: 2, 1: 5, 4: 5]
+private let dialogIDs: [Int: CGWindowID] = [1: 100, 2: 200, 3: 300, 4: 400]
+private func dialogActivation(_ surface: Int) throws -> Int? {
+    try resolveActivationWindow(surface, pid: 10, owner: { _ in 10 },
+        role: { dialogRoles[$0] }, parent: { dialogParents[$0] })
+}
+sheetFocusCheck(try dialogActivation(1) == 1)
+sheetFocusCheck(try dialogActivation(2) == 1)
+sheetFocusCheck(try dialogActivation(3) == 1)
+private func dialogFocused(_ requested: Int, _ actual: Int) throws -> Bool {
+    try exactFocusedSurface(requested: requested, requestedWindow: dialogIDs[requested]!,
+                            focused: actual, equal: ==, windowID: { dialogIDs[$0]! })
+}
+sheetFocusCheck(try dialogFocused(2, 2))
+sheetFocusCheck(try !dialogFocused(2, 1)) // Parent-focused provider form remains unproven.
+sheetFocusCheck(try !dialogFocused(2, 3)) // A new nested sheet is a distinct target.
+sheetFocusCheck(try !dialogFocused(2, 4))
+sheetFocusCheck(try !exactFocusedSurface(requested: 2, requestedWindow: 200,
+                                    focused: 2, equal: ==, windowID: { _ in 201 }))
+private let foreignActivation = try resolveActivationWindow(2, pid: 10,
+    owner: { $0 == 1 ? 20 : 10 }, role: { dialogRoles[$0] }, parent: { dialogParents[$0] })
+sheetFocusCheck(foreignActivation == nil)
+private let cycleActivation = try resolveActivationWindow(2, pid: 10,
+    owner: { _ in 10 }, role: { _ in kAXSheetRole }, parent: { _ in 2 })
+sheetFocusCheck(cycleActivation == nil)
+do {
+    _ = try resolveActivationWindow(2, pid: 10, owner: { _ in 10 },
+        role: { dialogRoles[$0] }, parent: { _ -> Int? in throw failure("native_stopping", "original cleanup stop") })
+    preconditionFailure("Activation ancestry swallowed cancellation")
+} catch let error as NativeFailure { sheetFocusCheck(error.code == "native_stopping" && error.message == "original cleanup stop") }
+// Returning to a captured sheet raises its parent, but a parent readback alone
+// never proves restoration of that exact original sheet.
+let previousSheetRaise = try dialogActivation(2)
+let previousSheetExact = try dialogFocused(2, 2)
+sheetFocusCheck(previousSheetRaise == 1 && previousSheetExact)
+sheetFocusCheck(try !dialogFocused(2, previousSheetRaise!))
+private var sheetEpoch = FocusBorrowEpoch(initialPID: 10, targetPID: 10, targetWindow: 200)
+sheetEpoch.established(10, window: 200)
+func sheetNotification(_ name: String, objectID: CGWindowID, sampledID: CGWindowID) {
+    if notificationNamesFocusedWindow(name) { sheetEpoch.focusedWindow(objectID) }
+    else { _ = sheetEpoch.sampled(10, window: sampledID, revision: sheetEpoch.sampleRevision) }
+}
+sheetNotification(kAXMainWindowChangedNotification, objectID: 100, sampledID: 200)
+sheetFocusCheck(!sheetEpoch.invalidated)
+sheetNotification(kAXFocusedWindowChangedNotification, objectID: 400, sampledID: 400)
+sheetFocusCheck(sheetEpoch.invalidated)
+sheetNotification(kAXFocusedWindowChangedNotification, objectID: 200, sampledID: 200)
+sheetFocusCheck(sheetEpoch.invalidated) // A genuine leave-return is never rearmed.
+print("Sheet activation, exact focus/return and main-window notification controls passed")
+
+// Initial exact focus incurs no restoration debt even if input later closes
+// that sheet. In-place cleanup still runs the same conservative pointer path.
+private func alreadyAtSurface(previousPID: Int32 = 10, generation: UInt64 = 1,
+                              previous: Int? = 2, previousID: CGWindowID? = 200,
+                              target: Int? = 2, targetID: CGWindowID = 200) -> Bool {
+    sameFocusDestination(previousApp: (previousPID, generation), previousWindow: previous,
+        previousWindowID: previousID, targetApp: (10, 1), targetWindow: target,
+        targetWindowID: targetID, equal: ==)
+}
+surfaceCheck(alreadyAtSurface())
+surfaceCheck(!alreadyAtSurface(previousPID: 20))
+surfaceCheck(!alreadyAtSurface(generation: 2))
+surfaceCheck(!alreadyAtSurface(previous: 1, previousID: 100)) // Same PID sibling/parent.
+surfaceCheck(!alreadyAtSurface(previous: 3)) // Reused WindowID is not the same AX object.
+surfaceCheck(!alreadyAtSurface(previousID: 201))
+surfaceCheck(!alreadyAtSurface(previous: nil, previousID: nil))
+surfaceCheck(!alreadyAtSurface(target: nil))
+private var inPlace = FocusReturnObligation(matchesOriginal: alreadyAtSurface())
+private var pointerCleanups = 0
+sheetFocusCheck(try inPlace.releaseInPlace { pointerCleanups += 1 })
+surfaceCheck(pointerCleanups == 1 && !inPlace.required)
+inPlace.retarget(matchesOriginal: true)
+surfaceCheck(!inPlace.required)
+inPlace.retarget(matchesOriginal: false)
+surfaceCheck(inPlace.required)
+sheetFocusCheck(try !inPlace.releaseInPlace { preconditionFailure("A real borrow skipped exact restoration") })
+inPlace.retarget(matchesOriginal: true)
+surfaceCheck(inPlace.required) // An earlier real borrow cannot be cleared by repeated focus.
+private let existingSheet = FocusReturnObligation(matchesOriginal: true)
+do {
+    _ = try existingSheet.releaseInPlace { throw failure("pointer_restore_failed", "original pointer cleanup") }
+    preconditionFailure("In-place focus swallowed pointer cleanup failure")
+} catch let error as NativeFailure {
+    surfaceCheck(error.code == "pointer_restore_failed" && error.message == "original pointer cleanup")
+}
+print("Exact in-place focus, real-borrow retention and independent pointer cleanup controls passed")
+
 // Readiness distinguishes a temporal web stub from persistent custom decoration.
 private var ordinary = SemanticReadinessSample()
 ordinary.add(role:kAXButtonRole,children:0,depth:2,parentRole:kAXGroupRole)
@@ -119,43 +297,50 @@ private func focusFailure(_ code: String, _ body: () throws -> Bool) {
 }
 private var focusReads = 0
 private var windowReads = 0
-private let stableFocus = try exactInputFocus(expectedPID: 10, focusedPID: {
+private func controlExactInputFocus(expectedPID: Int32, focusedPID: () throws -> Int32?,
+                                    windowMatches: () throws -> Bool) throws -> Bool {
+    try exactInputFocus(expectedPID: expectedPID, focusedApplication: {
+        guard let pid = try focusedPID(), pid > 0 else { throw missingFocus(.application) }
+        return FocusApplication(element: pid, pid: pid, generation: 1, fromCandidate: false)
+    }, windowMatches: { _ in try windowMatches() })
+}
+private let stableFocus = try controlExactInputFocus(expectedPID: 10, focusedPID: {
     focusReads += 1; return 10
 }, windowMatches: { windowReads += 1; return true })
 focusCheck(stableFocus && focusReads == 2 && windowReads == 1, "Stable focus requires two fresh application reads")
 focusReads = 0; windowReads = 0
-private let otherApp = try exactInputFocus(expectedPID: 10, focusedPID: {
+private let otherApp = try controlExactInputFocus(expectedPID: 10, focusedPID: {
     focusReads += 1; return 20
 }, windowMatches: { windowReads += 1; return true })
 focusCheck(!otherApp && focusReads == 1 && windowReads == 0, "Another foreground app must reject a stale target window")
 private var livePID: Int32 = 10
-private let switchedDuringWindowRead = try exactInputFocus(expectedPID: 10, focusedPID: {
+private let switchedDuringWindowRead = try controlExactInputFocus(expectedPID: 10, focusedPID: {
     livePID
 }, windowMatches: { livePID = 20; return true })
 focusCheck(!switchedDuringWindowRead, "Focus changed while the target AX window query was in flight")
-private let changedWindow = try exactInputFocus(expectedPID: 10, focusedPID: { 10 }, windowMatches: { false })
+private let changedWindow = try controlExactInputFocus(expectedPID: 10, focusedPID: { 10 }, windowMatches: { false })
 focusCheck(!changedWindow, "A sibling window in the same process must not match")
 for unavailable: Int32? in [nil, 0, -1] {
     focusFailure("focus_unproven") {
-        try exactInputFocus(expectedPID: 10, focusedPID: { unavailable }, windowMatches: { true })
+        try controlExactInputFocus(expectedPID: 10, focusedPID: { unavailable }, windowMatches: { true })
     }
 }
 private var focusAvailable = true
 focusFailure("focus_unproven") {
-    try exactInputFocus(expectedPID: 10, focusedPID: { focusAvailable ? 10 : nil },
+    try controlExactInputFocus(expectedPID: 10, focusedPID: { focusAvailable ? 10 : nil },
                         windowMatches: { focusAvailable = false; return true })
 }
 focusFailure("ax_unavailable") {
-    try exactInputFocus(expectedPID: 10, focusedPID: { throw failure("ax_unavailable", "original AX failure") },
+    try controlExactInputFocus(expectedPID: 10, focusedPID: { throw failure("ax_unavailable", "original AX failure") },
                         windowMatches: { true })
 }
 focusFailure("window_unproven") {
-    try exactInputFocus(expectedPID: 10, focusedPID: { 10 },
+    try controlExactInputFocus(expectedPID: 10, focusedPID: { 10 },
                         windowMatches: { throw failure("window_unproven", "original window identity failure") })
 }
 focusReads = 0
 focusFailure("deadline_exceeded") {
-    try exactInputFocus(expectedPID: 10, focusedPID: {
+    try controlExactInputFocus(expectedPID: 10, focusedPID: {
         focusReads += 1
         if focusReads == 2 { throw failure("deadline_exceeded", "deadline elapsed during focus read") }
         return 10
@@ -288,7 +473,7 @@ focusReadinessFailure(busyFocusAX) {
     }, wait: { _ in preconditionFailure("A late error must not start another wait") })
 }
 focusFailure("ax_unavailable") {
-    try exactInputFocus(expectedPID: 10, focusedPID: { throw busyFocusAX }, windowMatches: { true })
+    try controlExactInputFocus(expectedPID: 10, focusedPID: { throw busyFocusAX }, windowMatches: { true })
 }
 // The explicit focus/input request authorizes one establishment after target
 // validation; existing focus is optional in that phase, never proof of success.
@@ -315,7 +500,7 @@ for absent in [FocusAbsence.application, .window] {
     focusPhaseCheck(missingFocus(absent).json.count == 2, "Typed focus absence is private, not a public schema change")
 }
 private let initialAbsentApp = try focusedBeforeEstablishment {
-    try exactInputFocus(expectedPID: 10, focusedPID: { nil }, windowMatches: { true })
+    try controlExactInputFocus(expectedPID: 10, focusedPID: { nil }, windowMatches: { true })
 }
 focusPhaseCheck(!initialAbsentApp, "The real missing focused-app reader can proceed to establishment")
 for fatal in [
@@ -328,10 +513,10 @@ for fatal in [
     focusPhaseFailure(fatal) { try focusedBeforeEstablishment { throw fatal } }
 }
 focusPhaseFailure(missingFocus(.application)) {
-    try exactInputFocus(expectedPID: 10, focusedPID: { nil }, windowMatches: { true })
+    try controlExactInputFocus(expectedPID: 10, focusedPID: { nil }, windowMatches: { true })
 }
 focusPhaseFailure(missingFocus(.window)) {
-    try exactInputFocus(expectedPID: 10, focusedPID: { 10 }, windowMatches: { throw missingFocus(.window) })
+    try controlExactInputFocus(expectedPID: 10, focusedPID: { 10 }, windowMatches: { throw missingFocus(.window) })
 }
 
 for absent in [FocusAbsence.application, .window] {
@@ -514,3 +699,265 @@ private func checkExecutableAliases() throws {
 }
 try checkExecutableAliases()
 print("Executable alias contracts passed (real hard link, impostor, missing file and nested helper)")
+
+
+// Retry only complete read-only inventories after a typed cannotComplete. Each
+// attempt constructs a new array; a failed partial snapshot is never merged.
+private let inventoryBusy = failure("ax_unavailable", "original AXRole busy",
+    attributeFailure: AXAttributeFailure(name: kAXRoleAttribute, error: .cannotComplete))
+private var inventoryTime = 0.0
+private var inventoryReads = 0
+private let recoveredInventory: [Int] = try retryCompleteInventory(original: inventoryBusy,
+    remaining: { 0.75 - inventoryTime }, check: {}, read: {
+        inventoryReads += 1
+        if inventoryReads == 1 {
+            let partial = [1, 2]; surfaceCheck(partial.count == 2)
+            throw inventoryBusy
+        }
+        return [3, 4]
+    }, wait: { inventoryTime += $0 })
+surfaceCheck(recoveredInventory == [3, 4] && inventoryReads == 2)
+inventoryTime = 0
+private var lastInventoryError = ""
+do {
+    let _: [Int] = try retryCompleteInventory(original: inventoryBusy,
+        remaining: { 0.25 - inventoryTime }, check: {}, read: {
+            inventoryTime += 0.1
+            lastInventoryError = "AXWindows busy at \(inventoryTime)"
+            throw failure("ax_unavailable", lastInventoryError,
+                          attributeFailure: AXAttributeFailure(name: kAXWindowsAttribute, error: .cannotComplete))
+        }, wait: { inventoryTime += $0 })
+    preconditionFailure("Busy inventory falsely became empty")
+} catch let error as NativeFailure {
+    surfaceCheck(error.message == lastInventoryError && error.attributeFailure?.name == kAXWindowsAttribute)
+}
+for code in ["native_stopping", "deadline_exceeded", "app_changed"] {
+    do {
+        let _: [Int] = try retryCompleteInventory(original: inventoryBusy, remaining: { 0.75 },
+            check: { throw failure(code, "caller cause") },
+            read: { preconditionFailure("Read continued after caller stop") }, wait: { _ in })
+        preconditionFailure("Caller error lost")
+    } catch let error as NativeFailure { surfaceCheck(error.code == code && error.message == "caller cause") }
+}
+for original in [failure("ax_unavailable", "target object expired", attributeFailure: AXAttributeFailure(name: kAXRoleAttribute, error: .invalidUIElement)),
+                 failure("ax_unavailable", "untyped failure"), failure("target_changed", "target changed")] {
+    do {
+        let _: [Int] = try retryCompleteInventory(original: inventoryBusy, remaining: { 0.75 },
+            check: {}, read: { throw original }, wait: { _ in })
+        preconditionFailure("A non-busy error was retried")
+    } catch let error as NativeFailure { surfaceCheck(error.code == original.code && error.message == original.message) }
+}
+inventoryTime = 0
+do {
+    let _: [Int] = try retryCompleteInventory(original: inventoryBusy,
+        remaining: { 0.25 - inventoryTime }, check: {}, read: {
+            inventoryTime = 0.25
+            throw failure("deadline_exceeded", "local read window expired")
+        }, wait: { inventoryTime += $0 })
+    preconditionFailure("Local recovery expiry falsely succeeded")
+} catch let error as NativeFailure { surfaceCheck(error.message == inventoryBusy.message) }
+private var inventoryChecks = 0
+do {
+    let _: [Int] = try retryCompleteInventory(original: inventoryBusy, remaining: { 0.75 }, check: {
+        inventoryChecks += 1
+        if inventoryChecks == 3 { throw failure("app_changed", "after fresh snapshot") }
+    }, read: { [7] }, wait: { _ in })
+    preconditionFailure("Replaced app published a fresh array")
+} catch let error as NativeFailure { surfaceCheck(error.code == "app_changed" && error.message == "after fresh snapshot") }
+print("Complete inventory resampling controls passed (typed busy only; caller and original errors retained)")
+
+// A native menu has no AXWindow; only an already proven association can select
+// the existing strict visible-pixel fallback. No focus error is generalized.
+surfaceCheck(coordinateMenuSurface(role: kAXMenuRole, associated: true))
+surfaceCheck(!coordinateMenuSurface(role: kAXMenuRole, associated: false))
+for role in [kAXWindowRole, kAXSheetRole, kAXMenuBarRole, kAXGroupRole] {
+    surfaceCheck(!coordinateMenuSurface(role: role, associated: true))
+}
+surfaceCheck(!coordinateMenuSurface(role: nil, associated: true))
+sheetFocusCheck(try modalKeyboardRequiresForeground(role: kAXSheetRole) { preconditionFailure("Sheet modal state is structural") })
+sheetFocusCheck(try modalKeyboardRequiresForeground(role: kAXWindowRole) { true })
+sheetFocusCheck(try !modalKeyboardRequiresForeground(role: kAXWindowRole) { false })
+sheetFocusCheck(try !modalKeyboardRequiresForeground(role: kAXMenuRole) { preconditionFailure("Menu must not manufacture AXModal") })
+do {
+    _ = try modalKeyboardRequiresForeground(role: kAXWindowRole) { nil }
+    preconditionFailure("Missing modal state became background support")
+} catch let error as NativeFailure { surfaceCheck(error.code == "modal_state_unproven") }
+do {
+    _ = try modalKeyboardRequiresForeground(role: kAXWindowRole) { throw inventoryBusy }
+    preconditionFailure("Typed modal read failure was swallowed")
+} catch let error as NativeFailure { surfaceCheck(error.message == inventoryBusy.message && error.attributeFailure?.error == .cannotComplete) }
+print("Associated-menu routing and modal keyboard preflight controls passed")
+
+// FilePanel-shaped control: the large directory precedes the filename field.
+// The ROI excludes the known native viewport, so no directory child is loaded.
+private let filenameROI = CGRect(x: -980, y: 10, width: 200, height: 40)
+private let directoryViewport = CGRect(x: -1000, y: 80, width: 500, height: 700)
+private let filenameRect = CGRect(x: -950, y: 15, width: 120, height: 24)
+private var regionFrontier = [0]
+private var regionVisited = 0
+private var regionFound: [Int] = []
+while let node = regionFrontier.popLast() {
+    regionVisited += 1
+    switch node {
+    case 0: regionFrontier.append(contentsOf: [2, 1])
+    case 1:
+        if regionExcludesScrollContents(role: kAXScrollAreaRole, bounds: directoryViewport, region: filenameROI) { continue }
+        regionFrontier.append(contentsOf: Array(3..<10_003))
+    case 2:
+        if visibleRegionIntersection(element: filenameRect, region: filenameROI, viewports: []) != nil { regionFound.append(node) }
+    default: preconditionFailure("Out-of-region directory contents were traversed")
+    }
+}
+surfaceCheck(regionVisited == 3 && regionFound == [2])
+surfaceCheck(!regionExcludesScrollContents(role: kAXGroupRole, bounds: directoryViewport, region: filenameROI))
+surfaceCheck(!regionExcludesScrollContents(role: kAXScrollAreaRole, bounds: nil, region: filenameROI))
+surfaceCheck(!regionExcludesScrollContents(role: kAXScrollAreaRole, bounds: .zero, region: filenameROI))
+surfaceCheck(!regionExcludesScrollContents(role: kAXScrollAreaRole, bounds: filenameRect, region: filenameROI))
+surfaceCheck(!regionExcludesScrollContents(role: kAXScrollAreaRole, bounds: CGRect(x: CGFloat.infinity, y: 0, width: 3, height: 3), region: filenameROI))
+surfaceCheck(visibleRegionIntersection(element: filenameRect, region: filenameROI, viewports: [directoryViewport]) == nil)
+private let viewport = CGRect(x: -1000, y: 0, width: 500, height: 60)
+private let regionWindow = CGRect(x: -1000, y: 0, width: 600, height: 900)
+private let regionProof = RegionElementProof(region: filenameROI, window: regionWindow,
+    element: filenameRect, viewports: [(11, viewport)])
+surfaceCheck(visibleRegionIntersection(element: filenameRect, region: filenameROI, viewports: [viewport]) == filenameRect)
+surfaceCheck(regionProof.matches(regionProof, equal: ==))
+for changed in [
+    RegionElementProof(region: filenameROI, window: regionWindow, element: filenameRect.offsetBy(dx: 1, dy: 0), viewports: [(11, viewport)]),
+    RegionElementProof(region: filenameROI, window: regionWindow, element: filenameRect, viewports: [(11, viewport.offsetBy(dx: 0, dy: 1))]),
+    RegionElementProof(region: filenameROI, window: regionWindow, element: filenameRect, viewports: [(12, viewport)]),
+    RegionElementProof(region: filenameROI, window: regionWindow, element: filenameRect, viewports: []),
+    RegionElementProof(region: filenameROI, window: regionWindow.offsetBy(dx: 1, dy: 0), element: filenameRect, viewports: [(11, viewport)]),
+] { surfaceCheck(!regionProof.matches(changed, equal: ==)) }
+print("Visible-region FilePanel shape, unknown/overlapping clipping and retained geometry controls passed")
+
+// A region-selected row can exceed its viewport. The scroll point belongs to
+// the proven visible intersection while the full row/window stay in the guard.
+private let oversizedRow = CGRect(x: -950, y: -100, width: 120, height: 200)
+private let regionScroll = try ScrollAnchorGeometry(element: oversizedRow, window: regionWindow,
+                                                    clipping: [filenameROI, viewport])
+surfaceCheck(regionScroll.point == CGPoint(x: -890, y: 30))
+surfaceCheck(regionScroll.element == oversizedRow && regionScroll.window == regionWindow)
+surfaceCheck(filenameROI.contains(regionScroll.point) && viewport.contains(regionScroll.point))
+surfaceCheck(!regionScroll.matches(element: oversizedRow.offsetBy(dx: 1, dy: 0), window: regionWindow, point: regionScroll.point))
+private let ordinaryScroll = try ScrollAnchorGeometry(element: oversizedRow, window: regionWindow)
+surfaceCheck(ordinaryScroll.point == CGPoint(x: -890, y: 50))
+print("Region semantic wheel anchor uses visible intersection and retains full geometry proof")
+
+
+// Same child and CG surface can survive reparenting while the AX window root
+// changes. A fresh subtree may use the new root; the old ref cannot derive it.
+private let retainedSubtree = RetainedSubtree(element: 7, root: 101)
+private var liveSubtreeParent = 101
+sheetFocusCheck(try retainedSubtree.checkedElement(in: liveSubtreeParent, equal: ==) == 7)
+liveSubtreeParent = 202
+do {
+    _ = try retainedSubtree.checkedElement(in: liveSubtreeParent, equal: ==)
+    preconditionFailure("Reparenting the same child rebound an old subtree ref")
+} catch let error as NativeFailure { surfaceCheck(error.code == "stale_observation") }
+private let refreshedSubtree = RetainedSubtree(element: 7, root: liveSubtreeParent)
+sheetFocusCheck(try refreshedSubtree.checkedElement(in: liveSubtreeParent, equal: ==) == 7)
+// Equal retained region geometry does not override the root-object obligation.
+private let regionSubtree = RetainedSubtree(element: regionProof, root: 101)
+private let survivingRegionProof = try regionSubtree.checkedElement(in: 101, equal: ==)
+surfaceCheck(survivingRegionProof.matches(regionProof, equal: ==))
+do {
+    _ = try regionSubtree.checkedElement(in: 202, equal: ==)
+    preconditionFailure("Matching region geometry replaced the original AX root")
+} catch let error as NativeFailure { surfaceCheck(error.code == "stale_observation") }
+print("Derived subtrees retain their original AX root across reparenting and region proofs")
+
+
+// Association root A -> B keeps the app/CG owner and CGWindowID but gets a new
+// generation. Both caches must be reconciled with that final publication.
+private struct CacheControlBinding { let target: NativeTarget; let root: Int }
+private let cacheApp = NativeApp(identity: "pure.cache.control", pid: 123, generation: 10)
+private let cacheOld = NativeTarget(app: cacheApp, nativeID: 42, generation: 100)
+private let cacheNew = NativeTarget(app: cacheApp, nativeID: 42, generation: 101)
+private let cacheSibling = NativeTarget(app: cacheApp, nativeID: 43, generation: 102)
+private let cacheSlot = WindowSlot(app: cacheApp, id: 42)
+private let siblingSlot = WindowSlot(app: cacheApp, id: 43)
+private var publishedTargets = [cacheSlot: cacheOld, siblingSlot: cacheSibling]
+private var semanticCache = [cacheSlot: CacheControlBinding(target: cacheOld, root: 1),
+                            siblingSlot: CacheControlBinding(target: cacheSibling, root: 3)]
+private var observationCache = ["old": CacheControlBinding(target: cacheOld, root: 1),
+                               "sibling": CacheControlBinding(target: cacheSibling, root: 3)]
+publishedTargets[cacheSlot] = cacheNew
+semanticCache = currentWindowBindings(semanticCache, windows: publishedTargets) { $0.target }
+observationCache = currentWindowBindings(observationCache, windows: publishedTargets) { $0.target }
+surfaceCheck(semanticCache[cacheSlot] == nil && observationCache["old"] == nil)
+surfaceCheck(semanticCache[siblingSlot]?.target == cacheSibling && observationCache["sibling"]?.target == cacheSibling)
+surfaceCheck(publishedTargets[cacheSlot] != cacheOld && publishedTargets[cacheSlot] == cacheNew)
+// The freshly discovered root can now populate the cache directly; no second
+// observe is needed to clear a stale A object left behind by windows().
+semanticCache[cacheSlot] = CacheControlBinding(target: cacheNew, root: 2)
+observationCache["fresh"] = CacheControlBinding(target: cacheNew, root: 2)
+semanticCache = currentWindowBindings(semanticCache, windows: publishedTargets) { $0.target }
+observationCache = currentWindowBindings(observationCache, windows: publishedTargets) { $0.target }
+surfaceCheck(semanticCache[cacheSlot]?.root == 2 && observationCache["fresh"]?.root == 2)
+surfaceCheck(observationCache["old"] == nil)
+print("Association generation publication retires old roots/bindings and admits the fresh target")
+
+
+// Two direct modal siblings are not a mutual exclusion cycle: only the exact
+// focused modal may ignore its sibling. An ordinary window never inherits it.
+private func modalPolicy(_ target: Int, focus: Int?, ui: Bool? = nil, direct: Bool = true) throws -> Bool {
+    try permitsOtherModal(descendant: false, applicationModal: { true }, activeModalTarget: {
+        try permitsActiveModalSibling(targetIsModal: { target == 1 || target == 2 },
+            targetIsDirectAppChild: { direct }, exactFocusedRoot: { focus == target },
+            focusedUIWithinTarget: { ui })
+    })
+}
+for focused in [1, 2] {
+    sheetFocusCheck(try modalPolicy(focused, focus: focused))
+    for requested in [1, 2, 3] where requested != focused {
+        do {
+            _ = try modalPolicy(requested, focus: focused)
+            preconditionFailure("A nonfocused/ordinary window inherited modal access")
+        } catch let error as NativeFailure { surfaceCheck(error.code == "target_blocked_by_modal") }
+    }
+}
+for (target, focused, ui, direct) in [(3, 3 as Int?, nil as Bool?, true),
+                                    (1, nil, nil, true), (1, 1, false, true), (1, 1, nil, false)] {
+    do { _ = try modalPolicy(target, focus: focused, ui: ui, direct: direct); preconditionFailure("Incomplete modal proof accepted") }
+    catch let error as NativeFailure { surfaceCheck(error.code == "target_blocked_by_modal") }
+}
+sheetFocusCheck(try modalPolicy(1, focus: 1, ui: true))
+sheetFocusCheck(try modalPolicy(1, focus: 1, ui: nil))
+do {
+    _ = try permitsOtherModal(descendant: true,
+        applicationModal: { preconditionFailure("Attached child must reject before sibling inspection") },
+        activeModalTarget: { preconditionFailure("Focus cannot override an attached child modal") })
+    preconditionFailure("Active parent bypassed a child sheet")
+} catch let error as NativeFailure { surfaceCheck(error.code == "target_blocked_by_modal") }
+sheetFocusCheck(try !permitsOtherModal(descendant: false, applicationModal: { false },
+    activeModalTarget: { preconditionFailure("Another window's attached sheet needs no focus exemption") }))
+private var modalFocus = 1
+private var focusedChild = 7
+private let modalControlParents = [7: 1, 8: 1, 9: 2]
+private func currentModalProof() throws -> Bool {
+    try permitsActiveModalSibling(targetIsModal: { true }, targetIsDirectAppChild: { true },
+        exactFocusedRoot: { modalFocus == 1 }, focusedUIWithinTarget: {
+            boundedAncestor(focusedChild, is: 1, equal: ==) { modalControlParents[$0] }
+        })
+}
+sheetFocusCheck(try currentModalProof())
+focusedChild = 8 // A different control in the same exact modal is valid.
+try recheckActiveModalSibling(true, proof: currentModalProof)
+modalFocus = 2
+do { try recheckActiveModalSibling(true, proof: currentModalProof); preconditionFailure("Focus changed across modal validation") }
+catch let error as NativeFailure { surfaceCheck(error.code == "focus_changed") }
+modalFocus = 1; focusedChild = 9
+do { try recheckActiveModalSibling(true, proof: currentModalProof); preconditionFailure("Readable contradictory focused UI was ignored") }
+catch let error as NativeFailure { surfaceCheck(error.code == "focus_changed") }
+try recheckActiveModalSibling(false) { preconditionFailure("Ordinary paths must not add focus reads") }
+for original in [inventoryBusy, failure("modal_state_unproven", "malformed typed modal/focus attribute"),
+                 failure("native_stopping", "cancelled"), failure("deadline_exceeded", "expired")] {
+    do {
+        _ = try permitsActiveModalSibling(targetIsModal: { throw original },
+            targetIsDirectAppChild: { true }, exactFocusedRoot: { true }, focusedUIWithinTarget: { nil })
+        preconditionFailure("A typed proof failure was converted to permission")
+    } catch let error as NativeFailure { surfaceCheck(error.code == original.code && error.message == original.message) }
+    do { try recheckActiveModalSibling(true) { throw original }; preconditionFailure("Final proof error lost") }
+    catch let error as NativeFailure { surfaceCheck(error.code == original.code && error.message == original.message) }
+}
+print("Focused sibling modal policy preserves descendant blocking and rechecks root/UI evidence")

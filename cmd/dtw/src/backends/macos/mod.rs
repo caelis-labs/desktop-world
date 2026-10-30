@@ -211,13 +211,15 @@ impl Drop for NativeBinding {
     }
 }
 const COVERAGE: &str =
-    "same-PID available application surfaces, including raised panels; AX semantics are a separate exact-window capability";
+    "application surfaces and native service dialogs with a proven public-AX relationship; AX semantics remain an exact-surface capability";
 const CONDITIONS: &[&str] = &[
     "semantic and input operations require macOS Accessibility permission",
     "capture and click require macOS Screen Recording permission",
     "input prefers directed background delivery; a side-effect-free preflight decline may use temporary foreground focus",
     "foreground coordinate fallback requires a visible, unobstructed point in the captured window",
-    "keyboard, focus and semantic input require an exact standard AX window without modal interception",
+    "semantic scopes include retained subtrees, capture-pixel regions and the app menu; region geometry does not prove pixel visibility",
+    "readText requires native textual content and preserves one content revision across UTF-16 pages; titles and descriptions are not document text",
+    "input requires an exact app-associated AX surface and current modal target; proven cross-process service surfaces use foreground input",
     "borrowed foreground is returned only while still owned; uncertain input is never rerouted or replayed",
 ];
 impl NativeBackend {
@@ -234,11 +236,13 @@ impl NativeBackend {
                 | Capability::Keypress
                 | Capability::Scroll
                 | Capability::SetValue
+                | Capability::ReadText
         )
     }
     pub fn description() -> Value {
         json!({"provider":"dtw-macos-native", "coverage":COVERAGE,"conditions":CONDITIONS,
-            "supported_capabilities":Capability::ALL.into_iter().filter(|c|Self::supports_capability(*c)).map(Capability::as_str).collect::<Vec<_>>()})
+            "supported_capabilities":Capability::ALL.into_iter().filter(|c|Self::supports_capability(*c)).map(Capability::as_str).collect::<Vec<_>>(),
+            "supported_observe_scopes":ObserveScopeKind::ALL.map(ObserveScopeKind::as_str)})
     }
 
     pub fn spawn() -> Result<Self, Error> {
@@ -478,13 +482,7 @@ impl NativeBackend {
             }
         };
         let mut outcome = action_reply(&reply);
-        if explicit_focus
-            && outcome.dispatch == DispatchState::NotDispatched
-            && !outcome
-                .delivery
-                .as_ref()
-                .is_some_and(|value| value.foreground_borrowed)
-        {
+        if explicit_focus && focus_did_not_add_return_obligation(&outcome) {
             self.focus_pending
                 .store(previous_pending, Ordering::Release);
         }
@@ -597,31 +595,33 @@ fn retire_worker(worker: &Worker, error: Error) -> Error {
         )),
     }
 }
+fn focus_did_not_add_return_obligation(outcome: &ActionOutcome) -> bool {
+    let borrowed = outcome
+        .delivery
+        .as_ref()
+        .is_some_and(|value| value.foreground_borrowed);
+    !borrowed
+        && (outcome.dispatch == DispatchState::NotDispatched
+            || outcome.delivery.as_ref().is_some_and(|value| {
+                value.route == Some(InputRoute::Foreground)
+                    && value.focus_return == Some(FocusReturn::Unchanged)
+            }))
+}
 
 fn select_scene_target(inventory: &Value, original: &Value) -> Result<Value, Error> {
     let original = parse_target(original)?;
-    let report = parse_inventory_report(&inventory["coverage"], true)?;
-    let rows = array(inventory, "windows")?;
-    if rows.len() != report.supported_count as usize || rows.len() > 256 {
-        return Err(Error::InvalidObservation);
-    }
-    let mut matched = None;
-    for row in rows {
-        let target = parse_target(&row["target"])?;
-        if target.app != original.app {
-            return Err(Error::WrongApp);
-        }
-        if target.native_id == original.native_id {
-            if matched.is_some() {
-                return Err(Error::InvalidObservation);
-            }
-            matched = Some(row["target"].clone());
-        }
-    }
-    matched.ok_or(Error::TargetChanged)
+    parse_window_inventory(inventory, &original.app)?
+        .windows
+        .into_iter()
+        .find(|window| window.target.native_id == original.native_id)
+        .map(|window| target_json(&window.target))
+        .ok_or(Error::TargetChanged)
 }
 impl Backend for NativeBackend {
     type Binding = NativeBinding;
+    fn is_available(&self) -> bool {
+        !self.worker.is_stopped()
+    }
     fn finish_execution(&self) -> Result<Option<FocusReturn>, Error> {
         let until = Instant::now() + Duration::from_millis(400);
         let request_id = unique_generation();
@@ -703,22 +703,7 @@ impl Backend for NativeBackend {
     }
     fn windows(&self, app: &AppInstance, call: &CallContext<'_>) -> Result<WindowInventory, Error> {
         let result = self.read_rpc(json!({"operation":"windows","app":app_json(app)}), call)?;
-        let report = parse_inventory_report(&result["coverage"], true)?;
-        let rows = array(&result, "windows")?;
-        if rows.len() > 256 || rows.len() != report.supported_count as usize {
-            return Err(failed("Native inventory row/count mismatch"));
-        }
-        let windows = rows
-            .iter()
-            .map(|row| {
-                Ok(WindowInfo {
-                    target: parse_target(&row["target"])?,
-                    title: string(row, "title")?.into(),
-                    visible: row["onscreen"].as_bool().ok_or(Error::InvalidObservation)?,
-                })
-            })
-            .collect::<Result<_, Error>>()?;
-        Ok(WindowInventory { windows, report })
+        parse_window_inventory(&result, app)
     }
     fn observe(
         &self,
@@ -733,9 +718,48 @@ impl Backend for NativeBackend {
         query: &ObserveQuery,
         call: &CallContext<'_>,
     ) -> Result<BackendObservation<NativeBinding>, Error> {
+        self.observe_scoped(target, query, ObserveScope::Window, None, call)
+    }
+    fn supports_observe_scope(&self, _scope: ObserveScopeKind) -> bool {
+        true
+    }
+    fn observe_scoped(
+        &self,
+        target: &WindowTarget,
+        query: &ObserveQuery,
+        scope: ObserveScope,
+        source: Option<&NativeBinding>,
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservation<NativeBinding>, Error> {
+        let native_scope = match scope {
+            ObserveScope::Window => json!({"kind":"window"}),
+            ObserveScope::Menu => json!({"kind":"menu"}),
+            ObserveScope::Subtree(element) => {
+                json!({"kind":"subtree","binding":source.and_then(|b|b.semantic.as_ref()).ok_or(Error::InvalidObservation)?,"element":element.0})
+            }
+            ObserveScope::Region(region) => {
+                let (bounds, width, height) = source
+                    .and_then(|b| b.pixels.as_ref())
+                    .ok_or(Error::InvalidObservation)?;
+                let (x, y) = bound_pixel_point(
+                    bounds,
+                    *width,
+                    *height,
+                    PixelPoint {
+                        x: region.x,
+                        y: region.y,
+                    },
+                )?;
+                let w = bounds[2].as_f64().ok_or(Error::InvalidObservation)? * region.width
+                    / *width as f64;
+                let h = bounds[3].as_f64().ok_or(Error::InvalidObservation)? * region.height
+                    / *height as f64;
+                json!({"kind":"region","bounds":bounds,"rect":[x,y,w,h]})
+            }
+        };
         let reply = self.read_rpc(
             json!({"operation":"observe","target":target_json(target),
-                "query":{"role":query.role,"text":query.text,"limit":query.limit}}),
+                "query":{"role":query.role,"text":query.text,"limit":query.limit,"scope":native_scope}}),
             call,
         )?;
         // Construct the guard before parsing the rest so invalid replies still release it.
@@ -751,6 +775,33 @@ impl Backend for NativeBackend {
             image: None,
             discovery: Some(page.discovery),
             binding,
+        })
+    }
+    fn read_text(
+        &self,
+        target: &WindowTarget,
+        binding: &NativeBinding,
+        request: TextRequest,
+        call: &CallContext<'_>,
+    ) -> Result<BackendTextPage, Error> {
+        let reply = self.read_rpc(json!({"operation":"read_text","target":target_json(target),
+            "binding":binding.semantic.as_ref().ok_or(Error::InvalidObservation)?,"element":request.element.0,
+            "offset":request.offset,"limit":request.limit}), call)?;
+        if reply["unit"] != "utf16" {
+            return Err(Error::InvalidObservation);
+        }
+        Ok(BackendTextPage {
+            target: parse_target(&reply["target"])?,
+            page: TextPage {
+                text: string(&reply, "text")?.into(),
+                offset: u32::try_from(number(&reply, "offset")?).map_err(failed)?,
+                total_length: u32::try_from(number(&reply, "total_length")?).map_err(failed)?,
+                next_offset: if reply["next_offset"].is_null() {
+                    None
+                } else {
+                    Some(u32::try_from(number(&reply, "next_offset")?).map_err(failed)?)
+                },
+            },
         })
     }
     fn continue_observation(
@@ -1278,6 +1329,7 @@ for line in sys.stdin:
             ("foreground", true, Some("restored")),
             ("foreground", true, Some("changed_externally")),
             ("foreground", true, Some("pending")),
+            ("foreground", false, Some("unchanged")),
         ] {
             let reply = json!({"dispatch":"dispatched","evidence":"unverified",
                 "delivery":{"route":route,"reason":"test_reason","foreground_borrowed":borrowed,"focus_return":returned}});
@@ -1294,6 +1346,25 @@ for line in sys.stdin:
                 "route":null,"reason":"explicit_focus","foreground_borrowed":false}}));
         assert_eq!(rejected.dispatch, DispatchState::NotDispatched);
         assert_eq!(rejected.delivery.unwrap().route, None);
+    }
+
+    #[test]
+    fn unchanged_focus_does_not_add_pending_return_but_unknown_focus_does() {
+        for borrowed in [false, true] {
+            let outcome = action_reply(&json!({"dispatch":"dispatched","evidence":"unverified",
+                "delivery":{"route":"foreground","foreground_borrowed":borrowed,
+                "focus_return":if borrowed {"pending"} else {"unchanged"}}}));
+            assert_eq!(focus_did_not_add_return_obligation(&outcome), !borrowed);
+        }
+        assert!(focus_did_not_add_return_obligation(
+            &ActionOutcome::rejected(Error::TargetChanged)
+        ));
+        assert!(!focus_did_not_add_return_obligation(
+            &ActionOutcome::unknown(Error::TargetChanged)
+        ));
+        let malformed = action_reply(&json!({"dispatch":"dispatched","evidence":"unverified",
+            "delivery":{"route":"invalid","foreground_borrowed":false,"focus_return":"unchanged"}}));
+        assert!(!focus_did_not_add_return_obligation(&malformed));
     }
 
     #[test]
@@ -1512,7 +1583,7 @@ for line in sys.stdin:
         local["generation"] = json!(99);
         let inventory = |targets: &[Value]| {
             let n = targets.len();
-            json!({"windows":targets.iter().map(|target| json!({"target":target})).collect::<Vec<_>>(),
+            json!({"windows":targets.iter().map(|target| json!({"target":target,"title":"Fixture","onscreen":true})).collect::<Vec<_>>(),
                 "coverage":{"scope":"same_pid_layer_zero_standard_ax_windows","complete":false,
                     "window_server_count":n,"supported_count":n,"ax_id_errors":[],"diagnostics":{
                         "cg_app_raw":n,"window_server_count":n,"cg_non_layer_zero":0,"cg_invalid_metadata":0,
@@ -1681,6 +1752,37 @@ for line in sys.stdin:
     }
 
     #[test]
+    fn native_discovery_geometry_gap_preserves_rows_and_partial_page_evidence() {
+        let mut value = json!({
+            "target":{"app":{"identity":"test","pid":2,"generation":3},"native_id":4,"generation":5},
+            "elements":[{"id":8,"label":"Known field","role":"text_field",
+                "name":"Known field","value":"retained text","enabled":true,
+                "actions":["setValue"],"can_press":false}],
+            "discovery":{"has_more":true,"complete":false,
+                "reason":"geometry_unavailable","visited":320}
+        });
+        for has_more in [true, false] {
+            value["discovery"]["has_more"] = json!(has_more);
+            let page = parse_discovery_page(&value).unwrap();
+            assert_eq!(page.elements.len(), 1);
+            assert_eq!(page.elements[0].id, ElementId(8));
+            assert_eq!(page.elements[0].value.as_deref(), Some("retained text"));
+            assert_eq!(page.discovery.has_more, has_more);
+            assert!(!page.discovery.complete);
+            assert_eq!(
+                page.discovery.reason.as_deref(),
+                Some("geometry_unavailable")
+            );
+            assert_eq!(page.discovery.visited, 320);
+        }
+        value["discovery"]["complete"] = json!(true);
+        assert!(parse_discovery_page(&value).is_err());
+        value["discovery"]["complete"] = json!(false);
+        value["discovery"]["reason"] = json!("unrecognized_native_reason");
+        assert!(parse_discovery_page(&value).is_err());
+    }
+
+    #[test]
     fn shutdown_failure_is_not_hidden_by_context_cancellation() {
         let error = TransportError {
             kind: TransportErrorKind::Shutdown("kill failed".into()),
@@ -1744,6 +1846,168 @@ for line in sys.stdin:
         assert!(parse_inventory_report(&value, false).is_ok());
         value["diagnostics"]["extra"] = json!(0);
         assert!(parse_inventory_report(&value, false).is_err());
+    }
+
+    fn associated_inventory_fixture() -> Value {
+        // NativeStore.listWindows keeps the six same-PID diagnostics unchanged;
+        // only individually proven associated rows are added outside that sum.
+        json!({"windows":[
+            {"target":{"app":{"identity":"example.app","pid":21,"generation":30},
+                "native_id":42,"generation":55},"title":"Document","onscreen":true},
+            {"target":{"app":{"identity":"example.app","pid":21,"generation":30},
+                "native_id":43,"generation":56},"title":"Save","onscreen":true}],
+            "coverage":{"scope":"application_and_proven_associated_surfaces",
+                "associated_count":1,"association_complete":false,
+                "association_probe_failures":0,"association_error_codes":[],"diagnostics":{
+                    "cg_app_raw":3,"supported_count":1,"excluded_unavailable_surface":1,
+                    "excluded_zero_area":1,"invalid_metadata":0,"duplicate_id":0}}})
+    }
+
+    #[test]
+    fn associated_inventory_matches_native_shape_without_claiming_all_helpers() {
+        let mut value = associated_inventory_fixture();
+        let app = parse_app(&value["windows"][0]["target"]["app"]).unwrap();
+        let inventory = parse_window_inventory(&value, &app).unwrap();
+        assert_eq!(
+            inventory.report.scope,
+            InventoryScope::ApplicationAndProvenAssociatedSurfaces {
+                associated_count: 1
+            }
+        );
+        assert_eq!(
+            (
+                inventory.report.candidate_count,
+                inventory.report.supported_count,
+                inventory.report.excluded_count
+            ),
+            (4, 2, 2)
+        );
+        assert_eq!(inventory.windows.len(), 2);
+        assert_eq!(
+            inventory
+                .report
+                .diagnostics
+                .counters
+                .iter()
+                .find(|(name, _)| name == "supported_count")
+                .unwrap()
+                .1,
+            1
+        );
+        assert_eq!(
+            select_scene_target(&value, &value["windows"][1]["target"]),
+            Ok(value["windows"][1]["target"].clone())
+        );
+
+        // Ordinary applications use the same new shape with no associated rows.
+        value["coverage"]["associated_count"] = json!(0);
+        value["windows"].as_array_mut().unwrap().pop();
+        assert_eq!(
+            parse_window_inventory(&value, &app)
+                .unwrap()
+                .report
+                .supported_count,
+            1
+        );
+        value["coverage"]["association_probe_failures"] = json!(1);
+        value["coverage"]["association_error_codes"] = json!([-25204]);
+        let report = parse_window_inventory(&value, &app).unwrap().report;
+        assert_eq!(report.diagnostics.error_codes, vec![-25204]);
+        assert!(report
+            .diagnostics
+            .counters
+            .contains(&("association_probe_failures".into(), 1)));
+    }
+
+    #[test]
+    fn associated_inventory_rejects_malformed_counts_and_unbound_rows() {
+        let original = associated_inventory_fixture();
+        let app = parse_app(&original["windows"][0]["target"]["app"]).unwrap();
+        for invalid_count in [Value::Null, json!(-1), json!(1.5), json!("1"), json!(129)] {
+            let mut value = original.clone();
+            value["coverage"]["associated_count"] = invalid_count;
+            assert!(parse_window_inventory(&value, &app).is_err());
+        }
+        for mutate in [
+            |v: &mut Value| {
+                v["coverage"]["association_complete"] = json!(true);
+            },
+            |v: &mut Value| {
+                v["coverage"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("association_complete");
+            },
+            |v: &mut Value| {
+                v["coverage"]["extra"] = json!(0);
+            },
+            |v: &mut Value| {
+                v["coverage"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("association_probe_failures");
+            },
+            |v: &mut Value| {
+                v["coverage"]["association_probe_failures"] = json!(1);
+            },
+            |v: &mut Value| {
+                v["coverage"]["association_error_codes"] = json!([0]);
+            },
+            |v: &mut Value| {
+                v["coverage"]["association_probe_failures"] = json!(1_000_001);
+            },
+            |v: &mut Value| {
+                v["coverage"]["diagnostics"]["cg_app_raw"] = json!(4);
+            },
+            |v: &mut Value| {
+                v["coverage"]["associated_count"] = json!(0);
+            },
+            |v: &mut Value| {
+                v["coverage"]["associated_count"] = json!(2);
+            },
+            |v: &mut Value| {
+                v["windows"].as_array_mut().unwrap().pop();
+            },
+            |v: &mut Value| {
+                v["windows"][1]["target"]["native_id"] = json!(42);
+            },
+            |v: &mut Value| {
+                v["windows"][1]["target"]["native_id"] = json!(0);
+            },
+            |v: &mut Value| {
+                v["windows"][1]["target"]["generation"] = json!(0);
+            },
+            |v: &mut Value| {
+                v["windows"][1]["target"]["app"]["pid"] = json!(22);
+            },
+        ] {
+            let mut value = original.clone();
+            mutate(&mut value);
+            assert!(parse_window_inventory(&value, &app).is_err(), "{value}");
+        }
+        let mut limit = original["coverage"].clone();
+        limit["associated_count"] = json!(128);
+        assert!(parse_inventory_report(&limit, true).is_err()); // 129 supported rows
+    }
+
+    #[test]
+    fn native_text_range_error_keeps_the_reference_preserving_core_identity() {
+        for (code, expected) in [
+            (
+                "invalid_text_range",
+                Error::NativeFailure {
+                    code: "invalid_text_range".into(),
+                    message: "Native rejection".into(),
+                },
+            ),
+            ("unsupported_capability", Error::UnsupportedCapability),
+            ("stale_observation", Error::StaleObservation),
+        ] {
+            assert_eq!(
+                reply_error(&json!({"error":code,"message":"Native rejection"})),
+                Some(expected)
+            );
+        }
     }
 
     #[test]
@@ -1857,6 +2121,7 @@ fn parse_discovery_page(value: &Value) -> Result<BackendObservationPage, Error> 
                     | "text_limit"
                     | "unsupported_semantic_tree"
                     | "content_unproven"
+                    | "geometry_unavailable"
             )
         })
     {
@@ -1954,7 +2219,10 @@ fn reply_error(v: &Value) -> Option<Error> {
 }
 
 fn parse_inventory_report(value: &Value, proven: bool) -> Result<InventoryReport, Error> {
-    if value["scope"] == "same_pid_application_surfaces" {
+    if matches!(
+        value["scope"].as_str(),
+        Some("same_pid_application_surfaces" | "application_and_proven_associated_surfaces")
+    ) {
         return parse_surface_inventory(value, proven);
     }
     const COUNTERS: [&str; 18] = [
@@ -2053,11 +2321,44 @@ fn parse_surface_inventory(value: &Value, proven: bool) -> Result<InventoryRepor
         "duplicate_id",
     ];
     let invalid = || failed("Malformed native surface inventory evidence");
+    let fields = value.as_object().ok_or_else(invalid)?;
+    let (associated, association_failures, error_codes) =
+        if value["scope"] == "application_and_proven_associated_surfaces" {
+            if fields.len() != 6 || value["association_complete"] != false {
+                return Err(invalid());
+            }
+            let count = value["associated_count"]
+                .as_u64()
+                .filter(|count| *count <= 128)
+                .ok_or_else(invalid)? as u32;
+            let failures = value["association_probe_failures"]
+                .as_u64()
+                .filter(|count| *count <= 1_000_000)
+                .ok_or_else(invalid)?;
+            let codes = value["association_error_codes"]
+                .as_array()
+                .filter(|codes| codes.len() as u64 == failures.min(8))
+                .ok_or_else(invalid)?
+                .iter()
+                .map(|code| {
+                    code.as_i64()
+                        .and_then(|n| i32::try_from(n).ok())
+                        .filter(|n| *n != 0)
+                        .ok_or_else(invalid)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            (Some(count), failures, codes)
+        } else {
+            if fields.len() != 2 {
+                return Err(invalid());
+            }
+            (None, 0, vec![])
+        };
     let counts = value["diagnostics"]
         .as_object()
         .filter(|v| v.len() == NAMES.len())
         .ok_or_else(invalid)?;
-    let counters = NAMES
+    let mut counters = NAMES
         .iter()
         .map(|name| {
             let n = counts
@@ -2068,6 +2369,9 @@ fn parse_surface_inventory(value: &Value, proven: bool) -> Result<InventoryRepor
             Ok(((*name).into(), n))
         })
         .collect::<Result<Vec<_>, Error>>()?;
+    if associated.is_some() {
+        counters.push(("association_probe_failures".into(), association_failures));
+    }
     let count = |name: &str| counts[name].as_u64().unwrap();
     let unresolved = count("invalid_metadata") + count("duplicate_id");
     let excluded = count("excluded_unavailable_surface") + count("excluded_zero_area");
@@ -2077,18 +2381,54 @@ fn parse_surface_inventory(value: &Value, proven: bool) -> Result<InventoryRepor
         return Err(invalid());
     }
     let report = InventoryReport {
-        scope: InventoryScope::SameProcessApplicationSurfaces,
-        candidate_count: count("cg_app_raw") as u32,
-        supported_count: count("supported_count") as u32,
+        scope: match associated {
+            Some(associated_count) => {
+                InventoryScope::ApplicationAndProvenAssociatedSurfaces { associated_count }
+            }
+            None => InventoryScope::SameProcessApplicationSurfaces,
+        },
+        candidate_count: count("cg_app_raw") as u32 + associated.unwrap_or(0),
+        supported_count: count("supported_count") as u32 + associated.unwrap_or(0),
         excluded_count: excluded as u32,
         diagnostics: InventoryDiagnostics {
             provider: "macos.window-server".into(),
             counters,
-            error_codes: vec![],
+            error_codes,
         },
     };
-    if !report.valid() {
+    if !report.valid() || (associated.is_some() && report.supported_count > 128) {
         return Err(invalid());
     }
     Ok(report)
+}
+
+fn parse_window_inventory(value: &Value, app: &AppInstance) -> Result<WindowInventory, Error> {
+    let report = parse_inventory_report(&value["coverage"], true)?;
+    let rows = array(value, "windows")?;
+    if rows.len() > 256 || rows.len() != report.supported_count as usize {
+        return Err(failed("Native inventory row/count mismatch"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let windows = rows
+        .iter()
+        .map(|row| {
+            let target = parse_target(&row["target"])?;
+            if &target.app != app {
+                return Err(Error::WrongApp);
+            }
+            if target.native_id == 0
+                || target.native_id > u64::from(u32::MAX)
+                || target.generation == 0
+                || !seen.insert(target.native_id)
+            {
+                return Err(Error::InvalidObservation);
+            }
+            Ok(WindowInfo {
+                target,
+                title: string(row, "title")?.into(),
+                visible: row["onscreen"].as_bool().ok_or(Error::InvalidObservation)?,
+            })
+        })
+        .collect::<Result<_, Error>>()?;
+    Ok(WindowInventory { windows, report })
 }

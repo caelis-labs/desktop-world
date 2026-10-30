@@ -118,10 +118,11 @@ pub enum Capability {
     Scroll,
     Focus,
     SetValue,
+    ReadText,
 }
 
 impl Capability {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Windows,
         Self::Observe,
         Self::Press,
@@ -132,6 +133,7 @@ impl Capability {
         Self::Scroll,
         Self::Focus,
         Self::SetValue,
+        Self::ReadText,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -146,6 +148,7 @@ impl Capability {
             Self::Scroll => "scroll",
             Self::Focus => "focus",
             Self::SetValue => "setValue",
+            Self::ReadText => "readText",
         }
     }
 
@@ -235,6 +238,77 @@ pub struct PixelPoint {
     pub y: f64,
 }
 
+/// A region in pixels of one retained capture, never desktop coordinates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PixelRegion {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObserveScopeKind {
+    Window,
+    Menu,
+    Subtree,
+    Region,
+}
+impl ObserveScopeKind {
+    pub const ALL: [Self; 4] = [Self::Window, Self::Menu, Self::Subtree, Self::Region];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Window => "window",
+            Self::Menu => "menu",
+            Self::Subtree => "subtree",
+            Self::Region => "region",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ObserveScope {
+    Window,
+    Menu,
+    Subtree(ElementId),
+    Region(PixelRegion),
+}
+impl ObserveScope {
+    pub fn kind(self) -> ObserveScopeKind {
+        match self {
+            Self::Window => ObserveScopeKind::Window,
+            Self::Menu => ObserveScopeKind::Menu,
+            Self::Subtree(_) => ObserveScopeKind::Subtree,
+            Self::Region(_) => ObserveScopeKind::Region,
+        }
+    }
+    pub fn observation_kind(self) -> Option<ObservationKind> {
+        match self {
+            Self::Subtree(_) => Some(ObservationKind::Semantic),
+            Self::Region(_) => Some(ObservationKind::Pixels),
+            _ => None,
+        }
+    }
+}
+
+/// UTF-16 offsets follow native text APIs and JS strings. Providers never split
+/// surrogate pairs and pin the first read's content in the existing binding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextRequest {
+    pub element: ElementId,
+    pub offset: u32,
+    pub limit: u32,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextPage {
+    pub text: String,
+    pub offset: u32,
+    pub next_offset: Option<u32>,
+    pub total_length: u32,
+}
+pub struct BackendTextPage {
+    pub target: WindowTarget,
+    pub page: TextPage,
+}
+
 /// A scroll point bound to a retained observation, never a global coordinate.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ScrollAnchor {
@@ -305,6 +379,22 @@ pub struct WindowInfo {
 pub enum InventoryScope {
     SameProcessStandardWindows,
     SameProcessApplicationSurfaces,
+    /// The same-process inventory plus individually proven associated surfaces.
+    /// This never claims that every possible association was discovered.
+    ApplicationAndProvenAssociatedSurfaces {
+        associated_count: u32,
+    },
+}
+
+impl InventoryScope {
+    pub(crate) fn associated_count(self) -> Option<u32> {
+        match self {
+            Self::ApplicationAndProvenAssociatedSurfaces { associated_count } => {
+                Some(associated_count)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Bounded provider evidence, not an authorization or a retry instruction.
@@ -336,6 +426,10 @@ impl InventoryReport {
                     .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
         };
         self.candidate_count <= 256
+            && self
+                .scope
+                .associated_count()
+                .is_none_or(|count| count <= self.supported_count)
             && u64::from(self.supported_count) + u64::from(self.excluded_count)
                 <= u64::from(self.candidate_count)
             && valid_name(&self.diagnostics.provider)
@@ -484,6 +578,14 @@ pub struct BackendObservationPage {
 pub trait Backend: Send + Sync {
     type Binding: Send;
 
+    /// Whether this native owner can admit future work. This is a nonblocking
+    /// lifecycle read, not a target validation or permission check. A false
+    /// result does not erase the original error or prove cleanup succeeded;
+    /// the host must retire this owner before replacing it for a new request.
+    fn is_available(&self) -> bool {
+        true
+    }
+
     /// Sticky failure to settle owned native resources after an operation.
     /// Reading this never performs cleanup and never replaces the operation's
     /// original result. Execution owners must seal admission and report it
@@ -545,6 +647,31 @@ pub trait Backend: Send + Sync {
             });
         }
         Ok(observed)
+    }
+    fn supports_observe_scope(&self, scope: ObserveScopeKind) -> bool {
+        scope == ObserveScopeKind::Window
+    }
+    fn observe_scoped(
+        &self,
+        target: &WindowTarget,
+        query: &ObserveQuery,
+        scope: ObserveScope,
+        _binding: Option<&Self::Binding>,
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservation<Self::Binding>, Error> {
+        if scope != ObserveScope::Window {
+            return Err(Error::UnsupportedCapability);
+        }
+        self.observe_page(target, query, call)
+    }
+    fn read_text(
+        &self,
+        _target: &WindowTarget,
+        _binding: &Self::Binding,
+        _request: TextRequest,
+        _call: &CallContext<'_>,
+    ) -> Result<BackendTextPage, Error> {
+        Err(Error::UnsupportedCapability)
     }
     fn continue_observation(
         &self,

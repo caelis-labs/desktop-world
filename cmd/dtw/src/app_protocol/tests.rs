@@ -432,7 +432,7 @@ fn describe_reports_the_bound_app_and_backend_support() {
         description["supported_capabilities"],
         json!([
             "windows", "observe", "press", "capture", "click", "typeText", "keypress", "scroll",
-            "focus", "setValue"
+            "focus", "setValue", "readText"
         ])
     );
 }
