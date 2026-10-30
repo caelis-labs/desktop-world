@@ -236,6 +236,12 @@ def recorded_mcp_command(root, binary):
     return [sys.executable, str(launcher), str(root/'native-stderr.log'), str(binary), 'mcp']
 
 
+def agy_gui_settings(name):
+    """Session-only standard CLI rules; GUI work stays on the named MCP server."""
+    return {'permissions': {'allow': ['mcp('+name+'/*)'],
+                            'deny': ['command(*)', 'write_file(*)', 'read_url(*)', 'execute_url(*)']}}
+
+
 def run_agent(repo, root, binary, client, adapter, name, prompt, evidence):
     stage, skill = stage_agent_plugin(repo, root, binary, name)
     mcp = recorded_mcp_command(root, binary)
@@ -266,7 +272,10 @@ def run_agent(repo, root, binary, client, adapter, name, prompt, evidence):
             with (root/'setup.log').open('w') as log:
                 subprocess.run(['agy','plugin','install',str(stage)],check=True,stdout=log,stderr=log); installed=True
                 subprocess.run(['agy','mcp','add',name,*mcp],check=True,stdout=log,stderr=log); registered=True
+            settings = agy_gui_settings(name)
+            evidence['agent_session_settings'] = settings
             command = ['agy','--print',prompt,'--dangerously-skip-permissions',
+                       '--settings',json.dumps(settings),
                        '--output-format','stream-json','--print-timeout','900s',
                        '--log-file',str(root/'agy.log')]
         started = time.monotonic()

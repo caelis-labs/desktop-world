@@ -300,7 +300,7 @@ class RouteTests(unittest.TestCase):
         calls.append({'name':'Skill','arguments':{'skill':NAME}})
         probe.check_routes(calls, NAME, root)
         for command in ('ls -la '+str(metadata)+'; echo replay',
-                        'cat '+str(metadata/'exec.json'), 'ls -la /tmp'):
+                        'cat '+str(metadata/'exec.json'), 'ls -la /tmp', "python3 -c '"):
             with self.assertRaises(AssertionError):
                 probe.check_routes([{'name':'run_command','arguments':{'CommandLine':command}}], NAME, root)
         for path in (str(metadata/'../other/exec.json'), '/tmp/'+NAME+'/SKILL.md'):

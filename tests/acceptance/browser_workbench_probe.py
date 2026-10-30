@@ -559,7 +559,10 @@ def check_routes(calls, name, root):
             require(read in reads or metadata_discovery_miss(call, name),
                     'Agent read task data outside the GUI route'); continue
         if tool == 'run_command':
-            argv = shlex.split(arguments.get('CommandLine', ''))
+            try:
+                argv = shlex.split(arguments.get('CommandLine', ''))
+            except ValueError as error:
+                raise AssertionError('Unparseable shell request cannot prove an allowed metadata listing') from error
             require(argv[:-1] in (['ls', '-la'], ['ls']) and '..' not in Path(argv[-1]).parts
                     and Path(argv[-1]) == metadata,
                     'Shell access is limited to this MCP metadata listing'); continue
