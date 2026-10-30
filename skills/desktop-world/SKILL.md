@@ -7,7 +7,7 @@ description: Operate desktop apps through DTW MCP with app-scoped JavaScript, fi
 
 Use the configured DTW MCP server's `apps`, `api`, `exec`, `result` tools (the client may prefix their names). Start with `apps` for stable app IDs, method signatures and platform conditions. Execute with exactly `{app, source}`. `source` is an async JavaScript function body with `app`, `state`, `await` and `return`. Send the original source string serialized once; no filename or double JSON encoding.
 
-**Work in complete UI steps.** Return to the model only when new labels, state or an image require a decision. Once the next operations are known, run them sequentially in the same script, including verification. For repeated forms, discover the labels once, then process the requested records in one loop. Do not rediscover the surrounding table between records. Input methods focus internally; a separate focus call is usually unnecessary.
+**Work in complete UI steps.** Return to the model only when new labels, state or an image require a decision. Once the next operations are known, run them sequentially in the same script, including verification. For repeated forms, discover the labels once, then process the requested records in one loop. Do not rediscover the surrounding table between records. Input methods target the selected window; macOS prefers background delivery and temporarily focuses it when needed. A separate focus call is usually unnecessary.
 
 **Confirm form actions before changing values.** Task-supplied field labels do not establish save, submit or close button labels. Before the first field or checkbox mutation, discover and validate the relevant action names in the actual form, once per form layout. Do not turn a task verb into a guessed exact label. If interpretation is needed, return compact action choices before editing. Then batch records with fresh exact-name lookups; do not repeat action-label discovery for every record or scan a full tree.
 
@@ -19,7 +19,7 @@ Optional host-argument object properties whose value is `undefined` are omitted;
 
 ## 1. Discover the relevant controls
 
-For a browser table/form, start with **window selection plus `role:'text_field'` discovery in the same exec**. Find the search/filter field before searching the entire tree for a record keyword. Do not start by dumping an unfiltered browser window or all matching table rows. Adapt this example to the task:
+For a browser table/form, start with **window selection plus `role:'text_field'` discovery in the same exec**. Find the search/filter field before searching the entire tree for a record keyword. On a first inspection of an unfamiliar window, include its capture in that same return: a cold browser can expose only its toolbar, so this gives the next decision both the visible page and available controls without another round trip. Omit the image when existing context already identifies the page. Do not dump an unfiltered browser window or all table rows. Adapt this example to the task:
 
 ```javascript
 const matches = (await app.windows()).windows.filter(w => w.title === 'Task window');
@@ -32,12 +32,12 @@ for (;;) {
   if (!p.next) break;
   p = await app.observe({cursor:p.next});
 }
-return {fields, coverage:p.coverage};
+return {fields, coverage:p.coverage, capture:await app.capture({window_ref:state.window})};
 ```
 
 If the task provides field labels, skip only their repeated discovery. Identify any unknown form actions before proceeding to section 2. Combine filtering, identifying the edit control, opening the form and discovering the relevant controls in one script. This example uses an observed search label and requires an actually discovered, exact edit label before pressing it. Adapt the action-search keywords to the task; keywords find candidate names and are not exact action labels. Return compact choices when their meaning or uniqueness needs a decision, before changing form values.
 
-Copy the local helpers from section 2 into this script. The task already names its fields, so this example discovers only action labels; for unknown fields, add a query for the relevant role and return only its names/values.
+Copy the local helpers from section 2 into this script. Discover the first form’s action labels and any still-unknown field roles together, in this same exec. Return only relevant names, roles, values and advertised actions. Once those are known, skip this inspection for later records and batch their edits, saves and readback.
 
 ```javascript
 const window_ref = state.window, key = 'Contact A';
@@ -52,10 +52,19 @@ const q = await query('button',closeName ?? 'cancel',
   closeName ? {name:closeName,action:'press',afterTransition:true} : {afterTransition:true});
 const actionChoices = {save:saveChoices,
   close:q.elements.map(e=>({name:e.name,enabled:e.enabled,actions:e.actions}))};
+// Include task-relevant field metadata here when its role is still unknown.
+const fields = [];
+for (const name of ['Display name','Approved','Notes']) {
+  const controls = await query(undefined,name,{afterTransition:true});
+  fields.push(...controls.elements.filter(e=>e.name===name).map(e=>({
+    name:e.name,role:e.role,value:e.value ?? null,enabled:e.enabled,actions:e.actions
+  })));
+}
 // A keyword match alone does not establish what pressing it will do.
-if (!closeName) return {actionChoices,formOpen:true};
-await app.press(ref(q,q.elements[0]));
-return {actionChoices,closedWithoutSaving:true};
+if (!closeName) return {actionChoices,fields,formOpen:true};
+// Field discovery replaced the earlier query: obtain a fresh close ref.
+await press(closeName);
+return {actionChoices,fields,closedWithoutSaving:true};
 ```
 
 Choose the relevant exact action names from the observed controls and store them as `state.formActions = {save: observedSaveName, close: observedCloseName}`; these are names, not reusable refs. A save action may be disabled until values change, so distinguish an observed disabled control from an absent label. If the actions are already clear, continue with the batch in the same script instead of returning only discovery. If a decision was needed, retain whether the form was left open and resume there. A full tree, another row scan or a screenshot is unnecessary when the controls are already identified. If a visible transition is asynchronous, make bounded read-only checks for the expected control inside the script; never repeat the action to wait for it.
@@ -166,7 +175,7 @@ await app.keypress({window_ref, keys:['META','S']});
 return await app.capture({window_ref});
 ```
 
-Input methods focus their target window internally. Typing inserts into its focused control; it does not choose a field. After any workflow, inspect resulting content or visible state. Native `dispatched` and script `completed` alone do not prove task success. Keep readback in the action script; if a semantic readback is incomplete, return its fallback capture from that same script.
+Input methods select delivery internally. Unrelated pointer movements and work in other apps do not invalidate keyboard input; refresh when the actual target or required input state changes. Typing inserts into the selected window's focused control; it does not choose a field. On macOS, foreground fallback temporarily borrows focus and returns it when DTW still owns it. Explicit focus is released when the script finishes. After any workflow, inspect resulting content or visible state. Native `dispatched` and script `completed` alone do not prove task success. Keep readback in the action script; if a semantic readback is incomplete, return its fallback capture from that same script.
 
 ## Method contract
 
@@ -184,7 +193,7 @@ Arguments are exact objects; text and text-setter values are strings. Keep eleme
 | `app.typeText({window_ref,text})` | Literal Unicode insertion; no clipboard. |
 | `app.keypress({window_ref,keys})` | Complete chord, e.g. `['META','A']`, `['CTRL','S']`, `['RETURN']`. |
 | `app.scroll({window_ref,delta_x?,delta_y?})` | Wheel steps −100…100; positive x right/y down. |
-| `app.focus({window_ref})` | Bring the selected window forward. |
+| `app.focus({window_ref})` | Bring the selected window forward; macOS returns borrowed focus after the script. |
 
 Each window retains one semantic query and one capture independently; capture preserves semantic refs. All query pages share an observation ref. A new same-window query replaces its semantic query. **Every admitted action consumes that window's observations**, including focus/keyboard/text. Query fresh before each semantic action, capture fresh before each coordinate action. Other windows remain independent. Observations expire after 15 seconds; observe and act in the same script. Never invent refs or borrow coordinates from another image.
 
@@ -198,4 +207,4 @@ On `focus_changed`, `focus_unproven`, `stale_observation` or `target_changed`, s
 
 `exec` waits and returns a compact summary. No polling or `result` query is needed after ordinary success. `incomplete_reads` preserves partial window inventories and terminal incomplete semantic queries, even when JS ignores the result. Missing from a partial inventory does not prove disappearance. Optional `recovered_incomplete_reads` counts semantic reads superseded by a new complete observation of the same window before any action/error intervened; the original warning remains. This proves read-only refresh, not business success or identical query filters. Unrecovered reads require fresh discovery before acting. For uncertainty, `result({app})` reads this connection's latest accepted execution, or use a **returned** `execution_id` for that original ledger. An unreceived/rejected request may leave an older latest record. Never resubmit an action merely to recover its receipt; retain uncertainty and inspect the target if its original record is unavailable.
 
-DTW has a 30-second execution deadline without a native-call quota. MCP cancellation stops work; dispatched input may still have effects. Scripts have no filesystem, network, process, timers or arbitrary native-tool APIs. JSON state commits only on successful execution and is not durable. Report permission/unsupported-surface conditions without repeated identical attempts. Foreground input can change focus and coordinate clicks move the system pointer; independent background/lock-screen modes are not provided.
+DTW has a 30-second execution deadline without a native-call quota. History is a sliding window: expired receipts do not reset app state or permit replay. MCP cancellation stops work; dispatched input may still have effects. Scripts have no filesystem, network, process, timers or arbitrary native-tool APIs. JSON state commits only on successful execution and is not durable. Report permission/unsupported-surface conditions without repeated identical attempts. On macOS, eligible input goes directly to the selected app/window without moving the system pointer. When background delivery is unavailable before any side effects, DTW can temporarily focus the window and use shared input. Do not assume every app/action supports background delivery; verify the actual result. Locked-session operation is not yet supported.

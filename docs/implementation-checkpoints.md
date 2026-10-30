@@ -204,7 +204,7 @@ C5-macOS.2b.1 在未干预 AXWindows 的新 TextEdit 进程中完成 13 阶段�
 
 2026-10-28：#62 合并后进入第一批“通用基础与发现”施工。第一个交付切片是统一 `app + source` 说明，并在 MCP 出口提供简洁 exec 摘要、result 按需全文。通过条件是原记录/未知效果不丢、标准 rmcp 重复帧不重复派发、真实 GUI 独立读回、普通 Agent 无额外查询即可完成操作，同时记录输出量与步数/时间。证据见[摘要切片验收](compact-exec-acceptance.md)。
 
-2026-10-28：#63、#64 已合并。默认摘要、按窗口/类型隔离引用、原生 role/text 过滤与 cursor 分页已实现，并有 AppKit 大树和暖态 WKWebView 验收。WindowSurface 完全脱离 AX、浏览器冷启动就绪、常用输入和 Windows provider 仍未完成。当前首版范围、工作项和平台验收责任统一见[首个重写正式版本计划](first-rewrite-release-plan.md)。继续按实现 → 回归 → 真实工作流 → 复核推进，不再细分 C6 检查点编号。
+2026-10-29：#63–#67 已合并；按窗引用、原生分页、AX 独立基础表面、浏览器冷态就绪、常用输入和 Windows provider 已实现。当前原生平台和模型证据以[产品矩阵](product-matrix.md)为准。本轮按用户要求阶段性收尾，草稿尚有真实 GUI 阻塞，见[后台输入阶段报告](background-input-acceptance.md)。新增滑动历史和固定上游来源的 macOS 后台输入组，按实现 → 纯回归 → 标准 stdio 真实应用 → 复核循环推进；不扩张为全量 CUA 重写。Windows 继续由用户实机验收，Linux 保留实现但不作支持承诺。
 
 **目标**：逐组增加选定的键盘、文本、滚动、拖拽、菜单、focus、Browser 和 Windows 深层能力。每次只扩展一个有完整状态所有权的能力组，记录为 `C6-能力组-平台`。
 

@@ -416,7 +416,8 @@ Ordinary operations use stable app IDs and exec({{app,source}}). Harness approva
 remain with the Agent; no custom Host is required. See the canonical Skill for
 pagination, input, reference lifetime, unknown-effect and no-replay behavior.
 Full dependency notices are under notices/; adapted source notices and hashes
-are in THIRD_PARTY_NOTICES.md and docs/native-source-provenance*.md.
+are in THIRD_PARTY_NOTICES.md, docs/native-source-provenance*.md and
+docs/background-input-port.md.
 """
 
 
@@ -424,7 +425,8 @@ def package_assets(source, package, version, target):
     for name in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
         shutil.copy2(source / name, package / name)
     shutil.copytree(source / "skills/desktop-world", package / "skills/desktop-world")
-    for relative in ("docs/native-source-provenance.md", "docs/native-source-provenance-cross-platform.md"):
+    for relative in ("docs/native-source-provenance.md", "docs/native-source-provenance-cross-platform.md",
+                     "docs/background-input-port.md"):
         dest = package / relative
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source / relative, dest)

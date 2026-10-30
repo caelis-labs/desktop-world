@@ -181,6 +181,10 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         self.backend.cleanup_error()
     }
 
+    pub fn finish_execution(&self) -> Result<(), Error> {
+        self.backend.finish_execution()
+    }
+
     /// Reports retained ownership for public reference-cache cleanup only.
     /// This does not call the provider or validate whether an action can dispatch.
     pub fn retains_observation(&self, reference: ObservationRef) -> bool {

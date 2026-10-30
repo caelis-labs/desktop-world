@@ -32,7 +32,8 @@ def stage(binary, output, repo):
         for name in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
             shutil.copy2(repo / name, output / name)
         (output / "docs").mkdir()
-        for name in ("native-source-provenance.md", "native-source-provenance-cross-platform.md"):
+        for name in ("native-source-provenance.md", "native-source-provenance-cross-platform.md",
+                     "background-input-port.md"):
             shutil.copy2(repo / "docs" / name, output / "docs" / name)
         shutil.copytree(repo / "packaging/third-party", output / "packaging/third-party")
         with (output / "bin/dtw").open("rb") as executable:

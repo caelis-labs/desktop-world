@@ -15,11 +15,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-const MAX_RECORDS: usize = 512;
-const MAX_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
-// Receipts and step inventory evidence cannot be evicted like images/results.
-// Stop admitting new work at this threshold, preserving the last complete receipt.
-const MAX_RECEIPT_BYTES: usize = 16 * 1024 * 1024;
+// Completed receipts use a bounded sliding window. Active/unsettled execution
+// and the newest result remain available; history never expires the app context.
+const RETENTION: super::RetentionPolicy = super::RetentionPolicy::DEFAULT;
 const MAX_SHUTDOWN_ERRORS: usize = 8;
 const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -57,7 +55,7 @@ struct AppContext<B: Backend> {
     owner: Option<Arc<Coordinator<B>>>,
 }
 struct State<B: Backend> {
-    // One logical entry per used app; bounded by accepted session executions.
+    // One logical entry per used app, independent of execution history retention.
     // Includes preparing and failed-to-retire owners until cleanup succeeds.
     contexts: VecDeque<AppContext<B>>,
     records: VecDeque<Record>,
@@ -78,6 +76,8 @@ pub struct Call<B: Backend> {
     command: ToolCall,
     run_finished: AtomicBool,
     completion: tokio::sync::Notify,
+    // Duplicate waiters own this response even if later calls evict its history.
+    completed: Mutex<Option<Reply>>,
     // Set and cleared under Server state; pins admission while shared cleanup runs.
     stopping: AtomicBool,
     context_reset: AtomicBool,
@@ -133,7 +133,8 @@ impl<F: Factory> Server<F> {
         let mut state = self.state.lock().unwrap();
         self.refresh(&mut state);
         // Standard MCP request identity is transport-owned. Repeated frames
-        // refer to one accepted execution, including while it is still running.
+        // refer to one accepted execution while its history is retained, including
+        // while it is still running. Old IDs are not kept in an unbounded tombstone set.
         // A new RPC ID always admits new work, even for the same source text.
         if let Some(record) = state.records.iter().find(|record| record.rpc_id == rpc_id) {
             if name != "exec" || record.input != args {
@@ -189,12 +190,6 @@ impl<F: Factory> Server<F> {
         let execution_id = match &command {
             ToolCall::Apps => None,
             ToolCall::Exec { app, .. } => {
-                if state.records.len() >= MAX_RECORDS
-                    || state.records.iter().map(|r| r.receipt_bytes).sum::<usize>()
-                        >= MAX_RECEIPT_BYTES
-                {
-                    return Started::Reply(problem("request_limit", "Retained receipt capacity is exhausted. Reconnect for new work; do not replay uncertain operations"));
-                }
                 let id = super::reference("execution");
                 state.records.push_back(Record {
                     id: id.clone(),
@@ -216,11 +211,13 @@ impl<F: Factory> Server<F> {
             command,
             run_finished: AtomicBool::new(false),
             completion: tokio::sync::Notify::new(),
+            completed: Mutex::new(None),
             stopping: AtomicBool::new(false),
             context_reset: AtomicBool::new(false),
             state_reset: AtomicBool::new(false),
         });
         state.active = Some(call.clone());
+        trim_history(&mut state);
         Started::Call(call)
     }
     pub fn run(&self, call: &Arc<Call<F::Provider>>) -> Reply {
@@ -282,7 +279,7 @@ impl<F: Factory> Server<F> {
             }
             if !call.stopping.load(Ordering::Acquire) {
                 if let Some((owner, id)) = owner.as_ref().zip(call.execution_id.as_ref()) {
-                    owner.release_result_payload(id);
+                    owner.release_completed_job(id);
                 }
                 if state
                     .active
@@ -293,6 +290,7 @@ impl<F: Factory> Server<F> {
                 }
             }
         }
+        *call.completed.lock().unwrap() = Some(reply.clone());
         call.run_finished.store(true, Ordering::Release);
         call.completion.notify_waiters();
         self.finished.notify_all();
@@ -313,7 +311,8 @@ impl<F: Factory> Server<F> {
                 let mut reply = owner.result(id);
                 self.annotate(state, &call, &mut reply);
                 cache_reply(state, id, &reply);
-                owner.release_result_payload(id);
+                *call.completed.lock().unwrap() = Some(reply);
+                owner.release_completed_job(id);
             }
         }
         state.active = None;
@@ -336,9 +335,9 @@ impl<F: Factory> Server<F> {
                 Reply::plain(json!({"version":1,
                 "apps":apps,"backend":self.factory.description(),
                 "script":super::description::index(),
-                "limits":{"retained_executions":MAX_RECORDS,"payload_bytes":MAX_PAYLOAD_BYTES,
-                    "receipt_admission_bytes":MAX_RECEIPT_BYTES,"max_steps_per_request":scripts::MAX_CALLS},
-                "semantics":"Every exec requires a stable application identifier. Windows from all its running instances are aggregated; window_ref routes each action to its exact native owner. Membership refreshes before each exec. Switching apps preserves logical state and native references. Instance joins/exits preserve surviving references and committed state; replacing every instance clears state and sets state_reset. Native owner replacement invalidates references and sets context_reset. This connection executes one call at a time. DTW assigns execution_id automatically. result(app) reads this session's most recently accepted execution for that app; optional execution_id selects an older record. Only repeated MCP request IDs with identical exec arguments reuse an execution. New MCP request IDs always execute again; there is no cross-connection deduplication. Receipt capacity stops new work without dropping the last receipt."}))
+                "limits":{"retained_executions":RETENTION.records,"payload_bytes":RETENTION.payload_bytes,
+                    "receipt_bytes":RETENTION.receipt_bytes,"max_steps_per_request":scripts::MAX_CALLS},
+                "semantics":"Every exec requires a stable application identifier. Windows from all its running instances are aggregated; window_ref routes each action to its exact native owner. Membership refreshes before each exec. Switching apps preserves logical state and native references. Instance joins/exits preserve surviving references and committed state; replacing every instance clears state and sets state_reset. Native owner replacement invalidates references and sets context_reset. This connection executes one call at a time. DTW assigns execution_id automatically. result(app) reads the latest retained execution for that app; optional execution_id selects an older retained record. History and MCP request deduplication use a bounded sliding window; expired results are unavailable, not evidence of no effect. Identical requests reuse an execution only while its MCP request ID is retained. New or expired MCP request IDs execute new work; do not resubmit uncertain actions. App state and native references outlive history eviction."}))
             }
             Ok(_) => problem("cancelled", "Application discovery was cancelled"),
             Err(e) => Reply::error(wire::core_error(&e)),
@@ -400,7 +399,7 @@ impl<F: Factory> Server<F> {
             Some(owner) => {
                 let reusable = {
                     let state = owner.state.lock().unwrap();
-                    continuous && state.terminal.is_none() && state.jobs.len() < owner.max_requests
+                    continuous && state.terminal.is_none()
                 };
                 if reusable {
                     // Reconciliation never closes the shared native provider or
@@ -465,14 +464,11 @@ impl<F: Factory> Server<F> {
                 Ok(backend) => backend,
                 Err(error) => return Reply::error(wire::core_error(&error)),
             };
-            let mut owner =
+            let owner =
                 match Coordinator::with_app_instances(backend, instances, app_name, script_state) {
                     Ok(owner) => owner,
                     Err(error) => return Reply::error(wire::core_error(&error)),
                 };
-            // The session owns request retention. Reaching the old standalone
-            // coordinator quota must not silently invalidate an app's refs.
-            Arc::get_mut(&mut owner).unwrap().max_requests = MAX_RECORDS;
             // Register even if close/cancel won during connect. close() waits for
             // this run and performs a second pass over all registered owners.
             self.state
@@ -566,10 +562,13 @@ impl<F: Factory> Server<F> {
             .and_then(|id| state.records.iter().find(|record| record.id == *id))
         {
             Some(record) => self.record_reply(&state, record),
-            None => problem(
-                "unknown_execution",
-                "The original execution record is unavailable; no work was replayed",
-            ),
+            None => {
+                let mut reply = call.completed.lock().unwrap().clone().unwrap_or_else(|| {
+                    problem("execution_unavailable", "The original execution is not retained; no work was replayed. Missing history does not prove no effect")
+                });
+                append_shutdown_errors(&mut reply, &state.shutdown_errors);
+                reply
+            }
         }
     }
     fn record_reply(&self, state: &State<F::Provider>, record: &Record) -> Reply {
@@ -618,7 +617,7 @@ impl<F: Factory> Server<F> {
             match state.records.iter().find(|record| record.id == id) {
                 Some(record) if record.app == app => self.record_reply(&state, record),
                 Some(_) => problem("wrong_app", "The execution belongs to a different app identifier"),
-                None => problem("unknown_execution", "This MCP session has no retained execution with this ID. Absence does not prove an operation had no effect"),
+                None => problem("execution_unavailable", "This execution is not retained in this MCP session; it may have expired or never existed here. Missing history does not prove no effect; no work was replayed"),
             }
         } else {
             match state.records.iter().rev().find(|record| record.app == app) {
@@ -627,7 +626,7 @@ impl<F: Factory> Server<F> {
                     reply.data["selection"] = json!("latest_accepted");
                     reply
                 }
-                None => problem("no_execution", "This MCP session has no accepted execution for this app. Absence does not prove an operation had no effect"),
+                None => problem("execution_unavailable", "No execution is retained for this app; older results may have expired. Missing history does not prove no effect; no work was replayed"),
             }
         }
     }
@@ -800,6 +799,33 @@ fn remember_shutdown<B: Backend>(state: &mut State<B>, error: WireError) {
         };
     }
 }
+// The active call may have a terminal-looking snapshot before native cleanup
+// settles. Keep it, and keep the newest result for delivery, regardless of size.
+// All older completed history is disposable, including unknown outcomes: losing
+// a receipt is not authority to repeat its side effects.
+fn trim_history<B: Backend>(state: &mut State<B>) {
+    let active = state
+        .active
+        .as_ref()
+        .and_then(|call| call.execution_id.as_deref());
+    let latest = state.records.back().map(|record| record.id.clone());
+    let mut bytes: usize = state
+        .records
+        .iter()
+        .map(|record| record.receipt_bytes)
+        .sum();
+    while state.records.len() > RETENTION.records || bytes > RETENTION.receipt_bytes {
+        let removable = state.records.iter().position(|record| {
+            record.reply.is_some()
+                && Some(record.id.as_str()) != active
+                && Some(&record.id) != latest.as_ref()
+        });
+        let Some(index) = removable else { break };
+        let removed = state.records.remove(index).unwrap();
+        bytes = bytes.saturating_sub(removed.receipt_bytes);
+    }
+}
+
 fn cache_reply<B: Backend>(state: &mut State<B>, id: &str, reply: &Reply) {
     if let Some(record) = state.records.iter_mut().find(|record| record.id == id) {
         record.payload_bytes = payload_size(reply);
@@ -812,7 +838,7 @@ fn cache_reply<B: Backend>(state: &mut State<B>, id: &str, reply: &Reply) {
         .map(|record| record.payload_bytes)
         .sum();
     for record in &mut state.records {
-        if bytes <= MAX_PAYLOAD_BYTES {
+        if bytes <= RETENTION.payload_bytes {
             break;
         }
         bytes -= record.payload_bytes;
@@ -824,6 +850,7 @@ fn cache_reply<B: Backend>(state: &mut State<B>, id: &str, reply: &Reply) {
             record.receipt_bytes = receipt_size(reply);
         }
     }
+    trim_history(state);
 }
 fn payload_size(reply: &Reply) -> usize {
     reply
@@ -1225,6 +1252,8 @@ mod lifecycle_tests {
         }));
         assert_eq!(admitted.data["status"], "running");
         control.entered();
+        owner.release_completed_job(call.execution_id.as_deref().unwrap());
+        assert_eq!(owner.state.lock().unwrap().jobs.len(), 1);
         owner.cancel(call.execution_id.as_deref().unwrap());
         // Exercise the outer-wait completion boundary without spending ten seconds
         // on a production timeout. The original native action is still blocked.
@@ -1260,8 +1289,8 @@ mod lifecycle_tests {
             .shutdown_fails
             .store(true, Ordering::SeqCst);
         let app = factory.applications.lock().unwrap()[0].app.clone();
-        let mut owner = Coordinator::new(factory.provider.clone(), app, "App".into());
-        Arc::get_mut(&mut owner).unwrap().max_requests = 0;
+        let owner = Coordinator::new(factory.provider.clone(), app, "App".into());
+        owner.state.lock().unwrap().terminal = Some(Error::Closed);
         server.state.lock().unwrap().contexts.push_back(AppContext {
             app_id: APP.into(),
             instances: owner.instances(),
@@ -1293,8 +1322,8 @@ mod lifecycle_tests {
     fn failed_native_reconnect_retains_the_logical_state_and_original_failure() {
         let (server, factory) = fixture();
         let app = factory.applications.lock().unwrap()[0].app.clone();
-        let mut owner = Coordinator::new(factory.provider.clone(), app, "App".into());
-        Arc::get_mut(&mut owner).unwrap().max_requests = 0;
+        let owner = Coordinator::new(factory.provider.clone(), app, "App".into());
+        owner.state.lock().unwrap().terminal = Some(Error::Closed);
         let script_state = Arc::new(Mutex::new(json!({"kept":7})));
         owner.state.lock().unwrap().script_state = script_state.clone();
         server.state.lock().unwrap().contexts.push_back(AppContext {
@@ -1487,26 +1516,37 @@ mod lifecycle_tests {
     }
 
     #[test]
-    fn receipt_capacity_counts_step_inventory_evidence_separately_from_payloads() {
-        let (server, _) = fixture();
-        let call = begin(&server, "retained", "return 1;");
-        let completed = Reply::plain(
-            json!({"script":{"steps":[{"inventory":{"coverage":"supported subset","diagnostics":{"count":1}}}]},"value":"evictable result"}),
-        );
-        let retained = receipt_size(&completed);
-        assert!(retained > completed.data["script"].to_string().len());
-        server.finish_run(&call, completed);
-        server.state.lock().unwrap().records[0].receipt_bytes = MAX_RECEIPT_BYTES;
+    fn receipt_capacity_slides_without_losing_the_response_owned_by_a_waiter() {
+        let (server, factory) = fixture();
+        let call = begin(&server, "old", "return 1;");
+        let completed = server.finish_run(&call, Reply::plain(json!({
+            "script":{"steps":[{"inventory":{"coverage":"supported subset","diagnostics":{"count":1}},
+                "receipt":{"outcome":{"dispatch":"unknown","evidence":"unverified"}}}]},
+            "value":"evictable result"
+        })));
+        assert!(receipt_size(&completed) > completed.data["script"].to_string().len());
+        // Force the byte boundary without allocating sixteen MiB in a control test.
+        server.state.lock().unwrap().records[0].receipt_bytes = RETENTION.receipt_bytes;
+        let next = begin(&server, "new", "return 2;");
+        let newest = server.finish_run(&next, Reply::plain(json!({"value":"new result"})));
+        assert_eq!(server.state.lock().unwrap().records.len(), 1);
+        assert_eq!(result(&server, "new").data, newest.data);
+        let old = server.result(json!({"app":APP,"execution_id":call.execution_id}));
+        assert_eq!(old.data["error"]["code"], "execution_unavailable");
+        // A duplicate handler accepted before eviction still receives its original
+        // response from the Call it already owns; no permanent tombstone is needed.
+        assert_eq!(server.completed_reply(&call).data, completed.data);
         assert_eq!(
             reply(server.begin(
                 json!("new"),
                 "exec",
                 json!({"app":APP,"source":"return 2;"})
             ))
-            .data["error"]["code"],
-            "request_limit"
+            .data,
+            newest.data
         );
-        assert!(result(&server, "retained").data["script"]["steps"][0]["inventory"].is_object());
+        assert_eq!(factory.provider.0.actions.load(Ordering::SeqCst), 0);
+        assert_eq!(factory.connects.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -1707,14 +1747,9 @@ mod lifecycle_tests {
                 // not overwrite it with an already-released owner payload.
                 assert_eq!(result(&server, "sampled").data, completed.data);
             }
-            // Completed native owners retain receipts but hand their payloads
-            // to the one session cache, avoiding a second cache for every app.
-            let owned = owner.state.lock().unwrap();
-            let done = owned.jobs[0].completed.as_ref().unwrap();
-            assert!(done.value.is_none());
-            assert!(done.image.is_none());
-            assert_eq!(done.payload_bytes, 0);
-            drop(owned);
+            // The session owns the completed receipt; resident apps retain no
+            // duplicate Job or script history after that handoff settles.
+            assert!(owner.state.lock().unwrap().jobs.is_empty());
             if fail {
                 assert_eq!(completed.data["shutdown_errors"][0]["code"], "drain_failed");
                 assert_eq!(

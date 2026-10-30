@@ -52,6 +52,7 @@ struct Model {
     panic_action: bool,
     poll_action: bool,
     shutdown_error: Option<Error>,
+    finish_error: Option<Error>,
     cleanup_error: Option<Error>,
     cleanup_after_capture: Option<Error>,
     cleanup_after_action: Option<Error>,
@@ -66,6 +67,7 @@ struct Shared {
     captures: AtomicUsize,
     actions: AtomicUsize,
     shutdowns: AtomicUsize,
+    finishes: AtomicUsize,
 }
 #[derive(Clone)]
 struct MockBackend(Arc<Shared>);
@@ -83,6 +85,7 @@ impl MockBackend {
                 panic_action: false,
                 poll_action: false,
                 shutdown_error: None,
+                finish_error: None,
                 cleanup_error: None,
                 cleanup_after_capture: None,
                 cleanup_after_action: None,
@@ -95,6 +98,7 @@ impl MockBackend {
             captures: AtomicUsize::new(0),
             actions: AtomicUsize::new(0),
             shutdowns: AtomicUsize::new(0),
+            finishes: AtomicUsize::new(0),
         }))
     }
     fn read_gate(&self) -> TestGate {
@@ -190,6 +194,13 @@ impl Backend for MockBackend {
     }
     fn cleanup_error(&self) -> Option<Error> {
         self.0.model.lock().unwrap().cleanup_error.clone()
+    }
+    fn finish_execution(&self) -> Result<(), Error> {
+        self.0.finishes.fetch_add(1, Ordering::SeqCst);
+        match self.0.model.lock().unwrap().finish_error.clone() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
     fn shutdown(&self) -> Result<(), Error> {
         self.0.shutdowns.fetch_add(1, Ordering::SeqCst);
@@ -762,11 +773,11 @@ fn close_then_cancel_keeps_the_closed_state_and_reports_shutdown_failures() {
 }
 
 #[test]
-fn payload_eviction_preserves_receipts_and_accepted_ids_are_never_recycled() {
+fn completed_job_history_slides_while_retained_ids_still_deduplicate() {
     let (mut owner, backend) = coordinator();
     let config = Arc::get_mut(&mut owner).unwrap();
-    config.max_requests = 4;
-    config.max_payload_bytes = 1024;
+    config.retention.records = 4;
+    config.retention.payload_bytes = 1024;
     let window = windows(&owner, "windows").remove(0);
     let (observation, element) = observe(&owner, "observe", &window);
     let action = submit(
@@ -786,11 +797,10 @@ fn payload_eviction_preserves_receipts_and_accepted_ids_are_never_recycled() {
     assert_eq!(result(&owner, "windows").data["payload_expired"], true);
     assert_eq!(result(&owner, "observe").data["payload_expired"], true);
     assert_eq!(result(&owner, "action").data, completed.data);
-    assert_code(
-        &start(&owner, submit(&owner, "fifth", None, Command::Windows)),
-        "request_limit",
-    );
-    assert_code(&result(&owner, "fifth"), "unknown_request");
+    start(&owner, submit(&owner, "fifth", None, Command::Windows));
+    assert!(!finish(&owner, "fifth").is_error);
+    assert_code(&result(&owner, "windows"), "unknown_request");
+    assert_eq!(owner.state.lock().unwrap().jobs.len(), 4);
     assert_eq!(start(&owner, capture).data, expired.data);
     assert_eq!(start(&owner, action).data, completed.data);
     assert_eq!(backend.0.actions.load(Ordering::SeqCst), 1);

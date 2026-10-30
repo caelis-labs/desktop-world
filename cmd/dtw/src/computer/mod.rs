@@ -218,7 +218,7 @@ pub struct WindowInfo {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InventoryScope {
     SameProcessStandardWindows,
-    SameProcessLayerZeroSurfaces,
+    SameProcessApplicationSurfaces,
 }
 
 /// Bounded provider evidence, not an authorization or a retry instruction.
@@ -401,6 +401,12 @@ pub trait Backend: Send + Sync {
     /// separately, including when a script catches the operation's own error.
     fn cleanup_error(&self) -> Option<Error> {
         None
+    }
+
+    /// Release temporary resources borrowed by one script, including foreground
+    /// focus. App state and native observations remain available to later scripts.
+    fn finish_execution(&self) -> Result<(), Error> {
+        Ok(())
     }
 
     /// Stop and reap native resources. Failure does not reopen admission.

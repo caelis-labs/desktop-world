@@ -524,11 +524,12 @@ pub(crate) fn inventory_report(report: &computer::InventoryReport, proven: bool)
                 "non_default_layers"
             ]),
         ),
-        computer::InventoryScope::SameProcessLayerZeroSurfaces => (
-            "same_process_layer_zero_surfaces",
+        computer::InventoryScope::SameProcessApplicationSurfaces => (
+            "same_process_application_surfaces",
             json!([
                 "helper_processes",
-                "non_default_layers",
+                "unproven_associations",
+                "unavailable_surfaces",
                 "zero_area_surfaces"
             ]),
         ),

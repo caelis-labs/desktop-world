@@ -6,11 +6,11 @@ private func surfaceRow(_ id: UInt32, pid: Int32 = 10, layer: Int = 0, width: Do
      kCGWindowIsOnscreen as String:true, kCGWindowName as String:"owned title"]
 }
 private let (surfaces, coverage) = try surfaceInventory([surfaceRow(1), surfaceRow(2), surfaceRow(3, pid:11), surfaceRow(4, layer:3), surfaceRow(5, width:0)], pid:10)
-surfaceCheck(surfaces.count == 2 && surfaces[0].0.id == 1 && surfaces[1].0.id == 2)
-surfaceCheck(coverage["scope"] as? String == "same_pid_layer_zero_surfaces")
+surfaceCheck(surfaces.count == 3 && surfaces[0].0.id == 1 && surfaces[1].0.id == 2 && surfaces[2].0.id == 4)
+surfaceCheck(coverage["scope"] as? String == "same_pid_application_surfaces")
 let counts = coverage["diagnostics"] as! [String:Int]
-surfaceCheck(counts["cg_app_raw"] == 4 && counts["supported_count"] == 2)
-surfaceCheck(counts["excluded_non_layer_zero"] == 1 && counts["excluded_zero_area"] == 1)
+surfaceCheck(counts["cg_app_raw"] == 4 && counts["supported_count"] == 3)
+surfaceCheck(counts["excluded_unavailable_surface"] == 0 && counts["excluded_zero_area"] == 1)
 private let empty = try surfaceInventory([], pid:10)
 surfaceCheck(empty.0.isEmpty)
 private var invalid = surfaceRow(1)
@@ -388,3 +388,94 @@ do {
 descriptionCheck(descriptionFailure().json.count == 2,
                  "typed native evidence does not change the public error schema")
 print("Optional AXDescription controls passed (\(descriptionAssertions) assertions; no AX reads)")
+
+// All-list retained backing surfaces must not mint live refs. A false onscreen
+// flag alone does not exclude a surface which exact WindowServer lookup proves.
+private var offscreenSurface = surfaceRow(8)
+offscreenSurface.removeValue(forKey: kCGWindowIsOnscreen as String)
+private var exactReads: [UInt32] = []
+private let liveSurfaces = try surfaceInventory([surfaceRow(7), offscreenSurface, surfaceRow(9, layer: 25)], pid: 10) { record in
+    exactReads.append(record.id)
+    return record.id == 7 ? nil : record
+}
+surfaceCheck(exactReads == [7, 8, 9])
+surfaceCheck(liveSurfaces.0.map { $0.0.id } == [8, 9])
+surfaceCheck(!liveSurfaces.0[0].0.onscreen)
+surfaceCheck((liveSurfaces.1["diagnostics"] as! [String:Int])["excluded_unavailable_surface"] == 1)
+do {
+    _ = try surfaceInventory([surfaceRow(7)], pid: 10) { _ in throw failure("deadline_exceeded", "original") }
+    preconditionFailure("Exact inventory failure became absence")
+} catch let error as NativeFailure { surfaceCheck(error.code == "deadline_exceeded" && error.message == "original") }
+do {
+    _ = try surfaceInventory([surfaceRow(7)], pid: 10) { record in
+        CGRecord(id: record.id, pid: 11, bounds: record.bounds, onscreen: true)
+    }
+    preconditionFailure("Changed owner became a live reference")
+} catch let error as NativeFailure { surfaceCheck(error.code == "target_changed") }
+print("Application surfaces preserve overlays, reject retained stores and check exact owners")
+
+// Exercise the production exact-query parser, not only the resolver seam.
+// Nonempty malformed data may not claim a complete inventory by disappearing.
+private let expectedSurface = cgRecord(surfaceRow(70))!
+private let absentExactSurface = try exactSurfaceRecord([], expected: expectedSurface)
+surfaceCheck(absentExactSurface == nil)
+private let provenExactSurface = try exactSurfaceRecord([surfaceRow(70, layer: 25)], expected: expectedSurface)
+surfaceCheck(provenExactSurface?.id == expectedSurface.id)
+for missing in [kCGWindowNumber, kCGWindowOwnerPID, kCGWindowLayer, kCGWindowBounds] {
+    var row = surfaceRow(70)
+    row.removeValue(forKey: missing as String)
+    do {
+        _ = try exactSurfaceRecord([row], expected: expectedSurface)
+        preconditionFailure("Incomplete exact row became unavailable")
+    } catch let error as NativeFailure { surfaceCheck(error.code == "window_inventory_unproven") }
+}
+for rows in [[surfaceRow(70), surfaceRow(70)], [surfaceRow(70), [:]], [surfaceRow(70, width: 0)]] {
+    do {
+        _ = try exactSurfaceRecord(rows, expected: expectedSurface)
+        preconditionFailure("Invalid exact rows became unavailable")
+    } catch let error as NativeFailure { surfaceCheck(error.code == "window_inventory_unproven") }
+}
+for row in [surfaceRow(71), surfaceRow(70, pid: 11)] {
+    do {
+        _ = try exactSurfaceRecord([row], expected: expectedSurface)
+        preconditionFailure("Changed exact identity became unavailable")
+    } catch let error as NativeFailure { surfaceCheck(error.code == "target_changed") }
+}
+print("Exact inventory distinguishes empty lookup from malformed or changed metadata")
+
+// Real filesystem aliases: a matching label or matching bytes is insufficient.
+// No process/desktop reads are needed to prove the normalization boundary.
+private func checkExecutableAliases() throws {
+    let fm = FileManager.default
+    let root = fm.temporaryDirectory.appendingPathComponent("dtw-executable-alias-" + UUID().uuidString)
+    defer { try? fm.removeItem(at: root) }
+    let bundle = root.appendingPathComponent("Browser.app")
+    let executable = bundle.appendingPathComponent("Contents/MacOS/Browser")
+    let alias = root.appendingPathComponent("Browser.app.bundle/Contents/MacOS/Browser")
+    let impostor = root.appendingPathComponent("Other.app/Contents/MacOS/Browser")
+    for file in [executable, alias, impostor] {
+        try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+    }
+    try Data("owned binary".utf8).write(to: executable)
+    try fm.linkItem(at: executable, to: alias)
+    try Data("owned binary".utf8).write(to: impostor)
+    let candidate = (bundle: bundle.path, executable: executable.path)
+    surfaceCheck(canonicalAppExecutable(alias.path, registered: { candidate }) == executable.path)
+    surfaceCheck(canonicalAppExecutable(alias.path, registered: { nil }) == alias.path)
+    surfaceCheck(canonicalAppExecutable(alias.path, registered: {
+        (root.appendingPathComponent("Other.app").path, impostor.path)
+    }) == alias.path)
+    surfaceCheck(canonicalAppExecutable(alias.path, registered: {
+        (root.appendingPathComponent("Wrong.app").path, executable.path)
+    }) == alias.path)
+    try fm.removeItem(at: executable)
+    surfaceCheck(canonicalAppExecutable(alias.path, registered: { candidate }) == alias.path)
+    for kernel in [impostor.path, "/usr/bin/tool",
+                   "/Applications/Browser.app/Contents/Frameworks/Helper.app/Contents/MacOS/Helper"] {
+        surfaceCheck(canonicalAppExecutable(kernel, registered: {
+            preconditionFailure("ordinary bundle/helper/non-app must not consult registered URLs")
+        }) == kernel)
+    }
+}
+try checkExecutableAliases()
+print("Executable alias contracts passed (real hard link, impostor, missing file and nested helper)")

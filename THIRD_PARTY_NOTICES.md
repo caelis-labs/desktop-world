@@ -10,6 +10,13 @@ The latter also retains the donor’s Victor Vannara and Francesco Bonacci MIT
 notices for adapted Windows source groups. Removing the SDK
 and upstream worker does not remove this source attribution.
 
+The macOS background input group additionally ports a selected Rust input/AX
+closure from CUA commit `b38360443960a6540685a9a5eb5407f10fe3d03b`. Its exact
+donor hashes and deliberate adaptations are recorded in
+[background input provenance](docs/background-input-port.md); the original
+MIT license is included in `packaging/third-party/cua-background-input/LICENSE`.
+This adds native source and small locked Rust dependencies, not the CUA SDK.
+
 The script engine directly uses rquickjs 0.14.0 and its bundled QuickJS-ng
 0.16.2. QuickJS-ng credits Fabrice Bellard (2017–2026), Charlie Gordon
 (2017–2024), Ben Noordhuis (2023–2026) and Saúl Ibarra Corretgé (2023–2026);

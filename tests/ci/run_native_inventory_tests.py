@@ -22,6 +22,7 @@ def main():
             admission, native, scene, controls,
             native.with_name("surface_contract_tests.swift"),
             native.with_name("scene_contract_tests.swift"),
+            native.with_name("background_contract_tests.swift"),
         ]))
         binary = directory / "native-inventory-tests"
         subprocess.run(

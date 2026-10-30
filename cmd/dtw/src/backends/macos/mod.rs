@@ -7,6 +7,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+mod cua_input;
 mod worker;
 pub use worker::worker_entry;
 
@@ -19,6 +20,7 @@ pub struct NativeBackend {
     worker: Arc<Worker>,
     scene: SceneOwner,
     stamp: ProviderStamp,
+    cleanup_failure: Mutex<Option<Error>>,
 }
 
 #[derive(Default)]
@@ -152,12 +154,14 @@ impl Drop for NativeBinding {
     }
 }
 const COVERAGE: &str =
-    "same-PID layer-0 system surfaces; AX semantics are a separate exact-window capability";
+    "same-PID available application surfaces, including raised panels; AX semantics are a separate exact-window capability";
 const CONDITIONS: &[&str] = &[
     "semantic and input operations require macOS Accessibility permission",
     "capture and click require macOS Screen Recording permission",
-    "click requires a visible, unobstructed point in the captured window",
+    "input prefers directed background delivery; a side-effect-free preflight decline may use temporary foreground focus",
+    "foreground coordinate fallback requires a visible, unobstructed point in the captured window",
     "keyboard, focus and semantic input require an exact standard AX window without modal interception",
+    "borrowed foreground is returned only while still owned; uncertain input is never rerouted or replayed",
 ];
 impl NativeBackend {
     fn supports_capability(capability: Capability) -> bool {
@@ -186,6 +190,7 @@ impl NativeBackend {
         Ok(Self {
             worker: Arc::new(worker),
             scene: SceneOwner::default(),
+            cleanup_failure: Mutex::new(None),
             stamp: ProviderStamp {
                 id: "dtw-macos-native".into(),
                 generation: unique_generation(),
@@ -260,7 +265,12 @@ impl NativeBackend {
             })?;
         let reply: Value =
             serde_json::from_slice(&bytes).map_err(|e| (retire_worker(worker, failed(e)), true))?;
-        envelope_reply(&reply, request_id).map_err(|error| (retire_worker(worker, error), true))
+        let reply = envelope_reply(&reply, request_id)
+            .map_err(|error| (retire_worker(worker, error), true))?;
+        if let Some(error) = native_cleanup_error(&reply) {
+            self.cleanup_failure.lock().unwrap().get_or_insert(error);
+        }
+        Ok(reply)
     }
 
     fn retire(&self, error: Error) -> Error {
@@ -398,9 +408,38 @@ fn select_scene_target(inventory: &Value, original: &Value) -> Result<Value, Err
 }
 impl Backend for NativeBackend {
     type Binding = NativeBinding;
+    fn finish_execution(&self) -> Result<(), Error> {
+        let until = Instant::now() + Duration::from_millis(400);
+        let request_id = unique_generation();
+        let request = json!({"operation":"release_focus","request_id":request_id,
+            "deadline_unix_ms":(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default()+Duration::from_millis(350)).as_millis() as u64});
+        let bytes = match self.worker.call(request.to_string().as_bytes(), || {
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                Err(StopReason::TimedOut)
+            } else {
+                Ok(left)
+            }
+        }) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind == TransportErrorKind::Stopped => {
+                return self
+                    .worker
+                    .cleanup_error()
+                    .map_or(Ok(()), |error| Err(transport_error(error)));
+            }
+            Err(error) => return Err(transport_error(error)),
+        };
+        let envelope = serde_json::from_slice(&bytes).map_err(failed)?;
+        let reply = envelope_reply(&envelope, request_id)?;
+        reply_error(&reply).map_or(Ok(()), Err)
+    }
     fn cleanup_error(&self) -> Option<Error> {
-        self.scene
-            .cleanup_error()
+        self.cleanup_failure
+            .lock()
+            .unwrap()
+            .clone()
+            .or_else(|| self.scene.cleanup_error())
             .or_else(|| self.worker.cleanup_error().map(transport_error))
     }
     fn shutdown(&self) -> Result<(), Error> {
@@ -409,7 +448,12 @@ impl Backend for NativeBackend {
         match (scene, native) {
             (Err(scene), Err(native)) => Err(failed(format!("{scene:?}; {native:?}"))),
             (Err(error), _) | (_, Err(error)) => Err(error),
-            _ => Ok(()),
+            _ => self
+                .cleanup_failure
+                .lock()
+                .unwrap()
+                .clone()
+                .map_or(Ok(()), Err),
         }
     }
     fn stamp(&self) -> ProviderStamp {
@@ -621,6 +665,20 @@ impl Backend for NativeBackend {
         )
     }
 }
+fn native_cleanup_error(reply: &Value) -> Option<Error> {
+    let cleanup = reply.get("cleanup_error")?;
+    Some(Error::NativeFailure {
+        code: cleanup["code"]
+            .as_str()
+            .or_else(|| cleanup["error"].as_str())
+            .unwrap_or("cleanup_failed")
+            .into(),
+        message: cleanup["message"]
+            .as_str()
+            .unwrap_or("Native resource cleanup could not be confirmed")
+            .into(),
+    })
+}
 fn envelope_reply(reply: &Value, request_id: u64) -> Result<Value, Error> {
     if reply["request_id"].as_u64() != Some(request_id) || !reply["result"].is_object() {
         Err(Error::InvalidObservation)
@@ -652,6 +710,44 @@ fn action_reply(reply: &Value) -> ActionOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cleanup_failure_survives_an_independent_primary_action_error() {
+        let backend = NativeBackend {
+            worker: Arc::new(scene_fixture("import sys,json\nfor line in sys.stdin:\n r=json.loads(line);print(json.dumps({'request_id':r['request_id'],'result':{'dispatch':'unknown','evidence':'unverified','error':'input_failed','message':'original action error','cleanup_error':{'error':'focus_restore_failed','message':'restore failed'}}}),flush=True)").unwrap()),
+            scene: SceneOwner::default(),
+            cleanup_failure: Mutex::new(None),
+            stamp: ProviderStamp { id:"cleanup-test".into(),generation:1 },
+        };
+        let poll = || Ok(Duration::from_secs(2));
+        let outcome = backend.action(
+            json!({"operation":"keypress"}),
+            &CallContext { poll: &poll },
+        );
+        assert_eq!(
+            outcome.error,
+            Some(Error::NativeFailure {
+                code: "input_failed".into(),
+                message: "original action error".into()
+            })
+        );
+        assert_eq!(
+            backend.cleanup_error(),
+            Some(Error::NativeFailure {
+                code: "focus_restore_failed".into(),
+                message: "restore failed".into()
+            })
+        );
+        assert_eq!(
+            native_cleanup_error(
+                &json!({"cleanup_error":{"code":"cleanup_failed","message":"CUA release failed"}})
+            ),
+            Some(Error::NativeFailure {
+                code: "cleanup_failed".into(),
+                message: "CUA release failed".into()
+            })
+        );
+    }
 
     fn scene_fixture(code: &str) -> Result<Worker, Error> {
         Worker::spawn(std::path::Path::new("python3"), &["-u", "-c", code]).map_err(transport_error)
@@ -760,6 +856,7 @@ mod tests {
         let backend = NativeBackend {
             worker: Arc::new(echo_scene().unwrap()),
             scene: owner,
+            cleanup_failure: Mutex::new(None),
             stamp: ProviderStamp {
                 id: "cleanup-test".into(),
                 generation: 1,
@@ -777,6 +874,7 @@ mod tests {
                 scene_fixture("import sys\nsys.stdin.readline()\nsys.exit(74)").unwrap(),
             ),
             scene: SceneOwner::default(),
+            cleanup_failure: Mutex::new(None),
             stamp: ProviderStamp {
                 id: "resident-cleanup-test".into(),
                 generation: 1,
@@ -1013,11 +1111,11 @@ mod tests {
     }
     #[test]
     fn surface_inventory_is_ax_free_and_rejects_missing_or_conflicting_evidence() {
-        let mut value = json!({"scope":"same_pid_layer_zero_surfaces","diagnostics":{
-            "cg_app_raw":4,"supported_count":2,"excluded_non_layer_zero":1,
+        let mut value = json!({"scope":"same_pid_application_surfaces","diagnostics":{
+            "cg_app_raw":4,"supported_count":2,"excluded_unavailable_surface":1,
             "excluded_zero_area":1,"invalid_metadata":0,"duplicate_id":0}});
         let report = parse_inventory_report(&value, true).unwrap();
-        assert_eq!(report.scope, InventoryScope::SameProcessLayerZeroSurfaces);
+        assert_eq!(report.scope, InventoryScope::SameProcessApplicationSurfaces);
         assert_eq!(
             (
                 report.candidate_count,
@@ -1244,7 +1342,7 @@ fn reply_error(v: &Value) -> Option<Error> {
 }
 
 fn parse_inventory_report(value: &Value, proven: bool) -> Result<InventoryReport, Error> {
-    if value["scope"] == "same_pid_layer_zero_surfaces" {
+    if value["scope"] == "same_pid_application_surfaces" {
         return parse_surface_inventory(value, proven);
     }
     const COUNTERS: [&str; 18] = [
@@ -1337,7 +1435,7 @@ fn parse_surface_inventory(value: &Value, proven: bool) -> Result<InventoryRepor
     const NAMES: [&str; 6] = [
         "cg_app_raw",
         "supported_count",
-        "excluded_non_layer_zero",
+        "excluded_unavailable_surface",
         "excluded_zero_area",
         "invalid_metadata",
         "duplicate_id",
@@ -1360,14 +1458,14 @@ fn parse_surface_inventory(value: &Value, proven: bool) -> Result<InventoryRepor
         .collect::<Result<Vec<_>, Error>>()?;
     let count = |name: &str| counts[name].as_u64().unwrap();
     let unresolved = count("invalid_metadata") + count("duplicate_id");
-    let excluded = count("excluded_non_layer_zero") + count("excluded_zero_area");
+    let excluded = count("excluded_unavailable_surface") + count("excluded_zero_area");
     if proven != (unresolved == 0)
         || count("supported_count") + excluded + unresolved != count("cg_app_raw")
     {
         return Err(invalid());
     }
     let report = InventoryReport {
-        scope: InventoryScope::SameProcessLayerZeroSurfaces,
+        scope: InventoryScope::SameProcessApplicationSurfaces,
         candidate_count: count("cg_app_raw") as u32,
         supported_count: count("supported_count") as u32,
         excluded_count: excluded as u32,

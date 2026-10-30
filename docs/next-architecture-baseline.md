@@ -11,8 +11,8 @@ DTW 拥有独立的 Computer Use 类型、执行语义和演进权。CUA 是按�
 | 基线 | 固定内容 | 用途 |
 | --- | --- | --- |
 | 原生与脚本历史证据 | #60，`d0d8279130b74a58496e13b7f6a4c4565f6f00cf` | C5 历史行为和验收记录，不要求兼容旧 Host-grant 接线 |
-| CUA 源码来源 | Driver 0.38.0，`85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19` | 按映射职责迁入，不随 DTW 分发完整 CUA worker |
-| 当前接入 | `dtw mcp`，标准 `apps / exec / result` 与 Agent Skills | 普通 Agent 配置即可接入，无 DTW 专用 Host 适配要求 |
+| CUA 源码来源 | 既有组保留 Driver 0.38.0 来源；后台输入组固定 `b38360443960a6540685a9a5eb5407f10fe3d03b` | 按完整依赖闭包 port + 薄适配，[来源与差异](background-input-port.md)可追踪，不分发完整 worker |
+| 当前接入 | `dtw mcp`，标准 `apps / api / exec / result` 与 Agent Skills | 普通 Agent 配置即可接入，无 DTW 专用 Host 适配要求 |
 
 ## 分层与所有权
 
@@ -31,7 +31,7 @@ flowchart TD
 | Agent 接口 | 标准 MCP、app ID、脚本描述、结果/图像、Skill | 不把平台原生 schema 或 token 当公共 API |
 | 执行上下文 | 单执行准入、Job、VM、JSON state、预算、取消、回执和清理 | 不作授权决定，不创建授权状态机 |
 | Computer Core | 类型化操作、身份/引用校验、能力路由、效果模型 | 不导入 CUA ToolRegistry、SDK Session 或 Manifest |
-| 平台能力组 | OS 操作、对象保活、原生证据、线程与资源清理 | 不决定工具审批、不将失败自动切换为另一输入路线 |
+| 平台能力组 | OS 操作、对象保活、原生证据、线程与资源清理 | 不决定工具审批；只在无派发、无准备副作用的预检阶段选择前台替代路线 |
 
 一个 MCP 会话持有多个逻辑 App 上下文；每个 App 上下文维护自己的运行实例集合、已提交 JSON state 和引用生命周期。窗口引用内部绑定精确实例，同一脚本可操作多个实例的窗口。一次 exec 仍显式指定一个 app，便于 Harness 解析普通参数；这不限制整个 Agent 会话只能操作一个应用。Provider 可以保存 AX/COM 对象以及原生 token，不能自行把目标换成另一个应用。继续使用一个 Cargo package、Rust 内核和已有 Swift 桥；阻塞原生操作留在可终止的私有子进程内。模块边界由依赖与责任体现，不用 crate 数量衡量架构完成度。
 
@@ -42,10 +42,11 @@ flowchart TD
 app ID 是目标身份，不是权限 token。DTW 不要求、接收或验证用户审批事实。Harness 直接解析普通 MCP 参数中的 app 字符串；未实现细粒度策略的 Agent 也能正常调用工具。PID、进程出生代际、路径证明和其他内部身份结构不进入模型参数。
 
 ```text
-apps() -> [{app: 稳定平台 ID, name: 展示名称}] + 方法/schema/限制
+apps() -> [{app: 稳定平台 ID, name: 展示名称}] + 紧凑方法索引
+api(methods = 可选方法列表) -> 按需方法/schema/限制
 exec(app = 稳定平台 ID, source)
-    -> 内部分配执行标识，解析唯一可操作运行实例
-    -> 注入只绑定该实例的 app 对象
+    -> 内部分配执行标识，解析该 app 的当前运行实例集合
+    -> 注入绑定该 app 的对象；窗口引用选定精确实例
     -> 每次原生调用校验实例、窗口、provider 与 observation
     -> 等待执行收尾，回显 app ID、结果、步骤/动作摘要与图像
 result(app = 原 app ID, execution_id = 可选历史引用)
@@ -77,11 +78,11 @@ result(app = 原 app ID, execution_id = 可选历史引用)
 
 首版只做好本地 stdio，远程传输不构成首版阻塞项。协议层明确优先复用 [MCP 官方 Rust SDK rmcp](https://github.com/modelcontextprotocol/rust-sdk#transports)：它提供 stdio、Streamable HTTP 和进程内 transport，按 Cargo feature 选择；不为未来形态预先启用 HTTP、认证或服务部署。当前已迁入并锁定 `rmcp 3.8.0`，仅启用 server 与 transport-io；手写协商、消息分发与 framing 已删除。SDK 支持其他传输不等同于 DTW 已支持远程。
 
-扩展点保持为“SDK transport → 薄工具 handler → DTW 执行上下文/Core”。SDK 负责标准消息、协商、序列化和传输，DTW 负责 app 绑定、脚本、state、原始回执与原生资源收尾；将 SDK 的取消/关闭事件接到已有执行生命周期。执行层不直接依赖 stdin、socket 或调用方文件路径。首版验收聚焦内容保真、三工具调用、取消/EOF 清理、真实 GUI 与普通 Agent 接入；未来按需求添加 SDK transport 并完成相应场景验证，不新增必填的模型会话编号或定制 Host。
+扩展点保持为“SDK transport → 薄工具 handler → DTW 执行上下文/Core”。SDK 负责标准消息、协商、序列化和传输，DTW 负责 app 绑定、脚本、state、原始回执与原生资源收尾；将 SDK 的取消/关闭事件接到已有执行生命周期。执行层不直接依赖 stdin、socket 或调用方文件路径。首版验收聚焦内容保真、四工具调用、取消/EOF 清理、真实 GUI 与普通 Agent 接入；未来按需求添加 SDK transport 并完成相应场景验证，不新增必填的模型会话编号或定制 Host。
 
 ## 脚本与标准 MCP 生命周期
 
-五个方法 `windows / observe / capture / press / click` 返回 Promise。脚本顺序组合观察、操作与独立读回。脚本不能切换 app、传任意 PID、启动进程或调用任意 native tool；同名多窗仍需消歧。没有文件、网络、进程或模块加载入口。采用 QuickJS/rquickjs，不自造 JavaScript parser。
+`windows / observe / capture / press / click / focus / typeText / keypress / scroll / setValue` 返回 Promise。脚本顺序组合观察、操作与独立读回。脚本不能切换 app、传任意 PID、启动进程或调用任意 native tool；同名多窗仍需消歧。没有文件、网络、进程或模块加载入口。采用 QuickJS/rquickjs，不自造 JavaScript parser。
 
 方法名、参数/结果与能力描述由 Rust 方法定义和 schemas 描述；`dtw api` 从同一 schemas 生成 TypeScript，仓库声明通过生成结果比较保护。结构化观察保留可可靠读取的角色、名称、值、启用状态与动作信息；展示 label 不承担结构化事实来源。后端支持项明确枚举，覆盖范围由后端报告，不由通用协议层写死 AX 或 Windows 细节。
 
@@ -102,7 +103,7 @@ result(app = 原 app ID, execution_id = 可选历史引用)
 | 基础窗口操作 | 列 app → 列窗口 → 指定窗口截图 → 按图像坐标点击。目标归属和坐标校验必需，语义树可用性不是前置条件 | 五个方法已经包含该路径。只读 windows/observe 已与输入模态扫描分离，语义与图像引用按窗口独立保留；窗口身份和 capture/click 仍依赖 AX 校验。补齐替代身份及窗口 ID 复用证明后，才能宣称基础路径独立于 AX |
 | 语义操作 | 按控件类型、关键字、区域或子树按需发现，返回少量元素；语义动作通过元素引用在内部定位与校验 | 已接入窗口范围的原生 role/text 筛选与 cursor 续页，页间保留 frontier/visited 和前页元素。区域、子树选择以及浏览器特有启用/归属仍需后续样板；不以放大节点上限替代分页 |
 
-WindowSurface（窗口归属、几何、图像坐标）与 SemanticBinding（AX/UIA 对象、元素动作）必须分开管理。基础路径不能要求先成功读取控件树；缺少语义能力也不能使应用从窗口/截图能力中消失。拆分前必须补充替代的目标身份、窗口 ID 复用、遮挡与坐标证明，不能简单删除现有 AX guard。两条路径都保留，无隐式强制语义路线或自动输入降级。
+WindowSurface（窗口归属、几何、图像坐标）与 SemanticBinding（AX/UIA 对象、元素动作）必须分开管理。基础路径不能要求先成功读取控件树；缺少语义能力也不能使应用从窗口/截图能力中消失。拆分前必须补充替代的目标身份、窗口 ID 复用、遮挡与坐标证明，不能简单删除现有 AX guard。两条路径都保留；内部输入路由不改变 Agent 选择的目标或动作。
 
 高级能力按 **应用/窗口 × 动作 × 执行条件** 声明，而不是一个 `background=true`：
 
@@ -113,7 +114,7 @@ WindowSurface（窗口归属、几何、图像坐标）与 SemanticBinding（AX/
 | 锁屏 | 当前 OS、会话与目标应用在已锁屏条件下是否经验证支持？不能由后台能力推断，不包含解锁或绕过认证 |
 | 资源冲突 | 占用哪个 app/窗口、capture client、指针、键盘或桌面资源？何时释放，取消后由谁收尾？ |
 
-能力结果明确区分支持、不支持和未验证。后台或鼠标独立路线不可用时返回具体原因，不偷偷激活前台或移动用户鼠标。本轮只落实原生 owner 与短命 scene 资源的分离；后台新路线、鼠标独立、锁屏以及完整输入仲裁尚未实现。
+能力结果明确区分支持、不支持和未验证。公开动作不增加 delivery 参数：macOS 优先后台定向投递，预检确认不可用且尚无副作用时才临时聚焦目标；Agent 也可显式 focus。完成后归还仍由 DTW 持有的前台和指针，用户改变前台选择后不抢回。开始准备或派发后出现失败，不转路线、不重投。按进程实例串行写入、跨实例后台并行；共享物理输入和 SCK 各自有跨进程租约。锁屏、对话框、overlay 以及更多应用族仍需独立验证，不由这组输入推导支持。
 
 ## 按需发现与简洁输出的目标合同
 

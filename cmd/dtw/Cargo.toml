@@ -22,6 +22,13 @@ tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-th
 
 tokio-util = { version = "0.7.20", default-features = false, features = ["rt"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+core-foundation = "0.10"
+core-graphics = { version = "0.24", features = ["highsierra", "elcapitan"] }
+foreign-types = "0.5"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
