@@ -1,0 +1,33 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>DTW Scroll __CASE__</title>
+<style>
+*{box-sizing:border-box}body{margin:0;padding:18px;font:16px system-ui;background:#edf2f5;overflow:hidden}
+main{display:flex;gap:20px;height:calc(100vh - 72px)}.region{overflow:auto;overscroll-behavior:contain;scroll-behavior:auto;border:2px solid #334155;padding:0}
+#left{width:57%;background:#d7f4f0}#right{flex:1;background:#ffe7cd}.document{height:4800px;padding:22px}
+#nested{height:230px;width:calc(100% - 20px);background:#e8dcfa;margin:40px 10px}.anchor{margin:0 0 18px;font-weight:bold;font-size:20px}
+p.row{height:36px;margin:0}h1{font-size:20px;margin:0 0 12px}
+</style>
+<h1>Owned dual-column / nested scroll task</h1><main>
+<section id="left" class="region" role="region" aria-label="Left scroll region" tabindex="0"><div class="document"><p class="anchor" id="left-anchor">Left anchor</p><div class="rows"></div></div></section>
+<section id="right" class="region" role="region" aria-label="Right scroll region" tabindex="0"><div class="document"><p class="anchor" id="right-anchor">Right anchor</p>
+<section id="nested" class="region" role="region" aria-label="Nested scroll region" tabindex="0"><div class="document"><p class="anchor" id="nested-anchor">Nested anchor</p><div class="rows"></div></div></section>
+<div class="rows"></div></div></section></main>
+<script>
+(() => {
+  for (const rows of document.querySelectorAll('.rows')) {
+    for(let n=0;n<100;n++){const row=document.createElement('p');row.className='row';row.textContent=`Record ${n+1}: independent scroll content`;rows.append(row);}
+  }
+  let sequence=0, delivery=Promise.resolve();
+  const event=(type,data)=>{const body=JSON.stringify({type,sequence:++sequence,...data});
+    delivery=delivery.then(()=>fetch('/api/event',{method:'POST',headers:{'Content-Type':'application/json'},body}));};
+  const rect=e=>{const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height];};
+  const snapshot=()=>event('snapshot',{offsets:Object.fromEntries(['left','right','nested'].map(id=>[id,document.getElementById(id).scrollTop])),
+    regions:Object.fromEntries(['left','right','nested'].map(id=>[id,rect(document.getElementById(id))])),
+    anchors:Object.fromEntries(['left','right','nested'].map(id=>[id,rect(document.getElementById(id+'-anchor'))])),
+    window:{x:screenX,y:screenY,width:outerWidth,height:outerHeight,inner_width:innerWidth,inner_height:innerHeight,device_pixel_ratio:devicePixelRatio}});
+  document.addEventListener('wheel',e=>event('wheel',{region:e.target.closest('.region')?.id??null,trusted:e.isTrusted,
+    delta_x:e.deltaX,delta_y:e.deltaY,delta_mode:e.deltaMode,wheel_delta_y:e.wheelDeltaY,
+    client_point:[e.clientX,e.clientY],timestamp:e.timeStamp}),{capture:true,passive:true});
+  document.addEventListener('scroll',snapshot,{capture:true,passive:true});
+  event('ready',{});setInterval(snapshot,100);snapshot();
+})();
+</script></html>

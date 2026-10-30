@@ -235,6 +235,27 @@ pub struct PixelPoint {
     pub y: f64,
 }
 
+/// A scroll point bound to a retained observation, never a global coordinate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ScrollAnchor {
+    Pixels(PixelPoint),
+    Element(ElementId),
+}
+impl ScrollAnchor {
+    pub fn kind(self) -> ObservationKind {
+        match self {
+            Self::Pixels(_) => ObservationKind::Pixels,
+            Self::Element(_) => ObservationKind::Semantic,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScrollRequest {
+    pub anchor: ScrollAnchor,
+    pub delta_x: i32,
+    pub delta_y: i32,
+}
+
 /// One complete input transaction. No held keys or buttons escape an atomic call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WindowInput {
@@ -551,6 +572,20 @@ pub trait Backend: Send + Sync {
         &self,
         _target: &WindowTarget,
         _input: &WindowInput,
+        _call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        ActionOutcome::rejected(Error::UnsupportedCapability)
+    }
+    /// Separate from center scrolling, so unsupported providers reject before
+    /// Core consumes the observation.
+    fn supports_scroll_anchor(&self, _kind: ObservationKind) -> bool {
+        false
+    }
+    fn scroll_at(
+        &self,
+        _target: &WindowTarget,
+        _binding: &Self::Binding,
+        _scroll: ScrollRequest,
         _call: &CallContext<'_>,
     ) -> ActionOutcome {
         ActionOutcome::rejected(Error::UnsupportedCapability)

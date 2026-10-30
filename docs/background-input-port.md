@@ -38,6 +38,8 @@ The native crate dependencies match CUA's `core-graphics 0.24` (`highsierra`, `e
 8. `SLSGetWindowOwner` returning exactly `1002` during the read-only connection preflight is retained as an invalid worker WindowServer connection. DTW returns unavailable immediately instead of masking it with `GetProcessForPID` and discovering it on the first focus post. Other statuses are not misclassified as `1002`.
 9. Upstream window-change tail bookkeeping and cursor-overlay runtime integration remain excluded; DTW retains observation invalidation and instance identity ownership. A separate [cursor presentation port](cursor-overlay-port.md) now observes actual posts through narrow feedback hooks; it does not change the imported input recipes. Upstream best-effort `Drop` restoration is replaced with explicit checked cleanup, plus `Drop` as an unwind guard.
 
+精确滚动沿用以上事件构造和 wheel-step 单位，只在输入适配边界增加截图锚点映射与首次 wheel 前的原 AX 对象复核；固定落点和失败/取消语义见[精确滚动验收](anchored-scroll-acceptance.md)。
+
 ## Menu shortcuts and Chromium text dispatch boundary
 
 The authenticated PID route can deliver a `keydown` to Chromium without producing the intended text edit. Candidate E (`/private/tmp/dtw-background-followup-browser-e/web/state.json`) retained the original `seed-to-replace` after Cmd+A; it recorded a trusted `🐦` keydown but no corresponding `input`. BMP Chinese and `café` inserted, and Backspace worked. The resulting note was `seed-to-replace后台复核：已核对  café`. All four calls had posted successfully, so none was retried. This evidence identifies a route capability boundary, not malformed JSON or truncated UTF-16: the port and donor both construct the complete UTF-16 payload for each scalar.

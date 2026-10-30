@@ -12,8 +12,10 @@ use std::{
 };
 mod cua_input;
 mod cursor_session;
+mod local_socket;
 mod overlay;
 mod pointer_presentation;
+mod scroll_guard;
 pub use cursor_session::CursorSession;
 pub use overlay::worker_entry as overlay_worker_entry;
 mod worker;
@@ -40,6 +42,7 @@ struct SceneState {
     closed: bool,
     worker: Option<Arc<Worker>>,
     failure: Option<Error>,
+    guard: Option<Arc<scroll_guard::Owner>>,
 }
 
 /// Owns a short-lived child of the MCP process, never a child of its AX worker.
@@ -90,6 +93,9 @@ impl SceneOwner {
     }
 
     fn finish(&self, worker: &Arc<Worker>) -> Result<(), Error> {
+        if let Some(guard) = self.state.lock().unwrap().guard.as_ref() {
+            guard.invalidate();
+        }
         let result = worker.stop().map_err(transport_error);
         let mut state = self.state.lock().unwrap();
         if let Err(error) = &result {
@@ -101,6 +107,7 @@ impl SceneOwner {
             .is_some_and(|owned| Arc::ptr_eq(owned, worker))
         {
             state.worker = None;
+            state.guard = None;
         }
         result
     }
@@ -109,6 +116,9 @@ impl SceneOwner {
         let worker = {
             let mut state = self.state.lock().unwrap();
             state.closed = true;
+            if let Some(guard) = &state.guard {
+                guard.invalidate();
+            }
             state.worker.clone()
         };
         if let Some(worker) = worker {
@@ -116,6 +126,27 @@ impl SceneOwner {
         }
         let state = self.state.lock().unwrap();
         state.failure.clone().map_or(Ok(()), Err)
+    }
+    fn attach_guard(
+        &self,
+        worker: &Arc<Worker>,
+        guard: Arc<scroll_guard::Owner>,
+    ) -> Result<(), Error> {
+        let mut state = self.state.lock().unwrap();
+        if state.closed {
+            guard.invalidate();
+            return Err(Error::Closed);
+        }
+        if !state
+            .worker
+            .as_ref()
+            .is_some_and(|owned| Arc::ptr_eq(owned, worker))
+        {
+            guard.invalidate();
+            return Err(Error::Busy);
+        }
+        state.guard = Some(guard);
+        Ok(())
     }
 }
 
@@ -269,8 +300,17 @@ impl NativeBackend {
     fn rpc_on(
         &self,
         worker: &Worker,
+        request: Value,
+        call: &CallContext<'_>,
+    ) -> Result<Value, (Error, bool)> {
+        self.rpc_on_guarded(worker, request, call, None)
+    }
+    fn rpc_on_guarded(
+        &self,
+        worker: &Worker,
         mut request: Value,
         call: &CallContext<'_>,
+        guard: Option<(&Arc<scroll_guard::Owner>, &Value)>,
     ) -> Result<Value, (Error, bool)> {
         let mut cursor_attempt = CursorAttempt {
             cursor: &self.cursor,
@@ -309,18 +349,67 @@ impl NativeBackend {
         request["deadline_unix_ms"] = json!(wall.as_millis() as u64);
         let stop = std::sync::Mutex::new(None);
         let bytes = worker
-            .call(request.to_string().as_bytes(), || match call.remaining() {
-                Ok(left) => {
-                    let left = left.min(deadline.saturating_duration_since(Instant::now()));
-                    if left.is_zero() {
-                        Err(StopReason::TimedOut)
-                    } else {
-                        Ok(left)
+            .call(request.to_string().as_bytes(), || {
+                if let Some((owner, validation)) = guard {
+                    let query = match owner.pending() {
+                        Ok(query) => query,
+                        Err(error) => {
+                            owner.invalidate();
+                            *stop.lock().unwrap() = Some(failed(error));
+                            return Err(StopReason::Cancelled);
+                        }
+                    };
+                    if let Some(query) = query {
+                        // pending() returns an owned request: no pump/channel
+                        // mutex remains held while entering this nested RPC.
+                        let poll = || {
+                            let left = call.remaining().and_then(|left| {
+                                let left =
+                                    left.min(deadline.saturating_duration_since(Instant::now()));
+                                if left.is_zero() {
+                                    Err(Error::TimedOut)
+                                } else {
+                                    Ok(left)
+                                }
+                            });
+                            if left.is_err() {
+                                self.stop_guard_scene(worker, owner);
+                            }
+                            left
+                        };
+                        let nested = CallContext { poll: &poll };
+                        // Cooperative cancel/EOF follows scene -> resident order.
+                        // A resident pipe/frame failure may retire itself inside
+                        // Worker.call; that pre-existing bounded failure path
+                        // keeps cleanup uncertainty instead of promising order.
+                        let response = match self.read_rpc(validation.clone(), &nested) {
+                            Ok(_) => json!({"ok":true}),
+                            Err(error) => guard_error(error),
+                        };
+                        if query.respond(response).is_err() {
+                            owner.invalidate();
+                        }
                     }
                 }
-                Err(error) => {
-                    *stop.lock().unwrap() = Some(error);
-                    Err(StopReason::Cancelled)
+                match call.remaining() {
+                    Ok(left) => {
+                        let left = left.min(deadline.saturating_duration_since(Instant::now()));
+                        if left.is_zero() {
+                            if let Some((owner, _)) = guard {
+                                owner.invalidate();
+                            }
+                            Err(StopReason::TimedOut)
+                        } else {
+                            Ok(left)
+                        }
+                    }
+                    Err(error) => {
+                        if let Some((owner, _)) = guard {
+                            owner.invalidate();
+                        }
+                        *stop.lock().unwrap() = Some(error);
+                        Err(StopReason::Cancelled)
+                    }
                 }
             })
             .map_err(|error| {
@@ -338,6 +427,24 @@ impl NativeBackend {
             cursor_attempt.operation = None;
         }
         Ok(reply)
+    }
+
+    fn stop_guard_scene(&self, worker: &Worker, owner: &scroll_guard::Owner) {
+        owner.invalidate();
+        if let Err(error) = worker.stop() {
+            // A cleanup error can coexist with a confirmed wait/reap. If the
+            // OS could not terminate the owned scene at all, we still use the
+            // existing bounded resident stop; neither cleanup is called proven.
+            // Never prolong the original deadline or permit new input admission.
+            let message = if worker.is_reaped() {
+                format!("{error}")
+            } else {
+                format!("Scene process exit could not be confirmed before bounded resident cleanup: {error}")
+            };
+            let mut state = self.scene.state.lock().unwrap();
+            state.failure.get_or_insert(Error::BackendFailed(message));
+            state.closed = true;
+        }
     }
 
     fn retire(&self, error: Error) -> Error {
@@ -394,15 +501,24 @@ impl NativeBackend {
         Ok(reply["bounds"].clone())
     }
 
-    fn scene_rpc(
+    fn scene_rpc(&self, request: Value, call: &CallContext<'_>) -> Result<Value, (Error, bool)> {
+        self.scene_rpc_guarded(request, call, None)
+    }
+    fn scene_rpc_guarded(
         &self,
         mut request: Value,
         call: &CallContext<'_>,
+        validation: Option<Value>,
     ) -> Result<Value, (Error, bool)> {
         let original = request["target"].clone();
         // This first validation rejects stale refs before spawning a scene.
         self.validate_window(&original, call)
             .map_err(|error| (error, false))?;
+        let guard = validation
+            .as_ref()
+            .map(|_| scroll_guard::Owner::new())
+            .transpose()
+            .map_err(|error| (failed(error), false))?;
         let scene = self
             .scene
             .start(|| {
@@ -410,6 +526,12 @@ impl NativeBackend {
                 Worker::spawn(&exe, &["--dtw-scene-worker"]).map_err(transport_error)
             })
             .map_err(|error| (error, false))?;
+        if let Some(guard) = &guard {
+            self.scene
+                .attach_guard(&scene.worker, guard.clone())
+                .map_err(|error| (error, false))?;
+            request["_scroll_guard"] = guard.endpoint();
+        }
         let result = (|| {
             // A scene retains its own AX window object. Revalidate the resident
             // binding AFTER that object is acquired, linking both identities.
@@ -437,7 +559,12 @@ impl NativeBackend {
                 .map_err(|error| (error, false))?;
             request["target"] = local.clone();
             let capture = request["operation"] == "capture";
-            let mut reply = self.rpc_on(&scene.worker, request, call)?;
+            let mut reply = self.rpc_on_guarded(
+                &scene.worker,
+                request,
+                call,
+                guard.as_ref().zip(validation.as_ref()),
+            )?;
             if capture && reply.get("error").is_some_and(|error| !error.is_string()) {
                 return Err((Error::InvalidObservation, false));
             }
@@ -718,12 +845,76 @@ impl Backend for NativeBackend {
         let Some((bounds, width, height)) = &binding.pixels else {
             return ActionOutcome::rejected(Error::InvalidObservation);
         };
-        let screen_x =
-            bounds[0].as_f64().unwrap() + point.x / *width as f64 * bounds[2].as_f64().unwrap();
-        let screen_y =
-            bounds[1].as_f64().unwrap() + point.y / *height as f64 * bounds[3].as_f64().unwrap();
+        let (screen_x, screen_y) = match bound_pixel_point(bounds, *width, *height, point) {
+            Ok(point) => point,
+            Err(error) => return ActionOutcome::rejected(error),
+        };
         let scene = self.scene_rpc(json!({"operation":"click","target":target_json(target),"bounds":bounds,"screen_x":screen_x,"screen_y":screen_y,"button":match options.button {MouseButton::Left=>"left",MouseButton::Right=>"right"},"count":options.count}),call);
         match scene {
+            Ok(reply) => action_reply(&reply),
+            Err((error, true)) => ActionOutcome::unknown(error),
+            Err((error, false)) => ActionOutcome::rejected(error),
+        }
+    }
+    fn supports_scroll_anchor(&self, kind: ObservationKind) -> bool {
+        matches!(kind, ObservationKind::Pixels | ObservationKind::Semantic)
+    }
+    fn scroll_at(
+        &self,
+        target: &WindowTarget,
+        binding: &NativeBinding,
+        scroll: ScrollRequest,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        let original = target_json(target);
+        let mut request = json!({"operation":"scroll","target":original,
+            "delta_x":scroll.delta_x,"delta_y":scroll.delta_y});
+        let validation = match scroll.anchor {
+            ScrollAnchor::Pixels(point) => {
+                let Some((bounds, width, height)) = &binding.pixels else {
+                    return ActionOutcome::rejected(Error::InvalidObservation);
+                };
+                let (x, y) = match bound_pixel_point(bounds, *width, *height, point) {
+                    Ok(point) => point,
+                    Err(error) => return ActionOutcome::rejected(error),
+                };
+                request["bounds"] = bounds.clone();
+                request["screen_x"] = json!(x);
+                request["screen_y"] = json!(y);
+                None
+            }
+            ScrollAnchor::Element(element) => {
+                let Some(token) = &binding.semantic else {
+                    return ActionOutcome::rejected(Error::InvalidObservation);
+                };
+                let mut proof = json!({"operation":"resolve_scroll_anchor","target":original,
+                    "binding":token,"element":element.0});
+                let resolved = match self.read_rpc(proof.clone(), call) {
+                    Ok(value) => value,
+                    Err(error) => return ActionOutcome::rejected(error),
+                };
+                if worker::validate_reply(&resolved, &original).is_err()
+                    || !["screen_x", "screen_y"]
+                        .iter()
+                        .all(|key| resolved[key].as_f64().is_some_and(f64::is_finite))
+                    || resolved["element_bounds"].as_array().is_none_or(|values| {
+                        values.len() != 4
+                            || values
+                                .iter()
+                                .any(|value| value.as_f64().is_none_or(|value| !value.is_finite()))
+                    })
+                {
+                    return ActionOutcome::rejected(self.retire(Error::InvalidObservation));
+                }
+                proof["operation"] = json!("validate_scroll_anchor");
+                for key in ["bounds", "screen_x", "screen_y", "element_bounds"] {
+                    proof[key] = resolved[key].clone();
+                    request[key] = resolved[key].clone();
+                }
+                Some(proof)
+            }
+        };
+        match self.scene_rpc_guarded(request, call, validation) {
             Ok(reply) => action_reply(&reply),
             Err((error, true)) => ActionOutcome::unknown(error),
             Err((error, false)) => ActionOutcome::rejected(error),
@@ -770,6 +961,52 @@ impl Backend for NativeBackend {
             call,
         )
     }
+}
+fn guard_error(error: Error) -> Value {
+    match error {
+        Error::NativeFailure { code, message } => json!({"error":code,"message":message}),
+        Error::TimedOut => {
+            json!({"error":"deadline_exceeded","message":"Scroll anchor validation deadline elapsed"})
+        }
+        Error::Cancelled | Error::Closed => {
+            json!({"error":"native_stopping","message":"Scroll anchor validation cancelled"})
+        }
+        other => json!({"error":"scroll_anchor_unavailable","message":format!("{other:?}")}),
+    }
+}
+fn bound_pixel_point(
+    bounds: &Value,
+    width: u32,
+    height: u32,
+    point: PixelPoint,
+) -> Result<(f64, f64), Error> {
+    let values = bounds
+        .as_array()
+        .filter(|values| values.len() == 4)
+        .ok_or(Error::InvalidObservation)?;
+    let coords = values
+        .iter()
+        .map(|value| value.as_f64().filter(|value| value.is_finite()))
+        .collect::<Option<Vec<_>>>()
+        .ok_or(Error::InvalidObservation)?;
+    if width == 0 || height == 0 || coords[2] <= 0.0 || coords[3] <= 0.0 {
+        return Err(Error::InvalidObservation);
+    }
+    if !point.x.is_finite()
+        || !point.y.is_finite()
+        || point.x < 0.0
+        || point.y < 0.0
+        || point.x >= width as f64
+        || point.y >= height as f64
+    {
+        return Err(Error::InvalidPoint);
+    }
+    let x = coords[0] + point.x / width as f64 * coords[2];
+    let y = coords[1] + point.y / height as f64 * coords[3];
+    if !x.is_finite() || !y.is_finite() {
+        return Err(Error::InvalidPoint);
+    }
+    Ok((x, y))
 }
 fn native_cleanup_error(reply: &Value) -> Option<Error> {
     let cleanup = reply.get("cleanup_error")?;
@@ -859,6 +1096,155 @@ fn action_reply(reply: &Value) -> ActionOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scroll_pixel_binding_uses_image_scale_and_negative_screen_origin() {
+        let bounds = json!([-1200.0, -100.0, 800.0, 600.0]);
+        assert_eq!(
+            bound_pixel_point(&bounds, 1600, 1200, PixelPoint { x: 200.0, y: 100.0 }),
+            Ok((-1100.0, -50.0))
+        );
+        assert_eq!(
+            bound_pixel_point(&bounds, 1600, 1200, PixelPoint { x: 1600.0, y: 0.0 }),
+            Err(Error::InvalidPoint)
+        );
+        assert_eq!(
+            bound_pixel_point(&bounds, 0, 1200, PixelPoint { x: 0.0, y: 0.0 }),
+            Err(Error::InvalidObservation)
+        );
+        assert_eq!(
+            bound_pixel_point(
+                &bounds,
+                1600,
+                1200,
+                PixelPoint {
+                    x: f64::NAN,
+                    y: 0.0
+                }
+            ),
+            Err(Error::InvalidPoint)
+        );
+    }
+
+    #[test]
+    fn scroll_guard_cancel_releases_scene_before_old_explicit_focus_owner() {
+        // The scene holds the same kind of exclusion an old resident focus
+        // cleanup needs. Nested polling must stop that scene first, even when
+        // its exit reports cleanup failure after being conclusively reaped.
+        for cleanup_fails in [false, true] {
+            let path = std::env::temp_dir().join(format!(
+                "dtw-scroll-order-{}",
+                uuid::Uuid::new_v4().simple()
+            ));
+            std::fs::create_dir(&path).unwrap();
+            let prelude = format!(
+                r#"
+import sys,json,signal,time,pathlib,fcntl,socket
+root=pathlib.Path({})
+lock=open(root/'coordination','w')
+def note(value):
+ with open(root/'events','a') as log: log.write(value+'\n')
+"#,
+                json!(path.to_str().unwrap())
+            );
+            let scene_code = format!(
+                r#"{prelude}
+fcntl.flock(lock,fcntl.LOCK_SH)
+def stop(signum,frame):
+ fcntl.flock(lock,fcntl.LOCK_UN)
+ note('scene-released')
+ sys.exit({})
+signal.signal(signal.SIGTERM,stop)
+for line in sys.stdin:
+ request=json.loads(line); guard=request['_scroll_guard']
+ stream=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);stream.connect(guard['path'])
+ stream.sendall((json.dumps({{'command':'check','token':guard['token']}})+'\n').encode())
+ stream.recv(8192)
+ while True:time.sleep(.01)
+"#,
+                if cleanup_fails { 74 } else { 0 }
+            );
+            let resident_code = format!(
+                r#"{prelude}
+def stop(signum,frame):
+ note('resident-stopping')
+ fcntl.flock(lock,fcntl.LOCK_EX)
+ note('resident-restored')
+ sys.exit({})
+signal.signal(signal.SIGTERM,stop)
+for line in sys.stdin:
+ note('resident-reading')
+ while True:time.sleep(.01)
+"#,
+                if cleanup_fails { 74 } else { 0 }
+            );
+            let backend = NativeBackend {
+                worker: Arc::new(scene_fixture(&resident_code).unwrap()),
+                scene: SceneOwner::default(),
+                stamp: ProviderStamp {
+                    id: "guard-order".into(),
+                    generation: 1,
+                },
+                cleanup_failure: Mutex::new(None),
+                input_policy: InputPolicy::Auto,
+                focus_pending: AtomicBool::new(true),
+                cursor: Arc::new(CursorSession::default()),
+                cursor_operation: AtomicU64::new(0),
+            };
+            let scene = backend.scene.start(|| scene_fixture(&scene_code)).unwrap();
+            let owner = scroll_guard::Owner::new().unwrap();
+            backend
+                .scene
+                .attach_guard(&scene.worker, owner.clone())
+                .unwrap();
+            let until = Instant::now() + Duration::from_secs(3);
+            let poll = || {
+                if std::fs::read_to_string(path.join("events"))
+                    .unwrap_or_default()
+                    .contains("resident-reading")
+                {
+                    Err(Error::Cancelled) // Includes session cancellation / input EOF.
+                } else {
+                    let left = until.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        Err(Error::TimedOut)
+                    } else {
+                        Ok(left)
+                    }
+                }
+            };
+            let outcome = backend.rpc_on_guarded(
+                &scene.worker,
+                json!({"operation":"guard_fixture","_scroll_guard":owner.endpoint()}),
+                &CallContext { poll: &poll },
+                Some((&owner, &json!({"operation":"validate_scroll_anchor"}))),
+            );
+            assert!(
+                matches!(outcome, Err((Error::Cancelled, true))),
+                "{outcome:?}"
+            );
+            assert!(scene.worker.is_reaped());
+            assert!(backend.worker.is_reaped());
+            assert_eq!(scene.worker.cleanup_error().is_some(), cleanup_fails);
+            assert_eq!(backend.worker.cleanup_error().is_some(), cleanup_fails);
+            let events = std::fs::read_to_string(path.join("events")).unwrap();
+            assert_eq!(
+                events.lines().collect::<Vec<_>>(),
+                [
+                    "resident-reading",
+                    "scene-released",
+                    "resident-stopping",
+                    "resident-restored"
+                ]
+            );
+            assert_eq!(scene.finish().is_err(), cleanup_fails);
+            if cleanup_fails {
+                assert!(backend.scene.check().is_err());
+            }
+            drop(backend);
+            std::fs::remove_dir_all(path).unwrap();
+        }
+    }
 
     #[test]
     fn stopped_focus_owner_keeps_unconfirmed_terminal_evidence() {

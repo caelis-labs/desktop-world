@@ -592,3 +592,75 @@ fn delivery_is_optional_and_preserves_typed_route_and_focus_evidence() {
         assert_eq!(value["dispatch"], "unknown");
     }
 }
+
+#[test]
+fn scroll_anchor_forms_are_exclusive_and_keep_wheel_units() {
+    let pixel = script_submit(
+        "app-a",
+        "r",
+        "scroll",
+        &json!({"window_ref":"w","observation_ref":"o","x":2.5,"y":3,"delta_y":8}),
+    )
+    .unwrap();
+    assert!(matches!(
+        pixel.command,
+        Command::Scroll {
+            anchor: ScrollLocation::Pixels(computer::PixelPoint { x: 2.5, y: 3.0 }),
+            delta_x: 0,
+            delta_y: 8,
+            ..
+        }
+    ));
+    let semantic = script_submit(
+        "app-a",
+        "r",
+        "scroll",
+        &json!({"window_ref":"w","observation_ref":"o","element_ref":"e","delta_x":-100}),
+    )
+    .unwrap();
+    assert!(
+        matches!(semantic.command, Command::Scroll {anchor:ScrollLocation::Element(ref e),delta_x:-100,delta_y:0,..} if e=="e")
+    );
+    let center = script_submit(
+        "app-a",
+        "r",
+        "scroll",
+        &json!({"window_ref":"w","delta_y":100}),
+    )
+    .unwrap();
+    assert_eq!(
+        center.command,
+        Command::Input(computer::WindowInput::Scroll {
+            delta_x: 0,
+            delta_y: 100
+        })
+    );
+    for extra in [
+        json!({"x":1,"y":2}),
+        json!({"element_ref":"e"}),
+        json!({"observation_ref":"o"}),
+        json!({"observation_ref":"o","x":1}),
+        json!({"observation_ref":"o","y":2}),
+        json!({"observation_ref":"o","element_ref":"e","x":1,"y":2}),
+        json!({"observation_ref":"o","element_ref":"e","x":1}),
+        json!({"observation_ref":"o","element_ref":"e","y":1}),
+        json!({"observation_ref":null,"x":1,"y":2}),
+        json!({"observation_ref":"o","element_ref":""}),
+        json!({"observation_ref":"o","x":-1,"y":2}),
+        json!({"observation_ref":"o","x":1,"y":null}),
+        json!({"delivery":"background"}),
+        json!({"point":{"x":1,"y":2}}),
+        json!({"delta_y":0}),
+        json!({"delta_y":101}),
+        json!({"delta_y":0.5}),
+    ] {
+        let mut args = json!({"window_ref":"w","delta_y":8});
+        args.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        assert!(
+            script_submit("app-a", "r", "scroll", &args).is_err(),
+            "{args}"
+        );
+    }
+}

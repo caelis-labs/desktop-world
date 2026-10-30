@@ -479,6 +479,22 @@ pub fn post_event_via(pid: i32, event: &CGEvent, auth: bool, public: bool) {
         None
     };
     // The exact-window AX read and event allocation above may have blocked.
+    if matches!(event.get_type(), CGEventType::ScrollWheel) {
+        if let Err(error) = super::super::scroll_guard::check() {
+            gate.record_error(
+                error["message"]
+                    .as_str()
+                    .unwrap_or("scroll anchor proof failed")
+                    .to_owned(),
+            );
+            return;
+        }
+        // The resident AX proof was read-only and outside input admission.
+        // Recheck the normal window/bounds/cancel contract after that IPC wait.
+        if gate.validate().is_err() {
+            return;
+        }
+    }
     // Do not register a release or send a new down after local admission closes.
     if gate.local().is_err() {
         return;
@@ -490,6 +506,9 @@ pub fn post_event_via(pid: i32, event: &CGEvent, auth: bool, public: bool) {
     if !send_event(pid, event, auth, public) {
         gate.record_error("targeted event dispatch could not be confirmed".into());
         return;
+    }
+    if matches!(event.get_type(), CGEventType::ScrollWheel) {
+        super::super::scroll_guard::posted();
     }
     use super::super::overlay::PointerKind;
     let kind = match event.get_type() {

@@ -32,6 +32,12 @@ pub struct Target {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum ScrollLocation {
+    Pixels(computer::PixelPoint),
+    Element(String),
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     Script {
         source: String,
@@ -64,6 +70,12 @@ pub enum Command {
         observation_ref: String,
         element_ref: String,
         value: String,
+    },
+    Scroll {
+        observation_ref: String,
+        anchor: ScrollLocation,
+        delta_x: i32,
+        delta_y: i32,
     },
     Input(computer::WindowInput),
 }
@@ -347,7 +359,19 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
             Ok(Command::Input(computer::WindowInput::Keypress { keys }))
         }
         "scroll" => {
-            fields(command, &["kind", "delta_x", "delta_y"], "command")?;
+            fields(
+                command,
+                &[
+                    "kind",
+                    "delta_x",
+                    "delta_y",
+                    "observation_ref",
+                    "x",
+                    "y",
+                    "element_ref",
+                ],
+                "command",
+            )?;
             let delta = |key: &str| -> Result<i32, WireError> {
                 match command.get(key) {
                     None => Ok(0),
@@ -364,10 +388,28 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
             if delta_x == 0 && delta_y == 0 {
                 return Err(invalid("scroll requires a nonzero delta"));
             }
-            Ok(Command::Input(computer::WindowInput::Scroll {
+            let shape = (
+                command.contains_key("observation_ref"),
+                command.contains_key("x"),
+                command.contains_key("y"),
+                command.contains_key("element_ref"),
+            );
+            let anchor = match shape {
+                (false, false, false, false) => return Ok(Command::Input(computer::WindowInput::Scroll { delta_x, delta_y })),
+                (true, true, true, false) => {
+                    let point = computer::PixelPoint { x: coordinate(command, "x")?, y: coordinate(command, "y")? };
+                    if point.x < 0.0 || point.y < 0.0 { return Err(invalid("scroll image coordinates must be nonnegative")); }
+                    ScrollLocation::Pixels(point)
+                },
+                (true, false, false, true) => ScrollLocation::Element(string(command, "element_ref", "command")?),
+                _ => return Err(invalid("scroll accepts a window center, observation_ref with x/y, or observation_ref with element_ref")),
+            };
+            Ok(Command::Scroll {
+                observation_ref: string(command, "observation_ref", "command")?,
+                anchor,
                 delta_x,
                 delta_y,
-            }))
+            })
         }
         _ => Err(invalid("Unknown command.kind")),
     }

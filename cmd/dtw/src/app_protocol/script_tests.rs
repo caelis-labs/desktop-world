@@ -784,3 +784,57 @@ fn final_focus_return_is_separate_from_the_original_focus_receipt() {
     assert!(next.data["script"].get("focus_return").is_none());
     owner.close();
 }
+
+#[test]
+fn script_scroll_resolves_bound_refs_once_and_keeps_other_windows() {
+    let (owner, backend) = coordinator();
+    let reply = run_script(
+        &owner,
+        "scroll-anchors",
+        r#"
+const [a,b]=(await app.windows()).windows;
+const first=await app.observe({window_ref:a.window_ref});
+const neighbor=await app.observe({window_ref:b.window_ref});
+const semantic={window_ref:a.window_ref,observation_ref:first.observation_ref,element_ref:first.elements[0].element_ref,delta_y:8};
+await app.scroll(semantic);
+let stale;
+try { await app.scroll(semantic); } catch(e) { stale=e.code; }
+await app.scroll({window_ref:b.window_ref,observation_ref:neighbor.observation_ref,element_ref:neighbor.elements[0].element_ref,delta_x:-3});
+const image=await app.capture({window_ref:a.window_ref});
+let malformed;
+try { await app.scroll({window_ref:a.window_ref,observation_ref:image.observation_ref,x:2.5,delta_y:8}); } catch(e) { malformed=e.code; }
+await app.scroll({window_ref:a.window_ref,observation_ref:image.observation_ref,x:2.5,y:3,delta_y:8});
+return {stale,malformed};
+"#,
+    );
+    assert!(!reply.is_error, "{}", reply.data);
+    assert_eq!(reply.data["value"]["result"]["stale"], "stale_observation");
+    assert_eq!(reply.data["value"]["result"]["malformed"], "invalid_args");
+    let calls = backend.0.anchored_scrolls.lock().unwrap();
+    assert_eq!(calls.len(), 3);
+    assert_eq!(
+        calls
+            .iter()
+            .map(|(target, _)| target.native_id)
+            .collect::<Vec<_>>(),
+        vec![101, 202, 101]
+    );
+    assert_eq!(
+        calls[0].1,
+        ScrollRequest {
+            anchor: ScrollAnchor::Element(ElementId(9007199254740993)),
+            delta_x: 0,
+            delta_y: 8
+        }
+    );
+    assert_eq!(calls[1].1.delta_x, -3);
+    assert_eq!(
+        calls[2].1,
+        ScrollRequest {
+            anchor: ScrollAnchor::Pixels(PixelPoint { x: 2.5, y: 3.0 }),
+            delta_x: 0,
+            delta_y: 8
+        }
+    );
+    assert_eq!(backend.0.actions.load(Ordering::SeqCst), 3);
+}

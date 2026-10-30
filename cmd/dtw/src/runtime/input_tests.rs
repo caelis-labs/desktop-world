@@ -4,6 +4,7 @@ use std::sync::{mpsc, Arc};
 #[derive(Clone)]
 struct InputBackend {
     calls: Arc<Mutex<Vec<String>>>,
+    anchors: Arc<std::sync::atomic::AtomicBool>,
     gate: Arc<Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>>,
 }
 impl Backend for InputBackend {
@@ -50,6 +51,40 @@ impl Backend for InputBackend {
         }
         dispatched()
     }
+    fn supports_scroll_anchor(&self, _: ObservationKind) -> bool {
+        self.anchors.load(std::sync::atomic::Ordering::Acquire)
+    }
+    fn capture(
+        &self,
+        target: &WindowTarget,
+        _: &CallContext<'_>,
+    ) -> Result<BackendObservation<()>, Error> {
+        Ok(BackendObservation {
+            target: target.clone(),
+            binding: (),
+            elements: vec![],
+            discovery: None,
+            image: Some(ImageFrame {
+                width: 100,
+                height: 80,
+                png: vec![1],
+            }),
+        })
+    }
+    fn scroll_at(
+        &self,
+        _: &WindowTarget,
+        _: &(),
+        scroll: ScrollRequest,
+        _: &CallContext<'_>,
+    ) -> ActionOutcome {
+        self.calls.lock().unwrap().push(format!("{scroll:?}"));
+        if let Some((entered, release)) = self.gate.lock().unwrap().take() {
+            entered.send(()).unwrap();
+            let _ = release.recv();
+        }
+        dispatched()
+    }
     fn set_value(
         &self,
         _: &WindowTarget,
@@ -82,6 +117,7 @@ fn setup() -> (Arc<Runtime<InputBackend>>, InputBackend, WindowTarget) {
     };
     let backend = InputBackend {
         calls: Arc::default(),
+        anchors: Arc::default(),
         gate: Arc::default(),
     };
     (
@@ -239,4 +275,186 @@ fn interruption_retains_the_provider_delivery_without_claiming_effect_success() 
     }
     let absent = ActionReceipt::from_provider(dispatched(), Some(Error::Cancelled));
     assert!(absent.outcome.delivery.is_none());
+}
+
+fn anchored(anchor: ScrollAnchor) -> ScrollRequest {
+    ScrollRequest {
+        anchor,
+        delta_x: 0,
+        delta_y: 8,
+    }
+}
+fn enable_anchors(backend: &InputBackend) {
+    backend
+        .anchors
+        .store(true, std::sync::atomic::Ordering::Release);
+}
+
+#[test]
+fn anchored_scroll_unsupported_preserves_semantic_and_pixel_bindings() {
+    let (runtime, backend, target) = setup();
+    let semantic = runtime.observe(&target).unwrap();
+    let pixels = runtime.capture_until(&target, deadline()).unwrap();
+    for (reference, anchor) in [
+        (semantic.reference, ScrollAnchor::Element(ElementId(1))),
+        (
+            pixels.reference,
+            ScrollAnchor::Pixels(PixelPoint { x: 10.0, y: 20.0 }),
+        ),
+    ] {
+        assert_eq!(
+            runtime
+                .scroll_at_until(&target, reference, anchored(anchor), deadline())
+                .outcome,
+            ActionOutcome::rejected(Error::UnsupportedCapability)
+        );
+        assert!(runtime.retains_observation(semantic.reference));
+        assert!(runtime.retains_observation(pixels.reference));
+    }
+    assert!(backend.calls.lock().unwrap().is_empty());
+    enable_anchors(&backend);
+    assert_eq!(
+        runtime
+            .scroll_at_until(
+                &target,
+                semantic.reference,
+                anchored(ScrollAnchor::Element(ElementId(1))),
+                deadline()
+            )
+            .outcome,
+        dispatched()
+    );
+    assert!(!runtime.retains_observation(semantic.reference));
+    assert!(!runtime.retains_observation(pixels.reference));
+    assert_eq!(backend.calls.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn semantic_scroll_needs_membership_not_pressability_and_consumes_only_its_window() {
+    let (runtime, backend, target) = setup();
+    enable_anchors(&backend);
+    let mut other = target.clone();
+    other.native_id += 1;
+    let original = runtime.observe(&target).unwrap();
+    let neighbor = runtime.observe(&other).unwrap();
+    assert!(!original.elements[0].can_press);
+    let invalid = anchored(ScrollAnchor::Element(ElementId(99)));
+    assert_eq!(
+        runtime
+            .scroll_at_until(&target, original.reference, invalid, deadline())
+            .outcome,
+        ActionOutcome::rejected(Error::ElementNotFound)
+    );
+    let valid = anchored(ScrollAnchor::Element(ElementId(1)));
+    assert_eq!(
+        runtime
+            .scroll_at_until(&other, original.reference, valid, deadline())
+            .outcome,
+        ActionOutcome::rejected(Error::TargetChanged)
+    );
+    assert!(backend.calls.lock().unwrap().is_empty());
+    assert_eq!(
+        runtime
+            .scroll_at_until(&target, original.reference, valid, deadline())
+            .outcome,
+        dispatched()
+    );
+    assert_eq!(
+        runtime
+            .scroll_at_until(&target, original.reference, valid, deadline())
+            .outcome,
+        ActionOutcome::rejected(Error::StaleObservation)
+    );
+    assert!(runtime.retains_observation(neighbor.reference));
+    assert_eq!(backend.calls.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn pixel_scroll_requires_capture_kind_and_finite_in_image_anchor() {
+    let (runtime, backend, target) = setup();
+    enable_anchors(&backend);
+    let semantic = runtime.observe(&target).unwrap();
+    let pixels = runtime.capture_until(&target, deadline()).unwrap();
+    let valid = anchored(ScrollAnchor::Pixels(PixelPoint { x: 99.5, y: 79.5 }));
+    assert_eq!(
+        runtime
+            .scroll_at_until(&target, semantic.reference, valid, deadline())
+            .outcome,
+        ActionOutcome::rejected(Error::InvalidObservation)
+    );
+    assert_eq!(
+        runtime
+            .scroll_at_until(
+                &target,
+                pixels.reference,
+                anchored(ScrollAnchor::Element(ElementId(1))),
+                deadline()
+            )
+            .outcome,
+        ActionOutcome::rejected(Error::InvalidObservation)
+    );
+    for point in [
+        PixelPoint { x: -1.0, y: 1.0 },
+        PixelPoint { x: 100.0, y: 1.0 },
+        PixelPoint { x: 1.0, y: 80.0 },
+        PixelPoint {
+            x: f64::NAN,
+            y: 1.0,
+        },
+        PixelPoint {
+            x: 1.0,
+            y: f64::INFINITY,
+        },
+    ] {
+        assert_eq!(
+            runtime
+                .scroll_at_until(
+                    &target,
+                    pixels.reference,
+                    anchored(ScrollAnchor::Pixels(point)),
+                    deadline()
+                )
+                .outcome,
+            ActionOutcome::rejected(Error::InvalidPoint)
+        );
+        assert!(runtime.retains_observation(pixels.reference));
+    }
+    assert!(backend.calls.lock().unwrap().is_empty());
+    assert_eq!(
+        runtime
+            .scroll_at_until(&target, pixels.reference, valid, deadline())
+            .outcome,
+        dispatched()
+    );
+    assert_eq!(backend.calls.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn cancellation_of_anchored_scroll_keeps_original_receipt_and_admission_until_return() {
+    let (runtime, backend, target) = setup();
+    enable_anchors(&backend);
+    let observed = runtime.observe(&target).unwrap();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    *backend.gate.lock().unwrap() = Some((entered_tx, release_rx));
+    let child = runtime.clone();
+    let chosen = target.clone();
+    let scroll = anchored(ScrollAnchor::Element(ElementId(1)));
+    let thread = std::thread::spawn(move || {
+        child.scroll_at_until(&chosen, observed.reference, scroll, deadline())
+    });
+    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    runtime.cancel().unwrap();
+    assert_eq!(
+        runtime
+            .scroll_at_until(&target, observed.reference, scroll, deadline())
+            .outcome,
+        ActionOutcome::rejected(Error::Busy)
+    );
+    release_tx.send(()).unwrap();
+    let receipt = thread.join().unwrap();
+    assert_eq!(receipt.outcome, ActionOutcome::unknown(Error::Cancelled));
+    assert_eq!(receipt.provider_outcome, Some(dispatched()));
+    assert_eq!(receipt.interruption, Some(Error::Cancelled));
+    assert_eq!(backend.calls.lock().unwrap().len(), 1);
 }

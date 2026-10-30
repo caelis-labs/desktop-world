@@ -36,6 +36,8 @@
 | `await app.typeText({window_ref,text})` | 动作 receipt | 向指定窗口当前文本焦点输入，内部按服务策略选择投递路线 |
 | `await app.keypress({window_ref,keys})` | 动作 receipt | 一个组合键，如 `["META","S"]`；平台支持的键名按原生合同校验 |
 | `await app.scroll({window_ref,delta_x?,delta_y?})` | 动作 receipt | 在指定窗口中心发送整数 wheel steps，每轴 ±100，至少一轴非零；实际距离由 OS/app 决定 |
+| `await app.scroll({window_ref,observation_ref,x,y,delta_x?,delta_y?})` | 动作 receipt | macOS：截图像素内的滚动落点；引用必须来自该窗口 capture，坐标不能超出图像 |
+| `await app.scroll({window_ref,observation_ref,element_ref,delta_x?,delta_y?})` | 动作 receipt | macOS：引用 observe 的元素作为滚动落点；不要求 can_press，首个 wheel 前复核同一对象与固定几何 |
 | `await app.setValue({window_ref,observation_ref,element_ref,value})` | 动作 receipt | 当前语义观察中明确广告 `setValue` 的可编辑文本控件 |
 
 调用 app 方法时，普通参数对象中自有、可枚举且值为 `undefined` 的数据属性视为未提供；这不会修改调用方对象。随后仍按唯一参数 schema 校验必填字段、长度及互斥规则。数组中的 undefined/空洞、访问器、toJSON、symbols、循环及其他非 JSON 值仍拒绝；已提交 state 与结果对象不会采用此省略规则。

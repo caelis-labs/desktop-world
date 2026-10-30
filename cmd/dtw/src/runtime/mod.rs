@@ -787,6 +787,16 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         )
     }
 
+    pub fn scroll_at_until(
+        &self,
+        target: &WindowTarget,
+        reference: ObservationRef,
+        scroll: ScrollRequest,
+        deadline: Instant,
+    ) -> ActionReceipt {
+        self.act(target, reference, Action::Scroll(scroll), Some(deadline))
+    }
+
     /// Window-targeted input needs no semantic or pixel binding. Native input
     /// owns focus and the shared desktop through completion of the transaction.
     pub fn input_until(
@@ -864,6 +874,10 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         let outcome = match ready {
             Err(error) => ActionOutcome::rejected(error),
             Ok(_) => match action {
+                Action::Scroll(scroll) => {
+                    self.backend
+                        .scroll_at(target, &observation.native, scroll, &call)
+                }
                 Action::Press(element) => {
                     self.backend
                         .press(target, &observation.native, element, &call)
@@ -917,8 +931,12 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             Action::Press(_) => (Capability::Press, ObservationKind::Semantic),
             Action::Click(_, _) => (Capability::Click, ObservationKind::Pixels),
             Action::SetValue(_, _) => (Capability::SetValue, ObservationKind::Semantic),
+            Action::Scroll(scroll) => (Capability::Scroll, scroll.anchor.kind()),
         };
         self.validate_target(state, &target.app, capability)?;
+        if matches!(action, Action::Scroll(_)) && !self.backend.supports_scroll_anchor(kind) {
+            return Err(Error::UnsupportedCapability);
+        }
         self.check_deadline(deadline)?;
         let index = state
             .observations
@@ -959,20 +977,23 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                     return Err(Error::UnsupportedCapability);
                 }
             }
+            Action::Scroll(scroll) => match scroll.anchor {
+                ScrollAnchor::Pixels(point) => validate_pixel_point(point, live.image_size)?,
+                ScrollAnchor::Element(element) => {
+                    if !live
+                        .elements
+                        .iter()
+                        .any(|candidate| candidate.id == element)
+                    {
+                        return Err(Error::ElementNotFound);
+                    }
+                }
+            },
             Action::Click(point, options) => {
                 if !(1..=2).contains(&options.count) {
                     return Err(Error::InvalidPoint);
                 }
-                let (width, height) = live.image_size.ok_or(Error::InvalidObservation)?;
-                if !point.x.is_finite()
-                    || !point.y.is_finite()
-                    || point.x < 0.0
-                    || point.y < 0.0
-                    || point.x >= width as f64
-                    || point.y >= height as f64
-                {
-                    return Err(Error::InvalidPoint);
-                }
+                validate_pixel_point(point, live.image_size)?;
             }
         }
         // Consume before dispatch. No outcome permits replay of this binding.
@@ -1148,6 +1169,21 @@ enum Action<'a> {
     Press(ElementId),
     SetValue(ElementId, &'a str),
     Click(PixelPoint, ClickOptions),
+    Scroll(ScrollRequest),
+}
+
+fn validate_pixel_point(point: PixelPoint, image_size: Option<(u32, u32)>) -> Result<(), Error> {
+    let (width, height) = image_size.ok_or(Error::InvalidObservation)?;
+    if !point.x.is_finite()
+        || !point.y.is_finite()
+        || point.x < 0.0
+        || point.y < 0.0
+        || point.x >= width as f64
+        || point.y >= height as f64
+    {
+        return Err(Error::InvalidPoint);
+    }
+    Ok(())
 }
 
 /// Releases admission on every return path. A panicking backend closes the

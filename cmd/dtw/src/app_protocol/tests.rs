@@ -67,6 +67,7 @@ struct Shared {
     observes: AtomicUsize,
     captures: AtomicUsize,
     actions: AtomicUsize,
+    anchored_scrolls: Mutex<Vec<(WindowTarget, ScrollRequest)>>,
     shutdowns: AtomicUsize,
     finishes: AtomicUsize,
 }
@@ -100,6 +101,7 @@ impl MockBackend {
             observes: AtomicUsize::new(0),
             captures: AtomicUsize::new(0),
             actions: AtomicUsize::new(0),
+            anchored_scrolls: Mutex::new(Vec::new()),
             shutdowns: AtomicUsize::new(0),
             finishes: AtomicUsize::new(0),
         }))
@@ -275,6 +277,23 @@ impl Backend for MockBackend {
         self.act(call)
     }
     fn input(&self, _: &WindowTarget, _: &WindowInput, call: &CallContext<'_>) -> ActionOutcome {
+        self.act(call)
+    }
+    fn supports_scroll_anchor(&self, _: ObservationKind) -> bool {
+        true
+    }
+    fn scroll_at(
+        &self,
+        target: &WindowTarget,
+        _: &(),
+        scroll: ScrollRequest,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        self.0
+            .anchored_scrolls
+            .lock()
+            .unwrap()
+            .push((target.clone(), scroll));
         self.act(call)
     }
     fn set_value(

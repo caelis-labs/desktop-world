@@ -377,10 +377,20 @@ fn background(request: &mut Value) -> BackgroundAttempt {
         validate_background,
     );
     target.failures.borrow().apply(&mut result);
+    if let Some(error) = super::scroll_guard::failure() {
+        if result["error"].is_object() {
+            result["error"]["code"] = error["error"].clone();
+            result["error"]["message"] = error["message"].clone();
+            result["anchor_error"] = error;
+        }
+    }
     background_result(result)
 }
 
 fn dispatch(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value {
+    let _anchor = super::scroll_guard::Scope::new(&request, remaining(&request), || {
+        TERMINATING.load(Ordering::Relaxed)
+    });
     let op = request["operation"].as_str().unwrap_or("").to_owned();
     let op = op.as_str();
     let background_only = match request["input_policy"].as_str() {

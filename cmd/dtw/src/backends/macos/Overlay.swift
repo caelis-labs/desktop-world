@@ -149,16 +149,53 @@ private final class OverlayWindow: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 }
+
+// DTW's four-hex-digit badge needs no font lookup or text layout. Keep its tiny
+// fixed alphabet as vector cells: a font-backed NSString draw has thrown an
+// uncaught CoreText exception in the otherwise healthy presentation helper.
+private let overlayHexGlyphs: [UInt16] = [
+    0b111_101_101_101_111, 0b010_110_010_010_111,
+    0b111_001_111_100_111, 0b111_001_111_001_111,
+    0b101_101_111_001_001, 0b111_100_111_001_111,
+    0b111_100_111_101_111, 0b111_001_010_010_010,
+    0b111_101_111_101_111, 0b111_101_111_001_111,
+    0b010_101_111_101_101, 0b110_101_110_101_110,
+    0b111_100_100_100_111, 0b110_101_101_101_110,
+    0b111_100_110_100_111, 0b111_100_110_100_100
+]
+func overlayBadgePath(_ label: String) -> NSBezierPath {
+    let path = NSBezierPath()
+    let bytes = Array(label.utf8.prefix(5))
+    guard bytes.count == 4 else { return path }
+    let digits: [Int] = bytes.compactMap { byte in
+        switch byte {
+        case 48...57: return Int(byte - 48)
+        case 65...70: return Int(byte - 65 + 10)
+        case 97...102: return Int(byte - 97 + 10)
+        default: return nil
+        }
+    }
+    guard digits.count == 4 else { return path }
+    for (index, digit) in digits.enumerated() {
+        for row in 0..<5 {
+            for column in 0..<3 where overlayHexGlyphs[digit] & (1 << ((4 - row) * 3 + 2 - column)) != 0 {
+                path.appendRect(CGRect(x: 43 + index * 8 + column * 2, y: 38 + row * 2, width: 2, height: 2))
+            }
+        }
+    }
+    return path
+}
+
 private final class OverlayCursorView: NSView {
     override var isFlipped: Bool { true }
     let color: NSColor
-    let label: String
+    let labelPath: NSBezierPath
     var pulse = OverlayClickPulse()
     let hotspot = CGPoint(x: 14, y: 14)
     init(session: String) {
         let rgb = overlayPalette[overlayColorIndex(session)]
         color = NSColor(srgbRed: rgb[0] / 255, green: rgb[1] / 255, blue: rgb[2] / 255, alpha: 1)
-        label = String(session.prefix(4))
+        labelPath = overlayBadgePath(String(session.prefix(4)))
         super.init(frame: CGRect(x: 0, y: 0, width: 88, height: 64))
     }
     required init?(coder: NSCoder) { nil }
@@ -173,9 +210,7 @@ private final class OverlayCursorView: NSView {
         color.setFill(); arrow.fill()
         let badge = CGRect(x: 38, y: 36, width: 44, height: 19)
         color.setFill(); NSBezierPath(roundedRect: badge, xRadius: 5, yRadius: 5).fill()
-        (label as NSString).draw(at: CGPoint(x: 43, y: 38), withAttributes: [
-            .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .semibold), .foregroundColor: NSColor.black
-        ])
+        NSColor.black.setFill(); labelPath.fill()
     }
 }
 // CUA build_default_theme.py DART_OUTLINE, HOTSPOT and UPRIGHT_DEGREES.

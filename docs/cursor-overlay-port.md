@@ -166,7 +166,7 @@ not imported. The window is a small vector panel instead of a full-screen bitmap
 DTW adds operation generations, the one-slot mailbox, exact identity checks and
 owner cleanup. The donor's primary-screen-only guard, large command history,
 8-second animation arrival wait and missing-target top-of-desktop fallback are
-not carried over. The session uses a system font, so no Inter/OFL payload is added.
+not carried over. The four-character session badge uses fixed hexadecimal vector cells, so no font lookup, text layout or Inter/OFL payload is added. A later GUI run exposed an exception inside CoreText during the former system-font drawing path; the geometry path removes that entry point without suppressing the original helper failure. See the [anchored-scroll acceptance record](anchored-scroll-acceptance.md).
 
 ## Required acceptance after wiring
 

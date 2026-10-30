@@ -16,3 +16,4 @@ python3 -m unittest discover -s tests/acceptance -p test_native_input_probe.py
 python3 -m unittest discover -s tests/acceptance -p test_background_input_probe.py
 python3 -m unittest discover -s tests/acceptance -p test_application_surface_probe.py
 python3 -m unittest discover -s tests/acceptance -p test_cursor_overlay_probe.py
+python3 -m unittest discover -s tests/acceptance -p test_anchored_scroll_probe.py

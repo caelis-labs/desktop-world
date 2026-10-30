@@ -103,6 +103,7 @@ fn operation(command: &Command) -> &'static str {
         Command::Press { .. } => "press",
         Command::Click { .. } | Command::ClickWithOptions { .. } => "click",
         Command::SetValue { .. } => "setValue",
+        Command::Scroll { .. } => "scroll",
         Command::Input(input) => input.capability().as_str(),
     }
 }
@@ -113,6 +114,7 @@ fn is_action(command: &Command) -> bool {
             | Command::Click { .. }
             | Command::ClickWithOptions { .. }
             | Command::SetValue { .. }
+            | Command::Scroll { .. }
             | Command::Input(_)
     )
 }
@@ -740,6 +742,53 @@ impl<B: Backend + 'static> Coordinator<B> {
                         ))
                     }
                     None => Work::rejected(&submitted.command, Error::InvalidObservation),
+                }
+            }
+            Command::Scroll {
+                observation_ref,
+                anchor,
+                delta_x,
+                delta_y,
+            } => {
+                let bound = (|| {
+                    let state = self.state.lock().unwrap();
+                    if let Some(error) = &state.terminal {
+                        return Err(error.clone());
+                    }
+                    let snapshot = state
+                        .observations
+                        .iter()
+                        .find(|o| o.public == *observation_ref)
+                        .ok_or(Error::InvalidObservation)?;
+                    if snapshot.retired {
+                        return Err(Error::StaleObservation);
+                    }
+                    let anchor = match anchor {
+                        wire::ScrollLocation::Pixels(point) => ScrollAnchor::Pixels(*point),
+                        wire::ScrollLocation::Element(element) => ScrollAnchor::Element(
+                            *snapshot
+                                .elements
+                                .get(element)
+                                .ok_or(Error::ElementNotFound)?,
+                        ),
+                    };
+                    Ok((
+                        snapshot.core,
+                        ScrollRequest {
+                            anchor,
+                            delta_x: *delta_x,
+                            delta_y: *delta_y,
+                        },
+                    ))
+                })();
+                match bound {
+                    Ok((observation, scroll)) => Work::action(self.runtime.scroll_at_until(
+                        &target,
+                        observation,
+                        scroll,
+                        deadline,
+                    )),
+                    Err(error) => Work::rejected(&submitted.command, error),
                 }
             }
             Command::Input(input) => {
