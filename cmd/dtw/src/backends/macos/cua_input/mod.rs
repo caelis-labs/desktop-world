@@ -294,6 +294,18 @@ pub extern "C" fn dtw_set_front_process(pid: i32, window_id: u32) -> bool {
     pid > 0 && window_id > 0 && skylight::make_exact_window_key(pid, window_id)
 }
 
+/// Read-only proof: 1 = current front process, 0 = another process. Negative
+/// values retain the native absence reason; only read/identity absence is
+/// transient, while missing symbols/invalid PID never become retryable proof.
+#[no_mangle]
+pub extern "C" fn dtw_front_process_matches(pid: i32) -> i32 {
+    match skylight::front_process_matches(pid) {
+        Ok(true) => 1,
+        Ok(false) => 0,
+        Err(reason) => reason as i32,
+    }
+}
+
 /// The callback context must remain alive until this synchronous call returns.
 #[no_mangle]
 pub unsafe extern "C" fn dtw_cua_input_call(

@@ -48,8 +48,14 @@ fn finish_focus_shutdown(until: Instant) -> bool {
     match unsafe { dtw_focus_owner(left().as_millis() as u32, &mut pid, &mut generation) } {
         0 => unsafe { dtw_focus_quiesce(left().as_millis() as u32) },
         1 => {
-            // An in-flight action in this worker may still own these leases.
-            // Wait only within the shared shutdown budget; never restore unlocked.
+            // Return can modify the previous app as well as the borrowed app.
+            // An in-flight action (including ours) may own a shared lease; wait
+            // before acquiring any instance/physical lock, never restore unlocked.
+            let Ok(_coordination) =
+                scene_lease::lock_coordination(scene_lease::InputCoordination::Foreground, left())
+            else {
+                return false;
+            };
             let Ok(_instance) = scene_lease::lock_instance(pid, generation, left()) else {
                 return false;
             };
@@ -347,7 +353,25 @@ fn dispatch(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value 
     } else {
         focus_owner
     };
-    let _instance = if let Some((pid, generation)) = instance {
+    // A directed route first shares coordination with independent background
+    // mutations. Known foreground/return routes enter exclusively from the start.
+    let known_foreground = op == "focus" || focus_owner.is_some();
+    let mut coordination = if instance.is_some() {
+        let mode = if known_foreground {
+            scene_lease::InputCoordination::Foreground
+        } else {
+            scene_lease::InputCoordination::Background
+        };
+        match scene_lease::lock_coordination(mode, remaining(&request)) {
+            Ok(lease) => Some(lease),
+            Err(message) => {
+                return rejected(json!({"error":"native_input_busy","message":message}), op)
+            }
+        }
+    } else {
+        None
+    };
+    let mut instance_lease = if let Some((pid, generation)) = instance {
         let left = remaining(&request);
         if left.is_zero() || TERMINATING.load(Ordering::Relaxed) {
             return rejected(
@@ -373,11 +397,47 @@ fn dispatch(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value 
     if let Some(result) = background(&mut request) {
         return result;
     }
-    // Only routes that actually use foreground/HID input need the global lease.
-    // Semantic AX writes and directed input keep their instance lease; unrelated
-    // apps remain concurrent. Physical routes recheck their own target on change.
     let physical = matches!(op, "focus" | "type_text" | "keypress" | "scroll" | "click")
         || (op == "release_focus" && focus_owner.is_some());
+    if physical && !known_foreground {
+        // background() declined before preparation/input. Never upgrade a shared
+        // lease in place or wait for coordination while holding an instance lock:
+        // a peer foreground transaction could be waiting for that same instance.
+        drop(instance_lease.take());
+        drop(coordination.take());
+        coordination = match scene_lease::lock_coordination(
+            scene_lease::InputCoordination::Foreground,
+            remaining(&request),
+        ) {
+            Ok(lease) => Some(lease),
+            Err(message) => {
+                return rejected(json!({"error":"native_input_busy","message":message}), op)
+            }
+        };
+        if let Some((pid, generation)) = instance {
+            instance_lease = match scene_lease::lock_instance(pid, generation, remaining(&request))
+            {
+                Ok(lease) => Some(lease),
+                Err(message) => {
+                    return rejected(json!({"error":"native_input_busy","message":message}), op)
+                }
+            };
+        }
+    }
+    if TERMINATING.load(Ordering::Relaxed) {
+        return rejected(
+            json!({"error":"native_stopping","message":"Input admission is closed"}),
+            op,
+        );
+    }
+    if physical && remaining(&request).is_zero() {
+        return rejected(
+            json!({"error":"deadline_exceeded","message":"Input deadline elapsed while waiting for native resources"}),
+            op,
+        );
+    }
+    // prepare_foreground / dispatch_owned revalidate the original native target
+    // after the lock handover. Only an actual physical route takes the HID lease.
     let _input = if physical {
         match scene_lease::lock_input(remaining(&request)) {
             Ok(lease) => Some(lease),
@@ -411,6 +471,13 @@ fn dispatch(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value 
             }
         }
     }
+    // Explicit focus is an operation, not a script-wide lease: a later pixel
+    // action runs in a sibling scene worker. Its final release_focus acquires
+    // exclusive coordination anew. If another background operation outlives the
+    // cleanup budget, cleanup stays unconfirmed rather than interrupting it.
+    drop(_input);
+    drop(instance_lease);
+    drop(coordination);
     result
 }
 fn dispatch_owned(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value {

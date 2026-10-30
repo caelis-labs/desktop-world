@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import sys
 import subprocess
@@ -408,6 +409,125 @@ await app.focus({{window_ref}});
         focus_return_coverage(foreground, before, target, proof)
 
 
+def require_exact_return(state, pid, window):
+    require(state['frontmost_pid'] == pid and state['pid'] == pid
+            and state['key_window'] == window,
+            'Original foreground application and exact window were not both restored')
+
+
+def same_pid_focus_return(mcp, target, evidence):
+    reset(target)
+    before = front(target)
+    original, borrowed = [window['id'] for window in before['windows']]
+    proof = evidence.setdefault('same_pid_original_window_return', {'before': before})
+    execute(mcp, target, 'same-pid-window-return', select(SECONDARY) + """
+await app.focus({window_ref});
+const until=Date.now()+200;while(Date.now()<until) {} return true;
+""", proof)
+    after = fresh_end(target)
+    proof['after'] = after
+    rows = journal(target, 'desktop.jsonl')
+    proof['samples'] = rows = [row for row in rows
+        if before['published_uptime'] < row['uptime'] <= after['published_uptime']]
+    require(any(row['frontmost_pid'] == target.child.pid and row.get('key_window') == borrowed
+                for row in rows), 'Same-PID borrow did not independently reach the secondary window')
+    require_exact_return(after, target.child.pid, original)
+    proof['exact_window_return_verified'] = True
+
+
+def timed_out_focus_return(mcp, target, evidence):
+    reset(target)
+    before = front(target)
+    proof = evidence.setdefault('timed_out_same_pid_original_window_return', {'before':before})
+    source = select(SECONDARY)+'await app.focus({window_ref});while(true) {}'
+    record, _ = mcp.execute(target.app_id, 'same-pid-timeout-return', source)
+    proof['record'] = record
+    require(record.get('status') == 'completed' and record.get('error')
+            and record.get('script',{}).get('failure',{}).get('kind') == 'timeout',
+            'Expected original script timeout after one explicit focus')
+    require(not record['script'].get('shutdown_error'), 'Timeout left unconfirmed focus cleanup')
+    require([step['operation'] for step in record['script']['steps']] == ['windows','focus'],
+            'Timeout executed unexpected input or replayed focus')
+    after = fresh_end(target)
+    proof['after'] = after
+    require_exact_return(after, target.child.pid, before['windows'][0]['id'])
+    proof['exact_window_return_verified'] = True
+
+
+def mixed_foreground_background(clients, target, peer, evidence):
+    # A1 is the user's original foreground. B's one control-bearing request
+    # chooses the physical route before its first scalar. Start A2 only after
+    # B's real input prefix, so this is a forced mixed-route overlap, not two
+    # unrelated background calls or an artificial lock-only scenario.
+    reset(target); reset(peer)
+    before = front(target)
+    tag = uuid.uuid4().hex[:12]
+    foreground_text = 'FG-'+tag+'-'+'b'*160
+    background_text = 'BG-'+tag+'-'+('甲乙丙丁'*80)
+    proof = evidence.setdefault('foreground_return_vs_background_input', {
+        'before': before, 'peer_before': peer.state(),
+        'foreground_text': foreground_text, 'background_text': background_text})
+    foreground_source = select()+f"return await app.typeText({{window_ref,text:{json.dumps(foreground_text+chr(10))}}});"
+    background_source = select(SECONDARY)+f"return await app.typeText({{window_ref,text:{json.dumps(background_text)}}});"
+    def run(index, fixture, label, source):
+        row = {'mcp_pid':clients[index].child.pid, 'started':time.monotonic()}
+        proof[label] = row
+        record, _ = clients[index].execute(fixture.app_id, label, source)
+        row.update(record=record, finished=time.monotonic(), fixture=fixture.state())
+        return row
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(run, 1, peer, 'foreground', foreground_source)
+        def prefix():
+            state = peer.state()
+            return state if (state['frontmost_pid'] == peer.child.pid
+                and foreground_text.startswith(state['text']) and 0 < len(state['text']) < len(foreground_text)) else None
+        proof['foreground_prefix'] = wait_until(prefix)
+        second = pool.submit(run, 0, target, 'background', background_source)
+        # Always retain both original responses, including a partial/unknown
+        # baseline. Nothing retries or substitutes for either action.
+        rows = [future.result(timeout=35) for future in (first, second)]
+    proof['after'], proof['peer_after'] = fresh_end(target), peer.state()
+    proof['target_events'] = [row for row in journal(target,'events.jsonl') if row['sequence'] > before['events_count']]
+    proof['peer_events'] = [row for row in journal(peer,'events.jsonl') if row['sequence'] > proof['peer_before']['events_count']]
+    require(rows[1]['started'] < rows[0]['finished'], 'Second request did not overlap the foreground transaction')
+    for row in rows: successful(row['record'])
+    require(proof['after']['secondary_text'] == background_text and proof['after']['text'] == '',
+            'Background request was interrupted or reached A1 instead of A2')
+    require(proof['peer_after']['text'] == foreground_text, 'Foreground request did not complete exactly once')
+    original, secondary = [window['id'] for window in before['windows']]
+    a_events = [row for row in proof['target_events'] if row['kind'] in ('key_down','key_up')]
+    b_events = [row for row in proof['peer_events'] if row['kind'] in ('key_down','key_up')]
+    require(a_events and b_events and all(row['window_number'] == secondary for row in a_events),
+            'Mixed-route input reached the wrong window')
+    require(all(row['window_number'] == proof['peer_before']['windows'][0]['id'] for row in b_events),
+            'Foreground input reached a different B window')
+    proof['input_intervals'] = [[min(row['uptime'] for row in events), max(row['uptime'] for row in events)]
+                              for events in (b_events, a_events)]
+    require(proof['input_intervals'][0][1] <= proof['input_intervals'][1][0],
+            'Background input was admitted during the physical foreground transaction')
+    for name, events in [('background',a_events),('foreground',b_events)]:
+        proof[name]['pairs'] = pairs = observed_pairs(events)
+        require(not pairs['unpaired'], 'Owned mixed-route input was left pressed')
+    require_exact_return(proof['after'], target.child.pid, original)
+    proof['coordinated_return_verified'] = True
+
+
+def wait_for_focus_established(mcp, target, offset, proof):
+    # A fixture becoming frontmost can precede completion of app.focus(). This
+    # private trace is only a setup barrier; actual effects and the script hold
+    # interval are still independently asserted below.
+    marker = (f'dtw_focus_transition pid={target.child.pid} '
+              f'window={target.state()["windows"][0]["id"]} phase=focus_established')
+    trace = mcp.output / 'dtw-stderr.log'
+    wait_until(lambda: marker in trace.read_text()[offset:])
+    observed = target.state()['published_uptime']
+    proof['focus_setup_barrier'] = {'trace_offset': offset, 'marker': marker,
+                                  'observed_fixture_uptime': observed}
+    # Let a fresh independent fixture publication follow the completed native
+    # focus response. The final script timestamps reject an early/late control.
+    wait_until(lambda: target.state()['published_uptime'] - observed >= 0.15)
+
+
 def focus_change(mcp, target, peer, foreground, evidence):
     before = front(foreground)
     proof = evidence.setdefault('external_focus_change_is_preserved', {'before': before})
@@ -415,12 +535,14 @@ def focus_change(mcp, target, peer, foreground, evidence):
 await app.focus({window_ref});
 const until=Date.now()+2000;while(Date.now()<until) {} return true;
 """
+    trace_offset = len((mcp.output / 'dtw-stderr.log').read_text())
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(execute, mcp, target, 'external-focus-change', source, proof)
         def borrowed():
             state = target.state()
             return state if state['active'] and state['frontmost_pid'] == target.child.pid else None
         proof['borrowed'] = wait_until(borrowed)
+        wait_for_focus_established(mcp, target, trace_offset, proof)
         # Owned fixture control represents a user/other Agent's independent
         # activation; it is deliberately outside this DTW/MCP execution.
         proof['external_activation'] = front(peer)
@@ -438,12 +560,14 @@ const hold_started_unix_ms=Date.now();
 while(Date.now()<hold_started_unix_ms+5000) {}
 return {hold_started_unix_ms,hold_ended_unix_ms:Date.now()};
 """
+    trace_offset = len((mcp.output / 'dtw-stderr.log').read_text())
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(execute, mcp, target, 'external-focus-leave-return', source, proof)
         def borrowed():
             state = target.state()
             return state if state['active'] and state['frontmost_pid'] == target.child.pid else None
         proof['borrowed'] = wait_until(borrowed)
+        wait_for_focus_established(mcp, target, trace_offset, proof)
         proof['external_leave'] = front(peer)
         proof['external_return'] = front(target)
         proof['external_return_unix_ms'] = int(time.time()*1000)
@@ -472,9 +596,11 @@ return {hold_started_unix_ms,hold_ended_unix_ms:Date.now()};
             return state if (state['frontmost_pid'] == target.child.pid
                              and state['key_window'] == state['windows'][index]['id']) else None
         return wait_until(ready)
+    trace_offset = len((mcp.output / 'dtw-stderr.log').read_text())
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(execute, mcp, target, 'external-sibling-window-leave-return', source, proof)
         proof['borrowed'] = selected(0)
+        wait_for_focus_established(mcp, target, trace_offset, proof)
         command(target, 'front_secondary')
         proof['external_sibling'] = selected(1)
         # Retain independent publications across several bounded observer samples.
@@ -636,9 +762,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dtw', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--case', choices=['all', 'background', 'foreground-fallback', 'multiwindow', 'concurrent', 'focus-return', 'focus-change', 'focus-leave-return', 'focus-window-leave-return', 'close-window'], default='all')
+    parser.add_argument('--case', choices=['all', 'background', 'foreground-fallback', 'multiwindow', 'concurrent', 'focus-return', 'same-pid-focus-return', 'focus-timeout', 'mixed-foreground-background', 'focus-change', 'focus-leave-return', 'focus-window-leave-return', 'close-window'], default='all')
     args = parser.parse_args()
     require(sys.platform == 'darwin', 'Requires a real macOS GUI desktop')
+    if args.case in ('all', 'focus-change', 'focus-leave-return', 'focus-window-leave-return'):
+        require(os.environ.get('DTW_AX_READINESS_TRACE') == '1',
+                'Focus interference setup requires DTW_AX_READINESS_TRACE=1')
     output = args.output.absolute(); output.mkdir(mode=0o700)
     binary = args.dtw.resolve(strict=True)
     source = Path(__file__).resolve().parents[1] / 'fixtures/native-input/main.swift'
@@ -671,12 +800,15 @@ def main():
                  'multiwindow': lambda: multiwindow(clients[0], target, peer, foreground, evidence),
                  'concurrent': lambda: concurrent(clients, target, peer, foreground, evidence),
                  'focus-return': lambda: focus_return(clients[0], target, foreground, evidence),
+                 'same-pid-focus-return': lambda: same_pid_focus_return(clients[0], target, evidence),
+                 'focus-timeout': lambda: timed_out_focus_return(clients[0], target, evidence),
+                 'mixed-foreground-background': lambda: mixed_foreground_background(clients, target, peer, evidence),
                  'focus-change': lambda: focus_change(clients[0], target, peer, foreground, evidence),
                  'focus-leave-return': lambda: focus_leave_return(clients[0], target, peer, foreground, evidence),
                  'focus-window-leave-return': lambda: focus_window_leave_return(clients[0], target, foreground, evidence),
                  'close-window': lambda: close_window(clients[0], target, foreground, evidence)}
         for name, run in cases.items():
-            if args.case in ('all', name): run()
+            if args.case == name or (args.case == 'all' and name != 'focus-timeout'): run()
         evidence['after'] = [fixture.state() for fixture in fixtures]
     except BaseException as error:
         failure = {'type': type(error).__name__, 'message': str(error)}

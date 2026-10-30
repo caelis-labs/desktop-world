@@ -6,8 +6,10 @@ DTW_AX_READINESS_TRACE=1 python3 tests/acceptance/background_lifecycle_probe.py 
 
 Each case uses a fresh MCP process and reset owned AppKit fixtures. After actual
 partial Unicode input, cancel the original request, close its stdin, or terminate
-that exact MCP parent. Never focus the target with DTW, move the pointer, replay
-input, or release global user input. Owned native events and partial text verify
+that exact MCP parent. The optional --foreground case uses one control-bearing
+request to select automatic foreground fallback and verifies exact original-window
+return. No explicit focus, pointer move, input replay or global user key release
+is issued by the probe. Owned native events and partial text verify
 effects; global activity is observation only. Closed transports have no invented
 final ledger, and worker PID disappearance does not prove its exit code was zero.
 This is native fixture/MCP evidence, not arbitrary-app or external-Agent coverage.
@@ -24,7 +26,7 @@ import traceback
 from types import SimpleNamespace
 import uuid
 
-from background_input_probe import front, fresh_end, journal, observe_desktop, observed_pairs, reset, select
+from background_input_probe import front, fresh_end, journal, observe_desktop, observed_pairs, reset, select, require_exact_return
 from native_input_probe import check_cleanup, close_mcp, recorded_workers, retained_exec_response
 from standard_agent_probe import Fixture, Mcp, require, wait_until, write_json
 
@@ -87,7 +89,7 @@ def check_single_dispatch(mcp, proof, source):
             'The original input was duplicated or changed')
 
 
-def run_case(binary, directory, target, peer, case, proof, clients):
+def run_case(binary, directory, target, peer, case, proof, clients, foreground=False):
     directory.mkdir()
     reset(target); reset(peer)
     proof['desktop_before'] = front(peer)
@@ -97,6 +99,10 @@ def run_case(binary, directory, target, peer, case, proof, clients):
     proof['target_window_id'] = windows[0]['id']
     tag = uuid.uuid4().hex
     payload = 'BG-'+tag+'-中文😀|' + ''.join(f'{tag}:{index:04d}:中文😀|' for index in range(50))
+    if foreground:
+        # One trailing control scalar selects the entire foreground route before
+        # any prefix. Cancellation still happens in ordinary Unicode text.
+        payload += '\n'
     suffix = 'NEVER-'+tag
     source = select() + f"""
 const typed=await app.typeText({{window_ref,text:{json.dumps(payload)}}});
@@ -176,7 +182,10 @@ await app.keypress({{window_ref,keys:['META','S']}});return typed;
         proof['peer_events'] = [event for event in journal(peer, 'events.jsonl')
             if event['sequence'] > proof['peer_before']['events_count'] and event['uptime'] <= proof['peer_after']['published_uptime']]
         observe_desktop(peer, proof['desktop_before'], proof['peer_after'], proof.setdefault('desktop', {}),
-                        forbidden_pids=(target.child.pid,))
+                        forbidden_pids=() if foreground else (target.child.pid,))
+        if foreground:
+            require_exact_return(proof['peer_after'], peer.child.pid, proof['desktop_before']['key_window'])
+            proof['exact_foreground_return_verified'] = True
         require(proof['after']['text'] == proof['after_stop']['text'], 'Target text continued changing after owner cleanup')
         if 'entered' in proof:
             check_effects(proof, payload, tag, suffix)
@@ -190,6 +199,7 @@ def main():
     parser.add_argument('--dtw', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--case', choices=('all',)+CASES, default='all')
+    parser.add_argument('--foreground', action='store_true', help='Exercise automatic foreground fallback and exact return during interruption')
     args = parser.parse_args()
     require(sys.platform == 'darwin', 'This probe requires real macOS')
     require(os.environ.get('DTW_AX_READINESS_TRACE') == '1',
@@ -198,6 +208,7 @@ def main():
     output = args.output.absolute(); output.mkdir(mode=0o700, parents=True, exist_ok=False)
     source = Path(__file__).resolve().parents[1]/'fixtures/native-input/main.swift'
     evidence = {'kind':'owned-AppKit-background-lifecycle-standard-MCP', 'case':args.case,
+                'foreground_fallback':args.foreground,
                 'live_llm_host':False, 'release_artifact':False, 'binary_path':str(binary),
                 'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),
                 'fixture_source_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),
@@ -218,7 +229,7 @@ def main():
         for case in CASES:
             if args.case in ('all',case):
                 proof = evidence['cases'].setdefault(case, {})
-                run_case(binary, output/('mcp-'+case), target, peer, case, proof, clients)
+                run_case(binary, output/('mcp-'+case), target, peer, case, proof, clients, foreground=args.foreground)
         evidence['after'] = [fixture.state() for fixture in fixtures]
     except BaseException as error:
         failure = {'type':type(error).__name__, 'message':str(error), 'traceback':traceback.format_exc()}

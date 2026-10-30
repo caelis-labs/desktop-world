@@ -109,6 +109,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         lastPublishedUptime = publishedUptime
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
         let desktop: [String:Any] = ["uptime":publishedUptime,"frontmost_pid":frontmostPID,
+                                     "pid":ownPID,"key_window":fixtureApplication.keyWindow?.windowNumber ?? 0,
                                      "pointer_screen":[cursor.x,primaryHeight-cursor.y]]
         journal(desktop,to:desktopFile)
         var value: [String:Any] = ["pid":ProcessInfo.processInfo.processIdentifier,"ready":true,"command":command,

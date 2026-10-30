@@ -300,6 +300,58 @@ fn get_process_for_pid_fn() -> Option<GetProcessForPIDFn> {
     *SYM.get_or_init(|| find_sym(b"GetProcessForPID\0").map(|p| unsafe { as_fn(p) }))
 }
 
+/// Read-only WindowServer authority, using the same donor symbols as focus
+/// delivery. AppKit's cached frontmost PID cannot prove a resident worker's
+/// current foreground while its main runloop is blocked on stdin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(i32)]
+pub enum FrontProcessReadFailure {
+    MissingSymbol = -1,
+    InvalidPID = -2,
+    FrontReadFailed = -3,
+    FrontIdentityMissing = -4,
+    TargetReadFailed = -5,
+    TargetIdentityMissing = -6,
+}
+
+pub fn front_process_matches(pid: pid_t) -> Result<bool, FrontProcessReadFailure> {
+    if pid <= 0 {
+        return Err(FrontProcessReadFailure::InvalidPID);
+    }
+    let get_front = get_front_process_fn().ok_or(FrontProcessReadFailure::MissingSymbol)?;
+    let get_pid_psn = get_process_for_pid_fn().ok_or(FrontProcessReadFailure::MissingSymbol)?;
+    front_process_matches_with(
+        || {
+            let mut psn = [0u8; 8];
+            (unsafe { get_front(psn.as_mut_ptr().cast()) } == 0).then_some(psn)
+        },
+        || {
+            let mut psn = [0u8; 8];
+            (unsafe { get_pid_psn(pid, psn.as_mut_ptr().cast()) } == 0).then_some(psn)
+        },
+    )
+}
+
+fn front_process_matches_with(
+    mut front: impl FnMut() -> Option<[u8; 8]>,
+    target: impl FnOnce() -> Option<[u8; 8]>,
+) -> Result<bool, FrontProcessReadFailure> {
+    use FrontProcessReadFailure::*;
+    let before = front().ok_or(FrontReadFailed)?;
+    if before == [0; 8] {
+        return Err(FrontIdentityMissing);
+    }
+    let target = target().ok_or(TargetReadFailed)?;
+    if target == [0; 8] {
+        return Err(TargetIdentityMissing);
+    }
+    let after = front().ok_or(FrontReadFailed)?;
+    if after == [0; 8] {
+        return Err(FrontIdentityMissing);
+    }
+    Ok(before == target && after == target)
+}
+
 pub fn is_available() -> bool {
     post_to_pid_fn().is_some()
 }
@@ -712,6 +764,31 @@ impl Drop for WindowKeyScope {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn foreground_proof_preserves_mismatch_unavailable_and_read_interval() {
+        let a = [1; 8];
+        let b = [2; 8];
+        use FrontProcessReadFailure::*;
+        for (before, target, after, expected) in [
+            (Some(a), Some(a), Some(a), Ok(true)),
+            (Some(a), Some(b), Some(a), Ok(false)),
+            (Some(a), Some(a), Some(b), Ok(false)),
+            (Some(b), Some(a), Some(a), Ok(false)),
+            (None, Some(a), Some(a), Err(FrontReadFailed)),
+            (Some(a), None, Some(a), Err(TargetReadFailed)),
+            (Some(a), Some(a), None, Err(FrontReadFailed)),
+            (Some([0; 8]), Some(a), Some(a), Err(FrontIdentityMissing)),
+            (Some(a), Some([0; 8]), Some(a), Err(TargetIdentityMissing)),
+            (Some(a), Some(a), Some([0; 8]), Err(FrontIdentityMissing)),
+        ] {
+            let mut reads = [before, after].into_iter();
+            assert_eq!(
+                front_process_matches_with(|| reads.next().unwrap(), || target),
+                expected
+            );
+        }
+    }
+
     #[test]
     fn exact_foreground_sequence_targets_one_window_and_stops_on_failure() {
         use std::cell::RefCell;

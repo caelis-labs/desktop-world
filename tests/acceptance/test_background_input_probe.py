@@ -10,6 +10,21 @@ from unittest.mock import patch
 import background_input_probe as probe
 
 
+class ExactForegroundReturnTests(unittest.TestCase):
+    def test_same_pid_wrong_window_is_not_a_confirmed_return(self):
+        with self.assertRaisesRegex(AssertionError, 'exact window'):
+            probe.require_exact_return({'pid':7,'frontmost_pid':7,'key_window':22},7,11)
+
+    def test_wrong_process_with_matching_window_cannot_confirm_return(self):
+        for state in [{'pid':7,'frontmost_pid':8,'key_window':11},
+                      {'pid':8,'frontmost_pid':7,'key_window':11}]:
+            with self.assertRaisesRegex(AssertionError, 'exact window'):
+                probe.require_exact_return(state,7,11)
+
+    def test_exact_original_window_confirms_return(self):
+        probe.require_exact_return({'pid':7,'frontmost_pid':7,'key_window':11},7,11)
+
+
 class DesktopEvidenceTests(unittest.TestCase):
     def verify(self, samples, activations=(), target_pids=(9,), end=10.1, initial_pid=4):
         with tempfile.TemporaryDirectory() as folder:
