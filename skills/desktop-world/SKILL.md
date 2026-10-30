@@ -92,3 +92,5 @@ Ordinary `exec` returns synchronously with a compact summary. Use `result` when 
 macOS selects semantic, background or foreground delivery internally. The service's `auto` policy permits foreground fallback before dispatch when target delivery is unsupported; native modal input can require that route. `background_only` prohibits fallback and explicit focus. `foreground_required` is a service constraint, not an approval request.
 
 Delivery metadata records the actual route and focus return. `restored` proves the original window, `application_restored` only the app, and `changed_externally` preserves a changed foreground. `unconfirmed` does not prove return; missing metadata means unavailable evidence. Windows/Linux input does not promise macOS focus-return behavior. Capabilities vary by platform; locked-screen operation is unsupported.
+
+An `unconfirmed` focus return without a `shutdown_error` permits a fresh read of the target; inspect the original action receipt and current state before new work. It does not authorize replay of the earlier action. A `shutdown_error` indicates failed native cleanup and closes further execution in that session.

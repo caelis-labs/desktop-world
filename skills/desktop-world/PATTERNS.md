@@ -32,6 +32,8 @@ After editing, check relevant field values, validation messages, and commit-cont
 
 ## Large trees and bounded discovery
 
+For a long list or table, first look for the application's own search, filter, or page controls. Native `observe` filters the currently exposed accessibility tree; it does not load other application pages or materialize virtual rows. Use the application's controls to bring the relevant records into view before discovering their actions. Accessibility cursor pagination and application pagination are different operations.
+
 `limit` limits returned matches, not native traversal work. Use the smallest relevant scope: a known container, a visible region from a current capture, or the app-menu scope. Add role/text filters based on observed controls. Scanning a full window repeatedly for each field is expensive, especially in long documents, directory views, and browser accessibility trees.
 
 An empty page can still have `next`. Continue with `{cursor: next}` when further matches are needed. Keep continuation reads together in one script when practical; bindings have a lifetime and pagination does not renew it. Stop when the question is answered, or preserve the final coverage and its partial reasons. Do not infer absence from `next:null` alone.

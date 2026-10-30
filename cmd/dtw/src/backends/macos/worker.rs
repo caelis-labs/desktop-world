@@ -685,8 +685,7 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
     }
     if physical && op != "focus" && op != "release_focus" {
         let cleanup = native(
-            &json!({"operation":"release_focus",
-                "deadline_unix_ms":super::focus_return_deadline_ms(now_ms(), Some(call_deadline))}),
+            &super::focus_return_request(now_ms(), Some(call_deadline)),
             false,
         );
         record_foreground_cleanup(&mut result, cleanup);

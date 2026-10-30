@@ -865,6 +865,51 @@ fn final_focus_return_is_separate_from_the_original_focus_receipt() {
 }
 
 #[test]
+fn retired_unconfirmed_focus_keeps_receipts_and_allows_fresh_reads() {
+    for uncertain in [false, true] {
+        let (owner, backend) = coordinator();
+        run_script(&owner, "seed", "state.kept=7;");
+        {
+            let mut model = backend.0.model.lock().unwrap();
+            if uncertain {
+                model.outcome = ActionOutcome::unknown(Error::NativeFailure {
+                    code: "ax_unavailable".into(),
+                    message: "original focus preparation failed".into(),
+                });
+            }
+            model.finish_focus = Some(FocusReturn::Unconfirmed);
+        }
+        let original = run_script(
+            &owner,
+            "retired-focus",
+            format!("{SETUP}{PRESS}state.kept=9;return true;"),
+        );
+        assert_eq!(original.is_error, uncertain, "{}", original.data);
+        assert_eq!(original.data["script"]["focus_return"], "unconfirmed");
+        assert!(original.data["shutdown_error"].is_null());
+        assert_eq!(
+            steps(&original)[2]["receipt"]["outcome"]["dispatch"],
+            if uncertain { "unknown" } else { "dispatched" }
+        );
+        backend.0.model.lock().unwrap().finish_focus = None;
+        let fresh = run_script(
+            &owner,
+            "fresh-read",
+            "return {windows:await app.windows(),kept:state.kept};",
+        );
+        assert!(!fresh.is_error, "{}", fresh.data);
+        assert_eq!(
+            fresh.data["value"]["result"]["kept"],
+            if uncertain { 7 } else { 9 }
+        );
+        assert_eq!(backend.0.actions.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.0.shutdowns.load(Ordering::SeqCst), 0);
+        assert_eq!(result(&owner, "retired-focus").data, original.data);
+        owner.close();
+    }
+}
+
+#[test]
 fn script_scroll_resolves_bound_refs_once_and_keeps_other_windows() {
     let (owner, backend) = coordinator();
     let reply = run_script(

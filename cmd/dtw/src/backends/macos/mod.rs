@@ -32,6 +32,18 @@ fn focus_return_deadline_ms(now: u64, call_deadline: Option<u64>) -> u64 {
     call_deadline.map_or(capped, |deadline| deadline.min(capped))
 }
 
+fn focus_return_request(now: u64, call_deadline: Option<u64>) -> Value {
+    let mut request = json!({
+        "operation": "release_focus",
+        "deadline_unix_ms": focus_return_deadline_ms(now, call_deadline),
+        "ownership_cap_unix_ms": focus_return_deadline_ms(now, None),
+    });
+    if let Some(deadline) = call_deadline {
+        request["caller_deadline_unix_ms"] = json!(deadline);
+    }
+    request
+}
+
 pub struct AppInfo {
     pub app_id: String,
     pub app: AppInstance,
@@ -678,8 +690,8 @@ impl Backend for NativeBackend {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        let request = json!({"operation":"release_focus","request_id":request_id,
-            "deadline_unix_ms":focus_return_deadline_ms(now, None)});
+        let mut request = focus_return_request(now, None);
+        request["request_id"] = json!(request_id);
         let bytes = match self.worker.call(request.to_string().as_bytes(), || {
             let left = until.saturating_duration_since(Instant::now());
             if left.is_zero() {
@@ -715,6 +727,7 @@ impl Backend for NativeBackend {
             Some("application_restored") => Ok(Some(FocusReturn::ApplicationRestored)),
             Some("changed_externally") => Ok(Some(FocusReturn::ChangedExternally)),
             Some("previous_app_closed") => Ok(Some(FocusReturn::PreviousAppClosed)),
+            Some("unconfirmed") => Ok(Some(FocusReturn::Unconfirmed)),
             _ => Err(Error::InvalidObservation),
         }
     }
@@ -1209,6 +1222,17 @@ mod tests {
         assert_eq!(focus_return_deadline_ms(1_000, Some(1_000)), 1_000);
         assert_eq!(focus_return_deadline_ms(1_000, Some(900)), 900);
         assert_eq!(focus_return_deadline_ms(u64::MAX - 50, None), u64::MAX);
+        let short = focus_return_request(1_000, Some(1_175));
+        assert_eq!(short["deadline_unix_ms"], 1_175);
+        assert_eq!(short["ownership_cap_unix_ms"], 3_000);
+        assert_eq!(short["caller_deadline_unix_ms"], 1_175);
+        let long = focus_return_request(1_000, Some(20_000));
+        assert_eq!(long["deadline_unix_ms"], 3_000);
+        assert_eq!(long["ownership_cap_unix_ms"], 3_000);
+        assert_eq!(long["caller_deadline_unix_ms"], 20_000);
+        assert!(focus_return_request(1_000, None)
+            .get("caller_deadline_unix_ms")
+            .is_none());
         assert_eq!(
             NORMAL_FOCUS_RETURN_BUDGET + FOCUS_RETURN_TRANSPORT_MARGIN,
             Duration::from_millis(2_100)
@@ -1386,6 +1410,57 @@ for line in sys.stdin:
         );
         backend.focus_pending.store(false, Ordering::Release);
         assert_eq!(backend.finish_execution(), Ok(None));
+    }
+
+    #[test]
+    fn unconfirmed_focus_retirement_preserves_original_error_and_read_access() {
+        let backend = NativeBackend {
+            worker: Arc::new(scene_fixture(r#"import sys,json
+for line in sys.stdin:
+ r=json.loads(line)
+ if r['operation']=='release_focus':
+  assert r['ownership_cap_unix_ms']==r['deadline_unix_ms']
+  result={'focus':'unconfirmed'}
+ elif r['operation']=='keypress':
+  result={'dispatch':'unknown','evidence':'unverified','error':'ax_unavailable','message':'AXWindows busy','delivery':{'route':'foreground','foreground_borrowed':True,'focus_return':'pending'}}
+ else:
+  result={'fresh_read':True}
+ print(json.dumps({'request_id':r['request_id'],'result':result}),flush=True)
+"#).unwrap()),
+            scene: SceneOwner::default(),
+            stamp: ProviderStamp { id: "focus-retirement".into(), generation: 1 },
+            cleanup_failure: Mutex::new(None),
+            input_policy: InputPolicy::Auto,
+            cursor: Arc::new(CursorSession::default()),
+            cursor_operation: AtomicU64::new(0),
+            focus_pending: AtomicBool::new(true),
+        };
+        let poll = || Ok(Duration::from_secs(2));
+        let call = CallContext { poll: &poll };
+        let original = backend.action(json!({"operation":"keypress"}), &call);
+        assert_eq!(original.dispatch, DispatchState::Unknown);
+        assert_eq!(
+            original.error,
+            Some(Error::NativeFailure {
+                code: "ax_unavailable".into(),
+                message: "AXWindows busy".into()
+            })
+        );
+        assert_eq!(
+            backend.finish_execution(),
+            Ok(Some(FocusReturn::Unconfirmed))
+        );
+        assert!(!backend.focus_pending.load(Ordering::Acquire));
+        assert_eq!(backend.cleanup_error(), None);
+        assert!(backend.is_available());
+        assert_eq!(
+            backend
+                .read_rpc(json!({"operation":"read"}), &call)
+                .unwrap()["fresh_read"],
+            true
+        );
+        assert_eq!(original.dispatch, DispatchState::Unknown);
+        backend.shutdown().unwrap();
     }
 
     #[test]
