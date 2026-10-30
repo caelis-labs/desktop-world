@@ -2,7 +2,7 @@
 
 本轮基于 main `0935778d2537536e95c7e9012715999b1d6d5ab6`，只完成服务输入策略、投递回执和由新增生命周期验收发现的退出清理修复。保持标准 stdio MCP 与 `exec(app, source)`；光标覆盖层、滚动锚点留给后续检查点。
 
-最终本地签名候选 S 的二进制 SHA-256 为 `aa6b32b7ad1d0c239c9e6bf0dcfde2fe06fa281657d28c6d22eae4a6f3231ace`。其 `source.json` SHA-256 为 `aa65db58a8f2ad3f26e0bcb963edce8c1c7105e25865a816024a26769c8a188c`；64 个源码及构建文件逐项与当前工作树匹配，GUI 样本使用同一二进制。
+最终本地签名候选 S 的二进制 SHA-256 为 `aa6b32b7ad1d0c239c9e6bf0dcfde2fe06fa281657d28c6d22eae4a6f3231ace`。其 `source.json` SHA-256 为 `aa65db58a8f2ad3f26e0bcb963edce8c1c7105e25865a816024a26769c8a188c`；64 个源码及构建文件逐项与检查点 1 验收时的源码（提交 `e5525d8`）匹配，GUI 样本使用同一二进制。
 
 ## 本轮契约
 

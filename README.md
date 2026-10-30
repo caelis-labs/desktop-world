@@ -47,6 +47,8 @@ The script API provides `windows`, `observe`, `capture`, `press`, `click`, `focu
 
 Actions may report `delivery` with the selected semantic/background/foreground route, reason and temporary foreground ownership/return evidence. This does not confirm the business effect. An explicit `app.focus` receipt can remain `pending`; `script.focus_return` separately records the later script cleanup. Missing delivery metadata is not a claim that input stayed in the background. See the [receipt contract](docs/app-protocol-v1.md#结果效果与图像).
 
+On macOS, each session has an independent Agent cursor for actual pointer input. Its window does not accept mouse input; target-window screenshots and input checks exclude only verified DTW cursor windows. It shows where input was posted, not whether the task succeeded. See the [cursor port and validation boundaries](docs/cursor-overlay-port.md).
+
 `exec` waits for its bounded execution; normal use needs no job-polling loop. Standard MCP cancellation addresses the active request. Closing the connection closes its native resources. Unknown outcomes remain unknown and are never automatically replayed. See the [MCP contract](docs/app-protocol-v1.md).
 
 ## Development and evidence

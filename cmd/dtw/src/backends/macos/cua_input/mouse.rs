@@ -28,6 +28,10 @@ struct ChromiumClickRouteStep {
     delay_after_ms: u64,
 }
 
+fn presents_target_pointer(step: &ChromiumClickRouteStep) -> bool {
+    step.phase == 3 && !matches!(step.kind, ChromiumClickEventKind::Move)
+}
+
 fn chromium_click_route_plan(
     screen_x: f64,
     screen_y: f64,
@@ -156,12 +160,21 @@ pub fn click_at_xy_chromium(
         set_explicit_flags(event, flags);
     };
 
-    let post = |event: &CGEvent, _step: &ChromiumClickRouteStep| {
-        dispatch_mouse_event(
-            post_route(pointer_post_mode(), skylight_available()),
-            pid,
-            event,
-        );
+    let post = |event: &CGEvent, step: &ChromiumClickRouteStep| {
+        let dispatch = || {
+            dispatch_mouse_event(
+                post_route(pointer_post_mode(), skylight_available()),
+                pid,
+                event,
+            )
+        };
+        // Phase 1/2 and the initial tracking move are donor preparation, not
+        // target clicks. Negative coordinates can be valid display positions.
+        if presents_target_pointer(step) {
+            dispatch();
+        } else {
+            super::super::pointer_presentation::without_feedback(dispatch);
+        }
     };
 
     for step in route_plan {
@@ -342,7 +355,9 @@ fn post_mouse_moved_primer(
         CGMouseButton::Left,
     ) {
         set_explicit_flags(&mv, CGEventFlags::CGEventFlagNull);
-        post_mouse_event_with_mode(pid, &mv, window_local, wid, click_group_id, 0, 0, 3, mode);
+        super::super::pointer_presentation::without_feedback(|| {
+            post_mouse_event_with_mode(pid, &mv, window_local, wid, click_group_id, 0, 0, 3, mode);
+        });
     }
 }
 
@@ -464,6 +479,19 @@ extern "C" {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn presentation_excludes_primers_by_purpose_even_at_a_valid_negative_point() {
+        let plan = chromium_click_route_plan(-1.0, -1.0, 10.0, 20.0, 2);
+        assert!(plan[..3].iter().all(|step| !presents_target_pointer(step)));
+        assert!(plan[3..].iter().all(presents_target_pointer));
+        assert!(plan.iter().all(|step| step.event_location == (-1.0, -1.0)));
+        assert_eq!(
+            plan.iter()
+                .filter(|step| presents_target_pointer(step))
+                .count(),
+            4
+        );
+    }
     #[test]
     fn chromium_recipe_keeps_distinct_screen_and_window_coordinates_and_pairs() {
         let plan = chromium_click_route_plan(700.0, 400.0, 10.0, 20.0, 2);

@@ -2497,7 +2497,8 @@ private final class NativeStore: @unchecked Sendable {
                     throw failure("input_unavailable", "Cannot allocate scroll event source")
                 }
                 guard let proof = dtwProveSurfacePoint(point, id: target.nativeID, pid: target.app.pid,
-                                                       bounds: window.cg.bounds, deadline: context.deadline.uptime) else {
+                                                       bounds: window.cg.bounds, deadline: context.deadline.uptime,
+                                                       overlayCandidates: dtwSceneOverlayCandidates(request)) else {
                     try check(focus: false)
                     throw failure("target_occluded", "Scroll center is not a proven visible point of the target window")
                 }
@@ -2505,7 +2506,9 @@ private final class NativeStore: @unchecked Sendable {
                 guard proof.matchesCurrent() else { throw failure("stale_observation", "Scroll hit stack changed during focus validation") }
                 guard let positioned = dtwWithInputAdmission({
                     changed = true
-                    return CGWarpMouseCursorPosition(point) == .success && CGAssociateMouseAndMouseCursorPosition(1) == .success
+                    guard CGWarpMouseCursorPosition(point) == .success else { return false }
+                    dtwPresentPostedPointer(point, kind: 0)
+                    return CGAssociateMouseAndMouseCursorPosition(1) == .success
                 }) else { throw failure("native_stopping", "Native input admission is closed") }
                 guard positioned else { throw failure("input_unavailable", "Cannot position scroll pointer") }
                 guard dtwSettleInput(seconds: 0.04, deadline: context.deadline.uptime) else {
@@ -2530,6 +2533,7 @@ private final class NativeStore: @unchecked Sendable {
                     event.location = point; event.flags = []
                     input.posted(eventType: CGEventType.scrollWheel.rawValue)
                     event.post(tap: .cghidEventTap)
+                    dtwPresentPostedPointer(point, kind: 3)
                     return true
                 }) else { throw failure("native_stopping", "Native input admission is closed") }
             }

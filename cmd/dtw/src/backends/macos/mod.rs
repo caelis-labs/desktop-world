@@ -5,12 +5,17 @@ use base64::Engine;
 use serde_json::{json, Value};
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 mod cua_input;
+mod cursor_session;
+mod overlay;
+mod pointer_presentation;
+pub use cursor_session::CursorSession;
+pub use overlay::worker_entry as overlay_worker_entry;
 mod worker;
 pub use worker::worker_entry;
 
@@ -26,6 +31,8 @@ pub struct NativeBackend {
     cleanup_failure: Mutex<Option<Error>>,
     input_policy: InputPolicy,
     focus_pending: AtomicBool,
+    cursor: Arc<CursorSession>,
+    cursor_operation: AtomicU64,
 }
 
 #[derive(Default)]
@@ -131,6 +138,20 @@ impl Drop for SceneFlight<'_> {
     }
 }
 
+// Preserve successful last-pointer feedback, but retire this exact generation
+// on any RPC failure. A failed older app cannot hide another app's newer marker.
+struct CursorAttempt<'a> {
+    cursor: &'a CursorSession,
+    operation: Option<u64>,
+}
+impl Drop for CursorAttempt<'_> {
+    fn drop(&mut self) {
+        if let Some(operation) = self.operation {
+            self.cursor.hide(operation);
+        }
+    }
+}
+
 pub struct NativeBinding {
     worker: Arc<Worker>,
     semantic: Option<String>,
@@ -194,6 +215,13 @@ impl NativeBackend {
     }
 
     pub fn spawn_with_policy(input_policy: InputPolicy) -> Result<Self, Error> {
+        Self::spawn_with_cursor(input_policy, Arc::new(CursorSession::default()))
+    }
+
+    pub fn spawn_with_cursor(
+        input_policy: InputPolicy,
+        cursor: Arc<CursorSession>,
+    ) -> Result<Self, Error> {
         let exe = std::env::current_exe().map_err(failed)?;
         let worker = Worker::spawn(&exe, &["--dtw-native-worker"]).map_err(transport_error)?;
         Ok(Self {
@@ -201,6 +229,8 @@ impl NativeBackend {
             scene: SceneOwner::default(),
             cleanup_failure: Mutex::new(None),
             focus_pending: AtomicBool::new(false),
+            cursor,
+            cursor_operation: AtomicU64::new(0),
             input_policy,
             stamp: ProviderStamp {
                 id: "dtw-macos-native".into(),
@@ -242,9 +272,31 @@ impl NativeBackend {
         mut request: Value,
         call: &CallContext<'_>,
     ) -> Result<Value, (Error, bool)> {
+        let mut cursor_attempt = CursorAttempt {
+            cursor: &self.cursor,
+            operation: None,
+        };
         let request_id = unique_generation();
         request["request_id"] = json!(request_id);
         request["input_policy"] = json!(self.input_policy.as_str());
+        if matches!(request["operation"].as_str(), Some("click" | "scroll")) {
+            // scene_rpc already validated the retained target before this point.
+            // Presentation never grants input admission or changes its outcome.
+            if let Some(endpoint) = self.cursor.begin(call) {
+                cursor_attempt.operation = Some(endpoint.operation);
+                self.cursor_operation
+                    .store(endpoint.operation, Ordering::Release);
+                request["_cursor_endpoint"] = json!(endpoint);
+            }
+            let left = call.remaining().map_err(|error| (error, false))?;
+            let mut candidates = overlay::discover_candidates(Instant::now() + left);
+            if let Some(identity) = self.cursor.identity() {
+                if !candidates.contains(&identity) {
+                    candidates.push(identity);
+                }
+            }
+            request["_overlay_candidates"] = json!(candidates);
+        }
         let left = call
             .remaining()
             .map_err(|e| (e, false))?
@@ -281,6 +333,9 @@ impl NativeBackend {
             .map_err(|error| (retire_worker(worker, error), true))?;
         if let Some(error) = native_cleanup_error(&reply) {
             self.cleanup_failure.lock().unwrap().get_or_insert(error);
+        }
+        if reply_error(&reply).is_none() {
+            cursor_attempt.operation = None;
         }
         Ok(reply)
     }
@@ -494,6 +549,8 @@ impl Backend for NativeBackend {
     fn shutdown(&self) -> Result<(), Error> {
         let scene = self.scene.close();
         let native = self.worker.stop().map_err(transport_error);
+        self.cursor
+            .hide(self.cursor_operation.swap(0, Ordering::AcqRel));
         match (scene, native) {
             (Err(scene), Err(native)) => Err(failed(format!("{scene:?}; {native:?}"))),
             (Err(error), _) | (_, Err(error)) => Err(error),
@@ -814,6 +871,8 @@ mod tests {
             },
             cleanup_failure: Mutex::new(None),
             input_policy: InputPolicy::Auto,
+            cursor: Arc::new(CursorSession::default()),
+            cursor_operation: AtomicU64::new(0),
             focus_pending: AtomicBool::new(true),
         };
         backend.worker.stop().unwrap();
@@ -872,6 +931,8 @@ mod tests {
             worker: Arc::new(scene_fixture("import sys,json\nfor line in sys.stdin:\n r=json.loads(line);print(json.dumps({'request_id':r['request_id'],'result':{'dispatch':'unknown','evidence':'unverified','error':'input_failed','message':'original action error','cleanup_error':{'error':'focus_restore_failed','message':'restore failed'}}}),flush=True)").unwrap()),
             scene: SceneOwner::default(),
             cleanup_failure: Mutex::new(None),
+            cursor: Arc::new(CursorSession::default()),
+            cursor_operation: AtomicU64::new(0),
             focus_pending: AtomicBool::new(false),
             input_policy: InputPolicy::Auto,
             stamp: ProviderStamp { id:"cleanup-test".into(),generation:1 },
@@ -1014,6 +1075,8 @@ mod tests {
             worker: Arc::new(echo_scene().unwrap()),
             scene: owner,
             cleanup_failure: Mutex::new(None),
+            cursor: Arc::new(CursorSession::default()),
+            cursor_operation: AtomicU64::new(0),
             focus_pending: AtomicBool::new(false),
             input_policy: InputPolicy::Auto,
             stamp: ProviderStamp {
@@ -1034,6 +1097,8 @@ mod tests {
             ),
             scene: SceneOwner::default(),
             cleanup_failure: Mutex::new(None),
+            cursor: Arc::new(CursorSession::default()),
+            cursor_operation: AtomicU64::new(0),
             focus_pending: AtomicBool::new(false),
             input_policy: InputPolicy::Auto,
             stamp: ProviderStamp {

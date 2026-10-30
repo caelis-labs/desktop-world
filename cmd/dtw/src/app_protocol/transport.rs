@@ -24,6 +24,8 @@ use std::{
 struct NativeFactory {
     input_policy: InputPolicy,
     catalog: Mutex<Option<Arc<NativeBackend>>>,
+    #[cfg(target_os = "macos")]
+    cursor: Arc<crate::backends::macos::CursorSession>,
 }
 impl Factory for NativeFactory {
     type Provider = NativeBackend;
@@ -54,7 +56,21 @@ impl Factory for NativeFactory {
         })
     }
     fn connect(&self) -> Result<NativeBackend, Error> {
-        NativeBackend::spawn_with_policy(self.input_policy)
+        #[cfg(target_os = "macos")]
+        {
+            NativeBackend::spawn_with_cursor(self.input_policy, self.cursor.clone())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            NativeBackend::spawn_with_policy(self.input_policy)
+        }
+    }
+    fn close_session(&self) -> Result<(), Error> {
+        #[cfg(target_os = "macos")]
+        self.cursor.close().map_err(|error| {
+            Error::BackendFailed(format!("cursor presentation cleanup: {error}"))
+        })?;
+        Ok(())
     }
     fn close_catalog(&self) -> Result<(), Error> {
         let reader = self.catalog.lock().unwrap().clone();

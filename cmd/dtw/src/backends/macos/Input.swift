@@ -1,5 +1,34 @@
 import Foundation
 
+// Presentation observes posted pointer work; it never creates or retries input.
+// Registration is per worker. Invoke outside the lock so a presenter can retire
+// itself without blocking input cleanup or another registration.
+private final class PointerPresenter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var callback: (@convention(c) (Double, Double, Int32) -> Void)?
+
+    func set(_ value: (@convention(c) (Double, Double, Int32) -> Void)?) {
+        lock.lock(); callback = value; lock.unlock()
+    }
+
+    func posted(_ point: CGPoint, kind: Int32) {
+        guard point.x.isFinite, point.y.isFinite, (0...3).contains(kind) else { return }
+        lock.lock(); let current = callback; lock.unlock()
+        current?(Double(point.x), Double(point.y), kind)
+    }
+}
+private let pointerPresenter = PointerPresenter()
+
+@_cdecl("dtw_set_pointer_presenter")
+public func dtwSetPointerPresenter(_ callback: (@convention(c) (Double, Double, Int32) -> Void)?) {
+    pointerPresenter.set(callback)
+}
+
+// 0: successful warp, 1: posted press, 2: posted release, 3: posted wheel.
+func dtwPresentPostedPointer(_ point: CGPoint, kind: Int32) {
+    pointerPresenter.posted(point, kind: kind)
+}
+
 // Retain the source until private and session event progress reach every
 // posted release and both state tables report its touched keys/buttons up.
 // An initially empty key table proves nothing

@@ -39,6 +39,10 @@ pub trait Factory: Send + Sync + 'static {
     }
     /// Stops a possibly blocked metadata read. A later call may create a new reader.
     fn close_catalog(&self) -> Result<(), Error>;
+    /// Terminal session resources, independent of refreshable catalog/app owners.
+    fn close_session(&self) -> Result<(), Error> {
+        Ok(())
+    }
 }
 struct Record {
     id: String,
@@ -710,6 +714,9 @@ impl<F: Factory> Server<F> {
             self.remember_shutdown(wire::core_error(&error));
         }
         self.close_contexts();
+        if let Err(error) = self.factory.close_session() {
+            self.remember_shutdown(wire::core_error(&error));
+        }
         if let Some(call) = active {
             let until = Instant::now() + STOP_TIMEOUT;
             let mut state = self.state.lock().unwrap();
@@ -1133,10 +1140,15 @@ mod lifecycle_tests {
         catalog_close_panics: AtomicBool,
         catalog_close: Mutex<Option<Arc<Gate>>>,
         catalog_closes: AtomicUsize,
+        session_closes: AtomicUsize,
         closing: Mutex<Option<mpsc::SyncSender<()>>>,
     }
     impl Factory for Arc<TestFactory> {
         type Provider = Provider;
+        fn close_session(&self) -> Result<(), Error> {
+            self.session_closes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
         fn catalog(&self) -> Result<Vec<Application>, Error> {
             let gate = self.catalog.lock().unwrap().take();
             if let Some(gate) = gate {
@@ -1200,6 +1212,7 @@ mod lifecycle_tests {
             catalog_close_panics: AtomicBool::new(false),
             catalog_close: Mutex::new(None),
             catalog_closes: AtomicUsize::new(0),
+            session_closes: AtomicUsize::new(0),
             closing: Mutex::new(None),
         });
         (Server::new(factory.clone()), factory)
@@ -1210,6 +1223,17 @@ mod lifecycle_tests {
             Started::Reply(reply) => panic!("unexpected rejection: {}", reply.data),
             Started::InFlight(_) => panic!("unexpected duplicate frame"),
         }
+    }
+    #[test]
+    fn cancelled_app_work_keeps_shared_session_resources_until_terminal_close() {
+        let (server, factory) = fixture();
+        let call = begin(&server, "cancelled-before-start", "return 1");
+        server.cancel(&json!("cancelled-before-start"));
+        server.run(&call);
+        assert!(factory.catalog_closes.load(Ordering::SeqCst) > 0);
+        assert_eq!(factory.session_closes.load(Ordering::SeqCst), 0);
+        server.close().unwrap();
+        assert_eq!(factory.session_closes.load(Ordering::SeqCst), 1);
     }
     fn reply(started: Started<Provider>) -> Reply {
         match started {

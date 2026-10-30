@@ -41,7 +41,9 @@ fn run(args: &[String]) -> Result<(), WireError> {
 
 fn main() -> ExitCode {
     #[cfg(target_os = "macos")]
-    if desktop_world::backends::macos::worker_entry() {
+    if desktop_world::backends::macos::overlay_worker_entry()
+        || desktop_world::backends::macos::worker_entry()
+    {
         return ExitCode::SUCCESS;
     }
     #[cfg(target_os = "windows")]

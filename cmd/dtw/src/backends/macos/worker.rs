@@ -12,6 +12,7 @@ mod scene_lease;
 unsafe extern "C" {
     fn dtw_native_call(request: *const std::ffi::c_char) -> *mut std::ffi::c_char;
     fn dtw_native_free(reply: *mut std::ffi::c_char);
+    fn dtw_set_pointer_presenter(callback: Option<extern "C" fn(f64, f64, i32)>);
     fn dtw_scene_call(request: *const std::ffi::c_char) -> *mut std::ffi::c_char;
     fn dtw_scene_free(reply: *mut std::ffi::c_char);
     fn dtw_input_quiesce(timeout_milliseconds: u32) -> bool;
@@ -345,6 +346,7 @@ fn background(request: &mut Value) -> BackgroundAttempt {
     if !keyboard {
         request["screen_x"] = json!(x);
         request["screen_y"] = json!(y);
+        request["_pointer_bounds"] = before["bounds"].clone();
     }
     let mut input = json!({"operation":op,"pid":request["target"]["app"]["pid"],
         "window_id":request["target"]["native_id"],"deadline_unix_ms":request["deadline_unix_ms"],
@@ -362,6 +364,13 @@ fn background(request: &mut Value) -> BackgroundAttempt {
         deadline: request["deadline_unix_ms"].as_u64().unwrap_or(0),
         failures: RefCell::default(),
     };
+    let _presentation = (!keyboard).then(|| {
+        super::pointer_presentation::Scope::new(
+            request,
+            &before["bounds"],
+            super::overlay::PointerRoute::Background,
+        )
+    });
     let mut result = super::cua_input::call(
         &input.to_string(),
         (&mut target as *mut BackgroundTarget).cast(),
@@ -542,6 +551,13 @@ fn dispatch(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value 
         }
         borrowed = prepared["borrowed"].as_bool().unwrap_or(false);
     }
+    let _presentation = matches!(op, "click" | "scroll").then(|| {
+        super::pointer_presentation::Scope::new(
+            &request,
+            &request["_pointer_bounds"],
+            super::overlay::PointerRoute::Foreground,
+        )
+    });
     let mut result = dispatch_owned(request, leased, scene_worker);
     if physical && op != "release_focus" {
         result["delivery"] = delivery(
@@ -814,6 +830,9 @@ pub fn worker_entry() -> bool {
         Some("--dtw-scene-worker") => true,
         _ => return false,
     };
+    unsafe {
+        dtw_set_pointer_presenter(Some(super::pointer_presentation::native_posted));
+    }
     if install_termination_handler().is_err() {
         std::process::exit(1);
     }

@@ -18,19 +18,28 @@ def main():
     with tempfile.TemporaryDirectory(prefix="dtw-native-inventory-") as scratch:
         directory = Path(scratch)
         source = directory / "main.swift"
-        source.write_text("\n".join(path.read_text() for path in [
-            admission, native, scene, controls,
-            native.with_name("surface_contract_tests.swift"),
-            native.with_name("scene_contract_tests.swift"),
-            native.with_name("background_contract_tests.swift"),
-        ]))
-        binary = directory / "native-inventory-tests"
-        subprocess.run(
-            ["swiftc", "-warnings-as-errors", "-module-cache-path", str(directory / "module-cache"),
-             str(source), "-o", str(binary)],
-            check=True, timeout=120,
-        )
-        subprocess.run([str(binary)], check=True, timeout=20)
+        groups = {
+            "native-inventory-tests": [
+                admission, native, scene, controls,
+                native.with_name("surface_contract_tests.swift"),
+                native.with_name("scene_contract_tests.swift"),
+                native.with_name("background_contract_tests.swift"),
+            ],
+            "cursor-overlay-tests": [
+                native.with_name("Overlay.swift"),
+                native.with_name("overlay_contract_tests.swift"),
+            ],
+        }
+        for name, paths in groups.items():
+            source.write_text("\n".join(path.read_text() for path in paths))
+            binary = directory / name
+            subprocess.run(
+                ["swiftc", "-warnings-as-errors", "-module-cache-path", str(directory / "module-cache"),
+                 str(source), "-o", str(binary)],
+                check=True, timeout=120,
+            )
+            subprocess.run([str(binary)], check=True, timeout=20)
+
 
 
 if __name__ == "__main__":

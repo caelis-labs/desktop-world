@@ -12,7 +12,7 @@
       "sha256": "aa65db58a8f2ad3f26e0bcb963edce8c1c7105e25865a816024a26769c8a188c"
     },
     "source_file_count": 64,
-    "current_worktree_source_hashes_match": true,
+    "source_hashes_matched_at_checkpoint": true,
     "source_sha256": {
       "cmd/dtw/Cargo.lock": "9187a5cecbfbc16ca95c7ce6f2fe2f2283854d8e71dbf40f22c72bc59083935c",
       "cmd/dtw/Cargo.toml": "d0f4ee31a7b833cdc20e3414b2a1e78dffedaa8ad190d3ec282e121e5d7a63ef",

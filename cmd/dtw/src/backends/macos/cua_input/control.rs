@@ -491,6 +491,22 @@ pub fn post_event_via(pid: i32, event: &CGEvent, auth: bool, public: bool) {
         gate.record_error("targeted event dispatch could not be confirmed".into());
         return;
     }
+    use super::super::overlay::PointerKind;
+    let kind = match event.get_type() {
+        CGEventType::LeftMouseDown | CGEventType::RightMouseDown | CGEventType::OtherMouseDown => {
+            Some(PointerKind::Press)
+        }
+        CGEventType::LeftMouseUp | CGEventType::RightMouseUp | CGEventType::OtherMouseUp => {
+            Some(PointerKind::Release)
+        }
+        CGEventType::MouseMoved => Some(PointerKind::Move),
+        CGEventType::ScrollWheel => Some(PointerKind::Scroll),
+        _ => None,
+    };
+    if let Some(kind) = kind {
+        let point = event.location();
+        super::super::pointer_presentation::posted([point.x, point.y], kind);
+    }
     if let Some((id, _, false)) = paired {
         CALL.with(|c| {
             let mut c = c.borrow_mut();
