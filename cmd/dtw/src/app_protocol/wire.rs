@@ -564,11 +564,20 @@ fn outcome(outcome: &computer::ActionOutcome) -> Value {
             json!({"kind": "mismatch", "expected": expected, "observed": observed})
         }
     };
-    json!({
+    let mut value = json!({
         "dispatch": dispatch,
         "evidence": evidence,
         "error": outcome.error.as_ref().map(error_value)
-    })
+    });
+    if let Some(delivery) = &outcome.delivery {
+        value["delivery"] = json!({
+            "route": delivery.route.map(computer::InputRoute::as_str),
+            "reason": delivery.reason,
+            "foreground_borrowed": delivery.foreground_borrowed,
+            "focus_return": delivery.focus_return.map(computer::FocusReturn::as_str)
+        });
+    }
+    value
 }
 
 /// Encode all evidence without reclassifying success, cancellation or dispatch.

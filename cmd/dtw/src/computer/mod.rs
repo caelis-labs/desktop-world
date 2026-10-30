@@ -41,6 +41,71 @@ pub struct WindowTarget {
     pub generation: u64,
 }
 
+/// Service launch policy; callers cannot override it in individual scripts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InputPolicy {
+    #[default]
+    Auto,
+    BackgroundOnly,
+}
+impl InputPolicy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::BackgroundOnly => "background_only",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputRoute {
+    Semantic,
+    Background,
+    Foreground,
+}
+impl InputRoute {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Semantic => "semantic",
+            Self::Background => "background",
+            Self::Foreground => "foreground",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FocusReturn {
+    Pending,
+    Restored,
+    ApplicationRestored,
+    ChangedExternally,
+    PreviousAppClosed,
+    Unchanged,
+    Unconfirmed,
+}
+impl FocusReturn {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Restored => "restored",
+            Self::ApplicationRestored => "application_restored",
+            Self::ChangedExternally => "changed_externally",
+            Self::PreviousAppClosed => "previous_app_closed",
+            Self::Unchanged => "unchanged",
+            Self::Unconfirmed => "unconfirmed",
+        }
+    }
+}
+
+/// Provider-reported routing evidence, independent of effect confirmation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InputDelivery {
+    pub route: Option<InputRoute>,
+    pub reason: Option<String>,
+    pub foreground_borrowed: bool,
+    pub focus_return: Option<FocusReturn>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Capability {
     Windows,
@@ -347,6 +412,7 @@ pub enum EffectEvidence {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActionOutcome {
+    pub delivery: Option<InputDelivery>,
     pub dispatch: DispatchState,
     pub evidence: EffectEvidence,
     pub error: Option<Error>,
@@ -355,6 +421,7 @@ pub struct ActionOutcome {
 impl ActionOutcome {
     pub fn rejected(error: Error) -> Self {
         Self {
+            delivery: None,
             dispatch: DispatchState::NotDispatched,
             evidence: EffectEvidence::Unverified,
             error: Some(error),
@@ -363,6 +430,7 @@ impl ActionOutcome {
 
     pub fn unknown(error: Error) -> Self {
         Self {
+            delivery: None,
             dispatch: DispatchState::Unknown,
             evidence: EffectEvidence::Unverified,
             error: Some(error),
@@ -405,8 +473,8 @@ pub trait Backend: Send + Sync {
 
     /// Release temporary resources borrowed by one script, including foreground
     /// focus. App state and native observations remain available to later scripts.
-    fn finish_execution(&self) -> Result<(), Error> {
-        Ok(())
+    fn finish_execution(&self) -> Result<Option<FocusReturn>, Error> {
+        Ok(None)
     }
 
     /// Stop and reap native resources. Failure does not reopen admission.

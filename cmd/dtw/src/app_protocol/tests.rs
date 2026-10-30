@@ -53,6 +53,7 @@ struct Model {
     poll_action: bool,
     shutdown_error: Option<Error>,
     finish_error: Option<Error>,
+    finish_focus: Option<FocusReturn>,
     cleanup_error: Option<Error>,
     cleanup_after_capture: Option<Error>,
     cleanup_after_action: Option<Error>,
@@ -78,6 +79,7 @@ impl MockBackend {
                 read_gate: None,
                 action_gate: None,
                 outcome: ActionOutcome {
+                    delivery: None,
                     dispatch: DispatchState::Dispatched,
                     evidence: EffectEvidence::Unverified,
                     error: None,
@@ -86,6 +88,7 @@ impl MockBackend {
                 poll_action: false,
                 shutdown_error: None,
                 finish_error: None,
+                finish_focus: None,
                 cleanup_error: None,
                 cleanup_after_capture: None,
                 cleanup_after_action: None,
@@ -195,11 +198,12 @@ impl Backend for MockBackend {
     fn cleanup_error(&self) -> Option<Error> {
         self.0.model.lock().unwrap().cleanup_error.clone()
     }
-    fn finish_execution(&self) -> Result<(), Error> {
+    fn finish_execution(&self) -> Result<Option<FocusReturn>, Error> {
         self.0.finishes.fetch_add(1, Ordering::SeqCst);
-        match self.0.model.lock().unwrap().finish_error.clone() {
+        let model = self.0.model.lock().unwrap();
+        match model.finish_error.clone() {
             Some(error) => Err(error),
-            None => Ok(()),
+            None => Ok(model.finish_focus),
         }
     }
     fn shutdown(&self) -> Result<(), Error> {
@@ -659,6 +663,7 @@ fn cancelling_an_entered_action_retains_original_evidence_and_never_replays() {
     let window = windows(&owner, "windows").remove(0);
     let (observation, element) = observe(&owner, "observe", &window);
     let provider = ActionOutcome {
+        delivery: None,
         dispatch: DispatchState::Dispatched,
         evidence: EffectEvidence::Mismatch {
             expected: "counter=1".into(),
@@ -839,6 +844,7 @@ fn close_after_cancel_keeps_the_original_cancellation_cause_in_late_receipts() {
     let window = windows(&owner, "windows").remove(0);
     let (observation, element) = observe(&owner, "observe", &window);
     let provider = ActionOutcome {
+        delivery: None,
         dispatch: DispatchState::Dispatched,
         evidence: EffectEvidence::Confirmed("controlled postcondition".into()),
         error: None,

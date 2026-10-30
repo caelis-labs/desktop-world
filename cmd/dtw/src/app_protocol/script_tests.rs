@@ -91,6 +91,7 @@ return 'pretend success';
 fn click_cleanup_failure_keeps_the_original_native_outcome_and_step_receipt() {
     for provider in [
         ActionOutcome {
+            delivery: None,
             dispatch: DispatchState::Dispatched,
             evidence: EffectEvidence::Unverified,
             error: None,
@@ -387,6 +388,7 @@ fn script_cancel_and_close_keep_late_provider_evidence_without_replay() {
     for close in [false, true] {
         let (owner, backend) = coordinator();
         let provider = ActionOutcome {
+            delivery: None,
             dispatch: DispatchState::Dispatched,
             evidence: EffectEvidence::Mismatch {
                 expected: "counter=1".into(),
@@ -736,6 +738,7 @@ fn execution_finish_failure_preserves_action_receipt_and_prevents_state_commit()
     );
     assert!(completed.is_error, "{}", completed.data);
     assert_eq!(completed.data["shutdown_error"]["code"], "finish_failed");
+    assert_eq!(completed.data["script"]["focus_return"], "unconfirmed");
     assert_eq!(completed.data["script"]["state_committed"], false);
     assert_eq!(
         *owner.state.lock().unwrap().script_state.lock().unwrap(),
@@ -752,5 +755,32 @@ fn execution_finish_failure_preserves_action_receipt_and_prevents_state_commit()
         "closed",
     );
     assert_eq!(result(&owner, "finish-error").data, completed.data);
+    owner.close();
+}
+
+#[test]
+fn final_focus_return_is_separate_from_the_original_focus_receipt() {
+    let (owner, backend) = coordinator();
+    {
+        let mut model = backend.0.model.lock().unwrap();
+        model.outcome.delivery = Some(InputDelivery {
+            route: Some(InputRoute::Foreground),
+            reason: None,
+            foreground_borrowed: true,
+            focus_return: Some(FocusReturn::Pending),
+        });
+        model.finish_focus = Some(FocusReturn::Restored);
+    }
+    let completed = run_script(&owner, "focus-return", "const w=(await app.windows()).windows[0].window_ref;return await app.focus({window_ref:w});");
+    assert!(!completed.is_error, "{}", completed.data);
+    assert_eq!(completed.data["script"]["focus_return"], "restored");
+    assert_eq!(
+        steps(&completed)[1]["receipt"]["outcome"]["delivery"]["focus_return"],
+        "pending"
+    );
+    assert_eq!(result(&owner, "focus-return").data, completed.data);
+    backend.0.model.lock().unwrap().finish_focus = None;
+    let next = run_script(&owner, "no-focus-return", "return 1;");
+    assert!(next.data["script"].get("focus_return").is_none());
     owner.close();
 }

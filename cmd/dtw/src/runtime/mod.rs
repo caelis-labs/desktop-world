@@ -46,7 +46,9 @@ impl ActionReceipt {
     fn from_provider(provider_outcome: ActionOutcome, interruption: Option<Error>) -> Self {
         let outcome = match &interruption {
             Some(error) if provider_outcome.dispatch != DispatchState::NotDispatched => {
-                ActionOutcome::unknown(error.clone())
+                let mut uncertain = ActionOutcome::unknown(error.clone());
+                uncertain.delivery = provider_outcome.delivery.clone();
+                uncertain
             }
             _ => provider_outcome.clone(),
         };
@@ -181,7 +183,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         self.backend.cleanup_error()
     }
 
-    pub fn finish_execution(&self) -> Result<(), Error> {
+    pub fn finish_execution(&self) -> Result<Option<FocusReturn>, Error> {
         self.backend.finish_execution()
     }
 

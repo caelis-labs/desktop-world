@@ -64,6 +64,7 @@ impl Backend for InputBackend {
 }
 fn dispatched() -> ActionOutcome {
     ActionOutcome {
+        delivery: None,
         dispatch: DispatchState::Dispatched,
         evidence: EffectEvidence::Unverified,
         error: None,
@@ -203,4 +204,39 @@ fn cancelled_input_keeps_admission_until_late_receipt_and_never_replays() {
         ActionOutcome::rejected(Error::Cancelled)
     );
     assert_eq!(backend.calls.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn interruption_retains_the_provider_delivery_without_claiming_effect_success() {
+    for dispatch in [
+        DispatchState::Dispatched,
+        DispatchState::Unknown,
+        DispatchState::NotDispatched,
+    ] {
+        let provider = ActionOutcome {
+            delivery: Some(InputDelivery {
+                route: Some(InputRoute::Foreground),
+                reason: Some("background_unavailable".into()),
+                foreground_borrowed: true,
+                focus_return: Some(FocusReturn::Restored),
+            }),
+            dispatch,
+            evidence: EffectEvidence::Unverified,
+            error: None,
+        };
+        let receipt = ActionReceipt::from_provider(provider.clone(), Some(Error::Cancelled));
+        assert_eq!(receipt.outcome.delivery, provider.delivery);
+        assert_eq!(receipt.provider_outcome, Some(provider));
+        assert_eq!(
+            receipt.outcome.dispatch,
+            if dispatch == DispatchState::NotDispatched {
+                DispatchState::NotDispatched
+            } else {
+                DispatchState::Unknown
+            }
+        );
+        assert_eq!(receipt.interruption, Some(Error::Cancelled));
+    }
+    let absent = ActionReceipt::from_provider(dispatched(), Some(Error::Cancelled));
+    assert!(absent.outcome.delivery.is_none());
 }

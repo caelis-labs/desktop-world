@@ -10,7 +10,7 @@ use crate::backends::linux::NativeBackend;
 use crate::backends::macos::NativeBackend;
 #[cfg(target_os = "windows")]
 use crate::backends::windows::NativeBackend;
-use crate::computer::{Backend, Error};
+use crate::computer::{Backend, Error, InputPolicy};
 use serde_json::{json, Value};
 use std::{
     io::{self, Write},
@@ -22,10 +22,14 @@ use std::{
 };
 #[derive(Default)]
 struct NativeFactory {
+    input_policy: InputPolicy,
     catalog: Mutex<Option<Arc<NativeBackend>>>,
 }
 impl Factory for NativeFactory {
     type Provider = NativeBackend;
+    fn input_policy(&self) -> InputPolicy {
+        self.input_policy
+    }
     fn description(&self) -> Value {
         NativeBackend::description()
     }
@@ -33,7 +37,9 @@ impl Factory for NativeFactory {
         let reader = {
             let mut slot = self.catalog.lock().unwrap();
             if slot.is_none() {
-                *slot = Some(Arc::new(NativeBackend::spawn()?));
+                *slot = Some(Arc::new(NativeBackend::spawn_with_policy(
+                    self.input_policy,
+                )?));
             }
             slot.as_ref().unwrap().clone()
         };
@@ -48,7 +54,7 @@ impl Factory for NativeFactory {
         })
     }
     fn connect(&self) -> Result<NativeBackend, Error> {
-        NativeBackend::spawn()
+        NativeBackend::spawn_with_policy(self.input_policy)
     }
     fn close_catalog(&self) -> Result<(), Error> {
         let reader = self.catalog.lock().unwrap().clone();
@@ -89,13 +95,27 @@ pub fn run(args: &[String]) -> Result<(), WireError> {
             );
             Ok(())
         }
-        ["mcp"] => serve(Server::new(NativeFactory::default())),
+        ["mcp", options @ ..] => serve(Server::new(NativeFactory {
+            input_policy: input_policy(options)?,
+            ..NativeFactory::default()
+        })),
         _ => Err(error(
             "invalid_arguments",
-            "Usage: dtw mcp | dtw app catalog",
+            "Usage: dtw mcp [--input-policy auto|background-only] | dtw app catalog",
         )),
     }
 }
+fn input_policy(options: &[&str]) -> Result<InputPolicy, WireError> {
+    match options {
+        [] | ["--input-policy", "auto"] => Ok(InputPolicy::Auto),
+        ["--input-policy", "background-only"] => Ok(InputPolicy::BackgroundOnly),
+        _ => Err(error(
+            "invalid_arguments",
+            "Expected --input-policy auto|background-only",
+        )),
+    }
+}
+
 struct Watchdog(Arc<AtomicBool>);
 impl Drop for Watchdog {
     fn drop(&mut self) {
@@ -165,6 +185,41 @@ fn cleanup_for_exit(server: &Server<NativeFactory>) -> i32 {
                 "Cleanup panicked; native outcome remains unknown",
             ));
             2
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn service_policy_launch_options_are_exact_and_default_to_auto() {
+        assert_eq!(input_policy(&[]).unwrap(), InputPolicy::Auto);
+        assert_eq!(
+            input_policy(&["--input-policy", "auto"]).unwrap(),
+            InputPolicy::Auto
+        );
+        assert_eq!(
+            input_policy(&["--input-policy", "background-only"]).unwrap(),
+            InputPolicy::BackgroundOnly
+        );
+        for options in [
+            vec!["--input-policy"],
+            vec!["--input-policy", "background_only"],
+            vec!["--input-policy", "foreground"],
+            vec!["--input-policy=auto"],
+            vec![
+                "--input-policy",
+                "auto",
+                "--input-policy",
+                "background-only",
+            ],
+            vec!["--other", "auto"],
+        ] {
+            assert_eq!(
+                input_policy(&options).unwrap_err().code,
+                "invalid_arguments"
+            );
         }
     }
 }

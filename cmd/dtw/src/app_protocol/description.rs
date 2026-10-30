@@ -24,7 +24,13 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
                 object(json!({"kind":{"const":"confirmed"},"postcondition":{"type":"string"}}), &["kind","postcondition"]),
                 object(json!({"kind":{"const":"mismatch"},"expected":{"type":"string"},"observed":{"type":"string"}}), &["kind","expected","observed"])
             ]},
-            "error":{"anyOf":[error,{"type":"null"}]}
+            "error":{"anyOf":[error,{"type":"null"}]},
+            "delivery":object(json!({
+                "route":{"enum":["semantic","background","foreground",null]},
+                "reason":{"type":["string","null"]},
+                "foreground_borrowed":{"type":"boolean"},
+                "focus_return":{"enum":["pending","restored","application_restored","changed_externally","previous_app_closed","unchanged","unconfirmed",null]}
+            }), &["route","reason","foreground_borrowed","focus_return"])
         }),
         &["dispatch", "evidence", "error"],
     );
@@ -179,7 +185,7 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
             "failure":"A Host error throws before returning to JavaScript; its action receipt remains in script.steps. Previously completed effects and receipts survive later exceptions, cancellation, timeout and VM failure.",
             "ledger":"script.steps retains number,line,operation,status,error,receipt and windows inventory coverage/diagnostics independently of evictable value/image payloads. Bridge attempts consume call numbers, so the ledger may have gaps. No automatic replay. DTW keeps the original ledger; repeated accepted MCP transport IDs refer to the same execution, while new requests execute new work."
         },
-        "result":"exec waits until completion and returns value.result plus unchanged console,console_truncated,calls,last_capture. script.summary replaces the step ledger with counts and a last_issue sample; script.failure,state_committed,shutdown_error and all recovery flags remain. result({app}) retrieves the full original record with script.steps; optional execution_id selects a prior returned record. Summary dispatch/evidence counts do not prove business success. Caught errors may coexist with state_committed=true; consult the full ledger for all issues, never replay. Payload eviction sets payload_expired and may clear value/image while retaining errors and receipts.",
+        "result":"exec waits until completion and returns value.result plus unchanged console,console_truncated,calls,last_capture. script.summary replaces the step ledger with counts and a last_issue sample; script.failure,state_committed,shutdown_error,optional focus_return and all recovery flags remain. result({app}) retrieves the full original record with script.steps; optional execution_id selects a prior returned record. Summary dispatch/evidence counts do not prove business success. Optional delivery summaries retain reported routes and focus-return evidence; absent delivery is not inferred. An app.focus receipt may remain pending while script.focus_return records the later execution cleanup. Caught errors may coexist with state_committed=true; consult the full ledger for all issues, never replay. Payload eviction sets payload_expired and may clear value/image while retaining errors and receipts.",
         "images":"value.last_capture identifies the last successful capture's step and metadata. Its PNG is returned as MCP image content outside the VM; scripts cannot access or return image bytes.",
         "lifecycle":"Cancellation or script timeout closes the context, stops native resources and joins the VM before job completion. Cancellation cannot prove an already dispatched action did not occur. A later new exec rebuilds affected native references as needed (context_reset) while retaining committed JSON state. Only an actual application instance change clears state (state_reset). Retained jobs remain queryable within this MCP connection.",
         "example":{

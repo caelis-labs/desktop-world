@@ -247,6 +247,7 @@ impl Backend for TestBackend {
             (
                 model.press_gate.take(),
                 model.press_outcome.take().unwrap_or(ActionOutcome {
+                    delivery: None,
                     dispatch: DispatchState::Dispatched,
                     evidence: EffectEvidence::Confirmed("button is on".into()),
                     error: None,
@@ -310,6 +311,7 @@ fn assert_interrupted(receipt: ActionReceipt, expected: Error, provider: ActionO
 
 fn successful_press() -> ActionOutcome {
     ActionOutcome {
+        delivery: None,
         dispatch: DispatchState::Dispatched,
         evidence: EffectEvidence::Confirmed("button is on".into()),
         error: None,
@@ -701,6 +703,7 @@ fn backend_failures_and_uncertain_effects_are_preserved_without_retry() {
         ActionOutcome::unknown(Error::TimedOut),
         ActionOutcome::rejected(Error::BackendFailed("no input sent".into())),
         ActionOutcome {
+            delivery: None,
             dispatch: DispatchState::Dispatched,
             evidence: EffectEvidence::Mismatch {
                 expected: "off".into(),
@@ -1015,6 +1018,7 @@ fn interruption_preserves_provider_error_and_effect_evidence_without_retry() {
     let outcomes = [
         ActionOutcome::unknown(Error::TimedOut),
         ActionOutcome {
+            delivery: None,
             dispatch: DispatchState::Dispatched,
             evidence: EffectEvidence::Mismatch {
                 expected: "button off".into(),

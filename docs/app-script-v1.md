@@ -13,6 +13,8 @@
 
 示例 app ID 必须与 `apps` 返回的目标应用一致。`source` 是 JavaScript 异步函数体，可直接使用 `await` 和 `return`，不是模块或文件路径。DTW 自动分配执行标识；模型只需提供 `app` 和 `source`。公开输入严格只有这两个字段，未知字段拒绝；当前内部执行期限为 30 秒，不设调用次数配额。预算属于执行层策略，不要求模型配置。没有 grant、approved、授权能力集合或续期参数。
 
+服务可用 `dtw mcp --input-policy auto|background-only` 启动，默认 `auto`。`apps` / `api` 返回 `service.input_policy`（`auto` 或 `background_only`），脚本不设置或覆盖策略。macOS 自动选择可用的后台输入；`auto` 允许预检确认后台不可用后临时使用前台，`background_only` 在前台准备之前拒绝该路线及显式 focus，返回 `not_dispatched` / `foreground_required`。不要通过重试 focus 处理此错误。支持的语义操作仍可用，但应用可能自行改变界面或焦点；服务策略不是审批机制，也不替代 Harness 授权。详见[服务输入策略](app-protocol-v1.md#服务输入策略)。
+
 `source` 是解码后的脚本文本。MCP 消息仍需符合 JSON 字符串规则：例如脚本中的正则 `/\bword\b/` 在原始 JSON 字符串里写为 `/\\bword\\b/`；少一层转义会得到合法 JSON，但脚本内变成退格字符。调用程序应把原始字符串交给 JSON 序列化器，不能先手工转义再序列化。DTW 不重复解码或自动修复源码。回归测试覆盖引号、反斜杠、正则、模板字符串、换行、CRLF、中文/emoji、Unicode 转义及结果中的控制字符；这保证已接收内容的保真，不保证模型构造的参数符合其原意。
 
 当前 `exec` 不接受文件路径。未来文件便利入口由调用方读取本地文件后发送内容，远端继续使用相同脚本合同；文件与远程传输的边界见[架构基线](next-architecture-baseline.md#脚本内容文件输入与远程执行)。
@@ -30,8 +32,8 @@
 | `await app.capture({window_ref})` | `{window_ref,observation_ref,kind:"pixels",image:{width,height,coordinate_space:"image_pixels"}}` | 返回像素观察元数据，图片字节在 VM 外 |
 | `await app.press({window_ref,observation_ref,element_ref})` | 原协议的动作 receipt | 当前语义观察中的可按元素 |
 | `await app.click({window_ref,observation_ref,x,y,button?,count?})` | 原协议的动作 receipt | 当前像素观察及有效图片坐标；button=left/right，count=1/2 |
-| `await app.focus({window_ref})` | 动作 receipt | 验证、激活并聚焦指定窗口 |
-| `await app.typeText({window_ref,text})` | 动作 receipt | 向指定窗口当前文本焦点输入，内部取得物理输入 owner |
+| `await app.focus({window_ref})` | 动作 receipt | 验证、激活并聚焦指定窗口；`background_only` 拒绝 |
+| `await app.typeText({window_ref,text})` | 动作 receipt | 向指定窗口当前文本焦点输入，内部按服务策略选择投递路线 |
 | `await app.keypress({window_ref,keys})` | 动作 receipt | 一个组合键，如 `["META","S"]`；平台支持的键名按原生合同校验 |
 | `await app.scroll({window_ref,delta_x?,delta_y?})` | 动作 receipt | 在指定窗口中心发送整数 wheel steps，每轴 ±100，至少一轴非零；实际距离由 OS/app 决定 |
 | `await app.setValue({window_ref,observation_ref,element_ref,value})` | 动作 receipt | 当前语义观察中明确广告 `setValue` 的可编辑文本控件 |
@@ -40,9 +42,9 @@
 
 文本按 UTF-8 限 16 KiB，JSON 编码后限 48 KiB，不含 NUL；`setValue` 允许空串清空，`typeText` 不允许空串。键盘输入与语义 setter 的事件语义不同，业务效果必须独立读回。focus/输入动作同样消费目标窗口旧观察；其他窗口和 app 的状态保留。跨进程输入 lease 覆盖聚焦、目标复核和完整输入事务；中断不重放，已按下的键/按钮按原操作清理。
 
-用户或外部程序仍可改变系统焦点。macOS 输入会按事件段重新核验系统级 AX 当前应用和精确窗口；失焦返回 `focus_changed`，无法证明焦点返回原始错误或 `focus_unproven`。已开始的输入保留 `unknown` 与原回执，并停止脚本后续动作；不会在输入中途主动抢回焦点或重发文本。首次执行输入时建立焦点仍是该方法的显式行为。
+用户或外部程序仍可改变目标状态。macOS 后台输入核验目标 app/窗口及动作需要的状态，不要求目标保持系统前台；无关的指针移动不使键盘输入失效。前台路线按事件段重新核验系统级 AX 当前应用和精确窗口；失焦返回 `focus_changed`，无法证明焦点返回原始错误或 `focus_unproven`。已开始的输入保留 `unknown` 与原回执；不会在输入中途主动抢回焦点或重发文本。
 
-首次请求聚焦时，已验证的目标不要求当前已有 focused app/window；缺失焦点允许进行一次请求中的 raise/activate，但不算聚焦成功。之后已有的聚焦等待阶段可对焦点缺失及 AX `CannotComplete` 重查只读状态；不再次激活。其他 AX 错误、身份变化、中止或请求截止立即停止；等待耗尽时保留当前未解决错误。输入阶段不采用这种等待重查。
+前台路线先保留已证明的原应用及原窗口，再建立目标焦点。无法证明原身份时不继续切换；明确没有原窗口时只能承诺应用级归还。已有的聚焦等待阶段可对暂时缺失的焦点及 AX `CannotComplete` 重查只读状态，不再次激活；其他 AX 错误、身份变化、中止或截止立即停止。前台输入完成后，DTW 仅在仍持有所有权时归还；显式 focus 的归还发生在脚本收尾。
 
 遇到 `focus_changed`、`focus_unproven`、`stale_observation` 或 `target_changed`，Agent 应刷新受影响窗口的身份/语义观察/截图，核对实际内容，再决定剩余步骤。此机制不是任意业务内容变化的全局版本锁，也不能撤回外部切换前已排入系统队列的事件；其他窗口、实例和 app 的上下文保留。
 
@@ -141,11 +143,14 @@ state 提交不是桌面事务。动作一旦派发，之后的异常、取消�
 | `script.steps[].discovery` | 成功 observe 的 `{window_ref,observation_ref,complete,reason,visited,has_more}`；保存当页覆盖证据，不保存元素、游标或页面文本 |
 | `script.failure` | null 或 `{kind,message,line,operation,code,call}`；无可定位信息时为 null，内部错误可能只有部分诊断 |
 | `script.state_committed` | 新 state 是否实际提交 |
+| `script.focus_return` | 可选的脚本收尾归还状态；与早先动作的 pending receipt 分开，紧凑结果也保留 |
 | `script.shutdown_error` | 关闭资源失败的独立 `{code,message}`，不覆盖脚本失败或动作 receipt |
 
 步骤编号来自 bridge 尝试编号。某些参数拒绝已经计入 bridge 预算，但没有进入 Coordinator，因此步骤可有空号；在 JavaScript 参数检查或 JSON 编码阶段就被拒绝的调用未必计数。`line` 指向调用者源码，无法定位时步骤使用 0，failure 使用 null。编号与源码行用于定位调用，不改变目标身份。
 
 成功解析为动作的步骤保存完整 `outcome/provider_outcome/interruption`；在 Coordinator 的协议解析阶段被拒绝的步骤只记录 error，receipt 为 null；读步骤也保留错误。普通异常和 provider panic 后，之前的步骤及 receipt 不丢失；panic 时尚无最终回执的动作记为未知效果。脚本失败后的 `completed` 只表示任务已收尾，不能据此推断没有桌面效果。`error.code` 可为 `script_syntax / script_exception / script_memory / script_timeout / script_cancelled / script_stalled / script_internal`，也可能是 Core/协议收尾错误；细分原因如 `call_limit`、`receipt_limit`、`invalid_args`、`invalid_json` 在 `script.failure.code` 中，原生动作事实以步骤 receipt 为准。
+
+动作可选 `delivery` 包含 `route/reason/foreground_borrowed/focus_return`，保留原生报告的语义、后台或前台路线及归还证据；缺失时不推断。`foreground_borrowed` 仅表示临时借用并计划归还，不等同于所有焦点变化；Windows/Linux 当前前台动作不承诺归还。显式 focus 的动作回执可保持 `pending`，最终归还在 `script.focus_return`：`restored` 证明原窗口，`application_restored` 仅证明原 app；`changed_externally`、`previous_app_closed`、`unconfirmed` 不承诺已返回。取消后丢失精确归还结果的已知借用保留 `unconfirmed`，原动作不被重写。紧凑摘要只汇总已报告的 delivery，完整字段定义见[MCP 结果合同](app-protocol-v1.md#结果效果与图像)。这些证据均不代替业务效果读回。
 
 一个连接保留多个 app 上下文，A→B→A 不重置 state 或窗口引用。原生 worker、最新 app state/refs 与历史回执分开管理。已完成历史采用滑动窗口：当前默认保留最近 512 条、16 MiB 回执；value/image 另有 64 MiB payload 预算。这些是保留容量，不是累计执行配额，达到容量会淘汰旧记录并继续执行，不重建 app owner。活动和未收尾执行不会被淘汰。payload 单独淘汰时标记 payload_expired；整条历史淘汰后 result 返回 execution_unavailable，不重放原脚本、不保留无限墓碑。默认 result 读取该 app 最新仍保留的已接受执行（包括进行中）；历史回执不是持久审计存储，去重仅覆盖仍被保留的传输记录。macOS 同一实例的写操作跨会话互斥，独立实例的后台输入可并行；前台替代路线占用共享物理输入租约，归还前台/指针也在该租约内。
 

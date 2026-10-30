@@ -4,7 +4,7 @@ use super::{
     wire::{self, Command, Request, Submit, Target, WireError},
     Coordinator, Reply,
 };
-use crate::computer::{AppInstance, Backend, Error};
+use crate::computer::{AppInstance, Backend, Error, InputPolicy};
 use serde_json::{json, Value};
 use std::{
     collections::VecDeque,
@@ -31,6 +31,9 @@ pub trait Factory: Send + Sync + 'static {
     type Provider: Backend + 'static;
     fn catalog(&self) -> Result<Vec<Application>, Error>;
     fn connect(&self) -> Result<Self::Provider, Error>;
+    fn input_policy(&self) -> InputPolicy {
+        InputPolicy::Auto
+    }
     fn description(&self) -> Value {
         json!({"coverage":"Provider-defined application window subset","conditions":[]})
     }
@@ -161,7 +164,10 @@ impl<F: Factory> Server<F> {
                 return Started::Reply(problem("closed", "The MCP server is shutting down"));
             }
             return Started::Reply(match super::description::requested(&args) {
-                Ok(value) => Reply::plain(value),
+                Ok(mut value) => {
+                    value["service"] = self.service();
+                    Reply::plain(value)
+                }
                 Err(error) => Reply::error(error),
             });
         }
@@ -325,6 +331,9 @@ impl<F: Factory> Server<F> {
         }
         append_shutdown_errors(reply, &state.shutdown_errors);
     }
+    fn service(&self) -> Value {
+        json!({"input_policy":self.factory.input_policy().as_str()})
+    }
     fn apps(&self, call: &Call<F::Provider>) -> Reply {
         if call.cancelled.load(Ordering::Acquire) {
             return problem("cancelled", "Application discovery was cancelled");
@@ -333,7 +342,7 @@ impl<F: Factory> Server<F> {
             Ok(apps) if !call.cancelled.load(Ordering::Acquire) => {
                 let apps = public_apps(apps);
                 Reply::plain(json!({"version":1,
-                "apps":apps,"backend":self.factory.description(),
+                "apps":apps,"backend":self.factory.description(),"service":self.service(),
                 "script":super::description::index(),
                 "limits":{"retained_executions":RETENTION.records,"payload_bytes":RETENTION.payload_bytes,
                     "receipt_bytes":RETENTION.receipt_bytes,"max_steps_per_request":scripts::MAX_CALLS},
@@ -1105,6 +1114,7 @@ mod lifecycle_tests {
             self.0.actions.fetch_add(1, Ordering::SeqCst);
             self.0.action_targets.lock().unwrap().push(target.clone());
             ActionOutcome {
+                delivery: None,
                 dispatch: DispatchState::Dispatched,
                 evidence: EffectEvidence::Unverified,
                 error: None,

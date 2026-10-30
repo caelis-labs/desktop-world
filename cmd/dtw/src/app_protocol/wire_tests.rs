@@ -386,6 +386,7 @@ fn cancellation_receipts_preserve_distinct_context_and_provider_evidence() {
     let receipt = runtime::ActionReceipt {
         outcome: ActionOutcome::unknown(Error::Cancelled),
         provider_outcome: Some(ActionOutcome {
+            delivery: None,
             dispatch: DispatchState::Dispatched,
             evidence: EffectEvidence::Confirmed("counter changed from 0 to 1".into()),
             error: None,
@@ -422,6 +423,7 @@ fn known_rejection_and_mismatch_are_not_reclassified() {
     assert_eq!(value["interruption"]["code"], "closed");
     let value = receipt(&runtime::ActionReceipt {
         outcome: ActionOutcome {
+            delivery: None,
             dispatch: DispatchState::Dispatched,
             evidence: EffectEvidence::Mismatch {
                 expected: "Count: 1".into(),
@@ -558,4 +560,35 @@ fn scripts_are_app_bound_with_caller_selected_execution_budgets() {
         schema["properties"]["command"]["properties"]["max_calls"]["maximum"],
         crate::app_protocol::scripts::MAX_CALLS
     );
+}
+
+#[test]
+fn delivery_is_optional_and_preserves_typed_route_and_focus_evidence() {
+    use crate::computer::{FocusReturn, InputDelivery, InputRoute};
+    let mut native = ActionOutcome::unknown(Error::Cancelled);
+    let missing = super::outcome(&native);
+    assert!(missing.get("delivery").is_none());
+    for (status, name) in [
+        (FocusReturn::Pending, "pending"),
+        (FocusReturn::Restored, "restored"),
+        (FocusReturn::ApplicationRestored, "application_restored"),
+        (FocusReturn::ChangedExternally, "changed_externally"),
+        (FocusReturn::PreviousAppClosed, "previous_app_closed"),
+        (FocusReturn::Unchanged, "unchanged"),
+        (FocusReturn::Unconfirmed, "unconfirmed"),
+    ] {
+        native.delivery = Some(InputDelivery {
+            route: Some(InputRoute::Foreground),
+            reason: Some("background_unavailable".into()),
+            foreground_borrowed: true,
+            focus_return: Some(status),
+        });
+        let value = super::outcome(&native);
+        assert_eq!(
+            value["delivery"],
+            json!({"route":"foreground","reason":"background_unavailable",
+            "foreground_borrowed":true,"focus_return":name})
+        );
+        assert_eq!(value["dispatch"], "unknown");
+    }
 }

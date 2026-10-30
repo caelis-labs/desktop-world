@@ -89,7 +89,7 @@ def check_single_dispatch(mcp, proof, source):
             'The original input was duplicated or changed')
 
 
-def run_case(binary, directory, target, peer, case, proof, clients, foreground=False):
+def run_case(binary, directory, target, peer, case, proof, clients, foreground=False, explicit_focus=False):
     directory.mkdir()
     reset(target); reset(peer)
     proof['desktop_before'] = front(peer)
@@ -104,7 +104,7 @@ def run_case(binary, directory, target, peer, case, proof, clients, foreground=F
         # any prefix. Cancellation still happens in ordinary Unicode text.
         payload += '\n'
     suffix = 'NEVER-'+tag
-    source = select() + f"""
+    source = select() + ("await app.focus({window_ref});" if explicit_focus else "") + f"""
 const typed=await app.typeText({{window_ref,text:{json.dumps(payload)}}});
 await app.typeText({{window_ref,text:{json.dumps(suffix)}}});
 await app.keypress({{window_ref,keys:['META','S']}});return typed;
@@ -151,6 +151,13 @@ await app.keypress({{window_ref,keys:['META','S']}});return typed;
                 return record if record.get('status') == 'completed' else None
             proof['record'] = wait_until(terminal, timeout=8)
             check_cancel_record(proof['record'], proof['execution_id'])
+            if explicit_focus:
+                steps = proof['record']['script']['steps']
+                focused = [step for step in steps if step['operation'] == 'focus']
+                require(len(focused) == 1 and focused[0]['receipt']['provider_outcome']['delivery']['focus_return'] == 'pending',
+                        'Cancellation rewrote the original explicit-focus receipt')
+                require(proof['record']['script'].get('focus_return') == 'unconfirmed',
+                        'Stopped focus owner lost its unconfirmed final return evidence')
             proof['retained_record'] = mcp.receipt(target.app_id, case+'_original')
             require(proof['retained_record'] == proof['record'], 'Original cancellation receipt changed')
         else:
@@ -182,8 +189,8 @@ await app.keypress({{window_ref,keys:['META','S']}});return typed;
         proof['peer_events'] = [event for event in journal(peer, 'events.jsonl')
             if event['sequence'] > proof['peer_before']['events_count'] and event['uptime'] <= proof['peer_after']['published_uptime']]
         observe_desktop(peer, proof['desktop_before'], proof['peer_after'], proof.setdefault('desktop', {}),
-                        forbidden_pids=() if foreground else (target.child.pid,))
-        if foreground:
+                        forbidden_pids=() if foreground or explicit_focus else (target.child.pid,))
+        if foreground or explicit_focus:
             require_exact_return(proof['peer_after'], peer.child.pid, proof['desktop_before']['key_window'])
             proof['exact_foreground_return_verified'] = True
         require(proof['after']['text'] == proof['after_stop']['text'], 'Target text continued changing after owner cleanup')
@@ -199,6 +206,7 @@ def main():
     parser.add_argument('--dtw', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--case', choices=('all',)+CASES, default='all')
+    parser.add_argument('--explicit-focus', action='store_true', help='Borrow foreground explicitly before background input and retain uncertain finalizer evidence on cancellation')
     parser.add_argument('--foreground', action='store_true', help='Exercise automatic foreground fallback and exact return during interruption')
     args = parser.parse_args()
     require(sys.platform == 'darwin', 'This probe requires real macOS')
@@ -208,7 +216,7 @@ def main():
     output = args.output.absolute(); output.mkdir(mode=0o700, parents=True, exist_ok=False)
     source = Path(__file__).resolve().parents[1]/'fixtures/native-input/main.swift'
     evidence = {'kind':'owned-AppKit-background-lifecycle-standard-MCP', 'case':args.case,
-                'foreground_fallback':args.foreground,
+                'foreground_fallback':args.foreground,'explicit_focus':args.explicit_focus,
                 'live_llm_host':False, 'release_artifact':False, 'binary_path':str(binary),
                 'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),
                 'fixture_source_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),
@@ -229,7 +237,7 @@ def main():
         for case in CASES:
             if args.case in ('all',case):
                 proof = evidence['cases'].setdefault(case, {})
-                run_case(binary, output/('mcp-'+case), target, peer, case, proof, clients, foreground=args.foreground)
+                run_case(binary, output/('mcp-'+case), target, peer, case, proof, clients, foreground=args.foreground, explicit_focus=args.explicit_focus)
         evidence['after'] = [fixture.state() for fixture in fixtures]
     except BaseException as error:
         failure = {'type':type(error).__name__, 'message':str(error), 'traceback':traceback.format_exc()}

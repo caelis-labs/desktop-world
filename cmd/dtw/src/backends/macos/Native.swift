@@ -2645,7 +2645,7 @@ private final class NativeStore: @unchecked Sendable {
                     point = CGPoint(x: x, y: y)
                 } else { point = nil }
                 try borrowFocus(target, window?.element, context, inputPoint: point)
-                return ["prepared": true]
+                return ["prepared": true, "borrowed": borrowedFocus != nil]
             case "release_focus": return try releaseFocus(context.deadline)
             case "validate_background":
                 let target = try NativeTarget(request["target"])

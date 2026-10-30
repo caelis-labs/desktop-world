@@ -4,7 +4,10 @@ use crate::computer::*;
 use base64::Engine;
 use serde_json::{json, Value};
 use std::{
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 mod cua_input;
@@ -21,6 +24,8 @@ pub struct NativeBackend {
     scene: SceneOwner,
     stamp: ProviderStamp,
     cleanup_failure: Mutex<Option<Error>>,
+    input_policy: InputPolicy,
+    focus_pending: AtomicBool,
 }
 
 #[derive(Default)]
@@ -185,12 +190,18 @@ impl NativeBackend {
     }
 
     pub fn spawn() -> Result<Self, Error> {
+        Self::spawn_with_policy(InputPolicy::Auto)
+    }
+
+    pub fn spawn_with_policy(input_policy: InputPolicy) -> Result<Self, Error> {
         let exe = std::env::current_exe().map_err(failed)?;
         let worker = Worker::spawn(&exe, &["--dtw-native-worker"]).map_err(transport_error)?;
         Ok(Self {
             worker: Arc::new(worker),
             scene: SceneOwner::default(),
             cleanup_failure: Mutex::new(None),
+            focus_pending: AtomicBool::new(false),
+            input_policy,
             stamp: ProviderStamp {
                 id: "dtw-macos-native".into(),
                 generation: unique_generation(),
@@ -233,6 +244,7 @@ impl NativeBackend {
     ) -> Result<Value, (Error, bool)> {
         let request_id = unique_generation();
         request["request_id"] = json!(request_id);
+        request["input_policy"] = json!(self.input_policy.as_str());
         let left = call
             .remaining()
             .map_err(|e| (e, false))?
@@ -288,12 +300,32 @@ impl NativeBackend {
         }
     }
     fn action(&self, request: Value, call: &CallContext<'_>) -> ActionOutcome {
+        // A worker can restore focus during cancellation shutdown before the
+        // finalizer can ask for its exact return result. Retain that uncertainty.
+        let explicit_focus = request["operation"] == "focus";
+        let previous_pending = explicit_focus && self.focus_pending.swap(true, Ordering::AcqRel);
         let reply = match self.rpc(request, call) {
             Ok(reply) => reply,
             Err((error, true)) => return ActionOutcome::unknown(error),
-            Err((error, false)) => return ActionOutcome::rejected(error),
+            Err((error, false)) => {
+                if explicit_focus {
+                    self.focus_pending
+                        .store(previous_pending, Ordering::Release);
+                }
+                return ActionOutcome::rejected(error);
+            }
         };
         let mut outcome = action_reply(&reply);
+        if explicit_focus
+            && outcome.dispatch == DispatchState::NotDispatched
+            && !outcome
+                .delivery
+                .as_ref()
+                .is_some_and(|value| value.foreground_borrowed)
+        {
+            self.focus_pending
+                .store(previous_pending, Ordering::Release);
+        }
         if outcome.error == Some(Error::InvalidObservation) {
             outcome.error = Some(self.retire(Error::InvalidObservation));
         }
@@ -408,7 +440,7 @@ fn select_scene_target(inventory: &Value, original: &Value) -> Result<Value, Err
 }
 impl Backend for NativeBackend {
     type Binding = NativeBinding;
-    fn finish_execution(&self) -> Result<(), Error> {
+    fn finish_execution(&self) -> Result<Option<FocusReturn>, Error> {
         let until = Instant::now() + Duration::from_millis(400);
         let request_id = unique_generation();
         let request = json!({"operation":"release_focus","request_id":request_id,
@@ -423,16 +455,33 @@ impl Backend for NativeBackend {
         }) {
             Ok(bytes) => bytes,
             Err(error) if error.kind == TransportErrorKind::Stopped => {
-                return self
-                    .worker
-                    .cleanup_error()
-                    .map_or(Ok(()), |error| Err(transport_error(error)));
+                return self.worker.cleanup_error().map_or_else(
+                    || {
+                        Ok(self
+                            .focus_pending
+                            .load(Ordering::Acquire)
+                            .then_some(FocusReturn::Unconfirmed))
+                    },
+                    |error| Err(transport_error(error)),
+                );
             }
             Err(error) => return Err(transport_error(error)),
         };
         let envelope = serde_json::from_slice(&bytes).map_err(failed)?;
         let reply = envelope_reply(&envelope, request_id)?;
-        reply_error(&reply).map_or(Ok(()), Err)
+        if let Some(error) = reply_error(&reply) {
+            return Err(error);
+        }
+        self.focus_pending.store(false, Ordering::Release);
+        // No outstanding borrow is not a new restoration claim.
+        match reply["focus"].as_str() {
+            Some("unchanged") => Ok(None),
+            Some("restored") => Ok(Some(FocusReturn::Restored)),
+            Some("application_restored") => Ok(Some(FocusReturn::ApplicationRestored)),
+            Some("changed_externally") => Ok(Some(FocusReturn::ChangedExternally)),
+            Some("previous_app_closed") => Ok(Some(FocusReturn::PreviousAppClosed)),
+            _ => Err(Error::InvalidObservation),
+        }
     }
     fn cleanup_error(&self) -> Option<Error> {
         self.cleanup_failure
@@ -686,6 +735,44 @@ fn envelope_reply(reply: &Value, request_id: u64) -> Result<Value, Error> {
         Ok(reply["result"].clone())
     }
 }
+fn parse_delivery(value: Option<&Value>) -> Result<Option<InputDelivery>, ()> {
+    let Some(value) = value else { return Ok(None) };
+    let object = value.as_object().ok_or(())?;
+    let route = match object.get("route").and_then(Value::as_str) {
+        Some("semantic") => Some(InputRoute::Semantic),
+        Some("background") => Some(InputRoute::Background),
+        Some("foreground") => Some(InputRoute::Foreground),
+        None if value["route"].is_null() => None,
+        _ => return Err(()),
+    };
+    let reason = match object.get("reason") {
+        Some(Value::String(reason)) if reason.len() <= 2048 => Some(reason.clone()),
+        None | Some(Value::Null) => None,
+        _ => return Err(()),
+    };
+    let foreground_borrowed = value["foreground_borrowed"].as_bool().ok_or(())?;
+    let focus_return = match object.get("focus_return").and_then(Value::as_str) {
+        Some("pending") => Some(FocusReturn::Pending),
+        Some("restored") => Some(FocusReturn::Restored),
+        Some("application_restored") => Some(FocusReturn::ApplicationRestored),
+        Some("changed_externally") => Some(FocusReturn::ChangedExternally),
+        Some("previous_app_closed") => Some(FocusReturn::PreviousAppClosed),
+        Some("unchanged") => Some(FocusReturn::Unchanged),
+        Some("unconfirmed") => Some(FocusReturn::Unconfirmed),
+        None if value["focus_return"].is_null() => None,
+        _ => return Err(()),
+    };
+    if (foreground_borrowed || focus_return.is_some()) && route != Some(InputRoute::Foreground) {
+        return Err(());
+    }
+    Ok(Some(InputDelivery {
+        route,
+        reason,
+        foreground_borrowed,
+        focus_return,
+    }))
+}
+
 fn action_reply(reply: &Value) -> ActionOutcome {
     let dispatch = match reply["dispatch"].as_str() {
         Some("not_dispatched") => DispatchState::NotDispatched,
@@ -701,7 +788,12 @@ fn action_reply(reply: &Value) -> ActionOutcome {
     {
         return ActionOutcome::unknown(Error::InvalidObservation);
     }
+    let delivery = match parse_delivery(reply.get("delivery")) {
+        Ok(delivery) => delivery,
+        Err(()) => return ActionOutcome::unknown(Error::InvalidObservation),
+    };
     ActionOutcome {
+        delivery,
         dispatch,
         evidence: EffectEvidence::Unverified,
         error,
@@ -712,11 +804,76 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stopped_focus_owner_keeps_unconfirmed_terminal_evidence() {
+        let backend = NativeBackend {
+            worker: Arc::new(scene_fixture("import sys\nfor line in sys.stdin: pass\n").unwrap()),
+            scene: SceneOwner::default(),
+            stamp: ProviderStamp {
+                id: "focus-finalizer".into(),
+                generation: 1,
+            },
+            cleanup_failure: Mutex::new(None),
+            input_policy: InputPolicy::Auto,
+            focus_pending: AtomicBool::new(true),
+        };
+        backend.worker.stop().unwrap();
+        assert_eq!(
+            backend.finish_execution(),
+            Ok(Some(FocusReturn::Unconfirmed))
+        );
+        backend.focus_pending.store(false, Ordering::Release);
+        assert_eq!(backend.finish_execution(), Ok(None));
+    }
+
+    #[test]
+    fn action_keeps_native_route_and_return_without_claiming_effect() {
+        for (route, borrowed, returned) in [
+            ("semantic", false, None),
+            ("background", false, None),
+            ("foreground", true, Some("restored")),
+            ("foreground", true, Some("changed_externally")),
+            ("foreground", true, Some("pending")),
+        ] {
+            let reply = json!({"dispatch":"dispatched","evidence":"unverified",
+                "delivery":{"route":route,"reason":"test_reason","foreground_borrowed":borrowed,"focus_return":returned}});
+            let result = action_reply(&reply);
+            assert_eq!(result.dispatch, DispatchState::Dispatched);
+            assert_eq!(result.evidence, EffectEvidence::Unverified);
+            let delivery = result.delivery.unwrap();
+            assert_eq!(delivery.route.unwrap().as_str(), route);
+            assert_eq!(delivery.foreground_borrowed, borrowed);
+            assert_eq!(delivery.focus_return.map(|value| value.as_str()), returned);
+        }
+        let rejected = action_reply(&json!({"dispatch":"not_dispatched","evidence":"unverified",
+            "error":"foreground_required","message":"strict service", "delivery":{
+                "route":null,"reason":"explicit_focus","foreground_borrowed":false}}));
+        assert_eq!(rejected.dispatch, DispatchState::NotDispatched);
+        assert_eq!(rejected.delivery.unwrap().route, None);
+    }
+
+    #[test]
+    fn malformed_route_metadata_never_fabricates_delivery() {
+        for delivery in [
+            json!({"route":"guessed","foreground_borrowed":false}),
+            json!({"route":"background","foreground_borrowed":true}),
+            json!({"route":"semantic","foreground_borrowed":false,"focus_return":"restored"}),
+            json!({"route":"foreground","foreground_borrowed":true,"focus_return":"success"}),
+        ] {
+            let result = action_reply(
+                &json!({"dispatch":"dispatched","evidence":"unverified","delivery":delivery}),
+            );
+            assert_eq!(result, ActionOutcome::unknown(Error::InvalidObservation));
+        }
+    }
+
+    #[test]
     fn cleanup_failure_survives_an_independent_primary_action_error() {
         let backend = NativeBackend {
             worker: Arc::new(scene_fixture("import sys,json\nfor line in sys.stdin:\n r=json.loads(line);print(json.dumps({'request_id':r['request_id'],'result':{'dispatch':'unknown','evidence':'unverified','error':'input_failed','message':'original action error','cleanup_error':{'error':'focus_restore_failed','message':'restore failed'}}}),flush=True)").unwrap()),
             scene: SceneOwner::default(),
             cleanup_failure: Mutex::new(None),
+            focus_pending: AtomicBool::new(false),
+            input_policy: InputPolicy::Auto,
             stamp: ProviderStamp { id:"cleanup-test".into(),generation:1 },
         };
         let poll = || Ok(Duration::from_secs(2));
@@ -857,6 +1014,8 @@ mod tests {
             worker: Arc::new(echo_scene().unwrap()),
             scene: owner,
             cleanup_failure: Mutex::new(None),
+            focus_pending: AtomicBool::new(false),
+            input_policy: InputPolicy::Auto,
             stamp: ProviderStamp {
                 id: "cleanup-test".into(),
                 generation: 1,
@@ -875,6 +1034,8 @@ mod tests {
             ),
             scene: SceneOwner::default(),
             cleanup_failure: Mutex::new(None),
+            focus_pending: AtomicBool::new(false),
+            input_policy: InputPolicy::Auto,
             stamp: ProviderStamp {
                 id: "resident-cleanup-test".into(),
                 generation: 1,
