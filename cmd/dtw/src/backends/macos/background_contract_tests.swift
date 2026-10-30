@@ -1102,3 +1102,105 @@ _ = expectedBackgroundError("deadline_exceeded") {
     }, wait: { _ in preconditionFailure("Late success cannot restart its budget") })
 }
 print("Cleanup-only AX busy read settles fresh ownership without replay, rejects real changes and preserves one deadline")
+
+
+// A cold background attempt can exhaust its opt-in clock before the script
+// brings the exact same window forward. One existing explicit-focus scope can
+// then wait read-only; ordinary controls and fresh content never spend it.
+private var focusColdShell = SemanticReadinessSample()
+focusColdShell.add(role:kAXWindowRole, children:2, depth:0, parentRole:"")
+focusColdShell.add(role:kAXGroupRole, children:0, depth:2, parentRole:kAXGroupRole)
+focusColdShell.add(role:kAXButtonRole, children:0, depth:1, parentRole:kAXWindowRole, decoration:true)
+backgroundCheck(focusColdShell.shellOnly)
+backgroundCheck(focusColdShell.decision(manualOptIn:true, elapsed:0.002,
+    materializationRemaining:-20) == .emptyContent)
+private var focusReadinessControl = FocusSemanticReadiness()
+focusReadinessControl.arm(now:100)
+focusReadinessControl.arm(now:101) // Same epoch cannot slide its deadline.
+backgroundCheck(focusReadinessControl.until == 103)
+private var readinessAudits = 0
+private let focusReadinessUntil = try focusReadinessControl.consume(shellOnly:focusColdShell.shellOnly,
+    complete:true, now:100.1, deadline:120, audit:{ until in
+        readinessAudits += 1; backgroundCheck(until == 103); return true
+    })
+backgroundCheck(focusReadinessUntil == 103 && readinessAudits == 1)
+backgroundCheck(focusColdShell.decision(manualOptIn:true, elapsed:0.002,
+    materializationRemaining:focusReadinessUntil!-100.1) == .pending)
+private var focusedWebContent = focusColdShell
+focusedWebContent.add(role:"AXWebArea", children:5, depth:7, parentRole:kAXGroupRole)
+backgroundCheck(focusedWebContent.decision(manualOptIn:true, elapsed:0.01,
+    materializationRemaining:2.8) == .ready)
+backgroundCheck(focusColdShell.decision(manualOptIn:true, elapsed:3,
+    materializationRemaining:0) == .emptyContent)
+focusReadinessControl.arm(now:200)
+private let reusedFocusReadiness = try focusReadinessControl.consume(shellOnly:true, complete:true,
+    now:101, deadline:120, audit:{ _ in preconditionFailure("Consumed focus must not repeat its audit or wait") })
+backgroundCheck(reusedFocusReadiness == nil && focusReadinessControl.until == 103)
+
+for contentRole in [kAXTextFieldRole, kAXStaticTextRole, "AXWebArea"] {
+    var content = focusColdShell
+    content.add(role:contentRole, children:contentRole == "AXWebArea" ? 1 : 0, depth:7, parentRole:kAXGroupRole)
+    var opportunity = FocusSemanticReadiness(); opportunity.arm(now:100)
+    backgroundCheck(content.decision(manualOptIn:true, elapsed:0.002, materializationRemaining:-20) == .ready)
+    let extra = try opportunity.consume(shellOnly:content.shellOnly, complete:true, now:100.1,
+        deadline:120, audit:{ _ in preconditionFailure("Native controls and mature web content return immediately") })
+    backgroundCheck(extra == nil && !opportunity.consumed)
+}
+private var incompleteFocusScan = FocusSemanticReadiness(); incompleteFocusScan.arm(now:100)
+private let incompleteFocusWait = try incompleteFocusScan.consume(shellOnly:true, complete:false,
+    now:100.1, deadline:120, audit:{ _ in preconditionFailure("A truncated tree cannot prove a complete cold shell") })
+backgroundCheck(incompleteFocusWait == nil && !incompleteFocusScan.consumed)
+for now in [103.0, 104.0] {
+    var opportunity = FocusSemanticReadiness(); opportunity.arm(now:100)
+    let extra = try opportunity.consume(shellOnly:true, complete:true, now:now, deadline:120,
+        audit:{ _ in preconditionFailure("An expired foreground opportunity does not read or wait") })
+    backgroundCheck(extra == nil && opportunity.consumed)
+}
+private var limitedFocusReadiness = FocusSemanticReadiness(); limitedFocusReadiness.arm(now:100)
+private let limitedFocusUntil = try limitedFocusReadiness.consume(shellOnly:true, complete:true,
+    now:100.1, deadline:100.2, audit:{ until in backgroundCheck(until == 100.2); return true })
+backgroundCheck(limitedFocusUntil == 100.2)
+private var expiredCallerReadiness = FocusSemanticReadiness(); expiredCallerReadiness.arm(now:100)
+private let expiredCallerWait = try expiredCallerReadiness.consume(shellOnly:true, complete:true,
+    now:100.2, deadline:100.2, audit:{ _ in preconditionFailure("No work may outlive the caller deadline") })
+backgroundCheck(expiredCallerWait == nil)
+
+// Consume before the existing exact-current proof. A different current window,
+// reused PID, or external epoch ends only the optional wait; no activation is
+// requested. Permission/cancellation/deadline errors retain their original type.
+for (focus, window, epochEnded) in [(cleanupApplication, CGWindowID(888), false),
+    (FocusApplication(element:100, pid:Int32(10), generation:UInt64(43), fromCandidate:false), CGWindowID(777), false),
+    (cleanupApplication, CGWindowID(777), true)] {
+    var opportunity = FocusSemanticReadiness(); opportunity.arm(now:100)
+    let extra = try opportunity.consume(shellOnly:true, complete:true, now:100.1, deadline:120, audit:{ _ in
+        try borrowedFocusStillOwned(app:cleanupApp, windowID:777, invalidated:{epochEnded},
+            focusedApplication:{focus}, currentWindowID:{_ in window})
+    })
+    backgroundCheck(extra == nil && opportunity.consumed)
+    opportunity.arm(now:102)
+    backgroundCheck(opportunity.until == 103)
+}
+for original in [failure("native_stopping", "cancelled before readiness focus proof"),
+                 failure("deadline_exceeded", "original observation deadline"),
+                 failure("permission_denied", "current focus permission denied"),
+                 failure("target_changed", "current process identity changed")] {
+    var opportunity = FocusSemanticReadiness(); opportunity.arm(now:100)
+    let kept = expectedBackgroundError(original.code) {
+        _ = try opportunity.consume(shellOnly:true, complete:true, now:100.1, deadline:120,
+            audit:{ _ in throw original })
+    }
+    backgroundCheck(kept.message == original.message && opportunity.consumed)
+    let again = try opportunity.consume(shellOnly:true, complete:true, now:100.2, deadline:120,
+        audit:{ _ in preconditionFailure("A failed proof cannot reopen this epoch's wait") })
+    backgroundCheck(again == nil)
+}
+private var retargetReadiness = FocusSemanticReadiness(); retargetReadiness.arm(now:100)
+retargetReadiness.discard(); retargetReadiness.arm(now:101)
+private let retargetWait = try retargetReadiness.consume(shellOnly:true, complete:true, now:101.1,
+    deadline:120, audit:{ _ in preconditionFailure("A retarget cannot inherit or renew the old opportunity") })
+backgroundCheck(retargetWait == nil)
+private var absentFocusReadiness: FocusSemanticReadiness?
+absentFocusReadiness?.arm(now:100)
+backgroundCheck(absentFocusReadiness == nil)
+backgroundCheck(!noCleanupBorrow.required) // No opportunity can invent a return obligation.
+print("Explicit-focus cold-shell wait is single-use, bounded and read-only; warm content, missing scopes and original stop/focus errors stay strict")

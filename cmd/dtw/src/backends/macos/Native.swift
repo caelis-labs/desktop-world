@@ -2304,6 +2304,28 @@ private struct SemanticEnablement {
     let enhancedAttemptedAt: TimeInterval?
 }
 
+// One read-only opportunity within an already-proven explicit-focus scope.
+// Its clock is never a new AX enablement attempt or a focus-return obligation.
+private struct FocusSemanticReadiness {
+    private(set) var until: TimeInterval?
+    private(set) var consumed = false
+    mutating func arm(now: TimeInterval) {
+        guard until == nil && !consumed else { return }
+        until = now + semanticReadinessBudget
+    }
+    mutating func discard() { consumed = true }
+    mutating func consume(shellOnly: Bool, complete: Bool, now: TimeInterval,
+                          deadline: TimeInterval, audit: (TimeInterval) throws -> Bool) throws -> TimeInterval? {
+        guard shellOnly && complete, !consumed, let until else { return nil }
+        // An expired/failed attempt also spends the opportunity. No later
+        // observe or repeated focus in this epoch can restart its deadline.
+        consumed = true
+        let bounded = min(until, deadline)
+        guard now < bounded, try audit(bounded) else { return nil }
+        return bounded
+    }
+}
+
 // Either accepted opt-in may materialize asynchronously. Retain the first
 // attempt's clock; reasserting the setter can restart the provider's debounce.
 private func semanticMaterializationUntil(attemptedAt: TimeInterval?, now: TimeInterval) -> TimeInterval? {
@@ -2751,6 +2773,7 @@ private final class NativeStore: @unchecked Sendable {
         // The exact logical focus surface can differ from the associated CG
         // owner surface. Save its proven ID before the AX root can disappear.
         var focusWindowID: CGWindowID
+        var semanticReadiness = FocusSemanticReadiness()
         let pointer: CGPoint?
         var inputPoint: CGPoint?
     }
@@ -3356,6 +3379,28 @@ private final class NativeStore: @unchecked Sendable {
                               "reason": observation.reason as Any? ?? NSNull(), "visited": observation.visits]]
     }
 
+    private func focusReadinessCurrent(_ scope: BorrowedFocus, _ deadline: Deadline) throws -> Bool {
+        guard !dtwInputStopping() else { throw failure("native_stopping", "Semantic materialization was cancelled") }
+        try deadline.check()
+        guard let current = borrowedFocus, current.activationEpoch == scope.activationEpoch,
+              current.target == scope.target else { return false }
+        return try ownsBorrowedFocus(scope, deadline, traceStage: "semantic.foreground_readiness")
+    }
+
+    private func consumeFocusReadiness(_ target: NativeTarget, shellOnly: Bool, complete: Bool,
+                                       _ deadline: Deadline) throws -> (BorrowedFocus, TimeInterval)? {
+        guard let scope = borrowedFocus, scope.target == target else { return nil }
+        var opportunity = scope.semanticReadiness
+        // NativeStore's lock covers this call. Publish consumption even when a
+        // current-focus read throws; never recreate a missing borrow on return.
+        defer { borrowedFocus?.semanticReadiness = opportunity }
+        guard let until = try opportunity.consume(shellOnly: shellOnly, complete: complete,
+            now: ProcessInfo.processInfo.systemUptime, deadline: deadline.uptime, audit: { until in
+                try self.focusReadinessCurrent(scope, deadline.limited(to: until))
+            }) else { return nil }
+        return (scope, until)
+    }
+
     // Source: CUA 0.38.0 AX enablement. Opt-in is process-scoped, but readiness
     // is sampled for every new query. No bundle-name classifier or whole-page
     // loading assertion is used. Unknown custom leaves remain explicitly partial.
@@ -3394,12 +3439,13 @@ private final class NativeStore: @unchecked Sendable {
         // cache. Reading another window/query never restarts its debounce.
         let manualUntil = enablement.manualAttemptedAt.map { $0 + semanticReadinessBudget }
         let manualWaitUntil = semanticMaterializationUntil(attemptedAt: enablement.manualAttemptedAt, now: started)
-        let until = min(context.deadline.uptime, started + semanticReadinessBudget,
+        var until = min(context.deadline.uptime, started + semanticReadinessBudget,
                         materializationUntil ?? .greatestFiniteMagnitude, manualWaitUntil ?? .greatestFiniteMagnitude)
         // An expired attempt still classifies a fresh, complete shell as
         // unproven. Only its remaining time can extend a readonly wait; later
         // queries scan once without another poke or a restarted budget.
-        let readiness = context.deadline.limited(to: until)
+        var readiness = context.deadline.limited(to: until)
+        var foregroundReadiness: BorrowedFocus?
         var samples = 0
         var probedEmptyRoots: [AXUIElement] = []
         var last: [[String: Any]] = []
@@ -3418,6 +3464,7 @@ private final class NativeStore: @unchecked Sendable {
                 "manual_setter_result":enablement.manualResult,
                 "enhanced_setter_result":enablement.enhancedResult as Any? ?? NSNull(),
                 "materialization_recheck":materializationUntil != nil,
+                "foreground_readiness":foregroundReadiness != nil,
                 "readiness_flags":lastFlags, "scan_truncated":lastScanTruncated, "nodes":last]
             if let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) {
                 FileHandle.standardError.write(Data("dtw_semantic_readiness ".utf8) + data + Data("\n".utf8))
@@ -3490,13 +3537,32 @@ private final class NativeStore: @unchecked Sendable {
                 samples += 1
                 _ = try materializationPending(until: manualUntil, populated: sample.populatedWebArea)
                 let sampledAt = ProcessInfo.processInfo.systemUptime
-                let decision = sample.decision(manualOptIn: enablement.manual,
+                var decision = sample.decision(manualOptIn: enablement.manual,
                     elapsed: sampledAt-started,
                     materializationRemaining: manualUntil.map { $0-sampledAt }, scanComplete: !lastScanTruncated)
                 lastPending = decision != .ready
                 // Expiry during this final sample must not turn an observed
                 // shell into ready. Preserve the attempt even at zero budget.
                 lastManualShellPending = manualUntil != nil && !lastScanTruncated && sample.shellOnly
+                if decision == .emptyContent, lastManualShellPending, foregroundReadiness == nil,
+                   let (scope, opportunityUntil) = try consumeFocusReadiness(target,
+                       shellOnly: sample.shellOnly, complete: !lastScanTruncated, context.deadline) {
+                    foregroundReadiness = scope
+                    until = min(until, opportunityUntil)
+                    readiness = context.deadline.limited(to: until)
+                }
+                if foregroundReadiness != nil, lastManualShellPending {
+                    decision = sample.decision(manualOptIn: enablement.manual, elapsed: sampledAt-started,
+                        materializationRemaining: until-ProcessInfo.processInfo.systemUptime, scanComplete: true)
+                }
+                // A fresh ready tree does not depend on foreground. Only
+                // additional waiting needs the still-owned exact scope.
+                if let scope = foregroundReadiness, decision == .pending, samples > 1,
+                   try !focusReadinessCurrent(scope, readiness) {
+                    trace("foreground_readiness_lost")
+                    return "content_unproven"
+                }
+                lastPending = decision != .ready
                 waitedOnReady = try decision == .ready && materializationPending(until: materializationUntil,
                     populated: sample.populatedWebArea)
                 if samples == 1 { trace(waitedOnReady ? "materialization_pending" : decision.rawValue) }
@@ -3739,6 +3805,7 @@ private final class NativeStore: @unchecked Sendable {
                     previousWindow: prior.previousWindow, previousWindowID: prior.previousWindowID,
                     targetApp: (target.app.pid, target.app.generation), targetWindow: window,
                     targetWindowID: focusID, equal: CFEqual))
+                if next.target != target { next.semanticReadiness.discard() }
                 next.target = target; next.window = window; next.focusWindowID = focusID
                 next.inputPoint = inputPoint
             }) {
@@ -4206,6 +4273,11 @@ private final class NativeStore: @unchecked Sendable {
                 }) else { throw failure("native_stopping", "Native input admission is closed") }
             }
             try check(focus: false)
+            if operation == "focus", var scope = borrowedFocus, scope.target == target,
+               !focusObserver.invalidated(scope.activationEpoch) {
+                scope.semanticReadiness.arm(now: ProcessInfo.processInfo.systemUptime)
+                borrowedFocus = scope
+            }
             return finished(["dispatch": "dispatched", "evidence": "unverified"])
         } catch let error as NativeFailure {
             return finished(error.json.merging(["dispatch": changed ? "unknown" : "not_dispatched", "evidence": "unverified"]) { _, new in new })
