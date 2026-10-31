@@ -1162,3 +1162,100 @@ fn menu_selection_waits_for_readiness_after_focus_without_repeating_focus() {
     );
     assert_eq!(reply.data["script"]["focus_return"], "restored");
 }
+
+#[test]
+fn selection_ownership_gap_stops_the_cursor_without_dispatching() {
+    for matches in 0..=2 {
+        let mut partial = page(
+            (1..=matches).map(|id| element(id, true)).collect(),
+            true,
+            false,
+            3,
+        );
+        partial.discovery.reason = Some("ownership_unproven".into());
+        let (owner, backend) = setup(vec![Ok(partial), Err(Error::UnsupportedCapability)]);
+        let reply = script(
+            &owner,
+            "ownership-partial",
+            "await app.setValue({window_ref,selector:{text:'Save'},value:'updated',timeout_ms:0});",
+        );
+        assert!(reply.is_error);
+        assert_eq!(
+            step(&reply)["error"]["code"],
+            if matches == 2 {
+                "selector_ambiguous"
+            } else {
+                "selector_unproven"
+            }
+        );
+        assert_eq!(step(&reply)["resolution"]["pages"], 1);
+        assert_eq!(
+            step(&reply)["resolution"]["coverage"]["reason"],
+            "ownership_unproven"
+        );
+        assert_eq!(
+            step(&reply)["receipt"]["outcome"]["dispatch"],
+            "not_dispatched"
+        );
+        assert_eq!(backend.advances.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.queries.lock().unwrap().len(), 1);
+        assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
+fn selection_ownership_gap_can_recover_with_a_fresh_query_and_one_action() {
+    let mut partial = page(vec![element(1, true)], true, false, 1);
+    partial.discovery.reason = Some("ownership_unproven".into());
+    let (owner, backend) = setup(vec![
+        Ok(partial),
+        Ok(page(vec![element(2, true)], false, true, 1)),
+    ]);
+    let reply = script(
+        &owner,
+        "ownership-recovered",
+        "await app.setValue({window_ref,selector:{text:'Save'},value:'updated',timeout_ms:200});",
+    );
+    assert!(!reply.is_error, "{}", reply.data);
+    assert_eq!(backend.advances.load(Ordering::SeqCst), 0);
+    assert_eq!(backend.queries.lock().unwrap().len(), 2);
+    assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 0);
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *backend.selected_elements.lock().unwrap(),
+        vec![ElementId(2)]
+    );
+    assert_eq!(*backend.values.lock().unwrap(), vec!["updated"]);
+    assert_eq!(step(&reply)["resolution"]["attempts"], 2);
+    assert_eq!(step(&reply)["resolution"]["pages"], 2);
+}
+
+#[test]
+fn selection_windows_page_limit_keeps_paging_to_prove_uniqueness() {
+    for duplicate in [false, true] {
+        let mut first = page(vec![element(1, true)], true, false, 1);
+        first.discovery.reason = Some("page_limit".into());
+        let last = if duplicate {
+            vec![element(2, true)]
+        } else {
+            vec![]
+        };
+        let (owner, backend) = setup(vec![Ok(first), Ok(page(last, false, true, 2))]);
+        let reply = script(
+            &owner,
+            "windows-page-limit",
+            "await app.press({window_ref,selector:{text:'Save'},timeout_ms:0});",
+        );
+        assert_eq!(backend.advances.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.queries.lock().unwrap().len(), 1);
+        assert_eq!(
+            backend.base.0.actions.load(Ordering::SeqCst),
+            usize::from(!duplicate)
+        );
+        assert_eq!(reply.is_error, duplicate, "{}", reply.data);
+        if duplicate {
+            assert_eq!(step(&reply)["error"]["code"], "selector_ambiguous");
+        }
+    }
+}

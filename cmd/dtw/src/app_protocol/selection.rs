@@ -97,6 +97,12 @@ impl<B: Backend + 'static> Coordinator<B> {
                     return selection_error(submitted, resolution_error("selector_ambiguous",
                         "The selector matches multiple elements; narrow role or text. The selected action was not dispatched", &progress));
                 }
+                // Ownership gaps are sticky within this retained traversal.
+                // Stop paging it; a fresh query may still recover within the
+                // existing polling window. Ordinary page limits keep paging.
+                if page["coverage"]["reason"] == "ownership_unproven" {
+                    break page;
+                }
                 if let Some(cursor) = page["next"].as_str() {
                     command = Command::ContinueObservation {
                         cursor: cursor.into(),
