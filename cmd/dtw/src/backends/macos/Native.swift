@@ -2199,6 +2199,32 @@ private func semanticRole(_ role: String, subrole: String? = nil) -> String {
     }
 }
 
+// The public preview and selector use the same fields. Native attribute reads
+// can additionally match within their existing bounded search prefix.
+private struct SemanticTextFields {
+    let label: String
+    let name: String?
+    let value: String?
+
+    init(role: String, title: String?, value: String?, description: String?) {
+        let labels = [title, value, description].compactMap { $0 }.filter { !$0.isEmpty }
+        label = labels.isEmpty ? String(String.UnicodeScalarView(role.unicodeScalars.prefix(256))) : labels.joined(separator: " | ")
+        name = title?.isEmpty == false ? title : description
+        self.value = value
+    }
+
+    func matches(_ needle: String?) -> Bool {
+        guard let needle else { return true }
+        return [label, name, value].compactMap { $0 }.contains { semanticTextContains($0, needle: needle) }
+    }
+}
+
+private func semanticTextContains(_ text: String, needle: String) -> Bool {
+    let source = text as NSString
+    return source.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive],
+                        range: NSRange(location: 0, length: min(source.length, 4_096))).location != NSNotFound
+}
+
 private func finitePositiveRect(_ rect: CGRect) -> Bool {
     [rect.minX, rect.minY, rect.width, rect.height].allSatisfy(\.isFinite) && rect.width > 0 && rect.height > 0
 }
@@ -3618,10 +3644,7 @@ private final class NativeStore: @unchecked Sendable {
                             let source = text as NSString
                             let length = min(source.length, 4_096)
                             if source.length > length { observation.note("text_limit") }
-                            if source.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive],
-                                            range: NSRange(location: 0, length: length)).location != NSNotFound {
-                                matched = true
-                            }
+                            if semanticTextContains(text, needle: needle) { matched = true }
                         }
                         return String(String.UnicodeScalarView(text.unicodeScalars.prefix(256)))
                     }
@@ -3631,8 +3654,8 @@ private final class NativeStore: @unchecked Sendable {
                         try text(kAXDescriptionAttribute)
                     }
                     if descriptionRead.incompleteMatch { observation.note("node_unavailable") }
-                    let description = descriptionRead.text
-                    guard matched else { continue }
+                    let fields = SemanticTextFields(role: role, title: title, value: value, description: descriptionRead.text)
+                    guard matched || fields.matches(observation.query.text) else { continue }
                     // Only possible text/role matches need a visible-region
                     // proof. A native scroll viewport clips its descendants;
                     // this is not WindowServer occlusion or pixel evidence.
@@ -3642,7 +3665,6 @@ private final class NativeStore: @unchecked Sendable {
                             target: observation.target, region: region, bounds: window.cg.bounds, deadline: pageDeadline)
                         guard regionProof != nil else { continue }
                     } else { regionProof = nil }
-                    let labels = [title, value, description].compactMap { $0 }.filter { !$0.isEmpty }
                     let rawEnabled = try axAttribute(element, kAXEnabledAttribute, pageDeadline)
                     let enabled: Bool? = rawEnabled.flatMap {
                         CFGetTypeID($0) == CFBooleanGetTypeID() ? ($0 as? Bool) : nil
@@ -3653,9 +3675,8 @@ private final class NativeStore: @unchecked Sendable {
                                                  window: window.element, target: observation.target,
                                                  deadline: pageDeadline)
                     let row = NativeElement(id: UInt64(observation.elements.count + 1), element: element,
-                                            label: labels.isEmpty ? String(String.UnicodeScalarView(role.unicodeScalars.prefix(256))) : labels.joined(separator: " | "),
-                                            role: normalizedRole, name: title?.isEmpty == false ? title : description,
-                                            value: value, enabled: enabled, canPress: canPress,
+                                            label: fields.label, role: normalizedRole, name: fields.name,
+                                            value: fields.value, enabled: enabled, canPress: canPress,
                                             canSetValue: try settable(element, role: role, enabled: enabled == true, window: window.element, target: observation.target, deadline: pageDeadline),
                                             regionProof: regionProof)
                     let size = try rowBytes(row)
