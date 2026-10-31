@@ -38,6 +38,10 @@ pub fn cleanup_failed() -> bool {
 pub fn closing() -> bool {
     GATE.closing()
 }
+pub(super) fn fail_delivery() {
+    GATE.fail_cleanup();
+    GATE.close();
+}
 pub fn mutation(until: Instant) -> Result<Mutation<'static>, Error> {
     GATE.admit_before(until).map_err(|error| match error {
         AdmissionError::Expired => Error::TimedOut,
@@ -368,7 +372,9 @@ pub fn send(
     hwnd: HWND,
     until: Instant,
     dispatched: &mut bool,
+    accepted: &mut usize,
 ) -> Result<(), Error> {
+    *accepted = 0;
     if batch.is_empty() {
         return Ok(());
     }
@@ -378,6 +384,7 @@ pub fn send(
     let _mutation = mutation(until)?;
     *dispatched = true;
     let inserted = unsafe { SendInput(batch, std::mem::size_of::<INPUT>() as i32) };
+    *accepted = (inserted as usize).min(batch.len());
     if inserted != batch.len() as u32 {
         let releases = pending_releases(&batch[..(inserted as usize).min(batch.len())]);
         if !releases.is_empty() {

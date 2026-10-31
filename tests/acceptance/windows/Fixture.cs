@@ -86,6 +86,7 @@ namespace DtwWindowsSmoke {
             origin = Location;
             editor.Location = new Point(12, 12); editor.Size = new Size(386, 125);
             editor.Multiline = true; editor.AcceptsReturn = true;
+            if (File.Exists(Path.Combine(root,"password-editor"))) editor.PasswordChar='*';
             editor.ScrollBars = ScrollBars.Vertical; editor.AccessibleName = "Message";
             editor.TextChanged += delegate {
                 Record("text_changed", new { length = editor.Text.Length });
@@ -93,6 +94,12 @@ namespace DtwWindowsSmoke {
                     File.Exists(Path.Combine(root,"track-surrogate"))) {
                     Record("surrogate_half",new {length=editor.Text.Length});
                     if (File.Exists(Path.Combine(root,"delay-surrogate"))) System.Threading.Thread.Sleep(40);
+                    if (File.Exists(Path.Combine(root,"block-surrogate"))) {
+                        File.WriteAllText(Path.Combine(root,"surrogate-blocked"),"entered",utf8);
+                        var barrier=Stopwatch.StartNew();
+                        while (!File.Exists(Path.Combine(root,"release-surrogate")) && barrier.ElapsedMilliseconds<5000)
+                            System.Threading.Thread.Sleep(5);
+                    }
                 }
             };
             Controls.Add(editor);

@@ -1004,6 +1004,26 @@ impl Store {
         check(until)?;
         input::focus(window, until, dispatched)?;
         self.input_boundary(target, window, until)?;
+        let text_scalars: Vec<char> = if op == "typeText" {
+            input_sequence::normalized_text(string(r, "text")?)
+                .chars()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let mut delivery = if text_scalars.iter().any(|scalar| scalar.len_utf16() > 1) {
+            let uia = self.uia()?;
+            let root = unsafe { uia.ElementFromHandle(window) }.map_err(failed)?;
+            let focused = unsafe { uia.GetFocusedElement() }.map_err(failed)?;
+            owned(&uia, &focused, &root, until)?;
+            let guard =
+                super::text_delivery::TextDelivery::new(uia.clone(), focused.clone(), window)?;
+            owned(&uia, &focused, &root, until)?;
+            self.input_boundary(target, window, until)?;
+            Some(guard)
+        } else {
+            None
+        };
         // Scroll centers are computed after activation, which may move a window.
         if let Some((x, y)) = scroll {
             if point.is_none() {
@@ -1033,7 +1053,8 @@ impl Store {
             .as_ref()
             .and_then(|_| super::cursor::Emitter::new(&r["cursor_feedback"], target));
         let mut placed = false;
-        input_sequence::run(&segments, |step| match step {
+        let mut text_index = 0;
+        let result = input_sequence::run(&segments, |step| match step {
             Step::Verify => {
                 self.input_boundary(target, window, until)?;
                 input::no_held_keys()?;
@@ -1070,7 +1091,19 @@ impl Store {
             }
             Step::Dispatch(segment) => {
                 self.validate(target)?;
-                input::send(segment, window, until, dispatched)?;
+                let mut accepted = 0;
+                let sent = input::send(segment, window, until, dispatched, &mut accepted);
+                if let Some(delivery) = delivery.as_mut() {
+                    let scalar = text_scalars[text_index];
+                    delivery.inserted(scalar, accepted, segment.len());
+                    text_index += 1;
+                    sent?;
+                    if scalar.len_utf16() > 1 {
+                        delivery.settle(|| self.validate(target).map(|_| ()))?;
+                    }
+                } else {
+                    sent?;
+                }
                 if let (Some(cursor), Some((_, hit, _, _, _))) = (cursor.as_mut(), point.as_ref()) {
                     // Emit only after the entire native mouse segment was
                     // inserted. Partial/cleanup and keyboard events emit none.
@@ -1090,7 +1123,11 @@ impl Store {
                 std::thread::sleep(Duration::from_millis(if point.is_some() { 25 } else { 3 }));
                 Ok(())
             }
-        })
+        });
+        if let Some(delivery) = delivery.as_mut() {
+            delivery.settle(|| self.validate(target).map(|_| ()))?;
+        }
+        result
     }
     fn pixel_point(
         &mut self,
@@ -1254,7 +1291,7 @@ impl Store {
             }
         };
         if input::cleanup_failed() {
-            reply["shutdown_error"] = json!({"code":"input_cleanup_failed","message":"Paired input or transaction lease cleanup is unconfirmed"});
+            reply["shutdown_error"] = json!({"code":"input_cleanup_failed","message":"Paired input, accepted text delivery or transaction lease cleanup is unconfirmed"});
         }
         reply
     }
@@ -1347,7 +1384,7 @@ unsafe fn toggle_pattern(
 ) -> Result<Option<IUIAutomationTogglePattern>, Error> {
     optional_pattern(element, UIA_TogglePatternId)
 }
-unsafe fn optional_pattern<P: Interface>(
+pub(super) unsafe fn optional_pattern<P: Interface>(
     element: &IUIAutomationElement,
     id: UIA_PATTERN_ID,
 ) -> Result<Option<P>, Error> {

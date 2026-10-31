@@ -3,8 +3,10 @@
 use super::native_client::{self, Platform as PlatformContract};
 use crate::computer::{Capability, Error, ObserveScopeKind};
 pub(crate) mod cursor;
+mod edit_delivery;
 mod input;
 mod native;
+mod text_delivery;
 pub(crate) mod window_state;
 mod worker;
 pub use cursor::CursorSession;
@@ -24,6 +26,7 @@ impl PlatformContract for Platform {
         "window waits prove same-process owned native modals with Win32 owner/disabled state and UIA IsModal; same-window web modals and cross-process dialogs are unsupported",
         "scroll anchors bind retained capture pixels or a live UIA element clipped through its ancestor rectangles; missing native geometry fails explicitly",
         "input establishes foreground focus and moves the shared pointer for clicks",
+        "supplementary-plane keyboard text requires a bounded readable focused TextPattern selection or same-process Unicode Edit; protected/unreadable controls are denied before typing; unconfirmed accepted text prevents clean input handoff, without replay",
         "one optional session cursor presents actual pointer posts without focus or input; exact authenticated peer cursor windows alone are exempt from capture occlusion",
         "Windows GUI coverage is recorded per candidate; compilation alone is not GUI evidence",
     ];

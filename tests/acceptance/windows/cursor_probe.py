@@ -159,7 +159,7 @@ class Mcp:
             require(full.get('error') is not None and error in json.dumps(full), full)
         return full.get('value', {}).get('result'), full
 
-    def close(self):
+    def close(self, expected_exit=0):
         if self.proc.poll() is None:
             self.proc.stdin.close()
         forced=False
@@ -171,7 +171,7 @@ class Mcp:
             forced=True
         self.reader.join(timeout=2)
         self.err.close()
-        require(not forced and not self.reader.is_alive() and code == 0, f'MCP cleanup failed: exit={code}, forced={forced}')
+        require(not forced and not self.reader.is_alive() and code == expected_exit, f'MCP cleanup failed: exit={code}, expected={expected_exit}, forced={forced}')
         return {'pid':self.proc.pid, 'exit_code':code, 'forced':False}
 
 

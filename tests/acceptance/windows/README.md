@@ -13,6 +13,16 @@ to a replacement character and is not accepted as a scalar-prefix pass. Snapshot
 readiness/release sampling may retry bounded read-only observations; no application
 action is retried. See the dated record for exact binary hashes and failures.
 
+The subsequent Windows delivery guard keeps real SendInput and reads the original
+focused control before handing off accepted supplementary-plane text. Run the
+same strict `delivery_probe.py` both normally and with `--handler-delay`, then
+`delivery_guard_probe.py --dtw C:\Candidates\DTW\bin\dtw.exe --output C:\Temp\dtw-delivery-guard`.
+The latter covers selection around existing surrogates and line breaks, unsupported
+and password fields denied before text, and a blocked GUI handler canceled while
+another owner queues focus. That negative case requires native exit 74, both MCP
+owners' explicit uncertainty exit 2, an unknown original receipt and no dispatched
+queued focus; these exits must not be presented as ordinary clean shutdown.
+
 ## Run on an exclusive Windows desktop
 
 Requirements: Windows 10 (1703 or newer)/11 with an interactive unlocked desktop, built-in
