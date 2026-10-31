@@ -1385,14 +1385,15 @@ for rows in [[surfaceRow(90, pid: 11)], [surfaceRow(91)], [surfaceRow(90), surfa
     catch let error as NativeFailure { surfaceCheck(["target_changed", "window_inventory_unproven"].contains(error.code)) }
 }
 // Nested sheets choose the leaf; unrelated siblings remain two candidates.
-let waitParents = [2: 1, 3: 2, 4: 1, 5: 0]
-let waitTerminal = terminalModalRoots([2, 3], equal: ==) { child, parent in
-    boundedAncestor(child, is: parent, equal: ==) { waitParents[$0] }
+let waitParents: [Int: Int] = [2: 1, 3: 2, 4: 1, 5: 0]
+let waitEqual: (Int, Int) -> Bool = { $0 == $1 }
+let waitParent: (Int) -> Int? = { waitParents[$0] }
+let waitDescendant: (Int, Int) -> Bool = { child, parent in
+    boundedAncestor(child, is: parent, equal: waitEqual, parent: waitParent)
 }
+let waitTerminal = terminalModalRoots([2, 3], equal: waitEqual, descendant: waitDescendant)
 surfaceCheck(waitTerminal == [3])
-let waitAmbiguous = terminalModalRoots([3, 4], equal: ==) { child, parent in
-    boundedAncestor(child, is: parent, equal: ==) { waitParents[$0] }
-}
+let waitAmbiguous = terminalModalRoots([3, 4], equal: waitEqual, descendant: waitDescendant)
 surfaceCheck(waitAmbiguous == [3, 4])
 do {
     _ = try terminalModalRoots([2, 3], equal: ==) { _, _ -> Bool in
