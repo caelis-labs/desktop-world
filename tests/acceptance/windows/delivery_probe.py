@@ -81,13 +81,20 @@ def main():
             require(q['error'] is None,'Queued independent owner did not complete')
             aa=wait(lambda:(s if (s:=read(a/'state.json')) and s['left_up']==sa['left_up']+1 else None))
             time.sleep(.15);bb=wait(lambda:read(b/'state.json'))
+            write(out/(prefix+'-effects.json'),{'next_owner':aa,'original_owner':bb,
+                'scalar_prefix':payload.startswith(bb['text']),
+                'utf16_prefix':payload.encode('utf-16-le').startswith(bb['text'].encode('utf-16-le','surrogatepass'))})
             require(aa['text']=='' and not aa['keys_down_global'],'Unicode tail leaked into the next owner')
             require(0<len(bb['text'])<len(payload) and payload.startswith(bb['text']),'Interrupted text is not a scalar prefix')
             require(not bb['keys_down_global'] and bb['saves']==sb['saves'],'Input/save cleanup changed')
             summary['iterations'].append({'iteration':iteration+1,'prefix_codepoints':len(bb['text']),'no_replacement_or_split_surrogate':True,
                 'next_owner_text_empty':True,'next_owner_clicks':1,'held_keys':[],'original_dispatch':'unknown','shutdown_error':None})
         summary['passed']=True
-    except BaseException:summary['failure']=traceback.format_exc()
+    except BaseException:
+        summary['failure']=traceback.format_exc()
+        if clients and 'app' in locals():
+            try:write(out/'failure-original-ledger.json',clients[0].tool('result',{'app':app}))
+            except BaseException:pass
     finally:
         for c in clients:
             try:summary['cleanup'].append(c.close())

@@ -173,9 +173,21 @@ namespace DtwWindowsSmoke {
                 Record("key_up", new { key = message.WParam.ToInt32() });
             return false;
         }
+        string Encode(object value) {
+            // JavaScriptSerializer emits raw UTF-16 surrogates. UTF8Encoding
+            // would replace a lone half observed during WM_CHAR processing.
+            // Preserve every code unit in JSON, including intermediate states.
+            string raw=json.Serialize(value);
+            var encoded=new StringBuilder(raw.Length);
+            foreach(char c in raw) {
+                if(char.IsSurrogate(c)) encoded.Append("\\u").Append(((int)c).ToString("x4"));
+                else encoded.Append(c);
+            }
+            return encoded.ToString();
+        }
         void Record(string kind, object data) {
             File.AppendAllText(Path.Combine(root, "events.jsonl"),
-                json.Serialize(new { elapsed_ms = clock.Elapsed.TotalMilliseconds, kind = kind, data = data }) + "\n", utf8);
+                Encode(new { elapsed_ms = clock.Elapsed.TotalMilliseconds, kind = kind, data = data }) + "\n", utf8);
         }
         void Publish() {
             if (!IsHandleCreated) return;
@@ -184,7 +196,7 @@ namespace DtwWindowsSmoke {
             Point point = pad.PointToScreen(new Point(pad.Width / 2, pad.Height / 2));
             List<int> held = new List<int>();
             for (int key = 1; key <= 255; key++) if (GetAsyncKeyState(key) < 0) held.Add(key);
-            string snapshot = json.Serialize(new {
+            string snapshot = Encode(new {
                 pid = Process.GetCurrentProcess().Id, label = label, title = Text,
                 sequence = ++sequence, elapsed_ms = clock.Elapsed.TotalMilliseconds,
                 ready = ready, closed = closed, hwnd = Handle.ToInt64().ToString(),

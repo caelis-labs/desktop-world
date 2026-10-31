@@ -6,6 +6,13 @@ records the specific desktop runs, binary hashes, failures and remaining gates.
 macOS syntax/type checks do not establish Windows compilation, UIA behavior,
 input delivery or native linking. A Windows build is a separate prerequisite.
 
+Current release gate: the reviewed candidate passes the 25-case base and 15-case
+cursor suites, but stronger lossless Unicode cancellation stress fails. Fixture
+JSON preserves surrogate code units; a terminal high surrogate is not rewritten
+to a replacement character and is not accepted as a scalar-prefix pass. Snapshot
+readiness/release sampling may retry bounded read-only observations; no application
+action is retried. See the dated record for exact binary hashes and failures.
+
 ## Run on an exclusive Windows desktop
 
 Requirements: Windows 10 (1703 or newer)/11 with an interactive unlocked desktop, built-in

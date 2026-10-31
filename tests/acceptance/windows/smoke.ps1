@@ -53,8 +53,16 @@ function Read-State($Fixture) {
     if (-not (Test-Path -LiteralPath $path)) { return $null }
     # The fixture replaces snapshots atomically. Allow replacement while reading
     # this immutable version, rather than making File.Replace fail on Windows.
-    $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read,
-        ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    try {
+        $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+            ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    } catch [IO.IOException] {
+        # A replace/open race can briefly deny this independent readiness read.
+        # Wait-State bounds retries; application actions are never replayed.
+        $code = $_.Exception.HResult -band 0xffff
+        if ($code -in @(2, 3, 32, 33)) { return $null }
+        throw
+    }
     $reader = $null
     try {
         $reader = New-Object IO.StreamReader($stream, $script:utf8)

@@ -1,12 +1,99 @@
 # Windows rewrite follow-up — 2026-10-31
 
-The Windows defects found during desktop acceptance are addressed in this change.
-This is a normal-user Windows 11 development-build regression record, **not final
-release approval**. The broader Windows matrix and final distribution artifact
-still require acceptance. The machine-readable companion is
+This record includes multiple successive Windows candidates. **Current decision:
+No-Go for release**, because lossless cancellation stress still leaves a terminal
+high surrogate in the original app. Fixes and passing tasks below do not override
+that failure. The original machine-readable companion is
 [windows-rewrite-2026-10-31.json](evidence/windows-rewrite-2026-10-31.json).
 
-## Subsequent Windows parity verification
+## Reviewed CI candidate and latest result
+
+The latest native source is `a13775908df0052fea3227a23c816df90aea8612`, built by
+[Windows candidate CI](https://github.com/caelis-labs/desktop-world/actions/runs/41208527909).
+Binary SHA-256: `3c80e2384cf292de176a390a610fcfa4c2411a3285db06790bf5e782daa9252f`;
+package ZIP: `aa63bf1647d5ff89d966a9b64725ce63b418d99855db337e562ce0d4988e8c20`.
+All 197 packaged checksums matched before and after the tasks. Source/macOS native
+checks passed in [CI](https://github.com/caelis-labs/desktop-world/actions/runs/41208528717).
+The current sanitized evidence is
+[windows-parity-2026-10-31.json](evidence/windows-parity-2026-10-31.json).
+
+On normal-user Windows 11 build 22631, primary display at 125%, this candidate
+passed 386 Rust library tests and 3 CLI tests in CI, plus these actual local GUI
+runs: base 25, cursor/session/lifecycle 15, blocked UIA/cancel/timeout/protocol 4,
+DPI-unaware physical capture/input/cursor 3, and sibling/instance restart 3.
+The latest base run uses a read-only snapshot sharing-race fix. The cursor run
+uses lossless surrogate snapshots and fresh stable key-release samples.
+
+The separate 20-transaction cancellation stress stopped at transaction eight
+after seven passes. Its lossless result is a UTF-16 prefix ending in U+D83D,
+not a scalar prefix. Original cancellation retained unknown dispatch and null
+shutdown error; the queued owner's text stayed empty, its click occurred once,
+no save occurred, and keys/native processes cleaned up. This is an unresolved
+application-processing boundary, not evidence of successful atomic text delivery.
+The private-tag queue observer experiment also failed and was removed. No global
+keyboard hook, replay/repair text, guessed delay or relaxed gate is shipped.
+
+The next fix must prove that an accepted Unicode pair has reached the original
+application before focus handoff, or explicitly fail closed where that proof is
+unavailable. `SendInput` acceptance, low-level hook observation and a synchronous
+sent-message fence do not establish processing of the application's queued
+`WM_CHAR` messages; sent and posted messages can precede input in the
+[Win32 retrieval order](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmessage).
+Do not broaden this fix into macOS input or change shared
+receipt semantics. Re-run the same lossless stress and original cancellation,
+EOF, parent-exit and concurrent-owner cases before removing the release block.
+
+### Real DeepSeek Flash tasks
+
+The standard installed DTW MCP and bundled Skill performed every application
+interaction. No shell, DOM/CDP, direct business-file editing, alternate automation
+or delegated Agent was used. Read-only independent disk/hash verification and
+native screenshots establish the results. The user allowed installed substitutes
+for unavailable WPS/Obsidian; WordPad and Explorer are those substitutes, not
+coverage claims for the missing apps.
+
+| Host/task | Time | exec / MCP / native | PNGs | Result and preserved failures |
+| --- | ---: | --- | ---: | --- |
+| Caelis 0.75 / Chrome | 158.83s | 35 / 37 / 104 | 25 | Two target records saved once, exact keyboard-entered Chinese/emoji notes, reopened readback, matching native file upload; 238 neighbors unchanged. A workbench screenshot was visually checked. 5 errored execs / 5 failed native steps remain recorded. |
+| Caelis 0.75 / WordPad, initial | 7.79s | 0 / 2 / 0 | 0 | Host rejected a thirteen-method API response with `11188 > 10000` before any GUI input. Preserved as a failed session. |
+| Caelis 0.75 / WordPad, independent workaround task | 344.35s | 55 / 58 / 160 | 39 | Exact four paragraphs, heading bold/body regular, saved/reopened RTF, native readText and body screenshot; seed unchanged. API queries capped at three methods only for this old-host run. 14 errored execs / 24 failed native steps. |
+| Caelis 0.75 / Explorer | 147.22s | 28 / 30 / 50 | 16 | Created Reviewed, renamed/moved the target, inspected child/parent, exact resulting tree and all hashes; two neighbors unchanged. 3 errored execs / 6 failed native steps. |
+| Core PR #182 `3c3e09f3` / WordPad | 298.82s | 44 / 47 / 109 | 16 | One thirteen-method API query, complete artifact read and uninterrupted continuation; exact RTF/formatting/seed and reopened native readback. 20 failed native steps remain recorded. |
+
+WordPad reports partial UIA coverage (`native_read_gap`); this is never promoted
+to complete coverage or uniqueness. Native `readText` returns the actual four
+paragraphs, including Chinese and emoji. Offline RTF parsing confirms content and
+bold state. Both WordPad runs exit normally; read-only DTW window enumeration
+confirms the owned Explorer task is closed without terminating the shared shell.
+Screenshots show actual document/workbench/Explorer content, not only dialogs.
+
+### Caelis Core integration
+
+The old 0.75 error was a host canonical serialization-budget defect; it was not a
+DTW API limit. PR #182 already fixes that calculation. The follow-up on its latest
+branch adds complete multipart artifacts and reserves the trusted recovery
+reference behind earlier text, using the generic pipeline for all tools.
+[Core commit](https://github.com/caelis-labs/caelis/commit/3c3e09f336e5f919bf805fc05f77d458a5ab1e78).
+
+The frozen Core binary has SHA-256
+`dae9b2259189cd13a539ccffc42d2f8408c0702b993f802bdd0952710664e16d`.
+Its live API artifact is 109,720 bytes, two ordered text/JSON parts containing all
+13 method definitions. Text parses to the same complete structured payload;
+the Agent reads the runtime artifact and continues. The model-visible result,
+durable event and file-store replay remain canonical and bounded. One unique
+WordPad app-access approval request covers the session's 44 execs (three approval
+events are lifecycle updates of that one request). SDK tool/session/runtime suites
+and `make commit-check` pass. No global Caelis configuration or installed binary
+was replaced. [Tool-loading assessment](plugin-tool-loading-evaluation-2026-10-31.md)
+separately evaluates eager DTW entrypoints; it changes no loading policy here.
+
+Remaining matrix gates include mixed-monitor/movement and additional DPI scales,
+Windows minimum-version execution, elevation/secure desktop, and final release
+packaging/signing. Native changes remain within Windows implementations and
+Windows-only wiring; macOS native source, public API/Skill and Cargo.lock are
+unchanged. The sections below preserve earlier candidates and their limitations.
+
+## Earlier Windows parity verification
 
 The later development binary `ea973ccd8c52e5dd262d0400e684da4131f3b1fd7328eb0bac6d0a261f84c9ad`
 passes **385 library tests, 3 CLI tests, the full 25-case GUI smoke and 15

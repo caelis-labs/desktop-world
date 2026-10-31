@@ -311,11 +311,19 @@ def main():
         return handles
 
     def released(fixture):
-        last = wait(lambda: (s if not (s:=state(fixture))['keys_down_global'] else None))
-        time.sleep(.15)
-        after = state(fixture)
-        require(after['sequence']>last['sequence'] and not after['keys_down_global'], 'Input remained held after teardown')
-        return after
+        previous=-1;stable=None;samples=[]
+        def fresh():
+            nonlocal previous,stable
+            s=state(fixture)
+            if s['sequence']<=previous:return None
+            previous=s['sequence'];now=time.monotonic()
+            samples.append({'sequence':previous,'keys':s['keys_down_global']})
+            if s['keys_down_global']:stable=None
+            elif stable is None:stable=now
+            elif now-stable>=.1:return s
+            return None
+        try:return wait(fresh,timeout=3)
+        finally:write(output/('release-'+fixture['label']+'-'+str(time.monotonic_ns())+'.json'),samples)
 
     def inflight(client, fixture, app, window, case):
         client.execute(app,case+'-focus-editor',
@@ -357,17 +365,20 @@ def main():
             # Keep this as a failed acceptance gate. The opt-in only allows
             # later independent EOF/parent-exit checks to run, never converts
             # the original scalar-integrity failure into a pass.
-            prefix=text[:-1].encode('utf-16-le') if text.endswith('\ufffd') else b''
+            raw_half=bool(text) and 0xD800<=ord(text[-1])<=0xDBFF
+            prefix=text[:-1].encode('utf-16-le') if text.endswith('\ufffd') or raw_half else b''
             expected=payload.encode('utf-16-le')
             high=int.from_bytes(expected[len(prefix):len(prefix)+2],'little')
             known_tail=bool(prefix) and expected.startswith(prefix) and 0xD800<=high<=0xDBFF
             require(args.record_partial_text and known_tail,'Interrupted input is not the original partial prefix')
             summary['unresolved'].append({'case':'interrupted-unicode-tail','fixture':fixture['label'],
-                'native_receipt':'unknown','observed':'terminal replacement at an expected high-surrogate boundary'})
+                'native_receipt':'unknown','observed':('terminal high surrogate preserved losslessly' if raw_half else 'legacy fixture replacement at an expected high-surrogate boundary')})
         require(after['saves']==before['saves'],'Unexecuted suffix saved the document')
         time.sleep(.15)
         require(state(fixture)['text']==after['text'],'Late input continued after interruption')
-        return {'partial_prefix_length':len(text),'scalar_prefix':scalar_prefix,'payload_length':len(payload),'held_keys':after['keys_down_global'],'saves_unchanged':True}
+        return {'partial_prefix_length':len(text),'scalar_prefix':scalar_prefix,
+            'utf16_prefix':payload.encode('utf-16-le').startswith(text.encode('utf-16-le','surrogatepass')),
+            'payload_length':len(payload),'held_keys':after['keys_down_global'],'saves_unchanged':True}
 
     try:
         compile_result = subprocess.run(['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',str(here/'compile-cursor.ps1'),

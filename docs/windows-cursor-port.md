@@ -104,8 +104,9 @@ arrays and preservation of signed opaque ID components.
 `3543afa795c9bfbe5d6a8fe4ed812b54f627b093c075546df86e5f320f91ef64`
 passed the base 25 cases and the first 11 cursor cases, then failed the strict
 Unicode-prefix assertion during in-flight cancellation plus queued foreground
-handoff. The original app ended in a replacement character at a high-surrogate
-boundary; no held keys, extra save or next-owner text change was observed. The
+handoff. The old fixture encoded a high-surrogate boundary as a replacement
+character; that snapshot alone could not distinguish application content from
+UTF-8 encoder loss. No held keys, extra save or next-owner text change was observed. The
 original cancellation ledger retained unknown dispatch and no shutdown error.
 Separate normal-processing stress reproduced this after two successful
 iterations. This is not a passing cancellation acceptance result.
@@ -118,6 +119,21 @@ claim closure. Later independent lifecycle cases can be collected with the
 explicit partial-text option, but its unresolved failure keeps the overall
 suite failed. This issue requires a proven Windows application-processing
 boundary before release approval.
+
+The reviewed CI binary `3c80e2384cf292de176a390a610fcfa4c2411a3285db06790bf5e782daa9252f`
+passed the 15-case cursor suite with lossless fixture JSON and fresh release
+samples. A separate stronger normal-processing stress then passed seven
+transactions and failed the eighth: the old app retained a literal terminal
+U+D83D. Its content was a UTF-16 prefix but not a Unicode scalar prefix. The next
+owner's text stayed empty and its click occurred once; keys were released,
+no save occurred, shutdown error was null and original dispatch remained unknown.
+This lossless reproduction confirms the release blocker independently of the
+earlier fixture's replacement behavior. A passing shorter run does not close it.
+
+The fixture now escapes all surrogate code units in JSON before UTF-8 storage.
+Key-release checks require fresh publications with no held keys for 100ms within
+a bounded 3s read window, instead of assuming that a 150ms sleep implies a new
+snapshot. Only observations are retried; no input is replayed.
 
 The 2026-10-31 development binary `ea973ccd8c52e5dd262d0400e684da4131f3b1fd7328eb0bac6d0a261f84c9ad`
 passed 385 library tests, 3 CLI tests, all 25 base GUI cases and 15 cursor/parity
