@@ -20,7 +20,7 @@ Inspect the path field and its supported action. After confirming navigation onc
 
 For a known filename field, `setValue` with a selector locates it afresh and sets it once, provided it advertises that action. Otherwise establish its editing focus using a current semantic action or capture-based click, then use the platform's select-all chord and `typeText`. DTW chooses delivery internally, including foreground fallback for native modal input. Do not assume a delivered keystroke updated the field: read or capture the value before confirming the chooser.
 
-Confirm once after checking the selected path/name and the enabled control. Window waits refer to native surfaces: closing a document or tab can leave its containing window open, so inspect the resulting UI for those transitions. A closed dialog alone does not prove the requested save, open, or upload completed. Inspect the receiving application's resulting state. If confirmation has an unknown outcome, inspect that state and the original receipt before deciding what new work is needed; do not submit it again automatically.
+Confirm once after checking the selected path/name and the enabled control. If waiting for closure times out, the application may have opened a nested confirmation or directory-access dialog. Inspect a fresh capture or call `waitForWindow({window_ref: state.chooser, state:'dialog', timeout_ms:0})` to discover a proven related modal before new input; do not click the old confirmation again. Window waits refer to native surfaces: closing a document or tab can leave its containing window open, so inspect the resulting UI for those transitions. A closed dialog alone does not prove the requested save, open, or upload completed. Inspect the receiving application's resulting state. If confirmation has an unknown outcome, inspect that state and the original receipt before deciding what new work is needed; do not submit it again automatically.
 
 ## Forms and dynamic editing controls
 
@@ -71,7 +71,9 @@ Return a compact decision record: relevant candidates or values, unresolved ambi
 
 ## Menus and focus-dependent interactions
 
-Use `scope:'menu'` for the application's menu tree when advertised. App-menu actions apply to the focused window, so establish focus and perform the dependent menu action within the same script. An explicit `focus` does not reserve foreground focus for a later script.
+For a known application-menu command, use `app.press({window_ref, selector:{scope:'menu',role:'menu_item',text:...}})`. DTW proves a unique match, prepares focus and resolves the menu again before pressing once. `app.find` with the same selector reads without focusing. Menu scope must be advertised by the provider; it does not search window controls or context menus.
+
+Use `app.observe({window_ref,scope:'menu',...})` to explore the application's menu tree. For direct ref-based app-menu actions, establish focus and observe/act within the same script; app-menu actions apply to the focused window. An explicit `focus` does not reserve foreground focus for a later script.
 
 Some applications defer a background semantic or coordinate action until their window becomes active. A delivered action with no visible effect may still be pending. First use `focus` and a fresh read in the same script, without repeating the action; the original effect may then appear. When the resulting state calls for new input, keep `focus` and the dependent actions in one script. This also applies to custom controls whose semantic actions are unavailable.
 

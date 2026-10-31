@@ -50,8 +50,15 @@ pub enum DiscoveryScope {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectorScope {
+    Window,
+    Menu,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ElementSelector {
+    pub scope: SelectorScope,
     pub role: Option<String>,
     pub text: Option<String>,
 }
@@ -191,7 +198,7 @@ fn coordinate(object: &Map<String, Value>, key: &str) -> Result<f64, WireError> 
 
 fn selection(command: &Map<String, Value>) -> Result<(ElementSelector, u64), WireError> {
     let selector = object(command.get("selector").unwrap_or(&Value::Null), "selector")?;
-    fields(selector, &["role", "text"], "selector")?;
+    fields(selector, &["role", "text", "scope"], "selector")?;
     let part = |key: &str, maximum: usize| {
         selector
             .get(key)
@@ -208,7 +215,14 @@ fn selection(command: &Map<String, Value>) -> Result<(ElementSelector, u64), Wir
             })
             .transpose()
     };
+    let scope = match selector.get("scope") {
+        None => SelectorScope::Window,
+        Some(Value::String(scope)) if scope == "window" => SelectorScope::Window,
+        Some(Value::String(scope)) if scope == "menu" => SelectorScope::Menu,
+        _ => return Err(invalid("selector.scope must be window or menu")),
+    };
     let selector = ElementSelector {
+        scope,
         role: part("role", 64)?,
         text: part("text", 256)?,
     };

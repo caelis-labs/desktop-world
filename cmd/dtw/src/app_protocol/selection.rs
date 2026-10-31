@@ -1,7 +1,7 @@
 //! Convenience resolution uses the existing observation owner and action path.
 //! A complete fresh traversal proves uniqueness; it is not a UI snapshot lock.
 use super::*;
-use wire::ElementSelector;
+use wire::{ElementSelector, SelectorScope};
 
 const POLL: Duration = Duration::from_millis(50);
 
@@ -27,8 +27,8 @@ impl<B: Backend + 'static> Coordinator<B> {
         deadline: Instant,
         wait_until: Instant,
     ) -> Work {
-        let mut progress =
-            json!({"kind":"element","attempts":0,"pages":0,"matches":0,"status":"reading"});
+        let mut progress = json!({"kind":"element","attempts":0,"pages":0,"matches":0,"status":"reading",
+                "scope":match selector.scope { SelectorScope::Window => "window", SelectorScope::Menu => "menu" }});
         self.record_resolution(&submitted.request_id, progress.clone());
         let mut attempts = 0_u32;
         let mut pages = 0_u32;
@@ -36,11 +36,18 @@ impl<B: Backend + 'static> Coordinator<B> {
         loop {
             attempts += 1;
             let mut matches = Vec::<Value>::new();
-            let mut command = Command::ObserveQuery(ObserveQuery {
+            let query = ObserveQuery {
                 role: selector.role.clone(),
                 text: selector.text.clone(),
                 limit: 2,
-            });
+            };
+            let mut command = match selector.scope {
+                SelectorScope::Window => Command::ObserveQuery(query),
+                SelectorScope::Menu => Command::ObserveScoped {
+                    query,
+                    scope: wire::DiscoveryScope::Menu,
+                },
+            };
             let final_page = loop {
                 if let Err(error) = self.selection_live(deadline) {
                     progress["status"] = json!("interrupted");
@@ -103,6 +110,36 @@ impl<B: Backend + 'static> Coordinator<B> {
                 && matches.len() == 1
                 && matches[0]["enabled"] == false
                 && !matches!(submitted.command, Command::Find { .. });
+            if selector.scope == SelectorScope::Menu
+                && complete
+                && matches.len() == 1
+                && !focus_attempted
+                && !matches!(submitted.command, Command::Find { .. })
+                && (disabled
+                    || match submitted.command {
+                        Command::PressSelected { .. } => matches[0]["can_press"] == true,
+                        Command::SetValueSelected { .. } => {
+                            matches[0]["actions"].as_array().is_some_and(|actions| {
+                                actions.iter().any(|action| action == "setValue")
+                            })
+                        }
+                        _ => false,
+                    })
+            {
+                // App menus act on the focused window. Prove a unique menu
+                // target before borrowing focus, then discard that discovery:
+                // activation can change both menu content and enabled state.
+                focus_attempted = true;
+                if let Err(error) = self.prepare_selection_focus(
+                    submitted,
+                    deadline,
+                    &mut progress,
+                    json!("menu_scope"),
+                ) {
+                    return selection_error(submitted, error);
+                }
+                continue;
+            }
             if complete && matches.len() == 1 && !disabled {
                 progress["status"] = json!("resolved");
                 self.record_resolution(&submitted.request_id, progress);
@@ -156,6 +193,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 );
             }
             if !focus_attempted
+                && selector.scope == SelectorScope::Window
                 && timeout_ms != 0
                 && matches!(
                     submitted.command,
@@ -165,52 +203,29 @@ impl<B: Backend + 'static> Coordinator<B> {
                 && final_page["coverage"]["reason"] == "content_unproven"
             {
                 focus_attempted = true;
-                progress["status"] = json!("preparing_focus");
-                progress["focus_preparation"] = json!({"attempted":true,
-                    "trigger":final_page["coverage"],"receipt":null});
-                self.record_resolution(&submitted.request_id, progress.clone());
-                // Use the ordinary action admission, policy, binding retirement
-                // and foreground-return owner. Never focus inside a read RPC.
-                let focus = self.execute_atomic(
-                    &Submit {
-                        command: Command::Input(WindowInput::Focus),
-                        ..submitted.clone()
-                    },
+                if let Err(error) = self.prepare_selection_focus(
+                    submitted,
                     deadline,
-                );
-                let ready = focus.completed.receipt.as_ref().is_some_and(|receipt| {
-                    receipt.outcome.dispatch == DispatchState::Dispatched
-                        && receipt.outcome.error.is_none()
-                        && receipt.interruption.is_none()
-                        && !matches!(receipt.outcome.evidence, EffectEvidence::Mismatch { .. })
-                });
-                progress["focus_preparation"]["receipt"] = focus
-                    .completed
-                    .receipt
-                    .as_ref()
-                    .map(wire::receipt)
-                    .unwrap_or(Value::Null);
-                if !ready {
-                    let error = focus.completed.error.unwrap_or_else(|| resolution_error(
-                        "focus_preparation_unproven", "Focus preparation was not proven; the selected action was not dispatched", &progress));
-                    progress["status"] = json!("focus_failed");
-                    progress["error"] = error_json(&error);
-                    self.record_resolution(&submitted.request_id, progress);
+                    &mut progress,
+                    final_page["coverage"].clone(),
+                ) {
                     return selection_error(submitted, error);
                 }
-                progress["status"] = json!("reading");
-                self.record_resolution(&submitted.request_id, progress.clone());
                 // One fresh traversal, even if the first native read consumed
                 // the polling window. Do not restart that window or repeat the
                 // preparation; the original execution deadline still applies.
                 continue;
             }
-            if !focus_attempted && timeout_ms != 0 && Instant::now() < wait_until {
+            // Menu readiness can settle asynchronously after activation. Keep
+            // polling reads within the original window without focusing again.
+            // Cold-window recovery retains its existing one-traversal limit.
+            let one_shot_recovery = focus_attempted && selector.scope == SelectorScope::Window;
+            if !one_shot_recovery && timeout_ms != 0 && Instant::now() < wait_until {
                 progress["status"] = json!("waiting");
                 self.record_resolution(&submitted.request_id, progress.clone());
                 std::thread::sleep(POLL.min(wait_until.saturating_duration_since(Instant::now())));
             }
-            if focus_attempted || timeout_ms == 0 || Instant::now() >= wait_until {
+            if one_shot_recovery || timeout_ms == 0 || Instant::now() >= wait_until {
                 if let Err(error) = self.selection_live(deadline) {
                     progress["status"] = json!("interrupted");
                     progress["error"] = core_error(&error);
@@ -219,6 +234,11 @@ impl<B: Backend + 'static> Coordinator<B> {
                 }
                 let (code, status, message) = if disabled {
                     ("selector_not_ready", "not_ready", "The unique element remained disabled; the selected action was not dispatched")
+                } else if complete
+                    && selector.scope == SelectorScope::Window
+                    && selector.role.as_deref() == Some("menu_item")
+                {
+                    ("selector_not_found", "not_found", "No menu item matched in window scope; for the application's menu use selector:{scope:'menu',role:'menu_item',text:...}. The selected action was not dispatched")
                 } else if complete {
                     (
                         "selector_not_found",
@@ -233,6 +253,55 @@ impl<B: Backend + 'static> Coordinator<B> {
                 return selection_error(submitted, resolution_error(code, message, &progress));
             }
         }
+    }
+
+    fn prepare_selection_focus(
+        &self,
+        submitted: &Submit,
+        deadline: Instant,
+        progress: &mut Value,
+        trigger: Value,
+    ) -> Result<(), WireError> {
+        progress["status"] = json!("preparing_focus");
+        progress["focus_preparation"] = json!({"attempted":true,"trigger":trigger,"receipt":null});
+        self.record_resolution(&submitted.request_id, progress.clone());
+        // Use ordinary action admission, policy, binding retirement and focus
+        // return ownership. A read-only find never enters this preparation.
+        let focus = self.execute_atomic(
+            &Submit {
+                command: Command::Input(WindowInput::Focus),
+                ..submitted.clone()
+            },
+            deadline,
+        );
+        let ready = focus.completed.receipt.as_ref().is_some_and(|receipt| {
+            receipt.outcome.dispatch == DispatchState::Dispatched
+                && receipt.outcome.error.is_none()
+                && receipt.interruption.is_none()
+                && !matches!(receipt.outcome.evidence, EffectEvidence::Mismatch { .. })
+        });
+        progress["focus_preparation"]["receipt"] = focus
+            .completed
+            .receipt
+            .as_ref()
+            .map(wire::receipt)
+            .unwrap_or(Value::Null);
+        if !ready {
+            let error = focus.completed.error.unwrap_or_else(|| {
+                resolution_error(
+                    "focus_preparation_unproven",
+                    "Focus preparation was not proven; the selected action was not dispatched",
+                    progress,
+                )
+            });
+            progress["status"] = json!("focus_failed");
+            progress["error"] = error_json(&error);
+            self.record_resolution(&submitted.request_id, progress.clone());
+            return Err(error);
+        }
+        progress["status"] = json!("reading");
+        self.record_resolution(&submitted.request_id, progress.clone());
+        Ok(())
     }
 
     fn selection_live(&self, deadline: Instant) -> Result<(), Error> {

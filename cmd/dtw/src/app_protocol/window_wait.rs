@@ -48,10 +48,16 @@ impl<B: Backend + 'static> Coordinator<B> {
         };
         if let WindowStateProbe::Pending { reason } = &result.probe {
             let details = json!({"state":desired.as_str(), "window_ref":source_ref, "samples":result.samples, "reason":reason});
+            let hint = match desired {
+                WindowWaitState::Closed | WindowWaitState::Unblocked =>
+                    " A confirmation may have opened another modal. Inspect the current window or use app.waitForWindow({window_ref,state:'dialog',timeout_ms:0}) on the same anchor before deciding on new input; do not repeat the prior close or confirmation.",
+                WindowWaitState::Dialog =>
+                    " Refresh app.windows() and inspect the current UI; do not repeat the action that was expected to open a dialog.",
+            };
             return Work {
                 completed: Completed { value: None, image: None, receipt: None,
                     error: Some(WireError { code:"window_wait_timeout".into(),
-                        message:"The scoped window condition was not proven before the wait ended; no input was dispatched".into(),
+                        message:format!("The scoped window condition was not proven before the wait ended ({reason}); no input was dispatched.{hint}"),
                         details:Some(details) }), payload_bytes:0, payload_expired:false },
                 publication:Publication::None, state_update:None,
             };

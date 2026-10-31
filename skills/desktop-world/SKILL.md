@@ -25,7 +25,7 @@ Scripts have a 30-second deadline and no native-call quota. Imports, filesystem,
 
 Window inventory is complete only within its declared scope. `association_complete:false` means not every possible helper relationship is established. Related surfaces use the same logical app ID and their own returned window refs. For a blocked target, use `waitForWindow` with `state:'dialog'` to discover a proven related modal when supported; inspect that returned window before new input. If the relationship remains unproven, use fresh inventory or report the boundary.
 
-For a known control, use a selector instead of writing an observation/pagination loop. Selectors combine an exact returned `role` with case-insensitive `text` matching the label, name, or value; provide at least one. Use labels from the current UI:
+For a known control, use a selector instead of writing an observation/pagination loop. Selectors combine an exact returned `role` with case-insensitive `text` matching the label, name, or value; provide at least one. The default scope is the selected window; use `selector:{scope:'menu',role:'menu_item',text:...}` for its application menu. Use labels from the current UI:
 
 ```javascript
 await app.setValue({
@@ -38,7 +38,7 @@ await app.press({
 });
 ```
 
-DTW refreshes each target, handles pagination and briefly waits, then acts once. If an inactive application exposes only its window shell (`content_unproven`), selector actions may borrow focus once under the configured delivery policy and resolve afresh before sending input. `find` remains a read. Optional `timeout_ms` defaults to 2000; zero performs one traversal without this focus preparation. Multiple matches return candidates; incomplete coverage is unproven. Narrow or inspect those cases rather than taking the first match. `app.find({window_ref,selector,timeout_ms?})` waits for one unique element and returns its refs plus `element` metadata, useful for reading its current bounded value. Use `observe` for exploration and large trees requiring a smaller scope.
+DTW refreshes each target, handles pagination and briefly waits, then acts once. If an inactive application exposes only its window shell (`content_unproven`), selector actions may borrow focus once under the configured delivery policy and resolve afresh before sending input. For `scope:'menu'` actions, DTW first proves a unique match, prepares the selected window's focus and resolves the menu afresh; no separate `focus` call is needed. `find` remains a read. Optional `timeout_ms` defaults to 2000; zero disables polling and cold-window preparation, but retains the menu action's focus preparation. Multiple matches return candidates; incomplete coverage is unproven. Narrow or inspect those cases rather than taking the first match. `app.find({window_ref,selector,timeout_ms?})` waits for one unique element and returns its refs plus `element` metadata, useful for reading its current bounded value. Use `observe` for exploration and large trees requiring a smaller scope.
 
 On supported providers, `app.waitForWindow({window_ref,state:'dialog'})` waits for a proven related modal and returns its own fresh `window_ref`. Use `state:'closed'` to wait for that exact dialog to disappear, or `state:'unblocked'` for the original window's modal gate to clear. It never follows arbitrary new or focused windows. Optional `timeout_ms` has the same default; condition timeout is a normal error and does not replay input. See the file-chooser pattern for nested dialogs.
 
