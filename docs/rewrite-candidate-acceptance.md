@@ -1,6 +1,8 @@
 # 重写候选与最终安装验收
 
-当前状态（2026-10-31）：下方 `50dbec3` 安装验收属于历史候选，不能验收当前 #70。最新开发任务和修复见[真实任务记录](real-task-closure-acceptance.md)；本轮 Windows 候选须从 #70 对应 SHA 的显式 workflow 获取。最终 macOS 安装字节必须通过新的 `--installed-package` 三应用入口；当前尚无该最终包通过记录。目标 Agent 已更新为 Caelis、DSH、agy，具体门槛见[发布计划](first-rewrite-release-plan.md)。
+当前状态（2026-11-01）：#71/#72 已合并。Windows 使用用户已验收的 `da61485c` 固定包，见[Windows 实机结果](windows-release-acceptance-2026-11-01.md)。macOS 最终候选为 `df76b14d`，ZIP `216cc1663cd844b1fe778c7f56029913d7cf9485df9020abd4cfb2db7ea876e7`，Developer ID 签名、公证 Accepted；在包含空格和中文的实际安装路径，通过 Core main `d15874f7` + Terra 的 Chrome、Obsidian、WPS 完整任务、独立读回及清理，分别约 103 / 270 / 153 秒，20 / 44 / 27 次 exec，每个任务仅一次 app 授权。此前开发候选或其他 Agent 的结果仍只属于各自字节。发布资产 `RELEASE.json` 汇总最终验收与原始平台来源；不重写已验收归档。
+
+构包后的并行测试曾触发成功路径 200ms 轮询预算假设，保留原失败。后续只修改测试和说明：确定性的已过期窗口检查证明不读取下一页且不派发，成功路径放宽调度余量；本机 449 library + 4 CLI + 3 stdio 测试通过。运行时代码和 Skill 未变，签名公证包不重建。
 
 历史记录日期：2026-10-29。前两批核心实现在 #66 / `7a06c6b`，开发字节的原生与外部 Agent 六轮门槛已通过，见[核心验收](release-core-acceptance.md)。本记录从第三批开始：0.2.0 为候选源版本，尚未发布。
 

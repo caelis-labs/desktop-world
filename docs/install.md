@@ -7,12 +7,14 @@ not require an approval token, custom Host adapter or private DSH plugin.
 
 ## Select and extract a package
 
-**The rewrite's v0.2.0 is not published yet.** Use an explicitly supplied candidate
-from [candidate construction](releasing.md) and check its source/hash against
-[the current evidence](rewrite-candidate-acceptance.md). Historical v0.1.x assets
-use the retired runtime and are not substitutes. macOS arm64 and Windows x64 are
-the release targets; Windows desktop acceptance and final macOS installed-package
-acceptance remain required. Linux desktop support is experimental.
+Download **v0.2.0** from [the release page](https://github.com/caelis-labs/desktop-world/releases/tag/v0.2.0):
+
+- macOS (Apple Silicon): `desktop-world-0.2.0-aarch64-apple-darwin.zip`.
+- Windows x64: `desktop-world-0.2.0-x86_64-pc-windows-msvc.zip`.
+
+Use the adjacent `.sha256` for the selected ZIP. Historical v0.1.x assets use the
+retired runtime and are not substitutes. Linux desktop support is experimental.
+Release notes identify the exact platform sources, accepted bytes and test scope.
 
 Verify the ZIP's adjacent `.sha256`, extract the complete directory to a permanent
 location outside the source checkout, then verify every entry in `SHA256SUMS`.
@@ -59,13 +61,14 @@ Start a new Session to load the MCP/Skill snapshot. Registration alone does not
 prove tools are ready; complete the first-execution check below. Do not separately
 register a second copy of the MCP server.
 
-**Next Core integration:** parse the standard `exec.app` argument and request
-approval on first use of each app in a Session. Approval for that app is reused
-for subsequent scripts in the same Session; a new app or new Session needs its
-own approval. Denial must stop before dispatch. This is planned Core behavior,
-not a permission mechanism implemented by DTW or a claim about the current Core.
-Acceptance will use `deepseek-flash` and `gpt-6.1-terra`, including screenshots,
-repeated calls, denial and separate Sessions.
+**Caelis compatibility:** use Core main `d15874f759aae5736b5afecf1060186a23d700bf`
+or a later release containing [Core #185](https://github.com/caelis-labs/caelis/pull/185)
+and [#187](https://github.com/caelis-labs/caelis/pull/187). These changes support the
+standard plugin identity, large results and fixed `tool_search` / `mcp_call` route.
+Core requests approval on first use of each `exec.app` in a Session, then reuses
+that app approval. A new app or Session needs its own approval; denial stops
+before dispatch. Approval remains entirely in Core, not DTW. Older Core builds
+may lack these integration fixes.
 
 ## DeepSeek Harness (DSH)
 

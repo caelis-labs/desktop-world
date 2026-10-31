@@ -1,6 +1,8 @@
 # 重写版产品矩阵
 
-当前 Windows 检查点：#72 的固定候选在 Windows 11 22631、普通用户、主屏 125% 下通过 100 项原生检查（含 40 次严格取消交接）及 Caelis + deepseek-flash 的 Chrome、WordPad、Explorer 完整任务；#182 的应用会话授权和大结果工件恢复联调通过。候选哈希、失败尝试及支持边界见[2026-11-01 验收](windows-release-acceptance-2026-11-01.md)。公开发布仍需落地两个 PR 并使用已验收字节。
+当前 Windows 检查点：#72 的固定候选在 Windows 11 22631、普通用户、主屏 125% 下通过 100 项原生检查（含 40 次严格取消交接）及 Caelis + deepseek-flash 的 Chrome、WordPad、Explorer 完整任务；#182 的应用会话授权和大结果工件恢复联调通过。候选哈希、失败尝试及支持边界见[2026-11-01 验收](windows-release-acceptance-2026-11-01.md)。DTW #71/#72 已合并；Core 最新 main 的 #185/#187 已在固定 tool_search/mcp_call 路由上落地等价集成，公开发布使用已验收字节。
+
+macOS 最终包：`df76b14d` 的签名公证 ZIP 经最新 Core main `d15874f7` + Terra 完成 Chrome、Obsidian、WPS 三个真实任务，实际安装清单、结果读回及清理通过，见[候选记录](rewrite-candidate-acceptance.md)。
 
 macOS 既有检查点：WPS 关闭后的焦点清理已修复；DSH 的三个完整真实任务通过开发候选验收，最后 AX 修复有独立实机对照。结果见[阶段记录](real-task-closure-acceptance.md)；本轮没有修改 macOS 原生实现。
 
@@ -8,7 +10,7 @@ macOS 既有检查点：WPS 关闭后的焦点清理已修复；DSH 的三个完
 
 | 能力 / 工作流 | 当前实现与条件 | 证据 / 尚待完成 |
 | --- | --- | --- |
-| Agent 入口 | 官方 rmcp stdio；apps/api/exec/result；exec 仅 app/source；稳定平台 app ID | 普通 MCP + Skill，无定制 Host；目标为 Caelis、DSH、agy；Caelis app 授权由 Core #182 实现，Windows 实机会话已验证首次授权、同 app 复用、跨 app state 保留及新会话重新授权 |
+| Agent 入口 | 官方 rmcp stdio；apps/api/exec/result；exec 仅 app/source；稳定平台 app ID | 普通 MCP + Skill，无定制 Host；目标为 Caelis、DSH、agy；Caelis app 授权由 Core #187 实现（含 #185 的标准插件与大回包修复），Windows 实机会话已验证首次授权、同 app 复用、跨 app state 保留及新会话重新授权 |
 | 按需 API | apps 紧凑索引；api 可选方法详情；result 原始账本 | 默认输出不展开全方法 schema，不为成功操作追加账本查询 |
 | 窗口基础路线 | macOS 逐实例验证 PID、正面积且精确查询可用的 WindowServer 表面（含同 PID 非零 layer 浮层）；不要求 AX 语义库存；精确 SCK 截图及可见点点击 | 有归属/生命周期/像素几何证明；模态、遮挡和空间边界按原生条件拒绝，不承诺任意后台点击 |
 | 同 app 多实例 | 稳定 app ID 聚合各实例窗口，window_ref 路由到精确实例；成员变化保留存活兄弟引用与 state | 真实双实例退出/重启通过；部分库存失败保留可用窗口、原错误及摘要提示，不伪装成完整库存 |
