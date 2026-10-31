@@ -100,6 +100,25 @@ arrays and preservation of signed opaque ID components.
 
 ## Evidence and remaining coverage
 
+**Release gate still open:** the later release-build candidate
+`3543afa795c9bfbe5d6a8fe4ed812b54f627b093c075546df86e5f320f91ef64`
+passed the base 25 cases and the first 11 cursor cases, then failed the strict
+Unicode-prefix assertion during in-flight cancellation plus queued foreground
+handoff. The original app ended in a replacement character at a high-surrogate
+boundary; no held keys, extra save or next-owner text change was observed. The
+original cancellation ledger retained unknown dispatch and no shutdown error.
+Separate normal-processing stress reproduced this after two successful
+iterations. This is not a passing cancellation acceptance result.
+
+An experimental private-tag low-level keyboard queue observer still failed the
+stronger stress after ten successful iterations. It was rejected and is **not
+shipped**: queue-stage observation cannot establish application-level scalar
+completion. Neither replay/repair input nor a longer guessed sleep is used to
+claim closure. Later independent lifecycle cases can be collected with the
+explicit partial-text option, but its unresolved failure keeps the overall
+suite failed. This issue requires a proven Windows application-processing
+boundary before release approval.
+
 The 2026-10-31 development binary `ea973ccd8c52e5dd262d0400e684da4131f3b1fd7328eb0bac6d0a261f84c9ad`
 passed 385 library tests, 3 CLI tests, all 25 base GUI cases and 15 cursor/parity
 GUI cases. The latter use standard MCP plus an independent read-only Win32 and
@@ -111,7 +130,8 @@ concurrent input handoff, in-flight EOF/parent death and session isolation.
 Retained process handles establish actual native/helper exit codes, rather than
 treating process absence as successful cleanup.
 
-These are normal-user Windows 11, primary-monitor 125% tests. They do not certify
+The earlier passing runs above are normal-user Windows 11, primary-monitor 125%
+tests; they do not override the later failure. They do not certify
 mixed-monitor movement/scaling, elevation/secure desktop, blocking UIA calls,
 background input, WGC geometry, other host session-approval policies or a final
 distribution artifact. See the dated Windows acceptance record for Agent tasks

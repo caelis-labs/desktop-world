@@ -147,6 +147,21 @@ tolerance), clicks its physical center exactly once, and checks the cursor's
 actual colored pixels and raster dimensions against the PMv2 helper's DPI.
 This does not simulate or certify other monitor configurations.
 
+`delivery_probe.py --dtw ... --output ... --iterations 20` is a stricter opt-in
+Unicode cancellation/handoff stress control. Each iteration is a new independent
+transaction after reading the previous original ledger; no uncertain operation
+is replayed. It checks the original unknown receipt, released keys, next-owner
+zero text changes and exact click count, and the original app's scalar-prefix
+integrity. A real terminal replacement/split-surrogate failure remains an open
+release gate. `--handler-delay` additionally selects an owned 40 ms GUI handler
+delay; it is recorded separately from normal app processing.
+
+For collecting later independent lifecycle evidence after that known failure,
+`cursor_probe.py --record-partial-text ...` may continue only for the specifically
+validated terminal replacement pattern. It still returns `passed:false` and exit
+1 with `unresolved`; it does not relax a release pass. The strict default stops
+at the original failure.
+
 `summary.json` records OS, PowerShell, source and binary SHA-256, selected cases,
 pending manual coverage and cleanup. `smoke_passed` covers **only the selected
 smoke**; `manual_pending` must remain visible in the handoff. Any failure returns

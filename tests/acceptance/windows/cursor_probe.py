@@ -229,6 +229,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dtw', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--record-partial-text', action='store_true',
+        help='Continue lifecycle checks for a known terminal replacement of a split surrogate; keep overall result failed')
     args = parser.parse_args()
     require(os.name == 'nt' and sys.flags.utf8_mode, 'Use Windows: python -X utf8 cursor_probe.py ...')
     from PIL import Image, ImageChops
@@ -238,7 +240,7 @@ def main():
     output.mkdir(parents=True)
     here = Path(__file__).parent
     summary = {'passed':False, 'kind':'owned Windows fixtures via standard MCP; independent Win32/pixel observer',
-               'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(), 'cases':[], 'cleanup':[]}
+               'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(), 'cases':[], 'cleanup':[], 'unresolved':[]}
     fixtures, clients = [], []
     blocker = None
     snapshots = 0
@@ -349,11 +351,23 @@ def main():
 
     def stopped_effect(fixture,payload,before):
         after=released(fixture)
-        require(0<len(after['text'])<len(payload) and payload.startswith(after['text']), 'Interrupted input is not the original partial prefix')
+        text=after['text']
+        scalar_prefix=0<len(text)<len(payload) and payload.startswith(text)
+        if not scalar_prefix:
+            # Keep this as a failed acceptance gate. The opt-in only allows
+            # later independent EOF/parent-exit checks to run, never converts
+            # the original scalar-integrity failure into a pass.
+            prefix=text[:-1].encode('utf-16-le') if text.endswith('\ufffd') else b''
+            expected=payload.encode('utf-16-le')
+            high=int.from_bytes(expected[len(prefix):len(prefix)+2],'little')
+            known_tail=bool(prefix) and expected.startswith(prefix) and 0xD800<=high<=0xDBFF
+            require(args.record_partial_text and known_tail,'Interrupted input is not the original partial prefix')
+            summary['unresolved'].append({'case':'interrupted-unicode-tail','fixture':fixture['label'],
+                'native_receipt':'unknown','observed':'terminal replacement at an expected high-surrogate boundary'})
         require(after['saves']==before['saves'],'Unexecuted suffix saved the document')
         time.sleep(.15)
         require(state(fixture)['text']==after['text'],'Late input continued after interruption')
-        return {'partial_prefix_length':len(after['text']),'payload_length':len(payload),'held_keys':after['keys_down_global'],'saves_unchanged':True}
+        return {'partial_prefix_length':len(text),'scalar_prefix':scalar_prefix,'payload_length':len(payload),'held_keys':after['keys_down_global'],'saves_unchanged':True}
 
     try:
         compile_result = subprocess.run(['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',str(here/'compile-cursor.ps1'),
@@ -523,6 +537,7 @@ def main():
         write(output/'queued-input-ledger.json',queued)
         require(queued['status']=='completed' and queued['error'] is None,queued.get('error'))
         wait(lambda:state(a)['left_up']==before_click+1)
+        require(state(a)['text']==pa['text'],'Canceled text leaked into the queued owner')
         require(provider.wait()==0,'Canceled native worker did not report clean exit')
         provider.close()
         require(original_helper.alive(),'Cancel killed the shared session helper')
@@ -565,7 +580,7 @@ def main():
         wait(lambda: not helpers(snapshot(int(state(b)['hwnd'])),first))
         click(second,b,second_app,second_window,'surviving-session-pointer')
         summary['cases'].append('session-eof-isolation-and-helper-reclamation')
-        summary['passed'] = True
+        summary['passed'] = not summary['unresolved']
     except BaseException:
         summary['failure'] = traceback.format_exc()
         (output/'failure.txt').write_text(summary['failure'],encoding='utf-8')

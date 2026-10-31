@@ -375,6 +375,14 @@ fn run(expected: u32, birth: u64) -> Result<(), Box<dyn std::error::Error>> {
                             }
                             dirty = false;
                             pulse = false;
+                            if unsafe { GetDpiForWindow(window.as_ref().unwrap().0) } != image_dpi {
+                                // A new independent action may follow a DPI
+                                // retirement. Old cached pixels must neither
+                                // retire this new operation nor be reused.
+                                image_dpi = 0;
+                                images = None;
+                                surface = None;
+                            }
                             response = json!({"ok":true});
                         }
                     }

@@ -87,7 +87,14 @@ namespace DtwWindowsSmoke {
             editor.Location = new Point(12, 12); editor.Size = new Size(386, 125);
             editor.Multiline = true; editor.AcceptsReturn = true;
             editor.ScrollBars = ScrollBars.Vertical; editor.AccessibleName = "Message";
-            editor.TextChanged += delegate { Record("text_changed", new { length = editor.Text.Length }); };
+            editor.TextChanged += delegate {
+                Record("text_changed", new { length = editor.Text.Length });
+                if (editor.Text.Length>0 && char.IsHighSurrogate(editor.Text[editor.Text.Length-1]) &&
+                    File.Exists(Path.Combine(root,"track-surrogate"))) {
+                    Record("surrogate_half",new {length=editor.Text.Length});
+                    if (File.Exists(Path.Combine(root,"delay-surrogate"))) System.Threading.Thread.Sleep(40);
+                }
+            };
             Controls.Add(editor);
             increment.Text = "Increment"; increment.AccessibleName = "Increment";
             increment.Location = new Point(12, 145); increment.Size = new Size(120, 30);
