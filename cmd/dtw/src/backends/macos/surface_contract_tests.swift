@@ -1453,3 +1453,31 @@ for row in [invalid, surfaceRow(90, width: -1), surfaceRow(90, width: Double.inf
     do { _ = try readyModalSurface([row], id: 90); preconditionFailure("Invalid sheet surface became pending") }
     catch let error as NativeFailure { surfaceCheck(["window_unproven", "target_changed"].contains(error.code)) }
 }
+
+// An unnamed editable control publishes its native role as a fallback label.
+// Copying that returned label into a selector must find the same control.
+private let unnamedTextField = SemanticTextFields(role: kAXTextFieldRole, title: "", value: "", description: "")
+surfaceCheck(unnamedTextField.label == "AXTextField" && unnamedTextField.name == "" && unnamedTextField.value == "")
+precondition(unnamedTextField.matches("AXTextField"), "selector failed to match the returned AXTextField label")
+surfaceCheck(unnamedTextField.matches("axtextfield"))
+surfaceCheck(!unnamedTextField.matches("text_field"))
+private let absentTextAttributes = SemanticTextFields(role: kAXTextFieldRole, title: nil, value: nil, description: nil)
+surfaceCheck(absentTextAttributes.matches("AXTextField"))
+surfaceCheck(absentTextAttributes.name == nil && absentTextAttributes.value == nil)
+
+// Public composite labels are matchable verbatim. Separately returned fields
+// never create an implicit whitespace-joined match, nor an extra role alias.
+private let orderNumber = SemanticTextFields(role: kAXTextFieldRole, title: "Order", value: "Number", description: nil)
+surfaceCheck(orderNumber.label == "Order | Number")
+surfaceCheck(orderNumber.matches("Order | Number"))
+surfaceCheck(orderNumber.matches("order") && orderNumber.matches("NUMBER"))
+surfaceCheck(!orderNumber.matches("Order Number"))
+surfaceCheck(!orderNumber.matches("AXTextField"))
+private let describedText = SemanticTextFields(role: kAXTextFieldRole, title: "", value: "", description: "Café")
+surfaceCheck(describedText.name == "Café" && describedText.matches("CAFE"))
+private let spacedText = SemanticTextFields(role: kAXTextFieldRole, title: "  retained spaces  ", value: nil, description: nil)
+surfaceCheck(spacedText.matches("  RETAINED SPACES  "))
+surfaceCheck(orderNumber.matches(nil))
+surfaceCheck(!semanticTextContains(String(repeating: "a", count: 4_096) + "needle", needle: "needle"))
+surfaceCheck(semanticTextContains(String(repeating: "a", count: 300) + "needle", needle: "NEEDLE"))
+print("Semantic selectors match public fallback/composite labels without concatenating fields; no AX or GUI reads")
