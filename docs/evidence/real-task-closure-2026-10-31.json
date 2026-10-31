@@ -1,0 +1,92 @@
+{
+  "date": "2026-10-31",
+  "kind": "development-candidate-evidence-summary",
+  "source_runtime_and_skill": "0d507be590ba79caef4760c6f210b4382142686e",
+  "model": "deepseek-official/deepseek-flash (DeepSeek-V4.1-Flash)",
+  "installed_package_acceptance": false,
+  "windows_gui_acceptance": false,
+  "samples": [
+    {
+      "app": "chrome",
+      "case": "case-560be3bf33",
+      "binary_sha256": "204ffdb5a739d69ac01d102462add69bbe80e51a14e201495dbd3bc31676a559",
+      "skill_sha256": "a693d04ec304cf8d7bf428d7365a7ae159e0b1fbd3a30c9818efbeb26b8ec3df",
+      "seconds": 80.39,
+      "metrics": {
+        "agent_tool_calls": 29,
+        "mcp_calls": 27,
+        "exec_calls": 25,
+        "script_host_calls": 64,
+        "mcp_json_bytes": 77968
+      },
+      "exec_containing_failure": 1,
+      "business_and_cleanup_passed": true,
+      "gui_review_passed": true,
+      "raw_automatic_acceptance_status": "pending_gui_review",
+      "raw_agent_sha256": "f02fbe2921d2caf3b14069f49a8ddbf644e537e3bde708cbcafa6f3e3161752f",
+      "evidence_sha256": "630a27e0d84c289d30a8a8ee6e9a9e7f20c320ca96f7c342e04dc7d032606ba2",
+      "gui_review_sha256": "fb050e43ded7febafcb88d670eb19bd9dd512039ae833fd88fe65ce145ae477a"
+    },
+    {
+      "app": "wps",
+      "case": "case-0a580c2f53",
+      "binary_sha256": "204ffdb5a739d69ac01d102462add69bbe80e51a14e201495dbd3bc31676a559",
+      "skill_sha256": "a693d04ec304cf8d7bf428d7365a7ae159e0b1fbd3a30c9818efbeb26b8ec3df",
+      "seconds": 192.871,
+      "metrics": {
+        "agent_tool_calls": 48,
+        "mcp_calls": 46,
+        "exec_calls": 45,
+        "script_host_calls": 105,
+        "mcp_json_bytes": 94252
+      },
+      "exec_containing_failure": 10,
+      "business_and_cleanup_passed": true,
+      "gui_review_passed": true,
+      "raw_automatic_acceptance_status": "pending_gui_review",
+      "raw_agent_sha256": "397412276fdf84e0adf8f9ac6629ab6e33249cf10bb4860c9ca2df307f6a666b",
+      "evidence_sha256": "a97671aa7d9c745b0507cc5401abf63125915bf96de522869f3aff51187b5703",
+      "gui_review_sha256": "ad2d7281d4d6545c6056b691eab823665943f70ac19943aa06d7a2cae8a4ef8f"
+    },
+    {
+      "app": "obsidian",
+      "case": "case-9aa4f12ada",
+      "binary_sha256": "204ffdb5a739d69ac01d102462add69bbe80e51a14e201495dbd3bc31676a559",
+      "skill_sha256": "a693d04ec304cf8d7bf428d7365a7ae159e0b1fbd3a30c9818efbeb26b8ec3df",
+      "seconds": 334.575,
+      "metrics": {
+        "agent_tool_calls": 64,
+        "mcp_calls": 62,
+        "exec_calls": 61,
+        "script_host_calls": 186,
+        "mcp_json_bytes": 103221
+      },
+      "exec_containing_failure": 7,
+      "business_and_cleanup_passed": true,
+      "gui_review_passed": true,
+      "raw_automatic_acceptance_status": "pending_gui_review",
+      "raw_agent_sha256": "7e61364635e3eea21fb3b1a078f8909dfa28f96036d7e458e831f6e6728b0a92",
+      "evidence_sha256": "c35ceeb22c5e4c4bfe413a741c46ed5893e51b2fd373dc1bc145e5e7f73acb26",
+      "gui_review_sha256": "cdede5355853b7b74b3d0c593391f079e5285ddc21e0f7725fbfdea8da12ada4"
+    }
+  ],
+  "targeted_final_candidate": {
+    "source": "b8d8d21dc6e8d9f822fa346c4b9bfda7e157ee1b",
+    "binary_sha256": "f13770da5c92b4b6d1e09eadcd13b36b8a87bdfafb400a1e8d550b86da7dfc67",
+    "scope": "same WPS Save As dialog; menu, partial AX query, subsequent capture, close and cleanup",
+    "old_query": {
+      "pages": 62,
+      "visited": 6629,
+      "seconds": 15.049,
+      "outcome": "timed_out"
+    },
+    "new_query": {
+      "pages": 1,
+      "visited": 105,
+      "seconds": 0.231,
+      "outcome": "selector_unproven"
+    },
+    "three_app_matrix_rerun": false,
+    "evidence_sha256": "f09610b471939dc7e78cb33f7985fba0be1450781e79bc964e56407b9e294208"
+  }
+}

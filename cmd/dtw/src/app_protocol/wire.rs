@@ -38,6 +38,32 @@ pub enum ScrollLocation {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum DiscoveryScope {
+    Menu,
+    Subtree {
+        observation_ref: String,
+        element_ref: String,
+    },
+    Region {
+        observation_ref: String,
+        region: computer::PixelRegion,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectorScope {
+    Window,
+    Menu,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ElementSelector {
+    pub scope: SelectorScope,
+    pub role: Option<String>,
+    pub text: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     Script {
         source: String,
@@ -45,12 +71,39 @@ pub enum Command {
         max_calls: u32,
     },
     Windows,
+    WaitForWindow {
+        state: computer::WindowWaitState,
+        timeout_ms: u64,
+    },
     Observe,
     ObserveQuery(computer::ObserveQuery),
+    ObserveScoped {
+        query: computer::ObserveQuery,
+        scope: DiscoveryScope,
+    },
+    ReadText {
+        observation_ref: String,
+        element_ref: String,
+        offset: u32,
+        limit: u32,
+    },
     ContinueObservation {
         cursor: String,
     },
     Capture,
+    Find {
+        selector: ElementSelector,
+        timeout_ms: u64,
+    },
+    PressSelected {
+        selector: ElementSelector,
+        timeout_ms: u64,
+    },
+    SetValueSelected {
+        selector: ElementSelector,
+        timeout_ms: u64,
+        value: String,
+    },
     Press {
         observation_ref: String,
         element_ref: String,
@@ -61,6 +114,12 @@ pub enum Command {
         y: f64,
     },
     ClickWithOptions {
+        observation_ref: String,
+        x: f64,
+        y: f64,
+        options: computer::ClickOptions,
+    },
+    ClickNormalized {
         observation_ref: String,
         x: f64,
         y: f64,
@@ -135,6 +194,51 @@ fn coordinate(object: &Map<String, Value>, key: &str) -> Result<f64, WireError> 
         .and_then(Value::as_f64)
         .filter(|value| value.is_finite())
         .ok_or_else(|| invalid(format!("command.{key} must be a finite number")))
+}
+
+fn selection(command: &Map<String, Value>) -> Result<(ElementSelector, u64), WireError> {
+    let selector = object(command.get("selector").unwrap_or(&Value::Null), "selector")?;
+    fields(selector, &["role", "text", "scope"], "selector")?;
+    let part = |key: &str, maximum: usize| {
+        selector
+            .get(key)
+            .map(|value| {
+                value
+                    .as_str()
+                    .filter(|text| !text.trim().is_empty() && text.chars().count() <= maximum)
+                    .map(str::to_owned)
+                    .ok_or_else(|| {
+                        invalid(format!(
+                            "selector.{key} must contain 1 to {maximum} characters"
+                        ))
+                    })
+            })
+            .transpose()
+    };
+    let scope = match selector.get("scope") {
+        None => SelectorScope::Window,
+        Some(Value::String(scope)) if scope == "window" => SelectorScope::Window,
+        Some(Value::String(scope)) if scope == "menu" => SelectorScope::Menu,
+        _ => return Err(invalid("selector.scope must be window or menu")),
+    };
+    let selector = ElementSelector {
+        scope,
+        role: part("role", 64)?,
+        text: part("text", 256)?,
+    };
+    if selector.role.is_none() && selector.text.is_none() {
+        return Err(invalid("selector requires role or text"));
+    }
+    Ok((selector, read_wait_timeout(command)?))
+}
+
+fn read_wait_timeout(command: &Map<String, Value>) -> Result<u64, WireError> {
+    command.get("timeout_ms").map_or(Ok(2_000), |value| {
+        value
+            .as_u64()
+            .filter(|timeout| *timeout <= 30_000)
+            .ok_or_else(|| invalid("timeout_ms must be an integer between 0 and 30000"))
+    })
 }
 
 /// Shared argument parser for the VM bridge and the bound coordinator. Parsing
@@ -221,7 +325,20 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
                     cursor: string(command, "cursor", "command")?,
                 });
             }
-            fields(command, &["kind", "role", "text", "limit"], "command")?;
+            fields(
+                command,
+                &[
+                    "kind",
+                    "role",
+                    "text",
+                    "limit",
+                    "scope",
+                    "observation_ref",
+                    "element_ref",
+                    "region",
+                ],
+                "command",
+            )?;
             if command.len() == 1 {
                 return Ok(Command::Observe);
             }
@@ -250,17 +367,131 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
                     .ok_or_else(|| invalid("command.limit must be an integer from 1 to 100"))?
                     as u32,
             };
-            Ok(Command::ObserveQuery(computer::ObserveQuery {
+            let query = computer::ObserveQuery {
                 role: filter("role", 1, 64)?,
                 text: filter("text", 0, 256)?.filter(|text| !text.is_empty()),
                 limit,
-            }))
+            };
+            let scoped = command.contains_key("scope");
+            let bound = command.contains_key("observation_ref");
+            let element = command.contains_key("element_ref");
+            let region = command.contains_key("region");
+            let scope = match (scoped, bound, element, region) {
+                (false, false, false, false) => return Ok(Command::ObserveQuery(query)),
+                (true, false, false, false) if command["scope"] == "menu" => DiscoveryScope::Menu,
+                (false, true, true, false) => DiscoveryScope::Subtree {
+                    observation_ref: string(command, "observation_ref", "command")?,
+                    element_ref: string(command, "element_ref", "command")?,
+                },
+                (false, true, false, true) => {
+                    let rect = object(&command["region"], "region")?;
+                    fields(rect, &["x", "y", "width", "height"], "region")?;
+                    let number = |key| {
+                        rect.get(key)
+                            .and_then(Value::as_f64)
+                            .filter(|v| v.is_finite())
+                            .ok_or_else(|| invalid("region needs four finite pixel coordinates"))
+                    };
+                    let region = computer::PixelRegion {
+                        x: number("x")?,
+                        y: number("y")?,
+                        width: number("width")?,
+                        height: number("height")?,
+                    };
+                    if region.x < 0.0
+                        || region.y < 0.0
+                        || region.width <= 0.0
+                        || region.height <= 0.0
+                    {
+                        return Err(invalid(
+                            "region must have nonnegative origin and positive size",
+                        ));
+                    }
+                    DiscoveryScope::Region {
+                        observation_ref: string(command, "observation_ref", "command")?,
+                        region,
+                    }
+                }
+                _ => {
+                    return Err(invalid(
+                        "observe accepts one menu, element or capture-region scope",
+                    ))
+                }
+            };
+            Ok(Command::ObserveScoped { query, scope })
+        }
+        "readText" => {
+            fields(
+                command,
+                &["kind", "observation_ref", "element_ref", "offset", "limit"],
+                "command",
+            )?;
+            let number = |key: &str, default, minimum, maximum| {
+                command.get(key).map_or(Ok(default), |v| {
+                    v.as_u64()
+                        .filter(|n| *n >= minimum && *n <= maximum)
+                        .map(|n| n as u32)
+                        .ok_or_else(|| invalid(format!("Invalid readText {key}")))
+                })
+            };
+            Ok(Command::ReadText {
+                observation_ref: string(command, "observation_ref", "command")?,
+                element_ref: string(command, "element_ref", "command")?,
+                offset: number("offset", 0, 0, u32::MAX as u64)?,
+                limit: number("limit", 4096, 2, 16384)?,
+            })
         }
         "windows" | "capture" => {
             fields(command, &["kind"], "command")?;
             Ok(match kind.as_str() {
                 "windows" => Command::Windows,
                 _ => Command::Capture,
+            })
+        }
+        "waitForWindow" => {
+            fields(command, &["kind", "state", "timeout_ms"], "command")?;
+            let state = match command.get("state").and_then(Value::as_str) {
+                Some("dialog") => computer::WindowWaitState::Dialog,
+                Some("unblocked") => computer::WindowWaitState::Unblocked,
+                Some("closed") => computer::WindowWaitState::Closed,
+                _ => {
+                    return Err(invalid(
+                        "waitForWindow state must be dialog, unblocked or closed",
+                    ))
+                }
+            };
+            Ok(Command::WaitForWindow {
+                state,
+                timeout_ms: read_wait_timeout(command)?,
+            })
+        }
+        "find" => {
+            fields(command, &["kind", "selector", "timeout_ms"], "command")?;
+            let (selector, timeout_ms) = selection(command)?;
+            Ok(Command::Find {
+                selector,
+                timeout_ms,
+            })
+        }
+        "press" if command.contains_key("selector") => {
+            fields(command, &["kind", "selector", "timeout_ms"], "command")?;
+            let (selector, timeout_ms) = selection(command)?;
+            Ok(Command::PressSelected {
+                selector,
+                timeout_ms,
+            })
+        }
+        "setValue" if command.contains_key("selector") => {
+            fields(
+                command,
+                &["kind", "selector", "timeout_ms", "value"],
+                "command",
+            )?;
+            let (selector, timeout_ms) = selection(command)?;
+            Ok(Command::SetValueSelected {
+                selector,
+                timeout_ms,
+                value: text_value(command, "value", true)?,
             })
         }
         "press" => {
@@ -277,7 +508,15 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
         "click" => {
             fields(
                 command,
-                &["kind", "observation_ref", "x", "y", "button", "count"],
+                &[
+                    "kind",
+                    "observation_ref",
+                    "x",
+                    "y",
+                    "button",
+                    "count",
+                    "coordinate_space",
+                ],
                 "command",
             )?;
             let observation_ref = string(command, "observation_ref", "command")?;
@@ -298,6 +537,28 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
                     as u8,
             };
             let options = computer::ClickOptions { button, count };
+            match command.get("coordinate_space").and_then(Value::as_str) {
+                Some("normalized_1000") => {
+                    if !(0.0..1000.0).contains(&x) || !(0.0..1000.0).contains(&y) {
+                        return Err(invalid(
+                            "normalized_1000 coordinates must satisfy 0 <= x,y < 1000",
+                        ));
+                    }
+                    return Ok(Command::ClickNormalized {
+                        observation_ref,
+                        x,
+                        y,
+                        options,
+                    });
+                }
+                Some("image_pixels") => {}
+                None if !command.contains_key("coordinate_space") => {}
+                _ => {
+                    return Err(invalid(
+                        "coordinate_space must be image_pixels or normalized_1000",
+                    ))
+                }
+            }
             if options == computer::ClickOptions::default() {
                 Ok(Command::Click {
                     observation_ref,
@@ -575,6 +836,14 @@ pub(crate) fn inventory_report(report: &computer::InventoryReport, proven: bool)
                 "zero_area_surfaces"
             ]),
         ),
+        computer::InventoryScope::ApplicationAndProvenAssociatedSurfaces { .. } => (
+            "application_and_proven_associated_surfaces",
+            json!([
+                "unproven_associations",
+                "unavailable_surfaces",
+                "zero_area_surfaces"
+            ]),
+        ),
     };
     let counters: serde_json::Map<String, Value> = report
         .diagnostics
@@ -582,12 +851,17 @@ pub(crate) fn inventory_report(report: &computer::InventoryReport, proven: bool)
         .iter()
         .map(|(name, count)| (name.clone(), json!(count)))
         .collect();
-    json!({"coverage": {
+    let mut value = json!({"coverage": {
         "scope":scope,"complete_within_scope":proven,
         "status":if !proven {"unproven"} else if report.supported_count == 0 {"empty_within_scope"} else {"available"},
         "candidate_count":report.candidate_count,"supported_count":report.supported_count,"excluded_count":report.excluded_count,
         "excludes":excludes
-    }, "diagnostics":{"provider":report.diagnostics.provider,"counters":counters,"error_codes":report.diagnostics.error_codes}})
+    }, "diagnostics":{"provider":report.diagnostics.provider,"counters":counters,"error_codes":report.diagnostics.error_codes}});
+    if let Some(count) = report.scope.associated_count() {
+        value["coverage"]["associated_count"] = json!(count);
+        value["coverage"]["association_complete"] = json!(false);
+    }
+    value
 }
 
 fn outcome(outcome: &computer::ActionOutcome) -> Value {

@@ -1,5 +1,85 @@
 # Native source provenance
 
+## Real-application closure additions (2026-10-30)
+
+This batch extends the existing provider; it does not add the CUA SDK, upstream
+worker, or a second script runtime. The earlier exclusions below describe their
+original checkpoints. The following additions supersede their blanket exclusion
+of menus, sheets, and associated surfaces; real-task acceptance is recorded
+separately from source and pure-control evidence.
+
+- **Modal and menu ancestry:** the bounded AXParent walk, menu-bar ancestry and
+  sheet-to-owning-window activation mapping come from CUA 0.38.0
+  `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`,
+  `platform-macos/src/ax/exact_target.rs:22–209`. The local background-input donor
+  at `b38360443960a6540685a9a5eb5407f10fe3d03b` was consulted and that exact block
+  was compared byte-for-byte with 0.38.0: 6,694 bytes, SHA256
+  `76d684180b73acc56e5b1458d91a68f1a0d5d8414ba3e1f4168cae977a42d396`.
+  The later commit's different background inventory code is not part of this
+  ancestry port. DTW keeps each sheet's own surface identity and uses its owning
+  window only for raise/activation. Exact focused-surface verification still
+  requires the requested sheet's own AX object and native window ID.
+- **Associated helper surfaces:** the public AX-client hit, nearest menu/window
+  root and visible exact WindowServer surface mechanism is recovered from DTW
+  `79a097b`, `cmd/dtw/src/app_view/Scene.swift` (`hit`/`discover`). The new adapter
+  retains the logical client, actual CG owner and kernel birth, and native AX
+  root. Each operation rechecks those relationships. The candidate surface must
+  supply its own nontransparent pixel at the tested point. Geometry or title
+  alone cannot establish association. CUA directed background input is declined
+  before dispatch when the actual owner differs; the existing foreground path
+  then uses the validated owner. An unprovable helper remains unsupported.
+- **Discovery scopes:** menu, retained-subtree and capture-pixel-region queries
+  reuse DTW's existing bounded frontier, pagination, lifetime and ownership
+  checks. On macOS, a region also clips through proven AXScrollArea viewports;
+  disjoint contents can be skipped without walking their full tree. Retained
+  candidates carry their element and viewport geometry for later validation.
+  Missing geometry remains partial coverage. A region is not OCR or a pixel
+  occlusion guarantee. A derived subtree retains its original AX root identity,
+  even if the same child object is reparented. Replacing a subtree query consumes
+  the prior semantic query, while other windows and the capture binding retain
+  their existing lifetime.
+- **Long text:** `readText` is a small native `AXValue`/`AXStringForRange` adapter,
+  not a claimed copy of an upstream whole method. UTF-16 pages preserve surrogate
+  pairs and bind to one text revision. Titles/descriptions do not stand in for
+  full text. Retained text is bounded to 1,048,576 UTF-16 units per element and
+  2,097,152 per observation; exhaustion is explicit rather than truncation.
+- **Input and recovery adapters:** the existing CUA keyboard/mouse port remains
+  unchanged. Native modal keyboard targets can decline background input before
+  dispatch so the existing automatic foreground route can run once. A modal
+  appearing during an admitted input sequence stops that sequence; it does not
+  select a second route. Short recovery for typed AX `cannotComplete` rebuilds
+  an entire read-only snapshot within the original deadline. A stopped provider
+  can be replaced at the next request only after successful cleanup, with old
+  refs retired and the original execution evidence preserved. These are
+  DTW-owned adapters, not additional claims of upstream source migration.
+- **Focused application proof:** only typed system-wide AX `cannotComplete` or
+  `noValue` permits an alternate candidate, verified through the existing CUA
+  WindowServer PSN comparison and process birth identity. Known targets use
+  their PID directly; AppKit supplies only a candidate for an unknown prior
+  application. Exact app-owned AXFocusedWindow identity remains mandatory for
+  window input and return. Contradictory successful system AX evidence, other
+  errors and unreadable exact windows do not select a favorable fallback. The
+  observer no longer guesses a focused window from CG list ordering; a PID-only
+  observation cannot establish window ownership. No new CUA ABI or input replay
+  is introduced.
+
+Association discovery covers proven visible relationships, not every possible
+helper or all Spaces. The inventory exposes this distinction. An attached sheet
+blocks its parent, without making an independent sibling window modal-blocked.
+An application-modal dialog blocks other ordinary targets. For stacked direct
+application-modal siblings, an exact current AXFocusedWindow root can prove
+which modal is active and permit that modal to operate. That proof checks the owner, native window ID and typed
+modal state, and is rechecked after sibling inspection. It does not bypass a
+descendant modal or depend on titles or WindowServer ordering. Unreadable modal
+state is not silently treated as false. No-window-ancestor menus do not
+gain fictitious keyboard focus, and locked-screen support remains unclaimed.
+
+Windows uses the existing UIA provider for subtree/region discovery and bounded
+Value/TextPattern reads. Query matching now examines bounded native text before
+making the 512-character display excerpt; a text budget gap is reported as
+partial coverage. Menu discovery is explicitly unsupported on that provider.
+Windows runtime behavior still requires the independent Windows acceptance run.
+
 The macOS checkpoint provider in
 `cmd/dtw/src/backends/macos/Native.swift` is a narrow, adapted source port of
 [Cua Driver 0.38.0](https://github.com/trycua/cua/tree/85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19/libs/cua-driver/rust),
@@ -27,7 +107,7 @@ short paths is `libs/cua-driver/rust/crates/platform-macos/src/`.
 | `ax/enablement.rs` | `0c254408f71684bf8687cda4754ab5f9d99d6d3076579b7b656b17b87ae10c90` | `RequestContext.startStamp`: exact-size `proc_pidinfo(PROC_PIDTBSDINFO)` birth timestamp; browser AX opt-in and window-local readiness are adapted in the first release core batch |
 | `ax/bindings.rs` | `00b68eaab97fdbef71402bc48e37941f84940e02facbb89362355aaeaa484df7` | AX attributes/actions, PID lookup, retained window arrays, exact `_AXUIElementGetWindow` identity and bounded parent ascent |
 | `ax/exact_target.rs` | `a06cd9602add11130935a6d6777031b0aefccc2d50ffbe94f48ac4a171def3a7` | `NativeStore.candidates`, `validate`, `owned`: exact window ID and element/window relationship; no title/geometry identity guesses |
-| `ax/window_scope.rs` | `e01d85f0218cb8bc38004489bb444479dd4b10d29bd5068e1a94896ebe5f3f39` | `ordinaryWindow`: window roles/subroles and explicit open/save-panel identifiers; transient/helper resolution is excluded |
+| `ax/window_scope.rs` | `e01d85f0218cb8bc38004489bb444479dd4b10d29bd5068e1a94896ebe5f3f39` | Initial `ordinaryWindow` role/subrole and open/save-panel classification; current transient/helper support is described above |
 | `ax/snapshot.rs` | `15b05543c02e41a7499574f508e5a80ced4585b69d37651030cd21ddbbdc6874` | `RegisteredWindow`, `NativeElement`, `NativeObservation`: keep native objects alive with the reference and release with its owner |
 | `ax/tree.rs` | `bdd1b29d6f3374bf9633c9669b9458e7d15690973f8070c932403461426980ab` | `NativeStore.observe`: bounded AX child traversal, readable attributes and original native element retention; full semantic tree heuristics are excluded |
 | `LICENSE.md` (repository root) | `c0779290c1d4783169aa3dbfb55feb505e563ef8a004bbf55298ceffcfbda8d9` | Original CUA MIT copyright and license, retained below |
@@ -62,7 +142,7 @@ coverage is explicitly incomplete. It uses neither NSWorkspace's running-app
 cache nor AX, screenshot capture or permission prompts.
 
 Swift ARC strong references replace the donor's explicit `CFRetain`/`CFRelease`
-wrappers. A registered window holds its native AX object; a published observation
+wrappers. A registered semantic window holds its native AX object; a published observation
 holds its own element objects. Native bindings are opaque UUIDs, scoped to the
 worker and exact target window. A new semantic query replaces only that
 window's previous semantic query; continuation retains its binding and earlier
@@ -71,20 +151,26 @@ Bindings are released by their Core owner and `release`. Cleanup is permitted af
 it only drops retained objects. There is no implicit action, focus change or
 re-observation during cleanup.
 
-Window generations combine a worker-local random namespace and a checked
-monotonic counter. They are minted only after agreement between current
-WindowServer owner/ID and a same-PID AX window's exact ID. Reusing the numeric
-window ID is insufficient: a refreshed AX window must also compare equal to the
-retained object. The Runtime's provider generation adds its separate worker
+Window surface generations combine a worker-local random namespace and a
+checked monotonic counter. Inventory registers exact WindowServer owner/ID
+against the verified app instance without requiring an AX window inventory.
+An associated surface additionally retains its proven AX client root and actual
+owner birth; a changed association receives a new generation. Semantic bindings
+separately retain and revalidate their exact AX objects. Inventory reconciliation
+retires departed apps and absent surfaces, then filters semantic windows and
+observations against the final target generations. It has no 512-identity
+lifetime cap. The Runtime's provider generation adds its separate worker
 lifetime boundary. Tokens and target generations are internal references, not
 authorization tokens.
 
 `_AXUIElementGetWindow` remains a private macOS SPI. It is dynamically resolved
 from HIServices and failure is explicit `unsupported_platform`; there is no
 replacement based on titles, bounds, focused windows or a different process.
-Window inventory still uses the donor's single `AXUIElementCopyAttributeValue`
-read of AXWindows (128 windows, 512 registered identities). Semantic discovery
-now uses `AXUIElementGetAttributeValueCount` followed by indexed
+The current WindowServer surface inventory is bounded to 128 candidates per
+app request. Semantic root discovery separately reads AXWindows, application
+children and attached sheets, with a 128-root bound; it is not a prerequisite
+for listing same-process surfaces. Semantic child discovery uses
+`AXUIElementGetAttributeValueCount` followed by indexed
 [`AXUIElementCopyAttributeValues`](https://developer.apple.com/documentation/applicationservices/1462060-axuielementcopyattributevalues) ranges of at most 17 objects: 16 new children
 and one overlap anchor. An earlier adaptation encountered `illegalArgument`;
 this implementation skips empty ranges, clamps to the current count, and reports

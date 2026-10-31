@@ -10,6 +10,7 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+mod associated_proof;
 mod cua_input;
 mod cursor_session;
 mod local_socket;
@@ -20,6 +21,81 @@ pub use cursor_session::CursorSession;
 pub use overlay::worker_entry as overlay_worker_entry;
 mod worker;
 pub use worker::worker_entry;
+
+// Normal focus return may need multiple bounded AX reads during a modal
+// transition. Emergency shutdown retains its separate, shorter drain budget.
+const NORMAL_FOCUS_RETURN_BUDGET: Duration = Duration::from_secs(2);
+const FOCUS_RETURN_TRANSPORT_MARGIN: Duration = Duration::from_millis(100);
+
+fn focus_return_deadline_ms(now: u64, call_deadline: Option<u64>) -> u64 {
+    let capped = now.saturating_add(NORMAL_FOCUS_RETURN_BUDGET.as_millis() as u64);
+    call_deadline.map_or(capped, |deadline| deadline.min(capped))
+}
+
+fn focus_return_request(now: u64, call_deadline: Option<u64>) -> Value {
+    let mut request = json!({
+        "operation": "release_focus",
+        "deadline_unix_ms": focus_return_deadline_ms(now, call_deadline),
+        "ownership_cap_unix_ms": focus_return_deadline_ms(now, None),
+    });
+    if let Some(deadline) = call_deadline {
+        request["caller_deadline_unix_ms"] = json!(deadline);
+    }
+    request
+}
+
+// Private capture-only classification. Neither stale references nor arbitrary
+// native errors are eligible for another read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CaptureGeometryStage {
+    Scene,
+    Resident,
+}
+impl CaptureGeometryStage {
+    fn reply(self) -> Value {
+        let stage = match self {
+            Self::Scene => "scene",
+            Self::Resident => "resident",
+        };
+        json!({"error":"capture_geometry_changed",
+            "message":format!("Window geometry changed during {stage} capture validation; no image was published"),
+            "details":{"capture_stage":stage}})
+    }
+    fn from_reply(reply: &Value) -> Option<Self> {
+        if reply["error"] != "capture_geometry_changed" || reply.get("dispatch").is_some() {
+            return None;
+        }
+        match reply["details"]["capture_stage"].as_str()? {
+            "scene" => Some(Self::Scene),
+            "resident" => Some(Self::Resident),
+            _ => None,
+        }
+    }
+}
+
+fn fresh_capture_reply(
+    target: &WindowTarget,
+    call: &CallContext<'_>,
+    mut capture: impl FnMut(Value, &CallContext<'_>) -> Result<Value, (Error, bool)>,
+) -> Result<Value, Error> {
+    let request = json!({"operation":"capture","target":target_json(target)});
+    for attempt in 0..2 {
+        if call.remaining()?.is_zero() {
+            return Err(Error::TimedOut);
+        }
+        let reply = capture(request.clone(), call).map_err(|(error, _)| error)?;
+        if attempt == 0 && CaptureGeometryStage::from_reply(&reply).is_some() {
+            // Discard this entire frame. The next invocation binds and validates
+            // the same target from scratch under the original live budget.
+            continue;
+        }
+        if let Some(error) = reply_error(&reply) {
+            return Err(error);
+        }
+        return Ok(reply);
+    }
+    unreachable!("at most one fresh geometry read")
+}
 
 pub struct AppInfo {
     pub app_id: String,
@@ -211,13 +287,15 @@ impl Drop for NativeBinding {
     }
 }
 const COVERAGE: &str =
-    "same-PID available application surfaces, including raised panels; AX semantics are a separate exact-window capability";
+    "application surfaces and native service dialogs with a proven public-AX relationship; AX semantics remain an exact-surface capability";
 const CONDITIONS: &[&str] = &[
     "semantic and input operations require macOS Accessibility permission",
     "capture and click require macOS Screen Recording permission",
     "input prefers directed background delivery; a side-effect-free preflight decline may use temporary foreground focus",
     "foreground coordinate fallback requires a visible, unobstructed point in the captured window",
-    "keyboard, focus and semantic input require an exact standard AX window without modal interception",
+    "semantic scopes include retained subtrees, capture-pixel regions and the app menu; region geometry does not prove pixel visibility",
+    "readText requires native textual content and preserves one content revision across UTF-16 pages; titles and descriptions are not document text",
+    "input requires an exact app-associated AX surface and current modal target; proven cross-process service surfaces use foreground input",
     "borrowed foreground is returned only while still owned; uncertain input is never rerouted or replayed",
 ];
 impl NativeBackend {
@@ -234,11 +312,14 @@ impl NativeBackend {
                 | Capability::Keypress
                 | Capability::Scroll
                 | Capability::SetValue
+                | Capability::ReadText
         )
     }
     pub fn description() -> Value {
         json!({"provider":"dtw-macos-native", "coverage":COVERAGE,"conditions":CONDITIONS,
-            "supported_capabilities":Capability::ALL.into_iter().filter(|c|Self::supports_capability(*c)).map(Capability::as_str).collect::<Vec<_>>()})
+            "supported_capabilities":Capability::ALL.into_iter().filter(|c|Self::supports_capability(*c)).map(Capability::as_str).collect::<Vec<_>>(),
+            "supported_observe_scopes":ObserveScopeKind::ALL.map(ObserveScopeKind::as_str),
+            "supported_window_wait_states":WindowWaitState::ALL.map(WindowWaitState::as_str)})
     }
 
     pub fn spawn() -> Result<Self, Error> {
@@ -478,13 +559,7 @@ impl NativeBackend {
             }
         };
         let mut outcome = action_reply(&reply);
-        if explicit_focus
-            && outcome.dispatch == DispatchState::NotDispatched
-            && !outcome
-                .delivery
-                .as_ref()
-                .is_some_and(|value| value.foreground_borrowed)
-        {
+        if explicit_focus && focus_did_not_add_return_obligation(&outcome) {
             self.focus_pending
                 .store(previous_pending, Ordering::Release);
         }
@@ -498,7 +573,7 @@ impl NativeBackend {
         let reply = self.read_rpc(json!({"operation":"validate","target":target}), call)?;
         worker::validate_reply(&reply, target)
             .map_err(|error| reply_error(&error).unwrap_or(Error::InvalidObservation))?;
-        Ok(reply["bounds"].clone())
+        Ok(reply)
     }
 
     fn scene_rpc(&self, request: Value, call: &CallContext<'_>) -> Result<Value, (Error, bool)> {
@@ -532,60 +607,83 @@ impl NativeBackend {
                 .map_err(|error| (error, false))?;
             request["_scroll_guard"] = guard.endpoint();
         }
+        let capture = request["operation"] == "capture";
         let result = (|| {
-            // A scene retains its own AX window object. Revalidate the resident
-            // binding AFTER that object is acquired, linking both identities.
-            // A reused numeric ID cannot silently replace either retained window.
-            let inventory = self
-                .rpc_on(
-                    &scene.worker,
-                    json!({"operation":"windows","app":original["app"]}),
-                    call,
-                )
-                .map_err(|(error, _)| (error, false))?;
-            if inventory
-                .get("error")
-                .is_some_and(|error| !error.is_string())
-            {
-                return Err((Error::InvalidObservation, false));
-            }
-            if let Some(error) = reply_error(&inventory) {
-                return Err((error, false));
-            }
-            let local =
-                select_scene_target(&inventory, &original).map_err(|error| (error, false))?;
+            // A scene registers only the selected surface in its own generation.
+            // Revalidate the resident binding after acquisition to link both
+            // identities without repeating optional app-wide discovery.
+            let local = bind_scene_target(&original, |request| {
+                self.rpc_on(&scene.worker, request, call)
+                    .map_err(|(error, _)| error)
+            })
+            .map_err(|error| (error, false))?;
             let before = self
                 .validate_window(&original, call)
                 .map_err(|error| (error, false))?;
             request["target"] = local.clone();
-            let capture = request["operation"] == "capture";
-            let mut reply = self.rpc_on_guarded(
+            let reply = self.rpc_on_guarded(
                 &scene.worker,
                 request,
                 call,
                 guard.as_ref().zip(validation.as_ref()),
             )?;
+            Ok((reply, local, before))
+        })();
+        // SCK can live until process exit, even after its reply. Resident
+        // revalidation may need a fresh association proof child and must not
+        // wait for the still-live Scene's global lease.
+        let scene_worker = scene.worker.clone();
+        let _ = scene.finish();
+        // The owner retains cleanup failure on the independent diagnostic
+        // channel. Never replace an original native/transport error with it.
+        result.and_then(|(mut reply, local, before)| {
             if capture && reply.get("error").is_some_and(|error| !error.is_string()) {
                 return Err((Error::InvalidObservation, false));
+            }
+            if capture
+                && CaptureGeometryStage::from_reply(&reply).is_some()
+                && (!scene_worker.is_reaped() || self.scene.cleanup_error().is_some())
+            {
+                // Preserve the original geometry failure and independent
+                // cleanup diagnostic; an unretired SCK client cannot retry.
+                return Err((reply_error(&reply).expect("geometry error"), false));
             }
             if capture && reply.get("error").is_none() {
                 if reply["target"] != local {
                     return Err((Error::InvalidObservation, false));
                 }
+                if !scene_worker.is_reaped() {
+                    return Err((
+                        self.scene.cleanup_error().unwrap_or_else(|| {
+                            Error::BackendFailed(
+                                "Scene exit is unconfirmed; capture revalidation was not started"
+                                    .into(),
+                            )
+                        }),
+                        false,
+                    ));
+                }
                 let after = self
                     .validate_window(&original, call)
                     .map_err(|error| (error, false))?;
-                if before != after || reply["bounds"] != after {
-                    return Err((Error::StaleObservation, false));
+                if let Some(error) = worker::capture_snapshot_error(
+                    &before,
+                    &after,
+                    &reply["bounds"],
+                    CaptureGeometryStage::Resident,
+                ) {
+                    if self.scene.cleanup_error().is_some() {
+                        return Err((
+                            reply_error(&error).expect("capture validation error"),
+                            false,
+                        ));
+                    }
+                    return Ok(error);
                 }
                 reply["target"] = original;
             }
             Ok(reply)
-        })();
-        // The owner retains any cleanup failure for the independent diagnostic
-        // channel. Never replace a native outcome with that later failure.
-        let _ = scene.finish();
-        result
+        })
     }
 }
 
@@ -597,36 +695,76 @@ fn retire_worker(worker: &Worker, error: Error) -> Error {
         )),
     }
 }
+fn focus_did_not_add_return_obligation(outcome: &ActionOutcome) -> bool {
+    let borrowed = outcome
+        .delivery
+        .as_ref()
+        .is_some_and(|value| value.foreground_borrowed);
+    !borrowed
+        && (outcome.dispatch == DispatchState::NotDispatched
+            || outcome.delivery.as_ref().is_some_and(|value| {
+                value.route == Some(InputRoute::Foreground)
+                    && value.focus_return == Some(FocusReturn::Unchanged)
+            }))
+}
+
+fn bind_scene_target(
+    original: &Value,
+    bind: impl FnOnce(Value) -> Result<Value, Error>,
+) -> Result<Value, Error> {
+    let original = parse_target(original)?;
+    let inventory = bind(
+        json!({"operation":"bind_window", "app":app_json(&original.app),
+        "native_id":original.native_id}),
+    )?;
+    if inventory
+        .get("error")
+        .is_some_and(|error| !error.is_string())
+    {
+        return Err(Error::InvalidObservation);
+    }
+    if let Some(error) = reply_error(&inventory) {
+        return Err(error);
+    }
+    select_scene_target(&inventory, &target_json(&original))
+}
 
 fn select_scene_target(inventory: &Value, original: &Value) -> Result<Value, Error> {
     let original = parse_target(original)?;
-    let report = parse_inventory_report(&inventory["coverage"], true)?;
-    let rows = array(inventory, "windows")?;
-    if rows.len() != report.supported_count as usize || rows.len() > 256 {
+    let coverage = &inventory["coverage"];
+    if coverage["scope"] != "selected_surface" || coverage["association_probe_failures"] != 0 {
         return Err(Error::InvalidObservation);
     }
-    let mut matched = None;
-    for row in rows {
-        let target = parse_target(&row["target"])?;
-        if target.app != original.app {
-            return Err(Error::WrongApp);
-        }
-        if target.native_id == original.native_id {
-            if matched.is_some() {
-                return Err(Error::InvalidObservation);
-            }
-            matched = Some(row["target"].clone());
-        }
+    // This private binding report describes one selected surface, not app-wide
+    // discovery. Reuse count and row validation without publishing its scope.
+    let report = parse_surface_inventory(coverage, true)?;
+    if report.candidate_count != 1 || report.supported_count != 1 || report.excluded_count != 0 {
+        return Err(Error::InvalidObservation);
     }
-    matched.ok_or(Error::TargetChanged)
+    let windows = parse_window_rows(inventory, &original.app, report.supported_count)?;
+    if windows.len() != 1 {
+        return Err(Error::InvalidObservation);
+    }
+    windows
+        .into_iter()
+        .find(|window| window.target.native_id == original.native_id)
+        .map(|window| target_json(&window.target))
+        .ok_or(Error::TargetChanged)
 }
 impl Backend for NativeBackend {
     type Binding = NativeBinding;
+    fn is_available(&self) -> bool {
+        !self.worker.is_stopped()
+    }
     fn finish_execution(&self) -> Result<Option<FocusReturn>, Error> {
-        let until = Instant::now() + Duration::from_millis(400);
+        let until = Instant::now() + NORMAL_FOCUS_RETURN_BUDGET + FOCUS_RETURN_TRANSPORT_MARGIN;
         let request_id = unique_generation();
-        let request = json!({"operation":"release_focus","request_id":request_id,
-            "deadline_unix_ms":(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default()+Duration::from_millis(350)).as_millis() as u64});
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let mut request = focus_return_request(now, None);
+        request["request_id"] = json!(request_id);
         let bytes = match self.worker.call(request.to_string().as_bytes(), || {
             let left = until.saturating_duration_since(Instant::now());
             if left.is_zero() {
@@ -662,6 +800,7 @@ impl Backend for NativeBackend {
             Some("application_restored") => Ok(Some(FocusReturn::ApplicationRestored)),
             Some("changed_externally") => Ok(Some(FocusReturn::ChangedExternally)),
             Some("previous_app_closed") => Ok(Some(FocusReturn::PreviousAppClosed)),
+            Some("unconfirmed") => Ok(Some(FocusReturn::Unconfirmed)),
             _ => Err(Error::InvalidObservation),
         }
     }
@@ -703,22 +842,19 @@ impl Backend for NativeBackend {
     }
     fn windows(&self, app: &AppInstance, call: &CallContext<'_>) -> Result<WindowInventory, Error> {
         let result = self.read_rpc(json!({"operation":"windows","app":app_json(app)}), call)?;
-        let report = parse_inventory_report(&result["coverage"], true)?;
-        let rows = array(&result, "windows")?;
-        if rows.len() > 256 || rows.len() != report.supported_count as usize {
-            return Err(failed("Native inventory row/count mismatch"));
-        }
-        let windows = rows
-            .iter()
-            .map(|row| {
-                Ok(WindowInfo {
-                    target: parse_target(&row["target"])?,
-                    title: string(row, "title")?.into(),
-                    visible: row["onscreen"].as_bool().ok_or(Error::InvalidObservation)?,
-                })
-            })
-            .collect::<Result<_, Error>>()?;
-        Ok(WindowInventory { windows, report })
+        parse_window_inventory(&result, app)
+    }
+    fn supported_window_wait_states(&self) -> &'static [WindowWaitState] {
+        &WindowWaitState::ALL
+    }
+    fn probe_window_state(
+        &self,
+        target: &WindowTarget,
+        state: WindowWaitState,
+        call: &CallContext<'_>,
+    ) -> Result<WindowStateProbe, Error> {
+        let reply = self.read_rpc(json!({"operation":"probe_window_state", "target":target_json(target), "state":state.as_str()}), call)?;
+        parse_window_state_probe(&reply, &target.app)
     }
     fn observe(
         &self,
@@ -733,9 +869,48 @@ impl Backend for NativeBackend {
         query: &ObserveQuery,
         call: &CallContext<'_>,
     ) -> Result<BackendObservation<NativeBinding>, Error> {
+        self.observe_scoped(target, query, ObserveScope::Window, None, call)
+    }
+    fn supports_observe_scope(&self, _scope: ObserveScopeKind) -> bool {
+        true
+    }
+    fn observe_scoped(
+        &self,
+        target: &WindowTarget,
+        query: &ObserveQuery,
+        scope: ObserveScope,
+        source: Option<&NativeBinding>,
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservation<NativeBinding>, Error> {
+        let native_scope = match scope {
+            ObserveScope::Window => json!({"kind":"window"}),
+            ObserveScope::Menu => json!({"kind":"menu"}),
+            ObserveScope::Subtree(element) => {
+                json!({"kind":"subtree","binding":source.and_then(|b|b.semantic.as_ref()).ok_or(Error::InvalidObservation)?,"element":element.0})
+            }
+            ObserveScope::Region(region) => {
+                let (bounds, width, height) = source
+                    .and_then(|b| b.pixels.as_ref())
+                    .ok_or(Error::InvalidObservation)?;
+                let (x, y) = bound_pixel_point(
+                    bounds,
+                    *width,
+                    *height,
+                    PixelPoint {
+                        x: region.x,
+                        y: region.y,
+                    },
+                )?;
+                let w = bounds[2].as_f64().ok_or(Error::InvalidObservation)? * region.width
+                    / *width as f64;
+                let h = bounds[3].as_f64().ok_or(Error::InvalidObservation)? * region.height
+                    / *height as f64;
+                json!({"kind":"region","bounds":bounds,"rect":[x,y,w,h]})
+            }
+        };
         let reply = self.read_rpc(
             json!({"operation":"observe","target":target_json(target),
-                "query":{"role":query.role,"text":query.text,"limit":query.limit}}),
+                "query":{"role":query.role,"text":query.text,"limit":query.limit,"scope":native_scope}}),
             call,
         )?;
         // Construct the guard before parsing the rest so invalid replies still release it.
@@ -751,6 +926,33 @@ impl Backend for NativeBackend {
             image: None,
             discovery: Some(page.discovery),
             binding,
+        })
+    }
+    fn read_text(
+        &self,
+        target: &WindowTarget,
+        binding: &NativeBinding,
+        request: TextRequest,
+        call: &CallContext<'_>,
+    ) -> Result<BackendTextPage, Error> {
+        let reply = self.read_rpc(json!({"operation":"read_text","target":target_json(target),
+            "binding":binding.semantic.as_ref().ok_or(Error::InvalidObservation)?,"element":request.element.0,
+            "offset":request.offset,"limit":request.limit}), call)?;
+        if reply["unit"] != "utf16" {
+            return Err(Error::InvalidObservation);
+        }
+        Ok(BackendTextPage {
+            target: parse_target(&reply["target"])?,
+            page: TextPage {
+                text: string(&reply, "text")?.into(),
+                offset: u32::try_from(number(&reply, "offset")?).map_err(failed)?,
+                total_length: u32::try_from(number(&reply, "total_length")?).map_err(failed)?,
+                next_offset: if reply["next_offset"].is_null() {
+                    None
+                } else {
+                    Some(u32::try_from(number(&reply, "next_offset")?).map_err(failed)?)
+                },
+            },
         })
     }
     fn continue_observation(
@@ -786,15 +988,8 @@ impl Backend for NativeBackend {
         target: &WindowTarget,
         call: &CallContext<'_>,
     ) -> Result<BackendObservation<NativeBinding>, Error> {
-        let reply = self
-            .scene_rpc(
-                json!({"operation":"capture","target":target_json(target)}),
-                call,
-            )
-            .map_err(|(error, _)| error)?;
-        if let Some(error) = reply_error(&reply) {
-            return Err(error);
-        }
+        let reply =
+            fresh_capture_reply(target, call, |request, call| self.scene_rpc(request, call))?;
         let width = u32::try_from(number(&reply, "width")?).map_err(failed)?;
         let height = u32::try_from(number(&reply, "height")?).map_err(failed)?;
         let png = base64::engine::general_purpose::STANDARD
@@ -1097,6 +1292,239 @@ fn action_reply(reply: &Value) -> ActionOutcome {
 mod tests {
     use super::*;
 
+    fn capture_target() -> WindowTarget {
+        WindowTarget {
+            app: AppInstance {
+                identity: AppIdentity("capture.app".into()),
+                pid: 21,
+                generation: 30,
+            },
+            native_id: 42,
+            generation: 55,
+        }
+    }
+    fn capture_validation(target: &WindowTarget, bounds: Value) -> Value {
+        json!({"target":target_json(target),"surface_owner":{"pid":21,"generation":30},"bounds":bounds})
+    }
+
+    #[test]
+    fn fresh_capture_rechecks_same_target_and_live_budget_then_only_returns_new_image() {
+        for stage in [CaptureGeometryStage::Scene, CaptureGeometryStage::Resident] {
+            let target = capture_target();
+            let budget = AtomicU64::new(2000);
+            let poll = || Ok(Duration::from_millis(budget.load(Ordering::SeqCst)));
+            let call = CallContext { poll: &poll };
+            let mut attempts = 0;
+            let before = capture_validation(&target, json!([1, 2, 300, 400]));
+            let after = capture_validation(&target, json!([2, 3, 300, 400]));
+            let result = fresh_capture_reply(&target,&call,|request,context| {
+                attempts += 1;
+                assert_eq!(request,json!({"operation":"capture","target":target_json(&target)}));
+                assert!(std::ptr::eq(context,&call),"capture replaced the caller's live deadline");
+                if attempts == 1 {
+                    assert_eq!(context.remaining(),Ok(Duration::from_millis(2000)));
+                    budget.store(900,Ordering::SeqCst);
+                    let mut moved = worker::capture_snapshot_error(&before,&after,&before["bounds"],stage).unwrap();
+                    moved["png"] = json!("obsolete-first-frame");
+                    Ok(moved)
+                } else {
+                    assert_eq!(context.remaining(),Ok(Duration::from_millis(900)));
+                    assert!(worker::capture_snapshot_error(&after,&after,&after["bounds"],stage).is_none());
+                    Ok(json!({"target":target_json(&target),"bounds":after["bounds"],"png":"fresh-second-frame"}))
+                }
+            }).unwrap();
+            assert_eq!(attempts, 2);
+            assert_eq!(result["png"], "fresh-second-frame");
+            assert_eq!(result["bounds"], after["bounds"]);
+        }
+    }
+
+    #[test]
+    fn fresh_capture_owner_change_is_not_a_geometry_retry_even_when_bounds_also_change() {
+        let target = capture_target();
+        let poll = || Ok(Duration::from_secs(1));
+        let call = CallContext { poll: &poll };
+        let before = capture_validation(&target, json!([1, 2, 300, 400]));
+        for field in ["pid", "generation"] {
+            let mut after = capture_validation(&target, json!([2, 3, 300, 400]));
+            after["surface_owner"][field] = json!(999);
+            let mut attempts = 0;
+            let result = fresh_capture_reply(&target, &call, |_, _| {
+                attempts += 1;
+                Ok(worker::capture_snapshot_error(
+                    &before,
+                    &after,
+                    &before["bounds"],
+                    CaptureGeometryStage::Scene,
+                )
+                .unwrap())
+            });
+            assert_eq!(result, Err(Error::TargetChanged));
+            assert_eq!(attempts, 1);
+        }
+    }
+
+    #[test]
+    fn fresh_capture_never_retries_stale_timeout_permission_or_unclassified_reply() {
+        let target = capture_target();
+        let poll = || Ok(Duration::from_secs(1));
+        let call = CallContext { poll: &poll };
+        for reply in [
+            json!({"error":"stale_observation","message":"Old observation"}),
+            json!({"error":"deadline_exceeded","message":"Original deadline"}),
+            json!({"error":"permission_denied","message":"Screen recording permission missing"}),
+            json!({"error":"capture_geometry_changed","message":"Untyped geometry text"}),
+            json!({"error":"capture_geometry_changed","message":"Unknown stage","details":{"capture_stage":"other"}}),
+            json!({"error":"capture_geometry_changed","message":"Unknown effect","details":{"capture_stage":"scene"},"dispatch":"unknown"}),
+        ] {
+            let expected = reply_error(&reply).unwrap();
+            let mut attempts = 0;
+            let result = fresh_capture_reply(&target, &call, |_, _| {
+                attempts += 1;
+                Ok(reply.clone())
+            });
+            assert_eq!(result, Err(expected));
+            assert_eq!(attempts, 1);
+        }
+        for (error, sent) in [
+            (Error::StaleObservation, false),
+            (Error::TimedOut, true),
+            (Error::Cancelled, true),
+            (Error::TargetChanged, false),
+            (
+                reply_error(&CaptureGeometryStage::Scene.reply()).unwrap(),
+                true,
+            ),
+        ] {
+            let mut attempts = 0;
+            let result = fresh_capture_reply(&target, &call, |_, _| {
+                attempts += 1;
+                Err((error.clone(), sent))
+            });
+            assert_eq!(result, Err(error));
+            assert_eq!(
+                attempts, 1,
+                "transport uncertainty must not become another read"
+            );
+        }
+    }
+
+    #[test]
+    fn fresh_capture_second_failure_retains_its_stage_and_never_publishes_old_frame() {
+        let target = capture_target();
+        let poll = || Ok(Duration::from_secs(1));
+        let call = CallContext { poll: &poll };
+        for second in [
+            CaptureGeometryStage::Resident.reply(),
+            json!({"error":"target_changed","message":"Owner replaced before second frame"}),
+        ] {
+            let mut attempts = 0;
+            let result = fresh_capture_reply(&target, &call, |_, _| {
+                attempts += 1;
+                if attempts == 1 {
+                    let mut first = CaptureGeometryStage::Scene.reply();
+                    first["png"] = json!("obsolete-first-frame");
+                    Ok(first)
+                } else {
+                    Ok(second.clone())
+                }
+            });
+            assert_eq!(result, Err(reply_error(&second).unwrap()));
+            assert_eq!(attempts, 2);
+        }
+    }
+
+    #[test]
+    fn fresh_capture_checks_cancellation_and_original_deadline_before_second_read() {
+        let target = capture_target();
+        for interruption in [Error::Cancelled, Error::TimedOut] {
+            let interrupted = AtomicBool::new(false);
+            let poll = || {
+                if interrupted.load(Ordering::SeqCst) {
+                    Err(interruption.clone())
+                } else {
+                    Ok(Duration::from_secs(1))
+                }
+            };
+            let call = CallContext { poll: &poll };
+            let mut attempts = 0;
+            let result = fresh_capture_reply(&target, &call, |_, _| {
+                attempts += 1;
+                interrupted.store(true, Ordering::SeqCst);
+                Ok(CaptureGeometryStage::Scene.reply())
+            });
+            assert_eq!(result, Err(interruption));
+            assert_eq!(attempts, 1);
+        }
+    }
+
+    #[test]
+    fn window_wait_provider_parses_only_explicit_scoped_proofs() {
+        let app = AppInstance {
+            identity: AppIdentity("wait.app".into()),
+            pid: 42,
+            generation: 7,
+        };
+        let target = WindowTarget {
+            app: app.clone(),
+            native_id: 2,
+            generation: 3,
+        };
+        let valid = json!({"status":"matched", "kind":"sheet", "relation":"child_modal",
+            "windows":[{"target":target_json(&target),"title":"","onscreen":true}]});
+        assert!(matches!(
+            parse_window_state_probe(&valid, &app),
+            Ok(WindowStateProbe::Window(_))
+        ));
+        assert_eq!(
+            parse_window_state_probe(&json!({"status":"closed"}), &app),
+            Ok(WindowStateProbe::Closed)
+        );
+        assert!(
+            parse_window_state_probe(&json!({"status":"pending","reason":"unknown"}), &app)
+                .is_err()
+        );
+        for invalid in [
+            json!({"status":"matched","kind":"sheet","relation":"child_modal","windows":[]}),
+            json!({"status":"missing"}),
+            json!({"status":"matched","kind":"guessed_dialog","relation":"child_modal","windows":valid["windows"]}),
+        ] {
+            assert!(parse_window_state_probe(&invalid, &app).is_err());
+        }
+        let mut wrong = valid;
+        wrong["windows"][0]["target"]["app"]["pid"] = json!(43);
+        assert_eq!(parse_window_state_probe(&wrong, &app), Err(Error::WrongApp));
+        assert_eq!(
+            NativeBackend::description()["supported_window_wait_states"],
+            json!(["dialog", "unblocked", "closed"])
+        );
+    }
+
+    #[test]
+    fn normal_focus_return_budget_respects_the_original_call_deadline() {
+        assert_eq!(focus_return_deadline_ms(1_000, None), 3_000);
+        assert_eq!(focus_return_deadline_ms(1_000, Some(20_000)), 3_000);
+        assert_eq!(focus_return_deadline_ms(1_000, Some(1_175)), 1_175);
+        assert_eq!(focus_return_deadline_ms(1_000, Some(1_000)), 1_000);
+        assert_eq!(focus_return_deadline_ms(1_000, Some(900)), 900);
+        assert_eq!(focus_return_deadline_ms(u64::MAX - 50, None), u64::MAX);
+        let short = focus_return_request(1_000, Some(1_175));
+        assert_eq!(short["deadline_unix_ms"], 1_175);
+        assert_eq!(short["ownership_cap_unix_ms"], 3_000);
+        assert_eq!(short["caller_deadline_unix_ms"], 1_175);
+        let long = focus_return_request(1_000, Some(20_000));
+        assert_eq!(long["deadline_unix_ms"], 3_000);
+        assert_eq!(long["ownership_cap_unix_ms"], 3_000);
+        assert_eq!(long["caller_deadline_unix_ms"], 20_000);
+        assert!(focus_return_request(1_000, None)
+            .get("caller_deadline_unix_ms")
+            .is_none());
+        assert_eq!(
+            NORMAL_FOCUS_RETURN_BUDGET + FOCUS_RETURN_TRANSPORT_MARGIN,
+            Duration::from_millis(2_100)
+        );
+    }
+
     #[test]
     fn scroll_pixel_binding_uses_image_scale_and_negative_screen_origin() {
         let bounds = json!([-1200.0, -100.0, 800.0, 600.0]);
@@ -1271,6 +1699,57 @@ for line in sys.stdin:
     }
 
     #[test]
+    fn unconfirmed_focus_retirement_preserves_original_error_and_read_access() {
+        let backend = NativeBackend {
+            worker: Arc::new(scene_fixture(r#"import sys,json
+for line in sys.stdin:
+ r=json.loads(line)
+ if r['operation']=='release_focus':
+  assert r['ownership_cap_unix_ms']==r['deadline_unix_ms']
+  result={'focus':'unconfirmed'}
+ elif r['operation']=='keypress':
+  result={'dispatch':'unknown','evidence':'unverified','error':'ax_unavailable','message':'AXWindows busy','delivery':{'route':'foreground','foreground_borrowed':True,'focus_return':'pending'}}
+ else:
+  result={'fresh_read':True}
+ print(json.dumps({'request_id':r['request_id'],'result':result}),flush=True)
+"#).unwrap()),
+            scene: SceneOwner::default(),
+            stamp: ProviderStamp { id: "focus-retirement".into(), generation: 1 },
+            cleanup_failure: Mutex::new(None),
+            input_policy: InputPolicy::Auto,
+            cursor: Arc::new(CursorSession::default()),
+            cursor_operation: AtomicU64::new(0),
+            focus_pending: AtomicBool::new(true),
+        };
+        let poll = || Ok(Duration::from_secs(2));
+        let call = CallContext { poll: &poll };
+        let original = backend.action(json!({"operation":"keypress"}), &call);
+        assert_eq!(original.dispatch, DispatchState::Unknown);
+        assert_eq!(
+            original.error,
+            Some(Error::NativeFailure {
+                code: "ax_unavailable".into(),
+                message: "AXWindows busy".into()
+            })
+        );
+        assert_eq!(
+            backend.finish_execution(),
+            Ok(Some(FocusReturn::Unconfirmed))
+        );
+        assert!(!backend.focus_pending.load(Ordering::Acquire));
+        assert_eq!(backend.cleanup_error(), None);
+        assert!(backend.is_available());
+        assert_eq!(
+            backend
+                .read_rpc(json!({"operation":"read"}), &call)
+                .unwrap()["fresh_read"],
+            true
+        );
+        assert_eq!(original.dispatch, DispatchState::Unknown);
+        backend.shutdown().unwrap();
+    }
+
+    #[test]
     fn action_keeps_native_route_and_return_without_claiming_effect() {
         for (route, borrowed, returned) in [
             ("semantic", false, None),
@@ -1278,6 +1757,7 @@ for line in sys.stdin:
             ("foreground", true, Some("restored")),
             ("foreground", true, Some("changed_externally")),
             ("foreground", true, Some("pending")),
+            ("foreground", false, Some("unchanged")),
         ] {
             let reply = json!({"dispatch":"dispatched","evidence":"unverified",
                 "delivery":{"route":route,"reason":"test_reason","foreground_borrowed":borrowed,"focus_return":returned}});
@@ -1294,6 +1774,25 @@ for line in sys.stdin:
                 "route":null,"reason":"explicit_focus","foreground_borrowed":false}}));
         assert_eq!(rejected.dispatch, DispatchState::NotDispatched);
         assert_eq!(rejected.delivery.unwrap().route, None);
+    }
+
+    #[test]
+    fn unchanged_focus_does_not_add_pending_return_but_unknown_focus_does() {
+        for borrowed in [false, true] {
+            let outcome = action_reply(&json!({"dispatch":"dispatched","evidence":"unverified",
+                "delivery":{"route":"foreground","foreground_borrowed":borrowed,
+                "focus_return":if borrowed {"pending"} else {"unchanged"}}}));
+            assert_eq!(focus_did_not_add_return_obligation(&outcome), !borrowed);
+        }
+        assert!(focus_did_not_add_return_obligation(
+            &ActionOutcome::rejected(Error::TargetChanged)
+        ));
+        assert!(!focus_did_not_add_return_obligation(
+            &ActionOutcome::unknown(Error::TargetChanged)
+        ));
+        let malformed = action_reply(&json!({"dispatch":"dispatched","evidence":"unverified",
+            "delivery":{"route":"invalid","foreground_borrowed":false,"focus_return":"unchanged"}}));
+        assert!(!focus_did_not_add_return_obligation(&malformed));
     }
 
     #[test]
@@ -1504,40 +2003,130 @@ for line in sys.stdin:
         assert_eq!(backend.cleanup_error(), Some(original));
     }
 
+    fn selected_scene_inventory(targets: &[Value], associated: bool) -> Value {
+        let n = targets.len();
+        let same_pid = if associated { 0 } else { n };
+        json!({"windows":targets.iter().map(|target| json!({"target":target,"title":"Fixture","onscreen":true})).collect::<Vec<_>>(),
+            "coverage":{"scope":"selected_surface","associated_count":if associated { n } else { 0 },
+                "association_complete":false,"association_probe_failures":0,"association_error_codes":[],
+                "diagnostics":{"cg_app_raw":same_pid,"supported_count":same_pid,
+                    "excluded_unavailable_surface":0,"excluded_zero_area":0,"invalid_metadata":0,"duplicate_id":0}}})
+    }
+
+    #[test]
+    fn scene_binding_requests_only_the_selected_surface() {
+        let original = json!({"app":{"identity":"example.app","pid":21,"generation":30},
+            "native_id":42,"generation":55});
+        let mut local = original.clone();
+        local["generation"] = json!(99); // Scene generation is deliberately independent.
+        for associated in [false, true] {
+            let result = bind_scene_target(&original, |request| {
+                assert_eq!(
+                    request,
+                    json!({"operation":"bind_window", "app":original["app"], "native_id":42})
+                );
+                Ok(selected_scene_inventory(&[local.clone()], associated))
+            });
+            assert_eq!(result, Ok(local.clone()));
+        }
+    }
+
+    #[test]
+    fn scene_binding_preserves_native_and_transport_errors_without_another_request() {
+        let original = json!({"app":{"identity":"example.app","pid":21,"generation":30},
+            "native_id":42,"generation":55});
+        for error in [Error::TimedOut, Error::Cancelled, Error::TargetChanged] {
+            assert_eq!(
+                bind_scene_target(&original, |_| Err(error.clone())),
+                Err(error)
+            );
+        }
+        assert_eq!(
+            bind_scene_target(&original, |_| Ok(
+                json!({"error":"target_changed", "message":"Selected surface closed"})
+            )),
+            Err(Error::TargetChanged)
+        );
+        assert_eq!(
+            bind_scene_target(&original, |_| Ok(
+                json!({"error":{"code":"target_changed"}})
+            )),
+            Err(Error::InvalidObservation)
+        );
+        assert!(bind_scene_target(&json!({}), |_| panic!(
+            "Malformed target cannot start scene discovery"
+        ))
+        .is_err());
+    }
+
     #[test]
     fn scene_target_selection_requires_the_same_app_and_one_exact_native_id() {
         let original = json!({"app":{"identity":"example.app","pid":21,"generation":30},
             "native_id":42,"generation":55});
         let mut local = original.clone();
         local["generation"] = json!(99);
-        let inventory = |targets: &[Value]| {
-            let n = targets.len();
-            json!({"windows":targets.iter().map(|target| json!({"target":target})).collect::<Vec<_>>(),
-                "coverage":{"scope":"same_pid_layer_zero_standard_ax_windows","complete":false,
-                    "window_server_count":n,"supported_count":n,"ax_id_errors":[],"diagnostics":{
-                        "cg_app_raw":n,"window_server_count":n,"cg_non_layer_zero":0,"cg_invalid_metadata":0,
-                        "ax_window_count":n,"excluded_scope":0,"ax_pid_unproven":0,"ax_role_unproven":0,
-                        "ax_subrole_unproven":0,"exact_id_unproven":0,"exact_id_zero":0,"cg_owner_unmatched":0,
-                        "duplicate_id":0,"supported_count":n,"excluded_non_window_role":0,"excluded_non_standard_subrole":0,
-                        "excluded_open_save_panel":0,"excluded_non_layer_zero":0}}})
-        };
+        let inventory = |targets: &[Value]| selected_scene_inventory(targets, false);
         assert_eq!(
             select_scene_target(&inventory(&[local.clone()]), &original),
             Ok(local.clone())
         );
         assert_eq!(
             select_scene_target(&inventory(&[]), &original),
-            Err(Error::TargetChanged)
+            Err(Error::InvalidObservation)
         );
         assert_eq!(
             select_scene_target(&inventory(&[local.clone(), local.clone()]), &original),
             Err(Error::InvalidObservation)
         );
-        let mut wrong_app = local;
-        wrong_app["app"]["generation"] = json!(31);
+        for (field, value) in [
+            ("identity", json!("other.app")),
+            ("pid", json!(22)),
+            ("generation", json!(31)),
+        ] {
+            let mut wrong_app = local.clone();
+            wrong_app["app"][field] = value;
+            assert_eq!(
+                select_scene_target(&inventory(&[wrong_app]), &original),
+                Err(Error::WrongApp)
+            );
+        }
+        let mut wrong_window = local.clone();
+        wrong_window["native_id"] = json!(43);
         assert_eq!(
-            select_scene_target(&inventory(&[wrong_app]), &original),
-            Err(Error::WrongApp)
+            select_scene_target(&inventory(&[wrong_window.clone()]), &original),
+            Err(Error::TargetChanged)
+        );
+        assert_eq!(
+            select_scene_target(&inventory(&[local.clone(), wrong_window]), &original),
+            Err(Error::InvalidObservation)
+        );
+        for field in ["native_id", "generation"] {
+            let mut invalid = local.clone();
+            invalid[field] = json!(0);
+            assert_eq!(
+                select_scene_target(&inventory(&[invalid]), &original),
+                Err(Error::InvalidObservation)
+            );
+        }
+        let selected = inventory(&[local]);
+        assert!(parse_window_inventory(&selected, &parse_app(&original["app"]).unwrap()).is_err());
+        for scope in [
+            "same_pid_application_surfaces",
+            "application_and_proven_associated_surfaces",
+        ] {
+            let mut broad = selected.clone();
+            broad["coverage"]["scope"] = json!(scope);
+            assert_eq!(
+                select_scene_target(&broad, &original),
+                Err(Error::InvalidObservation)
+            );
+        }
+        let mut partial = selected;
+        partial["coverage"]["association_probe_failures"] = json!(1);
+        partial["coverage"]["association_error_codes"] = json!([-25204]);
+        assert_eq!(
+            select_scene_target(&partial, &original),
+            Err(Error::InvalidObservation)
         );
     }
 
@@ -1681,6 +2270,37 @@ for line in sys.stdin:
     }
 
     #[test]
+    fn native_discovery_geometry_gap_preserves_rows_and_partial_page_evidence() {
+        let mut value = json!({
+            "target":{"app":{"identity":"test","pid":2,"generation":3},"native_id":4,"generation":5},
+            "elements":[{"id":8,"label":"Known field","role":"text_field",
+                "name":"Known field","value":"retained text","enabled":true,
+                "actions":["setValue"],"can_press":false}],
+            "discovery":{"has_more":true,"complete":false,
+                "reason":"geometry_unavailable","visited":320}
+        });
+        for has_more in [true, false] {
+            value["discovery"]["has_more"] = json!(has_more);
+            let page = parse_discovery_page(&value).unwrap();
+            assert_eq!(page.elements.len(), 1);
+            assert_eq!(page.elements[0].id, ElementId(8));
+            assert_eq!(page.elements[0].value.as_deref(), Some("retained text"));
+            assert_eq!(page.discovery.has_more, has_more);
+            assert!(!page.discovery.complete);
+            assert_eq!(
+                page.discovery.reason.as_deref(),
+                Some("geometry_unavailable")
+            );
+            assert_eq!(page.discovery.visited, 320);
+        }
+        value["discovery"]["complete"] = json!(true);
+        assert!(parse_discovery_page(&value).is_err());
+        value["discovery"]["complete"] = json!(false);
+        value["discovery"]["reason"] = json!("unrecognized_native_reason");
+        assert!(parse_discovery_page(&value).is_err());
+    }
+
+    #[test]
     fn shutdown_failure_is_not_hidden_by_context_cancellation() {
         let error = TransportError {
             kind: TransportErrorKind::Shutdown("kill failed".into()),
@@ -1744,6 +2364,168 @@ for line in sys.stdin:
         assert!(parse_inventory_report(&value, false).is_ok());
         value["diagnostics"]["extra"] = json!(0);
         assert!(parse_inventory_report(&value, false).is_err());
+    }
+
+    fn associated_inventory_fixture() -> Value {
+        // NativeStore.listWindows keeps the six same-PID diagnostics unchanged;
+        // only individually proven associated rows are added outside that sum.
+        json!({"windows":[
+            {"target":{"app":{"identity":"example.app","pid":21,"generation":30},
+                "native_id":42,"generation":55},"title":"Document","onscreen":true},
+            {"target":{"app":{"identity":"example.app","pid":21,"generation":30},
+                "native_id":43,"generation":56},"title":"Save","onscreen":true}],
+            "coverage":{"scope":"application_and_proven_associated_surfaces",
+                "associated_count":1,"association_complete":false,
+                "association_probe_failures":0,"association_error_codes":[],"diagnostics":{
+                    "cg_app_raw":3,"supported_count":1,"excluded_unavailable_surface":1,
+                    "excluded_zero_area":1,"invalid_metadata":0,"duplicate_id":0}}})
+    }
+
+    #[test]
+    fn associated_inventory_matches_native_shape_without_claiming_all_helpers() {
+        let mut value = associated_inventory_fixture();
+        let app = parse_app(&value["windows"][0]["target"]["app"]).unwrap();
+        let inventory = parse_window_inventory(&value, &app).unwrap();
+        assert_eq!(
+            inventory.report.scope,
+            InventoryScope::ApplicationAndProvenAssociatedSurfaces {
+                associated_count: 1
+            }
+        );
+        assert_eq!(
+            (
+                inventory.report.candidate_count,
+                inventory.report.supported_count,
+                inventory.report.excluded_count
+            ),
+            (4, 2, 2)
+        );
+        assert_eq!(inventory.windows.len(), 2);
+        assert_eq!(
+            inventory
+                .report
+                .diagnostics
+                .counters
+                .iter()
+                .find(|(name, _)| name == "supported_count")
+                .unwrap()
+                .1,
+            1
+        );
+        assert_eq!(
+            select_scene_target(&value, &value["windows"][1]["target"]),
+            Err(Error::InvalidObservation) // Full discovery cannot bind a selected scene.
+        );
+
+        // Ordinary applications use the same new shape with no associated rows.
+        value["coverage"]["associated_count"] = json!(0);
+        value["windows"].as_array_mut().unwrap().pop();
+        assert_eq!(
+            parse_window_inventory(&value, &app)
+                .unwrap()
+                .report
+                .supported_count,
+            1
+        );
+        value["coverage"]["association_probe_failures"] = json!(1);
+        value["coverage"]["association_error_codes"] = json!([-25204]);
+        let report = parse_window_inventory(&value, &app).unwrap().report;
+        assert_eq!(report.diagnostics.error_codes, vec![-25204]);
+        assert!(report
+            .diagnostics
+            .counters
+            .contains(&("association_probe_failures".into(), 1)));
+    }
+
+    #[test]
+    fn associated_inventory_rejects_malformed_counts_and_unbound_rows() {
+        let original = associated_inventory_fixture();
+        let app = parse_app(&original["windows"][0]["target"]["app"]).unwrap();
+        for invalid_count in [Value::Null, json!(-1), json!(1.5), json!("1"), json!(129)] {
+            let mut value = original.clone();
+            value["coverage"]["associated_count"] = invalid_count;
+            assert!(parse_window_inventory(&value, &app).is_err());
+        }
+        for mutate in [
+            |v: &mut Value| {
+                v["coverage"]["association_complete"] = json!(true);
+            },
+            |v: &mut Value| {
+                v["coverage"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("association_complete");
+            },
+            |v: &mut Value| {
+                v["coverage"]["extra"] = json!(0);
+            },
+            |v: &mut Value| {
+                v["coverage"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("association_probe_failures");
+            },
+            |v: &mut Value| {
+                v["coverage"]["association_probe_failures"] = json!(1);
+            },
+            |v: &mut Value| {
+                v["coverage"]["association_error_codes"] = json!([0]);
+            },
+            |v: &mut Value| {
+                v["coverage"]["association_probe_failures"] = json!(1_000_001);
+            },
+            |v: &mut Value| {
+                v["coverage"]["diagnostics"]["cg_app_raw"] = json!(4);
+            },
+            |v: &mut Value| {
+                v["coverage"]["associated_count"] = json!(0);
+            },
+            |v: &mut Value| {
+                v["coverage"]["associated_count"] = json!(2);
+            },
+            |v: &mut Value| {
+                v["windows"].as_array_mut().unwrap().pop();
+            },
+            |v: &mut Value| {
+                v["windows"][1]["target"]["native_id"] = json!(42);
+            },
+            |v: &mut Value| {
+                v["windows"][1]["target"]["native_id"] = json!(0);
+            },
+            |v: &mut Value| {
+                v["windows"][1]["target"]["generation"] = json!(0);
+            },
+            |v: &mut Value| {
+                v["windows"][1]["target"]["app"]["pid"] = json!(22);
+            },
+        ] {
+            let mut value = original.clone();
+            mutate(&mut value);
+            assert!(parse_window_inventory(&value, &app).is_err(), "{value}");
+        }
+        let mut limit = original["coverage"].clone();
+        limit["associated_count"] = json!(128);
+        assert!(parse_inventory_report(&limit, true).is_err()); // 129 supported rows
+    }
+
+    #[test]
+    fn native_text_range_error_keeps_the_reference_preserving_core_identity() {
+        for (code, expected) in [
+            (
+                "invalid_text_range",
+                Error::NativeFailure {
+                    code: "invalid_text_range".into(),
+                    message: "Native rejection".into(),
+                },
+            ),
+            ("unsupported_capability", Error::UnsupportedCapability),
+            ("stale_observation", Error::StaleObservation),
+        ] {
+            assert_eq!(
+                reply_error(&json!({"error":code,"message":"Native rejection"})),
+                Some(expected)
+            );
+        }
     }
 
     #[test]
@@ -1857,6 +2639,7 @@ fn parse_discovery_page(value: &Value) -> Result<BackendObservationPage, Error> 
                     | "text_limit"
                     | "unsupported_semantic_tree"
                     | "content_unproven"
+                    | "geometry_unavailable"
             )
         })
     {
@@ -1954,7 +2737,10 @@ fn reply_error(v: &Value) -> Option<Error> {
 }
 
 fn parse_inventory_report(value: &Value, proven: bool) -> Result<InventoryReport, Error> {
-    if value["scope"] == "same_pid_application_surfaces" {
+    if matches!(
+        value["scope"].as_str(),
+        Some("same_pid_application_surfaces" | "application_and_proven_associated_surfaces")
+    ) {
         return parse_surface_inventory(value, proven);
     }
     const COUNTERS: [&str; 18] = [
@@ -2053,11 +2839,46 @@ fn parse_surface_inventory(value: &Value, proven: bool) -> Result<InventoryRepor
         "duplicate_id",
     ];
     let invalid = || failed("Malformed native surface inventory evidence");
+    let fields = value.as_object().ok_or_else(invalid)?;
+    let (associated, association_failures, error_codes) = if matches!(
+        value["scope"].as_str(),
+        Some("application_and_proven_associated_surfaces" | "selected_surface")
+    ) {
+        if fields.len() != 6 || value["association_complete"] != false {
+            return Err(invalid());
+        }
+        let count = value["associated_count"]
+            .as_u64()
+            .filter(|count| *count <= 128)
+            .ok_or_else(invalid)? as u32;
+        let failures = value["association_probe_failures"]
+            .as_u64()
+            .filter(|count| *count <= 1_000_000)
+            .ok_or_else(invalid)?;
+        let codes = value["association_error_codes"]
+            .as_array()
+            .filter(|codes| codes.len() as u64 == failures.min(8))
+            .ok_or_else(invalid)?
+            .iter()
+            .map(|code| {
+                code.as_i64()
+                    .and_then(|n| i32::try_from(n).ok())
+                    .filter(|n| *n != 0)
+                    .ok_or_else(invalid)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        (Some(count), failures, codes)
+    } else {
+        if fields.len() != 2 {
+            return Err(invalid());
+        }
+        (None, 0, vec![])
+    };
     let counts = value["diagnostics"]
         .as_object()
         .filter(|v| v.len() == NAMES.len())
         .ok_or_else(invalid)?;
-    let counters = NAMES
+    let mut counters = NAMES
         .iter()
         .map(|name| {
             let n = counts
@@ -2068,6 +2889,9 @@ fn parse_surface_inventory(value: &Value, proven: bool) -> Result<InventoryRepor
             Ok(((*name).into(), n))
         })
         .collect::<Result<Vec<_>, Error>>()?;
+    if associated.is_some() {
+        counters.push(("association_probe_failures".into(), association_failures));
+    }
     let count = |name: &str| counts[name].as_u64().unwrap();
     let unresolved = count("invalid_metadata") + count("duplicate_id");
     let excluded = count("excluded_unavailable_surface") + count("excluded_zero_area");
@@ -2077,18 +2901,109 @@ fn parse_surface_inventory(value: &Value, proven: bool) -> Result<InventoryRepor
         return Err(invalid());
     }
     let report = InventoryReport {
-        scope: InventoryScope::SameProcessApplicationSurfaces,
-        candidate_count: count("cg_app_raw") as u32,
-        supported_count: count("supported_count") as u32,
+        scope: match associated {
+            Some(associated_count) => {
+                InventoryScope::ApplicationAndProvenAssociatedSurfaces { associated_count }
+            }
+            None => InventoryScope::SameProcessApplicationSurfaces,
+        },
+        candidate_count: count("cg_app_raw") as u32 + associated.unwrap_or(0),
+        supported_count: count("supported_count") as u32 + associated.unwrap_or(0),
         excluded_count: excluded as u32,
         diagnostics: InventoryDiagnostics {
             provider: "macos.window-server".into(),
             counters,
-            error_codes: vec![],
+            error_codes,
         },
     };
-    if !report.valid() {
+    if !report.valid() || (associated.is_some() && report.supported_count > 128) {
         return Err(invalid());
     }
     Ok(report)
+}
+
+fn parse_window_inventory(value: &Value, app: &AppInstance) -> Result<WindowInventory, Error> {
+    let report = parse_inventory_report(&value["coverage"], true)?;
+    let windows = parse_window_rows(value, app, report.supported_count)?;
+    Ok(WindowInventory { windows, report })
+}
+
+fn parse_window_state_probe(value: &Value, app: &AppInstance) -> Result<WindowStateProbe, Error> {
+    match string(value, "status")? {
+        "pending" => {
+            let reason = string(value, "reason")?;
+            if ![
+                "ax_busy",
+                "blocked_by_modal",
+                "semantic_window_unavailable",
+                "focus_changed",
+                "window_present",
+                "window_not_visible",
+                "dialog_not_present",
+                "dialog_not_ready",
+                "ambiguous_dialog",
+            ]
+            .contains(&reason)
+            {
+                return Err(Error::InvalidObservation);
+            }
+            Ok(WindowStateProbe::Pending {
+                reason: reason.into(),
+            })
+        }
+        "closed" => Ok(WindowStateProbe::Closed),
+        "matched" => {
+            let mut windows = parse_window_rows(value, app, 1)?;
+            let kind = match string(value, "kind")? {
+                "window" => WindowKind::Window,
+                "dialog" => WindowKind::Dialog,
+                "sheet" => WindowKind::Sheet,
+                _ => return Err(Error::InvalidObservation),
+            };
+            let relation = match string(value, "relation")? {
+                "same_window" => WindowRelation::SameWindow,
+                "child_modal" => WindowRelation::ChildModal,
+                "application_modal" => WindowRelation::ApplicationModal,
+                _ => return Err(Error::InvalidObservation),
+            };
+            Ok(WindowStateProbe::Window(MatchedWindow {
+                window: windows.remove(0),
+                kind,
+                relation,
+            }))
+        }
+        _ => Err(Error::InvalidObservation),
+    }
+}
+
+fn parse_window_rows(
+    value: &Value,
+    app: &AppInstance,
+    supported_count: u32,
+) -> Result<Vec<WindowInfo>, Error> {
+    let rows = array(value, "windows")?;
+    if rows.len() > 256 || rows.len() != supported_count as usize {
+        return Err(failed("Native inventory row/count mismatch"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    rows.iter()
+        .map(|row| {
+            let target = parse_target(&row["target"])?;
+            if &target.app != app {
+                return Err(Error::WrongApp);
+            }
+            if target.native_id == 0
+                || target.native_id > u64::from(u32::MAX)
+                || target.generation == 0
+                || !seen.insert(target.native_id)
+            {
+                return Err(Error::InvalidObservation);
+            }
+            Ok(WindowInfo {
+                target,
+                title: string(row, "title")?.into(),
+                visible: row["onscreen"].as_bool().ok_or(Error::InvalidObservation)?,
+            })
+        })
+        .collect()
 }

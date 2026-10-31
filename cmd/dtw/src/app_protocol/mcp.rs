@@ -29,7 +29,7 @@ impl<F: Factory> ServerHandler for Handler<F> {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("desktop-world", env!("CARGO_PKG_VERSION")))
-            .with_instructions("Call apps for application identifiers and compact method signatures. Call api for selected method schemas when needed. Call exec with app and source; DTW assigns execution_id and waits for completion. Standard MCP cancellation stops the matching call. result with app alone reads this session's latest accepted execution; optional execution_id selects an older receipt without replay. New MCP requests execute new work. DTW validates targets and confines execution.")
+            .with_instructions("Load the installed DTW Skill through the client's Skill discovery. In a plugin, its file is <plugin-root>/skills/<skill-name>/SKILL.md, where skill-name is the installed Skill name; PATTERNS.md is beside SKILL.md. Call apps for application identifiers and compact method signatures. Call api for selected method schemas when needed. Prefer selector actions for known controls, find for reading one matching element, and waitForWindow for native dialog transitions; DTW handles their discovery and read-only waiting internally. Call exec with app and source; DTW assigns execution_id and waits for completion. Standard MCP cancellation stops the matching call. result with app alone reads this session's latest accepted execution; optional execution_id selects an older receipt without replay. New MCP requests execute new work. DTW validates targets and confines execution.")
     }
 
     async fn list_tools(
@@ -75,6 +75,7 @@ impl<F: Factory> ServerHandler for Handler<F> {
         };
         let server = self.server.clone();
         let token = context.ct.clone();
+        let completed_call = call.clone();
         let mut worker = tokio::task::spawn_blocking(move || {
             if token.is_cancelled() {
                 server.cancel_call(&call);
@@ -91,6 +92,13 @@ impl<F: Factory> ServerHandler for Handler<F> {
         };
         guard.call = None;
         match completed {
+            // guard.cancel() may have settled shared cleanup after run()
+            // produced its reply. Read the original record again, never return
+            // that earlier running snapshot or replay the request.
+            Ok(reply) if reply.data["status"] == "running" => Ok(result(
+                self.server.completed_reply(&completed_call),
+                compact,
+            )),
             Ok(reply) => Ok(result(reply, compact)),
             Err(_) => {
                 self.lifecycle.fail(
@@ -181,10 +189,14 @@ fn result(reply: Reply, compact: bool) -> CallToolResponse {
 pub fn tools() -> Value {
     let id = json!({"type":"string","minLength":1,"maxLength":128,"description":"Optional DTW-generated execution ID from an earlier response in this MCP session. Omit to read this app's latest accepted execution."});
     let read = json!({"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true});
+    let methods: Vec<_> = super::methods::Method::ALL
+        .into_iter()
+        .map(|method| method.name())
+        .collect();
     json!([
         {"name":"apps","description":"List running applications with stable identifiers, compact script method signatures and provider conditions. Use api for selected argument and return schemas. No window contents or screenshots are read.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":read},
-        {"name":"api","description":"Read detailed argument/return schemas and semantics for selected script methods. No native desktop read or input. Omit methods to list compact signatures.","inputSchema":{"type":"object","properties":{"methods":{"type":"array","minItems":1,"maxItems":10,"items":{"type":"string","enum":["windows","observe","capture","press","click","typeText","keypress","scroll","focus","setValue"]}}},"additionalProperties":false},"annotations":read},
-        {"name":"exec","description":"Run JavaScript in exactly the app identified by the required app identifier. Use app.windows/observe/capture/press/click/typeText/keypress/scroll/focus/setValue; await methods sequentially. apps lists signatures; api returns selected schemas. The call waits for completion, returns a compact step/effect summary and the last PNG outside JS; result retrieves the full original ledger. state persists separately for each app in this MCP session. DTW generates execution_id; callers supply only app and source. A new MCP request ID executes new work even when source is identical. Inspect effects independently; cancellation is not undo.",
+        {"name":"api","description":"Read detailed argument/return schemas and semantics for selected script methods. No native desktop read or input. Omit methods to list compact signatures.","inputSchema":{"type":"object","properties":{"methods":{"type":"array","minItems":1,"maxItems":methods.len(),"items":{"type":"string","enum":methods}}},"additionalProperties":false},"annotations":read},
+        {"name":"exec","description":"Run JavaScript in exactly the app identified by the required app identifier. Await app methods sequentially. For known controls, call press/setValue with selector; use find to read one matching element and waitForWindow for native dialog transitions. DTW handles their discovery and read-only waiting internally. Use observe for exploration or scoped discovery, and capture/click for visual targets. apps lists signatures; api returns selected schemas. The call waits for completion, returns a compact step/effect summary and the last PNG outside JS; result retrieves the full original ledger. state persists separately for each app in this MCP session. DTW generates execution_id; callers supply only app and source. A new MCP request ID executes new work even when source is identical. Inspect effects independently; cancellation is not undo.",
             "inputSchema":{"type":"object","additionalProperties":false,"properties":{"app":app_id::schema(),"source":{"type":"string","minLength":1,"maxLength":65536,"description":"JavaScript async function body, at most 64 KiB UTF-8; supports await and return. No imports, filesystem, network or process APIs."}},"required":["app","source"]},
             "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}},
         {"name":"result","description":"Read the full original execution ledger for this MCP session's latest accepted execution for the app, including a running or failed execution, cancellation and app exit. Optionally pass a DTW-generated execution_id to retrieve an older record. This is read-only and never replays work. Records do not cross connections; missing records never prove absence of effects.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"app":app_id::schema(),"execution_id":id},"required":["app"]},"annotations":read}

@@ -16,6 +16,59 @@ fn script(source: &str) -> Command {
 }
 
 #[test]
+fn associated_surface_coverage_preserves_known_count_and_unknown_completeness() {
+    let (owner, backend) = coordinator();
+    let mut inventory = test_inventory(vec![WindowInfo {
+        target: WindowTarget {
+            app: application(),
+            native_id: 42,
+            generation: 1,
+        },
+        title: "Associated dialog".into(),
+        visible: true,
+    }]);
+    inventory.report.scope = InventoryScope::ApplicationAndProvenAssociatedSurfaces {
+        associated_count: 1,
+    };
+    let report = inventory.report.clone();
+    backend.0.model.lock().unwrap().inventory = Some(inventory);
+    let result = run(
+        &owner,
+        "associated-surfaces",
+        None,
+        script("return await app.windows();"),
+    );
+    assert!(!result.is_error, "{}", result.data);
+    let coverage = &result.data["value"]["result"]["coverage"];
+    assert_eq!(
+        coverage["scope"],
+        "application_and_proven_associated_surfaces"
+    );
+    assert_eq!(coverage["associated_count"], 1);
+    assert_eq!(coverage["association_complete"], false);
+    assert_eq!(coverage["complete_within_scope"], true);
+    let excludes = coverage["excludes"].as_array().unwrap();
+    assert!(excludes.contains(&json!("unproven_associations")));
+    assert!(!excludes.contains(&json!("helper_processes")));
+
+    let aggregate = aggregate_inventory_report(&[&report, &report], &[], 2);
+    assert_eq!(aggregate["coverage"]["scope"], "application_instances");
+    assert_eq!(aggregate["coverage"]["associated_count"], 2);
+    assert_eq!(aggregate["coverage"]["association_complete"], false);
+    let partial = aggregate_inventory_report(&[&report], &[&Error::TimedOut], 1);
+    assert_eq!(partial["coverage"]["status"], "partial");
+    assert_eq!(partial["coverage"]["complete_within_scope"], false);
+    assert_eq!(partial["coverage"]["associated_count"], 1);
+    assert_eq!(partial["coverage"]["association_complete"], false);
+
+    let mut invalid = report;
+    invalid.scope = InventoryScope::ApplicationAndProvenAssociatedSurfaces {
+        associated_count: 2,
+    };
+    assert!(!invalid.valid());
+}
+
+#[test]
 fn scope_empty_remains_distinguishable_in_atomic_and_script_results() {
     let (owner, backend) = coordinator();
     backend.0.model.lock().unwrap().inventory = Some(excluded());

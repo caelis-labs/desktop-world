@@ -27,6 +27,25 @@ struct NativeFactory {
     #[cfg(target_os = "macos")]
     cursor: Arc<crate::backends::macos::CursorSession>,
 }
+fn retire_unavailable_catalog<B: Backend>(catalog: &Mutex<Option<Arc<B>>>) -> Result<(), Error> {
+    let stopped = catalog
+        .lock()
+        .unwrap()
+        .as_ref()
+        .filter(|reader| !reader.is_available())
+        .cloned();
+    if let Some(reader) = stopped {
+        reader.shutdown()?;
+        let mut slot = catalog.lock().unwrap();
+        if slot
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &reader))
+        {
+            *slot = None;
+        }
+    }
+    Ok(())
+}
 impl Factory for NativeFactory {
     type Provider = NativeBackend;
     fn input_policy(&self) -> InputPolicy {
@@ -36,6 +55,10 @@ impl Factory for NativeFactory {
         NativeBackend::description()
     }
     fn catalog(&self) -> Result<Vec<Application>, Error> {
+        // A previous read may have timed out and permanently stopped this
+        // metadata worker. Recover only for this new request, after settling
+        // the exact old owner; never retry the failed catalog call in place.
+        retire_unavailable_catalog(&self.catalog)?;
         let reader = {
             let mut slot = self.catalog.lock().unwrap();
             if slot.is_none() {
@@ -208,6 +231,91 @@ fn cleanup_for_exit(server: &Server<NativeFactory>) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::computer::{
+        ActionOutcome, BackendObservation, CallContext, Capability, ElementId, ProviderStamp,
+        WindowTarget,
+    };
+    use std::sync::atomic::AtomicUsize;
+
+    struct CatalogReader {
+        available: AtomicBool,
+        cleanup_fails: bool,
+        shutdowns: AtomicUsize,
+    }
+    impl Backend for CatalogReader {
+        type Binding = ();
+        fn is_available(&self) -> bool {
+            self.available.load(Ordering::SeqCst)
+        }
+        fn stamp(&self) -> ProviderStamp {
+            ProviderStamp {
+                id: "catalog-test".into(),
+                generation: 1,
+            }
+        }
+        fn supports(&self, _: Capability) -> bool {
+            false
+        }
+        fn shutdown(&self) -> Result<(), Error> {
+            self.shutdowns.fetch_add(1, Ordering::SeqCst);
+            if self.cleanup_fails {
+                Err(Error::BackendFailed("original cleanup failure".into()))
+            } else {
+                Ok(())
+            }
+        }
+        fn observe(
+            &self,
+            _: &WindowTarget,
+            _: &CallContext<'_>,
+        ) -> Result<BackendObservation<()>, Error> {
+            panic!("catalog recovery must not invoke an operation")
+        }
+        fn press(
+            &self,
+            _: &WindowTarget,
+            _: &(),
+            _: ElementId,
+            _: &CallContext<'_>,
+        ) -> ActionOutcome {
+            panic!("catalog recovery must not dispatch input")
+        }
+    }
+
+    #[test]
+    fn catalog_replacement_requires_unavailable_owner_and_successful_cleanup() {
+        for cleanup_fails in [false, true] {
+            let reader = Arc::new(CatalogReader {
+                available: AtomicBool::new(true),
+                cleanup_fails,
+                shutdowns: AtomicUsize::new(0),
+            });
+            let catalog = Mutex::new(Some(reader.clone()));
+            retire_unavailable_catalog(&catalog).unwrap();
+            assert_eq!(reader.shutdowns.load(Ordering::SeqCst), 0);
+            assert!(Arc::ptr_eq(
+                catalog.lock().unwrap().as_ref().unwrap(),
+                &reader
+            ));
+            reader.available.store(false, Ordering::SeqCst);
+            let result = retire_unavailable_catalog(&catalog);
+            assert_eq!(reader.shutdowns.load(Ordering::SeqCst), 1);
+            if cleanup_fails {
+                assert_eq!(
+                    result.unwrap_err(),
+                    Error::BackendFailed("original cleanup failure".into())
+                );
+                assert!(Arc::ptr_eq(
+                    catalog.lock().unwrap().as_ref().unwrap(),
+                    &reader
+                ));
+            } else {
+                result.unwrap();
+                assert!(catalog.lock().unwrap().is_none());
+            }
+        }
+    }
+
     #[test]
     fn service_policy_launch_options_are_exact_and_default_to_auto() {
         assert_eq!(input_policy(&[]).unwrap(), InputPolicy::Auto);

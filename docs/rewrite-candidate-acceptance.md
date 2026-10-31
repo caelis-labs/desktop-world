@@ -1,10 +1,12 @@
 # 重写候选与最终安装验收
 
-日期：2026-10-29。前两批核心实现在 #66 / `7a06c6b`，开发字节的原生与外部 Agent 六轮门槛已通过，见[核心验收](release-core-acceptance.md)。本记录从第三批开始：0.2.0 为候选源版本，尚未发布。
+当前状态（2026-10-31）：下方 `50dbec3` 安装验收属于历史候选，不能验收当前 #70。最新开发任务和修复见[真实任务记录](real-task-closure-acceptance.md)；本轮 Windows 候选须从 #70 对应 SHA 的显式 workflow 获取。最终 macOS 安装字节必须通过新的 `--installed-package` 三应用入口；当前尚无该最终包通过记录。目标 Agent 已更新为 Caelis、DSH、agy，具体门槛见[发布计划](first-rewrite-release-plan.md)。
+
+历史记录日期：2026-10-29。前两批核心实现在 #66 / `7a06c6b`，开发字节的原生与外部 Agent 六轮门槛已通过，见[核心验收](release-core-acceptance.md)。本记录从第三批开始：0.2.0 为候选源版本，尚未发布。
 
 候选构建只在显式触发时运行，不恢复 CUA SDK/worker 或旧打包链路。Windows 最终支持须由用户独立验收；Linux 不制作正式候选或作支持承诺。编译、签名、公证、安装和 GUI 验证分别记录，不能互相替代。
 
-| 层级 | 当前状态 |
+| 层级 | 50dbec3 历史状态 |
 | --- | --- |
 | 固定来源与候选脚本 | 导出 clean Git commit/tree，固定 Rust 1.98.0/lockfile；目标依赖 notices、平台格式、版本、归档完整性均有检查 |
 | macOS 候选 | `50dbec3` 已签名、公证；146 文件安装清单复核和六组原生 GUI 通过 |
@@ -26,7 +28,7 @@
 
 受控失焦操作 `execution_e05b6d2a-6d6a-4218-802a-88b1ba4838d9` 在输入 18 字符后返回 `focus_changed/unknown`，提示刷新并确认部分效果，保存后缀未执行；另一窗口保留原 seed，两边保存数 0。此样本没有新增误投字符，但前一签名样本曾有一个已排队的 `q` 落到另一窗口。因此这里只证明检测与停止后续输入，不承诺撤回已投递事件、零误投或 OS 级原子性。同一窗口中的任意业务内容变化也不具备完整版本锁。
 
-Windows 用户应使用上述当前 artifact 中的 `desktop-world-0.2.0-x86_64-pc-windows-msvc.zip`。包内 `acceptance/windows/README.md`、`smoke.ps1` 和手工矩阵通过标准 MCP 验证两个同应用实例、文本/快捷键、截图、释放和可选指针组。Rust 1.98.0、MSVC 19.51.36260、Windows SDK 10.0.26100.0；静态 CRT 和原生导入检查通过。CI 编译不替代 Windows 桌面、DPI、权限、并发和取消验收。
+上述 artifact 仅用于复核 `50dbec3` 历史构建，不用于 #70 正式验收。其中的 `desktop-world-0.2.0-x86_64-pc-windows-msvc.zip`。包内 `acceptance/windows/README.md`、`smoke.ps1` 和手工矩阵通过标准 MCP 验证两个同应用实例、文本/快捷键、截图、释放和可选指针组。Rust 1.98.0、MSVC 19.51.36260、Windows SDK 10.0.26100.0；静态 CRT 和原生导入检查通过。CI 编译不替代 Windows 桌面、DPI、权限、并发和取消验收。
 
 开发预检 `/private/tmp/dtw-host-arguments-{claude,agy}-20261029-16/evidence.json` 均通过：Claude 5 exec / 6 MCP、8,934 JSON bytes、57.976 秒；agy 7 exec / 8 MCP、10,480 JSON bytes、175.273 秒。开发二进制 `dbff5998708938cbe18938934e6066f5a996eb64ba29f78a2c8e15e6525df7bd` 与冻结 Skill 组合仅作预检，不计入安装六轮。
 

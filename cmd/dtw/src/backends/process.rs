@@ -488,6 +488,12 @@ impl Worker {
             .map(TransportError::local)
     }
 
+    /// Admission is permanently closed after any transport/control failure.
+    /// This does not imply that cleanup succeeded or the child was reaped.
+    pub fn is_stopped(&self) -> bool {
+        self.process.stopped.load(Ordering::SeqCst)
+    }
+
     /// True only after this exact owned Child was consumed by wait/try_wait.
     /// A stopped flag or a cleanup error alone is not process-exit evidence.
     pub fn is_reaped(&self) -> bool {

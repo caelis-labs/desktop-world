@@ -238,7 +238,47 @@ def decode_output(output, image_scope=None):
     return payload, flag, image_size(blocks)
 
 
-def normalize_acp(path):
+DSH_UNADMITTED_IMAGE = ('[image unavailable: image/png; this result was not admitted to durable model context; '
+                        'raw image data remains available to programmatic callers]')
+DSH_MODEL_IMAGE = re.compile(
+    r'\[image unavailable: image/png; model "(?:deepseek-v4-flash|deepseek-flash)" '
+    r'does not declare image input; raw image data remains available to programmatic callers\]')
+
+
+def dsh_output(output, status):
+    """Unwrap only observed ACP text formats, retaining errors and missing images."""
+    if not isinstance(output, list): return None, None
+    blocks = []
+    for block in output:
+        require(isinstance(block, dict), 'Invalid DSH content block')
+        if block.get('type') == 'content': block = block.get('content', {})
+        require(isinstance(block, dict), 'Invalid DSH wrapped content')
+        blocks.append(block)
+    # Normal inline images need no DSH text adaptation; the ordinary decoder
+    # validates their bytes without treating them as Claude caption paths.
+    if any(block.get('type') == 'image' for block in blocks): return None, None
+    require(1 <= len(blocks) <= 2 and all(block.get('type') == 'text' for block in blocks),
+            'Unknown DSH MCP content shape')
+    texts = [block.get('text') for block in blocks]
+    require(all(isinstance(text, str) for text in texts), 'Invalid DSH MCP text')
+    prefixed_error = texts[0].startswith('Error: ')
+    text = texts[0][len('Error: '):] if prefixed_error else texts[0]
+    _, end = json.JSONDecoder().raw_decode(text)
+    payload = json_object(text[:end])
+    trailer = text[end:]
+    unavailable = None
+    if trailer.strip():
+        require(prefixed_error and len(texts) == 1 and trailer == '\n'+DSH_UNADMITTED_IMAGE,
+                'Unknown DSH MCP output trailer')
+        unavailable = DSH_UNADMITTED_IMAGE
+    if len(texts) == 2:
+        require(not prefixed_error and DSH_MODEL_IMAGE.fullmatch(texts[1]) is not None,
+                'Unknown DSH image availability text')
+        unavailable = texts[1]
+    return {'structuredContent': payload, 'isError': prefixed_error or status == 'failed'}, unavailable
+
+
+def normalize_acp(path, client='claude'):
     calls = {}
     requests = {}; sessions = {}
     terminal = None
@@ -251,25 +291,54 @@ def normalize_acp(path):
         if isinstance(e.get('result'), dict) and 'sessionId' in e['result'] and 'id' in e:
             cwd = requests.get(json.dumps(e['id']))
             session = e['result']['sessionId']
-            if cwd and isinstance(session, str) and str(uuid.UUID(session)) == session:
-                sessions[session] = cwd
+            # ACP session IDs are opaque. Only Claude's known UUID form can
+            # establish the adapter-specific inline-image caption namespace.
+            if client == 'claude' and cwd and isinstance(session, str):
+                try:
+                    if str(uuid.UUID(session)) == session: sessions[session] = cwd
+                except ValueError:
+                    pass
         update = e.get('params', {}).get('update', {})
         if update.get('sessionUpdate') in ('tool_call', 'tool_call_update'):
             key = (e.get('params', {}).get('sessionId'), update['toolCallId'])
             calls.setdefault(key, {}).update(update)
         if 'stopReason' in e.get('result', {}): terminal = e['result']
+        if 'id' in e and isinstance(e.get('error'), dict):
+            terminal = {'error': e['error'], 'response_id': e['id']}
     rows = []
     for (session, _), c in calls.items():
         try: images = image_size(c['content']) if 'content' in c else None
         except (AssertionError, ValueError, TypeError): images = None
         name = c.get('name', c.get('title'))
         row = {'name':name, 'arguments':c.get('rawInput'),
-               'output':c.get('rawOutput'), 'status':c.get('status'), 'image_bytes':images}
+               'output':c.get('rawOutput', c.get('content')), 'status':c.get('status'), 'image_bytes':images}
         tool = re.fullmatch(r'mcp__([A-Za-z0-9_.-]+)__(apps|api|exec|result)', name or '')
+        if client == 'dsh' and tool:
+            try:
+                payload, unavailable = dsh_output(row['output'], row['status'])
+                if payload is not None: row['payload_output'] = payload
+                if unavailable is not None:
+                    row['image_unavailable'] = unavailable
+                    row['image_bytes'] = None
+            except (AssertionError, ValueError, TypeError) as error:
+                row['normalization_error'] = str(error)
         if session in sessions and tool:
             row['acp_image_scope'] = {'cwd':sessions[session], 'session_id':session, 'namespace':tool.group(1)}
         rows.append(row)
     return rows, terminal
+
+
+def prepare_dsh_agent(root, skill, adapter, name, mcp, timeout):
+    """Use an isolated DSH wrapper with only MCP, Skill and read-only read tools."""
+    require(adapter is not None, 'DSH requires --acp-adapter pointing to an isolated wrapper')
+    local = root/'.agents/skills'/name
+    local.mkdir(parents=True)
+    shutil.copytree(skill.parent, local, dirs_exist_ok=True)
+    config = root/'mcp.json'
+    write_json(config, {'mcpServers': [{'name': name, 'command': mcp[0], 'args': mcp[1:], 'env': []}]})
+    return ['acpx', '--agent', str(adapter), '--cwd', str(root), '--mcp-config', str(config),
+            '--format', 'json', '--timeout', str(timeout), '--approve-all', '--no-fs',
+            '--no-terminal', 'exec']
 
 
 def agy_output(output, directory):
@@ -310,8 +379,10 @@ def normalize_agy(path):
                 old = steps.setdefault(key, {})
                 info = {**old.get('tool_info', {}), **s.get('tool_info', {})}
                 output_observed = old.get('_output_observed', False) or info.get('output') is not None
+                non_preflight_state = old.get('_non_preflight_state', False) or s.get('state') not in ('ACTIVE', 'ERROR')
                 old.update(s); old['tool_info'] = info
                 old['_output_observed'] = output_observed
+                old['_non_preflight_state'] = non_preflight_state
         if e.get('event') in ('result', 'done', 'turn_complete'): terminal = e
     rows = []
     for s in steps.values():
@@ -325,6 +396,7 @@ def normalize_agy(path):
             # data was exposed, including in earlier partial step updates.
             row['client_error_no_data'] = (info.get('name') == s['tool_name']
                 and set(info) == {'name','parameters','error'} and not s['_output_observed'])
+            row['client_preflight_only'] = not s['_non_preflight_state']
         if 'duration_seconds' in s:
             row['duration_seconds'] = s['duration_seconds']
         if s.get('tool_name') == 'call_mcp_tool':
@@ -429,7 +501,48 @@ def metadata_discovery_miss(call, name):
             and call.get('client_error') == {'type':'TOOL_ERROR','message':'file does not exist'})
 
 
-def metrics(calls, name, browser_app="com.google.Chrome"):
+def denied_route_attempt(call):
+    """Only the client's explicit pre-execution command-denial envelope qualifies."""
+    if (call.get('name') != 'run_command' or call.get('status') != 'ERROR'
+            or call.get('output') is not None or call.get('client_error_no_data') is not True
+            or call.get('client_preflight_only') is not True):
+        return False
+    error = call.get('client_error')
+    arguments = call.get('arguments')
+    if (not isinstance(error, dict) or set(error) != {'type','message'}
+            or error['type'] != 'TOOL_ERROR' or not isinstance(error['message'], str)
+            or not isinstance(arguments, dict) or set(arguments) != {'CommandLine'}):
+        return False
+    # Generic runtime "permission denied" errors do not prove non-execution.
+    # The client quotes the full rejected command even when its displayed input
+    # is truncated. Bind that quoted request to this exact tool attempt.
+    prefix = 'permission check failed for unsandboxed '
+    message = error['message']
+    if not message.startswith(prefix): return False
+    try:
+        command, end = json.JSONDecoder().raw_decode(message[len(prefix):])
+    except (ValueError, TypeError):
+        return False
+    tail = message[len(prefix)+end:]
+    denial_prefix = ': Permission denied for unsandboxed('
+    denial_suffix = '). Matches user-configured deny rule.'
+    if (not isinstance(command, str) or not command
+            or not tail.startswith(denial_prefix) or not tail.endswith(denial_suffix)):
+        return False
+    rejected = tail[len(denial_prefix):-len(denial_suffix)]
+    # This client's permission display drops blank lines, but must still name
+    # the same request. Do not accept unrelated text inside a denial wrapper.
+    if ([line for line in rejected.splitlines() if line.strip()]
+            != [line for line in command.splitlines() if line.strip()]):
+        return False
+    displayed = arguments['CommandLine']
+    return isinstance(displayed, str) and (displayed == command
+        or (len(displayed) > 1 and displayed.endswith('…') and command.startswith(displayed[:-1])))
+
+
+def metrics(calls, name, browser_app="com.google.Chrome", *, allowed_apps=None):
+    if allowed_apps is None:
+        allowed_apps = (browser_app, 'com.apple.TextEdit')
     selected = []
     for c in calls:
         if c['name'] == 'call_mcp_tool':
@@ -438,7 +551,11 @@ def metrics(calls, name, browser_app="com.google.Chrome"):
                 selected.append({**c, 'method':a['ToolName'], 'arguments':a['Arguments']})
         elif isinstance(c['name'], str) and c['name'].startswith(f'mcp__{name}__'):
             selected.append({**c, 'method':c['name'].split('__')[-1]})
-    text_bytes = 0; images_total = 0; issues = []; exec_count = 0; images_complete = True
+    denied = [{'agent_call':number, 'tool':c['name'], 'duration_seconds':c.get('duration_seconds')}
+              for number, c in enumerate(calls, 1) if denied_route_attempt(c)]
+    # A blocked attempt did not bypass the GUI route, but is not a clean run.
+    text_bytes = 0; images_total = 0; issues = [dict(kind='denied_route_attempt', **row) for row in denied]
+    exec_count = 0; images_complete = True
     script_calls = []; read_refreshes = []
     for number, c in enumerate(selected, 1):
         if c['method'] == 'exec':
@@ -461,7 +578,7 @@ def metrics(calls, name, browser_app="com.google.Chrome"):
             if envelope_images is not None and c.get('image_bytes') not in (None, 0, envelope_images):
                 images = None
             capture = isinstance(data.get('value'), dict) and data['value'].get('last_capture') is not None
-            if capture and not images:
+            if c.get('image_unavailable') or (capture and not images):
                 images_complete = False
             elif images is not None:
                 images_total += images
@@ -471,7 +588,7 @@ def metrics(calls, name, browser_app="com.google.Chrome"):
             if c['method'] == 'exec':
                 arguments = c['arguments']
                 require(isinstance(arguments, dict) and set(arguments) == {'app','source'}, 'exec must use exactly app/source')
-                require(arguments['app'] in (browser_app,'com.apple.TextEdit'), 'Unexpected target app')
+                require(arguments['app'] in allowed_apps, 'Unexpected target app')
                 check_execution(data, arguments)
                 recovered = data['script']['summary'].get('recovered_incomplete_reads', 0)
                 if recovered:
@@ -497,6 +614,7 @@ def metrics(calls, name, browser_app="com.google.Chrome"):
             'image_bytes':images_total if images_complete else None,
             'image_measurement':'complete' if images_complete else 'payload_not_fully_exposed',
             'issues':issues,'read_refreshes':read_refreshes,
+            'denied_route_attempts':len(denied),'denied_route_attempt_details':denied,
             'metadata_discovery_misses':[{'agent_call':number,'path':c['arguments']['Path'],
                 'client_error':c['client_error'],'duration_seconds':c.get('duration_seconds')}
                 for number, c in enumerate(calls, 1) if metadata_discovery_miss(c, name)],
@@ -506,7 +624,30 @@ def metrics(calls, name, browser_app="com.google.Chrome"):
 def skill_paths(name, root):
     return {str(path) for path in (
         Path.home()/'.gemini/config/plugins'/name/'skills'/name/'SKILL.md',
-        root/'plugin/skills'/name/'SKILL.md')}
+        root/'plugin/skills'/name/'SKILL.md',
+        root/'.claude/skills'/name/'SKILL.md',
+        root/'.agents/skills'/name/'SKILL.md')}
+
+
+def dsh_skill_loaded(output, name, root):
+    """Prove DSH exposed this staged Skill's complete instructions and base path."""
+    path = root/'.agents/skills'/name/'SKILL.md'
+    if not path.is_file(): return False
+    if isinstance(output, list):
+        if len(output) != 1: return False
+        block = output[0]
+        if not isinstance(block, dict): return False
+        if block.get('type') == 'content': block = block.get('content', {})
+        if not isinstance(block, dict) or block.get('type') != 'text': return False
+        output = block.get('text')
+    if not isinstance(output, str): return False
+    pattern = (r'<skill_content name="'+re.escape(name)+r'">\s*<skill_resources>\n'
+               r'Base directory for this skill: ([^\n]+)\n.*?</skill_resources>\s*'
+               r'<skill_instructions>\n(.*)\n</skill_instructions>\s*</skill_content>')
+    match = re.fullmatch(pattern, output.strip(), re.DOTALL)
+    source = re.sub(r'\A---\r?\n.*?\r?\n---(?:\r?\n|\Z)', '', path.read_text(), count=1, flags=re.DOTALL)
+    return (match is not None and match[1] == str(path.parent)
+            and match[2].strip() == source.strip())
 
 
 def check_skill_loaded(calls, name, root):
@@ -514,6 +655,8 @@ def check_skill_loaded(calls, name, root):
         if call.get('status') not in ('completed', 'DONE'): continue
         arguments = call.get('arguments') or {}
         output = call.get('output')
+        if call.get('name') == 'skill' and arguments.get('name') == name:
+            if dsh_skill_loaded(output, name, root): return
         if call.get('name') == 'Skill' and arguments.get('skill') == name:
             if output == 'Launching skill: '+name: return
         if call.get('name') in ('read_file', 'Read'):
@@ -531,6 +674,7 @@ def check_routes(calls, name, root):
     reads = {str(metadata/filename) for filename in
              ('instructions.md', 'apps.json', 'api.json', 'exec.json', 'result.json')}
     reads.update(skill_paths(name, root))
+    reads.update(str(Path(path).with_name('PATTERNS.md')) for path in skill_paths(name, root))
     # Only output caches belonging to this run's own DTW calls can be inspected.
     reads.update(c['owned_output_path'] for c in calls
                  if c.get('name') == 'call_mcp_tool'
@@ -542,6 +686,12 @@ def check_routes(calls, name, root):
                  for path in c.get('owned_image_paths', []))
     for call in calls:
         tool = call['name']; arguments = call.get('arguments') or {}
+        if tool == 'skill':
+            require(arguments.get('name') == name, 'Unexpected Skill'); continue
+        if tool == 'read':
+            local = root/'.agents/skills'/name
+            require(arguments.get('file_path') in {str(local/'SKILL.md'), str(local/'PATTERNS.md')},
+                    'Agent read task data outside the GUI route'); continue
         if tool == 'Skill':
             require(arguments.get('skill') == name, 'Unexpected Skill'); continue
         if tool == 'ToolSearch': continue
@@ -553,7 +703,11 @@ def check_routes(calls, name, root):
             require(read in reads or metadata_discovery_miss(call, name),
                     'Agent read task data outside the GUI route'); continue
         if tool == 'run_command':
-            argv = shlex.split(arguments.get('CommandLine', ''))
+            if denied_route_attempt(call): continue
+            try:
+                argv = shlex.split(arguments.get('CommandLine', ''))
+            except ValueError as error:
+                raise AssertionError('Unparseable shell request cannot prove an allowed metadata listing') from error
             require(argv[:-1] in (['ls', '-la'], ['ls']) and '..' not in Path(argv[-1]).parts
                     and Path(argv[-1]) == metadata,
                     'Shell access is limited to this MCP metadata listing'); continue
@@ -564,7 +718,7 @@ def check_terminal(client, terminal, returncode, stderr=''):
     require(returncode == 0, 'Agent did not exit successfully')
     require(isinstance(terminal, dict), 'Agent completion terminal missing')
     require(not terminal.get('error'), 'Agent terminal contains an error')
-    if client == 'claude':
+    if client in ('claude', 'dsh'):
         require(terminal.get('stopReason') == 'end_turn', 'Agent did not complete an ordinary turn')
     else:
         # agy can emit SUCCESS and exit 0 after its print deadline while the
@@ -788,7 +942,7 @@ def main():
     parser.add_argument('--installed-package', type=Path,
                         help='Extracted unpublished macOS candidate; execute its bin/dtw in place')
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--client', choices=['native','claude','agy'], required=True)
+    parser.add_argument('--client', choices=['native','claude','agy','dsh'], required=True)
     parser.add_argument('--acp-adapter', type=Path)
     parser.add_argument('--browser', choices=['chrome','safari'], default='chrome')
     args = parser.parse_args()
@@ -875,12 +1029,15 @@ def main():
             env = os.environ.copy()
             if args.client == 'claude':
                 require(args.acp_adapter is not None,'Official ACP adapter executable required')
-                local=root/'.claude/skills'/name;local.mkdir(parents=True);shutil.copy2(skill,local/'SKILL.md')
+                local=root/'.claude/skills'/name;local.mkdir(parents=True);shutil.copytree(skill.parent,local,dirs_exist_ok=True)
                 settings=Path.home()/'.claude/settings.json'
                 if settings.exists(): env.update({k:str(v) for k,v in json.loads(settings.read_text()).get('env',{}).items()})
                 env['CLAUDE_CODE_EXECUTABLE']=shutil.which('claude')
                 config=root/'mcp.json';write_json(config,{'mcpServers':[{'name':name,'command':str(binary),'args':['mcp'],'env':[]}]})
-                cmd=['acpx','--agent',str(args.acp_adapter),'--cwd',str(root),'--mcp-config',str(config),'--format','json','--timeout','600','--model','codex/gpt-6.1-terra','--deny-all','--allowed-tools',','.join(['Skill']+[f'mcp__{name}__{m}' for m in ['apps','api','exec','result']]),'--max-turns','18','--no-fs','--no-terminal','exec',prompt]
+                allowed=['Skill',f"Read({local/'PATTERNS.md'})"]+[f'mcp__{name}__{m}' for m in ['apps','api','exec','result']]
+                cmd=['acpx','--agent',str(args.acp_adapter),'--cwd',str(root),'--mcp-config',str(config),'--format','json','--timeout','600','--model','codex/gpt-6.1-terra','--deny-all','--allowed-tools',','.join(allowed),'--max-turns','18','--no-fs','--no-terminal','exec',prompt]
+            elif args.client == 'dsh':
+                cmd = prepare_dsh_agent(root, skill, args.acp_adapter, name, [str(binary), 'mcp'], 600) + [prompt]
             else:
                 # agy currently needs its ordinary absolute-path MCP registration;
                 # a plugin's CLAUDE_PLUGIN_ROOT placeholder is not portable to it.
@@ -895,7 +1052,8 @@ def main():
                 # Resource ceiling only; elapsed time is not a pass/fail SLA.
                 agent.wait(timeout=620)
             evidence['agent_wall_seconds']=round(time.monotonic()-start,3);evidence['agent_returncode']=agent.returncode
-            calls, terminal=(normalize_acp if args.client=='claude' else normalize_agy)(root/'agent.jsonl')
+            calls, terminal=(normalize_agy(root/'agent.jsonl') if args.client=='agy'
+                             else normalize_acp(root/'agent.jsonl', args.client))
             write_json(root/'normalized-calls.json',calls)
             evidence['metrics']=metrics(calls,name,browser_app);evidence['terminal']=terminal
             evidence['usability_passed'] = usability_passed(evidence['metrics'])

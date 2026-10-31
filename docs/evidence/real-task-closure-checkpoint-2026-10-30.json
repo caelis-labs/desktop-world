@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "status": "paused_at_user_request_after_wps",
+  "base_commit": "c95e5be150a877dc960399fae87f91a05c2039f0",
+  "full_acceptance_passed": false,
+  "candidate": {
+    "name": "H",
+    "kind": "developer_id_signed_local_development_binary",
+    "notarized_release_artifact": false,
+    "binary_sha256": "5e6dbc2e999f67fca8e6f86aac833770466cab2959fb72196dc8a8831de8f3a7",
+    "source_archive_sha256": "dd1a2cb19ed7bb061eadd50db1d74bf0a6d2b1d49e9c555ee22d9d858145e46b",
+    "native_swift_sha256": "8c1b010b224cc9c02c4982d7c371ce6f4178c7588607bdf6a80c60fc89a8ae95",
+    "skill_sha256": "8ee980fc7ba6065383a502e871b635636e9f69b8cedb7594bc990517ab1f3cbc",
+    "patterns_sha256": "5e7020fe1c9c909f93ce2b053451fbed197bd37a6606b4c18255e1415030a771",
+    "runtime_and_skill_match_checkpoint": true
+  },
+  "wps": {
+    "external_agent_sample": {
+      "candidate": "E",
+      "client": "claude",
+      "seconds": 297.635,
+      "agent_tools": 38,
+      "mcp_calls": 35,
+      "exec_calls": 34,
+      "attempted_app_methods": 59,
+      "failed_execs": 3,
+      "complete_task_passed": false,
+      "saved_document_paragraphs_verified": true,
+      "saved_document_sha256": "9413d2e7ddec4fc86c3641c71deb91107f8d5f6e3b4895c0dea2065eb34a6430",
+      "blocker": "stacked application-modal surfaces blocked reopening"
+    },
+    "direct_regressions": [
+      {
+        "candidate": "F",
+        "passed": true,
+        "scope": "active native directory-access modal semantic press; document reopened; four paragraphs visually verified",
+        "foreground_borrowed": false,
+        "changes_external_sample_verdict": false
+      },
+      {
+        "candidate": "G",
+        "passed": true,
+        "scope": "typed global AX noValue permits independently proven exact focus snapshot and return"
+      },
+      {
+        "candidate": "G",
+        "passed": false,
+        "scope": "close preflight",
+        "execution_id": "execution_66c85659-249a-4620-980b-7d0cf3ee4ce5",
+        "dispatch": "unknown",
+        "focus_return": "restored",
+        "error": "AXRaise did not confirm the requested window",
+        "raw_ax_error_unavailable": true,
+        "cause_closed": false
+      },
+      {
+        "candidate": "H",
+        "passed": true,
+        "scope": "explicit focus, capture and exact original-window return"
+      },
+      {
+        "candidate": "H",
+        "passed": false,
+        "scope": "document close and foreground cleanup",
+        "execution_id": "execution_21a52580-5ce4-42e2-9267-a9110f7b740d",
+        "dispatch": "unknown",
+        "focus_return": "unconfirmed",
+        "native_error": "window_unproven",
+        "native_message": "AX exact window identity unresolved: AXError=-25204, id=0",
+        "script_error": "script_cancelled",
+        "subsequent_exec_error": "shutdown_failed",
+        "document_closed_confirmed_by_independent_read_only_inventory_and_capture": true,
+        "original_process_exit_code": 2,
+        "native_workers_reaped": true,
+        "forced_termination": false,
+        "original_unknown_preserved": true
+      }
+    ]
+  },
+  "validation": {
+    "lightweight_source_checks_passed_at_checkpoint": true,
+    "rust_library_tests": {
+      "passed": 373,
+      "candidate": "E",
+      "rust_and_cargo_files_unchanged_since_run": true
+    },
+    "macos_native_pure_suite": {
+      "passed": true,
+      "candidate": "G"
+    },
+    "swift_typecheck_and_build": {
+      "passed": true,
+      "candidate": "H"
+    },
+    "windows_packaging_tests": {
+      "passed": 26
+    },
+    "windows_provider_typecheck": {
+      "passed": true,
+      "real_machine_acceptance": false
+    },
+    "linux_support": "experimental"
+  },
+  "next": [
+    "Identify which exact AX window identity read fails during post-close releaseFocus; do not assume object replacement or transient cannotComplete.",
+    "Preserve G AXRaise failure until its raw cause is established; a passing rerun is not closure.",
+    "After repairs, run all six Claude/agy WPS/Obsidian/Chrome tasks on one frozen candidate."
+  ],
+  "raw_evidence": "Retained locally; private recent-file views and full transcripts are not published."
+}

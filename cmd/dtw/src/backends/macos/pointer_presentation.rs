@@ -20,8 +20,10 @@ impl Scope {
             let endpoint: OverlayEndpoint =
                 serde_json::from_value(request["_cursor_endpoint"].clone()).ok()?;
             let target = OverlayTarget {
-                pid: u32::try_from(request["target"]["app"]["pid"].as_u64()?).ok()?,
-                birth: request["target"]["app"]["generation"].as_u64()?,
+                // Worker overwrites this private field only after native target
+                // validation. Associated surfaces can belong to a service PID.
+                pid: u32::try_from(request["surface_owner"]["pid"].as_u64()?).ok()?,
+                birth: request["surface_owner"]["generation"].as_u64()?,
                 window: u32::try_from(request["target"]["native_id"].as_u64()?).ok()?,
                 bounds: serde_json::from_value(bounds.clone()).ok()?,
             };
@@ -99,7 +101,7 @@ mod tests {
             .set_read_timeout(Some(Duration::from_millis(20)))
             .unwrap();
         let request = json!({"_cursor_endpoint":{"path":path,"token":"owned","operation":9},
-            "target":{"app":{"pid":7,"generation":11},"native_id":13}});
+            "target":{"app":{"pid":7,"generation":11},"native_id":13},"surface_owner":{"pid":7,"generation":11}});
         let bounds = json!([-100.0, -100.0, 200.0, 200.0]);
         {
             let _scope = Scope::new(&request, &bounds, PointerRoute::Background);
@@ -117,6 +119,37 @@ mod tests {
         assert_eq!(event["sequence"], 1);
         assert_eq!(event["target"]["window"], 13);
         assert!(receiver.recv(&mut bytes).is_err());
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn associated_surface_feedback_requires_the_proven_owner_not_the_logical_app() {
+        let path = format!(
+            "/private/tmp/dtw-pointer-owner-{}",
+            uuid::Uuid::new_v4().simple()
+        );
+        let receiver = UnixDatagram::bind(&path).unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .unwrap();
+        let mut request = json!({"_cursor_endpoint":{"path":path,"token":"owned","operation":10},"target":{"app":{"pid":7,"generation":11},"native_id":13}});
+        let bounds = json!([0., 0., 100., 100.]);
+        {
+            let _scope = Scope::new(&request, &bounds, PointerRoute::Foreground);
+            posted([20., 20.], PointerKind::Press);
+        }
+        let mut bytes = [0; 4096];
+        assert!(receiver.recv(&mut bytes).is_err());
+        request["surface_owner"] = json!({"pid":17,"generation":22});
+        {
+            let _scope = Scope::new(&request, &bounds, PointerRoute::Foreground);
+            posted([20., 20.], PointerKind::Press);
+        }
+        let size = receiver.recv(&mut bytes).unwrap();
+        let event: Value = serde_json::from_slice(&bytes[..size]).unwrap();
+        assert_eq!(event["target"]["pid"], 17);
+        assert_eq!(event["target"]["birth"], 22);
+        assert_eq!(event["target"]["window"], 13);
+        assert_eq!(request["target"]["app"]["pid"], 7);
         std::fs::remove_file(path).unwrap();
     }
 }

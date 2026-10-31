@@ -21,6 +21,52 @@ fn commands() -> Vec<Value> {
 }
 
 #[test]
+fn scoped_discovery_and_text_pages_have_exclusive_bounded_shapes() {
+    for args in [
+        json!({"window_ref":"w","scope":"menu","text":"Save"}),
+        json!({"window_ref":"w","observation_ref":"o","element_ref":"e"}),
+        json!({"window_ref":"w","observation_ref":"o","region":{"x":0,"y":1,"width":20,"height":30}}),
+    ] {
+        assert!(matches!(
+            script_submit("a", "r", "observe", &args).unwrap().command,
+            Command::ObserveScoped { .. }
+        ));
+    }
+    for args in [
+        json!({"window_ref":"w","scope":"window"}),
+        json!({"window_ref":"w","scope":"menu","observation_ref":"o"}),
+        json!({"window_ref":"w","element_ref":"e"}),
+        json!({"window_ref":"w","observation_ref":"o"}),
+        json!({"window_ref":"w","observation_ref":"o","element_ref":"e","region":{"x":0,"y":0,"width":1,"height":1}}),
+        json!({"window_ref":"w","observation_ref":"o","region":{"x":0,"y":0,"width":0,"height":1}}),
+        json!({"cursor":"c","scope":"menu"}),
+    ] {
+        assert!(script_submit("a", "r", "observe", &args).is_err(), "{args}");
+    }
+    let args = json!({"window_ref":"w","observation_ref":"o","element_ref":"e"});
+    assert!(matches!(
+        script_submit("a", "r", "readText", &args).unwrap().command,
+        Command::ReadText {
+            offset: 0,
+            limit: 4096,
+            ..
+        }
+    ));
+    for (field, value) in [
+        ("offset", json!(-1)),
+        ("offset", json!(4294967296u64)),
+        ("offset", json!(1.5)),
+        ("limit", json!(1)),
+        ("limit", json!(16385)),
+        ("scope", json!("menu")),
+    ] {
+        let mut bad = args.clone();
+        bad[field] = value;
+        assert!(script_submit("a", "r", "readText", &bad).is_err());
+    }
+}
+
+#[test]
 fn observe_query_and_cursor_forms_are_strict_and_bounded() {
     let query = parse_request(submit(
         json!({"kind":"observe","role":"AXButton","text":"提交","limit":1}),

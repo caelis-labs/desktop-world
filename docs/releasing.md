@@ -132,3 +132,21 @@ spaces/non-ASCII characters, standard MCP discovery, native subprocess identity,
 OS permissions, real applications, original receipts and cleanup. Use the same
 binary/archive digests for any future publication. Windows remains pending until
 its independent matrix passes; this workflow cannot mark desktop support approved.
+
+
+## Review-to-release handoff
+
+A Windows candidate also contains `acceptance/windows/` and the same-source
+`acceptance/browser-workbench/{server.py,index.html}`. Follow the bundled Windows
+README for ordered smoke checks, Chrome startup/readback and the three-app matrix.
+The browser workbench explicitly reads/writes UTF-8 on localized Windows systems.
+Download the artifact for the intended source SHA, not the old `50dbec3` package.
+
+The final macOS three-app runner accepts `--installed-package /absolute/package`
+together with its original `--dtw /absolute/package/bin/dtw`; it uses the installed
+binary and bundled Skill, retaining and revalidating the complete checksum manifest.
+A copied development binary is not installed-package evidence. Target Agents and
+current gates are [Caelis, DSH and agy](first-rewrite-release-plan.md#agent-acceptance-policy).
+Historical Claude/agy runs and earlier WPS failures remain historical evidence;
+release claims must name the candidate actually used. Core app approval is tested
+in Caelis, not implemented inside DTW.

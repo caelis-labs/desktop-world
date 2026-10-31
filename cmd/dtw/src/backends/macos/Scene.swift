@@ -56,6 +56,17 @@ private func overlayProcessBirth(_ pid: pid_t) -> UInt64? {
     return overflow || addedOverflow || stamp == 0 ? nil : stamp
 }
 
+private func surfaceOwnerCurrent(_ request: [String: Any]) -> Bool {
+    // Internal alpha probes are not app-target operations. Every app-target
+    // scene request carries the already validated actual WindowServer owner.
+    guard request["target"] != nil else { return true }
+    guard let owner = request["surface_owner"] as? [String: Any],
+          let rawPID = overlayUnsigned(owner["pid"]), let pid = Int32(exactly: rawPID),
+          let birth = overlayUnsigned(owner["generation"]), birth > 0,
+          request["pid"] as? Int32 == pid else { return false }
+    return overlayProcessBirth(pid) == birth
+}
+
 // Both birth reads bracket the WindowServer snapshot that proves the owner and
 // exact window. Missing evidence leaves the surface in every visibility check.
 private func withoutVerifiedOverlays(_ candidates: [SceneOverlayCandidate],
@@ -104,6 +115,7 @@ private func fail(_ code: String, _ message: String) -> [String:Any] { ["error":
 private func capture(_ request: [String:Any], deadline: TimeInterval? = nil,
                      stopping: () -> Bool = { false }) -> [String:Any] {
     guard CGPreflightScreenCaptureAccess() else { return fail("permission_denied","Screen Recording is required") }
+    guard surfaceOwnerCurrent(request) else { return fail("target_changed", "Surface owner changed before capture") }
     let id = UInt32(request["window_id"] as? Int ?? 0)
     let pid = Int32(request["pid"] as? Int ?? 0)
     let cap = request["max_image_dimension"] as? Int ?? 1600
@@ -112,7 +124,7 @@ private func capture(_ request: [String:Any], deadline: TimeInterval? = nil,
     let began = ProcessInfo.processInfo.systemUptime
     func trace(_ phase: String) {
         guard tracing else { return }
-        let message = "dtw_scene capture pid=\(pid) window=\(id) elapsed=\(ProcessInfo.processInfo.systemUptime-began) phase=\(phase)\n"
+        let message = "dtw_scene capture worker_pid=\(getpid()) main_thread=\(Thread.isMainThread) pid=\(pid) window=\(id) elapsed=\(ProcessInfo.processInfo.systemUptime-began) phase=\(phase)\n"
         FileHandle.standardError.write(Data(message.utf8))
     }
     trace("begin")
@@ -142,6 +154,7 @@ private func capture(_ request: [String:Any], deadline: TimeInterval? = nil,
         SCScreenshotManager.captureImage(contentFilter:filter,configuration:config) { image, error in
             trace("image_callback")
             guard let image else { box.result = fail("capture_failed",error?.localizedDescription ?? "Empty SCK frame"); semaphore.signal(); return }
+            guard surfaceOwnerCurrent(request) else { box.result = fail("target_changed", "Surface owner changed during capture"); semaphore.signal(); return }
             guard image.width==config.width,image.height==config.height else {
                 box.result=fail("capture_geometry_mismatch","SCK output dimensions differ from the configured frame");semaphore.signal();return
             }
@@ -170,8 +183,10 @@ private func capture(_ request: [String:Any], deadline: TimeInterval? = nil,
                           "bounds":[window.frame.minX,window.frame.minY,window.frame.width,window.frame.height]]
             semaphore.signal()
         }
+        trace("image_request_returned")
     }
     let until = min(deadline ?? .greatestFiniteMagnitude, ProcessInfo.processInfo.systemUptime + 12)
+    trace("wait_semaphore")
     guard dtwWaitForScene(until: until, stopping: stopping, wait: {
         semaphore.wait(timeout: .now() + $0) == .success
     }) else {
@@ -286,6 +301,19 @@ func dtwProveSurfacePoint(_ point: CGPoint, id: CGWindowID, pid: pid_t,
                           overlayCandidates: [SceneOverlayCandidate] = []) -> SurfacePointProof? {
     try? proveSurfacePoint(point, id: id, pid: pid, bounds: bounds, deadline: deadline,
                            overlayCandidates: overlayCandidates)
+}
+
+// A transparent foreign surface above a client can pass a public AX hit test
+// through to that client. Association therefore also requires an opaque pixel
+// from this exact surface, never merely matching geometry and a hit below it.
+func dtwProveAssociatedSurfacePoint(_ point: CGPoint, id: CGWindowID, pid: pid_t,
+                                   bounds: CGRect, deadline: TimeInterval) -> Bool {
+    guard let proof = dtwProveSurfacePoint(point, id: id, pid: pid, bounds: bounds, deadline: deadline),
+          #available(macOS 14.2, *) else { return false }
+    let sample = capture(["window_id":Int(id), "pid":Int(pid), "max_image_dimension":0,
+                          "screen_x":Double(point.x), "screen_y":Double(point.y)],
+                         deadline: deadline, stopping: dtwInputStopping)
+    return (sample["alpha"] as? Int ?? 0) > 0 && proof.matchesCurrent()
 }
 
 // The foreground route has already requested its one raise. This only waits
@@ -480,6 +508,7 @@ public func dtwSceneCall(_ raw: UnsafePointer<CChar>) -> UnsafeMutablePointer<CC
                 if #available(macOS 14.2, *) { result = capture(request) }
                 else { result = fail("unsupported_platform","SCK screenshots require macOS 14.2+") }
             case "click": result = click(request)
+            case "prove_associated_surface": result = dtwReadAssociatedSurfaceProof(request)
             default: result = fail("invalid_operation","Unknown native extension operation")
             }
         } catch { result = fail("invalid_request",String(describing:error)) }

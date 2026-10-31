@@ -281,7 +281,7 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
             }
             _ => unreachable!(),
         }
-        control::check()
+        control::check_completed()
     })();
     scope.cleanup();
     session.finish(result, false)
@@ -302,6 +302,16 @@ pub extern "C" fn dtw_front_process_matches(pid: i32) -> i32 {
     match skylight::front_process_matches(pid) {
         Ok(true) => 1,
         Ok(false) => 0,
+        Err(reason) => reason as i32,
+    }
+}
+
+/// Positive PID only after a stable WindowServer PSN/PID/PSN roundtrip.
+/// Negative values preserve a failed identity read; zero is never an app.
+#[no_mangle]
+pub extern "C" fn dtw_front_process_pid() -> i32 {
+    match skylight::front_process_pid() {
+        Ok(pid) => pid,
         Err(reason) => reason as i32,
     }
 }

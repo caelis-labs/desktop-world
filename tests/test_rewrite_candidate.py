@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import io
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -51,6 +52,63 @@ def pe(import_name="kernel32.dll", machine=0x8664):
     return bytes(data)
 
 
+class BrowserWorkbenchEncodingTests(unittest.TestCase):
+    def test_real_html_and_saved_unicode_are_utf8_under_cp936_defaults(self):
+        spec = importlib.util.spec_from_file_location(
+            "packaged_workbench", Path(__file__).parent / "fixtures/browser-workbench/server.py")
+        server = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(server)
+        read_text, write_text = Path.read_text, Path.write_text
+        responses = []
+        note = '已核对 🐦\n下一步：安排补货'
+
+        # Simulate non-UTF-8 Windows defaults without opening a socket or
+        # changing the host locale. Explicit encoding arguments remain intact.
+        def read_cp936(path, encoding=None, errors=None):
+            return read_text(path, encoding=encoding or 'cp936', errors=errors)
+        def write_cp936(path, data, encoding=None, errors=None, newline=None):
+            return write_text(path, data, encoding=encoding or 'cp936', errors=errors, newline=newline)
+
+        class HttpServer:
+            def __init__(self, address, handler):
+                self.handler = handler
+                self.server_port = 1234
+            def serve_forever(self):
+                handler = self.handler.__new__(self.handler)
+                handler.reply = lambda status, body, kind=None: responses.append((status, body))
+                handler.path = '/'
+                handler.do_GET()
+                for path, value in (
+                    ('/api/save', {'sku':'DTW-0088', 'quantity':37, 'reviewed':True, 'note':note}),
+                    ('/api/attachment', {'name':'复核记录.txt', 'text':note}),
+                ):
+                    data = json.dumps(value, ensure_ascii=False).encode('utf-8')
+                    handler.path = path
+                    handler.headers = {'Content-Length':str(len(data))}
+                    handler.rfile = io.BytesIO(data)
+                    handler.do_POST()
+            def server_close(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)/'中文 evidence'
+            with patch.object(server, 'ThreadingHTTPServer', HttpServer), \
+                 patch.object(server.threading, 'Thread'), \
+                 patch('sys.argv', ['server.py', '--output', str(output), '--case', 'case-unicode', '--file-task']), \
+                 patch.object(Path, 'read_text', read_cp936), patch.object(Path, 'write_text', write_cp936), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                server.main()
+            self.assertEqual([status for status, _ in responses], [200, 200, 200])
+            html = responses[0][1].decode('utf-8')
+            self.assertIn('DTW Workbench case-unicode', html)
+            self.assertNotIn('__CASE__', html)
+            state = json.loads((output/'state.json').read_bytes().decode('utf-8'))
+            self.assertEqual(state['items'][87]['note'], note)
+            self.assertEqual(state['saves'][0]['note'], note)
+            self.assertEqual(state['uploads'][0]['name'], '复核记录.txt')
+            self.assertEqual(state['uploads'][0]['sha256'], hashlib.sha256(note.encode('utf-8')).hexdigest())
+
+
 class Fixture(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -69,8 +127,11 @@ class Fixture(unittest.TestCase):
         put(self.repo, "docs/examples/codex.toml", '[mcp_servers.desktop-world]\ncommand="/absolute/path/to/dtw"\nargs=["mcp"]\n')
         put(self.repo, "plugins/claude/.claude-plugin/plugin.json", '{"name":"desktop-world","version":"0.1.3"}\n')
         put(self.repo, "packaging/third-party/overrides.json", "{}\n")
-        put(self.repo, "tests/acceptance/windows/README.md", "Windows independent acceptance\n")
+        put(self.repo, "docs/real-task-closure-plan.md", "Same-source task specification, not acceptance evidence\n")
+        put(self.repo, "tests/acceptance/windows/README.md", "Windows independent acceptance\n[Task plan](../../../docs/real-task-closure-plan.md)\n")
         put(self.repo, "tests/acceptance/windows/smoke.ps1", "# Owned-window standard MCP smoke\n")
+        for name in ("server.py", "index.html"):
+            put(self.repo, "tests/fixtures/browser-workbench/" + name, "Same-source browser task 中文 🐦\n")
         self.sysroot = self.root / "rust"
         for name in ("COPYRIGHT.html", "COPYRIGHT-library.html", "licenses/MIT.txt", "licenses/Apache.txt"):
             put(self.sysroot, "share/doc/rust/" + name, "Rust runtime notice\n")
@@ -364,6 +425,18 @@ class WorkflowTests(Fixture):
         metadata = next(c for c in calls if "metadata" in c)
         self.assertEqual(metadata[metadata.index("--filter-platform") + 1], WIN)
         candidate.verify_archive(output / result["archive"], Path(result["archive"]).stem)
+        package_name = Path(result["archive"]).stem
+        with zipfile.ZipFile(output / result["archive"]) as archive:
+            handoff = archive.read(package_name + "/acceptance/windows/README.md").decode("utf-8")
+            self.assertIn("(../../docs/real-task-closure-plan.md)", handoff)
+            self.assertNotIn("(../../../docs/real-task-closure-plan.md)", handoff)
+            for name in ("server.py", "index.html"):
+                self.assertEqual(archive.read(package_name + "/acceptance/browser-workbench/" + name),
+                                 (self.repo / "tests/fixtures/browser-workbench" / name).read_bytes())
+            self.assertEqual(archive.read(package_name + "/docs/real-task-closure-plan.md"),
+                             (self.repo / "docs/real-task-closure-plan.md").read_bytes())
+        self.assertIn("(../../../docs/real-task-closure-plan.md)",
+                      (self.repo / "tests/acceptance/windows/README.md").read_text())
 
     def test_native_candidate_is_immutable_unverified_archive_not_a_release(self):
         fake, calls = self.fake_commands()

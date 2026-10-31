@@ -5,6 +5,7 @@ body{font:15px system-ui;margin:24px;color:#18232b;background:#f4f6f8}header,mai
 <header><h1>Inventory review — __CASE__</h1><p>Review stock targets and leave a handoff note. Changes are saved to this disposable local workspace.</p></header>
 <main><label>Search inventory <input id="search" type="text" placeholder="SKU or product name" autocomplete="off"></label>
 <p id="summary" aria-live="polite"></p><div id="status" class="status" role="status"></div>
+__ATTACHMENT_SECTION__
 <table aria-label="Inventory records"><thead><tr><th>SKU</th><th>Product</th><th>Warehouse</th><th>Target quantity</th><th>Reviewed</th><th>Action</th></tr></thead><tbody id="rows"></tbody></table>
 <nav aria-label="Inventory pages"><button id="previous">Previous page</button><span id="page"></span><button id="next">Next page</button></nav></main>
 <dialog id="editor" aria-labelledby="edit-title"><form id="edit-form"><h2 id="edit-title"></h2>
@@ -24,5 +25,6 @@ byId('previous').onclick=()=>{page--;render();event('page',{page:page+1});};byId
 byId('cancel').onclick=()=>byId('editor').close();
 for(const id of ['quantity','reviewed','note'])byId(id).addEventListener('input',()=>event('input',{control:id,value:id==='reviewed'?byId(id).checked:byId(id).value}));
 byId('edit-form').onsubmit=async e=>{e.preventDefault();const response=await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sku:editing.sku,quantity:Number(byId('quantity').value),reviewed:byId('reviewed').checked,note:byId('note').value})});if(!response.ok){byId('status').textContent='Save failed';return;}const result=await response.json();items=items.map(x=>x.sku===result.sku?result:x);byId('editor').close();render();byId('status').textContent='Saved '+result.sku+': quantity '+result.quantity+'; reviewed '+(result.reviewed?'yes':'no');};
+__ATTACHMENT_SCRIPT__
 fetch('/api/items').then(r=>r.json()).then(data=>{items=data;render();event('ready');});
 </script></html>

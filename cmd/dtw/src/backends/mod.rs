@@ -2,6 +2,8 @@
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod process;
+#[cfg(any(target_os = "windows", test))]
+mod text_page;
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod input_sequence;

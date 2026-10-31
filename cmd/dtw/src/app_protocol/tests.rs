@@ -432,7 +432,7 @@ fn describe_reports_the_bound_app_and_backend_support() {
         description["supported_capabilities"],
         json!([
             "windows", "observe", "press", "capture", "click", "typeText", "keypress", "scroll",
-            "focus", "setValue"
+            "focus", "setValue", "readText"
         ])
     );
 }
@@ -917,6 +917,9 @@ mod standard_tests;
 
 #[path = "discovery_tests.rs"]
 mod discovery_tests;
+
+#[path = "selection_tests.rs"]
+mod selection_tests;
 
 #[path = "multi_instance_tests.rs"]
 mod multi_instance;

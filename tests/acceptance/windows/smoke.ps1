@@ -150,7 +150,7 @@ function Tool([string]$Name, $Arguments) {
     }
     return $result.structuredContent
 }
-function Execute([string]$Name, [string]$Source) {
+function Execute([string]$Name, [string]$Source, [switch]$ExpectStale) {
     $compact = Tool 'exec' @{ app = $script:appId; source = $Source }
     $script:executionImageCount = $script:lastToolImageCount
     $script:executionImageSizes = $script:lastToolImageSizes
@@ -164,6 +164,22 @@ function Execute([string]$Name, [string]$Source) {
     $full = Tool 'result' @{ app = $script:appId; execution_id = $compact.execution_id }
     Write-Json (Join-Path $script:output ($Name + '-ledger.json')) $full
     Require ($full.execution_id -ceq $compact.execution_id) 'Result changed the execution identity'
+    if ($ExpectStale) {
+        Require ($full.status -eq 'failed' -and $null -ne $full.error) 'Old region reference unexpectedly succeeded'
+        $failedSteps = @($full.script.steps | Where-Object { $_.status -eq 'failed' })
+        Require ($failedSteps.Count -eq 1) 'Expected one stale-reference rejection'
+        Require ($failedSteps[0].error.code -in @('stale_observation', 'target_changed')) 'Reference failed for a reason other than changed geometry'
+        foreach ($step in $full.script.steps) {
+            if ($null -ne $step.receipt) {
+                Require ($step.receipt.outcome.dispatch -eq 'not_dispatched') 'Rejected reference dispatched or has an unknown effect'
+                if ($null -ne $step.receipt.provider_outcome) {
+                    Require ($step.receipt.provider_outcome.dispatch -eq 'not_dispatched') 'Provider dispatched a rejected reference'
+                }
+            }
+        }
+        $script:caseNames.Add($Name)
+        return $full
+    }
     Require ($full.status -eq 'completed' -and $null -eq $full.error) ('Execution failed: ' + (Js $full.error))
     Require ($full.script.state_committed -eq $true -and $null -eq $full.script.failure -and $null -eq $full.script.shutdown_error) 'Script did not finish cleanly'
     foreach ($step in $full.script.steps) {
@@ -182,6 +198,14 @@ function Execute([string]$Name, [string]$Source) {
     $script:caseNames.Add($Name)
     return $full.value.result
 }
+function Change-Layout($Fixture, [int]$WindowOffset, [int]$ControlOffset, [string]$Name) {
+    $requested = (Read-State $Fixture).layout_sequence + 1
+    $path = Join-Path $Fixture.directory 'layout.json'
+    Write-Json ($path + '.next') @{ sequence = $requested; window_offset = $WindowOffset; control_offset = $ControlOffset }
+    if (Test-Path -LiteralPath $path) { [IO.File]::Replace(($path + '.next'), $path, $null) }
+    else { [IO.File]::Move(($path + '.next'), $path) }
+    [void](Wait-State $Fixture $Name { param($s) $s.layout_sequence -eq $requested })
+}
 function Peer-Fingerprint($State) {
     Js @($State.text, $State.saved, $State.saves, $State.increments, $State.left_up,
         $State.right_up, $State.double_clicks, $State.wheel_delta)
@@ -194,15 +218,6 @@ function Verify-Saved($Fixture, [string]$Expected, [int]$Saves, [string]$Name) {
     Require ((Normalize $disk) -ceq (Normalize $Expected)) 'Saved disk contents differ from expected Unicode text'
     Require ((Normalize $state.text) -ceq (Normalize $Expected)) 'Editor contents differ from saved text'
 }
-$find = @'
-async function one(window_ref,role,name,action){
- let p=await app.observe({window_ref,role,text:name,limit:10}); const found=[];
- for(;;){found.push(...p.elements.filter(e=>e.name===name&&e.enabled!==false&&e.actions.includes(action)));
- if(!p.next)break;p=await app.observe({cursor:p.next});}
- if(!p.coverage.complete||found.length!==1)throw Error('Need one proven owned control: '+name);
- return {window_ref,observation_ref:p.observation_ref,element_ref:found[0].element_ref};
-}
-'@
 try {
     foreach ($name in @('Fixture.cs', 'McpPipe.cs', 'smoke.ps1')) {
         $summary.source_hashes[$name] = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $PSScriptRoot $name)).Hash
@@ -259,14 +274,17 @@ if(state.A===state.B)throw Error('Distinct instances share a window ref');return
             $f = $fixtures[$i]; $peer = $fixtures[1 - $i]; $label = $f.label
             $beforePeer = Peer-Fingerprint (Read-State $peer)
             $window = 'state[' + (Js $label) + ']'
-            [void](Execute ("press-$label") ($find + "`nconst w=$window;await app.focus({window_ref:w});return await app.press(await one(w,'button','Increment','press'));"))
+            [void](Execute ("press-$label") ("const window_ref=$window;await app.focus({window_ref});const selector={role:'button',text:'button Increment'};const f=await app.find({window_ref,selector,timeout_ms:0});if(f.element.name!=='Increment')throw Error('Wrong unique button');return await app.press({window_ref,selector,timeout_ms:0});"))
             [void](Wait-State $f ("increment-$label") { param($s) $s.increments -eq 1 })
             $setter = 'Setter ' + $label
-            [void](Execute ("setter-$label") ($find + "`nconst w=$window;await app.setValue({...await one(w,'text_field','Message','setValue'),value:" + (Js $setter) + "});return await app.press(await one(w,'button','Save','press'));"))
+            [void](Execute ("setter-$label") ("const window_ref=$window;await app.setValue({window_ref,selector:{role:'text_field',text:'Message'},value:" + (Js $setter) + ",timeout_ms:0});return await app.press({window_ref,selector:{role:'button',text:'button Save'},timeout_ms:0});"))
             Verify-Saved $f $setter 1 ("setter-disk-$label")
             $unicode = $label + ' ' + ([char]0x4E2D).ToString() + ([char]0x6587).ToString() + ' ' + [char]::ConvertFromUtf32(0x1F600) + "`r`nSecond line"
             [void](Execute ("unicode-$label") ("const window_ref=$window;await app.focus({window_ref});await app.keypress({window_ref,keys:['CTRL','A']});await app.typeText({window_ref,text:" + (Js $unicode) + "});return await app.keypress({window_ref,keys:['CTRL','S']});"))
             Verify-Saved $f $unicode 2 ("unicode-disk-$label")
+            $readback = Execute ("unicode-pages-$label") ("const window_ref=$window;const ref=await app.find({window_ref,selector:{role:'text_field',text:'Message'},timeout_ms:0});let offset=0,text='',pages=0;for(;;){const p=await app.readText({window_ref,observation_ref:ref.observation_ref,element_ref:ref.element_ref,offset,limit:3});pages++;if(p.offset!==offset)throw Error('Offset changed');text+=p.text;if(p.next_offset===null){if(text.length!==p.total_length)throw Error('Wrong UTF16 length');return {text,pages};}if(p.next_offset<=offset)throw Error('Pagination did not advance');offset=p.next_offset;}")
+            Require ($readback.pages -gt 1 -and (Normalize $readback.text) -ceq (Normalize $unicode)) 'Native Unicode pages differ from the owned editor text'
+
             [void](Wait-Released $f ("release-$label"))
             Require ((Peer-Fingerprint (Read-State $peer)) -ceq $beforePeer) 'Input or semantic action changed the other owned instance'
             $shot = Execute ("capture-$label") ("const window_ref=$window;await app.focus({window_ref});return await app.capture({window_ref});")
@@ -274,6 +292,31 @@ if(state.A===state.B)throw Error('Distinct instances share a window ref');return
             Require ($executionImageCount -eq 1) 'Capture did not return one PNG in MCP content'
             Require ($executionImageSizes[0].width -eq $shot.image.width -and $executionImageSizes[0].height -eq $shot.image.height) 'PNG dimensions differ from the capture descriptor'
         }
+        $f = $fixtures[0]
+        foreach ($case in @(
+            @{ name = 'moved-window-press'; field = 'increment_bounds'; role = 'button'; text = 'Increment'; operation = 'press'; window = 12; control = 0 },
+            @{ name = 'moved-control-press'; field = 'increment_bounds'; role = 'button'; text = 'Increment'; operation = 'press'; window = 0; control = 200 },
+            @{ name = 'moved-control-setValue'; field = 'editor_bounds'; role = 'text_field'; text = 'Message'; operation = 'setValue'; window = 0; control = 200 },
+            @{ name = 'moved-window-readText'; field = 'editor_bounds'; role = 'text_field'; text = 'Message'; operation = 'readText'; window = 12; control = 0 },
+            @{ name = 'moved-control-readText'; field = 'editor_bounds'; role = 'text_field'; text = 'Message'; operation = 'readText'; window = 0; control = 200 }
+        )) {
+            Change-Layout $f 0 0 ($case.name + '-reset')
+            $before = Read-State $f
+            $beforePeer = Peer-Fingerprint (Read-State $fixtures[1])
+            $bounds = $before.($case.field)
+            $region = @{ x = $bounds.x - $before.bounds.x; y = $bounds.y - $before.bounds.y; width = $bounds.width; height = $bounds.height }
+            $watch = [Diagnostics.Stopwatch]::StartNew()
+            $source = "const inv=await app.windows();const w=inv.windows.filter(w=>w.title==='DTW Windows Smoke A');if(w.length!==1)throw Error('Owned window not unique');const window_ref=w[0].window_ref;state.A=window_ref;await app.focus({window_ref});const shot=await app.capture({window_ref});let p=await app.observe({window_ref,observation_ref:shot.observation_ref,region:" + (Js $region) + ",role:" + (Js $case.role) + ",text:" + (Js $case.text) + ",limit:10});const rows=[];for(;;){rows.push(...p.elements);if(!p.next)break;p=await app.observe({cursor:p.next});}if(!p.coverage.complete||rows.length!==1)throw Error('Region is not complete and unique');state.regionRef={window_ref,observation_ref:p.observation_ref,element_ref:rows[0].element_ref};return state.regionRef;"
+            [void](Execute ($case.name + '-observe') $source)
+            Change-Layout $f $case.window $case.control ($case.name + '-changed')
+            $source = 'return await app.' + $case.operation + '({...state.regionRef' + $(if ($case.operation -eq 'setValue') { ",value:'MUST NOT BE WRITTEN'" } else { '' }) + '});'
+            [void](Execute $case.name $source -ExpectStale)
+            Require ($watch.ElapsedMilliseconds -lt 12000) 'Refusal exceeded the retention control budget; expiry could mask the geometry regression'
+            $after = Read-State $f
+            Require ($after.increments -eq $before.increments -and $after.text -ceq $before.text -and $after.saves -eq $before.saves) 'Old region reference changed the owned application'
+            Require ((Peer-Fingerprint (Read-State $fixtures[1])) -ceq $beforePeer) 'Region test changed the peer instance'
+        }
+        Change-Layout $f 0 0 'region-final-reset'
         if ($IncludePointerTests) {
             $f = $fixtures[0]
             $beforePeer = Peer-Fingerprint (Read-State $fixtures[1])

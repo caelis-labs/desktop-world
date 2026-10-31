@@ -304,6 +304,16 @@ impl<F: Factory> Server<F> {
         call.run_finished.store(true, Ordering::Release);
         call.completion.notify_waiters();
         self.finished.notify_all();
+        // Preserve the original first-delivery payload independently of history
+        // eviction. Only its public completion state waits for the reservation.
+        if call.execution_id.is_some()
+            && state
+                .active
+                .as_ref()
+                .is_some_and(|active| Arc::ptr_eq(active, call))
+        {
+            reply.data["status"] = json!("running");
+        }
         reply
     }
     fn refresh(&self, state: &mut State<F::Provider>) {
@@ -412,7 +422,7 @@ impl<F: Factory> Server<F> {
             Some(owner) => {
                 let reusable = {
                     let state = owner.state.lock().unwrap();
-                    continuous && state.terminal.is_none()
+                    continuous && state.terminal.is_none() && owner.runtime.provider_available()
                 };
                 if reusable {
                     // Reconciliation never closes the shared native provider or
@@ -608,6 +618,11 @@ impl<F: Factory> Server<F> {
             // Core can finish before the Server worker publishes its cache.
             // Project the same app metadata on both sides of that boundary.
             self.annotate(state, active, &mut reply);
+            // A terminal Core receipt does not retire shared catalog cleanup
+            // or the outer worker. refresh() releases this reservation only
+            // when both are settled, so completed also means later admission
+            // is no longer blocked by this execution.
+            reply.data["status"] = json!("running");
         } else {
             public_execution(&mut reply, &record.app, &record.id);
             append_shutdown_errors(&mut reply, &state.shutdown_errors);
@@ -1031,6 +1046,8 @@ mod lifecycle_tests {
         shutdowns: AtomicUsize,
         actions: AtomicUsize,
         action_targets: Mutex<Vec<WindowTarget>>,
+        stopped: AtomicBool,
+        timeout_read: AtomicBool,
         shutdown_fails: AtomicBool,
         cleanup_fails: AtomicBool,
     }
@@ -1038,6 +1055,9 @@ mod lifecycle_tests {
     struct Provider(Arc<Probe>);
     impl Backend for Provider {
         type Binding = ();
+        fn is_available(&self) -> bool {
+            !self.0.stopped.load(Ordering::SeqCst)
+        }
         fn stamp(&self) -> ProviderStamp {
             ProviderStamp {
                 id: "server-test".into(),
@@ -1090,6 +1110,13 @@ mod lifecycle_tests {
             target: &WindowTarget,
             _: &CallContext<'_>,
         ) -> Result<BackendObservation<()>, Error> {
+            if self.0.timeout_read.swap(false, Ordering::SeqCst) {
+                self.0.stopped.store(true, Ordering::SeqCst);
+                return Err(Error::TimedOut);
+            }
+            if self.0.stopped.load(Ordering::SeqCst) {
+                return Err(Error::BackendFailed("native transport: Stopped".into()));
+            }
             Ok(BackendObservation {
                 discovery: None,
                 target: target.clone(),
@@ -1166,6 +1193,7 @@ mod lifecycle_tests {
             if self.connect_fails.load(Ordering::SeqCst) {
                 return Err(Error::BackendFailed("connect failed".into()));
             }
+            self.provider.0.stopped.store(false, Ordering::SeqCst);
             Ok(self.provider.clone())
         }
         fn close_catalog(&self) -> Result<(), Error> {
@@ -1391,6 +1419,97 @@ mod lifecycle_tests {
     }
 
     #[test]
+    fn stopped_provider_recovers_only_on_a_new_execution_with_fresh_references() {
+        let (server, factory) = fixture();
+        let original = server.run(&begin(
+            &server,
+            "commit",
+            r#"
+            state.window=(await app.windows()).windows[0].window_ref;
+            const observed=await app.observe({window_ref:state.window});
+            await app.press({window_ref:state.window,observation_ref:observed.observation_ref,
+                element_ref:observed.elements[0].element_ref});
+            state.kept=7; return state.window;
+        "#,
+        ));
+        assert!(!original.is_error, "{}", original.data);
+        let old_window = original.data["value"]["result"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        factory
+            .provider
+            .0
+            .timeout_read
+            .store(true, Ordering::SeqCst);
+        let failed = server.run(&begin(
+            &server,
+            "timed-read",
+            "return await app.observe({window_ref:state.window});",
+        ));
+        assert!(failed.is_error, "{}", failed.data);
+        assert_eq!(
+            failed.data["script"]["steps"][0]["error"]["code"],
+            "timed_out"
+        );
+        assert!(failed.data["script"]["steps"][0]["receipt"].is_null());
+        assert_eq!(factory.connects.load(Ordering::SeqCst), 1);
+        assert_eq!(factory.provider.0.actions.load(Ordering::SeqCst), 1);
+
+        // Logical state survives, but strings embedded in it remain old refs.
+        // Native references are never silently rebound to the new provider.
+        let recovered = server.run(&begin(
+            &server,
+            "fresh-inventory",
+            r#"
+            return {kept:state.kept,old:state.window,windows:(await app.windows()).windows};
+        "#,
+        ));
+        assert!(!recovered.is_error, "{}", recovered.data);
+        assert_eq!(recovered.data["context_reset"], true);
+        assert_eq!(recovered.data["state_reset"], false);
+        assert_eq!(recovered.data["value"]["result"]["kept"], 7);
+        assert_eq!(recovered.data["value"]["result"]["old"], old_window);
+        assert_ne!(
+            recovered.data["value"]["result"]["windows"][0]["window_ref"],
+            old_window
+        );
+        assert_eq!(factory.connects.load(Ordering::SeqCst), 2);
+        let stale = server.run(&begin(
+            &server,
+            "old-reference",
+            "return await app.observe({window_ref:state.window});",
+        ));
+        assert!(stale.is_error, "{}", stale.data);
+        assert_eq!(
+            stale.data["script"]["steps"][0]["error"]["code"],
+            "target_changed"
+        );
+        assert_eq!(result(&server, "timed-read").data, failed.data);
+        assert_eq!(result(&server, "commit").data, original.data);
+        assert_eq!(factory.provider.0.actions.load(Ordering::SeqCst), 1);
+        server.close().unwrap();
+    }
+
+    #[test]
+    fn stopped_provider_is_not_replaced_when_its_cleanup_failed() {
+        let (server, factory) = fixture();
+        let original = server.run(&begin(&server, "original", "return 7;"));
+        assert!(!original.is_error);
+        factory.provider.0.stopped.store(true, Ordering::SeqCst);
+        factory
+            .provider
+            .0
+            .shutdown_fails
+            .store(true, Ordering::SeqCst);
+        let failed = server.run(&begin(&server, "fresh", "return await app.windows();"));
+        assert_eq!(failed.data["shutdown_errors"][0]["code"], "drain_failed");
+        assert_eq!(factory.connects.load(Ordering::SeqCst), 1);
+        assert_eq!(factory.provider.0.actions.load(Ordering::SeqCst), 0);
+        assert!(server.state.lock().unwrap().contexts[0].owner.is_some());
+    }
+
+    #[test]
     fn close_waits_for_a_preparing_owner_and_preserves_its_cleanup_failure() {
         for fail in [false, true] {
             let (server, factory) = fixture();
@@ -1447,6 +1566,7 @@ mod lifecycle_tests {
         control.entered();
         let completed = server.run(&call);
         assert_eq!(completed.data["error"]["code"], "cancelled");
+        assert_eq!(completed.data["status"], "running");
         assert!(call.run_finished.load(Ordering::Acquire));
         assert_eq!(
             reply(server.begin(json!("during-cleanup"), "apps", json!({}))).data["error"]["code"],
@@ -1468,7 +1588,9 @@ mod lifecycle_tests {
         server.cancel_call(&call);
         assert!(factory.catalog_open.load(Ordering::SeqCst));
         assert_eq!(factory.catalog_closes.load(Ordering::SeqCst), closes);
-        assert_eq!(result(&server, "cancel-owner").data, completed.data);
+        let mut expected = completed.data;
+        expected["status"] = json!("completed");
+        assert_eq!(result(&server, "cancel-owner").data, expected);
         server.close().unwrap();
     }
 
@@ -1744,7 +1866,8 @@ mod lifecycle_tests {
             assert_eq!(admitted.data["status"], "running");
             assert!(owner.wait_idle(Duration::from_secs(5)));
             let before_cache = result(&server, "sampled");
-            assert_eq!(before_cache.data["status"], "completed");
+            assert_eq!(before_cache.data["status"], "running");
+            assert_eq!(before_cache.data["value"]["result"], 7);
             assert_eq!(before_cache.data["context_reset"], false);
             assert_eq!(before_cache.data["state_reset"], false);
             if fail {
@@ -1766,21 +1889,27 @@ mod lifecycle_tests {
                 control.entered();
                 (control, canceller)
             });
-            let completed = server.finish_run(&call, admitted);
-            assert_eq!(completed.data["status"], "completed");
+            let mut completed = server.finish_run(&call, admitted);
+            assert_eq!(
+                completed.data["status"],
+                if stopping { "running" } else { "completed" }
+            );
             assert_eq!(completed.data["value"]["result"], 7);
             if !fail {
-                assert_eq!(before_cache.data, completed.data);
+                let mut same_phase = completed.data.clone();
+                same_phase["status"] = json!("running");
+                assert_eq!(before_cache.data, same_phase);
             }
-            assert_eq!(result(&server, "sampled").data["status"], "completed");
             assert_eq!(result(&server, "sampled").data, completed.data);
             if let Some((control, canceller)) = cancellation {
                 control.release();
                 canceller.join().unwrap();
                 // Refresh after cancellation must retain the original payload,
                 // not overwrite it with an already-released owner payload.
+                completed.data["status"] = json!("completed");
                 assert_eq!(result(&server, "sampled").data, completed.data);
             }
+            assert_eq!(result(&server, "sampled").data["status"], "completed");
             // The session owns the completed receipt; resident apps retain no
             // duplicate Job or script history after that handoff settles.
             assert!(owner.state.lock().unwrap().jobs.is_empty());

@@ -19,11 +19,13 @@ mod methods;
 mod projection;
 mod script_engine;
 mod scripts;
+mod selection;
 pub mod server;
 #[cfg(test)]
 mod tests;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod transport;
+mod window_wait;
 pub mod wire;
 
 use wire::{Command, Request, Submit, WireError};
@@ -96,13 +98,19 @@ fn operation(command: &Command) -> &'static str {
     match command {
         Command::Script { .. } => "script",
         Command::Windows => "windows",
-        Command::Observe | Command::ObserveQuery(_) | Command::ContinueObservation { .. } => {
-            "observe"
-        }
+        Command::WaitForWindow { .. } => "waitForWindow",
+        Command::Observe
+        | Command::ObserveQuery(_)
+        | Command::ObserveScoped { .. }
+        | Command::ContinueObservation { .. } => "observe",
+        Command::ReadText { .. } => "readText",
         Command::Capture => "capture",
-        Command::Press { .. } => "press",
-        Command::Click { .. } | Command::ClickWithOptions { .. } => "click",
-        Command::SetValue { .. } => "setValue",
+        Command::Find { .. } => "find",
+        Command::Press { .. } | Command::PressSelected { .. } => "press",
+        Command::Click { .. }
+        | Command::ClickWithOptions { .. }
+        | Command::ClickNormalized { .. } => "click",
+        Command::SetValue { .. } | Command::SetValueSelected { .. } => "setValue",
         Command::Scroll { .. } => "scroll",
         Command::Input(input) => input.capability().as_str(),
     }
@@ -111,9 +119,12 @@ fn is_action(command: &Command) -> bool {
     matches!(
         command,
         Command::Press { .. }
+            | Command::PressSelected { .. }
             | Command::Click { .. }
             | Command::ClickWithOptions { .. }
+            | Command::ClickNormalized { .. }
             | Command::SetValue { .. }
+            | Command::SetValueSelected { .. }
             | Command::Scroll { .. }
             | Command::Input(_)
     )
@@ -125,6 +136,7 @@ struct Snapshot {
     public: String,
     window_ref: String,
     kind: ObservationKind,
+    image_size: Option<(u32, u32)>,
     cursor: Option<String>,
     retired: bool,
     // Bounds the public lookup cache only. Core owns the earlier, authoritative TTL.
@@ -215,6 +227,7 @@ pub struct Coordinator<B: Backend> {
     app_name: String,
     app_ref: String,
     supported: Vec<Capability>,
+    observe_scopes: Vec<ObserveScopeKind>,
     state: Mutex<State>,
     finished: Condvar,
     retention: RetentionPolicy,
@@ -245,10 +258,17 @@ impl<B: Backend + 'static> Coordinator<B> {
             .collect();
         let coverage = backend.coverage();
         let conditions = backend.conditions();
+        let observe_scopes = ObserveScopeKind::ALL
+            .into_iter()
+            .filter(|scope| {
+                backend.supports(Capability::Observe) && backend.supports_observe_scope(*scope)
+            })
+            .collect();
         let owner = Arc::new(Self {
             runtime: Runtime::with_apps(backend, apps, OBSERVATION_TTL)?,
             coverage,
             conditions,
+            observe_scopes,
             app_name,
             app_ref: reference("app"),
             supported,
@@ -383,6 +403,8 @@ impl<B: Backend + 'static> Coordinator<B> {
         Reply::plain(json!({
             "version":1,"app":app,
             "supported_capabilities":self.supported.iter().map(|c|c.as_str()).collect::<Vec<_>>(),
+            "supported_observe_scopes":self.observe_scopes.iter().map(|scope|scope.as_str()).collect::<Vec<_>>(),
+            "supported_window_wait_states":self.runtime.supported_window_wait_states().iter().map(|state|state.as_str()).collect::<Vec<_>>(),
             "context":{"state":context_state(&state),"terminal_reason":state.terminal.as_ref().map(core_error),
                 "shutdown_error":state.shutdown_error.as_ref().map(error_json)},
             "script":scripts::description(),
@@ -558,6 +580,24 @@ impl<B: Backend + 'static> Coordinator<B> {
         work
     }
     fn execute_atomic_inner(&self, submitted: &Submit, deadline: Instant) -> Work {
+        match &submitted.command {
+            Command::Find {
+                selector,
+                timeout_ms,
+            }
+            | Command::PressSelected {
+                selector,
+                timeout_ms,
+            }
+            | Command::SetValueSelected {
+                selector,
+                timeout_ms,
+                ..
+            } => {
+                return self.select_element(submitted, selector, *timeout_ms, deadline);
+            }
+            _ => {}
+        }
         if let Command::ContinueObservation { cursor } = &submitted.command {
             return self.continue_observation(cursor, deadline);
         }
@@ -627,6 +667,87 @@ impl<B: Backend + 'static> Coordinator<B> {
             return Work::rejected(&submitted.command, Error::TargetChanged);
         };
         match &submitted.command {
+            Command::WaitForWindow { state, timeout_ms } => {
+                self.wait_for_window(submitted, &target, *state, *timeout_ms, deadline)
+            }
+            Command::ObserveScoped { query, scope } => {
+                let bound = (|| match scope {
+                    wire::DiscoveryScope::Menu => Ok((ObserveScope::Menu, None)),
+                    wire::DiscoveryScope::Subtree {
+                        observation_ref,
+                        element_ref,
+                    } => {
+                        let (reference, element) =
+                            self.bound_element(observation_ref, element_ref)?;
+                        Ok((ObserveScope::Subtree(element), Some(reference)))
+                    }
+                    wire::DiscoveryScope::Region {
+                        observation_ref,
+                        region,
+                    } => {
+                        let state = self.state.lock().unwrap();
+                        let snapshot = state
+                            .observations
+                            .iter()
+                            .find(|o| o.public == *observation_ref)
+                            .ok_or(Error::InvalidObservation)?;
+                        if snapshot.retired {
+                            return Err(Error::StaleObservation);
+                        }
+                        Ok((ObserveScope::Region(*region), Some(snapshot.core)))
+                    }
+                })();
+                let read = bound.and_then(|(scope, reference)| {
+                    self.runtime
+                        .observe_scoped_until(&target, query, scope, reference, deadline)
+                });
+                match read {
+                    Ok(observation) => self.observation(
+                        submitted.target.window_ref.as_deref().unwrap(),
+                        observation,
+                        None,
+                    ),
+                    Err(error) => Work::read_error(error),
+                }
+            }
+            Command::ReadText {
+                observation_ref,
+                element_ref,
+                offset,
+                limit,
+            } => {
+                let read = self.bound_element(observation_ref, element_ref).and_then(
+                    |(reference, element)| {
+                        self.runtime.read_text_until(
+                            &target,
+                            reference,
+                            TextRequest {
+                                element,
+                                offset: *offset,
+                                limit: *limit,
+                            },
+                            deadline,
+                        )
+                    },
+                );
+                match read {
+                    Ok(page) => Work {
+                        completed: Completed {
+                            value: Some(
+                                json!({"text":page.text,"offset":page.offset,"next_offset":page.next_offset,"total_length":page.total_length,"unit":"utf16"}),
+                            ),
+                            image: None,
+                            receipt: None,
+                            error: None,
+                            payload_bytes: 0,
+                            payload_expired: false,
+                        },
+                        publication: Publication::None,
+                        state_update: None,
+                    },
+                    Err(error) => Work::read_error(error),
+                }
+            }
             Command::Observe | Command::ObserveQuery(_) | Command::Capture => {
                 let window_ref = submitted
                     .target
@@ -715,6 +836,12 @@ impl<B: Backend + 'static> Coordinator<B> {
                 x,
                 y,
                 ..
+            }
+            | Command::ClickNormalized {
+                observation_ref,
+                x,
+                y,
+                ..
             } => {
                 let bound = {
                     let state = self.state.lock().unwrap();
@@ -725,18 +852,37 @@ impl<B: Backend + 'static> Coordinator<B> {
                         .observations
                         .iter()
                         .find(|o| o.public == *observation_ref)
-                        .map(|o| o.core)
+                        .map(|o| (o.core, o.image_size))
                 };
                 match bound {
-                    Some(observation) => {
+                    Some((observation, image_size)) => {
                         let options = match submitted.command {
-                            Command::ClickWithOptions { options, .. } => options,
+                            Command::ClickWithOptions { options, .. }
+                            | Command::ClickNormalized { options, .. } => options,
                             _ => ClickOptions::default(),
+                        };
+                        let point = if matches!(submitted.command, Command::ClickNormalized { .. })
+                        {
+                            let Some((width, height)) = image_size else {
+                                return Work::rejected(
+                                    &submitted.command,
+                                    Error::InvalidObservation,
+                                );
+                            };
+                            if !(0.0..1000.0).contains(x) || !(0.0..1000.0).contains(y) {
+                                return Work::rejected(&submitted.command, Error::InvalidPoint);
+                            }
+                            PixelPoint {
+                                x: x / 1000.0 * f64::from(width),
+                                y: y / 1000.0 * f64::from(height),
+                            }
+                        } else {
+                            PixelPoint { x: *x, y: *y }
                         };
                         Work::action(self.runtime.click_with_options_until(
                             &target,
                             observation,
-                            PixelPoint { x: *x, y: *y },
+                            point,
                             options,
                             deadline,
                         ))
@@ -794,10 +940,37 @@ impl<B: Backend + 'static> Coordinator<B> {
             Command::Input(input) => {
                 Work::action(self.runtime.input_until(&target, input, deadline))
             }
-            Command::Windows | Command::Script { .. } | Command::ContinueObservation { .. } => {
+            Command::Windows
+            | Command::Script { .. }
+            | Command::ContinueObservation { .. }
+            | Command::Find { .. }
+            | Command::PressSelected { .. }
+            | Command::SetValueSelected { .. } => {
                 unreachable!()
             }
         }
+    }
+    fn bound_element(
+        &self,
+        observation: &str,
+        element: &str,
+    ) -> Result<(ObservationRef, ElementId), Error> {
+        let state = self.state.lock().unwrap();
+        let snapshot = state
+            .observations
+            .iter()
+            .find(|o| o.public == observation)
+            .ok_or(Error::InvalidObservation)?;
+        if snapshot.retired {
+            return Err(Error::StaleObservation);
+        }
+        Ok((
+            snapshot.core,
+            *snapshot
+                .elements
+                .get(element)
+                .ok_or(Error::ElementNotFound)?,
+        ))
     }
     fn continue_observation(&self, cursor: &str, deadline: Instant) -> Work {
         let (previous, target) = {
@@ -846,6 +1019,10 @@ impl<B: Backend + 'static> Coordinator<B> {
             public: reference("observation"),
             window_ref: window_ref.into(),
             kind: observation.kind,
+            image_size: observation
+                .image
+                .as_ref()
+                .map(|image| (image.width, image.height)),
             cursor: None,
             retired: false,
             expires_at: Instant::now() + OBSERVATION_TTL,
@@ -1125,7 +1302,7 @@ fn aggregate_inventory_report(
     let complete = errors.is_empty();
     let candidates: u32 = reports.iter().map(|report| report.candidate_count).sum();
     let excluded: u32 = reports.iter().map(|report| report.excluded_count).sum();
-    json!({"coverage":{
+    let mut value = json!({"coverage":{
         "scope":"application_instances", "complete_within_scope":complete,
         "status":if reports.is_empty() {"unproven"} else if !complete {"partial"} else if window_count == 0 {"empty_within_scope"} else {"available"},
         "instance_count":reports.len() + errors.len(), "available_instances":reports.len(),
@@ -1133,7 +1310,20 @@ fn aggregate_inventory_report(
         "candidate_count":complete.then_some(candidates),
         "supported_count":window_count, "excluded_count":complete.then_some(excluded),
         "excludes":["provider_excluded_windows","unavailable_instance_windows"]
-    }, "diagnostics":{"provider":provider,"counters":counters,"error_codes":error_codes,"errors":errors}})
+    }, "diagnostics":{"provider":provider,"counters":counters,"error_codes":error_codes,"errors":errors}});
+    let associations: Vec<_> = reports
+        .iter()
+        .filter_map(|report| report.scope.associated_count())
+        .collect();
+    if !associations.is_empty() {
+        value["coverage"]["associated_count"] = json!(associations.iter().sum::<u32>());
+        value["coverage"]["association_complete"] = json!(false);
+        value["coverage"]["excludes"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("unproven_associations"));
+    }
+    value
 }
 
 fn context_state(state: &State) -> &'static str {

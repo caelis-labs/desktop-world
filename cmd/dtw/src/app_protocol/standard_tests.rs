@@ -498,6 +498,19 @@ fn one_method_registry_covers_facade_schemas_and_types() {
         methods.len(),
         crate::app_protocol::methods::Method::ALL.len()
     );
+    let mcp_tools = mcp::tools();
+    let names: Vec<_> = crate::app_protocol::methods::Method::ALL
+        .into_iter()
+        .map(|method| method.name())
+        .collect();
+    assert_eq!(
+        mcp_tools[1]["inputSchema"]["properties"]["methods"]["items"]["enum"],
+        json!(names)
+    );
+    assert_eq!(
+        mcp_tools[1]["inputSchema"]["properties"]["methods"]["maxItems"],
+        names.len()
+    );
     for method in crate::app_protocol::methods::Method::ALL {
         let spec = &methods[method.name()];
         assert!(spec.get("parameters").is_some());

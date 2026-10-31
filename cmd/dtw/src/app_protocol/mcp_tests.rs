@@ -20,11 +20,11 @@ struct Client {
 }
 
 impl Client {
-    async fn new(server: Arc<Server<Catalog>>) -> Self {
+    async fn new<F: Factory>(server: Arc<Server<F>>) -> Self {
         Self::with_writer(server, "2025-06-18", None).await
     }
 
-    fn connect(server: Arc<Server<Catalog>>, mode: Option<Arc<AtomicU8>>) -> Self {
+    fn connect<F: Factory>(server: Arc<Server<F>>, mode: Option<Arc<AtomicU8>>) -> Self {
         let (client, remote) = tokio::io::duplex(64 * 1024);
         let (read, write) = tokio::io::split(remote);
         let writer = ControlledWriter {
@@ -41,8 +41,8 @@ impl Client {
         }
     }
 
-    async fn with_writer(
-        server: Arc<Server<Catalog>>,
+    async fn with_writer<F: Factory>(
+        server: Arc<Server<F>>,
         version: &str,
         mode: Option<Arc<AtomicU8>>,
     ) -> Self {
@@ -755,6 +755,120 @@ async fn reached(gate: TestGate) -> TestGate {
     .unwrap()
 }
 
+#[derive(Clone)]
+struct CleanupCatalog {
+    inner: Catalog,
+    close_gate: Arc<Mutex<Option<WorkerGate>>>,
+}
+impl Factory for CleanupCatalog {
+    type Provider = MockBackend;
+    fn catalog(&self) -> Result<Vec<Application>, Error> {
+        self.inner.catalog()
+    }
+    fn connect(&self) -> Result<MockBackend, Error> {
+        self.inner.connect()
+    }
+    fn close_catalog(&self) -> Result<(), Error> {
+        let gate = self.close_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.wait();
+        }
+        self.inner.close_catalog()
+    }
+}
+
+#[tokio::test]
+async fn sdk_completed_receipt_waits_for_outer_cancellation_cleanup() {
+    let (_, catalog) = server();
+    catalog.backend.0.model.lock().unwrap().poll_action = true;
+    let factory = CleanupCatalog {
+        inner: catalog.clone(),
+        close_gate: Arc::default(),
+    };
+    let mut client = Client::new(Server::new(factory.clone())).await;
+    let initial = decoded(
+        &client
+            .tool("exec", input("state.before=true;return 1;"))
+            .await,
+    );
+    assert_eq!(initial["value"]["result"], 1, "{initial}");
+    let action = catalog.backend.action_gate();
+    let id = client
+        .begin(
+            "tools/call",
+            json!({"name":"exec","arguments":input(PRESS)}),
+        )
+        .await;
+    let action = reached(action).await;
+    let running = decoded(&client.tool("result", json!({"app":APP})).await);
+    let (gate, cleanup) = TestGate::pair();
+    *factory.close_gate.lock().unwrap() = Some(gate);
+    client
+        .send(json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":id}}))
+        .await;
+    let cleanup = reached(cleanup).await;
+    // Core has produced its terminal receipt, but the outer run/cancel owner
+    // still holds shared catalog resources. Public completion must cover both.
+    let unsettled = tokio::time::timeout(RESPONSE_TIMEOUT, async {
+        loop {
+            let current = decoded(&client.tool("result", json!({"app":APP})).await);
+            if current["error"].is_object() && current["script"]["steps"][2]["receipt"].is_object()
+            {
+                break current;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("Core did not publish its original terminal receipt");
+    assert_eq!(
+        unsettled["execution_id"], running["execution_id"],
+        "{unsettled}"
+    );
+    assert_eq!(
+        unsettled["script"]["steps"][2]["receipt"]["outcome"]["dispatch"], "unknown",
+        "{unsettled}"
+    );
+    let blocked = decoded(
+        &client
+            .tool("exec", input("return Object.keys(state);"))
+            .await,
+    );
+    assert_eq!(blocked["error"]["code"], "busy", "{blocked}");
+    assert!(blocked.get("execution_id").is_none(), "{blocked}");
+    assert_eq!(
+        unsettled["status"], "running",
+        "public record before cleanup: {unsettled}; admission: {blocked}"
+    );
+    cleanup.release();
+    action.release();
+    let settled = tokio::time::timeout(RESPONSE_TIMEOUT, async {
+        loop {
+            let current = decoded(&client.tool("result", json!({"app":APP})).await);
+            if current["status"] == "completed" {
+                break current;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("outer cleanup did not settle");
+    assert_eq!(settled["execution_id"], running["execution_id"]);
+    assert_eq!(settled["script"], unsettled["script"]);
+    let recovered = decoded(
+        &client
+            .tool("exec", input("return Object.keys(state);"))
+            .await,
+    );
+    assert_eq!(
+        recovered["value"]["result"],
+        json!(["before"]),
+        "{recovered}"
+    );
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+    client.close().await;
+}
+
 #[tokio::test]
 async fn sdk_cancellation_preserves_original_receipt_and_allows_later_work() {
     let (server, catalog) = server();
@@ -800,7 +914,11 @@ async fn sdk_cancellation_preserves_original_receipt_and_allows_later_work() {
             .tool("exec", input("return Object.keys(state);"))
             .await,
     );
-    assert_eq!(recovered["value"]["result"], json!(["before"]));
+    assert_eq!(
+        recovered["value"]["result"],
+        json!(["before"]),
+        "recovery exec: {recovered}; original execution: {original}"
+    );
     let retained = decoded(
         &client
             .tool(

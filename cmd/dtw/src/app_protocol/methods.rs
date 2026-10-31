@@ -3,6 +3,8 @@ use crate::computer::Capability;
 #[derive(Clone, Copy)]
 pub(super) enum Method {
     Windows,
+    WaitForWindow,
+    Find,
     Observe,
     Capture,
     Press,
@@ -12,10 +14,13 @@ pub(super) enum Method {
     Scroll,
     Focus,
     SetValue,
+    ReadText,
 }
 impl Method {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 13] = [
         Self::Windows,
+        Self::WaitForWindow,
+        Self::Find,
         Self::Observe,
         Self::Capture,
         Self::Press,
@@ -25,10 +30,13 @@ impl Method {
         Self::Scroll,
         Self::Focus,
         Self::SetValue,
+        Self::ReadText,
     ];
     pub fn name(self) -> &'static str {
         match self {
             Self::Windows => "windows",
+            Self::WaitForWindow => "waitForWindow",
+            Self::Find => "find",
             Self::Observe => "observe",
             Self::Capture => "capture",
             Self::Press => "press",
@@ -38,6 +46,7 @@ impl Method {
             Self::Scroll => "scroll",
             Self::Focus => "focus",
             Self::SetValue => "setValue",
+            Self::ReadText => "readText",
         }
     }
     pub fn arity(self) -> usize {
@@ -52,7 +61,8 @@ impl Method {
     }
     pub fn capability(self) -> Capability {
         match self {
-            Self::Windows => Capability::Windows,
+            Self::Windows | Self::WaitForWindow => Capability::Windows,
+            Self::Find => Capability::Observe,
             Self::Observe => Capability::Observe,
             Self::Capture => Capability::Capture,
             Self::Press => Capability::Press,
@@ -62,6 +72,7 @@ impl Method {
             Self::Scroll => Capability::Scroll,
             Self::Focus => Capability::Focus,
             Self::SetValue => Capability::SetValue,
+            Self::ReadText => Capability::ReadText,
         }
     }
     pub fn parse(name: &str) -> Option<Self> {

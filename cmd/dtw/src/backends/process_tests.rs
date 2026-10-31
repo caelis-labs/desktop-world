@@ -138,7 +138,14 @@ fn failed_native_drain_survives_idle_reaping_and_repeated_stop() {
 #[test]
 fn a_stopped_flag_alone_is_not_owned_child_exit_evidence() {
     let fixture = Fixture::new();
-    let worker = fixture.worker("hang");
+    // Keep the child alive independently of stdin EOF when the stopped flag
+    // retires its IO thread. A clean stop requires the native platform route:
+    // Windows uses its cooperative event; Unix uses the requested SIGTERM.
+    #[cfg(target_os = "windows")]
+    let worker = cooperative_windows_fixture(&fixture, false);
+    #[cfg(not(target_os = "windows"))]
+    let worker = fixture.worker("no_read");
+    fixture.wait_ready();
     assert!(!worker.is_reaped());
     worker.process.stopped.store(true, Ordering::SeqCst);
     assert!(!worker.is_reaped());
@@ -441,6 +448,7 @@ fn timeout_controls_a_worker_that_does_not_read_stdin() {
     let fixture = Fixture::new();
     let worker = fixture.worker("no_read");
     fixture.wait_ready();
+    assert!(!worker.is_stopped());
     let deadline = Instant::now() + Duration::from_millis(50);
     let started = Instant::now();
     let error = worker
@@ -457,6 +465,10 @@ fn timeout_controls_a_worker_that_does_not_read_stdin() {
     assert!(error.request_may_have_been_sent);
     assert!(started.elapsed() < Duration::from_secs(2));
     assert_reaped(&worker);
+    assert!(worker.is_stopped());
+    let subsequent = worker.call(b"{}", budget()).unwrap_err();
+    assert_eq!(subsequent.kind, TransportErrorKind::Stopped);
+    assert!(!subsequent.request_may_have_been_sent);
 }
 
 #[test]

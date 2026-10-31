@@ -204,7 +204,9 @@ impl Gate {
                     (
                         state.deadline,
                         if self.validation == Validation::Target {
-                            state.error.clone()
+                            // A failed paired release also closes admission for
+                            // new input; only remaining owned cleanup may run.
+                            state.error.clone().or_else(|| state.cleanup_error.clone())
                         } else {
                             state.cleanup_error.clone()
                         },
@@ -290,6 +292,12 @@ fn owner_gate() -> anyhow::Result<Gate> {
 }
 pub fn check() -> anyhow::Result<()> {
     target_gate()?.validate()
+}
+/// A completed post may legitimately open a modal or close its window. Keep
+/// cancellation, expiry and the original error, without admitting another input
+/// or requiring the pre-input surface to remain operable after its effect.
+pub fn check_completed() -> anyhow::Result<()> {
+    target_gate()?.local()
 }
 pub fn check_input_owner() -> anyhow::Result<()> {
     owner_gate()?.validate()
@@ -406,12 +414,28 @@ extern "C" {
 pub fn post_event(pid: i32, event: &CGEvent, auth: bool) {
     post_event_via(pid, event, auth, false)
 }
-fn keyboard_release(event: CGEventType, paired: bool) -> bool {
-    matches!(event, CGEventType::KeyUp) && paired
+fn is_release(event: CGEventType) -> bool {
+    matches!(
+        event,
+        CGEventType::KeyUp | CGEventType::LeftMouseUp | CGEventType::RightMouseUp
+    )
+}
+fn input_event_gate(event: CGEventType, paired_release: bool) -> anyhow::Result<Gate> {
+    if !is_release(event) {
+        return target_gate();
+    }
+    if !paired_release {
+        let message = "input release has no admitted down pair";
+        fail(message.into());
+        anyhow::bail!(message);
+    }
+    // The down's pending entry, delivery transport and original application
+    // identity authorize only this release, even if that down opened a modal.
+    owner_gate()
 }
 pub fn post_event_via(pid: i32, event: &CGEvent, auth: bool, public: bool) {
     let paired = pair(event);
-    let release_transport = if matches!(event.get_type(), CGEventType::KeyUp) {
+    let release_transport = if is_release(event.get_type()) {
         paired.and_then(|(id, _, _)| {
             CALL.with(|call| {
                 call.borrow().as_ref().and_then(|state| {
@@ -419,7 +443,11 @@ pub fn post_event_via(pid: i32, event: &CGEvent, auth: bool, public: bool) {
                         .pending
                         .iter()
                         .rev()
-                        .find(|pending| pending.id == id && pending.keyboard)
+                        .find(|pending| {
+                            pending.id == id
+                                && pending.keyboard
+                                    == matches!(event.get_type(), CGEventType::KeyUp)
+                        })
                         .map(|pending| (pending.auth, pending.public))
                 })
             })
@@ -427,16 +455,7 @@ pub fn post_event_via(pid: i32, event: &CGEvent, auth: bool, public: bool) {
     } else {
         None
     };
-    if matches!(event.get_type(), CGEventType::KeyUp) && release_transport.is_none() {
-        fail("key release has no admitted down pair".into());
-        return;
-    }
-    let keyboard_release = keyboard_release(event.get_type(), release_transport.is_some());
-    let gate = if keyboard_release {
-        owner_gate()
-    } else {
-        target_gate()
-    };
+    let gate = input_event_gate(event.get_type(), release_transport.is_some());
     let Ok(gate) = gate else { return };
     if gate.validate().is_err() {
         return;
@@ -549,11 +568,9 @@ pub fn cleanup_pending() {
     }
     with_cleanup(|| {
         for pending in pending.into_iter().rev() {
-            let gate = if pending.keyboard {
-                owner_gate()
-            } else {
-                target_gate()
-            };
+            // Every entry was reserved before its admitted down. Releasing it
+            // cannot require the old window to survive the down's effect.
+            let gate = owner_gate();
             let Ok(gate) = gate else { break };
             if gate.validate().is_err() {
                 cleanup_failure(
@@ -646,12 +663,179 @@ mod tests {
         assert_eq!(result["fallback_allowed"], false);
     }
     #[test]
-    fn only_admitted_key_up_uses_the_app_release_gate() {
-        assert!(keyboard_release(CGEventType::KeyUp, true));
-        assert!(!keyboard_release(CGEventType::KeyUp, false));
-        assert!(!keyboard_release(CGEventType::KeyDown, true));
-        assert!(!keyboard_release(CGEventType::LeftMouseUp, true));
-        assert!(!keyboard_release(CGEventType::RightMouseDown, true));
+    fn only_admitted_up_uses_the_app_release_gate() {
+        let _owner = OWNER_TEST.lock().unwrap();
+        extern "C" fn valid(_: *mut c_void, _: i32) -> i32 {
+            1
+        }
+        for up in [
+            CGEventType::KeyUp,
+            CGEventType::LeftMouseUp,
+            CGEventType::RightMouseUp,
+        ] {
+            let session =
+                Session::start(7, now_ms() + 10_000, std::ptr::null_mut(), valid, false).unwrap();
+            assert_eq!(
+                input_event_gate(up, true).unwrap().validation,
+                Validation::InputOwner
+            );
+            assert!(input_event_gate(up, false).is_err());
+            let result = session.finish(Ok(()), false);
+            assert_eq!(result["dispatch"], "not_dispatched");
+            assert_eq!(result["fallback_allowed"], false);
+        }
+        let session =
+            Session::start(7, now_ms() + 10_000, std::ptr::null_mut(), valid, false).unwrap();
+        for new_input in [
+            CGEventType::KeyDown,
+            CGEventType::LeftMouseDown,
+            CGEventType::RightMouseDown,
+            CGEventType::MouseMoved,
+            CGEventType::ScrollWheel,
+        ] {
+            assert_eq!(
+                input_event_gate(new_input, true).unwrap().validation,
+                Validation::Target
+            );
+        }
+        assert_eq!(session.finish(Ok(()), false)["ok"], true);
+    }
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum SurfaceState {
+        Available,
+        ModalOpened,
+        Closed,
+    }
+    struct EffectContext {
+        surface: std::cell::Cell<SurfaceState>,
+        owner_valid: std::cell::Cell<bool>,
+        phases: RefCell<Vec<i32>>,
+    }
+    extern "C" fn effect_validation(context: *mut c_void, phase: i32) -> i32 {
+        let state = unsafe { &*context.cast::<EffectContext>() };
+        state.phases.borrow_mut().push(phase);
+        i32::from(
+            state.owner_valid.get()
+                && (phase == 2 || state.surface.get() == SurfaceState::Available),
+        )
+    }
+    #[test]
+    fn modal_or_closed_target_does_not_fail_completed_mouse_or_key_input() {
+        let _owner = OWNER_TEST.lock().unwrap();
+        for effect in [SurfaceState::ModalOpened, SurfaceState::Closed] {
+            for (down, up) in [
+                (CGEventType::LeftMouseDown, CGEventType::LeftMouseUp),
+                (CGEventType::RightMouseDown, CGEventType::RightMouseUp),
+                (CGEventType::KeyDown, CGEventType::KeyUp),
+            ] {
+                let mut state = EffectContext {
+                    surface: std::cell::Cell::new(SurfaceState::Available),
+                    owner_valid: std::cell::Cell::new(true),
+                    phases: RefCell::default(),
+                };
+                let context = (&mut state as *mut EffectContext).cast();
+                let session =
+                    Session::start(7, now_ms() + 10_000, context, effect_validation, false)
+                        .unwrap();
+                input_event_gate(down, false).unwrap().validate().unwrap();
+                // Model the admitted native post, then its legitimate app effect.
+                CALL.with(|call| call.borrow_mut().as_mut().unwrap().dispatched = true);
+                state.surface.set(effect);
+                input_event_gate(up, true).unwrap().validate().unwrap();
+                check_completed().unwrap();
+                assert_eq!(*state.phases.borrow(), [0, 2]);
+                let result = session.finish(Ok(()), false);
+                assert_eq!(result["dispatch"], "dispatched");
+                assert_eq!(result["ok"], true);
+                assert!(result.get("cleanup_error").is_none());
+
+                // Completion cannot authorize another down against the old surface.
+                let next = Session::start(7, now_ms() + 10_000, context, effect_validation, false)
+                    .unwrap();
+                assert!(input_event_gate(down, false).unwrap().validate().is_err());
+                assert_eq!(*state.phases.borrow(), [0, 2, 0]);
+                let rejected = next.finish(Ok(()), false);
+                assert_eq!(rejected["dispatch"], "not_dispatched");
+                assert_eq!(rejected["fallback_allowed"], false);
+            }
+        }
+    }
+    #[test]
+    fn paired_mouse_release_rejects_a_changed_owner_without_window_fallback() {
+        let _owner = OWNER_TEST.lock().unwrap();
+        let mut state = EffectContext {
+            surface: std::cell::Cell::new(SurfaceState::Available),
+            owner_valid: std::cell::Cell::new(true),
+            phases: RefCell::default(),
+        };
+        let session = Session::start(
+            7,
+            now_ms() + 10_000,
+            (&mut state as *mut EffectContext).cast(),
+            effect_validation,
+            false,
+        )
+        .unwrap();
+        input_event_gate(CGEventType::LeftMouseDown, false)
+            .unwrap()
+            .validate()
+            .unwrap();
+        CALL.with(|call| call.borrow_mut().as_mut().unwrap().dispatched = true);
+        state.surface.set(SurfaceState::Closed);
+        state.owner_valid.set(false);
+        assert!(input_event_gate(CGEventType::LeftMouseUp, true)
+            .unwrap()
+            .validate()
+            .is_err());
+        assert!(check_completed().is_err());
+        assert!(input_event_gate(CGEventType::LeftMouseDown, false)
+            .unwrap()
+            .validate()
+            .is_err());
+        assert_eq!(*state.phases.borrow(), [0, 2]);
+        let result = session.finish(Ok(()), false);
+        assert_eq!(result["dispatch"], "unknown");
+        assert_eq!(result["fallback_allowed"], false);
+        assert!(result["cleanup_error"].is_object());
+        *LIFECYCLE.lock().unwrap() = Lifecycle::default();
+    }
+    #[test]
+    fn completion_keeps_original_error_expiry_and_cancellation() {
+        let _owner = OWNER_TEST.lock().unwrap();
+        extern "C" fn never_validate(_: *mut c_void, _: i32) -> i32 {
+            panic!("Completion cannot traverse the old target")
+        }
+        for reason in ["original", "cleanup", "expired", "cancelled"] {
+            let session = Session::start(
+                7,
+                now_ms() + 10_000,
+                std::ptr::null_mut(),
+                never_validate,
+                false,
+            )
+            .unwrap();
+            CALL.with(|call| call.borrow_mut().as_mut().unwrap().dispatched = true);
+            match reason {
+                "original" => fail("original dispatch failure".into()),
+                "cleanup" => cleanup_failure("original paired release failure".into()),
+                "expired" => CALL.with(|call| call.borrow_mut().as_mut().unwrap().deadline = 0),
+                _ => LIFECYCLE.lock().unwrap().closed = true,
+            }
+            assert!(check_completed().is_err());
+            let result = session.finish(Ok(()), false);
+            assert_eq!(result["dispatch"], "unknown");
+            assert_eq!(result["fallback_allowed"], false);
+            if reason == "original" {
+                assert_eq!(result["error"]["message"], "original dispatch failure");
+            }
+            if reason == "cleanup" {
+                assert_eq!(
+                    result["cleanup_error"]["message"],
+                    "original paired release failure"
+                );
+            }
+            *LIFECYCLE.lock().unwrap() = Lifecycle::default();
+        }
     }
     #[test]
     fn window_loss_blocks_new_input_but_app_release_remains_bounded() {
