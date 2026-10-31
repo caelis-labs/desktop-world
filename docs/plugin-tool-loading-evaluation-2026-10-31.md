@@ -73,6 +73,55 @@ OpenCode's public MCP documentation describes automatic tool availability and
 context cost; it is insufficient to infer that this newer dev snapshot injects
 every individual MCP schema directly. [Public documentation](https://docs.opencode.ai/docs/mcp-servers/).
 
+## Standard declaration entrypoints
+
+Agent Plugins **1.0.0** supplies an appropriate carrier, not standardized loading
+semantics: `plugin.json` has reverse-domain `extensions`, with object values owned
+by each client. Unrecognized namespaces must be ignored. Root core fields and
+the standard `mcp.json` server objects are closed; adding `deferred` there is not
+conformant. [Manifest extension rules](https://agent-plugins.org/specification#81-manifest-extension-data),
+[MCP configuration schema](https://agent-plugins.org/schemas/1.0.0/mcp.schema.json).
+
+MCP **2026-07-28** has no core `auto/eager/deferred` tool property. Vendor-namespaced
+`Tool._meta` can carry custom metadata, but provides no portable loading behavior.
+OpenAI's `defer_loading` is a provider API field, not that MCP property.
+[MCP schema](https://modelcontextprotocol.io/specification/2026-07-28/schema#tool),
+[MCP metadata](https://modelcontextprotocol.io/specification/2026-07-28/basic/index#meta),
+[OpenAI Tool Search](https://developers.openai.com/api/docs/guides/tools-tool-search).
+
+Prefer **one** declaration source for v1: the recognized client extension in the
+installed plugin, plus an explicit Host/user override. Do not also interpret a
+remote MCP `_meta` loading hint in the first implementation. Besides its weaker
+authority, changing such a hint may change the remote definition fingerprint,
+entangling a visibility preference with source refresh. Pure standalone MCP
+servers can use Host configuration; standard interoperability stays unchanged.
+
+A proposed extension payload, nested under the client's controlled reverse-domain
+namespace (not a new top-level field), is:
+
+```json
+{
+  "toolLoading": {
+    "version": 1,
+    "servers": {
+      "desktop-world": {
+        "default": "auto",
+        "tools": {
+          "apps": "eager",
+          "api": "eager",
+          "exec": "eager",
+          "result": "eager"
+        }
+      }
+    }
+  }
+}
+```
+
+Keys match the plugin-local server key and exact remote tool name, before Host
+name projection. Unknown names do not create tools. The example is a proposed
+Caelis extension schema; current Caelis does not interpret it yet.
+
 ## Proposed Caelis contract
 
 - A versioned, namespaced **plugin loading preference**, server default plus
@@ -94,9 +143,61 @@ every individual MCP schema directly. [Public documentation](https://docs.openco
 - Loading affects visibility only. Source approval, per-Session app grants,
   explicit Ask/Deny, resource identity, cancellation and result truncation keep
   their existing authority. The plugin cannot grant itself access.
-- Decide how eager tools interact with `tool_retire`: a Host-selected eager
-  baseline should remain reconstructible across compaction; avoid accidental
-  re-search or retaining a stale source merely to keep a cache prefix unchanged.
+- `eager` controls **initial exposure**, not permanent pinning or retirement
+  immunity. The existing exposure owner must commit and replay that initial
+  admission. It must also distinguish "bootstrap not applied" from "bootstrap
+  applied and the active set is now empty". An empty post-retirement set must
+  never trigger re-seeding. Do not keep a second registry of active tools.
+
+### Default behavior and lifecycle isolation
+
+For v1, absent configuration is exactly `auto`, and `auto` preserves the current
+Host behavior: MCP tools are deferred when ToolSearch is available, otherwise
+exposed through the existing compatible direct path. It is not a new heuristic
+that quietly changes old plugins. Unknown extension versions or invalid loading
+values should produce a localized diagnostic and fall back to `auto`, without
+disabling otherwise valid standard plugin components. Explicit per-tool choice
+overrides the server default; Host/user choice overrides the plugin. A requested
+deferred mode must not leave tools unreachable on a Host without discovery.
+
+Keep three responsibilities separate:
+
+| Owner | Owns | Loading preference must not do |
+| --- | --- | --- |
+| Plugin/Host policy resolver | Versioned preference and schema budget for initial exposure | Invent capabilities, grant app access, change remote source identity |
+| MCP Manager | Current accepted catalog, source versions, ready/unavailable state, connection handles | Change its refresh/reconnect behavior because a tool is eager |
+| Existing Session exposure lifecycle | Exact active/pending bindings, durable retirement, compaction/replay | Resurrect retired tools from the loading default |
+
+Apply the initial policy at a new Session's bounded startup/admission boundary,
+using the accepted ready catalog. Persist its one-time application through the
+existing exposure owner. Resume restores durable exposure rather than rerunning
+bootstrap; old Sessions are not retroactively opted in. Configuration changes
+take effect for a new Session or an explicit future policy-reapply operation,
+not through `tools/list_changed` or every model-request preparation.
+
+An ordinary refresh keeps its existing semantics for already exposed tools and
+uses current definitions/handles. New unexposed tools continue normal discovery
+for that Session; an eager server default is not a request to inject every later
+addition. Removal/disconnection makes a tool unavailable immediately. A same-name
+replacement never inherits the previous callable or grant from its loading
+preference. Retirement still commits only at its existing durable checkpoint;
+later refresh, reconnect, replay or a changed `policyRevision` cannot silently
+undo it. Rediscovery follows the existing explicit ToolSearch path.
+
+Loading policy has its own revision. It must not be mixed into remote MCP schema
+fingerprints, emit catalog-change notifications, restart servers, revoke source
+grants, or rewrite past tool events solely because the preference changed.
+Security-relevant source/schema changes continue their existing invalidation.
+Stable ordering is preserved when the effective tool set is unchanged; actual
+additions/removals may still alter the cached prefix.
+
+Required integration checks include: absent extension behaves identically;
+one-time eager admission; retirement followed by empty exposure, compaction,
+resume, unrelated refresh and reconnect stays retired; add/remove/re-add with the
+same name; schema change while a batch or approval is pending; startup timeout;
+budget refusal; unknown extension version; and unchanged Ask/Deny/app grants.
+These are design acceptance conditions, not claims that loading-policy code has
+already been written or validated.
 
 Before enabling the default, compare the current path with eager DTW on identical
 tasks: cold/warm startup, enabled-but-unused DTW, long GUI runs, many unrelated
