@@ -19,11 +19,13 @@ mod methods;
 mod projection;
 mod script_engine;
 mod scripts;
+mod selection;
 pub mod server;
 #[cfg(test)]
 mod tests;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod transport;
+mod window_wait;
 pub mod wire;
 
 use wire::{Command, Request, Submit, WireError};
@@ -96,15 +98,19 @@ fn operation(command: &Command) -> &'static str {
     match command {
         Command::Script { .. } => "script",
         Command::Windows => "windows",
+        Command::WaitForWindow { .. } => "waitForWindow",
         Command::Observe
         | Command::ObserveQuery(_)
         | Command::ObserveScoped { .. }
         | Command::ContinueObservation { .. } => "observe",
         Command::ReadText { .. } => "readText",
         Command::Capture => "capture",
-        Command::Press { .. } => "press",
-        Command::Click { .. } | Command::ClickWithOptions { .. } => "click",
-        Command::SetValue { .. } => "setValue",
+        Command::Find { .. } => "find",
+        Command::Press { .. } | Command::PressSelected { .. } => "press",
+        Command::Click { .. }
+        | Command::ClickWithOptions { .. }
+        | Command::ClickNormalized { .. } => "click",
+        Command::SetValue { .. } | Command::SetValueSelected { .. } => "setValue",
         Command::Scroll { .. } => "scroll",
         Command::Input(input) => input.capability().as_str(),
     }
@@ -113,9 +119,12 @@ fn is_action(command: &Command) -> bool {
     matches!(
         command,
         Command::Press { .. }
+            | Command::PressSelected { .. }
             | Command::Click { .. }
             | Command::ClickWithOptions { .. }
+            | Command::ClickNormalized { .. }
             | Command::SetValue { .. }
+            | Command::SetValueSelected { .. }
             | Command::Scroll { .. }
             | Command::Input(_)
     )
@@ -127,6 +136,7 @@ struct Snapshot {
     public: String,
     window_ref: String,
     kind: ObservationKind,
+    image_size: Option<(u32, u32)>,
     cursor: Option<String>,
     retired: bool,
     // Bounds the public lookup cache only. Core owns the earlier, authoritative TTL.
@@ -394,6 +404,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             "version":1,"app":app,
             "supported_capabilities":self.supported.iter().map(|c|c.as_str()).collect::<Vec<_>>(),
             "supported_observe_scopes":self.observe_scopes.iter().map(|scope|scope.as_str()).collect::<Vec<_>>(),
+            "supported_window_wait_states":self.runtime.supported_window_wait_states().iter().map(|state|state.as_str()).collect::<Vec<_>>(),
             "context":{"state":context_state(&state),"terminal_reason":state.terminal.as_ref().map(core_error),
                 "shutdown_error":state.shutdown_error.as_ref().map(error_json)},
             "script":scripts::description(),
@@ -569,6 +580,24 @@ impl<B: Backend + 'static> Coordinator<B> {
         work
     }
     fn execute_atomic_inner(&self, submitted: &Submit, deadline: Instant) -> Work {
+        match &submitted.command {
+            Command::Find {
+                selector,
+                timeout_ms,
+            }
+            | Command::PressSelected {
+                selector,
+                timeout_ms,
+            }
+            | Command::SetValueSelected {
+                selector,
+                timeout_ms,
+                ..
+            } => {
+                return self.select_element(submitted, selector, *timeout_ms, deadline);
+            }
+            _ => {}
+        }
         if let Command::ContinueObservation { cursor } = &submitted.command {
             return self.continue_observation(cursor, deadline);
         }
@@ -638,6 +667,9 @@ impl<B: Backend + 'static> Coordinator<B> {
             return Work::rejected(&submitted.command, Error::TargetChanged);
         };
         match &submitted.command {
+            Command::WaitForWindow { state, timeout_ms } => {
+                self.wait_for_window(submitted, &target, *state, *timeout_ms, deadline)
+            }
             Command::ObserveScoped { query, scope } => {
                 let bound = (|| match scope {
                     wire::DiscoveryScope::Menu => Ok((ObserveScope::Menu, None)),
@@ -804,6 +836,12 @@ impl<B: Backend + 'static> Coordinator<B> {
                 x,
                 y,
                 ..
+            }
+            | Command::ClickNormalized {
+                observation_ref,
+                x,
+                y,
+                ..
             } => {
                 let bound = {
                     let state = self.state.lock().unwrap();
@@ -814,18 +852,37 @@ impl<B: Backend + 'static> Coordinator<B> {
                         .observations
                         .iter()
                         .find(|o| o.public == *observation_ref)
-                        .map(|o| o.core)
+                        .map(|o| (o.core, o.image_size))
                 };
                 match bound {
-                    Some(observation) => {
+                    Some((observation, image_size)) => {
                         let options = match submitted.command {
-                            Command::ClickWithOptions { options, .. } => options,
+                            Command::ClickWithOptions { options, .. }
+                            | Command::ClickNormalized { options, .. } => options,
                             _ => ClickOptions::default(),
+                        };
+                        let point = if matches!(submitted.command, Command::ClickNormalized { .. })
+                        {
+                            let Some((width, height)) = image_size else {
+                                return Work::rejected(
+                                    &submitted.command,
+                                    Error::InvalidObservation,
+                                );
+                            };
+                            if !(0.0..1000.0).contains(x) || !(0.0..1000.0).contains(y) {
+                                return Work::rejected(&submitted.command, Error::InvalidPoint);
+                            }
+                            PixelPoint {
+                                x: x / 1000.0 * f64::from(width),
+                                y: y / 1000.0 * f64::from(height),
+                            }
+                        } else {
+                            PixelPoint { x: *x, y: *y }
                         };
                         Work::action(self.runtime.click_with_options_until(
                             &target,
                             observation,
-                            PixelPoint { x: *x, y: *y },
+                            point,
                             options,
                             deadline,
                         ))
@@ -883,7 +940,12 @@ impl<B: Backend + 'static> Coordinator<B> {
             Command::Input(input) => {
                 Work::action(self.runtime.input_until(&target, input, deadline))
             }
-            Command::Windows | Command::Script { .. } | Command::ContinueObservation { .. } => {
+            Command::Windows
+            | Command::Script { .. }
+            | Command::ContinueObservation { .. }
+            | Command::Find { .. }
+            | Command::PressSelected { .. }
+            | Command::SetValueSelected { .. } => {
                 unreachable!()
             }
         }
@@ -957,6 +1019,10 @@ impl<B: Backend + 'static> Coordinator<B> {
             public: reference("observation"),
             window_ref: window_ref.into(),
             kind: observation.kind,
+            image_size: observation
+                .image
+                .as_ref()
+                .map(|image| (image.width, image.height)),
             cursor: None,
             retired: false,
             expires_at: Instant::now() + OBSERVATION_TTL,

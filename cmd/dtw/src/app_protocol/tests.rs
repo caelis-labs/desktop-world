@@ -918,5 +918,8 @@ mod standard_tests;
 #[path = "discovery_tests.rs"]
 mod discovery_tests;
 
+#[path = "selection_tests.rs"]
+mod selection_tests;
+
 #[path = "multi_instance_tests.rs"]
 mod multi_instance;

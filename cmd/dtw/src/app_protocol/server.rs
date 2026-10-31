@@ -304,6 +304,16 @@ impl<F: Factory> Server<F> {
         call.run_finished.store(true, Ordering::Release);
         call.completion.notify_waiters();
         self.finished.notify_all();
+        // Preserve the original first-delivery payload independently of history
+        // eviction. Only its public completion state waits for the reservation.
+        if call.execution_id.is_some()
+            && state
+                .active
+                .as_ref()
+                .is_some_and(|active| Arc::ptr_eq(active, call))
+        {
+            reply.data["status"] = json!("running");
+        }
         reply
     }
     fn refresh(&self, state: &mut State<F::Provider>) {
@@ -608,6 +618,11 @@ impl<F: Factory> Server<F> {
             // Core can finish before the Server worker publishes its cache.
             // Project the same app metadata on both sides of that boundary.
             self.annotate(state, active, &mut reply);
+            // A terminal Core receipt does not retire shared catalog cleanup
+            // or the outer worker. refresh() releases this reservation only
+            // when both are settled, so completed also means later admission
+            // is no longer blocked by this execution.
+            reply.data["status"] = json!("running");
         } else {
             public_execution(&mut reply, &record.app, &record.id);
             append_shutdown_errors(&mut reply, &state.shutdown_errors);
@@ -1551,6 +1566,7 @@ mod lifecycle_tests {
         control.entered();
         let completed = server.run(&call);
         assert_eq!(completed.data["error"]["code"], "cancelled");
+        assert_eq!(completed.data["status"], "running");
         assert!(call.run_finished.load(Ordering::Acquire));
         assert_eq!(
             reply(server.begin(json!("during-cleanup"), "apps", json!({}))).data["error"]["code"],
@@ -1572,7 +1588,9 @@ mod lifecycle_tests {
         server.cancel_call(&call);
         assert!(factory.catalog_open.load(Ordering::SeqCst));
         assert_eq!(factory.catalog_closes.load(Ordering::SeqCst), closes);
-        assert_eq!(result(&server, "cancel-owner").data, completed.data);
+        let mut expected = completed.data;
+        expected["status"] = json!("completed");
+        assert_eq!(result(&server, "cancel-owner").data, expected);
         server.close().unwrap();
     }
 
@@ -1848,7 +1866,8 @@ mod lifecycle_tests {
             assert_eq!(admitted.data["status"], "running");
             assert!(owner.wait_idle(Duration::from_secs(5)));
             let before_cache = result(&server, "sampled");
-            assert_eq!(before_cache.data["status"], "completed");
+            assert_eq!(before_cache.data["status"], "running");
+            assert_eq!(before_cache.data["value"]["result"], 7);
             assert_eq!(before_cache.data["context_reset"], false);
             assert_eq!(before_cache.data["state_reset"], false);
             if fail {
@@ -1870,21 +1889,27 @@ mod lifecycle_tests {
                 control.entered();
                 (control, canceller)
             });
-            let completed = server.finish_run(&call, admitted);
-            assert_eq!(completed.data["status"], "completed");
+            let mut completed = server.finish_run(&call, admitted);
+            assert_eq!(
+                completed.data["status"],
+                if stopping { "running" } else { "completed" }
+            );
             assert_eq!(completed.data["value"]["result"], 7);
             if !fail {
-                assert_eq!(before_cache.data, completed.data);
+                let mut same_phase = completed.data.clone();
+                same_phase["status"] = json!("running");
+                assert_eq!(before_cache.data, same_phase);
             }
-            assert_eq!(result(&server, "sampled").data["status"], "completed");
             assert_eq!(result(&server, "sampled").data, completed.data);
             if let Some((control, canceller)) = cancellation {
                 control.release();
                 canceller.join().unwrap();
                 // Refresh after cancellation must retain the original payload,
                 // not overwrite it with an already-released owner payload.
+                completed.data["status"] = json!("completed");
                 assert_eq!(result(&server, "sampled").data, completed.data);
             }
+            assert_eq!(result(&server, "sampled").data["status"], "completed");
             // The session owns the completed receipt; resident apps retain no
             // duplicate Job or script history after that handoff settles.
             assert!(owner.state.lock().unwrap().jobs.is_empty());

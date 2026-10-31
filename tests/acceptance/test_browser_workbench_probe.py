@@ -52,6 +52,24 @@ def normalized_agy(events):
         return probe.normalize_agy(path)[0]
 
 
+def denied_command_events():
+    # Observed AGY shape: the displayed command is cut inside an open quote,
+    # while the client's pre-execution denial quotes the complete request.
+    command = 'python3 -c "' + 'from PIL import Image\n\n' + '# inspect screenshot pixels\n' * 25 + '"'
+    parameters = {'CommandLine':command[:512]+'…'}
+    base = {'conversation_id':'5fd1c99e-31e0-4804-9131-580fd99ef54e',
+            'step_index':46,'tool_name':'run_command','step_type':'tool'}
+    permission_display = command.replace('\n\n', '\n')
+    denial = ('permission check failed for unsandboxed '+json.dumps(command)
+              +': Permission denied for unsandboxed('+permission_display+'). Matches user-configured deny rule.')
+    return [
+        {'step_update':{**base,'state':'ACTIVE','tool_info':{'name':'run_command','parameters':parameters}}},
+        {'step_update':{**base,'state':'ERROR','duration_seconds':0.705011,
+            'tool_info':{'name':'run_command','parameters':parameters,
+                         'error':{'type':'TOOL_ERROR','message':denial}}}},
+    ]
+
+
 class InstalledPackageTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -335,6 +353,71 @@ class RouteTests(unittest.TestCase):
                             'cat '+metadata+'/exec.json'):
                 with self.subTest(command=command), self.assertRaises(AssertionError):
                     probe.check_routes([{'name':'run_command', 'arguments':{'CommandLine':command}}], NAME, root)
+
+
+class DeniedRouteTests(unittest.TestCase):
+    def test_truncated_pre_execution_denial_is_counted_without_claiming_a_clean_route(self):
+        denied, = normalized_agy(denied_command_events())
+        with self.assertRaises(ValueError): probe.shlex.split(denied['arguments']['CommandLine'])
+        probe.check_routes([denied], NAME, Path('/tmp/owned-case'))
+        baseline = probe.metrics([call(completed())], NAME)
+        measured = probe.metrics([denied, call(completed())], NAME)
+        self.assertEqual(measured['denied_route_attempts'], 1)
+        self.assertEqual(measured['denied_route_attempt_details'], [
+            {'agent_call':1,'tool':'run_command','duration_seconds':0.705011}])
+        self.assertEqual(measured['issues'], [
+            {'kind':'denied_route_attempt','agent_call':1,'tool':'run_command','duration_seconds':0.705011}])
+        self.assertFalse(probe.usability_passed(measured))
+        self.assertEqual(measured['agent_tool_calls'], baseline['agent_tool_calls'] + 1)
+        for key in ('mcp_calls','exec_calls','script_host_calls','mcp_json_bytes','image_bytes','result_queries'):
+            self.assertEqual(measured[key], baseline[key], key)
+
+    def test_only_a_correlated_exact_client_denial_can_bypass_shell_parsing(self):
+        denied, = normalized_agy(denied_command_events())
+        error = denied['client_error']
+        changes = [
+            {'status':'DONE'}, {'status':'UNKNOWN'}, {'status':None},
+            {'output':'permission denied'}, {'output':''}, {'output':{}},
+            {'client_error_no_data':False}, {'client_preflight_only':False},
+            {'client_error':{'type':'TOOL_ERROR','message':'Permission denied'}},
+            {'client_error':{'type':'OTHER','message':error['message']}},
+            {'client_error':{**error,'data':'possible command output'}},
+            {'client_error':{**error,'message':'Tool failed: '+error['message']}},
+            {'client_error':{**error,'message':error['message']+' extra output'}},
+            {'client_error':{**error,'message':error['message'].replace(
+                'Matches user-configured deny rule.', 'Operation failed.')}},
+            {'client_error':{**error,'message':error['message'].split(': Permission denied for unsandboxed(')[0]
+                +': Permission denied for unsandboxed(unrelated request). Matches user-configured deny rule.'}},
+            {'arguments':{'CommandLine':"python3 -c 'different request"}},
+            {'arguments':{'CommandLine':'…'}},
+            {'arguments':{**denied['arguments'],'extra':'unknown execution option'}},
+            {'name':'another_tool'},
+        ]
+        for changed in changes:
+            candidate = {**denied, **changed}
+            with self.subTest(changed=changed), self.assertRaises(AssertionError):
+                probe.check_routes([candidate], NAME, Path('/tmp/owned-case'))
+            self.assertEqual(probe.metrics([candidate], NAME)['denied_route_attempts'], 0)
+        for missing in ('client_error', 'client_error_no_data', 'client_preflight_only'):
+            candidate = {k:v for k,v in denied.items() if k != missing}
+            with self.subTest(missing=missing), self.assertRaises(AssertionError):
+                probe.check_routes([candidate], NAME, Path('/tmp/owned-case'))
+
+    def test_earlier_success_unknown_state_or_output_cannot_be_erased_by_denial(self):
+        for state, output in [('DONE', None), ('UNKNOWN', None), ('ACTIVE', ''),
+                              ('ACTIVE', 'earlier output'), ('ACTIVE', {})]:
+            events = denied_command_events()
+            events[0]['step_update']['state'] = state
+            if output is not None: events[0]['step_update']['tool_info']['output'] = output
+            candidate, = normalized_agy(events)
+            with self.subTest(state=state,output=output), self.assertRaises(AssertionError):
+                probe.check_routes([candidate], NAME, Path('/tmp/owned-case'))
+        for output in (None, '', [], {}):
+            events = denied_command_events()
+            events[-1]['step_update']['tool_info']['output'] = output
+            candidate, = normalized_agy(events)
+            with self.subTest(output=output), self.assertRaises(AssertionError):
+                probe.check_routes([candidate], NAME, Path('/tmp/owned-case'))
 
 
 class OutputTests(unittest.TestCase):

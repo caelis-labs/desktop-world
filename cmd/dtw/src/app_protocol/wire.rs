@@ -50,6 +50,12 @@ pub enum DiscoveryScope {
     },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ElementSelector {
+    pub role: Option<String>,
+    pub text: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     Script {
@@ -58,6 +64,10 @@ pub enum Command {
         max_calls: u32,
     },
     Windows,
+    WaitForWindow {
+        state: computer::WindowWaitState,
+        timeout_ms: u64,
+    },
     Observe,
     ObserveQuery(computer::ObserveQuery),
     ObserveScoped {
@@ -74,6 +84,19 @@ pub enum Command {
         cursor: String,
     },
     Capture,
+    Find {
+        selector: ElementSelector,
+        timeout_ms: u64,
+    },
+    PressSelected {
+        selector: ElementSelector,
+        timeout_ms: u64,
+    },
+    SetValueSelected {
+        selector: ElementSelector,
+        timeout_ms: u64,
+        value: String,
+    },
     Press {
         observation_ref: String,
         element_ref: String,
@@ -84,6 +107,12 @@ pub enum Command {
         y: f64,
     },
     ClickWithOptions {
+        observation_ref: String,
+        x: f64,
+        y: f64,
+        options: computer::ClickOptions,
+    },
+    ClickNormalized {
         observation_ref: String,
         x: f64,
         y: f64,
@@ -158,6 +187,44 @@ fn coordinate(object: &Map<String, Value>, key: &str) -> Result<f64, WireError> 
         .and_then(Value::as_f64)
         .filter(|value| value.is_finite())
         .ok_or_else(|| invalid(format!("command.{key} must be a finite number")))
+}
+
+fn selection(command: &Map<String, Value>) -> Result<(ElementSelector, u64), WireError> {
+    let selector = object(command.get("selector").unwrap_or(&Value::Null), "selector")?;
+    fields(selector, &["role", "text"], "selector")?;
+    let part = |key: &str, maximum: usize| {
+        selector
+            .get(key)
+            .map(|value| {
+                value
+                    .as_str()
+                    .filter(|text| !text.trim().is_empty() && text.chars().count() <= maximum)
+                    .map(str::to_owned)
+                    .ok_or_else(|| {
+                        invalid(format!(
+                            "selector.{key} must contain 1 to {maximum} characters"
+                        ))
+                    })
+            })
+            .transpose()
+    };
+    let selector = ElementSelector {
+        role: part("role", 64)?,
+        text: part("text", 256)?,
+    };
+    if selector.role.is_none() && selector.text.is_none() {
+        return Err(invalid("selector requires role or text"));
+    }
+    Ok((selector, read_wait_timeout(command)?))
+}
+
+fn read_wait_timeout(command: &Map<String, Value>) -> Result<u64, WireError> {
+    command.get("timeout_ms").map_or(Ok(2_000), |value| {
+        value
+            .as_u64()
+            .filter(|timeout| *timeout <= 30_000)
+            .ok_or_else(|| invalid("timeout_ms must be an integer between 0 and 30000"))
+    })
 }
 
 /// Shared argument parser for the VM bridge and the bound coordinator. Parsing
@@ -367,6 +434,52 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
                 _ => Command::Capture,
             })
         }
+        "waitForWindow" => {
+            fields(command, &["kind", "state", "timeout_ms"], "command")?;
+            let state = match command.get("state").and_then(Value::as_str) {
+                Some("dialog") => computer::WindowWaitState::Dialog,
+                Some("unblocked") => computer::WindowWaitState::Unblocked,
+                Some("closed") => computer::WindowWaitState::Closed,
+                _ => {
+                    return Err(invalid(
+                        "waitForWindow state must be dialog, unblocked or closed",
+                    ))
+                }
+            };
+            Ok(Command::WaitForWindow {
+                state,
+                timeout_ms: read_wait_timeout(command)?,
+            })
+        }
+        "find" => {
+            fields(command, &["kind", "selector", "timeout_ms"], "command")?;
+            let (selector, timeout_ms) = selection(command)?;
+            Ok(Command::Find {
+                selector,
+                timeout_ms,
+            })
+        }
+        "press" if command.contains_key("selector") => {
+            fields(command, &["kind", "selector", "timeout_ms"], "command")?;
+            let (selector, timeout_ms) = selection(command)?;
+            Ok(Command::PressSelected {
+                selector,
+                timeout_ms,
+            })
+        }
+        "setValue" if command.contains_key("selector") => {
+            fields(
+                command,
+                &["kind", "selector", "timeout_ms", "value"],
+                "command",
+            )?;
+            let (selector, timeout_ms) = selection(command)?;
+            Ok(Command::SetValueSelected {
+                selector,
+                timeout_ms,
+                value: text_value(command, "value", true)?,
+            })
+        }
         "press" => {
             fields(
                 command,
@@ -381,7 +494,15 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
         "click" => {
             fields(
                 command,
-                &["kind", "observation_ref", "x", "y", "button", "count"],
+                &[
+                    "kind",
+                    "observation_ref",
+                    "x",
+                    "y",
+                    "button",
+                    "count",
+                    "coordinate_space",
+                ],
                 "command",
             )?;
             let observation_ref = string(command, "observation_ref", "command")?;
@@ -402,6 +523,28 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
                     as u8,
             };
             let options = computer::ClickOptions { button, count };
+            match command.get("coordinate_space").and_then(Value::as_str) {
+                Some("normalized_1000") => {
+                    if !(0.0..1000.0).contains(&x) || !(0.0..1000.0).contains(&y) {
+                        return Err(invalid(
+                            "normalized_1000 coordinates must satisfy 0 <= x,y < 1000",
+                        ));
+                    }
+                    return Ok(Command::ClickNormalized {
+                        observation_ref,
+                        x,
+                        y,
+                        options,
+                    });
+                }
+                Some("image_pixels") => {}
+                None if !command.contains_key("coordinate_space") => {}
+                _ => {
+                    return Err(invalid(
+                        "coordinate_space must be image_pixels or normalized_1000",
+                    ))
+                }
+            }
             if options == computer::ClickOptions::default() {
                 Ok(Command::Click {
                     observation_ref,

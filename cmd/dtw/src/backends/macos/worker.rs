@@ -751,11 +751,13 @@ fn dispatch_owned(mut request: Value, leased: &mut bool, scene_worker: bool) -> 
     if let Err(error) = validate_reply(&after, &request["target"]) {
         return error;
     }
-    if before["surface_owner"] != after["surface_owner"]
-        || before["bounds"] != after["bounds"]
-        || result["bounds"] != after["bounds"]
-    {
-        return json!({"error":"stale_observation","message":"Window moved during capture"});
+    if let Some(error) = capture_snapshot_error(
+        &before,
+        &after,
+        &result["bounds"],
+        super::CaptureGeometryStage::Scene,
+    ) {
+        return error;
     }
     result["target"] = after["target"].clone();
     result
@@ -798,21 +800,45 @@ fn rejected(mut result: Value, operation: &str) -> Value {
     }
     result
 }
-pub(super) fn validate_reply(reply: &Value, target: &Value) -> Result<(), Value> {
-    if reply["error"].is_string() {
-        return Err(reply.clone());
-    }
-    let bounds_valid = reply["bounds"].as_array().is_some_and(|a| {
+fn valid_bounds(bounds: &Value) -> bool {
+    bounds.as_array().is_some_and(|a| {
         a.len() == 4
             && a.iter().all(|n| n.as_f64().is_some_and(|f| f.is_finite()))
             && a[2].as_f64().unwrap() > 0.0
             && a[3].as_f64().unwrap() > 0.0
-    });
+    })
+}
+
+// Both snapshots have already passed validate_reply. Identity takes precedence
+// over geometry: a replaced owner must never become a capture retry hint.
+pub(super) fn capture_snapshot_error(
+    before: &Value,
+    after: &Value,
+    frame_bounds: &Value,
+    stage: super::CaptureGeometryStage,
+) -> Option<Value> {
+    if before["target"] != after["target"] || before["surface_owner"] != after["surface_owner"] {
+        return Some(json!({"error":"target_changed",
+            "message":"Window identity or surface owner changed during capture validation"}));
+    }
+    if !valid_bounds(frame_bounds) {
+        return Some(json!({"error":"invalid_response","message":"Invalid capture frame bounds"}));
+    }
+    if before["bounds"] != after["bounds"] || frame_bounds != &after["bounds"] {
+        return Some(stage.reply());
+    }
+    None
+}
+
+pub(super) fn validate_reply(reply: &Value, target: &Value) -> Result<(), Value> {
+    if reply["error"].is_string() {
+        return Err(reply.clone());
+    }
     if !reply.is_object()
         || reply.get("error").is_some()
         || &reply["target"] != target
         || !target.is_object()
-        || !bounds_valid
+        || !valid_bounds(&reply["bounds"])
         || !reply["surface_owner"]["pid"]
             .as_u64()
             .is_some_and(|pid| pid > 0 && pid <= i32::MAX as u64)
@@ -1012,6 +1038,39 @@ mod tests {
             assert_eq!(result["dispatch"], dispatch);
             assert_eq!(result["delivery"]["route"], "background");
             assert_eq!(result["delivery"]["foreground_borrowed"], false);
+        }
+    }
+
+    #[test]
+    fn capture_snapshot_classification_requires_stable_identity_and_valid_geometry() {
+        let target = json!({"app":{"pid":7,"generation":3},"native_id":1,"generation":2});
+        let before = json!({"target":target,"bounds":[-100,2,300,400],
+            "surface_owner":{"pid":7,"generation":3}});
+        for stage in [
+            super::super::CaptureGeometryStage::Scene,
+            super::super::CaptureGeometryStage::Resident,
+        ] {
+            assert!(capture_snapshot_error(&before, &before, &before["bounds"], stage).is_none());
+            let moved_frame = json!([-99, 2, 300, 400]);
+            let changed = capture_snapshot_error(&before, &before, &moved_frame, stage).unwrap();
+            assert_eq!(
+                super::super::CaptureGeometryStage::from_reply(&changed),
+                Some(stage)
+            );
+            for bounds in [json!([]), json!([1, 2, 0, 4]), json!([1, 2, null, 4])] {
+                let bad = capture_snapshot_error(&before, &before, &bounds, stage).unwrap();
+                assert_eq!(bad["error"], "invalid_response");
+                assert_eq!(super::super::CaptureGeometryStage::from_reply(&bad), None);
+            }
+            let mut replaced = before.clone();
+            replaced["target"]["generation"] = json!(99);
+            replaced["bounds"] = moved_frame.clone();
+            let changed = capture_snapshot_error(&before, &replaced, &moved_frame, stage).unwrap();
+            assert_eq!(changed["error"], "target_changed");
+            assert_eq!(
+                super::super::CaptureGeometryStage::from_reply(&changed),
+                None
+            );
         }
     }
 

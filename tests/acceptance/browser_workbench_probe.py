@@ -312,8 +312,10 @@ def normalize_agy(path):
                 old = steps.setdefault(key, {})
                 info = {**old.get('tool_info', {}), **s.get('tool_info', {})}
                 output_observed = old.get('_output_observed', False) or info.get('output') is not None
+                non_preflight_state = old.get('_non_preflight_state', False) or s.get('state') not in ('ACTIVE', 'ERROR')
                 old.update(s); old['tool_info'] = info
                 old['_output_observed'] = output_observed
+                old['_non_preflight_state'] = non_preflight_state
         if e.get('event') in ('result', 'done', 'turn_complete'): terminal = e
     rows = []
     for s in steps.values():
@@ -327,6 +329,7 @@ def normalize_agy(path):
             # data was exposed, including in earlier partial step updates.
             row['client_error_no_data'] = (info.get('name') == s['tool_name']
                 and set(info) == {'name','parameters','error'} and not s['_output_observed'])
+            row['client_preflight_only'] = not s['_non_preflight_state']
         if 'duration_seconds' in s:
             row['duration_seconds'] = s['duration_seconds']
         if s.get('tool_name') == 'call_mcp_tool':
@@ -431,6 +434,45 @@ def metadata_discovery_miss(call, name):
             and call.get('client_error') == {'type':'TOOL_ERROR','message':'file does not exist'})
 
 
+def denied_route_attempt(call):
+    """Only the client's explicit pre-execution command-denial envelope qualifies."""
+    if (call.get('name') != 'run_command' or call.get('status') != 'ERROR'
+            or call.get('output') is not None or call.get('client_error_no_data') is not True
+            or call.get('client_preflight_only') is not True):
+        return False
+    error = call.get('client_error')
+    arguments = call.get('arguments')
+    if (not isinstance(error, dict) or set(error) != {'type','message'}
+            or error['type'] != 'TOOL_ERROR' or not isinstance(error['message'], str)
+            or not isinstance(arguments, dict) or set(arguments) != {'CommandLine'}):
+        return False
+    # Generic runtime "permission denied" errors do not prove non-execution.
+    # The client quotes the full rejected command even when its displayed input
+    # is truncated. Bind that quoted request to this exact tool attempt.
+    prefix = 'permission check failed for unsandboxed '
+    message = error['message']
+    if not message.startswith(prefix): return False
+    try:
+        command, end = json.JSONDecoder().raw_decode(message[len(prefix):])
+    except (ValueError, TypeError):
+        return False
+    tail = message[len(prefix)+end:]
+    denial_prefix = ': Permission denied for unsandboxed('
+    denial_suffix = '). Matches user-configured deny rule.'
+    if (not isinstance(command, str) or not command
+            or not tail.startswith(denial_prefix) or not tail.endswith(denial_suffix)):
+        return False
+    rejected = tail[len(denial_prefix):-len(denial_suffix)]
+    # This client's permission display drops blank lines, but must still name
+    # the same request. Do not accept unrelated text inside a denial wrapper.
+    if ([line for line in rejected.splitlines() if line.strip()]
+            != [line for line in command.splitlines() if line.strip()]):
+        return False
+    displayed = arguments['CommandLine']
+    return isinstance(displayed, str) and (displayed == command
+        or (len(displayed) > 1 and displayed.endswith('…') and command.startswith(displayed[:-1])))
+
+
 def metrics(calls, name, browser_app="com.google.Chrome", *, allowed_apps=None):
     if allowed_apps is None:
         allowed_apps = (browser_app, 'com.apple.TextEdit')
@@ -442,7 +484,11 @@ def metrics(calls, name, browser_app="com.google.Chrome", *, allowed_apps=None):
                 selected.append({**c, 'method':a['ToolName'], 'arguments':a['Arguments']})
         elif isinstance(c['name'], str) and c['name'].startswith(f'mcp__{name}__'):
             selected.append({**c, 'method':c['name'].split('__')[-1]})
-    text_bytes = 0; images_total = 0; issues = []; exec_count = 0; images_complete = True
+    denied = [{'agent_call':number, 'tool':c['name'], 'duration_seconds':c.get('duration_seconds')}
+              for number, c in enumerate(calls, 1) if denied_route_attempt(c)]
+    # A blocked attempt did not bypass the GUI route, but is not a clean run.
+    text_bytes = 0; images_total = 0; issues = [dict(kind='denied_route_attempt', **row) for row in denied]
+    exec_count = 0; images_complete = True
     script_calls = []; read_refreshes = []
     for number, c in enumerate(selected, 1):
         if c['method'] == 'exec':
@@ -501,6 +547,7 @@ def metrics(calls, name, browser_app="com.google.Chrome", *, allowed_apps=None):
             'image_bytes':images_total if images_complete else None,
             'image_measurement':'complete' if images_complete else 'payload_not_fully_exposed',
             'issues':issues,'read_refreshes':read_refreshes,
+            'denied_route_attempts':len(denied),'denied_route_attempt_details':denied,
             'metadata_discovery_misses':[{'agent_call':number,'path':c['arguments']['Path'],
                 'client_error':c['client_error'],'duration_seconds':c.get('duration_seconds')}
                 for number, c in enumerate(calls, 1) if metadata_discovery_miss(c, name)],
@@ -559,6 +606,7 @@ def check_routes(calls, name, root):
             require(read in reads or metadata_discovery_miss(call, name),
                     'Agent read task data outside the GUI route'); continue
         if tool == 'run_command':
+            if denied_route_attempt(call): continue
             try:
                 argv = shlex.split(arguments.get('CommandLine', ''))
             except ValueError as error:

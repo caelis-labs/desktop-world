@@ -1416,7 +1416,7 @@ private func requireNonModalWindow(_ element: AXUIElement, _ deadline: Deadline)
           CFGetTypeID(value) == CFBooleanGetTypeID(), let modal = value as? Bool else {
         throw failure("modal_state_unproven", "A window does not expose a Boolean AXModal state")
     }
-    if modal { throw failure("unsupported_modal", "A modal window blocks this application scope") }
+    if modal { throw failure("unsupported_modal", "A modal blocks the selected window. Use app.waitForWindow({window_ref,state:'dialog'}) to look for a proven related modal; if resolved, inspect that window before deciding on new input.") }
 }
 
 private func rejectModalSurface(_ element: AXUIElement, _ context: RequestContext) throws {
@@ -1426,7 +1426,7 @@ private func rejectModalSurface(_ element: AXUIElement, _ context: RequestContex
         throw failure("modal_state_unproven", "An AX inventory element has no readable role")
     }
     if role == kAXSheetRole {
-        throw failure("unsupported_modal", "A sheet is present; sheet/modal routing is not supported")
+        throw failure("unsupported_modal", "An attached sheet blocks the selected window. Use app.waitForWindow({window_ref,state:'dialog'}) to look for a proven related modal; if resolved, inspect that window before deciding on new input.")
     }
     if role == kAXWindowRole { try requireNonModalWindow(element, deadline) }
 }
@@ -1533,7 +1533,7 @@ private func requireWindowWithoutSheet(_ element: AXUIElement, _ context: Reques
                 throw failure("modal_state_unproven", "AXSheets is not an array")
             }
             if CFArrayGetCount((sheets as! CFArray)) > 0 {
-                throw failure("unsupported_modal", "The target window has an attached sheet")
+                throw failure("unsupported_modal", "An attached sheet blocks the selected window. Use app.waitForWindow({window_ref,state:'dialog'}) to look for a proven related modal; if resolved, inspect that window before deciding on new input.")
             }
         }
         try inspectModalChildren(element, context: context) { child in
@@ -1693,11 +1693,11 @@ private func permitsActiveModalSibling(targetIsModal: () throws -> Bool,
 private func permitsOtherModal(descendant: Bool, applicationModal: () throws -> Bool,
                                activeModalTarget: () throws -> Bool) throws -> Bool {
     if descendant {
-        throw failure("target_blocked_by_modal", "This surface has an attached modal; select the dialog window and observe it")
+        throw failure("target_blocked_by_modal", "An attached modal blocks the selected window. Use app.waitForWindow({window_ref,state:'dialog'}) to look for a proven related modal; if resolved, inspect that window before deciding on new input.")
     }
     guard try applicationModal() else { return false }
     guard try activeModalTarget() else {
-        throw failure("target_blocked_by_modal", "An application modal blocks this surface; select the modal window")
+        throw failure("target_blocked_by_modal", "An application modal blocks the selected window. Use app.waitForWindow({window_ref,state:'dialog'}) to look for a proven related modal; if resolved, inspect that window before deciding on new input.")
     }
     return true
 }
@@ -1844,6 +1844,85 @@ private func currentWindowBindings<Key: Hashable, Binding>(
     bindings.filter {
         let retained = target($0.value)
         return windows[WindowSlot(app: retained.app, id: retained.nativeID)] == retained
+    }
+}
+
+private enum ScopedWindowCondition: String { case dialog, unblocked, closed }
+
+// Closed waits may outlive their original process. Only positive kernel death
+// can replace a live identity check, never an unreadable or reused PID.
+private func verifyWindowWaitProcess(expected: UInt64, stamp: UInt64?,
+    gone: () -> Bool, verifyLive: () throws -> Void) throws {
+    if let stamp {
+        guard stamp == expected else { throw failure("app_changed", "Window wait process identity was reused") }
+        do { try verifyLive() }
+        catch let error as NativeFailure where error.code == "app_changed" {
+            guard gone() else { throw error }
+        }
+    } else {
+        guard gone() else { throw failure("app_changed", "Window wait process identity is unavailable") }
+    }
+}
+
+// An exact absence check never depends on AX readiness, a title, app inventory
+// coverage or onscreen state. A retained zero-sized/hidden surface is still open.
+private func exactWindowPresent(_ rows: [[String: Any]], id: CGWindowID, owner: Int32) throws -> Bool {
+    guard !rows.isEmpty else { return false }
+    guard rows.count == 1, let foundID = rows[0][kCGWindowNumber as String] as? UInt32,
+          foundID != 0, let foundOwner = rows[0][kCGWindowOwnerPID as String] as? Int32, foundOwner > 0 else {
+        throw failure("window_inventory_unproven", "Exact window presence metadata is incomplete or duplicated")
+    }
+    guard foundID == id, foundOwner == owner else {
+        throw failure("target_changed", "Exact window presence returned a different owner or surface")
+    }
+    return true
+}
+
+// WindowServer can publish a growing sheet at zero area before it is ready.
+// That is a present-but-unready surface, not malformed metadata or closure.
+private func readyModalSurface(_ rows: [[String: Any]], id: CGWindowID) throws -> CGRecord? {
+    guard !rows.isEmpty else { return nil }
+    guard rows.count == 1, let owner = rows[0][kCGWindowOwnerPID as String] as? Int32, owner > 0,
+          rows[0][kCGWindowLayer as String] is Int,
+          let dictionary = rows[0][kCGWindowBounds as String] as? NSDictionary,
+          let bounds = CGRect(dictionaryRepresentation: dictionary),
+          bounds.minX.isFinite, bounds.minY.isFinite, bounds.width.isFinite, bounds.height.isFinite,
+          bounds.width >= 0, bounds.height >= 0 else {
+        throw failure("window_unproven", "Dialog surface metadata is incomplete or malformed")
+    }
+    _ = try exactWindowPresent(rows, id: id, owner: owner)
+    if bounds.width == 0 || bounds.height == 0 { return nil }
+    let record = try selectedSurfaceRecord(rows, id: id)
+    return record.onscreen ? record : nil
+}
+
+// The caller has already proved every candidate's relation to the anchor. A
+// parent modal is not actionable while another candidate descends from it.
+private func terminalModalRoots<Root>(_ roots: [Root], equal: (Root, Root) -> Bool,
+                                     descendant: (Root, Root) throws -> Bool) rethrows -> [Root] {
+    try roots.filter { root in
+        try !roots.contains { other in try !equal(root, other) && descendant(other, root) }
+    }
+}
+
+private func windowProbeFailureReason(_ error: NativeFailure,
+                                      checkCaller: () throws -> Void) throws -> String? {
+    // Typed AX busy may settle on a fresh read, but a true caller deadline,
+    // cancellation or process-identity failure always remains authoritative.
+    try checkCaller()
+    return windowProbePending(error)
+}
+
+private func windowProbePending(_ error: NativeFailure) -> String? {
+    if error.attributeFailure?.error == .cannotComplete,
+       error.code == "ax_unavailable" || (error.code == "window_unproven" && error.attributeFailure?.name == "AXWindowID") {
+        return "ax_busy"
+    }
+    switch error.code {
+    case "target_blocked_by_modal", "unsupported_modal": return "blocked_by_modal"
+    case "semantic_window_unavailable": return "semantic_window_unavailable"
+    case "focus_changed": return "focus_changed"
+    default: return nil
     }
 }
 
@@ -2805,7 +2884,7 @@ private final class BackgroundInputValidation {
                 throw failure("modal_state_unproven", "AXSheets is not an array")
             }
             guard CFArrayGetCount((sheets as! CFArray)) == 0 else {
-                throw failure("unsupported_modal", "The target window has an attached sheet")
+                throw failure("unsupported_modal", "An attached sheet blocks the selected window. Use app.waitForWindow({window_ref,state:'dialog'}) to look for a proven related modal; if resolved, inspect that window before deciding on new input.")
             }
         }
         // Refresh only the target's shallow child membership. Known control
@@ -2825,7 +2904,7 @@ private final class BackgroundInputValidation {
                     throw failure("modal_state_unproven", "An AX child has no readable role")
                 }
                 guard role != kAXSheetRole else {
-                    throw failure("unsupported_modal", "A sheet is present; sheet/modal routing is not supported")
+                    throw failure("unsupported_modal", "An attached sheet blocks the selected window. Use app.waitForWindow({window_ref,state:'dialog'}) to look for a proven related modal; if resolved, inspect that window before deciding on new input.")
                 }
                 isWindow = role == kAXWindowRole
             }
@@ -3012,6 +3091,208 @@ private final class NativeStore: @unchecked Sendable {
         // never against the old slot contents before generation assignment.
         reconcileWindowBindings()
         return ["windows": rows, "coverage": coverage]
+    }
+
+    private func probeWindowState(_ request: [String: Any], _ context: RequestContext) throws -> [String: Any] {
+        let target = try NativeTarget(request["target"])
+        guard let value = request["state"] as? String, let desired = ScopedWindowCondition(rawValue: value) else {
+            throw failure("invalid_request", "Unsupported window condition")
+        }
+        let slot = WindowSlot(app: target.app, id: target.nativeID)
+        guard windows[slot] == target else { throw failure("stale_window", "Window condition requires its registered target") }
+        func check() throws {
+            guard !dtwInputStopping() else { throw failure("native_stopping", "Window condition read was cancelled") }
+            try context.deadline.check()
+            try verifyWindowWaitApp(target.app, desired: desired, context)
+        }
+        try check()
+        // The Runtime condition deadline only controls another probe. This
+        // complete read retains its original call budget, including scoped SCK
+        // helpers, which are reaped before the reply and any inter-probe wait.
+        do {
+            let result = try windowStateSnapshot(target, desired: desired, context)
+            try check()
+            return result
+        } catch let error as NativeFailure {
+            if let reason = try windowProbeFailureReason(error, checkCaller: check) {
+                return ["status":"pending", "reason":reason]
+            }
+            throw error
+        }
+    }
+
+    private func verifyWindowWaitApp(_ app: NativeApp, desired: ScopedWindowCondition,
+                                     _ context: RequestContext) throws {
+        guard desired == .closed else { try context.verify(app); return }
+        try verifyWindowWaitProcess(expected: app.generation, stamp: context.startStamp(app.pid),
+            gone: { kill(app.pid, 0) == -1 && errno == ESRCH }, verifyLive: { try context.verify(app) })
+        try context.deadline.check()
+    }
+
+    private func windowStateSnapshot(_ target: NativeTarget, desired: ScopedWindowCondition,
+                                     _ context: RequestContext) throws -> [String: Any] {
+        let slot = WindowSlot(app: target.app, id: target.nativeID)
+        let association = associatedSurfaces[slot]
+        let ownerPID = association?.ownerPID ?? target.app.pid
+        let ownerBirth = association?.ownerBirth ?? target.app.generation
+        func checkOwner() throws {
+            if desired == .closed {
+                try verifyWindowWaitProcess(expected: ownerBirth, stamp: context.startStamp(ownerPID),
+                    gone: { kill(ownerPID, 0) == -1 && errno == ESRCH }, verifyLive: {})
+            } else if try context.startStamp(ownerPID) != ownerBirth {
+                throw failure("stale_window", "Present window owner birth identity changed")
+            }
+        }
+        try checkOwner()
+        let present = try exactWindowPresent(cgWindowRows(context.deadline, only: target.nativeID),
+                                             id: target.nativeID, owner: ownerPID)
+        try verifyWindowWaitApp(target.app, desired: desired, context)
+        try checkOwner()
+        if !present {
+            if desired == .closed {
+                windows.removeValue(forKey: slot)
+                associatedSurfaces.removeValue(forKey: slot)
+                semanticWindows.removeValue(forKey: slot)
+                observations = observations.filter { $0.value.target != target }
+                return ["status":"closed"]
+            }
+            throw failure("target_changed", "Anchor window closed before the requested condition was proven")
+        }
+        if desired == .closed { return ["status":"pending", "reason":"window_present"] }
+        guard AXIsProcessTrusted() else { throw failure("permission_denied", "Accessibility permission is required") }
+        let anchor = try validate(target, context, input: desired == .unblocked)
+        guard anchor.cg.onscreen else { return ["status":"pending", "reason":"window_not_visible"] }
+        if desired == .unblocked {
+            let kind = try windowConditionKind(anchor.element, context.deadline)
+            return ["status":"matched", "kind":kind, "relation":"same_window",
+                    "windows":[["target":target.json, "title":anchor.title, "onscreen":true]]]
+        }
+        let application = AXUIElementCreateApplication(target.app.pid)
+        var roots = try semanticWindowRoots(application, context.deadline)
+        if !roots.contains(where: { CFEqual($0, anchor.element) }) { roots.append(anchor.element) }
+        var related: [(root: AXUIElement, kind: String, relation: String)] = []
+        for root in roots where !CFEqual(root, anchor.element) {
+            guard try axPID(root, context.deadline) == target.app.pid else {
+                throw failure("modal_state_unproven", "Modal root belongs to another AX application")
+            }
+            let kind = try windowConditionKind(root, context.deadline)
+            guard kind != "window" else { continue }
+            if try axAncestor(root, is: anchor.element, context.deadline) {
+                related.append((root, kind, "child_modal"))
+            } else if try !axAncestor(anchor.element, is: root, context.deadline),
+                      let parent = axElement(try axAttribute(root, kAXParentAttribute, context.deadline)),
+                      CFEqual(parent, application), try axPID(parent, context.deadline) == target.app.pid {
+                // This is an AX-proven application-modal relation, never a
+                // guessed relationship based on an empty title or CG ordering.
+                related.append((root, kind, "application_modal"))
+            }
+        }
+        let terminal = try terminalModalRoots(related, equal: { CFEqual($0.root, $1.root) },
+            descendant: { try axAncestor($0.root, is: $1.root, context.deadline) })
+        guard !terminal.isEmpty else { return ["status":"pending", "reason":"dialog_not_present"] }
+        var ready: [(root: AXUIElement, kind: String, relation: String, record: CGRecord,
+                     title: String, association: SurfaceAssociation?)] = []
+        var unresolvedSurface = false
+        for modal in terminal {
+            guard let surface = try windowModalSurface(modal.root, anchor: target, context) else {
+                unresolvedSurface = true; continue
+            }
+            do {
+                try requireNoBlockingModal(modal.root, roots: roots, windowID: surface.record.id, context: context)
+                let proof = FocusModalContext(phase: .validation, originalTarget: modal.root, checkTarget: {
+                    try context.verify(target.app)
+                    guard let live = try exactSurfaceRecord(cgWindowRows(context.deadline, only: surface.record.id), expected: surface.record),
+                          live.bounds == surface.record.bounds, live.onscreen else {
+                        throw failure("target_changed", "Modal surface changed during condition validation")
+                    }
+                })
+                try requireWindowWithoutSheet(modal.root, context, modal: proof)
+            } catch let error as NativeFailure where ["target_blocked_by_modal", "unsupported_modal"].contains(error.code) {
+                continue
+            }
+            ready.append((modal.root, modal.kind, modal.relation, surface.record, surface.title, surface.association))
+        }
+        guard !unresolvedSurface, ready.count == 1, let chosen = ready.first else {
+            return ["status":"pending", "reason":unresolvedSurface || ready.isEmpty ? "dialog_not_ready" : "ambiguous_dialog"]
+        }
+        // Recheck the original anchor and the selected live root/owner. A new
+        // ordinary window or another process cannot be adopted as its dialog.
+        _ = try validateSurface(target, context)
+        guard try axPID(chosen.root, context.deadline) == target.app.pid,
+              let live = try exactSurfaceRecord(cgWindowRows(context.deadline, only: chosen.record.id), expected: chosen.record),
+              live.bounds == chosen.record.bounds, live.onscreen else {
+            throw failure("target_changed", "Dialog changed before publication")
+        }
+        if let associated = chosen.association,
+           try context.startStamp(associated.ownerPID) != associated.ownerBirth {
+            throw failure("stale_window", "Associated dialog owner changed before publication")
+        }
+        let relationStillValid: Bool
+        if chosen.relation == "child_modal" {
+            relationStillValid = try axAncestor(chosen.root, is: anchor.element, context.deadline)
+        } else {
+            relationStillValid = try axElement(axAttribute(chosen.root, kAXParentAttribute, context.deadline))
+                .map { CFEqual($0, application) } ?? false
+        }
+        guard relationStillValid else { throw failure("stale_window", "Dialog relation changed before publication") }
+        try context.verify(target.app)
+        try context.deadline.check()
+        let selectedSlot = WindowSlot(app: target.app, id: chosen.record.id)
+        if let old = semanticWindows[selectedSlot], !CFEqual(old.element, chosen.root) {
+            windows.removeValue(forKey: selectedSlot)
+        }
+        let row = try registerSurface(live, title: chosen.title, app: target.app, association: chosen.association)
+        reconcileWindowBindings()
+        if let selected = windows[selectedSlot] {
+            semanticWindows[selectedSlot] = RegisteredWindow(target: selected, element: chosen.root)
+        }
+        return ["status":"matched", "kind":chosen.kind, "relation":chosen.relation, "windows":[row]]
+    }
+
+    private func windowConditionKind(_ root: AXUIElement, _ deadline: Deadline) throws -> String {
+        let role = try axAttribute(root, kAXRoleAttribute, deadline) as? String
+        if role == kAXSheetRole { return "sheet" }
+        guard role == kAXWindowRole else { return "window" }
+        guard let raw = try axAttribute(root, kAXModalAttribute, deadline),
+              CFGetTypeID(raw) == CFBooleanGetTypeID(), let modal = raw as? Bool else {
+            throw failure("modal_state_unproven", "Window has no readable Boolean modal state")
+        }
+        return modal ? "dialog" : "window"
+    }
+
+    private func windowModalSurface(_ root: AXUIElement, anchor: NativeTarget, _ context: RequestContext) throws
+        -> (record: CGRecord, title: String, association: SurfaceAssociation?)? {
+        let id = try axWindowID(root, context.deadline)
+        if id != anchor.nativeID {
+            let rows = try cgWindowRows(context.deadline, only: id)
+            if !rows.isEmpty {
+                guard let selected = try readyModalSurface(rows, id: id) else { return nil }
+                if selected.pid == anchor.app.pid {
+                    return (selected, String((rows[0][kCGWindowName as String] as? String ?? "").prefix(512)), nil)
+                }
+            }
+        }
+        // Some client AX roots describe a service-owned backing surface, while
+        // AXWindowID names the logical parent. Geometry only narrows candidates;
+        // fresh public AX ancestry + visible pixel proof must return THIS root.
+        guard let rect = try axRect(root, context.deadline) else { return nil }
+        let rows = try cgWindowRows(context.deadline)
+        let candidates = rows.compactMap(cgRecord).filter {
+            $0.id != anchor.nativeID && $0.onscreen && associatedGeometry(rect, $0.bounds)
+        }
+        guard candidates.count <= 128 else { throw failure("window_limit", "Modal backing surface candidates exceed the supported limit") }
+        var proven: [(record: CGRecord, title: String, association: SurfaceAssociation?)] = []
+        for candidate in candidates {
+            guard let birth = try context.startStamp(candidate.pid),
+                  let associatedRoot = try associatedClientRoot(candidate, app: anchor.app, context),
+                  CFEqual(associatedRoot, root),
+                  try context.startStamp(candidate.pid) == birth,
+                  let live = try exactSurfaceRecord(cgWindowRows(context.deadline, only: candidate.id), expected: candidate),
+                  live.bounds == candidate.bounds, live.onscreen else { continue }
+            let title = String((rows.first { ($0[kCGWindowNumber as String] as? UInt32) == live.id }?[kCGWindowName as String] as? String ?? "").prefix(512))
+            proven.append((live, title, SurfaceAssociation(ownerPID: live.pid, ownerBirth: birth, root: root)))
+        }
+        return proven.count == 1 ? proven[0] : nil
     }
 
     fileprivate func validateSurface(_ target: NativeTarget, _ context: RequestContext,
@@ -4649,6 +4930,7 @@ private final class NativeStore: @unchecked Sendable {
             case "catalog": return try context.catalog()
             case "windows": return try listWindows(NativeApp(request["app"]), context)
             case "bind_window": return try bindWindow(request, context)
+            case "probe_window_state": return try probeWindowState(request, context)
             case "observe": return try observe(request, context)
             case "observe_next": return try observeNext(request, context)
             case "read_text": return try readText(request, context)

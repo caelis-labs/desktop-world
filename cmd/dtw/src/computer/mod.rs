@@ -375,6 +375,75 @@ pub struct WindowInfo {
     pub visible: bool,
 }
 
+/// Read-only conditions for one exact registered window, never an input retry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowWaitState {
+    Dialog,
+    Unblocked,
+    Closed,
+}
+impl WindowWaitState {
+    pub const ALL: [Self; 3] = [Self::Dialog, Self::Unblocked, Self::Closed];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Dialog => "dialog",
+            Self::Unblocked => "unblocked",
+            Self::Closed => "closed",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowKind {
+    Window,
+    Dialog,
+    Sheet,
+}
+impl WindowKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Window => "window",
+            Self::Dialog => "dialog",
+            Self::Sheet => "sheet",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowRelation {
+    SameWindow,
+    ChildModal,
+    ApplicationModal,
+}
+impl WindowRelation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SameWindow => "same_window",
+            Self::ChildModal => "child_modal",
+            Self::ApplicationModal => "application_modal",
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MatchedWindow {
+    pub window: WindowInfo,
+    pub kind: WindowKind,
+    pub relation: WindowRelation,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WindowStateProbe {
+    /// A successful scoped read did not prove the requested condition yet.
+    Pending {
+        reason: String,
+    },
+    /// Only an exact native disappearance proves this condition.
+    Closed,
+    Window(MatchedWindow),
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowWaitResult {
+    pub probe: WindowStateProbe,
+    pub samples: u32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InventoryScope {
     SameProcessStandardWindows,
@@ -618,6 +687,17 @@ pub trait Backend: Send + Sync {
         _app: &AppInstance,
         _call: &CallContext<'_>,
     ) -> Result<WindowInventory, Error> {
+        Err(Error::UnsupportedCapability)
+    }
+    fn supported_window_wait_states(&self) -> &'static [WindowWaitState] {
+        &[]
+    }
+    fn probe_window_state(
+        &self,
+        _target: &WindowTarget,
+        _state: WindowWaitState,
+        _call: &CallContext<'_>,
+    ) -> Result<WindowStateProbe, Error> {
         Err(Error::UnsupportedCapability)
     }
     fn observe(

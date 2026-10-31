@@ -3,6 +3,8 @@ use crate::computer::Capability;
 #[derive(Clone, Copy)]
 pub(super) enum Method {
     Windows,
+    WaitForWindow,
+    Find,
     Observe,
     Capture,
     Press,
@@ -15,8 +17,10 @@ pub(super) enum Method {
     ReadText,
 }
 impl Method {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 13] = [
         Self::Windows,
+        Self::WaitForWindow,
+        Self::Find,
         Self::Observe,
         Self::Capture,
         Self::Press,
@@ -31,6 +35,8 @@ impl Method {
     pub fn name(self) -> &'static str {
         match self {
             Self::Windows => "windows",
+            Self::WaitForWindow => "waitForWindow",
+            Self::Find => "find",
             Self::Observe => "observe",
             Self::Capture => "capture",
             Self::Press => "press",
@@ -55,7 +61,8 @@ impl Method {
     }
     pub fn capability(self) -> Capability {
         match self {
-            Self::Windows => Capability::Windows,
+            Self::Windows | Self::WaitForWindow => Capability::Windows,
+            Self::Find => Capability::Observe,
             Self::Observe => Capability::Observe,
             Self::Capture => Capability::Capture,
             Self::Press => Capability::Press,

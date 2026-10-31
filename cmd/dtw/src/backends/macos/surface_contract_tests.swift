@@ -1369,3 +1369,86 @@ for stop in ["app_changed", "native_stopping", "deadline_exceeded"] {
     surfaceCheck(stopped.code == stop)
 }
 print("Expired discovery association rebuilds one full snapshot; persistent errors retain cause, while identity/permission/stop remain final")
+
+// Scoped waits must use exact native absence, not incomplete app inventory,
+// visibility, zero-area animation, title matching, or a different owner.
+let waitAbsent = try exactWindowPresent([], id: 90, owner: 10)
+surfaceCheck(!waitAbsent)
+let waitZeroPresent = try exactWindowPresent([surfaceRow(90, width: 0)], id: 90, owner: 10)
+surfaceCheck(waitZeroPresent)
+var waitHidden = surfaceRow(90)
+waitHidden[kCGWindowIsOnscreen as String] = false
+let waitHiddenPresent = try exactWindowPresent([waitHidden], id: 90, owner: 10)
+surfaceCheck(waitHiddenPresent)
+for rows in [[surfaceRow(90, pid: 11)], [surfaceRow(91)], [surfaceRow(90), surfaceRow(90)], [[:]]] {
+    do { _ = try exactWindowPresent(rows, id: 90, owner: 10); preconditionFailure("Unproven absence accepted") }
+    catch let error as NativeFailure { surfaceCheck(["target_changed", "window_inventory_unproven"].contains(error.code)) }
+}
+// Nested sheets choose the leaf; unrelated siblings remain two candidates.
+let waitParents = [2: 1, 3: 2, 4: 1, 5: 0]
+let waitTerminal = terminalModalRoots([2, 3], equal: ==) { child, parent in
+    boundedAncestor(child, is: parent, equal: ==) { waitParents[$0] }
+}
+surfaceCheck(waitTerminal == [3])
+let waitAmbiguous = terminalModalRoots([3, 4], equal: ==) { child, parent in
+    boundedAncestor(child, is: parent, equal: ==) { waitParents[$0] }
+}
+surfaceCheck(waitAmbiguous == [3, 4])
+do {
+    _ = try terminalModalRoots([2, 3], equal: ==) { _, _ -> Bool in
+        throw failure("permission_denied", "original ancestry permission failure")
+    }
+    preconditionFailure("Ancestry failure became an empty dialog list")
+} catch let error as NativeFailure { surfaceCheck(error.code == "permission_denied") }
+surfaceCheck(windowProbePending(failure("ax_unavailable", "busy", attributeFailure: AXAttributeFailure(name: "AXWindows", error: .cannotComplete))) == "ax_busy")
+for error in [failure("permission_denied", "original"), failure("app_changed", "birth changed"),
+              failure("native_stopping", "cancelled"),
+              failure("ax_unavailable", "expired target", attributeFailure: AXAttributeFailure(name: "AXRole", error: .invalidUIElement))] {
+    surfaceCheck(windowProbePending(error) == nil)
+}
+print("Scoped window condition contracts passed (no AX or GUI reads)")
+
+let waitDeadline = try windowProbeFailureReason(failure("deadline_exceeded", "original deadline"), checkCaller: {})
+surfaceCheck(waitDeadline == nil)
+let waitHard = try windowProbeFailureReason(failure("permission_denied", "original permission"), checkCaller: {})
+surfaceCheck(waitHard == nil)
+for code in ["deadline_exceeded", "native_stopping", "app_changed"] {
+    do {
+        _ = try windowProbeFailureReason(failure("ax_unavailable", "busy", attributeFailure: AXAttributeFailure(name: "AXWindows", error: .cannotComplete)),
+            checkCaller: { throw failure(code, "original caller failure") })
+        preconditionFailure("Pending window read masked original caller failure")
+    } catch let error as NativeFailure { surfaceCheck(error.code == code && error.message == "original caller failure") }
+}
+
+// Closing the final window or an associated service can end its process. The
+// same helper guards BOTH identities; absence still needs the exact CG query.
+for expected in [UInt64(100), UInt64(200)] {
+    var checkedLive = false
+    try verifyWindowWaitProcess(expected: expected, stamp: expected, gone: { false }, verifyLive: { checkedLive = true })
+    surfaceCheck(checkedLive)
+    try verifyWindowWaitProcess(expected: expected, stamp: nil, gone: { true }, verifyLive: { preconditionFailure("Exited process was verified live") })
+    for stamp in [UInt64?.none, expected + 1] {
+        do {
+            try verifyWindowWaitProcess(expected: expected, stamp: stamp, gone: { false }, verifyLive: {})
+            preconditionFailure("Missing or reused process identity accepted")
+        } catch let error as NativeFailure { surfaceCheck(error.code == "app_changed") }
+    }
+    do {
+        try verifyWindowWaitProcess(expected: expected, stamp: expected, gone: { true },
+            verifyLive: { throw failure("permission_denied", "original permission") })
+        preconditionFailure("Process exit hid a permission failure")
+    } catch let error as NativeFailure { surfaceCheck(error.code == "permission_denied") }
+}
+print("Closed-window waits require original process identity or positive death plus exact CG absence")
+
+surfaceCheck(windowProbePending(failure("window_unproven", "busy exact id", attributeFailure: AXAttributeFailure(name: "AXWindowID", error: .cannotComplete))) == "ax_busy")
+surfaceCheck(windowProbePending(failure("window_unproven", "zero exact id", attributeFailure: AXAttributeFailure(name: "AXWindowID", error: .success))) == nil)
+
+private let waitGrowingSheet = try readyModalSurface([surfaceRow(90, width: 0)], id: 90)
+private let waitHiddenSheet = try readyModalSurface([waitHidden], id: 90)
+private let waitVisibleSheet = try readyModalSurface([surfaceRow(90)], id: 90)
+surfaceCheck(waitGrowingSheet == nil && waitHiddenSheet == nil && waitVisibleSheet?.id == 90)
+for row in [invalid, surfaceRow(90, width: -1), surfaceRow(90, width: Double.infinity), surfaceRow(91)] {
+    do { _ = try readyModalSurface([row], id: 90); preconditionFailure("Invalid sheet surface became pending") }
+    catch let error as NativeFailure { surfaceCheck(["window_unproven", "target_changed"].contains(error.code)) }
+}

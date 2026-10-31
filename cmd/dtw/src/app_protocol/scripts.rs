@@ -63,6 +63,7 @@ struct Step {
     error: Option<WireError>,
     inventory: Option<Value>,
     discovery: Option<Value>,
+    resolution: Option<Value>,
 }
 impl Step {
     fn json(&self) -> Value {
@@ -72,6 +73,9 @@ impl Step {
             "inventory":self.inventory});
         if let Some(discovery) = &self.discovery {
             value["discovery"] = discovery.clone();
+        }
+        if let Some(resolution) = &self.resolution {
+            value["resolution"] = resolution.clone();
         }
         value
     }
@@ -336,6 +340,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 error: None,
                 inventory: None,
                 discovery: None,
+                resolution: None,
             });
         }
         let mut work = match parsed {
@@ -412,6 +417,22 @@ impl<B: Backend + 'static> Coordinator<B> {
 
     fn parse_script_call(&self, id: &str, call: &engine::HostCall) -> Result<Submit, WireError> {
         wire::script_submit(&self.app_ref, id, &call.op, &call.args)
+    }
+
+    /// Replace bounded progress on the current host call, including before an
+    /// input exists. Cancellation and a later action failure retain this proof.
+    pub(super) fn record_resolution(&self, id: &str, progress: Value) {
+        let mut state = self.state.lock().unwrap();
+        if let Some(step) = state
+            .jobs
+            .iter_mut()
+            .find(|job| job.submitted.request_id == id)
+            .and_then(|job| job.script.as_mut())
+            .and_then(|run| run.steps.last_mut())
+            .filter(|step| !step.completed)
+        {
+            step.resolution = Some(progress);
+        }
     }
 
     pub(super) fn stop_script(&self, id: &str, reason: Error) {

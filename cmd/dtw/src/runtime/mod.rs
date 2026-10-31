@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 mod input_tests;
 #[cfg(test)]
 mod tests;
+mod window_wait;
 
 static NEXT_CONTEXT: AtomicU64 = AtomicU64::new(1);
 

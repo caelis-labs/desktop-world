@@ -42,6 +42,10 @@ fn summarize(steps: &[Value]) -> Value {
     let mut foreground_borrowed = 0;
     let mut deliveries = 0;
     for step in steps {
+        if step["resolution"].is_object() {
+            summary["last_resolution"] = json!({"number":step["number"],"operation":step["operation"],
+                "resolution":resolution_summary(&step["resolution"])});
+        }
         failed += usize::from(!step["error"].is_null());
         pending += usize::from(step["status"] != "completed");
         let inventory_incomplete = incomplete_inventory(&step["inventory"]);
@@ -131,6 +135,9 @@ fn summarize(steps: &[Value]) -> Value {
             if discovery_incomplete {
                 summary["last_issue"]["discovery"] = step["discovery"].clone();
             }
+            if step["resolution"].is_object() {
+                summary["last_issue"]["resolution"] = step["resolution"].clone();
+            }
         }
     }
     summary["failed"] = json!(failed);
@@ -150,6 +157,44 @@ fn summarize(steps: &[Value]) -> Value {
         }
     }
     summary
+}
+
+fn resolution_summary(resolution: &Value) -> Value {
+    let mut compact = Map::new();
+    for key in [
+        "kind", "status", "state", "attempts", "pages", "matches", "samples",
+    ] {
+        if let Some(value) = resolution.get(key) {
+            compact.insert(key.into(), value.clone());
+        }
+    }
+    let preparation = &resolution["focus_preparation"];
+    if preparation.is_object() {
+        let mut sample = Map::new();
+        if let Some(attempted) = preparation.get("attempted") {
+            sample.insert("attempted".into(), attempted.clone());
+        }
+        let receipt = &preparation["receipt"];
+        let outcome = &receipt["outcome"];
+        if let Some(dispatch) = outcome.get("dispatch") {
+            sample.insert("dispatch".into(), dispatch.clone());
+        }
+        let delivery = if receipt["provider_outcome"]["delivery"].is_object() {
+            &receipt["provider_outcome"]["delivery"]
+        } else {
+            &outcome["delivery"]
+        };
+        if delivery.is_object() {
+            sample.insert("delivery".into(), delivery.clone());
+        }
+        if let Some(code) = outcome["error"].get("code") {
+            sample.insert("error_code".into(), code.clone());
+        }
+        // Preparation is distinct from the requested semantic action; retain
+        // its delivery without adding it to the original action counters.
+        compact.insert("focus_preparation".into(), Value::Object(sample));
+    }
+    Value::Object(compact)
 }
 
 fn incomplete_inventory(inventory: &Value) -> bool {
@@ -232,6 +277,30 @@ mod tests {
                 "window_ref":window,"observation_ref":observation,"complete":complete,
                 "reason":if complete || has_more {None} else {Some("node_unavailable")},
                 "visited":3,"has_more":has_more}})
+    }
+
+    #[test]
+    fn resolution_preparation_keeps_dispatch_delivery_without_fabricating_missing_receipt() {
+        let delivery =
+            json!({"route":"foreground","foreground_borrowed":true,"focus_return":"pending"});
+        let resolution = json!({"kind":"element","status":"focus_failed","candidates":[{"name":"private label"}],
+            "focus_preparation":{"attempted":true,"trigger":{"reason":"content_unproven"},
+                "receipt":{"outcome":{"dispatch":"unknown","error":{"code":"cancelled","message":"long message"}},
+                    "provider_outcome":{"dispatch":"dispatched","delivery":delivery}}}});
+        let compact = resolution_summary(&resolution);
+        assert_eq!(
+            compact["focus_preparation"],
+            json!({"attempted":true,"dispatch":"unknown",
+            "delivery":delivery,"error_code":"cancelled"})
+        );
+        assert!(compact.get("candidates").is_none());
+        assert_eq!(
+            resolution_summary(&json!({"focus_preparation":{"attempted":true,"receipt":null}})),
+            json!({"focus_preparation":{"attempted":true}})
+        );
+        assert!(resolution_summary(&json!({"status":"resolved"}))
+            .get("focus_preparation")
+            .is_none());
     }
 
     #[test]

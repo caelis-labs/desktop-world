@@ -44,6 +44,59 @@ fn focus_return_request(now: u64, call_deadline: Option<u64>) -> Value {
     request
 }
 
+// Private capture-only classification. Neither stale references nor arbitrary
+// native errors are eligible for another read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CaptureGeometryStage {
+    Scene,
+    Resident,
+}
+impl CaptureGeometryStage {
+    fn reply(self) -> Value {
+        let stage = match self {
+            Self::Scene => "scene",
+            Self::Resident => "resident",
+        };
+        json!({"error":"capture_geometry_changed",
+            "message":format!("Window geometry changed during {stage} capture validation; no image was published"),
+            "details":{"capture_stage":stage}})
+    }
+    fn from_reply(reply: &Value) -> Option<Self> {
+        if reply["error"] != "capture_geometry_changed" || reply.get("dispatch").is_some() {
+            return None;
+        }
+        match reply["details"]["capture_stage"].as_str()? {
+            "scene" => Some(Self::Scene),
+            "resident" => Some(Self::Resident),
+            _ => None,
+        }
+    }
+}
+
+fn fresh_capture_reply(
+    target: &WindowTarget,
+    call: &CallContext<'_>,
+    mut capture: impl FnMut(Value, &CallContext<'_>) -> Result<Value, (Error, bool)>,
+) -> Result<Value, Error> {
+    let request = json!({"operation":"capture","target":target_json(target)});
+    for attempt in 0..2 {
+        if call.remaining()?.is_zero() {
+            return Err(Error::TimedOut);
+        }
+        let reply = capture(request.clone(), call).map_err(|(error, _)| error)?;
+        if attempt == 0 && CaptureGeometryStage::from_reply(&reply).is_some() {
+            // Discard this entire frame. The next invocation binds and validates
+            // the same target from scratch under the original live budget.
+            continue;
+        }
+        if let Some(error) = reply_error(&reply) {
+            return Err(error);
+        }
+        return Ok(reply);
+    }
+    unreachable!("at most one fresh geometry read")
+}
+
 pub struct AppInfo {
     pub app_id: String,
     pub app: AppInstance,
@@ -265,7 +318,8 @@ impl NativeBackend {
     pub fn description() -> Value {
         json!({"provider":"dtw-macos-native", "coverage":COVERAGE,"conditions":CONDITIONS,
             "supported_capabilities":Capability::ALL.into_iter().filter(|c|Self::supports_capability(*c)).map(Capability::as_str).collect::<Vec<_>>(),
-            "supported_observe_scopes":ObserveScopeKind::ALL.map(ObserveScopeKind::as_str)})
+            "supported_observe_scopes":ObserveScopeKind::ALL.map(ObserveScopeKind::as_str),
+            "supported_window_wait_states":WindowWaitState::ALL.map(WindowWaitState::as_str)})
     }
 
     pub fn spawn() -> Result<Self, Error> {
@@ -519,7 +573,7 @@ impl NativeBackend {
         let reply = self.read_rpc(json!({"operation":"validate","target":target}), call)?;
         worker::validate_reply(&reply, target)
             .map_err(|error| reply_error(&error).unwrap_or(Error::InvalidObservation))?;
-        Ok(reply["bounds"].clone())
+        Ok(reply)
     }
 
     fn scene_rpc(&self, request: Value, call: &CallContext<'_>) -> Result<Value, (Error, bool)> {
@@ -586,6 +640,14 @@ impl NativeBackend {
             if capture && reply.get("error").is_some_and(|error| !error.is_string()) {
                 return Err((Error::InvalidObservation, false));
             }
+            if capture
+                && CaptureGeometryStage::from_reply(&reply).is_some()
+                && (!scene_worker.is_reaped() || self.scene.cleanup_error().is_some())
+            {
+                // Preserve the original geometry failure and independent
+                // cleanup diagnostic; an unretired SCK client cannot retry.
+                return Err((reply_error(&reply).expect("geometry error"), false));
+            }
             if capture && reply.get("error").is_none() {
                 if reply["target"] != local {
                     return Err((Error::InvalidObservation, false));
@@ -604,8 +666,19 @@ impl NativeBackend {
                 let after = self
                     .validate_window(&original, call)
                     .map_err(|error| (error, false))?;
-                if before != after || reply["bounds"] != after {
-                    return Err((Error::StaleObservation, false));
+                if let Some(error) = worker::capture_snapshot_error(
+                    &before,
+                    &after,
+                    &reply["bounds"],
+                    CaptureGeometryStage::Resident,
+                ) {
+                    if self.scene.cleanup_error().is_some() {
+                        return Err((
+                            reply_error(&error).expect("capture validation error"),
+                            false,
+                        ));
+                    }
+                    return Ok(error);
                 }
                 reply["target"] = original;
             }
@@ -771,6 +844,18 @@ impl Backend for NativeBackend {
         let result = self.read_rpc(json!({"operation":"windows","app":app_json(app)}), call)?;
         parse_window_inventory(&result, app)
     }
+    fn supported_window_wait_states(&self) -> &'static [WindowWaitState] {
+        &WindowWaitState::ALL
+    }
+    fn probe_window_state(
+        &self,
+        target: &WindowTarget,
+        state: WindowWaitState,
+        call: &CallContext<'_>,
+    ) -> Result<WindowStateProbe, Error> {
+        let reply = self.read_rpc(json!({"operation":"probe_window_state", "target":target_json(target), "state":state.as_str()}), call)?;
+        parse_window_state_probe(&reply, &target.app)
+    }
     fn observe(
         &self,
         target: &WindowTarget,
@@ -903,15 +988,8 @@ impl Backend for NativeBackend {
         target: &WindowTarget,
         call: &CallContext<'_>,
     ) -> Result<BackendObservation<NativeBinding>, Error> {
-        let reply = self
-            .scene_rpc(
-                json!({"operation":"capture","target":target_json(target)}),
-                call,
-            )
-            .map_err(|(error, _)| error)?;
-        if let Some(error) = reply_error(&reply) {
-            return Err(error);
-        }
+        let reply =
+            fresh_capture_reply(target, call, |request, call| self.scene_rpc(request, call))?;
         let width = u32::try_from(number(&reply, "width")?).map_err(failed)?;
         let height = u32::try_from(number(&reply, "height")?).map_err(failed)?;
         let png = base64::engine::general_purpose::STANDARD
@@ -1213,6 +1291,214 @@ fn action_reply(reply: &Value) -> ActionOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn capture_target() -> WindowTarget {
+        WindowTarget {
+            app: AppInstance {
+                identity: AppIdentity("capture.app".into()),
+                pid: 21,
+                generation: 30,
+            },
+            native_id: 42,
+            generation: 55,
+        }
+    }
+    fn capture_validation(target: &WindowTarget, bounds: Value) -> Value {
+        json!({"target":target_json(target),"surface_owner":{"pid":21,"generation":30},"bounds":bounds})
+    }
+
+    #[test]
+    fn fresh_capture_rechecks_same_target_and_live_budget_then_only_returns_new_image() {
+        for stage in [CaptureGeometryStage::Scene, CaptureGeometryStage::Resident] {
+            let target = capture_target();
+            let budget = AtomicU64::new(2000);
+            let poll = || Ok(Duration::from_millis(budget.load(Ordering::SeqCst)));
+            let call = CallContext { poll: &poll };
+            let mut attempts = 0;
+            let before = capture_validation(&target, json!([1, 2, 300, 400]));
+            let after = capture_validation(&target, json!([2, 3, 300, 400]));
+            let result = fresh_capture_reply(&target,&call,|request,context| {
+                attempts += 1;
+                assert_eq!(request,json!({"operation":"capture","target":target_json(&target)}));
+                assert!(std::ptr::eq(context,&call),"capture replaced the caller's live deadline");
+                if attempts == 1 {
+                    assert_eq!(context.remaining(),Ok(Duration::from_millis(2000)));
+                    budget.store(900,Ordering::SeqCst);
+                    let mut moved = worker::capture_snapshot_error(&before,&after,&before["bounds"],stage).unwrap();
+                    moved["png"] = json!("obsolete-first-frame");
+                    Ok(moved)
+                } else {
+                    assert_eq!(context.remaining(),Ok(Duration::from_millis(900)));
+                    assert!(worker::capture_snapshot_error(&after,&after,&after["bounds"],stage).is_none());
+                    Ok(json!({"target":target_json(&target),"bounds":after["bounds"],"png":"fresh-second-frame"}))
+                }
+            }).unwrap();
+            assert_eq!(attempts, 2);
+            assert_eq!(result["png"], "fresh-second-frame");
+            assert_eq!(result["bounds"], after["bounds"]);
+        }
+    }
+
+    #[test]
+    fn fresh_capture_owner_change_is_not_a_geometry_retry_even_when_bounds_also_change() {
+        let target = capture_target();
+        let poll = || Ok(Duration::from_secs(1));
+        let call = CallContext { poll: &poll };
+        let before = capture_validation(&target, json!([1, 2, 300, 400]));
+        for field in ["pid", "generation"] {
+            let mut after = capture_validation(&target, json!([2, 3, 300, 400]));
+            after["surface_owner"][field] = json!(999);
+            let mut attempts = 0;
+            let result = fresh_capture_reply(&target, &call, |_, _| {
+                attempts += 1;
+                Ok(worker::capture_snapshot_error(
+                    &before,
+                    &after,
+                    &before["bounds"],
+                    CaptureGeometryStage::Scene,
+                )
+                .unwrap())
+            });
+            assert_eq!(result, Err(Error::TargetChanged));
+            assert_eq!(attempts, 1);
+        }
+    }
+
+    #[test]
+    fn fresh_capture_never_retries_stale_timeout_permission_or_unclassified_reply() {
+        let target = capture_target();
+        let poll = || Ok(Duration::from_secs(1));
+        let call = CallContext { poll: &poll };
+        for reply in [
+            json!({"error":"stale_observation","message":"Old observation"}),
+            json!({"error":"deadline_exceeded","message":"Original deadline"}),
+            json!({"error":"permission_denied","message":"Screen recording permission missing"}),
+            json!({"error":"capture_geometry_changed","message":"Untyped geometry text"}),
+            json!({"error":"capture_geometry_changed","message":"Unknown stage","details":{"capture_stage":"other"}}),
+            json!({"error":"capture_geometry_changed","message":"Unknown effect","details":{"capture_stage":"scene"},"dispatch":"unknown"}),
+        ] {
+            let expected = reply_error(&reply).unwrap();
+            let mut attempts = 0;
+            let result = fresh_capture_reply(&target, &call, |_, _| {
+                attempts += 1;
+                Ok(reply.clone())
+            });
+            assert_eq!(result, Err(expected));
+            assert_eq!(attempts, 1);
+        }
+        for (error, sent) in [
+            (Error::StaleObservation, false),
+            (Error::TimedOut, true),
+            (Error::Cancelled, true),
+            (Error::TargetChanged, false),
+            (
+                reply_error(&CaptureGeometryStage::Scene.reply()).unwrap(),
+                true,
+            ),
+        ] {
+            let mut attempts = 0;
+            let result = fresh_capture_reply(&target, &call, |_, _| {
+                attempts += 1;
+                Err((error.clone(), sent))
+            });
+            assert_eq!(result, Err(error));
+            assert_eq!(
+                attempts, 1,
+                "transport uncertainty must not become another read"
+            );
+        }
+    }
+
+    #[test]
+    fn fresh_capture_second_failure_retains_its_stage_and_never_publishes_old_frame() {
+        let target = capture_target();
+        let poll = || Ok(Duration::from_secs(1));
+        let call = CallContext { poll: &poll };
+        for second in [
+            CaptureGeometryStage::Resident.reply(),
+            json!({"error":"target_changed","message":"Owner replaced before second frame"}),
+        ] {
+            let mut attempts = 0;
+            let result = fresh_capture_reply(&target, &call, |_, _| {
+                attempts += 1;
+                if attempts == 1 {
+                    let mut first = CaptureGeometryStage::Scene.reply();
+                    first["png"] = json!("obsolete-first-frame");
+                    Ok(first)
+                } else {
+                    Ok(second.clone())
+                }
+            });
+            assert_eq!(result, Err(reply_error(&second).unwrap()));
+            assert_eq!(attempts, 2);
+        }
+    }
+
+    #[test]
+    fn fresh_capture_checks_cancellation_and_original_deadline_before_second_read() {
+        let target = capture_target();
+        for interruption in [Error::Cancelled, Error::TimedOut] {
+            let interrupted = AtomicBool::new(false);
+            let poll = || {
+                if interrupted.load(Ordering::SeqCst) {
+                    Err(interruption.clone())
+                } else {
+                    Ok(Duration::from_secs(1))
+                }
+            };
+            let call = CallContext { poll: &poll };
+            let mut attempts = 0;
+            let result = fresh_capture_reply(&target, &call, |_, _| {
+                attempts += 1;
+                interrupted.store(true, Ordering::SeqCst);
+                Ok(CaptureGeometryStage::Scene.reply())
+            });
+            assert_eq!(result, Err(interruption));
+            assert_eq!(attempts, 1);
+        }
+    }
+
+    #[test]
+    fn window_wait_provider_parses_only_explicit_scoped_proofs() {
+        let app = AppInstance {
+            identity: AppIdentity("wait.app".into()),
+            pid: 42,
+            generation: 7,
+        };
+        let target = WindowTarget {
+            app: app.clone(),
+            native_id: 2,
+            generation: 3,
+        };
+        let valid = json!({"status":"matched", "kind":"sheet", "relation":"child_modal",
+            "windows":[{"target":target_json(&target),"title":"","onscreen":true}]});
+        assert!(matches!(
+            parse_window_state_probe(&valid, &app),
+            Ok(WindowStateProbe::Window(_))
+        ));
+        assert_eq!(
+            parse_window_state_probe(&json!({"status":"closed"}), &app),
+            Ok(WindowStateProbe::Closed)
+        );
+        assert!(
+            parse_window_state_probe(&json!({"status":"pending","reason":"unknown"}), &app)
+                .is_err()
+        );
+        for invalid in [
+            json!({"status":"matched","kind":"sheet","relation":"child_modal","windows":[]}),
+            json!({"status":"missing"}),
+            json!({"status":"matched","kind":"guessed_dialog","relation":"child_modal","windows":valid["windows"]}),
+        ] {
+            assert!(parse_window_state_probe(&invalid, &app).is_err());
+        }
+        let mut wrong = valid;
+        wrong["windows"][0]["target"]["app"]["pid"] = json!(43);
+        assert_eq!(parse_window_state_probe(&wrong, &app), Err(Error::WrongApp));
+        assert_eq!(
+            NativeBackend::description()["supported_window_wait_states"],
+            json!(["dialog", "unblocked", "closed"])
+        );
+    }
 
     #[test]
     fn normal_focus_return_budget_respects_the_original_call_deadline() {
@@ -2640,6 +2926,54 @@ fn parse_window_inventory(value: &Value, app: &AppInstance) -> Result<WindowInve
     let report = parse_inventory_report(&value["coverage"], true)?;
     let windows = parse_window_rows(value, app, report.supported_count)?;
     Ok(WindowInventory { windows, report })
+}
+
+fn parse_window_state_probe(value: &Value, app: &AppInstance) -> Result<WindowStateProbe, Error> {
+    match string(value, "status")? {
+        "pending" => {
+            let reason = string(value, "reason")?;
+            if ![
+                "ax_busy",
+                "blocked_by_modal",
+                "semantic_window_unavailable",
+                "focus_changed",
+                "window_present",
+                "window_not_visible",
+                "dialog_not_present",
+                "dialog_not_ready",
+                "ambiguous_dialog",
+            ]
+            .contains(&reason)
+            {
+                return Err(Error::InvalidObservation);
+            }
+            Ok(WindowStateProbe::Pending {
+                reason: reason.into(),
+            })
+        }
+        "closed" => Ok(WindowStateProbe::Closed),
+        "matched" => {
+            let mut windows = parse_window_rows(value, app, 1)?;
+            let kind = match string(value, "kind")? {
+                "window" => WindowKind::Window,
+                "dialog" => WindowKind::Dialog,
+                "sheet" => WindowKind::Sheet,
+                _ => return Err(Error::InvalidObservation),
+            };
+            let relation = match string(value, "relation")? {
+                "same_window" => WindowRelation::SameWindow,
+                "child_modal" => WindowRelation::ChildModal,
+                "application_modal" => WindowRelation::ApplicationModal,
+                _ => return Err(Error::InvalidObservation),
+            };
+            Ok(WindowStateProbe::Window(MatchedWindow {
+                window: windows.remove(0),
+                kind,
+                relation,
+            }))
+        }
+        _ => Err(Error::InvalidObservation),
+    }
 }
 
 fn parse_window_rows(
