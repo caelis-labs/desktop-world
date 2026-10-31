@@ -29,6 +29,10 @@ pub struct NativeBackend<P: Platform> {
     generation: u64,
     input_policy: InputPolicy,
     cleanup: Mutex<Option<Error>>,
+    #[cfg(target_os = "windows")]
+    cursor: Arc<super::windows::CursorSession>,
+    #[cfg(target_os = "windows")]
+    cursor_operation: std::sync::atomic::AtomicU64,
     platform: PhantomData<P>,
 }
 pub struct NativeBinding {
@@ -62,13 +66,35 @@ impl<P: Platform> NativeBackend<P> {
             generation: nonce(),
             input_policy,
             cleanup: Mutex::new(None),
+            #[cfg(target_os = "windows")]
+            cursor: Arc::new(super::windows::CursorSession::default()),
+            #[cfg(target_os = "windows")]
+            cursor_operation: std::sync::atomic::AtomicU64::new(0),
             platform: PhantomData,
         })
     }
+    #[cfg(target_os = "windows")]
+    pub fn spawn_with_cursor(
+        input_policy: InputPolicy,
+        cursor: Arc<super::windows::CursorSession>,
+    ) -> Result<Self, Error> {
+        let mut backend = Self::spawn_with_policy(input_policy)?;
+        backend.cursor = cursor;
+        Ok(backend)
+    }
     pub fn description() -> Value {
-        json!({"provider":P::ID,"coverage":P::COVERAGE,"conditions":P::CONDITIONS,
+        let value = json!({"provider":P::ID,"coverage":P::COVERAGE,"conditions":P::CONDITIONS,
             "supported_capabilities":P::CAPABILITIES.iter().map(|c|c.as_str()).collect::<Vec<_>>(),
-            "supported_observe_scopes":P::DISCOVERY_SCOPES.iter().filter(|_|P::CAPABILITIES.contains(&Capability::Observe)).map(|s|s.as_str()).collect::<Vec<_>>()})
+            "supported_observe_scopes":P::DISCOVERY_SCOPES.iter().filter(|_|P::CAPABILITIES.contains(&Capability::Observe)).map(|s|s.as_str()).collect::<Vec<_>>()});
+        #[cfg(target_os = "windows")]
+        {
+            let mut value = value;
+            value["supported_window_wait_states"] =
+                json!(WindowWaitState::ALL.map(WindowWaitState::as_str));
+            value
+        }
+        #[cfg(not(target_os = "windows"))]
+        value
     }
     pub fn catalog(&self, timeout: Duration) -> Result<Vec<AppInfo>, Error> {
         let until = Instant::now() + timeout;
@@ -180,7 +206,29 @@ impl<P: Platform> NativeBackend<P> {
         if let Some(rejected) = policy_rejection(self.input_policy, &operation) {
             return rejected;
         }
-        match self.rpc(request, call) {
+        #[cfg(target_os = "windows")]
+        let (request, mut presentation) = {
+            let mut request = request;
+            let presentation = if matches!(operation.as_str(), "click" | "scroll") {
+                // Validate the native target before starting optional visuals.
+                // The eventual action repeats every ordinary admission check.
+                self.read(
+                    json!({"operation":"prepare_cursor","target":request["target"]}),
+                    call,
+                )
+                .ok()
+                .and_then(|reply| self.cursor.begin(reply["cursor_target"].clone(), call))
+            } else {
+                None
+            };
+            if let Some(action) = presentation.as_ref() {
+                self.cursor_operation
+                    .store(action.operation, std::sync::atomic::Ordering::Release);
+                request["cursor_feedback"] = action.endpoint();
+            }
+            (request, presentation)
+        };
+        let outcome = match self.rpc(request, call) {
             Err((error, true)) => ActionOutcome::unknown(error),
             Err((error, false)) => ActionOutcome::rejected(error),
             Ok(reply) => {
@@ -216,7 +264,14 @@ impl<P: Platform> NativeBackend<P> {
                 }
                 outcome
             }
+        };
+        #[cfg(target_os = "windows")]
+        if outcome.dispatch == DispatchState::Dispatched {
+            if let Some(action) = presentation.as_mut() {
+                action.keep();
+            }
         }
+        outcome
     }
     fn observation(
         &self,
@@ -291,7 +346,13 @@ impl<P: Platform> Backend for NativeBackend<P> {
             .or_else(|| self.worker.cleanup_error().map(transport_error))
     }
     fn shutdown(&self) -> Result<(), Error> {
-        self.worker.stop().map_err(transport_error)?;
+        let stopped = self.worker.stop().map_err(transport_error);
+        #[cfg(target_os = "windows")]
+        self.cursor.hide(
+            self.cursor_operation
+                .swap(0, std::sync::atomic::Ordering::AcqRel),
+        );
+        stopped?;
         self.cleanup.lock().unwrap().clone().map_or(Ok(()), Err)
     }
     fn windows(&self, app: &AppInstance, call: &CallContext<'_>) -> Result<WindowInventory, Error> {
@@ -328,6 +389,20 @@ impl<P: Platform> Backend for NativeBackend<P> {
             },
             windows,
         })
+    }
+    #[cfg(target_os = "windows")]
+    fn supported_window_wait_states(&self) -> &'static [WindowWaitState] {
+        &WindowWaitState::ALL
+    }
+    #[cfg(target_os = "windows")]
+    fn probe_window_state(
+        &self,
+        target: &WindowTarget,
+        state: WindowWaitState,
+        call: &CallContext<'_>,
+    ) -> Result<WindowStateProbe, Error> {
+        let reply=self.read(json!({"operation":"probe_window_state","target":target_json(target),"state":state.as_str()}),call)?;
+        super::windows::window_state::parse(&reply, &target.app)
     }
     fn observe(
         &self,
@@ -482,6 +557,28 @@ impl<P: Platform> Backend for NativeBackend<P> {
         };
         request["target"] = target_json(target);
         self.action(request, call)
+    }
+    #[cfg(target_os = "windows")]
+    fn supports_scroll_anchor(&self, kind: ObservationKind) -> bool {
+        matches!(kind, ObservationKind::Pixels | ObservationKind::Semantic)
+    }
+    #[cfg(target_os = "windows")]
+    fn scroll_at(
+        &self,
+        target: &WindowTarget,
+        binding: &Self::Binding,
+        scroll: ScrollRequest,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        let anchor = match scroll.anchor {
+            ScrollAnchor::Pixels(point) => json!({"kind":"pixels","x":point.x,"y":point.y}),
+            ScrollAnchor::Element(element) => json!({"kind":"element","element":element.0}),
+        };
+        self.action(
+            json!({"operation":"scroll","target":target_json(target),"binding":binding.token,
+            "anchor":anchor,"delta_x":scroll.delta_x,"delta_y":scroll.delta_y}),
+            call,
+        )
     }
 }
 fn operation_route(operation: &str) -> Option<InputRoute> {

@@ -40,7 +40,10 @@ byId('attachment-status').textContent=response.ok?'Received attachment: '+file.n
 
     def persist():
         path = args.output / 'state.json'
-        path.with_suffix('.tmp').write_text(json.dumps(state, ensure_ascii=False), encoding='utf-8')
+        # Browser strings are UTF-16. A real keyboard input event can contain
+        # one surrogate before the next event completes an emoji. JSON escapes
+        # preserve that exact event without poisoning all later UTF-8 writes.
+        path.with_suffix('.tmp').write_text(json.dumps(state, ensure_ascii=True), encoding='utf-8')
         path.with_suffix('.tmp').replace(path)
 
     persist()
@@ -102,7 +105,7 @@ byId('attachment-status').textContent=response.ok?'Received attachment: '+file.n
                     else:
                         raise ValueError('route')
                     persist()
-                self.reply(200, json.dumps(result, ensure_ascii=False).encode('utf-8'))
+                self.reply(200, json.dumps(result, ensure_ascii=True).encode('utf-8'))
             except (ValueError, KeyError, StopIteration):
                 self.reply(400, b'{"error":"invalid input"}')
 

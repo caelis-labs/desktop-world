@@ -44,8 +44,15 @@ between its MCP and Skill entries. Caelis supports this layout through its norma
 
 ```sh
 caelis plugin install /absolute/path/to/extracted-package --json
-caelis plugin status desktop-world --json
+caelis plugin status <installed-id> --json
 ```
+
+Windows candidates include Agent Plugins 1.0 metadata with the stable installed
+ID `desktop-world`, independent of the extracted directory name. Check them with
+`caelis plugin status desktop-world --json`. An earlier Claude-format Windows
+package may have registered its directory name instead; remove that exact old
+ID before installing this standard format, preserving unrelated registrations.
+macOS keeps its existing package format; use the ID returned by installation.
 
 Or enter `/plugin install /absolute/path/to/extracted-package` in the Caelis TUI.
 Start a new Session to load the MCP/Skill snapshot. Registration alone does not
@@ -133,6 +140,13 @@ operations. Use the actual installed process identity in the OS permission
 settings. Windows uses the public foreground keyboard/pointer route; background
 Windows input and secure-desktop operation are not promised. A successful MCP
 connection does not prove native GUI or permissions are ready.
+
+On Windows, supplementary-plane keyboard text (including emoji) requires readable
+literal text and a selection in the focused control. Unsupported/password fields
+are rejected before that text is dispatched. Accepted text whose delivery cannot
+be confirmed fails closed with an unknown receipt and cleanup error; do not
+replay it. Custom controls that transform text or cannot expose bounded readback
+are outside the verified route. See the [Windows acceptance record](windows-release-acceptance-2026-11-01.md).
 
 For upgrades, finish active operations and stop the old connection before changing
 package files. Extract a new verified package, update the registration/Skill and

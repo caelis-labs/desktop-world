@@ -1,7 +1,8 @@
 # Windows and experimental Linux source adaptation
 
 Source baseline: [Cua Driver 0.38.0](https://github.com/trycua/cua/tree/85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19), commit `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`.
-Original file hashes below were read from that exact checkout on 2026-10-28.
+Original file hashes below were read from that exact checkout for the 2026-10-28
+inventory; the foreground attachment reference was verified on 2026-10-31.
 This is a source record, not a Windows/Linux runtime or release acceptance claim.
 
 | Original repository path | SHA-256 | Adaptation/reference |
@@ -11,7 +12,8 @@ This is a source record, not a Windows/Linux runtime or release acceptance claim
 | `libs/cua-driver/rust/crates/platform-windows/src/uia/mod.rs` | `90361fbcd469c2f26eccd129232d6959ceccc7b3a8bb044988d3d808839c5bcc` | UIA native properties and Invoke/Toggle/Selection/Value patterns |
 | `libs/cua-driver/rust/crates/platform-windows/src/input/keyboard.rs` | `bc9aa34e811505fc75a34b1e36f6879e73a5e9dcfad4582253d2e7fe2996d5c8` | UTF-16 SendInput pairs and virtual-key transactions |
 | `libs/cua-driver/rust/crates/platform-windows/src/input/mouse.rs` | `1f4b77b21183636425b353a9b0f225fe5c9961f9a228a27925dfdbac1ca66971` | Win32 pointer/button input primitives |
-| `libs/cua-driver/rust/crates/platform-windows/src/capture.rs` | `480e7715c970df0d32459e3ac97fe13911f20f79d01d76f08f75c7fdc0fc8b98` | GDI screen-region capture mechanism; no PrintWindow/WGC fallback copied |
+| `libs/cua-driver/rust/crates/platform-windows/src/input/inject.rs` | `3898a9154fa79467bde340bd69fa655b88bc81f20390819964b04cf983c70859` | Scoped foreground-thread attachment; DTW also attaches the target queue, creates the worker queue, pairs detaches and bounds exact-HWND confirmation |
+| `libs/cua-driver/rust/crates/platform-windows/src/capture.rs` | `480e7715c970df0d32459e3ac97fe13911f20f79d01d76f08f75c7fdc0fc8b98` | Exact-window PrintWindow/GDI rendering, physical frame cropping and blank-render detection; no desktop-copy or WGC fallback |
 | `libs/cua-driver/rust/crates/platform-linux/src/x11_client_pid.rs` | `9af4e64b32c04e65215d2ad1d08987a9ec2d93e89361adb8c8b7441546560ef4` | verbatim pure XRes ownership selection and eight tests |
 | `libs/cua-driver/rust/crates/platform-linux/src/x11/mod.rs` | `66aac02e51b1e0d161846910910cf4b1031df0f28127223cd1c4df12f8cabda3` | XRes calls, X11 window discovery and input primitives |
 | `libs/cua-driver/rust/crates/platform-linux/src/capture.rs` | `c1eaf2046fd49af871e77ad460d2e71e4a46d70fcbb68ad12c362700bbc74306` | XGetImage native frame/pixel layout validation |
@@ -23,7 +25,7 @@ This is a source record, not a Windows/Linux runtime or release acceptance claim
 
 - `backends/windows`: native Win32 process creation stamp and executable app ID;
   EnumWindows inventory independent of UIA; UIA lazy child/sibling traversal,
-  role/text filtering and retained element actions; visible-window GDI PNG;
+  role/text filtering and retained element actions; exact-window rendered GDI PNG;
   foreground UTF-16 text, keyboard chords, scroll and left/right/double clicks.
 - `backends/linux`: experimental local X11/EWMH inventory and XRes 1.2 process
   proof, `/proc` process birth, unoccluded XGetImage client PNG, XTest clicks,
@@ -32,11 +34,28 @@ This is a source record, not a Windows/Linux runtime or release acceptance claim
 - The pure `linux/client_pid.rs` is copied intact, including its eight ownership
   tests. Other files adapt the donor mechanisms into DTW's contracts; they are
   not wholesale copies of upstream tools or a claim of upstream behavior parity.
-- No SDK, upstream worker, ToolRegistry, browser/DOM, overlay, keyring, clipboard,
+- No SDK, upstream worker, ToolRegistry, browser/DOM, keyring, clipboard,
   Wayland helper or complete platform crate is imported. Runtime dependencies are
   the target-specific `windows 0.58.0`, `x11rb 0.13.2`, PNG encoder and libc, plus
   the existing DTW protocol dependencies. Actual package dependency notices are
   still a release-candidate responsibility.
+
+## Windows session cursor follow-up (2026-10-31)
+
+The Windows-only presentation worker additionally adapts CUA commit
+`b38360443960a6540685a9a5eb5407f10fe3d03b`:
+`platform-windows/src/overlay.rs` (SHA-256
+`cb3cac0b729d0dd7ee88d6887eb18b76fd6aa62ebb05ab9eb4e380e6b6f40b4a`),
+shared `overlay/theme.rs` (`08e04ecab19be1d9cdf5beaa2564e9855457f3b50dd2b7d38e9487214b51bc77`)
+and `build_default_theme.py` (`caa536a26215e51d0d1cc9e05f632ffc9f2b1a60b696cbe497af20c0f49d0b1c`).
+Full donor paths, current upstream comparison, behavioral differences and
+verification are recorded in
+[the Windows port record](https://github.com/caelis-labs/desktop-world/blob/main/docs/windows-cursor-port.md).
+The full MIT license is retained in
+`packaging/third-party/cua-background-input/LICENSE`. No upstream registry,
+image/font asset, SDK or renderer dependency is imported. Additional windows
+crate feature flags are Windows-target-only; locked dependency versions remain
+unchanged. Session wiring in common source is conditional on Windows.
 
 ## Deliberate DTW behavior
 
@@ -89,10 +108,23 @@ not fabricate a cleanup failure. Cancellation rejects new segments and lets an
 admitted pair finish releasing. A forced termination cannot prove late remote
 application effects were undone.
 
-Windows capture is the bounded **visible, fully unobstructed screen-region GDI**
-route. It is independent of UIA, but it is not WGC or an occluded/background
-surface promise. Pixel clicks bind captured physical bounds and DPI and reject
-changed geometry and foreign-process hit targets. X11 requires native local X11,
+Windows capture retains the **visible, fully unobstructed window** admission
+boundary. It renders the exact HWND with `PrintWindow/PW_RENDERFULLCONTENT` into
+a zero-initialized GDI DIB. Maximized captures crop the raw physical window
+rectangle to a proven contained DWM visible frame; retained regions and pixel
+input use that same origin. Compositor fences and root-window hit checks
+supplement the existing z-order and before/after identity/geometry checks.
+Blank or unsupported native rendering fails explicitly. There is no desktop
+BitBlt fallback: Win32 geometry and hit tests can already report maximized bounds
+while desktop pixels still contain other applications during an animation.
+This is independent of UIA, not a WGC or occluded/background surface promise.
+Pixel clicks bind captured physical bounds and DPI and reject changed geometry
+and foreign-process hit targets. Foreground input briefly attaches the worker's
+message queue to the current foreground and target threads, detaches both before target input,
+and observes one activation request for at most 200 ms. Unproven activation
+dispatches no target keystrokes; failed detach preserves cleanup failure. The
+upstream reserved-key foreground assistance is not transplanted.
+X11 requires native local X11,
 XInput 2, 32-bit little-endian TrueColor pixels and proven ownership from XRes (not merely
 _NET_WM_PID); only characters present in the current keyboard map can be typed.
 Only keyboard group zero is accepted for text; active alternate groups or
@@ -112,7 +144,10 @@ modifiers and unsupported characters are rejected before injection.
   builds an isolated checker rather than cross-compiling QuickJS or CUA.
 - Windows Unicode-pair/chord and cooperative-stop tests are present and type-checked,
   but were not executed on macOS. This is not a linked Windows/Linux product build.
-- No Windows/Linux GUI was run. Candidate construction, normal-user Windows tests,
+- The original cross-platform inventory included no Windows/Linux GUI run.
+  Follow-up Windows evidence is in
+  [the 2026-10-31 acceptance record](https://github.com/caelis-labs/desktop-world/blob/main/docs/windows-rewrite-acceptance-2026-10-31.md).
+  Final candidate construction, the broader normal-user Windows matrix,
   DPI/geometry, modal/focus races, cancellation/parent exit and independent effect
   readback remain required. Linux desktop combinations remain unverified and do
   not acquire a support commitment from successful compilation.

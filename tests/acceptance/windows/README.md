@@ -1,9 +1,46 @@
 # Windows candidate handoff
 
-This is an **opt-in GUI smoke for a Windows user**, not a Windows acceptance claim.
-It has not been executed on a Windows desktop by its author. macOS syntax/type
-checks do not establish Windows compilation, UIA behavior, input delivery or
-native linking. The candidate's Windows build is a separate prerequisite.
+This is an **opt-in GUI smoke for a Windows user**, not general Windows release
+approval. The [2026-11-01 follow-up](../../../docs/windows-release-acceptance-2026-11-01.md)
+records the specific desktop runs, binary hashes, failures and remaining gates.
+macOS syntax/type checks do not establish Windows compilation, UIA behavior,
+input delivery or native linking. A Windows build is a separate prerequisite.
+
+The earlier reviewed candidate passed the 25-case base and 15-case cursor suites,
+but failed stronger lossless Unicode cancellation stress. That failure remains
+in the [previous record](../../../docs/windows-rewrite-acceptance-2026-10-31.md). Fixture
+JSON preserves surrogate code units; a terminal high surrogate is not rewritten
+to a replacement character and is not accepted as a scalar-prefix pass. Snapshot
+readiness/release sampling may retry bounded read-only observations; no application
+action is retried. See the dated record for exact binary hashes and failures.
+
+The subsequent Windows delivery guard keeps real SendInput and reads the original
+focused control before handing off accepted supplementary-plane text. Run the
+same strict `delivery_probe.py` both normally and with `--handler-delay`, then
+`delivery_guard_probe.py --dtw C:\Candidates\DTW\bin\dtw.exe --output C:\Temp\dtw-delivery-guard`.
+The latter covers selection around existing surrogates and line breaks, unsupported
+and password fields denied before text, and a blocked GUI handler canceled while
+another owner queues focus. That negative case requires native exit 74, both MCP
+owners' explicit uncertainty exit 2, an unknown original receipt and no dispatched
+queued focus; these exits must not be presented as ordinary clean shutdown.
+
+Run the separate Chrome selection regression on an installed real Chrome:
+
+```powershell
+python -X utf8 .\browser_delivery_probe.py --dtw 'C:\Candidates\DTW\bin\dtw.exe' `
+  --chrome 'C:\Program Files\Google\Chrome\Application\chrome.exe' `
+  --output 'C:\Temp\dtw-browser-delivery-new'
+```
+
+It creates its own disposable profile and workbench. Six real keyboard cases
+check an empty control, terminal caret, replacement beside existing surrogates,
+multiline text and literal U+FFFC content. Native field readback and independent
+fixture input events must agree. Chrome can order its caret after DocumentRange's
+end and represent an empty edit by an embedded-object marker. Windows proves
+selection ownership and an exact text partition; only a writable, independently
+empty ValuePattern identifies that empty placeholder. It never calls its setter,
+strips literal U+FFFC content or replays unknown input. The owned browser must close
+normally; the disposable HTTP fixture is explicitly stopped by the supervisor.
 
 ## Run on an exclusive Windows desktop
 
@@ -90,6 +127,80 @@ receipts and cleanup failures stop the run. Earlier receipts/files remain.
 
 ## Evidence and interpreting the outcome
 
+The session cursor/native parity suite is separate from the base smoke. It
+requires Python 3 and Pillow for independent PNG comparison. It compiles owned
+fixtures using Windows PowerShell 5.1, then drives input only through DTW MCP:
+
+```powershell
+python -X utf8 .\cursor_probe.py --dtw 'C:\Candidates\DTW\bin\dtw.exe' `
+  --output 'C:\Temp\dtw-cursor-new'
+```
+
+Use an exclusive normal interactive desktop and a new output directory. Its
+read-only observer samples actual physical pixels, exact process/window identity
+and styles. A deliberately created foreign same-class window must remain an
+occluder. The suite tests simultaneous sessions, capture exclusion, move
+retirement, native modal waits, retained wheel anchors and in-flight lifecycle
+cleanup; `summary.json` lists the cases actually completed and cleanup results.
+Only its owned helper is deliberately terminated for the recovery control.
+No system setting, installed user application or personal document is modified.
+Raw MCP ledgers, PNGs, original cancellation errors and retained-handle exit codes
+remain in its output. Passing this suite does not certify other DPI layouts,
+secure desktop, background input or final package acceptance.
+
+For real blocked UIA reads, the same owned fixture has an opt-in accessibility
+Name getter barrier. Run the separate supervisor (Python standard library only):
+
+```powershell
+python -X utf8 .\blocking_probe.py --dtw 'C:\Candidates\DTW\bin\dtw.exe' `
+  --output 'C:\Temp\dtw-blocked-new'
+```
+
+It proves entry into the barrier, cancels one original execution and lets another
+hit the native-call deadline. It checks original ledgers, zero text/counter/input
+effects and actual native exit 0, then releases/stops the owned fixture. MCP may
+suppress the cancelled request response; `result` retrieves the original ledger
+without replay. Separate private-worker controls distinguish empty EOF (exit 0)
+from malformed JSON (exit 1). The barrier's 45-second ceiling is fixture recovery,
+not a successful provider timeout.
+
+Two additional opt-in suites use the same requirements and new output paths:
+
+```powershell
+python -X utf8 .\restart_probe.py --dtw 'C:\Candidates\DTW\bin\dtw.exe' `
+  --output 'C:\Temp\dtw-restart-new'
+python -X utf8 .\dpi_probe.py --dtw 'C:\Candidates\DTW\bin\dtw.exe' `
+  --output 'C:\Temp\dtw-unaware-new'
+```
+
+The restart suite checks same-executable sibling state/reference survival,
+same-title replacement rejection before input, fresh-reference exact routing and
+state reset after every instance is replaced. The DPI suite starts a DPI-unaware
+owned app without changing any OS setting. It requires an actually scaled primary
+display; a 100% display cannot pass its scaling assertion. It compares an owned
+pad's native PNG and independently sampled physical geometry (one pixel edge
+tolerance), clicks its physical center exactly once, and checks the cursor's
+actual colored pixels and raster dimensions against the PMv2 helper's DPI.
+This does not simulate or certify other monitor configurations.
+
+`delivery_probe.py --dtw ... --output ... --iterations 20` is a stricter opt-in
+Unicode cancellation/handoff stress control. Each iteration is a new independent
+transaction after reading the previous original ledger; no uncertain operation
+is replayed. Preparation clicks the owned editor once and requires fresh focus
+and released-key snapshots for 100ms before arming the surrogate journal. A UIA
+button Invoke alone does not prove its handler's focus change survived queued
+activation. It checks the original unknown receipt, released keys, next-owner
+zero text changes and exact click count, and the original app's scalar-prefix
+integrity. A real terminal replacement/split-surrogate failure remains an open
+release gate. `--handler-delay` additionally selects an owned 40 ms GUI handler
+delay; it is recorded separately from normal app processing.
+
+For collecting later independent lifecycle evidence after that known failure,
+`cursor_probe.py --record-partial-text ...` may continue only for the specifically
+validated terminal replacement pattern. It still returns `passed:false` and exit
+1 with `unresolved`; it does not relax a release pass. The strict default stops
+at the original failure.
+
 `summary.json` records OS, PowerShell, source and binary SHA-256, selected cases,
 pending manual coverage and cleanup. `smoke_passed` covers **only the selected
 smoke**; `manual_pending` must remain visible in the handoff. Any failure returns
@@ -147,6 +258,11 @@ $utf8 = New-Object Text.UTF8Encoding($false)
 [IO.File]::WriteAllText((Join-Path $work 'review-evidence.txt'), "DTW Windows review`n", $utf8)
 py -3 .\acceptance\browser-workbench\server.py --output $work --case windows-first --file-task
 ```
+
+JSON snapshots escape UTF-16 code units, including temporary unpaired surrogates
+from real keyboard input events. The file remains UTF-8 JSON; parse it to read
+the original Chinese/emoji values rather than comparing its textual escape form.
+An intermediate event must not prevent later saves or attachment receipts.
 
 The server prints its loopback URL and stays running. Open that URL in a new
 owned Chrome window/profile. Give the Agent the URL/window, its `apps` app ID,

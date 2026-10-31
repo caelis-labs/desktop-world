@@ -1,0 +1,838 @@
+{
+  "schema": 1,
+  "date": "2026-11-01",
+  "decision": "go_for_covered_windows_candidate_matrix",
+  "release_dependency": "Caelis integration requires PR182 or equivalent Core fixes; no merge/tag/publication performed",
+  "platform": {
+    "os": "Windows 11 build 22631",
+    "integrity": "normal user",
+    "primary_scale_percent": 125,
+    "monitor_helper_dpi": 120
+  },
+  "candidate": {
+    "source_commit": "da61485cd41cb0aee880139d94ab86c1e5bb5970",
+    "archive_sha256": "4c46085adb4d83e6a0c1024b652553159af482dc78afaf49b3f53af41d435922",
+    "binary_sha256": "ca5f8a4286514ab4ded3479c4fc8f9dee07e838a6ed6619f8e30b44651bd7411",
+    "checksum_entries": 199,
+    "all_checksums_match": true,
+    "ci_run": 41224837671,
+    "ci_url": "https://github.com/caelis-labs/desktop-world/actions/runs/41224837671",
+    "artifact_id": 13051482896,
+    "outer_artifact_sha256": "39d2d9bd76a0b4dbcf59c8ac11f9d3301404e80a88694c61759f024322c6de0e",
+    "rust_library_tests": 388,
+    "cli_tests": 3,
+    "signing": "not_requested",
+    "install_path_features": [
+      "spaces",
+      "Chinese"
+    ],
+    "same_199_checksums_before_and_after": true
+  },
+  "native": {
+    "passed": true,
+    "total_cases_including_repeated_transactions": 100,
+    "harness_readiness_commit": "4208a88598fcdc395fc4b344651cf4673213b863",
+    "stages": [
+      {
+        "stage": "browser",
+        "exit": 0,
+        "elapsed_seconds": 23.42133355140686,
+        "passed": true,
+        "case_count": 6,
+        "summary_sha256": "feb55494c2566dffd1bb8032eb6893ac19a6acc2f77873b90ead01c10ee542ba",
+        "cases": [
+          {
+            "case": "empty-terminal-caret",
+            "native_readback_exact": true,
+            "independent_input_event_exact": true
+          },
+          {
+            "case": "append-terminal-caret",
+            "native_readback_exact": true,
+            "independent_input_event_exact": true
+          },
+          {
+            "case": "replace-selection-before-surrogate",
+            "native_readback_exact": true,
+            "independent_input_event_exact": true
+          },
+          {
+            "case": "replace-all-multiline",
+            "native_readback_exact": true,
+            "independent_input_event_exact": true
+          },
+          {
+            "case": "literal-object-marker",
+            "native_readback_exact": true,
+            "independent_input_event_exact": true
+          },
+          {
+            "case": "append-after-literal-object-marker",
+            "native_readback_exact": true,
+            "independent_input_event_exact": true
+          }
+        ],
+        "cleanup": [
+          {
+            "pid": 18944,
+            "exit_code": 0,
+            "forced": false
+          },
+          {
+            "normal_owned_browser_exit": 0
+          },
+          {
+            "stopped_owned_fixture_server": 1
+          }
+        ]
+      },
+      {
+        "stage": "delivery",
+        "exit": 0,
+        "elapsed_seconds": 24.18415594100952,
+        "passed": true,
+        "case_count": 20,
+        "summary_sha256": "3affa15043196fad41d4b4344f942025cec17589557802282fa8772f726f61b3",
+        "cases": [],
+        "cleanup": [
+          {
+            "pid": 40968,
+            "exit_code": 0,
+            "forced": false
+          },
+          {
+            "pid": 38220,
+            "exit_code": 0,
+            "forced": false
+          },
+          {
+            "fixture_exit": 0
+          },
+          {
+            "fixture_exit": 0
+          }
+        ]
+      },
+      {
+        "stage": "delivery-delay",
+        "exit": 0,
+        "elapsed_seconds": 22.86271071434021,
+        "passed": true,
+        "case_count": 20,
+        "summary_sha256": "ede5228ab6bd8d8012a850164af901412901da7560dcdbc7d0fa7be81375ff28",
+        "cases": [],
+        "cleanup": [
+          {
+            "pid": 36440,
+            "exit_code": 0,
+            "forced": false
+          },
+          {
+            "pid": 30756,
+            "exit_code": 0,
+            "forced": false
+          },
+          {
+            "fixture_exit": 0
+          },
+          {
+            "fixture_exit": 0
+          }
+        ]
+      },
+      {
+        "stage": "delivery-guards",
+        "exit": 0,
+        "elapsed_seconds": 4.545056104660034,
+        "passed": true,
+        "case_count": 4,
+        "summary_sha256": "688123b03746f842a74f072a1a176d4ca7cb4c71821f0187f20d495f517ba1a0",
+        "cases": [
+          "selected-text-surrounding-surrogates-and-linebreaks",
+          "unsupported-focused-control-denied-before-text",
+          "password-denied-before-text",
+          {
+            "case": "blocked-character-cancel-refuses-queued-handoff",
+            "observed_native_exits": [
+              0,
+              74
+            ],
+            "next_owner_effects_unchanged": true,
+            "original_dispatch": "unknown"
+          }
+        ],
+        "cleanup": [
+          {
+            "pid": 17292,
+            "exit_code": 0,
+            "forced": false
+          },
+          {
+            "fixture_exit": 0
+          },
+          {
+            "pid": 40128,
+            "exit_code": 0,
+            "forced": false
+          },
+          {
+            "fixture_exit": 0
+          },
+          {
+            "pid": 38460,
+            "exit_code": 2,
+            "forced": false
+          },
+          {
+            "pid": 41428,
+            "exit_code": 2,
+            "forced": false
+          },
+          {
+            "fixture_exit": 0
+          },
+          {
+            "fixture_exit": 0
+          }
+        ]
+      },
+      {
+        "stage": "base",
+        "exit": 0,
+        "elapsed_seconds": 8.723614931106567,
+        "passed": true,
+        "case_count": 25,
+        "summary_sha256": "d820d5fdb770daf32932c5ed1ffab739d2bfc6afdb3949cc000336ed651cacc4",
+        "cases": [
+          "inventory",
+          "press-A",
+          "setter-A",
+          "unicode-A",
+          "unicode-pages-A",
+          "capture-A",
+          "press-B",
+          "setter-B",
+          "unicode-B",
+          "unicode-pages-B",
+          "capture-B",
+          "moved-window-press-observe",
+          "moved-window-press",
+          "moved-control-press-observe",
+          "moved-control-press",
+          "moved-control-setValue-observe",
+          "moved-control-setValue",
+          "moved-window-readText-observe",
+          "moved-window-readText",
+          "moved-control-readText-observe",
+          "moved-control-readText",
+          "pointer-left",
+          "pointer-right",
+          "pointer-double",
+          "wheel"
+        ],
+        "cleanup": [
+          {
+            "pid": 25192,
+            "exited": true,
+            "forced": false,
+            "exit_code": 0,
+            "readers_joined": true,
+            "transport_error": null,
+            "cleanup_error": null
+          },
+          {
+            "error": null,
+            "exit_code": 0,
+            "pid": 38200,
+            "fixture": "A",
+            "exited": true,
+            "forced": false
+          },
+          {
+            "error": null,
+            "exit_code": 0,
+            "pid": 39164,
+            "fixture": "B",
+            "exited": true,
+            "forced": false
+          }
+        ]
+      },
+      {
+        "stage": "cursor",
+        "exit": 0,
+        "elapsed_seconds": 16.87697720527649,
+        "passed": true,
+        "case_count": 15,
+        "summary_sha256": "3c2d7c014b58ad47bc5ff21c74a317af18a9dd7e6a9aafa4432ca900968d9f0a",
+        "cases": [
+          "lazy-semantic-no-marker",
+          "visible-colored-nonactivating-clickthrough-marker",
+          "same-session-cross-app-continuity",
+          "two-live-session-markers",
+          "exact-peer-exclusion-and-static-pixels",
+          "same-class-same-basename-foreign-window-not-exempt",
+          "foreign-cover-remains-above-session-markers",
+          "geometry-change-retires-both-markers",
+          "native-modal-owned-relation-closed-unblocked",
+          "retained-pixel-and-clipped-semantic-wheel-anchors",
+          "helper-exit-recovers-only-on-new-independent-action",
+          "inflight-cancel-and-concurrent-owner-transaction-handoff",
+          "inflight-eof-native-and-helper-reclamation",
+          "inflight-parent-exit-native-and-helper-reclamation",
+          "session-eof-isolation-and-helper-reclamation"
+        ],
+        "cleanup": [
+          {
+            "pid": 39208,
+            "exit_code": 0,
+            "forced": false
+          },
+          {
+            "pid": 41200,
+            "exit_code": 0,
+            "forced": false
+          },
+          {
+            "fixture": "A",
+            "exit_code": 0,
+            "forced": false
+          },
+          {
+            "fixture": "B",
+            "exit_code": 0,
+            "forced": false
+          }
+        ]
+      },
+      {
+        "stage": "blocking",
+        "exit": 0,
+        "elapsed_seconds": 17.721235036849976,
+        "passed": true,
+        "case_count": 4,
+        "summary_sha256": "204938deaf089d9f273d496b2b0bbb87f812c8b8e973a705bbfbdcadcaec2c90",
+        "cases": [
+          {
+            "case": "blocked-uia-read-cancel",
+            "native_exit": 0,
+            "effects_unchanged": true,
+            "elapsed_seconds": 0.079,
+            "failure": {
+              "call": 1,
+              "code": "cancelled",
+              "kind": "cancelled",
+              "line": 1,
+              "message": "the script was cancelled",
+              "operation": "find"
+            }
+          },
+          {
+            "case": "blocked-uia-read-timeout",
+            "native_exit": 0,
+            "effects_unchanged": true,
+            "elapsed_seconds": 15.016,
+            "failure": {
+              "call": 1,
+              "code": "timed_out",
+              "kind": "exception",
+              "line": 1,
+              "message": "find failed: The operation deadline elapsed",
+              "operation": "find"
+            }
+          },
+          {
+            "case": "native-protocol-empty-eof",
+            "exit_code": 0
+          },
+          {
+            "case": "native-protocol-malformed",
+            "exit_code": 1
+          }
+        ],
+        "cleanup": [
+          {
+            "pid": 12500,
+            "exit_code": 0,
+            "forced": false
+          },
+          {
+            "pid": 40064,
+            "exit_code": 0,
+            "forced": false
+          }
+        ]
+      },
+      {
+        "stage": "dpi",
+        "exit": 0,
+        "elapsed_seconds": 1.979212999343872,
+        "passed": true,
+        "case_count": 3,
+        "summary_sha256": "fb1eac3166d787b868afde6fab09224181e49e8f77550f9025670279595bc918",
+        "cases": [
+          "unaware-target-native-capture-matches-physical-geometry",
+          "physical-pixel-click-exactly-once",
+          "cursor-raster-uses-monitor-scale"
+        ],
+        "cleanup": [
+          {
+            "pid": 4764,
+            "exit_code": 0,
+            "forced": false
+          },
+          {
+            "fixture_exit": 0
+          }
+        ]
+      },
+      {
+        "stage": "restart",
+        "exit": 0,
+        "elapsed_seconds": 3.0831594467163086,
+        "passed": true,
+        "case_count": 3,
+        "summary_sha256": "ba9803b72a986400a45022d90a2a790c9ed6034ff0e6e0ee9d4eebf5217a9749",
+        "cases": [
+          "sibling-exit-preserves-survivor-reference-and-state",
+          "same-title-restart-old-reference-rejected-fresh-reference-exactly-once",
+          "all-instances-replaced-resets-state-and-rejects-old-reference"
+        ],
+        "cleanup": [
+          {
+            "pid": 41120,
+            "exit_code": 0,
+            "forced": false
+          },
+          {
+            "fixture_exit": 0
+          }
+        ]
+      }
+    ]
+  },
+  "agents": {
+    "chrome": {
+      "model": "deepseek-flash",
+      "elapsed_seconds": 183.31036019325256,
+      "exec_calls": 44,
+      "mcp_calls": 45,
+      "native_calls": 132,
+      "png_count": 30,
+      "errored_execs": 4,
+      "failed_native_steps": 7,
+      "route_violations": [],
+      "unique_app_approval_requests": 1,
+      "agent_exit": 0,
+      "raw_agent_jsonl_sha256": "d450e2227b5e948a3d7c16388564cc599a43c2129fbeef8eccda356c4c2ed373",
+      "failed_tool_calls": [
+        {
+          "call_id": "call_00_wnOYvTcCg9xCRPgt22VO3220",
+          "name": "desktop_world__exec",
+          "error": {
+            "code": "script_exception",
+            "message": "capture failed: BackendFailed(\"Window is occluded; screen pixels cannot prove window content\")"
+          }
+        },
+        {
+          "call_id": "call_00_dC4ubFqBXOidKsyuoA6E3915",
+          "name": "desktop_world__exec",
+          "error": {
+            "code": "script_exception",
+            "message": "capture failed: BackendFailed(\"Window is occluded; screen pixels cannot prove window content\")"
+          }
+        },
+        {
+          "call_id": "call_00_MGeFc31qfBLl5Z5UebJe6692",
+          "name": "desktop_world__exec",
+          "error": {
+            "code": "script_exception",
+            "message": "click failed: BackendFailed(\"Exact target is no longer enabled and foreground\")"
+          }
+        },
+        {
+          "call_id": "call_00_HGS9f13ZJpWHJGKFV62U4117",
+          "name": "desktop_world__exec",
+          "error": {
+            "code": "script_exception",
+            "message": "capture failed: BackendFailed(\"Window is occluded; screen pixels cannot prove window content\")"
+          }
+        }
+      ],
+      "business": {
+        "values_match": {
+          "DTW-0088": true,
+          "DTW-0240": true
+        },
+        "save_counts": {
+          "DTW-0088": 1,
+          "DTW-0240": 1
+        },
+        "changed_neighbors": [],
+        "uploads": [
+          {
+            "name": "review-evidence.txt",
+            "sha256": "16b31e19498cad8c4df38a65f7c822b5db6629d783320605642b3485bbc714ae",
+            "unix_ms": 1793468798516
+          }
+        ],
+        "attachment_matches": true,
+        "record_count": 240,
+        "record_open_counts": {
+          "DTW-0088": 2,
+          "DTW-0240": 2
+        },
+        "record_cancel_counts": {
+          "DTW-0088": 0,
+          "DTW-0240": 0
+        },
+        "passed": true
+      },
+      "keyboard_note_execs": [
+        "call_00_rsm4IqSKTEeyV8C9x6lJ7994",
+        "call_00_33PB9NF8scWk8MXHMsS11821"
+      ],
+      "note_setValue_fallback": false,
+      "cancel_verification": {
+        "fixture_cancel_event_not_instrumented": true,
+        "pixel_cancel_execs": [
+          "call_00_UzpyaYFyE3Yr052Xh9h28152",
+          "call_00_jFlCad4sOozpPrhyXgkT4157"
+        ],
+        "post_cancel_workbench_images_sha256": [
+          "2b10f50f3336bca81e84039b2a68a145ebd9f00b343267ae69c3a2d6a7330980",
+          "44125b0e26a562c260ab903fec97e2555c5f19ad222e1f1fd5c8e07de1af108f"
+        ],
+        "visually_checked_both_editors_closed": true,
+        "no_extra_save": true
+      }
+    },
+    "wordpad": {
+      "model": "deepseek-flash",
+      "elapsed_seconds": 166.4708127975464,
+      "exec_calls": 30,
+      "mcp_calls": 32,
+      "native_calls": 83,
+      "png_count": 24,
+      "errored_execs": 4,
+      "failed_native_steps": 15,
+      "route_violations": [],
+      "unique_app_approval_requests": 1,
+      "agent_exit": 0,
+      "raw_agent_jsonl_sha256": "e08706d3f02b2fef3560a2f23f6866ef8e5a9f3af49c92da081a2c03bddfceac",
+      "failed_tool_calls": [
+        {
+          "call_id": "call_00_SpLWj0ZXcthlZREwbP7q3367",
+          "name": "desktop_world__exec",
+          "error": {
+            "code": "script_exception",
+            "message": "capture failed: BackendFailed(\"Window is occluded; screen pixels cannot prove window content\")"
+          }
+        },
+        {
+          "call_id": "call_00_ShgecGZ6uhwRj4SOiJjH9849",
+          "name": "desktop_world__exec",
+          "error": {
+            "code": "script_exception",
+            "message": "click failed: BackendFailed(\"Capture requires a visible, unminimized window\")"
+          }
+        },
+        {
+          "call_id": "call_00_jnOQIGKQUnG1eGt5ioYP7914",
+          "name": "desktop_world__exec",
+          "error": {
+            "code": "script_exception",
+            "message": "click failed: BackendFailed(\"Capture requires a visible, unminimized window\")"
+          }
+        },
+        {
+          "call_id": "call_00_Smty9U5wQ2zyYPmzvTid2230",
+          "name": "desktop_world__exec",
+          "error": {
+            "code": "script_exception",
+            "message": "capture failed: The target no longer matches the observed window"
+          }
+        }
+      ],
+      "business": {
+        "text_exact": true,
+        "heading_bold": true,
+        "body_regular": true,
+        "seed_unchanged": true,
+        "output_sha256": "055c79c557eba5ba21d120191df29bfc14d42ced49073f986bd02cf8e6d14f9d"
+      },
+      "native_read_call_ids": [
+        "call_00_3QRHc60qK0h1Gfdn6PH98163",
+        "call_00_1vyrCOE6mkOXR0otH0F88328"
+      ],
+      "app_cleanup": {
+        "supervisor_program_exit": 0,
+        "agent_returncode": 0,
+        "shared_shell_process": false,
+        "launcher_exit": 0
+      }
+    },
+    "explorer": {
+      "model": "deepseek-flash",
+      "elapsed_seconds": 292.7846965789795,
+      "exec_calls": 57,
+      "mcp_calls": 58,
+      "native_calls": 148,
+      "png_count": 35,
+      "errored_execs": 7,
+      "failed_native_steps": 10,
+      "route_violations": [],
+      "unique_app_approval_requests": 1,
+      "agent_exit": 0,
+      "raw_agent_jsonl_sha256": "b0feac19c23ff7824d38a5bf2d1f5b00619679ae28b189915911b32cbd9a6c7b",
+      "failed_tool_calls": [
+        {
+          "call_id": "call_00_2w9eeEwjxSXbsz0sVOA28665",
+          "name": "desktop_world__exec",
+          "error": {
+            "code": "script_exception",
+            "message": "observe failed: command.limit must be an integer from 1 to 100"
+          }
+        },
+        {
+          "call_id": "call_00_kbZPz2M0WY75MrWcAfuz3251",
+          "name": "desktop_world__exec",
+          "error": {
+            "code": "script_exception",
+            "message": "capture failed: BackendFailed(\"Window is occluded; screen pixels cannot prove window content\")"
+          }
+        },
+        {
+          "call_id": "call_00_jAMWUo3BFuq4gq6iNN2R2575",
+          "name": "desktop_world__exec",
+          "error": {
+            "code": "script_exception",
+            "message": "click failed: BackendFailed(\"Capture requires a visible, unminimized window\")"
+          }
+        },
+        {
+          "call_id": "call_00_8rCrp6M0HUDyT9JuGSmg0960",
+          "name": "desktop_world__exec",
+          "error": {
+            "code": "script_exception",
+            "message": "capture failed: BackendFailed(\"Window is occluded; screen pixels cannot prove window content\")"
+          }
+        },
+        {
+          "call_id": "call_00_9DdfbtlMPfshyWXt6lYN1477",
+          "name": "desktop_world__exec",
+          "error": {
+            "code": "script_exception",
+            "message": "capture failed: BackendFailed(\"Window is occluded; screen pixels cannot prove window content\")"
+          }
+        },
+        {
+          "call_id": "call_00_rn7KYIS8ETQzrI4hHzv48776",
+          "name": "desktop_world__exec",
+          "error": {
+            "code": "script_exception",
+            "message": "click failed: BackendFailed(\"Exact target is no longer enabled and foreground\")"
+          }
+        },
+        {
+          "call_id": "call_00_VUYxe7zj2465uqjKpuuf8029",
+          "name": "desktop_world__exec",
+          "error": {
+            "code": "script_exception",
+            "message": "result contains a non-JSON value"
+          }
+        }
+      ],
+      "business": {
+        "exact_tree_and_content": true,
+        "files": {
+          "keep-alpha.txt": "a2509b5c108598b8972c17902cad9764165624acf32801e16fab775f350a5aec",
+          "keep-beta.txt": "3908686199210d42e4408d0e148bea09dd0852d5caacf2acc77c0cfddc6637ab",
+          "Reviewed/交接 已核对.txt": "a6e20995918b7eda1a5112a8092d54c462c23a7054a243e1b983348b04390129"
+        }
+      },
+      "app_cleanup": {
+        "supervisor_program_exit": 0,
+        "agent_returncode": 0,
+        "shared_shell_process": true,
+        "launcher_exit": 1
+      }
+    },
+    "auth": {
+      "model": "deepseek-flash",
+      "elapsed_seconds": 27.2382755279541,
+      "exec_calls": 5,
+      "mcp_calls": 8,
+      "native_calls": 5,
+      "png_count": 0,
+      "errored_execs": 2,
+      "failed_native_steps": 0,
+      "route_violations": [],
+      "unique_app_approval_requests": 2,
+      "agent_exit": 0,
+      "raw_agent_jsonl_sha256": "55bb2f8531344005864964d0bc59e0f695e9a5103adb5e9a7e4ee28f46eda1d2",
+      "failed_tool_calls": [
+        {
+          "call_id": "call_01_SRpcuNwQ0l57p2WX36kn6477",
+          "name": "desktop_world__api",
+          "error": {
+            "code": "invalid_arguments",
+            "message": "Unknown script method"
+          }
+        },
+        {
+          "call_id": "call_00_41o3mVlJMs0zY8DrPCcK5648",
+          "name": "desktop_world__exec",
+          "error": {
+            "code": "script_exception",
+            "message": "result contains a non-JSON value"
+          }
+        }
+      ]
+    },
+    "auth-new": {
+      "model": "deepseek-flash",
+      "elapsed_seconds": 14.211627960205078,
+      "exec_calls": 1,
+      "mcp_calls": 2,
+      "native_calls": 1,
+      "png_count": 0,
+      "errored_execs": 0,
+      "failed_native_steps": 0,
+      "route_violations": [],
+      "unique_app_approval_requests": 1,
+      "agent_exit": 0,
+      "raw_agent_jsonl_sha256": "8f10547438947604a7e13af40ef216ae32a52295803bdc2358b09a26a686a130",
+      "failed_tool_calls": []
+    }
+  },
+  "core": {
+    "pr": 182,
+    "commit": "3c3e09f336e5f919bf805fc05f77d458a5ab1e78",
+    "binary_sha256": "dae9b2259189cd13a539ccffc42d2f8408c0702b993f802bdd0952710664e16d",
+    "api_artifact": {
+      "bytes": 109720,
+      "sha256": "068325f4467f9e9dabd0f21b09cbec768b3c4a179f5b7230343179f53298e087",
+      "ordered_parts": [
+        "text",
+        "json"
+      ],
+      "methods": [
+        "capture",
+        "click",
+        "find",
+        "focus",
+        "keypress",
+        "observe",
+        "press",
+        "readText",
+        "scroll",
+        "setValue",
+        "typeText",
+        "waitForWindow",
+        "windows"
+      ],
+      "text_equals_json": true,
+      "api_call_id": "call_00_rrp6ikAvvqHC9i1rnINJ0027",
+      "model_read_call_ids": [
+        "call_00_6UbDXNllQrMkKa7h8BGC8489"
+      ],
+      "continued_execs": 30,
+      "agent_exit": 0
+    },
+    "authorization": {
+      "successful_app_sequence": [
+        {
+          "app": "A",
+          "counter": 1
+        },
+        {
+          "app": "B",
+          "counter": 1
+        },
+        {
+          "app": "A",
+          "counter": 2
+        },
+        {
+          "app": "B",
+          "counter": 2
+        }
+      ],
+      "initial_non_json_script_failed_without_committing_state": true,
+      "same_session_unique_app_requests": 2,
+      "new_session_unique_app_requests": 1,
+      "new_session_counter": 1,
+      "new_session_distinct": true,
+      "no_fixture_input_effects": true,
+      "normal_fixture_exits": [
+        0,
+        0
+      ]
+    }
+  },
+  "preserved_failures": [
+    {
+      "candidate": "3c80e238",
+      "failure": "literal terminal U+D83D at cancellation transaction eight; UTF16 prefix true/scalar prefix false"
+    },
+    {
+      "candidate": "e10f205c",
+      "failure": "Chrome final business values correct, required emoji keyboard admissions failed three times; semantic fallback does not pass keyboard subgoal"
+    },
+    {
+      "candidate": "e10f205c",
+      "task": "WordPad initial",
+      "text_exact": true,
+      "heading_bold": false,
+      "output_sha256": "5e07930d566971230bd3422beb5f1cde098fe8303573c8f87fa570d5038e79ce",
+      "cause": "Agent toggled Ctrl+B again after an already-bold screenshot"
+    },
+    {
+      "candidate": "e10f205c",
+      "task": "WordPad independent format repair",
+      "text_exact": true,
+      "heading_bold": true,
+      "body_regular": true,
+      "output_sha256": "055c79c557eba5ba21d120191df29bfc14d42ced49073f986bd02cf8e6d14f9d"
+    },
+    {
+      "candidate": "ca5f8a42",
+      "task": "first delayed cancellation batch",
+      "completed_transactions": 4,
+      "failure": "preparation left focused button; fifth typeText rejected unsupported before dispatch; original suite remains failed"
+    },
+    {
+      "candidate": "ca5f8a42",
+      "task": "base wrapper preflight",
+      "attempts": 2,
+      "completed_cases": 0,
+      "failure": "inherited PowerShell module paths hid Windows PowerShell Get-FileHash; fixed only child environment before GUI/MCP launch"
+    }
+  ],
+  "post_audit": {
+    "all_package_checksums_match": true,
+    "global_config_sha256_unchanged": "f9e34004a21a3ea293cb883b26082ef6486a175e9f5d8b7b3bdf7cad1bf8e50b",
+    "owned_wordpad_closed": true,
+    "owned_explorer_window_closed": true,
+    "shared_explorer_still_running": true,
+    "remaining_candidate_processes": [],
+    "original_user_browser_and_server_alive": true
+  },
+  "scope": {
+    "macos_native_source_public_API_Skill_Cargo_lock_unchanged": true,
+    "caelis_plugin_tool_lifecycle_changes": false,
+    "unverified": [
+      "mixed monitors and other scale configurations",
+      "other/minimum Windows versions",
+      "elevated applications",
+      "unreadable/transforming custom editors"
+    ],
+    "unsupported_or_deferred": [
+      "Windows background input",
+      "secure desktop"
+    ]
+  },
+  "private_evidence_root": "artifacts/windows-release-20261101",
+  "previous_record": "docs/windows-rewrite-acceptance-2026-10-31.md"
+}

@@ -5,19 +5,30 @@ use crate::backends::input_sequence::{
 };
 use crate::backends::native_client::{check, failed};
 use crate::computer::Error;
-use std::time::{Duration, Instant};
+use std::{
+    sync::atomic::{AtomicU8, Ordering},
+    time::{Duration, Instant},
+};
 use windows::{
     core::w,
     Win32::{
         Foundation::{CloseHandle, HANDLE, HWND, WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT},
-        System::Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject},
+        System::Threading::{
+            AttachThreadInput, CreateMutexW, GetCurrentThreadId, ReleaseMutex, WaitForSingleObject,
+        },
         UI::{
             Input::KeyboardAndMouse::*,
-            WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow},
+            WindowsAndMessaging::{
+                GetForegroundWindow, GetWindowThreadProcessId, PeekMessageW, SetForegroundWindow,
+                MSG, PM_NOREMOVE,
+            },
         },
     },
 };
 static GATE: MutationGate = MutationGate::new();
+// Publication is inside the mutation gate, so shutdown cannot observe an
+// acquired-but-unpublished mutex as clean. Bit 1 is held, bit 4 is uncertainty.
+static LEASE_STATE: AtomicU8 = AtomicU8::new(0);
 pub fn close() {
     GATE.close();
 }
@@ -27,6 +38,10 @@ pub fn cleanup_failed() -> bool {
 pub fn closing() -> bool {
     GATE.closing()
 }
+pub(super) fn fail_delivery() {
+    GATE.fail_cleanup();
+    GATE.close();
+}
 pub fn mutation(until: Instant) -> Result<Mutation<'static>, Error> {
     GATE.admit_before(until).map_err(|error| match error {
         AdmissionError::Expired => Error::TimedOut,
@@ -34,17 +49,40 @@ pub fn mutation(until: Instant) -> Result<Mutation<'static>, Error> {
     })
 }
 pub fn quiesce(budget: Duration) -> bool {
-    GATE.quiesce(budget)
+    quiesce_transaction(&GATE, &LEASE_STATE, budget)
+}
+fn quiesce_transaction(gate: &MutationGate, lease: &AtomicU8, budget: Duration) -> bool {
+    let until = Instant::now() + budget;
+    if !gate.quiesce(budget) {
+        return false;
+    }
+    loop {
+        let state = lease.load(Ordering::SeqCst);
+        if state & 1 == 0 {
+            return state & 4 == 0 && !gate.cleanup_failed();
+        }
+        if Instant::now() >= until
+            && lease
+                .compare_exchange(state, state | 4, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        {
+            gate.fail_cleanup();
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
 }
 // On an uncertain release retain the handle until the owning process exits.
-unsafe fn release_handle(handle: HANDLE) {
+unsafe fn release_handle(handle: HANDLE) -> bool {
     if ReleaseMutex(handle).is_err() {
         GATE.fail_cleanup();
-        return;
+        return false;
     }
     if CloseHandle(handle).is_err() {
         GATE.fail_cleanup();
+        return false;
     }
+    true
 }
 pub struct Lease(HANDLE);
 impl Lease {
@@ -61,7 +99,16 @@ impl Lease {
                     let _ = CloseHandle(handle);
                     return Err(Error::Closed);
                 }
-                let status = WaitForSingleObject(handle, 5);
+                // Waiting owns no active mutation. Only the nonblocking
+                // acquire + held-state publication is one admitted segment.
+                let admission = match mutation(until) {
+                    Ok(admission) => admission,
+                    Err(error) => {
+                        let _ = CloseHandle(handle);
+                        return Err(error);
+                    }
+                };
+                let status = WaitForSingleObject(handle, 0);
                 if status == WAIT_ABANDONED {
                     release_handle(handle);
                     GATE.fail_cleanup();
@@ -79,8 +126,11 @@ impl Lease {
                         release_handle(handle);
                         return Err(Error::Closed);
                     }
+                    LEASE_STATE.store(1, Ordering::SeqCst);
                     return Ok(Self(handle));
                 }
+                drop(admission);
+                std::thread::sleep(Duration::from_millis(5));
             }
         }
     }
@@ -91,7 +141,11 @@ impl Drop for Lease {
         // process before another owner may acquire it. Do not close the handle.
         if !cleanup_failed() {
             unsafe {
-                release_handle(self.0);
+                if release_handle(self.0) {
+                    LEASE_STATE.fetch_and(!1, Ordering::SeqCst);
+                } else {
+                    LEASE_STATE.fetch_or(4, Ordering::SeqCst);
+                }
             }
         }
     }
@@ -104,17 +158,89 @@ pub fn no_held_keys() -> Result<(), Error> {
     }
     Ok(())
 }
+
+// Adapted from CUA 0.38.0 input/inject.rs::force_foreground_attached at
+// 85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19. The native worker is not the
+// foreground process, so SetForegroundWindow alone can be refused by Windows.
+// Link both the foreground and target queues for this transition. Attaching
+// only the foreground queue can still be refused when Chrome owns foreground.
+// Never inject a key to acquire focus.
+struct ForegroundAttachment {
+    current: u32,
+    attached: Vec<u32>,
+    refused: Vec<(u32, String)>,
+}
+impl ForegroundAttachment {
+    unsafe fn acquire(target: HWND) -> Self {
+        let current = GetCurrentThreadId();
+        let foreground = GetWindowThreadProcessId(GetForegroundWindow(), None);
+        let target = GetWindowThreadProcessId(target, None);
+        // AttachThreadInput requires both threads to have a message queue.
+        // This worker may have done only pipe IO before its first focus call.
+        let mut message = MSG::default();
+        let _ = PeekMessageW(&mut message, HWND::default(), 0, 0, PM_NOREMOVE);
+        let mut attachment = Self {
+            current,
+            attached: Vec::with_capacity(2),
+            refused: Vec::with_capacity(2),
+        };
+        for thread in [foreground, target] {
+            if thread != 0 && thread != current && !attachment.attached.contains(&thread) {
+                match AttachThreadInput(current, thread, true).ok() {
+                    Ok(()) => attachment.attached.push(thread),
+                    Err(error) => attachment.refused.push((thread, error.to_string())),
+                }
+            }
+        }
+        // Queue attachment is assistance, not authorization. Like CUA, still
+        // let Windows decide one SetForegroundWindow request when attachment
+        // is unavailable (for example an inaccessible current foreground).
+        attachment
+    }
+}
+impl Drop for ForegroundAttachment {
+    fn drop(&mut self) {
+        for &thread in self.attached.iter().rev() {
+            if !unsafe { AttachThreadInput(self.current, thread, false) }.as_bool() {
+                GATE.fail_cleanup();
+            }
+        }
+    }
+}
 pub fn focus(hwnd: HWND, until: Instant, dispatched: &mut bool) -> Result<(), Error> {
     unsafe {
+        let mut activation = None;
         if GetForegroundWindow() != hwnd {
             let _mutation = mutation(until)?;
+            let attachment = ForegroundAttachment::acquire(hwnd);
+            check(until)?;
+            no_held_keys()?;
             *dispatched = true;
-            let _ = SetForegroundWindow(hwnd);
+            let before = GetForegroundWindow();
+            let accepted = SetForegroundWindow(hwnd).as_bool();
+            activation = Some((before.0 as usize, accepted, attachment.refused.clone()));
+            drop(attachment);
+            if cleanup_failed() {
+                return Err(failed("Foreground input queue detach is unconfirmed"));
+            }
+        }
+        // Cross-thread activation can finish after SetForegroundWindow returns.
+        // Observe that one request briefly; never replay it or send target input
+        // before the exact HWND is foreground. Waiting owns no mutation gate.
+        let settle = until.min(Instant::now() + Duration::from_millis(200));
+        while GetForegroundWindow() != hwnd && Instant::now() < settle {
+            check(until)?;
+            if closing() {
+                return Err(Error::Closed);
+            }
+            std::thread::sleep(Duration::from_millis(5));
         }
         if GetForegroundWindow() != hwnd {
-            return Err(failed(
-                "Target did not become foreground; no keyboard input issued",
-            ));
+            return Err(failed(format!(
+                "Target did not become foreground; no keyboard input issued (target={}, actual={}, activation={activation:?})",
+                hwnd.0 as usize,
+                GetForegroundWindow().0 as usize,
+            )));
         }
         Ok(())
     }
@@ -246,7 +372,9 @@ pub fn send(
     hwnd: HWND,
     until: Instant,
     dispatched: &mut bool,
+    accepted: &mut usize,
 ) -> Result<(), Error> {
+    *accepted = 0;
     if batch.is_empty() {
         return Ok(());
     }
@@ -256,6 +384,7 @@ pub fn send(
     let _mutation = mutation(until)?;
     *dispatched = true;
     let inserted = unsafe { SendInput(batch, std::mem::size_of::<INPUT>() as i32) };
+    *accepted = (inserted as usize).min(batch.len());
     if inserted != batch.len() as u32 {
         let releases = pending_releases(&batch[..(inserted as usize).min(batch.len())]);
         if !releases.is_empty() {
@@ -324,6 +453,32 @@ fn pending_releases(prefix: &[INPUT]) -> Vec<INPUT> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stop_waits_for_transaction_release_after_the_last_input_pair() {
+        let gate = std::sync::Arc::new(MutationGate::new());
+        let lease = std::sync::Arc::new(AtomicU8::new(1));
+        let (other_gate, other_lease) = (gate.clone(), lease.clone());
+        let release = std::thread::spawn(move || {
+            while !other_gate.closing() {
+                std::thread::yield_now();
+            }
+            std::thread::sleep(Duration::from_millis(10));
+            other_lease.fetch_and(!1, Ordering::SeqCst);
+        });
+        assert!(quiesce_transaction(&gate, &lease, Duration::from_secs(1)));
+        assert_eq!(lease.load(Ordering::SeqCst), 0);
+        release.join().unwrap();
+        let gate = MutationGate::new();
+        let held = AtomicU8::new(1);
+        assert!(!quiesce_transaction(&gate, &held, Duration::ZERO));
+        assert!(gate.cleanup_failed());
+        assert_eq!(held.load(Ordering::SeqCst), 5);
+        assert!(quiesce_transaction(
+            &MutationGate::new(),
+            &AtomicU8::new(0),
+            Duration::ZERO
+        ));
+    }
     #[test]
     fn unicode_surrogates_and_newlines_have_balanced_releases() {
         let batch = keyboard(Some("中😀\r\n"), None).unwrap();
