@@ -10,10 +10,15 @@ use windows::{
     core::w,
     Win32::{
         Foundation::{CloseHandle, HANDLE, HWND, WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT},
-        System::Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject},
+        System::Threading::{
+            AttachThreadInput, CreateMutexW, GetCurrentThreadId, ReleaseMutex, WaitForSingleObject,
+        },
         UI::{
             Input::KeyboardAndMouse::*,
-            WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow},
+            WindowsAndMessaging::{
+                GetForegroundWindow, GetWindowThreadProcessId, PeekMessageW, SetForegroundWindow,
+                MSG, PM_NOREMOVE,
+            },
         },
     },
 };
@@ -104,17 +109,88 @@ pub fn no_held_keys() -> Result<(), Error> {
     }
     Ok(())
 }
+
+// Adapted from CUA 0.38.0 input/inject.rs::force_foreground_attached at
+// 85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19. The native worker is not the
+// foreground process, so SetForegroundWindow alone can be refused by Windows.
+// Link both the foreground and target queues for this transition. Attaching
+// only the foreground queue can still be refused when Chrome owns foreground.
+// Never inject a key to acquire focus.
+struct ForegroundAttachment {
+    current: u32,
+    attached: Vec<u32>,
+}
+impl ForegroundAttachment {
+    unsafe fn acquire(target: HWND) -> Result<Self, Error> {
+        let current = GetCurrentThreadId();
+        let foreground = GetWindowThreadProcessId(GetForegroundWindow(), None);
+        let target = GetWindowThreadProcessId(target, None);
+        // AttachThreadInput requires both threads to have a message queue.
+        // This worker may have done only pipe IO before its first focus call.
+        let mut message = MSG::default();
+        let _ = PeekMessageW(&mut message, HWND::default(), 0, 0, PM_NOREMOVE);
+        let mut attachment = Self {
+            current,
+            attached: Vec::with_capacity(2),
+        };
+        for thread in [foreground, target] {
+            if thread != 0 && thread != current && !attachment.attached.contains(&thread) {
+                AttachThreadInput(current, thread, true)
+                    .ok()
+                    .map_err(|error| {
+                        failed(format!(
+                            "Foreground input queue attach failed (worker={current}, thread={thread}, foreground={foreground}, target={target}): {error}"
+                        ))
+                    })?;
+                attachment.attached.push(thread);
+            }
+        }
+        Ok(attachment)
+    }
+}
+impl Drop for ForegroundAttachment {
+    fn drop(&mut self) {
+        for &thread in self.attached.iter().rev() {
+            if !unsafe { AttachThreadInput(self.current, thread, false) }.as_bool() {
+                GATE.fail_cleanup();
+            }
+        }
+    }
+}
 pub fn focus(hwnd: HWND, until: Instant, dispatched: &mut bool) -> Result<(), Error> {
     unsafe {
+        let mut activation = None;
         if GetForegroundWindow() != hwnd {
             let _mutation = mutation(until)?;
+            let attachment = ForegroundAttachment::acquire(hwnd)?;
+            check(until)?;
+            no_held_keys()?;
             *dispatched = true;
-            let _ = SetForegroundWindow(hwnd);
+            let before = GetForegroundWindow();
+            let accepted = SetForegroundWindow(hwnd).as_bool();
+            activation = Some((before.0 as usize, accepted));
+            drop(attachment);
+            if cleanup_failed() {
+                return Err(failed("Foreground input queue detach is unconfirmed"));
+            }
+        }
+        // Cross-thread activation can finish after SetForegroundWindow returns.
+        // Observe that one request briefly; never replay it or send target input
+        // before the exact HWND is foreground. Waiting owns no mutation gate.
+        let settle = until.min(Instant::now() + Duration::from_millis(200));
+        while GetForegroundWindow() != hwnd && Instant::now() < settle {
+            check(until)?;
+            if closing() {
+                return Err(Error::Closed);
+            }
+            std::thread::sleep(Duration::from_millis(5));
         }
         if GetForegroundWindow() != hwnd {
-            return Err(failed(
-                "Target did not become foreground; no keyboard input issued",
-            ));
+            return Err(failed(format!(
+                "Target did not become foreground; no keyboard input issued (target={}, actual={}, activation={activation:?})",
+                hwnd.0 as usize,
+                GetForegroundWindow().0 as usize,
+            )));
         }
         Ok(())
     }

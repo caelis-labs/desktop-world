@@ -15,7 +15,7 @@ use windows::{
             CloseHandle, BOOL, E_NOINTERFACE, FILETIME, HANDLE, HWND, LPARAM, POINT, RECT,
         },
         Graphics::{
-            Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED},
+            Dwm::{DwmFlush, DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS},
             Gdi::*,
         },
         System::{
@@ -42,6 +42,13 @@ use windows::{
 };
 
 const MARKER: windows::core::PCWSTR = w!("DesktopWorld.WindowIncarnation.v1");
+// PrintWindow is a user32 API; the windows 0.58 binding groups it under the
+// unrelated XPS feature. Keep this exact Win32 ABI inside the Windows backend.
+#[link(name = "user32")]
+extern "system" {
+    #[link_name = "PrintWindow"]
+    fn render_window(window: HWND, dc: HDC, flags: u32) -> BOOL;
+}
 pub fn process_stamp(pid: u32) -> Result<AppInstance, Error> {
     unsafe {
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).map_err(failed)?;
@@ -83,7 +90,35 @@ fn id(window: HWND) -> u64 {
 fn rect(window: HWND) -> Result<RECT, Error> {
     let mut result = RECT::default();
     unsafe { GetWindowRect(window, &mut result) }.map_err(failed)?;
+    if unsafe { IsZoomed(window) }.as_bool() {
+        // Like pinned CUA's win32/windows.rs and capture.rs frame geometry,
+        // use DWM's physical visible frame. Maximized GetWindowRect includes
+        // invisible resize borders outside the monitor. Do not clip a genuinely
+        // off-screen window, and keep every retained pixel/region check aligned.
+        let mut frame = RECT::default();
+        let read = unsafe {
+            DwmGetWindowAttribute(
+                window,
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                &mut frame as *mut _ as *mut _,
+                std::mem::size_of::<RECT>() as u32,
+            )
+        };
+        result = maximized_frame(result, read.ok().map(|()| frame));
+    }
     Ok(result)
+}
+fn maximized_frame(window: RECT, frame: Option<RECT>) -> RECT {
+    frame
+        .filter(|frame| {
+            frame.left < frame.right
+                && frame.top < frame.bottom
+                && frame.left >= window.left
+                && frame.top >= window.top
+                && frame.right <= window.right
+                && frame.bottom <= window.bottom
+        })
+        .unwrap_or(window)
 }
 fn equal_rect(a: RECT, b: RECT) -> bool {
     a.left == b.left && a.top == b.top && a.right == b.right && a.bottom == b.bottom
@@ -671,13 +706,19 @@ impl Store {
     }
     fn capture(&mut self, target: &WindowTarget, until: Instant) -> Result<Value, Error> {
         let window = self.validate(target)?;
+        // CUA also fences the compositor after visible window transitions.
+        // Win32 can publish a new maximized rectangle before DWM displays it.
+        unsafe { DwmFlush() }.map_err(failed)?;
         let bounds = unobstructed(window)?;
+        capture_points_owned(window, bounds)?;
         check(until)?;
-        let image = capture_rgb(bounds)?;
+        let image = capture_rgb(window, bounds)?;
+        unsafe { DwmFlush() }.map_err(failed)?;
         self.validate(target)?;
         if !equal_rect(bounds, unobstructed(window)?) {
             return Err(Error::TargetChanged);
         }
+        capture_points_owned(window, bounds)?;
         self.pixels.retain(|_, p| p.target != *target);
         if self.pixels.len() >= 32 {
             return Err(failed("Pixel binding budget exhausted"));
@@ -1212,9 +1253,60 @@ fn unobstructed(window: HWND) -> Result<RECT, Error> {
     }
     Err(Error::TargetChanged)
 }
-fn capture_rgb(bounds: RECT) -> Result<Value, Error> {
+fn capture_points_owned(window: HWND, bounds: RECT) -> Result<(), Error> {
+    // Supplement the conservative z-order rectangle check with CUA's native
+    // WindowFromPoint/root proof. Require every sample, rather than accepting a
+    // partially covered frame. Inset past invisible borders and rounded corners.
+    let inset_x = 16.min((bounds.right - bounds.left - 1) / 2);
+    let inset_y = 16.min((bounds.bottom - bounds.top - 1) / 2);
+    for (x, y) in [
+        (bounds.left + inset_x, bounds.top + inset_y),
+        (bounds.right - 1 - inset_x, bounds.top + inset_y),
+        (bounds.left + inset_x, bounds.bottom - 1 - inset_y),
+        (bounds.right - 1 - inset_x, bounds.bottom - 1 - inset_y),
+        (
+            bounds.left + (bounds.right - bounds.left) / 2,
+            bounds.top + (bounds.bottom - bounds.top) / 2,
+        ),
+    ] {
+        let hit = unsafe { WindowFromPoint(POINT { x, y }) };
+        if unsafe { GetAncestor(hit, GA_ROOT) } != window {
+            return Err(failed(
+                "Window surface is transitioning or occluded; capture pixel ownership is unproven",
+            ));
+        }
+    }
+    Ok(())
+}
+fn rendered_content(rgb: &[u8]) -> bool {
+    // CUA capture.rs uses the same 99.5% black sentinel for unsupported native
+    // renderers. Reject an unproven render instead of copying desktop pixels.
+    let pixels = rgb.len() / 3;
+    let stride = (pixels / 1024).max(1);
+    let (mut sampled, mut black) = (0, 0);
+    for pixel in rgb.chunks_exact(3).step_by(stride) {
+        sampled += 1;
+        black += usize::from(pixel == [0, 0, 0]);
+    }
+    sampled > 0 && black * 200 < sampled * 199
+}
+fn capture_rgb(window: HWND, bounds: RECT) -> Result<Value, Error> {
     unsafe {
-        let (w, h) = (bounds.right - bounds.left, bounds.bottom - bounds.top);
+        let mut raw = RECT::default();
+        GetWindowRect(window, &mut raw).map_err(failed)?;
+        let w = raw.right.checked_sub(raw.left).ok_or(Error::InvalidPoint)?;
+        let h = raw.bottom.checked_sub(raw.top).ok_or(Error::InvalidPoint)?;
+        if w <= 0
+            || h <= 0
+            || w > 8192
+            || h > 8192
+            || w as u64 * h as u64 > 16_777_216
+            || !equal_rect(maximized_frame(raw, Some(bounds)), bounds)
+        {
+            return Err(Error::TargetChanged);
+        }
+        let (width, height) = (bounds.right - bounds.left, bounds.bottom - bounds.top);
+        let (crop_x, crop_y) = (bounds.left - raw.left, bounds.top - raw.top);
         let screen = GetDC(HWND::default());
         if screen.0.is_null() {
             return Err(failed("GetDC failed"));
@@ -1248,26 +1340,33 @@ fn capture_rgb(bounds: RECT) -> Result<Value, Error> {
             )
             .map_err(failed)?;
             let old = SelectObject(memory, bitmap);
-            let captured = BitBlt(
-                memory,
-                0,
-                0,
-                w,
-                h,
-                screen,
-                bounds.left,
-                bounds.top,
-                SRCCOPY | CAPTUREBLT,
-            )
-            .map_err(failed);
+            std::slice::from_raw_parts_mut(bits as *mut u8, w as usize * h as usize * 4).fill(0);
+            // Port CUA 0.38.0 capture.rs's PW_RENDERFULLCONTENT route. A desktop
+            // BitBlt can return another app during maximize/restore animation
+            // even when Win32 rectangles and hit tests already name this HWND.
+            // Render only this exact window; there is no desktop-copy fallback.
+            let captured = render_window(window, memory, 2).ok().map_err(failed);
             let result = captured.and_then(|_| {
                 let bgra =
                     std::slice::from_raw_parts(bits as *const u8, w as usize * h as usize * 4);
-                let mut rgb = Vec::with_capacity(w as usize * h as usize * 3);
-                for p in bgra.chunks_exact(4) {
-                    rgb.extend_from_slice(&[p[2], p[1], p[0]]);
+                let mut rgb = Vec::with_capacity(width as usize * height as usize * 3);
+                for y in crop_y..crop_y + height {
+                    let start = (y as usize * w as usize + crop_x as usize) * 4;
+                    for p in bgra[start..start + width as usize * 4].chunks_exact(4) {
+                        rgb.extend_from_slice(&[p[2], p[1], p[0]]);
+                    }
                 }
-                encode_png(w as u32, h as u32, &rgb)
+                let mut after = RECT::default();
+                GetWindowRect(window, &mut after).map_err(failed)?;
+                if !equal_rect(raw, after) {
+                    return Err(Error::TargetChanged);
+                }
+                if !rendered_content(&rgb) {
+                    return Err(failed(
+                        "Native window render is blank or unsupported; capture content is unproven",
+                    ));
+                }
+                encode_png(width as u32, height as u32, &rgb)
             });
             SelectObject(memory, old);
             let _ = DeleteObject(bitmap);
@@ -1315,6 +1414,75 @@ fn absolute_move(point: POINT) -> Result<INPUT, Error> {
 mod semantic_tests {
     use super::*;
     use windows::Win32::Foundation::{E_ACCESSDENIED, E_POINTER, S_OK};
+
+    #[test]
+    fn blank_native_render_is_not_replaced_with_desktop_pixels() {
+        assert!(!rendered_content(&[]));
+        assert!(!rendered_content(&[0; 3000]));
+        assert!(rendered_content(&[1; 3000]));
+        let mut dark = vec![0; 3000];
+        dark[0..30].fill(1);
+        assert!(rendered_content(&dark));
+    }
+
+    #[test]
+    fn maximized_frame_excludes_invisible_resize_borders() {
+        let raw = RECT {
+            left: -8,
+            top: -8,
+            right: 2568,
+            bottom: 1388,
+        };
+        let visible = RECT {
+            left: 0,
+            top: 0,
+            right: 2560,
+            bottom: 1380,
+        };
+        assert!(equal_rect(maximized_frame(raw, Some(visible)), visible));
+    }
+
+    #[test]
+    fn invalid_or_unavailable_dwm_frame_preserves_native_bounds() {
+        let raw = RECT {
+            left: -8,
+            top: -8,
+            right: 2568,
+            bottom: 1388,
+        };
+        for frame in [
+            None,
+            Some(RECT::default()),
+            Some(RECT { left: -9, ..raw }),
+            Some(RECT { right: 2569, ..raw }),
+            Some(RECT {
+                left: 5,
+                right: 4,
+                ..raw
+            }),
+        ] {
+            assert!(equal_rect(maximized_frame(raw, frame), raw));
+        }
+    }
+
+    #[test]
+    fn visible_frame_does_not_clip_real_offscreen_content() {
+        let raw = RECT {
+            left: -108,
+            top: -8,
+            right: 908,
+            bottom: 708,
+        };
+        let visible = RECT {
+            left: -100,
+            top: 0,
+            right: 900,
+            bottom: 700,
+        };
+        let actual = maximized_frame(raw, Some(visible));
+        assert!(equal_rect(actual, visible));
+        assert!(actual.left < 0);
+    }
 
     #[test]
     fn successful_null_tree_edge_is_not_a_native_read_gap() {

@@ -53,6 +53,57 @@ def pe(import_name="kernel32.dll", machine=0x8664):
 
 
 class BrowserWorkbenchEncodingTests(unittest.TestCase):
+    def test_utf16_input_events_do_not_poison_later_saves_or_attachments(self):
+        spec = importlib.util.spec_from_file_location(
+            "utf16_workbench", Path(__file__).parent / "fixtures/browser-workbench/server.py")
+        server = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(server)
+        responses = []
+        fragments = ['已核对 \ud83d', '已核对 \udc26', '已核对 🐦']
+        note = '第一批：已核对 🐦\n待补货'
+        requests = [('/api/event', {'type':'input', 'control':'note', 'value':value})
+                    for value in fragments]
+        requests += [
+            ('/api/save', {'sku':'DTW-0088', 'quantity':37, 'reviewed':True, 'note':note}),
+            ('/api/attachment', {'name':'复核记录.txt', 'text':note}),
+            # A JSON string may also retain a code unit in a saved field. Its
+            # successful response must remain encodable after the disk commit.
+            ('/api/save', {'sku':'DTW-0240', 'quantity':52, 'reviewed':True, 'note':'\ud83d'}),
+        ]
+
+        class HttpServer:
+            def __init__(self, address, handler):
+                self.handler = handler
+                self.server_port = 1234
+            def serve_forever(self):
+                handler = self.handler.__new__(self.handler)
+                handler.reply = lambda status, body, kind=None: responses.append((status, body))
+                for path, value in requests:
+                    data = json.dumps(value, ensure_ascii=True).encode('utf-8')
+                    handler.path = path
+                    handler.headers = {'Content-Length':str(len(data))}
+                    handler.rfile = io.BytesIO(data)
+                    handler.do_POST()
+            def server_close(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            with patch.object(server, 'ThreadingHTTPServer', HttpServer), \
+                 patch.object(server.threading, 'Thread'), \
+                 patch('sys.argv', ['server.py', '--output', str(output), '--case', 'utf16', '--file-task']), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                server.main()
+            self.assertEqual([status for status, _ in responses], [200] * len(requests))
+            state = json.loads((output/'state.json').read_text(encoding='utf-8'))
+            self.assertEqual([event['value'] for event in state['events']], fragments)
+            self.assertEqual([saved['sku'] for saved in state['saves']], ['DTW-0088', 'DTW-0240'])
+            self.assertEqual(state['items'][87]['note'], note)
+            self.assertEqual(state['items'][239]['note'], '\ud83d')
+            self.assertEqual(json.loads(responses[-1][1])['note'], '\ud83d')
+            self.assertEqual(state['uploads'][0]['sha256'], hashlib.sha256(note.encode('utf-8')).hexdigest())
+            self.assertFalse((output/'state.tmp').exists())
+
     def test_real_html_and_saved_unicode_are_utf8_under_cp936_defaults(self):
         spec = importlib.util.spec_from_file_location(
             "packaged_workbench", Path(__file__).parent / "fixtures/browser-workbench/server.py")
@@ -398,6 +449,18 @@ class BinaryAndArchiveTests(Fixture):
             self.assertEqual(json.loads((package / ".claude-plugin/plugin.json").read_text())["version"], "0.2.0")
             self.assertEqual((package / "skills/desktop-world/SKILL.md").read_bytes(), (self.repo / "skills/desktop-world/SKILL.md").read_bytes())
             self.assertIn("do not register both", (package / "README.md").read_text())
+            if target == WIN:
+                manifest = json.loads((package / "plugin.json").read_text())
+                self.assertEqual(manifest["name"], "desktop-world")
+                self.assertEqual(manifest["version"], "0.2.0")
+                self.assertEqual(manifest["$schema"], "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json")
+                standard = json.loads((package / "mcp.json").read_text())
+                self.assertEqual(standard["mcpServers"], {"desktop-world": {
+                    "type":"stdio", "command":"./bin/dtw.exe", "args":["mcp"]}})
+                self.assertEqual(standard["$schema"], "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json")
+            else:
+                self.assertFalse((package / "plugin.json").exists())
+                self.assertFalse((package / "mcp.json").exists())
 
 
 class WorkflowTests(Fixture):

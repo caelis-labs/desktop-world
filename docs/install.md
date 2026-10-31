@@ -44,8 +44,15 @@ between its MCP and Skill entries. Caelis supports this layout through its norma
 
 ```sh
 caelis plugin install /absolute/path/to/extracted-package --json
-caelis plugin status desktop-world --json
+caelis plugin status <installed-id> --json
 ```
+
+Windows candidates include Agent Plugins 1.0 metadata with the stable installed
+ID `desktop-world`, independent of the extracted directory name. Check them with
+`caelis plugin status desktop-world --json`. An earlier Claude-format Windows
+package may have registered its directory name instead; remove that exact old
+ID before installing this standard format, preserving unrelated registrations.
+macOS keeps its existing package format; use the ID returned by installation.
 
 Or enter `/plugin install /absolute/path/to/extracted-package` in the Caelis TUI.
 Start a new Session to load the MCP/Skill snapshot. Registration alone does not

@@ -382,7 +382,7 @@ def verify_archive(archive, package_name):
 
 def package_readme(target):
     executable = TARGETS[target][2]
-    return f"""# DTW rewrite candidate
+    readme = f"""# DTW rewrite candidate
 
 This archive is an unpublished build candidate, not an installed/GUI-accepted
 release. Keep BUILD.json, SHA256SUMS and the outer CANDIDATE.json together.
@@ -425,6 +425,18 @@ Full dependency notices are under notices/; adapted source notices and hashes
 are in THIRD_PARTY_NOTICES.md, docs/native-source-provenance*.md and
 docs/background-input-port.md.
 """
+    if target.endswith("msvc"):
+        readme += """
+Windows Caelis integration uses the root Agent Plugins 1.0 plugin.json and
+mcp.json. Install this extracted directory with `caelis plugin install <path>
+--json`, then check `caelis plugin status desktop-world --json` and start a new
+Session. The stable plugin ID is desktop-world regardless of this directory's
+name. Caelis chooses the standard manifest; Claude continues to use its own
+metadata. Both launch the same bin/dtw.exe and bundled Skill. If an older Claude
+registration used the directory name as its ID, remove that old registration
+before installing this format; preserve the package and other plugins.
+"""
+    return readme
 
 
 def package_assets(source, package, version, target):
@@ -456,6 +468,18 @@ def package_assets(source, package, version, target):
     write_json(package / ".claude-plugin/plugin.json", plugin)
     write_json(package / ".mcp.json", {"mcpServers": {"desktop-world": {
         "command": "${CLAUDE_PLUGIN_ROOT}/bin/" + TARGETS[target][2], "args": ["mcp"]}}})
+    if target.endswith("msvc"):
+        # Caelis's ordinary local installer gives standard packages the
+        # manifest's stable name. Claude-format packages use a directory alias.
+        # Keep the already accepted macOS package layout unchanged.
+        standard = {key: plugin[key] for key in ("name", "version", "description", "license", "author")
+                    if key in plugin}
+        standard["$schema"] = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
+        write_json(package / "plugin.json", standard)
+        write_json(package / "mcp.json", {
+            "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+            "mcpServers": {"desktop-world": {"type": "stdio", "command": "./bin/dtw.exe", "args": ["mcp"]}},
+        })
 
 
 def build(repo, output, target, signing_identity=None, notary_profile=None, notary_keychain=None):

@@ -1,9 +1,10 @@
 # Windows candidate handoff
 
-This is an **opt-in GUI smoke for a Windows user**, not a Windows acceptance claim.
-It has not been executed on a Windows desktop by its author. macOS syntax/type
-checks do not establish Windows compilation, UIA behavior, input delivery or
-native linking. The candidate's Windows build is a separate prerequisite.
+This is an **opt-in GUI smoke for a Windows user**, not general Windows release
+approval. The [2026-10-31 follow-up](https://github.com/caelis-labs/desktop-world/blob/main/docs/windows-rewrite-acceptance-2026-10-31.md)
+records the specific desktop runs, binary hashes, failures and remaining gates.
+macOS syntax/type checks do not establish Windows compilation, UIA behavior,
+input delivery or native linking. A Windows build is a separate prerequisite.
 
 ## Run on an exclusive Windows desktop
 
@@ -147,6 +148,11 @@ $utf8 = New-Object Text.UTF8Encoding($false)
 [IO.File]::WriteAllText((Join-Path $work 'review-evidence.txt'), "DTW Windows review`n", $utf8)
 py -3 .\acceptance\browser-workbench\server.py --output $work --case windows-first --file-task
 ```
+
+JSON snapshots escape UTF-16 code units, including temporary unpaired surrogates
+from real keyboard input events. The file remains UTF-8 JSON; parse it to read
+the original Chinese/emoji values rather than comparing its textual escape form.
+An intermediate event must not prevent later saves or attachment receipts.
 
 The server prints its loopback URL and stays running. Open that URL in a new
 owned Chrome window/profile. Give the Agent the URL/window, its `apps` app ID,

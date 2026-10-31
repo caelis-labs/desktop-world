@@ -29,6 +29,7 @@ function Normalize([string]$Value) { $Value.Replace("`r`n", "`n") }
 $fixtures = New-Object 'Collections.Generic.List[object]'
 $client = $null
 $serial = 0
+$snapshotSerial = 0
 $lastToolImageCount = 0
 $executionImageCount = 0
 $lastToolImageSizes = @()
@@ -83,6 +84,13 @@ function Wait-State($Fixture, [string]$Name, [scriptblock]$Predicate, [int]$Mill
             elapsed_ms = $watch.ElapsedMilliseconds; limit_ms = $Milliseconds; samples = @($samples.ToArray())
         }
     }
+}
+# Direct effect comparisons require a complete publication, using the same
+# bounded, independent readiness reads as Wait-State.
+# This retries only a snapshot read, never a DTW request or application action.
+function Read-Snapshot($Fixture) {
+    $script:snapshotSerial++
+    Wait-State $Fixture ("snapshot-" + $script:snapshotSerial + "-" + $Fixture.label) { param($s) $true }
 }
 function Wait-Released($Fixture, [string]$Name) {
     $track = @{ sequence = 0; first = $null; previous = $null; count = 0 }
@@ -165,9 +173,15 @@ function Execute([string]$Name, [string]$Source, [switch]$ExpectStale) {
     Write-Json (Join-Path $script:output ($Name + '-ledger.json')) $full
     Require ($full.execution_id -ceq $compact.execution_id) 'Result changed the execution identity'
     if ($ExpectStale) {
-        Require ($full.status -eq 'failed' -and $null -ne $full.error) 'Old region reference unexpectedly succeeded'
-        $failedSteps = @($full.script.steps | Where-Object { $_.status -eq 'failed' })
-        Require ($failedSteps.Count -eq 1) 'Expected one stale-reference rejection'
+        # A settled script exception has status completed. The step's error and
+        # original receipt carry the rejection; status is not effect success.
+        Require ($full.status -eq 'completed' -and $null -ne $full.error -and
+            $full.error.code -eq 'script_exception' -and $null -ne $full.script.failure -and
+            $full.script.failure.code -in @('stale_observation', 'target_changed') -and
+            $full.script.state_committed -eq $false -and $null -eq $full.script.shutdown_error) 'Expected a settled stale-reference script exception'
+        $failedSteps = @($full.script.steps | Where-Object { $null -ne $_.error })
+        Require ($failedSteps.Count -eq 1 -and @($full.script.steps).Count -eq 1 -and
+            $failedSteps[0].status -eq 'completed') 'Expected one settled stale-reference rejection'
         Require ($failedSteps[0].error.code -in @('stale_observation', 'target_changed')) 'Reference failed for a reason other than changed geometry'
         foreach ($step in $full.script.steps) {
             if ($null -ne $step.receipt) {
@@ -199,10 +213,12 @@ function Execute([string]$Name, [string]$Source, [switch]$ExpectStale) {
     return $full.value.result
 }
 function Change-Layout($Fixture, [int]$WindowOffset, [int]$ControlOffset, [string]$Name) {
-    $requested = (Read-State $Fixture).layout_sequence + 1
+    $requested = (Read-Snapshot $Fixture).layout_sequence + 1
     $path = Join-Path $Fixture.directory 'layout.json'
     Write-Json ($path + '.next') @{ sequence = $requested; window_offset = $WindowOffset; control_offset = $ControlOffset }
-    if (Test-Path -LiteralPath $path) { [IO.File]::Replace(($path + '.next'), $path, $null) }
+    # Windows PowerShell 5.1 coerces $null to an empty string for this .NET
+    # String parameter. File.Replace needs an actual null backup filename.
+    if (Test-Path -LiteralPath $path) { [IO.File]::Replace(($path + '.next'), $path, [NullString]::Value) }
     else { [IO.File]::Move(($path + '.next'), $path) }
     [void](Wait-State $Fixture $Name { param($s) $s.layout_sequence -eq $requested })
 }
@@ -272,7 +288,7 @@ if(state.A===state.B)throw Error('Distinct instances share a window ref');return
         Require (@($inventory.windows).Count -eq 2) 'Unexpected extra window in the owned application'
         foreach ($i in 0..1) {
             $f = $fixtures[$i]; $peer = $fixtures[1 - $i]; $label = $f.label
-            $beforePeer = Peer-Fingerprint (Read-State $peer)
+            $beforePeer = Peer-Fingerprint (Read-Snapshot $peer)
             $window = 'state[' + (Js $label) + ']'
             [void](Execute ("press-$label") ("const window_ref=$window;await app.focus({window_ref});const selector={role:'button',text:'button Increment'};const f=await app.find({window_ref,selector,timeout_ms:0});if(f.element.name!=='Increment')throw Error('Wrong unique button');return await app.press({window_ref,selector,timeout_ms:0});"))
             [void](Wait-State $f ("increment-$label") { param($s) $s.increments -eq 1 })
@@ -286,7 +302,7 @@ if(state.A===state.B)throw Error('Distinct instances share a window ref');return
             Require ($readback.pages -gt 1 -and (Normalize $readback.text) -ceq (Normalize $unicode)) 'Native Unicode pages differ from the owned editor text'
 
             [void](Wait-Released $f ("release-$label"))
-            Require ((Peer-Fingerprint (Read-State $peer)) -ceq $beforePeer) 'Input or semantic action changed the other owned instance'
+            Require ((Peer-Fingerprint (Read-Snapshot $peer)) -ceq $beforePeer) 'Input or semantic action changed the other owned instance'
             $shot = Execute ("capture-$label") ("const window_ref=$window;await app.focus({window_ref});return await app.capture({window_ref});")
             Require ($shot.image.width -gt 0 -and $shot.image.height -gt 0) 'Capture has no pixel dimensions'
             Require ($executionImageCount -eq 1) 'Capture did not return one PNG in MCP content'
@@ -301,8 +317,8 @@ if(state.A===state.B)throw Error('Distinct instances share a window ref');return
             @{ name = 'moved-control-readText'; field = 'editor_bounds'; role = 'text_field'; text = 'Message'; operation = 'readText'; window = 0; control = 200 }
         )) {
             Change-Layout $f 0 0 ($case.name + '-reset')
-            $before = Read-State $f
-            $beforePeer = Peer-Fingerprint (Read-State $fixtures[1])
+            $before = Read-Snapshot $f
+            $beforePeer = Peer-Fingerprint (Read-Snapshot $fixtures[1])
             $bounds = $before.($case.field)
             $region = @{ x = $bounds.x - $before.bounds.x; y = $bounds.y - $before.bounds.y; width = $bounds.width; height = $bounds.height }
             $watch = [Diagnostics.Stopwatch]::StartNew()
@@ -312,16 +328,16 @@ if(state.A===state.B)throw Error('Distinct instances share a window ref');return
             $source = 'return await app.' + $case.operation + '({...state.regionRef' + $(if ($case.operation -eq 'setValue') { ",value:'MUST NOT BE WRITTEN'" } else { '' }) + '});'
             [void](Execute $case.name $source -ExpectStale)
             Require ($watch.ElapsedMilliseconds -lt 12000) 'Refusal exceeded the retention control budget; expiry could mask the geometry regression'
-            $after = Read-State $f
+            $after = Read-Snapshot $f
             Require ($after.increments -eq $before.increments -and $after.text -ceq $before.text -and $after.saves -eq $before.saves) 'Old region reference changed the owned application'
-            Require ((Peer-Fingerprint (Read-State $fixtures[1])) -ceq $beforePeer) 'Region test changed the peer instance'
+            Require ((Peer-Fingerprint (Read-Snapshot $fixtures[1])) -ceq $beforePeer) 'Region test changed the peer instance'
         }
         Change-Layout $f 0 0 'region-final-reset'
         if ($IncludePointerTests) {
             $f = $fixtures[0]
-            $beforePeer = Peer-Fingerprint (Read-State $fixtures[1])
+            $beforePeer = Peer-Fingerprint (Read-Snapshot $fixtures[1])
             foreach ($item in @(@{ name = 'left'; button = 'left'; count = 1 }, @{ name = 'right'; button = 'right'; count = 1 }, @{ name = 'double'; button = 'left'; count = 2 })) {
-                $before = Read-State $f
+                $before = Read-Snapshot $f
                 $x = ($before.pad_point.x - $before.bounds.x) / [double]$before.bounds.width
                 $y = ($before.pad_point.y - $before.bounds.y) / [double]$before.bounds.height
                 $source = 'const window_ref=state.A;await app.focus({window_ref});const p=await app.capture({window_ref});return await app.click({window_ref,observation_ref:p.observation_ref,x:p.image.width*' + (Js $x) + ',y:p.image.height*' + (Js $y) + ',button:' + (Js $item.button) + ',count:' + $item.count + '});'
@@ -331,11 +347,11 @@ if(state.A===state.B)throw Error('Distinct instances share a window ref');return
                     return ($s.left_up -eq $before.left_up + $item.count -and ($item.name -ne 'double' -or $s.double_clicks -eq $before.double_clicks + 1))
                 })
             }
-            $before = Read-State $f
+            $before = Read-Snapshot $f
             [void](Execute 'wheel' "return await app.scroll({window_ref:state.A,delta_y:3,delta_x:0});")
             [void](Wait-State $f 'wheel-state' { param($s) $s.wheel_delta -eq $before.wheel_delta - 360 })
             [void](Wait-Released $f 'pointer-release')
-            Require ((Peer-Fingerprint (Read-State $fixtures[1])) -ceq $beforePeer) 'Pointer input changed the peer instance'
+            Require ((Peer-Fingerprint (Read-Snapshot $fixtures[1])) -ceq $beforePeer) 'Pointer input changed the peer instance'
         }
         foreach ($f in $fixtures) {
             $finalState = Wait-Released $f ('final-release-' + $f.label)
@@ -359,7 +375,7 @@ if(state.A===state.B)throw Error('Distinct instances share a window ref');return
     }
 } catch {
     $summary.status = 'failed'; $summary.passed = $false; $summary.failure = $_.ToString()
-    [IO.File]::WriteAllText((Join-Path $output 'failure.txt'), ($_ | Out-String), $utf8)
+    [IO.File]::WriteAllText((Join-Path $output 'failure.txt'), (($_ | Out-String) + $_.ScriptStackTrace), $utf8)
 } finally {
     if ($null -ne $client) {
         try {
