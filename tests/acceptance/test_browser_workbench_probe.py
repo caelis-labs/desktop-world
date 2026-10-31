@@ -958,5 +958,169 @@ class CleanupTests(unittest.TestCase):
             probe.check_execution(full, {'app': APP}, compact=False)
 
 
+class DshIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.skill = self.root/'.agents/skills'/NAME/'SKILL.md'
+        self.skill.parent.mkdir(parents=True)
+        self.body = '# Desktop World\n\nUse app + source.\nRead PATTERNS.md as needed.\n'
+        self.skill.write_text('---\nname: '+NAME+'\ndescription: Generic desktop actions\n---\n'+self.body)
+
+    def wrapped(self, text):
+        return [{'type':'content', 'content':{'type':'text', 'text':text}}]
+
+    def test_content_fallback_keeps_opaque_sessions_and_never_assigns_dsh_claude_scope(self):
+        for session in ('dsh-session-opaque', 'abdf93be-f7e7-45b8-a7b0-49433a95e77c'):
+            events = [
+                {'id':1, 'method':'session/new', 'params':{'cwd':str(self.root)}},
+                {'id':1, 'result':{'sessionId':session}},
+                {'params':{'sessionId':session, 'update':{'sessionUpdate':'tool_call',
+                    'toolCallId':'owned-call', 'title':f'mcp__{NAME}__exec',
+                    'rawInput':{'app':APP, 'source':'return true;'}}}},
+                {'params':{'sessionId':session, 'update':{'sessionUpdate':'tool_call_update',
+                    'toolCallId':'owned-call', 'status':'completed',
+                    'content':self.wrapped(json.dumps(completed()))}}},
+                {'id':2, 'result':{'stopReason':'end_turn'}},
+            ]
+            path = self.root/'agent.jsonl'; original = '\n'.join(map(json.dumps, events))
+            path.write_text(original)
+            calls, terminal = probe.normalize_acp(path, 'dsh')
+            self.assertEqual(calls[0]['output'], events[-2]['params']['update']['content'])
+            self.assertNotIn('acp_image_scope', calls[0])
+            self.assertEqual(probe.metrics(calls, NAME)['issues'], [])
+            probe.check_terminal('dsh', terminal, 0)
+            self.assertEqual(path.read_text(), original)
+            if session == 'dsh-session-opaque':
+                self.assertNotIn('acp_image_scope', probe.normalize_acp(path)[0][0])
+
+    def test_skill_requires_exact_staged_body_base_directory_and_success(self):
+        text = (f'<skill_content name="{NAME}">\n<skill_resources>\n'
+                f'Base directory for this skill: {self.skill.parent}\n'
+                'Resolve relative paths against the base directory.\n</skill_resources>\n\n'
+                f'<skill_instructions>\n{self.body.rstrip()}\n</skill_instructions>\n</skill_content>')
+        loaded = {'name':'skill', 'arguments':{'name':NAME}, 'status':'completed',
+                  'output':self.wrapped(text)}
+        probe.check_skill_loaded([loaded], NAME, self.root)
+        probe.check_routes([loaded], NAME, self.root)
+        for altered in (text.replace('Use app + source.', 'Different instructions.'),
+                        text.replace(str(self.skill.parent), str(self.root/'other')),
+                        text.replace(f'name="{NAME}"', 'name="other"'),
+                        text.replace(self.body.rstrip(), '# Desktop World')):
+            with self.assertRaises(AssertionError):
+                probe.check_skill_loaded([{**loaded, 'output':self.wrapped(altered)}], NAME, self.root)
+        with self.assertRaises(AssertionError):
+            probe.check_skill_loaded([{**loaded, 'status':'failed'}], NAME, self.root)
+        for path in (self.skill, self.skill.with_name('PATTERNS.md')):
+            probe.check_routes([{'name':'read', 'arguments':{'file_path':str(path)}}], NAME, self.root)
+        for path in (self.root/'saved.docx', self.root/'dsh-spill.txt', self.skill.parent/'other.md'):
+            with self.assertRaises(AssertionError):
+                probe.check_routes([{'name':'read', 'arguments':{'file_path':str(path)}}], NAME, self.root)
+
+    def test_wrapper_is_required_and_stages_standard_skill_without_forcing_model(self):
+        with self.assertRaisesRegex(AssertionError, '--acp-adapter'):
+            probe.prepare_dsh_agent(self.root, self.skill, None, NAME, ['/bin/dtw', 'mcp'], 900)
+        source = self.root/'source/SKILL.md'; source.parent.mkdir()
+        source.write_text(self.skill.read_text())
+        source.with_name('PATTERNS.md').write_text('Generic patterns')
+        stage = self.root/'run'; stage.mkdir()
+        command = probe.prepare_dsh_agent(stage, source, self.root/'isolated-wrapper', NAME,
+                                          ['/bin/dtw', 'mcp'], 900)
+        self.assertEqual(command[:3], ['acpx', '--agent', str(self.root/'isolated-wrapper')])
+        self.assertEqual(command[-4:], ['--approve-all', '--no-fs', '--no-terminal', 'exec'])
+        self.assertNotIn('--model', command)
+        self.assertEqual((stage/'.agents/skills'/NAME/'SKILL.md').read_text(), source.read_text())
+        self.assertEqual((stage/'.agents/skills'/NAME/'PATTERNS.md').read_text(), 'Generic patterns')
+        self.assertEqual(json.loads((stage/'mcp.json').read_text()), {'mcpServers':[
+            {'name':NAME, 'command':'/bin/dtw', 'args':['mcp'], 'env':[]}]})
+
+    def normalized_outputs(self, rows):
+        events = [{'params':{'sessionId':'dsh-owned-session', 'update':{
+            'sessionUpdate':'tool_call', 'toolCallId':str(index), 'title':f'mcp__{NAME}__exec',
+            'rawInput':{'app':APP, 'source':'return true;'}, 'status':status, 'content':output}}}
+            for index, (status, output) in enumerate(rows)]
+        path = self.root/'agent.jsonl'; original = '\n'.join(map(json.dumps, events))
+        path.write_text(original)
+        calls, _ = probe.normalize_acp(path, 'dsh')
+        self.assertEqual(path.read_text(), original)
+        return calls
+
+    def test_dsh_error_prefix_keeps_original_payload_failure_and_recovery_counts(self):
+        from real_app_tasks import recovery_metrics
+        failure = completed(); failure['error'] = {'code':'script_exception'}
+        failure['script']['state_committed'] = False
+        failure['value']['last_capture'] = {'step':1}
+        with_image = self.wrapped('Error: '+json.dumps(failure)+'\n'+probe.DSH_UNADMITTED_IMAGE)
+        without_image = self.wrapped('Error: '+json.dumps(failure))
+        calls = self.normalized_outputs([('failed',with_image), ('failed',without_image),
+                                         ('completed',self.wrapped(json.dumps(completed())))])
+        for index in (0, 1):
+            self.assertEqual(calls[index]['status'], 'failed')
+            payload, error, _ = probe.decode_output(calls[index]['payload_output'])
+            self.assertTrue(error)
+            self.assertEqual(payload, failure)
+        self.assertEqual(calls[0]['output'], with_image)
+        self.assertEqual(calls[0]['image_unavailable'], probe.DSH_UNADMITTED_IMAGE)
+        self.assertIsNone(calls[0]['image_bytes'])
+        measured = recovery_metrics(calls, NAME)
+        self.assertEqual((measured['failed_exec'], measured['successful_exec']), (2, 1))
+        self.assertEqual(measured['executions'][0]['error'], failure['error'])
+        self.assertEqual(measured['executions'][0]['execution_id'], failure['execution_id'])
+        # Neither a completed ACP status nor an error-free DTW body overrides
+        # an explicit Harness error marker / failed ACP status.
+        for status, prefix in (('completed','Error: '), ('failed','')):
+            row = self.normalized_outputs([(status,self.wrapped(prefix+json.dumps(completed())))])[0]
+            self.assertTrue(row['payload_output']['isError'])
+            self.assertEqual(recovery_metrics([row], NAME)['failed_exec'], 1)
+
+    def test_dsh_missing_model_images_are_explicit_and_never_counted_as_exposed(self):
+        data = completed(); data['value']['last_capture'] = {'step':1}
+        for model in ('deepseek-v4-flash', 'deepseek-flash'):
+            notice = ('[image unavailable: image/png; model "'+model+'" does not declare image input; '
+                      'raw image data remains available to programmatic callers]')
+            output = self.wrapped(json.dumps(data))+self.wrapped(notice)
+            row = self.normalized_outputs([('completed',output)])[0]
+            self.assertEqual(row['output'], output)
+            self.assertEqual(row['image_unavailable'], notice)
+            self.assertIsNone(row['image_bytes'])
+            measured = probe.metrics([row], NAME)
+            self.assertEqual(measured['issues'], [])
+            self.assertIsNone(measured['image_bytes'])
+            self.assertEqual(measured['image_measurement'], 'payload_not_fully_exposed')
+            self.assertEqual(measured['mcp_json_bytes'], probe.json_bytes(data))
+
+    def test_dsh_unknown_trailers_and_truncated_json_cannot_hide_output(self):
+        payload = json.dumps(completed())
+        notice = ('[image unavailable: image/png; model "deepseek-v4-flash" does not declare image input; '
+                  'raw image data remains available to programmatic callers]')
+        invalid = [
+            self.wrapped('Error: '+payload+'\nunknown diagnostic'),
+            self.wrapped('Error: '+payload+'\n'+probe.DSH_UNADMITTED_IMAGE+'\nextra'),
+            self.wrapped('Error: '+payload[:30]+'\n[...]\n'+probe.DSH_UNADMITTED_IMAGE),
+            self.wrapped(payload+'\n'+probe.DSH_UNADMITTED_IMAGE),
+            self.wrapped(payload)+self.wrapped(notice.replace('image/png','image/jpeg')),
+            self.wrapped(payload)+self.wrapped(notice+'\nread /tmp/spill for more'),
+            self.wrapped(payload)+self.wrapped('another JSON or note'),
+            self.wrapped(payload)+self.wrapped(notice)+self.wrapped(payload),
+        ]
+        for output in invalid:
+            row = self.normalized_outputs([('completed',output)])[0]
+            self.assertEqual(row['output'], output)
+            self.assertNotIn('payload_output', row)
+            self.assertIn('normalization_error', row)
+            self.assertTrue(probe.metrics([row], NAME)['issues'])
+
+    def test_truncated_harness_payload_remains_invalid_and_is_not_reconstructed(self):
+        output = self.wrapped('{"methods": {\n\n[...]\n\nread spill file for more')
+        result = probe.metrics([{'name':f'mcp__{NAME}__api', 'arguments':{},
+                                 'output':output, 'status':'completed'}], NAME)
+        self.assertEqual(len(result['issues']), 1)
+        self.assertIn('invalid_output', result['issues'][0])
+        for terminal in ({'stopReason':'max_tokens'}, {'stopReason':'end_turn', 'error':'failure'}):
+            with self.assertRaises(AssertionError): probe.check_terminal('dsh', terminal, 0)
+        with self.assertRaises(AssertionError): probe.check_terminal('dsh', {'stopReason':'end_turn'}, 1)
+
+
 if __name__ == '__main__':
     unittest.main()

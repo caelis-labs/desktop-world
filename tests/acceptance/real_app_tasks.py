@@ -28,7 +28,7 @@ from browser_workbench_probe import (
     NOTES, QUANTITIES, check_business_state, check_routes, check_skill_loaded,
     check_terminal, cleanup_steps, file_sha256, initialize,
     metrics, normalize_acp, normalize_agy, prepare_runtime, process_cleaned, checked_windows, stable_execution,
-    stage_agent_plugin,
+    stage_agent_plugin, prepare_dsh_agent,
 )
 
 APPS = {'wps': ('com.kingsoft.wpsoffice.mac', '/Applications/wpsoffice.app'),
@@ -267,6 +267,9 @@ def run_agent(repo, root, binary, client, adapter, name, prompt, evidence):
                         '--no-fs', '--no-terminal']
             if not adapter: command.append('claude')
             command += ['exec', '--file', str(root/'prompt.txt')]
+        elif client == 'dsh':
+            command = prepare_dsh_agent(root, skill, adapter, name, mcp, 900)
+            command += ['--file', str(root/'prompt.txt')]
         else:
             (stage/'.mcp.json').unlink(missing_ok=True)
             with (root/'setup.log').open('w') as log:
@@ -302,7 +305,8 @@ def run_agent(repo, root, binary, client, adapter, name, prompt, evidence):
                     result = subprocess.run(command, stdout=log, stderr=log, timeout=30)
                     if result.returncode: failures.append(label)
             evidence['registration_cleanup'] = {'failed': failures}
-    calls, terminal = (normalize_acp if client == 'claude' else normalize_agy)(root/'agent.jsonl')
+    calls, terminal = (normalize_agy(root/'agent.jsonl') if client == 'agy'
+                       else normalize_acp(root/'agent.jsonl', client))
     write_json(root/'normalized-calls.json', calls)
     evidence['terminal'] = terminal
     evidence['metrics'] = metrics(calls, name, allowed_apps=(APPS[evidence['task']][0],))
@@ -346,7 +350,7 @@ def main():
     parser.add_argument('--dtw', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--task', choices=APPS, required=True)
-    parser.add_argument('--client', choices=('claude','agy'), required=True)
+    parser.add_argument('--client', choices=('claude','agy','dsh'), required=True)
     parser.add_argument('--acp-adapter', type=Path)
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[2]
