@@ -28,7 +28,7 @@ from browser_workbench_probe import (
     NOTES, QUANTITIES, check_business_state, check_routes, check_skill_loaded,
     check_terminal, cleanup_steps, file_sha256, initialize,
     metrics, normalize_acp, normalize_agy, prepare_runtime, process_cleaned, checked_windows, stable_execution,
-    stage_agent_plugin, prepare_dsh_agent,
+    stage_agent_plugin, prepare_dsh_agent, recheck_installed_package,
 )
 
 APPS = {'wps': ('com.kingsoft.wpsoffice.mac', '/Applications/wpsoffice.app'),
@@ -242,8 +242,8 @@ def agy_gui_settings(name):
                             'deny': ['command(*)', 'write_file(*)', 'read_url(*)', 'execute_url(*)']}}
 
 
-def run_agent(repo, root, binary, client, adapter, name, prompt, evidence):
-    stage, skill = stage_agent_plugin(repo, root, binary, name)
+def run_agent(repo, root, binary, client, adapter, name, prompt, evidence, installed_package=None):
+    stage, skill = stage_agent_plugin(repo, root, binary, name, installed_package)
     mcp = recorded_mcp_command(root, binary)
     evidence['mcp_stdio'] = {'command': mcp, 'launcher_sha256': file_sha256(root/'mcp-stdio.py'),
                             'capture': 'stderr only; stdin and stdout inherited unchanged'}
@@ -348,22 +348,31 @@ def launch_task(kind, root, spec, case, resources, evidence):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dtw', type=Path, required=True)
+    parser.add_argument('--installed-package', type=Path,
+                        help='Extracted unpublished macOS candidate; execute its bin/dtw in place')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--task', choices=APPS, required=True)
     parser.add_argument('--client', choices=('claude','agy','dsh'), required=True)
     parser.add_argument('--acp-adapter', type=Path)
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[2]
-    root = args.output.absolute(); root.mkdir(mode=0o700)
+    root = args.output.absolute()
+    if args.installed_package is not None:
+        require(not root.resolve().is_relative_to(args.installed_package.resolve(strict=True)),
+                'Output must be outside the installed package')
+    root.mkdir(mode=0o700)
     case = 'case-'+uuid.uuid4().hex[:10]; name = 'dtw-real-'+case
-    binary, artifact = prepare_runtime(repo, root, args.dtw)
-    artifact['skill_files_sha256'] = {
-        str(path.relative_to(repo/'skills/desktop-world')): file_sha256(path)
-        for path in sorted((repo/'skills/desktop-world').rglob('*')) if path.is_file()
+    binary, artifact = prepare_runtime(repo, root, args.dtw, args.installed_package)
+    package = Path(artifact['installed_package']['path']) if args.installed_package is not None else None
+    skill_source = (package if package is not None else repo)/'skills/desktop-world'
+    skill_files_sha256 = {
+        str(path.relative_to(skill_source)): file_sha256(path)
+        for path in sorted(skill_source.rglob('*')) if path.is_file()
     }
     app_id = APPS[args.task][0]
     evidence = {'kind':'real-application-Agent-task','task':args.task,'case':case,'client':args.client,
-                **artifact,'passed':False,'business_passed':False,'clean_run':False,
+                **artifact,'skill_files_sha256':skill_files_sha256,
+                'passed':False,'business_passed':False,'clean_run':False,
                 'gui_subtasks':'Inspect transcript for reopen/search/link coverage; disk readback alone is insufficient',
                 'started_unix_ms':int(time.time()*1000)}
     resources = {}; supervisor = None; spec = None
@@ -394,7 +403,8 @@ def main():
 Perform GUI work only through this DTW server and the selected app. Only the disposable resources named above and their new dialogs/windows are authorized. Preserve personal documents, vaults and browser tabs. No shell, filesystem editing, DOM/CDP, HTTP or another desktop tool may perform the task. Ordinary Skill and MCP metadata discovery is allowed. Batch known actions into scripts; use fresh observation when the target changes. Do not replay an uncertain action. Report which subgoals completed, any blocker, unnecessary discovery/retry steps, and specific usability difficulties. Leave the requested final UI open; the supervisor owns cleanup.'''
         (root/'prompt.txt').write_text(prompt)
         print(json.dumps({'output':str(root),'task':args.task,'client':args.client,'case':case}),flush=True)
-        run_agent(repo, root, binary, args.client, args.acp_adapter, name, prompt, evidence)
+        run_agent(repo, root, binary, args.client, args.acp_adapter, name, prompt, evidence,
+                  installed_package=package)
         evidence['readback'] = independent_readback(args.task, spec, root, case)
         evidence['business_passed'] = True
         evidence['clean_run'] = not evidence['metrics']['issues']
@@ -427,6 +437,8 @@ Perform GUI work only through this DTW server and the selected app. Only the dis
             def close_server():
                 (root/'web/stop').write_text('stop'); return stop_owned(resources['server'])
             steps.append(('owned-server',close_server,process_cleaned))
+        if package is not None:
+            steps.append(('installed_package_integrity', lambda:recheck_installed_package(artifact), None))
         cleanup_steps(evidence,steps)
         if evidence['business_passed']:
             try:

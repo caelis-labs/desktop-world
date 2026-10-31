@@ -27,7 +27,7 @@ def main():
               'quantity': 10 + i % 25, 'reviewed': False, 'note': ''} for i in range(1, 241)]
     state = {'case': args.case, 'items': items, 'saves': [], 'events': [], 'uploads': [], 'ready': False}
     lock = threading.Lock()
-    html = Path(__file__).with_name('index.html').read_text().replace('__CASE__', args.case)
+    html = Path(__file__).with_name('index.html').read_text(encoding='utf-8').replace('__CASE__', args.case)
     attachment = '''<section aria-label="Review attachment"><h2>Review attachment</h2>
 <label>Attach review evidence <input id="attachment" type="file" accept=".txt"></label>
 <p id="attachment-status" role="status">No attachment received</p></section>'''
@@ -36,11 +36,11 @@ const response=await fetch('/api/attachment',{method:'POST',headers:{'Content-Ty
 body:JSON.stringify({name:file.name,text:await file.text()})});
 byId('attachment-status').textContent=response.ok?'Received attachment: '+file.name:'Attachment failed';};'''
     html = html.replace('__ATTACHMENT_SECTION__', attachment if args.file_task else '')
-    html = html.replace('__ATTACHMENT_SCRIPT__', script if args.file_task else '').encode()
+    html = html.replace('__ATTACHMENT_SCRIPT__', script if args.file_task else '').encode('utf-8')
 
     def persist():
         path = args.output / 'state.json'
-        path.with_suffix('.tmp').write_text(json.dumps(state, ensure_ascii=False))
+        path.with_suffix('.tmp').write_text(json.dumps(state, ensure_ascii=False), encoding='utf-8')
         path.with_suffix('.tmp').replace(path)
 
     persist()
@@ -62,7 +62,7 @@ byId('attachment-status').textContent=response.ok?'Received attachment: '+file.n
                 self.reply(200, html, 'text/html')
             elif self.path == '/api/items':
                 with lock:
-                    self.reply(200, json.dumps(items).encode())
+                    self.reply(200, json.dumps(items).encode('utf-8'))
             else:
                 self.reply(404, b'{}')
 
@@ -102,7 +102,7 @@ byId('attachment-status').textContent=response.ok?'Received attachment: '+file.n
                     else:
                         raise ValueError('route')
                     persist()
-                self.reply(200, json.dumps(result, ensure_ascii=False).encode())
+                self.reply(200, json.dumps(result, ensure_ascii=False).encode('utf-8'))
             except (ValueError, KeyError, StopIteration):
                 self.reply(400, b'{"error":"invalid input"}')
 

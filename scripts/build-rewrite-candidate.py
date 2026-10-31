@@ -408,6 +408,10 @@ Windows builds use the static CRT; real Windows UI/DPI/cancellation and clean
 machine installation still require independent acceptance. The self-contained
 PowerShell smoke and full manual matrix are in acceptance/windows/README.md.
 They use the installed DTW through standard MCP and require no Rust or CUA.
+The same-source Chrome workbench server and HTML are in
+acceptance/browser-workbench/; its startup and UTF-8 state readback commands
+are in the Windows acceptance README. Only this optional browser task requires
+Python 3; the installed DTW runtime and WinForms smoke do not.
 On macOS, the binary deployment target is 14.2, arm64. Accessibility and Screen
 Recording permissions, Gatekeeper, final-path TCC/native subprocess identities
 and an independent installation must still be verified on the final bytes.
@@ -435,6 +439,7 @@ def package_assets(source, package, version, target):
     shutil.copytree(source / "packaging/third-party", package / "packaging/third-party")
     if target.endswith("msvc"):
         shutil.copytree(source / "tests/acceptance/windows", package / "acceptance/windows")
+        shutil.copytree(source / "tests/fixtures/browser-workbench", package / "acceptance/browser-workbench")
         shutil.copy2(source / "docs/real-task-closure-plan.md", package / "docs/real-task-closure-plan.md")
         handoff = package / "acceptance/windows/README.md"
         handoff_text = handoff.read_text(encoding="utf-8")

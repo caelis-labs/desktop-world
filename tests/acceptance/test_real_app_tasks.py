@@ -7,6 +7,10 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
+import contextlib
+import io
+
+import test_browser_workbench_probe as browser_tests
 import zipfile
 from xml.sax.saxutils import escape
 
@@ -157,6 +161,102 @@ class TaskEvidenceTests(unittest.TestCase):
         invocation = call(data); invocation['arguments']['app'] = data['app']
         self.assertTrue(tasks.metrics([invocation], NAME)['issues'])
         self.assertFalse(tasks.metrics([invocation], NAME, allowed_apps=[data['app']])['issues'])
+
+
+class InstalledTaskTests(unittest.TestCase):
+    def setUp(self):
+        fixture = browser_tests.InstalledPackageTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        self.fixture = fixture
+        self.root = fixture.root
+        self.package = self.root/'installed package 中文'
+        fixture.package.rename(self.package)
+        self.binary = self.package/'bin/dtw'
+
+    def invoke(self, task, output, attempt):
+        argv = ['real_app_tasks.py', '--dtw', str(self.binary), '--installed-package', str(self.package),
+                '--output', str(output), '--task', task, '--client', 'dsh']
+        supervisor = Mock()
+        supervisor.close.return_value = {'returncode':0, 'forced':[]}
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(sys, 'argv', argv))
+            stack.enter_context(patch.object(tasks, '__file__', str(self.fixture.repo/'tests/acceptance/real_app_tasks.py')))
+            initialized = stack.enter_context(patch.object(tasks, 'initialize', return_value=supervisor))
+            stack.enter_context(patch.object(tasks, 'launch_task', return_value='Owned task'))
+            stack.enter_context(patch.object(tasks, 'wait_until', return_value={'window_ref':'owned'}))
+            stack.enter_context(patch.object(tasks, 'run_agent', side_effect=attempt))
+            stack.enter_context(patch.object(tasks, 'independent_readback', return_value={'matches':True}))
+            stack.enter_context(patch.object(tasks, 'close_visible_owned_document', return_value={'owned':True}))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            status = tasks.main()
+        initialized.assert_called_once_with(self.binary.resolve(), output/'supervisor')
+        return status, json.loads((output/'evidence.json').read_text(encoding='utf-8'))
+
+    def test_all_tasks_use_installed_binary_and_skill_and_revalidate_package(self):
+        def attempt(repo, root, binary, client, adapter, name, prompt, evidence, installed_package=None):
+            self.assertEqual(binary, self.binary.resolve())
+            self.assertEqual(installed_package, self.package.resolve())
+            stage, skill = tasks.stage_agent_plugin(repo, root, binary, name, installed_package)
+            self.assertEqual(skill.read_text(), self.fixture.canonical_skill.replace('name: desktop-world', 'name: '+name))
+            self.assertEqual((skill.parent/'support.txt').read_text(), 'Package-owned resource')
+            evidence['metrics'] = {'issues':[]}
+        for task in tasks.APPS:
+            with self.subTest(task=task):
+                output = self.root/('attempt-'+task)
+                status, evidence = self.invoke(task, output, attempt)
+                self.assertEqual(status, 0, evidence.get('failure'))
+                self.assertTrue(evidence['installed_artifact'])
+                self.assertEqual(evidence['binary_path'], str(self.binary.resolve()))
+                self.assertFalse((output/'dtw').exists())
+                self.assertFalse((output/'plugin/bin').exists())
+                self.assertEqual(evidence['skill_files_sha256'], {
+                    str(p.relative_to(self.package/'skills/desktop-world')):tasks.file_sha256(p)
+                    for p in (self.package/'skills/desktop-world').rglob('*') if p.is_file()
+                })
+                self.assertEqual((output/'installed-SHA256SUMS').read_bytes(), (self.package/'SHA256SUMS').read_bytes())
+                integrity = next(row for row in evidence['cleanup'] if row['resource']=='installed_package_integrity')
+                self.assertTrue(integrity['ok'])
+                self.assertTrue(integrity['result']['unchanged'])
+                self.assertEqual(evidence['acceptance_status'], 'pending_gui_review')
+
+    def test_package_change_invalidates_attempt_without_erasing_task_result(self):
+        def attempt(*args, **kwargs):
+            (self.package/'skills/desktop-world/support.txt').write_text('Changed after launch')
+            args[7]['metrics'] = {'issues':[]}
+        status, evidence = self.invoke('chrome', self.root/'changed-attempt', attempt)
+        self.assertEqual(status, 1)
+        self.assertTrue(evidence['business_passed'])
+        self.assertFalse(evidence['cleanup_passed'])
+        integrity = next(row for row in evidence['cleanup'] if row['resource']=='installed_package_integrity')
+        self.assertFalse(integrity['ok'])
+        self.assertIn('hash mismatch', integrity['error']['message'])
+        self.assertEqual((self.root/'changed-attempt/installed-SHA256SUMS').read_bytes(),
+                         (self.package/'SHA256SUMS').read_bytes())
+
+    def test_output_inside_package_is_refused_before_creating_directory(self):
+        output = self.package/'attempt'
+        with self.assertRaisesRegex(AssertionError, 'outside'):
+            self.invoke('chrome', output, Mock())
+        self.assertFalse(output.exists())
+
+    def test_real_agent_staging_uses_packaged_skill_and_original_runtime(self):
+        output = self.root/'agent-path'; output.mkdir()
+        def prepare(root, skill, adapter, name, mcp, timeout):
+            self.assertEqual(skill.read_text(), self.fixture.canonical_skill.replace('name: desktop-world', 'name: '+name))
+            self.assertEqual(mcp[-2:], [str(self.binary), 'mcp'])
+            return ['fake-agent']
+        process = Mock(returncode=0)
+        process.poll.return_value = 0
+        evidence = {'task':'chrome'}
+        with patch.object(tasks, 'prepare_dsh_agent', side_effect=prepare), \
+             patch.object(tasks.subprocess, 'Popen', return_value=process), \
+             patch.object(tasks, 'normalize_acp', return_value=([], {})), \
+             patch.object(tasks, 'check_routes'), patch.object(tasks, 'check_skill_loaded'), \
+             patch.object(tasks, 'check_terminal'):
+            tasks.run_agent(self.fixture.repo, output, self.binary, 'dsh', self.root/'adapter',
+                            'owned-installed-test', 'Test', evidence, installed_package=self.package)
+        self.assertEqual((self.package/'skills/desktop-world/SKILL.md').read_text(), self.fixture.canonical_skill)
 
 
 if __name__ == '__main__':
