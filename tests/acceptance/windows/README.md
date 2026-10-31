@@ -23,7 +23,7 @@ From this directory, in `powershell.exe` (not PowerShell 7 `pwsh`):
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\smoke.ps1 `
-  -Dtw 'C:\Candidates\DTW\dtw.exe' `
+  -Dtw 'C:\Candidates\DTW\bin\dtw.exe' `
   -OutputDirectory 'C:\Temp\dtw-smoke-first'
 ```
 
@@ -38,7 +38,7 @@ For the optional pointer smoke, use another new output directory:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\smoke.ps1 `
-  -Dtw 'C:\Candidates\DTW\dtw.exe' `
+  -Dtw 'C:\Candidates\DTW\bin\dtw.exe' `
   -OutputDirectory 'C:\Temp\dtw-smoke-pointer-first' -IncludePointerTests
 ```
 

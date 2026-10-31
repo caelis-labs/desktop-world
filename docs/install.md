@@ -18,8 +18,19 @@ Verify the ZIP's adjacent `.sha256`, extract the complete directory to a permane
 location outside the source checkout, then verify every entry in `SHA256SUMS`.
 On macOS, use `shasum -a 256 <archive.zip>` and, inside the extracted directory,
 `shasum -a 256 -c SHA256SUMS`. On Windows, compare the ZIP with
-`Get-FileHash -Algorithm SHA256 <archive.zip>`; the bundled
-`acceptance/windows/smoke.ps1` checks the complete installed manifest before tests.
+`Get-FileHash -Algorithm SHA256 <archive.zip>`. To verify the listed package files
+in PowerShell, run this from inside the extracted directory:
+
+```powershell
+Get-Content -LiteralPath .\SHA256SUMS -Encoding UTF8 | ForEach-Object {
+  $expected, $relative = $_ -split '  ', 2
+  if ($expected -cnotmatch '^[0-9a-f]{64}$' -or !$relative -or
+      $relative -match '^[/\\]|:|(^|[/\\])\.\.([/\\]|$)') { throw 'Invalid checksum entry' }
+  $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $relative).Hash.ToLowerInvariant()
+  if ($actual -cne $expected) { throw "Checksum mismatch: $relative" }
+}
+```
+
 Keep `BUILD.json`, notices and Skill alongside `bin/dtw` or `bin/dtw.exe`.
 The runtime needs no Rust, Xcode, CUA, Node or Python installation. Optional
 acceptance scripts have their own Python/PowerShell requirements.
