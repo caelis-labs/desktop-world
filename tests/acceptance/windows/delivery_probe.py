@@ -47,7 +47,24 @@ def main():
                 return {w['title']:w['window_ref'] for w in rows}
             fw,sw=refs(first),refs(second)
             br=fw['DTW Windows Smoke B'];ar=sw['DTW Windows Smoke A']
-            first.execute(app,prefix+'-prepare',f'await app.focus({{window_ref:{json.dumps(br)}}});await app.press({{window_ref:{json.dumps(br)},selector:{{text:"Increment"}}}});return await app.keypress({{window_ref:{json.dumps(br)},keys:["CTRL","A"]}});')
+            before=wait(lambda:read(b/'state.json'))
+            editor=before['editor_bounds'];bounds=before['bounds']
+            x=editor['x']+editor['width']//2-bounds['x'];y=editor['y']+editor['height']//2-bounds['y']
+            # Invoke completion does not prove the fixture's editor.Focus() has
+            # survived queued activation/button focus. Place real pointer input
+            # once, then wait only for fresh independent readiness observations.
+            first.execute(app,prefix+'-prepare',f'await app.focus({{window_ref:{json.dumps(br)}}});await app.press({{window_ref:{json.dumps(br)},selector:{{text:"Increment"}}}});const c=await app.capture({{window_ref:{json.dumps(br)}}});await app.click({{window_ref:{json.dumps(br)},observation_ref:c.observation_ref,x:{x},y:{y}}});return await app.keypress({{window_ref:{json.dumps(br)},keys:["CTRL","A"]}});')
+            stable=None;sequence=before['sequence']
+            def editor_ready():
+                nonlocal stable,sequence
+                s=read(b/'state.json')
+                if not s or s['sequence']<=sequence:return None
+                sequence=s['sequence']
+                if not s['foreground'] or not s['editor_focused'] or s['keys_down_global']:
+                    stable=None;return None
+                if stable is None:stable=time.monotonic()
+                return s if time.monotonic()-stable>=.1 else None
+            write(out/(prefix+'-editor-ready.json'),wait(editor_ready,3))
             sa=wait(lambda:read(a/'state.json'));sb=wait(lambda:read(b/'state.json'))
             journal=b/'events.jsonl';offset=journal.stat().st_size
             request=first.begin('tools/call',{'name':'exec','arguments':{'app':app,'source':f'await app.typeText({{window_ref:{json.dumps(br)},text:{json.dumps(payload)}}});throw Error("cancellation missed actual input");'}})

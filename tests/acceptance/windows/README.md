@@ -185,7 +185,10 @@ This does not simulate or certify other monitor configurations.
 `delivery_probe.py --dtw ... --output ... --iterations 20` is a stricter opt-in
 Unicode cancellation/handoff stress control. Each iteration is a new independent
 transaction after reading the previous original ledger; no uncertain operation
-is replayed. It checks the original unknown receipt, released keys, next-owner
+is replayed. Preparation clicks the owned editor once and requires fresh focus
+and released-key snapshots for 100ms before arming the surrogate journal. A UIA
+button Invoke alone does not prove its handler's focus change survived queued
+activation. It checks the original unknown receipt, released keys, next-owner
 zero text changes and exact click count, and the original app's scalar-prefix
 integrity. A real terminal replacement/split-surrogate failure remains an open
 release gate. `--handler-delay` additionally selects an owned 40 ms GUI handler
