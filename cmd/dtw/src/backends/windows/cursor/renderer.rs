@@ -23,33 +23,19 @@ use windows::{
     },
 };
 
-// Monitor scale does not depend on the target app's DPI awareness. Keep this
-// exact Shcore ABI local: windows 0.58 groups it under the unrelated Shell SDK.
-#[link(name = "shcore")]
-extern "system" {
-    #[link_name = "GetScaleFactorForMonitor"]
-    fn monitor_scale(monitor: HMONITOR, scale: *mut i32) -> windows::core::HRESULT;
-}
-pub(super) fn displays() -> Option<Vec<[i32; 5]>> {
-    unsafe extern "system" fn collect(
-        monitor: HMONITOR,
-        _: HDC,
-        r: *mut RECT,
-        data: LPARAM,
-    ) -> BOOL {
+// Layout fingerprints are independent of app awareness. Effective scale comes
+// from the owned PMv2 helper HWND after placement, and is monitored separately.
+pub(super) fn displays() -> Option<Vec<[i32; 4]>> {
+    unsafe extern "system" fn collect(_: HMONITOR, _: HDC, r: *mut RECT, data: LPARAM) -> BOOL {
         if r.is_null() {
             return BOOL(0);
         }
-        let mut scale = 0;
-        if monitor_scale(monitor, &mut scale).is_err() || !(50..=800).contains(&scale) {
-            return BOOL(0);
-        }
-        let output = &mut *(data.0 as *mut Vec<[i32; 5]>);
+        let output = &mut *(data.0 as *mut Vec<[i32; 4]>);
         let r = *r;
-        output.push([r.left, r.top, r.right, r.bottom, scale]);
+        output.push([r.left, r.top, r.right, r.bottom]);
         BOOL(i32::from(output.len() <= 64))
     }
-    let mut output = Vec::<[i32; 5]>::new();
+    let mut output = Vec::<[i32; 4]>::new();
     if !unsafe {
         EnumDisplayMonitors(
             None,
@@ -428,6 +414,14 @@ fn run(expected: u32, birth: u64) -> Result<(), Box<dyn std::error::Error>> {
                 state.hide(state.operation);
                 dirty = true;
             }
+            if image_dpi != 0
+                && window
+                    .as_ref()
+                    .is_some_and(|w| unsafe { GetDpiForWindow(w.0) } != image_dpi)
+            {
+                state.hide(state.operation);
+                dirty = true;
+            }
             // Reassert relative order without re-rasterizing/compositing idle pixels.
             if let (Some(window), Some(target), Some(_)) =
                 (window.as_ref(), state.target.as_ref(), state.point)
@@ -450,17 +444,37 @@ fn run(expected: u32, birth: u64) -> Result<(), Box<dyn std::error::Error>> {
             if let Some(window) = window.as_ref() {
                 match (state.target.as_ref(), state.point) {
                     (Some(target), Some(point)) => {
-                        let dpi = target
-                            .displays
-                            .iter()
-                            .find(|d| {
-                                point.0 >= d[0]
-                                    && point.0 < d[2]
-                                    && point.1 >= d[1]
-                                    && point.1 < d[3]
-                            })
-                            .map(|d| (96 * d[4] / 100) as u32)
-                            .ok_or("cursor point has no proven monitor")?;
+                        // Query the DPI of our own PMv2 window, never the
+                        // unaware target's 96 DPI or a rounded scale index.
+                        // Move hidden across monitors before rasterization.
+                        let dpi = unsafe {
+                            let monitor = MonitorFromPoint(
+                                POINT {
+                                    x: point.0,
+                                    y: point.1,
+                                },
+                                MONITOR_DEFAULTTONULL,
+                            );
+                            if monitor.0.is_null() || !target.valid() {
+                                return Err("cursor monitor/target is unproven".into());
+                            }
+                            if MonitorFromWindow(window.0, MONITOR_DEFAULTTONULL) != monitor {
+                                let _ = ShowWindow(window.0, SW_HIDE);
+                                SetWindowPos(
+                                    window.0,
+                                    None,
+                                    point.0,
+                                    point.1,
+                                    0,
+                                    0,
+                                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                                )?;
+                            }
+                            GetDpiForWindow(window.0)
+                        };
+                        if !(48..=768).contains(&dpi) {
+                            return Err("cursor window DPI is unproven".into());
+                        }
                         if image_dpi != dpi {
                             surface = None;
                             images = None;

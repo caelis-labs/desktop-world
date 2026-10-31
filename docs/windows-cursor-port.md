@@ -42,10 +42,14 @@ exclusion, reserved-key assistance and desktop-copy fallback are not imported.
   topmost or raises its target. It stays immediately above the exact ordinary
   target, below unrelated covering windows, and is clipped to target bounds.
 - Target PID, process birth, executable identity, HWND incarnation, geometry,
-  application DPI and monitor layout/scales are revalidated. Move, resize,
+  application DPI and monitor layout are revalidated. The owned PMv2 helper's
+  effective DPI is monitored independently of the target application's DPI.
+  Move, resize,
   disable, close, display change or loss of identity retires the operation.
-  Raster scale follows the monitor under the physical event point, including
-  DPI-unaware targets; idle checks do not continuously composite frames.
+  Raster scale comes from the helper HWND on the monitor under the physical
+  event point, including DPI-unaware targets. Cross-monitor placement happens
+  hidden, without activation or raising. Idle checks do not continuously
+  composite frames. A rounded OS scale index is not used as raster DPI.
 - Capture remains exact-target PrintWindow, so DTW images omit its marker while
   physical screen pixels and external recorders retain it. Only exact proven
   DTW helper windows are exempted from occlusion/hit admission. Class, basename,
@@ -69,6 +73,30 @@ Input cancellation now waits for the complete transaction lease to unwind after
 the last key pair. A reproduced abandoned-mutex failure in a queued second
 session is retained separately from the passing rerun. Parent disappearance is
 a normal native-worker shutdown; malformed private protocol remains an error.
+
+The DPI-unaware control exposed a real capture defect: at 125%, a physical
+520x586 frame contained a 416x469 logical PrintWindow render. Windows now derives
+the target's backing extent using its exact HWND and
+[PhysicalToLogicalPointForPerMonitorDPI](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-physicaltologicalpointforpermonitordpi),
+renders only that window, then maps that bitmap into the physical output/crop.
+No desktop pixels or guessed DPI multiplier are used. The backing extent is
+rechecked after rendering and retained in pixel/region bindings, including each
+input segment's admission. DPI-aware windows keep their original one-to-one map.
+The cursor is independently sized from its own PMv2 window, not the foreign
+target's 96 DPI. The control checks actual physical pad edges and click effect,
+plus a 118x85 cursor panel at 120 DPI.
+
+WordPad also exposed an empty native runtime-ID SAFEARRAY (`0..-1`). An
+unidentifiable node now records `native_read_gap`, preserving independent
+siblings instead of aborting the entire page. It never becomes complete coverage
+or proof of absence/uniqueness. Total scanned nodes remain bounded even when IDs
+are unavailable. Before reading an ID, Windows validates its dimension, element
+size, VT_I4 type and bounds, and uses SafeArrayGetElement rather than unchecked
+pointer slicing. These follow Microsoft's
+[UIA SAFEARRAY client requirements](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-workingwithsafearrays).
+The original real WordPad failure and the later 19-element partial observation
+are kept as separate evidence, with tests for empty/wrong-type/nonzero-origin
+arrays and preservation of signed opaque ID components.
 
 ## Evidence and remaining coverage
 

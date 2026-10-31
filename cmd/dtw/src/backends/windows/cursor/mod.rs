@@ -28,7 +28,7 @@ struct Target {
     window: WindowTarget,
     bounds: [i32; 4],
     dpi: u32,
-    displays: Vec<[i32; 5]>,
+    displays: Vec<[i32; 4]>,
 }
 impl Target {
     fn read(window: WindowTarget) -> Option<Self> {
@@ -77,12 +77,12 @@ impl Target {
             .iter()
             .map(|v| v.as_i64().and_then(|v| i32::try_from(v).ok()))
             .collect::<Option<_>>()?;
-        let displays: Vec<[i32; 5]> = v["displays"]
+        let displays: Vec<[i32; 4]> = v["displays"]
             .as_array()?
             .iter()
             .map(|v| {
                 let values = v.as_array()?;
-                if values.len() != 5 {
+                if values.len() != 4 {
                     return None;
                 }
                 Some([
@@ -90,7 +90,6 @@ impl Target {
                     i32::try_from(values[1].as_i64()?).ok()?,
                     i32::try_from(values[2].as_i64()?).ok()?,
                     i32::try_from(values[3].as_i64()?).ok()?,
-                    i32::try_from(values[4].as_i64()?).ok()?,
                 ])
             })
             .collect::<Option<_>>()?;
@@ -210,7 +209,7 @@ mod tests {
                 },
                 bounds: [-100, -100, 100, 100],
                 dpi: 120,
-                displays: vec![[-100, -100, 100, 100, 125]],
+                displays: vec![[-100, -100, 100, 100]],
             }),
             ..Default::default()
         }

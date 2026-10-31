@@ -162,10 +162,16 @@ class Mcp:
     def close(self):
         if self.proc.poll() is None:
             self.proc.stdin.close()
-        code = self.proc.wait(timeout=8)
+        forced=False
+        try:
+            code = self.proc.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            self.proc.terminate()  # Popen retains this exact owned process handle.
+            code = self.proc.wait(timeout=5)
+            forced=True
         self.reader.join(timeout=2)
         self.err.close()
-        require(not self.reader.is_alive() and code == 0, f'MCP cleanup failed: {code}')
+        require(not forced and not self.reader.is_alive() and code == 0, f'MCP cleanup failed: exit={code}, forced={forced}')
         return {'pid':self.proc.pid, 'exit_code':code, 'forced':False}
 
 

@@ -10,6 +10,30 @@ using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
 namespace DtwWindowsSmoke {
+    // Opt-in read-only UIA barrier. Independent supervision releases this after
+    // the native caller has been canceled/timed out; the 45 s ceiling prevents
+    // a failed test from leaving the owned app permanently blocked.
+    public sealed class BlockingReadLabel : Label {
+        readonly string root;
+        public BlockingReadLabel(string directory) { root=directory; Text="Blocking read probe"; }
+        protected override AccessibleObject CreateAccessibilityInstance() { return new Barrier(this); }
+        sealed class Barrier : Control.ControlAccessibleObject {
+            readonly BlockingReadLabel label;
+            public Barrier(BlockingReadLabel owner) : base(owner) { label=owner; }
+            public override string Name {
+                get {
+                    if (File.Exists(Path.Combine(label.root,"block-uia"))) {
+                        File.WriteAllText(Path.Combine(label.root,"uia-entered"),"read-only Name getter");
+                        Stopwatch limit=Stopwatch.StartNew();
+                        while (!File.Exists(Path.Combine(label.root,"release-uia")) && limit.ElapsedMilliseconds<45000)
+                            System.Threading.Thread.Sleep(5);
+                    }
+                    return "Blocking read probe";
+                }
+                set { }
+            }
+        }
+    }
     public sealed class Pad : Control {
         public Pad() {
             SetStyle(ControlStyles.Selectable | ControlStyles.StandardClick |
@@ -91,6 +115,7 @@ namespace DtwWindowsSmoke {
                 wheelDelta += e.Delta; Record("pad_wheel", new { delta = e.Delta }); Publish();
             };
             Controls.Add(pad);
+            Controls.Add(new BlockingReadLabel(root) { Location=new Point(12,405), Size=new Size(380,25) });
             Shown += delegate { ready = true; editor.Focus(); Record("shown", new { }); Publish(); };
             FormClosed += delegate { closed = true; timer.Stop(); Record("closed", new { }); Publish(); Application.RemoveMessageFilter(this); };
             timer.Interval = 50;
@@ -172,10 +197,11 @@ namespace DtwWindowsSmoke {
             if (File.Exists(path)) File.Replace(temp, path, null); else File.Move(temp, path);
         }
         [STAThread] public static void Main(string[] args) {
-            if (args.Length != 2 || (args[1] != "A" && args[1] != "B")) return;
+            if ((args.Length != 2 && args.Length != 3) || (args[1] != "A" && args[1] != "B") ||
+                (args.Length == 3 && args[2] != "unaware")) return;
             try {
                 Directory.CreateDirectory(args[0]);
-                bool dpi = SetProcessDpiAwarenessContext(new IntPtr(-4));
+                bool dpi = SetProcessDpiAwarenessContext(new IntPtr(args.Length == 3 ? -1 : -4));
                 Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
                 Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
                 using (Fixture form = new Fixture(args[0], args[1], dpi)) Application.Run(form);

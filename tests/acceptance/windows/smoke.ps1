@@ -241,7 +241,7 @@ try {
     $fixtureExe = Join-Path $output 'DtwOwnedFixture.exe'
     Add-Type -AssemblyName System.Drawing
     Add-Type -TypeDefinition ([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'Fixture.cs'), $utf8)) -Language CSharp `
-        -ReferencedAssemblies @('System.dll','System.Windows.Forms.dll','System.Drawing.dll','System.Web.Extensions.dll') `
+        -ReferencedAssemblies @('System.dll','System.Windows.Forms.dll','System.Drawing.dll','System.Web.Extensions.dll','Accessibility.dll') `
         -OutputAssembly $fixtureExe -OutputType WindowsApplication
     Add-Type -TypeDefinition ([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'McpPipe.cs'), $utf8)) -Language CSharp
     $summary.fixture_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $fixtureExe).Hash

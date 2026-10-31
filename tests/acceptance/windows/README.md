@@ -112,6 +112,41 @@ Raw MCP ledgers, PNGs, original cancellation errors and retained-handle exit cod
 remain in its output. Passing this suite does not certify other DPI layouts,
 secure desktop, background input or final package acceptance.
 
+For real blocked UIA reads, the same owned fixture has an opt-in accessibility
+Name getter barrier. Run the separate supervisor (Python standard library only):
+
+```powershell
+python -X utf8 .\blocking_probe.py --dtw 'C:\Candidates\DTW\bin\dtw.exe' `
+  --output 'C:\Temp\dtw-blocked-new'
+```
+
+It proves entry into the barrier, cancels one original execution and lets another
+hit the native-call deadline. It checks original ledgers, zero text/counter/input
+effects and actual native exit 0, then releases/stops the owned fixture. MCP may
+suppress the cancelled request response; `result` retrieves the original ledger
+without replay. Separate private-worker controls distinguish empty EOF (exit 0)
+from malformed JSON (exit 1). The barrier's 45-second ceiling is fixture recovery,
+not a successful provider timeout.
+
+Two additional opt-in suites use the same requirements and new output paths:
+
+```powershell
+python -X utf8 .\restart_probe.py --dtw 'C:\Candidates\DTW\bin\dtw.exe' `
+  --output 'C:\Temp\dtw-restart-new'
+python -X utf8 .\dpi_probe.py --dtw 'C:\Candidates\DTW\bin\dtw.exe' `
+  --output 'C:\Temp\dtw-unaware-new'
+```
+
+The restart suite checks same-executable sibling state/reference survival,
+same-title replacement rejection before input, fresh-reference exact routing and
+state reset after every instance is replaced. The DPI suite starts a DPI-unaware
+owned app without changing any OS setting. It requires an actually scaled primary
+display; a 100% display cannot pass its scaling assertion. It compares an owned
+pad's native PNG and independently sampled physical geometry (one pixel edge
+tolerance), clicks its physical center exactly once, and checks the cursor's
+actual colored pixels and raster dimensions against the PMv2 helper's DPI.
+This does not simulate or certify other monitor configurations.
+
 `summary.json` records OS, PowerShell, source and binary SHA-256, selected cases,
 pending manual coverage and cleanup. `smoke_passed` covers **only the selected
 smoke**; `manual_pending` must remain visible in the handoff. Any failure returns

@@ -28,12 +28,13 @@ use windows::{
                 GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
                 PROCESS_QUERY_LIMITED_INFORMATION,
             },
+            Variant::VT_I4,
         },
         UI::{
             Accessibility::*,
             HiDpi::{
-                GetDpiForWindow, SetProcessDpiAwarenessContext,
-                DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+                GetDpiForWindow, PhysicalToLogicalPointForPerMonitorDPI,
+                SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
             },
             Input::KeyboardAndMouse::*,
             WindowsAndMessaging::*,
@@ -211,6 +212,7 @@ struct Query {
     scope_root: IUIAutomationElement,
     frontier: Vec<(IUIAutomationElement, u32)>,
     visited: HashSet<Vec<i32>>,
+    scanned: usize,
     elements: HashMap<u64, IUIAutomationElement>,
     pending: Option<Value>,
     role: Option<String>,
@@ -220,6 +222,7 @@ struct Query {
     gap: Option<String>,
     region: Option<RECT>,
     capture_bounds: Option<(RECT, u32)>,
+    render_size: Option<(i32, i32)>,
     texts: HashMap<u64, String>,
 }
 // Region membership is scoped to the source capture, not just the HWND. Read
@@ -257,6 +260,12 @@ impl Query {
             || unsafe { element.CurrentBoundingRectangle() }.map_err(failed),
             || Ok((rect(window)?, unsafe { GetDpiForWindow(window) })),
         )?;
+        if self
+            .render_size
+            .is_some_and(|saved| render_size(window).map_or(true, |now| now != saved))
+        {
+            return Err(Error::TargetChanged);
+        }
         check(until)
     }
 }
@@ -264,8 +273,10 @@ struct Pixels {
     target: WindowTarget,
     bounds: RECT,
     dpi: u32,
+    render_size: (i32, i32),
     expires: Instant,
 }
+type PointerPoint = (RECT, POINT, u32, Option<Instant>, Option<(i32, i32)>);
 pub struct Store {
     uia: Option<IUIAutomation>,
     windows: HashMap<u64, WindowTarget>,
@@ -545,6 +556,7 @@ impl Store {
             let mut first = root.clone();
             let mut region = None;
             let mut capture_bounds = None;
+            let mut source_render_size = None;
             match scope["kind"].as_str().unwrap_or("window") {
                 "window" => (),
                 "subtree" => {
@@ -574,6 +586,7 @@ impl Store {
                     }
                     if !equal_rect(pixels.bounds, rect(window)?)
                         || pixels.dpi != unsafe { GetDpiForWindow(window) }
+                        || pixels.render_size != render_size(window)?
                     {
                         return Err(Error::TargetChanged);
                     }
@@ -606,6 +619,7 @@ impl Store {
                         bottom: pixels.bounds.top + (y + h).ceil() as i32,
                     });
                     capture_bounds = Some((pixels.bounds, pixels.dpi));
+                    source_render_size = Some(pixels.render_size);
                 }
                 _ => return Err(Error::UnsupportedCapability),
             }
@@ -616,6 +630,7 @@ impl Store {
                 scope_root: first,
                 root,
                 visited: HashSet::new(),
+                scanned: 0,
                 elements: HashMap::new(),
                 pending: None,
                 role,
@@ -625,6 +640,7 @@ impl Store {
                 gap: None,
                 region,
                 capture_bounds,
+                render_size: source_render_size,
                 texts: HashMap::new(),
             }
         };
@@ -635,6 +651,11 @@ impl Store {
             rect(window).map_or(true, |now| !equal_rect(bounds, now))
                 || dpi != unsafe { GetDpiForWindow(window) }
         }) {
+            return Err(Error::TargetChanged);
+        }
+        if q.render_size
+            .is_some_and(|saved| render_size(window).map_or(true, |now| now != saved))
+        {
             return Err(Error::TargetChanged);
         }
         owned(&uia, &q.scope_root, &q.root, until).map_err(retained_error)?;
@@ -655,12 +676,13 @@ impl Store {
             && steps < 256
         {
             check(until)?;
-            if q.visited.len() >= 8192 || q.elements.len() >= 4096 {
+            if q.scanned >= 8192 || q.elements.len() >= 4096 {
                 q.frontier.clear();
                 q.gap = Some("scan_limit".into());
                 break;
             }
             let (element, depth) = q.frontier.pop().unwrap();
+            q.scanned += 1;
             steps += 1;
             if let Err(error) = owned(&uia, &element, &q.scope_root, until) {
                 let reason = match error {
@@ -671,11 +693,9 @@ impl Store {
                 q.gap.get_or_insert(reason.into());
                 continue;
             }
-            let runtime = runtime_id(&element)?;
-            if !q.visited.insert(runtime) {
-                q.gap.get_or_insert("tree_changed".into());
-                continue;
-            }
+            // Queue independent siblings before inspecting this node's runtime
+            // ID. WordPad can return an empty SAFEARRAY for a native UIA node.
+            // It is a coverage gap, not the end of the tree or the whole page.
             if depth > 0 {
                 match optional(unsafe { walker.GetNextSiblingElement(&element) }) {
                     Ok(Some(sibling)) => q.frontier.push((sibling, depth)),
@@ -683,6 +703,18 @@ impl Store {
                     Err(_) => {
                         q.gap.get_or_insert("native_read_gap".into());
                     }
+                }
+            }
+            match runtime_id(&element) {
+                Ok(runtime) => {
+                    if !q.visited.insert(runtime) {
+                        q.gap.get_or_insert("tree_changed".into());
+                        continue;
+                    }
+                }
+                Err(_) => {
+                    q.gap.get_or_insert("native_read_gap".into());
+                    continue;
                 }
             }
             match optional(unsafe { walker.GetFirstChildElement(&element) }) {
@@ -749,6 +781,11 @@ impl Store {
         }) {
             return Err(Error::TargetChanged);
         }
+        if q.render_size
+            .is_some_and(|saved| render_size(window).map_or(true, |now| now != saved))
+        {
+            return Err(Error::TargetChanged);
+        }
         let more = !q.frontier.is_empty() || q.pending.is_some();
         let reason = q.gap.clone().or_else(|| more.then(|| "page_limit".into()));
         let reply = json!({"target":target_json(&target),"binding":token,"elements":output,"discovery":{"has_more":more,"complete":!more&&q.gap.is_none(),"reason":reason,"visited":q.visited.len()}});
@@ -812,13 +849,16 @@ impl Store {
         let bounds = unobstructed(window)?;
         capture_points_owned(window, bounds)?;
         check(until)?;
-        let image = capture_rgb(window, bounds)?;
+        let (image, rendered_size) = capture_rgb(window, bounds)?;
         unsafe { DwmFlush() }.map_err(failed)?;
         self.validate(target)?;
         if !equal_rect(bounds, unobstructed(window)?) {
             return Err(Error::TargetChanged);
         }
         capture_points_owned(window, bounds)?;
+        if render_size(window)? != rendered_size {
+            return Err(Error::TargetChanged);
+        }
         self.pixels.retain(|_, p| p.target != *target);
         if self.pixels.len() >= 32 {
             return Err(failed("Pixel binding budget exhausted"));
@@ -831,6 +871,7 @@ impl Store {
                 target: target.clone(),
                 bounds,
                 dpi,
+                render_size: rendered_size,
                 expires: Instant::now() + Duration::from_secs(15),
             },
         );
@@ -865,7 +906,7 @@ impl Store {
         input::no_held_keys()?;
         let op = string(r, "operation")?;
         let mut segments: Vec<Vec<INPUT>> = Vec::new();
-        let mut point: Option<(RECT, POINT, u32, Option<Instant>)> = None;
+        let mut point: Option<PointerPoint> = None;
         let mut scroll = None;
         let mut semantic_anchor: Option<(
             IUIAutomation,
@@ -932,6 +973,7 @@ impl Store {
                             },
                             unsafe { GetDpiForWindow(window) },
                             Some(q.expires),
+                            q.render_size,
                         ));
                         semantic_anchor = Some((uia, element, q.root.clone(), clipped, q.region));
                     }
@@ -970,7 +1012,7 @@ impl Store {
                     x: bounds.left + (bounds.right - bounds.left) / 2,
                     y: bounds.top + (bounds.bottom - bounds.top) / 2,
                 };
-                point = Some((bounds, hit, unsafe { GetDpiForWindow(window) }, None));
+                point = Some((bounds, hit, unsafe { GetDpiForWindow(window) }, None, None));
             }
             for (delta, flags, sign) in [(y, MOUSEEVENTF_WHEEL, -1i32), (x, MOUSEEVENTF_HWHEEL, 1)]
             {
@@ -984,7 +1026,7 @@ impl Store {
                 }
             }
         }
-        if let Some((_, hit, _, _)) = &point {
+        if let Some((_, hit, _, _, _)) = &point {
             segments.insert(0, vec![absolute_move(*hit)?]);
         }
         let mut cursor = point
@@ -1004,10 +1046,13 @@ impl Store {
                     self.input_boundary(target, window, until)?;
                     input::no_held_keys()?;
                 }
-                if let Some((bounds, hit, dpi, expiry)) = &point {
+                if let Some((bounds, hit, dpi, expiry, rendered_size)) = &point {
                     if expiry.is_some_and(|expiry| expiry <= Instant::now())
                         || *dpi != unsafe { GetDpiForWindow(window) }
                         || !equal_rect(*bounds, unobstructed(window)?)
+                        || rendered_size.is_some_and(|saved| {
+                            render_size(window).map_or(true, |now| now != saved)
+                        })
                     {
                         return Err(Error::StaleObservation);
                     }
@@ -1026,7 +1071,7 @@ impl Store {
             Step::Dispatch(segment) => {
                 self.validate(target)?;
                 input::send(segment, window, until, dispatched)?;
-                if let (Some(cursor), Some((_, hit, _, _))) = (cursor.as_mut(), point.as_ref()) {
+                if let (Some(cursor), Some((_, hit, _, _, _))) = (cursor.as_mut(), point.as_ref()) {
                     // Emit only after the entire native mouse segment was
                     // inserted. Partial/cleanup and keyboard events emit none.
                     let down = segment.iter().any(|event| unsafe {
@@ -1053,11 +1098,12 @@ impl Store {
         window: HWND,
         token: &str,
         coordinates: &Value,
-    ) -> Result<(RECT, POINT, u32, Option<Instant>), Error> {
+    ) -> Result<PointerPoint, Error> {
         let pixels = self.pixels.remove(token).ok_or(Error::StaleObservation)?;
         if pixels.target != *target
             || pixels.expires <= Instant::now()
             || pixels.dpi != unsafe { GetDpiForWindow(window) }
+            || pixels.render_size != render_size(window)?
             || !equal_rect(pixels.bounds, unobstructed(window)?)
         {
             return Err(Error::StaleObservation);
@@ -1079,7 +1125,13 @@ impl Store {
             x: pixels.bounds.left + x.floor() as i32,
             y: pixels.bounds.top + y.floor() as i32,
         };
-        Ok((pixels.bounds, hit, pixels.dpi, Some(pixels.expires)))
+        Ok((
+            pixels.bounds,
+            hit,
+            pixels.dpi,
+            Some(pixels.expires),
+            Some(pixels.render_size),
+        ))
     }
     fn semantic_admission(
         &self,
@@ -1221,23 +1273,38 @@ fn optional(
 fn runtime_id(element: &IUIAutomationElement) -> Result<Vec<i32>, Error> {
     unsafe {
         let array = element.GetRuntimeId().map_err(failed)?;
-        let result = (|| {
-            let lo = SafeArrayGetLBound(array, 1).map_err(failed)?;
-            let hi = SafeArrayGetUBound(array, 1).map_err(failed)?;
-            let count = hi
-                .checked_sub(lo)
-                .and_then(|n| n.checked_add(1))
-                .filter(|n| *n > 0 && *n <= 64)
-                .ok_or_else(|| failed("Invalid UIA runtime ID"))?;
-            let mut data = std::ptr::null_mut();
-            SafeArrayAccessData(array, &mut data).map_err(failed)?;
-            let result = std::slice::from_raw_parts(data as *const i32, count as usize).to_vec();
-            SafeArrayUnaccessData(array).map_err(failed)?;
-            Ok(result)
-        })();
-        let _ = SafeArrayDestroy(array);
+        let result = runtime_id_array(array);
+        if !array.is_null() {
+            let _ = SafeArrayDestroy(array);
+        }
         result
     }
+}
+// UIA client arrays are one-dimensional, zero-based VT_I4. Validate before
+// reading; a provider's empty/malformed array is never an element identity.
+unsafe fn runtime_id_array(
+    array: *const windows::Win32::System::Com::SAFEARRAY,
+) -> Result<Vec<i32>, Error> {
+    if array.is_null()
+        || SafeArrayGetDim(array) != 1
+        || SafeArrayGetElemsize(array) != 4
+        || SafeArrayGetVartype(array).map_err(failed)? != VT_I4
+    {
+        return Err(failed("Invalid UIA runtime ID array shape"));
+    }
+    let lo = SafeArrayGetLBound(array, 1).map_err(failed)?;
+    let hi = SafeArrayGetUBound(array, 1).map_err(failed)?;
+    let count = hi
+        .checked_add(1)
+        .filter(|n| lo == 0 && *n > 0 && *n <= 64)
+        .ok_or_else(|| failed(format!("Invalid UIA runtime ID bounds: {lo}..{hi}")))?;
+    let mut values = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        let mut value = 0i32;
+        SafeArrayGetElement(array, &index, (&mut value as *mut i32).cast()).map_err(failed)?;
+        values.push(value);
+    }
+    Ok(values)
 }
 fn role(id: UIA_CONTROLTYPE_ID) -> &'static str {
     match id.0 {
@@ -1554,7 +1621,38 @@ fn rendered_content(rgb: &[u8]) -> bool {
     }
     sampled > 0 && black * 200 < sampled * 199
 }
-fn capture_rgb(window: HWND, bounds: RECT) -> Result<Value, Error> {
+fn render_size(window: HWND) -> Result<(i32, i32), Error> {
+    unsafe {
+        let mut raw = RECT::default();
+        GetWindowRect(window, &mut raw).map_err(failed)?;
+        let mut first = POINT {
+            x: raw.left,
+            y: raw.top,
+        };
+        let mut last = POINT {
+            x: raw.right,
+            y: raw.bottom,
+        };
+        PhysicalToLogicalPointForPerMonitorDPI(window, &mut first)
+            .ok()
+            .map_err(failed)?;
+        PhysicalToLogicalPointForPerMonitorDPI(window, &mut last)
+            .ok()
+            .map_err(failed)?;
+        let width = last.x.checked_sub(first.x).ok_or(Error::InvalidPoint)?;
+        let height = last.y.checked_sub(first.y).ok_or(Error::InvalidPoint)?;
+        if width <= 0
+            || height <= 0
+            || width > 8192
+            || height > 8192
+            || width as u64 * height as u64 > 16_777_216
+        {
+            return Err(Error::InvalidPoint);
+        }
+        Ok((width, height))
+    }
+}
+fn capture_rgb(window: HWND, bounds: RECT) -> Result<(Value, (i32, i32)), Error> {
     unsafe {
         let mut raw = RECT::default();
         GetWindowRect(window, &mut raw).map_err(failed)?;
@@ -1571,6 +1669,12 @@ fn capture_rgb(window: HWND, bounds: RECT) -> Result<Value, Error> {
         }
         let (width, height) = (bounds.right - bounds.left, bounds.bottom - bounds.top);
         let (crop_x, crop_y) = (bounds.left - raw.left, bounds.top - raw.top);
+        // PrintWindow paints in the target's backing coordinates. A DPI-unaware
+        // window on a scaled display can paint a 416x469 bitmap into a physical
+        // 520x586 frame. Derive its own logical extent through the HWND's native
+        // transform, then map the exact-window render into physical output.
+        // The worker and public input coordinates remain per-monitor/physical.
+        let (rw, rh) = render_size(window)?;
         let screen = GetDC(HWND::default());
         if screen.0.is_null() {
             return Err(failed("GetDC failed"));
@@ -1583,8 +1687,8 @@ fn capture_rgb(window: HWND, bounds: RECT) -> Result<Value, Error> {
         let info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: w,
-                biHeight: -h,
+                biWidth: rw,
+                biHeight: -rh,
                 biPlanes: 1,
                 biBitCount: 32,
                 biCompression: BI_RGB.0,
@@ -1603,8 +1707,16 @@ fn capture_rgb(window: HWND, bounds: RECT) -> Result<Value, Error> {
                 0,
             )
             .map_err(failed)?;
+            if bits.is_null() {
+                let _ = DeleteObject(bitmap);
+                return Err(failed("CreateDIBSection returned no pixel storage"));
+            }
             let old = SelectObject(memory, bitmap);
-            std::slice::from_raw_parts_mut(bits as *mut u8, w as usize * h as usize * 4).fill(0);
+            if old.0.is_null() || old.0 as isize == -1 {
+                let _ = DeleteObject(bitmap);
+                return Err(failed("Cannot select native render bitmap"));
+            }
+            std::slice::from_raw_parts_mut(bits as *mut u8, rw as usize * rh as usize * 4).fill(0);
             // Port CUA 0.38.0 capture.rs's PW_RENDERFULLCONTENT route. A desktop
             // BitBlt can return another app during maximize/restore animation
             // even when Win32 rectangles and hit tests already name this HWND.
@@ -1612,17 +1724,20 @@ fn capture_rgb(window: HWND, bounds: RECT) -> Result<Value, Error> {
             let captured = render_window(window, memory, 2).ok().map_err(failed);
             let result = captured.and_then(|_| {
                 let bgra =
-                    std::slice::from_raw_parts(bits as *const u8, w as usize * h as usize * 4);
+                    std::slice::from_raw_parts(bits as *const u8, rw as usize * rh as usize * 4);
                 let mut rgb = Vec::with_capacity(width as usize * height as usize * 3);
                 for y in crop_y..crop_y + height {
-                    let start = (y as usize * w as usize + crop_x as usize) * 4;
-                    for p in bgra[start..start + width as usize * 4].chunks_exact(4) {
+                    let sy = y as usize * rh as usize / h as usize;
+                    for x in crop_x..crop_x + width {
+                        let sx = x as usize * rw as usize / w as usize;
+                        let offset = (sy * rw as usize + sx) * 4;
+                        let p = &bgra[offset..offset + 4];
                         rgb.extend_from_slice(&[p[2], p[1], p[0]]);
                     }
                 }
                 let mut after = RECT::default();
                 GetWindowRect(window, &mut after).map_err(failed)?;
-                if !equal_rect(raw, after) {
+                if !equal_rect(raw, after) || render_size(window)? != (rw, rh) {
                     return Err(Error::TargetChanged);
                 }
                 if !rendered_content(&rgb) {
@@ -1630,7 +1745,7 @@ fn capture_rgb(window: HWND, bounds: RECT) -> Result<Value, Error> {
                         "Native window render is blank or unsupported; capture content is unproven",
                     ));
                 }
-                encode_png(width as u32, height as u32, &rgb)
+                Ok((encode_png(width as u32, height as u32, &rgb)?, (rw, rh)))
             });
             SelectObject(memory, old);
             let _ = DeleteObject(bitmap);
@@ -1677,6 +1792,27 @@ fn absolute_move(point: POINT) -> Result<INPUT, Error> {
 #[cfg(test)]
 mod semantic_tests {
     use super::*;
+    #[test]
+    fn native_runtime_id_arrays_reject_empty_wrong_type_shape_and_preserve_signed_ids() {
+        use windows::Win32::System::Variant::VT_R8;
+        unsafe {
+            assert!(runtime_id_array(std::ptr::null()).is_err());
+            for (kind, lo, count) in [(VT_I4, 0, 0), (VT_R8, 0, 2), (VT_I4, 1, 2)] {
+                let array = SafeArrayCreateVector(kind, lo, count);
+                assert!(!array.is_null());
+                assert!(runtime_id_array(array).is_err());
+                SafeArrayDestroy(array).unwrap();
+            }
+            let array = SafeArrayCreateVector(VT_I4, 0, 3);
+            assert!(!array.is_null());
+            let expected = [42i32, -17, i32::MAX];
+            for (index, value) in expected.iter().enumerate() {
+                SafeArrayPutElement(array, &(index as i32), (value as *const i32).cast()).unwrap();
+            }
+            assert_eq!(runtime_id_array(array).unwrap(), expected);
+            SafeArrayDestroy(array).unwrap();
+        }
+    }
     use windows::Win32::Foundation::{E_ACCESSDENIED, E_POINTER, S_OK};
 
     #[test]
