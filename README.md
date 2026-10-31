@@ -18,15 +18,14 @@ Copy this prompt into **Caelis, DSH, or agy**:
 ```text
 Install Desktop World for this Agent using:
 https://github.com/caelis-labs/desktop-world/blob/main/docs/install.md
-Choose the rewrite package for my OS, verify it, and install its desktop tools
+Choose the v0.2.0 package for my OS, verify it, and install its desktop tools
 and bundled Skill through this Agent's standard extension points. Preserve my
 existing configuration. Verify the connection by listing open app windows.
-If no rewrite package is available, ask me for the candidate package rather
-than installing an old release.
+Do not substitute historical v0.1.x packages.
 ```
 
-**v0.2.0 is currently an unpublished candidate.** Use the supplied rewrite package;
-historical v0.1.x releases are a different edition. You do not need a development
+Download the **v0.2.0** package from [Releases](https://github.com/caelis-labs/desktop-world/releases/tag/v0.2.0).
+Historical v0.1.x releases are a different edition. You do not need a development
 toolchain to run the package. See [installation details](docs/install.md) for
 manual setup and upgrades.
 
@@ -45,8 +44,8 @@ permissions. Keep the desktop unlocked; some actions bring a window to the front
 
 ## Current availability
 
-**macOS arm64** has real-app testing; the final release package still needs
-acceptance. **Windows x64** has a candidate for independent desktop acceptance.
+**macOS arm64** and **Windows x64** are the supported packages. Windows testing
+covers Windows 11, ordinary user access and a primary display at 125% scaling.
 Linux is experimental. Lock-screen use and remote control are not supported.
 
 [Installation](docs/install.md) · [Capabilities and limits](docs/product-matrix.md) ·
