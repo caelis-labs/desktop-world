@@ -53,12 +53,23 @@ pass or automatically retried.
 
 - Two fixture process instances aggregate under one stable executable app ID;
   their two titled windows have distinct public refs.
-- Each instance independently receives one unique semantic `Increment` press.
+- Each instance uses `find` and selector-form `press` to resolve one `Increment`
+  button, including its published `button Increment` label. Its counter must
+  increase exactly once. Normal terminal UIA edges must yield complete coverage;
+  a genuine UIA read failure must still be partial (the candidate also runs
+  HRESULT boundary regressions, including `E_POINTER` and access denial).
 - The `Message` field is discovered completely through pagination, set with
-  `setValue`, and saved through its unique semantic Save button.
+  selector-form `setValue`, and saved through its unique semantic Save button.
+  Full native fields match separately; a field boundary is not searchable text.
 - `focus`, Ctrl+A, Chinese + emoji + CRLF text entry, and Ctrl+S replace and save
   the document. Fixture state and the actual UTF-8 `saved.txt` are checked. Only
   CRLF versus LF is normalized for comparison; Unicode content is not normalized.
+- Native `readText` reconstructs the Unicode sample in three-UTF-16-unit pages,
+  checking offsets, forward progress, total length and exact text.
+- A captured region retains one button or editor reference. The supervisor then
+  moves the owned window or its controls. Old `press`, `setValue` and `readText`
+  refs must be rejected before dispatch; text and counters must stay unchanged.
+  These checks complete before the retained query can expire.
 - Each instance's edits leave the other instance's saved text and action counters
   unchanged. This checks precise routing, not parallel operation.
 - Both windows return pixel dimensions and a PNG MCP content block. **Inspect
@@ -70,6 +81,8 @@ pass or automatically retried.
 - Normal MCP stdin closure and owned fixture stop requests complete without
   forced process termination. This is not an in-flight EOF/cancel lifecycle test.
 
+Expected stale-region rejections are recorded as explicit negative controls;
+only their specific stale/target-changed errors with no dispatch pass.
 Every action is issued once. Read-only polling checks fixture readiness and
 independent effects, with bounded waits; it never repeats a DTW command to make
 an effect happen. Native errors, partial discovery, ambiguous controls, unknown
@@ -117,6 +130,80 @@ needs no `dtw.exe` (the .NET compiler may run as a child process).
 It emits `status:compiled_only`, `passed:false`: compilation is not a smoke pass.
 The source directory is never modified. No extra CI job is required by this kit.
 
+
+## Chrome workbench from the candidate ZIP
+
+The ZIP includes `acceptance/browser-workbench/server.py` and `index.html` from
+its recorded source. This optional local test server needs Python 3; DTW itself
+needs no Python runtime. All fixture reads/writes explicitly use UTF-8, including
+on a Chinese Windows installation. Start from the extracted candidate root in
+PowerShell, using a new evidence directory:
+
+```powershell
+$work = 'C:\Temp\dtw-browser-first'
+if (Test-Path -LiteralPath $work) { throw 'Use a new evidence directory' }
+[void][IO.Directory]::CreateDirectory($work)
+$utf8 = New-Object Text.UTF8Encoding($false)
+[IO.File]::WriteAllText((Join-Path $work 'review-evidence.txt'), "DTW Windows review`n", $utf8)
+py -3 .\acceptance\browser-workbench\server.py --output $work --case windows-first --file-task
+```
+
+The server prints its loopback URL and stays running. Open that URL in a new
+owned Chrome window/profile. Give the Agent the URL/window, its `apps` app ID,
+and this task (replace the evidence path if needed):
+
+> In DTW Workbench windows-first, set DTW-0088 quantity to 37 and DTW-0240 to 52.
+> Mark both Reviewed. Set their Handoff notes respectively to two lines:
+> `第一批：已核对 🐦` / `待补货`, and `第二批：已核对 🐦` / `待补货`.
+> Save each record exactly once, reopen both and verify every value, then cancel
+> without another save. Use Attach review evidence and the native file chooser
+> to select `C:\Temp\dtw-browser-first\review-evidence.txt`; verify the received
+> filename. Preserve all other records. Use DTW MCP and the shipped Skill for
+> all application interaction, without shell, file editing, HTTP, DOM or CDP.
+
+The supervisor independently reads state in another PowerShell terminal. These
+commands are verification only; do not give them to the executing Agent:
+
+```powershell
+$work = 'C:\Temp\dtw-browser-first'
+$utf8 = New-Object Text.UTF8Encoding($false)
+$s = ConvertFrom-Json ([IO.File]::ReadAllText((Join-Path $work 'state.json'), $utf8))
+$expected = @{
+  'DTW-0088' = @{ quantity = 37; note = "第一批：已核对 🐦`n待补货" }
+  'DTW-0240' = @{ quantity = 52; note = "第二批：已核对 🐦`n待补货" }
+}
+if (-not $s.ready -or @($s.items).Count -ne 240 -or @($s.saves).Count -ne 2) { throw 'Incomplete or duplicate saves' }
+foreach ($sku in $expected.Keys) {
+  $rows = @($s.items | Where-Object { $_.sku -eq $sku })
+  $saved = @($s.saves | Where-Object { $_.sku -eq $sku })
+  if ($rows.Count -ne 1 -or $saved.Count -ne 1) { throw ('Wrong record/save count: ' + $sku) }
+  foreach ($row in @($rows[0], $saved[0])) {
+    if ($row.quantity -ne $expected[$sku].quantity -or $row.reviewed -ne $true -or $row.note -cne $expected[$sku].note) { throw ('Wrong saved values: ' + $sku) }
+  }
+}
+foreach ($row in $s.items) {
+  if ($expected.ContainsKey($row.sku)) { continue }
+  $number = [int]$row.sku.Substring(4)
+  if ($row.quantity -ne (10 + $number % 25) -or $row.reviewed -ne $false -or $row.note -cne '') { throw ('Changed neighbor: ' + $row.sku) }
+}
+$sha = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $work 'review-evidence.txt')).Hash.ToLowerInvariant()
+if (@($s.uploads).Count -ne 1 -or $s.uploads[0].name -cne 'review-evidence.txt' -or $s.uploads[0].sha256 -cne $sha) { throw 'Wrong or repeated attachment' }
+$s.items | Where-Object { $expected.ContainsKey($_.sku) } | Format-List
+$s.saves | Group-Object sku | Select-Object Name,Count
+$s.uploads | Format-List
+'Independent browser state passed; inspect the transcript/screenshots for reopening and chooser use.'
+```
+
+Keep `state.json`, the Agent transcript and original screenshots, plus the
+candidate manifest/checksum and shipped Skill hash. Capture Agent wall time,
+MCP/exec calls, failures and read-only recovery calls. File/server success alone
+does not prove reopening or native chooser interaction. To stop only this owned
+server gracefully, write its stop marker from the supervisor terminal:
+
+```powershell
+[IO.File]::WriteAllText((Join-Path $work 'stop'), 'stop', $utf8)
+```
+
 ## Still required for full Windows acceptance
 
 The real-application closure batch adds subtree/region observation, `readText`
@@ -124,7 +211,10 @@ and full bounded UIA text matching. Rebuild the final batch revision on Windows;
 the earlier linked Windows candidate does not cover these changes. The Windows
 archive includes the same-source batch plan in its docs directory; the plan is
 an acceptance specification, not evidence that these tasks passed. Run the
-existing smoke first, then add these cases against that same binary and Skill:
+existing smoke first (unique selectors, region invalidation, Unicode pages and
+two-instance isolation), then validate DPI/monitor transitions and cancellation/
+parent-exit cleanup. Proceed to the three real applications only after those
+checks pass, using that same binary and Skill:
 
 - Find text beyond the 512-character display excerpt. A search budget limit
   must return partial coverage, not an empty complete result.

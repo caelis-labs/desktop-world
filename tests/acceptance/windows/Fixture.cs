@@ -39,10 +39,12 @@ namespace DtwWindowsSmoke {
         readonly UTF8Encoding utf8 = new UTF8Encoding(false);
         readonly Stopwatch clock = Stopwatch.StartNew();
         readonly TextBox editor = new TextBox();
+        readonly Button increment = new Button();
+        readonly Point origin;
         readonly Pad pad = new Pad();
         readonly Timer timer = new Timer();
         readonly bool dpiSet;
-        int sequence, increments, saves, leftUps, rightUps, doubles, wheelDelta;
+        int sequence, increments, saves, leftUps, rightUps, doubles, wheelDelta, layoutSequence;
         string saved = "";
         bool ready, closed;
 
@@ -57,12 +59,14 @@ namespace DtwWindowsSmoke {
             ClientSize = new Size(410, 440);
             Rectangle area = Screen.PrimaryScreen.WorkingArea;
             Location = new Point(area.Left + 16 + (label == "A" ? 0 : 446), area.Top + 16);
+            origin = Location;
             editor.Location = new Point(12, 12); editor.Size = new Size(386, 125);
             editor.Multiline = true; editor.AcceptsReturn = true;
             editor.ScrollBars = ScrollBars.Vertical; editor.AccessibleName = "Message";
             editor.TextChanged += delegate { Record("text_changed", new { length = editor.Text.Length }); };
             Controls.Add(editor);
-            Button increment = new Button { Text = "Increment", AccessibleName = "Increment", Location = new Point(12, 145), Size = new Size(120, 30) };
+            increment.Text = "Increment"; increment.AccessibleName = "Increment";
+            increment.Location = new Point(12, 145); increment.Size = new Size(120, 30);
             increment.Click += delegate { increments++; Record("increment", new { count = increments }); editor.Focus(); Publish(); };
             Button save = new Button { Text = "Save", AccessibleName = "Save", Location = new Point(144, 145), Size = new Size(100, 30) };
             save.Click += delegate { Save("button"); editor.Focus(); Publish(); };
@@ -83,9 +87,31 @@ namespace DtwWindowsSmoke {
             timer.Interval = 50;
             timer.Tick += delegate {
                 if (File.Exists(Path.Combine(root, "stop"))) { Close(); return; }
-                Publish();
+                ApplyLayoutCommand(); Publish();
             };
             Application.AddMessageFilter(this); timer.Start();
+        }
+        void ApplyLayoutCommand() {
+            string path = Path.Combine(root, "layout.json");
+            if (!File.Exists(path)) return;
+            Dictionary<string, int> command;
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            using (var reader = new StreamReader(stream, utf8))
+                command = json.Deserialize<Dictionary<string, int>>(reader.ReadToEnd());
+            int requested = command["sequence"];
+            if (requested <= layoutSequence) return;
+            int windowOffset = command["window_offset"], controlOffset = command["control_offset"];
+            if ((windowOffset != 0 && windowOffset != 12) || (controlOffset != 0 && controlOffset != 200))
+                throw new InvalidOperationException("Unsupported owned layout command");
+            Location = new Point(origin.X + windowOffset, origin.Y);
+            editor.Location = new Point(12, 12 + controlOffset);
+            increment.Location = new Point(12, 145 + controlOffset);
+            layoutSequence = requested;
+            Record("supervisor_layout", command);
+        }
+        object ControlBounds(Control control) {
+            Rectangle bounds = control.RectangleToScreen(new Rectangle(Point.Empty, control.Size));
+            return new { x = bounds.X, y = bounds.Y, width = bounds.Width, height = bounds.Height };
         }
         void Save(string source) {
             saved = editor.Text;
@@ -125,6 +151,7 @@ namespace DtwWindowsSmoke {
                 dpi_awareness_set = dpiSet, dpi = GetDpiForWindow(Handle), bounds_ok = boundsOk,
                 bounds = new { x = bounds.Left, y = bounds.Top, width = bounds.Right - bounds.Left, height = bounds.Bottom - bounds.Top },
                 pad_point = new { x = point.X, y = point.Y },
+                layout_sequence = layoutSequence, increment_bounds = ControlBounds(increment), editor_bounds = ControlBounds(editor),
                 working_area = new { x = Screen.PrimaryScreen.WorkingArea.X, y = Screen.PrimaryScreen.WorkingArea.Y,
                     width = Screen.PrimaryScreen.WorkingArea.Width, height = Screen.PrimaryScreen.WorkingArea.Height },
                 editor_focused = editor.Focused, text = editor.Text, saved = saved, saves = saves, increments = increments,

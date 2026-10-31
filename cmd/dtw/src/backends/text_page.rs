@@ -1,10 +1,10 @@
 //! UTF-16 paging shared with native providers; offsets are never byte indices.
 use crate::computer::{Error, TextPage};
 
-pub fn matches_fields(name: &str, value: &str, lowercase_needle: &str) -> bool {
-    format!("{name} {value}")
-        .to_lowercase()
-        .contains(lowercase_needle)
+pub fn matches_fields(label: &str, name: &str, value: &str, lowercase_needle: &str) -> bool {
+    [label, name, value]
+        .iter()
+        .any(|field| field.to_lowercase().contains(lowercase_needle))
 }
 
 pub fn page(text: &str, offset: u32, limit: u32) -> Result<TextPage, Error> {
@@ -36,9 +36,30 @@ mod tests {
     #[test]
     fn native_matching_does_not_search_truncated_discovery_previews() {
         let full = format!("{}Needle", "x".repeat(800));
-        assert!(matches_fields(&full, "", "needle"));
-        assert!(matches_fields("", &full, "needle"));
-        assert!(!matches_fields(&full, "", "absent"));
+        assert!(matches_fields("", &full, "", "needle"));
+        assert!(matches_fields("", "", &full, "needle"));
+        assert!(!matches_fields("", &full, "", "absent"));
+    }
+    #[test]
+    fn search_cannot_match_across_distinct_native_fields() {
+        assert!(!matches_fields(
+            "text_field Order",
+            "Order",
+            "Number",
+            "order number"
+        ));
+    }
+    #[test]
+    fn search_accepts_the_published_label_and_each_native_field() {
+        for needle in ["button save", "save", "ready"] {
+            assert!(matches_fields("button Save", "Save", "Ready", needle));
+        }
+        assert!(!matches_fields(
+            "button Save",
+            "Save",
+            "Ready",
+            "save ready"
+        ));
     }
     #[test]
     fn utf16_pages_preserve_surrogates_and_empty_terminal_page() {

@@ -108,6 +108,7 @@ fn discovery_matches<E>(
     if role.is_some_and(|role| row["role"].as_str() != Some(role))
         || text.is_some_and(|text| {
             !super::super::text_page::matches_fields(
+                row["label"].as_str().unwrap_or(""),
                 row["name"].as_str().unwrap_or(""),
                 row["value"].as_str().unwrap_or(""),
                 text,
@@ -185,6 +186,44 @@ struct Query {
     region: Option<RECT>,
     capture_bounds: Option<(RECT, u32)>,
     texts: HashMap<u64, String>,
+}
+// Region membership is scoped to the source capture, not just the HWND. Read
+// element bounds first: a blocking UIA getter must not hide a concurrent window
+// move or DPI change from the final capture-geometry check.
+fn validate_region_geometry(
+    capture_bounds: Option<(RECT, u32)>,
+    region: Option<RECT>,
+    read_element: impl FnOnce() -> Result<RECT, Error>,
+    read_window: impl FnOnce() -> Result<(RECT, u32), Error>,
+) -> Result<(), Error> {
+    if let Some(region) = region {
+        if !intersects(region, read_element()?) {
+            return Err(Error::StaleObservation);
+        }
+    }
+    if let Some((bounds, dpi)) = capture_bounds {
+        let (current, current_dpi) = read_window()?;
+        if !equal_rect(bounds, current) || dpi != current_dpi {
+            return Err(Error::TargetChanged);
+        }
+    }
+    Ok(())
+}
+impl Query {
+    fn validate_region(
+        &self,
+        window: HWND,
+        element: &IUIAutomationElement,
+        until: Instant,
+    ) -> Result<(), Error> {
+        validate_region_geometry(
+            self.capture_bounds,
+            self.region,
+            || unsafe { element.CurrentBoundingRectangle() }.map_err(failed),
+            || Ok((rect(window)?, unsafe { GetDpiForWindow(window) })),
+        )?;
+        check(until)
+    }
 }
 struct Pixels {
     target: WindowTarget,
@@ -388,6 +427,7 @@ impl Store {
                         .clone();
                     owned(&uia, &first, &old.root, until).map_err(retained_error)?;
                     owned(&uia, &first, &root, until).map_err(retained_error)?;
+                    old.validate_region(window, &first, until)?;
                 }
                 "region" => {
                     let pixels = self
@@ -595,12 +635,14 @@ impl Store {
             let current_root = unsafe { uia.ElementFromHandle(window) }.map_err(failed)?;
             owned(&uia, &element, &q.root, until).map_err(retained_error)?;
             owned(&uia, &element, &current_root, until).map_err(retained_error)?;
+            q.validate_region(window, &element, until)?;
             let current = element_text(&element)?;
             check(until)?;
             self.validate(&target)?;
             let current_root = unsafe { uia.ElementFromHandle(window) }.map_err(failed)?;
             owned(&uia, &element, &q.root, until).map_err(retained_error)?;
             owned(&uia, &element, &current_root, until).map_err(retained_error)?;
+            q.validate_region(window, &element, until)?;
             if let Some(previous) = q.texts.get(&id) {
                 if previous != &current {
                     return Err(Error::StaleObservation);
@@ -824,7 +866,7 @@ impl Store {
         window: HWND,
         uia: &IUIAutomation,
         element: &IUIAutomationElement,
-        root: &IUIAutomationElement,
+        query: &Query,
         until: Instant,
     ) -> Result<input_sequence::Mutation<'static>, Error> {
         // Pattern and property getters can block. Re-prove membership after
@@ -835,7 +877,8 @@ impl Store {
         {
             return Err(Error::ElementNotPressable);
         }
-        owned(uia, element, root, until)?;
+        owned(uia, element, &query.root, until)?;
+        query.validate_region(window, element, until)?;
         self.validate(target)?;
         if !unsafe { IsWindowEnabled(window) }.as_bool() {
             return Err(failed("Target is disabled by a modal window"));
@@ -893,21 +936,21 @@ impl Store {
                     }
                     let value = BSTR::from(value);
                     let _mutation =
-                        self.semantic_admission(&target, window, &uia, &element, &q.root, until)?;
+                        self.semantic_admission(&target, window, &uia, &element, &q, until)?;
                     dispatched = true;
                     unsafe { pattern.SetValue(&value) }.map_err(failed)?;
                 } else if let Ok(pattern) = unsafe {
                     element.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
                 } {
                     let _mutation =
-                        self.semantic_admission(&target, window, &uia, &element, &q.root, until)?;
+                        self.semantic_admission(&target, window, &uia, &element, &q, until)?;
                     dispatched = true;
                     unsafe { pattern.Invoke() }.map_err(failed)?;
                 } else if let Ok(pattern) = unsafe {
                     element.GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId)
                 } {
                     let _mutation =
-                        self.semantic_admission(&target, window, &uia, &element, &q.root, until)?;
+                        self.semantic_admission(&target, window, &uia, &element, &q, until)?;
                     dispatched = true;
                     unsafe { pattern.Toggle() }.map_err(failed)?;
                 } else if let Ok(pattern) = unsafe {
@@ -916,7 +959,7 @@ impl Store {
                     )
                 } {
                     let _mutation =
-                        self.semantic_admission(&target, window, &uia, &element, &q.root, until)?;
+                        self.semantic_admission(&target, window, &uia, &element, &q, until)?;
                     dispatched = true;
                     unsafe { pattern.Select() }.map_err(failed)?;
                 } else {
@@ -948,7 +991,9 @@ fn optional(
 ) -> Result<Option<IUIAutomationElement>, Error> {
     match result {
         Ok(e) => Ok(Some(e)),
-        Err(e) if e.code().0 == 0x80004003u32 as i32 => Ok(None),
+        // windows-rs 0.58 represents S_OK + a null interface as Error::empty
+        // (code 0). E_POINTER and all real failures are not normal tree ends.
+        Err(e) if e.code().0 == 0 => Ok(None),
         Err(e) => Err(failed(e)),
     }
 }
@@ -1270,6 +1315,153 @@ fn absolute_move(point: POINT) -> Result<INPUT, Error> {
 mod semantic_tests {
     use super::*;
     use windows::Win32::Foundation::{E_ACCESSDENIED, E_POINTER, S_OK};
+
+    #[test]
+    fn successful_null_tree_edge_is_not_a_native_read_gap() {
+        // This is the exact Result produced by Type::from_abi for S_OK + NULL
+        // in the locked windows-core 0.58 binding.
+        assert_eq!(windows::core::Error::empty().code(), S_OK);
+        assert!(optional(Err(windows::core::Error::empty()))
+            .unwrap()
+            .is_none());
+        for code in [
+            E_POINTER,
+            E_ACCESSDENIED,
+            HRESULT(UIA_E_ELEMENTNOTAVAILABLE as i32),
+        ] {
+            // The traversal records an Err as native_read_gap; real HRESULT
+            // failures must not be converted into a normal terminal edge.
+            assert!(optional(Err(windows::core::Error::from_hresult(code))).is_err());
+        }
+    }
+
+    #[test]
+    fn retained_region_rejects_window_move_resize_and_dpi_change() {
+        let bounds = RECT {
+            left: 10,
+            top: 20,
+            right: 210,
+            bottom: 220,
+        };
+        let region = RECT {
+            left: 20,
+            top: 30,
+            right: 100,
+            bottom: 110,
+        };
+        let element = RECT {
+            left: 30,
+            top: 40,
+            right: 90,
+            bottom: 100,
+        };
+        assert!(validate_region_geometry(
+            Some((bounds, 96)),
+            Some(region),
+            || Ok(element),
+            || Ok((bounds, 96))
+        )
+        .is_ok());
+        for current in [
+            (
+                RECT {
+                    left: 11,
+                    right: 211,
+                    ..bounds
+                },
+                96,
+            ),
+            (
+                RECT {
+                    bottom: 221,
+                    ..bounds
+                },
+                96,
+            ),
+            (bounds, 144),
+        ] {
+            assert!(matches!(
+                validate_region_geometry(
+                    Some((bounds, 96)),
+                    Some(region),
+                    || Ok(element),
+                    || Ok(current)
+                ),
+                Err(Error::TargetChanged)
+            ));
+        }
+    }
+
+    #[test]
+    fn retained_region_rejects_departed_or_unreadable_control() {
+        let region = RECT {
+            left: 0,
+            top: 0,
+            right: 100,
+            bottom: 100,
+        };
+        for moved in [
+            RECT {
+                left: 100,
+                top: 10,
+                right: 120,
+                bottom: 30,
+            },
+            RECT {
+                left: 20,
+                top: 20,
+                right: 20,
+                bottom: 30,
+            },
+        ] {
+            assert!(matches!(
+                validate_region_geometry(
+                    None,
+                    Some(region),
+                    || Ok(moved),
+                    || panic!("no capture constraint")
+                ),
+                Err(Error::StaleObservation)
+            ));
+        }
+        assert!(matches!(
+            validate_region_geometry(
+                None,
+                Some(region),
+                || Err(Error::Closed),
+                || panic!("no capture constraint")
+            ),
+            Err(Error::Closed)
+        ));
+        assert!(validate_region_geometry(
+            None,
+            None,
+            || panic!("unscoped semantic refs do not require rectangles"),
+            || panic!("unscoped semantic refs do not require capture geometry")
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn capture_geometry_is_checked_after_blocking_element_geometry() {
+        let bounds = RECT {
+            left: 0,
+            top: 0,
+            right: 100,
+            bottom: 100,
+        };
+        let dpi = std::cell::Cell::new(96);
+        let result = validate_region_geometry(
+            Some((bounds, 96)),
+            Some(bounds),
+            || {
+                dpi.set(144); // Window moved to another DPI while UIA yielded.
+                Ok(bounds)
+            },
+            || Ok((bounds, dpi.get())),
+        );
+        assert!(matches!(result, Err(Error::TargetChanged)));
+    }
 
     #[test]
     fn region_geometry_is_read_only_for_role_and_full_text_matches() {
