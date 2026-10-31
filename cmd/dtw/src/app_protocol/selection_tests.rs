@@ -669,7 +669,7 @@ fn selection_wait_restarts_only_reads_and_expiry_keeps_context_healthy() {
         Ok(page(vec![], false, true, 0)),
         Ok(page(vec![element(1, true)], false, true, 1)),
     ]);
-    let reply = script(&owner, "appears", "return await app.setValue({window_ref,selector:{text:'Save'},value:'new value',timeout_ms:200});");
+    let reply = script(&owner, "appears", "return await app.setValue({window_ref,selector:{text:'Save'},value:'new value',timeout_ms:2000});");
     assert!(!reply.is_error, "{}", reply.data);
     assert_eq!(backend.queries.lock().unwrap().len(), 2);
     assert_eq!(*backend.values.lock().unwrap(), ["new value"]);
@@ -685,6 +685,25 @@ fn selection_wait_restarts_only_reads_and_expiry_keeps_context_healthy() {
     assert!(!healthy.is_error, "{}", healthy.data);
 }
 
+// Success cases above and below test transitions, not scheduler latency. Their
+// two-second polling budget leaves room for parallel CI; expiry is injected
+// directly here so its no-dispatch contract does not depend on a timed sleep.
+#[test]
+fn disabled_selection_with_spent_poll_window_does_not_read_the_next_page_or_dispatch() {
+    let mut disabled = element(1, false);
+    disabled.enabled = Some(false);
+    let (owner, backend) = setup(vec![
+        Ok(page(vec![disabled], false, true, 1)),
+        Ok(page(vec![element(2, true)], false, true, 1)),
+    ]);
+    let work = select_after_poll_window(&owner, selected_press(200), 200);
+    assert_eq!(work.completed.error.unwrap().code, "selector_not_ready");
+    assert_eq!(backend.queries.lock().unwrap().len(), 1);
+    assert_eq!(backend.pages.lock().unwrap().len(), 1);
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 0);
+    assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 0);
+}
+
 #[test]
 fn selection_waits_for_disabled_target_without_filtering_it_or_delaying_find() {
     let mut disabled = element(1, false);
@@ -696,7 +715,7 @@ fn selection_waits_for_disabled_target_without_filtering_it_or_delaying_find() {
     let reply = script(
         &owner,
         "enabled",
-        "await app.press({window_ref,selector:{text:'Save'},timeout_ms:200});",
+        "await app.press({window_ref,selector:{text:'Save'},timeout_ms:2000});",
     );
     assert!(!reply.is_error, "{}", reply.data);
     assert_eq!(backend.queries.lock().unwrap().len(), 2);
@@ -1150,7 +1169,7 @@ fn menu_selection_waits_for_readiness_after_focus_without_repeating_focus() {
     let reply = script(
         &owner,
         "menu-readiness",
-        "await app.press({window_ref,selector:{scope:'menu',text:'Save'},timeout_ms:200});",
+        "await app.press({window_ref,selector:{scope:'menu',text:'Save'},timeout_ms:2000});",
     );
     assert!(!reply.is_error, "{}", reply.data);
     assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 1);
@@ -1215,7 +1234,7 @@ fn selection_ownership_gap_can_recover_with_a_fresh_query_and_one_action() {
     let reply = script(
         &owner,
         "ownership-recovered",
-        "await app.setValue({window_ref,selector:{text:'Save'},value:'updated',timeout_ms:200});",
+        "await app.setValue({window_ref,selector:{text:'Save'},value:'updated',timeout_ms:2000});",
     );
     assert!(!reply.is_error, "{}", reply.data);
     assert_eq!(backend.advances.load(Ordering::SeqCst), 0);

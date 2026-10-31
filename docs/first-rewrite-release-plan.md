@@ -58,8 +58,8 @@ all macOS versions, fresh-machine TCC behavior or all helper/modal configuration
 ## Agent acceptance policy
 
 Target Agents are **Caelis, DSH and agy**. DSH's ordinary MCP + Skill route requires
-no dedicated DTW plugin. Caelis's per-app Session policy is Core integration work,
-not already-verified DTW functionality. Caelis's two named models and DSH must
+no dedicated DTW plugin. Caelis's per-app Session policy is implemented in Core #187, with standard
+plugin and large-result fixes from #185; it is not DTW authorization logic. Caelis's two named models and DSH must
 complete the selected workflows on their recorded installed candidate. agy remains
 an interoperability/usability sample: reproducible DTW defects block and must be
 fixed; model exploration or judgment inefficiency alone does not. Preserve every

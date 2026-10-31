@@ -130,8 +130,8 @@ removing its registration and directory; the package does not edit Agent setting
 Before promotion, independently verify the final extracted bytes from a path with
 spaces/non-ASCII characters, standard MCP discovery, native subprocess identity,
 OS permissions, real applications, original receipts and cleanup. Use the same
-binary/archive digests for any future publication. Windows remains pending until
-its independent matrix passes; this workflow cannot mark desktop support approved.
+binary/archive digests for any future publication. Windows native acceptance is recorded in [the November 1 matrix](windows-release-acceptance-2026-11-01.md);
+its result applies only to the named original package and tested configurations.
 
 
 ## Review-to-release handoff
