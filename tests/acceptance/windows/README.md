@@ -23,6 +23,24 @@ another owner queues focus. That negative case requires native exit 74, both MCP
 owners' explicit uncertainty exit 2, an unknown original receipt and no dispatched
 queued focus; these exits must not be presented as ordinary clean shutdown.
 
+Run the separate Chrome selection regression on an installed real Chrome:
+
+```powershell
+python -X utf8 .\browser_delivery_probe.py --dtw 'C:\Candidates\DTW\bin\dtw.exe' `
+  --chrome 'C:\Program Files\Google\Chrome\Application\chrome.exe' `
+  --output 'C:\Temp\dtw-browser-delivery-new'
+```
+
+It creates its own disposable profile and workbench. Six real keyboard cases
+check an empty control, terminal caret, replacement beside existing surrogates,
+multiline text and literal U+FFFC content. Native field readback and independent
+fixture input events must agree. Chrome can order its caret after DocumentRange's
+end and represent an empty edit by an embedded-object marker. Windows proves
+selection ownership and an exact text partition; only a writable, independently
+empty ValuePattern identifies that empty placeholder. It never calls its setter,
+strips literal U+FFFC content or replays unknown input. The owned browser must close
+normally; the disposable HTTP fixture is explicitly stopped by the supervisor.
+
 ## Run on an exclusive Windows desktop
 
 Requirements: Windows 10 (1703 or newer)/11 with an interactive unlocked desktop, built-in

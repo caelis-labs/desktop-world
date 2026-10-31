@@ -95,25 +95,11 @@ impl TextDelivery {
                 return Err(Error::UnsupportedCapability);
             }
             let selection = ranges.GetElement(0).map_err(failed)?;
-            if selection
-                .CompareEndpoints(
-                    TextPatternRangeEndpoint_Start,
-                    &document,
-                    TextPatternRangeEndpoint_Start,
-                )
-                .map_err(failed)?
-                < 0
-                || selection
-                    .CompareEndpoints(
-                        TextPatternRangeEndpoint_End,
-                        &document,
-                        TextPatternRangeEndpoint_End,
-                    )
-                    .map_err(failed)?
-                    > 0
-            {
-                return Err(Error::InvalidObservation);
-            }
+            selection_owned(&uia, &selection, &element)?;
+            // Chrome can order a field's terminal caret after DocumentRange's
+            // end even though both represent the same text offset. Prove the
+            // selection's control ownership and exact text partition instead
+            // of treating provider endpoint order as containment evidence.
             let before = document.Clone().map_err(failed)?;
             before
                 .MoveEndpointByRange(
@@ -130,13 +116,32 @@ impl TextDelivery {
                     TextPatternRangeEndpoint_End,
                 )
                 .map_err(failed)?;
-            let prefix = text(&before)?;
+            let mut prefix = text(&before)?;
             let selected = text(&selection)?;
-            let suffix = text(&after)?;
+            let mut suffix = text(&after)?;
             if format!("{prefix}{selected}{suffix}") != full || text(&document)? != full {
                 return Err(failed(
                     "Focused native text changed before Unicode input admission",
                 ));
+            }
+            // An empty Chrome edit exposes an embedded-object marker through
+            // TextPattern. It disappears on the first real insertion. Only an
+            // independently readable, writable, still-empty ValuePattern can
+            // prove this is a placeholder; never strip literal U+FFFC text.
+            if full == "\u{fffc}" {
+                if let Some(value) = super::native::optional_pattern::<IUIAutomationValuePattern>(
+                    &element,
+                    UIA_ValuePatternId,
+                )? {
+                    if !value.CurrentIsReadOnly().map_err(failed)?.as_bool()
+                        && strict_text(&value.CurrentValue().map_err(failed)?)?.is_empty()
+                        && text(&document)? == full
+                        && strict_text(&value.CurrentValue().map_err(failed)?)?.is_empty()
+                    {
+                        prefix.clear();
+                        suffix.clear();
+                    }
+                }
             }
             Ok(Self {
                 uia,
@@ -209,6 +214,28 @@ impl TextDelivery {
             ));
         }
         Ok(())
+    }
+}
+
+fn selection_owned(
+    uia: &IUIAutomation,
+    range: &IUIAutomationTextRange,
+    focused: &IUIAutomationElement,
+) -> Result<(), Error> {
+    unsafe {
+        let walker = uia.RawViewWalker().map_err(failed)?;
+        let mut owner = range.GetEnclosingElement().map_err(failed)?;
+        for _ in 0..128 {
+            if uia
+                .CompareElements(&owner, focused)
+                .map_err(failed)?
+                .as_bool()
+            {
+                return Ok(());
+            }
+            owner = walker.GetParentElement(&owner).map_err(failed)?;
+        }
+        Err(Error::InvalidObservation)
     }
 }
 
