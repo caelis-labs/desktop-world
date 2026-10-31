@@ -1,112 +1,75 @@
-# 首个重写正式版本：能力审计与交付计划
+# First rewrite release: v0.2.0
 
-> 本计划的审计事实保留 #63/#64 基线；第一、二批实施的新状态见[核心实施与验收](release-core-acceptance.md)和[产品矩阵](product-matrix.md)。新的真实 Agent 易用性门槛已在固定开发字节上通过；第三、四批的独立产物证据见[候选与安装验收](rewrite-candidate-acceptance.md)。下方“本轮”描述的是原始审计轮次。
+Updated 2026-10-31 for #70 review. v0.2.0 is the reserved source version, not a
+published release. The original #63/#64 audit is preserved in Git; the current
+[product matrix](product-matrix.md) and [real-task evidence](real-task-closure-acceptance.md)
+describe implementation and actual validation separately.
 
-日期：2026-10-28。审计基线为 #63、#64 合并后的 `c33c8d637f3a7f5b773b7a69bfcccd34efbe3dbd`。其源树与 #64 验收头 `d8f25f2bd148b3681ebf85531b8c2b512fc72c1c` 完全一致。此次完成源码、现行说明、验收记录、发行脚本和公开待办审计；没有重新运行 GUI，也没有发布候选包。
+## Scope and responsibilities
 
-**结论：架构骨架和标准 Agent 接入已经成立；常用操作覆盖、通用窗口路径、Windows 后端及正式发行链尚未完成。** 首版按能完成普通桌面任务来收口，不以迁入全部 CUA 目录为目标。继续使用 DTW 自有合同和固定来源的原子实现，不恢复旧 SDK/worker 或兼容入口。
+The first version is the rewrite only: standard rmcp stdio + Skill, stable app ID,
+`exec({app, source})`, window inventory/capture, semantic and coordinate input,
+text/shortcuts/scroll, bounded discovery and text reading. Agents can alternate
+between apps and retain their contexts. DTW owns native identity, observations,
+focus, input coordination and cleanup. The Harness owns approval. CUA capability
+source is ported in bounded groups with thin adapters; no SDK/worker compatibility
+path or full-upstream CI is restored.
 
-## 首版范围与平台责任
-
-公开执行保持 `exec({app, source})`：app 是模型能发现和传递的稳定平台标识，执行编号由 DTW 生成。审批属于 Harness；窗口归属、观察状态、焦点、输入资源协调、取消收尾属于 DTW。标准 MCP + Skill 是完整接入路径。
-
-首版工作流目标：已运行应用中的窗口发现、截图坐标操作、按需语义操作、文本编辑、快捷键、滚动和独立效果验证；同一 Agent 可交替操作多个 app，独立 Agent 会话不串状态、不误投输入。
-
-| 平台 | 首版计划 | 验收责任与支持声明 |
+| Platform | Current state | Release gate |
 | --- | --- | --- |
-| macOS arm64 | 正式目标，继续在本机实现与验证 | 本机为 macOS 27.0.1 / 26A434。最终安装产物须重新验收；不能把这台机器的通过写成所有 macOS/架构均通过 |
-| Windows x64 | 正式目标，先实现原生 provider，再交付候选 | 用户安排独立 Windows 验收；其结果属于 Windows 正式支持及产物发布的准入条件。当前不是“只差验收” |
-| Linux 桌面 | 同批接入并保留实验 provider 源码，单独验证补全 | 当前重写树没有 Linux 原生 provider，需要补实现，不能把共享 Core 算作 Linux 桌面实现。首版只要求下述源码/构建基线；不承诺桌面支持、不发正式 Linux 支持声明，也不增加 Linux GUI 发布门槛 |
-| macOS x86_64、Windows ARM64 | 暂不默认纳入首版正式承诺 | 构建成功与实际桌面支持分开记录；有独立证据后再扩范围 |
+| macOS arm64, minimum 14.2 | Native implementation and signed development candidates; DSH Chrome/WPS/Obsidian tasks completed on candidate Z; final AA received targeted native checks | Build/sign/notarize the final package; run from its installed path with its Skill and checksum inventory, then publish those same bytes |
+| Windows x64 | Native UIA/GDI/SendInput provider; #70 review fixes normal UIA tree termination, retained region constraints and text matching | One same-source ZIP; user independently runs the bundled blocking checks, desktop matrix and three real applications |
+| Linux X11 | Experimental source/type-check baseline | No formal desktop support or release commitment; independent validation later |
+| macOS x86_64 / Windows ARM64 | Outside the initial supported pair | Separate evidence before extending support |
 
-macOS 当前编译目标为 14.0，而精确窗口截图运行时需要 14.2。发布前须统一最低运行版本/能力广告，建议完整基础能力的最低运行版本定为 14.2；较老系统兼容性仍需单列未验证范围。Linux/Windows 目前都在非 macOS 入口返回 `unsupported_platform`，不是可用的空能力服务器，见 [平台入口](../cmd/dtw/src/app_protocol/mod.rs)和[后端目录](../cmd/dtw/src/backends/mod.rs)。
+Windows background input, an independent Windows cursor, lock-screen operation,
+remote MCP, DOM/browser bridge, drag and app launch/quit remain deferred. They do
+not block the agreed foreground Windows route. No current candidate establishes
+all macOS versions, fresh-machine TCC behavior or all helper/modal configurations.
 
-## 已实现与不能外推的部分
+## Remaining delivery sequence
 
-| 能力 | 审计结果 | 现有证据与限制 |
-| --- | --- | --- |
-| 运行与接入 | 官方 rmcp stdio；apps、exec、result；app/source；标准取消、EOF 和回执查询 | 无定制 Host；普通 Claude、agy 有限定工作流证据。尚无最终安装包证据 |
-| 脚本与多 app | QuickJS、Promise 顺序调用、每 app state、A→B→A 引用保留、多个 MCP 会话隔离 | 当前同一连接串行执行；跨会话完整输入协调未完成 |
-| 原子方法 | 仅 windows、observe、capture、press、click | 展示更多 role 不代表相应动作已实现；press 为受限 AXPress，click 为图像坐标左键单击 |
-| 语义发现 | role/text 原生筛选、frontier 续页、partial coverage、按窗/类型引用隔离 | AppKit 420 控件和暖态 WKWebView 通过；区域/子树筛选、浏览器冷启动就绪未完成 |
-| 图像操作 | 精确窗口 PNG、坐标/遮挡校验和点击 | 仍依赖 AX 窗口身份；点击会移动系统鼠标，不能宣传为独立后台输入 |
-| 效果与生命周期 | 派发/效果/中断分开，原回执、未知不重放、worker 回收、绑定资源有界 | 强杀不能保证补发所有释放事件；失去回执不能推断没有效果 |
-| Agent 输出 | exec 默认小摘要，result 按需全文，PNG 在脚本外 | apps 仍附带所有方法的大 schema；默认发现成本尚未收敛 |
-| CUA 复用 | 固定 Driver 0.38.0 来源，窄原生与脚本实现已适配到 DTW | 不是全量 CUA 能力迁完。后续按状态所有权完整的能力组迁移并记录原始 hash、依赖闭包和行为改动 |
+1. **Review fixes and Windows handoff.** Correct successful-null UIA results while
+   retaining real read failures as partial. Revalidate capture geometry/DPI and
+   retained element-region constraints before semantic input and text reads.
+   Match label/name/value independently. Protect these with native boundary tests
+   and an expanded WinForms smoke. Bundle the UTF-8 Chrome workbench, launch and
+   independent readback instructions. Trigger one explicit Windows candidate build;
+   ordinary PR CI remains the two lightweight jobs.
+2. **Independent Windows acceptance.** First test a unique selector/one button
+   increment, moved-window/control stale refs with zero effect, Unicode text pages
+   and two app instances without cross-writing. Then test DPI/multiple screens,
+   cancellation/parent exit/key release/worker cleanup and WPS/Obsidian/Chrome.
+   Use [the bundled matrix](../tests/acceptance/windows/README.md). Compilation and
+   mock results never substitute for these desktop checks.
+3. **Caelis plugin integration and final macOS package.** Connect the same package
+   through Caelis's existing plugin manager. Core asks on the first `exec.app` per
+   Session and reuses that app's grant within that Session; denial dispatches
+   nothing, and a new Session starts without those grants. No DTW authorization
+   API is added. Validate `deepseek-flash` and `gpt-6.1-terra` for tool/Skill/image
+   delivery, same/new app decisions, separate Sessions and real task readback.
+   Run the final macOS three-app suite with `--installed-package`, checking the
+   original executable path, package Skill and unchanged manifest before/after.
+4. **Publish verified bytes.** Record source/tree, toolchain, dependency notices,
+   hashes, signature/notarization and platform results. Only after Windows and
+   macOS gates pass may the same archives be promoted as dual-platform v0.2.0.
+   A later runtime or Skill change requires updated candidate evidence.
 
-当前证据：225 项库测试、4 项 CLI、3 项真实 macOS stdio 进程测试；源码 Core/IPC/Python 检查与纯 Swift 控制；AppKit/WKWebView、坐标/取消/多 app/双会话及普通 Claude 实际执行。详见[分页验收](paged-discovery-acceptance.md)。这些是该源码/二进制的证据，不是最终签名安装产物的认证。
+## Agent acceptance policy
 
-## 首版必须补齐的工作包
+Target Agents are **Caelis, DSH and agy**. DSH's ordinary MCP + Skill route requires
+no dedicated DTW plugin. Caelis's per-app Session policy is Core integration work,
+not already-verified DTW functionality. Caelis's two named models and DSH must
+complete the selected workflows on their recorded installed candidate. agy remains
+an interoperability/usability sample: reproducible DTW defects block and must be
+fixed; model exploration or judgment inefficiency alone does not. Preserve every
+original failed attempt and its cost. Historical Claude results remain evidence,
+but the old mandatory Claude/agy six-run gate is replaced by this target matrix.
 
-下表是同一 C6 和发行目标的工作清单，不增加 C5/C6 的细分检查点编号。每包完成“实现 → 相关回归 → 真实流程 → 复核 → 更新矩阵”。
-
-| 工作包 | 具体交付 | 依赖与完成标准 |
-| --- | --- | --- |
-| **基础窗口路线** | 分离 WindowSurface 与 SemanticBinding；窗口身份/复用证明、几何与截图独立于 AX 语义发现；明确标准 dialog/sheet、隐藏、最小化、闭窗和 Space 的范围；统一 OS/能力条件 | 在系统窗口身份与捕获可用、AX 语义入口不可用时仍完成列窗→截图→一次坐标输入→独立读回；空控件树不能代替此场景；无有效身份、遮挡、窗口关闭/复用时拒绝旧引用。TCC 前提仍按原生 API 要求，不把“不依赖语义树”写成“不需要 OS 权限” |
-| **常用输入与内部协调** | 成组迁入文本插入、可用时的语义设值、按键/快捷键、双向滚动、左右键/双击、目标窗口 focus；明确按键、修饰键、鼠标按钮和共享桌面资源 owner；DTW 跨会话协调同 app 写入及共享键鼠 | 两个原生 app 与一个浏览器任务覆盖中文/emoji/多行、编辑/选择/保存、滚动到目标并操作；取消/超时/父退出后释放输入状态，可能发生的效果保留 unknown；并发会话无交叉输入。操作不暗中切换剪贴板、DOM 或另一 app 路线 |
-| **浏览器就绪与按需说明** | 原生语义启用/就绪、已暴露树与页面就绪的区分、有界内部等待；针对 Chrome 与 WKWebView 的冷/暖态样板；apps 默认小目录，方法详情通过标准 MCP 按需发现 | 冷启动不再要求模型先猜一次截图“唤醒”语义树；失败返回具体就绪状态而不证明目标不存在。默认 API 描述固定部分目标 ≤4 KiB；无需自定义 Host/本地源码知识，分页在脚本内完成 |
-| **Windows 原生接入** | 稳定 app ID 与多实例消歧；进程/HWND 生命周期；UIA 发现/分页/动作；窗口捕获与图像像素几何；常用输入；COM/阻塞 worker、取消和清理；接通同一 MCP/脚本合同 | 先完成源码、合同与 Windows 原生构建；产出同一版本的安装候选与验收包交用户。用户独立通过下方矩阵后才标为正式支持，macOS 或 mock 不代替 |
-| **Linux 实验源码基线** | 随上述能力组保留/迁入独立 experimental provider：app/窗口盘点、截图、坐标点击与可移植常用输入；显式区分 X11/Wayland 路线和依赖，不支持的操作返回具体能力缺失；不保留旧 SDK/worker 作为旁路 | 检查来源/依赖闭包、共享合同与 Linux target 编译；能力清单明确 unverified，不把编译通过当桌面通过。不要求 Linux GUI 验收或正式二进制发布；桌面组合验证、缺失能力和支持承诺后续单独补全 |
-| **发行与安装** | 重写版新版本号、可直接运行的独立包及标准 Skill/配置；同一二进制生成可选 Claude 包；完整 BUILD/checksum/来源/依赖 notices；macOS 签名、公证和 TCC 身份；Windows 依赖与安装路径核验 | 无 Rust/Xcode/CUA 开发环境也能从仓库外启动；移动安装目录/空格中文路径、升级、移除有明确行为；CLI/MCP/manifest 版本一致；按已验收的相同字节发布 |
-| **最终工作流验收** | 在最终安装产物上运行 macOS 本机矩阵、用户 Windows 矩阵、普通 Claude/agy；保留脚本调用数、输出量、时间、原回执、独立效果与清理记录 | 所声明工作流全部通过；任何新出现的重复/误投输入、遗留按键、错误成功或丢失回执为阻断。缺环境的范围明确未验证，不用跨平台构建通过抵扣 |
-
-实现优先复用 CUA 的原子能力，DTW 负责公开参数、引用、内部调度与回执。文本/快捷键不是需要继续研究架构的阻塞，但它们是“可完成日常任务”首版的必要实现项。拖拽、复杂菜单、启动/退出应用等不塞进上述最低集合。
-
-原生浏览器就绪和 API 按需说明分别验证，不能把减小 schema 当成就绪问题已修复。完整 Browser/profile/DOM 仍后置。基础窗口替代身份在证明成立前保留旧 guard，不通过删除校验来制造成功。
-
-## 分批推进顺序
-
-1. **先收口基础路径和发现。** 完成 WindowSurface、浏览器冷态、能力条件与按需 API 说明；沿用 #64 的大树、前页引用、像素样板。与此同时确定常用输入的共享合同和 owner，Windows 可独立开展原生身份/生命周期部分。
-2. **批量补常用输入，同时接入 Windows。** 共享方法/schema 确定后，macOS 与 Windows 在各自 provider 内施工；每组都必须贯通脚本→原生→独立读回。macOS 本机验证，Windows 构建及专属测试先行，实机结论留给用户。Linux 同批补实验 provider 源码/构建基线，桌面实测和缺失能力独立后置，不把空 trait 或共享 Core 当作实现。
-3. **制作固定候选并交付验收。** 所选能力完成后才构建 macOS/Windows 候选；打包、来源/依赖清单与签名可提前准备。每个目标一次完整构建并保存产物，不在每个 PR 重复做完整矩阵。
-4. **用候选本身验收，再推广相同字节。** 本机完成 macOS 和普通 Agent；用户完成 Windows。失败修复后只重验受影响的源码/产物与共享合同；版本、源码或二进制变化时必须更新证据绑定。Windows 未通过时保持待验收，不提前挂正式支持标签。
-
-首版正式支持目标为 macOS 与 Windows；如以后决定先发布 macOS，需明确调整范围。本计划不预先把未通过的 Windows 当作完成。
-
-## 真实工作流与 Agent 易用性验收
-
-| 场景 | 独立判据 |
-| --- | --- |
-| 基础视觉路线 | 列 app/多窗口消歧→目标 PNG→一次坐标点击，fixture 计数恰好一次，其他 app 为 0；覆盖 AX 语义入口不可用但系统窗口/捕获可用、移动/缩放、遮挡、闭窗和旧引用 |
-| 文本与快捷键 | 原生编辑器的已打开文档输入中文/emoji/多行，选择/替换、保存；应用自己的保存结果独立读回，不能只读注入参数 |
-| 真实浏览器原生路线 | 独立测试 profile/离线页，冷启动、角色/关键字筛选、滚动、填写、提交；页面事件与结果计数核验，DTW 操作全程走公开 native 路线 |
-| 多 app/多 Agent | A→B→A 不丢 state；两个 MCP 会话同时操作不同 app，验证输入 owner 和按键释放；同 app 冲突有确定行为，不能依赖 Agent 自行加锁 |
-| 失败与退出 | 错 app/窗口、旧引用、原生阻塞、取消、EOF/父退出；保留原始回执和可能的晚到效果，无自动重放，无遗留自有进程；现有 worker 退出 `<2s` 场景继续保护 |
-
-现有普通 Claude 样例为 **apps + 2 exec**，外层 26.667 秒，两次 exec JSON 合计 1716 B，但这不包含发现成本。同一保存样本中 apps JSON 为 **22,809 B**，其中 script 描述 **20,195 B**（约 89%）；这说明下一步应压缩默认 API 说明，而非继续只优化 exec 摘要。测量来自 `53ef004` 的既有原始记录，未公开用户 app 清单。
-
-易用性目标：常见已知方法任务保持 apps + 两次左右 exec 的流程，首次需要陌生能力时才按需查询详情；分页不变成模型逐页往返，不为每个成功 exec 追加 result。对固定任务、同模型和同安装产物做至少三次独立 fixture 测量，记录调用数、JSON/图像分开字节及墙钟中位数；模型时间只作比较，不用单次网络/模型波动设全局秒数保证。动作每轮只按任务要求执行一次。
-
-## Windows 独立验收交接清单
-
-交付物应为固定版本/hash 的 Windows x64 候选、BUILD manifest、普通 MCP/Skill 配置、PowerShell 启动说明、自有 WinForms/浏览器 fixture、断言与结果模板。验收脚本需要 Windows 兼容的管道读取和进程清理，不能直接把 POSIX/macOS 探针称为 Windows 验收。
-
-- 记录 Windows 版本、架构、DPI、显示器、权限级别、候选源码/二进制与依赖；默认验收普通用户桌面，不宣称 UAC/安全桌面/提权目标支持。
-- 核对稳定 app ID、多实例/同名多窗、关闭与 HWND 复用；每次输入都绑定选定 app/窗口。
-- 原生 UIA 观察→动作→独立读回，超过旧截断前缀的大树筛选与续页，前页引用及跨窗口组合。
-- PNG 与实际目标像素对齐；DPI-aware 和 DPI-unaware 窗口都测试 100%/125%/150%/200%。混合 DPI/跨屏移动要么验证通过，要么在输入前给出可解释的不支持结果。
-- 中文/emoji/多行输入、快捷键、左右键/双击、滚动；标准 modal/dialog 的打开、继续、关闭；作用已发生后发生焦点错误时保留效果不明，不重放。
-- UIA provider 阻塞、取消、超时、EOF、父退出，原始回执、晚到效果与输入状态释放；双 app/双会话不串状态或输入。
-- 从仓库外的空格/中文路径安装启动，普通 Agent 真实任务、依赖缺失诊断、升级与移除。
-
-唯一仍开放的公开问题 [#36](https://github.com/caelis-labs/desktop-world/issues/36) 属于旧 CUA 版本的 DPI、modal 阻塞和派发后焦点错误；这些场景进入新验收清单，但旧版本的“非阻断”决定不直接套用到重写版。没有新 Windows 证据前不关闭该问题。
-
-## 发行形态与准入
-
-建议版本使用 **v0.2.0** 区分已发布旧架构 v0.1.3；这是计划建议，本轮不改版本号、不创建 tag。最小发行形态为每平台独立运行包：`bin/dtw[.exe]`、Skill、普通 MCP/客户端示例、README、LICENSE/依赖 notices、BUILD manifest 与 SHA-256 校验文件。Claude 插件是该二进制的一层标准客户端包装，避免多个运行时副本或必需定制安装器。
-
-BUILD 至少记录版本、source commit、target/架构、最低运行要求、工具链、锁文件与来源摘要、二进制/包摘要及签名状态；当前本地 stage 的 version+binary hash 不足以作为发布来源证明。完整依赖清单来自实际 target-specific 锁定图；源码删除了旧许可证审计脚本，不代表新二进制已经无需依赖 notices。
-
-macOS 要验证签名、公证、系统动态依赖、最终安装路径下 DTW/native 子进程的 TCC 身份，以及权限缺失/拒绝后的明确说明。Windows 要确定静态或外部 runtime 依赖及签名状态，并在用户机器核验。最低系统/架构与“已实测范围”分开写入发行说明。
-
-日常保留现有两项轻 CI。新增行为只有在稳定、确实需要保护时才加针对性合同/纯逻辑测试；候选阶段按目标运行一次完整 DTW 构建、相关集成和产物检查。GUI 验收独立执行，不恢复全量上游 CUA 编译或双套旧兼容流程。
-
-## 后置项与本轮修正
-
-后置：完整 Browser/profile/DOM、区域/子树发现、拖拽/复杂菜单、启动退出应用、HTTP/远程 MCP、脚本文件便利入口、同连接并行 exec、后台独立输入、不移动指针和锁屏模式、Linux 正式支持、多架构全面覆盖、插件市场发布和通用安装器。已有后台 AXPress 不证明这些高级模式已完成。
-
-历史自然偶发窗口库存与 #63 额外计数事件缺少完整原始现场，保留证据限制，不宣称已定位。当前候选必须有独立事件/计数和回执记录；若再次出现未解释的额外效果则阻止相关能力通过，不能用随后一次成功覆盖失败。
-
-本轮同步修正了会分发的 Claude README、embedding 文档中错误的 request ID 要求、切 app 清空上下文说法，以及 README 中“调用者可调整 deadline”的说法；更新 C6 和产品矩阵的过期状态。输入协调职责也明确归于 DTW 内部，具体实现仍列为待办。除这些说明和计划外，本轮不扩展运行时能力。
-
-本轮文档验证：本地链接与差异检查通过；重新 stage 的 README 与仓库修正文档逐字相同，Claude plugin validate 通过。校验器提示缺少目录图标和 marketplace 安装行，属于尚未选择的市场上架形态，不等同于本地接入失败；正式包/安装/GUI 验证仍在上述工作包内。
+For each app record total time, MCP/exec calls, failures, read-only refreshes,
+images/JSON bytes, business readback and process/input cleanup. Unknown effects are
+not replayed. The general Skill documents APIs and reusable forms/chooser patterns,
+never task-specific WPS/Obsidian recipes. The earlier generic fresh-capture failure
+still has an unproven natural cause; only the narrow proven geometry-recovery
+contract is established. See [release construction](releasing.md) and
+[artifact-specific evidence](rewrite-candidate-acceptance.md).

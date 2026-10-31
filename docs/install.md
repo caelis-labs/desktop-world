@@ -1,83 +1,135 @@
-# Connect Desktop World to an Agent
+# Install Desktop World
 
-The current local product is the rewrite-only `dtw` executable, its standard stdio MCP interface, and an optional [Agent Skill](../skills/desktop-world/SKILL.md). No custom Host adapter, grant file or DTW approval UI is required. The Agent/Harness applies its own tool policy; each `exec` exposes the stable app ID as ordinary tool input.
+DTW is one runtime, a standard stdio MCP server and a bundled Agent Skill. Target
+Agents are **Caelis, DeepSeek Harness (DSH), and agy**. The public execution input
+is always `exec({app, source})`. Approval belongs to the Agent/Harness; DTW does
+not require an approval token, custom Host adapter or private DSH plugin.
 
-## Fixed candidates
+## Select and extract a package
 
-A rewrite candidate is a ZIP produced by the [candidate builder](releasing.md).
-It contains one executable, Skill, standard configuration examples, dependency
-notices and checksums. Extract the complete package, verify its outer `.sha256`
-and internal `SHA256SUMS`, then register the absolute `bin/dtw[.exe]` path below.
-It requires no Rust, Xcode, CUA or Node installation to run DTW. The same directory
-also supports the optional Claude plugin route without a second binary.
+**The rewrite's v0.2.0 is not published yet.** Use an explicitly supplied candidate
+from [candidate construction](releasing.md) and check its source/hash against
+[the current evidence](rewrite-candidate-acceptance.md). Historical v0.1.x assets
+use the retired runtime and are not substitutes. macOS arm64 and Windows x64 are
+the release targets; Windows desktop acceptance and final macOS installed-package
+acceptance remain required. Linux desktop support is experimental.
 
-Candidate construction, signature verification, notarization and actual installed
-GUI acceptance are separate results; consult its `BUILD.json`, `CANDIDATE.json` and
-[current acceptance record](rewrite-candidate-acceptance.md). No new public release
-is implied by the 0.2.0 source version. Windows still requires independent acceptance.
+Verify the ZIP's adjacent `.sha256`, extract the complete directory to a permanent
+location outside the source checkout, then verify every entry in `SHA256SUMS`.
+On macOS, use `shasum -a 256 <archive.zip>` and, inside the extracted directory,
+`shasum -a 256 -c SHA256SUMS`. On Windows, compare the ZIP with
+`Get-FileHash -Algorithm SHA256 <archive.zip>`; the bundled
+`acceptance/windows/smoke.ps1` checks the complete installed manifest before tests.
+Keep `BUILD.json`, notices and Skill alongside `bin/dtw` or `bin/dtw.exe`.
+The runtime needs no Rust, Xcode, CUA, Node or Python installation. Optional
+acceptance scripts have their own Python/PowerShell requirements.
 
-## Build and register MCP
+## Caelis
 
-Build from this checkout using [the build instructions](building.md). Use an absolute path to the resulting executable. For clients that accept the usual `mcpServers` JSON configuration, copy and customize [mcp.json](examples/mcp.json):
+The existing package contains a compatible plugin manifest and shares one runtime
+between its MCP and Skill entries. Caelis supports this layout through its normal
+[plugin manager](https://github.com/caelis-labs/caelis/blob/main/docs/plugins.md):
+
+```sh
+caelis plugin install /absolute/path/to/extracted-package --json
+caelis plugin status desktop-world --json
+```
+
+Or enter `/plugin install /absolute/path/to/extracted-package` in the Caelis TUI.
+Start a new Session to load the MCP/Skill snapshot. Registration alone does not
+prove tools are ready; complete the first-execution check below. Do not separately
+register a second copy of the MCP server.
+
+**Next Core integration:** parse the standard `exec.app` argument and request
+approval on first use of each app in a Session. Approval for that app is reused
+for subsequent scripts in the same Session; a new app or new Session needs its
+own approval. Denial must stop before dispatch. This is planned Core behavior,
+not a permission mechanism implemented by DTW or a claim about the current Core.
+Acceptance will use `deepseek-flash` and `gpt-6.1-terra`, including screenshots,
+repeated calls, denial and separate Sessions.
+
+## DeepSeek Harness (DSH)
+
+Use DSH's built-in Plugin Manager to add one instance of
+`@deepseek-ai/dsh-mcp-client` with this configuration (use `dtw.exe` on Windows):
+
+```json
+{
+  "serverName": "desktop-world",
+  "transport": "stdio",
+  "command": "/absolute/path/to/extracted-package/bin/dtw",
+  "args": ["mcp"]
+}
+```
+
+Enable the built-in Skill filesystem provider and add the package's `skills`
+directory to its `customSkillDirs`, or copy the bundled `skills/desktop-world`
+to the workspace's `.agents/skills/desktop-world`. Preserve other MCP servers,
+Skill roots and model settings. No DTW-specific plugin code is needed. For ACP,
+DSH can also receive the same stdio server from the ACP client's session setup.
+
+The verified DSH 0.2.1-rc.5 / DeepSeek-V4.1-Flash route uses the model ID
+`deepseek-flash` and accepts inline screenshots. DSH's MCP bridge is documented in
+[its upstream package](https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/mcp/mcp-client).
+Use the installed DSH configuration schema if its version differs; do not replace
+an entire profile to add this one server.
+
+## agy
+
+```sh
+agy mcp add desktop-world /absolute/path/to/extracted-package/bin/dtw mcp
+```
+
+On Windows, pass the absolute `bin/dtw.exe` path. Copy the complete bundled
+`skills/desktop-world` to the workspace's `.agents/skills/desktop-world`, then
+start a session in that workspace. agy has its own ordinary MCP and Skill extension
+points; do not import the Claude manifest expecting `${CLAUDE_PLUGIN_ROOT}` to
+be expanded by agy. Model exploration errors are recorded separately from DTW
+bugs and are not themselves a release blocker.
+
+## Other standard MCP clients
+
+Clients accepting `mcpServers` JSON can use:
 
 ```json
 {
   "mcpServers": {
     "desktop-world": {
-      "command": "/absolute/path/to/dtw",
+      "command": "/absolute/path/to/extracted-package/bin/dtw",
       "args": ["mcp"]
     }
   }
 }
 ```
 
-There is no universal Agent plugin manifest. Register the stdio server using the target client's documented configuration. Do not run the removed `dtw install` command.
+Add the bundled Skill using the client's normal discovery directory. Codex can
+use `codex mcp add desktop-world -- /absolute/path/to/dtw mcp`. Claude Code can
+load the complete package with `claude --plugin-dir /absolute/path/to/package`;
+its optional layout is described in [the staging guide](../plugins/claude/README.md).
+Neither client is a new required release matrix. Do not run the removed
+`dtw install` command or install both plugin and manual server into one session.
 
-For Codex, merge [the TOML example](examples/codex.toml) into its normal MCP configuration, or run:
+## First execution and updates
 
-```sh
-codex mcp add desktop-world -- /absolute/path/to/dtw mcp
-```
+Check that `apps`, `api`, `exec`, and `result` are discoverable. Call `apps`, choose
+a returned app ID unchanged, then execute only `return await app.windows();`.
+Confirm the result names that app and its windows. Read the bundled Skill before
+input. `result` reads original receipts when needed; it is not routine polling.
 
-Codex documents both CLI registration and the `mcp_servers` table in its [official MCP guide](https://developers.openai.com/codex/mcp/). These are instructions for the operator; no repository helper edits your Agent configuration.
+macOS requires Accessibility and Screen Recording permissions for relevant
+operations. Use the actual installed process identity in the OS permission
+settings. Windows uses the public foreground keyboard/pointer route; background
+Windows input and secure-desktop operation are not promised. A successful MCP
+connection does not prove native GUI or permissions are ready.
 
-For agy, register the same executable through its standard MCP command:
+For upgrades, finish active operations and stop the old connection before changing
+package files. Extract a new verified package, update the registration/Skill and
+start a new Session. Caelis binds a local registration to its canonical directory:
+to change directories, run `caelis plugin remove desktop-world --json` before
+installing the new root. Preserve unrelated configuration. Remove a stopped DTW
+installation by removing its registration, installed Skill and owned package
+directory. Never repeat an uncertain desktop action during installation/recovery.
 
-```sh
-agy mcp add desktop-world /absolute/path/to/dtw mcp
-```
-
-agy also discovers workspace Skills under `.agents/skills/`; copy the canonical
-`skills/desktop-world` directory there. Its native plugin configuration uses
-`mcp_config.json`. The Claude template below is client-specific: agy's importer
-does not translate `${CLAUDE_PLUGIN_ROOT}` into an executable path. Use the
-ordinary MCP registration above when loading the Skill separately. agy applies
-its normal tool policy; DTW requires no special approval integration.
-
-## Add the Skill
-
-Copy the `skills/desktop-world` directory to the chosen Agent's documented Skill discovery directory, or include it through that Agent's plugin packaging. The self-contained `SKILL.md` follows the [Agent Skills specification](https://agentskills.io/specification). It contains the observation/action/readback workflow and interruption rules. MCP itself advertises the method index through `apps` and detailed schemas through `api`, so the Skill is useful guidance rather than a hidden API dependency.
-
-## Local Claude Code plugin
-
-The repository has a [Claude Code plugin template](../plugins/claude/.claude-plugin/plugin.json) using that client's official layout. Stage an already-built local binary into a new directory:
-
-```sh
-python3 scripts/stage-agent-plugin.py \
-  --binary "$PWD/cmd/dtw/target/debug/dtw" \
-  --output /tmp/desktop-world-claude-plugin
-claude plugin validate /tmp/desktop-world-claude-plugin
-claude --plugin-dir /tmp/desktop-world-claude-plugin
-```
-
-The output contains `.claude-plugin/plugin.json`, `.mcp.json`, `bin/dtw`, the canonical Skill and notices. `.mcp.json` resolves the binary with `${CLAUDE_PLUGIN_ROOT}`. The helper refuses an existing output path and records the copied binary's SHA-256. It neither installs the plugin nor publishes, signs or builds a release. See Claude Code's [plugin reference](https://code.claude.com/docs/en/plugins-reference) and [local plugin testing](https://code.claude.com/docs/en/plugins#test-your-plugins-locally).
-
-Do not install both a manually configured server and the plugin's copy into the same Agent session unless two separate server instances are intended.
-
-## First execution
-
-Start the configured MCP connection, call `apps`, choose a returned app, then call `exec` with only its returned `app` ID string and a small `source` script such as `return await app.windows();`. `exec` returns when the script settles. `result` reads an original receipt when needed; it is not a normal polling step. Detailed tool arguments and cancellation are in the [MCP contract](app-protocol-v1.md).
-
-macOS native GUI workflows are validated locally. Accessibility and Screen Recording access are OS prerequisites for the relevant operations. Grant those OS permissions to the actual process identity used in your environment when macOS requires them; changing an unsigned build's path or bytes may require rechecking that identity. No capability approval token is supplied to DTW.
-
-Windows has a native provider and a verified native candidate build; independent Windows GUI acceptance remains pending. The macOS candidate is signed and notarized, with artifact-specific installed acceptance recorded separately; no public release has been created. Linux X11 is experimental and has no desktop support commitment. A successful local stage or manifest validation proves package structure, not native permissions, GUI behavior or a signed release. Old public `0.1.3`/candidate artifacts use the retired CUA runtime and must not be substituted for this build.
+From source, use [building](building.md). For installed-package and cross-platform
+acceptance, use [releasing](releasing.md) and the Windows README bundled with the
+same candidate. Publish the same verified bytes only after platform acceptance.

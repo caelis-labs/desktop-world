@@ -1,22 +1,22 @@
 # 重写版产品矩阵
 
-当前检查点：本轮 WPS 已完成检查并按用户要求暂停；关闭后的焦点清理仍阻塞完整验收。结果与恢复顺序见[阶段记录](real-task-closure-acceptance.md)。
+当前检查点：WPS 关闭后的焦点清理已修复；DSH 的三个完整真实任务通过开发候选验收，最后 AX 修复有独立实机对照。#70 正在收口 Windows 审查修复及同源验收包；最终安装包和 Caelis 会话级 app 授权联调仍待完成。结果见[阶段记录](real-task-closure-acceptance.md)。
 
-日期：2026-10-30。#69 后的[真实应用闭环批次](real-task-closure-plan.md)新增能力正在按 WPS、Obsidian、Chrome 完整任务验收。此前首版[发布计划](first-rewrite-release-plan.md)的第一、二批、macOS 安装候选及模型指标见[核心验收](release-core-acceptance.md)与[候选记录](rewrite-candidate-acceptance.md)，其结果仅证明对应候选，不自动覆盖当前源树。Windows 待用户独立实机验收；旧 CUA SDK/worker/安装包不属于下一 release。
+日期：2026-10-31。#69 后的[真实应用闭环批次](real-task-closure-plan.md)新增能力正在按 WPS、Obsidian、Chrome 完整任务验收。此前首版[发布计划](first-rewrite-release-plan.md)的第一、二批、macOS 安装候选及模型指标见[核心验收](release-core-acceptance.md)与[候选记录](rewrite-candidate-acceptance.md)，其结果仅证明对应候选，不自动覆盖当前源树。Windows 待用户独立实机验收；旧 CUA SDK/worker/安装包不属于下一 release。
 
 | 能力 / 工作流 | 当前实现与条件 | 证据 / 尚待完成 |
 | --- | --- | --- |
-| Agent 入口 | 官方 rmcp stdio；apps/api/exec/result；exec 仅 app/source；稳定平台 app ID | 普通 MCP + Skill，无定制 Host；真实模型任务按本轮门槛验证 |
+| Agent 入口 | 官方 rmcp stdio；apps/api/exec/result；exec 仅 app/source；稳定平台 app ID | 普通 MCP + Skill，无定制 Host；目标为 Caelis、DSH、agy；Caelis app 授权由 Core 实现，联调尚未完成 |
 | 按需 API | apps 紧凑索引；api 可选方法详情；result 原始账本 | 默认输出不展开全方法 schema，不为成功操作追加账本查询 |
 | 窗口基础路线 | macOS 逐实例验证 PID、正面积且精确查询可用的 WindowServer 表面（含同 PID 非零 layer 浮层）；不要求 AX 语义库存；精确 SCK 截图及可见点点击 | 有归属/生命周期/像素几何证明；模态、遮挡和空间边界按原生条件拒绝，不承诺任意后台点击 |
 | 同 app 多实例 | 稳定 app ID 聚合各实例窗口，window_ref 路由到精确实例；成员变化保留存活兄弟引用与 state | 真实双实例退出/重启通过；部分库存失败保留可用窗口、原错误及摘要提示，不伪装成完整库存 |
-| 语义发现与动作 | 原生 role/text 筛选、分页 frontier、菜单/子树/截图区域过滤；press/setValue 仅在元素广告对应 action 时可用 | 每窗观察独立；动作消费该窗观察；新 scope 按平台声明；macOS 区域按 AXScrollArea viewport 裁剪，Windows 按 UIA bounds 筛选，均不等同 OCR 或像素遮挡证明；partial 与原始原因保留，完整实机任务正在验证 |
+| 语义发现与动作 | 原生 role/text 筛选、分页 frontier、菜单/子树/截图区域过滤；press/setValue 仅在元素广告对应 action 时可用 | 每窗观察独立；动作消费该窗观察；新 scope 按平台声明；macOS 区域按 AXScrollArea viewport 裁剪，Windows 按 UIA bounds 筛选，均不等同 OCR 或像素遮挡证明；partial 与原始原因保留；候选 Z 的三个真实任务完成，最终安装字节待验收 |
 | 长文本读取 | readText 按 UTF-16 页读取原生文本；保留文本版本，变更后要求重新观察 | 不以 label/摘要冒充正文；macOS AXValue/StringForRange、Windows UIA；不支持的控件明确返回能力边界，待真实文档闭环验证 |
 | 文件对话框与关联表面 | macOS sheet/dialog 独立窗口引用；附着 sheet 阻塞父目标，application-modal 阻塞其他普通目标；经正向证明的活动兄弟 modal 可操作；有原生关联证据的跨 PID 表面仍通过逻辑 app 调用 | association_complete:false 不承诺穷尽所有 helper；目录选择、另存为、关闭/重开纳入新一轮任务，不能由窗口可列出直接推断输入可用 |
 | 常用输入 | focus、Unicode typeText、keypress、wheel-step scroll；左/右键及单/双击 | macOS 内部优先目标投递，预检不支持时借用前台；按动作复核目标，键盘不依赖无关指针或窗口位置变化。目标失效停止后续输入，已排队事件无法撤回；效果独立读回 |
 | 多 app 与多会话 | 最新 app state/refs 与滑动回执分开；同实例跨进程写租约，后台共享/前台独占协调先于实例与物理输入锁 | 历史容量不再拒绝新执行；独立实例后台并发按本轮真实样本验证；同一连接仍顺序执行脚本 |
 | 取消和未知效果 | 标准 MCP cancellation、配对释放、原回执、按需 owner 重建 | unknown 不重放；晚到/清理失败保留；强杀不能证明输入释放 |
-| Windows provider | 稳定应用身份、精确 HWND incarnation、UIA 筛选/分页/动作、GDI 可见无覆盖截图、SendInput、独立 worker | 历史 Windows x64 候选 50dbec3 完成原生链接、286 个库测试和 3 个 CLI 测试；本批 scoped observe/readText 与查询修复仅有源码/类型证据，须重建同源 Windows 候选；DPI/焦点/取消与真实 GUI 验收仍由用户独立实机确认 |
+| Windows provider | 稳定应用身份、精确 HWND incarnation、UIA 筛选/分页/动作、GDI 可见无覆盖截图、SendInput、独立 worker | 历史 Windows x64 候选 50dbec3 完成原生链接、286 个库测试和 3 个 CLI 测试；本轮修正 UIA 成功空值、区域引用几何复核与独立字段匹配，新增对应回归和 WinForms 检查；须使用本次同源 Windows 候选；DPI/焦点/取消与真实 GUI 验收仍由用户独立实机确认 |
 | Linux provider | 实验 X11/XRes 身份、窗口、XGetImage、XTest 输入；只使用当前可证明的键盘映射 | 不支持 Wayland/XWayland，不提供 AT-SPI 语义承诺；仅源码/类型证据，不承诺桌面支持或首版正式发行平台 |
 | 浏览器范围 | 真实浏览器窗口上的原生 AX 和基础像素路线 | DOM、profile、CDP/browser bridge 未接入 |
 | 输入后续组 | 拖拽、应用启动/退出、尚未支持的原生控件 | 后置批量能力；菜单发现/press 已纳入本批，不扩张当前已广告方法的语义 |

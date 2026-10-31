@@ -92,8 +92,8 @@ grant probes are marked in their file headers and are not current entry tests.
 
 A local Claude Code plugin can be staged with `scripts/stage-agent-plugin.py`;
 see [installation](install.md). It copies the supplied binary and canonical Skill
-without building, installing or publishing. There is no rewritten public release
-package, installer, signing or candidate workflow yet. The old CUA package scripts
+without building, installing or publishing. Explicit Windows and signed/notarized macOS candidate workflows now exist;
+a public rewrite release is still pending final installed-package acceptance. The old CUA package scripts
 and plugin payload have been removed. Their historical procedure remains in Git at
 [`c553486`](https://github.com/caelis-labs/desktop-world/tree/c55348610071e2b26e10ce490744065b0cdd08b7).
 Do not use those old packages as rewrite acceptance evidence.
@@ -113,8 +113,9 @@ python3 tests/acceptance/native_input_probe.py --dtw /absolute/path/to/dtw \
   --output /tmp/dtw-native-input-new-case --case all
 ```
 
-Then use `tests/acceptance/browser_workbench_probe.py` with `--client claude` or
-`--client agy`, `--dtw` and a fresh `--output` directory. Claude additionally takes
+Then use `tests/acceptance/browser_workbench_probe.py` with `--client dsh` or
+`--client agy` (the existing `claude` adapter remains available), `--dtw` and a fresh
+`--output` directory. DSH takes `--acp-adapter` pointing to its configured ACP launcher. Claude additionally takes
 `--acp-adapter /absolute/path/to/claude-agent-acp`; use the current official adapter
 and installed native Claude executable. This probe opens only its disposable
 Chrome workbench and TextEdit document, uses ordinary MCP/Skills, checks saves
@@ -122,3 +123,15 @@ independently, and retains failures. It must run serially with other GUI probes.
 The exact task, metrics and progression gate are in the
 [core acceptance record](release-core-acceptance.md). A local development stage
 is not a signed release candidate or an installed-artifact acceptance result.
+
+
+## Final installed three-app acceptance (macOS)
+
+Use `tests/acceptance/real_app_tasks.py --task chrome|wps|obsidian --client dsh|agy|claude`
+with a fresh `--output` per attempt and both `--dtw /absolute/package/bin/dtw` and
+`--installed-package /absolute/package`. DSH/Claude additionally use their ACP
+launcher. This keeps the installed executable path, stages only package-owned
+Skill/metadata for the isolated Agent and rechecks the full package manifest after
+cleanup. Omitting `--installed-package` is explicitly development evidence.
+The runner is macOS-specific; Windows uses the bundled Windows matrix/workbench.
+Caelis plugin/model acceptance is separate Core integration work.

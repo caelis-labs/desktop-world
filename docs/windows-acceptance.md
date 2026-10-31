@@ -1,3 +1,5 @@
+> 本文仅记录旧 CUA 版本的历史验收，不适用于重写版。当前 Windows 验收入口是[重写版矩阵](../tests/acceptance/windows/README.md)，请使用与当前源码一致的候选包。
+
 # Windows acceptance — 2026-10-11/12
 
 > Historical evidence: this report applies only to its named source revision, binary and entry point. The current product uses [standard MCP and explicit app IDs](app-protocol-v1.md); any grant, manifest, SDK/worker or custom Host setup below is superseded and is not a current installation instruction. No acceptance result here is claimed to have been rerun for the new entry.
