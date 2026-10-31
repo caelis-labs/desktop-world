@@ -138,7 +138,14 @@ fn failed_native_drain_survives_idle_reaping_and_repeated_stop() {
 #[test]
 fn a_stopped_flag_alone_is_not_owned_child_exit_evidence() {
     let fixture = Fixture::new();
-    let worker = fixture.worker("hang");
+    // Keep the child alive independently of stdin EOF when the stopped flag
+    // retires its IO thread. A clean stop requires the native platform route:
+    // Windows uses its cooperative event; Unix uses the requested SIGTERM.
+    #[cfg(target_os = "windows")]
+    let worker = cooperative_windows_fixture(&fixture, false);
+    #[cfg(not(target_os = "windows"))]
+    let worker = fixture.worker("no_read");
+    fixture.wait_ready();
     assert!(!worker.is_reaped());
     worker.process.stopped.store(true, Ordering::SeqCst);
     assert!(!worker.is_reaped());
