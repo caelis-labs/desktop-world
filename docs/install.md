@@ -141,6 +141,13 @@ settings. Windows uses the public foreground keyboard/pointer route; background
 Windows input and secure-desktop operation are not promised. A successful MCP
 connection does not prove native GUI or permissions are ready.
 
+On Windows, supplementary-plane keyboard text (including emoji) requires readable
+literal text and a selection in the focused control. Unsupported/password fields
+are rejected before that text is dispatched. Accepted text whose delivery cannot
+be confirmed fails closed with an unknown receipt and cleanup error; do not
+replay it. Custom controls that transform text or cannot expose bounded readback
+are outside the verified route. See the [Windows acceptance record](windows-release-acceptance-2026-11-01.md).
+
 For upgrades, finish active operations and stop the old connection before changing
 package files. Extract a new verified package, update the registration/Skill and
 start a new Session. Caelis binds a local registration to its canonical directory:

@@ -100,7 +100,15 @@ arrays and preservation of signed opaque ID components.
 
 ## Evidence and remaining coverage
 
-**Release gate still open:** the later release-build candidate
+The [2026-11-01 follow-up](windows-release-acceptance-2026-11-01.md) records the
+Unicode acknowledgement fix and the frozen Windows candidate's 100 native GUI
+checks, including strict cancellation/handoff, blocked delivery, and all 15
+session cursor cases. It also records the real Agent tasks and explicit coverage
+limits. The failed candidates below remain historical evidence.
+
+### Earlier candidates and release blocks
+
+**Earlier release block:** the release-build candidate
 `3543afa795c9bfbe5d6a8fe4ed812b54f627b093c075546df86e5f320f91ef64`
 passed the base 25 cases and the first 11 cursor cases, then failed the strict
 Unicode-prefix assertion during in-flight cancellation plus queued foreground

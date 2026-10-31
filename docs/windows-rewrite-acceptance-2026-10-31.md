@@ -1,12 +1,14 @@
 # Windows rewrite follow-up — 2026-10-31
 
-This record includes multiple successive Windows candidates. **Current decision:
-No-Go for release**, because lossless cancellation stress still leaves a terminal
+This record includes multiple successive Windows candidates. **Decision for those
+candidates: No-Go for release**, because lossless cancellation stress leaves a terminal
 high surrogate in the original app. Fixes and passing tasks below do not override
-that failure. The original machine-readable companion is
+that failure. The later frozen candidate and closure evidence are in the
+[2026-11-01 follow-up](windows-release-acceptance-2026-11-01.md).
+The original machine-readable companion is
 [windows-rewrite-2026-10-31.json](evidence/windows-rewrite-2026-10-31.json).
 
-## Reviewed CI candidate and latest result
+## Reviewed CI candidate and latest result in this record
 
 The latest native source is `a13775908df0052fea3227a23c816df90aea8612`, built by
 [Windows candidate CI](https://github.com/caelis-labs/desktop-world/actions/runs/41208527909).
