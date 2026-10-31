@@ -2,6 +2,8 @@
 
 当前 Windows 检查点：#72 的固定候选在 Windows 11 22631、普通用户、主屏 125% 下通过 100 项原生检查（含 40 次严格取消交接）及 Caelis + deepseek-flash 的 Chrome、WordPad、Explorer 完整任务；#182 的应用会话授权和大结果工件恢复联调通过。候选哈希、失败尝试及支持边界见[2026-11-01 验收](windows-release-acceptance-2026-11-01.md)。DTW #71/#72 已合并；Core 最新 main 的 #185/#187 已在固定 tool_search/mcp_call 路由上落地等价集成，公开发布使用已验收字节。
 
+macOS 最终包：`df76b14d` 的签名公证 ZIP 经最新 Core main `d15874f7` + Terra 完成 Chrome、Obsidian、WPS 三个真实任务，实际安装清单、结果读回及清理通过，见[候选记录](rewrite-candidate-acceptance.md)。
+
 macOS 既有检查点：WPS 关闭后的焦点清理已修复；DSH 的三个完整真实任务通过开发候选验收，最后 AX 修复有独立实机对照。结果见[阶段记录](real-task-closure-acceptance.md)；本轮没有修改 macOS 原生实现。
 
 日期：2026-11-01。#69 后的[真实应用闭环批次](real-task-closure-plan.md)新增能力正在按 WPS、Obsidian、Chrome 完整任务验收。此前首版[发布计划](first-rewrite-release-plan.md)的第一、二批、macOS 安装候选及模型指标见[核心验收](release-core-acceptance.md)与[候选记录](rewrite-candidate-acceptance.md)，其结果仅证明对应候选，不自动覆盖当前源树。Windows 本机验收的固定候选与条件见最新记录；旧 CUA SDK/worker/安装包不属于下一 release。
