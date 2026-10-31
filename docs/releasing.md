@@ -1,6 +1,6 @@
 # Releasing Desktop World
 
-The next release will contain the usable rewrite only. The old default runtime,
+The v0.2.0 release contains the usable rewrite only. The old default runtime,
 CUA SDK/worker dependency, script facade, plugin payload and installation/package
 paths have been removed from the source tree. Existing tags and released assets
 remain historical versions.
@@ -35,9 +35,11 @@ The current implementation audit, required work packages and macOS/Windows/Linux
 validation responsibilities are in the [first rewrite release plan](first-rewrite-release-plan.md).
 Windows and experimental Linux providers are implemented; Windows native linking
 and independent GUI acceptance remain separate from source/type checks. Linux desktop
-support is deferred. Version 0.2.0 is reserved for the rewrite candidate, not a published release.
+support is deferred. The [v0.2.0 release](https://github.com/caelis-labs/desktop-world/releases/tag/v0.2.0)
+promotes the accepted platform archives unchanged; its `RELEASE.json` identifies
+the original candidate sources and hashes.
 
-## Next release checkpoint
+## Release checkpoint
 
 1. Select supported workflows and platforms from the [product matrix](product-matrix.md).
    Record unsupported and unverified cases explicitly.

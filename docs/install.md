@@ -54,7 +54,8 @@ ID `desktop-world`, independent of the extracted directory name. Check them with
 `caelis plugin status desktop-world --json`. An earlier Claude-format Windows
 package may have registered its directory name instead; remove that exact old
 ID before installing this standard format, preserving unrelated registrations.
-macOS keeps its existing package format; use the ID returned by installation.
+macOS uses its existing Claude-compatible package format; current Core resolves
+its manifest name to the same `desktop-world` ID.
 
 Or enter `/plugin install /absolute/path/to/extracted-package` in the Caelis TUI.
 Start a new Session to load the MCP/Skill snapshot. Registration alone does not
