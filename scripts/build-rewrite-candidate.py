@@ -450,6 +450,7 @@ def package_assets(source, package, version, target):
         shutil.copy2(source / relative, dest)
     shutil.copytree(source / "packaging/third-party", package / "packaging/third-party")
     if target.endswith("msvc"):
+        shutil.copy2(source / "docs/windows-cursor-port.md", package / "docs/windows-cursor-port.md")
         shutil.copytree(source / "tests/acceptance/windows", package / "acceptance/windows")
         shutil.copytree(source / "tests/fixtures/browser-workbench", package / "acceptance/browser-workbench")
         shutil.copy2(source / "docs/real-task-closure-plan.md", package / "docs/real-task-closure-plan.md")

@@ -26,6 +26,8 @@ struct NativeFactory {
     catalog: Mutex<Option<Arc<NativeBackend>>>,
     #[cfg(target_os = "macos")]
     cursor: Arc<crate::backends::macos::CursorSession>,
+    #[cfg(target_os = "windows")]
+    cursor: Arc<crate::backends::windows::CursorSession>,
 }
 fn retire_unavailable_catalog<B: Backend>(catalog: &Mutex<Option<Arc<B>>>) -> Result<(), Error> {
     let stopped = catalog
@@ -83,7 +85,11 @@ impl Factory for NativeFactory {
         {
             NativeBackend::spawn_with_cursor(self.input_policy, self.cursor.clone())
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            NativeBackend::spawn_with_cursor(self.input_policy, self.cursor.clone())
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             NativeBackend::spawn_with_policy(self.input_policy)
         }
@@ -92,6 +98,10 @@ impl Factory for NativeFactory {
         #[cfg(target_os = "macos")]
         self.cursor.close().map_err(|error| {
             Error::BackendFailed(format!("cursor presentation cleanup: {error}"))
+        })?;
+        #[cfg(target_os = "windows")]
+        self.cursor.close().map_err(|error| {
+            Error::BackendFailed(format!("Windows cursor presentation cleanup: {error}"))
         })?;
         Ok(())
     }

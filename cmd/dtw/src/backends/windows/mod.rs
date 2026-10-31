@@ -2,9 +2,12 @@
 //! by a supervised DTW process, never an Agent thread or a CUA runtime.
 use super::native_client::{self, Platform as PlatformContract};
 use crate::computer::{Capability, Error, ObserveScopeKind};
+pub(crate) mod cursor;
 mod input;
 mod native;
+pub(crate) mod window_state;
 mod worker;
+pub use cursor::CursorSession;
 pub use native_client::AppInfo;
 pub use worker::{parent_alive_check, request_stop, worker_entry};
 pub struct Platform;
@@ -18,8 +21,11 @@ impl PlatformContract for Platform {
         "capture requires an unminimized fully visible window and proven native GDI rendering; blank or unsupported renders fail explicitly; no desktop-copy fallback or occluded WGC capture",
         "semantic scopes: window, retained subtree, capture-pixel region; menu scope is unsupported",
         "readText pages native UIA TextPattern, ValuePattern or static text; passwords and unsupported controls are not synthesized",
+        "window waits prove same-process owned native modals with Win32 owner/disabled state and UIA IsModal; same-window web modals and cross-process dialogs are unsupported",
+        "scroll anchors bind retained capture pixels or a live UIA element clipped through its ancestor rectangles; missing native geometry fails explicitly",
         "input establishes foreground focus and moves the shared pointer for clicks",
-        "native Windows GUI acceptance is pending; compilation is not GUI evidence",
+        "one optional session cursor presents actual pointer posts without focus or input; exact authenticated peer cursor windows alone are exempt from capture occlusion",
+        "Windows GUI coverage is recorded per candidate; compilation alone is not GUI evidence",
     ];
     const CAPABILITIES: &'static [Capability] = &[
         Capability::Windows,

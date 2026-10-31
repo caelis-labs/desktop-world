@@ -172,6 +172,7 @@ class Fixture(unittest.TestCase):
         put(self.repo, "cmd/dtw/Cargo.lock", 'version=4\n[[package]]\nname="desktop-world"\nversion="0.2.0"\n')
         for name in ("LICENSE", "THIRD_PARTY_NOTICES.md", "docs/native-source-provenance.md",
                      "docs/native-source-provenance-cross-platform.md", "docs/background-input-port.md",
+                     "docs/windows-cursor-port.md",
                      "skills/desktop-world/SKILL.md"):
             put(self.repo, name, "Original reviewed source content\n")
         put(self.repo, "docs/examples/mcp.json", '{"mcpServers":{"desktop-world":{"command":"/absolute/path/to/dtw","args":["mcp"]}}}\n')
@@ -461,6 +462,7 @@ class BinaryAndArchiveTests(Fixture):
             else:
                 self.assertFalse((package / "plugin.json").exists())
                 self.assertFalse((package / "mcp.json").exists())
+                self.assertFalse((package / "docs/windows-cursor-port.md").exists())
 
 
 class WorkflowTests(Fixture):

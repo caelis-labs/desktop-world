@@ -91,6 +91,27 @@ receipts and cleanup failures stop the run. Earlier receipts/files remain.
 
 ## Evidence and interpreting the outcome
 
+The session cursor/native parity suite is separate from the base smoke. It
+requires Python 3 and Pillow for independent PNG comparison. It compiles owned
+fixtures using Windows PowerShell 5.1, then drives input only through DTW MCP:
+
+```powershell
+python -X utf8 .\cursor_probe.py --dtw 'C:\Candidates\DTW\bin\dtw.exe' `
+  --output 'C:\Temp\dtw-cursor-new'
+```
+
+Use an exclusive normal interactive desktop and a new output directory. Its
+read-only observer samples actual physical pixels, exact process/window identity
+and styles. A deliberately created foreign same-class window must remain an
+occluder. The suite tests simultaneous sessions, capture exclusion, move
+retirement, native modal waits, retained wheel anchors and in-flight lifecycle
+cleanup; `summary.json` lists the cases actually completed and cleanup results.
+Only its owned helper is deliberately terminated for the recovery control.
+No system setting, installed user application or personal document is modified.
+Raw MCP ledgers, PNGs, original cancellation errors and retained-handle exit codes
+remain in its output. Passing this suite does not certify other DPI layouts,
+secure desktop, background input or final package acceptance.
+
 `summary.json` records OS, PowerShell, source and binary SHA-256, selected cases,
 pending manual coverage and cleanup. `smoke_passed` covers **only the selected
 smoke**; `manual_pending` must remain visible in the handoff. Any failure returns

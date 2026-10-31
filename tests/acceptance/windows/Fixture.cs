@@ -71,6 +71,15 @@ namespace DtwWindowsSmoke {
             Button save = new Button { Text = "Save", AccessibleName = "Save", Location = new Point(144, 145), Size = new Size(100, 30) };
             save.Click += delegate { Save("button"); editor.Focus(); Publish(); };
             Controls.Add(increment); Controls.Add(save);
+            Button openDialog = new Button { Text="Show owned dialog", AccessibleName="Show owned dialog", Location=new Point(250,145), Size=new Size(145,30) };
+            openDialog.Click += delegate { BeginInvoke((Action)delegate {
+                using (var dialog = new Form { Text="Owned native modal", AccessibleName="Owned native modal", ClientSize=new Size(280,100),
+                    StartPosition=FormStartPosition.CenterParent, ShowInTaskbar=false }) {
+                    var close=new Button { Text="Close dialog", AccessibleName="Close dialog", Location=new Point(20,20), Size=new Size(160,35), DialogResult=DialogResult.Cancel };
+                    dialog.Controls.Add(close);dialog.CancelButton=close;dialog.ShowDialog(this);
+                }
+            }); };
+            Controls.Add(openDialog);
             pad.Location = new Point(12, 185); pad.Size = new Size(386, 210);
             pad.MouseUp += delegate(object sender, MouseEventArgs e) {
                 if (e.Button == MouseButtons.Left) leftUps++;

@@ -6,6 +6,29 @@ release approval**. The broader Windows matrix and final distribution artifact
 still require acceptance. The machine-readable companion is
 [windows-rewrite-2026-10-31.json](evidence/windows-rewrite-2026-10-31.json).
 
+## Subsequent Windows parity verification
+
+The later development binary `ea973ccd8c52e5dd262d0400e684da4131f3b1fd7328eb0bac6d0a261f84c9ad`
+passes **385 library tests, 3 CLI tests, the full 25-case GUI smoke and 15
+cursor/native parity GUI cases**. The original final-queue binary also passed
+all 25 smoke cases on a normal foreground desktop before these changes.
+Earlier failures below remain historical results of their recorded binaries.
+
+Windows session cursor feedback is feasible and included. The
+[Windows port record](windows-cursor-port.md) describes exact upstream source
+hashes, session ownership, physical pixel checks, cross-session exclusion and
+the new native modal waits and retained pixel/semantic wheel anchors. In-flight
+cancel/EOF/parent-exit and concurrent-owner handoff now have actual process-exit
+and released-input evidence. The queued-owner abandoned-mutex defect and a
+parent-exit worker classification error were reproduced and fixed.
+
+Common adapter wiring is Windows-conditional; macOS native code, public API and
+Skill remain unchanged. Four existing windows-crate features support pipes,
+file handles and the native helper module. No dependency version changes.
+These later results supersede only the corresponding pending gates below.
+Final candidate construction, new Caelis runs and remaining matrix results are
+recorded separately; a development binary is not release approval.
+
 ## Changes and scope
 
 | Failure | Resulting behavior |
@@ -17,7 +40,7 @@ still require acceptance. The machine-readable companion is
 | Keyboard emoji input generated a transient UTF-16 surrogate in the browser event journal, poisoning every subsequent UTF-8 persistence operation. | Persist and return JSON strings with ASCII escapes. Parsing preserves every code unit, Chinese text, emoji and line break; later saves and attachment receipts remain writable. No text is dropped or normalized. |
 | A Claude-format Windows package acquired its extracted directory name as the Caelis plugin ID. | Windows candidates also carry standard Agent Plugins 1.0 manifests. Caelis installs one `desktop-world` MCP server and the bundled Skill under the stable ID `desktop-world`, including paths with spaces and Chinese characters. |
 
-Native runtime changes are confined to `backends/windows`. macOS native source,
+The initial native runtime changes were confined to `backends/windows`. macOS native source,
 shared runtime/protocol, public API, Skill, Cargo dependencies and macOS package
 layout are unchanged. Shared fixture serialization is lossless JSON escaping;
 the package builder adds the standard manifests only for the Windows target.

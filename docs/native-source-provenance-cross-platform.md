@@ -34,11 +34,28 @@ This is a source record, not a Windows/Linux runtime or release acceptance claim
 - The pure `linux/client_pid.rs` is copied intact, including its eight ownership
   tests. Other files adapt the donor mechanisms into DTW's contracts; they are
   not wholesale copies of upstream tools or a claim of upstream behavior parity.
-- No SDK, upstream worker, ToolRegistry, browser/DOM, overlay, keyring, clipboard,
+- No SDK, upstream worker, ToolRegistry, browser/DOM, keyring, clipboard,
   Wayland helper or complete platform crate is imported. Runtime dependencies are
   the target-specific `windows 0.58.0`, `x11rb 0.13.2`, PNG encoder and libc, plus
   the existing DTW protocol dependencies. Actual package dependency notices are
   still a release-candidate responsibility.
+
+## Windows session cursor follow-up (2026-10-31)
+
+The Windows-only presentation worker additionally adapts CUA commit
+`b38360443960a6540685a9a5eb5407f10fe3d03b`:
+`platform-windows/src/overlay.rs` (SHA-256
+`cb3cac0b729d0dd7ee88d6887eb18b76fd6aa62ebb05ab9eb4e380e6b6f40b4a`),
+shared `overlay/theme.rs` (`08e04ecab19be1d9cdf5beaa2564e9855457f3b50dd2b7d38e9487214b51bc77`)
+and `build_default_theme.py` (`caa536a26215e51d0d1cc9e05f632ffc9f2b1a60b696cbe497af20c0f49d0b1c`).
+Full donor paths, current upstream comparison, behavioral differences and
+verification are recorded in
+[the Windows port record](https://github.com/caelis-labs/desktop-world/blob/main/docs/windows-cursor-port.md).
+The full MIT license is retained in
+`packaging/third-party/cua-background-input/LICENSE`. No upstream registry,
+image/font asset, SDK or renderer dependency is imported. Additional windows
+crate feature flags are Windows-target-only; locked dependency versions remain
+unchanged. Session wiring in common source is conditional on Windows.
 
 ## Deliberate DTW behavior
 

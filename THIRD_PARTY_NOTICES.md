@@ -17,6 +17,11 @@ donor hashes and deliberate adaptations are recorded in
 MIT license is included in `packaging/third-party/cua-background-input/LICENSE`.
 This adds native source and small locked Rust dependencies, not the CUA SDK.
 
+The Windows session cursor also adapts CUA's Win32 overlay mechanisms and shared
+palette/DART outline from that commit. Donor hashes and the Windows ownership,
+capture and rendering changes are recorded in the cross-platform provenance
+record. The same retained CUA MIT license covers these source adaptations.
+
 The script engine directly uses rquickjs 0.14.0 and its bundled QuickJS-ng
 0.16.2. QuickJS-ng credits Fabrice Bellard (2017–2026), Charlie Gordon
 (2017–2024), Ben Noordhuis (2023–2026) and Saúl Ibarra Corretgé (2023–2026);

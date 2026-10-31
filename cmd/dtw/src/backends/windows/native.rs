@@ -87,7 +87,7 @@ fn hwnd(id: u64) -> HWND {
 fn id(window: HWND) -> u64 {
     window.0 as usize as u64
 }
-fn rect(window: HWND) -> Result<RECT, Error> {
+pub(super) fn rect(window: HWND) -> Result<RECT, Error> {
     let mut result = RECT::default();
     unsafe { GetWindowRect(window, &mut result) }.map_err(failed)?;
     if unsafe { IsZoomed(window) }.as_bool() {
@@ -159,7 +159,7 @@ fn discovery_matches<E>(
         None => Ok(true),
     }
 }
-fn visible(window: HWND) -> bool {
+pub(super) fn visible(window: HWND) -> bool {
     unsafe {
         let mut cloaked = 0u32;
         IsWindowVisible(window).as_bool()
@@ -192,7 +192,7 @@ fn title(window: HWND) -> String {
     let len = unsafe { GetWindowTextW(window, &mut text) }.max(0) as usize;
     String::from_utf16_lossy(&text[..len])
 }
-fn marker(window: HWND, create: bool) -> Result<u64, Error> {
+pub(super) fn marker(window: HWND, create: bool) -> Result<u64, Error> {
     unsafe {
         let mut value = GetPropW(window, MARKER).0 as usize as u64;
         if value == 0 && create {
@@ -344,11 +344,21 @@ impl Store {
             let until = deadline(request)?;
             check(until)?;
             match op {
+                "prepare_cursor" => {
+                    let target = parse_target(&request["target"])?;
+                    self.validate(&target)?;
+                    let proof =
+                        super::cursor::prepare(target).ok_or(Error::UnsupportedCapability)?;
+                    Ok(json!({"cursor_target":proof}))
+                }
                 "catalog" => {
+                    super::cursor::begin_proof_cycle();
                     let mut apps = HashMap::new();
                     for window in all_windows()? {
                         check(until)?;
-                        if !unsafe { IsWindowVisible(window) }.as_bool() {
+                        if !unsafe { IsWindowVisible(window) }.as_bool()
+                            || super::cursor::proven_overlay(window)
+                        {
                             continue;
                         }
                         let mut pid = 0;
@@ -409,6 +419,7 @@ impl Store {
                     Ok(json!({"windows":result}))
                 }
                 "observe" | "observe_next" => self.observe(request, until, op == "observe_next"),
+                "probe_window_state" => self.probe_window_state(request, until),
                 "read_text" => self.read_text(request, until),
                 "capture" => self.capture(&parse_target(&request["target"])?, until),
                 _ if action => Ok(self.action(request, until)),
@@ -416,6 +427,95 @@ impl Store {
             }
         })();
         result.unwrap_or_else(|error| error_reply(error, action))
+    }
+    fn probe_window_state(&mut self, r: &Value, until: Instant) -> Result<Value, Error> {
+        let target = parse_target(&r["target"])?;
+        let desired = string(r, "state")?;
+        if !["dialog", "unblocked", "closed"].contains(&desired) {
+            return Err(Error::UnsupportedCapability);
+        }
+        let anchor = hwnd(target.native_id);
+        if desired == "closed" && !unsafe { IsWindow(anchor) }.as_bool() {
+            return Ok(json!({"status":"closed"}));
+        }
+        self.validate(&target)?;
+        if desired == "closed" {
+            return Ok(json!({"status":"pending","reason":"window_present"}));
+        }
+        if !visible(anchor) {
+            return Ok(json!({"status":"pending","reason":"window_not_visible"}));
+        }
+        let enabled = unsafe { IsWindowEnabled(anchor) }.as_bool();
+        if desired == "unblocked" {
+            return if enabled {
+                Ok(
+                    json!({"status":"matched","kind":"window","relation":"same_window",
+                "window":{"target":target_json(&target),"title":title(anchor),"visible":true}}),
+                )
+            } else {
+                Ok(json!({"status":"pending","reason":"blocked_by_modal"}))
+            };
+        }
+        if enabled {
+            return Ok(json!({"status":"pending","reason":"dialog_not_present"}));
+        }
+        let mut candidates = Vec::new();
+        let mut not_ready = false;
+        for window in all_windows()? {
+            check(until)?;
+            if window == anchor
+                || !visible(window)
+                || !unsafe { IsWindowEnabled(window) }.as_bool()
+                || !owned_modal_chain(window, anchor, target.app.pid, until)?
+            {
+                continue;
+            }
+            let uia = self.uia()?;
+            let element = unsafe { uia.ElementFromHandle(window) }.map_err(failed)?;
+            let modal = unsafe {
+                optional_pattern::<IUIAutomationWindowPattern>(&element, UIA_WindowPatternId)
+            }?;
+            let is_modal = match modal {
+                Some(pattern) => unsafe { pattern.CurrentIsModal() }
+                    .map_err(failed)?
+                    .as_bool(),
+                None => false,
+            };
+            if is_modal {
+                candidates.push(window);
+            } else {
+                not_ready = true;
+            }
+        }
+        self.validate(&target)?;
+        if unsafe { IsWindowEnabled(anchor) }.as_bool() {
+            return Ok(json!({"status":"pending","reason":"dialog_not_present"}));
+        }
+        if candidates.len() != 1 {
+            return Ok(
+                json!({"status":"pending","reason":if candidates.len()>1{"ambiguous_dialog"}else if not_ready{"dialog_not_ready"}else{"dialog_not_present"}}),
+            );
+        }
+        let window = candidates[0];
+        if !visible(window)
+            || !owned_modal_chain(window, anchor, target.app.pid, until)?
+            || !unsafe { IsWindowEnabled(window) }.as_bool()
+        {
+            return Ok(json!({"status":"pending","reason":"dialog_not_ready"}));
+        }
+        let found = WindowTarget {
+            app: target.app.clone(),
+            native_id: id(window),
+            generation: marker(window, true)?,
+        };
+        if self.windows.len() >= 512 && !self.windows.contains_key(&found.native_id) {
+            return Err(failed("Window identity budget exhausted"));
+        }
+        self.windows.insert(found.native_id, found.clone());
+        self.validate(&found)?;
+        Ok(
+            json!({"status":"matched","kind":"dialog","relation":"child_modal","window":{"target":target_json(&found),"title":title(window),"visible":true}}),
+        )
     }
     fn observe(&mut self, r: &Value, until: Instant, next: bool) -> Result<Value, Error> {
         let target = parse_target(&r["target"])?;
@@ -767,6 +867,13 @@ impl Store {
         let mut segments: Vec<Vec<INPUT>> = Vec::new();
         let mut point: Option<(RECT, POINT, u32, Option<Instant>)> = None;
         let mut scroll = None;
+        let mut semantic_anchor: Option<(
+            IUIAutomation,
+            IUIAutomationElement,
+            IUIAutomationElement,
+            RECT,
+            Option<RECT>,
+        )> = None;
         match op {
             "typeText" => segments = input::keyboard_segments(Some(string(r, "text")?), None)?,
             "keypress" => {
@@ -789,37 +896,51 @@ impl Store {
                     return Err(failed("Scroll needs nonzero wheel steps within -100..100"));
                 }
                 scroll = Some((x, y));
+                match r["anchor"]["kind"].as_str() {
+                    Some("pixels") => {
+                        point = Some(self.pixel_point(
+                            target,
+                            window,
+                            string(r, "binding")?,
+                            &r["anchor"],
+                        )?);
+                    }
+                    Some("element") => {
+                        let q = self
+                            .queries
+                            .remove(string(r, "binding")?)
+                            .ok_or(Error::StaleObservation)?;
+                        if q.target != *target || q.expires <= Instant::now() {
+                            return Err(Error::StaleObservation);
+                        }
+                        let element = q
+                            .elements
+                            .get(&number(&r["anchor"], "element")?)
+                            .ok_or(Error::ElementNotFound)?
+                            .clone();
+                        let uia = self.uia()?;
+                        owned(&uia, &element, &q.root, until)?;
+                        q.validate_region(window, &element, until)?;
+                        let bounds = unobstructed(window)?;
+                        let clipped =
+                            scroll_element_rect(&uia, &element, &q.root, bounds, q.region, until)?;
+                        point = Some((
+                            bounds,
+                            POINT {
+                                x: clipped.left + (clipped.right - clipped.left) / 2,
+                                y: clipped.top + (clipped.bottom - clipped.top) / 2,
+                            },
+                            unsafe { GetDpiForWindow(window) },
+                            Some(q.expires),
+                        ));
+                        semantic_anchor = Some((uia, element, q.root.clone(), clipped, q.region));
+                    }
+                    None => (),
+                    _ => return Err(Error::InvalidObservation),
+                }
             }
             "click" => {
-                let p = self
-                    .pixels
-                    .remove(string(r, "binding")?)
-                    .ok_or(Error::StaleObservation)?;
-                if p.target != *target
-                    || p.expires <= Instant::now()
-                    || p.dpi != unsafe { GetDpiForWindow(window) }
-                    || !equal_rect(p.bounds, unobstructed(window)?)
-                {
-                    return Err(Error::StaleObservation);
-                }
-                let (x, y) = (
-                    r["x"].as_f64().ok_or(Error::InvalidPoint)?,
-                    r["y"].as_f64().ok_or(Error::InvalidPoint)?,
-                );
-                if !x.is_finite()
-                    || !y.is_finite()
-                    || x < 0.0
-                    || y < 0.0
-                    || x >= (p.bounds.right - p.bounds.left) as f64
-                    || y >= (p.bounds.bottom - p.bounds.top) as f64
-                {
-                    return Err(Error::InvalidPoint);
-                }
-                let hit = POINT {
-                    x: p.bounds.left + x.floor() as i32,
-                    y: p.bounds.top + y.floor() as i32,
-                };
-                point = Some((p.bounds, hit, p.dpi, Some(p.expires)));
+                point = Some(self.pixel_point(target, window, string(r, "binding")?, r)?);
                 let (down, up) = match r["button"].as_str() {
                     Some("left") => (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
                     Some("right") => (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
@@ -843,12 +964,14 @@ impl Store {
         self.input_boundary(target, window, until)?;
         // Scroll centers are computed after activation, which may move a window.
         if let Some((x, y)) = scroll {
-            let bounds = unobstructed(window)?;
-            let hit = POINT {
-                x: bounds.left + (bounds.right - bounds.left) / 2,
-                y: bounds.top + (bounds.bottom - bounds.top) / 2,
-            };
-            point = Some((bounds, hit, unsafe { GetDpiForWindow(window) }, None));
+            if point.is_none() {
+                let bounds = unobstructed(window)?;
+                let hit = POINT {
+                    x: bounds.left + (bounds.right - bounds.left) / 2,
+                    y: bounds.top + (bounds.bottom - bounds.top) / 2,
+                };
+                point = Some((bounds, hit, unsafe { GetDpiForWindow(window) }, None));
+            }
             for (delta, flags, sign) in [(y, MOUSEEVENTF_WHEEL, -1i32), (x, MOUSEEVENTF_HWHEEL, 1)]
             {
                 for _ in 0..delta.unsigned_abs() {
@@ -864,11 +987,23 @@ impl Store {
         if let Some((_, hit, _, _)) = &point {
             segments.insert(0, vec![absolute_move(*hit)?]);
         }
+        let mut cursor = point
+            .as_ref()
+            .and_then(|_| super::cursor::Emitter::new(&r["cursor_feedback"], target));
         let mut placed = false;
         input_sequence::run(&segments, |step| match step {
             Step::Verify => {
                 self.input_boundary(target, window, until)?;
                 input::no_held_keys()?;
+                if let Some((uia, element, root, before, region)) = semantic_anchor.as_ref() {
+                    let bounds = unobstructed(window)?;
+                    let current = scroll_element_rect(uia, element, root, bounds, *region, until)?;
+                    if !equal_rect(current, *before) {
+                        return Err(Error::StaleObservation);
+                    }
+                    self.input_boundary(target, window, until)?;
+                    input::no_held_keys()?;
+                }
                 if let Some((bounds, hit, dpi, expiry)) = &point {
                     if expiry.is_some_and(|expiry| expiry <= Instant::now())
                         || *dpi != unsafe { GetDpiForWindow(window) }
@@ -891,6 +1026,17 @@ impl Store {
             Step::Dispatch(segment) => {
                 self.validate(target)?;
                 input::send(segment, window, until, dispatched)?;
+                if let (Some(cursor), Some((_, hit, _, _))) = (cursor.as_mut(), point.as_ref()) {
+                    // Emit only after the entire native mouse segment was
+                    // inserted. Partial/cleanup and keyboard events emit none.
+                    let down = segment.iter().any(|event| unsafe {
+                        event.r#type == INPUT_MOUSE
+                            && event.Anonymous.mi.dwFlags.0
+                                & (MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_RIGHTDOWN).0
+                                != 0
+                    });
+                    cursor.posted(hit.x, hit.y, down);
+                }
                 if point.is_some() {
                     placed = true;
                 }
@@ -900,6 +1046,40 @@ impl Store {
                 Ok(())
             }
         })
+    }
+    fn pixel_point(
+        &mut self,
+        target: &WindowTarget,
+        window: HWND,
+        token: &str,
+        coordinates: &Value,
+    ) -> Result<(RECT, POINT, u32, Option<Instant>), Error> {
+        let pixels = self.pixels.remove(token).ok_or(Error::StaleObservation)?;
+        if pixels.target != *target
+            || pixels.expires <= Instant::now()
+            || pixels.dpi != unsafe { GetDpiForWindow(window) }
+            || !equal_rect(pixels.bounds, unobstructed(window)?)
+        {
+            return Err(Error::StaleObservation);
+        }
+        let (x, y) = (
+            coordinates["x"].as_f64().ok_or(Error::InvalidPoint)?,
+            coordinates["y"].as_f64().ok_or(Error::InvalidPoint)?,
+        );
+        if !x.is_finite()
+            || !y.is_finite()
+            || x < 0.
+            || y < 0.
+            || x >= (pixels.bounds.right - pixels.bounds.left) as f64
+            || y >= (pixels.bounds.bottom - pixels.bounds.top) as f64
+        {
+            return Err(Error::InvalidPoint);
+        }
+        let hit = POINT {
+            x: pixels.bounds.left + x.floor() as i32,
+            y: pixels.bounds.top + y.floor() as i32,
+        };
+        Ok((pixels.bounds, hit, pixels.dpi, Some(pixels.expires)))
     }
     fn semantic_admission(
         &self,
@@ -1216,7 +1396,88 @@ fn owned(
     }
     Err(Error::TargetChanged)
 }
+fn owned_modal_chain(
+    mut window: HWND,
+    anchor: HWND,
+    pid: u32,
+    until: Instant,
+) -> Result<bool, Error> {
+    let mut visited = HashSet::new();
+    for _ in 0..128 {
+        check(until)?;
+        if window == anchor {
+            return Ok(true);
+        }
+        if window.0.is_null() || !visited.insert(id(window)) {
+            return Ok(false);
+        }
+        let mut actual = 0;
+        unsafe {
+            GetWindowThreadProcessId(window, Some(&mut actual));
+        }
+        if actual != pid || unsafe { GetAncestor(window, GA_ROOT) } != window {
+            return Ok(false);
+        }
+        window = unsafe { GetWindow(window, GW_OWNER) }.unwrap_or_default();
+    }
+    Ok(false)
+}
+fn clipped_rect(a: RECT, b: RECT) -> Result<RECT, Error> {
+    let result = RECT {
+        left: a.left.max(b.left),
+        top: a.top.max(b.top),
+        right: a.right.min(b.right),
+        bottom: a.bottom.min(b.bottom),
+    };
+    if result.left >= result.right || result.top >= result.bottom {
+        Err(Error::ElementNotFound)
+    } else {
+        Ok(result)
+    }
+}
+fn scroll_element_rect(
+    uia: &IUIAutomation,
+    element: &IUIAutomationElement,
+    root: &IUIAutomationElement,
+    bounds: RECT,
+    region: Option<RECT>,
+    until: Instant,
+) -> Result<RECT, Error> {
+    if unsafe { element.CurrentIsOffscreen() }
+        .map_err(failed)?
+        .as_bool()
+        || !unsafe { element.CurrentIsEnabled() }
+            .map_err(failed)?
+            .as_bool()
+    {
+        return Err(Error::ElementNotPressable);
+    }
+    let mut result = bounds;
+    if let Some(region) = region {
+        result = clipped_rect(result, region)?;
+    }
+    let walker = unsafe { uia.RawViewWalker() }.map_err(failed)?;
+    let mut current = element.clone();
+    for _ in 0..128 {
+        check(until)?;
+        let rectangle = unsafe { current.CurrentBoundingRectangle() }.map_err(failed)?;
+        if rectangle.left >= rectangle.right || rectangle.top >= rectangle.bottom {
+            return Err(Error::UnsupportedCapability);
+        }
+        result = clipped_rect(result, rectangle)?;
+        if unsafe { uia.CompareElements(&current, root) }
+            .map_err(failed)?
+            .as_bool()
+        {
+            return Ok(result);
+        }
+        current =
+            optional(unsafe { walker.GetParentElement(&current) })?.ok_or(Error::TargetChanged)?;
+    }
+    Err(Error::TargetChanged)
+}
 fn unobstructed(window: HWND) -> Result<RECT, Error> {
+    super::cursor::begin_proof_cycle();
     if !visible(window) {
         return Err(failed("Capture requires a visible, unminimized window"));
     }
@@ -1245,7 +1506,10 @@ fn unobstructed(window: HWND) -> Result<RECT, Error> {
         if other == window {
             return Ok(bounds);
         }
-        if visible(other) && intersects(bounds, rect(other)?) {
+        if visible(other)
+            && intersects(bounds, rect(other)?)
+            && !super::cursor::proven_overlay(other)
+        {
             return Err(failed(
                 "Window is occluded; screen pixels cannot prove window content",
             ));
