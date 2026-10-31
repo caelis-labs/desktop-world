@@ -1,0 +1,204 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-31",
+  "source_base": "530b44f6bedecb455c1fa344112adf659088b255",
+  "cua_reference": "85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19",
+  "release_gate": "open",
+  "build_kind": "local unsigned debug development regression; not a release artifact",
+  "environment": {
+    "windows": "Windows 11 23H2, build 22631",
+    "powershell": "5.1.22621.6133",
+    "rust": "1.98.0",
+    "target": "x86_64-pc-windows-msvc",
+    "static_crt": true
+  },
+  "final_native_binary_sha256": "41721bb798b530df6498b5cb829e1b10069417546bb3a4f291a5bb2eed96199d",
+  "checks": {
+    "rust_library_tests_passed": 379,
+    "cli_tests_passed": 3,
+    "mcp_stdio_tests_selected": 0,
+    "python_candidate_fixture_tests_passed": 27,
+    "macos_signing_shell_test": "Windows shell invocation failed before build; supported Unix CI remains required",
+    "format_check": "passed",
+    "release_version_consistency": "passed",
+    "snapshot_readiness_control": {
+      "passed": true,
+      "unavailable_publications": 2,
+      "reads_to_ready": 3,
+      "dtw_requests": 0
+    },
+    "shared_core_checkpoint_suites_passed": [
+      83,
+      22,
+      20,
+      5
+    ]
+  },
+  "scope": {
+    "native_platforms_changed": [
+      "windows"
+    ],
+    "macos_native_unchanged": true,
+    "shared_runtime_protocol_api_skill_dependencies_unchanged": true,
+    "macos_package_layout_unchanged": true,
+    "shared_fixture_change": "lossless JSON escaping of UTF-16 strings",
+    "packaging_change": "standard manifests only for the Windows target",
+    "caelis_source_changed": false
+  },
+  "fixture_http_control": {
+    "old_serializer": "surrogate event, later save and attachment returned 400; memory diverged from disk",
+    "fixed_serializer": "all returned 200; one save and attachment persisted; memory equaled disk; no temporary file remained"
+  },
+  "foreground_native_control": {
+    "foreground_only_with_chrome": "activation refused; paired detach confirmed",
+    "foreground_and_target_with_chrome": "one activation succeeded; both detaches confirmed",
+    "system_service_foreground": "access denied; no activation assistance or target input attempted"
+  },
+  "standard_plugin_install": {
+    "caelis_version": "0.75.0",
+    "installed": true,
+    "plugin_id": "desktop-world",
+    "mcp_servers": 1,
+    "path_included_spaces_and_chinese": true,
+    "shipped_skill_loaded": true,
+    "old_owned_registration_removed_before_switching_directory": true,
+    "package_checksum_entries_verified": 189
+  },
+  "native_smoke_runs": [
+    {
+      "case": "smoke-render",
+      "binary_sha256": "4692ca59d246fa01a066a76fc7e1e013a6506586709e943bcafe1ec884d44109",
+      "status": "passed",
+      "cases_completed": 25,
+      "forced_cleanup": false
+    },
+    {
+      "case": "pre-final-queue-smoke",
+      "binary_sha256": "4692ca59d246fa01a066a76fc7e1e013a6506586709e943bcafe1ec884d44109",
+      "status": "failed",
+      "failure": "foreground-only attachment did not permit activation with Chrome in front; no target keystrokes issued"
+    },
+    {
+      "case": "final-queue-first-smoke",
+      "binary_sha256": "e141fc8bd1a6063c56b79bf540c03aea69247aee0d6892d718b64dc64c4f7271",
+      "status": "failed",
+      "cases_completed": 11,
+      "failure": "harness snapshot-property dereference failed; bounded snapshot readiness was subsequently added; final GUI verification pending",
+      "forced_cleanup": false
+    },
+    {
+      "case": "final-queue-system-foreground-smoke",
+      "binary_sha256": "e141fc8bd1a6063c56b79bf540c03aea69247aee0d6892d718b64dc64c4f7271",
+      "status": "blocked",
+      "cases_completed": 1,
+      "failure": "GameInputSvc owned foreground; thread queue attachment returned access denied",
+      "dispatch": "not_dispatched",
+      "forced_cleanup": false
+    }
+  ],
+  "composition_control": {
+    "exact_window_render_cycles": 3,
+    "settled_frames": "owned-window pixels only",
+    "transition_geometry_changes": "target_changed rejection retained",
+    "discarded_implementation": "desktop BitBlt with compositor fences and hit tests still exposed other-app pixels; not retained in final code"
+  },
+  "agent_runs": [
+    {
+      "case": "chrome-complete-pre-final-queue",
+      "binary_sha256": "4692ca59d246fa01a066a76fc7e1e013a6506586709e943bcafe1ec884d44109",
+      "model": "deepseek-flash",
+      "caelis_version": "0.75.0",
+      "elapsed_seconds": 342.58,
+      "exec_calls": 37,
+      "mcp_calls": 38,
+      "native_calls": 160,
+      "returned_pngs": 20,
+      "errored_execs": 8,
+      "failed_native_steps_including_caught_errors": 24,
+      "route_violations": [],
+      "business_disk_verification": {
+        "passed": true,
+        "record_count": 240,
+        "saved_once": [
+          "DTW-0088",
+          "DTW-0240"
+        ],
+        "quantity": [
+          37,
+          52
+        ],
+        "reviewed": [
+          true,
+          true
+        ],
+        "exact_chinese_emoji_multiline_notes": true,
+        "unchanged_other_records": 238,
+        "attachments": 1,
+        "attachment_hash_matched": true,
+        "native_reopened_values_matched": true,
+        "intermediate_surrogate_events_persisted": 2
+      },
+      "cancel_evidence": "native transcript and closed editor; the fixture does not journal Cancel",
+      "normal_cleanup": true,
+      "original_user_chrome_preserved": true
+    },
+    {
+      "case": "chrome-final",
+      "binary_sha256": "41721bb798b530df6498b5cb829e1b10069417546bb3a4f291a5bb2eed96199d",
+      "model": "deepseek-flash",
+      "caelis_version": "0.75.0",
+      "elapsed_seconds": 427.64,
+      "acceptance_status": "partial",
+      "exec_calls": 44,
+      "mcp_calls": 46,
+      "native_calls": 153,
+      "returned_pngs": 1,
+      "errored_execs": 4,
+      "failed_native_steps_including_caught_errors": 27,
+      "route_violations": [],
+      "keyboard_requirement_met": false,
+      "workbench_screenshot_requirement_met": false,
+      "captured_window": "target-owned Chrome translation bubble; process and owner HWND independently verified",
+      "business_disk_verification": {
+        "passed": true,
+        "record_count": 240,
+        "saved_once": [
+          "DTW-0088",
+          "DTW-0240"
+        ],
+        "quantity": [
+          37,
+          52
+        ],
+        "reviewed": [
+          true,
+          true
+        ],
+        "exact_chinese_emoji_multiline_notes": true,
+        "unchanged_other_records": 238,
+        "attachments": 1,
+        "attachment_hash_matched": true,
+        "native_reopened_values_matched": true,
+        "intermediate_surrogate_events_persisted": 0
+      },
+      "input_rejection": "GameInputSvc foreground queue access denied; keyboard/focus not dispatched; semantic UIA actions remained available",
+      "workbench_capture_rejection": "occluded by its own translation popup; conservative visible-window boundary retained",
+      "normal_cleanup": true,
+      "original_user_chrome_preserved": true,
+      "transcript_sha256": "33146d9125e8aaed0ada8b04077cd464152b122bfc4c9a5249af73d5a89c8620"
+    }
+  ],
+  "remaining_gates": [
+    "final-binary GUI smoke on a normal interactive foreground desktop",
+    "final release artifact construction and installed-package acceptance",
+    "mixed and per-monitor DPI and monitor movement",
+    "in-flight cancellation and blocking UIA calls",
+    "concurrent owners, restart and EOF reclamation",
+    "elevation and secure-desktop denial matrix",
+    "additional real Windows applications",
+    "final macOS distribution-package checks",
+    "planned Caelis Core per-Session app approval"
+  ],
+  "private_raw_evidence_retained_locally": true,
+  "raw_transcripts_screenshots_credentials_committed": false
+}

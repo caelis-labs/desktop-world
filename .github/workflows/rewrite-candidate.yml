@@ -41,6 +41,9 @@ jobs:
           $dtwFixtureOutput = Join-Path $env:RUNNER_TEMP 'dtw-windows-fixture-compile'
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/acceptance/windows/smoke.ps1 -CompileOnly -OutputDirectory $dtwFixtureOutput
           if ($LASTEXITCODE -ne 0) { throw 'Windows acceptance fixture compilation failed' }
+          $dtwCursorOutput = Join-Path $env:RUNNER_TEMP 'dtw-windows-cursor-compile'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/acceptance/windows/compile-cursor.ps1 -OutputDirectory $dtwCursorOutput
+          if ($LASTEXITCODE -ne 0) { throw 'Windows cursor observer compilation failed' }
           python scripts/build-rewrite-candidate.py --target x86_64-pc-windows-msvc --output $dtwCandidateOutput
           if ($LASTEXITCODE -ne 0) { throw 'Candidate construction failed; original output retained' }
           $env:CARGO_TARGET_DIR = Join-Path $dtwCandidateOutput 'target'
