@@ -22,6 +22,7 @@ On macOS, use `shasum -a 256 <archive.zip>` and, inside the extracted directory,
 in PowerShell, run this from inside the extracted directory:
 
 ```powershell
+$ErrorActionPreference = 'Stop'
 Get-Content -LiteralPath .\SHA256SUMS -Encoding UTF8 | ForEach-Object {
   $expected, $relative = $_ -split '  ', 2
   if ($expected -cnotmatch '^[0-9a-f]{64}$' -or !$relative -or
