@@ -4,19 +4,41 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: dtw-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Early rewrite development: keep fast, desktop-independent checks here.
-# Product/platform validation runs at the relevant implementation checkpoint.
 jobs:
-  source:
-    name: Source checks
+  plan:
+    name: Select checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tree: ${{ steps.plan.outputs.tree }}
+      reused_run: ${{ steps.plan.outputs.reused_run }}
+      source: ${{ steps.plan.outputs.source }}
+      macos: ${{ steps.plan.outputs.macos }}
+      windows: ${{ steps.plan.outputs.windows }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tests/ci/plan.py
+
+  portable:
+    name: Portable checks
+    needs: plan
+    if: needs.plan.outputs.source == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -31,13 +53,116 @@ jobs:
       - run: sh scripts/check-source.sh
 
   macos-inventory:
+    # Preserve the existing required check; it now includes the runtime contract.
     name: macOS inventory controls
+    needs: plan
+    if: needs.plan.outputs.macos == 'true'
     runs-on: macos-26
-    timeout-minutes: 5
+    timeout-minutes: 15
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '14.2'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target-ci
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cmd/dtw -> ../../target-ci
+          key: macos-runtime-release
+      # Match the shipping QuickJS build and stack behavior, not an unoptimized VM.
+      - name: Script, MCP, native adapters and CLI contracts
+        run: cargo test --release --locked --manifest-path cmd/dtw/Cargo.toml --lib --bins --tests
       - run: python3 tests/ci/run_native_inventory_tests.py
       - run: python3 tests/ci/run_native_input_tests.py
+      - name: Native and scene worker shutdown (no desktop access)
+        run: python3 tests/ci/run_native_worker_tests.py "$CARGO_TARGET_DIR/release/dtw"
+
+  windows:
+    name: Windows adapter contracts
+    needs: plan
+    if: needs.plan.outputs.windows == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 15
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target-ci
+      RUSTFLAGS: '-C target-feature=+crt-static'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cmd/dtw -> ../../target-ci
+          key: windows-runtime-release
+      # Shared script/MCP tests run on macOS; Windows runs its platform contracts.
+      - name: Windows UIA, geometry, input and cursor contracts
+        shell: pwsh
+        run: |
+          cargo test --release --locked --manifest-path cmd/dtw/Cargo.toml --lib backends::windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release --locked --manifest-path cmd/dtw/Cargo.toml --bins --test cli
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Compile the real-machine acceptance fixtures (do not run GUI)
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/acceptance/windows/smoke.ps1 -CompileOnly -OutputDirectory "$env:RUNNER_TEMP/dtw-fixture"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/acceptance/windows/compile-cursor.ps1 -OutputDirectory "$env:RUNNER_TEMP/dtw-cursor"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  source:
+    # Keep the protected status name; unlike a skipped platform job this gate
+    # fails if any selected check failed, was cancelled, or was unexpectedly skipped.
+    name: Source checks
+    needs: [plan, portable, macos-inventory, windows]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every selected check
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          needs = json.loads(os.environ['NEEDS'])
+          assert needs['plan']['result'] == 'success', 'CI planning failed'
+          plan = needs['plan']['outputs']
+          assert re.fullmatch(r'[0-9a-f]{40}', plan['tree']), 'Invalid verified tree'
+          assert all(plan.get(key) in ('true', 'false') for key in ('source', 'macos', 'windows')), 'Invalid check selection'
+          if plan['source'] == 'false':
+              assert os.environ['GITHUB_EVENT_NAME'] == 'push' and plan['reused_run'].isdigit(), 'Missing reuse evidence'
+          for job, selected in [('portable', 'source'), ('macos-inventory', 'macos'), ('windows', 'windows')]:
+              expected = 'success' if plan[selected] == 'true' else 'skipped'
+              assert needs[job]['result'] == expected, f'{job}: {needs[job]["result"]}, expected {expected}'
+          PY
+      - name: Record verified tree for main (no code or binaries in the receipt)
+        env:
+          TREE: ${{ needs.plan.outputs.tree }}
+          REUSED_RUN: ${{ needs.plan.outputs.reused_run }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          record = {'schema': 1, 'tree': os.environ['TREE'], 'run_id': int(os.environ['GITHUB_RUN_ID']),
+                    'attempt': int(os.environ['GITHUB_RUN_ATTEMPT']), 'event': os.environ['GITHUB_EVENT_NAME'], 'checks': 'passed'}
+          Path('verified.json').write_text(json.dumps(record), encoding='utf-8')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+              output.write('Verified tree: `' + record['tree'] + '`\n')
+              if os.environ['REUSED_RUN']:
+                  output.write('Reused identical-tree PR CI run: ' + os.environ['REUSED_RUN'] + '\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: verified.json
+          retention-days: 90

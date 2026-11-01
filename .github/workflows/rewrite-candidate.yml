@@ -8,7 +8,10 @@ on:
 permissions:
   contents: read
 
-# Explicit candidate construction only. Normal PR changes keep the two light CI jobs.
+# Explicit candidate construction only; normal PR CI does not package releases.
+concurrency:
+  group: rewrite-windows-candidate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
 jobs:
   windows-candidate:
     if: >-
@@ -17,6 +20,9 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: windows-2025
     timeout-minutes: 25
+    env:
+      DTW_CARGO_TARGET_DIR: ${{ github.workspace }}/../dtw-candidate-release-target
+      RUSTFLAGS: -C target-feature=+crt-static
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,6 +35,13 @@ jobs:
         with:
           toolchain: 1.98.0
           components: rust-docs
+      # A sibling of the checkout, never inside the atomically reserved output.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: dtw-candidate-release-v1
+          key: x86_64-pc-windows-msvc-static-crt
+          workspaces: cmd/dtw -> ../../../dtw-candidate-release-target
+          cache-bin: false
       - name: Build one fixed native Windows candidate and run source tests
         shell: pwsh
         run: |
@@ -44,9 +57,9 @@ jobs:
           $dtwCursorOutput = Join-Path $env:RUNNER_TEMP 'dtw-windows-cursor-compile'
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/acceptance/windows/compile-cursor.ps1 -OutputDirectory $dtwCursorOutput
           if ($LASTEXITCODE -ne 0) { throw 'Windows cursor observer compilation failed' }
-          python scripts/build-rewrite-candidate.py --target x86_64-pc-windows-msvc --output $dtwCandidateOutput
+          python scripts/build-rewrite-candidate.py --target x86_64-pc-windows-msvc --output $dtwCandidateOutput --cargo-target-dir $env:DTW_CARGO_TARGET_DIR
           if ($LASTEXITCODE -ne 0) { throw 'Candidate construction failed; original output retained' }
-          $env:CARGO_TARGET_DIR = Join-Path $dtwCandidateOutput 'target'
+          $env:CARGO_TARGET_DIR = $env:DTW_CARGO_TARGET_DIR
           $env:RUSTFLAGS = '-C target-feature=+crt-static'
           $dtwRustSysroot = & rustup run 1.98.0 rustc --print sysroot
           if ($LASTEXITCODE -ne 0) { throw 'Cannot identify fixed Rust compiler' }

@@ -525,6 +525,23 @@ class WorkflowTests(Fixture):
         self.assertFalse(any(c[0] in ("codesign", "claude", "agy") or "notarytool" in c for c in calls))
         candidate.verify_archive(output / result["archive"], Path(result["archive"]).stem)
 
+    def test_existing_external_cargo_cache_supplies_the_packaged_binary(self):
+        cache = self.root / "cargo cache"
+        sentinel = put(cache, "existing-dependency", b"keep")
+        output = self.root / "cached-candidate"
+        fake, calls = self.fake_commands()
+        with patch.object(candidate, "native_host"), patch.object(candidate.Commands, "run", fake):
+            result = candidate.build(self.repo, output, MAC, cargo_target_dir=cache)
+        built = cache / MAC / "release/dtw"
+        package = output / Path(result["archive"]).stem
+        manifest = json.loads((package / "BUILD.json").read_text())
+        self.assertEqual(manifest["build_environment"]["CARGO_TARGET_DIR"], str(cache.resolve()))
+        self.assertEqual((package / "bin/dtw").read_bytes(), built.read_bytes())
+        self.assertEqual(result["binary_sha256"], candidate.digest(built))
+        self.assertFalse((output / "target").exists())
+        self.assertEqual(sentinel.read_bytes(), b"keep")
+        self.assertEqual(sum("build" in command for command in calls), 1)
+
     def test_binary_version_mismatch_preserves_failed_output_without_candidate_manifest(self):
         fake, _ = self.fake_commands(binary_version="0.1.3")
         output = self.root / "wrong-version"

@@ -13,23 +13,31 @@ The candidate and final-install evidence are tracked separately in
 
 ## Current development checks
 
-PR and main CI run two bounded jobs:
+PR CI selects checks from the changed paths:
 
 | Check | Scope |
 | --- | --- |
-| Source checks | Version consistency, rustfmt, dependency-free Core/IPC tests, Python syntax and rewrite acceptance negative controls |
-| macOS inventory controls | Compile and run the Swift inventory and input controls without GUI access |
+| Portable checks | Version consistency, rustfmt, dependency-free Core/IPC/Linux inventory controls, Python syntax, packaging/acceptance/CI negative controls |
+| macOS inventory controls | Full rewrite Rust script/MCP/CLI contracts, Swift inventory/input/overlay controls, and native/scene worker shutdown without desktop access |
+| Windows adapter contracts | Windows UIA/geometry/input/cursor contracts, CLI integration, and compilation of the real-machine acceptance fixtures |
+| Source checks | Required aggregate: every selected check must succeed; cancellation or an unexpected skip fails |
 
-Neither job downloads CUA source, builds Cargo dependencies, packages DTW, or
-operates a desktop. Each has a five-minute timeout. The required checks are
-`Source checks` and `macOS inventory controls`, with strict up-to-date branch
-checking.
+Documentation-only changes avoid native compilation. Platform-only changes select
+that platform; shared Rust or CI changes select both. Rust runs in the shipping
+`release` profile, with a fixed toolchain and dependency/build caches. This also
+keeps QuickJS stack behavior consistent with the distributed binary. Shared
+script/MCP tests run once on macOS; Windows adds its platform-specific contracts.
+No job builds upstream CUA, signs a package, or operates a desktop. The existing
+required names `Source checks` and `macOS inventory controls` remain unchanged,
+with strict up-to-date branch checking; the aggregate also protects Windows.
 
-These are early development checks. The std-only runner excludes the protocol,
-QuickJS and Rust native bridge; normal Cargo builds include the rewrite without
-opt-in features. Changes to these areas require the relevant local build/tests
-and checkpoint acceptance. Add CI coverage when a concrete, stable behavior needs
-protection; do not recreate the old full-package matrix.
+On a main push, CI looks for the merged PR's successful CI receipt and compares
+the **Git tree**, not just the PR number or head SHA. An identical tree reuses
+that verified result without recompiling. Missing, expired, failed, or mismatched
+evidence runs fresh checks. Manual `CI` dispatch always runs the full checks;
+this can also seed the main-branch Cargo cache after a toolchain change. PR caches
+remain subject to GitHub's branch scope. PR supersessions cancel older ordinary
+CI runs; candidate signing/notarization is never cancelled by a newer trigger.
 
 The current implementation audit, required work packages and macOS/Windows/Linux
 validation responsibilities are in the [first rewrite release plan](first-rewrite-release-plan.md).
@@ -79,6 +87,31 @@ the other platform. The old CUA artifact automation remains retired.
 release tag, generate licensing inventories or create archives. The historical
 package guarantees remain in [release readiness](release-readiness.md); they do
 not certify the rewrite.
+
+## Verify a staged release
+
+After uploading the frozen, accepted candidates to a draft and creating its tag,
+run **Release asset verification** (`release-check.yml`) with that tag. It checks
+the full release/ZIP checksum inventories, both platform/version/source records,
+embedded BUILD/binary/Skill/notices, actual executable formats, macOS Developer ID
+signature and the original Accepted notarization receipts. It downloads existing
+assets only: no compilation, re-signing, re-compression, or new notary upload.
+The same check runs on `release.published` as a post-publication audit.
+
+Require a successful draft preflight before publishing those same assets. This
+read-only workflow does not publish or prevent an administrator from bypassing
+it in the GitHub UI. It establishes artifact integrity, not GUI acceptance or
+build-run provenance. Keep the independently recorded macOS and Windows
+acceptance bound to the archive hashes; the existing release manifest may name
+different accepted platform source commits, so source is not assumed to equal
+the tag commit. A changed asset invalidates the earlier preflight.
+
+Candidate workflows cache only Cargo dependencies/build output in a separate
+release cache. Each explicit candidate is compiled once and its tests reuse that
+target directory. Signed ZIPs, keychains, credentials, notarization receipts and
+acceptance evidence are never taken from the build cache. The macOS candidate
+also exercises shutdown using the final signed package binary without desktop
+access. Normal PR/main runs never automatically dispatch candidate builds.
 
 ## Build and retain a fixed candidate
 

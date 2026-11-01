@@ -1,7 +1,8 @@
 # First rewrite release: v0.2.0
 
-Updated 2026-10-31 for #70 review. v0.2.0 is the reserved source version, not a
-published release. The original #63/#64 audit is preserved in Git; the current
+Historical v0.2.0 scope and delivery plan, recorded for #70 review. v0.2.0 has
+since been published; current CI and release gates are in [releasing.md](releasing.md).
+The original #63/#64 audit is preserved in Git; the current
 [product matrix](product-matrix.md) and [real-task evidence](real-task-closure-acceptance.md)
 describe implementation and actual validation separately.
 
@@ -35,7 +36,7 @@ all macOS versions, fresh-machine TCC behavior or all helper/modal configuration
    Match label/name/value independently. Protect these with native boundary tests
    and an expanded WinForms smoke. Bundle the UTF-8 Chrome workbench, launch and
    independent readback instructions. Trigger one explicit Windows candidate build;
-   ordinary PR CI remains the two lightweight jobs.
+   ordinary PR CI uses the bounded checks in [releasing.md](releasing.md).
 2. **Independent Windows acceptance.** First test a unique selector/one button
    increment, moved-window/control stale refs with zero effect, Unicode text pages
    and two app instances without cross-writing. Then test DPI/multiple screens,
