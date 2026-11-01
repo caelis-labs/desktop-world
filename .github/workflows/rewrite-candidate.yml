@@ -38,6 +38,7 @@ jobs:
       # A sibling of the checkout, never inside the atomically reserved output.
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-on-failure: true
           prefix-key: dtw-candidate-release-v1
           key: x86_64-pc-windows-msvc-static-crt
           workspaces: cmd/dtw -> ../../../dtw-candidate-release-target

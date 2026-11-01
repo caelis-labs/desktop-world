@@ -39,10 +39,11 @@ jobs:
       # Cache Cargo dependencies/build output only, never signing or package files.
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-on-failure: true
           prefix-key: dtw-candidate-release-v1
           key: aarch64-apple-darwin
           workspaces: cmd/dtw -> ../../../dtw-candidate-release-target
-          env-vars: MACOSX_DEPLOYMENT_TARGET
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST MACOSX_DEPLOYMENT_TARGET
           cache-bin: false
       - name: Build, sign and notarize one fixed native macOS candidate
         shell: bash

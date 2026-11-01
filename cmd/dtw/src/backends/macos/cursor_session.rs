@@ -148,6 +148,24 @@ mod tests {
     }
 
     #[test]
+    fn fixture_cold_start_is_separate_from_the_real_control_budget() {
+        let session = CursorSession::default();
+        let log = log_path();
+        let endpoint = session.begin_with_poll(&ready, |id, _| {
+            Ok(OverlayOwner::test_helper_with_startup_delay(
+                id,
+                "ready",
+                &log,
+                Duration::from_millis(2100), // Exceeds the real two-second startup exchange.
+            ))
+        });
+        assert_eq!(endpoint.unwrap().operation, 1);
+        assert_eq!(records(&log).len(), 2);
+        session.close().unwrap();
+        fs::remove_file(log).unwrap();
+    }
+
+    #[test]
     fn cancelled_or_expired_control_recovers_only_on_new_action_with_stable_identity() {
         for (mode, reason) in [
             ("startup_wait", StopReason::Cancelled),
