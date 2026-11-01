@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.2](https://github.com/caelis-labs/desktop-world/compare/v0.2.1...v0.2.2) (2026-11-01)
+
+
+### Bug Fixes
+
+* expire idle Windows cursor feedback ([#85](https://github.com/caelis-labs/desktop-world/issues/85)) ([6e61f4c](https://github.com/caelis-labs/desktop-world/commit/6e61f4c54a3ea4536b726f6bc87d4839fe15fb31))
+* stabilize Windows desktop input and agent plugin installs ([#83](https://github.com/caelis-labs/desktop-world/issues/83)) ([1f16e6e](https://github.com/caelis-labs/desktop-world/commit/1f16e6e5fc3e28ac97a120711d72e8a8713b533d))
+
 ## [0.2.1](https://github.com/caelis-labs/desktop-world/releases/tag/v0.2.1) (2026-11-01)
 
 ### Features
