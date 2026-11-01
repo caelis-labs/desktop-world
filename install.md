@@ -107,6 +107,6 @@ Clients accepting `mcpServers` JSON can use:
 Add the bundled Skill using the client's normal discovery directory. Codex can
 use `codex mcp add desktop-world -- /absolute/path/to/dtw mcp`. Claude Code can
 load the complete package with `claude --plugin-dir /absolute/path/to/package`;
-its optional layout is described in [the staging guide](../plugins/claude/README.md).
+its optional layout is described in [the staging guide](https://github.com/caelis-labs/desktop-world/blob/main/plugins/claude/README.md).
 Neither client is a new required release matrix. Do not run the removed
 `dtw install` command or install both plugin and manual server into one session.

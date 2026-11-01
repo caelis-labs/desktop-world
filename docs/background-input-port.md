@@ -26,6 +26,17 @@ The hashes below are SHA-256 of the original downloaded bytes, before namespace 
 
 The native crate dependencies match CUA's `core-graphics 0.24` (`highsierra`, `elcapitan`), `core-foundation 0.10`, and `foreign-types 0.5`, plus `anyhow 1`. The adapter uses `serde 1` with derive; `libc` and `serde_json` already existed. No Objective-C wrapper crate or new framework build is required.
 
+## Scalar validation boundary
+
+Unicode typing retains the upstream 8 ms down/up pacing and one character per
+pair. Before allocating each pair, DTW checks local cancellation, deadline and
+prior errors only. Event allocation has no desktop side effect; every KeyDown
+still performs complete target validation at its dispatch boundary, and each
+paired KeyUp validates its original input owner. This removes a duplicate AX
+traversal before allocation without caching target permission across characters,
+extending deadlines or batching input. Pure gate tests cover target changes
+between allocation and dispatch, plus releases after a target closes.
+
 ## Deliberate differences from the pinned source
 
 1. Each input event uses one directed delivery selected before input: authenticated keyboard and Chromium pointer events use SkyLight, while the generic AppKit pointer recipe uses public PID delivery. The worker supplies a private app/framework classification; no agent parameter is added. The original scroll path's SkyLight + public PID duplicate and the legacy `Both` route are excluded. No imported background route calls HID posting, cursor warping, global key events, window raising, or front-process activation. The separate foreground adapter ports CUA’s exact-window front-process + make-key records only inside DTW’s existing physical-input lease, followed by AX raise and read-only exact-focus proof. The `defocus_front` branch is retained inside the imported function but the adapter always passes `false`.

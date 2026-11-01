@@ -124,6 +124,65 @@ precondition(pointFailure {
                          prove: { _ in throw PointReadinessFailure(result: ["error":"stale_observation"]) },
                          wait: { _ in preconditionFailure("Invalid proof target was retried") })
 } == "stale_observation")
+// Native deadlines are rounded to milliseconds. Expiring the local 750ms
+// validation cap must not claim that the enclosing action deadline expired.
+for failingValidation in [1, 2] {
+    for returnedAt in [0.7495, 0.75] {
+        clock = 0
+        var validations = 0
+        do {
+            _ = try waitForFirstPoint(deadline: 5, stopping: { false }, now: { clock }, validate: { until in
+                precondition(until == 0.75)
+                validations += 1
+                guard validations == failingValidation else { return nil }
+                clock = returnedAt
+                return ["error":"deadline_exceeded", "message":"Request deadline elapsed"]
+            }, prove: { _ in
+                precondition(failingValidation == 2)
+                return readyPoint
+            }, wait: { _ in preconditionFailure("Local expiry must not retry") })
+            preconditionFailure("Local validation expiry admitted a click")
+        } catch let error as PointReadinessFailure {
+            precondition(error.result["error"] as? String == "target_not_ready")
+            let message = error.result["message"] as? String ?? ""
+            precondition(message.contains("Local point readiness") && message.contains("no click posted")
+                && message.contains("Refresh the target"))
+        }
+        precondition(validations == failingValidation)
+    }
+}
+// The shorter real action deadline remains a deadline error, including its
+// rounded native boundary. A late result cannot turn full expiry into readiness.
+for (actionDeadline, returnedAt) in [(0.5, 0.4995), (0.5, 0.5), (5.0, 5.0)] {
+    clock = 0
+    precondition(pointFailure {
+        try waitForFirstPoint(deadline: actionDeadline, stopping: { false }, now: { clock }, validate: { _ in
+            clock = returnedAt
+            return ["error":"deadline_exceeded"]
+        }, prove: { _ in preconditionFailure("Expired action admitted proof") },
+           wait: { _ in preconditionFailure("Expired action retried") })
+    } == "deadline_exceeded")
+}
+for original in ["stale_observation", "target_changed", "native_stopping"] {
+    clock = 0
+    precondition(pointFailure {
+        try waitForFirstPoint(deadline: 5, stopping: { false }, now: { clock }, validate: { _ in
+            clock = 0.75
+            return ["error":original]
+        }, prove: { _ in preconditionFailure("Failed target admitted proof") },
+           wait: { _ in preconditionFailure("Failed target retried") })
+    } == original)
+}
+clock = 0
+closing = false
+precondition(pointFailure {
+    try waitForFirstPoint(deadline: 5, stopping: { closing }, now: { clock }, validate: { _ in
+        clock = 0.7495; closing = true
+        return ["error":"deadline_exceeded"]
+    }, prove: { _ in preconditionFailure("Cancellation admitted proof") },
+       wait: { _ in preconditionFailure("Cancellation retried") })
+} == "native_stopping")
+closing = false
 print("First-point readiness bounds, post-read guards and target invalidation passed; no GUI input")
 
 

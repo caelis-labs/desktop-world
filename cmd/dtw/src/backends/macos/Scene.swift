@@ -388,7 +388,7 @@ private func waitForFirstPoint(deadline: TimeInterval, stopping: () -> Bool,
                                prove: (TimeInterval) throws -> SurfacePointProof?,
                                wait: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }) throws -> SurfacePointProof {
     let until = min(deadline, now() + 0.75)
-    func live() throws {
+    func live(checkReadiness: Bool = true) throws {
         if stopping() {
             throw PointReadinessFailure(result: fail("native_stopping", "Input stopped before point readiness; no click posted"))
         }
@@ -396,20 +396,31 @@ private func waitForFirstPoint(deadline: TimeInterval, stopping: () -> Bool,
         if current >= deadline {
             throw PointReadinessFailure(result: fail("deadline_exceeded", "Action deadline elapsed before point readiness; no click posted"))
         }
-        if current >= until {
+        if checkReadiness && current >= until {
             throw PointReadinessFailure(result: fail("target_occluded", "Point visibility did not settle within the readiness budget; no click posted"))
         }
     }
+    func validateTarget() throws {
+        let error = validate(until)
+        // Cancellation and the real action deadline remain authoritative. The
+        // native validator receives a rounded millisecond local deadline, which
+        // can expire just before our monotonic readiness clock reaches until.
+        try live(checkReadiness: false)
+        if let error {
+            if error["error"] as? String == "deadline_exceeded", until < deadline {
+                throw PointReadinessFailure(result: fail("target_not_ready",
+                    "Local point readiness validation budget elapsed; no click posted. Refresh the target before another action."))
+            }
+            throw PointReadinessFailure(result: error)
+        }
+        try live()
+    }
     while true {
         try live()
-        let before = validate(until)
-        try live()
-        if let error = before { throw PointReadinessFailure(result: error) }
+        try validateTarget()
         let proof = try prove(until)
         try live()
-        let after = validate(until)
-        try live()
-        if let error = after { throw PointReadinessFailure(result: error) }
+        try validateTarget()
         if let proof { return proof }
         wait(min(0.015, max(0, until - now())))
     }
