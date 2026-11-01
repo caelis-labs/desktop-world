@@ -12,6 +12,48 @@ Retain candidate identity, original logs and final-install acceptance with the
 release PR/artifacts. Keep development-binary evidence separate from evidence for
 the immutable archives selected for publication.
 
+## Release Please and accepted-package publication
+
+Release Please maintains the version PR and changelog from Conventional Commits.
+Its manifest, `version.txt`, Cargo.toml and the DTW entry in Cargo.lock advance
+together; dependency versions are not bumped. Installation pages select the
+latest stable release, so an unaccepted draft is never advertised as the download.
+The bootstrap starts at v0.2.1; retired 0.1.x changes are not released again.
+
+`release-please.yml` follows successful main CI and also supports manual dispatch.
+It uses the existing `RELEASE_PLEASE_TOKEN` repository/organization secret, as
+Caelis does. A separate bot token lets its PRs trigger ordinary CI; copying a
+developer's local credentials is unnecessary. The action is pinned to v5.0.0's
+commit. Merging its version PR creates a **draft and tag**, never a public release.
+
+Build candidates for the stable version PR head using the existing Windows/macOS
+candidate workflows (manual dispatch or their build labels). Complete GUI and
+Harness acceptance on those exact ZIPs. Keep the original outcomes and archive
+hashes. Then merge the version PR and run **Publish accepted release** once:
+
+```sh
+gh workflow run release-promote.yml --ref main \
+  -f tag=vX.Y.Z -f macos_run_id=MAC_RUN -f windows_run_id=WIN_RUN \
+  -F gui_accepted=true -f acceptance_notes='Actual per-platform GUI/Harness scope and retained failures'
+```
+
+This explicit attestation is bound to the selected candidate run IDs and ZIP
+hashes. Compilation or notarization alone never supplies it. The workflow checks
+successful same-repository candidate workflows and their artifact digests, keeps
+the original ZIP/BUILD/CANDIDATE/notarization bytes, and generates the 13-asset
+release inventory. It verifies signatures natively on macOS, uploads missing
+assets, downloads and audits the draft, and only then publishes those same bytes.
+It downloads and audits again after publication because `GITHUB_TOKEN` writes
+do not trigger a second release-event workflow. No executable from an artifact is
+run, and nothing is rebuilt, re-signed or recompressed.
+
+An existing complete draft keeps its original RELEASE.json and SHA256SUMS.
+Partial uploads can resume only when every existing byte matches; no `--clobber`
+or replacement is permitted. A rerun on an already published release only audits
+it. Unexpected or changed assets fail rather than being repaired automatically.
+The promotion report is retained as an Actions artifact with the selected sources,
+hashes, explicit acceptance notes, preflight and publication audit results.
+
 ## Current development checks
 
 PR CI selects checks from the changed paths:
@@ -99,9 +141,12 @@ signature and the original Accepted notarization receipts. It downloads existing
 assets only: no compilation, re-signing, re-compression, or new notary upload.
 The same check runs on `release.published` as a post-publication audit.
 
-Require a successful draft preflight before publishing those same assets. This
-read-only workflow does not publish or prevent an administrator from bypassing
-it in the GitHub UI. It establishes artifact integrity, not GUI acceptance or
+Require a successful draft preflight before publishing those same assets. The
+publication workflow performs that gate itself; this standalone download/audit
+workflow does not publish or prevent an administrator from bypassing it in the
+GitHub UI. Manual draft audit needs `contents: write` solely because GitHub hides
+drafts from readers. Published-event audits keep `contents: read`; both call the
+same maintained verifier. It establishes artifact integrity, not GUI acceptance or
 build-run provenance. Keep the independently recorded macOS and Windows
 acceptance bound to the archive hashes; the existing release manifest may name
 different accepted platform source commits, so source is not assumed to equal
