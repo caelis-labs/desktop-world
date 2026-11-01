@@ -443,7 +443,7 @@ return await app.click({{window_ref:state.w,observation_ref:state.shot.observati
     evidence['all_cases_passed'] = True  # Functional effects; coverage is recorded separately.
 
 
-def main():
+def main(*, case_runner=None, instrumentation=INSTRUMENTATION, observer_options=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dtw', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
@@ -476,7 +476,7 @@ def main():
     failure = None
     try:
         observer = Fixture.prepare(output/'foreground', 'dev.dtw.backgroundbrowser.'+uuid.uuid4().hex, source)
-        write_json(observer.root/'fixture.json', {'background_probe':True,'x':380,'title':'DTW Browser Background Observer'})
+        write_json(observer.root/'fixture.json', {'background_probe':True,'x':380,'title':'DTW Browser Background Observer', **(observer_options or {})})
         evidence['observer_initial'] = observer.start()
         evidence['global_input_released_before_setup'] = input_is_released(evidence['observer_initial'])
         page_dir = output/'web-fixture'; page_dir.mkdir()
@@ -484,7 +484,7 @@ def main():
         html = (web_source/'index.html').read_text()
         require(html.count('<textarea id="note">') == 1 and html.count('</html>') == 1, 'Workbench markup changed')
         html = html.replace('<textarea id="note">', '<textarea id="note" autofocus>')
-        (page_dir/'index.html').write_text(html.replace('</html>', INSTRUMENTATION+'</html>'))
+        (page_dir/'index.html').write_text(html.replace('</html>', instrumentation+'</html>'))
         evidence['instrumented_html_sha256'] = file_sha256(page_dir/'index.html')
         (output/'web').mkdir()
         server_log = (output/'server.log').open('w'); logs.append(server_log)
@@ -524,7 +524,7 @@ def main():
         evidence['owned_window'] = owned[0]
         execute(client, 'select-owned-window', 'state.w='+json.dumps(owned[0]['window_ref'])+';return state.w;',
                 evidence.setdefault('selected_window', {}))
-        run_cases(client, observer, path, output, evidence, chrome.pid)
+        (case_runner or run_cases)(client, observer, path, output, evidence, chrome.pid)
     except BaseException as error:
         failure = error
         evidence['failure'] = {'type':type(error).__name__,'message':str(error),'traceback':traceback.format_exc()}
