@@ -1,6 +1,14 @@
 name: Rewrite Windows candidate
 
 on:
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+    outputs:
+      artifact_id:
+        value: ${{ jobs.windows-candidate.outputs.artifact_id }}
   workflow_dispatch:
   pull_request:
     types: [labeled]
@@ -8,14 +16,17 @@ on:
 permissions:
   contents: read
 
-# Explicit candidate construction only; normal PR CI does not package releases.
+# Fixed construction for automatic releases and optional development dispatch.
 concurrency:
   group: rewrite-windows-candidate-${{ github.event.pull_request.number || github.ref }}
+  queue: max
   cancel-in-progress: false
 jobs:
   windows-candidate:
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      inputs.source_sha != '' || github.event_name == 'workflow_dispatch' ||
       (github.event.label.name == 'build-windows-candidate' &&
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: windows-2025
@@ -26,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
@@ -68,11 +79,16 @@ jobs:
           $manifest = Join-Path $dtwCandidateOutput 'source\cmd\dtw\Cargo.toml'
           rustup run 1.98.0 cargo test --release --locked --manifest-path $manifest --target x86_64-pc-windows-msvc --lib --bins --tests
           if ($LASTEXITCODE -ne 0) { throw 'Windows source tests failed; candidate is not accepted' }
+          $dtwCandidate = Get-Content -Raw (Join-Path $dtwCandidateOutput 'CANDIDATE.json') | ConvertFrom-Json
+          $dtwPackageBinary = Join-Path $dtwCandidateOutput (([IO.Path]::GetFileNameWithoutExtension($dtwCandidate.archive)) + '\bin\dtw.exe')
+          python (Join-Path $dtwCandidateOutput 'source\tests\ci\run_packaged_mcp.py') --dtw $dtwPackageBinary --version $dtwCandidate.version --output (Join-Path $dtwCandidateOutput 'packaged-mcp')
+          if ($LASTEXITCODE -ne 0) { throw 'Final package metadata/EOF contracts failed' }
       - name: Retain candidate and original construction evidence
+        id: upload
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: dtw-windows-candidate-${{ github.event.pull_request.head.sha || github.sha }}
+          name: dtw-windows-candidate-${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}-attempt-${{ github.run_attempt }}
           retention-days: 90
           if-no-files-found: error
           path: |
@@ -82,3 +98,4 @@ jobs:
             ${{ runner.temp }}/dtw-rewrite-candidate/FAILURE.json
             ${{ runner.temp }}/dtw-rewrite-candidate/commands.json
             ${{ runner.temp }}/dtw-rewrite-candidate/logs
+            ${{ runner.temp }}/dtw-rewrite-candidate/packaged-mcp

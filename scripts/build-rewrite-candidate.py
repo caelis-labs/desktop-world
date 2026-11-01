@@ -389,8 +389,9 @@ def package_readme(target):
     executable = TARGETS[target][2]
     readme = f"""# DTW rewrite candidate
 
-This archive is an unpublished build candidate, not an installed/GUI-accepted
-release. Keep BUILD.json, SHA256SUMS and the outer CANDIDATE.json together.
+This native package is built from fixed source. Automatic release CI verifies
+the complete immutable artifacts before publication. Keep BUILD.json,
+SHA256SUMS and the outer CANDIDATE.json together as construction evidence.
 The outer archive .sha256 covers the immutable ZIP. Notarization receipts, when
 requested, are external because they are obtained after this ZIP is fixed.
 
@@ -408,17 +409,17 @@ anything, edit Agent configuration, or grant OS permissions.
 
 On Windows, in PowerShell: `& 'C:\\path with spaces\\bin\\dtw.exe' --version`.
 Use escaped backslashes or forward slashes in the JSON/TOML path.
-Windows builds use the static CRT; real Windows UI/DPI/cancellation and clean
-machine installation still require independent acceptance. The self-contained
-PowerShell smoke and full manual matrix are in acceptance/windows/README.md.
+Windows builds use the static CRT. CI runs native contracts and final-package
+MCP metadata/EOF checks without desktop input. Optional UI diagnostics are in
+the self-contained PowerShell smoke and manual matrix at acceptance/windows/README.md.
 They use the installed DTW through standard MCP and require no Rust or CUA.
 The same-source Chrome workbench server and HTML are in
 acceptance/browser-workbench/; its startup and UTF-8 state readback commands
 are in the Windows acceptance README. Only this optional browser task requires
 Python 3; the installed DTW runtime and WinForms smoke do not.
-On macOS, the binary deployment target is 14.2, arm64. Accessibility and Screen
-Recording permissions, Gatekeeper, final-path TCC/native subprocess identities
-and an independent installation must still be verified on the final bytes.
+On macOS, the binary deployment target is 14.2, arm64. The user grants
+Accessibility and Screen Recording permissions when needed. CI verifies signing
+and notarization; interactive GUI checks are optional diagnostics.
 A standalone ZIP is not stapled; an Accepted online notarization submission is
 not proof of offline Gatekeeper or GUI acceptance. Linux is not packaged here.
 

@@ -64,7 +64,10 @@ impl<B: Backend + 'static> Coordinator<B> {
         }
         let state = self.state.lock().unwrap();
         let (value, bound) =
-            publish_wait_result(&state.windows, source_ref, target, desired, result.probe);
+            match publish_wait_result(&state.windows, source_ref, target, desired, result.probe) {
+                Ok(publication) => publication,
+                Err(error) => return Work::read_error(error),
+            };
         Work {
             completed: Completed {
                 value: Some(value),
@@ -86,19 +89,22 @@ fn publish_wait_result(
     target: &WindowTarget,
     desired: WindowWaitState,
     probe: WindowStateProbe,
-) -> (Value, HashMap<String, WindowTarget>) {
+) -> Result<(Value, HashMap<String, WindowTarget>), Error> {
     let mut bound = current.clone();
     match probe {
         WindowStateProbe::Closed => {
             bound.retain(|_, value| value != target);
-            (json!({"state":"closed", "window_ref":source_ref}), bound)
+            Ok((json!({"state":"closed", "window_ref":source_ref}), bound))
         }
         WindowStateProbe::Window(found) => {
-            let key = current
+            let key = match current
                 .iter()
                 .find(|(_, target)| **target == found.window.target)
                 .map(|(key, _)| key.clone())
-                .unwrap_or_else(|| reference("window"));
+            {
+                Some(key) => key,
+                None => reference("win")?,
+            };
             // A new generation of this one surface retires only that slot.
             // Unavailable siblings and other process instances remain bound.
             bound.retain(|_, old| {
@@ -107,10 +113,10 @@ fn publish_wait_result(
                     || *old == found.window.target
             });
             bound.insert(key.clone(), found.window.target);
-            (
+            Ok((
                 json!({"state":desired.as_str(), "window_ref":key, "kind":found.kind.as_str(), "relation":found.relation.as_str()}),
                 bound,
-            )
+            ))
         }
         WindowStateProbe::Pending { .. } => unreachable!("pending cannot publish window identity"),
     }
@@ -155,12 +161,14 @@ mod tests {
                 kind: WindowKind::Sheet,
                 relation: WindowRelation::ChildModal,
             }),
-        );
+        )
+        .unwrap();
         assert_eq!(value["state"], "dialog");
         assert_eq!(value["kind"], "sheet");
         assert_eq!(bound["anchor"], anchor);
         assert_eq!(bound["sibling"], sibling);
         assert!(!bound.contains_key("old_dialog"));
+        super::super::tests::assert_reference(value["window_ref"].as_str().unwrap(), "win");
         assert_eq!(bound[value["window_ref"].as_str().unwrap()], next);
     }
     #[test]
@@ -177,7 +185,8 @@ mod tests {
             &anchor,
             WindowWaitState::Closed,
             WindowStateProbe::Closed,
-        );
+        )
+        .unwrap();
         assert_eq!(value, json!({"state":"closed","window_ref":"anchor"}));
         assert!(!bound.contains_key("anchor"));
         assert_eq!(bound["sibling"], sibling);

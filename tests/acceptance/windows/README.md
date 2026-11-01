@@ -1,5 +1,9 @@
 # Windows candidate handoff
 
+These opt-in desktop diagnostics are not publication gates. Releases are built,
+verified and published automatically after the version PR's successful CI; see
+[the release process](../../../docs/releasing.md).
+
 This directory contains the **opt-in Windows GUI smoke and real-task acceptance
 criteria**. It is a test specification, not a record of a candidate passing.
 Record the exact source, installed binary and shipped Skill hashes with each run;

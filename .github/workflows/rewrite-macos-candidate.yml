@@ -1,6 +1,23 @@
 name: Rewrite macOS candidate
 
 on:
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+    secrets:
+      APPLE_DEVELOPER_ID_P12_BASE64:
+        required: true
+      APPLE_DEVELOPER_ID_P12_PASSWORD:
+        required: true
+      APPLE_NOTARY_APPLE_ID:
+        required: true
+      APPLE_NOTARY_PASSWORD:
+        required: true
+    outputs:
+      artifact_id:
+        value: ${{ jobs.macos-candidate.outputs.artifact_id }}
   workflow_dispatch:
   pull_request:
     types: [labeled]
@@ -8,15 +25,18 @@ on:
 permissions:
   contents: read
 
-# A separate explicit trigger: this workflow never dispatches a Windows build.
-# A later run must not interrupt an in-flight notarization or keychain cleanup.
+# Reusable automatic release construction also supports development dispatch.
+# A later run never interrupts in-flight notarization or keychain cleanup.
 concurrency:
   group: rewrite-macos-candidate-${{ github.event.pull_request.number || github.ref }}
+  queue: max
   cancel-in-progress: false
 jobs:
   macos-candidate:
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      inputs.source_sha != '' || github.event_name == 'workflow_dispatch' ||
       (github.event.label.name == 'build-macos-candidate' &&
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: macos-26
@@ -27,7 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
@@ -81,11 +101,15 @@ jobs:
           )
           python3 "$RUNNER_TEMP/dtw-macos-candidate/source/tests/ci/run_native_worker_tests.py" "$dtwPackageBinary" \
             2>&1 | tee "$RUNNER_TEMP/dtw-macos-candidate/native-worker-tests.log"
+          dtwVersion=$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/dtw-macos-candidate/CANDIDATE.json"))["version"])')
+          python3 "$RUNNER_TEMP/dtw-macos-candidate/source/tests/ci/run_packaged_mcp.py" \
+            --dtw "$dtwPackageBinary" --version "$dtwVersion" --output "$RUNNER_TEMP/dtw-macos-candidate/packaged-mcp"
       - name: Retain immutable candidate, original notarization and cleanup evidence
+        id: upload
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: dtw-macos-candidate-${{ github.event.pull_request.head.sha || github.sha }}
+          name: dtw-macos-candidate-${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}-attempt-${{ github.run_attempt }}
           retention-days: 90
           if-no-files-found: error
           path: |
@@ -99,3 +123,4 @@ jobs:
             ${{ runner.temp }}/dtw-macos-candidate/source-tests.log
             ${{ runner.temp }}/dtw-macos-candidate/native-worker-tests.log
             ${{ runner.temp }}/dtw-macos-candidate/logs
+            ${{ runner.temp }}/dtw-macos-candidate/packaged-mcp

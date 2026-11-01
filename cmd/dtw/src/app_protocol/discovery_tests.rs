@@ -371,7 +371,11 @@ fn cursors_are_context_local_and_cannot_be_combined_with_new_query_parameters() 
     let window = windows(&first, "windows").remove(0);
     let page = run(&first, "first", Some(&window), Command::Observe);
     let cursor = page.data["value"]["next"].as_str().unwrap();
+    assert_reference(cursor, "cur");
     let (second, other_backend) = setup();
+    let other_window = windows(&second, "windows").remove(0);
+    let other_page = run(&second, "first", Some(&other_window), Command::Observe);
+    assert_ne!(page.data["value"]["next"], other_page.data["value"]["next"]);
     let foreign = run(
         &second,
         "foreign",
@@ -388,7 +392,7 @@ fn cursors_are_context_local_and_cannot_be_combined_with_new_query_parameters() 
     ] {
         let reply = script_run(
             &first,
-            &reference("bad"),
+            &reference("bad").unwrap(),
             &format!("return await app.observe({args});"),
         );
         assert!(reply.is_error, "{}", reply.data);
@@ -404,5 +408,19 @@ fn cursors_are_context_local_and_cannot_be_combined_with_new_query_parameters() 
         },
     );
     assert!(!valid.is_error, "{}", valid.data);
+    let next = valid.data["value"]["next"].as_str().unwrap();
+    assert_reference(next, "cur");
+    assert_ne!(next, cursor);
+    assert_code(
+        &run(
+            &first,
+            "consumed-cursor",
+            None,
+            Command::ContinueObservation {
+                cursor: cursor.into(),
+            },
+        ),
+        "stale_cursor",
+    );
     assert_eq!(backend.advances.load(Ordering::SeqCst), 1);
 }

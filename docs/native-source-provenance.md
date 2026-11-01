@@ -194,7 +194,7 @@ does not extend it. Consumed public bindings release their element lookup maps.
 
 These are DTW policies, not copied CUA limits. Native providers may still allocate
 an AX string or the complete AXWindows CFArray before DTW bounds retained data.
-The native element-byte cap does not include public UUID refs and envelopes, or
+The native element-byte cap does not include public opaque refs and envelopes, or
 arbitrary values explicitly returned by a script. Read-only identity discovery
 does not scan modal child trees. Input still requires exact window identity,
 current enabled/action/ancestry checks and a proven modal boundary; its direct
