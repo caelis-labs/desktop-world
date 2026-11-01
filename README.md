@@ -24,6 +24,8 @@ existing configuration. Verify the connection by listing open app windows.
 ```
 
 Download the **latest stable** package from [Releases](https://github.com/caelis-labs/desktop-world/releases/latest).
+Version PR merges automatically run CI, build and verify both platform packages,
+and publish the complete release; see [the release process](docs/releasing.md).
 You do not need a development toolchain to run the package. See [installation details](install.md) for
 manual setup and upgrades.
 

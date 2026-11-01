@@ -24,3 +24,5 @@ python3 -m unittest discover -s tests/acceptance -p test_real_app_tasks.py
 python3 -m unittest discover -s tests -p test_ci_plan.py
 python3 -m unittest discover -s tests -p test_release_verification.py
 python3 -m unittest discover -s tests -p test_release_promotion.py
+python3 -m unittest discover -s tests -p test_release_plan.py
+python3 -m unittest discover -s tests -p test_packaged_mcp.py

@@ -54,7 +54,10 @@ The MCP product entry is `dtw mcp`; `dtw app catalog` is a diagnostic CLI.
 Connect it using standard Agent MCP configuration; see [installation](install.md).
 Bare `dtw` and `--help` display help instead of starting an old MCP executor.
 
-Library tests do not replace native acceptance through `dtw mcp`. Run affected
+Releases use the automatic CI, fixed-source construction and publication path in
+[releasing](releasing.md), including headless final-package MCP/EOF checks. GUI
+and Agent tasks below are optional diagnostics, not release publication gates.
+Library tests do not establish GUI behavior. Run affected optional
 GUI controls on owned resources with independent effect readback. Prior evidence
 applies only to its recorded source, binary and environment. Never run desktop
 input probes automatically in ordinary CI.
@@ -91,7 +94,7 @@ Skill. See [releasing](releasing.md) for candidate preservation and release chec
 Local staging with `scripts/stage-agent-plugin.py` is development evidence, not a
 signed installed artifact or a publication.
 
-## Native and Agent usability loop
+## Optional native and Agent usability loop
 
 The existing fast lane also executes the std-only input sequencing regressions and
 pure Swift surface/readiness/input controls. It still never compiles upstream CUA.
@@ -114,7 +117,7 @@ independently, and retains failures. It must run serially with other GUI probes.
 A local development stage is not an installed-artifact acceptance result.
 
 
-## Final installed three-app acceptance (macOS)
+## Optional installed three-app diagnostics (macOS)
 
 Use `tests/acceptance/real_app_tasks.py --task chrome|wps|obsidian --client dsh|agy|claude`
 with a fresh `--output` per attempt and both `--dtw /absolute/package/bin/dtw` and
@@ -154,6 +157,6 @@ applying a tiny-fixture call limit to complex workflows. The external task runne
 Batch related changes, run focused source/native controls, freeze source/binary/
 Skill identity, then run real tasks. Attribute failures before changing the next
 candidate; revalidate affected tasks and the final installed workflows. Recheck
-package checksums after cleanup. Windows requires independent real-machine
-acceptance using [its matrix](../tests/acceptance/windows/README.md); macOS evidence
+package checksums after cleanup. Optional Windows real-machine
+diagnostics use [its matrix](../tests/acceptance/windows/README.md); macOS evidence
 never implies Windows, older OS, fresh-TCC, multi-display or Linux coverage.
