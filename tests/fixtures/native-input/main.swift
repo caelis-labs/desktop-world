@@ -211,6 +211,12 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let selectAll=NSMenuItem(title:"Select All",action:#selector(NSText.selectAll(_:)),keyEquivalent:"a")
         selectAll.keyEquivalentModifierMask = .command;editing.addItem(selectAll);edit.submenu=editing;menu.addItem(edit)
         fixtureApplication.mainMenu=menu
+        if fixtureConfiguration["all_mouse_events"] as? Bool == true {
+            NSEvent.addLocalMonitorForEvents(matching:[.leftMouseDown,.leftMouseUp,.rightMouseDown,.rightMouseUp]) { [weak self] event in
+                self?.record("observed_mouse_\(event.type.rawValue)", event)
+                return event
+            }
+        }
         let defaultX: CGFloat = output.lastPathComponent == "peer" ? 730 : 120
         let x = (fixtureConfiguration["x"] as? NSNumber).map { CGFloat($0.doubleValue) } ?? defaultX
         window = NSWindow(contentRect:NSRect(x:x,y:210,width:540,height:420),styleMask:[.titled,.closable],backing:.buffered,defer:false)

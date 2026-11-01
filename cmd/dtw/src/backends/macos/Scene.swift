@@ -210,6 +210,10 @@ private func capture(_ request: [String:Any], deadline: TimeInterval? = nil,
         let scale = cap > 0 ? min(2, Double(cap) / max(window.frame.width,window.frame.height)) : 2
         config.width = max(1, Int((window.frame.width*scale).rounded()))
         config.height = max(1, Int((window.frame.height*scale).rounded()))
+        // Independent-window capture otherwise only scales down: on a 1x
+        // display a larger requested canvas is padded, breaking pixel binding.
+        // The captured content must fill the dimensions used by bound_pixel_point.
+        config.scalesToFit = true
         config.showsCursor = false; config.ignoreShadowsSingleWindow = true
         config.shouldBeOpaque = false
         config.includeChildWindows = false
