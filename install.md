@@ -13,8 +13,7 @@ Download the **latest stable** package from [Releases](https://github.com/caelis
 - macOS (Apple Silicon): `desktop-world-<version>-aarch64-apple-darwin.zip`.
 - Windows x64: `desktop-world-<version>-x86_64-pc-windows-msvc.zip`.
 
-Use the adjacent `.sha256` for the selected ZIP. Historical v0.1.x assets use the
-retired runtime and are not substitutes. Linux desktop support is experimental.
+Use the adjacent `.sha256` for the selected ZIP. Linux desktop support is experimental.
 Release notes identify the exact platform sources, accepted bytes and test scope.
 
 Verify the ZIP's adjacent `.sha256`, extract the complete directory to a permanent
