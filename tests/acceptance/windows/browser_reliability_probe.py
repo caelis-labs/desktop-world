@@ -18,6 +18,7 @@ import traceback
 import uuid
 
 from cursor_probe import Mcp, read, require, wait, write
+from probe_paths import browser_workbench
 
 
 def window_diagnostics(owned_pid, owned_title_prefix):
@@ -104,12 +105,12 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--skip-traversal', action='store_true', help='Collect input events only; keep traversal explicitly unverified')
     args = parser.parse_args()
+    source = browser_workbench(__file__, ('server.py', 'index.html', 'reliability.html'))
     require(os.name == 'nt' and sys.flags.utf8_mode, 'Use Windows: python -X utf8')
     binary, chrome = args.dtw.resolve(strict=True), args.chrome.resolve(strict=True)
     output = args.output.resolve()
     require(not output.exists(), 'Use a new evidence directory')
     output.mkdir(parents=True)
-    source = Path(__file__).resolve().parents[2] / 'fixtures/browser-workbench'
     summary = {'passed': False, 'kind': 'owned Chrome reliability through standard DTW MCP',
                'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
                'binary': str(binary), 'chrome': str(chrome),

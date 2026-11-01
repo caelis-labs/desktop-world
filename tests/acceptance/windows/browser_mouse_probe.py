@@ -5,12 +5,13 @@ from ctypes import wintypes as w
 from pathlib import Path
 from cursor_probe import Mcp, read, require, wait, write
 from browser_reliability_probe import window_diagnostics
+from probe_paths import browser_workbench
 
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--dtw',type=Path,required=True);p.add_argument('--chrome',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
-    a=p.parse_args();binary=a.dtw.resolve(strict=True);out=a.output.resolve();require(os.name=='nt' and sys.flags.utf8_mode and not out.exists(),'Use Windows, utf8 and new output');out.mkdir(parents=True)
+    a=p.parse_args();src=browser_workbench(__file__);binary=a.dtw.resolve(strict=True);out=a.output.resolve();require(os.name=='nt' and sys.flags.utf8_mode and not out.exists(),'Use Windows, utf8 and new output');out.mkdir(parents=True)
     summary={'passed':False,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'cases':[],'cleanup':[]};client=browser=server=fixture=None
     retain_scene=False;close_attempted=False;phase='setup';title=None
     user=ctypes.WinDLL('user32',use_last_error=True);user.GetForegroundWindow.restype=w.HWND
@@ -20,7 +21,7 @@ def main():
         from PIL import Image, ImageChops
         build=subprocess.run(['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',str(Path(__file__).with_name('compile-cursor.ps1')),'-OutputDirectory',str(out/'build')],capture_output=True)
         (out/'compile.stdout').write_bytes(build.stdout);(out/'compile.stderr').write_bytes(build.stderr);require(build.returncode==0,'compile failed')
-        web=out/'web';web.mkdir();src=Path(__file__).resolve().parents[2]/'fixtures/browser-workbench'
+        web=out/'web';web.mkdir()
         shutil.copyfile(src/'server.py',web/'server.py')
         # A visible color oracle in this owned local fixture only. No DOM/CDP.
         html=(src/'index.html').read_text(encoding='utf-8').replace('</style>','tbody button{background:rgb(83,165,131)}</style>');(web/'index.html').write_text(html,encoding='utf-8')
