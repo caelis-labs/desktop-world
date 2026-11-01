@@ -432,6 +432,10 @@ impl<B: Backend + 'static> Coordinator<B> {
     /// Replace bounded progress on the current host call, including before an
     /// input exists. Cancellation and a later action failure retain this proof.
     pub(super) fn record_resolution(&self, id: &str, progress: Value) {
+        self.try_record_resolution(id, progress);
+    }
+
+    pub(super) fn try_record_resolution(&self, id: &str, progress: Value) -> bool {
         let mut state = self.state.lock().unwrap();
         if let Some(step) = state
             .jobs
@@ -442,6 +446,9 @@ impl<B: Backend + 'static> Coordinator<B> {
             .filter(|step| !step.completed)
         {
             step.resolution = Some(progress);
+            true
+        } else {
+            false
         }
     }
 

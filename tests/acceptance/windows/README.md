@@ -41,6 +41,42 @@ empty ValuePattern identifies that empty placeholder. It never calls its setter,
 strips literal U+FFFC content or replays unknown input. The owned browser must close
 normally; the disposable HTTP fixture is explicitly stopped by the supervisor.
 
+## Diagnose a named empty desktop without desktop input
+
+This opt-in probe requires Windows and Python 3 only. It creates one uniquely
+named invisible desktop using the current user's normal permissions, launches a
+read-only native catalog there, then launches ordinary `dtw mcp` with the actual
+Win32 `STARTUPINFOW.lpDesktop`. It never switches the input desktop, moves the
+pointer, sends input, changes an ACL or attempts to bypass a host sandbox:
+
+```powershell
+python -X utf8 .\desktop_probe.py --dtw 'C:\Candidates\DTW\bin\dtw.exe' `
+  --output 'C:\Temp\dtw-empty-desktop-new'
+```
+
+Keep `desktop_process.py` and `cursor_probe.py` beside it. Python's ordinary
+`subprocess.STARTUPINFO` does not expose `lpDesktop`; setting an arbitrary Python
+attribute does not establish a valid isolated-desktop test. The helper uses
+`CreateProcessW` with an explicit stdio-only inherited handle list.
+
+`summary.json` separates the named MCP parent from the native worker's measured
+desktop. `DTW_AX_READINESS_TRACE=1` retains raw enumeration return/error/callback
+counts, actual worker PID/session/window station/thread desktop/input desktop
+and process-token flags in the owned stderr logs. `token.filtered` reports
+`TokenHasRestrictions` filtering history, not `IsTokenRestricted`'s restricting
+SID-list predicate. A genuinely successful empty
+enumeration may return an empty catalog. `FALSE` with error 0 is instead an
+explicit `desktop_enumeration_unproven` diagnostic, never an "operation succeeded"
+exception or an assumed complete inventory. The probe accepts either documented
+outcome while rejecting host-window leakage from a worker bound to the owned
+desktop. It records default-desktop child connection separately if the OS uses
+that path. Both original outcomes and exact process cleanup remain in evidence.
+
+Passing this probe proves scoped inventory/diagnostics and cleanup, not access
+to the user's foreground from a restricted host, AppContainer compatibility,
+secure-desktop support or completion of a GUI task. All owned native/MCP
+processes must exit before the owned desktop is removed.
+
 ## Run on an exclusive Windows desktop
 
 Requirements: Windows 10 (1703 or newer)/11 with an interactive unlocked desktop, built-in

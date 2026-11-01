@@ -58,6 +58,35 @@ image/font asset, SDK or renderer dependency is imported. Additional windows
 crate feature flags are Windows-target-only; locked dependency versions remain
 unchanged. Session wiring in common source is conditional on Windows.
 
+## Windows inventory and discovery hardening (2026-11-01)
+
+The current comparison used CUA commit
+[`8db684185a93e854bb7811189d69f933bb15f55d`](https://github.com/trycua/cua/blob/8db684185a93e854bb7811189d69f933bb15f55d/libs/cua-driver/rust/crates/platform-windows/src/win32/windows.rs).
+Its Win32 z-order plus UIA extra-window union was reviewed, not copied into
+DTW's inventory or capture ordering. DTW does not copy its ignored enumeration
+error path: it retains the raw `EnumWindows` BOOL, LastError, callback count and
+its own explicit budget stop before classifying a failure. A successful empty
+inventory is scoped to the worker's desktop. An unspecified `FALSE`/error-0
+result remains unproven and includes bounded read-only worker context; no
+desktop switch, permission change or sandbox-escape mechanism is added.
+
+The new traversal scheduler, diagnostic adapter and per-node UIA cache request
+are DTW-owned implementations of the native API contracts. The cache uses only
+`TreeScope_Element` metadata and native pattern-availability booleans, refreshed
+at each node's admission. It never eagerly reads password/value contents,
+expands a subtree through `FindAll`, caches an action pattern or replaces fresh
+ancestry/action proofs. Missing or malformed cached metadata uses the original
+live getter path, preserving its failures. A role mismatch can skip unnecessary
+name/pattern reads only after scheduling descendants; it never prunes that
+branch. Unreadable structural nodes retain a coverage gap while independently
+provable descendants/siblings can continue within the existing query budgets.
+
+Only explicit Windows occlusion errors can request one ordinary coordinated
+focus preparation and a fresh capture in the script layer. Blank native renders,
+geometry failure and foreign topmost overlays remain errors. No foreign cursor
+window receives a new capture exemption. These changes do not modify the macOS
+runtime or add a CUA runtime dependency.
+
 ## Deliberate DTW behavior
 
 Each provider is a private process of the installed DTW executable. Native UIA

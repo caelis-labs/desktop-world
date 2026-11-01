@@ -260,6 +260,46 @@ fn selected_press(timeout_ms: u64) -> Command {
 }
 
 #[test]
+fn selection_read_errors_describe_resolution_without_claiming_an_action() {
+    for (matches, complete, expected) in [
+        (vec![element(1, true)], false, "selector_unproven"),
+        (
+            vec![element(1, true), element(2, true)],
+            true,
+            "selector_ambiguous",
+        ),
+        (vec![], true, "selector_not_found"),
+    ] {
+        for method in ["find", "press"] {
+            let (owner, backend) = setup(vec![Ok(page(matches.clone(), false, complete, 17))]);
+            let reply = script(
+                &owner,
+                "resolution-error",
+                &format!(
+                "return await app.{method}({{window_ref,selector:{{text:'Save'}},timeout_ms:0}});"
+            ),
+            );
+            let error = &step(&reply)["error"];
+            assert_eq!(error["code"], expected);
+            let message = error["message"].as_str().unwrap();
+            if method == "find" {
+                assert!(message.contains("No unique element reference"), "{message}");
+                assert!(!message.contains("action"), "{message}");
+            } else {
+                assert!(
+                    message.contains("selected action was not dispatched"),
+                    "{message}"
+                );
+            }
+            assert_eq!(error["details"]["matches"], matches.len());
+            assert_eq!(error["details"]["coverage"]["visited"], 17);
+            assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 0);
+            assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 0);
+        }
+    }
+}
+
+#[test]
 fn selection_content_recovery_retains_focus_receipt_and_dispatches_original_action_once() {
     for action in [
         "await app.press({window_ref,selector:{text:'Save'}});",

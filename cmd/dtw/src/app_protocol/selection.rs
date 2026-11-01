@@ -94,8 +94,15 @@ impl<B: Backend + 'static> Coordinator<B> {
                 if matches.len() >= 2 {
                     progress["status"] = json!("ambiguous");
                     self.record_resolution(&submitted.request_id, progress.clone());
-                    return selection_error(submitted, resolution_error("selector_ambiguous",
-                        "The selector matches multiple elements; narrow role or text. The selected action was not dispatched", &progress));
+                    return selection_error(
+                        submitted,
+                        selection_resolution_error(
+                            &submitted.command,
+                            "selector_ambiguous",
+                            "The selector matches multiple elements; narrow role or text",
+                            &progress,
+                        ),
+                    );
                 }
                 // Ownership gaps are sticky within this retained traversal.
                 // Stop paging it; a fresh query may still recover within the
@@ -239,24 +246,35 @@ impl<B: Backend + 'static> Coordinator<B> {
                     return selection_error(submitted, wire::core_error(&error));
                 }
                 let (code, status, message) = if disabled {
-                    ("selector_not_ready", "not_ready", "The unique element remained disabled; the selected action was not dispatched")
+                    (
+                        "selector_not_ready",
+                        "not_ready",
+                        "The unique element remained disabled",
+                    )
                 } else if complete
                     && selector.scope == SelectorScope::Window
                     && selector.role.as_deref() == Some("menu_item")
                 {
-                    ("selector_not_found", "not_found", "No menu item matched in window scope; for the application's menu use selector:{scope:'menu',role:'menu_item',text:...}. The selected action was not dispatched")
+                    ("selector_not_found", "not_found", "No menu item matched in window scope; for the application's menu use selector:{scope:'menu',role:'menu_item',text:...}")
                 } else if complete {
                     (
                         "selector_not_found",
                         "not_found",
-                        "No element matched the selector; the selected action was not dispatched",
+                        "No element matched the selector",
                     )
                 } else {
-                    ("selector_unproven", "unproven", "Discovery remained incomplete; uniqueness is unproven and the selected action was not dispatched")
+                    (
+                        "selector_unproven",
+                        "unproven",
+                        "Discovery remained incomplete; uniqueness is unproven",
+                    )
                 };
                 progress["status"] = json!(status);
                 self.record_resolution(&submitted.request_id, progress.clone());
-                return selection_error(submitted, resolution_error(code, message, &progress));
+                return selection_error(
+                    submitted,
+                    selection_resolution_error(&submitted.command, code, message, &progress),
+                );
             }
         }
     }
@@ -331,6 +349,20 @@ fn resolution_error(code: &str, message: &str, progress: &Value) -> WireError {
         message: message.into(),
         details: Some(progress.clone()),
     }
+}
+
+fn selection_resolution_error(
+    command: &Command,
+    code: &str,
+    message: &str,
+    progress: &Value,
+) -> WireError {
+    let conclusion = if matches!(command, Command::Find { .. }) {
+        "No unique element reference was returned; inspect candidates and coverage"
+    } else {
+        "The selected action was not dispatched"
+    };
+    resolution_error(code, &format!("{message}. {conclusion}"), progress)
 }
 
 fn selection_error(submitted: &Submit, error: WireError) -> Work {

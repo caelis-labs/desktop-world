@@ -56,6 +56,7 @@ struct Model {
     finish_focus: Option<FocusReturn>,
     cleanup_error: Option<Error>,
     cleanup_after_capture: Option<Error>,
+    capture_errors: std::collections::VecDeque<Error>,
     cleanup_after_action: Option<Error>,
     shutdown_gate: Option<(WorkerGate, Error)>,
     windows_error: Option<Error>,
@@ -92,6 +93,7 @@ impl MockBackend {
                 finish_focus: None,
                 cleanup_error: None,
                 cleanup_after_capture: None,
+                capture_errors: std::collections::VecDeque::new(),
                 cleanup_after_action: None,
                 shutdown_gate: None,
                 windows_error: None,
@@ -260,6 +262,9 @@ impl Backend for MockBackend {
         _: &CallContext<'_>,
     ) -> Result<BackendObservation<()>, Error> {
         self.0.captures.fetch_add(1, Ordering::SeqCst);
+        if let Some(error) = self.0.model.lock().unwrap().capture_errors.pop_front() {
+            return Err(error);
+        }
         let observation = self.read(target, true);
         let mut model = self.0.model.lock().unwrap();
         if let Some(error) = model.cleanup_after_capture.take() {
@@ -920,6 +925,10 @@ mod discovery_tests;
 
 #[path = "selection_tests.rs"]
 mod selection_tests;
+
+#[cfg(target_os = "windows")]
+#[path = "capture_tests.rs"]
+mod capture_tests;
 
 #[path = "multi_instance_tests.rs"]
 mod multi_instance;

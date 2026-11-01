@@ -74,7 +74,7 @@ def read(path):
 
 
 class Mcp:
-    def __init__(self, binary, output, options=()):
+    def __init__(self, binary, output, options=(), *, env=None, process_factory=None):
         self.output = output
         output.mkdir()
         self.serial = 0
@@ -82,8 +82,9 @@ class Mcp:
         self.pending = {}
         self.images = []
         self.err = (output/'stderr.log').open('wb')
-        self.proc = subprocess.Popen([str(binary), 'mcp', *options], stdin=subprocess.PIPE,
-                                     stdout=subprocess.PIPE, stderr=self.err)
+        self.proc = (process_factory or subprocess.Popen)(
+            [str(binary), 'mcp', *options], stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=self.err, env=env)
         def receive():
             try:
                 with (output/'stdout.jsonl').open('wb') as log:

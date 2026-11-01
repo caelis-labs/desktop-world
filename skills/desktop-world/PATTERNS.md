@@ -69,6 +69,10 @@ Some applications expose only window decorations while inactive. If a capture sh
 
 Return a compact decision record: relevant candidates or values, unresolved ambiguity, coverage reasons, and an image only when it helps the next decision. Keep traversal details and unrelated text out of the model response.
 
+Native paragraph text can be split across several accessible elements. `name`, `value` and `label` are discovery excerpts, not complete paragraph reads. Use `readText` on a currently observed text container when it advertises native text support, and page its returned offsets. There is no implicit parent-navigation or guaranteed visual-paragraph reconstruction; obtain any container from actual discovery rather than inventing a parent ref.
+
+For an unnamed icon button, use a fresh capture to identify a small region, then observe that region with the returned button role. An unambiguous current `element_ref` with `can_press:true` can be pressed directly; otherwise use the current capture's pixel coordinates. Native semantic activation and physical clicking may trigger different application handlers. Verify the resulting state before choosing new input; never automatically follow an accepted but ineffective press with a second click.
+
 ## Menus and focus-dependent interactions
 
 For a known application-menu command, use `app.press({window_ref, selector:{scope:'menu',role:'menu_item',text:...}})`. DTW proves a unique match, prepares focus and resolves the menu again before pressing once. `app.find` with the same selector reads without focusing. Menu scope must be advertised by the provider; it does not search window controls or context menus.

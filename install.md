@@ -3,7 +3,8 @@
 DTW is one runtime, a standard stdio MCP server and a bundled Agent Skill. Target
 Agents are **Caelis, DeepSeek Harness (DSH), and agy**. The public execution input
 is always `exec({app, source})`. Approval belongs to the Agent/Harness; DTW does
-not require an approval token, custom Host adapter or private DSH plugin.
+not require an approval token or custom Host adapter. The package includes
+standard and host-specific plugin manifests around that same executable.
 
 ## Select and extract a package
 
@@ -46,13 +47,13 @@ and its bundled Skill through your Agent's standard extension points:
 | Agent | Setup instructions |
 |---|---|
 | Caelis | [Install the package as a plugin](docs/install-caelis.md) |
-| DeepSeek Harness (DSH) | [Add the MCP bridge and Skill, then verify live tools](docs/install-dsh.md) |
-| agy | [Register stdio MCP and the Skill](docs/install-agy.md) |
+| DeepSeek Harness (DSH) | [Install the bundled Cordis adapter, or use the manual fallback](docs/install-dsh.md) |
+| Antigravity App / agy CLI | [Install the package as one plugin](docs/install-agy.md) |
 
 Several Agents can point to the same installed package; each MCP connection has
 its own runtime state. Do not duplicate the package for each model or register
-both plugin and manual MCP routes in one session. No separate DTW-specific DSH
-plugin is required.
+both plugin and manual MCP routes in one session. The optional Cordis adapter
+only composes DSH's existing MCP and Skill extensions.
 
 ## Check the installation
 
@@ -74,8 +75,9 @@ in Terminal does not establish that the same binary launched by a desktop Agent
 has access. [DSH-specific troubleshooting](docs/install-dsh.md#macos-permissions)
 covers that distinction.
 
-Windows uses the foreground keyboard/pointer route; background Windows input and
-secure-desktop operation are not promised. Supplementary-plane text (including
+DTW manages foreground access when an operation requires it. Windows may use
+targeted native delivery for supported controls; independent background input
+and secure-desktop operation are not promised. Supplementary-plane text (including
 emoji) needs readable literal text and a selection in the focused control;
 unsupported/password fields are rejected before dispatch. If a write returns an
 unknown outcome, read its original receipt using `result` instead of replaying it.

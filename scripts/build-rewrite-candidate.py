@@ -8,6 +8,7 @@ It neither installs software nor creates tags, releases, or Agent configuration.
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -29,6 +30,10 @@ TARGETS = {
     "x86_64-pc-windows-msvc": ("Windows", {"amd64", "x86_64"}, "dtw.exe"),
 }
 NOTICE_PREFIXES = ("license", "licence", "notice", "copying", "copyright")
+
+_plugin_spec = importlib.util.spec_from_file_location("dtw_plugin_package", Path(__file__).with_name("plugin_package.py"))
+plugin_package = importlib.util.module_from_spec(_plugin_spec)
+_plugin_spec.loader.exec_module(plugin_package)
 
 
 def require(condition, message):
@@ -391,16 +396,15 @@ requested, are external because they are obtained after this ZIP is fixed.
 
 Extract to a stable location. Run `bin/{executable} --version`, then use the
 absolute extracted binary path in examples/mcp.json or examples/codex.toml.
-Use MCP arguments ["mcp"] for automatic input routing, or
-["mcp", "--input-policy", "background-only"] to prohibit DTW foreground use.
-Register skills/desktop-world using the
-Agent's ordinary Skill mechanism. Examples are templates; this archive does
-not install anything, edit Agent configuration, or grant OS permissions.
-
-Alternatively, this same package is a Claude Code plugin: start Claude with
-`claude --plugin-dir /absolute/path/to/extracted/package`. Its .mcp.json and
-.claude-plugin metadata reuse the same bin/ and Skill. Choose this plugin route
-or ordinary MCP/Skill registration; do not register both copies simultaneously.
+Use MCP arguments ["mcp"]. DTW manages input routing and foreground access
+when an operation requires it; the Agent needs no extra input-mode argument.
+This same directory includes Agent Plugins 1.0/Caelis, Claude Code, Antigravity
+and DSH Cordis entries around the same executable and Skill. Follow install.md
+and docs/install-caelis.md, docs/install-dsh.md or docs/install-agy.md. Claude
+Code can load it with `claude --plugin-dir /absolute/path/to/extracted/package`.
+Choose the plugin route or ordinary MCP/Skill registration; do not register both
+copies simultaneously. Examples are templates; this archive does not install
+anything, edit Agent configuration, or grant OS permissions.
 
 On Windows, in PowerShell: `& 'C:\\path with spaces\\bin\\dtw.exe' --version`.
 Use escaped backslashes or forward slashes in the JSON/TOML path.
@@ -425,14 +429,13 @@ Full dependency notices are under notices/; adapted source notices and hashes
 are in THIRD_PARTY_NOTICES.md, docs/native-source-provenance*.md and
 docs/background-input-port.md.
 """
-    if target.endswith("msvc"):
-        readme += """
-Windows Caelis integration uses the root Agent Plugins 1.0 plugin.json and
+    readme += """
+Caelis integration uses the root Agent Plugins 1.0 plugin.json and
 mcp.json. Install this extracted directory with `caelis plugin install <path>
 --json`, then check `caelis plugin status desktop-world --json` and start a new
 Session. The stable plugin ID is desktop-world regardless of this directory's
 name. Caelis chooses the standard manifest; Claude continues to use its own
-metadata. Both launch the same bin/dtw.exe and bundled Skill. If an older Claude
+metadata. Both launch the same target executable and bundled Skill. If an older Claude
 registration used the directory name as its ID, remove that old registration
 before installing this format; preserve the package and other plugins.
 """
@@ -458,24 +461,7 @@ def package_assets(source, package, version, target):
     for name in ("mcp.json", "codex.toml"):
         shutil.copy2(source / "docs/examples" / name, package / "examples" / name)
     (package / "README.md").write_text(package_readme(target), encoding="utf-8")
-    (package / ".claude-plugin").mkdir()
-    plugin = json.loads((source / "plugins/claude/.claude-plugin/plugin.json").read_text(encoding="utf-8"))
-    plugin["version"] = version
-    write_json(package / ".claude-plugin/plugin.json", plugin)
-    write_json(package / ".mcp.json", {"mcpServers": {"desktop-world": {
-        "command": "${CLAUDE_PLUGIN_ROOT}/bin/" + TARGETS[target][2], "args": ["mcp"]}}})
-    if target.endswith("msvc"):
-        # Caelis's ordinary local installer gives standard packages the
-        # manifest's stable name. Claude-format packages use a directory alias.
-        # Keep the already accepted macOS package layout unchanged.
-        standard = {key: plugin[key] for key in ("name", "version", "description", "license", "author")
-                    if key in plugin}
-        standard["$schema"] = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
-        write_json(package / "plugin.json", standard)
-        write_json(package / "mcp.json", {
-            "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
-            "mcpServers": {"desktop-world": {"type": "stdio", "command": "./bin/dtw.exe", "args": ["mcp"]}},
-        })
+    return plugin_package.write_plugin_entries(source, package, version, target)
 
 
 def build(repo, output, target, signing_identity=None, notary_profile=None, notary_keychain=None, cargo_target_dir=None):
@@ -573,7 +559,7 @@ def build(repo, output, target, signing_identity=None, notary_profile=None, nota
                            "details": details, "installation_verification": "unverified"}
         text, _ = commands.run([str(binary), "--version"], cwd=output)
         require(text.strip() == f"dtw {version}", "Built CLI version does not match source")
-        package_assets(source, package, version, target)
+        plugin_entries = package_assets(source, package, version, target)
         require(source_identity(repo, commands.run) == identity, "Source changed during candidate build")
         require(digest(source / "cmd/dtw/Cargo.lock") == identity["cargo_lock_sha256"], "Build changed the exported lockfile")
         build_info = {"schema": 1, "kind": "unpublished-rewrite-candidate", "version": version, "target": target,
@@ -581,6 +567,7 @@ def build(repo, output, target, signing_identity=None, notary_profile=None, nota
                       "build_environment": build_env, "host": {"system": platform.system(), "release": platform.release(), "machine": platform.machine()},
                       "binary": {"path": f"bin/{binary.name}", "sha256": digest(binary), **fmt},
                       "skill_sha256": digest(package / "skills/desktop-world/SKILL.md"),
+                      "plugin_package": plugin_entries,
                       "dependency_count": len(notices["crates"]), "dependencies_sha256": digest(package / "notices/DEPENDENCIES.json"),
                       "signing": signing, "notarization": {"requested": bool(notary_profile), "status": "unverified",
                           "meaning": "Verdict is obtained only after this immutable archive; see outer CANDIDATE.json and notarization receipts"},
