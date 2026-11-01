@@ -22,6 +22,7 @@ use windows::Win32::{
 
 const CLASS: &str = "DesktopWorld.SessionCursor.v1";
 const MAX_PACKET: usize = 4096;
+const IDLE_HIDE_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Clone, Debug, PartialEq)]
 struct Target {
@@ -125,6 +126,7 @@ struct Presentation {
     target: Option<Target>,
     point: Option<(i32, i32)>,
     pulse_until: Option<std::time::Instant>,
+    last_activity: Option<std::time::Instant>,
 }
 impl Presentation {
     fn begin(&mut self, operation: u64, target: Target) -> bool {
@@ -137,6 +139,7 @@ impl Presentation {
         self.target = Some(target);
         self.point = None;
         self.pulse_until = None;
+        self.last_activity = None;
         true
     }
     fn hide(&mut self, operation: u64) {
@@ -145,9 +148,30 @@ impl Presentation {
             self.target = None;
             self.point = None;
             self.pulse_until = None;
+            self.last_activity = None;
         }
     }
+    fn idle_expired(&self, now: std::time::Instant) -> bool {
+        self.point.is_some()
+            && self
+                .last_activity
+                .is_some_and(|last| now.saturating_duration_since(last) >= IDLE_HIDE_AFTER)
+    }
+    fn expire_idle(&mut self, now: std::time::Instant) -> bool {
+        if !self.idle_expired(now) {
+            return false;
+        }
+        // Retire the operation as well as hiding it: late packets and the idle
+        // z-order maintenance must not bring an old pointer presentation back.
+        self.hide(self.operation);
+        true
+    }
     fn event(&mut self, value: &Value, now: std::time::Instant) -> bool {
+        // A delayed packet cannot extend an already elapsed lifetime even if
+        // the renderer has not reached its next idle tick yet.
+        if self.idle_expired(now) {
+            return false;
+        }
         let (Some(operation), Some(sequence), Some(press), Some(x), Some(y)) = (
             value["operation"].as_u64(),
             value["sequence"].as_u64(),
@@ -174,6 +198,7 @@ impl Presentation {
         }
         self.sequence = sequence;
         self.point = Some((x, y));
+        self.last_activity = Some(now);
         if press > self.press {
             self.press = press;
             self.pulse_until = Some(now + std::time::Duration::from_millis(200));
@@ -257,5 +282,70 @@ mod tests {
         v["dpi"] = json!(u64::MAX);
         assert!(Target::parse(&v).is_none());
         assert!(identity::Identity::parse(&json!({"pid":0,"birth":1,"hwnd":1})).is_none());
+    }
+    #[test]
+    fn idle_expiry_hides_and_retires_exactly_at_two_seconds() {
+        let mut s = state();
+        let now = std::time::Instant::now();
+        assert!(!s.expire_idle(now + IDLE_HIDE_AFTER));
+        assert!(s.event(&event(2, 1, 1, -20), now));
+        assert!(!s.expire_idle(now + IDLE_HIDE_AFTER - std::time::Duration::from_nanos(1)));
+        assert!(s.expire_idle(now + IDLE_HIDE_AFTER));
+        assert_eq!(s.retired, 2);
+        assert!(
+            s.point.is_none()
+                && s.target.is_none()
+                && s.last_activity.is_none()
+                && s.pulse_until.is_none()
+        );
+        assert!(!s.expire_idle(now + IDLE_HIDE_AFTER));
+        assert!(!s.event(&event(2, 99, 99, -20), now + IDLE_HIDE_AFTER));
+    }
+    #[test]
+    fn only_accepted_pointer_activity_extends_idle_lifetime() {
+        let mut s = state();
+        let now = std::time::Instant::now();
+        assert!(s.event(&event(2, 1, 0, -20), now));
+        assert!(!s.event(
+            &event(1, 90, 0, -20),
+            now + std::time::Duration::from_secs(1)
+        ));
+        assert!(!s.event(
+            &event(2, 1, 0, -20),
+            now + std::time::Duration::from_secs(1)
+        ));
+        assert!(!s.event(
+            &event(2, 2, 3, -20),
+            now + std::time::Duration::from_secs(1)
+        ));
+        assert_eq!(s.last_activity, Some(now));
+        let refreshed = now + std::time::Duration::from_millis(1500);
+        assert!(s.event(&event(2, 2, 0, -10), refreshed));
+        assert!(!s.expire_idle(now + IDLE_HIDE_AFTER));
+        assert!(s.expire_idle(refreshed + IDLE_HIDE_AFTER));
+    }
+    #[test]
+    fn late_packet_before_renderer_tick_cannot_refresh_an_expired_presentation() {
+        let mut s = state();
+        let now = std::time::Instant::now();
+        assert!(s.event(&event(2, 1, 0, -20), now));
+        assert!(!s.event(&event(2, 2, 0, -10), now + IDLE_HIDE_AFTER));
+        assert_eq!(s.last_activity, Some(now));
+        assert!(s.expire_idle(now + IDLE_HIDE_AFTER));
+    }
+    #[test]
+    fn idle_clocks_are_independent_and_retirement_does_not_reset_session_ordinals() {
+        let (mut first, mut second) = (state(), state());
+        let now = std::time::Instant::now();
+        assert!(first.event(&event(2, 1, 0, -20), now));
+        assert!(second.event(
+            &event(2, 1, 0, -20),
+            now + std::time::Duration::from_secs(1)
+        ));
+        assert!(first.expire_idle(now + IDLE_HIDE_AFTER));
+        assert!(!second.expire_idle(now + IDLE_HIDE_AFTER));
+        assert_eq!((first.operation, first.retired), (2, 2));
+        assert_eq!((second.operation, second.retired), (2, 0));
+        assert!(!second.expire_idle(now)); // A backwards test clock cannot expire activity.
     }
 }
