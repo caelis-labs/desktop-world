@@ -170,7 +170,8 @@ class Fixture(unittest.TestCase):
         put(self.repo, "version.txt", "0.2.0\n")
         put(self.repo, "cmd/dtw/Cargo.toml", '[package]\nname="desktop-world"\nversion="0.2.0"\n')
         put(self.repo, "cmd/dtw/Cargo.lock", 'version=4\n[[package]]\nname="desktop-world"\nversion="0.2.0"\n')
-        for name in ("LICENSE", "THIRD_PARTY_NOTICES.md", "docs/native-source-provenance.md",
+        for name in ("LICENSE", "THIRD_PARTY_NOTICES.md", "install.md", "docs/install.md",
+                     "docs/install-dsh.md", "docs/install-caelis.md", "docs/install-agy.md", "docs/native-source-provenance.md",
                      "docs/native-source-provenance-cross-platform.md", "docs/background-input-port.md",
                      "docs/windows-cursor-port.md",
                      "skills/desktop-world/SKILL.md"):
@@ -445,6 +446,8 @@ class BinaryAndArchiveTests(Fixture):
             package = self.root / target
             package.mkdir()
             candidate.package_assets(self.repo, package, "0.2.0", target)
+            for guide in ("install.md", "docs/install.md", "docs/install-dsh.md", "docs/install-caelis.md", "docs/install-agy.md"):
+                self.assertEqual((package / guide).read_bytes(), (self.repo / guide).read_bytes())
             config = json.loads((package / ".mcp.json").read_text())
             self.assertEqual(config["mcpServers"]["desktop-world"], {"command": "${CLAUDE_PLUGIN_ROOT}/bin/" + binary, "args": ["mcp"]})
             self.assertEqual(json.loads((package / ".claude-plugin/plugin.json").read_text())["version"], "0.2.0")

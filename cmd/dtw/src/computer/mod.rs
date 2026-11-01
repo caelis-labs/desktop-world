@@ -76,6 +76,7 @@ impl InputRoute {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FocusReturn {
     Pending,
+    Retained,
     Restored,
     ApplicationRestored,
     ChangedExternally,
@@ -87,6 +88,7 @@ impl FocusReturn {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
+            Self::Retained => "retained",
             Self::Restored => "restored",
             Self::ApplicationRestored => "application_restored",
             Self::ChangedExternally => "changed_externally",
@@ -573,7 +575,17 @@ pub enum Error {
     InventoryUnproven(InventoryReport),
     AppInventoryUnproven(Vec<Error>),
     BackendFailed(String),
-    NativeFailure { code: String, message: String },
+    NativeFailure {
+        code: String,
+        message: String,
+    },
+    PermissionRequired {
+        capability: String,
+        message: String,
+        host_name: Option<String>,
+        host_bundle_id: Option<String>,
+        restart_may_be_required: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -663,7 +675,7 @@ pub trait Backend: Send + Sync {
         None
     }
 
-    /// Release temporary resources borrowed by one script, including foreground
+    /// Release temporary resources owned by one script, including foreground
     /// focus. App state and native observations remain available to later scripts.
     fn finish_execution(&self) -> Result<Option<FocusReturn>, Error> {
         Ok(None)

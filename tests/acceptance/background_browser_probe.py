@@ -377,9 +377,14 @@ return {{deep_button:{{pages:far.pages,coverage:far.coverage}},search_pages:sear
         desktop_end(observer, start, keyboard, target_pid)
         require_delivery(keyboard['record'], ['foreground','foreground','background'])
         for returned in action_deliveries(keyboard['record'])[:2]:
-            require(returned['foreground_borrowed'] is True and returned.get('focus_return') in
-                ('restored','application_restored','changed_externally','previous_app_closed'),
-                'Automatic fallback lost its original foreground-return evidence')
+            if returned['foreground_borrowed']:
+                require(returned.get('focus_return') in ('retained','changed_externally'),
+                        'Automatic fallback lost its foreground-retention evidence')
+        require(fresh_end(observer)['frontmost_pid'] == target_pid,
+                'Automatic fallback unexpectedly restored the previous app')
+        keyboard['target_foreground_retention_verified'] = True
+        # Cover the browser again explicitly for the independent occluded-click case.
+        keyboard['observer_front_for_next_case'] = front(observer)
 
     click = evidence.setdefault('covered_coordinate_click', {})
     capture, response = execute(client, 'capture-covered-browser',

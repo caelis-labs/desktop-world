@@ -797,6 +797,7 @@ pub fn core_error(error: &computer::Error) -> WireError {
             "window_inventory_unproven",
             "No application instance provided a proven window inventory; no absence or replay is implied",
         ),
+        Error::PermissionRequired { message, .. } => ("permission_required", message.as_str()),
         Error::NativeFailure { code, message } => (code.as_str(), message.as_str()),
         Error::BackendFailed(message) => ("backend_failed", message.as_str()),
     };
@@ -804,6 +805,16 @@ pub fn core_error(error: &computer::Error) -> WireError {
         details: match error {
             Error::InventoryUnproven(report) => Some(inventory_report(report, false)),
             Error::AppInventoryUnproven(errors) => Some(super::unavailable_app_inventory(errors)),
+            Error::PermissionRequired {
+                capability,
+                host_name,
+                host_bundle_id,
+                restart_may_be_required,
+                ..
+            } => Some(json!({
+                "capability":capability, "retryable":true, "restart_may_be_required":restart_may_be_required,
+                "host":host_name.as_ref().map(|name| json!({"name":name,"bundle_id":host_bundle_id,"source":"process_ancestry_hint"}))
+            })),
             Error::NativeFailure { code, .. } => Some(json!({"provider_code":code})),
             _ => None,
         },

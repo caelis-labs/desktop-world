@@ -445,13 +445,79 @@ fn omitted_host_fields_still_count_toward_json_traversal_limits() {
 }
 
 #[test]
+fn result_omits_undefined_object_fields_without_mutating_or_coercing_state() {
+    let out = pure(
+        r#"
+const value={missing:undefined, nested:{missing:undefined,kept:null}, rows:[{missing:undefined,kept:7}]};
+const plain=Object.create(null);plain.missing=undefined;plain.kept=false;
+state.hasMissing=Object.hasOwn(value,'missing');
+return {value,plain};
+"#,
+        json!({}),
+    ).result.unwrap();
+    assert_eq!(
+        out.value,
+        json!({"value":{"nested":{"kept":null},"rows":[{"kept":7}]},"plain":{"kept":false}})
+    );
+    assert_eq!(out.state, json!({"hasMissing":true}));
+    let failure = pure(
+        "const value={missing:undefined};state.value=value;return value;",
+        json!({}),
+    )
+    .result
+    .unwrap_err();
+    assert_eq!(failure.code.as_deref(), Some("invalid_json"));
+    assert!(
+        failure
+            .message
+            .contains(r#"state contains a non-JSON value at $["value"]["missing"]"#),
+        "{failure:?}"
+    );
+}
+
+#[test]
+fn result_omission_preserves_traversal_and_data_property_guards() {
+    for source in [
+        "const result={};for(let i=0;i<32768;i++)result['unused'+i]=undefined;return result;",
+        "const result={};let current=result;for(let i=0;i<65;i++){current.child={};current=current.child;}return result;",
+    ] {
+        let failure=pure(source,json!({})).result.unwrap_err();
+        assert_eq!(failure.code.as_deref(),Some("invalid_json"));
+        assert!(failure.message.contains("JSON traversal limit"),"{failure:?}");
+    }
+    for source in [
+        "return {outer:{get optional(){throw new Error('getter executed')}}};",
+        "return {outer:{toJSON(){throw new Error('toJSON executed')}}};",
+        "return {outer:Object.defineProperty({},'optional',{value:undefined})};",
+    ] {
+        let failure = pure(source, json!({})).result.unwrap_err();
+        assert_eq!(failure.code.as_deref(), Some("invalid_json"));
+        assert!(failure.message.contains(r#"$["outer"]"#), "{failure:?}");
+        assert!(!failure.message.contains("executed"), "{failure:?}");
+    }
+    let failure = pure("return {outer:[undefined]};", json!({}))
+        .result
+        .unwrap_err();
+    assert!(
+        failure
+            .message
+            .contains(r#"result contains a non-JSON value at $["outer"]["0"]"#),
+        "{failure:?}"
+    );
+}
+
+#[test]
 fn invalid_json_state_or_result_is_never_silently_coerced() {
     for mutation in ["state.x=undefined;", "state.x=()=>1;", "state.x=Symbol('x');", "state.x=NaN;", "state.x=Infinity;", "state.x=1n;", "state.x=state;", "state.x=new Date();", "state.x=[,1];", "state[Symbol('x')]=1;", "Object.defineProperty(state,'x',{get(){throw new Error('accessor executed')},enumerable:true});"] {
         let failure=pure(mutation,json!({})).result.unwrap_err(); assert_eq!(failure.code.as_deref(),Some("invalid_json"),"{mutation}: {failure:?}");
     }
     for result in [
         "()=>1",
-        "{x:undefined}",
+        "[undefined]",
+        "{x:[undefined]}",
+        "{x:NaN}",
+        "{x:()=>1}",
+        "(()=>{const x={};x.self=x;return x;})()",
         "Symbol('x')",
         "Infinity",
         "1n",

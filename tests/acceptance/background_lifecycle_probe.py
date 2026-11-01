@@ -7,8 +7,8 @@ DTW_AX_READINESS_TRACE=1 python3 tests/acceptance/background_lifecycle_probe.py 
 Each case uses a fresh MCP process and reset owned AppKit fixtures. After actual
 partial Unicode input, cancel the original request, close its stdin, or terminate
 that exact MCP parent. The optional --foreground case uses one control-bearing
-request to select automatic foreground fallback and verifies exact original-window
-return. No explicit focus, pointer move, input replay or global user key release
+request to select automatic foreground fallback and verifies the selected window remains foreground. --explicit-focus selects it
+before background input. No pointer move, input replay or global user key release
 is issued by the probe. Owned native events and partial text verify
 effects; global activity is observation only. Closed transports have no invented
 final ledger, and worker PID disappearance does not prove its exit code was zero.
@@ -26,7 +26,7 @@ import traceback
 from types import SimpleNamespace
 import uuid
 
-from background_input_probe import front, fresh_end, journal, observe_desktop, observed_pairs, reset, select, require_exact_return
+from background_input_probe import front, fresh_end, journal, observe_desktop, observed_pairs, reset, select, require_exact_foreground
 from native_input_probe import check_cleanup, close_mcp, recorded_workers, retained_exec_response
 from standard_agent_probe import Fixture, Mcp, require, wait_until, write_json
 
@@ -191,8 +191,8 @@ await app.keypress({{window_ref,keys:['META','S']}});return typed;
         observe_desktop(peer, proof['desktop_before'], proof['peer_after'], proof.setdefault('desktop', {}),
                         forbidden_pids=() if foreground or explicit_focus else (target.child.pid,))
         if foreground or explicit_focus:
-            require_exact_return(proof['peer_after'], peer.child.pid, proof['desktop_before']['key_window'])
-            proof['exact_foreground_return_verified'] = True
+            require_exact_foreground(proof['after'], target.child.pid, proof['target_window_id'])
+            proof['target_foreground_retention_verified'] = True
         require(proof['after']['text'] == proof['after_stop']['text'], 'Target text continued changing after owner cleanup')
         if 'entered' in proof:
             check_effects(proof, payload, tag, suffix)
@@ -206,8 +206,8 @@ def main():
     parser.add_argument('--dtw', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--case', choices=('all',)+CASES, default='all')
-    parser.add_argument('--explicit-focus', action='store_true', help='Borrow foreground explicitly before background input and retain uncertain finalizer evidence on cancellation')
-    parser.add_argument('--foreground', action='store_true', help='Exercise automatic foreground fallback and exact return during interruption')
+    parser.add_argument('--explicit-focus', action='store_true', help='Select foreground explicitly before background input and retain uncertain finalizer evidence on cancellation')
+    parser.add_argument('--foreground', action='store_true', help='Exercise automatic foreground fallback and target retention during interruption')
     args = parser.parse_args()
     require(sys.platform == 'darwin', 'This probe requires real macOS')
     require(os.environ.get('DTW_AX_READINESS_TRACE') == '1',

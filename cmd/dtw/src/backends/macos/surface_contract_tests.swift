@@ -146,12 +146,12 @@ do {
         role: { dialogRoles[$0] }, parent: { _ -> Int? in throw failure("native_stopping", "original cleanup stop") })
     preconditionFailure("Activation ancestry swallowed cancellation")
 } catch let error as NativeFailure { sheetFocusCheck(error.code == "native_stopping" && error.message == "original cleanup stop") }
-// Returning to a captured sheet raises its parent, but a parent readback alone
-// never proves restoration of that exact original sheet.
-let previousSheetRaise = try dialogActivation(2)
-let previousSheetExact = try dialogFocused(2, 2)
-sheetFocusCheck(previousSheetRaise == 1 && previousSheetExact)
-sheetFocusCheck(try !dialogFocused(2, previousSheetRaise!))
+// Activating a sheet raises its parent, but a parent readback alone never
+// proves focus of the exact requested sheet.
+let sheetParentRaise = try dialogActivation(2)
+let requestedSheetExact = try dialogFocused(2, 2)
+sheetFocusCheck(sheetParentRaise == 1 && requestedSheetExact)
+sheetFocusCheck(try !dialogFocused(2, sheetParentRaise!))
 private var sheetEpoch = FocusBorrowEpoch(initialPID: 10, targetPID: 10, targetWindow: 200)
 sheetEpoch.established(10, window: 200)
 func sheetNotification(_ name: String, objectID: CGWindowID, sampledID: CGWindowID) {
@@ -164,44 +164,7 @@ sheetNotification(kAXFocusedWindowChangedNotification, objectID: 400, sampledID:
 sheetFocusCheck(sheetEpoch.invalidated)
 sheetNotification(kAXFocusedWindowChangedNotification, objectID: 200, sampledID: 200)
 sheetFocusCheck(sheetEpoch.invalidated) // A genuine leave-return is never rearmed.
-print("Sheet activation, exact focus/return and main-window notification controls passed")
-
-// Initial exact focus incurs no restoration debt even if input later closes
-// that sheet. In-place cleanup still runs the same conservative pointer path.
-private func alreadyAtSurface(previousPID: Int32 = 10, generation: UInt64 = 1,
-                              previous: Int? = 2, previousID: CGWindowID? = 200,
-                              target: Int? = 2, targetID: CGWindowID = 200) -> Bool {
-    sameFocusDestination(previousApp: (previousPID, generation), previousWindow: previous,
-        previousWindowID: previousID, targetApp: (10, 1), targetWindow: target,
-        targetWindowID: targetID, equal: ==)
-}
-surfaceCheck(alreadyAtSurface())
-surfaceCheck(!alreadyAtSurface(previousPID: 20))
-surfaceCheck(!alreadyAtSurface(generation: 2))
-surfaceCheck(!alreadyAtSurface(previous: 1, previousID: 100)) // Same PID sibling/parent.
-surfaceCheck(!alreadyAtSurface(previous: 3)) // Reused WindowID is not the same AX object.
-surfaceCheck(!alreadyAtSurface(previousID: 201))
-surfaceCheck(!alreadyAtSurface(previous: nil, previousID: nil))
-surfaceCheck(!alreadyAtSurface(target: nil))
-private var inPlace = FocusReturnObligation(matchesOriginal: alreadyAtSurface())
-private var pointerCleanups = 0
-sheetFocusCheck(try inPlace.releaseInPlace { pointerCleanups += 1 })
-surfaceCheck(pointerCleanups == 1 && !inPlace.required)
-inPlace.retarget(matchesOriginal: true)
-surfaceCheck(!inPlace.required)
-inPlace.retarget(matchesOriginal: false)
-surfaceCheck(inPlace.required)
-sheetFocusCheck(try !inPlace.releaseInPlace { preconditionFailure("A real borrow skipped exact restoration") })
-inPlace.retarget(matchesOriginal: true)
-surfaceCheck(inPlace.required) // An earlier real borrow cannot be cleared by repeated focus.
-private let existingSheet = FocusReturnObligation(matchesOriginal: true)
-do {
-    _ = try existingSheet.releaseInPlace { throw failure("pointer_restore_failed", "original pointer cleanup") }
-    preconditionFailure("In-place focus swallowed pointer cleanup failure")
-} catch let error as NativeFailure {
-    surfaceCheck(error.code == "pointer_restore_failed" && error.message == "original pointer cleanup")
-}
-print("Exact in-place focus, real-borrow retention and independent pointer cleanup controls passed")
+print("Sheet activation, exact focus and main-window notification controls passed")
 
 // Readiness distinguishes a temporal web stub from persistent custom decoration.
 private var ordinary = SemanticReadinessSample()
@@ -1214,8 +1177,7 @@ surfaceCheck(!guardedAnchorGeometry.matches(element: CGRect(x: 10, y: 10, width:
 print("Resident scroll guard preserves fresh root/birth/geometry and cannot acquire the caller's scene lease")
 
 // AXWindowID cannotComplete is typed private evidence, never inferred from
-// the public message. Cleanup starts a complete fresh ownership read again;
-// a replacement current AX root may prove the same captured logical window.
+// the public message. No failed read is an identity or permission to dispatch.
 private func identityReadFailure(_ result: AXError, id: CGWindowID = 0) -> NativeFailure {
     do {
         _ = try requireAXWindowID(result, id)
@@ -1230,54 +1192,11 @@ surfaceCheck(typedBusyIdentity.attributeFailure?.name == "AXWindowID"
 surfaceCheck(Set(typedBusyIdentity.json.keys) == Set(["error", "message"]))
 private let provenIdentityID = try requireAXWindowID(.success, 777)
 surfaceCheck(provenIdentityID == 777)
-private let identityCleanupApp = NativeApp(identity: "owned.test.app", pid: 10, generation: 42)
-private var identityAppReads = 0
-private var identityRootReads: [Int] = []
-private var identityWaits = 0
-private let identityRecovered = try waitForBorrowedFocusRead(remaining: { 1 }, check: {}, invalidated: { false }, read: {
-    try borrowedFocusStillOwned(app: identityCleanupApp, windowID: 777, invalidated: { false }, focusedApplication: {
-        identityAppReads += 1
-        return FocusApplication(element: identityAppReads, pid: 10, generation: 42, fromCandidate: false)
-    }, currentWindowID: { root in
-        identityRootReads.append(root)
-        return try requireAXWindowID(root == 1 ? .cannotComplete : .success, root == 1 ? 0 : 777)
-    })
-}, wait: { _ in identityWaits += 1 })
-// The recovered read also repeats the existing post-window app birth proof.
-surfaceCheck(identityRecovered && identityAppReads == 3 && identityRootReads == [1, 2] && identityWaits == 1)
-
-for original in [identityReadFailure(.success), identityReadFailure(.apiDisabled),
-                 identityReadFailure(.invalidUIElement), identityReadFailure(.failure, id: 777),
-                 failure("window_unproven", typedBusyIdentity.message),
-                 failure("window_unproven", "wrong read stage", attributeFailure:
-                    AXAttributeFailure(name: kAXFocusedWindowAttribute, error: .cannotComplete)),
-                 failure("focus_unproven", "wrong error class", attributeFailure:
-                    AXAttributeFailure(name: "AXWindowID", error: .cannotComplete))] {
-    var reads = 0
-    do {
-        _ = try waitForBorrowedFocusRead(remaining: { 1 }, check: {}, invalidated: { false }, read: {
-            reads += 1; throw original
-        }, wait: { _ in preconditionFailure("Unproven or non-busy identity cannot retry") })
-        preconditionFailure("Unproven current identity accepted")
-    } catch let error as NativeFailure {
-        surfaceCheck(reads == 1 && error.code == original.code && error.message == original.message)
-        surfaceCheck(error.attributeFailure?.name == original.attributeFailure?.name
-            && error.attributeFailure?.error == original.attributeFailure?.error)
-    }
+for result in [AXError.success, .apiDisabled, .invalidUIElement, .failure] {
+    let error = identityReadFailure(result)
+    surfaceCheck(error.code == "window_unproven" && error.attributeFailure == nil)
 }
-// The identical typed status from the retained previous target does not gain
-// a retry: only fresh-current ownership uses the new narrow classification.
-private var previousIdentityReads = 0
-do {
-    _ = try waitForRestoredFocus(remaining: { 1 }, check: {}, invalidated: { false }, read: {
-        previousIdentityReads += 1; throw typedBusyIdentity
-    }, wait: { _ in preconditionFailure("Previous retained identity gained a retry") })
-    preconditionFailure("Unproven previous identity accepted")
-} catch let error as NativeFailure {
-    surfaceCheck(previousIdentityReads == 1 && error.code == "window_unproven"
-        && error.message == typedBusyIdentity.message)
-}
-print("Cleanup alone resamples typed AXWindowID busy; zero identity, permission, invalid object and previous target errors stay immediate")
+print("Exact window identity rejects zero IDs and native failures without treating them as absence")
 
 // A vanishing association point-hit cannot invalidate independent CG rows or
 // turn partial discovery into an empty/complete result. Recovery takes another

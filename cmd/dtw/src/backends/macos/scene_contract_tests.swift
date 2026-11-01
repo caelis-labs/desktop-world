@@ -181,3 +181,23 @@ private let finallyUnproven = withoutVerifiedOverlays([overlayCandidate], birth:
 precondition(hitStack(initiallyClear, id: cover.id, point: CGPoint(x: 50, y: 50)).isEmpty)
 precondition(!hitStack(finallyUnproven, id: cover.id, point: CGPoint(x: 50, y: 50)).isEmpty)
 print("Pointer presenter and exact overlay identity controls passed; no GUI input")
+
+// OS permission prompts do not manufacture a grant or freeze stale preflight.
+private let accessGate = PermissionRequests()
+private var accessGranted = false
+private var accessPrompts = 0
+private func checkTestAccess(_ request: Bool) -> Bool {
+    permissionGranted("accessibility", request: request, gate: accessGate,
+        preflight: { accessGranted }, prompt: { accessPrompts += 1 })
+}
+precondition(!checkTestAccess(false) && accessPrompts == 0)
+precondition(!checkTestAccess(true) && accessPrompts == 1)
+precondition(!checkTestAccess(true) && accessPrompts == 1)
+accessGranted = true
+precondition(checkTestAccess(true) && accessPrompts == 1)
+accessGranted = false
+precondition(!checkTestAccess(true) && accessPrompts == 1)
+precondition(!permissionGranted("screen_recording", request: true, gate: accessGate,
+    preflight: { false }, prompt: { accessPrompts += 1 }))
+precondition(accessPrompts == 2)
+print("Permission preflight, first request, denied and changed grant controls passed; no OS prompts")

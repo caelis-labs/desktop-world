@@ -72,12 +72,12 @@ MCP 工具响应同时提供文本 JSON，并在协议版本支持时提供 `str
 | --- | --- |
 | `route` | `semantic` / `background` / `foreground`；前台策略预检拒绝时为 null |
 | `reason` | 路线选择或拒绝的诊断字符串，未知时为 null；不是授权依据 |
-| `foreground_borrowed` | 是否保留了需要归还的临时前台所有权；不表示所有可能的焦点变化。Windows/Linux 当前前台输入不提供归还合同 |
-| `focus_return` | `pending`、`restored`、`application_restored`、`changed_externally`、`previous_app_closed`、`unchanged`、`unconfirmed` 或 null |
+| `foreground_borrowed` | 是否建立了需要收尾的前台上下文；字段名沿用，但 macOS 不再自动切回原 app |
+| `focus_return` | `pending`、`retained`、`restored`、`application_restored`、`changed_externally`、`previous_app_closed`、`unchanged`、`unconfirmed` 或 null |
 
-`restored` 表示原窗口归还已证明；`application_restored` 仅证明原应用；`changed_externally` 表示所有权已被外部选择改变；`previous_app_closed` 表示原应用已退出；`unchanged` 表示没有待归还的借用；`unconfirmed` 表示不能证明收尾状态。缺少整个 `delivery` 时不推断路线或归还状态。路由证据与 `dispatch/evidence` 独立，不能据此前台/后台投递或一次成功归还推断输入业务效果。
+当前 macOS 完成操作后保持目标前台；`retained` 表示收尾未切回其他窗口，`changed_externally` 表示尊重外部选择，`unchanged` 表示没有前台上下文，`unconfirmed` 表示不能证明收尾状态。历史版本的 `restored/application_restored/previous_app_closed` 仍可出现在旧记录中。没有 delivery 时不推断路线；这些字段不证明业务效果。
 
-显式 `app.focus` 先返回的动作 receipt 可保留 `focus_return: "pending"`；脚本收尾结果通过可选 `script.focus_return` 单独报告，原动作回执不被重写。已知待归还的前台在取消或 worker 关闭后失去精确结果时，保留 `unconfirmed`，不从正常退出码推断 `restored`；收尾错误继续独立出现在 `shutdown_error`。
+显式 focus 回执可保持 `pending`，最终上下文清理结果在 `script.focus_return`，原动作回执不重写。取消后未知收尾保留 `unconfirmed`，输入释放失败通过 `shutdown_error` 报告。图片来自最后一次显式 capture；`value.last_capture.step/timing/later_calls` 标明时序，不隐含后续动作已被截图验证。
 
 紧凑投影仅在原生报告 delivery 时加入 `script.summary.actions.delivery`，按 `reported/routes/reasons/foreground_borrowed/focus_returns` 汇总，每个动作只计一次，优先采用 provider 原始证据。`script.summary.last_delivery` 保留最后一个报告样本及其 outcome/provider_outcome delivery；`script.focus_return` 在紧凑与完整记录中均保留。运行中断的 unknown 包装也保留 provider delivery，不伪造缺失证据。
 

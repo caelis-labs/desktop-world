@@ -440,11 +440,12 @@ before installing this format; preserve the package and other plugins.
 
 
 def package_assets(source, package, version, target):
-    for name in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
+    for name in ("LICENSE", "THIRD_PARTY_NOTICES.md", "install.md"):
         shutil.copy2(source / name, package / name)
     shutil.copytree(source / "skills/desktop-world", package / "skills/desktop-world")
     for relative in ("docs/native-source-provenance.md", "docs/native-source-provenance-cross-platform.md",
-                     "docs/background-input-port.md"):
+                     "docs/background-input-port.md", "docs/install.md", "docs/install-dsh.md",
+                     "docs/install-caelis.md", "docs/install-agy.md"):
         dest = package / relative
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source / relative, dest)

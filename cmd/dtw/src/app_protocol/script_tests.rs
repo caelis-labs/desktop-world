@@ -336,6 +336,11 @@ return {{label:verified.elements[0].label, refreshed:reobserved.observation_ref 
     assert!(completed.data["script"]["failure"].is_null());
     assert!(completed.image.is_some());
     assert_eq!(completed.data["value"]["last_capture"]["step"], 5);
+    assert_eq!(
+        completed.data["value"]["last_capture"]["timing"],
+        "before_later_calls"
+    );
+    assert_eq!(completed.data["value"]["last_capture"]["later_calls"], 2);
     for (index, step) in steps(&completed).iter().enumerate() {
         assert_eq!(step["number"], index + 1);
         assert!(step["line"].as_u64().unwrap_or(0) > 0, "{step}");

@@ -117,7 +117,7 @@ return {counts, coverage:after.coverage};
 
 总 deadline 同时约束 VM、bridge 等待和每次同步原生调用；Core 还会校验观察期限。到期检查覆盖准入、旧绑定释放后、provider 返回及绑定释放后、state 提交前。下一步不会重新获得整份脚本预算，预算也不延长观察 TTL。晚到动作保留 provider 原始结果；若已可能派发，顶层结论仍为未知效果并记录中断，已知 `not_dispatched` 不改写成未知。
 
-严格 JSON 编码拒绝非有限数、BigInt、函数、symbol、循环、访问器/隐藏属性、非普通 JSON 对象、数组空洞及额外数组属性；不会悄悄丢字段或把非法值改成 null。唯一顶层便捷规则是脚本没有返回值或返回 `undefined` 时，`value.result` 为 null。嵌套 `undefined` 仍拒绝。
+JSON 编码拒绝非有限数、BigInt、函数、symbol、循环、访问器/隐藏属性、非普通 JSON 对象、数组空洞及额外数组属性，不执行 getter 或 `toJSON`。返回值中普通对象的 `undefined` 数据属性按 JSON 习惯递归省略，例如 `return {status: undefined, ok: true}` 返回 `{ok: true}`；数组中的 `undefined` 仍拒绝，不改为 null，也不修改原对象。`state` 继续采用严格 JSON，任何嵌套 `undefined` 都拒绝提交。省略的字段仍计入遍历上限；错误包含有界字段路径。脚本没有返回值或返回根 `undefined` 时，`value.result` 为 null。
 
 普通 Host 错误可在 JavaScript 中 `try/catch` 后继续，先前失败步骤仍在账本中。deadline、取消、显式调用次数配额耗尽及步骤回执准入耗尽会锁定执行失败，不能通过 catch 再返回成功。内存配额由 VM 强制执行；如果脚本捕获一次内存分配异常，并在硬配额内完成后续执行及 JSON 结算，可以成功，不能把“捕获过 OOM”直接等同于突破配额。未捕获的内存/栈错误、语法错误和普通异常均不提交 state。
 
@@ -152,7 +152,7 @@ state 提交不是桌面事务。动作一旦派发，之后的异常、取消�
 
 成功解析为动作的步骤保存完整 `outcome/provider_outcome/interruption`；在 Coordinator 的协议解析阶段被拒绝的步骤只记录 error，receipt 为 null；读步骤也保留错误。普通异常和 provider panic 后，之前的步骤及 receipt 不丢失；panic 时尚无最终回执的动作记为未知效果。脚本失败后的 `completed` 只表示任务已收尾，不能据此推断没有桌面效果。`error.code` 可为 `script_syntax / script_exception / script_memory / script_timeout / script_cancelled / script_stalled / script_internal`，也可能是 Core/协议收尾错误；细分原因如 `call_limit`、`receipt_limit`、`invalid_args`、`invalid_json` 在 `script.failure.code` 中，原生动作事实以步骤 receipt 为准。
 
-动作可选 `delivery` 包含 `route/reason/foreground_borrowed/focus_return`，保留原生报告的语义、后台或前台路线及归还证据；缺失时不推断。`foreground_borrowed` 仅表示临时借用并计划归还，不等同于所有焦点变化；Windows/Linux 当前前台动作不承诺归还。显式 focus 的动作回执可保持 `pending`，最终归还在 `script.focus_return`：`restored` 证明原窗口，`application_restored` 仅证明原 app；`changed_externally`、`previous_app_closed`、`unconfirmed` 不承诺已返回。取消后丢失精确归还结果的已知借用保留 `unconfirmed`，原动作不被重写。紧凑摘要只汇总已报告的 delivery，完整字段定义见[MCP 结果合同](app-protocol-v1.md#结果效果与图像)。这些证据均不代替业务效果读回。
+动作可选 `delivery` 包含 `route/reason/foreground_borrowed/focus_return`，保留原生投递路线。macOS 按需抬升目标窗口后保持前台，不自动切回原应用；阶段任务完成后由 Agent 通过普通 UI 关闭/最小化自己的窗口，或由用户切换。`foreground_borrowed` 是沿用的路线字段，表示本次建立过需要收尾的前台上下文，不再承诺归还。`script.focus_return:retained` 表示结束内部上下文并保留前台，`changed_externally` 表示尊重外部切换，`unconfirmed` 表示收尾状态未获确认。输入释放失败仍通过 `shutdown_error` 关闭后续执行。历史记录可能包含旧版本的 `restored/application_restored`。路线与焦点结果不证明业务效果。`value.last_capture.step/timing/later_calls` 说明图片采集时序；`before_later_calls` 的图片不能作为后续操作的视觉结果，需要时显式在操作之后 capture。
 
 一个连接保留多个 app 上下文，A→B→A 不重置 state 或窗口引用。原生 worker、最新 app state/refs 与历史回执分开管理。已完成历史采用滑动窗口：当前默认保留最近 512 条、16 MiB 回执；value/image 另有 64 MiB payload 预算。这些是保留容量，不是累计执行配额，达到容量会淘汰旧记录并继续执行，不重建 app owner。活动和未收尾执行不会被淘汰。payload 单独淘汰时标记 payload_expired；整条历史淘汰后 result 返回 execution_unavailable，不重放原脚本、不保留无限墓碑。默认 result 读取该 app 最新仍保留的已接受执行（包括进行中）；历史回执不是持久审计存储，去重仅覆盖仍被保留的传输记录。macOS 同一实例的写操作跨会话互斥，独立实例的后台输入可并行；前台替代路线占用共享物理输入租约，归还前台/指针也在该租约内。
 

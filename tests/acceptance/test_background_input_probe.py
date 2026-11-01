@@ -10,19 +10,19 @@ from unittest.mock import patch
 import background_input_probe as probe
 
 
-class ExactForegroundReturnTests(unittest.TestCase):
-    def test_same_pid_wrong_window_is_not_a_confirmed_return(self):
+class ExactForegroundRetentionTests(unittest.TestCase):
+    def test_same_pid_wrong_window_is_not_retained(self):
         with self.assertRaisesRegex(AssertionError, 'exact window'):
-            probe.require_exact_return({'pid':7,'frontmost_pid':7,'key_window':22},7,11)
+            probe.require_exact_foreground({'pid':7,'frontmost_pid':7,'key_window':22},7,11)
 
-    def test_wrong_process_with_matching_window_cannot_confirm_return(self):
+    def test_wrong_process_with_matching_window_cannot_confirm_retention(self):
         for state in [{'pid':7,'frontmost_pid':8,'key_window':11},
                       {'pid':8,'frontmost_pid':7,'key_window':11}]:
             with self.assertRaisesRegex(AssertionError, 'exact window'):
-                probe.require_exact_return(state,7,11)
+                probe.require_exact_foreground(state,7,11)
 
-    def test_exact_original_window_confirms_return(self):
-        probe.require_exact_return({'pid':7,'frontmost_pid':7,'key_window':11},7,11)
+    def test_exact_selected_window_confirms_retention(self):
+        probe.require_exact_foreground({'pid':7,'frontmost_pid':7,'key_window':11},7,11)
 
 
 class DesktopEvidenceTests(unittest.TestCase):
@@ -155,74 +155,89 @@ class OwnedInputEvidenceTests(unittest.TestCase):
 
 
 class FocusOwnershipEvidenceTests(unittest.TestCase):
-    def verify(self, pids, final_pid, sampling='complete'):
+    def verify(self, pids, final_pid, sampling='complete', final_window=91):
         before = {'frontmost_pid': 4, 'key_window': 41}
         target = SimpleNamespace(child=SimpleNamespace(pid=9))
         rows = [{'uptime': i, 'frontmost_pid': pid} for i, pid in enumerate(pids)]
         desktop = {'samples': rows, 'activations': [], 'sampling_coverage': {'status':sampling}}
-        with patch.object(probe, 'fresh_end', return_value={'pid':4,'frontmost_pid': final_pid,'key_window':41}), \
+        final = {'pid':9,'frontmost_pid':final_pid,'key_window':final_window,'windows':[{'id':91}]}
+        with patch.object(probe, 'fresh_end', return_value=final), \
              patch.object(probe, 'observe_desktop', return_value=desktop):
             return probe.focus_return_coverage(object(), before, target, {})
 
-    def test_uninterrupted_borrow_requires_return(self):
-        self.assertEqual(self.verify([9, 4], 4)['status'], 'established')
+    def test_target_retained_is_required_after_controlled_focus(self):
+        self.assertEqual(self.verify([4, 9, 9], 9)['status'], 'established')
         with self.assertRaisesRegex(AssertionError, 'exact window'):
-            self.verify([9], 9)
+            self.verify([4, 9, 4], 4)
 
-    def test_sampling_gap_cannot_claim_uninterrupted_return(self):
-        self.assertEqual(self.verify([9, 4], 4, 'not_established')['status'], 'not_established')
+    def test_same_app_wrong_window_is_not_retention(self):
+        with self.assertRaisesRegex(AssertionError, 'exact window'):
+            self.verify([4, 9], 9, final_window=92)
+
+    def test_sampling_gap_does_not_claim_retention(self):
         self.assertEqual(self.verify([9], 9, 'not_established')['status'], 'not_established')
 
-    def test_external_takeover_marks_return_coverage_unproven(self):
+    def test_external_takeover_does_not_require_stealing_focus_back(self):
         result = self.verify([9, 7], 7)
         self.assertEqual(result['status'], 'not_established')
         self.assertEqual(result['external_foreground_observations'][0]['frontmost_pid'], 7)
 
-    def test_user_reactivation_after_return_is_not_cleanup_failure(self):
-        self.assertEqual(self.verify([9, 4, 9], 9)['status'], 'not_established')
-
-    def test_missing_actual_borrow_is_not_silently_accepted(self):
+    def test_missing_actual_selection_is_not_silently_accepted(self):
         with self.assertRaisesRegex(AssertionError, 'never independently reached'):
             self.verify([4], 4)
 
 
-class FocusReturnReceiptTests(unittest.TestCase):
-    def proof(self, native_return, window=41):
-        before = {'frontmost_pid':4, 'key_window':41}
-        after = {'pid':4, 'frontmost_pid':4, 'key_window':window}
-        desktop = {'samples':[{'uptime':1,'frontmost_pid':9},{'uptime':2,'frontmost_pid':4}],
-                   'activations':[], 'sampling_coverage':{'status':'complete'}}
-        delivery = {'route':'foreground','foreground_borrowed':True,'focus_return':'pending'}
+class FocusRetentionReceiptTests(unittest.TestCase):
+    def proof(self, native_return, borrowed=True):
+        delivery = {'route':'foreground','foreground_borrowed':borrowed,
+                    'focus_return':'pending' if borrowed else None}
         proof = {'record':{'script':{'focus_return':native_return,'steps':[
             {'operation':'focus','receipt':{'provider_outcome':{'delivery':delivery}}}]}}}
-        with patch.object(probe, 'fresh_end', return_value=after), \
-             patch.object(probe, 'observe_desktop', return_value=desktop):
-            probe.focus_return_coverage(object(), before, SimpleNamespace(child=SimpleNamespace(pid=9)), proof)
         probe.focus_receipt_evidence(proof, 1)
         return proof
 
-    def test_exact_sampled_return_does_not_rewrite_conservative_native_result(self):
-        proof = self.proof('changed_externally')
-        self.assertTrue(proof['sampled_exact_return_verified'])
-        self.assertEqual(proof['native_return_evidence']['focus_return'], 'changed_externally')
-        self.assertFalse(proof['native_return_evidence']['exact_window_return_proven'])
+    def test_retained_receipt_preserves_original_pending_step(self):
+        proof = self.proof('retained')
+        self.assertTrue(proof['native_retention_evidence']['target_retained_reported'])
         self.assertEqual(proof['record']['script']['steps'][0]['receipt']['provider_outcome']
                          ['delivery']['focus_return'], 'pending')
 
-    def test_wrong_sampled_window_still_fails_with_conservative_or_restored_receipt(self):
-        for returned in ['changed_externally','restored']:
-            with self.subTest(returned=returned), self.assertRaisesRegex(AssertionError, 'exact window'):
-                self.proof(returned, window=42)
+    def test_already_selected_window_does_not_require_borrow(self):
+        self.proof('retained', borrowed=False)
 
-    def test_restored_native_receipt_keeps_its_distinct_proof(self):
-        proof = self.proof('restored')
-        self.assertTrue(proof['sampled_exact_return_verified'])
-        self.assertTrue(proof['native_return_evidence']['exact_window_return_proven'])
+    def test_external_change_is_not_claimed_as_target_retention(self):
+        proof = self.proof('changed_externally')
+        self.assertFalse(proof['native_retention_evidence']['target_retained_reported'])
 
-    def test_missing_or_pending_finalizer_receipt_is_not_accepted(self):
-        for returned in [None,'pending','success']:
-            with self.subTest(returned=returned), self.assertRaisesRegex(AssertionError, 'terminal return evidence'):
+    def test_old_restore_policy_and_missing_finalizer_are_rejected(self):
+        for returned in [None,'pending','success','restored','application_restored']:
+            with self.subTest(returned=returned), self.assertRaisesRegex(AssertionError, 'terminal retention evidence'):
                 self.proof(returned)
+
+
+class SameProcessSelectedWindowTests(unittest.TestCase):
+    def verify(self, final_window, timeout=False):
+        before = {'pid':9,'frontmost_pid':9,'key_window':91,
+                  'windows':[{'id':91},{'id':92}], 'published_uptime':1}
+        after = dict(before, key_window=final_window, published_uptime=3)
+        target = SimpleNamespace(child=SimpleNamespace(pid=9), app_id='test.app')
+        record = {'status':'completed','error':True,'script':{'failure':{'kind':'timeout'},
+                  'steps':[{'operation':'windows'},{'operation':'focus'}]}}
+        mcp = SimpleNamespace(execute=lambda *args:(record, {}))
+        with patch.object(probe, 'reset'), patch.object(probe, 'front', return_value=before), \
+             patch.object(probe, 'execute'), patch.object(probe, 'fresh_end', return_value=after), \
+             patch.object(probe, 'journal', return_value=[{'uptime':2,'frontmost_pid':9,'key_window':92}]):
+            run = probe.timed_out_focus_return if timeout else probe.same_pid_focus_return
+            run(mcp, target, {})
+
+    def test_selected_sibling_stays_foreground_after_success_and_timeout(self):
+        for timeout in (False, True):
+            with self.subTest(timeout=timeout): self.verify(92, timeout)
+
+    def test_restoring_original_sibling_is_a_regression(self):
+        for timeout in (False, True):
+            with self.subTest(timeout=timeout), self.assertRaisesRegex(AssertionError, 'exact window'):
+                self.verify(91, timeout)
 
 
 class CloseReceiptTests(unittest.TestCase):
