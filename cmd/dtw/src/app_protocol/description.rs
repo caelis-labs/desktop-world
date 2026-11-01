@@ -197,6 +197,20 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
         json!({"window_ref":reference,"observation_ref":reference,"element_ref":reference,"element":element}),
         &["window_ref", "observation_ref", "element_ref", "element"],
     );
+    let mut wait = select.clone();
+    wait["properties"]["state"] = json!({"enum":["present","absent","enabled","disabled"]});
+    wait["required"] = json!(["window_ref", "selector", "state"]);
+    wait["properties"]["timeout_ms"]["default"] = json!(10000);
+    wait["properties"]["timeout_ms"]["description"] = json!("Read polling window, default 10000ms, maximum 30000ms; zero takes one traversal. Polling delay is 50ms, capped by the remaining budget. An admitted native read may finish after this window, within the original execution deadline. No focus, input or action replay.");
+    let mut waited = found.clone();
+    waited["properties"]["state"] = json!({"enum":["present","enabled","disabled"]});
+    waited["required"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("state"));
+    let wait_result = json!({"oneOf":[waited,
+        object(json!({"window_ref":reference,"state":{"const":"absent"}}), &["window_ref","state"])
+    ]});
     let press_refs = object(
         json!({"window_ref":reference,"observation_ref":reference,"element_ref":reference}),
         &["window_ref", "observation_ref", "element_ref"],
@@ -223,7 +237,7 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
     json!({
         "version":1,"language":"javascript",
         "entry":"exec({app: 'com.example.App', source}); source is an async function body with app and state",
-        "facade":{"windows":"app.windows()","waitForWindow":"app.waitForWindow({window_ref,state:'dialog'|'unblocked'|'closed',timeout_ms?})","find":"app.find({window_ref,selector:{scope?:'window'|'menu',role?,text?},timeout_ms?})","observe":"app.observe({window_ref, role?, text?, limit?}) or add scope:'menu', observation_ref+element_ref (subtree), or observation_ref+region:{x,y,width,height} (capture pixels); continue with app.observe({cursor})","capture":"app.capture({window_ref})",
+        "facade":{"windows":"app.windows()","waitForWindow":"app.waitForWindow({window_ref,state:'dialog'|'unblocked'|'closed',timeout_ms?})","wait":"app.wait({window_ref,selector:{scope?:'window'|'menu',role?,text?},state:'present'|'absent'|'enabled'|'disabled',timeout_ms?})","find":"app.find({window_ref,selector:{scope?:'window'|'menu',role?,text?},timeout_ms?})","observe":"app.observe({window_ref, role?, text?, limit?}) or add scope:'menu', observation_ref+element_ref (subtree), or observation_ref+region:{x,y,width,height} (capture pixels); continue with app.observe({cursor})","capture":"app.capture({window_ref})",
             "press":"app.press({window_ref,selector:{scope?:'window'|'menu',role?,text?},timeout_ms?}) or {window_ref,observation_ref,element_ref}","click":"app.click({window_ref,observation_ref,x,y,coordinate_space?,button?,count?})",
             "typeText":"app.typeText({window_ref,text})","keypress":"app.keypress({window_ref,keys})","scroll":"app.scroll({window_ref,delta_x?,delta_y?,observation_ref?,x?,y?,element_ref?})",
             "focus":"app.focus({window_ref})","setValue":"app.setValue({window_ref,selector:{scope?:'window'|'menu',role?,text?},value,timeout_ms?}) or {window_ref,observation_ref,element_ref,value}",
@@ -233,6 +247,8 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
                 "semantics":"No arguments. Aggregates proven windows from the app instances discovered before this exec. Each window_ref routes to its exact native instance. Unchanged targets keep refs and observations; proven removed targets retire theirs. A failed instance does not discard proven sibling windows: partial coverage reports unavailable_instances and bounded errors. When no instance can be inventoried the call throws; an unproven inventory is never success []."},
             (Method::Find.name()):{"parameters":select,"returns":found,"requires":["observe"],
                 "semantics":"Resolve one fresh semantic element by selector in window scope by default, or selector.scope:'menu' for the application's menu. DTW handles pagination and briefly waits using reads only; find never borrows foreground focus. Uniqueness requires a completed traversal; ambiguous matches return bounded candidates, incomplete discovery stays unproven. Missing controls can be read again within timeout_ms; find returns the current enabled state without waiting for it to change. Actions are never repeated. The returned refs and capabilities follow observe's normal lifetime. Use observe for exploration, large trees or narrower scopes."},
+            (Method::Wait.name()):{"parameters":wait,"returns":wait_result,"requires":["observe"],
+                "semantics":"Read-only selector condition inside the current exec. present requires one unique match in a complete traversal; enabled/disabled additionally require that exact Boolean enabled state (null is unproven), never filter away duplicate candidates. absent requires zero matches in a complete traversal of the exposed scope; it is not proof of global absence or an atomic UI snapshot. Incomplete discovery cannot satisfy any condition. Polls fresh queries with pagination, without focusing or input. Positive conditions return fresh usable observation/element refs and bounded element metadata; absent returns only window_ref/state. Each admitted fresh query retires this window's previous semantic refs, preserving captures and other windows. No TTL is extended. wait_timeout is a catchable condition-not-met error; cancellation and the original exec deadline remain terminal. A successful wait proves only its sampled condition and never upgrades a prior action's receipt or authorizes replay. Group action, wait and independent readback/capture in one exec; use waitForWindow for related modal/closure conditions."},
             (Method::WaitForWindow.name()):{"parameters":wait_window,"returns":object(json!({"state":{"enum":["dialog","unblocked","closed"]},"window_ref":reference,"kind":{"enum":["window","dialog","sheet"]},"relation":{"enum":["same_window","child_modal","application_modal"]}}), &["state","window_ref"]),"requires":["windows"],
                 "semantics":"Read-only waiting for one selected native window. dialog returns the fresh ref of the uniquely proven actionable related modal; unblocked waits for the selected window's modal gate to clear; closed requires native proof that this exact surface disappeared. Missing inventory, focus changes, empty titles and arbitrary new windows are not closure or relationship proof. Uses scoped native probes, never input or action replay. Timeout is an ordinary condition-not-met error; the enclosing script deadline still applies. Unsupported providers report unsupported_capability."},
             (Method::Observe.name()):{"parameters":query,"returns":observation,"requires":[Method::Observe.capability().as_str()],
@@ -272,7 +288,7 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
         "execution":"Await every app call sequentially; no concurrent or detached Host calls, timers, imports, filesystem, process or network APIs. One script executes at a time per MCP connection. Each Host call revalidates Core instance, target and binding under one absolute script deadline.",
         "state":"The state root object cannot be rebound. Modify its JSON fields; state must be strict JSON. Returned plain-object undefined properties are omitted recursively; undefined array elements remain invalid. Both reject non-finite numbers, cycles, functions, accessors and exotic objects, with depth <=64 and nodes <=32768. Invalid JSON errors include a bounded field path. An absent return or undefined result root becomes null. State commits only after successful completion before cancellation/timeout; mutations never roll back desktop effects.",
         "errors":{
-            "shape":error,"catch":"Ordinary Host errors expose e.code and optional e.details and may be caught. Timeout, cancellation and call limit remain failures even when caught. Unhandled Promise rejections fail the script without committing state. Caught memory-allocation exceptions may recover within the hard VM quota.",
+            "shape":error,"catch":"Ordinary Host errors expose e.code and optional e.details and may be caught, including wait_timeout and window_wait_timeout (conditions not met). The execution deadline, cancellation and call limit remain failures even when caught. Unhandled Promise rejections fail the script without committing state. Caught memory-allocation exceptions may recover within the hard VM quota.",
             "inventory_unproven":"e.code=window_inventory_unproven; e.details contains coverage with status=unproven, complete_within_scope=false and diagnostics, without windows. Explicit supported-scope exclusions alone do not make inventory unproven."
         },
         "receipts":{

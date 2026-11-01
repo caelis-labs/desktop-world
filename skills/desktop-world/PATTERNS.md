@@ -30,7 +30,29 @@ Discover a form's controls with role/text filters and, when useful, a subtree or
 
 `setValue` replaces a native value without promising ordinary typing/change events. `typeText` sends Unicode keyboard input to the selected editing control, without locating that control. On macOS, newline characters generate Return (CRLF once) and tabs generate Tab; rich editors may continue lists, indent text, or move focus. Verify the resulting content, including any automatic formatting. Choose the method supported by the current field, and verify the effect that matters to the application. Do not silently try both methods after an uncertain write.
 
-A semantic press or shortcut can start an asynchronous UI transition. Delivery does not prove that the new editing control is ready or focused. For a known next control, selector actions resolve a unique target and wait while it is explicitly disabled, using reads only. `find` waits only for a unique match and reports its current `enabled` state; it can return a disabled control. For unstructured editors, observe or capture and establish editing focus before typing. Use `waitForWindow` for modal transitions. Do not repeatedly press or type as a waiting strategy.
+A semantic press or shortcut can start an asynchronous UI transition. Delivery does not prove that the new editing control is ready or focused. For a known next control, `wait` can require its presence or explicit enabled state; selector actions also resolve a unique target and briefly wait while it is disabled, using reads only. `find` waits only for a unique match and reports its current `enabled` state; it can return a disabled control. For unstructured editors, observe or capture and establish editing focus before typing. Use `waitForWindow` for modal transitions. Do not repeatedly press or type as a waiting strategy.
+
+Keep a known transition and its readback in one `exec`, using names and roles already observed in that application:
+
+```javascript
+const window_ref = state.window;
+await app.press({window_ref, selector:{role:'button', text:'Edit'}});
+const field = await app.wait({
+  window_ref, selector:{role:'text_field', text:'Name'}, state:'enabled'
+});
+await app.setValue({
+  window_ref, observation_ref:field.observation_ref,
+  element_ref:field.element_ref, value:'Example'
+});
+await app.press({window_ref, selector:{role:'button', text:'Save'}});
+const saved = await app.wait({
+  window_ref, selector:{text:'Saved successfully'}, state:'present'
+});
+await app.capture({window_ref});
+return {confirmation:saved.element};
+```
+
+The enabled field must advertise `setValue`; otherwise choose its supported editing route. Each action runs once. The waits use fresh discovery, not the refs consumed by the preceding action. `wait` defaults to ten seconds and shares the original script deadline with all other steps; it returns immediately when the condition is met. `state:'absent'` can wait for a known loading indicator to leave the exposed semantic tree, but this alone does not establish that expected data loaded: also wait for/read the relevant resulting state. Partial discovery cannot establish absence. No fixed sleep or extra MCP round trip is needed for a known condition.
 
 Actions consume the target window's current semantic and pixel bindings. For a multi-field form, retain selectors and intended values; selector actions reacquire each target internally. Do not collect all element refs once and reuse them after earlier edits. Stable selectors and small JSON values can be stored in `state`; helper functions belong in the current script.
 
@@ -38,7 +60,7 @@ For toggles, inspect the actual state before pressing: pressing changes state ra
 
 For example, the JavaScript source `text: 'first line\nsecond line'` produces a newline in the text value. Let the client serialize that source as JSON; do not manually add another layer of backslash escaping.
 
-Native value updates can be asynchronous. To wait for a short expected value, use `find` with the field role and that value as `text`, then compare its returned `element.value`; a role-only match can return the old value immediately. This only waits for native field state, not persistence or application validation.
+Native value updates can be asynchronous. To wait for a short expected value, use `wait` with `state:'present'`, the field role and that value as `text`, then compare its returned `element.value`; a role-only match can return the old value immediately. Text selection is a substring match, so compare the expected value explicitly. This only waits for native field state, not persistence or application validation.
 
 After editing, check relevant field values, validation messages, and commit-control state. Commit once, then verify the application's resulting state. Tool delivery, script completion, a field displaying new text, and persisted application data are distinct evidence.
 

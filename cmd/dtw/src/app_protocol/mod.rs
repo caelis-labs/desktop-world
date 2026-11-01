@@ -107,6 +107,7 @@ fn operation(command: &Command) -> &'static str {
         Command::ReadText { .. } => "readText",
         Command::Capture => "capture",
         Command::Find { .. } => "find",
+        Command::Wait { .. } => "wait",
         Command::Press { .. } | Command::PressSelected { .. } => "press",
         Command::Click { .. }
         | Command::ClickWithOptions { .. }
@@ -587,6 +588,11 @@ impl<B: Backend + 'static> Coordinator<B> {
                 selector,
                 timeout_ms,
             }
+            | Command::Wait {
+                selector,
+                timeout_ms,
+                ..
+            }
             | Command::PressSelected {
                 selector,
                 timeout_ms,
@@ -962,6 +968,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             | Command::Script { .. }
             | Command::ContinueObservation { .. }
             | Command::Find { .. }
+            | Command::Wait { .. }
             | Command::PressSelected { .. }
             | Command::SetValueSelected { .. } => {
                 unreachable!()

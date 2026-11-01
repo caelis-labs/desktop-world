@@ -28,6 +28,8 @@
 | 方法 | 返回值 | 执行范围与绑定 |
 | --- | --- | --- |
 | `await app.windows()` | `{windows:[{window_ref,title,visible}],coverage,diagnostics}` | 发现当前 app 的窗口 |
+| `await app.wait({window_ref,selector,state,timeout_ms?})` | 正向条件返回 `{window_ref,observation_ref,element_ref,element,state}`；absent 返回 `{window_ref,state}` | 在脚本内只读等待 present/absent/enabled/disabled，不聚焦或输入 |
+| `await app.waitForWindow({window_ref,state,timeout_ms?})` | `{window_ref,state,kind?,relation?}` | 等待已证明的相关 dialog、原窗口 unblocked 或精确窗口 closed |
 | `await app.observe({window_ref,role?,text?,limit?})` 或 `await app.observe({cursor})` | `{window_ref,observation_ref,kind:"semantic",elements:[{element_ref,role,name,value,enabled,actions,label,can_press}],next,coverage:{complete,reason,visited}}` | 创建或继续原生语义查询，返回当前页 |
 | `await app.capture({window_ref})` | `{window_ref,observation_ref,kind:"pixels",image:{width,height,coordinate_space:"image_pixels"}}` | 返回像素观察元数据，图片字节在 VM 外 |
 | `await app.press({window_ref,observation_ref,element_ref})` | 原协议的动作 receipt | 当前语义观察中的可按元素 |
@@ -41,6 +43,10 @@
 | `await app.setValue({window_ref,observation_ref,element_ref,value})` | 动作 receipt | 当前语义观察中明确广告 `setValue` 的可编辑文本控件 |
 
 调用 app 方法时，普通参数对象中自有、可枚举且值为 `undefined` 的数据属性视为未提供；这不会修改调用方对象。随后仍按唯一参数 schema 校验必填字段、长度及互斥规则。数组中的 undefined/空洞、访问器、toJSON、symbols、循环及其他非 JSON 值仍拒绝；已提交 state 与结果对象不会采用此省略规则。
+
+`wait` 将动作后的异步条件与下一步放在同一次 `exec` 中。`selector` 与 `find` 相同，`state` 必填：`present` 要求完整遍历中恰好一个匹配；`enabled`/`disabled` 先证明同样的唯一性，再要求 `enabled` 显式为 true/false，null 不能满足；`absent` 要求完整遍历中零匹配。它只证明暴露语义树的当前采样条件，不证明全局不存在、原子快照、保存落盘或先前动作的业务成功。正向结果含本次新 refs 和有界元素元数据，可直接用于当前脚本下一步；absent 不返回元素 refs。每次新查询按原 observe 合同退休本窗旧语义 refs，保留本窗 capture 与其他窗口。
+
+新 `wait` 的 `timeout_ms` 默认 10000、范围 0–30000；立即满足会立即返回，零只做一次完整遍历。轮询间隔为 50ms，并受剩余条件/脚本预算约束；分页、原生读取与大树扫描仍有实际成本。条件时间窗只停止新的采样，已获准读取可以在窗外健康完成，但不能越过原 `exec` deadline。条件未满足抛出可捕获的 `wait_timeout`，保留有界解析进度；取消或总 deadline 仍终止执行，catch 不能继续原生调用或提交 state。`find`、selector 动作与 `waitForWindow` 的原默认时间不变。等待不发送 input、不自动 focus、不重放动作、不延长引用 TTL，也不把原动作 `unverified` 升级为 `confirmed`。已知流程应在一个脚本内组合 action → wait → 独立读回/capture；新视觉决策或不明确条件再返回模型。
 
 文本按 UTF-8 限 16 KiB，JSON 编码后限 48 KiB，不含 NUL；`setValue` 允许空串清空，`typeText` 不允许空串。键盘输入与语义 setter 的事件语义不同，业务效果必须独立读回。focus/输入动作同样消费目标窗口旧观察；其他窗口和 app 的状态保留。跨进程输入 lease 覆盖聚焦、目标复核和完整输入事务；中断不重放，已按下的键/按钮按原操作清理。
 

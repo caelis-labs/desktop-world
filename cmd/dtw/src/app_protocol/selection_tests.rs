@@ -2,6 +2,9 @@
 use super::*;
 use std::collections::VecDeque;
 
+#[path = "wait_tests.rs"]
+mod wait_tests;
+
 struct Page {
     elements: Vec<Element>,
     discovery: DiscoveryPage,
