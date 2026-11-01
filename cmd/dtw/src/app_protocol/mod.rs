@@ -19,6 +19,7 @@ pub mod mcp;
 mod mcp_io;
 mod methods;
 mod projection;
+mod references;
 mod script_engine;
 mod scripts;
 mod selection;
@@ -30,6 +31,7 @@ pub mod transport;
 mod window_wait;
 pub mod wire;
 
+use references::reference;
 use wire::{Command, Request, Submit, WireError};
 
 #[derive(Clone, Copy)]
@@ -92,9 +94,6 @@ fn problem(code: &str, message: &str) -> Reply {
         code: code.into(),
         message: message.into(),
     })
-}
-fn reference(prefix: &str) -> String {
-    format!("{prefix}_{}", uuid::Uuid::new_v4())
 }
 fn operation(command: &Command) -> &'static str {
     match command {
@@ -254,6 +253,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         app_name: String,
         script_state: Arc<Mutex<Value>>,
     ) -> Result<Arc<Self>, Error> {
+        let app_ref = reference("app")?;
         let supported = Capability::ALL
             .into_iter()
             .filter(|c| backend.supports(*c))
@@ -272,7 +272,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             conditions,
             observe_scopes,
             app_name,
-            app_ref: reference("app"),
+            app_ref,
             supported,
             state: Mutex::new(State {
                 terminal: None,
@@ -629,12 +629,24 @@ impl<B: Backend + 'static> Coordinator<B> {
                         .filter(|(_, target)| !proven.contains(&target.app))
                         .map(|(key, target)| (key.clone(), target.clone()))
                         .collect();
-                    let rows:Vec<_>=windows.into_iter().map(|window| {
-                        let key=state.windows.iter().find(|(_, target)| **target == window.target)
-                            .map(|(key, _)| key.clone()).unwrap_or_else(|| reference("window"));
-                        let row=json!({"window_ref":key,"title":window.title,"visible":window.visible});
-                        bound.insert(key,window.target); row
-                    }).collect();
+                    let mut rows = Vec::with_capacity(windows.len());
+                    for window in windows {
+                        let key = match state
+                            .windows
+                            .iter()
+                            .find(|(_, target)| **target == window.target)
+                        {
+                            Some((key, _)) => key.clone(),
+                            None => match reference("win") {
+                                Ok(key) => key,
+                                Err(error) => return Work::read_error(error),
+                            },
+                        };
+                        rows.push(
+                            json!({"window_ref":key,"title":window.title,"visible":window.visible}),
+                        );
+                        bound.insert(key, window.target);
+                    }
                     Work {
                         completed: Completed {
                             value: Some({
@@ -1019,35 +1031,47 @@ impl<B: Backend + 'static> Coordinator<B> {
         observation: Observation,
         previous: Option<Snapshot>,
     ) -> Work {
-        let mut snapshot = previous.unwrap_or_else(|| Snapshot {
-            core: observation.reference,
-            elements: HashMap::new(),
-            public: reference("observation"),
-            window_ref: window_ref.into(),
-            kind: observation.kind,
-            image_size: observation
-                .image
-                .as_ref()
-                .map(|image| (image.width, image.height)),
-            cursor: None,
-            retired: false,
-            expires_at: Instant::now() + OBSERVATION_TTL,
-        });
-        let rows: Vec<_> = observation
-            .elements
-            .into_iter()
-            .map(|element| {
-                let id = reference("element");
-                let row =
-                    json!({"element_ref":id,"label":element.label,"can_press":element.can_press,"role":element.role,"name":element.name,"value":element.value,"enabled":element.enabled,"actions":element.actions});
-                snapshot.elements.insert(id, element.id);
-                row
-            })
-            .collect();
+        let mut snapshot = match previous {
+            Some(snapshot) => snapshot,
+            None => Snapshot {
+                core: observation.reference,
+                elements: HashMap::new(),
+                public: match reference("obs") {
+                    Ok(key) => key,
+                    Err(error) => return Work::read_error(error),
+                },
+                window_ref: window_ref.into(),
+                kind: observation.kind,
+                image_size: observation
+                    .image
+                    .as_ref()
+                    .map(|image| (image.width, image.height)),
+                cursor: None,
+                retired: false,
+                expires_at: Instant::now() + OBSERVATION_TTL,
+            },
+        };
+        let mut rows = Vec::with_capacity(observation.elements.len());
+        for element in observation.elements {
+            let id = match reference("el") {
+                Ok(key) => key,
+                Err(error) => return Work::read_error(error),
+            };
+            let row = json!({"element_ref":id,"label":element.label,"can_press":element.can_press,"role":element.role,"name":element.name,"value":element.value,"enabled":element.enabled,"actions":element.actions});
+            snapshot.elements.insert(id, element.id);
+            rows.push(row);
+        }
         let mut value = json!({"window_ref":window_ref,"observation_ref":snapshot.public,
             "kind":match observation.kind {ObservationKind::Semantic=>"semantic",ObservationKind::Pixels=>"pixels"}});
         if let Some(page) = observation.discovery {
-            snapshot.cursor = page.has_more.then(|| reference("cursor"));
+            snapshot.cursor = if page.has_more {
+                match reference("cur") {
+                    Ok(key) => Some(key),
+                    Err(error) => return Work::read_error(error),
+                }
+            } else {
+                None
+            };
             value["next"] = json!(snapshot.cursor);
             value["coverage"] =
                 json!({"complete":page.complete,"reason":page.reason,"visited":page.visited});
