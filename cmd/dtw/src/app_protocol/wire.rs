@@ -63,6 +63,24 @@ pub struct ElementSelector {
     pub text: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ElementWaitState {
+    Present,
+    Absent,
+    Enabled,
+    Disabled,
+}
+impl ElementWaitState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Present => "present",
+            Self::Absent => "absent",
+            Self::Enabled => "enabled",
+            Self::Disabled => "disabled",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     Script {
@@ -93,6 +111,11 @@ pub enum Command {
     Capture,
     Find {
         selector: ElementSelector,
+        timeout_ms: u64,
+    },
+    Wait {
+        selector: ElementSelector,
+        state: ElementWaitState,
         timeout_ms: u64,
     },
     PressSelected {
@@ -470,6 +493,37 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
             let (selector, timeout_ms) = selection(command)?;
             Ok(Command::Find {
                 selector,
+                timeout_ms,
+            })
+        }
+        "wait" => {
+            fields(
+                command,
+                &["kind", "selector", "state", "timeout_ms"],
+                "command",
+            )?;
+            let (selector, timeout_ms) = selection(command)?;
+            // General async page transitions get a longer default than target
+            // resolution. This is still bounded by the enclosing exec deadline.
+            let timeout_ms = if command.contains_key("timeout_ms") {
+                timeout_ms
+            } else {
+                10_000
+            };
+            let state = match command.get("state").and_then(Value::as_str) {
+                Some("present") => ElementWaitState::Present,
+                Some("absent") => ElementWaitState::Absent,
+                Some("enabled") => ElementWaitState::Enabled,
+                Some("disabled") => ElementWaitState::Disabled,
+                _ => {
+                    return Err(invalid(
+                        "wait state must be present, absent, enabled or disabled",
+                    ))
+                }
+            };
+            Ok(Command::Wait {
+                selector,
+                state,
                 timeout_ms,
             })
         }

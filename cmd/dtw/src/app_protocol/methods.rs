@@ -4,6 +4,7 @@ use crate::computer::Capability;
 pub(super) enum Method {
     Windows,
     WaitForWindow,
+    Wait,
     Find,
     Observe,
     Capture,
@@ -17,9 +18,10 @@ pub(super) enum Method {
     ReadText,
 }
 impl Method {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Windows,
         Self::WaitForWindow,
+        Self::Wait,
         Self::Find,
         Self::Observe,
         Self::Capture,
@@ -36,6 +38,7 @@ impl Method {
         match self {
             Self::Windows => "windows",
             Self::WaitForWindow => "waitForWindow",
+            Self::Wait => "wait",
             Self::Find => "find",
             Self::Observe => "observe",
             Self::Capture => "capture",
@@ -62,7 +65,7 @@ impl Method {
     pub fn capability(self) -> Capability {
         match self {
             Self::Windows | Self::WaitForWindow => Capability::Windows,
-            Self::Find => Capability::Observe,
+            Self::Find | Self::Wait => Capability::Observe,
             Self::Observe => Capability::Observe,
             Self::Capture => Capability::Capture,
             Self::Press => Capability::Press,

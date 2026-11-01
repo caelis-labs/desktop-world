@@ -86,6 +86,7 @@ fn only_small_frozen_app_surface_exists_and_native_bridges_are_hidden() {
         json!([
             "windows",
             "waitForWindow",
+            "wait",
             "find",
             "observe",
             "capture",

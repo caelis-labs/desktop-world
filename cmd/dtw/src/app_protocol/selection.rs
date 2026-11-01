@@ -1,7 +1,7 @@
 //! Convenience resolution uses the existing observation owner and action path.
 //! A complete fresh traversal proves uniqueness; it is not a UI snapshot lock.
 use super::*;
-use wire::{ElementSelector, SelectorScope};
+use wire::{ElementSelector, ElementWaitState, SelectorScope};
 
 const POLL: Duration = Duration::from_millis(50);
 
@@ -27,8 +27,21 @@ impl<B: Backend + 'static> Coordinator<B> {
         deadline: Instant,
         wait_until: Instant,
     ) -> Work {
+        let condition = match submitted.command {
+            Command::Wait { state, .. } => Some(state),
+            _ => None,
+        };
+        let read_only = matches!(
+            submitted.command,
+            Command::Find { .. } | Command::Wait { .. }
+        );
+        let absent = condition == Some(ElementWaitState::Absent);
         let mut progress = json!({"kind":"element","attempts":0,"pages":0,"matches":0,"status":"reading",
                 "scope":match selector.scope { SelectorScope::Window => "window", SelectorScope::Menu => "menu" }});
+        if let Some(condition) = condition {
+            progress["kind"] = json!("element_condition");
+            progress["state"] = json!(condition.as_str());
+        }
         self.record_resolution(&submitted.request_id, progress.clone());
         let mut attempts = 0_u32;
         let mut pages = 0_u32;
@@ -92,6 +105,12 @@ impl<B: Backend + 'static> Coordinator<B> {
                 progress["status"] = json!("reading");
                 self.record_resolution(&submitted.request_id, progress.clone());
                 if matches.len() >= 2 {
+                    // Two matches already disprove absence for this sample.
+                    // No element is being selected; wait for a fresh traversal
+                    // rather than treating these matches as an ambiguity error.
+                    if absent {
+                        break page;
+                    }
                     progress["status"] = json!("ambiguous");
                     self.record_resolution(&submitted.request_id, progress.clone());
                     return selection_error(
@@ -119,15 +138,13 @@ impl<B: Backend + 'static> Coordinator<B> {
                 }
             };
             let complete = final_page["coverage"]["complete"] == true;
-            let disabled = complete
-                && matches.len() == 1
-                && matches[0]["enabled"] == false
-                && !matches!(submitted.command, Command::Find { .. });
+            let disabled =
+                complete && matches.len() == 1 && matches[0]["enabled"] == false && !read_only;
             if selector.scope == SelectorScope::Menu
                 && complete
                 && matches.len() == 1
                 && !focus_attempted
-                && !matches!(submitted.command, Command::Find { .. })
+                && !read_only
                 && (disabled
                     || match submitted.command {
                         Command::PressSelected { .. } => matches[0]["can_press"] == true,
@@ -153,9 +170,35 @@ impl<B: Backend + 'static> Coordinator<B> {
                 }
                 continue;
             }
-            if complete && matches.len() == 1 && !disabled {
+            let condition_met = match condition {
+                Some(ElementWaitState::Absent) => matches.is_empty(),
+                Some(ElementWaitState::Enabled) => {
+                    matches.len() == 1 && matches[0]["enabled"] == true
+                }
+                Some(ElementWaitState::Disabled) => {
+                    matches.len() == 1 && matches[0]["enabled"] == false
+                }
+                _ => matches.len() == 1 && !disabled,
+            };
+            if complete && condition_met {
                 progress["status"] = json!("resolved");
                 self.record_resolution(&submitted.request_id, progress);
+                if absent {
+                    return Work {
+                        completed: Completed {
+                            value: Some(
+                                json!({"window_ref":submitted.target.window_ref,"state":"absent"}),
+                            ),
+                            image: None,
+                            receipt: None,
+                            error: None,
+                            payload_bytes: 0,
+                            payload_expired: false,
+                        },
+                        publication: Publication::None,
+                        state_update: None,
+                    };
+                }
                 let observation_ref = final_page["observation_ref"]
                     .as_str()
                     .expect("observation ref")
@@ -165,15 +208,19 @@ impl<B: Backend + 'static> Coordinator<B> {
                     .expect("element ref")
                     .to_owned();
                 let command = match &submitted.command {
-                    Command::Find { .. } => {
+                    Command::Find { .. } | Command::Wait { .. } => {
+                        let mut value = json!({"window_ref":submitted.target.window_ref,
+                            "observation_ref":observation_ref,"element_ref":element_ref,
+                            "element":{"role":matches[0]["role"],"name":matches[0]["name"],
+                                "value":matches[0]["value"],"label":matches[0]["label"],
+                                "enabled":matches[0]["enabled"],"actions":matches[0]["actions"],
+                                "can_press":matches[0]["can_press"]}});
+                        if let Some(condition) = condition {
+                            value["state"] = json!(condition.as_str());
+                        }
                         return Work {
                             completed: Completed {
-                                value: Some(json!({"window_ref":submitted.target.window_ref,
-                                "observation_ref":observation_ref,"element_ref":element_ref,
-                                "element":{"role":matches[0]["role"],"name":matches[0]["name"],
-                                    "value":matches[0]["value"],"label":matches[0]["label"],
-                                    "enabled":matches[0]["enabled"],"actions":matches[0]["actions"],
-                                    "can_press":matches[0]["can_press"]}})),
+                                value: Some(value),
                                 image: None,
                                 receipt: None,
                                 error: None,
@@ -182,7 +229,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                             },
                             publication: Publication::None,
                             state_update: None,
-                        }
+                        };
                     }
                     Command::PressSelected { .. } => Command::Press {
                         observation_ref,
@@ -244,6 +291,15 @@ impl<B: Backend + 'static> Coordinator<B> {
                     progress["error"] = core_error(&error);
                     self.record_resolution(&submitted.request_id, progress.clone());
                     return selection_error(submitted, wire::core_error(&error));
+                }
+                if let Some(condition) = condition {
+                    progress["status"] = json!("timeout");
+                    self.record_resolution(&submitted.request_id, progress.clone());
+                    return selection_error(submitted, resolution_error(
+                        "wait_timeout",
+                        &format!("The selector condition '{}' was not observed before the wait ended; only reads were performed. Inspect the original action receipt and current UI instead of repeating input", condition.as_str()),
+                        &progress,
+                    ));
                 }
                 let (code, status, message) = if disabled {
                     (
@@ -357,7 +413,7 @@ fn selection_resolution_error(
     message: &str,
     progress: &Value,
 ) -> WireError {
-    let conclusion = if matches!(command, Command::Find { .. }) {
+    let conclusion = if matches!(command, Command::Find { .. } | Command::Wait { .. }) {
         "No unique element reference was returned; inspect candidates and coverage"
     } else {
         "The selected action was not dispatched"
