@@ -524,14 +524,23 @@ def mixed_foreground_background(clients, target, peer, evidence):
     proof['foreground_retention_verified'] = True
 
 
+def focus_established_trace(trace, pid, window):
+    prefix = ['dtw_focus_transition', f'pid={pid}', f'window={window}']
+    for line in trace.splitlines():
+        tokens = line.split()
+        if tokens[:3] == prefix and [token for token in tokens[3:] if token.startswith('phase=')] == ['phase=focus_established']:
+            return True
+    return False
+
+
 def wait_for_focus_established(mcp, target, offset, proof):
     # A fixture becoming frontmost can precede completion of app.focus(). This
     # private trace is only a setup barrier; actual effects and the script hold
     # interval are still independently asserted below.
-    marker = (f'dtw_focus_transition pid={target.child.pid} '
-              f'window={target.state()["windows"][0]["id"]} phase=focus_established')
+    pid, window = target.child.pid, target.state()['windows'][0]['id']
+    marker = f'dtw_focus_transition pid={pid} window={window} phase=focus_established'
     trace = mcp.output / 'dtw-stderr.log'
-    wait_until(lambda: marker in trace.read_text()[offset:])
+    wait_until(lambda: focus_established_trace(trace.read_text()[offset:], pid, window))
     observed = target.state()['published_uptime']
     proof['focus_setup_barrier'] = {'trace_offset': offset, 'marker': marker,
                                   'observed_fixture_uptime': observed}

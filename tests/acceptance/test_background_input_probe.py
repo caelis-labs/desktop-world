@@ -10,6 +10,27 @@ from unittest.mock import patch
 import background_input_probe as probe
 
 
+class FocusEstablishedTraceTests(unittest.TestCase):
+    def test_native_trace_accepts_additional_fields(self):
+        for extra in ['', 'activation_window=42 ', 'activation_window=42 revision=3 ']:
+            trace = f'dtw_focus_transition pid=7 window=42 {extra}phase=focus_established extra=value'
+            self.assertTrue(probe.focus_established_trace(trace, 7, 42))
+
+    def test_wrong_target_or_incomplete_phase_never_opens_barrier(self):
+        for trace in [
+            'dtw_focus_transition pid=70 window=42 phase=focus_established',
+            'dtw_focus_transition pid=7 window=420 phase=focus_established',
+            'dtw_focus_transition pid=7 window=42 phase=focus_established_later',
+            'dtw_focus_transition pid=7 window=42 phase=raise_requested',
+            'dtw_focus_transition pid=7 window=42 other_phase=focus_established',
+            'other_trace pid=7 window=42 phase=focus_established',
+            'dtw_focus_transition pid=7 window=42\nphase=focus_established',
+            'dtw_focus_transition pid=7 window=42 phase=raise_requested phase=focus_established',
+        ]:
+            with self.subTest(trace=trace):
+                self.assertFalse(probe.focus_established_trace(trace, 7, 42))
+
+
 class ExactForegroundRetentionTests(unittest.TestCase):
     def test_same_pid_wrong_window_is_not_retained(self):
         with self.assertRaisesRegex(AssertionError, 'exact window'):
