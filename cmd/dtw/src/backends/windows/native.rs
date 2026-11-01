@@ -902,6 +902,7 @@ impl Store {
         r: &Value,
         until: Instant,
         dispatched: &mut bool,
+        route: &mut Option<&'static str>,
     ) -> Result<(), Error> {
         input::no_held_keys()?;
         let op = string(r, "operation")?;
@@ -1002,6 +1003,101 @@ impl Store {
         self.consume(target);
         self.validate(target)?;
         check(until)?;
+        if matches!(op, "click" | "scroll") {
+            if point.is_none() {
+                let bounds = unobstructed(window)?;
+                point = Some((
+                    bounds,
+                    POINT {
+                        x: bounds.left + (bounds.right - bounds.left) / 2,
+                        y: bounds.top + (bounds.bottom - bounds.top) / 2,
+                    },
+                    unsafe { GetDpiForWindow(window) },
+                    None,
+                    None,
+                ));
+            }
+            let (bounds, hit, dpi, expiry, rendered_size) = point.as_ref().unwrap();
+            let count = if op == "click" {
+                number(r, "count")?
+            } else {
+                1
+            };
+            let receiver = if op == "click" && r["button"] != "left" {
+                None
+            } else {
+                super::posted_mouse::Target::prepare(
+                    window,
+                    target.app.pid,
+                    *hit,
+                    op == "scroll",
+                    count,
+                )?
+            };
+            if let Some(receiver) = receiver {
+                let mut cursor = super::cursor::Emitter::new(&r["cursor_feedback"], target);
+                let verify = |state: &Self| -> Result<(), Error> {
+                    state.validate(target)?;
+                    check(until)?;
+                    input::no_held_keys()?;
+                    if !unsafe { IsWindowEnabled(window) }.as_bool()
+                        || expiry.is_some_and(|e| e <= Instant::now())
+                        || *dpi != unsafe { GetDpiForWindow(window) }
+                        || !equal_rect(*bounds, unobstructed(window)?)
+                        || rendered_size.is_some_and(|saved| {
+                            render_size(window).map_or(true, |now| now != saved)
+                        })
+                    {
+                        return Err(Error::StaleObservation);
+                    }
+                    if let Some((uia, element, root, before, region)) = semantic_anchor.as_ref() {
+                        if !equal_rect(
+                            scroll_element_rect(uia, element, root, *bounds, *region, until)?,
+                            *before,
+                        ) {
+                            return Err(Error::StaleObservation);
+                        }
+                    }
+                    receiver.validate()
+                };
+                if op == "click" {
+                    for index in 0..count {
+                        verify(self)?;
+                        *route = Some("background");
+                        receiver.click(index == 1, until, dispatched)?;
+                        if let Some(cursor) = cursor.as_mut() {
+                            cursor.posted(hit.x, hit.y, true);
+                        }
+                        std::thread::sleep(Duration::from_millis(25));
+                    }
+                } else if let Some((x, y)) = scroll {
+                    for (delta, horizontal, sign) in [(y, false, -1), (x, true, 1)] {
+                        for _ in 0..delta.unsigned_abs() {
+                            verify(self)?;
+                            *route = Some("background");
+                            receiver.wheel(
+                                horizontal,
+                                delta.signum() as i32 * sign * 120,
+                                until,
+                                dispatched,
+                            )?;
+                            if let Some(cursor) = cursor.as_mut() {
+                                cursor.posted(hit.x, hit.y, false);
+                            }
+                            std::thread::sleep(Duration::from_millis(25));
+                        }
+                    }
+                }
+                return Ok(());
+            }
+            if r["input_policy"] == "background_only" {
+                return Err(Error::NativeFailure {
+                    code: "foreground_required".into(),
+                    message: "This mouse receiver or gesture requires foreground input".into(),
+                });
+            }
+        }
+        *route = Some("foreground");
         input::focus(window, until, dispatched)?;
         self.input_boundary(target, window, until)?;
         let text_scalars: Vec<char> = if op == "typeText" {
@@ -1197,6 +1293,7 @@ impl Store {
     }
     fn action(&mut self, r: &Value, until: Instant) -> Value {
         let mut dispatched = false;
+        let mut route = None;
         let result = (|| {
             let target = parse_target(&r["target"])?;
             let window = self.validate(&target)?;
@@ -1276,7 +1373,7 @@ impl Store {
                     return Err(Error::ElementNotPressable);
                 }
             } else {
-                self.window_input(&target, window, r, until, &mut dispatched)?;
+                self.window_input(&target, window, r, until, &mut dispatched, &mut route)?;
             }
             Ok(())
         })();
@@ -1290,6 +1387,7 @@ impl Store {
                 result
             }
         };
+        reply["input_route"] = json!(route);
         if input::cleanup_failed() {
             reply["shutdown_error"] = json!({"code":"input_cleanup_failed","message":"Paired input, accepted text delivery or transaction lease cleanup is unconfirmed"});
         }

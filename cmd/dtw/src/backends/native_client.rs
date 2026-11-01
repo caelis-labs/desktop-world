@@ -209,6 +209,7 @@ impl<P: Platform> NativeBackend<P> {
         #[cfg(target_os = "windows")]
         let (request, mut presentation) = {
             let mut request = request;
+            request["input_policy"] = json!(self.input_policy.as_str());
             let presentation = if matches!(operation.as_str(), "click" | "scroll") {
                 // Validate the native target before starting optional visuals.
                 // The eventual action repeats every ordinary admission check.
@@ -251,11 +252,19 @@ impl<P: Platform> NativeBackend<P> {
                         return ActionOutcome::unknown(Error::InvalidObservation);
                     }
                 };
-                // Both native providers have one physical input path. A native
-                // dispatched/unknown reply proves that path crossed admission;
-                // transport uncertainty alone does not prove any delivery route.
+                // Route evidence comes from native admission. Transport
+                // uncertainty alone cannot establish which route was selected.
                 if outcome.dispatch != DispatchState::NotDispatched {
-                    outcome.delivery = operation_route(&operation).map(|route| InputDelivery {
+                    #[cfg(target_os = "windows")]
+                    let route = match reply["input_route"].as_str() {
+                        Some("background") => Some(InputRoute::Background),
+                        Some("foreground") => Some(InputRoute::Foreground),
+                        _ if matches!(operation.as_str(), "click" | "scroll") => None,
+                        _ => operation_route(&operation),
+                    };
+                    #[cfg(not(target_os = "windows"))]
+                    let route = operation_route(&operation);
+                    outcome.delivery = route.map(|route| InputDelivery {
                         route: Some(route),
                         reason: None,
                         foreground_borrowed: false,
@@ -592,6 +601,12 @@ fn operation_route(operation: &str) -> Option<InputRoute> {
 }
 
 fn policy_rejection(policy: InputPolicy, operation: &str) -> Option<ActionOutcome> {
+    // Windows selects a targeted HWND route after proving the live receiver.
+    // Keyboard/focus and other platforms retain their existing policy gate.
+    #[cfg(target_os = "windows")]
+    if matches!(operation, "click" | "scroll") {
+        return None;
+    }
     if policy != InputPolicy::BackgroundOnly
         || operation_route(operation) != Some(InputRoute::Foreground)
     {
@@ -792,8 +807,13 @@ mod tests {
     }
 
     #[test]
-    fn background_only_rejects_every_physical_path_and_preserves_semantics() {
+    fn background_only_rejects_foreground_paths_and_preserves_semantics() {
         for operation in ["click", "focus", "typeText", "keypress", "scroll"] {
+            #[cfg(target_os = "windows")]
+            if matches!(operation, "click" | "scroll") {
+                assert!(policy_rejection(InputPolicy::BackgroundOnly, operation).is_none());
+                continue;
+            }
             let rejected = policy_rejection(InputPolicy::BackgroundOnly, operation).unwrap();
             assert_eq!(rejected.dispatch, DispatchState::NotDispatched);
             assert_eq!(

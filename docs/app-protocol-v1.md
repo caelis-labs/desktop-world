@@ -4,7 +4,7 @@
 
 ## 服务输入策略
 
-启动参数为 `dtw mcp [--input-policy auto|background-only]`，默认 `auto`。macOS 的 `auto` 优先选择可用的后台投递，只有在尚未准备或派发输入的预检阶段确认后台不可用，才选择前台路径；未知或已派发结果不会换路重试。`background-only` 禁止 DTW 主动取得前台：显式 `focus` 及需要前台投递的动作，在前台准备之前返回 `not_dispatched` / `foreground_required`。Windows/Linux 当前物理输入没有后台路线，因此此模式拒绝 click/focus/typeText/keypress/scroll；已实现的原生语义操作仍可用。
+启动参数为 `dtw mcp [--input-policy auto|background-only]`，默认 `auto`。macOS 的 `auto` 优先选择可用的后台投递，只有在尚未准备或派发输入的预检阶段确认后台不可用，才选择前台路径；未知或已派发结果不会换路重试。`background-only` 禁止 DTW 主动取得前台：显式 `focus` 及需要前台投递的动作，在前台准备之前返回 `not_dispatched` / `foreground_required`。Windows 的 `auto` 同样在已证明支持的 HWND 客户区选择定向鼠标消息，其他组合由 DTW 自动抬升窗口并使用前台投递；Agent 无需指定路线。显式限制为后台的服务仍会拒绝不支持的组合。Linux 当前物理输入没有后台路线；已实现的原生语义操作不受前台限制。
 
 `apps` 和 `api`（包括按方法过滤的返回）包含 `service: {input_policy: "auto" | "background_only"}`。命令行用连字符 `background-only`，返回值用下划线 `background_only`。策略固定于服务启动，脚本不覆盖它；`exec` 参数仍只有 `app + source`。这是工具的输入路由配置，不是授权、审批或 Harness 权限。语义动作可能使应用自行打开窗口或改变焦点，策略不承诺屏蔽应用自身的 UI 效果。Agent 遇到 `foreground_required` 应保留回执并说明当前路线不可用，不通过重试 `focus` 解决。
 

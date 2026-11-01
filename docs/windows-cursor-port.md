@@ -2,8 +2,60 @@
 
 Windows now implements the existing session cursor contract using a private,
 same-executable Win32 presentation worker. This is optional visual feedback;
-pointer and keyboard delivery still use foreground input and the shared physical
-pointer. It does not establish macOS background-input parity.
+Windows selects targeted mouse messages where supported and raises the target
+for other input. It does not establish full macOS background-input parity.
+
+## Visual feedback and input routing
+
+The colored marker is a presentation window, not another OS mouse device.
+Windows coordinate clicks and wheel anchors currently use `SendInput` with an
+absolute move on the shared system pointer. The real cursor and marker therefore
+move together. Semantic `press`/`setValue` use the control's UIA patterns instead
+of DTW moving the pointer. See Microsoft's [mouse input](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-mouseinput),
+[shared cursor](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setcursorpos)
+and [UIA Invoke](https://learn.microsoft.com/en-us/windows/win32/api/uiautomationclient/nf-uiautomationclient-iuiautomationinvokepattern-invoke)
+contracts.
+
+Moving the real cursor is a property of this input route, not a requirement for
+every Windows automation action. A later upstream comparison at CUA
+[`8db684185a93e854bb7811189d69f933bb15f55d`](https://github.com/trycua/cua/tree/8db684185a93e854bb7811189d69f933bb15f55d)
+finds additional Windows routes:
+
+- [Window-targeted posted messages](https://github.com/trycua/cua/blob/8db684185a93e854bb7811189d69f933bb15f55d/libs/cua-driver/rust/crates/platform-windows/src/input/mouse.rs#L138)
+  select a child HWND and post move/button messages without moving the system
+  mouse. Acceptance by the target is separate from queue insertion.
+- [Synthetic pen injection](https://github.com/trycua/cua/blob/8db684185a93e854bb7811189d69f933bb15f55d/libs/cua-driver/rust/crates/platform-windows/src/input/inject.rs#L307)
+  implements another coordinate route intended to preserve the user's mouse
+  location, with button, visibility and activation constraints. Microsoft's
+  [synthetic pointer API](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-createsyntheticpointerdevice)
+  creates touch or pen devices; it does not create an independent ordinary mouse
+  cursor per Agent.
+- The upstream [click dispatcher](https://github.com/trycua/cua/blob/8db684185a93e854bb7811189d69f933bb15f55d/libs/cua-driver/rust/crates/platform-windows/src/tools/click.rs#L1090)
+  distinguishes semantic, message, synthetic pointer and foreground SendInput
+  routes. Support for one gesture does not establish all buttons, modifiers,
+  drag or scroll behavior.
+
+DTW adapts the posted-message route in its Windows backend. Supported client-area
+HWND controls receive left single/double clicks and wheel messages; Chromium
+content accepts only a single left click through this route. Right clicks,
+Chromium wheel/double clicks, unknown window classes and non-client coordinates
+select the existing foreground route during preflight. Keyboard input and focus
+also raise the exact target automatically. Agents use the ordinary methods and
+need no routing parameter. An explicitly restricted legacy service policy can
+still prohibit foreground input; normal installation uses `auto`.
+
+The worker verifies exact root/PID, live receiver, unobstructed geometry, retained
+binding expiry and receiver DPI coordinates, including DPI-unaware controls.
+Queue acceptance remains unverified app effect. Cancellation pairs an accepted
+down, stops further segments, and retains uncertainty without changing routes
+or replaying. The presentation worker follows accepted posts without moving the
+physical cursor. Applications may activate themselves while handling a message;
+this is not full desktop or keyboard isolation.
+
+Synthetic pen/touch delivery is not imported. Neither are upstream foreign-thread
+suspension, foreign-window style mutation or forced restoration of another app's
+foreground. These require separate capability and cancellation/device-cleanup
+verification. Hiding or restoring the shared mouse is not input isolation.
 
 ## Source comparison and attribution
 
@@ -105,4 +157,22 @@ DPI, session-isolation, cancellation and helper-exit controls. UIA/SendInput ret
 values alone do not prove application processing. Preserve unknown effects and
 read original targets independently; do not replay or repair uncertain input.
 Normal-user desktop evidence does not establish elevated/secure desktop,
-background input, every mixed-display layout or blocking-provider recovery.
+all background gestures, every mixed-display layout or blocking-provider recovery.
+
+## Targeted message source reference
+
+The Windows-only message dispatcher was compared with CUA commit
+`8db684185a93e854bb7811189d69f933bb15f55d`:
+`platform-windows/src/input/mouse.rs` (Git blob `3923d75f9acdc17fd5f3507c30ed4d7733e800e0`),
+`platform-windows/src/tools/click.rs` (`e76b76ddced1a08dff8ff4264d3ad3455c34032a`),
+and `platform-windows/src/tools/scroll.rs` (`13e5625fd878f0976a36ca87934117eff14bbec6`).
+The MIT license above continues to cover the donor mechanism. DTW retains its own
+admission gate, window bindings, shared transaction lease and receipts. No macOS
+backend, public command schema or Agent routing parameter changes are involved.
+
+Run `posted_mouse_probe.py` and `browser_mouse_probe.py` in addition to the existing
+Windows suite. They independently check native control effects, near-edge
+DPI-unaware clicks, wheel cancellation without a tail, physical cursor stability,
+Chrome's actual dialog effect, and automatic foreground continuation. Chrome can
+activate itself when its dialog opens; only the physical cursor is required to
+remain fixed in that control. Preserve these observations in candidate evidence.
