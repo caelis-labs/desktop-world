@@ -26,24 +26,6 @@ pub(super) fn color(session: &str) -> [u8; 3] {
     };
     PALETTE[index]
 }
-const GLYPHS: [[u8; 5]; 16] = [
-    [7, 5, 5, 5, 7],
-    [2, 6, 2, 2, 7],
-    [7, 1, 7, 4, 7],
-    [7, 1, 7, 1, 7],
-    [5, 5, 7, 1, 1],
-    [7, 4, 7, 1, 7],
-    [7, 4, 7, 5, 7],
-    [7, 1, 1, 1, 1],
-    [7, 5, 7, 5, 7],
-    [7, 5, 7, 1, 7],
-    [2, 5, 7, 5, 5],
-    [6, 5, 6, 5, 6],
-    [7, 4, 4, 4, 7],
-    [6, 5, 5, 5, 6],
-    [7, 4, 6, 4, 7],
-    [7, 4, 6, 4, 4],
-];
 fn polygon() -> Vec<(f64, f64)> {
     // vertex, incoming tangent, outgoing tangent
     let s = [
@@ -102,14 +84,6 @@ fn border(x: f64, y: f64, poly: &[(f64, f64)]) -> bool {
         (x - a.0 - t * dx).powi(2) + (y - a.1 - t * dy).powi(2) <= 1.4 * 1.4
     })
 }
-fn rounded(x: f64, y: f64) -> bool {
-    if !(32. ..=90.).contains(&x) || !(43. ..=63.).contains(&y) {
-        return false;
-    }
-    let dx = x - x.clamp(37., 85.);
-    let dy = y - y.clamp(48., 58.);
-    dx * dx + dy * dy <= 25.
-}
 pub(super) struct Image {
     pub width: i32,
     pub height: i32,
@@ -122,11 +96,6 @@ pub(super) fn image(session: &str, dpi: u32, pulse: bool) -> Image {
     let height = (68. * scale).ceil() as i32;
     let fill = color(session);
     let poly = polygon();
-    let badge: Vec<_> = session
-        .chars()
-        .filter_map(|c| c.to_digit(16))
-        .take(4)
-        .collect();
     let mut pixels = vec![0; (width * height * 4) as usize];
     for y in 0..height {
         for x in 0..width {
@@ -143,24 +112,10 @@ pub(super) fn image(session: &str, dpi: u32, pulse: bool) -> Image {
                             255. * 0.28,
                         ]
                     }
-                    if inside(px, py, &poly) || rounded(px, py) {
+                    if inside(px, py, &poly) {
                         pixel = [fill[2] as f64, fill[1] as f64, fill[0] as f64, 255.]
                     } else if border(px, py, &poly) {
                         pixel = [255.; 4]
-                    }
-                    if rounded(px, py) {
-                        let col = ((px - 38.) / 12.).floor() as i32;
-                        let gx = (((px - 38.) % 12.) / 2.).floor() as i32;
-                        let gy = ((py - 48.) / 2.).floor() as i32;
-                        if (0..4).contains(&col)
-                            && (0..3).contains(&gx)
-                            && (0..5).contains(&gy)
-                            && badge.get(col as usize).is_some_and(|n| {
-                                GLYPHS[*n as usize][gy as usize] & (1 << (2 - gx)) != 0
-                            })
-                        {
-                            pixel = [255.; 4]
-                        }
                     }
                     for c in 0..4 {
                         channels[c] += pixel[c] / 4.;
@@ -182,6 +137,28 @@ pub(super) fn image(session: &str, dpi: u32, pulse: bool) -> Image {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn no_identity_badge_but_session_color_and_click_pulse_remain() {
+        for dpi in [96, 120, 192] {
+            let scale = dpi as f64 / 96.;
+            for pulse in [false, true] {
+                let first = image("abcd-1", dpi, pulse);
+                let same_color = image("9876-1", dpi, pulse);
+                assert_eq!(
+                    first.pixels, same_color.pixels,
+                    "identity text must not be rendered"
+                );
+                let (x, y) = ((78. * scale) as i32, (53. * scale) as i32);
+                assert_eq!(
+                    first.pixels[((y * first.width + x) * 4 + 3) as usize],
+                    0,
+                    "old badge background must be transparent"
+                );
+                assert!(first.pixels.chunks_exact(4).any(|pixel| pixel[3] > 0));
+                assert_ne!(first.pixels, image("abcd-2", dpi, pulse).pixels);
+            }
+        }
+    }
     #[test]
     fn stable_palette_and_premultiplied_multidpi_vector() {
         assert_eq!(color("session-1"), PALETTE[0]);

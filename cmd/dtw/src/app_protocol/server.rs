@@ -31,6 +31,9 @@ pub trait Factory: Send + Sync + 'static {
     type Provider: Backend + 'static;
     fn catalog(&self) -> Result<Vec<Application>, Error>;
     fn connect(&self) -> Result<Self::Provider, Error>;
+    fn permissions(&self) -> Option<Value> {
+        None
+    }
     fn input_policy(&self) -> InputPolicy {
         InputPolicy::Auto
     }
@@ -356,7 +359,7 @@ impl<F: Factory> Server<F> {
             Ok(apps) if !call.cancelled.load(Ordering::Acquire) => {
                 let apps = public_apps(apps);
                 Reply::plain(json!({"version":1,
-                "apps":apps,"backend":self.factory.description(),"service":self.service(),
+                "apps":apps,"permissions":self.factory.permissions(),"backend":self.factory.description(),"service":self.service(),
                 "script":super::description::index(),
                 "limits":{"retained_executions":RETENTION.records,"payload_bytes":RETENTION.payload_bytes,
                     "receipt_bytes":RETENTION.receipt_bytes,"max_steps_per_request":scripts::MAX_CALLS},

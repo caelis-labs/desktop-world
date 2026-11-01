@@ -62,7 +62,11 @@ pub fn type_text(pid: i32, text: &str) -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
 
     for ch in normalize_text(text).chars() {
-        super::control::check()?;
+        // Event construction has no desktop side effect. Keep local stop/error
+        // checks here; post_event_via validates the full target immediately before
+        // every KeyDown and the original input owner before each paired KeyUp.
+        // A second full AX traversal before allocation only spends call budget.
+        super::control::check_completed()?;
         let (down, up) = char_key_events(&source, ch)?;
         post_keyboard_event(pid, &down);
         key_gap_sleep();

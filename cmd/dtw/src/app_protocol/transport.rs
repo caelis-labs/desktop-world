@@ -56,6 +56,20 @@ impl Factory for NativeFactory {
     fn description(&self) -> Value {
         NativeBackend::description()
     }
+    fn permissions(&self) -> Option<Value> {
+        #[cfg(target_os = "macos")]
+        {
+            self.catalog
+                .lock()
+                .unwrap()
+                .as_ref()
+                .and_then(|reader| reader.permissions())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+    }
     fn catalog(&self) -> Result<Vec<Application>, Error> {
         // A previous read may have timed out and permanently stopped this
         // metadata worker. Recover only for this new request, after settling

@@ -720,6 +720,48 @@ mod tests {
         )
     }
     #[test]
+    fn local_scalar_precheck_keeps_target_validation_at_the_dispatch_boundary() {
+        let _owner = OWNER_TEST.lock().unwrap();
+        for changed_during_allocation in [false, true] {
+            let mut state = EffectContext {
+                surface: std::cell::Cell::new(SurfaceState::Available),
+                owner_valid: std::cell::Cell::new(true),
+                phases: RefCell::default(),
+            };
+            let session = Session::start(
+                7,
+                now_ms() + 10_000,
+                (&mut state as *mut EffectContext).cast(),
+                effect_validation,
+                false,
+            )
+            .unwrap();
+            // type_text's pre-allocation check must not spend an AX traversal.
+            check_completed().unwrap();
+            assert!(state.phases.borrow().is_empty());
+            if changed_during_allocation {
+                state.surface.set(SurfaceState::ModalOpened);
+            }
+            // Exercise the same gate as post_event_via without posting an event.
+            let down = input_event_gate(CGEventType::KeyDown, false)
+                .unwrap()
+                .validate();
+            assert_eq!(down.is_err(), changed_during_allocation);
+            assert_eq!(*state.phases.borrow(), [0]);
+            if !changed_during_allocation {
+                state.surface.set(SurfaceState::Closed);
+                input_event_gate(CGEventType::KeyUp, true)
+                    .unwrap()
+                    .validate()
+                    .unwrap();
+                assert_eq!(*state.phases.borrow(), [0, 2]);
+            }
+            let result = session.finish(Ok(()), false);
+            assert_eq!(result["ok"], !changed_during_allocation);
+            assert_eq!(result["dispatch"], "not_dispatched");
+        }
+    }
+    #[test]
     fn modal_or_closed_target_does_not_fail_completed_mouse_or_key_input() {
         let _owner = OWNER_TEST.lock().unwrap();
         for effect in [SurfaceState::ModalOpened, SurfaceState::Closed] {

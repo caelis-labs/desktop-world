@@ -79,35 +79,19 @@ let first = points.withUnsafeMutableBufferPointer { buffer in
 }
 expectOverlay(first == .moveTo && points[0] == hotspot, "ported arrow hotspot remains the actual event point")
 
-// Inspect geometry without loading fonts, starting AppKit, or opening a window.
-func overlayPathSignature(_ path: NSBezierPath) -> String {
-    (0..<path.elementCount).map { index in
-        var points = [CGPoint](repeating: .zero, count: 3)
-        let kind = points.withUnsafeMutableBufferPointer { buffer in
-            path.element(at: index, associatedPoints: buffer.baseAddress!)
-        }
-        return "\(kind.rawValue):" + points.map { "\($0.x),\($0.y)" }.joined(separator: ";")
-    }.joined(separator: "|")
-}
-let badge = CGRect(x: 38, y: 36, width: 44, height: 19)
-let labelBounds = CGRect(x: 43, y: 38, width: 30, height: 10)
-var glyphSignatures = Set<String>()
-for glyph in "0123456789abcdef" {
-    let label = "000" + String(glyph)
-    let glyphPath = overlayBadgePath(label)
-    expectOverlay(!glyphPath.isEmpty && glyphPath.bounds.maxX > 67 && badge.contains(glyphPath.bounds),
-                  "each tested fourth-position glyph is nonempty and visible within the badge")
-    expectOverlay(labelBounds.contains(glyphPath.bounds), "four digits cannot overflow their fixed geometry")
-    expectOverlay(glyphSignatures.insert(overlayPathSignature(glyphPath)).inserted, "all sixteen hex glyphs are distinct")
-    expectOverlay(overlayPathSignature(glyphPath) == overlayPathSignature(overlayBadgePath(label.uppercased())),
-                  "hex identity is the same for upper and lower case")
-}
-let sessionLabel = overlayBadgePath("a19f")
-expectOverlay(sessionLabel.bounds == labelBounds, "four-position badge retains its original origin and fits its panel")
-expectOverlay(overlayPathSignature(sessionLabel) == overlayPathSignature(overlayBadgePath("a19f")),
-              "the same session prefix produces stable geometry")
-for invalid in ["", "abc", "abcde", "abcg", "-123", "12\n3", "１234", "é123", "A\0BC", String(repeating: "0", count: 1000)] {
-    expectOverlay(overlayBadgePath(invalid).isEmpty, "invalid or oversized labels never draw partial or overflowing glyphs")
-}
-print("Font-free badge controls passed (16 distinct glyphs, fixed bounds and invalid labels)")
-print("overlay contract controls passed")
+// Draw offscreen without creating an application/window or loading fonts.
+// The old session badge area must stay transparent while the arrow remains visible.
+let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 88, pixelsHigh: 64,
+    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+NSGraphicsContext.saveGraphicsState()
+NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+private let cursor = OverlayCursorView(session: "a19f")
+cursor.draw(cursor.bounds)
+NSGraphicsContext.restoreGraphicsState()
+expectOverlay(bitmap.colorAt(x: 78, y: 45)!.alphaComponent == 0,
+              "session badge background and digits are not presented")
+expectOverlay((0..<64).contains { y in (0..<88).contains { x in
+    bitmap.colorAt(x: x, y: y)!.alphaComponent > 0
+}}, "session-colored arrow remains visible")
+print("overlay contract controls passed (arrow, pulse, lifecycle and no identity badge)")

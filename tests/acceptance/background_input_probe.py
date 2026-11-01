@@ -4,7 +4,7 @@
 Run on a real macOS desktop with a signed DTW candidate:
   python3 tests/acceptance/background_input_probe.py --dtw /path/to/dtw --output /tmp/new-run
 Three owned apps and two MCP processes cover background keyboard/click delivery,
-same-PID window routing, concurrent apps, focus return, and external focus change.
+same-PID window routing, concurrent apps, foreground retention, and external focus change.
 No action is retried. Independent fixture journals retain the initial failure.
 User mouse movement and unrelated foreground activity are observations, not failures.
 Position samples alone do not establish which actor moved the physical pointer.
@@ -326,34 +326,25 @@ def concurrent(clients, target, peer, foreground, evidence):
 
 
 def focus_return_coverage(observer, before, target, proof):
+    # Historical CLI case name retained; the policy now retains the selected app.
     after = fresh_end(observer)
     desktop = observe_desktop(observer, before, after, proof.setdefault('desktop', {}))
+    target_after = fresh_end(target)
     target_pid, original_pid = target.child.pid, before['frontmost_pid']
     rows = sorted(desktop['samples']+desktop['activations'], key=lambda row: row['uptime'])
     require(any(row['frontmost_pid'] == target_pid for row in rows),
             'Focus never independently reached the target app')
     external = [row for row in rows if row['frontmost_pid'] not in (target_pid, original_pid)]
-    # A new activation after a completed return can be a user's next choice.
-    # It is not evidence that cleanup failed to return the first borrow.
-    seen_target, seen_return = False, False
-    for row in rows:
-        pid = row['frontmost_pid']
-        if pid == target_pid:
-            if seen_return: external.append(row)
-            seen_target = True
-        elif pid == original_pid and seen_target:
-            seen_return = True
-    proof['after'] = after
+    proof.update(after=after, target_after_focus=target_after)
     continuous = desktop['sampling_coverage']['status'] == 'complete'
     proof['ownership_coverage'] = {'status': 'established' if continuous and not external else 'not_established',
         'sampling_coverage': desktop['sampling_coverage'],
         'external_foreground_observations': external,
-        'attribution': 'Independent finite samples describe the observed return interval, not uninterrupted '
-                       'native ownership or the actor responsible for an activation. Native return evidence '
-                       'is recorded separately; pointer movement is unrelated to focus ownership.'}
+        'attribution': 'Independent samples describe foreground retention, not its actor. '
+                       'Pointer movement is unrelated to focus ownership.'}
     if continuous and not external:
-        require_exact_return(after, original_pid, before['key_window'])
-        proof['sampled_exact_return_verified'] = True
+        require_exact_foreground(target_after, target_pid, target_after['windows'][0]['id'])
+        proof['sampled_target_retention_verified'] = True
     return proof['ownership_coverage']
 
 
@@ -362,24 +353,22 @@ def focus_receipt_evidence(proof, count):
     require(len(focus_steps) == count, 'Explicit focus ledger changed')
     for step in focus_steps:
         delivery = step['receipt']['provider_outcome']['delivery']
-        require(delivery['route'] == 'foreground' and delivery['foreground_borrowed'] is True
-                and delivery['focus_return'] == 'pending', 'Focus receipt guessed its later finalizer result')
+        require(delivery['route'] == 'foreground', 'Explicit focus lost its foreground route')
+        if delivery['foreground_borrowed']:
+            require(delivery['focus_return'] == 'pending', 'Focus receipt guessed its later finalizer result')
     returned = proof['record']['script'].get('focus_return')
-    require(returned in ('restored','application_restored','changed_externally','previous_app_closed'),
-            'Explicit focus lost its terminal return evidence')
-    # Exact final samples cannot prove that the native observer's epoch remained
-    # valid throughout return. Keep a conservative native branch as reported,
-    # including invalidation by a notification between independent samples.
-    proof['native_return_evidence'] = {
+    require(returned in ('retained', 'changed_externally'),
+            'Explicit focus lost its terminal retention evidence')
+    proof['native_retention_evidence'] = {
         'focus_return': returned,
-        'exact_window_return_proven': returned == 'restored',
+        'target_retained_reported': returned == 'retained',
         'source': 'native_execution_finalizer',
-        'attribution': 'A conservative native return does not identify a user or another Agent as the cause.'}
+        'attribution': 'Native evidence is separate from independent desktop samples.'}
 
 
 def foreground_fallback(mcp, target, foreground, evidence):
     before = front(foreground)
-    proof = evidence.setdefault('background_unsupported_automatically_borrows_foreground', {})
+    proof = evidence.setdefault('background_unsupported_retains_foreground', {})
     shot, response = execute(mcp, target, 'fallback-capture', select() +
         'state.fallbackWindow=window_ref;state.fallbackShot=await app.capture({window_ref});return state.fallbackShot;',
         proof.setdefault('capture', {}))
@@ -407,8 +396,8 @@ return await app.click({{window_ref:state.fallbackWindow,observation_ref:state.f
 
 
 def focus_return(mcp, target, foreground, evidence):
-    for count, key in [(1, 'explicit_focus_returns_after_script'), (2, 'repeated_focus_returns_after_script'),
-                       (3, 'explicit_sibling_focus_returns_after_script')]:
+    for count, key in [(1, 'explicit_focus_retained_after_script'), (2, 'repeated_focus_retained_after_script'),
+                       (3, 'explicit_sibling_focus_retained_after_script')]:
         reset(target)
         before = front(foreground)
         proof = evidence.setdefault(key, {'before': before, 'explicit_focus_count': count})
@@ -421,7 +410,7 @@ if(!sibling) throw new Error('Sibling window is missing');
 await app.focus({{window_ref:sibling.window_ref}});
 await app.focus({{window_ref}});
 """
-        marker = 'FOCUS-'+uuid.uuid4().hex[:8]+'-归还'
+        marker = 'FOCUS-'+uuid.uuid4().hex[:8]+'-保留'
         target_before = target.state()
         source = select() + focus + f"return await app.typeText({{window_ref,text:{json.dumps(marker)}}});"
         execute(mcp, target, f'focus-return-{count}', source, proof)
@@ -432,17 +421,17 @@ await app.focus({{window_ref}});
         focus_receipt_evidence(proof, count)
 
 
-def require_exact_return(state, pid, window):
+def require_exact_foreground(state, pid, window):
     require(state['frontmost_pid'] == pid and state['pid'] == pid
             and state['key_window'] == window,
-            'Original foreground application and exact window were not both restored')
+            'Selected foreground application and exact window were not both retained')
 
 
 def same_pid_focus_return(mcp, target, evidence):
     reset(target)
     before = front(target)
     original, borrowed = [window['id'] for window in before['windows']]
-    proof = evidence.setdefault('same_pid_original_window_return', {'before': before})
+    proof = evidence.setdefault('same_pid_selected_window_retained', {'before': before})
     execute(mcp, target, 'same-pid-window-return', select(SECONDARY) + """
 await app.focus({window_ref});
 const until=Date.now()+200;while(Date.now()<until) {} return true;
@@ -454,14 +443,14 @@ const until=Date.now()+200;while(Date.now()<until) {} return true;
         if before['published_uptime'] < row['uptime'] <= after['published_uptime']]
     require(any(row['frontmost_pid'] == target.child.pid and row.get('key_window') == borrowed
                 for row in rows), 'Same-PID borrow did not independently reach the secondary window')
-    require_exact_return(after, target.child.pid, original)
-    proof['exact_window_return_verified'] = True
+    require_exact_foreground(after, target.child.pid, borrowed)
+    proof['selected_window_retained_verified'] = True
 
 
 def timed_out_focus_return(mcp, target, evidence):
     reset(target)
     before = front(target)
-    proof = evidence.setdefault('timed_out_same_pid_original_window_return', {'before':before})
+    proof = evidence.setdefault('timed_out_selected_window_retained', {'before':before})
     source = select(SECONDARY)+'await app.focus({window_ref});while(true) {}'
     record, _ = mcp.execute(target.app_id, 'same-pid-timeout-return', source)
     proof['record'] = record
@@ -473,8 +462,8 @@ def timed_out_focus_return(mcp, target, evidence):
             'Timeout executed unexpected input or replayed focus')
     after = fresh_end(target)
     proof['after'] = after
-    require_exact_return(after, target.child.pid, before['windows'][0]['id'])
-    proof['exact_window_return_verified'] = True
+    require_exact_foreground(after, target.child.pid, before['windows'][1]['id'])
+    proof['selected_window_retained_verified'] = True
 
 
 def mixed_foreground_background(clients, target, peer, evidence):
@@ -487,7 +476,7 @@ def mixed_foreground_background(clients, target, peer, evidence):
     tag = uuid.uuid4().hex[:12]
     foreground_text = 'FG-'+tag+'-'+'b'*160
     background_text = 'BG-'+tag+'-'+('甲乙丙丁'*80)
-    proof = evidence.setdefault('foreground_return_vs_background_input', {
+    proof = evidence.setdefault('foreground_retention_vs_background_input', {
         'before': before, 'peer_before': peer.state(),
         'foreground_text': foreground_text, 'background_text': background_text})
     foreground_source = select()+f"return await app.typeText({{window_ref,text:{json.dumps(foreground_text+chr(10))}}});"
@@ -531,18 +520,27 @@ def mixed_foreground_background(clients, target, peer, evidence):
     for name, events in [('background',a_events),('foreground',b_events)]:
         proof[name]['pairs'] = pairs = observed_pairs(events)
         require(not pairs['unpaired'], 'Owned mixed-route input was left pressed')
-    require_exact_return(proof['after'], target.child.pid, original)
-    proof['coordinated_return_verified'] = True
+    require_exact_foreground(proof['peer_after'], peer.child.pid, proof['peer_before']['windows'][0]['id'])
+    proof['foreground_retention_verified'] = True
+
+
+def focus_established_trace(trace, pid, window):
+    prefix = ['dtw_focus_transition', f'pid={pid}', f'window={window}']
+    for line in trace.splitlines():
+        tokens = line.split()
+        if tokens[:3] == prefix and [token for token in tokens[3:] if token.startswith('phase=')] == ['phase=focus_established']:
+            return True
+    return False
 
 
 def wait_for_focus_established(mcp, target, offset, proof):
     # A fixture becoming frontmost can precede completion of app.focus(). This
     # private trace is only a setup barrier; actual effects and the script hold
     # interval are still independently asserted below.
-    marker = (f'dtw_focus_transition pid={target.child.pid} '
-              f'window={target.state()["windows"][0]["id"]} phase=focus_established')
+    pid, window = target.child.pid, target.state()['windows'][0]['id']
+    marker = f'dtw_focus_transition pid={pid} window={window} phase=focus_established'
     trace = mcp.output / 'dtw-stderr.log'
-    wait_until(lambda: marker in trace.read_text()[offset:])
+    wait_until(lambda: focus_established_trace(trace.read_text()[offset:], pid, window))
     observed = target.state()['published_uptime']
     proof['focus_setup_barrier'] = {'trace_offset': offset, 'marker': marker,
                                   'observed_fixture_uptime': observed}
@@ -798,7 +796,7 @@ def main():
                 'case': args.case, 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
                 'fixture_source_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
                 'started_unix_ms': int(time.time()*1000),
-                'acceptance_policy': 'action_scoped_v2', 'global_desktop_idle_required': False,
+                'acceptance_policy': 'action_scoped_retained_foreground_v3', 'global_desktop_idle_required': False,
                 'superseded_assertion': 'Unchanged pointer/foreground for every action was overly broad. '
                     'Old samples, including 20261029-h, stay preserved and are not relabeled as passing.',
                 'pass_scope': 'Functional effects, owned input pairing and cleanup; background and focus '

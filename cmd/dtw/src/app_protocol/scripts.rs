@@ -251,6 +251,16 @@ impl<B: Backend + 'static> Coordinator<B> {
                 ));
             }
         };
+        if let Some(capture) = &mut last_capture {
+            let later_calls =
+                u64::from(outcome.calls).saturating_sub(capture["step"].as_u64().unwrap_or(0));
+            capture["later_calls"] = json!(later_calls);
+            capture["timing"] = json!(if later_calls == 0 {
+                "last_call"
+            } else {
+                "before_later_calls"
+            });
+        }
         let mut completed = Completed {
             value: None,
             image: last_image,

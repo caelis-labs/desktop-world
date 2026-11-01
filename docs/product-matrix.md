@@ -24,7 +24,7 @@ macOS 既有检查点：WPS 关闭后的焦点清理已修复；DSH 的三个完
 | Linux provider | 实验 X11/XRes 身份、窗口、XGetImage、XTest 输入；只使用当前可证明的键盘映射 | 不支持 Wayland/XWayland，不提供 AT-SPI 语义承诺；仅源码/类型证据，不承诺桌面支持或首版正式发行平台 |
 | 浏览器范围 | 真实浏览器窗口上的原生 AX 和基础像素路线 | DOM、profile、CDP/browser bridge 未接入 |
 | 输入后续组 | 拖拽、应用启动/退出、尚未支持的原生控件 | 后置批量能力；菜单发现/press 已纳入本批，不扩张当前已广告方法的语义 |
-| 服务级输入约束与回执 | `auto` / `background_only`；`exec(app, source)` 不变；保留实际路线和归还证据 | 签名候选 S 的 AppKit、Chrome 与生命周期验证通过；不把约束等同于所有输入已支持后台，见[验收记录](input-delivery-acceptance.md) |
+| 服务级输入约束与回执 | `auto` / `background_only`；`exec(app, source)` 不变；保留实际路线和收尾证据；按需抬升后保持前台 | 签名候选 S 的 AppKit、Chrome 与生命周期验证通过；不把约束等同于所有输入已支持后台，见[验收记录](input-delivery-acceptance.md) |
 | macOS Agent 光标 | 每会话共享一个独立透明窗口；实际 pointer post 驱动；精确窗口排除和有界清理 | 本轮实现与验收边界见[光标迁入说明](cursor-overlay-port.md)；不同于跨 PID 应用浮层能力 |
 | Windows Agent 光标 | 每 MCP 会话一个延迟启动的透明、不激活、不可点击窗口；稳定颜色/徽标、目标相对层级与可信精确辅助窗口排除 | 两个会话同时可见、跨 app 连续、截图排除、DPI、取消/EOF/父退出回收与独立动作恢复均有实机证据；保留共享前台物理指针，不承诺后台输入；见[CUA 对照](windows-cursor-port.md) |
 | 精确滚动 | macOS 默认窗口中心、截图像素锚点或原 AX 对象锚点；复用既有 wheel steps 与输入 owner | Z 候选 12 项 AppKit/Chrome 真 GUI 与光标回归通过；前台滚动回退未建立真 GUI 样本，Windows 已支持并验收像素和 UIA 语义锚点，Linux 仅默认中心；见[验收记录](anchored-scroll-acceptance.md) |
@@ -35,6 +35,8 @@ macOS 既有检查点：WPS 关闭后的焦点清理已修复；DSH 的三个完
 | 构建与发行 | rewrite-only、各能力组固定来源 SHA，后台输入来源和差异单列；无全量上游编译 | 保留轻量源码/Core/原生纯控制 CI；固定 macOS/Windows 候选已生成，macOS 签名/公证和安装验收通过；Windows 固定候选本机验收通过，公开 release 待落地 PR 与既定发布流程 |
 
 历史开发字节和 macOS 安装候选的模型门槛为：Claude/agy 各 3 个有效任务；Claude 中位 5 exec / 6 MCP、约 52 秒，agy 中位 6 exec / 7 MCP、约 162 秒；元数据误判的原失败独立保留。这不是新 WPS/Obsidian/Chrome 复杂任务的耗时或通过率；本批按应用分别记录所有尝试、完整子目标、失败恢复与独立结果。Windows 支持结论限于本次固定候选和已验收条件，其他系统版本/多显示器配置未验证；Linux 不作支持承诺。详细来源保留在[适配说明](native-source-provenance.md)及[跨平台来源](native-source-provenance-cross-platform.md)。
+
+当前开发分支按 #75/#76 的反馈取消自动切回原应用：按需抬升后保留前台，输入释放与外部焦点变化保护继续生效。以下带日期的记录属于当时的候选验收，不作为新策略的实机证明。
 
 2026-10-30 焦点审查修复使用独立签名候选 P 验证：混合前台/后台协调、同 PID 精确原窗口归还、前台 cancel/EOF/parent-exit/timeout 及 Chrome 回归通过。P 未重跑 L 的外部模型任务，也未生成新发行包；证据见[焦点归还复核](evidence/focus-return-2026-10-30.json)。
 

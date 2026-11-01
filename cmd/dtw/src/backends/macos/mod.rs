@@ -22,8 +22,8 @@ pub use overlay::worker_entry as overlay_worker_entry;
 mod worker;
 pub use worker::worker_entry;
 
-// Normal focus return may need multiple bounded AX reads during a modal
-// transition. Emergency shutdown retains its separate, shorter drain budget.
+// Finalize the foreground context and pointer cleanup without activating another
+// application. Emergency shutdown retains its separate drain budget.
 const NORMAL_FOCUS_RETURN_BUDGET: Duration = Duration::from_secs(2);
 const FOCUS_RETURN_TRANSPORT_MARGIN: Duration = Duration::from_millis(100);
 
@@ -33,15 +33,7 @@ fn focus_return_deadline_ms(now: u64, call_deadline: Option<u64>) -> u64 {
 }
 
 fn focus_return_request(now: u64, call_deadline: Option<u64>) -> Value {
-    let mut request = json!({
-        "operation": "release_focus",
-        "deadline_unix_ms": focus_return_deadline_ms(now, call_deadline),
-        "ownership_cap_unix_ms": focus_return_deadline_ms(now, None),
-    });
-    if let Some(deadline) = call_deadline {
-        request["caller_deadline_unix_ms"] = json!(deadline);
-    }
-    request
+    json!({"operation":"release_focus", "deadline_unix_ms":focus_return_deadline_ms(now, call_deadline)})
 }
 
 // Private capture-only classification. Neither stale references nor arbitrary
@@ -109,6 +101,7 @@ pub struct NativeBackend {
     cleanup_failure: Mutex<Option<Error>>,
     input_policy: InputPolicy,
     focus_pending: AtomicBool,
+    permissions: Mutex<Option<Value>>,
     cursor: Arc<CursorSession>,
     cursor_operation: AtomicU64,
 }
@@ -296,7 +289,7 @@ const CONDITIONS: &[&str] = &[
     "semantic scopes include retained subtrees, capture-pixel regions and the app menu; region geometry does not prove pixel visibility",
     "readText requires native textual content and preserves one content revision across UTF-16 pages; titles and descriptions are not document text",
     "input requires an exact app-associated AX surface and current modal target; proven cross-process service surfaces use foreground input",
-    "borrowed foreground is returned only while still owned; uncertain input is never rerouted or replayed",
+    "foreground fallback leaves the selected window raised; user focus changes are respected; uncertain input is never rerouted or replayed",
 ];
 impl NativeBackend {
     fn supports_capability(capability: Capability) -> bool {
@@ -341,6 +334,7 @@ impl NativeBackend {
             scene: SceneOwner::default(),
             cleanup_failure: Mutex::new(None),
             focus_pending: AtomicBool::new(false),
+            permissions: Mutex::new(None),
             cursor,
             cursor_operation: AtomicU64::new(0),
             input_policy,
@@ -349,6 +343,9 @@ impl NativeBackend {
                 generation: unique_generation(),
             },
         })
+    }
+    pub fn permissions(&self) -> Option<Value> {
+        self.permissions.lock().unwrap().clone()
     }
     /// Low-permission process metadata only. AX window discovery is in Runtime.
     pub fn catalog(&self, timeout: Duration) -> Result<Vec<AppInfo>, Error> {
@@ -362,6 +359,7 @@ impl NativeBackend {
             }
         };
         let reply = self.read_rpc(json!({"operation":"catalog"}), &CallContext { poll: &poll })?;
+        *self.permissions.lock().unwrap() = reply.get("permissions").cloned();
         array(&reply, "apps")?
             .iter()
             .map(|entry| {
@@ -543,7 +541,7 @@ impl NativeBackend {
         }
     }
     fn action(&self, request: Value, call: &CallContext<'_>) -> ActionOutcome {
-        // A worker can restore focus during cancellation shutdown before the
+        // A worker can finish foreground cleanup during cancellation shutdown before the
         // finalizer can ask for its exact return result. Retain that uncertainty.
         let explicit_focus = request["operation"] == "focus";
         let previous_pending = explicit_focus && self.focus_pending.swap(true, Ordering::AcqRel);
@@ -796,6 +794,7 @@ impl Backend for NativeBackend {
         // No outstanding borrow is not a new restoration claim.
         match reply["focus"].as_str() {
             Some("unchanged") => Ok(None),
+            Some("retained") => Ok(Some(FocusReturn::Retained)),
             Some("restored") => Ok(Some(FocusReturn::Restored)),
             Some("application_restored") => Ok(Some(FocusReturn::ApplicationRestored)),
             Some("changed_externally") => Ok(Some(FocusReturn::ChangedExternally)),
@@ -1205,6 +1204,9 @@ fn bound_pixel_point(
 }
 fn native_cleanup_error(reply: &Value) -> Option<Error> {
     let cleanup = reply.get("cleanup_error")?;
+    if cleanup["error"] == "permission_required" {
+        return reply_error(cleanup);
+    }
     Some(Error::NativeFailure {
         code: cleanup["code"]
             .as_str()
@@ -1242,6 +1244,7 @@ fn parse_delivery(value: Option<&Value>) -> Result<Option<InputDelivery>, ()> {
     let foreground_borrowed = value["foreground_borrowed"].as_bool().ok_or(())?;
     let focus_return = match object.get("focus_return").and_then(Value::as_str) {
         Some("pending") => Some(FocusReturn::Pending),
+        Some("retained") => Some(FocusReturn::Retained),
         Some("restored") => Some(FocusReturn::Restored),
         Some("application_restored") => Some(FocusReturn::ApplicationRestored),
         Some("changed_externally") => Some(FocusReturn::ChangedExternally),
@@ -1510,12 +1513,8 @@ mod tests {
         assert_eq!(focus_return_deadline_ms(u64::MAX - 50, None), u64::MAX);
         let short = focus_return_request(1_000, Some(1_175));
         assert_eq!(short["deadline_unix_ms"], 1_175);
-        assert_eq!(short["ownership_cap_unix_ms"], 3_000);
-        assert_eq!(short["caller_deadline_unix_ms"], 1_175);
         let long = focus_return_request(1_000, Some(20_000));
         assert_eq!(long["deadline_unix_ms"], 3_000);
-        assert_eq!(long["ownership_cap_unix_ms"], 3_000);
-        assert_eq!(long["caller_deadline_unix_ms"], 20_000);
         assert!(focus_return_request(1_000, None)
             .get("caller_deadline_unix_ms")
             .is_none());
@@ -1616,6 +1615,7 @@ for line in sys.stdin:
                 cleanup_failure: Mutex::new(None),
                 input_policy: InputPolicy::Auto,
                 focus_pending: AtomicBool::new(true),
+                permissions: Mutex::new(None),
                 cursor: Arc::new(CursorSession::default()),
                 cursor_operation: AtomicU64::new(0),
             };
@@ -1688,6 +1688,7 @@ for line in sys.stdin:
             cursor: Arc::new(CursorSession::default()),
             cursor_operation: AtomicU64::new(0),
             focus_pending: AtomicBool::new(true),
+            permissions: Mutex::new(None),
         };
         backend.worker.stop().unwrap();
         assert_eq!(
@@ -1705,7 +1706,7 @@ for line in sys.stdin:
 for line in sys.stdin:
  r=json.loads(line)
  if r['operation']=='release_focus':
-  assert r['ownership_cap_unix_ms']==r['deadline_unix_ms']
+  assert 'ownership_cap_unix_ms' not in r
   result={'focus':'unconfirmed'}
  elif r['operation']=='keypress':
   result={'dispatch':'unknown','evidence':'unverified','error':'ax_unavailable','message':'AXWindows busy','delivery':{'route':'foreground','foreground_borrowed':True,'focus_return':'pending'}}
@@ -1720,6 +1721,7 @@ for line in sys.stdin:
             cursor: Arc::new(CursorSession::default()),
             cursor_operation: AtomicU64::new(0),
             focus_pending: AtomicBool::new(true),
+            permissions: Mutex::new(None),
         };
         let poll = || Ok(Duration::from_secs(2));
         let call = CallContext { poll: &poll };
@@ -1750,10 +1752,43 @@ for line in sys.stdin:
     }
 
     #[test]
+    fn permission_failure_preserves_guidance_without_claiming_dispatch() {
+        let native = json!({"dispatch":"not_dispatched","evidence":"unverified",
+            "error":"permission_required","message":"Grant the host named by macOS",
+            "details":{"capability":"screen_recording","restart_may_be_required":true,
+                "host":{"name":"Example Harness","bundle_id":"test.host"}}});
+        let outcome = action_reply(&native);
+        assert_eq!(outcome.dispatch, DispatchState::NotDispatched);
+        assert_eq!(outcome.evidence, EffectEvidence::Unverified);
+        let wire = crate::app_protocol::wire::core_error(outcome.error.as_ref().unwrap());
+        assert_eq!(wire.code, "permission_required");
+        let details = wire.details.unwrap();
+        assert_eq!(details["capability"], "screen_recording");
+        assert_eq!(details["host"]["name"], "Example Harness");
+        assert_eq!(details["host"]["source"], "process_ancestry_hint");
+        assert_eq!(details["restart_may_be_required"], true);
+        assert_eq!(details["retryable"], true);
+    }
+
+    #[test]
+    fn missing_access_is_explicit_without_discarding_window_server_inventory() {
+        let mut value = associated_inventory_fixture();
+        value["coverage"]["accessibility_available"] = json!(false);
+        let report = parse_inventory_report(&value["coverage"], true).unwrap();
+        assert!(report
+            .diagnostics
+            .counters
+            .contains(&("accessibility_available".into(), 0)));
+        value["coverage"]["accessibility_available"] = json!("unknown");
+        assert!(parse_inventory_report(&value["coverage"], true).is_err());
+    }
+
+    #[test]
     fn action_keeps_native_route_and_return_without_claiming_effect() {
         for (route, borrowed, returned) in [
             ("semantic", false, None),
             ("background", false, None),
+            ("foreground", true, Some("retained")),
             ("foreground", true, Some("restored")),
             ("foreground", true, Some("changed_externally")),
             ("foreground", true, Some("pending")),
@@ -1819,6 +1854,7 @@ for line in sys.stdin:
             cursor: Arc::new(CursorSession::default()),
             cursor_operation: AtomicU64::new(0),
             focus_pending: AtomicBool::new(false),
+            permissions: Mutex::new(None),
             input_policy: InputPolicy::Auto,
             stamp: ProviderStamp { id:"cleanup-test".into(),generation:1 },
         };
@@ -1963,6 +1999,7 @@ for line in sys.stdin:
             cursor: Arc::new(CursorSession::default()),
             cursor_operation: AtomicU64::new(0),
             focus_pending: AtomicBool::new(false),
+            permissions: Mutex::new(None),
             input_policy: InputPolicy::Auto,
             stamp: ProviderStamp {
                 id: "cleanup-test".into(),
@@ -1985,6 +2022,7 @@ for line in sys.stdin:
             cursor: Arc::new(CursorSession::default()),
             cursor_operation: AtomicU64::new(0),
             focus_pending: AtomicBool::new(false),
+            permissions: Mutex::new(None),
             input_policy: InputPolicy::Auto,
             stamp: ProviderStamp {
                 id: "resident-cleanup-test".into(),
@@ -2718,6 +2756,23 @@ fn parse_target(v: &Value) -> Result<WindowTarget, Error> {
 }
 fn reply_error(v: &Value) -> Option<Error> {
     v["error"].as_str().map(|code| match code {
+        "permission_required" => Error::PermissionRequired {
+            capability: v["details"]["capability"]
+                .as_str()
+                .unwrap_or("unknown")
+                .into(),
+            message: v["message"]
+                .as_str()
+                .unwrap_or("macOS access is required")
+                .into(),
+            host_name: v["details"]["host"]["name"].as_str().map(str::to_owned),
+            host_bundle_id: v["details"]["host"]["bundle_id"]
+                .as_str()
+                .map(str::to_owned),
+            restart_may_be_required: v["details"]["restart_may_be_required"]
+                .as_bool()
+                .unwrap_or(false),
+        },
         "window_inventory_unproven" => {
             match parse_inventory_report(&v["details"]["inventory"], false) {
                 Ok(report) => Error::InventoryUnproven(report),
@@ -2844,7 +2899,9 @@ fn parse_surface_inventory(value: &Value, proven: bool) -> Result<InventoryRepor
         value["scope"].as_str(),
         Some("application_and_proven_associated_surfaces" | "selected_surface")
     ) {
-        if fields.len() != 6 || value["association_complete"] != false {
+        if fields.len() != 6 + usize::from(fields.contains_key("accessibility_available"))
+            || value["association_complete"] != false
+        {
             return Err(invalid());
         }
         let count = value["associated_count"]
@@ -2889,6 +2946,12 @@ fn parse_surface_inventory(value: &Value, proven: bool) -> Result<InventoryRepor
             Ok(((*name).into(), n))
         })
         .collect::<Result<Vec<_>, Error>>()?;
+    if let Some(access) = fields.get("accessibility_available") {
+        counters.push((
+            "accessibility_available".into(),
+            u64::from(access.as_bool().ok_or_else(invalid)?),
+        ));
+    }
     if associated.is_some() {
         counters.push(("association_probe_failures".into(), association_failures));
     }

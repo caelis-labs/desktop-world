@@ -268,143 +268,6 @@ modalCheck(modalDeadline.code == "deadline_exceeded" && modalPolls == 1)
 print("Post-raise auxiliary snapshot expiry controls passed (\(modalAssertions) assertions; no AX or GUI reads)")
 
 
-// Return proof must identify the original window, including same-PID borrows.
-// Synthetic AX reads exercise the actual bounded poll without touching a desktop.
-private var returnClock = 0.0
-private var returnReads = 0
-private var returnInvalidated = false
-private func restoredFocusRead(pid: Int32 = 10, sameObject: Bool, sameID: Bool) throws -> Bool {
-    try controlExactInputFocus(expectedPID: 10, focusedPID: { pid }, windowMatches: { sameObject && sameID })
-}
-for mismatch in [(false, true), (true, false), (false, false)] {
-    returnClock = 0; returnReads = 0
-    _ = expectedBackgroundError("focus_restore_unproven") {
-        _ = try waitForRestoredFocus(remaining: { 0.05 - returnClock }, check: {}, invalidated: { false }, read: {
-            returnReads += 1
-            return try restoredFocusRead(sameObject: mismatch.0, sameID: mismatch.1)
-        }, wait: { returnClock += $0 })
-    }
-    backgroundCheck(returnReads == 3)
-}
-returnClock = 0; returnReads = 0
-private let delayedReturn = try waitForRestoredFocus(remaining: { 0.1 - returnClock }, check: {}, invalidated: { false }, read: {
-    returnReads += 1
-    return try restoredFocusRead(sameObject: returnReads >= 3, sameID: returnReads >= 3)
-}, wait: { returnClock += $0 })
-backgroundCheck(delayedReturn && returnReads == 3 && returnClock == 0.04)
-
-// A positively absent original focused window only needs exact app identity.
-// NativeStore labels that successful branch application_restored, not restored.
-private let applicationOnlyReturn = try waitForRestoredFocus(remaining: { 1 }, check: {}, invalidated: { false }, read: {
-    try controlExactInputFocus(expectedPID: 10, focusedPID: { 10 }, windowMatches: { true })
-}, wait: { _ in preconditionFailure("Available application return must not wait") })
-backgroundCheck(applicationOnlyReturn)
-
-// Already ended epochs do not query the target or accidentally claim restored.
-private let endedReturn = try waitForRestoredFocus(remaining: { 1 }, check: {}, invalidated: { true }, read: {
-    preconditionFailure("No return read after external focus choice")
-}, wait: { _ in preconditionFailure("No wait after external focus choice") })
-backgroundCheck(!endedReturn)
-returnInvalidated = false
-private let changedDuringRead = try waitForRestoredFocus(remaining: { 1 }, check: {}, invalidated: { returnInvalidated }, read: {
-    returnInvalidated = true
-    return true
-}, wait: { _ in preconditionFailure("Do not wait after losing ownership") })
-backgroundCheck(!changedDuringRead)
-returnInvalidated = false
-private var returnChecks = 0
-private let changedAfterRead = try waitForRestoredFocus(remaining: { 1 }, check: {
-    returnChecks += 1
-    if returnChecks == 2 { returnInvalidated = true }
-}, invalidated: { returnInvalidated }, read: { true }, wait: { _ in preconditionFailure("Do not wait after proof") })
-backgroundCheck(!changedAfterRead)
-returnInvalidated = false
-private let failedReadAfterExternalChange = try waitForRestoredFocus(remaining: { 1 }, check: {}, invalidated: { returnInvalidated }, read: {
-    returnInvalidated = true
-    throw failure("ax_unavailable", "Object invalidated by independent choice")
-}, wait: { _ in preconditionFailure("No read retry after external choice") })
-backgroundCheck(!failedReadAfterExternalChange)
-
-// Lost or replaced original process/window proof stops immediately, never loops
-// and never obtains a successful result merely because the frontmost PID agrees.
-for code in ["focus_restore_failed", "window_unproven", "deadline_exceeded"] {
-    _ = expectedBackgroundError(code) {
-        _ = try waitForRestoredFocus(remaining: { 1 }, check: {
-            throw failure(code, "Original return identity no longer proven")
-        }, invalidated: { false }, read: { preconditionFailure("No read after identity/deadline failure") },
-        wait: { _ in preconditionFailure("No retry after identity/deadline failure") })
-    }
-}
-returnChecks = 0
-_ = expectedBackgroundError("focus_restore_failed") {
-    _ = try waitForRestoredFocus(remaining: { 1 }, check: {
-        returnChecks += 1
-        if returnChecks == 2 { throw failure("focus_restore_failed", "Original app replaced during AX read") }
-    }, invalidated: { false }, read: { true }, wait: { _ in preconditionFailure("No retry after app replacement") })
-}
-backgroundCheck(returnChecks == 2)
-
-// Only typed missing focus/busy AX is eligible for the existing read-only poll.
-for transient in [missingFocus(.window), busyAttribute("AXFocusedWindow")] {
-    returnClock = 0; returnReads = 0
-    let restored = try waitForRestoredFocus(remaining: { 0.1 - returnClock }, check: {}, invalidated: { false }, read: {
-        returnReads += 1
-        if returnReads == 1 { throw transient }
-        return true
-    }, wait: { returnClock += $0 })
-    backgroundCheck(restored && returnReads == 2)
-}
-returnClock = 0
-_ = expectedBackgroundError("ax_unavailable") {
-    _ = try waitForRestoredFocus(remaining: { 0.03 - returnClock }, check: {}, invalidated: { false }, read: {
-        throw busyAttribute("AXFocusedWindow")
-    }, wait: { returnClock += $0 })
-}
-returnClock = 0
-_ = expectedBackgroundError("focus_restore_unproven") {
-    _ = try waitForRestoredFocus(remaining: { 0.03 - returnClock }, check: {}, invalidated: { false }, read: {
-        returnClock = 0.04
-        return true
-    }, wait: { _ in preconditionFailure("Late proof cannot wait") })
-}
-returnClock = 0
-_ = expectedBackgroundError("focus_restore_unproven") {
-    _ = try waitForRestoredFocus(remaining: { 0.03 - returnClock }, check: {}, invalidated: { false }, read: {
-        try restoredFocusRead(pid: 20, sameObject: true, sameID: true)
-    }, wait: { returnClock += $0 })
-}
-returnClock = 0
-_ = expectedBackgroundError("focus_restore_unproven") {
-    _ = try waitForRestoredFocus(remaining: { 0.03 - returnClock }, check: {}, invalidated: { false }, read: {
-        var pidReads = 0
-        return try controlExactInputFocus(expectedPID: 10, focusedPID: {
-            pidReads += 1; return pidReads == 1 ? 10 : 20
-        }, windowMatches: { true })
-    }, wait: { returnClock += $0 })
-}
-print("Exact focus restoration contracts passed (19 pure scenarios)")
-
-
-// The return snapshot is not published if any exact original-window read or
-// process proof changes while the initial AX capture is in progress.
-try validateFocusSnapshot(check: {}, read: { true })
-_ = expectedBackgroundError("focus_unproven") {
-    try validateFocusSnapshot(check: {}, read: { false })
-}
-private var snapshotChecks = 0
-_ = expectedBackgroundError("app_changed") {
-    try validateFocusSnapshot(check: {
-        snapshotChecks += 1
-        if snapshotChecks == 2 { throw failure("app_changed", "Birth stamp changed during snapshot") }
-    }, read: { true })
-}
-backgroundCheck(snapshotChecks == 2)
-_ = expectedBackgroundError("ax_unavailable") {
-    try validateFocusSnapshot(check: {}, read: { throw busyAttribute("AXFocusedWindow") })
-}
-print("Original focus snapshot controls passed (4 pure scenarios)")
-
-
 // Reproduce the original ordering directly: an old A read applied after exact
 // B establishment wrongly looks like an external leave. Same-epoch serial alone
 // cannot distinguish that stale result from a fresh observation.
@@ -502,81 +365,6 @@ for unavailable: Int32 in [-1, 2, Int32.min] {
 print("Fresh WindowServer foreground proof controls passed (5 pure scenarios)")
 
 
-// WindowServer may briefly omit its front PSN after activation. Only read-side
-// restoration polling can recover; pre-action capture remains fail-before-input.
-for transient: Int32 in [-3, -4, -5, -6] {
-    returnClock = 0; returnReads = 0
-    let restored = try waitForRestoredFocus(remaining: { 0.06 - returnClock }, check: {}, invalidated: { false }, read: {
-        returnReads += 1
-        return try frontProcessMatch(returnReads == 1 ? transient : 1)
-            && restoredFocusRead(sameObject: true, sameID: true)
-    }, wait: { returnClock += $0 })
-    backgroundCheck(restored && returnReads == 2 && returnClock == 0.02)
-    let beforeAction = expectedBackgroundError("focus_unproven") {
-        try validateFocusSnapshot(check: { _ = try frontProcessMatch(transient) }, read: {
-            preconditionFailure("Unproven foreground cannot publish a return snapshot")
-        })
-    }
-    backgroundCheck(beforeAction.focusAbsence == .frontProcess)
-}
-returnClock = 0; returnReads = 0
-private let persistentFrontAbsence = expectedBackgroundError("focus_restore_unproven") {
-    _ = try waitForRestoredFocus(remaining: { 0.03 - returnClock }, check: {}, invalidated: { false }, read: {
-        returnReads += 1
-        return try frontProcessMatch(returnReads == 1 ? -3 : -4)
-    }, wait: { returnClock += $0 })
-}
-backgroundCheck(returnReads == 2 && returnClock == 0.03 && persistentFrontAbsence.focusAbsence == .frontProcess)
-backgroundCheck((persistentFrontAbsence.details?["details"] as? [String: Any])?["native_result"] as? Int32 == -3)
-
-// A proven PID is insufficient if the exact AX object/window is still wrong;
-// valid mismatch after transient absence clears the obsolete unavailable cause.
-returnClock = 0; returnReads = 0
-private let delayedExactFrontReturn = try waitForRestoredFocus(remaining: { 0.1 - returnClock }, check: {}, invalidated: { false }, read: {
-    returnReads += 1
-    let result: Int32 = returnReads == 1 ? -3 : (returnReads == 2 ? 0 : 1)
-    return try frontProcessMatch(result)
-        && restoredFocusRead(sameObject: returnReads == 4, sameID: returnReads == 4)
-}, wait: { returnClock += $0 })
-backgroundCheck(delayedExactFrontReturn && returnReads == 4)
-returnClock = 0; returnReads = 0
-private let persistentFrontMismatch = expectedBackgroundError("focus_restore_unproven") {
-    _ = try waitForRestoredFocus(remaining: { 0.03 - returnClock }, check: {}, invalidated: { false }, read: {
-        returnReads += 1
-        return try frontProcessMatch(returnReads == 1 ? -3 : 0)
-    }, wait: { returnClock += $0 })
-}
-backgroundCheck(persistentFrontMismatch.focusAbsence == nil)
-
-// Permanent query errors do not acquire the transient read-only retry path.
-for permanent: Int32 in [-1, -2, 2] {
-    returnReads = 0
-    let error = expectedBackgroundError("focus_restore_unproven") {
-        _ = try waitForRestoredFocus(remaining: { 1 }, check: {}, invalidated: { false }, read: {
-            returnReads += 1; return try frontProcessMatch(permanent)
-        }, wait: { _ in preconditionFailure("Permanent WindowServer failure cannot retry") })
-    }
-    backgroundCheck(returnReads == 1 && error.focusAbsence == nil)
-}
-// Deadline/cancel/replacement checks win even when the preceding read reports
-// transient absence, and a user's external focus choice ends the return.
-for code in ["deadline_exceeded", "native_stopping", "focus_restore_failed"] {
-    returnChecks = 0
-    _ = expectedBackgroundError(code) {
-        _ = try waitForRestoredFocus(remaining: { 1 }, check: {
-            returnChecks += 1
-            if returnChecks == 2 { throw failure(code, "Return proof ended during native read") }
-        }, invalidated: { false }, read: { try frontProcessMatch(-3) },
-        wait: { _ in preconditionFailure("Ended return cannot reread") })
-    }
-    backgroundCheck(returnChecks == 2)
-}
-returnInvalidated = false
-private let frontAbsenceAfterExternalChoice = try waitForRestoredFocus(remaining: { 1 }, check: {}, invalidated: { returnInvalidated }, read: {
-    returnInvalidated = true; return try frontProcessMatch(-3)
-}, wait: { _ in preconditionFailure("No WindowServer reread after external choice") })
-backgroundCheck(!frontAbsenceAfterExternalChoice)
-print("Post-activation WindowServer absence controls passed (read-only; no GUI access)")
 @_cdecl("dtw_scroll_anchor_check")
 func testScrollAnchorCheck() -> UnsafeMutablePointer<CChar>? { nil }
 @_cdecl("dtw_scroll_anchor_free")
@@ -849,9 +637,9 @@ backgroundCheck(ordinaryProofFailure.message == "ordinary proof failure" && ordi
 print("Unconfirmed AXRaise permits only bounded exact readback, retains original cause, and never repeats activation or admits failed-proof keys")
 
 
-// Cleanup must inspect only today's focus. The old AX root is deliberately
+// Continuing an operation must inspect today's focus. The old AX root is deliberately
 // unreadable, while the current root can be a replacement for the same logical
-// window. Input and previous-return refs keep their separate exact-object proof.
+// window. Input refs keep their separate exact-object proof.
 private let cleanupApp = NativeApp(identity: "cleanup.control", pid: 10, generation: 42)
 private let cleanupApplication = FocusApplication(element: 100, pid: Int32(10), generation: UInt64(42), fromCandidate: true)
 private var obsoleteRootReads = 0
@@ -947,33 +735,13 @@ for original in [failure("permission_denied", "current permission denied"),
     backgroundCheck(kept.message == original.message)
 }
 
-// No-obligation cleanup keeps pointer release and never reads any window. A
-// real previous-return obligation cannot replace its closed original target.
-private let noCleanupBorrow = FocusReturnObligation(matchesOriginal: true)
-private var inPlacePointerReleases = 0
-if try !noCleanupBorrow.releaseInPlace(pointerCleanup: { inPlacePointerReleases += 1 }) {
-    preconditionFailure("An in-place action must not invent a focus-return proof")
-}
-backgroundCheck(inPlacePointerReleases == 1 && obsoleteRootReads == 0)
-_ = expectedBackgroundError("window_unproven") {
-    _ = try waitForRestoredFocus(remaining: { 1 }, check: { _ = try cleanupRootID(1) },
-        invalidated: { false }, read: { preconditionFailure("A closed previous target cannot be replaced") },
-        wait: { _ in preconditionFailure("Do not retry or substitute a previous return target") })
-}
-backgroundCheck(obsoleteRootReads == 1)
-print("Cleanup uses captured logical ID plus fresh focus only; stale input/previous refs stay strict and current errors remain unresolved")
-
-
 // The same ownership proof protects continuing a script's borrow. Updating a
-// new target cannot discard B's original return obligation after A swaps its AX
-// root; a busy current read must leave the entire prior borrow unpublished.
+// new target after an AX root replacement must retain the existing scope if
+// a current read or observer setup fails.
 private struct RetargetBorrowControl {
-    let previousWindow: Int
-    var obligation: FocusReturnObligation
     var currentWindow: CGWindowID
 }
-private let originalBorrowControl = RetargetBorrowControl(previousWindow: 55,
-    obligation: FocusReturnObligation(matchesOriginal: false), currentWindow: 777)
+private let originalBorrowControl = RetargetBorrowControl(currentWindow: 777)
 private var publishedBorrowControl: RetargetBorrowControl? = originalBorrowControl
 private var retargetEpochCalls = 0
 private let originalObsoleteReads = obsoleteRootReads
@@ -981,10 +749,8 @@ publishedBorrowControl = try retargetFocusBorrow(originalBorrowControl, owned: {
     try borrowedFocusStillOwned(app: cleanupApp, windowID: 777, invalidated: { false },
         focusedApplication: { cleanupApplication }, currentWindowID: { _ in try cleanupRootID(2) })
 }, retarget: { retargetEpochCalls += 1; return true }, update: { next in
-    next.obligation.retarget(matchesOriginal: true)
     next.currentWindow = 778
 })
-backgroundCheck(publishedBorrowControl?.previousWindow == 55 && publishedBorrowControl?.obligation.required == true)
 backgroundCheck(publishedBorrowControl?.currentWindow == 778 && retargetEpochCalls == 1 && obsoleteRootReads == originalObsoleteReads)
 for original in [busyAttribute(kAXFocusedWindowAttribute), failure("window_unproven", "current identity unreadable"),
                  failure("deadline_exceeded", "current read deadline"), failure("permission_denied", "current AX denied")] {
@@ -999,7 +765,6 @@ for original in [busyAttribute(kAXFocusedWindowAttribute), failure("window_unpro
         })
     }
     backgroundCheck(kept.message == original.message && retargetEpochCalls == 0)
-    backgroundCheck(publishedBorrowControl?.previousWindow == 55 && publishedBorrowControl?.obligation.required == true)
     backgroundCheck(publishedBorrowControl?.currentWindow == 777)
 }
 publishedBorrowControl = originalBorrowControl
@@ -1008,7 +773,7 @@ _ = expectedBackgroundError("deadline_exceeded") {
         throw failure("deadline_exceeded", "observer retarget deadline")
     }, update: { _ in preconditionFailure("Observer setup failure cannot publish a new borrow") })
 }
-backgroundCheck(publishedBorrowControl?.previousWindow == 55 && publishedBorrowControl?.currentWindow == 777)
+backgroundCheck(publishedBorrowControl?.currentWindow == 777)
 publishedBorrowControl = try retargetFocusBorrow(originalBorrowControl, owned: { false }, retarget: {
     preconditionFailure("A proven ended lease cannot retarget its epoch")
 }, update: { _ in preconditionFailure("A proven ended lease cannot publish a continuation") })
@@ -1016,93 +781,7 @@ backgroundCheck(publishedBorrowControl == nil)
 private let externallyEndedRetarget = try retargetFocusBorrow(originalBorrowControl, owned: { true }, retarget: { false },
     update: { _ in preconditionFailure("An ended observer epoch cannot publish a continuation") })
 backgroundCheck(externallyEndedRetarget == nil)
-print("Retarget keeps the original return target/obligation on same-window AX replacement and current-read/observer errors")
-
-// Only cleanup's current ownership probe retries a typed AX busy response.
-// Each retry reuses the original app generation/logical window ID and does
-// not query the old AX root or expose any activation/input callback.
-private let obsoleteReadsBeforeCleanupRetry = obsoleteRootReads
-for currentID: CGWindowID? in [777, 778, nil] {
-    var reads = 0
-    var clock: TimeInterval = 0
-    let owned = try waitForBorrowedFocusRead(remaining: { 1 - clock }, check: {
-        if clock >= 1 { throw failure("deadline_exceeded", "original cleanup deadline") }
-    }, invalidated: { false }, read: {
-        try borrowedFocusStillOwned(app: cleanupApp, windowID: 777,
-            invalidated: { false }, focusedApplication: { cleanupApplication }, currentWindowID: { _ in
-                reads += 1
-                if reads == 1 { throw busyAttribute(kAXFocusedWindowAttribute) }
-                // Today's object is a replacement for the same logical window.
-                if currentID == 777 { return try cleanupRootID(2) }
-                return currentID
-            })
-    }, wait: { interval in clock += interval })
-    backgroundCheck(owned == (currentID == 777) && reads == 2 && clock == 0.02)
-}
-backgroundCheck(obsoleteRootReads == obsoleteReadsBeforeCleanupRetry)
-
-private var cleanupBusyReads = 0
-private var cleanupBusyWaits = 0
-private var cleanupBusyClock: TimeInterval = 0
-private let exhaustedCleanupRead = expectedBackgroundError("deadline_exceeded") {
-    _ = try waitForBorrowedFocusRead(remaining: { 0.5 - cleanupBusyClock }, check: {
-        if cleanupBusyClock >= 0.5 { throw failure("deadline_exceeded", "unchanged absolute cleanup deadline") }
-    }, invalidated: { false }, read: {
-        cleanupBusyReads += 1; cleanupBusyClock += 0.2
-        throw busyAttribute(kAXFocusedWindowAttribute)
-    }, wait: { interval in cleanupBusyWaits += 1; cleanupBusyClock += interval })
-}
-backgroundCheck(exhaustedCleanupRead.message == "unchanged absolute cleanup deadline")
-backgroundCheck(cleanupBusyReads == 3 && cleanupBusyWaits == 2 && cleanupBusyClock < 0.7)
-
-for original in [failure("permission_denied", "permission denied"),
-                 failure("focus_unproven", "malformed focus"),
-                 failure("window_unproven", "unreadable exact identity"),
-                 failure("app_changed", "kernel birth changed"),
-                 failure("ax_unavailable", "untyped cannotComplete text"),
-                 failure("native_stopping", "cancelled caller"),
-                 failure("ax_unavailable", "disabled AX", attributeFailure:
-                    AXAttributeFailure(name: kAXFocusedWindowAttribute, error: .apiDisabled))] {
-    var reads = 0
-    let kept = expectedBackgroundError(original.code) {
-        _ = try waitForBorrowedFocusRead(remaining: { 1 }, check: {}, invalidated: { false }, read: {
-            reads += 1; throw original
-        }, wait: { _ in preconditionFailure("Non-busy failure cannot wait or retry") })
-    }
-    backgroundCheck(kept.message == original.message && reads == 1)
-}
-
-private var endedCleanupRetry = false
-private var endedCleanupRetryReads = 0
-private let endedCleanupOwnership = try waitForBorrowedFocusRead(remaining: { 1 }, check: {},
-    invalidated: { endedCleanupRetry }, read: {
-        endedCleanupRetryReads += 1
-        throw busyAttribute(kAXFocusedWindowAttribute)
-    }, wait: { _ in endedCleanupRetry = true })
-backgroundCheck(!endedCleanupOwnership && endedCleanupRetryReads == 1)
-
-private var reusedCleanupReads = 0
-private let reusedCleanupOwnership = try waitForBorrowedFocusRead(remaining: { 1 }, check: {},
-    invalidated: { false }, read: {
-        reusedCleanupReads += 1
-        if reusedCleanupReads == 1 { throw busyAttribute(kAXFocusedWindowAttribute) }
-        return try borrowedFocusStillOwned(app: cleanupApp, windowID: 777,
-            invalidated: { false }, focusedApplication: {
-                FocusApplication(element: 100, pid: 10, generation: 43, fromCandidate: true)
-            }, currentWindowID: { _ in preconditionFailure("Reused app cannot read a window") })
-    }, wait: { _ in })
-backgroundCheck(!reusedCleanupOwnership && reusedCleanupReads == 2)
-
-private var lateCleanupProof = false
-_ = expectedBackgroundError("deadline_exceeded") {
-    _ = try waitForBorrowedFocusRead(remaining: { lateCleanupProof ? 0 : 1 }, check: {
-        if lateCleanupProof { throw failure("deadline_exceeded", "read returned after deadline") }
-    }, invalidated: { false }, read: {
-        lateCleanupProof = true; return true
-    }, wait: { _ in preconditionFailure("Late success cannot restart its budget") })
-}
-print("Cleanup-only AX busy read settles fresh ownership without replay, rejects real changes and preserves one deadline")
-
+print("Retarget publishes only after current ownership and observer setup succeed")
 
 // A cold background attempt can exhaust its opt-in clock before the script
 // brings the exact same window forward. One existing explicit-focus scope can
@@ -1202,125 +881,7 @@ backgroundCheck(retargetWait == nil)
 private var absentFocusReadiness: FocusSemanticReadiness?
 absentFocusReadiness?.arm(now:100)
 backgroundCheck(absentFocusReadiness == nil)
-backgroundCheck(!noCleanupBorrow.required) // No opportunity can invent a return obligation.
 print("Explicit-focus cold-shell wait is single-use, bounded and read-only; warm content, missing scopes and original stop/focus errors stay strict")
-
-
-// A normal local eligibility cap may end one unproven return opportunity.
-// This is not caller expiry, an input release acknowledgement, or permission
-// to restore an app under unreadable focus. Emergency cleanup has no such cap.
-private let capNowMS = UInt64(Date().timeIntervalSince1970 * 1_000)
-private let capRequest: [String: Any] = ["deadline_unix_ms":capNowMS+2_000,
-    "ownership_cap_unix_ms":capNowMS+2_000, "caller_deadline_unix_ms":capNowMS+20_000]
-private let normalOwnershipCap = try FocusOwnershipCap(capRequest, deadline: Deadline(capRequest))!
-private let canRetireWithoutResources = try normalOwnershipCap.mayRetire(stopping:false, pointerObligation:false)
-private let canRetireWithPointer = try normalOwnershipCap.mayRetire(stopping:false, pointerObligation:true)
-backgroundCheck(canRetireWithoutResources && !canRetireWithPointer)
-_ = expectedBackgroundError("native_stopping") {
-    _ = try normalOwnershipCap.mayRetire(stopping:true, pointerObligation:false)
-}
-for request: [String: Any] in [
-    ["deadline_unix_ms":capNowMS+2_000],
-    ["deadline_unix_ms":capNowMS+1_000,"ownership_cap_unix_ms":capNowMS+2_000,"caller_deadline_unix_ms":capNowMS+1_000],
-    ["deadline_unix_ms":capNowMS+2_000,"ownership_cap_unix_ms":capNowMS+2_000,"caller_deadline_unix_ms":capNowMS+2_000]
-] {
-    let disabled = try FocusOwnershipCap(request, deadline: Deadline(request))
-    backgroundCheck(disabled == nil)
-}
-
-private var eligibilityClock: TimeInterval = 0
-private var eligibilityReads = 0
-private var eligibilityWrites = 0
-private var eligibilitySticky: NativeFailure?
-private var eligibilityUnconfirmed: NativeFailure?
-private let rawEligibility = FocusReadEvidence()
-do {
-    let owned = try waitForBorrowedFocusRead(remaining:{ 2-eligibilityClock }, check:{
-        if eligibilityClock >= 2 { throw failure("deadline_exceeded", "local cap") }
-    }, invalidated:{ false }, read:{
-        rawEligibility.clear(); eligibilityReads += 1; eligibilityClock += 0.21
-        rawEligibility.returned(.cannotComplete, attribute:kAXFocusedWindowAttribute)
-        if eligibilityClock >= 2 { throw failure("deadline_exceeded", "deadline checked after raw busy") }
-        throw busyAttribute(kAXFocusedWindowAttribute)
-    }, wait:{ eligibilityClock += $0 }, rawBusy:{ rawEligibility.busy }, retireAtCap:{ _ in
-        try normalOwnershipCap.mayRetire(stopping:false, pointerObligation:false)
-    })
-    if owned { eligibilityWrites += 1 }
-} catch let ended as FocusEligibilityUnconfirmed { eligibilityUnconfirmed = ended.cause }
-catch let error as NativeFailure { eligibilitySticky = error }
-backgroundCheck(eligibilityUnconfirmed?.attributeFailure?.error == .cannotComplete)
-backgroundCheck(eligibilityUnconfirmed?.attributeFailure?.name == kAXFocusedWindowAttribute)
-backgroundCheck(eligibilityReads > 1 && eligibilityClock < 2.25 && eligibilityWrites == 0 && eligibilitySticky == nil)
-
-for afterBusy in [true, false] {
-    var reads = 0
-    let owned = try waitForBorrowedFocusRead(remaining:{ 1 }, check:{}, invalidated:{ false }, read:{
-        reads += 1
-        if reads == 1 { throw busyAttribute(kAXFocusedWindowAttribute) }
-        return afterBusy
-    }, wait:{ _ in }, retireAtCap:{ _ in preconditionFailure("No retirement before the cap") })
-    backgroundCheck(owned == afterBusy && reads == 2)
-}
-
-// A successful fresh read clears earlier busy evidence; later unrelated expiry
-// and every real error retain their hard failure, even at the local cap.
-for result in [AXError.success, .noValue, .apiDisabled, .invalidUIElement] {
-    rawEligibility.returned(.cannotComplete, attribute:kAXFocusedApplicationAttribute)
-    rawEligibility.returned(result, attribute:kAXFocusedWindowAttribute)
-    backgroundCheck(rawEligibility.busy == nil)
-}
-for original in [failure("permission_denied", "permission denied"),
-                 failure("focus_unproven", "malformed current window"),
-                 failure("app_changed", "app identity changed"),
-                 failure("window_unproven", "untyped id zero"),
-                 failure("native_stopping", "cancelled"),
-                 failure("deadline_exceeded", "no raw current busy")] {
-    var ended = false
-    let kept = expectedBackgroundError(original.code) {
-        _ = try waitForBorrowedFocusRead(remaining:{ ended ? 0 : 1 }, check:{}, invalidated:{ false }, read:{
-            ended = true; rawEligibility.clear(); throw original
-        }, wait:{ _ in preconditionFailure("No wait after a hard error") }, rawBusy:{ rawEligibility.busy },
-           retireAtCap:{ _ in preconditionFailure("A real failure cannot retire as unconfirmed") })
-    }
-    backgroundCheck(kept.message == original.message)
-}
-
-// Caller's expiry/cancellation wins over a local cap, including when the last
-// current AX call itself returned cannotComplete after the cap elapsed.
-for original in [failure("deadline_exceeded", "original caller expired"),
-                 failure("native_stopping", "original caller cancelled")] {
-    var ended = false
-    let kept = expectedBackgroundError(original.code) {
-        _ = try waitForBorrowedFocusRead(remaining:{ ended ? 0 : 1 }, check:{}, invalidated:{ false }, read:{
-            ended = true; throw busyAttribute(kAXFocusedWindowAttribute)
-        }, wait:{ _ in }, retireAtCap:{ _ in throw original })
-    }
-    backgroundCheck(kept.message == original.message)
-}
-
-// Production's normal input finalizer closes admission if any posted release
-// cannot be proved. That real gate state, and any cursor obligation, prevents
-// this focus-only retirement; they retain the existing hard cleanup path.
-private let unreleasedGate = NativeInputGate()
-private let unreleasedSource = NativePendingInput(owner:NSObject(), eventTypes:[1], counters:[{ _ in 0 }],
-    released:{ _, _ in false }, probe:{ work in work() })
-backgroundCheck(unreleasedGate.register(unreleasedSource))
-unreleasedSource.posted(eventType:1, key:4)
-backgroundCheck(!unreleasedGate.finish(unreleasedSource, timeout:0))
-backgroundCheck(unreleasedGate.isClosing)
-_ = expectedBackgroundError("native_stopping") {
-    _ = try normalOwnershipCap.mayRetire(stopping:unreleasedGate.isClosing, pointerObligation:false)
-}
-do {
-    var ended = false
-    _ = expectedBackgroundError("deadline_exceeded") {
-        _ = try waitForBorrowedFocusRead(remaining:{ ended ? 0 : 1 }, check:{
-            if ended { throw failure("deadline_exceeded", "pointer or emergency cleanup remains hard") }
-        }, invalidated:{ false }, read:{ ended = true; throw busyAttribute(kAXFocusedWindowAttribute) },
-           wait:{ _ in }, retireAtCap:{ _ in canRetireWithPointer })
-    }
-}
-print("Only resource-free current-focus busy at its own cap retires unconfirmed; caller, permission, identity, input and cursor failures stay hard")
 
 
 // An actual successful System AX snapshot contradicted by WindowServer has
@@ -1332,58 +893,4 @@ private let typedSnapshotMismatch = expectedBackgroundError("focus_unproven") {
 }
 backgroundCheck(typedSnapshotMismatch.foregroundSnapshotMismatch)
 backgroundCheck(typedSnapshotMismatch.details?["ax_pid"] as? Int32 == 10)
-for settled in [true, false] {
-    var reads = 0
-    let owned = try waitForBorrowedFocusRead(remaining:{ 1 }, check:{}, invalidated:{ false }, read:{
-        reads += 1
-        if reads == 1 { throw typedSnapshotMismatch }
-        return settled
-    }, wait:{ _ in }, retrySnapshotMismatch:{ true },
-       retireAtCap:{ _ in preconditionFailure("Settled snapshot never consumes cap retirement") })
-    backgroundCheck(owned == settled && reads == 2)
-}
-private var mismatchClock: TimeInterval = 0
-private var mismatchReads = 0
-private var mismatchRetired = false
-private var mismatchReturnWrites = 0
-do {
-    let owned = try waitForBorrowedFocusRead(remaining:{ 0.06-mismatchClock }, check:{
-        if mismatchClock >= 0.06 { throw failure("deadline_exceeded", "local snapshot cap") }
-    }, invalidated:{ false }, read:{ mismatchReads += 1; throw typedSnapshotMismatch },
-       wait:{ mismatchClock += $0 }, retrySnapshotMismatch:{ true }, retireAtCap:{ _ in true })
-    if owned { mismatchReturnWrites += 1 }
-} catch let ended as FocusEligibilityUnconfirmed {
-    mismatchRetired = ended.cause.foregroundSnapshotMismatch
-}
-backgroundCheck(mismatchRetired && mismatchReads == 3 && mismatchReturnWrites == 0)
-// Forced shutdown, pointer obligations and a generic lookalike error stay hard
-// immediately; the new mismatch retry belongs only to normal empty cleanup.
-for original in [typedSnapshotMismatch, failure("focus_unproven", typedSnapshotMismatch.message)] {
-    let kept = expectedBackgroundError("focus_unproven") {
-        _ = try waitForBorrowedFocusRead(remaining:{ 1 }, check:{}, invalidated:{ false }, read:{ throw original },
-            wait:{ _ in preconditionFailure("No retry without normal resource-free eligibility") },
-            retrySnapshotMismatch:{ !original.foregroundSnapshotMismatch },
-            retireAtCap:{ _ in preconditionFailure("No softening of a generic or forced error") })
-    }
-    backgroundCheck(kept.foregroundSnapshotMismatch == original.foregroundSnapshotMismatch)
-}
-
-// Stale raw busy evidence cannot mask a later explicit permission/identity
-// failure. Only a genuine local-deadline error may use its just-returned result.
-for original in [failure("permission_denied", "permission after System AX busy"),
-                 failure("app_changed", "birth changed after System AX busy"),
-                 failure("focus_unproven", "malformed focused application")] {
-    var ended = false
-    let kept = expectedBackgroundError(original.code) {
-        _ = try waitForBorrowedFocusRead(remaining:{ ended ? 0 : 1 }, check:{}, invalidated:{ false }, read:{
-            ended = true
-            rawEligibility.returned(.cannotComplete, attribute:kAXFocusedApplicationAttribute)
-            throw original
-        }, wait:{ _ in }, rawBusy:{ rawEligibility.busy },
-           retrySnapshotMismatch:{ true }, retireAtCap:{ _ in
-               preconditionFailure("A prior busy status cannot override a real failure")
-           })
-    }
-    backgroundCheck(kept.message == original.message)
-}
-print("Typed AX/WindowServer mismatch can settle or retire only normal resource-free eligibility; other identities and shutdown stay strict")
+print("System AX/WindowServer disagreement retains typed mismatch evidence")

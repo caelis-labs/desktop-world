@@ -5,6 +5,70 @@ import ImageIO
 import UniformTypeIdentifiers
 import Darwin
 
+// Process-local prompt deduplication. macOS decides whether a previously
+// denied request can show UI; absence of a prompt is never treated as a grant.
+private final class PermissionRequests: @unchecked Sendable {
+    let lock = NSLock()
+    var requested = Set<String>()
+    func once(_ capability: String, request: () -> Void) {
+        lock.lock()
+        let first = requested.insert(capability).inserted
+        lock.unlock()
+        if first { request() }
+    }
+}
+private let permissionRequests = PermissionRequests()
+private func permissionGranted(_ capability: String, request: Bool,
+                               gate: PermissionRequests = permissionRequests,
+                               preflight: () -> Bool, prompt: () -> Void) -> Bool {
+    if preflight() { return true }
+    if request { gate.once(capability, request: prompt) }
+    return preflight()
+}
+func dtwAccessibilityGranted(request: Bool = false) -> Bool {
+    permissionGranted("accessibility", request: request, preflight: AXIsProcessTrusted) {
+        _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
+    }
+}
+func dtwScreenRecordingGranted(request: Bool = false) -> Bool {
+    permissionGranted("screen_recording", request: request, preflight: CGPreflightScreenCaptureAccess) {
+        _ = CGRequestScreenCaptureAccess()
+    }
+}
+// An ancestry hint, not an assertion about the private TCC attribution rules.
+private func permissionHost() -> [String: Any]? {
+    var pid = getppid()
+    var seen = Set<pid_t>()
+    while pid > 1 && seen.insert(pid).inserted {
+        if let app = NSRunningApplication(processIdentifier: pid), app.activationPolicy == .regular,
+           let name = app.localizedName, let bundle = app.bundleIdentifier {
+            return ["name": name, "bundle_id": bundle, "source": "process_ancestry_hint"]
+        }
+        var info = proc_bsdinfo()
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, Int32(MemoryLayout<proc_bsdinfo>.size)) == MemoryLayout<proc_bsdinfo>.size else { break }
+        pid = pid_t(info.pbi_ppid)
+    }
+    return nil
+}
+func dtwPermissionStatus() -> [String: Any] {
+    var status: [String: Any] = ["accessibility": dtwAccessibilityGranted() ? "granted" : "required",
+        "screen_recording": dtwScreenRecordingGranted() ? "granted" : "required",
+        "guidance": "On first use DTW requests missing macOS access. Grant the app named by macOS (often the launching Harness), not necessarily dtw. If no prompt appears, use System Settings > Privacy & Security. Screen Recording changes may require restarting that host app."]
+    if let host = permissionHost() { status["host"] = host }
+    return status
+}
+func dtwPermissionError(_ capability: String) -> [String: Any] {
+    let screen = capability == "screen_recording"
+    let host = permissionHost()
+    let name = host?["name"] as? String
+    let hint = name.map { " The launching app appears to be \($0); follow the app name shown by macOS." } ?? " Grant the app named by macOS, usually the launching Harness or terminal."
+    var details: [String: Any] = ["capability": capability, "retryable": true,
+        "restart_may_be_required": screen, "prompt_requested": true]
+    if let host { details["host"] = host }
+    return ["error": "permission_required", "details": details,
+        "message": "macOS \(screen ? "Screen Recording" : "Accessibility") access is required. A system permission request was made; if no prompt appears, open System Settings > Privacy & Security." + hint + (screen ? " After granting, restart the host if macOS requests it, reconnect DTW, then retry." : " After granting, refresh the window state before retrying.")]
+}
+
 // DTW screenshot/input bridge; linked only with the native provider's guards.
 private struct Window {
     let pid: pid_t; let id: CGWindowID; let layer: Int; let rank: Int; let rect: CGRect
@@ -114,7 +178,7 @@ private func fail(_ code: String, _ message: String) -> [String:Any] { ["error":
 @available(macOS 14.2, *)
 private func capture(_ request: [String:Any], deadline: TimeInterval? = nil,
                      stopping: () -> Bool = { false }) -> [String:Any] {
-    guard CGPreflightScreenCaptureAccess() else { return fail("permission_denied","Screen Recording is required") }
+    guard dtwScreenRecordingGranted(request: true) else { return dtwPermissionError("screen_recording") }
     guard surfaceOwnerCurrent(request) else { return fail("target_changed", "Surface owner changed before capture") }
     let id = UInt32(request["window_id"] as? Int ?? 0)
     let pid = Int32(request["pid"] as? Int ?? 0)
@@ -324,7 +388,7 @@ private func waitForFirstPoint(deadline: TimeInterval, stopping: () -> Bool,
                                prove: (TimeInterval) throws -> SurfacePointProof?,
                                wait: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }) throws -> SurfacePointProof {
     let until = min(deadline, now() + 0.75)
-    func live() throws {
+    func live(checkReadiness: Bool = true) throws {
         if stopping() {
             throw PointReadinessFailure(result: fail("native_stopping", "Input stopped before point readiness; no click posted"))
         }
@@ -332,20 +396,31 @@ private func waitForFirstPoint(deadline: TimeInterval, stopping: () -> Bool,
         if current >= deadline {
             throw PointReadinessFailure(result: fail("deadline_exceeded", "Action deadline elapsed before point readiness; no click posted"))
         }
-        if current >= until {
+        if checkReadiness && current >= until {
             throw PointReadinessFailure(result: fail("target_occluded", "Point visibility did not settle within the readiness budget; no click posted"))
         }
     }
+    func validateTarget() throws {
+        let error = validate(until)
+        // Cancellation and the real action deadline remain authoritative. The
+        // native validator receives a rounded millisecond local deadline, which
+        // can expire just before our monotonic readiness clock reaches until.
+        try live(checkReadiness: false)
+        if let error {
+            if error["error"] as? String == "deadline_exceeded", until < deadline {
+                throw PointReadinessFailure(result: fail("target_not_ready",
+                    "Local point readiness validation budget elapsed; no click posted. Refresh the target before another action."))
+            }
+            throw PointReadinessFailure(result: error)
+        }
+        try live()
+    }
     while true {
         try live()
-        let before = validate(until)
-        try live()
-        if let error = before { throw PointReadinessFailure(result: error) }
+        try validateTarget()
         let proof = try prove(until)
         try live()
-        let after = validate(until)
-        try live()
-        if let error = after { throw PointReadinessFailure(result: error) }
+        try validateTarget()
         if let proof { return proof }
         wait(min(0.015, max(0, until - now())))
     }
@@ -368,7 +443,7 @@ func dtwClickSequence(count: Int, validateNext: () -> [String: Any]?,
 }
 
 private func click(_ request: [String:Any]) -> [String:Any] {
-    guard AXIsProcessTrusted() else { return fail("permission_denied","Accessibility is required") }
+    guard dtwAccessibilityGranted(request: true) else { return dtwPermissionError("accessibility") }
     let id = UInt32(request["window_id"] as? Int ?? 0), pid = Int32(request["pid"] as? Int ?? 0)
     guard let b = request["bounds"] as? [Double], b.count == 4,
           let x = request["screen_x"] as? Double, let y = request["screen_y"] as? Double,

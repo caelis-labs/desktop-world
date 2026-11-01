@@ -64,25 +64,26 @@
     }
     return size;
   };
-  // Build data-only, null-prototype copies. Only host argument objects may
-  // omit undefined data properties; all other JSON checks remain strict.
+  // Build data-only, null-prototype copies. Host arguments and returned objects
+  // omit undefined data properties; persistent state remains strict JSON.
   const encode = (value, label, limit, omitUndefinedProperties = false) => {
     const ancestors = [];
     setPrototype(ancestors, null);
     let nodes = 0;
-    const copy = (value, depth, objectField = false) => {
-      if (++nodes > 32768 || depth > 64) fail(`${label} exceeds JSON traversal limit`, "invalid_json");
+    const copy = (value, depth, objectField = false, path = "$") => {
+      const invalid = (reason, location = path) => fail(`${label} ${reason} at ${location}`, "invalid_json");
+      if (++nodes > 32768 || depth > 64) invalid("exceeds JSON traversal limit");
       if (omitUndefinedProperties && objectField && value === undefined) return undefined;
       if (value === null || typeof value === "string" || typeof value === "boolean") return value;
       if (typeof value === "number") {
-        if (!finite(value)) fail(`${label} contains a non-finite number`, "invalid_json");
+        if (!finite(value)) invalid("contains a non-finite number");
         return value;
       }
-      if (typeof value !== "object") fail(`${label} contains a non-JSON value`, "invalid_json");
+      if (typeof value !== "object") invalid("contains a non-JSON value");
       const proto = prototype(value);
       const array = isArray(value);
-      if (proto !== null && proto !== (array ? arrayPrototype : objectPrototype)) fail(`${label} contains a non-JSON object`, "invalid_json");
-      for (let i = 0; i < ancestors.length; i++) if (ancestors[i] === value) fail(`${label} contains a cycle`, "invalid_json");
+      if (proto !== null && proto !== (array ? arrayPrototype : objectPrototype)) invalid("contains a non-JSON object");
+      for (let i = 0; i < ancestors.length; i++) if (ancestors[i] === value) invalid("contains a cycle");
       ancestors[ancestors.length] = value;
       const out = array ? [] : create(null);
       if (array) setPrototype(out, null);
@@ -91,16 +92,18 @@
       for (let i = 0; i < keys.length; i++) {
         const key = keys[i];
         if (array && key === "length") continue;
-        if (typeof key !== "string") fail(`${label} contains a symbol key`, "invalid_json");
+        if (typeof key !== "string") invalid("contains a symbol key");
+        // Bound diagnostic path components independently of the output limit.
+        const location = `${path}[${stringify(apply(slice, key, [0, 128]))}]`;
         const field = descriptor(value, key);
-        if (!field || !descriptor(field, "value") || !field.enumerable) fail(`${label} contains an accessor or hidden property`, "invalid_json");
-        if (array && (StringClass(count) !== key)) fail(`${label} contains an array hole or extra property`, "invalid_json");
-        const copied = copy(field.value, depth+1, !array);
+        if (!field || !descriptor(field, "value") || !field.enumerable) invalid("contains an accessor or hidden property", location);
+        if (array && (StringClass(count) !== key)) invalid("contains an array hole or extra property", location);
+        const copied = copy(field.value, depth+1, !array, location);
         if (copied !== undefined)
           define(out, key, {value:copied, enumerable:true, writable:true, configurable:true});
         count++;
       }
-      if (array && count !== value.length) fail(`${label} contains an array hole`, "invalid_json");
+      if (array && count !== value.length) invalid("contains an array hole");
       ancestors.length--;
       return out;
     };
@@ -183,7 +186,7 @@
     (value) => {
       accepting = false;
       try {
-        const value_json = encode(value === undefined ? null : value, "result", 65536);
+        const value_json = encode(value === undefined ? null : value, "result", 65536, true);
         const state_json = encode(root, "state", 65536);
         if (phaseViolation) fail("app calls are unavailable during script settlement", "invalid_phase");
         finish(envelope({ok:true, value_json, state_json}));

@@ -197,7 +197,7 @@ async fn sdk_lists_four_tools_and_exec_accepts_only_app_and_source() {
 }
 
 #[tokio::test]
-async fn sdk_omits_only_undefined_host_object_fields_and_preserves_strict_state_results() {
+async fn sdk_omits_undefined_host_and_result_object_fields_but_preserves_strict_state() {
     let (server, catalog) = server();
     let mut client = Client::new(server).await;
     let result = client
@@ -210,7 +210,7 @@ async function q(role,text) { return app.observe({window_ref,role,text,limit:12}
 const optional=await q(undefined,undefined);
 const omitted=await app.observe({window_ref,limit:12});
 state.saved=7;
-return {optional:optional.elements.map(e=>e.name),omitted:omitted.elements.map(e=>e.name)};
+return {optional:optional.elements.map(e=>e.name),omitted:omitted.elements.map(e=>e.name),diagnostics:{status:undefined,usable:true},unused:undefined};
 "#,
             ),
         )
@@ -218,7 +218,7 @@ return {optional:optional.elements.map(e=>e.name),omitted:omitted.elements.map(e
     assert_eq!(result["isError"], false, "{result}");
     assert_eq!(
         decoded(&result)["value"]["result"],
-        json!({"optional":["Increment"],"omitted":["Increment"]})
+        json!({"optional":["Increment"],"omitted":["Increment"],"diagnostics":{"usable":true}})
     );
     assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 2);
     let rejected = client
@@ -253,7 +253,6 @@ return codes;
     assert_eq!(rejected["script"]["summary"]["steps"], 1);
     for source in [
         "state.saved=8;state.optional=undefined;return true;",
-        "state.saved=8;return {optional:undefined};",
         "state.saved=8;return [undefined];",
     ] {
         let result = client.tool("exec", input(source)).await;
@@ -402,6 +401,8 @@ async fn sdk_returns_png_as_content_beside_matching_text_and_structured_result()
     );
     assert_eq!(compact["value"]["calls"], 2);
     assert_eq!(compact["value"]["last_capture"]["step"], 2);
+    assert_eq!(compact["value"]["last_capture"]["timing"], "last_call");
+    assert_eq!(compact["value"]["last_capture"]["later_calls"], 0);
     assert_eq!(compact["value"]["console_truncated"], false);
     let console = compact["value"]["console"].as_array().unwrap();
     assert_eq!(console.len(), 1);
