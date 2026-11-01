@@ -7,6 +7,8 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+import struct
+import zlib
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from unittest.mock import patch
@@ -80,6 +82,9 @@ class WorkbenchHttpTests(unittest.TestCase):
                 self.assertIn('Inventory review', response.read().decode('utf-8'))
             with self.assertRaises(HTTPError) as error:
                 urlopen(base + '/reliability', timeout=5)
+            self.assertEqual(error.exception.code, 404)
+            with self.assertRaises(HTTPError) as error:
+                urlopen(base + '/vision', timeout=5)
             self.assertEqual(error.exception.code, 404)
         finally:
             server.shutdown()
@@ -170,6 +175,68 @@ class WorkbenchHttpTests(unittest.TestCase):
         self.assertEqual(len(state['attempts']), 1)
         self.assertEqual(len(state['submissions']), 1)
         self.assertFalse((self.output / 'state.tmp').exists())
+
+    def test_vision_challenge_is_pixels_only_and_not_exposed_by_text_routes(self):
+        token = self.disk()['vision']['expected_token']
+        self.assertEqual(len(token), 8)
+        self.assertTrue(set(token) <= set(workbench.VISION_GLYPHS))
+        html = self.request('/vision')
+        self.assertNotIn(token, html)
+        self.assertIn('aria-label="Visual token challenge"', html)
+        self.assertIn('<canvas', html)
+        for route in ('/', '/reliability', '/api/items', '/api/reliability'):
+            result = self.request(route)
+            self.assertNotIn(token, result if isinstance(result, str) else json.dumps(result))
+        for route in ('/state.json', '/api/vision', '/vision/expected_token'):
+            with self.assertRaises(HTTPError):
+                self.request(route)
+        with urlopen(self.base + '/vision/challenge.png', timeout=5) as response:
+            self.assertEqual(response.headers.get_content_type(), 'image/png')
+            png = response.read()
+        self.assertTrue(png.startswith(b'\x89PNG\r\n\x1a\n'))
+        self.assertNotIn(token.encode('ascii'), png)
+        chunks, position = [], 8
+        while position < len(png):
+            length = struct.unpack_from('>I', png, position)[0]
+            kind = png[position+4:position+8]
+            value = png[position+8:position+8+length]
+            self.assertEqual(struct.unpack_from('>I', png, position+8+length)[0], zlib.crc32(kind+value))
+            chunks.append((kind, value))
+            position += 12+length
+        self.assertEqual(position, len(png))
+        self.assertEqual([kind for kind, _ in chunks], [b'IHDR', b'IDAT', b'IEND'])
+        self.assertEqual(struct.unpack('>IIBBBBB', chunks[0][1]), (640, 160, 8, 2, 0, 0, 0))
+        rows = zlib.decompress(chunks[1][1])
+        self.assertEqual(len(rows), 160*(640*3+1))
+        self.assertTrue(all(rows[y*(640*3+1)] == 0 for y in range(160)))
+        self.assertIn(b'\x12\x20\x2b', rows)
+        self.assertIn(b'\xff\xff\xff', rows)
+
+    def test_vision_records_wrong_and_correct_attempts_without_returning_answer(self):
+        token = self.disk()['vision']['expected_token']
+        wrong = 'XXXXXXXX' if token != 'XXXXXXXX' else 'AAAAAAAA'
+        first = self.request('/api/vision/verify', {'value': wrong})
+        self.assertEqual(first, {'passed': False, 'attempt_count': 1})
+        correct = self.request('/api/vision/verify', {'value': token})
+        self.assertEqual(correct, {'passed': True, 'attempt_count': 2})
+        self.assertNotIn(token, json.dumps(correct))
+        attempts = self.disk()['vision']['attempts']
+        self.assertEqual([row['submitted'] for row in attempts], [wrong, token])
+        self.assertEqual([row['passed'] for row in attempts], [False, True])
+        self.assertFalse(self.disk()['saves'])
+
+    def test_vision_input_bounds_and_attempt_limit(self):
+        for value in (None, '', 'A'*7, 'A'*9, 'A'*10000, '😀'*8, '<script>'):
+            with self.assertRaises(HTTPError) as error:
+                self.request('/api/vision/verify', {'value': value})
+            self.assertEqual(error.exception.code, 400)
+        self.assertFalse(self.disk()['vision']['attempts'])
+        for count in range(1, 9):
+            self.assertEqual(self.request('/api/vision/verify', {'value':'AAAAAAAA'})['attempt_count'], count)
+        with self.assertRaises(HTTPError) as error:
+            self.request('/api/vision/verify', {'value':'AAAAAAAA'})
+        self.assertEqual(error.exception.code, 400)
+        self.assertEqual(len(self.disk()['vision']['attempts']), 8)
 
 
 if __name__ == '__main__':

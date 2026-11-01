@@ -365,9 +365,30 @@ if(state.A===state.B)throw Error('Distinct instances share a window ref');return
             $finalState = Wait-Released $f ('final-release-' + $f.label)
             Require ($finalState.increments -eq 1 -and $finalState.saves -eq 2) 'Unexpected final effect count in owned fixture'
             Write-Json (Join-Path $output ('final-' + $f.label + '.json')) $finalState
+        }
+        # Both independent global-release observations precede per-Form message
+        # accounting. Wait-Released still covers every VK 1..255, including E8.
+        $summary.internal_mask_observations = @()
+        foreach ($f in $fixtures) {
             $held = @{}
+            $mask = [ordered]@{ fixture = $f.label; vk = 232; down = 0; up = 0; unmatched_up = 0; final_balance = 0
+                scope = 'Per-Form PreFilterMessage observations; not a guarantee of symmetric marker messages per HWND'
+                final_balance_definition = 'observed down count minus observed up count'
+                global_release = 'Wait-Released checks all VK 1..255, including this internal mask key'
+                events = (Join-Path $f.directory 'events.jsonl') }
+            $maskHeld = 0
             foreach ($line in [IO.File]::ReadAllLines((Join-Path $f.directory 'events.jsonl'), $utf8)) {
                 $event = ConvertFrom-Json $line
+                if ($event.kind -in @('key_down', 'key_up') -and $event.data.key -eq 232) {
+                    # Keep every raw event and report marker asymmetry separately.
+                    # It is a queue-read sentinel, outside the business key batch.
+                    if ($event.kind -eq 'key_down') { $mask.down++; $maskHeld++ }
+                    else {
+                        $mask.up++
+                        if ($maskHeld -gt 0) { $maskHeld-- } else { $mask.unmatched_up++ }
+                    }
+                    continue
+                }
                 if ($event.kind -eq 'key_down') {
                     $key = [string]$event.data.key
                     if (-not $held.ContainsKey($key)) { $held[$key] = 0 }; $held[$key]++
@@ -377,6 +398,8 @@ if(state.A===state.B)throw Error('Distinct instances share a window ref');return
                     $held[$key]--
                 }
             }
+            $mask.final_balance = $mask.down - $mask.up
+            $summary.internal_mask_observations += $mask
             Require (@($held.Values | Where-Object { $_ -ne 0 }).Count -eq 0) 'Fixture saw key down without matching release'
         }
         $summary.status = 'smoke_passed'; $summary.passed = $true

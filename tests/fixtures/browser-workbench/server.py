@@ -9,15 +9,64 @@ import argparse
 import hashlib
 import json
 import math
+import secrets
+import struct
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import threading
 import time
+import zlib
 
 
 POINTER_EVENTS = frozenset(('pointerdown', 'pointerup', 'pointermove', 'mousedown',
                             'mouseup', 'mousemove', 'click', 'keydown', 'focus', 'blur',
                             'submit', 'ready', 'settling', 'mode_changed', 'icon', 'link'))
+
+# A tiny fixed raster font keeps the image-channel control dependency-free.
+# Exclude easily confused I/1, O/0, B/8, S/5, G/6, Q/9 and Z/2 pairs.
+VISION_GLYPHS = {
+    'A': ('01110','10001','10001','11111','10001','10001','10001'),
+    'C': ('01111','10000','10000','10000','10000','10000','01111'),
+    'D': ('11110','10001','10001','10001','10001','10001','11110'),
+    'E': ('11111','10000','10000','11110','10000','10000','11111'),
+    'F': ('11111','10000','10000','11110','10000','10000','10000'),
+    'H': ('10001','10001','10001','11111','10001','10001','10001'),
+    'J': ('00111','00010','00010','00010','10010','10010','01100'),
+    'K': ('10001','10010','10100','11000','10100','10010','10001'),
+    'M': ('10001','11011','10101','10101','10001','10001','10001'),
+    'N': ('10001','11001','11001','10101','10011','10011','10001'),
+    'P': ('11110','10001','10001','11110','10000','10000','10000'),
+    'R': ('11110','10001','10001','11110','10100','10010','10001'),
+    'T': ('11111','00100','00100','00100','00100','00100','00100'),
+    'U': ('10001','10001','10001','10001','10001','10001','01110'),
+    'V': ('10001','10001','10001','10001','10001','01010','00100'),
+    'W': ('10001','10001','10001','10101','10101','11011','10001'),
+    'X': ('10001','10001','01010','00100','01010','10001','10001'),
+    'Y': ('10001','10001','01010','00100','00100','00100','00100'),
+    '2': ('01110','10001','00001','00010','00100','01000','11111'),
+    '3': ('11110','00001','00001','01110','00001','00001','11110'),
+    '4': ('00010','00110','01010','10010','11111','00010','00010'),
+    '7': ('11111','00001','00010','00100','01000','01000','01000'),
+    '9': ('01110','10001','10001','01111','00001','00001','01110'),
+}
+
+
+def vision_png(token):
+    """Render pixels only: no text chunk, token metadata or external font file."""
+    width, height, scale = 640, 160, 10
+    pixels = bytearray(b'\xff' * (width * height * 3))
+    for index, char in enumerate(token):
+        for row, bits in enumerate(VISION_GLYPHS[char]):
+            for column, bit in enumerate(bits):
+                if bit == '1':
+                    for dy in range(scale):
+                        start = ((45 + row*scale + dy)*width + 40 + index*70 + column*scale)*3
+                        pixels[start:start+scale*3] = b'\x12\x20\x2b' * scale
+    def chunk(kind, value):
+        return struct.pack('>I', len(value)) + kind + value + struct.pack('>I', zlib.crc32(kind+value))
+    rows = b''.join(b'\0'+pixels[y*width*3:(y+1)*width*3] for y in range(height))
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0))
+            + chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b''))
 
 
 def create_server(output, case, file_task=False):
@@ -39,6 +88,15 @@ def create_server(output, case, file_task=False):
     probe_path = Path(__file__).with_name('reliability.html')
     probe_html = (probe_path.read_text(encoding='utf-8').replace('__CASE__', case).encode('utf-8')
                   if probe_path.exists() else None)
+    vision_path = Path(__file__).with_name('vision.html')
+    vision_html = (vision_path.read_text(encoding='utf-8').replace('__CASE__', case).encode('utf-8')
+                   if vision_path.exists() else None)
+    vision = None
+    challenge = None
+    if vision_html is not None:
+        vision = {'expected_token': ''.join(secrets.choice(tuple(VISION_GLYPHS)) for _ in range(8)), 'attempts': []}
+        state['vision'] = vision
+        challenge = vision_png(vision['expected_token'])
     attachment = '''<section aria-label="Review attachment"><h2>Review attachment</h2>
 <label>Attach review evidence <input id="attachment" type="file" accept=".txt"></label>
 <p id="attachment-status" role="status">No attachment received</p></section>'''
@@ -126,7 +184,7 @@ byId('attachment-status').textContent=response.ok?'Received attachment: '+file.n
 
         def reply(self, status, body, kind='application/json'):
             self.send_response(status)
-            self.send_header('Content-Type', kind + '; charset=utf-8')
+            self.send_header('Content-Type', kind if kind == 'image/png' else kind + '; charset=utf-8')
             self.send_header('Content-Length', str(len(body)))
             self.send_header('Cache-Control', 'no-store')
             self.end_headers()
@@ -137,6 +195,10 @@ byId('attachment-status').textContent=response.ok?'Received attachment: '+file.n
                 self.reply(200, html, 'text/html')
             elif self.path in ('/reliability', '/reliability/') and probe_html is not None:
                 self.reply(200, probe_html, 'text/html')
+            elif self.path in ('/vision', '/vision/') and vision_html is not None:
+                self.reply(200, vision_html, 'text/html')
+            elif self.path == '/vision/challenge.png' and challenge is not None:
+                self.reply(200, challenge, 'image/png')
             elif self.path == '/api/reliability':
                 with lock:
                     counts = {}
@@ -197,6 +259,15 @@ byId('attachment-status').textContent=response.ok?'Received attachment: '+file.n
                         if row['accepted']:
                             reliability['submissions'].append(dict(row))
                         result = {**row, 'submission_count': len(reliability['submissions'])}
+                    elif self.path == '/api/vision/verify' and vision is not None:
+                        value = data.get('value')
+                        if (not isinstance(value, str) or len(value) != 8 or not value.isascii()
+                                or not value.isalnum() or len(vision['attempts']) >= 8):
+                            raise ValueError('visual token')
+                        vision_attempt = {'submitted': value, 'passed': value == vision['expected_token'],
+                                          'unix_ms': int(time.time() * 1000)}
+                        vision['attempts'].append(vision_attempt)
+                        result = {'passed': vision_attempt['passed'], 'attempt_count': len(vision['attempts'])}
                     elif self.path == '/api/attachment' and file_task:
                         if (not isinstance(data.get('name'), str) or not data['name']
                                 or len(data['name']) > 256 or '/' in data['name'] or '\\' in data['name']

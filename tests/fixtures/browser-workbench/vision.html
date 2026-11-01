@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>DTW Vision __CASE__</title>
+<style>
+body{font:18px system-ui;color:#18232b;background:#f4f6f8;margin:32px;max-width:950px}
+canvas{display:block;background:white;border:2px solid #556575;max-width:100%;height:auto;margin:24px 0}
+input,button{font:inherit;padding:12px;margin:10px 8px 10px 0}label{display:block}input{letter-spacing:3px}
+#result{min-height:32px;font-weight:600}
+</style>
+<h1>Image-channel check — __CASE__</h1>
+<p>Read the eight characters in the picture. Enter them below and verify once.</p>
+<canvas id="challenge" width="640" height="160" role="img" aria-label="Visual token challenge"></canvas>
+<p id="image-status" role="status">Loading picture</p>
+<form id="verification">
+<label>Visual token <input id="answer" type="text" minlength="8" maxlength="8" pattern="[A-Za-z0-9]{8}" required autocomplete="off" spellcheck="false"></label>
+<button id="verify" type="submit">Verify picture</button>
+</form>
+<p id="result" role="status">Not verified</p>
+<script>
+'use strict';
+const canvas = document.getElementById('challenge');
+const picture = new Image();
+picture.onload = () => {
+  canvas.getContext('2d').drawImage(picture,0,0);
+  document.getElementById('image-status').textContent = 'Picture ready';
+};
+picture.onerror = () => { document.getElementById('image-status').textContent = 'Picture failed to load'; };
+picture.src = '/vision/challenge.png';
+let pending = false;
+document.getElementById('verification').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (pending) return;
+  pending = true;
+  document.getElementById('verify').disabled = true;
+  try {
+    const response = await fetch('/api/vision/verify', {method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({value:document.getElementById('answer').value})});
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const result = await response.json();
+    document.getElementById('result').textContent = `${result.passed ? 'Verified' : 'Does not match'}; attempts: ${result.attempt_count}`;
+  } catch (error) {
+    document.getElementById('result').textContent = `Verification outcome unknown: ${error.message}. Inspect supervisor evidence before retrying.`;
+  } finally {
+    pending = false;
+    document.getElementById('verify').disabled = false;
+  }
+});
+</script>
+</html>

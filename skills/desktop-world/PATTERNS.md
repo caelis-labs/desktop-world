@@ -6,6 +6,8 @@ Use these patterns with the API and reference lifecycle in [SKILL.md](SKILL.md).
 
 Opening a chooser may create a separate sheet, dialog, or related helper surface. After the opening action, use `app.waitForWindow({window_ref: parent, state:"dialog"})` when supported; DTW waits for the transition and returns the uniquely proven related modal ref. Retain parent and dialog refs separately. Unsupported or unproven relationships require fresh `app.windows()` and inspection; empty titles, list position, and newly focused windows do not establish a relationship.
 
+On Windows, a Chrome file window can appear as an ordinary window while the selected parent remains enabled. `dialog_not_present` does not prove that opening failed. Inspect fresh windows and their actual controls, and continue only on the positively identified intended surface. Keep an ordinary window ref separate from a proven child-modal relationship. If ownership or identity remains ambiguous, retain that uncertainty; do not repeat the opening shortcut to discover what happened.
+
 Capture the dialog once to identify the filename/path field, directory contents, and confirmation controls. Large directory lists can dominate an AX/UIA traversal even when filtering for text fields. Query a semantic subtree or a capture region around the relevant controls before scanning the entire dialog. Regions are image coordinates; derive them from the current capture rather than a remembered layout.
 
 On macOS, a native file chooser commonly supports **Command+Shift+G** to enter a directory path. This can open another sheet. Wait for its proven relationship before entering the path, then wait for that exact sheet to close before continuing in the chooser:

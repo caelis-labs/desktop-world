@@ -122,3 +122,29 @@ Foreign windows, including another automation coordinator's full-desktop cursor
 overlay, can make the current GDI capture refuse occluded content. Finish or
 dispose that coordinator through its normal lifecycle before this probe. The
 probe neither disables foreign windows nor exempts them from capture proof.
+
+## Actual model image-channel check
+
+Use the same server's `/vision` page in a fresh case for each Agent host. It
+renders a random eight-character challenge in a canvas with a generic accessible
+name. The browser receives only a server-rendered raster PNG: HTML, scripts,
+fallback text, titles, accessibility labels and JSON APIs contain no answer.
+The PNG has only IHDR/IDAT/IEND chunks, without text metadata. Rendering uses a
+large fixed raster font and an alphabet that excludes confusing character pairs.
+No additional Python or browser dependency is required.
+
+Ask the Agent to use **DTW capture only** to read the picture, enter its eight
+characters into **Visual token**, and press **Verify picture** once. Do not give
+it the supervisor's expected token, fixture files or a different screenshot/OCR
+tool. Wait for **Picture ready** before its capture. A successful inventory edit,
+an image-preview UI error or a host assertion that it can see images does not
+replace this check.
+
+The supervisor alone reads `state.json.vision.expected_token` and
+`state.json.vision.attempts`. Every valid eight-character alphanumeric submission
+records the submitted value, pass/fail and timestamp; the page receives only
+pass/fail and attempt count. Inputs are bounded to eight characters, and each
+fresh case allows at most eight attempts. Retain failed attempts and verify
+the submitted value independently. The token stays fixed within one case;
+refreshing the page does not create a new one. Both `/vision` and its PNG return
+404 from old instrumented layouts that copied only server.py/index.html.

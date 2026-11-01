@@ -41,6 +41,79 @@ empty ValuePattern identifies that empty placeholder. It never calls its setter,
 strips literal U+FFFC content or replays unknown input. The owned browser must close
 normally; the disposable HTTP fixture is explicitly stopped by the supervisor.
 
+## Verify Notepad keyboard chords and saved effects
+
+Run `notepad_shortcut_probe.py` on an exclusive, unlocked Windows desktop with
+the actual installed modern Notepad executable. Keep `cursor_probe.py` beside
+it. The executable may be inside `C:\Program Files\WindowsApps`; use its exact
+installed path rather than a launcher alias. Start with a new evidence directory:
+
+```powershell
+python -X utf8 .\notepad_shortcut_probe.py `
+  --dtw 'C:\Candidates\DTW\bin\dtw.exe' `
+  --notepad 'C:\Path\To\Installed\Notepad\Notepad.exe' `
+  --output 'C:\Temp\dtw-notepad-shortcuts-new' `
+  --protect-file 'C:\Temp\existing-dsh-acceptance.txt' `
+  --protect-file 'C:\Temp\existing-agy-acceptance.txt'
+```
+
+Each `--protect-file` must already exist. It is hashed before and after the run
+and never opened or edited by the probe. The probe creates its own uniquely
+named `DTW-shortcut-<marker>.txt`, proves the active editor belongs to that tab,
+and uses only DTW tools for application actions. Nine cases cover CJK plus emoji
+through `typeText` and `setValue`, both `CTRL`/`CONTROL` aliases, a bare letter,
+Shift+A, Ctrl+A, Ctrl+S alone and Enter followed by Ctrl+S in the same execution.
+Native text readback and independent UTF-8 disk contents decide saved effects;
+an input dispatch or queue-marker acknowledgement alone does not pass a save.
+Original case results, receipts and keyboard queue traces remain in evidence.
+No failed shortcut is replayed.
+
+Cleanup separately selects the exact File > Save and File > Close tab commands
+for the owned document, then independently confirms that its tab disappeared.
+It never uses Save All, closes another tab or terminates Notepad, whose launcher
+may hand the document to an existing process. Cleanup failure makes the run fail
+and may leave its owned tab for inspection. Localized menu labels can be supplied
+with `--file-label`, `--save-label` and `--close-tab-label`.
+
+If Windows refuses initial foreground preparation, retain that setup failure.
+An operator may activate the uniquely named pristine owned tab, then start a
+separate evidence run with `--owned-file` pointing to that exact probe document.
+The runner checks its name and original seed before reuse; it does not hide a
+focus workaround or resume a partly executed shortcut run. For intermittent
+failures, use independent new documents and evidence directories and retain
+every attempt. A successful `summary.json` also requires unchanged protected
+hashes, owned-tab absence and clean MCP shutdown.
+
+`--trace-input-queues` additionally runs the independent read-only
+`input_queue_observer.py` sampler. It records the owned title's top/focus threads,
+`GetGUIThreadInfo`, foreground HWND and global `GetAsyncKeyState(0xE8)` about every
+10 ms. It never attaches queues or supplies input. These samples can distinguish
+global key release from the worker's synchronous marker observation; sampling
+can miss brief transitions and does not prove an application consumed a key.
+Any original unknown receipt, sticky cleanup failure or nonzero MCP exit remains
+a failed attempt even when later independent runs pass.
+
+The queue trace distinguishes `payload_tail_seen`, `sentinel_release_read` and
+per-key `named_release` evidence. Complete named chords require an observed tail
+toggle plus every business key released synchronously and globally, and the
+marker released globally. Unicode segments still require the strict toggle and
+synchronous marker-up. A named read without `sentinel_release_read` must not be
+reported as a Unicode read or a verified business effect. Candidate results,
+retained failed attempts and the final scoped 27-case milestone belong in the
+[host acceptance report](../../../docs/windows-host-acceptance-2026-11-01.md).
+
+The separate `keyboard_terminal_probe.py --dtw ... --chrome ... --output ...`
+uses an owned private Chrome profile to test Ctrl+O, Escape and Alt+F4. `--case
+close` isolates Alt+F4. It independently waits for the browser process to exit
+and never repeats an unknown close. The default strict dialog wait is a separate
+capability requirement: current Chrome's Open dialog can appear in the native
+inventory while failing DTW's existing same-process owned-modal proof. Preserve
+that limitation; a dispatched key does not certify `waitForWindow({state:'dialog'})`.
+The opt-in `--observed-dialog` supervisor requires a new window reference and an
+independent same-process HWND/owner/root proof before sending Escape. It does not
+relax production modality rules, and insufficient proof fails without acting on
+the new window. Any forced cleanup of its owned Chrome makes that attempt fail.
+
 ## Diagnose a named empty desktop without desktop input
 
 This opt-in probe requires Windows and Python 3 only. It creates one uniquely

@@ -20,6 +20,83 @@ import uuid
 from cursor_probe import Mcp, read, require, wait, write
 
 
+def window_diagnostics(owned_pid, owned_title_prefix):
+    """Read-only, non-atomic desktop geometry; never records unrelated titles."""
+    from ctypes import wintypes as w
+    user = ctypes.WinDLL('user32', use_last_error=True)
+    user.GetTopWindow.argtypes = [w.HWND]
+    user.GetTopWindow.restype = w.HWND
+    user.GetWindow.argtypes = [w.HWND, w.UINT]
+    user.GetWindow.restype = w.HWND
+    user.GetForegroundWindow.restype = w.HWND
+    user.GetWindowRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
+    user.GetWindowRect.restype = w.BOOL
+    user.GetWindowThreadProcessId.argtypes = [w.HWND, ctypes.POINTER(w.DWORD)]
+    user.GetWindowThreadProcessId.restype = w.DWORD
+    user.GetClassNameW.argtypes = [w.HWND, w.LPWSTR, ctypes.c_int]
+    user.GetWindowTextW.argtypes = [w.HWND, w.LPWSTR, ctypes.c_int]
+    user.IsWindowVisible.argtypes = user.IsIconic.argtypes = [w.HWND]
+    user.IsWindowVisible.restype = user.IsIconic.restype = w.BOOL
+    user.GetDpiForWindow.argtypes = [w.HWND]
+    user.GetDpiForWindow.restype = w.UINT
+    user.GetThreadDpiAwarenessContext.restype = w.HANDLE
+    user.GetAwarenessFromDpiAwarenessContext.argtypes = [w.HANDLE]
+    user.GetAwarenessFromDpiAwarenessContext.restype = ctypes.c_int
+    get_style = user.GetWindowLongPtrW if ctypes.sizeof(ctypes.c_void_p) == 8 else user.GetWindowLongW
+    get_style.argtypes = [w.HWND, ctypes.c_int]
+    get_style.restype = ctypes.c_ssize_t
+    try:
+        dwm = ctypes.WinDLL('dwmapi')
+        dwm.DwmGetWindowAttribute.argtypes = [w.HWND, w.DWORD, w.LPVOID, w.DWORD]
+        dwm.DwmGetWindowAttribute.restype = ctypes.c_long
+    except OSError:
+        dwm = None
+    result = {'observed_at_unix_ns': time.time_ns(), 'atomic_snapshot': False,
+              'owned_browser_pid': owned_pid, 'foreground_hwnd': user.GetForegroundWindow(),
+              'z_order': 'GetTopWindow followed by GW_HWNDNEXT; visible windows only',
+              'bounds_coordinates': 'GetWindowRect under the observer thread DPI context; may be virtualized',
+              'observer_dpi_context': user.GetThreadDpiAwarenessContext(),
+              'window_bound': 1024, 'windows': []}
+    result['observer_dpi_awareness'] = user.GetAwarenessFromDpiAwarenessContext(result['observer_dpi_context'])
+    result['dpi_awareness_values'] = {'0':'unaware', '1':'system-aware', '2':'per-monitor-aware', '-1':'invalid'}
+    hwnd, visited = user.GetTopWindow(None), set()
+    while hwnd and len(visited) < result['window_bound']:
+        if hwnd in visited:
+            result['incomplete_reason'] = 'window_chain_cycle_during_observation'
+            break
+        visited.add(hwnd)
+        if user.IsWindowVisible(hwnd):
+            pid, rect = w.DWORD(), w.RECT()
+            tid = user.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            class_name, title = ctypes.create_unicode_buffer(256), ctypes.create_unicode_buffer(1024)
+            user.GetClassNameW(hwnd, class_name, len(class_name))
+            user.GetWindowTextW(hwnd, title, len(title))
+            row = {'hwnd': hwnd, 'z_index': len(visited)-1, 'pid': pid.value,
+                   'thread_id': tid, 'class': class_name.value,
+                   'owned_browser_pid_match': pid.value == owned_pid,
+                   'owned_title_match': title.value.startswith(owned_title_prefix),
+                   'topmost': bool(get_style(hwnd, -20) & 8), 'minimized': bool(user.IsIconic(hwnd)),
+                   'owner_hwnd': user.GetWindow(hwnd, 4), 'dpi': user.GetDpiForWindow(hwnd)}
+            if user.GetWindowRect(hwnd, ctypes.byref(rect)):
+                row['bounds'] = [rect.left, rect.top, rect.right, rect.bottom]
+            else:
+                row['bounds_error'] = ctypes.get_last_error()
+            if dwm:
+                cloaked = w.DWORD()
+                status = dwm.DwmGetWindowAttribute(hwnd, 14, ctypes.byref(cloaked), ctypes.sizeof(cloaked))
+                if status == 0:
+                    row['cloaked'] = cloaked.value
+                else:
+                    row['cloaked_hresult'] = status
+            result['windows'].append(row)
+        hwnd = user.GetWindow(hwnd, 2)
+    if hwnd and 'incomplete_reason' not in result:
+        result['incomplete_reason'] = 'window_bound'
+    result['visited_windows'] = len(visited)
+    result['owned_title_match_count'] = sum(row['owned_title_match'] for row in result['windows'])
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dtw', type=Path, required=True)
@@ -46,6 +123,16 @@ def main():
     server = browser = client = None
     app = window_ref = None
     case = 'reliability-' + uuid.uuid4().hex[:12]
+
+    def diagnose(label):
+        # Observation failures must not hide the original dispatch/capture error.
+        try:
+            path = output/(label+'-windows.json')
+            write(path, window_diagnostics(browser.pid, 'DTW Reliability '+case))
+            return {'path': str(path)}
+        except BaseException:
+            return {'diagnostic_failure': traceback.format_exc()}
+
     try:
         from PIL import Image, ImageChops
         from ctypes import wintypes
@@ -137,6 +224,7 @@ def main():
                     row['receipt'] = result
                 except BaseException:
                     row['dispatch_failure'] = traceback.format_exc()
+                    row['failure_time_window_diagnostics'] = diagnose(label)
                 # Wait only for readback. Never repeat a submit after a failure,
                 # no receipt, or an uncertain/late effect.
                 try:
@@ -220,12 +308,28 @@ return {{complete:false,terminal:{{reason:'probe_page_bound'}},names,pages,fragm
         summary['failure'] = traceback.format_exc()
     finally:
         if client and app and window_ref and browser and browser.poll() is None:
+            close_error = False
             try:
                 client.execute(app, 'close-owned-browser', f'return await app.keypress({{window_ref:{json.dumps(window_ref)},keys:["ALT","F4"]}});')
-                summary['cleanup'].append({'normal_owned_browser_exit':browser.wait(timeout=10)})
             except BaseException:
+                close_error = True
                 summary['passed'] = False
-                summary['cleanup'].append({'browser_close_error':traceback.format_exc()})
+                summary['cleanup'].append({'browser_close_error':traceback.format_exc(),
+                                           'failure_time_window_diagnostics':diagnose('close-owned-browser')})
+            # A failed post-dispatch verification can follow an actual close.
+            # Preserve that failure, observe process exit, and never replay close.
+            started = time.monotonic()
+            observation = {'after_close_error':close_error, 'timeout_seconds':10,
+                           'close_replayed':False}
+            try:
+                observation['returncode'] = browser.wait(timeout=10)
+                if observation['returncode'] != 0:
+                    summary['passed'] = False
+            except subprocess.TimeoutExpired:
+                observation['timed_out'] = True
+                summary['passed'] = False
+            observation['elapsed_seconds'] = time.monotonic()-started
+            summary['cleanup'].append({'owned_browser_exit_observation':observation})
         if client:
             try:
                 summary['cleanup'].append(client.close())

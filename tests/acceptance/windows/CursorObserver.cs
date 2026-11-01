@@ -103,11 +103,16 @@ namespace DtwWindowsCursorAcceptance {
             Rect r;GetWindowRect(target,out r);WindowProc proc=delegate(IntPtr h,uint m,IntPtr w,IntPtr l){return DefWindowProc(h,m,w,l);};
             var cls=new WindowClass{Proc=proc,Name=ClassName,Brush=CreateSolidBrush(0x00FF00FF)};
             if(RegisterClass(ref cls)==0)throw new Exception("Owned spoof class registration failed");
-            IntPtr hwnd=CreateWindowEx(0x080800A0,ClassName,"Owned cursor-class negative control",0x88000000,r.Left+180,r.Top+260,80,80,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero);
+            IntPtr hwnd=CreateWindowEx(0x080800A8,ClassName,"Owned cursor-class negative control",0x88000000,r.Left+180,r.Top+260,80,80,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero);
             if(hwnd==IntPtr.Zero)throw new Exception("Owned spoof creation failed");
             try {
-                SetLayeredWindowAttributes(hwnd,0,255,2);ShowWindow(hwnd,4);SetWindowPos(hwnd,IntPtr.Zero,0,0,0,0,0x53);
-                File.WriteAllText(output,Json.Serialize(new {pid=Process.GetCurrentProcess().Id,hwnd=hwnd.ToInt64(),class_name=ClassName}),Utf8);
+                // A persistent owned cover: ordinary target focus must not make
+                // this negative control disappear below the capture window.
+                // It remains foreign to DTW regardless of class/basename.
+                SetLayeredWindowAttributes(hwnd,0,255,2);ShowWindow(hwnd,4);
+                if(!SetWindowPos(hwnd,new IntPtr(-1),0,0,0,0,0x53))throw new Exception("Owned topmost cover placement failed");
+                File.WriteAllText(output,Json.Serialize(new {pid=Process.GetCurrentProcess().Id,hwnd=hwnd.ToInt64(),class_name=ClassName,
+                    topmost=(GetWindowLongPtr(hwnd,-20).ToInt64()&8)!=0,visible=IsWindowVisible(hwnd)}),Utf8);
                 while(!File.Exists(output+".stop")){Application.DoEvents();Thread.Sleep(10);}
             }finally{DestroyWindow(hwnd);GC.KeepAlive(proc);}
         }

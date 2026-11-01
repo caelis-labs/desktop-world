@@ -149,8 +149,8 @@ BitBlt fallback: Win32 geometry and hit tests can already report maximized bound
 while desktop pixels still contain other applications during an animation.
 This is independent of UIA, not a WGC or occluded/background surface promise.
 Pixel clicks bind captured physical bounds and DPI and reject changed geometry
-and foreign-process hit targets. Foreground input briefly attaches the worker's
-message queue to the current foreground and target threads, detaches both before target input,
+and foreign-process hit targets. Foreground activation briefly attaches the worker's
+message queue to the current foreground and target threads, detaches both,
 and observes one activation request for at most 200 ms. Unproven activation
 dispatches no target keystrokes; failed detach preserves cleanup failure. The
 upstream reserved-key foreground assistance is not transplanted.
@@ -159,6 +159,82 @@ XInput 2, 32-bit little-endian TrueColor pixels and proven ownership from XRes (
 _NET_WM_PID); only characters present in the current keyboard map can be typed.
 Only keyboard group zero is accepted for text; active alternate groups or
 modifiers and unsupported characters are rejected before injection.
+
+## Windows keyboard queue follow-up (2026-11-01)
+
+The Windows keyboard path additionally adapts the input-queue attachment and
+read-tail marker mechanisms from CUA commit
+[`8db684185a93e854bb7811189d69f933bb15f55d`](https://github.com/trycua/cua/tree/8db684185a93e854bb7811189d69f933bb15f55d),
+[`libs/cua-driver/rust/crates/platform-windows/src/input/keyboard.rs`](https://github.com/trycua/cua/blob/8db684185a93e854bb7811189d69f933bb15f55d/libs/cua-driver/rust/crates/platform-windows/src/input/keyboard.rs#L637).
+The donor is MIT licensed; the full CUA copyright and license are retained in
+[`packaging/third-party/cua-background-input/LICENSE`](../packaging/third-party/cua-background-input/LICENSE).
+This is a narrow mechanism adaptation, not an import of the upstream worker or
+a change to macOS input.
+
+After ordinary foreground preparation, DTW attaches the worker queue for each
+keyboard segment to the selected window's top-level thread and, when ownership
+is proven, its focused child thread. The marker baseline is read only after
+attachment, because attachment resets shared keyboard state. A paired unassigned
+virtual key (`0xE8`) follows the original payload in the same `SendInput` batch.
+Complete chords remain one batch with their original virtual-key encodings;
+supplementary Unicode retains DTW's existing scalar segmentation and delivery
+proof. A target-layout scan-code experiment did not resolve the live Notepad
+failure and is not part of this implementation.
+
+For Unicode segments, DTW waits for the attached queue's marker state to change
+and return to key-up. For a fully inserted complete named chord, it latches the
+marker toggle change within the original attachment, proving that the preceding
+payload was read. It then independently requires every business virtual key to
+be released in both synchronous `GetKeyState` and global `GetAsyncKeyState`, and
+the marker to be released globally. The marker's synchronous key-up is recorded
+separately as `sentinel_release_read`; named completion does not pretend that
+this otherwise unassigned marker-up was consumed. This is stricter than the
+donor's named-key toggle-only drain and does not weaken Unicode's flip-plus-up
+boundary. Neither policy reattaches, resets state, sends an extra release or
+replays a payload to manufacture confirmation.
+
+This is a queue-consumption and release boundary, not proof that an
+application saved a file or otherwise completed the requested action. Dispatch
+receipts remain unverified; native readback and independent disk or application
+observations establish business effects. DTW bounds the read wait by the original
+deadline and two seconds, with at most 250 ms for an already inserted pair when
+cancellation arrives. It does not adopt an ignored timeout, fixed-delay fallback,
+automatic input replay, or restoration of a previous foreground window.
+
+Only the successful read and explicit detach of one complete named-key chord
+produce a Windows terminal completion token. Its final boundary still checks
+deadline, cancellation, cleanup and held keys, but allows that chord to close its
+original HWND or open a new foreground window. Text scalar and mouse segments
+retain their exact-target tail checks. This does not prove the new window is an
+owned modal or broaden `waitForWindow`'s existing modal ownership requirements.
+
+The existing single global input lease remains held during the read-only wait;
+the mutation gate is released while waiting. Preflight refreshes deadline,
+cancellation and cleanup checks immediately before insertion. Partial insertion
+cleans only confirmed held events, including a partially inserted marker, and
+does not count marker events as accepted text. Detach is explicit and attempted
+once before any subsequent UIA read. Unconfirmed delivery or detach preserves
+unknown effects and sticky cleanup failure; uncertain detach also prohibits the
+per-scalar and final UIA delivery reads. None of this changes mouse delivery,
+host authorization, public Agent parameters or sandbox boundaries.
+
+The opt-in Notepad probe records each original shortcut result separately from
+cleanup and compares native text with the owned document on disk. Its instructions
+and scope are in the [Windows acceptance matrix](../tests/acceptance/windows/README.md).
+An earlier candidate retained an intermittent Notepad marker-up timeout despite
+full insertion: the original attachment had observed marker-down, while the
+later independent snapshot showed global release. That failed attempt and its
+unknown receipt remain separate from cleanup and later passing diagnostics.
+The final named-versus-Unicode boundary above was then exercised on candidate
+`e946c689d29b673cb8f73b36bd242bdd2ce137082c18bea2a15e93d8b07e8fae`:
+three independent owned Notepad documents passed 27/27 cases, including 58 named
+completions with business releases proven before synchronous marker-up was read;
+all 210 Unicode segment confirmations retained strict marker-up. Each owned tab
+closed, each MCP exited normally and protected documents' hashes were unchanged.
+A separate one-shot Alt+F4 check retained unverified dispatch and independently
+proved the owned Chrome process exited normally. These scoped results do not
+erase earlier failures or establish arbitrary-application parity; see the
+[host acceptance report](windows-host-acceptance-2026-11-01.md).
 
 ## Verification boundaries
 

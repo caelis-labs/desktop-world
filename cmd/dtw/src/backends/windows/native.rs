@@ -1150,8 +1150,16 @@ impl Store {
             .and_then(|_| super::cursor::Emitter::new(&r["cursor_feedback"], target));
         let mut placed = false;
         let mut text_index = 0;
+        let named_keypress = op == "keypress" && segments.len() == 1;
+        let mut terminal_keypress_complete = false;
         let result = input_sequence::run(&segments, |step| match step {
             Step::Verify => {
+                if terminal_keypress_complete {
+                    // A single named chord may legitimately close this HWND or
+                    // open a new foreground dialog. Its complete queue read and
+                    // detach prove delivery only; keep stop/held/cleanup checks.
+                    return input::terminal_keypress_boundary(until);
+                }
                 self.input_boundary(target, window, until)?;
                 input::no_held_keys()?;
                 if let Some((uia, element, root, before, region)) = semantic_anchor.as_ref() {
@@ -1188,17 +1196,27 @@ impl Store {
             Step::Dispatch(segment) => {
                 self.validate(target)?;
                 let mut accepted = 0;
-                let sent = input::send(segment, window, until, dispatched, &mut accepted);
+                let sent = input::send(
+                    segment,
+                    window,
+                    until,
+                    dispatched,
+                    &mut accepted,
+                    named_keypress,
+                );
                 if let Some(delivery) = delivery.as_mut() {
                     let scalar = text_scalars[text_index];
                     delivery.inserted(scalar, accepted, segment.len());
                     text_index += 1;
-                    sent?;
-                    if scalar.len_utf16() > 1 {
-                        delivery.settle(|| self.validate(target).map(|_| ()))?;
-                    }
+                    terminal_keypress_complete = sent?.terminal_keypress();
+                    finish_delivery_read(Ok(()), input::cleanup_failed(), || {
+                        if scalar.len_utf16() > 1 {
+                            delivery.settle(|| self.validate(target).map(|_| ()))?;
+                        }
+                        Ok(())
+                    })?;
                 } else {
-                    sent?;
+                    terminal_keypress_complete = sent?.terminal_keypress();
                 }
                 if let (Some(cursor), Some((_, hit, _, _, _))) = (cursor.as_mut(), point.as_ref()) {
                     // Emit only after the entire native mouse segment was
@@ -1220,10 +1238,12 @@ impl Store {
                 Ok(())
             }
         });
-        if let Some(delivery) = delivery.as_mut() {
-            delivery.settle(|| self.validate(target).map(|_| ()))?;
-        }
-        result
+        finish_delivery_read(result, input::cleanup_failed(), || {
+            if let Some(delivery) = delivery.as_mut() {
+                delivery.settle(|| self.validate(target).map(|_| ()))?;
+            }
+            Ok(())
+        })
     }
     fn pixel_point(
         &mut self,
@@ -1393,6 +1413,22 @@ impl Store {
         }
         reply
     }
+}
+fn finish_delivery_read(
+    result: Result<(), Error>,
+    cleanup_failed: bool,
+    settle: impl FnOnce() -> Result<(), Error>,
+) -> Result<(), Error> {
+    if cleanup_failed {
+        return result.and(Err(Error::NativeFailure {
+            code: "input_cleanup_unconfirmed".into(),
+            message:
+                "Input or queue cleanup is unconfirmed; further UIA delivery reads were skipped"
+                    .into(),
+        }));
+    }
+    settle()?;
+    result
 }
 fn windows_error_reply(error: Error, action: bool) -> Value {
     if let Error::NativeFailure { code, message } = error {
@@ -1979,6 +2015,26 @@ fn absolute_move(point: POINT) -> Result<INPUT, Error> {
 #[cfg(test)]
 mod semantic_tests {
     use super::*;
+    #[test]
+    fn failed_queue_cleanup_skips_all_delivery_uia_reads_and_preserves_original_error() {
+        let original = Error::BackendFailed("original dispatch uncertainty".into());
+        assert_eq!(
+            finish_delivery_read(Err(original.clone()), true, || panic!(
+                "UIA forbidden after uncertain detach"
+            )),
+            Err(original)
+        );
+        assert!(
+            matches!(finish_delivery_read(Ok(()),true,||panic!("UIA forbidden after uncertain detach")),Err(Error::NativeFailure{code,..}) if code=="input_cleanup_unconfirmed")
+        );
+        let settled = std::cell::Cell::new(false);
+        finish_delivery_read(Ok(()), false, || {
+            settled.set(true);
+            Ok(())
+        })
+        .unwrap();
+        assert!(settled.get());
+    }
     #[test]
     fn explicit_windows_diagnostics_preserve_message_and_dispatch_without_debug_wrapping() {
         let error = || Error::NativeFailure {
