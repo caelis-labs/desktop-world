@@ -51,6 +51,26 @@ jobs:
           toolchain: 1.98.0
           components: rustfmt
       - run: sh scripts/check-source.sh
+      - name: Validate workflow wiring with pinned actionlint
+        run: |
+          dtwArchive="$RUNNER_TEMP/actionlint.tar.gz"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            --output "$dtwArchive"
+          printf '%s  %s\n' '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8' "$dtwArchive" | sha256sum --check -
+          tar -xzf "$dtwArchive" -C "$RUNNER_TEMP" actionlint
+          # GitHub's documented queue:max field is newer than actionlint 1.7.12.
+          # Validate its one supported value here; retain every other lint rule.
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          for path in Path('.github/workflows').glob('*.yml'):
+              for line in path.read_text().splitlines():
+                  if re.match(r'\s*queue:', line):
+                      assert line.strip() == 'queue: max', f'Invalid queue value in {path}'
+          PY
+          "$RUNNER_TEMP/actionlint" -shellcheck= -pyflakes= \
+            -ignore '^unexpected key "queue" for "concurrency" section\.'
 
   macos-inventory:
     # Preserve the existing required check; it now includes the runtime contract.

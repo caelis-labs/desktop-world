@@ -9,9 +9,11 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: dtw-release-please
+  queue: max
   cancel-in-progress: false
 
 jobs:
@@ -21,24 +23,107 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        (github.event.workflow_run.event == 'push' &&
         github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.path == '.github/workflows/ci.yml' &&
+        github.event.workflow_run.head_branch == 'main' &&
         github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    permissions:
+      # GitHub hides internal draft metadata from read-only tokens.
+      contents: write
+      actions: read
+    outputs:
+      release: ${{ steps.plan.outputs.release }}
+      source: ${{ steps.plan.outputs.source }}
+      tag: ${{ steps.plan.outputs.tag }}
+      plan: ${{ steps.save-plan.outputs.plan }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Admit only the current main tree's successful CI receipt
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release-plan.py gate --output "$RUNNER_TEMP/release-gate.json"
       - name: Check release credentials
+        if: steps.gate.outputs.eligible == 'true'
         env:
           RELEASE_PLEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
-        run: |
-          if [ -z "$RELEASE_PLEASE_TOKEN" ]; then
-            echo '::error::Configure RELEASE_PLEASE_TOKEN; see docs/releasing.md. A separate token lets release PRs trigger CI.'
-            exit 1
-          fi
-      - name: Maintain version PR and create a draft after merge
+        run: test -n "$RELEASE_PLEASE_TOKEN" || { echo '::error::Configure RELEASE_PLEASE_TOKEN; see docs/releasing.md'; exit 1; }
+      - name: Maintain version PR and automatically stage its merged release
+        if: steps.gate.outputs.eligible == 'true'
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           target-branch: main
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-      # Candidate builds and GUI acceptance stay explicit. Merging a version PR
-      # creates a draft/tag, never a published release without accepted assets.
+      - name: Resolve the pending tag and independently verify its exact source CI
+        id: plan
+        if: steps.gate.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_GATE: ${{ runner.temp }}/release-gate.json
+        run: python3 scripts/release-plan.py plan --output "$RUNNER_TEMP/release-plan-input.json"
+      - name: Export the fixed plan to dependent jobs
+        id: save-plan
+        if: steps.plan.outputs.release == 'true'
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          value = json.loads(Path(os.environ['RUNNER_TEMP'], 'release-plan-input.json').read_text())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('plan=' + json.dumps(value, separators=(',', ':')) + '\n')
+          PY
+
+  macos:
+    needs: release
+    if: needs.release.outputs.release == 'true'
+    uses: ./.github/workflows/rewrite-macos-candidate.yml
+    with:
+      source_sha: ${{ needs.release.outputs.source }}
+    secrets:
+      APPLE_DEVELOPER_ID_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
+      APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+      APPLE_NOTARY_APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
+      APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+
+  windows:
+    needs: release
+    if: needs.release.outputs.release == 'true'
+    uses: ./.github/workflows/rewrite-candidate.yml
+    with:
+      source_sha: ${{ needs.release.outputs.source }}
+
+  construction:
+    needs: [release, macos, windows]
+    if: needs.release.outputs.release == 'true' && needs.macos.result == 'success' && needs.windows.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.source }}
+          persist-credentials: false
+      - name: Bind successful platform outputs to immutable artifact identities
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PLAN_JSON: ${{ needs.release.outputs.plan }}
+          RELEASE_PLAN: ${{ runner.temp }}/release-plan-input.json
+          MACOS_ARTIFACT_ID: ${{ needs.macos.outputs.artifact_id }}
+          WINDOWS_ARTIFACT_ID: ${{ needs.windows.outputs.artifact_id }}
+        run: |
+          printf '%s' "$RELEASE_PLAN_JSON" > "$RELEASE_PLAN"
+          python3 scripts/release-plan.py collect --output release-plan.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-plan-${{ needs.release.outputs.source }}
+          path: release-plan.json
+          retention-days: 90
+          if-no-files-found: error

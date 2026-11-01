@@ -1,67 +1,76 @@
-name: Publish accepted release
+name: Publish release automatically
 on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Release Please draft tag (vX.Y.Z)
-        required: true
-        type: string
-      macos_run_id:
-        description: Successful macOS candidate run whose exact ZIP passed acceptance
-        required: true
-        type: string
-      windows_run_id:
-        description: Successful Windows candidate run whose exact ZIP passed acceptance
-        required: true
-        type: string
-      gui_accepted:
-        description: I have verified these exact candidate packages; scope is recorded below
-        required: true
-        default: false
-        type: boolean
-      acceptance_notes:
-        description: Actual platform GUI/Harness acceptance scope and any retained failures
-        required: true
-        type: string
+  workflow_run:
+    workflows: [Release please]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
 concurrency:
-  group: dtw-release-${{ inputs.tag }}
+  group: dtw-release-publication
+  queue: max
   cancel-in-progress: false
 jobs:
-  promote:
-    if: github.ref == 'refs/heads/main'
+  plan:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.path == '.github/workflows/release-please.yml' &&
+      (github.event.workflow_run.event == 'workflow_run' || github.event.workflow_run.event == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      release: ${{ steps.plan.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Select a completed immutable construction without starting a macOS runner
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BUILD_RUN_ID: ${{ github.event.workflow_run.id }}
+          RELEASE_BUILD_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: python3 scripts/release-plan.py inspect --output "$RUNNER_TEMP/release-plan.json"
+
+  publish:
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
     runs-on: macos-26
     timeout-minutes: 15
     permissions:
-      # Draft visibility and explicit publication both require a writer.
       contents: write
       actions: read
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Preserve, verify, upload, preflight and publish accepted bytes
+      - name: Verify and publish the successful construction's original bytes
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ inputs.tag }}
-          MACOS_RUN_ID: ${{ inputs.macos_run_id }}
-          WINDOWS_RUN_ID: ${{ inputs.windows_run_id }}
-          GUI_ACCEPTED: ${{ inputs.gui_accepted }}
-          ACCEPTANCE_NOTES: ${{ inputs.acceptance_notes }}
+          RELEASE_BUILD_RUN_ID: ${{ github.event.workflow_run.id }}
+          RELEASE_BUILD_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
         run: python3 scripts/promote-release.py --output "$RUNNER_TEMP/release-promotion"
-      # GITHUB_TOKEN publications do not trigger another release workflow.
-      # The promoter therefore downloads and audits again after publishing.
+      # GITHUB_TOKEN release writes do not trigger release.published workflows.
+      # The publisher therefore downloads and audits again after publication.
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: release-promotion-${{ github.run_id }}
+          name: release-promotion-${{ github.run_id }}-${{ github.run_attempt }}
           retention-days: 90
           if-no-files-found: warn
           path: ${{ runner.temp }}/release-promotion/report.json
