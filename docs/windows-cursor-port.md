@@ -8,10 +8,10 @@ for other input. It does not establish full macOS background-input parity.
 ## Visual feedback and input routing
 
 The colored marker is a presentation window, not another OS mouse device.
-Windows coordinate clicks and wheel anchors currently use `SendInput` with an
-absolute move on the shared system pointer. The real cursor and marker therefore
-move together. Semantic `press`/`setValue` use the control's UIA patterns instead
-of DTW moving the pointer. See Microsoft's [mouse input](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-mouseinput),
+The foreground mouse route uses `SendInput` with an absolute move on the shared
+system pointer, so the real cursor and marker move together on that route.
+Targeted HWND mouse messages leave the physical cursor fixed. Semantic
+`press`/`setValue` use the control's UIA patterns. See Microsoft's [mouse input](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-mouseinput),
 [shared cursor](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setcursorpos)
 and [UIA Invoke](https://learn.microsoft.com/en-us/windows/win32/api/uiautomationclient/nf-uiautomationclient-iuiautomationinvokepattern-invoke)
 contracts.
