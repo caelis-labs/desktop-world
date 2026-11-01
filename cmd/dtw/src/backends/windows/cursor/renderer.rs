@@ -328,6 +328,7 @@ fn run(expected: u32, birth: u64) -> Result<(), Box<dyn std::error::Error>> {
     let mut pulse = false;
     let mut geometry = Instant::now();
     while !closed.load(Ordering::Acquire) {
+        dirty |= state.expire_idle(Instant::now());
         if let Ok(command) = rx.try_recv() {
             let mut response = json!({"ok":false});
             match command["command"].as_str() {
@@ -416,6 +417,9 @@ fn run(expected: u32, birth: u64) -> Result<(), Box<dyn std::error::Error>> {
                 _ => break,
             }
         }
+        // Recheck before z-order maintenance and painting. A bounded packet
+        // drain or control command must not keep an idle presentation visible.
+        dirty |= state.expire_idle(Instant::now());
         if geometry.elapsed() >= Duration::from_millis(50) {
             geometry = Instant::now();
             if state.target.as_ref().is_some_and(|t| !t.valid()) {

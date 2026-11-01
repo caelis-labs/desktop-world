@@ -235,6 +235,21 @@ receipts and cleanup failures stop the run. Earlier receipts/files remain.
 
 ## Evidence and interpreting the outcome
 
+Windows cursor feedback uses a two-second idle deadline while the MCP connection
+and its retained state remain open. Verify that boundary independently:
+
+```powershell
+python -X utf8 .\cursor_idle_probe.py --dtw 'C:\Candidates\DTW\bin\dtw.exe' `
+  --output 'C:\Temp\dtw-cursor-idle-new'
+```
+
+It checks idle hiding after successful/failed scripts and read-only traffic,
+same-connection recovery, original reference/receipt retention, independent
+session timers, EOF isolation and unchanged physical cursor/foreground. Pure
+state tests cover exact expiry and stale packets; this probe adds no packet
+injection endpoint. See [Windows cursor lifecycle](../../../docs/windows-cursor-lifecycle.md)
+for the distinction between internal MCP close and a host conversation ending.
+
 The session cursor/native parity suite is separate from the base smoke. It
 requires Python 3 and Pillow for independent PNG comparison. It compiles owned
 fixtures using Windows PowerShell 5.1, then drives input only through DTW MCP:
