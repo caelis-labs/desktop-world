@@ -574,8 +574,10 @@ for line in sys.stdin:
         result = {'ok': True, 'operation': operation}
     print(json.dumps(result), flush=True)
 "#;
+        // Match the other headless fixtures and actions/setup-python. The macOS
+        // /usr/bin shim can cold-start developer tools outside our test environment.
         let worker = Worker::spawn(
-            Path::new("/usr/bin/python3"),
+            Path::new("python3"),
             &[
                 "-u",
                 "-c",
