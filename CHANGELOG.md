@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.2.1](https://github.com/caelis-labs/desktop-world/releases/tag/v0.2.1) (2026-11-01)
+
+### Features
+
+* Target supported Windows client-area mouse messages without moving the shared cursor; automatically raise the target for foreground-required input.
+* Keep session cursor feedback and exact target, DPI, cancellation and input-lease checks.
+
+### Fixes
+
+* Retain an automatically raised target in front and fit macOS captures across mixed-scale displays.
+* Select the latest stable package in Agent installation prompts and download links.
+
+The exact platform sources, GUI acceptance and retained Agent failures are in
+[the release record](docs/releases/0.2.1.md) and its RELEASE.json.
+
+## [0.2.0](https://github.com/caelis-labs/desktop-world/releases/tag/v0.2.0) (2026-11-01)
+
+* Ship the standard MCP and Agent Skill rewrite for macOS arm64 and Windows x64,
+  including native desktop actions, bounded discovery, inspectable receipts and
+  session cursor feedback. See [the release scope](docs/releases/0.2.0.md).
+
 ## [0.1.3](https://github.com/caelis-labs/desktop-world/compare/v0.1.2...v0.1.3) (2026-10-25)
 
 

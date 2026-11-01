@@ -1,0 +1,44 @@
+name: Release please
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dtw-release-please
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check release credentials
+        env:
+          RELEASE_PLEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+        run: |
+          if [ -z "$RELEASE_PLEASE_TOKEN" ]; then
+            echo '::error::Configure RELEASE_PLEASE_TOKEN; see docs/releasing.md. A separate token lets release PRs trigger CI.'
+            exit 1
+          fi
+      - name: Maintain version PR and create a draft after merge
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          target-branch: main
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+      # Candidate builds and GUI acceptance stay explicit. Merging a version PR
+      # creates a draft/tag, never a published release without accepted assets.

@@ -7,10 +7,10 @@ not require an approval token, custom Host adapter or private DSH plugin.
 
 ## Select and extract a package
 
-Download **v0.2.1** from [the release page](https://github.com/caelis-labs/desktop-world/releases/tag/v0.2.1):
+Download the **latest stable** package from [Releases](https://github.com/caelis-labs/desktop-world/releases/latest). Use its version in the asset name:
 
-- macOS (Apple Silicon): `desktop-world-0.2.1-aarch64-apple-darwin.zip`.
-- Windows x64: `desktop-world-0.2.1-x86_64-pc-windows-msvc.zip`.
+- macOS (Apple Silicon): `desktop-world-<version>-aarch64-apple-darwin.zip`.
+- Windows x64: `desktop-world-<version>-x86_64-pc-windows-msvc.zip`.
 
 Use the adjacent `.sha256` for the selected ZIP. Historical v0.1.x assets use the
 retired runtime and are not substitutes. Linux desktop support is experimental.

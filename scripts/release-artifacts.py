@@ -15,6 +15,9 @@ def check_version(repo):
     locked = [entry["version"] for entry in packages if entry["name"] == package["name"]]
     if locked != [version]:
         raise SystemExit("cmd/dtw/Cargo.lock does not match cmd/dtw/Cargo.toml")
+    manifest = repo / ".release-please-manifest.json"
+    if manifest.exists() and json.loads(manifest.read_text()).get(".") != version:
+        raise SystemExit("Release Please manifest does not match cmd/dtw/Cargo.toml")
     return version
 
 
