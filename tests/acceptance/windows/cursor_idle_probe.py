@@ -48,7 +48,7 @@ def main():
         fixture = subprocess.Popen([str(executable), str(directory), 'A'])
 
         def state():
-            value = read(directory / 'state.json')
+            value = wait(lambda: read(directory / 'state.json'), timeout=1)
             require(value is None or value['pid'] == fixture.pid, 'Fixture PID changed')
             return value
 
