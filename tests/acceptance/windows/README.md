@@ -367,6 +367,15 @@ The source directory is never modified. No extra CI job is required by this kit.
 
 ## Chrome workbench from the candidate ZIP
 
+The frozen v0.2.2 ZIP's `browser_reliability_probe.py`, `browser_mouse_probe.py`
+and `browser_delivery_probe.py` assume the repository fixture layout and fail
+before browser input when run from the ZIP. Use these probes from the matching
+source checkout with `--dtw` pointing to the extracted v0.2.2 executable. This
+workaround does not modify or repair that published package. The corrected
+source probes resolve both repository and bundled layouts relative to their
+script, independently of the working directory, and check required fixture
+files before starting any subprocess or desktop interaction.
+
 The ZIP includes `acceptance/browser-workbench/server.py` and `index.html` from
 its recorded source. This optional local test server needs Python 3; DTW itself
 needs no Python runtime. All fixture reads/writes explicitly use UTF-8, including

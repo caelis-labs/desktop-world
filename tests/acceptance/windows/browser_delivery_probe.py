@@ -15,6 +15,7 @@ import traceback
 import uuid
 
 from cursor_probe import Mcp, read, require, wait, write
+from probe_paths import browser_workbench
 
 
 def main():
@@ -23,6 +24,7 @@ def main():
     p.add_argument('--chrome', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
     args = p.parse_args()
+    fixture = browser_workbench(__file__) / 'server.py'
     require(os.name == 'nt' and sys.flags.utf8_mode, 'Use Windows: python -X utf8')
     binary, chrome = args.dtw.resolve(strict=True), args.chrome.resolve(strict=True)
     out = args.output.resolve()
@@ -33,7 +35,6 @@ def main():
     client = browser = server = None
     title = 'DTW Workbench delivery-' + uuid.uuid4().hex[:12]
     try:
-        fixture = Path(__file__).resolve().parents[2] / 'fixtures/browser-workbench/server.py'
         with (out / 'server.stdout').open('wb') as so, (out / 'server.stderr').open('wb') as se:
             server = subprocess.Popen([sys.executable, str(fixture), '--output', str(out),
                                        '--case', title.removeprefix('DTW Workbench ')],
