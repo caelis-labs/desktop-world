@@ -105,13 +105,11 @@ jobs:
           cache-on-failure: true
           workspaces: cmd/dtw -> ../../target-ci
           key: windows-runtime-release
-      # Shared script/MCP tests run on macOS; Windows runs its platform contracts.
-      - name: Windows UIA, geometry, input and cursor contracts
+      # Shared opaque references and lifecycle contracts apply to both platforms.
+      - name: Windows adapters, script, MCP and CLI contracts
         shell: pwsh
         run: |
-          cargo test --release --locked --manifest-path cmd/dtw/Cargo.toml --lib backends::windows
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --release --locked --manifest-path cmd/dtw/Cargo.toml --bins --test cli
+          cargo test --release --locked --manifest-path cmd/dtw/Cargo.toml --lib --bins --tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Compile the real-machine acceptance fixtures (do not run GUI)
         shell: pwsh

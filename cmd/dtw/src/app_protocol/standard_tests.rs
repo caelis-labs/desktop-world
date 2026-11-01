@@ -182,12 +182,37 @@ fn stable_id_survives_restart_but_state_and_refs_do_not() {
     let first = exec(&server,"first","state.count=7;state.window=(await app.windows()).windows[0].window_ref;return state.window");
     success(&first);
     catalog.entries.lock().unwrap()[0].app.generation = 1;
-    let reply = exec(&server, "restart", "return Object.keys(state)");
-    assert_eq!(success(&reply), &json!([]));
+    let old_window = success(&first).as_str().unwrap();
+    assert_reference(old_window, "win");
+    assert_reference(first.data["execution_id"].as_str().unwrap(), "exe");
+    let reply = exec(
+        &server,
+        "restart",
+        "return {keys:Object.keys(state),window:(await app.windows()).windows[0].window_ref}",
+    );
+    assert_eq!(success(&reply)["keys"], json!([]));
+    let new_window = success(&reply)["window"].as_str().unwrap();
+    assert_reference(new_window, "win");
+    assert_ne!(old_window, new_window);
+    assert_ne!(first.data["execution_id"], reply.data["execution_id"]);
     assert_eq!(reply.data["context_reset"], true);
     assert_eq!(reply.data["state_reset"], true);
     assert_eq!(catalog.connects.load(Ordering::SeqCst), 2);
-    assert!(!receipt(&server, &first).is_error);
+    let stale = exec(
+        &server,
+        "old-window",
+        &format!(
+            "return await app.capture({{window_ref:{}}})",
+            json!(old_window)
+        ),
+    );
+    assert!(stale.is_error);
+    assert_eq!(
+        stale.data["script"]["steps"][0]["error"]["code"],
+        "target_changed"
+    );
+    // Retirement changes admission, not the identity or contents of old receipts.
+    assert_eq!(receipt(&server, &first).data, first.data);
     server.close().unwrap();
 }
 #[test]
@@ -414,14 +439,21 @@ fn sliding_history_preserves_the_app_state_and_window_after_more_than_512_calls(
         .unwrap() as usize;
     let seed = exec(&server, "seed", "state.count=0;state.window=(await app.windows()).windows[0].window_ref;return state.window;");
     let original_ref = success(&seed).clone();
+    let mut execution_ids = std::collections::HashSet::from([seed.data["execution_id"].clone()]);
     let total = capacity * 2 + 3;
     for index in 1..=total {
         let reply = exec(&server, &format!("count-{index}"), "return ++state.count;");
         assert_eq!(success(&reply), index);
+        assert_reference(reply.data["execution_id"].as_str().unwrap(), "exe");
+        assert!(
+            execution_ids.insert(reply.data["execution_id"].clone()),
+            "An evicted execution ID was reused"
+        );
         assert_eq!(reply.data["context_reset"], false);
         assert_eq!(reply.data["state_reset"], false);
     }
     let next = exec(&server, "retained-window", "const shot=await app.capture({window_ref:state.window});return {count:state.count,window:shot.window_ref};");
+    assert!(execution_ids.insert(next.data["execution_id"].clone()));
     assert_eq!(success(&next)["count"], total);
     assert_eq!(success(&next)["window"], original_ref);
     assert_eq!(catalog.connects.load(Ordering::SeqCst), 1);

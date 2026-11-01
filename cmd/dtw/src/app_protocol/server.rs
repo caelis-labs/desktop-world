@@ -203,7 +203,10 @@ impl<F: Factory> Server<F> {
         let execution_id = match &command {
             ToolCall::Apps => None,
             ToolCall::Exec { app, .. } => {
-                let id = super::reference("execution");
+                let id = match super::reference("exe") {
+                    Ok(id) => id,
+                    Err(error) => return Started::Reply(Reply::error(wire::core_error(&error))),
+                };
                 state.records.push_back(Record {
                     id: id.clone(),
                     rpc_id: rpc_id.clone(),

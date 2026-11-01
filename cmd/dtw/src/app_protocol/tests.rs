@@ -426,6 +426,18 @@ fn assert_code(reply: &Reply, code: &str) {
     assert_eq!(reply.data["error"]["code"], code, "{}", reply.data);
 }
 
+pub(super) fn assert_reference(value: &str, prefix: &str) {
+    let tail = value.strip_prefix(&format!("{prefix}_")).unwrap();
+    let (namespace, counter) = tail.rsplit_once('_').unwrap();
+    assert_eq!(namespace.len(), 11);
+    assert!(namespace
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b"-_".contains(&byte)));
+    assert!(!counter.starts_with('0'));
+    assert!(u64::from_str_radix(counter, 36).unwrap() > 0);
+    assert!(value.len() <= prefix.len() + 26);
+}
+
 #[test]
 fn describe_reports_the_bound_app_and_backend_support() {
     let (owner, _) = coordinator();
@@ -476,6 +488,26 @@ fn public_references_do_not_cross_contexts_or_accept_native_ids() {
     let (second, backend) = coordinator();
     let first_window = windows(&first, "windows").remove(0);
     let (foreign_observation, foreign_element) = observe(&first, "observe", &first_window);
+    // Populate both contexts before testing old keys: per-context counters that
+    // reset to one would otherwise appear safe against an empty lookup map.
+    let window = windows(&second, "windows").remove(0);
+    let (own_observation, own_element) = observe(&second, "observe", &window);
+    for (value, prefix) in [
+        (&first.app_ref, "app"),
+        (&second.app_ref, "app"),
+        (&first_window, "win"),
+        (&window, "win"),
+        (&foreign_observation, "obs"),
+        (&own_observation, "obs"),
+        (&foreign_element, "el"),
+        (&own_element, "el"),
+    ] {
+        assert_reference(value, prefix);
+    }
+    assert_ne!(first.app_ref, second.app_ref);
+    assert_ne!(first_window, window);
+    assert_ne!(foreign_observation, own_observation);
+    assert_ne!(foreign_element, own_element);
     let foreign_app = submit(&first, "cross-app", None, Command::Windows);
     assert_code(&start(&second, foreign_app), "wrong_app");
     assert_code(&result(&second, "cross-app"), "unknown_request");
@@ -492,8 +524,6 @@ fn public_references_do_not_cross_contexts_or_accept_native_ids() {
         &run(&second, "native-window", Some("101"), Command::Observe),
         "target_changed",
     );
-    let window = windows(&second, "windows").remove(0);
-    let (own_observation, own_element) = observe(&second, "observe", &window);
     assert_code(
         &run(
             &second,
@@ -518,6 +548,50 @@ fn public_references_do_not_cross_contexts_or_accept_native_ids() {
             "valid",
             Some(&window),
             press(&own_observation, &own_element)
+        )
+        .is_error
+    );
+    assert_eq!(backend.0.actions.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn retired_window_references_are_not_reused_when_the_same_native_target_returns() {
+    let (owner, backend) = coordinator();
+    let original = windows(&owner, "original").remove(0);
+    let target = owner.state.lock().unwrap().windows[&original].clone();
+    let (old_observation, old_element) = observe(&owner, "observe-old", &original);
+    backend.0.model.lock().unwrap().inventory = Some(test_inventory(vec![]));
+    assert!(windows(&owner, "disappeared").is_empty());
+    backend.0.model.lock().unwrap().inventory = Some(test_inventory(vec![WindowInfo {
+        target,
+        title: "Returned target".into(),
+        visible: true,
+    }]));
+    let returned = windows(&owner, "returned").remove(0);
+    assert_reference(&returned, "win");
+    assert_ne!(returned, original);
+    assert_code(
+        &run(&owner, "old-window", Some(&original), Command::Observe),
+        "target_changed",
+    );
+    let (observation, element) = observe(&owner, "observe-returned", &returned);
+    assert_ne!(observation, old_observation);
+    assert_ne!(element, old_element);
+    assert_code(
+        &run(
+            &owner,
+            "old-observation",
+            Some(&returned),
+            press(&old_observation, &old_element),
+        ),
+        "invalid_observation",
+    );
+    assert!(
+        !run(
+            &owner,
+            "current",
+            Some(&returned),
+            press(&observation, &element)
         )
         .is_error
     );
