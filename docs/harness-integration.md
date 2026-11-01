@@ -16,6 +16,21 @@ Preserve returned action receipts, including uncertainty. An exception after an 
 
 The [MCP cancellation specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/utilities/cancellation) defines the standard notification and request-ID relationship. Annotations are presentation hints; use the Harness's existing policy mechanisms if a policy is required.
 
-## Removed contract
+## Session and operating-system boundaries
 
-The old `--capability-manifest` startup, upstream CUA manifest, grant-file startup and plugin-specific trust integration are not current setup instructions. Historical code and evidence remain in Git and the dated acceptance reports. Browser profiles, origins and downloads are not current capabilities; their later interfaces must expose real resource identity rather than inheriting a CUA manifest format.
+One MCP connection owns multiple app contexts. A→B→A preserves each app's committed
+state and still-valid references. Separate connections isolate state and receipts;
+Agents sharing a connection also share that state. The current connection executes
+scripts sequentially. Native resource coordination remains inside DTW; clients do
+not implement private grants, callbacks, renewal or a submit/poll state machine.
+
+Accessibility and Screen Recording permissions are OS prerequisites, not Harness
+approvals. A returned app ID is target identity, never proof of user consent.
+Parent exit, broken output and stdin EOF close native resources. Cancellation
+cannot undo already delivered input; preserve uncertain receipts and independently
+observe before deciding whether another action is appropriate.
+
+Use ordinary tool discovery and load detailed schemas only when needed. The Skill
+is a general script/capability manual: reusable guidance for file pickers, forms,
+dynamic controls and large trees belongs there; task-specific application recipes
+do not. Caelis, DSH and agy setup uses the linked installation guides.

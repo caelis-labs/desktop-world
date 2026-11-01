@@ -180,8 +180,8 @@ class Fixture(unittest.TestCase):
         put(self.repo, "docs/examples/codex.toml", '[mcp_servers.desktop-world]\ncommand="/absolute/path/to/dtw"\nargs=["mcp"]\n')
         put(self.repo, "plugins/claude/.claude-plugin/plugin.json", '{"name":"desktop-world","version":"0.1.3"}\n')
         put(self.repo, "packaging/third-party/overrides.json", "{}\n")
-        put(self.repo, "docs/real-task-closure-plan.md", "Same-source task specification, not acceptance evidence\n")
-        put(self.repo, "tests/acceptance/windows/README.md", "Windows independent acceptance\n[Task plan](../../../docs/real-task-closure-plan.md)\n")
+        put(self.repo, "tests/acceptance/windows/README.md",
+            (Path(__file__).parent / "acceptance/windows/README.md").read_bytes())
         put(self.repo, "tests/acceptance/windows/smoke.ps1", "# Owned-window standard MCP smoke\n")
         for name in ("server.py", "index.html"):
             put(self.repo, "tests/fixtures/browser-workbench/" + name, "Same-source browser task 中文 🐦\n")
@@ -495,16 +495,11 @@ class WorkflowTests(Fixture):
         candidate.verify_archive(output / result["archive"], Path(result["archive"]).stem)
         package_name = Path(result["archive"]).stem
         with zipfile.ZipFile(output / result["archive"]) as archive:
-            handoff = archive.read(package_name + "/acceptance/windows/README.md").decode("utf-8")
-            self.assertIn("(../../docs/real-task-closure-plan.md)", handoff)
-            self.assertNotIn("(../../../docs/real-task-closure-plan.md)", handoff)
+            self.assertEqual(archive.read(package_name + "/acceptance/windows/README.md"),
+                             (self.repo / "tests/acceptance/windows/README.md").read_bytes())
             for name in ("server.py", "index.html"):
                 self.assertEqual(archive.read(package_name + "/acceptance/browser-workbench/" + name),
                                  (self.repo / "tests/fixtures/browser-workbench" / name).read_bytes())
-            self.assertEqual(archive.read(package_name + "/docs/real-task-closure-plan.md"),
-                             (self.repo / "docs/real-task-closure-plan.md").read_bytes())
-        self.assertIn("(../../../docs/real-task-closure-plan.md)",
-                      (self.repo / "tests/acceptance/windows/README.md").read_text())
 
     def test_native_candidate_is_immutable_unverified_archive_not_a_release(self):
         fake, calls = self.fake_commands()

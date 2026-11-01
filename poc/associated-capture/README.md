@@ -12,7 +12,7 @@ PID, enumerates all attributed visible windows, and captures the upper two by
 default (`max_windows:1..8`). `operation:click` takes its `observation_id`,
 `image_index`, and PNG-pixel `x/y`. See the packaged Skill and API reference.
 
-[Runtime acceptance](../../docs/runtime-acceptance.md) records the current gates.
+[Runtime acceptance](https://github.com/caelis-labs/desktop-world/blob/f1d243a/docs/runtime-acceptance.md) records the current gates.
 The earlier [acceptance](acceptance.md) and its JSON are historical top2-only POC
 evidence, not the current implementation or binary. The new extension removes
 private AX symbols and does not depend on CUA internal types. Public-API

@@ -309,7 +309,7 @@ DTW-owned fail-closed adaptation, not a new donor migration or Space resolver.
 
 Real closed-window fixtures may retain CG surfaces after AXWindows becomes
 empty. They remain unresolved under this limited provider; offscreen status is
-not proof of closure. [C5.2 acceptance](window-inventory-acceptance.md) separates
+not proof of closure. [C5.2 acceptance](https://github.com/caelis-labs/desktop-world/blob/f1d243a/docs/window-inventory-acceptance.md) separates
 this observed limit, controlled AX-empty failures, and successful foreground /
 background fixture reads from the still-unresolved historical intermittent case.
 
@@ -342,7 +342,7 @@ SOFTWARE.
 ```
 
 Real fixture evidence for discovery, SCK, AX, sheet refusal and cancellation
-is recorded in [C2/C3 macOS acceptance](native-checkpoint-acceptance.md).
+is recorded in [C2/C3 macOS acceptance](https://github.com/caelis-labs/desktop-world/blob/f1d243a/docs/native-checkpoint-acceptance.md).
 
 
 ## C5 bounded app script port
@@ -401,7 +401,7 @@ to compile all upstream CUA. Before adding a capability group:
    behavior without rebuilding the complete donor.
 
 The detailed capability-group owner matrix is in the
-[current architecture baseline](next-architecture-baseline.md). This procedure
+[current architecture baseline](architecture.md). This procedure
 adds no new public capability and makes no claim that C6 has already shipped.
 
 

@@ -8,8 +8,9 @@ remain historical versions.
 The rewrite candidate builder is `scripts/build-rewrite-candidate.py`. It exports
 a clean Git commit and builds one native target; it does not publish a release.
 A development build is not an installed, signed or notarized release artifact.
-The candidate and final-install evidence are tracked separately in
-[the candidate record](rewrite-candidate-acceptance.md).
+Retain candidate identity, original logs and final-install acceptance with the
+release PR/artifacts. Keep development-binary evidence separate from evidence for
+the immutable archives selected for publication.
 
 ## Current development checks
 
@@ -39,8 +40,8 @@ this can also seed the main-branch Cargo cache after a toolchain change. PR cach
 remain subject to GitHub's branch scope. PR supersessions cancel older ordinary
 CI runs; candidate signing/notarization is never cancelled by a newer trigger.
 
-The current implementation audit, required work packages and macOS/Windows/Linux
-validation responsibilities are in the [first rewrite release plan](first-rewrite-release-plan.md).
+Current platform scope is in the [product matrix](product-matrix.md); reusable
+build and real-application validation instructions are in [building](building.md).
 Windows and experimental Linux providers are implemented; Windows native linking
 and independent GUI acceptance remain separate from source/type checks. Linux desktop
 support is deferred. The [v0.2.0 release](https://github.com/caelis-labs/desktop-world/releases/tag/v0.2.0)
@@ -57,11 +58,12 @@ the original candidate sources and hashes.
 3. Complete selected real-app and Harness workflows, including independent effect
    readback, explicit app ID failures and uncertain/cancelled outcomes. DTW does
    not approve operations; any Agent tool policy is validated in that Agent.
-4. Define the release package/install contract and implement candidate construction
-   for those products. The local Claude plugin staging helper is a development
-   input, not a signed release builder. Include the actual dependency notices and source provenance.
-   Validate final installed bytes, dependencies, signing, permissions/TCC and
-   child-process identity on supported platforms.
+4. Build from a clean, fixed commit. Each platform ZIP must include the runtime,
+   standard plugin/MCP manifests, Skill, installation references, dependency
+   notices, source provenance, BUILD identity and complete checksums. The local
+   plugin staging helper is a development input, not a release builder. Validate
+   final installed bytes, dependencies, signing, permissions/TCC and child-process
+   identity on supported platforms.
 5. Record source revision, CI scope, artifact hashes and actual native acceptance.
    Publish the same reviewed bytes without rebuilding.
 
@@ -84,9 +86,8 @@ the other platform. The old CUA artifact automation remains retired.
 
 `python3 scripts/release-artifacts.py check` only checks `version.txt`,
 `cmd/dtw/Cargo.toml` and DTW's entry in `cmd/dtw/Cargo.lock`. It does not validate a
-release tag, generate licensing inventories or create archives. The historical
-package guarantees remain in [release readiness](release-readiness.md); they do
-not certify the rewrite.
+release tag, generate licensing inventories or create archives. Use the candidate
+builder and final-asset verifier below for those contracts.
 
 ## Verify a staged release
 
@@ -111,7 +112,9 @@ release cache. Each explicit candidate is compiled once and its tests reuse that
 target directory. Signed ZIPs, keychains, credentials, notarization receipts and
 acceptance evidence are never taken from the build cache. The macOS candidate
 also exercises shutdown using the final signed package binary without desktop
-access. Normal PR/main runs never automatically dispatch candidate builds.
+access. A failed test still retains reusable dependency compilation; cache entries
+are not pass receipts. Normal PR/main runs never automatically dispatch candidate
+builds.
 
 ## Build and retain a fixed candidate
 
@@ -165,8 +168,9 @@ removing its registration and directory; the package does not edit Agent setting
 Before promotion, independently verify the final extracted bytes from a path with
 spaces/non-ASCII characters, standard MCP discovery, native subprocess identity,
 OS permissions, real applications, original receipts and cleanup. Use the same
-binary/archive digests for any future publication. Windows native acceptance is recorded in [the November 1 matrix](windows-release-acceptance-2026-11-01.md);
-its result applies only to the named original package and tested configurations.
+binary/archive digests for publication. A Windows acceptance result applies only
+to its recorded package and configurations; use the maintained
+[Windows acceptance matrix](../tests/acceptance/windows/README.md) for new candidates.
 
 
 ## Review-to-release handoff
@@ -175,13 +179,12 @@ A Windows candidate also contains `acceptance/windows/` and the same-source
 `acceptance/browser-workbench/{server.py,index.html}`. Follow the bundled Windows
 README for ordered smoke checks, Chrome startup/readback and the three-app matrix.
 The browser workbench explicitly reads/writes UTF-8 on localized Windows systems.
-Download the artifact for the intended source SHA, not the old `50dbec3` package.
+Select the artifact by its recorded source SHA and archive digest, not by a latest-run label.
 
 The final macOS three-app runner accepts `--installed-package /absolute/package`
 together with its original `--dtw /absolute/package/bin/dtw`; it uses the installed
 binary and bundled Skill, retaining and revalidating the complete checksum manifest.
 A copied development binary is not installed-package evidence. Target Agents and
-current gates are [Caelis, DSH and agy](first-rewrite-release-plan.md#agent-acceptance-policy).
-Historical Claude/agy runs and earlier WPS failures remain historical evidence;
-release claims must name the candidate actually used. Core app approval is tested
+current gates are [Caelis, DSH and agy](building.md).
+Release claims must name the candidate actually used. Core app approval is tested
 in Caelis, not implemented inside DTW.

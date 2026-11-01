@@ -454,12 +454,6 @@ def package_assets(source, package, version, target):
         shutil.copy2(source / "docs/windows-cursor-port.md", package / "docs/windows-cursor-port.md")
         shutil.copytree(source / "tests/acceptance/windows", package / "acceptance/windows")
         shutil.copytree(source / "tests/fixtures/browser-workbench", package / "acceptance/browser-workbench")
-        shutil.copy2(source / "docs/real-task-closure-plan.md", package / "docs/real-task-closure-plan.md")
-        handoff = package / "acceptance/windows/README.md"
-        handoff_text = handoff.read_text(encoding="utf-8")
-        source_link = "(../../../docs/real-task-closure-plan.md)"
-        require(handoff_text.count(source_link) == 1, "Windows handoff must link the same-source task plan")
-        handoff.write_text(handoff_text.replace(source_link, "(../../docs/real-task-closure-plan.md)"), encoding="utf-8")
     (package / "examples").mkdir()
     for name in ("mcp.json", "codex.toml"):
         shutil.copy2(source / "docs/examples" / name, package / "examples" / name)

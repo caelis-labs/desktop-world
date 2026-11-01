@@ -1,35 +1,131 @@
 # DTW architecture
 
-The canonical architecture is [next-architecture-baseline.md](next-architecture-baseline.md). This page is the short implementation map.
+DTW owns its Computer Use types, execution semantics and public API. CUA is a
+source donor: complete capability groups are ported with thin adapters and pinned
+provenance. The CUA SDK, registry and upstream worker are not runtime dependencies.
+The public interface uses standard MCP and an optional Agent Skill; no custom Host
+is required. Harnesses own approval and task policy. DTW owns target correctness,
+resource coordination, native execution and honest effect reporting.
 
 ```text
-Agent / Harness tool policy
-    | standard MCP tools + optional Agent Skill
-    v
-DTW Agent interface: apps / api / exec / result
-    | explicit stable app ID + script source
-    v
-Agent session: multiple app contexts, JSON state, jobs, receipts, cancellation
-    | typed operations bound to the selected window and running app instance
-    v
-Computer Core: target/reference checks, dispatch and effect evidence
-    | native-provider contract
-    v
-DTW app workers (AX) + short-lived scene workers (capture/input)
+Agent / Harness policy
+  → standard MCP: apps / api / exec / result
+  → session: app contexts, script VM, state, receipts and cancellation
+  → Computer Core: typed operations, references, routing and effects
+  → native providers: application workers and short-lived scene workers
 ```
 
-DTW does not own approval or authorization policy. Its boundary is concrete target identity and execution correctness. The public `app` field is a stable platform ID string. PID and process generation belong to internal instance resolution, not the Agent interface. Providers retain their native objects and prove window ownership; Core rejects wrong-instance, stale or incompatible references before dispatch.
+## Identity, references and state
 
-CUA is a source donor, not a runtime dependency. The fixed source baseline is recorded in [native-source-provenance.md](native-source-provenance.md). DTW uses its own operation types and script facade. It does not load the CUA SDK, registry or upstream worker, and does not expose a generic native-tool escape.
+`exec({app, source})` takes one stable platform app ID and one script. An Agent
+session can use multiple apps. PID, process birth generation and native handles
+remain internal. One app ID may resolve to multiple instances; `windows()`
+aggregates them and each window reference retains its exact owner. A provider
+must not silently substitute another instance or select one by title alone.
 
-The script methods cover window discovery, bounded semantic observation, capture, press, coordinate click, focus, Unicode text, key chords, scroll and string setters. Methods are Promise-returning and execute through the same Core boundary. Script state commits only on success; desktop effects are not transactional. See [script v1](app-script-v1.md).
+A window reference binds its application instance and native owner. Semantic and
+image references additionally bind their window, provider, observation generation
+and validity; images include geometry and coordinate transforms. Check only
+state relevant to the action: unrelated pointer motion does not invalidate a
+keyboard operation. A changed target produces a refreshable diagnostic before
+input where that change can be detected. Live UI trees are not atomic snapshots.
 
-Logical app state belongs to the session, independently of native worker lifetime and historical receipts. Switching apps preserves state and refs. Completed executions use a sliding retention window; eviction never resets the latest app state or re-executes old work. Active work stays owned until it settles. See [script lifecycle](app-script-v1.md).
+Each MCP connection owns separate app state, references and receipts. Switching
+apps preserves them. Completed receipts use sliding retention independently of
+the latest app state; eviction never replays old work. Same-connection scripts
+execute sequentially. Worker retirement can reset native references without
+discarding committed logical state; actual instance replacement has separate
+state-reset semantics. Connection shutdown ends the session; persistent receipt
+recovery across server processes is not promised.
 
-On macOS, an instance lease serializes writes to one process incarnation across MCP sessions. Directed CUA input and semantic AX writes for different apps can run independently. Keyboard validation follows app/window and key-target identity, not pointer movement or window position. Pointer-coordinate input additionally validates its geometric binding. A shared physical-input lease covers foreground fallback and its cleanup; the scene lease separately covers SCK lifetime. Background eligibility is checked before any preparation or input. Only a side-effect-free preflight decline permits foreground fallback. Once preparation or delivery starts, failure is reported without replay. Temporary foreground ownership is returned when still owned; external focus changes end that borrow.
+Script state commits on success. Desktop effects are not transactional. Outcomes
+separate `not_dispatched / dispatched / unknown` from concrete effect evidence;
+script completion does not establish business-task completion. Timeout, exception,
+cancellation and unknown effects never authorize automatic replay. `result`
+inspects the original receipt, while successful ordinary `exec` needs no polling.
+See [protocol](app-protocol-v1.md) and [script semantics](app-script-v1.md).
 
-WindowSurface and SemanticBinding are independent: inventory/capture/coordinate input retain system-surface identity even when an AX tree is unavailable. Native AX discovery is filtered and paged. Background input is conditional per operation/app, with the source closure and differences documented in [the CUA input port](background-input-port.md). Locked-session operation, cursor overlays, dialogs and remote transports remain separate, unverified capability groups.
+## Native resources and input
 
-C6 extends complete capability groups with their state ownership and cleanup. It does not require a new plugin framework or a split into more crates. The [product matrix](product-matrix.md) records actual support; dated acceptance reports establish evidence only for their named revisions and binaries.
+Blocking native operations belong to cancellable private workers. Providers own
+AX/COM objects, native handles, event sources and lifecycle evidence. Core owns
+typed operations and validation, not an upstream ToolRegistry. The existing Rust
+package and Swift bridges are sufficient; capability expansion does not require
+a new plugin framework or crate per capability.
 
-The SDK/worker architecture formerly described at this path is historical. Its source is retained at [the last C5 baseline](https://github.com/caelis-labs/desktop-world/blob/d0d8279130b74a58496e13b7f6a4c4565f6f00cf/docs/architecture.md).
+On macOS, an instance lease serializes writes to one process incarnation across
+sessions. Directed writes to independent instances can run concurrently. Shared
+physical input and ScreenCaptureKit have their own leases and cleanup boundaries.
+The scheduler serializes conflicting resources, not unrelated apps by default.
+Closing an owner must settle its native resources before releasing ownership;
+failed cleanup must not silently reopen admission.
+
+macOS prefers background delivery when the action supports it. Only a preflight
+failure with no preparation or dispatch side effect permits foreground fallback.
+Once preparation or dispatch begins, errors do not reroute or replay input.
+Explicit focus and automatic fallback leave the target in front after completion.
+The user or Agent may switch away or close the owned task window when finished;
+cleanup releases held inputs and respects external focus changes without restoring
+an earlier app. Windows uses foreground keyboard/pointer input. Background input,
+a stationary user pointer and locked-session operation are distinct capabilities.
+
+## Window and semantic paths
+
+Keep a universal path: list apps, list windows, capture a chosen window and click
+its image coordinates. WindowSurface identity/geometry and SemanticBinding objects
+are independent; unavailable AX/UIA content must not imply that no window exists.
+Pixel actions still require exact ownership and image geometry, plus visibility
+conditions for their selected delivery route.
+
+Semantic discovery is filtered by role/text and bounded by region/subtree where
+supported. Native traversal retains a continuation frontier rather than rescanning
+a truncated prefix. Matching count, visited nodes, time and output bytes are
+separate budgets. Partial coverage with no matches does not establish absence.
+References remain scoped to their window and kind; observing a different window
+must not discard unrelated usable references. Detail and full receipts are read
+on demand rather than expanding every response into a complete UI tree.
+
+Surface inventory may include menus, sheets and positively associated helpers.
+Logical app identity and actual surface owner remain distinct. Cross-process
+association needs native proof, not title/geometry guesses. ScreenCaptureKit
+window capture does not establish AX operability, lock-screen support or a browser
+tab-sharing implementation. A future exact-tab provider must migrate tab/frame
+lifecycle, navigation invalidation, DOM references and CSS/image transforms
+together; native-window pixels are not tab viewport CSS coordinates.
+
+## Script and transport boundaries
+
+QuickJS executes source with DTW's app facade; it does not expose arbitrary files,
+network, process creation or native-tool dispatch. JSON source is decoded once,
+without shell expansion or guessed unescaping. A future local file convenience
+can read and serialize source on the client; remote execution must not depend on
+shared local paths. Execution IDs are internally assigned, not model inputs.
+
+The official Rust MCP SDK supplies framing, negotiation and stdio transport.
+Transport feeds thin handlers and the existing execution lifecycle. HTTP/remote
+transport is an extension point, not current support. Remote deployment identity
+would belong to transport/deployment, while action approval remains with Harnesses.
+Method schemas generate API discovery and the checked-in TypeScript contract.
+
+## Extending capabilities
+
+Migrate a complete source dependency closure with pinned commit/path/hash,
+license, mechanical adaptations and deliberate behavior differences. Keep source
+verification lightweight; it does not require compiling the full CUA repository.
+[Native provenance](native-source-provenance.md),
+[cross-platform provenance](native-source-provenance-cross-platform.md),
+[background input](background-input-port.md) and the cursor port documents record
+those boundaries. Source hashes prove attribution, not adapted behavior.
+
+Each group must identify its state owner, dispatch boundary, failure evidence and
+cleanup on success/cancel/timeout/parent exit. Input groups include held keys,
+buttons and scroll state; browser groups include sessions/tabs/refs; Windows groups
+include COM apartments, DPI and delayed input. App launch/quit needs lifecycle
+semantics beyond operations on an already-running instance. Private SPI stays
+isolated and cannot be replaced by approximate ownership guesses.
+
+Prove one complete workflow through schema, script, native operation and independent
+readback before expanding a group in bulk. Keep rejection, unknown-effect and
+cleanup controls alongside successful tasks. [Building and acceptance](building.md)
+separates source tests, native fixtures, external Agents and installed artifacts.
+The [product matrix](product-matrix.md) records current support and limits.

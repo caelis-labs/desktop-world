@@ -49,7 +49,7 @@ between allocation and dispatch, plus releases after a target closes.
 8. `SLSGetWindowOwner` returning exactly `1002` during the read-only connection preflight is retained as an invalid worker WindowServer connection. DTW returns unavailable immediately instead of masking it with `GetProcessForPID` and discovering it on the first focus post. Other statuses are not misclassified as `1002`.
 9. Upstream window-change tail bookkeeping and cursor-overlay runtime integration remain excluded; DTW retains observation invalidation and instance identity ownership. A separate [cursor presentation port](cursor-overlay-port.md) now observes actual posts through narrow feedback hooks; it does not change the imported input recipes. Upstream best-effort `Drop` restoration is replaced with explicit checked cleanup, plus `Drop` as an unwind guard.
 
-精确滚动沿用以上事件构造和 wheel-step 单位，只在输入适配边界增加截图锚点映射与首次 wheel 前的原 AX 对象复核；固定落点和失败/取消语义见[精确滚动验收](anchored-scroll-acceptance.md)。
+精确滚动沿用以上事件构造和 wheel-step 单位，只在输入适配边界增加截图锚点映射与首次 wheel 前的原 AX 对象复核；固定落点和失败/取消语义见[精确滚动验收](https://github.com/caelis-labs/desktop-world/blob/f1d243a/docs/anchored-scroll-acceptance.md)。
 
 ## Menu shortcuts and Chromium text dispatch boundary
 
@@ -80,7 +80,7 @@ The response has `ok`, `dispatch`, `fallback_allowed`, optional `error`, and opt
 
 ## Foreground boundary
 
-Background app-local key/AX focus does not prove a physical raise. The selected foreground route performs its own single raise/activation, then checks focus. Before the first physical click, the existing point proof may settle for at most 750 ms within the action deadline; app/window identity and geometry changes, cancellation and expiry still stop immediately. No pointer/down is sent during this wait, and the second click retains its strict single check. The combined background-to-foreground cases passed on candidate L; those bounded results and the earlier failed candidates remain separate in the [stage report](background-input-acceptance.md).
+Background app-local key/AX focus does not prove a physical raise. The selected foreground route performs its own single raise/activation, then checks focus. Before the first physical click, the existing point proof may settle for at most 750 ms within the action deadline; app/window identity and geometry changes, cancellation and expiry still stop immediately. No pointer/down is sent during this wait, and the second click retains its strict single check. The combined background-to-foreground cases passed on candidate L; those bounded results and the earlier failed candidates remain separate in the [stage report](https://github.com/caelis-labs/desktop-world/blob/f1d243a/docs/background-input-acceptance.md).
 
 ## Foreground coordination
 
@@ -97,5 +97,3 @@ Compilation and focused pure tests cover original-key compatibility, Chromium sc
 Real acceptance must exercise the signed, standard local stdio product route: background Chromium editing and scrolling, AppKit editing, multiple windows of one process, unrelated foreground activity, app/window closure, cancellation/worker exit, and foreground retention. Pointer movement alone is observation, not failure; keyboard tests do not require desktop-wide inactivity. Space changes, interference during a modifier chord and forced input-release failures remain separate coverage gates. Record the selected route, independent app result, foreground app, pointer position and cleanup outcome. A foreground fallback case should separately show that its preflight was side-effect-free and the target remained foreground after cleanup.
 
 SkyLight authentication, focus records, `_AXUIElementGetWindow`, and opaque CGEvent record offsets are private SPI. Symbol availability does not prove event acceptance; OS releases and app frameworks can reject or reinterpret them. Locked-session use, native menu/dialog traversal, overlay ownership, and Windows WGC are separate acceptance groups. This port does not claim them complete.
-
-最终 L 同候选验证通过后台核心、两外部 Agent 任务及完整清理。抬升后仅对已从完整父库存消失的非目标 AX 对象做有界只读重验；原目标失效仍停止。历史失败、纯控制与未自然触发恢复分支的边界见[验收报告](background-input-acceptance.md)。

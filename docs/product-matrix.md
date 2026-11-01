@@ -1,43 +1,26 @@
-# 重写版产品矩阵
+# 功能与支持范围
 
-当前 Windows 检查点：#72 的固定候选在 Windows 11 22631、普通用户、主屏 125% 下通过 100 项原生检查（含 40 次严格取消交接）及 Caelis + deepseek-flash 的 Chrome、WordPad、Explorer 完整任务；#182 的应用会话授权和大结果工件恢复联调通过。候选哈希、失败尝试及支持边界见[2026-11-01 验收](windows-release-acceptance-2026-11-01.md)。DTW #71/#72 已合并；Core 最新 main 的 #185/#187 已在固定 tool_search/mcp_call 路由上落地等价集成，公开发布使用已验收字节。
+此页描述当前源码能力；已发行版本以对应 [Release](https://github.com/caelis-labs/desktop-world/releases) 的资产和说明为准。构建、原生测试、真实 Agent 任务和最终安装包验收是不同证据，不相互替代。
 
-macOS 最终包：`df76b14d` 的签名公证 ZIP 经最新 Core main `d15874f7` + Terra 完成 Chrome、Obsidian、WPS 三个真实任务，实际安装清单、结果读回及清理通过，见[候选记录](rewrite-candidate-acceptance.md)。
-
-macOS 既有检查点：WPS 关闭后的焦点清理已修复；DSH 的三个完整真实任务通过开发候选验收，最后 AX 修复有独立实机对照。结果见[阶段记录](real-task-closure-acceptance.md)；本轮没有修改 macOS 原生实现。
-
-日期：2026-11-01。#69 后的[真实应用闭环批次](real-task-closure-plan.md)新增能力正在按 WPS、Obsidian、Chrome 完整任务验收。此前首版[发布计划](first-rewrite-release-plan.md)的第一、二批、macOS 安装候选及模型指标见[核心验收](release-core-acceptance.md)与[候选记录](rewrite-candidate-acceptance.md)，其结果仅证明对应候选，不自动覆盖当前源树。Windows 本机验收的固定候选与条件见最新记录；旧 CUA SDK/worker/安装包不属于下一 release。
-
-| 能力 / 工作流 | 当前实现与条件 | 证据 / 尚待完成 |
+| 能力 | 当前支持 | 限制 |
 | --- | --- | --- |
-| Agent 入口 | 官方 rmcp stdio；apps/api/exec/result；exec 仅 app/source；稳定平台 app ID | 普通 MCP + Skill，无定制 Host；目标为 Caelis、DSH、agy；Caelis app 授权由 Core #187 实现（含 #185 的标准插件与大回包修复），Windows 实机会话已验证首次授权、同 app 复用、跨 app state 保留及新会话重新授权 |
-| 按需 API | apps 紧凑索引；api 可选方法详情；result 原始账本 | 默认输出不展开全方法 schema，不为成功操作追加账本查询 |
-| 窗口基础路线 | macOS 逐实例验证 PID、正面积且精确查询可用的 WindowServer 表面（含同 PID 非零 layer 浮层）；不要求 AX 语义库存；精确 SCK 截图及可见点点击 | 有归属/生命周期/像素几何证明；模态、遮挡和空间边界按原生条件拒绝，不承诺任意后台点击 |
-| 同 app 多实例 | 稳定 app ID 聚合各实例窗口，window_ref 路由到精确实例；成员变化保留存活兄弟引用与 state | 真实双实例退出/重启通过；部分库存失败保留可用窗口、原错误及摘要提示，不伪装成完整库存 |
-| 语义发现与动作 | 原生 role/text 筛选、分页 frontier、菜单/子树/截图区域过滤；press/setValue 仅在元素广告对应 action 时可用 | 每窗观察独立；动作消费该窗观察；新 scope 按平台声明；macOS 区域按 AXScrollArea viewport 裁剪，Windows 按 UIA bounds 筛选，均不等同 OCR 或像素遮挡证明；partial 与原始原因保留；候选 Z 的三个真实任务完成，最终安装字节待验收 |
-| 长文本读取 | readText 按 UTF-16 页读取原生文本；保留文本版本，变更后要求重新观察 | 不以 label/摘要冒充正文；macOS AXValue/StringForRange、Windows UIA；不支持的控件明确返回能力边界；Windows WordPad 已完成真实 readText/保存重开闭环，UIA 缺口仍为 partial |
-| 文件对话框与关联表面 | macOS sheet/dialog 独立窗口引用；附着 sheet 阻塞父目标，application-modal 阻塞其他普通目标；经正向证明的活动兄弟 modal 可操作；有原生关联证据的跨 PID 表面仍通过逻辑 app 调用 | association_complete:false 不承诺穷尽所有 helper；目录选择、另存为、关闭/重开纳入新一轮任务，不能由窗口可列出直接推断输入可用 |
-| 常用输入 | focus、Unicode typeText、keypress、wheel-step scroll；左/右键及单/双击 | macOS 内部优先目标投递，预检不支持时借用前台；按动作复核目标，键盘不依赖无关指针或窗口位置变化。目标失效停止后续输入，已排队事件无法撤回；效果独立读回 |
-| 多 app 与多会话 | 最新 app state/refs 与滑动回执分开；同实例跨进程写租约，后台共享/前台独占协调先于实例与物理输入锁 | 历史容量不再拒绝新执行；独立实例后台并发按本轮真实样本验证；同一连接仍顺序执行脚本 |
-| 取消和未知效果 | 标准 MCP cancellation、配对释放、原回执、按需 owner 重建 | unknown 不重放；晚到/清理失败保留；强杀不能证明输入释放 |
-| Windows provider | 稳定应用身份、精确 HWND incarnation、UIA 筛选/分页/动作、精确 HWND PrintWindow 与 DPI-unaware backing 映射、SendInput、独立 worker；补充平面文本需要可读选区和真实送达确认 | 固定 da61485 候选：388 库 + 3 CLI、100 原生检查及三个完整 Flash 任务通过；仅限 Windows 11 22631 普通用户、主屏 125%；原失败及自定义控件边界见[验收](windows-release-acceptance-2026-11-01.md) |
-| Linux provider | 实验 X11/XRes 身份、窗口、XGetImage、XTest 输入；只使用当前可证明的键盘映射 | 不支持 Wayland/XWayland，不提供 AT-SPI 语义承诺；仅源码/类型证据，不承诺桌面支持或首版正式发行平台 |
-| 浏览器范围 | 真实浏览器窗口上的原生 AX 和基础像素路线 | DOM、profile、CDP/browser bridge 未接入 |
-| 输入后续组 | 拖拽、应用启动/退出、尚未支持的原生控件 | 后置批量能力；菜单发现/press 已纳入本批，不扩张当前已广告方法的语义 |
-| 服务级输入约束与回执 | `auto` / `background_only`；`exec(app, source)` 不变；保留实际路线和收尾证据；按需抬升后保持前台 | 签名候选 S 的 AppKit、Chrome 与生命周期验证通过；不把约束等同于所有输入已支持后台，见[验收记录](input-delivery-acceptance.md) |
-| macOS Agent 光标 | 每会话共享一个独立透明窗口；实际 pointer post 驱动；精确窗口排除和有界清理 | 本轮实现与验收边界见[光标迁入说明](cursor-overlay-port.md)；不同于跨 PID 应用浮层能力 |
-| Windows Agent 光标 | 每 MCP 会话一个延迟启动的透明、不激活、不可点击窗口；稳定颜色/徽标、目标相对层级与可信精确辅助窗口排除 | 两个会话同时可见、跨 app 连续、截图排除、DPI、取消/EOF/父退出回收与独立动作恢复均有实机证据；保留共享前台物理指针，不承诺后台输入；见[CUA 对照](windows-cursor-port.md) |
-| 精确滚动 | macOS 默认窗口中心、截图像素锚点或原 AX 对象锚点；复用既有 wheel steps 与输入 owner | Z 候选 12 项 AppKit/Chrome 真 GUI 与光标回归通过；前台滚动回退未建立真 GUI 样本，Windows 已支持并验收像素和 UIA 语义锚点，Linux 仅默认中心；见[验收记录](anchored-scroll-acceptance.md) |
-| macOS 后台输入（本机候选已验收） | 固定 CUA Rust 依赖闭包 + 薄适配；内部选择目标投递/前台借用；不增加 delivery 参数 | L 候选的 AppKit 全套、Chrome 输入/点击/滚动、同 PID 浮层、生命周期与两种外部 Agent 任务均通过；catalog 系统硬链接别名已修正；菜单等价键、控制字符和 Chrome 补充平面文本预检转前台；见[阶段报告](background-input-acceptance.md) |
-| 锁屏与未证明的关联表面 | 锁屏独立后置；关联归属和生命周期无法证明的表面不广告可操作 | 不从后台输入推导锁屏支持，也不将一个文件选择器成功外推所有 helper/模态 |
-| 脚本文件、远程传输 | source 原文，经标准 JSON 传输；当前仅 stdio | 文件便利入口和 HTTP 后置，不引入调用方路径耦合 |
-| macOS 基线 | 构建/链接最低 14.2；本机 macOS 27.0.1 的固定签名/公证安装包完成六组原生和六个有效模型任务 | 本机既有权限环境通过不代表全新系统、所有旧系统或 x86_64 平台 |
-| 构建与发行 | rewrite-only、各能力组固定来源 SHA，后台输入来源和差异单列；无全量上游编译 | 保留轻量源码/Core/原生纯控制 CI；固定 macOS/Windows 候选已生成，macOS 签名/公证和安装验收通过；Windows 固定候选本机验收通过，公开 release 待落地 PR 与既定发布流程 |
+| Agent 接入 | 标准本地 stdio MCP + Skill；Caelis、DSH、agy；`exec(app, source)` | Harness 自行负责审批；不要求定制 Host；远程传输尚未接入 |
+| 方法发现与结果 | `apps` 紧凑索引，`api` 按需描述；执行摘要与截图，`result` 查原始回执 | 不需要模型生成 request ID 或对成功执行轮询；未知效果不能自动重放 |
+| 应用与窗口 | 稳定平台 app ID；同 app 多实例窗口聚合、精确 owner 引用 | 目标必须已运行；未提供应用启动/退出 API；窗口标题不能替代身份 |
+| 基本视觉操作 | 指定窗口截图、图像坐标点击；macOS 使用 ScreenCaptureKit，Windows 使用 PrintWindow | 动作需通过归属、几何及相应可见性检查；截图成功不代表目标支持所有输入 |
+| 语义发现 | AX/UIA 的类型、文本、区域/子树筛选、续页、按需文本读取 | 部分遍历会明确返回覆盖不足；自绘控件可能不提供语义对象；不默认输出整棵树 |
+| 常用操作 | 语义 press/setValue、坐标单/双击与右键、focus、Unicode 输入、快捷键、滚动 | 支持依应用控件和平台而异；拖拽等后续动作未广告为可用 |
+| 菜单与对话框 | macOS 菜单、sheet、dialog 及有正向归属证明的关联 surface | 不保证穷尽系统 helper；不能按标题或矩形猜跨进程归属 |
+| 多 app 与多会话 | app state/refs 跨切换保留，历史回执滑动回收；跨会话原生资源协调 | 同一连接脚本串行；独立连接隔离 state/receipts，不隔离物理桌面 |
+| macOS 输入 | 优先后台目标投递；无副作用预检不支持时自动聚焦；聚焦后保持目标前台 | 用户或 Agent 自行切走/关闭任务窗口；派发后失败不换路线重投；后台支持按动作判断 |
+| Windows 输入 | 前台键盘与鼠标、UIA 语义动作、DPI-aware 截图坐标与 Unicode 处理 | 不承诺后台键盘/独立物理指针；安全桌面、提权与不同 DPI 环境需分别验证 |
+| Agent 光标 | macOS/Windows 按会话颜色显示动作位置和点击反馈；不显示内部身份编号 | 视觉反馈不代表业务完成；只有经证明属于 DTW 的辅助窗口可从截图排除 |
+| 取消与资源回收 | 标准 MCP cancellation、EOF/父进程退出收尾、配对释放、原回执 | 已排队输入不可撤回；强杀或丢失结果不能证明动作未发生 |
+| 浏览器 | 原生窗口、AX/UIA 与像素路线，支持复杂网页通用交互 | DOM、CDP、profile、exact-tab provider 未接入 |
+| 锁屏 | 不承诺支持 | 后台输入不意味着锁屏可用；无解锁或绕过认证能力 |
+| Linux | 保留实验 X11/XRes 身份、XGetImage、XTest 实现 | 无正式桌面支持承诺；不承诺 Wayland/XWayland 或 AT-SPI 语义能力 |
+| 安装与构包 | macOS arm64、Windows x64；单可执行文件、Skill、MCP 示例与来源/校验清单 | macOS 最低构建目标 14.2 不等于所有旧系统已验收；全新权限环境、其他架构独立验证 |
 
-历史开发字节和 macOS 安装候选的模型门槛为：Claude/agy 各 3 个有效任务；Claude 中位 5 exec / 6 MCP、约 52 秒，agy 中位 6 exec / 7 MCP、约 162 秒；元数据误判的原失败独立保留。这不是新 WPS/Obsidian/Chrome 复杂任务的耗时或通过率；本批按应用分别记录所有尝试、完整子目标、失败恢复与独立结果。Windows 支持结论限于本次固定候选和已验收条件，其他系统版本/多显示器配置未验证；Linux 不作支持承诺。详细来源保留在[适配说明](native-source-provenance.md)及[跨平台来源](native-source-provenance-cross-platform.md)。
+macOS 多屏坐标、跨屏移动和不同缩放比例依实际布局验证；单机结果不外推全部屏幕配置。Windows 已发行包的实机条件与结果保留在其 RELEASE.json。Linux 源码或类型检查不构成桌面可用性证明。
 
-当前开发分支按 #75/#76 的反馈取消自动切回原应用：按需抬升后保留前台，输入释放与外部焦点变化保护继续生效。以下带日期的记录属于当时的候选验收，不作为新策略的实机证明。
-
-2026-10-30 焦点审查修复使用独立签名候选 P 验证：混合前台/后台协调、同 PID 精确原窗口归还、前台 cancel/EOF/parent-exit/timeout 及 Chrome 回归通过。P 未重跑 L 的外部模型任务，也未生成新发行包；证据见[焦点归还复核](evidence/focus-return-2026-10-30.json)。
-
-本轮后台输入与历史回收的实现、失败样本和验证边界见[后台输入验收](background-input-acceptance.md)。此前签名安装包和六个模型任务的证据仍仅属于各自原始候选，不自动覆盖本轮改动。
+使用方法见 [安装](../install.md)、[脚本合同](app-script-v1.md) 和随包 Skill。扩展方向与边界见 [架构](architecture.md)；真实任务指标与验证方法见 [构建和验收](building.md)；底层来源见 [原生来源](native-source-provenance.md) 和 [跨平台来源](native-source-provenance-cross-platform.md)。
