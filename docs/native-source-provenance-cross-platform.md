@@ -26,7 +26,8 @@ This is a source record, not a Windows/Linux runtime or release acceptance claim
 - `backends/windows`: native Win32 process creation stamp and executable app ID;
   EnumWindows inventory independent of UIA; UIA lazy child/sibling traversal,
   role/text filtering and retained element actions; exact-window rendered GDI PNG;
-  foreground UTF-16 text, keyboard chords, scroll and left/right/double clicks.
+  foreground UTF-16 text and keyboard chords; targeted client-area mouse messages
+  where supported, with automatic foreground left/right/double/wheel fallback.
 - `backends/linux`: experimental local X11/EWMH inventory and XRes 1.2 process
   proof, `/proc` process birth, unoccluded XGetImage client PNG, XTest clicks,
   focus, mapped text, chords and scroll. Wayland and XWayland are explicitly

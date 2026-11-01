@@ -74,7 +74,7 @@ def read(path):
 
 
 class Mcp:
-    def __init__(self, binary, output):
+    def __init__(self, binary, output, options=()):
         self.output = output
         output.mkdir()
         self.serial = 0
@@ -82,7 +82,7 @@ class Mcp:
         self.pending = {}
         self.images = []
         self.err = (output/'stderr.log').open('wb')
-        self.proc = subprocess.Popen([str(binary), 'mcp'], stdin=subprocess.PIPE,
+        self.proc = subprocess.Popen([str(binary), 'mcp', *options], stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=self.err)
         def receive():
             try:

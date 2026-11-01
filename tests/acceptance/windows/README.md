@@ -418,3 +418,18 @@ are outside this acceptance commitment.
   environment. After implementation or Skill changes, freeze a new candidate and
   use fresh cases; retest affected tasks and the final three-application closure.
   Earlier candidate successes do not transfer automatically to changed bytes.
+
+## Targeted mouse delivery
+
+Run `posted_mouse_probe.py --dtw <installed-exe> --output <new-dir>` and
+`browser_mouse_probe.py --dtw <installed-exe> --chrome <chrome-exe> --output <new-dir>`.
+The first verifies actual left single/double and wheel effects with another app
+foreground, a stationary physical cursor, DPI-aware/unaware near-edge coordinates,
+cancellation with no wheel tail and automatic foreground keyboard/right-click
+continuation. Its explicit restricted-policy control preserves legacy service
+configuration behavior; Agents do not need that option. Normal use is `auto`.
+The Chrome control clicks an independently rendered colored fixture button,
+verifies exactly one dialog-open event and a fixed physical cursor, then uses
+ordinary keyboard methods to raise and close Chrome. Chrome may activate itself
+when opening a web dialog. Neither test changes production app styles or uses
+DOM/CDP. Do not interpret posted-message acceptance as proof of business effect.

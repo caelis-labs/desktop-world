@@ -66,7 +66,8 @@ Once preparation or dispatch begins, errors do not reroute or replay input.
 Explicit focus and automatic fallback leave the target in front after completion.
 The user or Agent may switch away or close the owned task window when finished;
 cleanup releases held inputs and respects external focus changes without restoring
-an earlier app. Windows uses foreground keyboard/pointer input. Background input,
+an earlier app. Windows selects supported client-area mouse messages and otherwise raises the
+exact target for foreground input; Agents do not select routes. Background input,
 a stationary user pointer and locked-session operation are distinct capabilities.
 
 ## Window and semantic paths
