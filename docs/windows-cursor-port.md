@@ -32,8 +32,8 @@ exclusion, reserved-key assistance and desktop-copy fallback are not imported.
 ## Ownership and rendering
 
 - One lazily started helper belongs to one MCP session and is shared by its app
-  providers. Semantic-only sessions start no helper. Its UUID, palette color and
-  four-hex badge stay stable across app switches and helper replacement.
+  providers. Semantic-only sessions start no helper. Its internal UUID and visible palette color
+  stay stable across app switches and helper replacement; no identity badge is shown.
 - Feedback follows successful pointer input segments. UDP is loopback-only,
   nonblocking and authenticated by a private random token. Operation/sequence
   generations reject delayed events and stale hides. Visual failure never
@@ -98,65 +98,11 @@ The original real WordPad failure and the later 19-element partial observation
 are kept as separate evidence, with tests for empty/wrong-type/nonzero-origin
 arrays and preservation of signed opaque ID components.
 
-## Evidence and remaining coverage
+## Verification boundaries
 
-The [2026-11-01 follow-up](windows-release-acceptance-2026-11-01.md) records the
-Unicode acknowledgement fix and the frozen Windows candidate's 100 native GUI
-checks, including strict cancellation/handoff, blocked delivery, and all 15
-session cursor cases. It also records the real Agent tasks and explicit coverage
-limits. The failed candidates below remain historical evidence.
-
-### Earlier candidates and release blocks
-
-**Earlier release block:** the release-build candidate
-`3543afa795c9bfbe5d6a8fe4ed812b54f627b093c075546df86e5f320f91ef64`
-passed the base 25 cases and the first 11 cursor cases, then failed the strict
-Unicode-prefix assertion during in-flight cancellation plus queued foreground
-handoff. The old fixture encoded a high-surrogate boundary as a replacement
-character; that snapshot alone could not distinguish application content from
-UTF-8 encoder loss. No held keys, extra save or next-owner text change was observed. The
-original cancellation ledger retained unknown dispatch and no shutdown error.
-Separate normal-processing stress reproduced this after two successful
-iterations. This is not a passing cancellation acceptance result.
-
-An experimental private-tag low-level keyboard queue observer still failed the
-stronger stress after ten successful iterations. It was rejected and is **not
-shipped**: queue-stage observation cannot establish application-level scalar
-completion. Neither replay/repair input nor a longer guessed sleep is used to
-claim closure. Later independent lifecycle cases can be collected with the
-explicit partial-text option, but its unresolved failure keeps the overall
-suite failed. This issue requires a proven Windows application-processing
-boundary before release approval.
-
-The reviewed CI binary `3c80e2384cf292de176a390a610fcfa4c2411a3285db06790bf5e782daa9252f`
-passed the 15-case cursor suite with lossless fixture JSON and fresh release
-samples. A separate stronger normal-processing stress then passed seven
-transactions and failed the eighth: the old app retained a literal terminal
-U+D83D. Its content was a UTF-16 prefix but not a Unicode scalar prefix. The next
-owner's text stayed empty and its click occurred once; keys were released,
-no save occurred, shutdown error was null and original dispatch remained unknown.
-This lossless reproduction confirms the release blocker independently of the
-earlier fixture's replacement behavior. A passing shorter run does not close it.
-
-The fixture now escapes all surrogate code units in JSON before UTF-8 storage.
-Key-release checks require fresh publications with no held keys for 100ms within
-a bounded 3s read window, instead of assuming that a 150ms sleep implies a new
-snapshot. Only observations are retried; no input is replayed.
-
-The 2026-10-31 development binary `ea973ccd8c52e5dd262d0400e684da4131f3b1fd7328eb0bac6d0a261f84c9ad`
-passed 385 library tests, 3 CLI tests, all 25 base GUI cases and 15 cursor/parity
-GUI cases. The latter use standard MCP plus an independent read-only Win32 and
-physical-pixel observer. They cover two simultaneously visible distinct session
-markers, cross-app continuity, exact capture exclusion, a same-class/same-basename
-foreign negative control, covering-window order, geometry retirement, native
-modal waits, both wheel anchors, helper recovery, in-flight cancellation and
-concurrent input handoff, in-flight EOF/parent death and session isolation.
-Retained process handles establish actual native/helper exit codes, rather than
-treating process absence as successful cleanup.
-
-The earlier passing runs above are normal-user Windows 11, primary-monitor 125%
-tests; they do not override the later failure. They do not certify
-mixed-monitor movement/scaling, elevation/secure desktop, blocking UIA calls,
-background input, WGC geometry, other host session-approval policies or a final
-distribution artifact. See the dated Windows acceptance record for Agent tasks
-and package evidence. No macOS native source, public API or Skill is changed.
+Use the native Windows acceptance matrix for independent pointer, screenshot,
+DPI, session-isolation, cancellation and helper-exit controls. UIA/SendInput return
+values alone do not prove application processing. Preserve unknown effects and
+read original targets independently; do not replay or repair uncertain input.
+Normal-user desktop evidence does not establish elevated/secure desktop,
+background input, every mixed-display layout or blocking-provider recovery.

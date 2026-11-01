@@ -1,6 +1,6 @@
 # Historical top2-only POC acceptance — 2026-10-16
 
-Superseded for current behavior by [runtime acceptance](../../docs/runtime-acceptance.md).
+Superseded for current behavior by [runtime acceptance](https://github.com/caelis-labs/desktop-world/blob/f1d243a/docs/runtime-acceptance.md).
 The hashes and claims below describe the earlier implementation.
 
 The final implementation is a thin DTW extension using **unmodified official CUA

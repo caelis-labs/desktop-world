@@ -2,7 +2,7 @@
 
 Status: checkpoint 2 is implemented and accepted on signed macOS candidate V.
 335 Rust tests, lightweight source/probe checks, native Swift controls and the
-owned AppKit/Chrome GUI cases pass. See [acceptance evidence](cursor-overlay-acceptance.md)
+owned AppKit/Chrome GUI cases pass. See [acceptance evidence](https://github.com/caelis-labs/desktop-world/blob/f1d243a/docs/cursor-overlay-acceptance.md)
 for exact source hashes, original failed samples and platform limits.
 
 ## Ownership and effect boundary
@@ -11,7 +11,7 @@ for exact source hashes, original failed samples and platform limits.
 All application providers share its `Arc`; no per-app helper is created. The
 helper is the same signed DTW executable with `--dtw-overlay-worker`, so it has
 one AppKit main thread while the normal MCP and native-worker loops remain intact.
-Its random session identity, short badge and stable color survive app changes.
+Its internal random session identity and visible stable color survive app changes.
 There is no public cursor ID or extra model argument.
 
 The parent owns a fresh helper-instance directory below `/private/tmp/dtw-overlays-<euid>`.
@@ -166,7 +166,7 @@ not imported. The window is a small vector panel instead of a full-screen bitmap
 DTW adds operation generations, the one-slot mailbox, exact identity checks and
 owner cleanup. The donor's primary-screen-only guard, large command history,
 8-second animation arrival wait and missing-target top-of-desktop fallback are
-not carried over. The four-character session badge uses fixed hexadecimal vector cells, so no font lookup, text layout or Inter/OFL payload is added. A later GUI run exposed an exception inside CoreText during the former system-font drawing path; the geometry path removes that entry point without suppressing the original helper failure. See the [anchored-scroll acceptance record](anchored-scroll-acceptance.md).
+not carried over. The session identity remains internal. User-visible markers use color, arrow geometry and click feedback without a textual or hexadecimal badge.
 
 ## Required acceptance after wiring
 

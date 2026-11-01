@@ -150,7 +150,13 @@ fi
 unset dtw_notary_user dtw_notary_password
 dtw_stage=build_sign_notarize_once
 dtw_builder_invocations=1
-python3 "$dtw_repo/scripts/build-rewrite-candidate.py" --target aarch64-apple-darwin --output "$dtw_output" \
+# Positional arguments also handle the empty/default case on macOS Bash 3.2
+# with nounset enabled (an empty array expansion does not).
+set --
+if [[ -n ${DTW_CARGO_TARGET_DIR:-} ]]; then
+  set -- --cargo-target-dir "$DTW_CARGO_TARGET_DIR"
+fi
+python3 "$dtw_repo/scripts/build-rewrite-candidate.py" --target aarch64-apple-darwin --output "$dtw_output" "$@" \
   --signing-identity "$dtw_identity" --notary-profile "$dtw_profile" --notary-keychain "$dtw_keychain"
 
 dtw_stage=verify_final_signature_team

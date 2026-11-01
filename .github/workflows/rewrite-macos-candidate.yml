@@ -9,6 +9,10 @@ permissions:
   contents: read
 
 # A separate explicit trigger: this workflow never dispatches a Windows build.
+# A later run must not interrupt an in-flight notarization or keychain cleanup.
+concurrency:
+  group: rewrite-macos-candidate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
 jobs:
   macos-candidate:
     if: >-
@@ -17,6 +21,9 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: macos-26
     timeout-minutes: 60
+    env:
+      DTW_CARGO_TARGET_DIR: ${{ github.workspace }}/../dtw-candidate-release-target
+      MACOSX_DEPLOYMENT_TARGET: '14.2'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,6 +36,15 @@ jobs:
         with:
           toolchain: 1.98.0
           components: rust-docs
+      # Cache Cargo dependencies/build output only, never signing or package files.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          prefix-key: dtw-candidate-release-v1
+          key: aarch64-apple-darwin
+          workspaces: cmd/dtw -> ../../../dtw-candidate-release-target
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST MACOSX_DEPLOYMENT_TARGET
+          cache-bin: false
       - name: Build, sign and notarize one fixed native macOS candidate
         shell: bash
         env:
@@ -42,7 +58,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export CARGO_TARGET_DIR="$RUNNER_TEMP/dtw-macos-candidate/target"
+          export CARGO_TARGET_DIR="$DTW_CARGO_TARGET_DIR"
           export MACOSX_DEPLOYMENT_TARGET=14.2
           export RUSTFLAGS='' RUSTC_WRAPPER='' RUSTC_WORKSPACE_WRAPPER=''
           unset CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_RUSTC
@@ -52,6 +68,19 @@ jobs:
             --manifest-path "$RUNNER_TEMP/dtw-macos-candidate/source/cmd/dtw/Cargo.toml" \
             --target aarch64-apple-darwin --lib --bins --tests \
             2>&1 | tee "$RUNNER_TEMP/dtw-macos-candidate/source-tests.log"
+      - name: Check shutdown using the final signed package binary (no desktop access)
+        shell: bash
+        run: |
+          set -euo pipefail
+          dtwPackageBinary=$(python3 - "$RUNNER_TEMP/dtw-macos-candidate" <<'PYTHON'
+          import json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          candidate = json.loads((root / "CANDIDATE.json").read_text())
+          print(root / pathlib.Path(candidate["archive"]).stem / "bin/dtw")
+          PYTHON
+          )
+          python3 "$RUNNER_TEMP/dtw-macos-candidate/source/tests/ci/run_native_worker_tests.py" "$dtwPackageBinary" \
+            2>&1 | tee "$RUNNER_TEMP/dtw-macos-candidate/native-worker-tests.log"
       - name: Retain immutable candidate, original notarization and cleanup evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -68,4 +97,5 @@ jobs:
             ${{ runner.temp }}/dtw-macos-candidate/commands.json
             ${{ runner.temp }}/dtw-macos-candidate/notarization-*.json
             ${{ runner.temp }}/dtw-macos-candidate/source-tests.log
+            ${{ runner.temp }}/dtw-macos-candidate/native-worker-tests.log
             ${{ runner.temp }}/dtw-macos-candidate/logs

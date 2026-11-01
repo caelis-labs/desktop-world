@@ -130,27 +130,17 @@ _NET_WM_PID); only characters present in the current keyboard map can be typed.
 Only keyboard group zero is accepted for text; active alternate groups or
 modifiers and unsupported characters are rejected before injection.
 
-## Evidence and remaining gates
+## Verification boundaries
 
-- Local macOS run: original shared IPC lifecycle suite, 20 passing tests;
-  transplanted XRes ownership suite, 8 passing tests; shared input sequencing,
-  held-prefix cleanup, mutation-gate and size/lock/full button-mask contracts, 11 passing tests.
-  The input tests run directly with `rustc --edition 2021 --test
-  cmd/dtw/src/backends/input_sequence.rs -D warnings -o /tmp/dtw-input-tests`,
-  followed by `/tmp/dtw-input-tests`. They require no GUI or platform library.
-- Both `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu` provider source and
-  test code type-check against their actual target SDK crates. Reproduce with
-  `python3 tests/native/check_provider_types.py --target TARGET`; it deliberately
-  builds an isolated checker rather than cross-compiling QuickJS or CUA.
-- Windows Unicode-pair/chord and cooperative-stop tests are present and type-checked,
-  but were not executed on macOS. This is not a linked Windows/Linux product build.
-- The original cross-platform inventory included no Windows/Linux GUI run.
-  Follow-up Windows evidence is in
-  [the 2026-10-31 acceptance record](https://github.com/caelis-labs/desktop-world/blob/main/docs/windows-rewrite-acceptance-2026-10-31.md).
-  Final candidate construction, the broader normal-user Windows matrix,
-  DPI/geometry, modal/focus races, cancellation/parent exit and independent effect
-  readback remain required. Linux desktop combinations remain unverified and do
-  not acquire a support commitment from successful compilation.
+Provider source/tests can be type-checked with
+`python3 tests/native/check_provider_types.py --target TARGET`. This isolated
+checker uses actual SDK crates without cross-compiling QuickJS or CUA. Source
+checks and shared sequencing controls do not replace native platform execution.
+Windows needs linked-package, normal-user desktop, DPI/geometry, modal/focus,
+cancellation/parent-exit and independent-effect checks. Linux desktop combinations
+remain experimental and gain no support commitment from successful compilation.
+See [building and acceptance](building.md) and the
+[Windows matrix](../tests/acceptance/windows/README.md).
 
 ## Source notices
 

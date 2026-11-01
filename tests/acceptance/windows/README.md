@@ -1,20 +1,19 @@
 # Windows candidate handoff
 
-This is an **opt-in GUI smoke for a Windows user**, not general Windows release
-approval. The [2026-11-01 follow-up](../../../docs/windows-release-acceptance-2026-11-01.md)
-records the specific desktop runs, binary hashes, failures and remaining gates.
+This directory contains the **opt-in Windows GUI smoke and real-task acceptance
+criteria**. It is a test specification, not a record of a candidate passing.
+Record the exact source, installed binary and shipped Skill hashes with each run;
+results for other bytes or platforms do not establish this candidate's behavior.
 macOS syntax/type checks do not establish Windows compilation, UIA behavior,
 input delivery or native linking. A Windows build is a separate prerequisite.
 
-The earlier reviewed candidate passed the 25-case base and 15-case cursor suites,
-but failed stronger lossless Unicode cancellation stress. That failure remains
-in the [previous record](../../../docs/windows-rewrite-acceptance-2026-10-31.md). Fixture
-JSON preserves surrogate code units; a terminal high surrogate is not rewritten
-to a replacement character and is not accepted as a scalar-prefix pass. Snapshot
-readiness/release sampling may retry bounded read-only observations; no application
-action is retried. See the dated record for exact binary hashes and failures.
+Fixture JSON preserves surrogate code units; a terminal high surrogate is not
+rewritten to a replacement character and is not accepted as a scalar-prefix
+pass. Snapshot readiness/release sampling may retry bounded read-only
+observations; no application action is retried. Preserve original failures,
+receipts and logs alongside successful results.
 
-The subsequent Windows delivery guard keeps real SendInput and reads the original
+The Windows delivery guard keeps real SendInput and reads the original
 focused control before handing off accepted supplementary-plane text. Run the
 same strict `delivery_probe.py` both normally and with `--handler-delay`, then
 `delivery_guard_probe.py --dtw C:\Candidates\DTW\bin\dtw.exe --output C:\Temp\dtw-delivery-guard`.
@@ -322,15 +321,11 @@ server gracefully, write its stop marker from the supervisor terminal:
 
 ## Still required for full Windows acceptance
 
-The real-application closure batch adds subtree/region observation, `readText`
-and full bounded UIA text matching. Rebuild the final batch revision on Windows;
-the earlier linked Windows candidate does not cover these changes. The Windows
-archive includes the same-source batch plan in its docs directory; the plan is
-an acceptance specification, not evidence that these tasks passed. Run the
-existing smoke first (unique selectors, region invalidation, Unicode pages and
-two-instance isolation), then validate DPI/monitor transitions and cancellation/
-parent-exit cleanup. Proceed to the three real applications only after those
-checks pass, using that same binary and Skill:
+Use the final installed candidate and its bundled Skill for every acceptance
+stage. Run the existing smoke first (unique selectors, region invalidation,
+Unicode pages and two-instance isolation), then validate DPI/monitor transitions
+and cancellation/parent-exit cleanup. Proceed to the three real applications
+only after those checks pass, using the same binary and Skill:
 
 - Find text beyond the 512-character display excerpt. A search budget limit
   must return partial coverage, not an empty complete result.
@@ -343,7 +338,7 @@ checks pass, using that same binary and Skill:
   must not fall back to element names or descriptions as document text.
 - Complete the WPS create/edit/Save As/close/reopen, Obsidian new-vault/folder/
   notes/search/link, and Chrome edit/readback/native-file-selection tasks in
-  [the batch plan](../../../docs/real-task-closure-plan.md) through ordinary
+  the [real-task matrix below](#real-task-matrix-and-evidence) through ordinary
   Agent + MCP + the shipped Skill. Use the stable Windows app IDs returned by
   `apps`, not macOS bundle IDs. The current `real_app_tasks.py` launcher is
   macOS-specific and must not be presented as a runnable Windows harness.
@@ -364,3 +359,62 @@ reclamation; 100/125/150/200% and mixed-monitor DPI including window movement;
 permission/elevated/secure-desktop denial; screenshot visual fidelity; and real
 application/ordinary Agent tasks. Preserve failures and permission denials as
 their actual evidence class. Linux support is not tested by this directory.
+
+## Real-task matrix and evidence
+
+Use a new temporary directory, unique data and markers for each attempt. Operate
+only owned documents, isolated vaults and disposable browser profiles; preserve
+personal resources. The supervisor may prepare fixtures and read saved results,
+but the executing Agent must use ordinary DTW MCP and the shipped Skill for all
+application interaction. Shell, DOM/CDP, HTTP and direct file edits cannot be
+used to complete the business task. Give the Agent business goals and owned
+resources, not a custom sequence of automation commands. Setup and cleanup may
+only affect supervisor-created resources. An unknown write keeps its original
+receipt and is never replayed to recover a response.
+
+| Application | Complete task | Independent evidence |
+| --- | --- | --- |
+| WPS Office | Create from an owned seed document; enter Chinese/English text in multiple paragraphs and make an edit; use native Save As to choose a new directory and filename; save, close, reopen and verify. | DOCX ZIP text and paragraphs, unchanged seed-file hash, plus the Agent's reopened GUI readback. |
+| Obsidian | Create an isolated vault from the welcome screen through the native directory chooser; create a folder and two notes with an internal link; search, follow the link and reopen the target note. | Vault configuration, both Markdown files and their link, plus the Agent's search/link/reopen GUI readback. |
+| Chrome | Filter records across pages, edit fields and checkboxes with multiline Chinese/emoji, save each once, reopen and verify; use the native file chooser to attach an owned file. | Independent server save log and values, unchanged neighboring records, selected filename and content, plus reopen/chooser GUI evidence. A successful semantic press alone is insufficient. |
+
+### Candidate identity and result classes
+
+Freeze and record the source revision/tree, binary and shipped Skill hashes before
+running tasks. Run the installed package's actual executable and Skill, then
+recheck its checksum manifest at the end. Where the platform runner supports it,
+use `--installed-package`; do not copy a development executable elsewhere and
+present that run as installed-package evidence. The current `real_app_tasks.py`
+launcher remains macOS-specific.
+
+Native fixture, direct-script and ordinary-Agent results are separate evidence
+classes. Record every business subgoal as complete, partial or blocked. File or
+server readback cannot substitute for a required reopen, link, or native chooser
+interaction. Keep macOS and Windows results separate; Linux remains experimental.
+Lock-screen use, remote MCP, full DOM/tab providers and Windows background input
+are outside this acceptance commitment.
+
+### Ease of use and efficiency
+
+- Target Agent integrations are Caelis, DSH and agy. Exercise Caelis with
+  deepseek-flash and gpt-6.1-terra. Record the actual harness/model versions and
+  full-task successes/attempts per application on the final candidate. agy model
+  exploration inefficiency is not a release blocker; reproducible DTW defects
+  still require correction. Do not erase previous failed attempts.
+- Record metadata/Skill discovery effort, script syntax or API mistakes, manual
+  hints and concrete Agent feedback. Skills may explain reusable interactions
+  such as file choosers and forms, but must not encode these particular tasks.
+- Record total wall time, MCP/exec/native-method counts, output JSON/image bytes,
+  failed calls, read-only refreshes and repeated steps. Classify model/network
+  failures separately without silently removing them from the failure denominator.
+- Retain existing browser-workbench cost checks when running that runner. Establish
+  WPS/Obsidian cost baselines from these complete tasks; do not apply a small
+  fixture's fixed exec-count limit to them.
+- Use a 900-second supervision budget for full external-Agent tasks, without an
+  additional fixed model-turn cutoff. Preserve partial results at timeout and
+  count the attempt as incomplete. This is a test resource budget, not a DTW
+  script or product limit.
+- Classify the first failure as capability, state, interface, Skill, model or
+  environment. After implementation or Skill changes, freeze a new candidate and
+  use fresh cases; retest affected tasks and the final three-application closure.
+  Earlier candidate successes do not transfer automatically to changed bytes.

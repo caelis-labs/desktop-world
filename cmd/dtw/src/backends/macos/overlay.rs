@@ -534,16 +534,28 @@ pub struct OverlayOwner {
 impl OverlayOwner {
     #[cfg(test)]
     pub(super) fn test_helper(session: &str, mode: &str, log: &Path) -> Self {
+        Self::test_helper_with_startup_delay(session, mode, log, Duration::ZERO)
+    }
+    #[cfg(test)]
+    pub(super) fn test_helper_with_startup_delay(
+        session: &str,
+        mode: &str,
+        log: &Path,
+        startup_delay: Duration,
+    ) -> Self {
         // A headless byte-protocol fixture exercises the real Worker lifecycle.
         // It creates no AppKit process/window and never dispatches input.
         let instance = uuid::Uuid::new_v4().simple().to_string();
         let directory = create_registry_root().unwrap().join(&instance);
         DirBuilder::new().mode(0o700).create(&directory).unwrap();
         let birth_path = directory.join("test-birth");
+        let ready_path = directory.join("test-ready");
         let script = r#"
 import json, os, signal, sys, time
-mode, log, birth_path = sys.argv[1:]
+mode, log, birth_path, ready_path, startup_delay = sys.argv[1:]
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(74 if mode == 'unclean' else 0))
+time.sleep(float(startup_delay))
+with open(ready_path, 'w') as file: file.write('ready')
 operation = 0
 for line in sys.stdin:
     request = json.loads(line)
@@ -562,8 +574,10 @@ for line in sys.stdin:
         result = {'ok': True, 'operation': operation}
     print(json.dumps(result), flush=True)
 "#;
+        // Match the other headless fixtures and actions/setup-python. The macOS
+        // /usr/bin shim can cold-start developer tools outside our test environment.
         let worker = Worker::spawn(
-            Path::new("/usr/bin/python3"),
+            Path::new("python3"),
             &[
                 "-u",
                 "-c",
@@ -571,10 +585,23 @@ for line in sys.stdin:
                 mode,
                 log.to_str().unwrap(),
                 birth_path.to_str().unwrap(),
+                ready_path.to_str().unwrap(),
+                &startup_delay.as_secs_f64().to_string(),
             ],
         )
         .unwrap();
         fs::write(&birth_path, process_birth(worker.id()).unwrap().to_string()).unwrap();
+        // Interpreter cold start is fixture setup, not the cancellation/transport
+        // behavior under test. Do not spend the real two-second control budget on it.
+        let until = Instant::now() + Duration::from_secs(10);
+        while !ready_path.exists() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            ready_path.exists(),
+            "headless overlay fixture never became ready"
+        );
+        fs::remove_file(ready_path).unwrap();
         Self {
             session: session.to_owned(),
             instance,

@@ -454,12 +454,6 @@ def package_assets(source, package, version, target):
         shutil.copy2(source / "docs/windows-cursor-port.md", package / "docs/windows-cursor-port.md")
         shutil.copytree(source / "tests/acceptance/windows", package / "acceptance/windows")
         shutil.copytree(source / "tests/fixtures/browser-workbench", package / "acceptance/browser-workbench")
-        shutil.copy2(source / "docs/real-task-closure-plan.md", package / "docs/real-task-closure-plan.md")
-        handoff = package / "acceptance/windows/README.md"
-        handoff_text = handoff.read_text(encoding="utf-8")
-        source_link = "(../../../docs/real-task-closure-plan.md)"
-        require(handoff_text.count(source_link) == 1, "Windows handoff must link the same-source task plan")
-        handoff.write_text(handoff_text.replace(source_link, "(../../docs/real-task-closure-plan.md)"), encoding="utf-8")
     (package / "examples").mkdir()
     for name in ("mcp.json", "codex.toml"):
         shutil.copy2(source / "docs/examples" / name, package / "examples" / name)
@@ -484,11 +478,12 @@ def package_assets(source, package, version, target):
         })
 
 
-def build(repo, output, target, signing_identity=None, notary_profile=None, notary_keychain=None):
+def build(repo, output, target, signing_identity=None, notary_profile=None, notary_keychain=None, cargo_target_dir=None):
     output = reserve_output(repo, output)
     commands = Commands(output)
     try:
         native_host(target)
+        cargo_target_dir = Path(cargo_target_dir).resolve() if cargo_target_dir is not None else output / "target"
         require(target == "aarch64-apple-darwin" or not (signing_identity or notary_profile or notary_keychain),
                 "macOS signing/notarization options cannot be used for Windows")
         require(not notary_profile or signing_identity, "--notary-profile requires --signing-identity")
@@ -519,7 +514,7 @@ def build(repo, output, target, signing_identity=None, notary_profile=None, nota
             if key in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTUP_TOOLCHAIN", "CARGO_BUILD_RUSTC") or (
                     key.startswith("CARGO_TARGET_") and key.endswith(("_RUSTFLAGS", "_LINKER"))):
                 env.pop(key)
-        build_env = {"CARGO_TARGET_DIR": str(output / "target"), "SOURCE_DATE_EPOCH": str(identity["commit_unix_seconds"]),
+        build_env = {"CARGO_TARGET_DIR": str(cargo_target_dir), "SOURCE_DATE_EPOCH": str(identity["commit_unix_seconds"]),
                      "RUSTC": str(sysroot / "bin" / ("rustc.exe" if target.endswith("msvc") else "rustc")),
                      "RUSTC_WRAPPER": "", "RUSTC_WORKSPACE_WRAPPER": "",
                      "RUSTFLAGS": "-C target-feature=+crt-static" if target.endswith("msvc") else ""}
@@ -552,7 +547,7 @@ def build(repo, output, target, signing_identity=None, notary_profile=None, nota
         commands.run(cargo + ["build", "--release", "--locked", "--target", target, "--manifest-path", str(manifest), "--bin", "dtw"], cwd=source, env=env)
         binary = package / "bin" / TARGETS[target][2]
         binary.parent.mkdir()
-        shutil.copy2(output / "target" / target / "release" / binary.name, binary)
+        shutil.copy2(cargo_target_dir / target / "release" / binary.name, binary)
         binary.chmod(0o755)
         fmt = binary_format(binary, target)
         signing = {"status": "not_requested", "installation_verification": "unverified"}
@@ -638,6 +633,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", required=True, choices=TARGETS)
     parser.add_argument("--output", required=True, type=Path, help="New directory outside the source checkout; parent must exist")
+    parser.add_argument("--cargo-target-dir", type=Path,
+                        help="Reusable Cargo build directory; defaults to OUTPUT/target. Keep caches separate from candidate/signing output")
     parser.add_argument("--signing-identity", help="macOS codesign identity; no entitlements are inferred")
     parser.add_argument("--notary-profile", help="Existing macOS notarytool keychain profile; requires signing identity")
     parser.add_argument("--notary-keychain", type=Path,
@@ -645,7 +642,7 @@ def main():
     args = parser.parse_args()
     try:
         summary = build(Path(__file__).resolve().parent.parent, args.output, args.target,
-                        args.signing_identity, args.notary_profile, args.notary_keychain)
+                        args.signing_identity, args.notary_profile, args.notary_keychain, args.cargo_target_dir)
     except (OSError, ValueError, KeyError, RuntimeError) as error:
         parser.exit(1, f"Candidate build failed; inspect the retained output: {error}\n")
     print(json.dumps(summary, indent=2))
