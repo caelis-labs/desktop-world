@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.3](https://github.com/caelis-labs/desktop-world/compare/v0.2.2...v0.2.3) (2026-11-01)
+
+
+### Features
+
+* wait for script selector conditions without replaying input ([#92](https://github.com/caelis-labs/desktop-world/issues/92)) ([7c184be](https://github.com/caelis-labs/desktop-world/commit/7c184be8769755adc82fb1c6c2a084d7a5a6416a))
+
+
+### Performance Improvements
+
+* compact agent-visible opaque references ([#88](https://github.com/caelis-labs/desktop-world/issues/88)) ([fc485da](https://github.com/caelis-labs/desktop-world/commit/fc485da60b754ea3963a4600f894b5aa36a4956c))
+
 ## [0.2.2](https://github.com/caelis-labs/desktop-world/compare/v0.2.1...v0.2.2) (2026-11-01)
 
 
