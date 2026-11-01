@@ -17,10 +17,11 @@ Copy this prompt into **Caelis, DSH, or agy**:
 
 ```text
 Install Desktop World for this Agent using:
-https://github.com/caelis-labs/desktop-world/blob/main/install.md
-Choose the latest stable package for my OS, verify it, and install its desktop tools
-and bundled Skill as one plugin for this Agent. Preserve my
-existing configuration. Verify the connection by listing open app windows.
+https://raw.githubusercontent.com/caelis-labs/desktop-world/main/install.md
+Use the guide's direct route for my Agent and latest stable OS package. Install
+its desktop tools and bundled Skill as one plugin, preserving existing settings.
+Verify open app windows through MCP. If this conversation needs a fresh tool
+context, use a normal read-only verifier subagent or report the required next step.
 ```
 
 Download the **latest stable** package from [Releases](https://github.com/caelis-labs/desktop-world/releases/latest).
