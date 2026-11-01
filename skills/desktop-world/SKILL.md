@@ -46,6 +46,8 @@ On supported providers, `app.waitForWindow({window_ref,state:'dialog'})` waits f
 
 `app.capture({window_ref})` returns an image and a pixel observation ref. The image accompanying a script is its last explicit capture, not an implicit screenshot after clicks or typing. Check `last_capture.step`, `timing` and `later_calls`; call capture after an action when visual readback is needed. A changed or unchanged image alone does not prove the intended effect or justify replay. Coordinates refer to that image, not desktop or CSS coordinates.
 
+On Windows, an explicit occlusion failure during `exec` can make DTW prepare the selected window's foreground once and capture afresh. This uses ordinary input coordination and the original deadline; its focus receipt is retained in the capture step's `resolution.focus_preparation`. That preparation retires this window's semantic refs too. A denied or unconfirmed preparation stops. No delivery-mode argument is needed, and a failed capture does not authorize repeating prior input.
+
 For pixel grounding, use the returned `image.width` and `image.height`, even if a viewer resizes the image. For 0–1000 grounding, pass `coordinate_space:"normalized_1000"` to `click`; DTW converts both axes through the bound capture. Both coordinates must be in the same space; normalized values are at least 0 and less than 1000. Do not manually rescale normalized coordinates and also mark them normalized.
 
 `app.observe` supports these exclusive scopes, subject to `supported_observe_scopes`:
@@ -59,9 +61,13 @@ Region queries filter native geometry. macOS clips through proven scroll-area vi
 
 Each page contains `elements`, `observation_ref`, `next` and `coverage`. Element fields are `role,name,value,label,enabled,actions,element_ref,can_press`. Names, labels and values are bounded excerpts. Roles and advertised actions come from the provider; an intended task does not establish a control's name or capabilities.
 
+`name` is the native accessible name. `label` is a display summary and may include a role prefix, such as `text Example`; that prefix is not part of the native name. Prefer the observed role and name text when constructing selectors. An empty name does not imply a missing element.
+
 `limit` bounds matches per page, not traversal work. Narrow the scope and filters when possible. Continue with only `{cursor:page.next}`; a cursor advances once. An empty page can have a continuation. Earlier-page refs share the same observation.
 
 Text filters apply to label, name and value, including empty-name controls. A filtered page can be empty while `next` is present: continue the same query, or use `find` for a known control. Browser window scope can start with browser chrome before page contents; narrow by role/text or a captured region instead of dumping the full tree. `next:null` does not imply complete discovery. `coverage.complete` describes the live traversal of the selected scope; it is not an atomic snapshot or proof that an element does not exist. Preserve partial-coverage reasons. Missing, disabled, ambiguous and unsupported are different outcomes.
+
+Windows region queries filter returned UIA geometry; they do not necessarily prune traversal work. A retained, observed container subtree is preferable when available. Page bounds describe traversal work separately from returned matches, so an empty bounded page does not establish that the page is still loading or has no matches.
 
 ## Atomic actions and text
 

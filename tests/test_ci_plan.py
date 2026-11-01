@@ -13,6 +13,9 @@ spec.loader.exec_module(plan)
 class PlanTests(unittest.TestCase):
     def test_platform_selection(self):
         cases = [(['README.md'], (False, False)),
+                 # Both package layouts are covered by portable Python/Node
+                 # contracts; manifest generation does not compile a native adapter.
+                 (['scripts/plugin_package.py', 'plugins/cordis/index.mjs'], (False, False)),
                  (['cmd/dtw/src/backends/macos/Native.swift', 'docs/old-native.txt'], (True, False)),
                  (['cmd/dtw/src/script/mod.rs'], (True, True)),
                  (['cmd/dtw/Cargo.lock'], (True, True)),

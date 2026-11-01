@@ -1,3 +1,5 @@
 # Original upstream notice bytes are verified against immutable hashes.
 # Preserve their line endings on every checkout, including Windows CI.
 packaging/third-party/** -text
+# The generated TypeScript contract is compared byte-for-byte on every OS.
+docs/app-script-api.d.ts text eol=lf

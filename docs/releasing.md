@@ -196,14 +196,18 @@ python scripts/build-rewrite-candidate.py `
 ```
 
 Each ZIP contains one `bin/dtw[.exe]`, the canonical Skill, normal MCP/Codex examples,
-optional standard Claude metadata using that same executable, source notices,
+Agent Plugins 1.0, Claude Code, Antigravity and DSH Cordis metadata using that same executable, source notices,
 actual target dependency notices, Rust runtime notices, `BUILD.json` and a complete
 `SHA256SUMS`. The outer `.sha256` covers the ZIP. BUILD records source commit/tree,
 lockfile, toolchain, build environment, binary format/dependencies, minimum target,
-version and hashes. Its CLI check does not imply GUI or clean-install acceptance.
+version and hashes. New BUILD records also declare the multi-host plugin layout;
+the final-asset verifier checks its manifests, target paths and versions. Historical
+accepted packages retain their original verification contract. Its CLI check does
+not imply GUI or clean-install acceptance.
 
-The same extracted directory can be registered as ordinary MCP + Skill or loaded
-with `claude --plugin-dir`; choose one route per client. Neither route needs a custom
+The same extracted directory can be installed through a supported host's plugin
+entry, registered as ordinary MCP + Skill, or loaded with `claude --plugin-dir`;
+choose one route per client. These routes need no custom
 Host or a development toolchain at runtime. Keep the complete extracted directory.
 For an upgrade, extract to a new directory, finish existing operations and stop the
 old connection, update the configured executable/plugin path, then reconnect and

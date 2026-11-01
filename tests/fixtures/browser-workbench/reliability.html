@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>DTW Reliability __CASE__</title>
+<style>
+body{font:16px system-ui;color:#18232b;background:#f4f6f8;margin:24px;max-width:1100px}
+button,input{font:inherit;padding:10px;margin:5px}button{cursor:pointer}section{padding:12px;background:white;margin:16px 0}
+label{display:block;margin:8px 0}#create{padding:14px 30px;font-weight:600;background:rgb(83,165,131)}#icon{min-width:52px;font-size:22px}
+output{display:block;white-space:pre-wrap;margin:8px 0}li{margin:4px 0}#event-status{min-height:24px;color:#165b3b}
+</style>
+<h1>Pointer delivery and traversal — __CASE__</h1>
+<p>This disposable fixture records events and submissions locally. Use one action per observation; verify the receipt before retrying.</p>
+<section aria-label="Submission controls">
+<h2>Submission controls</h2>
+<label>Run label <input id="run" type="text" value="unlabelled" maxlength="80"></label>
+<label><input id="require-pointer" type="checkbox"> Require trusted pointer sequence</label>
+<p id="mode">Mode: normal; ready</p>
+<button id="settle" type="button">Settle for 1500 ms</button>
+<form id="form">
+<label>Record title <input id="title" type="text" value="Owned test record" maxlength="128" required></label>
+<button id="create" type="submit"><span>Create test record</span></button>
+</form>
+<output id="receipt" role="status">No submission attempted</output>
+<p id="event-status" role="status">Starting local event journal</p>
+<button id="refresh" type="button">Refresh diagnostic counts</button>
+<output id="counts">No diagnostic counts loaded</output>
+</section>
+<section aria-label="Text and unnamed button controls">
+<h2>Text and unnamed button controls</h2>
+<p id="split">Introductory fragment. <span>Continuation fragment in a separate inline element.</span> <strong>Final emphasized fragment.</strong></p>
+<p>Native accessibility providers may merge or split this paragraph; visual paragraph grouping is not assumed.</p>
+<button id="icon" type="button"><svg aria-hidden="true" focusable="false" width="24" height="24" viewBox="0 0 24 24"><path d="M12 3v18M3 12h18" stroke="currentColor" stroke-width="3"/></svg></button>
+<output id="icon-status" role="status">Unnamed icon activations: 0</output>
+</section>
+<section aria-label="Stable link catalogue">
+<h2>Stable link catalogue</h2>
+<p id="catalogue-status">Load the catalogue for a stable 360-link traversal case. It stays unchanged after loading; paginate every observation before comparing filtered sets.</p>
+<button id="load-catalogue" type="button">Load 360-link catalogue</button>
+<div id="catalogue"></div>
+</section>
+<script>
+'use strict';
+const byId = id => document.getElementById(id);
+const frame = crypto.randomUUID();
+let pending = Promise.resolve(), ready = true, gesture = {down:false,up:false,click:false}, lastDown = 0;
+let iconCount = 0, failures = 0;
+const moves = new Map();
+const mode = () => byId('require-pointer').checked ? 'trusted-pointer' : 'normal';
+const run = () => byId('run').value.trim() || 'unlabelled';
+const status = () => { byId('mode').textContent = `Mode: ${mode()}; ${ready ? 'ready' : 'settling'}`; };
+function send(path, data) {
+  const operation = pending.catch(() => {}).then(async () => {
+    const response = await fetch(path, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+    if (!response.ok) throw new Error(`Journal HTTP ${response.status}`);
+    return response.json();
+  });
+  pending = operation;
+  operation.then(() => { byId('event-status').textContent = `Local event journal saved; failures: ${failures}`; }, error => {
+    failures++;
+    byId('event-status').textContent = `${error.message}; failures: ${failures}. Retain evidence; do not replay an uncertain submit.`;
+  });
+  return operation;
+}
+function record(kind, details={}) {
+  return send('/api/reliability/event', {kind,run:run(),frame,client_ms:performance.now(),...details});
+}
+for (const kind of ['pointerdown','pointerup','pointermove','mousedown','mouseup','mousemove','click','keydown','focus','blur']) {
+  byId('create').addEventListener(kind, event => {
+    const now = performance.now();
+    // Sample movement only: clicks and paired downs/ups are never coalesced.
+    if (kind.endsWith('move')) {
+      if (now - (moves.get(kind) || -1000) < 100) return;
+      moves.set(kind, now);
+    }
+    if (kind === 'pointerdown') {
+      gesture = {down:event.isTrusted && event.button === 0,up:false,click:false};
+      lastDown = now;
+    }
+    if (kind === 'pointerup') gesture.up = gesture.down && event.isTrusted && event.button === 0 && now-lastDown < 2000;
+    if (kind === 'click') gesture.click = gesture.up && event.isTrusted && event.detail > 0;
+    if (kind === 'keydown') gesture = {down:false,up:false,click:false};
+    const row = {trusted:event.isTrusted,target:'create'};
+    for (const key of ['button','buttons','detail']) if (typeof event[key] === 'number') row[key] = event[key];
+    if (typeof event.clientX === 'number') { row.x = event.clientX; row.y = event.clientY; }
+    if (typeof event.isPrimary === 'boolean') row.primary = event.isPrimary;
+    if (typeof event.pointerType === 'string') row.pointer_type = event.pointerType;
+    if (typeof event.pointerId === 'number') row.pointer_id = event.pointerId;
+    if (event.key) row.key = event.key;
+    record(kind,row);
+  }, true);
+}
+byId('form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const captured = {...gesture};
+  gesture = {down:false,up:false,click:false};
+  const nonce = crypto.randomUUID();
+  record('submit', {trusted:event.isTrusted,mode:mode(),target:'form'});
+  try {
+    const receipt = await send('/api/reliability/attempt', {nonce,frame,run:run(),title:byId('title').value,mode:mode(),ready,gesture:captured});
+    byId('receipt').textContent = `Attempt ${receipt.sequence}: ${receipt.reason}; submissions ${receipt.submission_count}; nonce ${receipt.nonce}`;
+  } catch (error) {
+    byId('receipt').textContent = `Submission outcome unknown: ${error.message}. Read the supervisor state before retrying.`;
+  }
+});
+byId('require-pointer').addEventListener('change', () => {
+  gesture = {down:false,up:false,click:false}; status(); record('mode_changed',{mode:mode()});
+});
+byId('settle').addEventListener('click', () => {
+  if (!ready) return;
+  ready = false; byId('create').disabled = true; byId('settle').disabled = true;
+  gesture = {down:false,up:false,click:false}; status(); record('settling');
+  setTimeout(() => {
+    ready = true; byId('create').disabled = false; byId('settle').disabled = false;
+    status(); record('ready');
+  }, 1500);
+});
+byId('icon').addEventListener('click', event => {
+  iconCount++; byId('icon-status').textContent = `Unnamed icon activations: ${iconCount}`;
+  record('icon',{trusted:event.isTrusted,target:'icon'});
+});
+byId('refresh').addEventListener('click', async () => {
+  await pending.catch(() => {});
+  try {
+    const response = await fetch('/api/reliability');
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    byId('counts').textContent = `Attempts: ${data.attempt_count}; submissions: ${data.submission_count}; events: ${JSON.stringify(data.event_counts)}`;
+  } catch (error) { byId('counts').textContent = `Diagnostic read failed: ${error.message}`; }
+});
+byId('load-catalogue').addEventListener('click', () => {
+if (byId('catalogue').childElementCount) return;
+for (let group=0; group<8; group++) {
+  const section = document.createElement('section');
+  section.setAttribute('aria-label', `Catalogue group ${group+1}`);
+  const heading = document.createElement('h3'); heading.textContent = `Catalogue group ${group+1}`; section.append(heading);
+  const list = document.createElement('ul');
+  for (let offset=1; offset<=45; offset++) {
+    const number = String(group*45+offset).padStart(3,'0');
+    const item = document.createElement('li'), link = document.createElement('a');
+    link.href = `#fixture-link-${number}`; link.textContent = `Fixture link ${number}`;
+    link.addEventListener('click', event => {event.preventDefault();record('link',{trusted:event.isTrusted,target:number});});
+    item.append(link); list.append(item);
+  }
+  section.append(list); byId('catalogue').append(section);
+}
+byId('load-catalogue').disabled = true;
+byId('catalogue-status').textContent = 'Catalogue ready: exactly 360 uniquely named links; unchanged after loading.';
+record('ready',{target:'catalogue'});
+});
+status(); record('ready');
+</script>
+</html>

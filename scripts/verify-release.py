@@ -47,6 +47,50 @@ def signature(binary):
             and re.search(r'^Timestamp=.+$', details, re.M), 'Invalid release signing identity/runtime/timestamp')
 
 
+def plugin_package(archive, prefix, build):
+    """Audit the newly declared multi-host layout; retain historical contracts."""
+    if 'plugin_package' not in build:
+        return  # Existing accepted archives did not declare this layout.
+    target = build['target']
+    binary = build['binary']['path']
+    require(build['plugin_package'] == {
+        'target': target, 'binary': binary,
+        'formats': ['agent-plugins-1.0', 'claude-code', 'antigravity', 'dsh-cordis'],
+    }, 'Plugin package declaration mismatch')
+
+    def read(name):
+        require(prefix + name in archive.namelist(), 'Missing declared plugin component: ' + name)
+        value = json.loads(archive.read(prefix + name))
+        require(isinstance(value, dict), 'Invalid declared plugin component: ' + name)
+        return value
+
+    for path in ('plugin.json', '.claude-plugin/plugin.json', '.antigravity-plugin/plugin.json'):
+        manifest = read(path)
+        require(manifest.get('name') == 'desktop-world' and manifest.get('version') == build['version'],
+                'Plugin identity/version mismatch: ' + path)
+        if path == 'plugin.json':
+            require(manifest.get('$schema') == 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
+                    'Agent Plugins schema mismatch')
+        elif path.startswith('.antigravity-plugin/'):
+            require(manifest.get('$schema') == 'https://antigravity.google/schemas/v1/plugin.json',
+                    'Antigravity schema mismatch')
+    standard = read('mcp.json')
+    require(standard.get('$schema') == 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json'
+            and standard.get('mcpServers') == {'desktop-world': {
+                'type': 'stdio', 'command': './' + binary, 'args': ['mcp']}},
+            'Agent Plugins MCP entry mismatch')
+    require(read('.mcp.json').get('mcpServers') == {'desktop-world': {
+        'command': '${CLAUDE_PLUGIN_ROOT}/' + binary, 'args': ['mcp']}}, 'Claude MCP entry mismatch')
+    require(read('mcp_config.json').get('mcpServers') == {'desktop-world': {
+        'command': './' + binary, 'args': ['mcp'], 'cwd': '${PLUGIN_ROOT}'}}, 'Antigravity MCP entry mismatch')
+    cordis = read('package.json')
+    require(cordis.get('name') == '@caelis-labs/desktop-world' and cordis.get('version') == build['version']
+            and cordis.get('type') == 'module' and cordis.get('main') == './cordis/index.mjs'
+            and cordis.get('exports') == './cordis/index.mjs' and not cordis.get('dependencies')
+            and not cordis.get('scripts'), 'Cordis package entry mismatch')
+    require(prefix + 'cordis/index.mjs' in archive.namelist(), 'Missing declared Cordis adapter')
+
+
 def verify(root, tag, tag_commit):
     root = Path(root)
     require(re.fullmatch(r'v\d+\.\d+\.\d+', tag), 'Expected stable release tag')
@@ -101,6 +145,7 @@ def verify(root, tag, tag_commit):
                     == platform.get('binary_sha256'), 'Binary digest mismatch')
             require(sha(z.read(prefix + 'skills/desktop-world/SKILL.md')) == build.get('skill_sha256'), 'Skill digest mismatch')
             require(sha(z.read(prefix + 'notices/DEPENDENCIES.json')) == build.get('dependencies_sha256'), 'Notices digest mismatch')
+            plugin_package(z, prefix, build)
             with tempfile.TemporaryDirectory(prefix='dtw-release-check-') as tmp:
                 path = Path(tmp) / Path(binary_name).name
                 path.write_bytes(binary)

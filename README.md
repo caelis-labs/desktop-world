@@ -19,14 +19,12 @@ Copy this prompt into **Caelis, DSH, or agy**:
 Install Desktop World for this Agent using:
 https://github.com/caelis-labs/desktop-world/blob/main/install.md
 Choose the latest stable package for my OS, verify it, and install its desktop tools
-and bundled Skill through this Agent's standard extension points. Preserve my
+and bundled Skill as one plugin for this Agent. Preserve my
 existing configuration. Verify the connection by listing open app windows.
-Do not substitute historical v0.1.x packages.
 ```
 
 Download the **latest stable** package from [Releases](https://github.com/caelis-labs/desktop-world/releases/latest).
-Historical v0.1.x releases are a different edition. You do not need a development
-toolchain to run the package. See [installation details](install.md) for
+You do not need a development toolchain to run the package. See [installation details](install.md) for
 manual setup and upgrades.
 
 ## Try it

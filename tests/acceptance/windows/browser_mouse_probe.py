@@ -4,6 +4,7 @@ import argparse, ctypes, hashlib, json, os, shutil, subprocess, sys, time, trace
 from ctypes import wintypes as w
 from pathlib import Path
 from cursor_probe import Mcp, read, require, wait, write
+from browser_reliability_probe import window_diagnostics
 
 
 def main():
@@ -11,6 +12,7 @@ def main():
     p.add_argument('--dtw',type=Path,required=True);p.add_argument('--chrome',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
     a=p.parse_args();binary=a.dtw.resolve(strict=True);out=a.output.resolve();require(os.name=='nt' and sys.flags.utf8_mode and not out.exists(),'Use Windows, utf8 and new output');out.mkdir(parents=True)
     summary={'passed':False,'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'cases':[],'cleanup':[]};client=browser=server=fixture=None
+    retain_scene=False;close_attempted=False;phase='setup';title=None
     user=ctypes.WinDLL('user32',use_last_error=True);user.GetForegroundWindow.restype=w.HWND
     def desktop():
         point=w.POINT();require(user.GetPhysicalCursorPos(ctypes.byref(point)),'cursor read');return [point.x,point.y,user.GetForegroundWindow()]
@@ -41,10 +43,12 @@ def main():
         directory=out/'fixture';directory.mkdir();fixture=subprocess.Popen([str(out/'build/Fixture.exe'),str(directory),'A']);wait(lambda:(s if (s:=read(directory/'state.json')) and s['ready'] else None))
         fa=next(x['app'] for x in client.tool('apps',{})['apps'] if x['app'].casefold()==str(out/'build/Fixture.exe').casefold())
         client.execute(fa,'foreground-other','const w=(await app.windows()).windows[0];return await app.focus({window_ref:w.window_ref});');wait(lambda:(s if (s:=read(directory/'state.json')) and s['foreground'] else None));time.sleep(.1)
+        phase='content-capture'
         capture,_=client.execute(app,'content-capture',f'return await app.capture({{window_ref:{wr}}});')
         image=Image.open(client.images[-1]).convert('RGB');mask=Image.new('L',image.size,255)
         for channel,value in zip(image.split(),(83,165,131)):mask=ImageChops.multiply(mask,channel.point([255 if i==value else 0 for i in range(256)]))
         box=mask.getbbox();require(box,'No visible edit button');x=(box[0]+box[2])//2;y=(box[1]+box[3])//2
+        phase='content-click'
         before=desktop();_,ledger=client.execute(app,'content-click',f'return await app.click({{window_ref:{wr},observation_ref:{json.dumps(capture["observation_ref"])},x:{x},y:{y}}});')
         state=wait(lambda:(s if (s:=read(web/'state.json')) and len([e for e in s['events'] if e.get('type')=='dialog_opened'])==1 else None));time.sleep(.15);after=desktop()
         click=next(s for s in ledger['script']['steps'] if s['operation']=='click');require(click['receipt']['outcome']['delivery']['route']=='background',click);require(before[:2]==after[:2],{'before':before,'after':after})
@@ -53,18 +57,47 @@ def main():
         require(not state['saves'],'Unexpected save');summary['cases'].append({'name':'chrome-single-left-background','dialog_opened_exactly_once':True,'physical_cursor_unchanged':True,'application_activated_itself':before[2]!=after[2]})
         # The following foreground keyboard action belongs in the same normal API
         # and must raise Chrome automatically, without asking the Agent for a mode.
+        phase='automatic-foreground-followup';close_attempted=True
         client.execute(app,'automatic-foreground-followup',f'await app.keypress({{window_ref:{wr},keys:["ESC"]}});return await app.keypress({{window_ref:{wr},keys:["ALT","F4"]}});');require(browser.wait(10)==0,'Chrome exit');summary['cases'].append({'name':'chrome-foreground-keyboard-continuation','normal_exit':0})
         summary['passed']=True
-    except BaseException:summary['failure']=traceback.format_exc()
+    except BaseException:
+        summary['failure']=traceback.format_exc();summary['failure_phase']=phase
+        if browser and title:
+            try:
+                path=out/(phase+'-windows.json');write(path,window_diagnostics(browser.pid,'DTW Workbench '+title));summary['failure_time_window_diagnostics']=str(path)
+            except BaseException:summary['window_diagnostic_failure']=traceback.format_exc()
+        if phase=='content-capture' and client:
+            capture_ledger=read(client.output/'content-capture-ledger.json') or {}
+            capture_failure=(capture_ledger.get('script') or {}).get('failure') or {}
+            retain_scene=capture_failure.get('code')=='windows_capture_occluded'
     finally:
+        if close_attempted and browser:
+            # Preserve an uncertain keypress even if the window naturally closed.
+            # Observe once; never resend Escape or Alt+F4 during cleanup.
+            started=time.monotonic();observation={'close_replayed':False,'timeout_seconds':10}
+            try:observation['returncode']=browser.wait(10)
+            except subprocess.TimeoutExpired:observation['timed_out']=True
+            observation['elapsed_seconds']=time.monotonic()-started;summary['cleanup'].append({'owned_browser_exit_observation':observation})
         if client:
             try:summary['cleanup'].append(client.close())
             except BaseException:summary['passed']=False;summary['cleanup'].append({'error':traceback.format_exc()})
-        if fixture:
+        if retain_scene:
+            # Keep the actual failure scene for the supervisor, including the
+            # foreground fixture if it is itself the occluder. MCP is closed.
+            summary['retained_for_supervisor_inspection']={'browser_pid':browser.pid,'browser_exit_if_exited':browser.poll(),
+                'profile':str(out/'profile'),'url':url,'server_pid':server.pid,'server_exit_if_exited':server.poll(),
+                'server_stop_file':str(web/'stop'),'fixture_pid':fixture.pid if fixture else None,
+                'fixture_stop_file':str(directory/'stop') if fixture else None,
+                'reason':'Persistent capture occlusion; no input or automatic dismissal replayed'}
+        if fixture and not retain_scene:
             (directory/'stop').write_text('stop');summary['cleanup'].append({'fixture_exit':fixture.wait(5)})
-        if browser and browser.poll() is None:browser.terminate();summary['passed']=False;summary['cleanup'].append({'forced_browser_exit':browser.wait(5)})
-        if server:
-            server.terminate();summary['cleanup'].append({'server_exit':server.wait(5)})
+        if browser and not retain_scene and browser.poll() is None:browser.terminate();summary['passed']=False;summary['cleanup'].append({'forced_browser_exit':browser.wait(5)})
+        if server and not retain_scene:
+            if server.poll() is None:
+                (web/'stop').touch()
+                try:server.wait(5)
+                except subprocess.TimeoutExpired:server.terminate();summary['passed']=False;summary['cleanup'].append({'forced_server_exit':server.wait(5)})
+            summary['cleanup'].append({'server_exit':server.wait(5)})
         write(out/'summary.json',summary);print(json.dumps(summary))
     return 0 if summary['passed'] else 1
 

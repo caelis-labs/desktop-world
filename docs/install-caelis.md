@@ -11,13 +11,14 @@ caelis plugin install /absolute/path/to/extracted-package --json
 caelis plugin status <installed-id> --json
 ```
 
-Windows candidates include Agent Plugins 1.0 metadata with the stable installed
+Current packages include Agent Plugins 1.0 metadata with the stable installed
 ID `desktop-world`, independent of the extracted directory name. Check them with
 `caelis plugin status desktop-world --json`. An earlier Claude-format Windows
 package may have registered its directory name instead; remove that exact old
 ID before installing this standard format, preserving unrelated registrations.
-macOS uses its existing Claude-compatible package format; current Core resolves
-its manifest name to the same `desktop-world` ID.
+Earlier macOS packages use the Claude-compatible format; current Core resolves
+their manifest name to the same `desktop-world` ID. Check the installed status
+rather than registering a second MCP/Skill copy.
 
 Or enter `/plugin install /absolute/path/to/extracted-package` in the Caelis TUI.
 Start a new Session to load the MCP/Skill snapshot. Registration alone does not

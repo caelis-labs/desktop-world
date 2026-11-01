@@ -3,10 +3,53 @@
 First [download and verify DTW](../install.md#select-and-extract-a-package), extract
 it to a permanent directory, and start DSH once. This guide checks the shipped
 DSH **0.2.1-rc.5** configuration format. Other versions should use their installed
-MCP client and Skill provider schemas. DTW needs DSH's existing MCP bridge and
-filesystem Skill provider; no custom DSH plugin code is needed.
+MCP client and Skill provider schemas. Choose the bundled Cordis plugin below,
+or the manual MCP/Skill route. Both use DSH's existing MCP bridge and filesystem
+Skill provider; never enable both DTW routes together.
 
-## Register the MCP server
+## Bundled Cordis plugin
+
+The complete DTW package also contains `package.json` and `cordis/index.mjs`.
+In the running Desktop profile's plugin manager, install the extracted package
+using its **absolute local directory**, then enable
+`@caelis-labs/desktop-world`. This is a local package, not a claim that the same
+name has been published to npm. Keep the complete package at its installed path.
+
+The adapter asks the host loader for its installed
+`@deepseek-ai/dsh-mcp-client` and `@deepseek-ai/dsh-skill-filesystem` plugins. It
+mounts one `desktop-world` MCP connection and a Skill provider named
+`desktop-world`, scanning only the bundled `skills/` directory. It does not
+install a second DSH runtime or rescan all default Skill roots. Its child plugins
+are disposed with the parent by Cordis.
+
+If the plugin manager does not accept a local package on your DSH version, one
+profile patch row can load the same adapter directly:
+
+```yaml
+- insert:
+    - id: desktop-world-plugin
+      name: 'file:///C:/Tools/desktop-world/cordis/index.mjs'
+```
+
+Use the actual absolute file URL (`file:///absolute/path/...` on macOS), escaping
+spaces and non-ASCII characters as a file URL requires. The adapter derives
+binary and Skill paths from its own location; it takes no path configuration.
+Before loading it, finish active operations and remove only DTW's old manual MCP
+row and old Skill copy/custom root. Preserve other providers and Skill roots.
+
+Start a new session and run [the live checks](#verify-the-running-installation).
+Check disabling/re-enabling the parent plugin removes/restores its DTW tools
+and Skill without duplicate namespace diagnostics. If the host lacks these
+loader/provider interfaces, retain the manual route below and report the exact
+DSH version; no DSH core change is required by DTW.
+
+On Windows with DSH **0.2.1-rc.5**, the file-URL route has been checked from a
+package path containing spaces and non-ASCII characters. Profile hot reload
+stopped the previous standalone DTW connection and launched the package's
+bundled executable without restarting the App. Process identity verifies the
+loaded package; complete the session tool and screenshot checks separately.
+
+## Manual fallback: register the MCP server
 
 In the running Desktop profile, add the following to `cordis.patch.yml` without
 replacing its existing entries. The default path is

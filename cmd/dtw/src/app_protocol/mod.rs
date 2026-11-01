@@ -12,6 +12,8 @@ use std::{
     time::{Duration, Instant},
 };
 pub mod app_id;
+#[cfg(target_os = "windows")]
+mod capture;
 mod description;
 pub mod mcp;
 mod mcp_io;
@@ -759,6 +761,10 @@ impl<B: Backend + 'static> Coordinator<B> {
                 } else {
                     ObservationKind::Semantic
                 };
+                #[cfg(target_os = "windows")]
+                if kind == ObservationKind::Pixels {
+                    return self.capture_with_preparation(submitted, &target, window_ref, deadline);
+                }
                 // New reads retire only their own slot, including a failed replacement.
                 self.state
                     .lock()

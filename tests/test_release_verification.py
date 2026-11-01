@@ -81,6 +81,74 @@ class ReleaseVerificationTests(unittest.TestCase):
     def test_historical_format_different_sources_and_unverified_embedded_notary(self):
         self.assertEqual(self.audit()['assets_verified'], 13)
 
+    def rewrite_package(self, platform, mutate):
+        archive = self.root / platform['archive']
+        prefix = archive.stem + '/'
+        with zipfile.ZipFile(archive) as z:
+            files = {name[len(prefix):]: z.read(name) for name in z.namelist()}
+        mutate(files)
+        files.pop('SHA256SUMS', None)
+        files['SHA256SUMS'] = ''.join(f'{v.sha(data)}  {name}\n' for name, data in files.items()).encode()
+        with zipfile.ZipFile(archive, 'w') as z:
+            for name, data in files.items():
+                info = zipfile.ZipInfo(prefix + name)
+                info.external_attr = (stat.S_IFREG | 0o755) << 16
+                z.writestr(info, data)
+        target = platform['target']
+        self.write(f'BUILD-{target}.json', files['BUILD.json'])
+        platform['archive_sha256'] = v.sha(archive.read_bytes())
+        self.write(archive.name + '.sha256', f'{platform["archive_sha256"]}  {archive.name}\n'.encode())
+        candidate = json.loads((self.root / f'CANDIDATE-{target}.json').read_bytes())
+        candidate.update(archive_sha256=platform['archive_sha256'], build_manifest_sha256=v.sha(files['BUILD.json']))
+        self.write_json(f'CANDIDATE-{target}.json', candidate)
+        self.write_json('RELEASE.json', self.release)
+        self.resum()
+
+    def declare_multi_host_plugins(self):
+        for platform in self.release['platforms']:
+            with tempfile.TemporaryDirectory() as temporary:
+                package = Path(temporary)
+                entries = v.builder.plugin_package.write_plugin_entries(
+                    Path(__file__).parents[1], package, '0.2.0', platform['target'])
+                components = {p.relative_to(package).as_posix(): p.read_bytes()
+                              for p in package.rglob('*') if p.is_file()}
+            def add(files):
+                files.update(components)
+                build = json.loads(files['BUILD.json'])
+                build['plugin_package'] = entries
+                files['BUILD.json'] = json.dumps(build).encode()
+            self.rewrite_package(platform, add)
+
+    def test_declared_multi_host_plugins_reuse_target_and_version(self):
+        self.declare_multi_host_plugins()
+        self.assertEqual(self.audit()['assets_verified'], 13)
+
+    def test_declared_plugin_component_removal_is_rejected_even_after_rehashing(self):
+        self.declare_multi_host_plugins()
+        self.rewrite_package(self.release['platforms'][1], lambda files: files.pop('mcp_config.json'))
+        with self.assertRaisesRegex(ValueError, 'Missing declared plugin component'):
+            self.audit()
+
+    def test_declared_plugin_cannot_redirect_to_external_executable(self):
+        self.declare_multi_host_plugins()
+        platform = self.release['platforms'][1]
+        def replace_config(files):
+            files['mcp_config.json'] = json.dumps({'mcpServers': {'desktop-world': {
+                'command': 'C:/another-install/dtw.exe', 'args': ['mcp'], 'cwd': '${PLUGIN_ROOT}'}}}).encode()
+        self.rewrite_package(platform, replace_config)
+        with self.assertRaisesRegex(ValueError, 'Antigravity MCP entry mismatch'):
+            self.audit()
+
+    def test_declared_plugin_cannot_advertise_another_version(self):
+        self.declare_multi_host_plugins()
+        def replace_version(files):
+            manifest = json.loads(files['.antigravity-plugin/plugin.json'])
+            manifest['version'] = '9.9.9'
+            files['.antigravity-plugin/plugin.json'] = json.dumps(manifest).encode()
+        self.rewrite_package(self.release['platforms'][1], replace_version)
+        with self.assertRaisesRegex(ValueError, 'Plugin identity/version mismatch'):
+            self.audit()
+
     def test_wrong_candidate_version_target_source_and_digests(self):
         for key, value in [('version', '0.9.0'), ('target', v.TARGETS[1]), ('source', {}),
                            ('archive_sha256', '0' * 64), ('binary_sha256', '0' * 64),

@@ -6,6 +6,8 @@ Use these patterns with the API and reference lifecycle in [SKILL.md](SKILL.md).
 
 Opening a chooser may create a separate sheet, dialog, or related helper surface. After the opening action, use `app.waitForWindow({window_ref: parent, state:"dialog"})` when supported; DTW waits for the transition and returns the uniquely proven related modal ref. Retain parent and dialog refs separately. Unsupported or unproven relationships require fresh `app.windows()` and inspection; empty titles, list position, and newly focused windows do not establish a relationship.
 
+On Windows, a Chrome file window can appear as an ordinary window while the selected parent remains enabled. `dialog_not_present` does not prove that opening failed. Inspect fresh windows and their actual controls, and continue only on the positively identified intended surface. Keep an ordinary window ref separate from a proven child-modal relationship. If ownership or identity remains ambiguous, retain that uncertainty; do not repeat the opening shortcut to discover what happened.
+
 Capture the dialog once to identify the filename/path field, directory contents, and confirmation controls. Large directory lists can dominate an AX/UIA traversal even when filtering for text fields. Query a semantic subtree or a capture region around the relevant controls before scanning the entire dialog. Regions are image coordinates; derive them from the current capture rather than a remembered layout.
 
 On macOS, a native file chooser commonly supports **Command+Shift+G** to enter a directory path. This can open another sheet. Wait for its proven relationship before entering the path, then wait for that exact sheet to close before continuing in the chooser:
@@ -68,6 +70,10 @@ If a broad query is incomplete or too costly, use a fresh capture to choose a na
 Some applications expose only window decorations while inactive. If a capture shows controls but semantic discovery returns only the window shell or `content_unproven`, try `focus` followed by `observe` in the same script when foreground delivery is permitted. This can reveal semantic controls without guessing coordinates. If they remain unavailable, use a fresh capture and preserve the partial coverage.
 
 Return a compact decision record: relevant candidates or values, unresolved ambiguity, coverage reasons, and an image only when it helps the next decision. Keep traversal details and unrelated text out of the model response.
+
+Native paragraph text can be split across several accessible elements. `name`, `value` and `label` are discovery excerpts, not complete paragraph reads. Use `readText` on a currently observed text container when it advertises native text support, and page its returned offsets. There is no implicit parent-navigation or guaranteed visual-paragraph reconstruction; obtain any container from actual discovery rather than inventing a parent ref.
+
+For an unnamed icon button, use a fresh capture to identify a small region, then observe that region with the returned button role. An unambiguous current `element_ref` with `can_press:true` can be pressed directly; otherwise use the current capture's pixel coordinates. Native semantic activation and physical clicking may trigger different application handlers. Verify the resulting state before choosing new input; never automatically follow an accepted but ineffective press with a second click.
 
 ## Menus and focus-dependent interactions
 

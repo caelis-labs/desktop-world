@@ -11,6 +11,8 @@ python3 -m unittest discover -s tests -p test_app_protocol_probe.py
 python3 -m unittest discover -s tests -p test_window_inventory_probe.py
 python3 -m unittest discover -s tests -p test_input_cleanup_probe.py
 python3 -m unittest discover -s tests -p test_rewrite_candidate.py
+python3 -m unittest discover -s tests -p test_plugin_package.py
+python3 -m unittest discover -s tests -p test_browser_reliability.py
 python3 -m unittest discover -s tests/acceptance -p test_browser_workbench_probe.py
 python3 -m unittest discover -s tests/acceptance -p test_native_input_probe.py
 python3 -m unittest discover -s tests/acceptance -p test_background_input_probe.py

@@ -179,6 +179,8 @@ class Fixture(unittest.TestCase):
         put(self.repo, "docs/examples/mcp.json", '{"mcpServers":{"desktop-world":{"command":"/absolute/path/to/dtw","args":["mcp"]}}}\n')
         put(self.repo, "docs/examples/codex.toml", '[mcp_servers.desktop-world]\ncommand="/absolute/path/to/dtw"\nargs=["mcp"]\n')
         put(self.repo, "plugins/claude/.claude-plugin/plugin.json", '{"name":"desktop-world","version":"0.1.3"}\n')
+        put(self.repo, "plugins/cordis/index.mjs",
+            (Path(__file__).parents[1] / "plugins/cordis/index.mjs").read_bytes())
         put(self.repo, "packaging/third-party/overrides.json", "{}\n")
         put(self.repo, "tests/acceptance/windows/README.md",
             (Path(__file__).parent / "acceptance/windows/README.md").read_bytes())
@@ -441,7 +443,7 @@ class BinaryAndArchiveTests(Fixture):
         with self.assertRaisesRegex(ValueError, "inventory differs"):
             candidate.verify_archive(unlisted, "package")
 
-    def test_claude_optional_wrapper_reuses_one_target_binary_and_canonical_skill(self):
+    def test_multi_host_plugins_reuse_one_target_binary_and_canonical_skill(self):
         for target, binary in ((MAC, "dtw"), (WIN, "dtw.exe")):
             package = self.root / target
             package.mkdir()
@@ -453,18 +455,24 @@ class BinaryAndArchiveTests(Fixture):
             self.assertEqual(json.loads((package / ".claude-plugin/plugin.json").read_text())["version"], "0.2.0")
             self.assertEqual((package / "skills/desktop-world/SKILL.md").read_bytes(), (self.repo / "skills/desktop-world/SKILL.md").read_bytes())
             self.assertIn("do not register both", (package / "README.md").read_text())
-            if target == WIN:
-                manifest = json.loads((package / "plugin.json").read_text())
-                self.assertEqual(manifest["name"], "desktop-world")
-                self.assertEqual(manifest["version"], "0.2.0")
-                self.assertEqual(manifest["$schema"], "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json")
-                standard = json.loads((package / "mcp.json").read_text())
-                self.assertEqual(standard["mcpServers"], {"desktop-world": {
-                    "type":"stdio", "command":"./bin/dtw.exe", "args":["mcp"]}})
-                self.assertEqual(standard["$schema"], "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json")
-            else:
-                self.assertFalse((package / "plugin.json").exists())
-                self.assertFalse((package / "mcp.json").exists())
+            manifest = json.loads((package / "plugin.json").read_text())
+            self.assertEqual(manifest["name"], "desktop-world")
+            self.assertEqual(manifest["version"], "0.2.0")
+            self.assertEqual(manifest["$schema"], "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json")
+            standard = json.loads((package / "mcp.json").read_text())
+            self.assertEqual(standard["mcpServers"], {"desktop-world": {
+                "type":"stdio", "command":"./bin/" + binary, "args":["mcp"]}})
+            self.assertEqual(standard["$schema"], "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json")
+            agy = json.loads((package / ".antigravity-plugin/plugin.json").read_text())
+            self.assertEqual(agy["version"], manifest["version"])
+            self.assertEqual(agy["$schema"], "https://antigravity.google/schemas/v1/plugin.json")
+            self.assertEqual(json.loads((package / "mcp_config.json").read_text())["mcpServers"], {
+                "desktop-world": {"command":"./bin/" + binary, "args":["mcp"], "cwd":"${PLUGIN_ROOT}"}})
+            cordis = json.loads((package / "package.json").read_text())
+            self.assertEqual(cordis["version"], manifest["version"])
+            self.assertNotIn("dependencies", cordis)
+            self.assertEqual((package / "cordis/index.mjs").read_bytes(), (self.repo / "plugins/cordis/index.mjs").read_bytes())
+            if target == MAC:
                 self.assertFalse((package / "docs/windows-cursor-port.md").exists())
 
 

@@ -11,9 +11,7 @@ use std::{
 use windows::{
     core::{w, Interface, BSTR, HRESULT, PWSTR},
     Win32::{
-        Foundation::{
-            CloseHandle, BOOL, E_NOINTERFACE, FILETIME, HANDLE, HWND, LPARAM, POINT, RECT,
-        },
+        Foundation::{CloseHandle, BOOL, E_NOINTERFACE, FILETIME, HANDLE, HWND, POINT, RECT},
         Graphics::{
             Dwm::{DwmFlush, DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS},
             Gdi::*,
@@ -170,23 +168,8 @@ pub(super) fn visible(window: HWND) -> bool {
             && cloaked == 0
     }
 }
-unsafe extern "system" fn enum_window(window: HWND, param: LPARAM) -> BOOL {
-    let out = &mut *(param.0 as *mut Vec<HWND>);
-    if out.len() < 4096 {
-        out.push(window);
-        BOOL(1)
-    } else {
-        BOOL(0)
-    }
-}
 fn all_windows() -> Result<Vec<HWND>, Error> {
-    let mut out = Vec::new();
-    unsafe { EnumWindows(Some(enum_window), LPARAM(&mut out as *mut _ as isize)) }
-        .map_err(failed)?;
-    if out.len() >= 4096 {
-        return Err(failed("Desktop inventory exceeds 4096 windows"));
-    }
-    Ok(out)
+    super::desktop::windows()
 }
 fn title(window: HWND) -> String {
     let mut text = [0u16; 1024];
@@ -437,7 +420,7 @@ impl Store {
                 _ => Err(Error::UnsupportedCapability),
             }
         })();
-        result.unwrap_or_else(|error| error_reply(error, action))
+        result.unwrap_or_else(|error| windows_error_reply(error, action))
     }
     fn probe_window_state(&mut self, r: &Value, until: Instant) -> Result<Value, Error> {
         let target = parse_target(&r["target"])?;
@@ -662,10 +645,13 @@ impl Store {
         let current_root = unsafe { uia.ElementFromHandle(window) }.map_err(failed)?;
         owned(&uia, &q.scope_root, &current_root, until).map_err(retained_error)?;
         let walker = unsafe { uia.RawViewWalker() }.map_err(failed)?;
+        let metadata_cache = super::discovery_cache::Cache::new(&uia);
+        let page_started = Instant::now();
         let page_until = until.min(Instant::now() + Duration::from_millis(750));
         let mut output = Vec::new();
         let mut bytes = 0;
         let mut steps = 0;
+        let (mut cached_nodes, mut live_metadata_nodes) = (0, 0);
         if let Some(row) = q.pending.take() {
             bytes = row.to_string().len();
             output.push(row);
@@ -684,50 +670,40 @@ impl Store {
             let (element, depth) = q.frontier.pop().unwrap();
             q.scanned += 1;
             steps += 1;
-            if let Err(error) = owned(&uia, &element, &q.scope_root, until) {
-                let reason = match error {
-                    Error::TimedOut | Error::Cancelled | Error::Closed => return Err(error),
-                    Error::TargetChanged => "tree_changed",
-                    _ => "native_read_gap",
-                };
-                q.gap.get_or_insert(reason.into());
+            if !(super::discovery::Branches {
+                frontier: &mut q.frontier,
+                visited: &mut q.visited,
+                gap: &mut q.gap,
+            })
+            .admit(
+                depth,
+                || optional(unsafe { walker.GetNextSiblingElement(&element) }),
+                || optional(unsafe { walker.GetFirstChildElement(&element) }),
+                || owned_with_walker(&uia, &walker, &element, &q.scope_root, until),
+                || runtime_id(&element),
+            )? {
                 continue;
             }
-            // Queue independent siblings before inspecting this node's runtime
-            // ID. WordPad can return an empty SAFEARRAY for a native UIA node.
-            // It is a coverage gap, not the end of the tree or the whole page.
-            if depth > 0 {
-                match optional(unsafe { walker.GetNextSiblingElement(&element) }) {
-                    Ok(Some(sibling)) => q.frontier.push((sibling, depth)),
-                    Ok(None) => (),
+            if let Some(expected) = q.role.as_deref() {
+                match unsafe { element.CurrentControlType() } {
+                    Ok(control) if role(control) != expected => continue,
+                    Ok(_) => (),
                     Err(_) => {
                         q.gap.get_or_insert("native_read_gap".into());
-                    }
-                }
-            }
-            match runtime_id(&element) {
-                Ok(runtime) => {
-                    if !q.visited.insert(runtime) {
-                        q.gap.get_or_insert("tree_changed".into());
                         continue;
                     }
                 }
-                Err(_) => {
-                    q.gap.get_or_insert("native_read_gap".into());
-                    continue;
-                }
             }
-            match optional(unsafe { walker.GetFirstChildElement(&element) }) {
-                Ok(Some(child)) if depth < 64 => q.frontier.push((child, depth + 1)),
-                Ok(Some(_)) => {
-                    q.gap.get_or_insert("depth_limit".into());
-                }
-                Ok(None) => (),
-                Err(_) => {
-                    q.gap.get_or_insert("native_read_gap".into());
-                }
+            // Every branch was already queued: an irrelevant role must not
+            // prune descendants. It does avoid names/pattern probes which are
+            // unnecessary to prove that this exact node cannot match the role.
+            let cached = metadata_cache.read(&element);
+            if cached.is_some() {
+                cached_nodes += 1;
+            } else {
+                live_metadata_nodes += 1;
             }
-            let mut row = match element_row(&element, (q.elements.len() + 1) as u64) {
+            let mut row = match element_row(&element, (q.elements.len() + 1) as u64, cached) {
                 Ok(row) => row,
                 Err(_) => {
                     q.gap.get_or_insert("native_read_gap".into());
@@ -787,7 +763,31 @@ impl Store {
             return Err(Error::TargetChanged);
         }
         let more = !q.frontier.is_empty() || q.pending.is_some();
-        let reason = q.gap.clone().or_else(|| more.then(|| "page_limit".into()));
+        let reason = q.gap.clone().or_else(|| {
+            more.then(|| {
+                // A zero-match page is not proof that the provider has no such
+                // controls or has not loaded yet. Report the actual page bound.
+                if q.pending.is_some() {
+                    "page_byte_limit"
+                } else if output.len() >= q.limit {
+                    "page_element_limit"
+                } else if steps >= 256 {
+                    "page_node_limit"
+                } else {
+                    "page_time_limit"
+                }
+                .into()
+            })
+        });
+        if std::env::var("DTW_AX_READINESS_TRACE").ok().as_deref() == Some("1") {
+            eprintln!(
+                "DTW Windows discovery: {}",
+                json!({"pid":std::process::id(),"page_scanned":steps,
+                    "visited":q.visited.len(),"matched":output.len(),
+                    "cached_nodes":cached_nodes,"live_metadata_nodes":live_metadata_nodes,
+                    "elapsed_ms":page_started.elapsed().as_millis(),"has_more":more,"reason":reason})
+            );
+        }
         let reply = json!({"target":target_json(&target),"binding":token,"elements":output,"discovery":{"has_more":more,"complete":!more&&q.gap.is_none(),"reason":reason,"visited":q.visited.len()}});
         self.queries.insert(token, q);
         Ok(reply)
@@ -1150,8 +1150,16 @@ impl Store {
             .and_then(|_| super::cursor::Emitter::new(&r["cursor_feedback"], target));
         let mut placed = false;
         let mut text_index = 0;
+        let named_keypress = op == "keypress" && segments.len() == 1;
+        let mut terminal_keypress_complete = false;
         let result = input_sequence::run(&segments, |step| match step {
             Step::Verify => {
+                if terminal_keypress_complete {
+                    // A single named chord may legitimately close this HWND or
+                    // open a new foreground dialog. Its complete queue read and
+                    // detach prove delivery only; keep stop/held/cleanup checks.
+                    return input::terminal_keypress_boundary(until);
+                }
                 self.input_boundary(target, window, until)?;
                 input::no_held_keys()?;
                 if let Some((uia, element, root, before, region)) = semantic_anchor.as_ref() {
@@ -1188,17 +1196,27 @@ impl Store {
             Step::Dispatch(segment) => {
                 self.validate(target)?;
                 let mut accepted = 0;
-                let sent = input::send(segment, window, until, dispatched, &mut accepted);
+                let sent = input::send(
+                    segment,
+                    window,
+                    until,
+                    dispatched,
+                    &mut accepted,
+                    named_keypress,
+                );
                 if let Some(delivery) = delivery.as_mut() {
                     let scalar = text_scalars[text_index];
                     delivery.inserted(scalar, accepted, segment.len());
                     text_index += 1;
-                    sent?;
-                    if scalar.len_utf16() > 1 {
-                        delivery.settle(|| self.validate(target).map(|_| ()))?;
-                    }
+                    terminal_keypress_complete = sent?.terminal_keypress();
+                    finish_delivery_read(Ok(()), input::cleanup_failed(), || {
+                        if scalar.len_utf16() > 1 {
+                            delivery.settle(|| self.validate(target).map(|_| ()))?;
+                        }
+                        Ok(())
+                    })?;
                 } else {
-                    sent?;
+                    terminal_keypress_complete = sent?.terminal_keypress();
                 }
                 if let (Some(cursor), Some((_, hit, _, _, _))) = (cursor.as_mut(), point.as_ref()) {
                     // Emit only after the entire native mouse segment was
@@ -1220,10 +1238,12 @@ impl Store {
                 Ok(())
             }
         });
-        if let Some(delivery) = delivery.as_mut() {
-            delivery.settle(|| self.validate(target).map(|_| ()))?;
-        }
-        result
+        finish_delivery_read(result, input::cleanup_failed(), || {
+            if let Some(delivery) = delivery.as_mut() {
+                delivery.settle(|| self.validate(target).map(|_| ()))?;
+            }
+            Ok(())
+        })
     }
     fn pixel_point(
         &mut self,
@@ -1380,7 +1400,7 @@ impl Store {
         let mut reply = match result {
             Ok(()) => json!({"dispatch":"dispatched","evidence":"unverified"}),
             Err(error) => {
-                let mut result = error_reply(error, true);
+                let mut result = windows_error_reply(error, true);
                 if dispatched {
                     result["dispatch"] = json!("unknown");
                 }
@@ -1392,6 +1412,35 @@ impl Store {
             reply["shutdown_error"] = json!({"code":"input_cleanup_failed","message":"Paired input, accepted text delivery or transaction lease cleanup is unconfirmed"});
         }
         reply
+    }
+}
+fn finish_delivery_read(
+    result: Result<(), Error>,
+    cleanup_failed: bool,
+    settle: impl FnOnce() -> Result<(), Error>,
+) -> Result<(), Error> {
+    if cleanup_failed {
+        return result.and(Err(Error::NativeFailure {
+            code: "input_cleanup_unconfirmed".into(),
+            message:
+                "Input or queue cleanup is unconfirmed; further UIA delivery reads were skipped"
+                    .into(),
+        }));
+    }
+    settle()?;
+    result
+}
+fn windows_error_reply(error: Error, action: bool) -> Value {
+    if let Error::NativeFailure { code, message } = error {
+        // Keep explicit native diagnostics readable. Debug-formatting here and
+        // then wrapping them again across IPC escaped context JSON repeatedly.
+        let mut reply = json!({"error":code,"message":message});
+        if action {
+            reply["dispatch"] = json!("not_dispatched");
+        }
+        reply
+    } else {
+        error_reply(error, action)
     }
 }
 fn optional(
@@ -1508,25 +1557,50 @@ fn toggle_value(
         _ => None, // Unknown provider values are not evidence that a control is off.
     })
 }
-fn element_row(e: &IUIAutomationElement, id: u64) -> Result<Value, Error> {
+fn element_row(
+    e: &IUIAutomationElement,
+    id: u64,
+    cached: Option<super::discovery_cache::Metadata>,
+) -> Result<Value, Error> {
     unsafe {
-        let role = role(e.CurrentControlType().map_err(failed)?);
-        let name = e.CurrentName().map_err(failed)?.to_string();
-        let enabled = e.CurrentIsEnabled().map_err(failed)?.as_bool();
+        let metadata = super::discovery_cache::metadata_or_live(cached, || {
+            Ok(super::discovery_cache::Metadata {
+                control: e.CurrentControlType().map_err(failed)?,
+                name: e.CurrentName().map_err(failed)?.to_string(),
+                enabled: e.CurrentIsEnabled().map_err(failed)?.as_bool(),
+                patterns: None,
+            })
+        })?;
+        let role = role(metadata.control);
+        let (name, enabled) = (metadata.name, metadata.enabled);
+        let patterns = metadata.patterns;
         let mut actions = Vec::new();
-        let toggle = toggle_pattern(e)?;
-        if optional_pattern::<IUIAutomationInvokePattern>(e, UIA_InvokePatternId)?.is_some()
-            || toggle.is_some()
-            || optional_pattern::<IUIAutomationSelectionItemPattern>(e, UIA_SelectionItemPatternId)?
+        let toggle = if patterns.as_ref().is_some_and(|patterns| !patterns.toggle) {
+            None
+        } else {
+            toggle_pattern(e)?
+        };
+        let can_press = if let Some(patterns) = &patterns {
+            patterns.invoke || patterns.toggle || patterns.selection
+        } else {
+            optional_pattern::<IUIAutomationInvokePattern>(e, UIA_InvokePatternId)?.is_some()
+                || toggle.is_some()
+                || optional_pattern::<IUIAutomationSelectionItemPattern>(
+                    e,
+                    UIA_SelectionItemPatternId,
+                )?
                 .is_some()
-        {
+        };
+        if can_press {
             actions.push("press");
         }
         let value = if let Some(pattern) = toggle {
             toggle_value(pattern.CurrentToggleState()).map_err(failed)?
-        } else if let Some(pattern) =
+        } else if let Some(pattern) = if patterns.as_ref().is_some_and(|patterns| !patterns.value) {
+            None
+        } else {
             optional_pattern::<IUIAutomationValuePattern>(e, UIA_ValuePatternId)?
-        {
+        } {
             if !pattern.CurrentIsReadOnly().map_err(failed)?.as_bool() {
                 actions.push("setValue");
             }
@@ -1585,6 +1659,18 @@ fn owned(
     until: Instant,
 ) -> Result<(), Error> {
     let walker = unsafe { uia.RawViewWalker() }.map_err(failed)?;
+    owned_with_walker(uia, &walker, element, root, until)
+}
+fn owned_with_walker(
+    uia: &IUIAutomation,
+    walker: &IUIAutomationTreeWalker,
+    element: &IUIAutomationElement,
+    root: &IUIAutomationElement,
+    until: Instant,
+) -> Result<(), Error> {
+    // One page already owns this same raw-view walker. Reuse it for each
+    // ancestry proof rather than requesting another COM walker per node; all
+    // parent/CompareElements reads and the original deadline remain fresh.
     let mut cursor = element.clone();
     for _ in 0..128 {
         check(until)?;
@@ -1712,9 +1798,10 @@ fn unobstructed(window: HWND) -> Result<RECT, Error> {
             && intersects(bounds, rect(other)?)
             && !super::cursor::proven_overlay(other)
         {
-            return Err(failed(
-                "Window is occluded; screen pixels cannot prove window content",
-            ));
+            return Err(Error::NativeFailure {
+                code: "windows_capture_occluded".into(),
+                message: "Window is occluded; screen pixels cannot prove window content. DTW may prepare this exact window's foreground through ordinary input coordination before a fresh capture; persistent topmost or secure overlays must be cleared by their owner.".into(),
+            });
         }
     }
     Err(Error::TargetChanged)
@@ -1737,9 +1824,10 @@ fn capture_points_owned(window: HWND, bounds: RECT) -> Result<(), Error> {
     ] {
         let hit = unsafe { WindowFromPoint(POINT { x, y }) };
         if unsafe { GetAncestor(hit, GA_ROOT) } != window {
-            return Err(failed(
-                "Window surface is transitioning or occluded; capture pixel ownership is unproven",
-            ));
+            return Err(Error::NativeFailure {
+                code: "windows_capture_occluded".into(),
+                message: "Window surface is transitioning or occluded; capture pixel ownership is unproven. A fresh coordinated foreground preparation may help; DTW will not synthesize or reuse covered pixels.".into(),
+            });
         }
     }
     Ok(())
@@ -1927,6 +2015,44 @@ fn absolute_move(point: POINT) -> Result<INPUT, Error> {
 #[cfg(test)]
 mod semantic_tests {
     use super::*;
+    #[test]
+    fn failed_queue_cleanup_skips_all_delivery_uia_reads_and_preserves_original_error() {
+        let original = Error::BackendFailed("original dispatch uncertainty".into());
+        assert_eq!(
+            finish_delivery_read(Err(original.clone()), true, || panic!(
+                "UIA forbidden after uncertain detach"
+            )),
+            Err(original)
+        );
+        assert!(
+            matches!(finish_delivery_read(Ok(()),true,||panic!("UIA forbidden after uncertain detach")),Err(Error::NativeFailure{code,..}) if code=="input_cleanup_unconfirmed")
+        );
+        let settled = std::cell::Cell::new(false);
+        finish_delivery_read(Ok(()), false, || {
+            settled.set(true);
+            Ok(())
+        })
+        .unwrap();
+        assert!(settled.get());
+    }
+    #[test]
+    fn explicit_windows_diagnostics_preserve_message_and_dispatch_without_debug_wrapping() {
+        let error = || Error::NativeFailure {
+            code: "desktop_enumeration_unproven".into(),
+            message: "Native worker context: {\"thread_desktop\":\"fixture\"}".into(),
+        };
+        let read = windows_error_reply(error(), false);
+        assert_eq!(read["error"], "desktop_enumeration_unproven");
+        assert_eq!(
+            read["message"],
+            "Native worker context: {\"thread_desktop\":\"fixture\"}"
+        );
+        assert!(read.get("dispatch").is_none());
+        assert_eq!(
+            windows_error_reply(error(), true)["dispatch"],
+            "not_dispatched"
+        );
+    }
     #[test]
     fn native_runtime_id_arrays_reject_empty_wrong_type_shape_and_preserve_signed_ids() {
         use windows::Win32::System::Variant::VT_R8;

@@ -3,6 +3,9 @@
 use super::native_client::{self, Platform as PlatformContract};
 use crate::computer::{Capability, Error, ObserveScopeKind};
 pub(crate) mod cursor;
+mod desktop;
+mod discovery;
+mod discovery_cache;
 mod edit_delivery;
 mod input;
 mod native;
@@ -21,7 +24,7 @@ impl PlatformContract for Platform {
     const CONDITIONS: &'static [&'static str] = &[
         "Windows interactive user desktop; elevated and secure desktops are unsupported",
         "app IDs are canonical executable paths; window refs route across matching process instances",
-        "capture requires an unminimized fully visible window and proven native GDI rendering; blank or unsupported renders fail explicitly; no desktop-copy fallback or occluded WGC capture",
+        "capture requires an unminimized fully visible window and proven native GDI rendering; proven occlusion permits one coordinated foreground preparation and fresh capture; blank or unsupported renders fail explicitly; no desktop-copy fallback or occluded WGC capture",
         "semantic scopes: window, retained subtree, capture-pixel region; menu scope is unsupported",
         "readText pages native UIA TextPattern, ValuePattern or static text; passwords and unsupported controls are not synthesized",
         "window waits prove same-process owned native modals with Win32 owner/disabled state and UIA IsModal; same-window web modals and cross-process dialogs are unsupported",
