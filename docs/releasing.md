@@ -85,6 +85,9 @@ without repair or replacement. Expired/missing evidence fails rather than being
 interpreted as acceptance. Construction and publication reports are retained for
 90 days. A previous successful construction also prevents a duplicate automatic
 build from creating a different signed package for the same pending tag.
+Re-running all jobs after a construction plan already exists is rejected before
+signing; rerun that construction's original publication instead. An expired
+established plan also fails rather than silently creating replacement packages.
 
 Release writes use `GITHUB_TOKEN`. Such writes do not trigger a second
 release-event workflow, so the publisher performs its own final audit; see

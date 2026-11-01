@@ -115,11 +115,13 @@ def pending_plan(repository, gate_record, run_id):
     artifacts = gh('api', f'repos/{repository}/actions/artifacts?name={name}&per_page=100')['artifacts']
     for artifact in artifacts:
         previous = artifact.get('workflow_run', {}).get('id')
-        if artifact['name'] != name or artifact['expired'] or not previous or previous == run_id:
+        if artifact['name'] != name or not previous:
             continue
+        require(previous != run_id, 'Construction plan already exists for this run; retry its original publication instead of rebuilding')
         run = gh('api', f'repos/{repository}/actions/runs/{previous}')
         if run.get('conclusion') == 'success':
             trusted_run(run, repository, BUILD_WORKFLOW)
+            require(not artifact['expired'], 'Previous construction plan expired; refusing to rebuild an established pending release')
             prior = artifact_json(repository, artifact, 'release-plan.json')
             require(prior['source'] == source and prior['tag'] == tag, 'Previous construction identity mismatch')
             return {'release': False, 'reason': f'Immutable construction already exists in run {previous}; retry its publication workflow without rebuilding.'}

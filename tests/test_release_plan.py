@@ -202,6 +202,26 @@ class ReleasePlanTests(unittest.TestCase):
         self.assertFalse(result['release'])
         self.assertIn('retry its publication', result['reason'])
 
+    def test_expired_prior_successful_construction_cannot_silently_rebuild_pending_release(self):
+        self.pending()
+        self.ci(LATER, LATER_TREE, 22)
+        previous = {'id': 800, 'name': 'release-plan-' + LATER, 'expired': True,
+                    'workflow_run': {'id': 49}}
+        self.route(f'actions/artifacts?name=release-plan-{LATER}&per_page=100', {'artifacts': [previous]})
+        self.route('actions/runs/49', run(49, LATER, plan.BUILD_WORKFLOW, 'workflow_run'))
+        with self.assertRaisesRegex(ValueError, 'Previous construction plan expired'):
+            plan.pending_plan(REPO, self.gate(), 50)
+        self.assertFalse(any(call[0][-1].endswith('/800/zip') for call in self.calls))
+
+    def test_rerunning_completed_construction_never_resigns_before_plan_name_conflict(self):
+        self.pending()
+        self.ci(LATER, LATER_TREE, 22)
+        previous = {'id': 800, 'name': 'release-plan-' + LATER, 'expired': False,
+                    'workflow_run': {'id': 50}}
+        self.route(f'actions/artifacts?name=release-plan-{LATER}&per_page=100', {'artifacts': [previous]})
+        with self.assertRaisesRegex(ValueError, 'retry its original publication'):
+            plan.pending_plan(REPO, self.gate(), 50)
+
     def platform(self, target, identifier, attempt):
         prefix = 'dtw-macos-candidate-' if target == plan.TARGETS[0] else 'dtw-windows-candidate-'
         return self.route(f'actions/artifacts/{identifier}',
