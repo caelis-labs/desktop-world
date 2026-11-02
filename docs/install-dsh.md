@@ -1,18 +1,19 @@
 # Install DTW in DeepSeek Harness
 
 First [download and verify DTW](../install.md#select-and-extract-a-package), import
-it into the managed store, and start DSH once. This guide checks the shipped
-DSH **0.2.1-rc.5** configuration format. On Windows, use the direct file-URL row
-below as the first route. Other versions should use their installed MCP client
+it into the managed store. This guide covers the DSH **0.2.1-rc.5** Desktop
+configuration format. Use the direct file-URL row below as the first route.
+Other versions should use their installed MCP client
 and Skill provider schemas. The bundled Cordis adapter mounts the existing MCP
 bridge and filesystem Skill provider together as one plugin.
 
 ## Bundled Cordis plugin
 
-### Windows DSH 0.2.1-rc.5: one file-URL row
+### DSH Desktop: one file-URL row
 
-Use the common [Windows recipe](../install.md#windows-x64-download-and-verify-once)
-once. Its `cordis_url` output is the encoded absolute URL of the verified package's
+On Windows use the common [recipe](../install.md#windows-x64-download-and-verify-once)
+once; on macOS use the package import from the common guide.
+The `cordis_url` output is the encoded absolute URL of the verified package's
 `cordis/index.mjs`. In the running App's active Desktop profile, back up
 `cordis.patch.yml` (default: `~/.dsh/profiles/desktop/cordis.patch.yml`; a custom
 DSH home changes the root) and merge this one row, replacing the example `name`
@@ -25,16 +26,31 @@ with that returned URL:
 ```
 
 Keep the complete package at its returned permanent path. If the row already
-exists, update its `name` after stopping its old DTW connection; do not insert
+exists, update its `name`; do not insert
 a second row. Remove only old standalone DTW MCP/Skill registrations when
 migrating, preserving other providers and Skill roots. This tested route does
 not require a marketplace/npm lookup, a local-directory package install, or
 the manual MCP fallback below. Retain the first loader error if it fails.
 
-With profile hot reload enabled, the one row starts the bundled executable and
-Skill without restarting the App. Use a fresh session for the live checks below;
-if only the installing session has an old tool snapshot, use a normal read-only
-verifier subagent or report that a new session is needed.
+Editing the file is not a live reload. In the reported macOS Desktop 0.2.1-rc.5
+installation, the running profile did not reload this external patch; the old
+MCP and Skill remained active. The Plugins refresh button and a fresh conversation
+or verifier do not prove that the parent plugin was reloaded.
+
+Use an already documented host operation to replace/reload this same DTW plugin
+if available. Otherwise save the patch once, retain the pending pin and old live
+package, report **prepared; waiting for DSH restart**, and stop. Ask only for one
+normal quit/reopen after the user saves work. Do not reverse engineer private RPCs,
+scan host binaries, toggle unrelated plugins, kill a shared bridge, or repeatedly
+spawn verifiers to discover a reload workaround.
+
+After the host reload/restart, perform one live check. A fresh verifier is useful
+only when that host already runs the new package and this conversation still
+has old tools or Skill. A directly launched new MCP handshake is a package check,
+not proof that DSH switched its existing connection.
+
+A required restart is not a plugin-load failure. Do not add a manual MCP/Skill
+registration or switch installation routes merely to avoid that restart.
 
 The adapter asks the host loader for its installed
 `@deepseek-ai/dsh-mcp-client` and `@deepseek-ai/dsh-skill-filesystem` plugins. It
@@ -52,17 +68,14 @@ publication. A direct file URL also works as above (`file:///absolute/path/...`
 on macOS), with spaces and non-ASCII characters escaped. The adapter derives
 binary and Skill paths from its own location; it takes no path configuration.
 
-Start a new session and run [the live checks](#verify-the-running-installation).
-Check disabling/re-enabling the parent plugin removes/restores its DTW tools
-and Skill without duplicate namespace diagnostics. If the host lacks these
+After host reload/restart, run [the live checks](#verify-the-running-installation).
+Do not toggle plugins as part of an ordinary install. If the host lacks these
 loader/provider interfaces, retain the manual route below and report the exact
 DSH version; no DSH core change is required by DTW.
 
-On Windows with DSH **0.2.1-rc.5**, the preferred file-URL route has been checked from a
-package path containing spaces and non-ASCII characters. Profile hot reload
-stopped the previous standalone DTW connection and launched the package's
-bundled executable without restarting the App. Process identity verifies the
-loaded package; complete the session tool and screenshot checks separately.
+The Windows file-URL route supports package paths containing spaces and
+non-ASCII characters. Do not infer a Desktop reload capability from a different
+profile or platform's earlier observation.
 
 ## Manual fallback: register the MCP server
 
@@ -121,10 +134,10 @@ references from the same DTW version as the executable.
 
 ## Verify the running installation
 
-With configuration hot reload enabled, profile patch changes take effect without
-restarting DSH. Allow a few seconds, then check the live connection. If hot reload
-is disabled, restart after saving the configuration. Do not repeatedly restart
-an otherwise working host to compensate for an invalid patch.
+Run these checks after the host has loaded the changed registration. If the old
+runtime is still active, follow the single restart boundary above rather than
+repeating the same checks. Keep the task pending until the host connection and
+Skill match the intended package.
 
 On macOS, these checks do not change your desktop:
 
@@ -142,7 +155,8 @@ In a DSH session:
 
 1. Discover the DTW tools (normally names such as
    `mcp__desktop-world__apps`, `mcp__desktop-world__exec`).
-2. Call `apps({state:"running"})`, choose one of its app IDs, and call `exec` with that `app` and
+2. Verify the actual host connection uses the intended package/version and its
+   bundled Skill. Call `apps({state:"running"})`, choose one of its app IDs, and call `exec` with that `app` and
    `source: "await app.look();"`.
 3. Load the Skill, locate a test window and capture it through the documented
    screenshot API. Confirm the returned image reaches the model.
@@ -201,6 +215,24 @@ existing server entry and Skill root to the new verified package. Check the
 version of that exact executable and repeat live tool checks. Preserve other
 MCP servers, model settings and Skill roots. To remove DTW, remove only its
 inserted row/overrides and Skill registration after connections have stopped.
+
+## Resume after restart and finish cleanup
+
+Before waiting for restart, retain a short note in this installation task:
+expected version/package, host/profile pin, changed registration, and the exact
+previous standalone path if one exists. Report only the pending state and one
+required host action; do not print checksums, file inventories or internal pins
+as a success report. Continue this task after restart; if the host cannot resume
+it automatically, the same install/update prompt must resume the existing
+pending pin instead of downloading or reconfiguring the package again.
+
+Verify the intended live host connection/Skill once, then activate the pin. Only
+then report the update complete. Activation/GC covers the managed store and keeps
+rollback/live references; it cannot delete an older standalone directory such as
+`~/Applications/DesktopWorld`. The installer retires that exact previous owned
+directory separately, only after verifying its package ownership/inventory,
+zero live consumers and zero remaining configuration references. Never claim
+store GC will remove an external installation or a retained rollback.
 
 For upstream details, see DSH's [MCP client](https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/mcp/mcp-client).
 

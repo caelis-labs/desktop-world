@@ -14,6 +14,9 @@ path or cleanup command. Do not update other hosts as a side effect.
    Read its recorded pin where present. A PATH command or remembered version is
    not proof of the host's runtime. Already-current verified bytes need only the
    live connection check and owned cleanup; do not create another installation or restart it.
+   If this host already has a pending update, resume that transaction first:
+   reuse its staged package/registration and perform the outstanding host reload
+   and verification. Do not repeat downloads, configuration discovery or binding.
 2. Download and verify the new release as one complete package. Run the new
    package's own executable for import; use its returned installed `executable`
    for subsequent management. This also
@@ -21,13 +24,20 @@ path or cleanup command. Do not update other hosts as a side effect.
    new package commands. Outputs distinguish `manager_version`, package `version`
    and `store_schema`. An unsupported format fails before changing references.
 3. Reuse this host/profile's pin, stage the new package, finish outstanding work,
-   drain old DTW connections and cached contexts, and update this host's complete
-   plugin/Skill/MCP registration. Shared distribution bytes stay immutable.
-4. Reconnect using a fresh verifier/context and check the actual new process
+   and update this host's complete plugin/Skill/MCP registration. Establish the
+   host's supported reload boundary before probing tools: an external config
+   edit, a UI inventory refresh and a new conversation are not plugin reloads.
+   Use a documented reload for this plugin, or leave pending state and request
+   one normal host restart. Do not kill shared processes or reverse engineer
+   host internals to avoid that boundary. Shared distribution bytes stay immutable.
+4. After the host has loaded the new registration, reconnect and check the actual new process
    path/version, Skill, tools and read-only observation. Only then activate. A
    pending failure protects both the previous current and the intended new
    package. If the host requires a full restart, preserve pending state and give
-   that specific remaining action; never claim a verified upgrade early.
+   that specific remaining action; report prepared/awaiting restart, never an
+   installed or verified upgrade. A fresh verifier refreshes a conversation's
+   cached schema after host reload; it cannot reload the host itself. A standalone
+   MCP handshake verifies the package, not the host's live connection.
 5. Activation performs owned cleanup automatically, retaining one rollback,
    other hosts' pins and live old runtimes. Remove this invocation's owned
    download/extraction staging after successful import. The installer may retire
@@ -41,8 +51,8 @@ path or cleanup command. Do not update other hosts as a side effect.
 
 DSH's encoded Cordis URL follows the exact immutable package. agy's fixed plugin
 slot must be replaced as a complete stopped plugin; its host owns that copy's
-removal. A stale installation conversation can use the host's fresh verifier
-without asking the user to manage versions. Final reporting needs only the old
+removal. After host reload, a stale installation conversation can use one fresh
+verifier without asking the user to manage versions. Final reporting needs only the old
 and new version, actual connection validation and any unavoidable host action.
 
 The commands below document the installer's mechanism, not user prerequisites.
@@ -68,13 +78,15 @@ dtw package bind dsh-desktop <package_id>
 plugin source and Cordis URL. Host/profile names use lowercase ASCII letters,
 digits, dot, dash or underscore; Windows device names are rejected.
 
-1. Finish active operations in that host/profile and drain its old connections
-   and conversations that cached the previous Skill/tool schema.
+1. Finish active operations in that host/profile. Its supported plugin reload or
+   normal restart drains old connections; do not kill a shared bridge manually.
 2. Update its one complete plugin registration. DSH uses the recipe's Cordis URL,
    bundling executable and Skill. agy owns one plugin slot: install the complete
    `agy_source` using its normal plugin route, replacing its entire stopped slot.
-3. Open a fresh context and check actual `apps`/`exec`, the bundled Skill and
-   the running executable path/version. A green plugin card alone is insufficient.
+3. Apply the host's supported reload/restart, then check actual `apps`/`exec`,
+   the bundled Skill and the running executable path/version. Use one fresh
+   conversation/verifier only if this conversation still caches the old schema.
+   A green plugin card alone is insufficient.
 4. Complete activation:
 
 ```sh
