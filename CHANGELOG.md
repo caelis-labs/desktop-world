@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/caelis-labs/desktop-world/compare/v0.3.0...v0.3.1) (2026-11-02)
+
+
+### Bug Fixes
+
+* stabilize agent protocol and automatic package updates ([#96](https://github.com/caelis-labs/desktop-world/issues/96)) ([6a03c5f](https://github.com/caelis-labs/desktop-world/commit/6a03c5fa87884d852fc83751a506f3e57f0d7ac3))
+
 ## [0.3.0](https://github.com/caelis-labs/desktop-world/compare/v0.2.3...v0.3.0) (2026-11-02)
 
 
