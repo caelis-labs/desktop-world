@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0](https://github.com/caelis-labs/desktop-world/compare/v0.2.3...v0.3.0) (2026-11-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* simplify app-scoped computer use to apps and exec
+
+### Features
+
+* simplify app-scoped computer use to apps and exec ([5134aec](https://github.com/caelis-labs/desktop-world/commit/5134aec5ec5cfcecf190ec48c732f808d4f0b1f5))
+
 ## [0.2.3](https://github.com/caelis-labs/desktop-world/compare/v0.2.2...v0.2.3) (2026-11-01)
 
 
