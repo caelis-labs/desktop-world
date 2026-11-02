@@ -8,6 +8,7 @@ cargo +1.98.0 fmt --manifest-path cmd/dtw/Cargo.toml --check
 python3 tests/ci/run_core_checkpoint.py
 python3 -m compileall -q scripts tests/acceptance tests/ci
 python3 -m unittest discover -s tests -p test_app_protocol_probe.py
+python3 -m unittest discover -s tests -p test_windows_app_protocol_probe.py
 python3 -m unittest discover -s tests -p test_window_inventory_probe.py
 python3 -m unittest discover -s tests -p test_input_cleanup_probe.py
 python3 -m unittest discover -s tests -p test_rewrite_candidate.py

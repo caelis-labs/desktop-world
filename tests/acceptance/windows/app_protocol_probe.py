@@ -15,13 +15,13 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app_client import AppClient, METHODS, artifact_identity, require
+from windows.cursor_probe import read
 
 
 def state(root):
-    try:
-        return json.loads((root / 'state.json').read_text(encoding='utf-8-sig'))
-    except (FileNotFoundError, json.JSONDecodeError, PermissionError):
-        return None
+    # The fixture atomically replaces this publication. Share deletion while
+    # reading so an independent observation cannot crash its publisher.
+    return read(root / 'state.json')
 
 
 def wait(predicate, timeout=8):
@@ -32,6 +32,13 @@ def wait(predicate, timeout=8):
             return result
         time.sleep(.03)
     raise AssertionError('owned state did not reach its expected condition')
+
+
+def wait_state(root, predicate, timeout=8):
+    def matched():
+        snapshot = state(root)
+        return snapshot if snapshot is not None and predicate(snapshot) else None
+    return wait(matched, timeout)
 
 
 def main():
@@ -62,7 +69,7 @@ def main():
         exe = root / 'Fixture.exe'
         shutil.copy2(output / 'build/Fixture.exe', exe)
         child = subprocess.Popen([str(exe), str(root), 'A'])
-        wait(lambda: state(root) and state(root)['ready'] and state(root)['bounds_ok'])
+        wait_state(root, lambda snapshot: snapshot['ready'] and snapshot['bounds_ok'])
         client = AppClient(args.dtw.resolve(), output / 'protocol')
         apps, response = client.tool('apps', {'query': str(exe), 'state': 'running'})
         require(not response.get('isError') and len(apps['apps']) == 1, apps)
@@ -71,19 +78,26 @@ def main():
         require(response.get('isError') and invalid['error']['code'] == 'invalid_arguments', invalid)
         initial, _ = client.execute(app, "await app.look();return {methods:Object.keys(app),session:typeof session,state:typeof state};")
         require(initial['result'] == {'methods': METHODS, 'session': 'undefined', 'state': 'undefined'}, initial)
+        require(initial['view']['semantics']['complete'] and initial['view']['elements'], initial)
         record('discovery_required_app_and_public_surface')
+        returned, _ = client.execute(app, 'return await app.look({full:true});')
+        require(returned['view']['reset'] and 'result' not in returned, returned)
+        unchanged, _ = client.execute(app, 'return await app.look();')
+        require(unchanged['view'] == {'changed': False} and 'result' not in unchanged, unchanged)
+        require(client.metrics[-1]['json_bytes'] <= 512, client.metrics[-1])
+        record('returned_view_dedup_and_bounded_unchanged_delta')
         client.execute(app, "await app.click({selector:{role:'button',text:'Increment'}});")
-        wait(lambda: state(root)['increments'] == 1 and state(root)['editor_focused'])
+        wait_state(root, lambda snapshot: snapshot['increments'] == 1 and snapshot['editor_focused'])
         payload = 'DTW 中文 😀\r\nowned protocol'
         client.execute(app, "await app.keypress(['CTRL','A']);await app.typeText(" + json.dumps(payload) + ');')
-        wait(lambda: state(root)['text'] == payload)
+        wait_state(root, lambda snapshot: snapshot['text'] == payload)
         client.execute(app, "await app.keypress(['CTRL','S']);")
-        wait(lambda: state(root)['saves'] == 1)
+        wait_state(root, lambda snapshot: snapshot['saves'] == 1)
         require((root / 'saved.txt').read_bytes().decode('utf-8') == payload, 'saved bytes differ')
         client.capture(app, 'single-window')
         record('semantic_click_unicode_keyboard_and_file_readback')
         client.execute(app, "await app.click({selector:{role:'button',text:'Show owned dialog'}});")
-        wait(lambda: state(root)['modal_open'])
+        wait_state(root, lambda snapshot: snapshot['modal_open'])
         def modal_visible():
             view, _ = client.execute(app, 'await app.look({full:true});')
             return view if any(w['title'] == 'Owned native modal' and w['visible'] for w in view['view']['windows']) else None
@@ -96,9 +110,10 @@ def main():
         closed, response = client.execute(app, "await app.click({selector:{role:'button',text:'Close dialog'}});", allow_error=True)
         if response.get('isError'):
             require(closed.get('effects', {}).get('dispatch', {}).get('unknown') == 1, closed)
-        wait(lambda: not state(root)['modal_open'])
+        wait_state(root, lambda snapshot: not snapshot['modal_open'])
         client.execute(app, 'await app.look();')
-        require(state(root)['text'] == payload and state(root)['saves'] == 1, state(root))
+        final = wait_state(root, lambda snapshot: True)
+        require(final['text'] == payload and final['saves'] == 1, final)
         record('modal_close_fresh_read_without_input_replay')
         report['passed'] = True
     except BaseException as error:

@@ -25,6 +25,12 @@ This entry discovers one owned WinForms application and uses only `apps` and
 `exec({app,source})`. It checks the nine-method surface, required app admission,
 Unicode/keyboard/save readback, modal front-to-back physical geometry, covered
 opaque-window capture and closing a modal without replaying uncertain input.
+It also checks that returning a look does not duplicate the view and that an
+unchanged look stays within the JSON output budget. State reads share deletion
+with the fixture's atomic publisher; each bounded readiness poll uses one
+snapshot and tolerates a temporarily unavailable publication. The headless
+`tests/test_windows_app_protocol_probe.py` controls run in source checks and
+Windows CI, including replacement while the observer's handle is still open.
 It records exact binary hash, wire frames, source/JSON sizes, image counts and
 elapsed times. It does not establish real Chrome/Notepad tasks, all DPI layouts,
 new Windows lifecycle or pointer gestures. Those remain separate boundaries.

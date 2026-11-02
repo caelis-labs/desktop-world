@@ -133,13 +133,27 @@ fn application_search_is_bounded_and_does_not_connect() {
 
 #[test]
 fn direct_return_of_view_is_not_duplicated_and_unchanged_output_is_bounded() {
-    let (server, _) = agent();
+    let (server, catalog) = agent();
+    catalog.backend.0.model.lock().unwrap().inventory = Some(test_inventory(vec![WindowInfo {
+        target: WindowTarget {
+            app: application(),
+            native_id: 101,
+            generation: 3,
+        },
+        title: "Window with physical bounds".into(),
+        visible: true,
+        scene: WindowLayout::new([16.0, 16.0, 416.0, 469.0], 0),
+    }]));
     let first = super::super::projection::execution(exec(
         &server,
         "returned_view",
         "return await app.look();",
     ));
     assert!(first.data["view"]["reset"] == true);
+    assert_eq!(
+        first.data["view"]["windows"][0]["bounds"],
+        json!([16.0, 16.0, 416.0, 469.0])
+    );
     assert!(first.data.get("result").is_none(), "{:?}", first.data);
     let unchanged = super::super::projection::execution(exec(
         &server,

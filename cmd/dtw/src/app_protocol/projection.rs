@@ -15,7 +15,7 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
             .as_array()
             .map(|steps| summarize(steps));
         let mut compact = json!({"app":original["app"],"execution_id":original["execution_id"],"status":original["status"],"view":value["view"]});
-        if !value["result"].is_null() && value["result"] != value["view"] {
+        if !value["result"].is_null() && !same_json(&value["result"], &value["view"]) {
             compact["result"] = value["result"].clone();
         }
         if value["console"].as_array().is_some_and(|v| !v.is_empty()) {
@@ -59,6 +59,41 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
         data.remove("receipt");
     }
     reply
+}
+
+// JavaScript's JSON round trip changes integral floats such as window bounds
+// from 16.0 to 16. Compare their values without rounding distinct large integers.
+fn same_json(left: &Value, right: &Value) -> bool {
+    match (left, right) {
+        (Value::Number(a), Value::Number(b)) => {
+            a == b || integer_float_eq(a, b) || integer_float_eq(b, a)
+        }
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_json(a, b))
+        }
+        (Value::Object(a), Value::Object(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .all(|(key, a)| b.get(key).is_some_and(|b| same_json(a, b)))
+        }
+        _ => left == right,
+    }
+}
+
+fn integer_float_eq(integer: &serde_json::Number, float: &serde_json::Number) -> bool {
+    let Some(integer) = integer
+        .as_i64()
+        .map(i128::from)
+        .or_else(|| integer.as_u64().map(i128::from))
+    else {
+        return false;
+    };
+    let Some(float) = float.as_f64().filter(|_| float.is_f64()) else {
+        return false;
+    };
+    // i128 covers every JSON i64/u64. Even a saturating float cast remains
+    // outside that range, so u64::MAX cannot be mistaken for its rounded float.
+    float.fract() == 0.0 && float as i128 == integer
 }
 
 fn summarize(steps: &[Value]) -> Value {
@@ -276,6 +311,41 @@ fn outcome_issue(outcome: &Value) -> bool {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn returned_views_coalesce_numeric_storage_without_losing_distinct_task_results() {
+        for (returned, native, coalesced) in [
+            (json!([16, -16, 0]), json!([16.0, -16.0, -0.0]), true),
+            (json!(i64::MIN), json!(i64::MIN as f64), true),
+            (json!(1_u64 << 63), json!((1_u64 << 63) as f64), true),
+            (
+                json!(9_007_199_254_740_993_u64),
+                json!(9_007_199_254_740_992_f64),
+                false,
+            ),
+            (json!(u64::MAX), json!(u64::MAX as f64), false),
+            (json!(i64::MIN + 1), json!(i64::MIN as f64), false),
+            (json!(1), json!(1.5), false),
+            (json!("16"), json!(16.0), false),
+            (json!([1]), json!([1, 2]), false),
+            (json!({"custom":1}), json!({"native":1.0}), false),
+        ] {
+            let result = json!({"windows":[{"bounds":returned}]});
+            let view = json!({"windows":[{"bounds":native}]});
+            let mut reply = successful_execution(vec![]);
+            reply.data["value"] = json!({"agent_protocol":true,"result":result,"view":view});
+            let projected = execution(reply);
+            assert_eq!(projected.data["view"], view);
+            assert_eq!(
+                projected.data.get("result").is_none(),
+                coalesced,
+                "{result} / {view}"
+            );
+            if !coalesced {
+                assert_eq!(projected.data["result"], result);
+            }
+        }
+    }
 
     fn inventory_step(number: u32, inventory: Value) -> Value {
         json!({"number":number,"line":number + 1,"operation":"windows","status":"completed",
