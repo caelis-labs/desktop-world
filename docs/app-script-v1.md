@@ -1,6 +1,9 @@
 # 单 app 脚本 v1
 
-脚本通过标准 MCP `exec` 工具运行，外层必填当前 `apps` 返回的稳定 app ID 字符串。DTW 只验证目标和执行边界，审批与授权属于 Harness。[MCP 合同](app-protocol-v1.md)定义发现、调用和标准取消；`apps` 提供紧凑方法索引；`api({methods:[...]})` 按需返回详细参数/返回 schema。引用、限制和 state/receipt/image 语义在同一合同下保持一致。
+> 历史原子协议与内部实现参考。当前面向 Agent 的接口以 [Skill API](../skills/desktop-world/API.md) 为准：仅 apps/exec，app 必填，窗口与 Session 管理留在内部。
+
+
+脚本通过标准 MCP `exec` 工具运行。桌面操作显式绑定平台 app ID；macOS 也支持已存在的绝对 `.app` 路径，并可定位未运行的已安装应用。只做 Session 计算、JSON 状态或回执恢复时省略 `app`，不会连接原生 provider，也不能调用 app 方法。审批与授权属于 Harness。[MCP 合同](app-protocol-v1.md)定义发现、调用和标准取消；`apps` 提供紧凑方法索引；`api({methods:[...]})` 按需返回详细 schema。
 
 ## 调用与执行范围
 
@@ -11,7 +14,7 @@
 }
 ```
 
-示例 app ID 必须与 `apps` 返回的目标应用一致。`source` 是 JavaScript 异步函数体，可直接使用 `await` 和 `return`，不是模块或文件路径。DTW 自动分配执行标识；模型只需提供 `app` 和 `source`。公开输入严格只有这两个字段，未知字段拒绝；当前内部执行期限为 30 秒，不设调用次数配额。预算属于执行层策略，不要求模型配置。没有 grant、approved、授权能力集合或续期参数。
+示例 app ID 应替换为真实目标。`source` 是 JavaScript 异步函数体，可直接使用 `await` 和 `return`，不是模块或文件路径。DTW 自动分配执行标识；公开输入仅有 `source` 和可选 `app`，未知字段拒绝。脚本提供 `app`、`session`、`state` 和 `print`；不带 app 的脚本调用原生方法返回 `app_required`。当前内部执行期限为 30 秒，不设调用次数配额。没有 grant、approved、授权能力集合或续期参数。
 
 服务可用 `dtw mcp --input-policy auto|background-only` 启动，默认 `auto`。`apps` / `api` 返回 `service.input_policy`（`auto` 或 `background_only`），脚本不设置或覆盖策略。macOS 自动选择可用的后台输入；`auto` 允许预检确认后台不可用后临时使用前台，`background_only` 在前台准备之前拒绝该路线及显式 focus，返回 `not_dispatched` / `foreground_required`。不要通过重试 focus 处理此错误。支持的语义操作仍可用，但应用可能自行改变界面或焦点；服务策略不是审批机制，也不替代 Harness 授权。详见[服务输入策略](app-protocol-v1.md#服务输入策略)。
 
@@ -19,7 +22,7 @@
 
 当前 `exec` 不接受文件路径。未来文件便利入口由调用方读取本地文件后发送内容，远端继续使用相同脚本合同；文件与远程传输的边界见[架构基线](architecture.md)。
 
-脚本在一个执行上下文内串行运行；Host bridge 调用进入同一个 Core，不递归提交新任务。`exec` 等待该脚本收尾。每次新的 `exec` 都代表新工作，即使脚本相同也会再次执行。已接受执行的相同标准传输请求与参数复用原执行，改换参数得到 `request_conflict`；这部分由客户端传输层管理，不是模型入参。`result({app})` 读取该 app 最近接受的执行，可选 `execution_id` 精确选择历史记录；正常执行无需轮询。标准 MCP cancellation 使用外层 JSON-RPC request ID。
+脚本在一个执行上下文内串行运行；Host bridge 调用进入同一个 Core，不递归提交新任务。`exec` 等待该脚本收尾。每次新的 `exec` 都代表新工作，即使脚本相同也会再次执行。已接受执行的相同标准传输请求与参数复用原执行，改换参数得到 `request_conflict`；这部分由客户端传输层管理，不是模型入参。`session.result()` 读取最近接受的工作执行（跳过查询自身和只读回执的查询执行）；显式 execution ID 选择原记录，正常执行无需轮询。省略 app 的恢复脚本可在桌面执行仍运行或原生清理失败时查询。标准 MCP cancellation 使用外层 JSON-RPC request ID。
 
 ## App 方法
 
@@ -27,6 +30,10 @@
 
 | 方法 | 返回值 | 执行范围与绑定 |
 | --- | --- | --- |
+| `await app.launch()` | 动作 receipt | macOS：启动已安装应用或复用当前进程；process running 不等于窗口/业务已就绪 |
+| `await app.quit({window_ref?})` | 动作 receipt | macOS：请求正常退出；多实例须精确选一个；保存提示可使结果 unverified |
+| `await app.window({title?,window_ref?,timeout_ms?})` | 冻结的脚本内 Window | 完整库存中唯一匹配才绑定；默认最多等 2 秒；已知 ref 无额外库存读取 |
+| `await app.closeWindow({window_ref})` / `await w.close()` | 动作 receipt | macOS：只关精确窗口，不强杀进程、不丢弃文档；确认要求精确原生 surface 消失 |
 | `await app.windows()` | `{windows:[{window_ref,title,visible}],coverage,diagnostics}` | 发现当前 app 的窗口 |
 | `await app.wait({window_ref,selector,state,timeout_ms?})` | 正向条件返回 `{window_ref,observation_ref,element_ref,element,state}`；absent 返回 `{window_ref,state}` | 在脚本内只读等待 present/absent/enabled/disabled，不聚焦或输入 |
 | `await app.waitForWindow({window_ref,state,timeout_ms?})` | `{window_ref,state,kind?,relation?}` | 等待已证明的相关 dialog、原窗口 unblocked 或精确窗口 closed |
@@ -66,7 +73,7 @@
 
 `coverage.visited` 是查询累计访问节点数。`next=null` 仅表示无法继续，不保证完整；资源上限和已知读取缺口会保留 `complete=false` 与 `reason`。`complete=true` 只表示本次暴露出的活树遍历无已知缺口，不是 UI 原子快照或目标不存在的证明。WebKit 冷启动可能延迟发布内容树。macOS 内部区分应用 AX opt-in 与每个窗口的内容就绪；浅层空内容容器会有界重新探测，仍未证明时保留 `content_unproven`，不把它报告为完整空树。此策略不等待任意网页业务数据，也不假定所有原生辅助窗都必须包含 WebArea。
 
-`windows` 不接受参数，其他方法恰好接受一个上述字段构成的对象。多余 app_ref/PID、未知方法或 raw native 参数在 bridge 拒绝；跨上下文引用、伪窗口和未实现的能力由协议/Core 拒绝。每次原生调用重新校验完整 app 实例、目标、provider、观察种类和生命周期。窗口发现、新观察和动作对旧引用的影响与原子调用完全相同；不能用 state 中保存的字符串恢复失效引用。
+`windows` 和 `launch` 不接受参数；`window`、`quit` 的对象参数可省略；其他方法恰好接受一个 schema 对象。`app.window()` 仅在完整库存恰好一个窗口时成功；title 精确筛选，歧义保留候选 refs。Window 方法自动绑定 window_ref，不能覆盖它；close() 映射 closeWindow。只把 window_ref 存入 state，后续以 app.window({window_ref}) 重新绑定；分页继续用 app.observe({cursor})。多余 app_ref/PID、未知方法或 raw native 参数在 bridge 拒绝；跨上下文引用、伪窗口和未实现的能力由协议/Core 拒绝。每次原生调用重新校验完整 app 实例、目标、provider、观察种类和生命周期。窗口发现、新观察和动作对旧引用的影响与原子调用完全相同；不能用 state 中保存的字符串恢复失效引用。
 
 macOS 窗口归属未证明时，`app.windows()` 保留与原子入口相同的错误，不把失败改成空数组。未捕获错误会使脚本失败且不提交 state，原步骤诊断仍保留；[C5.2 库存验收](https://github.com/caelis-labs/desktop-world/blob/f1d243a/docs/window-inventory-acceptance.md)记录冷启动/后台/前台及闭窗残留的具体边界。
 
@@ -108,7 +115,7 @@ return {counts, coverage:after.coverage};
 
 ## VM、总预算与 JSON
 
-每个脚本使用独立 QuickJS VM。JavaScript 标准语言、Promise 和有界 console 可用；没有 timers、文件/进程/网络 API、OS 模块加载器、应用启动或任意原生调用。`await` 可以用于上述 app 方法和可结算 Promise；等待永不结算的 Promise 且没有剩余微任务时返回 `script_stalled`，不会等待外部事件。
+每个脚本使用独立 QuickJS VM。JavaScript 标准语言、Promise 和有界 console 可用；没有 timers、文件/进程/网络 API、OS 模块加载器或任意原生调用；应用生命周期只通过有 schema 的 app.launch/quit/closeWindow。`await` 可以用于上述 app 方法和可结算 Promise；等待永不结算的 Promise 且没有剩余微任务时返回 `script_stalled`，不会等待外部事件。
 
 | 边界 | 当前限制 |
 | --- | --- |
@@ -131,9 +138,11 @@ JSON 编码拒绝非有限数、BigInt、函数、symbol、循环、访问器/�
 
 ## state 提交与效果
 
-上下文初始 `state` 为 `{}`。每次新 VM 收到上一次成功提交的 JSON 副本；可修改对象字段及其嵌套数组/对象，但 `state = ...` 替换根会得到 `invalid_state`。普通变量、函数和 VM globals 不跨脚本保存。只有脚本成功、result/state 编码通过且收尾时未取消/超时，才原子提交新 state；失败时沿用旧值。新逻辑 app 上下文、所有旧 app 实例均被替换或 MCP 进程重启从空 state 开始。切换 app、取消/超时或原生 owner 重建不清空已提交 state；原生 refs 的有效性与 state 的 JSON 存续分开管理。
+上下文初始 `session.state` 为 `{}`，`state` 是同一对象的别名。每次新 VM 收到上一次成功提交的 JSON 副本；修改对象字段，不能替换根。普通变量、函数和 VM globals 不跨脚本保存。只有脚本成功、result/state 编码通过且收尾时未取消/超时，才原子提交新 state；失败沿用旧值。每个选择的 app 标识和 app-less lane 各有 JSON state；应用退出、重启、进程实例替换、普通 app 切换、取消或原生 owner 重建均不清空已提交 JSON。新 MCP 连接从空 state 开始。native refs 的有效性与 JSON 存续分开管理。`session.id` 是连接标识，`session.app` 是当前 app 参数或 null。
 
 state 提交不是桌面事务。动作一旦派发，之后的异常、取消、超时、JSON 编码失败或 state 未提交都不能回滚它。调用者应保留回执、按需重新观察；DTW 不补偿、不重放脚本。
+
+`print(...values)` 是冻结 console.log 的别名，沿用 200 行、32 KiB 和每行 2000 字符的限制，超限设置 console_truncated。它不会关闭自动摘要、绕过 JSON 预算，也不会让同样内容天然变少 token；仅输出决策需要的字段，避免同时 print 与 return 同一数据。
 
 ## 查询、步骤账本与图像
 
@@ -141,7 +150,7 @@ state 提交不是桌面事务。动作一旦派发，之后的异常、取消�
 
 同次执行中，后续同一 `window_ref`、不同 `observation_ref` 的查询以 `complete=true, has_more=false` 结束，可将此前该窗口的不完整查询计入 `recovered_incomplete_reads`。中间一旦出现动作 receipt、失败或未完成步骤，之前尚未恢复的查询永久退出恢复候选。库存、其他窗口或其他执行不参与此恢复判定；该字段仅在非零时输出，原 `incomplete_reads` 和 `last_issue` 不删除。它证明后来的独立查询完整，不证明两次筛选条件相同、原查询已补全或业务动作成功。
 
-`result({app})` 或带历史 `execution_id` 的查询返回完整原始记录，其中 `operation` 为 `script`，外层 `receipt` 通常为 null，动作证据在 `script.steps` 中：
+`await session.result(execution_id)` 或 `await session.result({execution_id?,offset?,limit?})` 只读原始记录的有界步骤页，其中 `operation` 为 `script`，外层 `receipt` 通常为 null，动作证据在 `script.steps` 中：
 
 | 字段 | 含义 |
 | --- | --- |
@@ -156,27 +165,29 @@ state 提交不是桌面事务。动作一旦派发，之后的异常、取消�
 | `script.focus_return` | 可选的脚本收尾归还状态；与早先动作的 pending receipt 分开，紧凑结果也保留 |
 | `script.shutdown_error` | 关闭资源失败的独立 `{code,message}`，不覆盖脚本失败或动作 receipt |
 
+回执查询默认 16 步，limit 为 1–64，最多 256 KiB 步骤页；script.total_steps/offset/next_offset 用于继续读取。单步超限返回 receipt_page_limit，不截断原回执。返回对象含原 value/error；若完整记录超出普通 64 KiB return 预算，在脚本里投影所需字段，不输出整页。历史图片可随查询返回，但 last_capture.timing 为 historical 且 recovered_from 指向原执行，不能当新观察。原 result 工具不再广告，仅保留旧客户端兼容入口。
+
 步骤编号来自 bridge 尝试编号。某些参数拒绝已经计入 bridge 预算，但没有进入 Coordinator，因此步骤可有空号；在 JavaScript 参数检查或 JSON 编码阶段就被拒绝的调用未必计数。`line` 指向调用者源码，无法定位时步骤使用 0，failure 使用 null。编号与源码行用于定位调用，不改变目标身份。
 
 成功解析为动作的步骤保存完整 `outcome/provider_outcome/interruption`；在 Coordinator 的协议解析阶段被拒绝的步骤只记录 error，receipt 为 null；读步骤也保留错误。普通异常和 provider panic 后，之前的步骤及 receipt 不丢失；panic 时尚无最终回执的动作记为未知效果。脚本失败后的 `completed` 只表示任务已收尾，不能据此推断没有桌面效果。`error.code` 可为 `script_syntax / script_exception / script_memory / script_timeout / script_cancelled / script_stalled / script_internal`，也可能是 Core/协议收尾错误；细分原因如 `call_limit`、`receipt_limit`、`invalid_args`、`invalid_json` 在 `script.failure.code` 中，原生动作事实以步骤 receipt 为准。
 
 动作可选 `delivery` 包含 `route/reason/foreground_borrowed/focus_return`，保留原生投递路线。macOS 按需抬升目标窗口后保持前台，不自动切回原应用；阶段任务完成后由 Agent 通过普通 UI 关闭/最小化自己的窗口，或由用户切换。`foreground_borrowed` 是沿用的路线字段，表示本次建立过需要收尾的前台上下文，不再承诺归还。`script.focus_return:retained` 表示结束内部上下文并保留前台，`changed_externally` 表示尊重外部切换，`unconfirmed` 表示收尾状态未获确认。输入释放失败仍通过 `shutdown_error` 关闭后续执行。历史记录可能包含旧版本的 `restored/application_restored`。路线与焦点结果不证明业务效果。`value.last_capture.step/timing/later_calls` 说明图片采集时序；`before_later_calls` 的图片不能作为后续操作的视觉结果，需要时显式在操作之后 capture。
 
-一个连接保留多个 app 上下文，A→B→A 不重置 state 或窗口引用。原生 worker、最新 app state/refs 与历史回执分开管理。已完成历史采用滑动窗口：当前默认保留最近 512 条、16 MiB 回执；value/image 另有 64 MiB payload 预算。这些是保留容量，不是累计执行配额，达到容量会淘汰旧记录并继续执行，不重建 app owner。活动和未收尾执行不会被淘汰。payload 单独淘汰时标记 payload_expired；整条历史淘汰后 result 返回 execution_unavailable，不重放原脚本、不保留无限墓碑。默认 result 读取该 app 最新仍保留的已接受执行（包括进行中）；历史回执不是持久审计存储，去重仅覆盖仍被保留的传输记录。macOS 同一实例的写操作跨会话互斥，独立实例的后台输入可并行；前台替代路线占用共享物理输入租约，归还前台/指针也在该租约内。
+一个连接保留多个 app 上下文，A→B→A 不重置 state 或窗口引用。原生 worker、最新 app state/refs 与历史回执分开管理。已完成历史采用滑动窗口：当前默认保留最近 512 条、16 MiB 回执；value/image 另有 64 MiB payload 预算。这些是保留容量，不是累计执行配额，达到容量会淘汰旧记录并继续执行，不重建 app owner。活动和未收尾执行不会被淘汰。payload 单独淘汰时标记 payload_expired；整条历史淘汰后 session.result 返回 execution_unavailable，不重放原脚本、不保留无限墓碑。默认 session.result 读取最近仍保留的工作执行（跳过只读回执的查询执行和查询自身）（包括进行中）；带 app 的脚本只查本 app，不带 app 可查整个连接；历史回执不是持久审计存储，去重仅覆盖仍被保留的传输记录。macOS 同一实例的写操作跨会话互斥，独立实例的后台输入可并行；前台替代路线占用共享物理输入租约，归还前台/指针也在该租约内。
 
 capture 只把尺寸、坐标系和 opaque observation_ref 交给 VM；PNG 字节始终在 VM 外。常规结算只返回最后一次 capture 的 MCP image，并用 `value.last_capture` 指明来源步骤。此前截图不会全部累计。保留的图片及引用可能已被后续操作取代或消费，不能当作仍然有效的点击依据。
 
 ## 中断与所有权
 
-总 deadline、标准 MCP 取消或连接关闭会中止相应执行并收尾原生资源，清理失败独立记录在 `shutdown_error`。VM 线程由任务所有者 join；provider panic 的 unwind 路径同样通知并 join，不能留下脱离任务生命周期的线程。`result({app})` 可读取该 app 最近接受的执行；返回的 `execution_id` 可用于精确查询其最终账本。
+总 deadline、标准 MCP 取消或连接关闭会中止相应执行并收尾原生资源，清理失败独立记录在 `shutdown_error`。VM 线程由任务所有者 join；provider panic 的 unwind 路径同样通知并 join，不能留下脱离任务生命周期的线程。`exec({source:"return await session.result();"})` 可独立读取最近接受的执行；返回的 `execution_id` 可用于精确查询其最终账本。
 
-首个终态原因保留。动作可能在取消后才产生外部效果；关闭 worker 或 join VM 都不证明效果已撤销。普通被捕获的 Host 错误或脚本异常本身不必关闭上下文。取消、超时或资源回收导致上下文更换时，后续新执行会报告 `context_reset`；已提交 state 继续保留，其中保存的原生 refs 可能已失效，需要重新发现。所有旧 app 实例均被替换时额外报告 `state_reset` 并清空 app state；仅一个实例加入或退出时保留其他实例引用及 app state；旧回执仍保留。
+首个终态原因保留。动作可能在取消后才产生外部效果；关闭 worker 或 join VM 都不证明效果已撤销。普通被捕获的 Host 错误或脚本异常本身不必关闭上下文。取消、超时或资源回收导致上下文更换时，后续新执行会报告 `context_reset`；已提交 state 继续保留，其中保存的原生 refs 可能已失效，需要重新发现。所有旧 app 实例均被替换时报告 context_reset 并退休旧原生 refs，仍保留逻辑 JSON state，state_reset 为 false；仅一个实例加入或退出时保留其他实例引用；旧回执仍保留。
 
 实现位于 `cmd/dtw/src/app_protocol/{wire.rs,scripts.rs,script_engine/}`，Core 预算入口位于 `cmd/dtw/src/runtime/mod.rs`。窄脚本引擎与 prelude 基于固定 CUA 0.38.0 donor 做 DTW 适配，第三方来源见 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)；不会调用既有 CUA 脚本执行器或开放其完整能力表。
 
 ## 可发现合同与库存证据
 
-`apps.script.methods` 是紧凑签名索引；参数、返回值、执行条件和引用规则通过 `api({methods:[…]})` 按需查询。组合行为有 Core/VM 回归与真实原生验收。`dtw api` 从同一 Rust schemas 生成 TypeScript；仓库中的 [TypeScript 声明](app-script-api.d.ts) 是生成文件，提交的仍是 JavaScript 函数体，不需要类型编译器或安装旧插件。
+`apps.script.methods` 是紧凑签名索引；参数、返回值、执行条件和引用规则通过 `api({methods:[…]})` 按需查询。组合行为有 Core/VM 回归与真实原生验收。`dtw api` 从同一 Rust schemas 生成 TypeScript；仓库中的 [TypeScript 声明](../tests/fixtures/atomic-script-api.d.ts) 是生成文件，提交的仍是 JavaScript 函数体，不需要类型编译器或安装旧插件。
 
 `app.windows()` 的成功 coverage 与原子入口相同；`empty_within_scope` 不等于应用无窗口。失败可通过 `e.code === "window_inventory_unproven"` 与 `e.details.coverage/diagnostics` 处理，无须解析 message。每次成功 windows 的 `script.steps[].inventory` 保留 coverage 与诊断，即使脚本随后抛错或 value/image 被驱逐，仍可调查首次读到空清单的原因。它不重复保存标题、图片或原生窗口 ID；失败步骤保持完整 error/details。
 
@@ -185,3 +196,23 @@ capture 只把尺寸、坐标系和 opaque observation_ref 交给 VM；PNG 字�
 脚本期限同样约束没有 Host Call 的纯 JavaScript。超时不提交 state，已发生动作和步骤证据不抹去；后续取消或关闭不覆盖先发生的终态原因。
 
 未处理的 Promise 拒绝会使脚本失败且不提交 `state`；正常 `.catch()` 或 `await` 处理仍可继续。引擎最多跟踪 256 个未处理拒绝，超限以 `promise_rejection_limit` 停止。
+
+## Session 方向评估与当前验证
+
+当前实现的是连接级 Session 身份、按所选 app 标识隔离的事务性 JSON state，以及独立的 app-less 恢复槽。它没有复用 QuickJS VM，也不承诺跨 exec 保存普通变量、函数、Promise 或 Window 对象。状态跨应用退出/重启保留，原生引用仍按实例和 owner 退休。print 复用既有有界 console 管道，失败前输出仍保留；不增加一种输出协议。
+
+`result` 已从工具发现中退役，当前广告 apps/api/exec 三个工具，兼容调度暂留。独立恢复槽解决了“应用已退出或原生 cleanup 失败，反而无法查询原回执”的依赖问题；查询不能自动重放。默认查询跳过纯回执查询执行，避免连续查询变成读取前一次查询。混合了原生工作的脚本仍可成为默认目标，任何保留记录也可用原 execution ID 精确读取。
+
+2026-11-02 的本地开发构建测量，以源基线 `3c0a01b805afe51f31833a4f5cccd7138b079092` 的原工具定义为对照，采用相同紧凑 JSON 编码：
+
+| 项目 | 对照 | 当前 | 解释 |
+| --- | --- | --- | --- |
+| 默认 Skill 正文 | 17109 bytes | 15828 bytes | 将详细查询/恢复边界移至按需 PATTERNS，正文减少 7.5%；完整参考仍保留 |
+| tools/list 定义 | 4 个，3429 UTF-8 bytes | 3 个，2327 bytes | 定义字节减少 32.1%；不是模型 tokenizer 或费用测量 |
+| 同一选窗、press、wait、capture 示例源码 | 手动筛选/检查唯一性 452 bytes | bound Window 213 bytes | 源码减少 52.9%；两者均为一次 exec、四个 bridge 调用，原生工作相同 |
+| app-less 空计算往返 | 未做旧版本同条件对照 | 中位 1.74ms，p95 2.74ms | Python stdio 客户端、debug 构建、含记录 I/O，预热 10 次后测 100 次 |
+| Session 回执查询往返 | 未做旧 result 工具延时对照 | 中位 1.89ms，p95 2.27ms | 同上；不是完整 Agent 任务耗时或常驻 VM 的对比 |
+
+真实 macOS 验收入口为 [app_lifecycle_session_probe.py](https://github.com/caelis-labs/desktop-world/blob/5b186b12db87f8bd647de779b2c772e25b6743cc/tests/acceptance/app_lifecycle_session_probe.py)，只使用广告的三个工具和本次生成的独立应用。已验证普通应用启动/复用、动作与独立读回、单窗关闭而进程保留、保存提示使 quit 保留 dispatched/unverified、正常退出、重启后 JSON 保留与旧引用失效、UIElement 可发现且可操作、嵌套 helper 排除、运行中的回执读取、取消后保留原 launch 回执及 worker 回收。保存提示由独立 fixture 控制器取消，此项不作为 DTW 操作该提示按钮的证据。原生 cleanup 失败后的恢复由受控故障测试验证；不冒充真实故障设备或实际模型/账号验收。Windows/Linux 新生命周期未实现，未发布安装包。
+
+完整常驻 VM 可作为下一轮独立实验，但应先明确变量/函数的失败回滚语义、跨执行 Promise 与 bridge 所有权、取消/超时后的 Session 重建、内存回收及失效 Window 的诊断。当前测量不足以证明它能改善 Agent 端到端速度。下一步先在实际 Harness 用同一批任务做三工具路线的对照：成功率、模型工具轮次、真实输入/输出 token、总耗时 p50/p95，以及取消/大回执/审批策略。所有 exec 仍声明可能写入；不得为了让回执查询免审批而把整个 exec 标成只读。验证这些兼容边界后，再决定何时完全删除旧 result 调度和是否引入常驻 VM。

@@ -142,8 +142,8 @@ In a DSH session:
 
 1. Discover the DTW tools (normally names such as
    `mcp__desktop-world__apps`, `mcp__desktop-world__exec`).
-2. Call `apps`, choose one of its app IDs, and call `exec` with that `app` and
-   `source: "return await app.windows();"`.
+2. Call `apps({state:"running"})`, choose one of its app IDs, and call `exec` with that `app` and
+   `source: "await app.look();"`.
 3. Load the Skill, locate a test window and capture it through the documented
    screenshot API. Confirm the returned image reaches the model.
 

@@ -283,7 +283,7 @@ const COVERAGE: &str =
     "application surfaces and native service dialogs with a proven public-AX relationship; AX semantics remain an exact-surface capability";
 const CONDITIONS: &[&str] = &[
     "semantic and input operations require macOS Accessibility permission",
-    "capture and click require macOS Screen Recording permission",
+    "capture and pixel pointer gestures require macOS Screen Recording permission",
     "input prefers directed background delivery; a side-effect-free preflight decline may use temporary foreground focus",
     "foreground coordinate fallback requires a visible, unobstructed point in the captured window",
     "semantic scopes include retained subtrees, capture-pixel regions and the app menu; region geometry does not prove pixel visibility",
@@ -300,12 +300,17 @@ impl NativeBackend {
                 | Capability::Press
                 | Capability::Capture
                 | Capability::Click
+                | Capability::Move
+                | Capability::Drag
                 | Capability::Focus
                 | Capability::TypeText
                 | Capability::Keypress
                 | Capability::Scroll
                 | Capability::SetValue
                 | Capability::ReadText
+                | Capability::Launch
+                | Capability::Quit
+                | Capability::CloseWindow
         )
     }
     pub fn description() -> Value {
@@ -370,6 +375,52 @@ impl NativeBackend {
                 })
             })
             .collect()
+    }
+    pub fn discover(&self, timeout: Duration) -> Result<Value, Error> {
+        let deadline = Instant::now() + timeout;
+        let poll = || {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                Err(Error::TimedOut)
+            } else {
+                Ok(left)
+            }
+        };
+        let reply = self.read_rpc(
+            json!({"operation":"discover_apps"}),
+            &CallContext { poll: &poll },
+        )?;
+        if !reply["apps"].is_array() || !reply["coverage"].is_object() {
+            return Err(Error::InvalidObservation);
+        }
+        Ok(reply)
+    }
+    pub fn resolve_target(
+        &self,
+        app_id: &str,
+        timeout: Duration,
+    ) -> Result<ApplicationTarget, Error> {
+        let deadline = Instant::now() + timeout;
+        let poll = || {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                Err(Error::TimedOut)
+            } else {
+                Ok(left)
+            }
+        };
+        let reply = self.read_rpc(
+            json!({"operation":"resolve_app","app_id":app_id}),
+            &CallContext { poll: &poll },
+        )?;
+        Ok(ApplicationTarget {
+            app_id: string(&reply, "app_id")?.into(),
+            name: string(&reply, "name")?.into(),
+            instances: array(&reply, "apps")?
+                .iter()
+                .map(|a| parse_app(&a["app"]))
+                .collect::<Result<_, _>>()?,
+        })
     }
     fn rpc(&self, request: Value, call: &CallContext<'_>) -> Result<Value, (Error, bool)> {
         self.scene.check().map_err(|error| (error, false))?;
@@ -839,6 +890,80 @@ impl Backend for NativeBackend {
     fn conditions(&self) -> &'static [&'static str] {
         CONDITIONS
     }
+    fn launch_application(&self, app_id: &str, call: &CallContext<'_>) -> ApplicationLaunch {
+        // Resolve a canonical bundle path before taking the launch lease. The
+        // native call resolves afresh under that lease and never repeats launch.
+        let resolved = match self.read_rpc(json!({"operation":"resolve_app","app_id":app_id}), call)
+        {
+            Ok(value) => value,
+            Err(error) => {
+                return ApplicationLaunch {
+                    outcome: ActionOutcome::rejected(error),
+                    instances: vec![],
+                }
+            }
+        };
+        let request = json!({"operation":"launch_app","app_id":app_id,"application_key":resolved["bundle_path"]});
+        let reply = match self.rpc(request, call) {
+            Ok(value) => value,
+            Err((error, dispatched)) => {
+                return ApplicationLaunch {
+                    outcome: if dispatched {
+                        ActionOutcome::unknown(error)
+                    } else {
+                        ActionOutcome::rejected(error)
+                    },
+                    instances: vec![],
+                }
+            }
+        };
+        let mut outcome = lifecycle_reply(&reply, "application_running");
+        let instances = if outcome.error.is_none() {
+            match array(&reply, "apps")
+                .and_then(|apps| apps.iter().map(|a| parse_app(&a["app"])).collect())
+            {
+                Ok(instances) => instances,
+                Err(error) => {
+                    outcome = ActionOutcome::unknown(error);
+                    vec![]
+                }
+            }
+        } else {
+            vec![]
+        };
+        ApplicationLaunch { outcome, instances }
+    }
+    fn keypress_application(
+        &self,
+        app: &AppInstance,
+        keys: &[String],
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        self.action(
+            json!({"operation":"keypress_app","target":{"app":app_json(app)},"keys":keys}),
+            call,
+        )
+    }
+    fn quit_application(&self, app: &AppInstance, call: &CallContext<'_>) -> ActionOutcome {
+        match self.rpc(
+            json!({"operation":"quit_app","target":{"app":app_json(app)}}),
+            call,
+        ) {
+            Ok(value) => lifecycle_reply(&value, "application_exited"),
+            Err((error, true)) => ActionOutcome::unknown(error),
+            Err((error, false)) => ActionOutcome::rejected(error),
+        }
+    }
+    fn close_window(&self, target: &WindowTarget, call: &CallContext<'_>) -> ActionOutcome {
+        match self.rpc(
+            json!({"operation":"close_window","target":target_json(target)}),
+            call,
+        ) {
+            Ok(value) => lifecycle_reply(&value, "window_closed"),
+            Err((error, true)) => ActionOutcome::unknown(error),
+            Err((error, false)) => ActionOutcome::rejected(error),
+        }
+    }
     fn windows(&self, app: &AppInstance, call: &CallContext<'_>) -> Result<WindowInventory, Error> {
         let result = self.read_rpc(json!({"operation":"windows","app":app_json(app)}), call)?;
         parse_window_inventory(&result, app)
@@ -1048,6 +1173,42 @@ impl Backend for NativeBackend {
             Ok(reply) => action_reply(&reply),
             Err((error, true)) => ActionOutcome::unknown(error),
             Err((error, false)) => ActionOutcome::rejected(error),
+        }
+    }
+    fn pointer_gesture(
+        &self,
+        target: &WindowTarget,
+        binding: &NativeBinding,
+        gesture: &PointerGesture,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        let Some((bounds, width, height)) = &binding.pixels else {
+            return ActionOutcome::rejected(Error::InvalidObservation);
+        };
+        let path = gesture
+            .points()
+            .iter()
+            .map(|p| {
+                bound_pixel_point(bounds, *width, *height, *p).map(|(x, y)| json!({"x":x,"y":y}))
+            })
+            .collect::<Result<Vec<_>, _>>();
+        let path = match path {
+            Ok(path) if !path.is_empty() => path,
+            Ok(_) => return ActionOutcome::rejected(Error::InvalidPoint),
+            Err(e) => return ActionOutcome::rejected(e),
+        };
+        let op = match gesture {
+            PointerGesture::Move(_) => "move",
+            PointerGesture::Drag(_) => "drag",
+        };
+        match self.scene_rpc(
+            json!({"operation":op,"target":target_json(target),"bounds":bounds,
+            "screen_x":path[0]["x"],"screen_y":path[0]["y"],"path":path}),
+            call,
+        ) {
+            Ok(reply) => action_reply(&reply),
+            Err((e, true)) => ActionOutcome::unknown(e),
+            Err((e, false)) => ActionOutcome::rejected(e),
         }
     }
     fn supports_scroll_anchor(&self, kind: ObservationKind) -> bool {
@@ -1265,6 +1426,25 @@ fn parse_delivery(value: Option<&Value>) -> Result<Option<InputDelivery>, ()> {
     }))
 }
 
+fn lifecycle_reply(reply: &Value, expected: &str) -> ActionOutcome {
+    if reply["evidence"] == "confirmed"
+        && reply["postcondition"] == expected
+        && reply.get("error").is_none()
+    {
+        let dispatch = match reply["dispatch"].as_str() {
+            Some("dispatched") => DispatchState::Dispatched,
+            Some("not_dispatched") => DispatchState::NotDispatched,
+            _ => return ActionOutcome::unknown(Error::InvalidObservation),
+        };
+        return ActionOutcome {
+            delivery: None,
+            dispatch,
+            evidence: EffectEvidence::Confirmed(expected.into()),
+            error: None,
+        };
+    }
+    action_reply(reply)
+}
 fn action_reply(reply: &Value) -> ActionOutcome {
     let dispatch = match reply["dispatch"].as_str() {
         Some("not_dispatched") => DispatchState::NotDispatched,
@@ -1294,6 +1474,37 @@ fn action_reply(reply: &Value) -> ActionOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lifecycle_confirmation_requires_the_exact_native_fact() {
+        for dispatch in ["dispatched", "not_dispatched"] {
+            let valid =
+                json!({"dispatch":dispatch,"evidence":"confirmed","postcondition":"window_closed"});
+            assert_eq!(
+                lifecycle_reply(&valid, "window_closed").evidence,
+                EffectEvidence::Confirmed("window_closed".into())
+            );
+            // Ordinary input cannot smuggle a confirmed lifecycle fact.
+            assert_eq!(action_reply(&valid).dispatch, DispatchState::Unknown);
+        }
+        for invalid in [
+            json!({"dispatch":"unknown","evidence":"confirmed","postcondition":"window_closed"}),
+            json!({"dispatch":"dispatched","evidence":"confirmed","postcondition":"application_exited"}),
+            json!({"dispatch":"dispatched","evidence":"confirmed","postcondition":"window_closed","error":null}),
+            json!({"dispatch":"not_dispatched","evidence":"unverified"}),
+        ] {
+            assert_eq!(
+                lifecycle_reply(&invalid, "window_closed").dispatch,
+                DispatchState::Unknown
+            );
+        }
+        let pending = lifecycle_reply(
+            &json!({"dispatch":"dispatched","evidence":"unverified"}),
+            "application_exited",
+        );
+        assert_eq!(pending.dispatch, DispatchState::Dispatched);
+        assert_eq!(pending.evidence, EffectEvidence::Unverified);
+    }
 
     fn capture_target() -> WindowTarget {
         WindowTarget {
@@ -3063,6 +3274,24 @@ fn parse_window_rows(
                 return Err(Error::InvalidObservation);
             }
             Ok(WindowInfo {
+                scene: row
+                    .get("scene")
+                    .map(|layout| {
+                        let a = layout["bounds"]
+                            .as_array()
+                            .filter(|a| a.len() == 4)
+                            .ok_or(Error::InvalidObservation)?;
+                        let mut rect = [0.0; 4];
+                        for (i, v) in a.iter().enumerate() {
+                            rect[i] = v.as_f64().ok_or(Error::InvalidObservation)?;
+                        }
+                        let rank = layout["rank"]
+                            .as_u64()
+                            .and_then(|r| u32::try_from(r).ok())
+                            .ok_or(Error::InvalidObservation)?;
+                        WindowLayout::new(rect, rank).ok_or(Error::InvalidObservation)
+                    })
+                    .transpose()?,
                 target,
                 title: string(row, "title")?.into(),
                 visible: row["onscreen"].as_bool().ok_or(Error::InvalidObservation)?,

@@ -32,6 +32,9 @@ impl Factory for PagedCatalog {
 }
 
 fn call(server: &Arc<Server<PagedCatalog>>, id: &str, name: &str, arguments: Value) -> Reply {
+    if name == "result" {
+        return server.result(arguments);
+    } // Internal ledger inspection.
     match server.begin(json!(id), name, arguments) {
         Started::Reply(reply) => reply,
         Started::Call(call) => server.run(&call),
@@ -57,7 +60,7 @@ fn assert_discovery(actual: &Value, visited: u32, terminal: bool) {
 fn terminal_incomplete_discovery_survives_js_discard_and_exception_in_public_results() {
     for throws in [false, true] {
         let (_, backend) = setup();
-        let server = Server::new(PagedCatalog(backend.clone()));
+        let server = Server::new_atomic_test(PagedCatalog(backend.clone()));
         let tail = if throws {
             "if(!page.coverage.complete) throw new Error('Incomplete');"
         } else {
@@ -127,7 +130,7 @@ fn unfinished_pagination_and_failed_continuation_are_not_terminal_incomplete_que
     for fail_next in [false, true] {
         let (_, backend) = setup();
         backend.fail_next.store(fail_next, Ordering::SeqCst);
-        let server = Server::new(PagedCatalog(backend.clone()));
+        let server = Server::new_atomic_test(PagedCatalog(backend.clone()));
         let source = format!(
             "const w=(await app.windows()).windows[0].window_ref;\
              const p=await app.observe({{window_ref:w}});\
@@ -186,7 +189,7 @@ fn terminal_discovery_metadata_survives_real_result_payload_eviction() {
 fn fresh_complete_query_records_recovery_with_exact_public_refs_within_one_execution() {
     let (_, backend) = setup();
     backend.complete_after_first.store(true, Ordering::SeqCst);
-    let server = Server::new(PagedCatalog(backend.clone()));
+    let server = Server::new_atomic_test(PagedCatalog(backend.clone()));
     let source = format!(
         "{READ_ALL}\
         const fresh=await app.observe({{window_ref}});\

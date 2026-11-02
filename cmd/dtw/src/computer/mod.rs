@@ -11,6 +11,20 @@ pub struct AppInstance {
     pub generation: u64,
 }
 
+/// A logical installed target can exist before its first native instance.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApplicationTarget {
+    pub app_id: String,
+    pub name: String,
+    pub instances: Vec<AppInstance>,
+}
+
+pub struct ApplicationLaunch {
+    pub outcome: ActionOutcome,
+    /// Only positively identified instances, including after partial delivery.
+    pub instances: Vec<AppInstance>,
+}
+
 /// Catalog admission is about exact native members, not path equality. A stable
 /// public application ID may cover more than one installed copy of an app.
 pub fn validate_app_instances(apps: &[AppInstance]) -> Result<(), Error> {
@@ -110,11 +124,16 @@ pub struct InputDelivery {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Capability {
+    Launch,
+    Quit,
+    CloseWindow,
     Windows,
     Observe,
     Press,
     Capture,
     Click,
+    Move,
+    Drag,
     TypeText,
     Keypress,
     Scroll,
@@ -124,12 +143,17 @@ pub enum Capability {
 }
 
 impl Capability {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 16] = [
+        Self::Launch,
+        Self::Quit,
+        Self::CloseWindow,
         Self::Windows,
         Self::Observe,
         Self::Press,
         Self::Capture,
         Self::Click,
+        Self::Move,
+        Self::Drag,
         Self::TypeText,
         Self::Keypress,
         Self::Scroll,
@@ -140,11 +164,16 @@ impl Capability {
 
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Launch => "launch",
+            Self::Quit => "quit",
+            Self::CloseWindow => "closeWindow",
             Self::Windows => "windows",
             Self::Observe => "observe",
             Self::Press => "press",
             Self::Capture => "capture",
             Self::Click => "click",
+            Self::Move => "move",
+            Self::Drag => "drag",
             Self::TypeText => "typeText",
             Self::Keypress => "keypress",
             Self::Scroll => "scroll",
@@ -370,8 +399,48 @@ impl Default for ClickOptions {
     }
 }
 
+/// A complete pointer transaction bound to one captured window. Never holds
+/// buttons across calls; providers release an admitted drag on every exit.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PointerGesture {
+    Move(PixelPoint),
+    Drag(Vec<PixelPoint>),
+}
+impl PointerGesture {
+    pub fn points(&self) -> &[PixelPoint] {
+        match self {
+            Self::Move(point) => std::slice::from_ref(point),
+            Self::Drag(path) => path,
+        }
+    }
+    pub fn capability(&self) -> Capability {
+        match self {
+            Self::Move(_) => Capability::Move,
+            Self::Drag(_) => Capability::Drag,
+        }
+    }
+}
+
+/// Validated screen-space layout; native JSON stays outside the portable core.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WindowLayout {
+    bounds: [f64; 4],
+    pub rank: u32,
+}
+impl Eq for WindowLayout {} // The constructor excludes NaN and infinity.
+impl WindowLayout {
+    pub fn new(bounds: [f64; 4], rank: u32) -> Option<Self> {
+        (bounds.iter().all(|v| v.is_finite()) && bounds[2] > 0.0 && bounds[3] > 0.0)
+            .then_some(Self { bounds, rank })
+    }
+    pub fn bounds(&self) -> [f64; 4] {
+        self.bounds
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WindowInfo {
+    pub scene: Option<WindowLayout>,
     pub target: WindowTarget,
     pub title: String,
     pub visible: bool,
@@ -694,6 +763,26 @@ pub trait Backend: Send + Sync {
     fn conditions(&self) -> &'static [&'static str] {
         &[]
     }
+    fn launch_application(&self, _app_id: &str, _call: &CallContext<'_>) -> ApplicationLaunch {
+        ApplicationLaunch {
+            outcome: ActionOutcome::rejected(Error::UnsupportedCapability),
+            instances: Vec::new(),
+        }
+    }
+    fn keypress_application(
+        &self,
+        _app: &AppInstance,
+        _keys: &[String],
+        _call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        ActionOutcome::rejected(Error::UnsupportedCapability)
+    }
+    fn quit_application(&self, _app: &AppInstance, _call: &CallContext<'_>) -> ActionOutcome {
+        ActionOutcome::rejected(Error::UnsupportedCapability)
+    }
+    fn close_window(&self, _target: &WindowTarget, _call: &CallContext<'_>) -> ActionOutcome {
+        ActionOutcome::rejected(Error::UnsupportedCapability)
+    }
     fn windows(
         &self,
         _app: &AppInstance,
@@ -815,6 +904,15 @@ pub trait Backend: Send + Sync {
         _binding: &Self::Binding,
         _element: ElementId,
         _value: &str,
+        _call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        ActionOutcome::rejected(Error::UnsupportedCapability)
+    }
+    fn pointer_gesture(
+        &self,
+        _target: &WindowTarget,
+        _binding: &Self::Binding,
+        _gesture: &PointerGesture,
         _call: &CallContext<'_>,
     ) -> ActionOutcome {
         ActionOutcome::rejected(Error::UnsupportedCapability)

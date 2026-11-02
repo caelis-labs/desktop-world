@@ -173,8 +173,8 @@ class Fixture(unittest.TestCase):
         for name in ("LICENSE", "THIRD_PARTY_NOTICES.md", "install.md", "docs/install.md",
                      "docs/install-dsh.md", "docs/install-caelis.md", "docs/install-agy.md", "docs/native-source-provenance.md",
                      "docs/native-source-provenance-cross-platform.md", "docs/background-input-port.md",
-                     "docs/windows-cursor-port.md",
-                     "skills/desktop-world/SKILL.md"):
+                     "docs/windows-cursor-port.md", "docs/agent-protocol-migration.md",
+                     "skills/desktop-world/SKILL.md", "skills/desktop-world/API.md", "skills/desktop-world/PATTERNS.md"):
             put(self.repo, name, "Original reviewed source content\n")
         put(self.repo, "docs/examples/mcp.json", '{"mcpServers":{"desktop-world":{"command":"/absolute/path/to/dtw","args":["mcp"]}}}\n')
         put(self.repo, "docs/examples/codex.toml", '[mcp_servers.desktop-world]\ncommand="/absolute/path/to/dtw"\nargs=["mcp"]\n')
@@ -185,6 +185,9 @@ class Fixture(unittest.TestCase):
         put(self.repo, "tests/acceptance/windows/README.md",
             (Path(__file__).parent / "acceptance/windows/README.md").read_bytes())
         put(self.repo, "tests/acceptance/windows/smoke.ps1", "# Owned-window standard MCP smoke\n")
+        for name in ("app_client.py", "windows/app_protocol_probe.py", "windows/cursor_probe.py"):
+            put(self.repo, "tests/acceptance/" + name,
+                (Path(__file__).parent / "acceptance" / name).read_bytes())
         for name in ("server.py", "index.html"):
             put(self.repo, "tests/fixtures/browser-workbench/" + name, "Same-source browser task 中文 🐦\n")
         self.sysroot = self.root / "rust"
@@ -448,7 +451,7 @@ class BinaryAndArchiveTests(Fixture):
             package = self.root / target
             package.mkdir()
             candidate.package_assets(self.repo, package, "0.2.0", target)
-            for guide in ("install.md", "docs/install.md", "docs/install-dsh.md", "docs/install-caelis.md", "docs/install-agy.md"):
+            for guide in ("install.md", "docs/install.md", "docs/install-dsh.md", "docs/install-caelis.md", "docs/install-agy.md", "docs/agent-protocol-migration.md"):
                 self.assertEqual((package / guide).read_bytes(), (self.repo / guide).read_bytes())
             config = json.loads((package / ".mcp.json").read_text())
             self.assertEqual(config["mcpServers"]["desktop-world"], {"command": "${CLAUDE_PLUGIN_ROOT}/bin/" + binary, "args": ["mcp"]})
@@ -505,6 +508,9 @@ class WorkflowTests(Fixture):
         with zipfile.ZipFile(output / result["archive"]) as archive:
             self.assertEqual(archive.read(package_name + "/acceptance/windows/README.md"),
                              (self.repo / "tests/acceptance/windows/README.md").read_bytes())
+            for name in ("app_client.py", "windows/app_protocol_probe.py", "windows/cursor_probe.py"):
+                self.assertEqual(archive.read(package_name + "/acceptance/" + name),
+                                 (self.repo / "tests/acceptance" / name).read_bytes())
             for name in ("server.py", "index.html"):
                 self.assertEqual(archive.read(package_name + "/acceptance/browser-workbench/" + name),
                                  (self.repo / "tests/fixtures/browser-workbench" / name).read_bytes())

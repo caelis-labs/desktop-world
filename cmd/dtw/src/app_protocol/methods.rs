@@ -2,6 +2,10 @@
 use crate::computer::Capability;
 #[derive(Clone, Copy)]
 pub(super) enum Method {
+    Window,
+    Launch,
+    Quit,
+    CloseWindow,
     Windows,
     WaitForWindow,
     Wait,
@@ -18,7 +22,11 @@ pub(super) enum Method {
     ReadText,
 }
 impl Method {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 18] = [
+        Self::Window,
+        Self::Launch,
+        Self::Quit,
+        Self::CloseWindow,
         Self::Windows,
         Self::WaitForWindow,
         Self::Wait,
@@ -36,6 +44,10 @@ impl Method {
     ];
     pub fn name(self) -> &'static str {
         match self {
+            Self::Window => "window",
+            Self::Launch => "launch",
+            Self::Quit => "quit",
+            Self::CloseWindow => "closeWindow",
             Self::Windows => "windows",
             Self::WaitForWindow => "waitForWindow",
             Self::Wait => "wait",
@@ -53,17 +65,24 @@ impl Method {
         }
     }
     pub fn arity(self) -> usize {
-        if matches!(self, Self::Windows) {
+        if matches!(self, Self::Windows | Self::Launch) {
             0
         } else {
             1
         }
     }
     pub fn window_target(self) -> bool {
-        !matches!(self, Self::Windows)
+        !matches!(
+            self,
+            Self::Windows | Self::Window | Self::Launch | Self::Quit
+        )
     }
     pub fn capability(self) -> Capability {
         match self {
+            Self::Window => Capability::Windows,
+            Self::Launch => Capability::Launch,
+            Self::Quit => Capability::Quit,
+            Self::CloseWindow => Capability::CloseWindow,
             Self::Windows | Self::WaitForWindow => Capability::Windows,
             Self::Find | Self::Wait => Capability::Observe,
             Self::Observe => Capability::Observe,
@@ -86,7 +105,7 @@ pub(super) fn facade_metadata() -> String {
     serde_json::to_string(
         &Method::ALL
             .into_iter()
-            .map(|m| serde_json::json!({"name":m.name(),"arity":m.arity()}))
+            .map(|m| serde_json::json!({"name":m.name(),"arity":m.arity(),"optional":matches!(m, Method::Quit | Method::Window),"window":m.window_target()}))
             .collect::<Vec<_>>(),
     )
     .unwrap()

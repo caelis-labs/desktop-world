@@ -36,6 +36,8 @@ class PluginStageTests(unittest.TestCase):
                                  (ROOT / "skills/desktop-world/SKILL.md").read_bytes())
                 self.assertEqual((output / "skills/desktop-world/PATTERNS.md").read_bytes(),
                                  (ROOT / "skills/desktop-world/PATTERNS.md").read_bytes())
+                self.assertEqual((output / "skills/desktop-world/API.md").read_bytes(),
+                                 (ROOT / "skills/desktop-world/API.md").read_bytes())
                 manifests = [json.loads((output / path).read_text(encoding="utf-8")) for path in
                              ("plugin.json", ".claude-plugin/plugin.json", ".antigravity-plugin/plugin.json")]
                 self.assertEqual({manifest["name"] for manifest in manifests}, {"desktop-world"})

@@ -70,6 +70,7 @@ namespace DtwWindowsSmoke {
         readonly bool dpiSet;
         int sequence, increments, saves, leftUps, rightUps, doubles, wheelDelta, layoutSequence;
         string saved = "";
+        bool modalOpen;
         bool ready, closed;
 
         Fixture(string directory, string instance, bool awarenessSet) {
@@ -114,7 +115,9 @@ namespace DtwWindowsSmoke {
                 using (var dialog = new Form { Text="Owned native modal", AccessibleName="Owned native modal", ClientSize=new Size(280,100),
                     StartPosition=FormStartPosition.CenterParent, ShowInTaskbar=false }) {
                     var close=new Button { Text="Close dialog", AccessibleName="Close dialog", Location=new Point(20,20), Size=new Size(160,35), DialogResult=DialogResult.Cancel };
-                    dialog.Controls.Add(close);dialog.CancelButton=close;dialog.ShowDialog(this);
+                    dialog.Controls.Add(close);dialog.CancelButton=close;
+                    modalOpen=true; Publish();
+                    try { dialog.ShowDialog(this); } finally { modalOpen=false; Publish(); }
                 }
             }); };
             Controls.Add(openDialog);
@@ -214,7 +217,7 @@ namespace DtwWindowsSmoke {
                 layout_sequence = layoutSequence, increment_bounds = ControlBounds(increment), editor_bounds = ControlBounds(editor),
                 working_area = new { x = Screen.PrimaryScreen.WorkingArea.X, y = Screen.PrimaryScreen.WorkingArea.Y,
                     width = Screen.PrimaryScreen.WorkingArea.Width, height = Screen.PrimaryScreen.WorkingArea.Height },
-                editor_focused = editor.Focused, text = editor.Text, saved = saved, saves = saves, increments = increments,
+                modal_open = modalOpen, editor_focused = editor.Focused, text = editor.Text, saved = saved, saves = saves, increments = increments,
                 left_up = leftUps, right_up = rightUps, double_clicks = doubles, wheel_delta = wheelDelta,
                 keys_down_global = held
             });

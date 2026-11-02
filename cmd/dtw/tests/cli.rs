@@ -32,7 +32,12 @@ fn version_is_available_without_worker_or_bundle() {
 
 #[test]
 fn legacy_commands_are_rejected() {
-    for args in [&["install", "plugin"][..], &["--stdio"], &["--serve"]] {
+    for args in [
+        &["install", "plugin"][..],
+        &["--stdio"],
+        &["--serve"],
+        &["api"],
+    ] {
         let output = cli(args);
         assert_eq!(output.status.code(), Some(2));
         assert!(output.stdout.is_empty());

@@ -131,6 +131,9 @@ jobs:
         run: |
           cargo test --release --locked --manifest-path cmd/dtw/Cargo.toml --lib --bins --tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Acceptance observer file-sharing controls (no GUI)
+        shell: pwsh
+        run: python -m unittest discover -s tests -p test_windows_app_protocol_probe.py
       - name: Compile the real-machine acceptance fixtures (do not run GUI)
         shell: pwsh
         run: |

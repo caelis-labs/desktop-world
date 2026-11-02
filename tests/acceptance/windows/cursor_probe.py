@@ -98,9 +98,13 @@ class Mcp:
                 self.messages.put(EOFError('MCP stdout closed'))
         self.reader = threading.Thread(target=receive, daemon=True)
         self.reader.start()
-        self.rpc('initialize', {'protocolVersion':'2025-06-18', 'capabilities':{},
-                                'clientInfo':{'name':'dtw-windows-cursor-acceptance','version':'1'}})
-        self.send({'jsonrpc':'2.0', 'method':'notifications/initialized'})
+        try:
+            self.rpc('initialize', {'protocolVersion':'2025-06-18', 'capabilities':{},
+                                    'clientInfo':{'name':'dtw-windows-cursor-acceptance','version':'1'}})
+            self.send({'jsonrpc':'2.0', 'method':'notifications/initialized'})
+        except BaseException:
+            self.close()
+            raise
 
     def send(self, message):
         with (self.output/'requests.jsonl').open('a', encoding='utf-8') as log:

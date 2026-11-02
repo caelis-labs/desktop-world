@@ -71,12 +71,12 @@ fn executes_each_app_operation_through_host_with_exact_refs_and_source_lines() {
 fn only_small_frozen_app_surface_exists_and_native_bridges_are_hidden() {
     let out = pure(
         r#"
-      const names=['__host','__done','__log','__settle','__reject_unhandled','__initial_state','__methods','cua','process','require','fetch','std','os','setTimeout'];
+      const names=['__host','__done','__log','__settle','__reject_unhandled','__initial_state','__methods','__session','cua','process','require','fetch','std','os','setTimeout'];
       for (const name of names) if (typeof globalThis[name] !== 'undefined') throw new Error(name);
       if (!Object.isFrozen(app) || !Object.isFrozen(app.press) || !Object.isFrozen(console)) throw new Error('mutable API');
       if (Object.getPrototypeOf(app)!==null) throw new Error('app prototype');
       try { app.raw = ()=>1; } catch (_) {}
-      if (app.raw || app.pid || app.app_ref || app.launch || app.sleep) throw new Error('privilege');
+      if (app.raw || app.pid || app.app_ref || app.sleep) throw new Error('privilege');
       return Object.keys(app);
     "#,
         json!({}),
@@ -84,6 +84,10 @@ fn only_small_frozen_app_surface_exists_and_native_bridges_are_hidden() {
     assert_eq!(
         out.result.unwrap().value,
         json!([
+            "window",
+            "launch",
+            "quit",
+            "closeWindow",
             "windows",
             "waitForWindow",
             "wait",
@@ -483,7 +487,7 @@ fn result_omission_preserves_traversal_and_data_property_guards() {
         "const result={};let current=result;for(let i=0;i<65;i++){current.child={};current=current.child;}return result;",
     ] {
         let failure=pure(source,json!({})).result.unwrap_err();
-        assert_eq!(failure.code.as_deref(),Some("invalid_json"));
+        assert_eq!(failure.code.as_deref(),Some("invalid_json"),"{failure:?}");
         assert!(failure.message.contains("JSON traversal limit"),"{failure:?}");
     }
     for source in [

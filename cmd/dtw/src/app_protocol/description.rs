@@ -237,12 +237,21 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
     json!({
         "version":1,"language":"javascript",
         "entry":"exec({app: 'com.example.App', source}); source is an async function body with app and state",
-        "facade":{"windows":"app.windows()","waitForWindow":"app.waitForWindow({window_ref,state:'dialog'|'unblocked'|'closed',timeout_ms?})","wait":"app.wait({window_ref,selector:{scope?:'window'|'menu',role?,text?},state:'present'|'absent'|'enabled'|'disabled',timeout_ms?})","find":"app.find({window_ref,selector:{scope?:'window'|'menu',role?,text?},timeout_ms?})","observe":"app.observe({window_ref, role?, text?, limit?}) or add scope:'menu', observation_ref+element_ref (subtree), or observation_ref+region:{x,y,width,height} (capture pixels); continue with app.observe({cursor})","capture":"app.capture({window_ref})",
+        "facade":{"window":"app.window({title?,window_ref?,timeout_ms?}); returns a bound Window","launch":"app.launch()","quit":"app.quit({window_ref?})","closeWindow":"app.closeWindow({window_ref})","windows":"app.windows()","waitForWindow":"app.waitForWindow({window_ref,state:'dialog'|'unblocked'|'closed',timeout_ms?})","wait":"app.wait({window_ref,selector:{scope?:'window'|'menu',role?,text?},state:'present'|'absent'|'enabled'|'disabled',timeout_ms?})","find":"app.find({window_ref,selector:{scope?:'window'|'menu',role?,text?},timeout_ms?})","observe":"app.observe({window_ref, role?, text?, limit?}) or add scope:'menu', observation_ref+element_ref (subtree), or observation_ref+region:{x,y,width,height} (capture pixels); continue with app.observe({cursor})","capture":"app.capture({window_ref})",
             "press":"app.press({window_ref,selector:{scope?:'window'|'menu',role?,text?},timeout_ms?}) or {window_ref,observation_ref,element_ref}","click":"app.click({window_ref,observation_ref,x,y,coordinate_space?,button?,count?})",
             "typeText":"app.typeText({window_ref,text})","keypress":"app.keypress({window_ref,keys})","scroll":"app.scroll({window_ref,delta_x?,delta_y?,observation_ref?,x?,y?,element_ref?})",
             "focus":"app.focus({window_ref})","setValue":"app.setValue({window_ref,selector:{scope?:'window'|'menu',role?,text?},value,timeout_ms?}) or {window_ref,observation_ref,element_ref,value}",
             "readText":"app.readText({window_ref,observation_ref,element_ref,offset?,limit?})"},
         "methods":{
+            (Method::Window.name()):{"parameters":object(json!({"title":{"type":"string"},"window_ref":reference,"timeout_ms":timeout}), &[]),
+                "returns":object(json!({"window_ref":reference,"title":{"type":"string"},"visible":{"type":"boolean"}}), &["window_ref","title","visible"]),
+                "requires":["windows"],"semantics":"Return a script-local bound Window. Omit the query only when the complete inventory has one window; title is an exact filter and never native identity. Ambiguity or partial coverage cannot select a first match. Missing windows poll reads briefly. A known window_ref binds without another inventory read; subsequent methods still validate the exact native target. Call bound press/setValue/observe/capture/wait/etc with ordinary arguments minus window_ref, and close() to close this window. For pagination use app.observe({cursor}). Store only window_ref in session.state; bound objects are not JSON."},
+            (Method::Launch.name()):{"parameters":null,"returns":receipt,"requires":["launch"],
+                "semantics":"Ensure this installed application is running. Reuse a proven running instance; never create a second instance implicitly. Confirmed application_running proves a process, not a ready window. Group launch and window discovery in one exec. Launch does not request foreground activation. Cancellation never rolls back a dispatched launch."},
+            (Method::Quit.name()):{"parameters":object(json!({"window_ref":reference}), &[]),"returns":receipt,"requires":["quit"],
+                "semantics":"Request normal termination once and briefly wait for the exact process incarnation to exit. With multiple instances window_ref must choose one. application_exited confirms that instance ended; application_not_running is a no-dispatch conclusion. An unverified dispatched result may be blocked by a save prompt or delayed; inspect fresh windows before new work. Never force-kills, discards documents or repeats quit automatically. Session JSON survives exit and relaunch; old native refs do not."},
+            (Method::CloseWindow.name()):{"parameters":window,"returns":receipt,"requires":["closeWindow"],
+                "semantics":"Invoke the exact window's proven native close action once and briefly wait for its disappearance. window_closed does not establish application termination or persistence of unsaved data. If unverified, inspect for a save dialog. Never substitutes a keyboard shortcut, quits peer windows or force-kills."},
             (Method::Windows.name()):{"parameters":null,"returns":inventory,"requires":[Method::Windows.capability().as_str()],
                 "semantics":"No arguments. Aggregates proven windows from the app instances discovered before this exec. Each window_ref routes to its exact native instance. Unchanged targets keep refs and observations; proven removed targets retire theirs. A failed instance does not discard proven sibling windows: partial coverage reports unavailable_instances and bounded errors. When no instance can be inventoried the call throws; an unproven inventory is never success []."},
             (Method::Find.name()):{"parameters":select,"returns":found,"requires":["observe"],
@@ -285,7 +294,7 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
             "memory_bytes":memory_bytes,"stack_bytes":stack_bytes,"max_result_bytes":65536,"max_state_bytes":65536,
             "max_unhandled_rejections":super::script_engine::MAX_UNHANDLED_REJECTIONS,"max_json_depth":64,"max_json_nodes":32768,"max_console_lines":200,"max_console_utf8_bytes":32768,
             "console_line_content_characters_before_truncation":2000},
-        "execution":"Await every app call sequentially; no concurrent or detached Host calls, timers, imports, filesystem, process or network APIs. One script executes at a time per MCP connection. Each Host call revalidates Core instance, target and binding under one absolute script deadline.",
+        "execution":"Await every app call sequentially; no concurrent or detached Host calls, timers, imports, filesystem, process or network APIs. One desktop script executes at a time per MCP connection; one provider-free Session script may run alongside it, with independent cancellation and JSON state. Each Host call revalidates Core instance, target and binding under one absolute script deadline.",
         "state":"The state root object cannot be rebound. Modify its JSON fields; state must be strict JSON. Returned plain-object undefined properties are omitted recursively; undefined array elements remain invalid. Both reject non-finite numbers, cycles, functions, accessors and exotic objects, with depth <=64 and nodes <=32768. Invalid JSON errors include a bounded field path. An absent return or undefined result root becomes null. State commits only after successful completion before cancellation/timeout; mutations never roll back desktop effects.",
         "errors":{
             "shape":error,"catch":"Ordinary Host errors expose e.code and optional e.details and may be caught, including wait_timeout and window_wait_timeout (conditions not met). The execution deadline, cancellation and call limit remain failures even when caught. Unhandled Promise rejections fail the script without committing state. Caught memory-allocation exceptions may recover within the hard VM quota.",
@@ -297,9 +306,9 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
             "failure":"A Host error throws before returning to JavaScript; its action receipt remains in script.steps. Previously completed effects and receipts survive later exceptions, cancellation, timeout and VM failure.",
             "ledger":"script.steps retains number,line,operation,status,error,receipt and bounded selector/window-wait resolution plus discovery/inventory coverage independently of evictable value/image payloads. Bridge attempts consume call numbers, so the ledger may have gaps. No automatic replay. DTW keeps the original ledger; repeated accepted MCP transport IDs refer to the same execution, while new requests execute new work."
         },
-        "result":"exec waits until completion and returns value.result plus console,console_truncated,calls,last_capture. last_capture.step identifies the actual capture call; timing:before_later_calls and later_calls explicitly identify an image predating later calls. Input never implicitly takes a post-action screenshot; call capture after input when visual verification is needed. script.summary replaces the step ledger with counts and a last_issue sample; script.failure,state_committed,shutdown_error,optional focus_return and all recovery flags remain. result({app}) retrieves the full original record with script.steps; optional execution_id selects a prior returned record. Summary dispatch/evidence counts do not prove business success. Optional delivery summaries retain reported routes and focus-return evidence; absent delivery is not inferred. An app.focus receipt may remain pending while script.focus_return records the later execution cleanup. Caught errors may coexist with state_committed=true; consult the full ledger for all issues, never replay. Payload eviction sets payload_expired and may clear value/image while retaining errors and receipts.",
+        "result":"exec waits until completion and returns value.result plus console,console_truncated,calls,last_capture. last_capture.step identifies the actual capture call; timing:before_later_calls and later_calls explicitly identify an image predating later calls. Input never implicitly takes a post-action screenshot; call capture after input when visual verification is needed. script.summary replaces the step ledger with counts and a last_issue sample; script.failure,state_committed,shutdown_error,optional focus_return and all recovery flags remain. session.result(execution_id?) reads the original record without replay. Its optional query accepts execution_id, offset and limit (default 16, maximum 64), returns script.total_steps/offset/next_offset, and bounds step pages to 256 KiB. Select small fields before print/return; the normal output limits still apply. Omit app on exec for recovery without a native owner. A recovered PNG is explicitly historical. Summary dispatch/evidence counts do not prove business success. Optional delivery summaries retain reported routes and focus-return evidence; absent delivery is not inferred. An app.focus receipt may remain pending while script.focus_return records the later execution cleanup. Caught errors may coexist with state_committed=true; consult the full ledger for all issues, never replay. Payload eviction sets payload_expired and may clear value/image while retaining errors and receipts.",
         "images":"value.last_capture identifies the last successful capture's step and metadata. Its PNG is returned as MCP image content outside the VM; scripts cannot access or return image bytes.",
-        "lifecycle":"Cancellation or script timeout closes the context, stops native resources and joins the VM before job completion. Cancellation cannot prove an already dispatched action did not occur. A later new exec rebuilds affected native references as needed (context_reset) while retaining committed JSON state. Only an actual application instance change clears state (state_reset). Retained jobs remain queryable within this MCP connection.",
+        "lifecycle":"Cancellation or script timeout closes the context, stops native resources and joins the VM before job completion. Cancellation cannot prove an already dispatched action did not occur. A later new exec rebuilds affected native references as needed (context_reset) while retaining committed JSON state. Application exit/relaunch also retains committed JSON state while retiring exact native refs; ordinary variables/functions are not persistent across VMs. session.state aliases the current lane state. print aliases bounded console.log. session.id belongs to the connection and session.app is the selected identifier or null. Retained jobs remain queryable within this MCP connection.",
         "example":{
             "purpose":"Choose one explicitly named window and enabled control, press once, independently reobserve, then capture. Replace the two exact names with the intended target's observed names; do not infer success from dispatch alone.",
             "source":"const inventory = await app.windows();\nconst candidates = inventory.windows.filter(w => w.title === 'Target window');\nif (candidates.length !== 1) throw new Error('Choose one target window');\nconst window_ref = candidates[0].window_ref;\nconst receipt = await app.press({window_ref, selector:{role:'button',text:'Target control'}});\nconst after = await app.observe({window_ref, limit:10});\nreturn {receipt, after};"
@@ -308,14 +317,17 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
 }
 
 /// Small default catalog; expensive schemas are opt-in through the api tool.
+#[cfg(test)]
 pub(super) fn index() -> Value {
     let full = super::scripts::description();
-    json!({"language":"javascript", "entry":"exec({app, source}); await app methods sequentially; state persists per app",
+    json!({"language":"javascript", "entry":"exec({app?, source}); desktop work requires app; await app methods sequentially; print small output; session.state is JSON",
+        "session":"session.result(id? | {execution_id?,offset?,limit?}) reads original receipts; omit app for recovery even during native cleanup. JSON state survives app relaunch; ordinary variables/functions do not persist. Store only window_ref from app.window().",
         "methods":full["facade"], "details":"Call api({methods:[name,...]}) for argument/return schemas and semantics. api({}) lists method signatures.",
         "references":"Keep window_ref in state. Observations expire after 15s; actions retire observations on that window. Read/act/verify in one script; never replay uncertain actions.",
         "limits":{"default_timeout_ms":super::scripts::DEFAULT_TIMEOUT_MS,"max_source_utf8_bytes":super::scripts::MAX_SOURCE_BYTES,"max_calls":null}})
 }
 
+#[cfg(test)]
 pub(super) fn requested(args: &Value) -> Result<Value, super::wire::WireError> {
     let invalid = |message: &str| super::wire::WireError {
         code: "invalid_arguments".into(),
@@ -350,28 +362,66 @@ pub(super) fn requested(args: &Value) -> Result<Value, super::wire::WireError> {
 }
 
 /// Generate the distributable declaration from discoverable return/argument schemas.
+#[cfg(test)]
 pub(super) fn typescript() -> String {
     let spec = super::scripts::description();
-    let mut out =
-        String::from("// Generated by dtw api. Edit the Rust script schemas, then regenerate.\n\n");
+    let mut out = String::from(
+        "// Internal atomic test protocol. Public Agent API: skills/desktop-world/API.md.\n\n",
+    );
     out.push_str("type Json = null | boolean | number | string | Json[] | { [key: string]: Json };\n\ninterface App {\n");
     for method in Method::ALL {
         let shape = &spec["methods"][method.name()];
         let args = if shape["parameters"].is_null() {
             String::new()
         } else {
-            format!("args: {}", ts_type(&shape["parameters"]))
+            format!(
+                "args{}: {}",
+                if matches!(method, Method::Quit | Method::Window) {
+                    "?"
+                } else {
+                    ""
+                },
+                ts_type(&shape["parameters"])
+            )
         };
         out.push_str(&format!(
             "  {}({}): Promise<{}>;\n",
             method.name(),
             args,
-            ts_type(&shape["returns"])
+            if matches!(method, Method::Window) {
+                "Window".into()
+            } else {
+                ts_type(&shape["returns"])
+            }
+        ));
+    }
+    out.push_str("}\ntype WindowArgs<T> = T extends {window_ref: string} ? Omit<T, 'window_ref'> : never;\ninterface Window {\n  readonly window_ref: string;\n  readonly title: string | null;\n");
+    for method in Method::ALL
+        .into_iter()
+        .filter(|method| method.window_target())
+    {
+        let name = method.name();
+        let optional = matches!(
+            method,
+            Method::Capture | Method::Focus | Method::CloseWindow
+        );
+        out.push_str(&format!(
+            "  {}(args{}: WindowArgs<Parameters<App[\"{}\"]>[0]>): ReturnType<App[\"{}\"]>;\n",
+            if matches!(method, Method::CloseWindow) {
+                "close"
+            } else {
+                name
+            },
+            if optional { "?" } else { "" },
+            name,
+            name
         ));
     }
     out.push_str("}\ndeclare const app: Readonly<App>;\n/** JSON data persists per session and app instance, independently of native workers; commits on successful completion only. */\ndeclare const state: { [key: string]: Json };\n");
+    out.push_str("declare function print(...values: Json[]): void;\ninterface Session {\n  readonly id: string | null;\n  readonly app: string | null;\n  readonly state: { [key: string]: Json };\n  result(query?: string | {execution_id?: string; offset?: number; limit?: number}): Promise<Json>;\n}\ndeclare const session: Readonly<Session>;\n");
     out
 }
+#[cfg(test)]
 fn ts_type(schema: &Value) -> String {
     if let Some(value) = schema.get("const") {
         return value.to_string();

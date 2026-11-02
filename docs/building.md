@@ -49,8 +49,10 @@ unknown binding; it does not touch AX, screenshots or desktop input. It requires
 checks also run in CI; see [the CI/release lanes](releasing.md).
 
 The MCP product entry is `dtw mcp`; `dtw app catalog` is a diagnostic CLI.
-`dtw api` prints TypeScript generated from the same Rust schemas advertised by the
-`apps` index and detailed `api` tool; `docs/app-script-api.d.ts` is the checked-in generated contract.
+The public contract is the packaged `skills/desktop-world/SKILL.md` and its
+`API.md` reference. MCP exposes only `apps` and `exec`; the retired `dtw api`
+command is unavailable. The private atomic DSL has a test fixture under
+`tests/fixtures/atomic-script-api.d.ts`; it is not an Agent interface.
 Connect it using standard Agent MCP configuration; see [installation](install.md).
 Bare `dtw` and `--help` display help instead of starting an old MCP executor.
 
@@ -68,23 +70,41 @@ local iteration, but are not the recommended full-contract test lane.
 
 ## Current external-client GUI probe
 
-On a macOS test desktop, the opt-in standard probe builds two uniquely identified
-owned fixtures and launches the selected binary through ordinary stdio MCP:
+On a macOS test desktop, the current app-scene probe builds a uniquely identified
+owned application and exercises the two advertised tools through real stdio:
 
 ```sh
-python3 tests/acceptance/standard_agent_probe.py \
+python3 tests/acceptance/app_scene_probe.py \
   --dtw "$PWD/cmd/dtw/target/release/dtw" \
-  --output /tmp/dtw-standard-agent-new-run
+  --output /tmp/dtw-app-scene-new-run
 ```
 
-It records structured semantic press and independent fixture counters, PNG
-capture, original receipts, stale/cross-app rejection, standard cancellation and
-committed-state recovery, A→B→A retained window refs, and concurrent captures from two independent MCP sessions. Add `--pixel-click` only when the owned window can stay
-foreground and unobscured. Output must be a new directory. The script closes its
-exact server and fixture PIDs and retains evidence even on failure. It does not
-install Agent configuration or retry actions. This proves a standard external
-MCP client plus native GUI, separately from live LLM-host behavior. Historical
-grant probes are marked in their file headers and are not current entry tests.
+It checks discovery/admission, stopped-app startup, overlapping surfaces, popup
+hit-testing, stale geometry rejection, normal window close, save sheets, a running
+app without windows, application shortcuts, background-only refusal and restart.
+Its independent AppKit state records actual events. It never retries input.
+The separate `app_scene_readonly_probe.py` reads already-running Finder, Chrome
+and WPS, redacting UI payloads; absence/unsupported coverage stays explicit.
+These are native/script evidence, not real model/Harness A/B tests or proof that
+all app families are supported. Output directories must be new.
+
+The current lifecycle/LSUIElement runner uses the same two-tool protocol:
+
+```sh
+python3 tests/acceptance/app_lifecycle_probe.py \
+  --dtw /absolute/path/to/dtw --output /tmp/dtw-lifecycle-new-case
+```
+
+It covers accessory application discovery/input, nested-helper exclusion, normal
+quit/save prompts, restart, and cancellation followed by an ordinary read. The
+Windows current-protocol entry is `tests/acceptance/windows/app_protocol_probe.py`;
+see its [handoff](../tests/acceptance/windows/README.md).
+
+The old `standard_agent_probe.py`, `browser_workbench_probe.py`,
+`real_app_tasks.py` and related atomic-protocol runners retain historical evidence
+and reusable fixtures/transports. They are not current acceptance commands;
+their Session/result/window-ref workflows do not establish the public facade.
+Internal ownership, cancellation and resource tests stay in the source/Rust suites.
 
 ## Distribution
 
@@ -94,39 +114,25 @@ Skill. See [releasing](releasing.md) for candidate preservation and release chec
 Local staging with `scripts/stage-agent-plugin.py` is development evidence, not a
 signed installed artifact or a publication.
 
-## Optional native and Agent usability loop
+## Boundary acceptance after implementation
 
-The existing fast lane also executes the std-only input sequencing regressions and
-pure Swift surface/readiness/input controls. It still never compiles upstream CUA.
-The optional provider checks above type-check Windows/Linux source and tests only.
+Complete the code changes first, then run the source/release-profile checks and
+current native protocol probes together. Real application boundary acceptance
+follows those checks. Run GUI probes serially on disposable owned windows,
+profiles and documents. Preserve original failures and read back unknown effects;
+never retry input solely because its response is missing.
 
-Run the native input probe on the owned macOS test desktop before model tasks:
+For Chrome, explicitly exercise real translation/menu overlays, stacked windows,
+keyboard destination and image fallback. A generic AppKit panel or DOM dialog
+cannot substitute for that native browser surface. Real TextEdit/WPS/Obsidian
+workflows require independent saved-file/control evidence. The matrix below is
+a task specification, not a claim that the new protocol has passed those apps.
+No model/Harness A/B is required for this protocol work. Native protocol metrics
+record source/response bytes, image counts and elapsed time separately.
 
-```sh
-python3 tests/acceptance/native_input_probe.py --dtw /absolute/path/to/dtw \
-  --output /tmp/dtw-native-input-new-case --case all
-```
-
-Then use `tests/acceptance/browser_workbench_probe.py` with `--client dsh` or
-`--client agy` (the existing `claude` adapter remains available), `--dtw` and a fresh
-`--output` directory. DSH takes `--acp-adapter` pointing to its configured ACP launcher. Claude additionally takes
-`--acp-adapter /absolute/path/to/claude-agent-acp`; use the current official adapter
-and installed native Claude executable. This probe opens only its disposable
-Chrome workbench and TextEdit document, uses ordinary MCP/Skills, checks saves
-independently, and retains failures. It must run serially with other GUI probes.
-A local development stage is not an installed-artifact acceptance result.
-
-
-## Optional installed three-app diagnostics (macOS)
-
-Use `tests/acceptance/real_app_tasks.py --task chrome|wps|obsidian --client dsh|agy|claude`
-with a fresh `--output` per attempt and both `--dtw /absolute/package/bin/dtw` and
-`--installed-package /absolute/package`. DSH/Claude additionally use their ACP
-launcher. This keeps the installed executable path, stages only package-owned
-Skill/metadata for the isolated Agent and rechecks the full package manifest after
-cleanup. Omitting `--installed-package` is explicitly development evidence.
-The runner is macOS-specific; Windows uses the bundled Windows matrix/workbench.
-Caelis plugin/model acceptance is separate Core integration work.
+Fixed-source development candidates and installed-package acceptance come after
+these implementation/regression steps. Caelis consumer/model integration and
+final published-asset installation remain separate evidence boundaries.
 
 ## Real-task acceptance principles
 

@@ -42,11 +42,11 @@ for line in sys.stdin:
    'protocolVersion':'2025-06-18','capabilities':{'tools':{}},
    'serverInfo':{'name':'desktop-world','version':'9.8.7'}})
  elif method=='tools/list':
-  reply(request['id'],{'tools':[{'name':name} for name in ['apps','api','exec','result']]})
+  reply(request['id'],{'tools':[{'name':name,'inputSchema':{'properties':{'app':{},'source':{}},'required':['app','source'],'additionalProperties':False}} for name in ['apps','exec']]})
  else:
-  assert request['params']=={'name':'api','arguments':{'methods':['windows']}}
-  data={'methods':{'windows':{'parameters':None,'returns':{}}}}
-  reply(request['id'],{'isError':mode=='api_error','structuredContent':data,
+  assert request['params']=={'name':'exec','arguments':{'source':'return 1;'}}
+  data={'error':{'code':'invalid_arguments','message':'app is required'}}
+  reply(request['id'],{'isError':mode!='api_error','structuredContent':data,
    'content':[{'type':'text','text':json.dumps(data)}]})
   if mode=='extra_error':reply(88,error={'code':-32603,'message':'extra owned failure'})
   if mode=='notification':print(json.dumps({'jsonrpc':'2.0','method':'notifications/message','params':{'message':'owned notice'}}),flush=True)
@@ -86,11 +86,11 @@ class PackagedMcpTests(unittest.TestCase):
         sent = [json.loads(line) for line in (output / 'mcp/requests.jsonl').read_text().splitlines()]
         self.assertEqual([request['method'] for request in sent],
                          ['initialize', 'notifications/initialized', 'tools/list', 'tools/call'])
-        self.assertEqual(sent[-1]['params'], {'name': 'api', 'arguments': {'methods': ['windows']}})
+        self.assertEqual(sent[-1]['params'], {'name': 'exec', 'arguments': {'source': 'return 1;'}})
         self.assertEqual({row['role'] for row in report['cleanup']}, {'version', 'mcp'})
         self.assertTrue(all(row['exit_code'] == 0 and not row['forced'] for row in report['cleanup']))
         self.assertIn(b'owned diagnostic', (output / 'mcp/stderr.bin').read_bytes())
-        self.assertEqual(set(report['metadata']['tools']), {'apps', 'api', 'exec', 'result'})
+        self.assertEqual(set(report['metadata']['tools']), {'apps', 'exec'})
 
     def test_wrong_cli_version_fails_before_mcp_is_started(self):
         report, output = self.exercise('bad_version')

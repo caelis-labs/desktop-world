@@ -3,7 +3,7 @@ use super::wire::WireError;
 use serde_json::{json, Value};
 pub fn schema() -> Value {
     json!({"type":"string","minLength":1,"maxLength":4096,
-        "description":"Application identifier returned by apps; on macOS the bundle ID, e.g. com.google.Chrome."})
+        "description":"Application identifier, e.g. com.google.Chrome on macOS. Installed macOS targets may be stopped; an existing absolute .app path is also accepted."})
 }
 pub fn parse(value: &Value) -> Result<String, WireError> {
     value

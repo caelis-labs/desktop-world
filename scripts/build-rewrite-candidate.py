@@ -449,7 +449,7 @@ def package_assets(source, package, version, target):
     shutil.copytree(source / "skills/desktop-world", package / "skills/desktop-world")
     for relative in ("docs/native-source-provenance.md", "docs/native-source-provenance-cross-platform.md",
                      "docs/background-input-port.md", "docs/install.md", "docs/install-dsh.md",
-                     "docs/install-caelis.md", "docs/install-agy.md"):
+                     "docs/install-caelis.md", "docs/install-agy.md", "docs/agent-protocol-migration.md"):
         dest = package / relative
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source / relative, dest)
@@ -457,6 +457,7 @@ def package_assets(source, package, version, target):
     if target.endswith("msvc"):
         shutil.copy2(source / "docs/windows-cursor-port.md", package / "docs/windows-cursor-port.md")
         shutil.copytree(source / "tests/acceptance/windows", package / "acceptance/windows")
+        shutil.copy2(source / "tests/acceptance/app_client.py", package / "acceptance/app_client.py")
         shutil.copytree(source / "tests/fixtures/browser-workbench", package / "acceptance/browser-workbench")
     (package / "examples").mkdir()
     for name in ("mcp.json", "codex.toml"):

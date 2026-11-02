@@ -25,8 +25,8 @@ pub(super) const MAX_TIMEOUT_MS: u64 = u32::MAX as u64;
 pub(super) const MAX_CALLS: u32 = u32::MAX;
 pub(super) const UNLIMITED_CALLS: u32 = 0;
 pub(super) const MAX_STEP_RECEIPT_BYTES: usize = 1024 * 1024;
-const MEMORY_BYTES: usize = 32 * 1024 * 1024;
-const STACK_BYTES: usize = 512 * 1024;
+pub(super) const MEMORY_BYTES: usize = 32 * 1024 * 1024;
+pub(super) const STACK_BYTES: usize = 512 * 1024;
 
 pub(super) fn budgets(values: &serde_json::Map<String, Value>) -> Result<(u64, u32), WireError> {
     let integer = |key: &str, default: u64, maximum: u64| match values.get(key) {
@@ -90,6 +90,7 @@ pub(super) struct ScriptRun {
     pub state_committed: bool,
     pub(super) shutdown_error: Option<WireError>,
     focus_return: Option<FocusReturn>,
+    view: Option<Value>,
 }
 impl ScriptRun {
     pub fn new(deadline: Instant) -> Self {
@@ -102,6 +103,7 @@ impl ScriptRun {
             state_committed: false,
             shutdown_error: None,
             focus_return: None,
+            view: None,
         }
     }
     pub fn json(&self) -> Value {
@@ -126,12 +128,12 @@ pub(super) fn cancel_active(state: &State) {
 
 // Dropping a JoinHandle detaches it. This owner keeps the VM inside the job
 // lifetime even when a Core provider panics while the VM awaits its reply.
-struct EngineThread {
-    handle: Option<std::thread::JoinHandle<engine::Outcome>>,
-    cancel: Arc<AtomicBool>,
+pub(super) struct EngineThread {
+    pub(super) handle: Option<std::thread::JoinHandle<engine::Outcome>>,
+    pub(super) cancel: Arc<AtomicBool>,
 }
 impl EngineThread {
-    fn join(mut self) -> std::thread::Result<engine::Outcome> {
+    pub(super) fn join(mut self) -> std::thread::Result<engine::Outcome> {
         self.handle.take().unwrap().join()
     }
 }
@@ -174,11 +176,14 @@ impl<B: Backend + 'static> Coordinator<B> {
             memory_bytes: MEMORY_BYTES,
             stack_bytes: STACK_BYTES,
         };
+        let session = self.session_metadata();
+        let agent_surface = session["agent"] == true;
         let engine_cancel = cancel.clone();
         let thread = match std::thread::Builder::new()
             .name("dtw-app-script".into())
-            .spawn(move || engine::run(&source, initial, limits, engine_cancel, sender))
-        {
+            .spawn(move || {
+                engine::run_with_session(&source, initial, session, limits, engine_cancel, sender)
+            }) {
             Ok(thread) => thread,
             Err(error) => {
                 return Work::read_error(Error::BackendFailed(format!(
@@ -255,7 +260,9 @@ impl<B: Backend + 'static> Coordinator<B> {
             let later_calls =
                 u64::from(outcome.calls).saturating_sub(capture["step"].as_u64().unwrap_or(0));
             capture["later_calls"] = json!(later_calls);
-            capture["timing"] = json!(if later_calls == 0 {
+            capture["timing"] = json!(if capture.get("recovered_from").is_some() {
+                "historical"
+            } else if later_calls == 0 {
                 "last_call"
             } else {
                 "before_later_calls"
@@ -270,7 +277,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             payload_expired: false,
         };
         let mut state_update = None;
-        let mut value = json!({"console":outcome.console,"console_truncated":outcome.console_truncated,"calls":outcome.calls,"last_capture":last_capture});
+        let mut value = json!({"agent_protocol":agent_surface,"console":outcome.console,"console_truncated":outcome.console_truncated,"calls":outcome.calls,"last_capture":last_capture});
         match outcome.result {
             Ok(success) => {
                 value["result"] = success.value;
@@ -306,6 +313,24 @@ impl<B: Backend + 'static> Coordinator<B> {
                 );
             }
         }
+        let mut state = self.state.lock().unwrap();
+        if let Some(view) = state
+            .jobs
+            .iter()
+            .find(|j| j.submitted.request_id == *id)
+            .unwrap()
+            .script
+            .as_ref()
+            .unwrap()
+            .view
+            .clone()
+        {
+            value["view"] = view;
+            if agent_surface {
+                state.scene.publish();
+            }
+        }
+        drop(state);
         completed.value = Some(value);
         Work {
             completed,
@@ -322,8 +347,32 @@ impl<B: Backend + 'static> Coordinator<B> {
         last_image: &mut Option<Arc<String>>,
         last_capture: &mut Option<Value>,
     ) -> Result<Value, engine::HostError> {
+        let receipt_query = call.op == "session.result";
         let parsed = self.parse_script_call(id, call);
-        let action = parsed.as_ref().is_ok_and(|s| is_action(&s.command));
+        let scene_call = call.op.starts_with("scene.");
+        let action = if scene_call {
+            !matches!(
+                call.op.as_str(),
+                "scene.look" | "scene.capture" | "scene.after"
+            )
+        } else {
+            parsed.as_ref().is_ok_and(|s| is_action(&s.command))
+        };
+        if scene_call && action {
+            *last_image = None;
+            *last_capture = None;
+            self.state
+                .lock()
+                .unwrap()
+                .jobs
+                .iter_mut()
+                .find(|j| j.submitted.request_id == id)
+                .unwrap()
+                .script
+                .as_mut()
+                .unwrap()
+                .view = None;
+        }
         {
             let mut state = self.state.lock().unwrap();
             let run = state
@@ -353,20 +402,74 @@ impl<B: Backend + 'static> Coordinator<B> {
                 resolution: None,
             });
         }
-        let mut work = match parsed {
-            Ok(submitted) => self.execute_atomic(&submitted, deadline),
-            Err(error) => Work {
-                completed: Completed {
-                    value: None,
-                    image: None,
-                    receipt: None,
-                    error: Some(error),
-                    payload_bytes: 0,
-                    payload_expired: false,
+        let mut work = if scene_call {
+            self.scene_call(id, &call.op, &call.args, deadline)
+        } else if receipt_query {
+            let reader = self
+                .session
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|s| s.read_receipt.clone());
+            match reader
+                .map(|reader| reader(id, &call.args))
+                .unwrap_or_else(|| {
+                    Err(WireError {
+                        code: "session_unavailable".into(),
+                        message: "No MCP session is bound".into(),
+                        details: None,
+                    })
+                }) {
+                Ok(reply) => {
+                    if let Some(image) = reply.image {
+                        *last_image = Some(image);
+                        *last_capture = Some(
+                            json!({"step":call.number,"recovered_from":reply.data["execution_id"],
+                            "observation":reply.data["value"]["last_capture"],"timing":"historical"}),
+                        );
+                    }
+                    Work {
+                        completed: Completed {
+                            value: Some(reply.data),
+                            image: None,
+                            receipt: None,
+                            error: None,
+                            payload_bytes: 0,
+                            payload_expired: false,
+                        },
+                        publication: Publication::None,
+                        state_update: None,
+                    }
+                }
+                Err(error) => Work {
+                    completed: Completed {
+                        value: None,
+                        image: None,
+                        receipt: None,
+                        error: Some(error),
+                        payload_bytes: 0,
+                        payload_expired: false,
+                    },
+                    publication: Publication::None,
+                    state_update: None,
                 },
-                publication: Publication::None,
-                state_update: None,
-            },
+            }
+        } else {
+            match parsed {
+                Ok(submitted) => self.execute_atomic(&submitted, deadline),
+                Err(error) => Work {
+                    completed: Completed {
+                        value: None,
+                        image: None,
+                        receipt: None,
+                        error: Some(error),
+                        payload_bytes: 0,
+                        payload_expired: false,
+                    },
+                    publication: Publication::None,
+                    state_update: None,
+                },
+            }
         };
         let response = if let Some(error) = &work.completed.error {
             Err(engine::HostError {
@@ -379,6 +482,15 @@ impl<B: Backend + 'static> Coordinator<B> {
         } else {
             Ok(work.completed.value.clone().unwrap_or(Value::Null))
         };
+        if scene_call
+            && matches!(
+                call.op.as_str(),
+                "scene.look" | "scene.capture" | "scene.after"
+            )
+        {
+            *last_image = None;
+            *last_capture = None;
+        }
         if let Some(image) = work.completed.image.take() {
             *last_image = Some(image);
             *last_capture = Some(json!({"step":call.number,"observation":work.completed.value}));
@@ -392,6 +504,16 @@ impl<B: Backend + 'static> Coordinator<B> {
             .script
             .as_mut()
             .unwrap();
+        if scene_call
+            && matches!(
+                call.op.as_str(),
+                "scene.look" | "scene.capture" | "scene.after"
+            )
+        {
+            if let Some(view) = &work.completed.value {
+                run.view = Some(view.clone());
+            }
+        }
         let step = run.steps.last_mut().unwrap();
         if call.op == "windows" && work.completed.error.is_none() {
             if let Some(value) = &work.completed.value {

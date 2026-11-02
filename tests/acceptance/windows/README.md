@@ -11,6 +11,41 @@ results for other bytes or platforms do not establish this candidate's behavior.
 macOS syntax/type checks do not establish Windows compilation, UIA behavior,
 input delivery or native linking. A Windows build is a separate prerequisite.
 
+## Current two-tool protocol
+
+Run after implementation and consolidated source/build checks, on an unlocked
+Windows desktop, using a fresh output directory:
+
+```powershell
+python -X utf8 .\app_protocol_probe.py --dtw 'C:\Candidates\DTW\bin\dtw.exe' `
+  --output 'C:\Temp\dtw-app-protocol-new'
+```
+
+This entry discovers one owned WinForms application and uses only `apps` and
+`exec({app,source})`. It checks the nine-method surface, required app admission,
+Unicode/keyboard/save readback, modal front-to-back physical geometry, covered
+opaque-window capture and closing a modal without replaying uncertain input.
+It also checks that returning a look does not duplicate the view and that an
+unchanged look stays within the JSON output budget. State reads share deletion
+with the fixture's atomic publisher; each bounded readiness poll uses one
+snapshot and tolerates a temporarily unavailable publication. The headless
+`tests/test_windows_app_protocol_probe.py` controls run in source checks and
+Windows CI, including replacement while the observer's handle is still open.
+It records exact binary hash, wire frames, source/JSON sizes, image counts and
+elapsed times. It does not establish real Chrome/Notepad tasks, all DPI layouts,
+new Windows lifecycle or pointer gestures. Those remain separate boundaries.
+
+Windows app composition uses exact-HWND rendering with no desktop-copy fallback;
+layered alpha is explicitly unsupported and input visibility/receiver checks
+remain conservative. Capture success never relaxes input ownership.
+
+## Historical atomic-protocol diagnostics
+
+The scripts and prior evidence below use the pre-convergence protocol (including
+window refs and result queries). They remain regression specifications/fixtures;
+run them only with their recorded source version. They are not current two-tool
+acceptance results. Their scenarios must be ported before reuse with new bytes.
+
 Fixture JSON preserves surrogate code units; a terminal high surrogate is not
 rewritten to a replacement character and is not accepted as a scalar-prefix
 pass. Snapshot readiness/release sampling may retry bounded read-only

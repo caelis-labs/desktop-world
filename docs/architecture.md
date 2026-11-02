@@ -9,19 +9,20 @@ resource coordination, native execution and honest effect reporting.
 
 ```text
 Agent / Harness policy
-  → standard MCP: apps / api / exec / result
-  → session: app contexts, script VM, state, receipts and cancellation
+  → standard MCP: apps / exec (required app authorization identity)
+  → app facade: scene deltas, semantic/pixel targeting, script VM and cancellation
   → Computer Core: typed operations, references, routing and effects
   → native providers: application workers and short-lived scene workers
 ```
 
 ## Identity, references and state
 
-`exec({app, source})` takes one stable platform app ID and one script. An Agent
-session can use multiple apps. PID, process birth generation and native handles
-remain internal. One app ID may resolve to multiple instances; `windows()`
-aggregates them and each window reference retains its exact owner. A provider
-must not silently substitute another instance or select one by title alone.
+`exec({app, source})` always binds one logical authorization target. `apps`
+searches installed/running applications; Skill API.md documents the public app
+methods. There is no public API/result tool, app-less lane or Session object.
+macOS resolves stopped bundle IDs and explicit .app paths. A look starts a stopped
+app; input readiness and native focus are internal. Process identities and all
+window/observation/cursor handles remain private.
 
 A window reference binds its application instance and native owner. Semantic and
 image references additionally bind their window, provider, observation generation
@@ -30,20 +31,17 @@ state relevant to the action: unrelated pointer motion does not invalidate a
 keyboard operation. A changed target produces a refreshable diagnostic before
 input where that change can be detected. Live UI trees are not atomic snapshots.
 
-Each MCP connection owns separate app state, references and receipts. Switching
-apps preserves them. Completed receipts use sliding retention independently of
-the latest app state; eviction never replays old work. Same-connection scripts
-execute sequentially. Worker retirement can reset native references without
-discarding committed logical state; actual instance replacement has separate
-state-reset semantics. Connection shutdown ends the session; persistent receipt
-recovery across server processes is not promised.
+Each MCP connection owns app contexts, native references, scene baselines and a
+bounded execution ledger. Calls are serialized in one admission slot. Worker or
+process replacement resets the app's scene baseline. Ordinary JavaScript variables
+last for one execution; the Agent does not commit or restore Session state.
 
-Script state commits on success. Desktop effects are not transactional. Outcomes
-separate `not_dispatched / dispatched / unknown` from concrete effect evidence;
-script completion does not establish business-task completion. Timeout, exception,
-cancellation and unknown effects never authorize automatic replay. `result`
-inspects the original receipt, while successful ordinary `exec` needs no polling.
-See [protocol](app-protocol-v1.md) and [script semantics](app-script-v1.md).
+Outcomes separate `not_dispatched / dispatched / unknown` from concrete effect
+evidence. Script completion does not establish task completion. Cancellation or
+unknown effects never authorize replay. Retained identical MCP request frames
+return their original execution; new request IDs are new work. Full receipts are
+internal diagnostics, with no public query tool. See the [Agent reference](../skills/desktop-world/API.md)
+and [working convergence plan](agent-protocol-convergence-plan.md).
 
 ## Native resources and input
 
@@ -72,8 +70,13 @@ a stationary user pointer and locked-session operation are distinct capabilities
 
 ## Window and semantic paths
 
-Keep a universal path: list apps, list windows, capture a chosen window and click
-its image coordinates. WindowSurface identity/geometry and SemanticBinding objects
+The public path is apps → app look → input → look. The facade selects current
+app surfaces internally and compares compact window/semantic baselines. macOS
+composes independently owned surface images in app-relative z-order; image hit
+testing uses the same layers and alpha. Coordinate input rechecks current app
+membership, order and geometry before entering the existing native action path.
+A windowless macOS app can receive an application shortcut: its process birth,
+foreground ownership, input policy and paired key release remain mandatory. WindowSurface identity/geometry and SemanticBinding objects
 are independent; unavailable AX/UIA content must not imply that no window exists.
 Pixel actions still require exact ownership and image geometry, plus visibility
 conditions for their selected delivery route.
@@ -83,8 +86,9 @@ supported. Native traversal retains a continuation frontier rather than rescanni
 a truncated prefix. Matching count, visited nodes, time and output bytes are
 separate budgets. Partial coverage with no matches does not establish absence.
 References remain scoped to their window and kind; observing a different window
-must not discard unrelated usable references. Detail and full receipts are read
-on demand rather than expanding every response into a complete UI tree.
+must not discard unrelated usable references. Only bounded semantic changes are public; unsupported semantic activation returns
+an explicit no-dispatch error and enables the screenshot fallback. Full native
+queries and receipts remain available to internal diagnostics and tests.
 
 Surface inventory may include menus, sheets and positively associated helpers.
 Logical app identity and actual surface owner remain distinct. Cross-process
@@ -106,7 +110,9 @@ The official Rust MCP SDK supplies framing, negotiation and stdio transport.
 Transport feeds thin handlers and the existing execution lifecycle. HTTP/remote
 transport is an extension point, not current support. Remote deployment identity
 would belong to transport/deployment, while action approval remains with Harnesses.
-Method schemas generate API discovery and the checked-in TypeScript contract.
+The private atomic method schemas still support internal typing/tests. The public
+facade and installed Skill API.md define the Agent contract; neither exposes raw
+window or observation arguments.
 
 ## Extending capabilities
 
@@ -121,8 +127,7 @@ those boundaries. Source hashes prove attribution, not adapted behavior.
 Each group must identify its state owner, dispatch boundary, failure evidence and
 cleanup on success/cancel/timeout/parent exit. Input groups include held keys,
 buttons and scroll state; browser groups include sessions/tabs/refs; Windows groups
-include COM apartments, DPI and delayed input. App launch/quit needs lifecycle
-semantics beyond operations on an already-running instance. Private SPI stays
+include COM apartments, DPI and delayed input. App launch/quit/closeWindow use distinct typed lifecycle admission. macOS launch serializes a canonical installed path before one NSWorkspace request; quit binds one exact process incarnation and closeWindow one proven native close control. Confirmed facts are process-running, process-exited or exact-window-closed; pending save dialogs remain unverified. No force kill or automatic replay is exposed. Private SPI stays
 isolated and cannot be replaced by approximate ownership guesses.
 
 Prove one complete workflow through schema, script, native operation and independent

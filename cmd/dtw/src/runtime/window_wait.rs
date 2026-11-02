@@ -264,6 +264,7 @@ mod tests {
     fn dialog() -> WindowStateProbe {
         WindowStateProbe::Window(MatchedWindow {
             window: WindowInfo {
+                scene: None,
                 target: target(2),
                 title: String::new(),
                 visible: true,

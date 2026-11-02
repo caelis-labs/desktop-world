@@ -29,6 +29,18 @@ struct NativeFactory {
     #[cfg(target_os = "windows")]
     cursor: Arc<crate::backends::windows::CursorSession>,
 }
+impl NativeFactory {
+    fn reader(&self) -> Result<Arc<NativeBackend>, Error> {
+        retire_unavailable_catalog(&self.catalog)?;
+        let mut slot = self.catalog.lock().unwrap();
+        if slot.is_none() {
+            *slot = Some(Arc::new(NativeBackend::spawn_with_policy(
+                self.input_policy,
+            )?));
+        }
+        Ok(slot.as_ref().unwrap().clone())
+    }
+}
 fn retire_unavailable_catalog<B: Backend>(catalog: &Mutex<Option<Arc<B>>>) -> Result<(), Error> {
     let stopped = catalog
         .lock()
@@ -74,16 +86,7 @@ impl Factory for NativeFactory {
         // A previous read may have timed out and permanently stopped this
         // metadata worker. Recover only for this new request, after settling
         // the exact old owner; never retry the failed catalog call in place.
-        retire_unavailable_catalog(&self.catalog)?;
-        let reader = {
-            let mut slot = self.catalog.lock().unwrap();
-            if slot.is_none() {
-                *slot = Some(Arc::new(NativeBackend::spawn_with_policy(
-                    self.input_policy,
-                )?));
-            }
-            slot.as_ref().unwrap().clone()
-        };
+        let reader = self.reader()?;
         reader.catalog(Duration::from_secs(8)).map(|apps| {
             apps.into_iter()
                 .map(|a| Application {
@@ -93,6 +96,15 @@ impl Factory for NativeFactory {
                 })
                 .collect()
         })
+    }
+    #[cfg(target_os = "macos")]
+    fn discover(&self) -> Result<Value, Error> {
+        self.reader()?.discover(Duration::from_secs(12))
+    }
+    #[cfg(target_os = "macos")]
+    fn resolve(&self, app_id: &str) -> Result<crate::computer::ApplicationTarget, Error> {
+        self.reader()?
+            .resolve_target(app_id, Duration::from_secs(8))
     }
     fn connect(&self) -> Result<NativeBackend, Error> {
         #[cfg(target_os = "macos")]

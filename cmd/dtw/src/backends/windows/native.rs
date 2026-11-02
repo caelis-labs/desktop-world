@@ -169,7 +169,25 @@ pub(super) fn visible(window: HWND) -> bool {
     }
 }
 fn all_windows() -> Result<Vec<HWND>, Error> {
-    super::desktop::windows()
+    let inventory = super::desktop::windows()?;
+    let mut ranks = HashMap::new();
+    let mut current = unsafe { GetTopWindow(None) }.unwrap_or_default();
+    while !current.0.is_null() {
+        let rank = ranks.len();
+        if rank >= 4096 || ranks.insert(id(current), rank).is_some() {
+            return Err(failed("Window z-order changed or exceeded its scan budget"));
+        }
+        current = unsafe { GetWindow(current, GW_HWNDNEXT) }.unwrap_or_default();
+    }
+    if inventory
+        .iter()
+        .any(|window| !ranks.contains_key(&id(*window)))
+    {
+        return Err(Error::TargetChanged);
+    }
+    let mut inventory = inventory;
+    inventory.sort_by_key(|window| ranks[&id(*window)]);
+    Ok(inventory)
 }
 fn title(window: HWND) -> String {
     let mut text = [0u16; 1024];
@@ -401,7 +419,17 @@ impl Store {
                             generation: marker(window, true)?,
                         };
                         self.windows.insert(id(window), target.clone());
-                        result.push(json!({"target":target_json(&target),"title":title(window),"visible":visible(window)}));
+                        self.validate(&target)?;
+                        let shown = visible(window);
+                        let scene = if shown {
+                            let b = rect(window)?;
+                            Some(
+                                json!({"bounds":[b.left,b.top,b.right-b.left,b.bottom-b.top],"rank":result.len()}),
+                            )
+                        } else {
+                            None
+                        };
+                        result.push(json!({"target":target_json(&target),"title":title(window),"visible":shown,"scene":scene}));
                         if result.len() > 256 || self.windows.len() > 512 {
                             return Err(failed(
                                 "Window inventory exceeds retained identity budget",
@@ -846,16 +874,31 @@ impl Store {
         // CUA also fences the compositor after visible window transitions.
         // Win32 can publish a new maximized rectangle before DWM displays it.
         unsafe { DwmFlush() }.map_err(failed)?;
-        let bounds = unobstructed(window)?;
-        capture_points_owned(window, bounds)?;
+        let bounds = capture_bounds(window)?;
+        if unsafe { GetWindowLongW(window, GWL_EXSTYLE) } as u32
+            & (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0)
+            != 0
+        {
+            return Err(Error::NativeFailure {
+                code: "windows_surface_unsupported".into(),
+                message: "Layered window alpha cannot be established by the exact-window renderer"
+                    .into(),
+            });
+        }
+        let dpi = unsafe { GetDpiForWindow(window) };
         check(until)?;
         let (image, rendered_size) = capture_rgb(window, bounds)?;
         unsafe { DwmFlush() }.map_err(failed)?;
         self.validate(target)?;
-        if !equal_rect(bounds, unobstructed(window)?) {
+        if !equal_rect(bounds, capture_bounds(window)?)
+            || dpi == 0
+            || dpi != unsafe { GetDpiForWindow(window) }
+            || unsafe { GetWindowLongW(window, GWL_EXSTYLE) } as u32
+                & (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0)
+                != 0
+        {
             return Err(Error::TargetChanged);
         }
-        capture_points_owned(window, bounds)?;
         if render_size(window)? != rendered_size {
             return Err(Error::TargetChanged);
         }
@@ -864,7 +907,6 @@ impl Store {
             return Err(failed("Pixel binding budget exhausted"));
         }
         let token = uuid::Uuid::new_v4().to_string();
-        let dpi = unsafe { GetDpiForWindow(window) };
         self.pixels.insert(
             token.clone(),
             Pixels {
@@ -1764,8 +1806,7 @@ fn scroll_element_rect(
     }
     Err(Error::TargetChanged)
 }
-fn unobstructed(window: HWND) -> Result<RECT, Error> {
-    super::cursor::begin_proof_cycle();
+fn capture_bounds(window: HWND) -> Result<RECT, Error> {
     if !visible(window) {
         return Err(failed("Capture requires a visible, unminimized window"));
     }
@@ -1790,6 +1831,11 @@ fn unobstructed(window: HWND) -> Result<RECT, Error> {
     {
         return Err(failed("Window extends outside the virtual screen"));
     }
+    Ok(bounds)
+}
+fn unobstructed(window: HWND) -> Result<RECT, Error> {
+    super::cursor::begin_proof_cycle();
+    let bounds = capture_bounds(window)?;
     for other in all_windows()? {
         if other == window {
             return Ok(bounds);
@@ -1805,32 +1851,6 @@ fn unobstructed(window: HWND) -> Result<RECT, Error> {
         }
     }
     Err(Error::TargetChanged)
-}
-fn capture_points_owned(window: HWND, bounds: RECT) -> Result<(), Error> {
-    // Supplement the conservative z-order rectangle check with CUA's native
-    // WindowFromPoint/root proof. Require every sample, rather than accepting a
-    // partially covered frame. Inset past invisible borders and rounded corners.
-    let inset_x = 16.min((bounds.right - bounds.left - 1) / 2);
-    let inset_y = 16.min((bounds.bottom - bounds.top - 1) / 2);
-    for (x, y) in [
-        (bounds.left + inset_x, bounds.top + inset_y),
-        (bounds.right - 1 - inset_x, bounds.top + inset_y),
-        (bounds.left + inset_x, bounds.bottom - 1 - inset_y),
-        (bounds.right - 1 - inset_x, bounds.bottom - 1 - inset_y),
-        (
-            bounds.left + (bounds.right - bounds.left) / 2,
-            bounds.top + (bounds.bottom - bounds.top) / 2,
-        ),
-    ] {
-        let hit = unsafe { WindowFromPoint(POINT { x, y }) };
-        if unsafe { GetAncestor(hit, GA_ROOT) } != window {
-            return Err(Error::NativeFailure {
-                code: "windows_capture_occluded".into(),
-                message: "Window surface is transitioning or occluded; capture pixel ownership is unproven. A fresh coordinated foreground preparation may help; DTW will not synthesize or reuse covered pixels.".into(),
-            });
-        }
-    }
-    Ok(())
 }
 fn rendered_content(rgb: &[u8]) -> bool {
     // CUA capture.rs uses the same 99.5% black sentinel for unsupported native

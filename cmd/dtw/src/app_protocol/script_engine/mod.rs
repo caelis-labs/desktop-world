@@ -181,9 +181,28 @@ impl Console {
 }
 
 /// Executes on the caller's dedicated thread. No module loader or OS bindings.
+#[cfg(test)]
 pub(super) fn run(
     script: &str,
     initial_state: Value,
+    limits: Limits,
+    cancel: Arc<AtomicBool>,
+    calls: SyncSender<HostCall>,
+) -> Outcome {
+    run_with_session(
+        script,
+        initial_state,
+        json!({"id":null,"app":null}),
+        limits,
+        cancel,
+        calls,
+    )
+}
+
+pub(super) fn run_with_session(
+    script: &str,
+    initial_state: Value,
+    session: Value,
     limits: Limits,
     cancel: Arc<AtomicBool>,
     calls: SyncSender<HostCall>,
@@ -194,6 +213,7 @@ pub(super) fn run(
     let result = run_inner(
         script,
         initial_state,
+        session,
         &limits,
         &cancel,
         calls,
@@ -214,6 +234,7 @@ pub(super) fn run(
 fn run_inner(
     script: &str,
     initial_state: Value,
+    session: Value,
     limits: &Limits,
     cancel: &Arc<AtomicBool>,
     calls: SyncSender<HostCall>,
@@ -309,6 +330,9 @@ fn run_inner(
             };
             globals.set("__log", log).map_err(internal)?;
             globals.set("__initial_state", initial).map_err(internal)?;
+            globals
+                .set("__session", session.to_string())
+                .map_err(internal)?;
             globals
                 .set("__methods", super::methods::facade_metadata())
                 .map_err(internal)?;
@@ -568,6 +592,12 @@ fn host_call(
 fn validate_args(op: &str, args: &Value) -> Result<(), super::wire::WireError> {
     // Use the coordinator's exact parser so the VM cannot advertise a different
     // argument shape. These placeholders never resolve or dispatch a target.
+    if op.starts_with("scene.") {
+        return super::scene::validate(op, args);
+    }
+    if op == "session.result" {
+        return super::session::receipt_query(args).map(|_| ());
+    }
     super::wire::script_submit("bound-app", "bridge-check", op, args).map(|_| ())
 }
 

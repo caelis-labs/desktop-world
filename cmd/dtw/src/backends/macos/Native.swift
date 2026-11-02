@@ -164,11 +164,31 @@ private struct NativeTarget: Equatable {
     var json: [String: Any] { ["app": app.json, "native_id": nativeID, "generation": generation] }
 }
 
+private final class ApplicationOpenCompletion: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: (NSRunningApplication?, Error?)?
+    func set(_ application: NSRunningApplication?, _ error: Error?) {
+        lock.lock(); defer { lock.unlock() }; value = (application, error)
+    }
+    var finished: Bool { lock.lock(); defer { lock.unlock() }; return value != nil }
+    var application: NSRunningApplication? { lock.lock(); defer { lock.unlock() }; return value?.0 }
+    var error: Error? { lock.lock(); defer { lock.unlock() }; return value?.1 }
+}
+
 private struct BundleMetadata {
     let path: String
     let identifier: String
     let name: String
-    let background: Bool
+    let uiElement: Bool
+    let backgroundOnly: Bool
+}
+
+// Discovery policy is separate from process identity. In particular, a user
+// agent with a window must pass the same identity checks as an ordinary app.
+private func catalogIncludes(_ bundle: BundleMetadata, knownRoot: Bool, hasSurface: Bool) -> Bool {
+    guard !bundle.backgroundOnly, !bundle.path.contains(".app/Contents/") else { return false }
+    if bundle.uiElement { return hasSurface }
+    return knownRoot || bundle.identifier == "com.apple.finder" || hasSurface
 }
 
 private struct KernelApp {
@@ -354,7 +374,7 @@ private final class RequestContext {
         let name = (plist["CFBundleDisplayName"] as? String) ?? (plist["CFBundleName"] as? String)
             ?? URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
         let result = BundleMetadata(path: path, identifier: identifier, name: name,
-                                    background: flag("LSUIElement") || flag("LSBackgroundOnly"))
+                                    uiElement: flag("LSUIElement"), backgroundOnly: flag("LSBackgroundOnly"))
         metadata[path] = result
         return result
     }
@@ -362,8 +382,8 @@ private final class RequestContext {
     func app(_ pid: Int32) throws -> KernelApp? {
         guard let before = try startStamp(pid, stage: "stamp_before"), let path = try executable(pid),
               let bundle = try bundle(path, pid: pid) else { return nil }
-        traceCatalog(pid, "bundle_classification", ["background": bundle.background])
-        guard !bundle.background else { return nil }
+        traceCatalog(pid, "bundle_classification", ["ui_element": bundle.uiElement,
+                                                    "background_only": bundle.backgroundOnly])
         let sameGeneration = try startStamp(pid, stage: "stamp_after") == before
         traceCatalog(pid, "app_generation", ["matches": sameGeneration])
         guard sameGeneration else { return nil }
@@ -385,6 +405,101 @@ private final class RequestContext {
         return kill(expected.pid, 0) == -1 && errno == ESRCH
     }
 
+    func runningApplications(_ identifier: String, path: String? = nil) throws -> [KernelApp] {
+        try deadline.check()
+        let count = proc_listallpids(nil, 0)
+        guard count > 0, count < 1_000_000 else { throw failure("catalog_unavailable", "Cannot enumerate application instances") }
+        var pids = [Int32](repeating: 0, count: Int(count) + 64)
+        let written = pids.withUnsafeMutableBytes { proc_listallpids($0.baseAddress, Int32($0.count)) }
+        guard written > 0, written < pids.count else { throw failure("catalog_unavailable", "Application enumeration changed beyond capacity") }
+        var matches: [KernelApp] = []
+        for pid in Set(pids.prefix(Int(written))).sorted() where pid > 0 {
+            try deadline.check()
+            guard let candidate = try app(pid), candidate.metadata.identifier == identifier,
+                  !candidate.metadata.backgroundOnly, !candidate.metadata.path.contains(".app/Contents/"),
+                  path == nil || candidate.metadata.path == path else { continue }
+            matches.append(candidate)
+        }
+        return matches
+    }
+
+    func resolveApplication(_ identifier: String) throws -> (BundleMetadata, [KernelApp]) {
+        let explicitPath = identifier.hasPrefix("/")
+        let url: URL
+        if explicitPath {
+            url = URL(fileURLWithPath: identifier).resolvingSymlinksInPath().standardizedFileURL
+        } else {
+            let running = try runningApplications(identifier)
+            if let first = running.first { return (first.metadata, running) }
+            let candidates = Set(NSWorkspace.shared.urlsForApplications(withBundleIdentifier: identifier)
+                .map { $0.resolvingSymlinksInPath().standardizedFileURL })
+                .filter { !$0.path.contains(".app/Contents/") }
+            guard candidates.count == 1, let candidate = candidates.first else {
+                throw failure(candidates.isEmpty ? "app_unavailable" : "ambiguous_app",
+                              "Resolve one installed application by bundle ID or an explicit .app path")
+            }
+            url = candidate
+        }
+        guard url.pathExtension == "app", let installed = Bundle(url: url),
+              let executable = installed.executableURL,
+              let metadata = try bundle(executable.resolvingSymlinksInPath().path, pid: 0),
+              metadata.path == url.path, !metadata.backgroundOnly,
+              !metadata.path.contains(".app/Contents/"),
+              explicitPath || metadata.identifier == identifier else {
+            throw failure("app_unavailable", "Target is not an installed user application bundle")
+        }
+        return (metadata, try runningApplications(metadata.identifier, path: explicitPath ? metadata.path : nil))
+    }
+
+    func applicationTarget(_ identifier: String) throws -> [String: Any] {
+        let (metadata, running) = try resolveApplication(identifier)
+        return ["app_id": identifier, "name": metadata.name, "bundle_path": metadata.path,
+                "apps": running.map(\.json)]
+    }
+
+    func discoverApplications() throws -> [String: Any] {
+        let inventory = try catalog()
+        let running = inventory["apps"] as? [[String: Any]] ?? []
+        let live = inventory["running_bundles"] as? [[String: Any]] ?? running
+        let roots = ["/Applications", "/System/Applications", "/System/Library/CoreServices/Applications",
+                     "/Users/Shared/Applications", NSHomeDirectory() + "/Applications"]
+        var found: [String: BundleMetadata] = [:]
+        var unreadable = 0
+        for path in roots {
+            try deadline.check()
+            var directory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &directory), directory.boolValue else { continue }
+            guard let enumerator = FileManager.default.enumerator(at: URL(fileURLWithPath: path),
+                includingPropertiesForKeys: nil, options: [.skipsHiddenFiles, .skipsPackageDescendants],
+                errorHandler: { _, _ in unreadable += 1; return true }) else { unreadable += 1; continue }
+            var visits = 0
+            for case let url as URL in enumerator {
+                try deadline.check()
+                visits += 1
+                guard visits <= 20_000 else { unreadable += 1; break }
+                if enumerator.level > 5 { enumerator.skipDescendants(); continue }
+                guard url.pathExtension.lowercased() == "app" else { continue }
+                enumerator.skipDescendants()
+                guard let executable = Bundle(url: url)?.executableURL,
+                      let entry = try bundle(executable.resolvingSymlinksInPath().path, pid: 0),
+                      !entry.backgroundOnly, !entry.path.contains(".app/Contents/") else { continue }
+                found[entry.path] = entry
+            }
+        }
+        for row in running {
+            if let path = row["bundle_path"] as? String, let entry = metadata[path] { found[path] = entry }
+        }
+        let counts = Dictionary(grouping: Array(found.values), by: \.identifier).mapValues(\.count)
+        let rows: [[String: Any]] = found.values.sorted { ($0.name, $0.path) < ($1.name, $1.path) }.map { entry in
+            let instances = live.filter { $0["bundle_path"] as? String == entry.path }.count
+            return ["app": counts[entry.identifier] == 1 ? entry.identifier : entry.path,
+                    "name": entry.name, "running": instances > 0, "instances": instances]
+        }
+        return ["apps": rows, "coverage": ["scope":"installed_application_folders_and_running_user_bundles",
+                "complete":false, "installed":true, "unreadable":unreadable,
+                "excludes":["unregistered_locations_not_running", "nested_helpers", "background_only_bundles", "unreadable_bundles"]]]
+    }
+
     func catalog() throws -> [String: Any] {
         try deadline.check()
         let count = proc_listallpids(nil, 0)
@@ -403,6 +518,7 @@ private final class RequestContext {
         let roots = ["/Applications/", "/System/Applications/", "/Users/Shared/Applications/",
                      "/opt/homebrew-cask/Caskroom/", NSHomeDirectory() + "/Applications/"]
         var apps: [KernelApp] = []
+        var liveBundles: [KernelApp] = []
         let enumeratedPIDs = Set(pids.prefix(Int(written)))
         for pid in tracedPIDs.sorted() {
             traceCatalog(pid, "process_table", ["enumerated": enumeratedPIDs.contains(pid),
@@ -411,8 +527,10 @@ private final class RequestContext {
         for pid in enumeratedPIDs.sorted() where pid > 0 {
             try deadline.check()
             guard let candidate = try app(pid) else { continue }
+            if !candidate.metadata.backgroundOnly && !candidate.metadata.path.contains(".app/Contents/") { liveBundles.append(candidate) }
             let knownRoot = roots.contains { candidate.metadata.path.hasPrefix($0) }
-            let included = knownRoot || candidate.metadata.identifier == "com.apple.finder" || windowed.contains(pid)
+            let included = catalogIncludes(candidate.metadata, knownRoot: knownRoot,
+                                           hasSurface: windowed.contains(pid))
             traceCatalog(pid, "catalog_filter", ["known_root": knownRoot, "windowed": windowed.contains(pid),
                                                  "included": included])
             if included {
@@ -423,9 +541,10 @@ private final class RequestContext {
         }
         try deadline.check()
         apps.sort { ($0.metadata.name, $0.app.pid) < ($1.metadata.name, $1.app.pid) }
-        return ["apps": apps.map(\.json), "permissions": dtwPermissionStatus(), "coverage": [
+        return ["apps": apps.map(\.json), "running_bundles": liveBundles.map(\.json), "permissions": dtwPermissionStatus(), "coverage": [
             "scope": "kernel_running_user_app_bundles", "complete": false,
-            "excludes": ["unreadable_processes", "background_bundles", "non_bundle_executables"],
+            "excludes": ["unreadable_processes", "background_only_bundles", "nested_helpers",
+                         "windowless_ui_agents", "non_bundle_executables"],
             "identity": "canonical_bundle_identifier_executable_and_kernel_birth_stamp"
         ]]
     }
@@ -2903,12 +3022,18 @@ private final class NativeStore: @unchecked Sendable {
         enabledApps = enabledApps.filter { !departed.contains($0.key) }
         if let validation = backgroundValidation, departed.contains(validation.target.app) { backgroundValidation = nil }
         let source = try cgWindowRows(context.deadline)
+        // optionAll includes hidden windows but does not promise z-order.
+        // Only optionOnScreenOnly documents front-to-back ordering.
+        guard let visibleSource = CGWindowListCopyWindowInfo([.optionOnScreenOnly,.excludeDesktopElements],0) as? [[String:Any]] else {
+            throw failure("windows_unavailable", "Cannot establish visible app layering")
+        }
+        try context.deadline.check()
         var (candidates, coverage) = try surfaceInventory(source, pid: app.pid, resolve: { record in
             try exactSurfaceRecord(cgWindowRows(context.deadline, only: record.id), expected: record)
         })
         var associated: [CGWindowID: SurfaceAssociation] = [:]
         var associationErrors: [Int32] = []
-        let onScreen = source.compactMap(cgRecord).filter(\.onscreen)
+        let onScreen = visibleSource.compactMap(cgRecord).filter(\.onscreen)
         if dtwAccessibilityGranted(request: true), let firstOwned = onScreen.firstIndex(where: { $0.pid == app.pid }) {
             // Associated sheets/menus are in front of their client window. Do
             // not probe unrelated hidden windows or applications behind it.
@@ -2952,7 +3077,10 @@ private final class NativeStore: @unchecked Sendable {
         associatedSurfaces = associatedSurfaces.filter { windows[$0.key] != nil }
         var rows: [[String: Any]] = []
         for (record, title) in candidates {
-            rows.append(try registerSurface(record, title: title, app: app, association: associated[record.id]))
+            var row = try registerSurface(record, title: title, app: app, association: associated[record.id])
+            row["scene"] = ["bounds": record.coordinates,
+                            "rank": visibleSource.firstIndex { ($0[kCGWindowNumber as String] as? UInt32) == record.id } ?? (visibleSource.count + (source.firstIndex { ($0[kCGWindowNumber as String] as? UInt32) == record.id } ?? source.count))]
+            rows.append(row)
         }
         // Associated AX root replacement can keep the CG ID/owner while making
         // a new generation above. Retire caches against those final targets,
@@ -4183,6 +4311,47 @@ private final class NativeStore: @unchecked Sendable {
         return ["released": true, "focus": invalidated ? "changed_externally" : "retained"]
     }
 
+    private func appKeypress(_ request: [String:Any]) -> [String:Any] {
+        var changed=false
+        var pending:NativePendingInput?
+        func finished(_ value:[String:Any])->[String:Any] {
+            guard let pending,!dtwFinishInput(pending) else{return value}
+            return ["dispatch":changed ? "unknown":"not_dispatched","evidence":"unverified","error":"input_release_unproven","message":"Application shortcut releases were not confirmed"]
+        }
+        do {
+            let context=try RequestContext(request)
+            let app=try NativeApp((request["target"] as? [String:Any])?["app"])
+            try context.verify(app)
+            guard request["input_policy"] as? String == "auto" else {throw failure("foreground_required","Application shortcuts require foreground delivery")}
+            guard dtwAccessibilityGranted(request:true) else {let e=dtwPermissionError("accessibility");throw failure("permission_required",e["message"] as! String)}
+            guard let keys=request["keys"] as? [String],dtwChordPlan(keys) != nil else {throw failure("invalid_keys","Unsupported application shortcut")}
+            guard CGEventSource.flagsState(.combinedSessionState).intersection([.maskCommand,.maskControl,.maskAlternate,.maskShift]).isEmpty else {throw failure("input_busy","Session modifiers are held")}
+            guard let source=CGEventSource(stateID:.privateState),let chord=dtwChord(keys,source:source),let application=NSRunningApplication(processIdentifier:app.pid) else {throw failure("input_unavailable","Cannot prepare application shortcut")}
+            if dtwFrontProcessMatches(app.pid) != 1 {
+                guard let accepted=dtwWithInputAdmission({changed=true;return application.activate(options:[])}),accepted else {throw failure("focus_failed","Application activation was not accepted")}
+                let until=min(context.deadline.uptime,ProcessInfo.processInfo.systemUptime+1)
+                while dtwFrontProcessMatches(app.pid) != 1 && ProcessInfo.processInfo.systemUptime<until {try context.deadline.check();RunLoop.current.run(until:Date().addingTimeInterval(0.01))}
+            }
+            func check() throws {
+                try context.deadline.check();try context.verify(app)
+                guard !dtwInputStopping() else {throw failure("native_stopping","Application shortcut stopped")}
+                guard dtwFrontProcessMatches(app.pid)==1 else {throw failure("focus_changed","Application foreground changed before shortcut delivery")}
+            }
+            try check()
+            guard let input=dtwTrackInput(source:source,eventTypes:[.keyUp,.flagsChanged]) else {throw failure("native_stopping","Application shortcut admission closed")}
+            pending=input
+            guard let _:Bool=try dtwWithInputAdmission({
+                var pressed:[NativeKeyPair]=[]
+                defer {for pair in pressed.reversed(){dtwPostKey(pair.up,input:input)}}
+                for pair in chord {try check();changed=true;dtwPostKey(pair.down,input:input);pressed.append(pair);Thread.sleep(forTimeInterval:0.005)}
+                return true
+            }) else {throw failure("native_stopping","Application shortcut admission closed")}
+            try context.deadline.check()
+            return finished(["dispatch":"dispatched","evidence":"unverified"])
+        } catch let e as NativeFailure {return finished(e.json.merging(["dispatch":changed ? "unknown":"not_dispatched","evidence":"unverified"]){_,new in new})}
+        catch {return finished(["dispatch":changed ? "unknown":"not_dispatched","evidence":"unverified","error":"native_error","message":String(describing:error)])}
+    }
+
     private func windowInput(_ request: [String: Any]) -> [String: Any] {
         var changed = false
         var pendingInput: NativePendingInput?
@@ -4448,6 +4617,105 @@ private final class NativeStore: @unchecked Sendable {
         } catch { return ["dispatch": dispatched ? "unknown" : "not_dispatched", "evidence": "unverified", "error": "native_error", "message": String(describing: error)] }
     }
 
+    private func lifecycle(_ request: [String: Any]) -> [String: Any] {
+        var attempted = false
+        do {
+            let context = try RequestContext(request)
+            let operation = request["operation"] as? String ?? ""
+            if operation == "launch_app" {
+                guard let identifier = request["app_id"] as? String else { throw failure("invalid_request", "Missing application target") }
+                let (metadata, running) = try context.resolveApplication(identifier)
+                guard request["application_key"] as? String == metadata.path else {
+                    throw failure("target_changed", "Installed application changed before launch admission")
+                }
+                if !running.isEmpty {
+                    return ["dispatch": "not_dispatched", "evidence": "confirmed",
+                            "postcondition": "application_running", "apps": running.map(\.json)]
+                }
+                let completion = ApplicationOpenCompletion()
+                let configuration = NSWorkspace.OpenConfiguration()
+                configuration.activates = request["input_policy"] as? String == "auto"
+                configuration.createsNewApplicationInstance = false
+                configuration.addsToRecentItems = false
+                try context.deadline.check()
+                guard dtwWithInputAdmission({
+                    attempted = true
+                    NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: metadata.path),
+                        configuration: configuration) { application, error in completion.set(application, error) }
+                    return true
+                }) == true else { throw failure("native_stopping", "Application launch admission is closed") }
+                while !completion.finished {
+                    try context.deadline.check()
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+                }
+                guard let opened = completion.application, completion.error == nil,
+                      let proven = try context.app(opened.processIdentifier),
+                      proven.metadata.path == metadata.path,
+                      proven.metadata.identifier == metadata.identifier else {
+                    throw failure("launch_unconfirmed", "Launch returned without a proven matching process; inspect before new work")
+                }
+                try context.verify(proven.app)
+                return ["dispatch": "dispatched", "evidence": "confirmed",
+                        "postcondition": "application_running", "apps": [proven.json]]
+            }
+            let target = operation == "close_window" ? try NativeTarget(request["target"]) : nil
+            let app = try target?.app ?? NativeApp((request["target"] as? [String: Any])?["app"])
+            if try context.hasExited(app) {
+                if let target, try !cgWindowRows(context.deadline, only: target.nativeID).isEmpty {
+                    throw failure("target_changed", "An exited process does not prove the selected backing surface disappeared")
+                }
+                return ["dispatch": "not_dispatched", "evidence": "confirmed",
+                        "postcondition": operation == "quit_app" ? "application_exited" : "window_closed"]
+            }
+            try context.verify(app)
+            if operation == "quit_app" {
+                guard let application = NSRunningApplication(processIdentifier: app.pid) else {
+                    throw failure("app_unproven", "Cannot bind the verified application for normal termination")
+                }
+                guard let accepted = dtwWithInputAdmission({ attempted = true; return application.terminate() }), accepted else {
+                    throw failure("quit_unconfirmed", "Normal termination request was not confirmed; inspect application state")
+                }
+            } else if let target {
+                let window = try validate(target, context)
+                guard let close = axElement(try axAttribute(window.element, kAXCloseButtonAttribute, context.deadline)),
+                      try owned(close, by: window.element, target: target, deadline: context.deadline),
+                      try actions(close, context.deadline).contains(kAXPressAction) else {
+                    throw failure("close_unsupported", "Exact window has no proven accessible close action")
+                }
+                _ = try validate(target, context)
+                try context.deadline.prepare(close)
+                guard let result = dtwWithInputAdmission({
+                    attempted = true
+                    return AXUIElementPerformAction(close, kAXPressAction as CFString)
+                }), result == .success else { throw failure("close_unconfirmed", "Window close may have been delivered; inspect its state") }
+            } else { throw failure("invalid_request", "Unknown lifecycle operation") }
+            // A bounded readback may end with a save dialog, an application
+            // refusal or delayed termination. None permits another dispatch.
+            let waitUntil = Date().addingTimeInterval(2)
+            repeat {
+                try context.deadline.check()
+                let exited = try context.hasExited(app)
+                let closed: Bool
+                if let target {
+                    if !exited { try context.verify(app) }
+                    closed = try cgWindowRows(context.deadline, only: target.nativeID).isEmpty
+                } else { closed = exited }
+                if closed {
+                    return ["dispatch": "dispatched", "evidence": "confirmed",
+                            "postcondition": operation == "quit_app" ? "application_exited" : "window_closed"]
+                }
+                RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+            } while Date() < waitUntil
+            return ["dispatch": "dispatched", "evidence": "unverified"]
+        } catch let error as NativeFailure {
+            return error.json.merging(["dispatch": attempted ? "unknown" : "not_dispatched",
+                                       "evidence": "unverified"]) { _, new in new }
+        } catch {
+            return ["dispatch": attempted ? "unknown" : "not_dispatched", "evidence": "unverified",
+                    "error": "lifecycle_failed", "message": String(describing: error)]
+        }
+    }
+
     private func press(_ request: [String: Any]) -> [String: Any] {
         do {
             guard let binding = request["binding"] as? String,
@@ -4587,7 +4855,13 @@ private final class NativeStore: @unchecked Sendable {
                 let app = try NativeApp(request["app"])
                 try context.verify(app)
                 return ["app": app.json]
+            case "resolve_app":
+                guard let identifier = request["app_id"] as? String else { throw failure("invalid_request", "Missing application target") }
+                return try context.applicationTarget(identifier)
+            case "launch_app", "quit_app", "close_window": return lifecycle(request)
+            case "keypress_app": return appKeypress(request)
             case "catalog": return try context.catalog()
+            case "discover_apps": return try context.discoverApplications()
             case "windows": return try listWindows(NativeApp(request["app"]), context)
             case "bind_window": return try bindWindow(request, context)
             case "probe_window_state": return try probeWindowState(request, context)

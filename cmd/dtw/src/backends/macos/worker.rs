@@ -139,7 +139,18 @@ pub(super) fn native(request: &Value, scene: bool) -> Value {
 fn input_operation(op: &str) -> bool {
     matches!(
         op,
-        "press" | "set_value" | "focus" | "type_text" | "keypress" | "scroll" | "click"
+        "press"
+            | "set_value"
+            | "focus"
+            | "type_text"
+            | "keypress"
+            | "keypress_app"
+            | "scroll"
+            | "click"
+            | "move"
+            | "drag"
+            | "quit_app"
+            | "close_window"
     )
 }
 fn now_ms() -> u64 {
@@ -368,6 +379,13 @@ fn modal_input_requires_foreground(validation: &Value) -> Result<bool, Value> {
 
 fn background(request: &mut Value) -> BackgroundAttempt {
     let op = request["operation"].as_str().unwrap_or("").to_owned();
+    if matches!(op.as_str(), "click" | "move" | "drag") {
+        // Image coordinates describe a visible physical pointer operation.
+        // PID-directed click changes/restores app-local key-window state; a
+        // transient popup can disappear after the click, making that unrelated
+        // restoration fail. Keep semantic presses on their own background path.
+        return BackgroundAttempt::Declined("visible_pointer_requires_foreground".into());
+    }
     if !matches!(op.as_str(), "click" | "scroll" | "type_text" | "keypress") {
         return BackgroundAttempt::NotApplicable;
     }
@@ -472,6 +490,87 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
     });
     let op = request["operation"].as_str().unwrap_or("").to_owned();
     let op = op.as_str();
+    if op == "launch_app" {
+        let Some(key) = request["application_key"]
+            .as_str()
+            .filter(|key| key.starts_with('/'))
+        else {
+            return rejected(
+                json!({"error":"invalid_request","message":"Missing canonical launch target"}),
+                op,
+            );
+        };
+        let _coordination = match scene_lease::lock_coordination(
+            if request["input_policy"] == "auto" {
+                scene_lease::InputCoordination::Foreground
+            } else {
+                scene_lease::InputCoordination::Background
+            },
+            remaining(&request),
+        ) {
+            Ok(lease) => lease,
+            Err(message) => {
+                return rejected(json!({"error":"native_input_busy","message":message}), op)
+            }
+        };
+        let _launch = match scene_lease::lock_application(key, remaining(&request)) {
+            Ok(lease) => lease,
+            Err(message) => {
+                return rejected(json!({"error":"native_input_busy","message":message}), op)
+            }
+        };
+        if TERMINATING.load(Ordering::Relaxed) || remaining(&request).is_zero() {
+            return rejected(
+                json!({"error":"native_stopping","message":"Launch admission is closed"}),
+                op,
+            );
+        }
+        return native(&request, false);
+    }
+    if op == "keypress_app" {
+        if request["input_policy"] != "auto" {
+            return foreground_required("windowless_app_shortcut");
+        }
+        let (Some(pid), Some(birth)) = (
+            request["target"]["app"]["pid"]
+                .as_u64()
+                .and_then(|p| u32::try_from(p).ok()),
+            request["target"]["app"]["generation"].as_u64(),
+        ) else {
+            return rejected(
+                json!({"error":"invalid_request","message":"Missing application shortcut identity"}),
+                op,
+            );
+        };
+        let _coordination = match scene_lease::lock_coordination(
+            scene_lease::InputCoordination::Foreground,
+            remaining(&request),
+        ) {
+            Ok(v) => v,
+            Err(message) => {
+                return rejected(json!({"error":"native_input_busy","message":message}), op)
+            }
+        };
+        let _instance = match scene_lease::lock_instance(pid, birth, remaining(&request)) {
+            Ok(v) => v,
+            Err(message) => {
+                return rejected(json!({"error":"native_input_busy","message":message}), op)
+            }
+        };
+        let _input = match scene_lease::lock_input(remaining(&request)) {
+            Ok(v) => v,
+            Err(message) => {
+                return rejected(json!({"error":"native_input_busy","message":message}), op)
+            }
+        };
+        if TERMINATING.load(Ordering::Relaxed) || remaining(&request).is_zero() {
+            return rejected(
+                json!({"error":"native_stopping","message":"Application shortcut admission closed"}),
+                op,
+            );
+        }
+        return native(&request, false);
+    }
     if op == "prove_associated_surface" {
         if !scene_worker {
             return json!({"error":"invalid_request","message":"Association pixels require a short-lived Scene owner"});
@@ -496,7 +595,7 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
     if background_only && op == "focus" {
         return foreground_required("explicit_focus");
     }
-    if matches!(op, "capture" | "click" | "scroll") && !scene_worker {
+    if matches!(op, "capture" | "click" | "move" | "drag" | "scroll") && !scene_worker {
         return rejected(
             json!({"error":"invalid_request","message":"Scene operations require a short-lived scene owner"}),
             op,
@@ -588,8 +687,10 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
             return foreground_required(reason);
         }
     }
-    let physical = matches!(op, "focus" | "type_text" | "keypress" | "scroll" | "click")
-        || (op == "release_focus" && focus_owner.is_some());
+    let physical = matches!(
+        op,
+        "focus" | "type_text" | "keypress" | "scroll" | "click" | "move" | "drag"
+    ) || (op == "release_focus" && focus_owner.is_some());
     if physical && !known_foreground {
         // A background preflight may have inspected an associated surface in
         // its proof child. Reap that Scene owner before waiting for exclusive
@@ -656,14 +757,14 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
             return result;
         }
         borrowed = prepared["borrowed"].as_bool().unwrap_or(false);
-        if matches!(op, "click" | "scroll") {
+        if matches!(op, "click" | "move" | "drag" | "scroll") {
             // Presentation uses the most recent native proof after focus/lease
             // handover. Input still performs its own target validation below.
             request["surface_owner"] = prepared["surface_owner"].clone();
             request["_pointer_bounds"] = prepared["bounds"].clone();
         }
     }
-    let _presentation = matches!(op, "click" | "scroll").then(|| {
+    let _presentation = matches!(op, "click" | "move" | "drag" | "scroll").then(|| {
         super::pointer_presentation::Scope::new(
             &request,
             &request["_pointer_bounds"],
@@ -701,7 +802,10 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
 }
 fn dispatch_owned(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value {
     let op = request["operation"].as_str().unwrap_or("").to_owned();
-    if !matches!(op.as_str(), "capture" | "click" | "scroll") {
+    if !matches!(
+        op.as_str(),
+        "capture" | "click" | "move" | "drag" | "scroll"
+    ) {
         return native(&request, false);
     }
     if !scene_worker {
@@ -723,7 +827,7 @@ fn dispatch_owned(mut request: Value, leased: &mut bool, scene_worker: bool) -> 
     request["surface_owner"] = before["surface_owner"].clone();
     request["window_id"] = request["target"]["native_id"].clone();
     let mut click_borrowed = None;
-    if op == "click" {
+    if matches!(op.as_str(), "click" | "move" | "drag") {
         let mut focus = request.clone();
         focus["operation"] = json!("focus");
         let raised = native(&focus, false);
@@ -741,7 +845,7 @@ fn dispatch_owned(mut request: Value, leased: &mut bool, scene_worker: bool) -> 
     if let Some(borrowed) = click_borrowed {
         result["borrowed"] = json!(borrowed);
     }
-    if op == "click" || op == "scroll" {
+    if matches!(op.as_str(), "click" | "move" | "drag" | "scroll") {
         return result;
     }
     if result.get("error").is_some() {
@@ -855,6 +959,18 @@ pub(super) fn validate_reply(reply: &Value, target: &Value) -> Result<(), Value>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visible_pointer_operations_decline_background_before_any_native_preflight() {
+        for operation in ["click", "move", "drag"] {
+            let mut request = json!({"operation":operation});
+            assert!(
+                matches!(background(&mut request), BackgroundAttempt::Declined(reason)
+                if reason == "visible_pointer_requires_foreground")
+            );
+            assert_eq!(request, json!({"operation":operation}));
+        }
+    }
 
     #[test]
     fn association_pixels_require_scene_role_and_live_admission() {

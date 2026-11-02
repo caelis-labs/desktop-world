@@ -200,10 +200,14 @@ private func capture(_ request: [String:Any], deadline: TimeInterval? = nil,
         guard let window = content?.windows.first(where: { $0.windowID == id && $0.owningApplication?.processID == pid }) else {
             box.result = fail("window_unavailable",error?.localizedDescription ?? "Window is no longer shareable"); semaphore.signal(); return
         }
-        let filter = SCContentFilter(desktopIndependentWindow:window)
-        // Child-window composition can return a parent+sheet canvas scaled
-        // inside the requested sheet's dimensions. Bind one surface only.
-        guard near(filter.contentRect,window.frame) else {
+        // includeChildWindows applies to display-bound filters. Independent
+        // window streams may include a sheet/popover in the parent's canvas.
+        // Select this exact owned window on its display, then crop its frame;
+        // no display background or other application's window is authorized.
+        let display = content?.displays.first { $0.frame.contains(window.frame) }
+        let filter = display.map { SCContentFilter(display:$0, including:[window]) }
+            ?? SCContentFilter(desktopIndependentWindow:window)
+        guard display != nil || near(filter.contentRect,window.frame) else {
             box.result=fail("capture_geometry_mismatch","SCK content geometry differs from the window; no input binding created");semaphore.signal();return
         }
         let config = SCStreamConfiguration()
@@ -214,6 +218,7 @@ private func capture(_ request: [String:Any], deadline: TimeInterval? = nil,
         // display a larger requested canvas is padded, breaking pixel binding.
         // The captured content must fill the dimensions used by bound_pixel_point.
         config.scalesToFit = true
+        if let display { config.sourceRect = window.frame.offsetBy(dx:-display.frame.minX,dy:-display.frame.minY) }
         config.showsCursor = false; config.ignoreShadowsSingleWindow = true
         config.shouldBeOpaque = false
         config.includeChildWindows = false
@@ -331,6 +336,23 @@ private struct PointReadinessFailure: Error {
     let result: [String: Any]
 }
 
+// A rectangular CG window list and an independent-window image do not prove
+// which display/Space renders each part of a spanning window. Refuse physical
+// input there until an exact hit proof exists; app-only capture remains useful.
+func dtwSingleDisplayPoint(_ point:CGPoint,bounds:CGRect,displays:[CGRect])->Bool {
+    var intersecting:[CGRect]=[]
+    for display in displays {
+        let intersection=display.intersection(bounds)
+        if !intersection.isNull,intersection.width>0,intersection.height>0,!intersecting.contains(display) {intersecting.append(display)}
+    }
+    return intersecting.count==1 && intersecting[0].contains(point)
+}
+private func displayProvesPoint(_ point:CGPoint,bounds:CGRect)->Bool {
+    var ids=[CGDirectDisplayID](repeating:0,count:64);var count:UInt32=0
+    guard CGGetActiveDisplayList(64,&ids,&count) == .success,count>0,count<=64 else{return false}
+    return dtwSingleDisplayPoint(point,bounds:bounds,displays:ids.prefix(Int(count)).map{CGDisplayBounds($0)})
+}
+
 // A missing/replaced/moved target is terminal even while presentation is
 // settling. Only visibility or hit-stack readiness may be sampled again.
 private func proveSurfacePoint(_ point: CGPoint, id: CGWindowID, pid: pid_t,
@@ -349,6 +371,7 @@ private func proveSurfacePoint(_ point: CGPoint, id: CGWindowID, pid: pid_t,
         }
         return value
     }
+    guard displayProvesPoint(point,bounds:bounds) else {throw PointReadinessFailure(result:fail("display_proof_unavailable","Physical pointer input requires a proven point on a window confined to one display"))}
     let all = windows(excluding: overlayCandidates)
     let window = try target(in: all, phase: "target_invalid_before_sample")
     let visible = visibleAt(point, target: window, all: all, deadline: deadline)
@@ -575,6 +598,108 @@ private func click(_ request: [String:Any]) -> [String:Any] {
     }
     return ["delivery":"posted","effect":"unverified","route":"dtw_visible_point","window_id":Int(id),"pointer_moved":true]
 }
+// One content gesture in an exact captured window. The input gate owns the
+// entire held interval; paired release runs even if a later proof fails.
+private func pointerGesture(_ request: [String:Any]) -> [String:Any] {
+    let dragging = request["operation"] as? String == "drag"
+    guard let path = request["path"] as? [[String:Double]],
+          (dragging ? 2...256 : 1...1).contains(path.count),
+          let b = request["bounds"] as? [Double], b.count == 4 else {
+        return fail("invalid_path", "Invalid bounded pointer path")
+    }
+    let points = path.compactMap { p -> CGPoint? in
+        guard p.count == 2, let x=p["x"],let y=p["y"],x.isFinite,y.isFinite else{return nil}
+        return CGPoint(x:x,y:y)
+    }
+    let bounds=CGRect(x:b[0],y:b[1],width:b[2],height:b[3])
+    guard points.count==path.count,points.allSatisfy({bounds.contains($0)}),
+          (!dragging || points.dropFirst().contains(where:{$0 != points[0]})),surfaceOwnerCurrent(request) else {
+        return fail("invalid_path", "Path must remain inside the captured surface")
+    }
+    guard points.allSatisfy({displayProvesPoint($0,bounds:bounds)}) else {
+        return fail("display_proof_unavailable","Physical pointer input on a spanning window is not supported; capture remains available")
+    }
+    guard CGEventSource.flagsState(.combinedSessionState).intersection([.maskCommand,.maskControl,.maskAlternate,.maskShift]).isEmpty,
+          !CGEventSource.buttonState(.combinedSessionState,button:.left),
+          !CGEventSource.buttonState(.combinedSessionState,button:.right),
+          !CGEventSource.buttonState(.combinedSessionState,button:.center) else {
+        return fail("input_busy", "Session modifiers or buttons are already held")
+    }
+    let id=UInt32(request["window_id"] as? Int ?? 0),pid=Int32(request["pid"] as? Int ?? 0)
+    let deadline=ProcessInfo.processInfo.systemUptime+max(0,(request["deadline_unix_ms"] as? Double ?? 0)/1000-Date().timeIntervalSince1970)
+    let overlays=dtwSceneOverlayCandidates(request)
+    var changed=false
+    var pending:NativePendingInput?
+    func finished(_ result:[String:Any])->[String:Any] {
+        var result=result
+        if let pending,!dtwFinishInput(pending),result["error"] == nil {result=fail("input_release_unproven","Pointer transaction cleanup was not confirmed")}
+        result["pointer_moved"]=changed
+        return result
+    }
+    func check(_ point:CGPoint, pointer:Bool=false) throws {
+        guard !dtwInputStopping(),ProcessInfo.processInfo.systemUptime<deadline else {
+            throw PointReadinessFailure(result:fail("native_stopping","Pointer transaction stopped or expired"))
+        }
+        var validation=request;validation["screen_x"]=point.x;validation["screen_y"]=point.y
+        if let error=dtwValidatePixelTarget(validation){throw PointReadinessFailure(result:error)}
+        guard surfaceOwnerCurrent(request),
+              let proof=dtwProveSurfacePoint(point,id:id,pid:pid,bounds:bounds,deadline:deadline,overlayCandidates:overlays),
+              proof.matchesCurrent(requirePointer:pointer) else {
+            throw PointReadinessFailure(result:fail("target_occluded","Pointer path no longer belongs to the proven visible surface"))
+        }
+    }
+    do {
+        try check(points[0])
+        guard deadline-ProcessInfo.processInfo.systemUptime>0.25,
+              let source=CGEventSource(stateID:.privateState),
+              let down=CGEvent(mouseEventSource:source,mouseType:.leftMouseDown,mouseCursorPosition:points[0],mouseButton:.left),
+              let up=CGEvent(mouseEventSource:source,mouseType:.leftMouseUp,mouseCursorPosition:points[0],mouseButton:.left) else {
+            return finished(fail("input_unavailable","Cannot prepare pointer transaction and release"))
+        }
+        down.flags=[];up.flags=[]
+        down.setIntegerValueField(.mouseEventClickState,value:1);up.setIntegerValueField(.mouseEventClickState,value:1)
+        guard let input=dtwTrackInput(source:source,eventTypes:dragging ? [.leftMouseUp] : [.mouseMoved]) else {
+            return finished(fail("native_stopping","Pointer admission is closed"))
+        }
+        pending=input
+        guard let _:Bool=try dtwWithInputAdmission({
+            var pressed=false
+            var last=points[0]
+            defer {
+                if pressed {
+                    up.location=last;input.posted(eventType:CGEventType.leftMouseUp.rawValue,button:CGMouseButton.left.rawValue)
+                    up.post(tap:.cghidEventTap);dtwPresentPostedPointer(last,kind:2)
+                }
+            }
+            try check(points[0])
+            changed=true
+            guard CGWarpMouseCursorPosition(points[0]) == .success,
+                  CGAssociateMouseAndMouseCursorPosition(1) == .success else {
+                throw PointReadinessFailure(result:fail("input_unavailable","Pointer placement failed"))
+            }
+            guard dtwSettleInput(seconds:0.04,deadline:deadline) else {throw PointReadinessFailure(result:fail("native_stopping","Pointer routing stopped"))}
+            try check(points[0],pointer:true)
+            if dragging {input.posted(eventType:nil,button:CGMouseButton.left.rawValue);down.post(tap:.cghidEventTap);pressed=true;dtwPresentPostedPointer(last,kind:1)}
+            for point in dragging ? Array(points.dropFirst()) : points {
+                try check(point)
+                guard let event=CGEvent(mouseEventSource:source,mouseType:dragging ? .leftMouseDragged : .mouseMoved,mouseCursorPosition:point,mouseButton:.left) else {
+                    throw PointReadinessFailure(result:fail("input_unavailable","Pointer event allocation failed"))
+                }
+                event.flags=[]
+                event.setIntegerValueField(.mouseEventDeltaX,value:Int64((point.x-last.x).rounded()))
+                event.setIntegerValueField(.mouseEventDeltaY,value:Int64((point.y-last.y).rounded()))
+                last=point
+                if !dragging {input.posted(eventType:CGEventType.mouseMoved.rawValue)}
+                event.post(tap:.cghidEventTap);dtwPresentPostedPointer(point,kind:0)
+                Thread.sleep(forTimeInterval:dragging ? 0.01 : 0.04)
+            }
+            return true
+        }) else {return finished(fail("native_stopping","Pointer admission closed"))}
+        return finished(["delivery":"posted","effect":"unverified"])
+    } catch let error as PointReadinessFailure {return finished(error.result)}
+    catch {return finished(fail("native_error",String(describing:error)))}
+}
+
 @_cdecl("dtw_scene_call")
 public func dtwSceneCall(_ raw: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>? {
     autoreleasepool {
@@ -587,12 +712,13 @@ public func dtwSceneCall(_ raw: UnsafePointer<CChar>) -> UnsafeMutablePointer<CC
                 if #available(macOS 14.2, *) { result = capture(request) }
                 else { result = fail("unsupported_platform","SCK screenshots require macOS 14.2+") }
             case "click": result = click(request)
+            case "move", "drag": result = pointerGesture(request)
             case "prove_associated_surface": result = dtwReadAssociatedSurfaceProof(request)
             default: result = fail("invalid_operation","Unknown native extension operation")
             }
         } catch { result = fail("invalid_request",String(describing:error)) }
         // The producer owns dispatch classification, including pointer-only effects.
-        if let request = try? JSONSerialization.jsonObject(with:Data(String(cString:raw).utf8)) as? [String:Any], request["operation"] as? String == "click" {
+        if let request = try? JSONSerialization.jsonObject(with:Data(String(cString:raw).utf8)) as? [String:Any], ["click","move","drag"].contains(request["operation"] as? String ?? "") {
             result["dispatch"] = result["delivery"] as? String == "posted" ? "dispatched" : (result["pointer_moved"] as? Bool == true ? "unknown" : "not_dispatched")
             result["evidence"] = "unverified"
         }

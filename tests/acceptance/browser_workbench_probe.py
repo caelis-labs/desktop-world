@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Real Chrome business UI + TextEdit, through standard DTW only.
+"""HISTORICAL pre-convergence protocol (not a current Agent acceptance runner).
+
+Current protocol: app_scene_probe.py, app_lifecycle_probe.py and
+windows/app_protocol_probe.py. Reusable fixture/stdio helpers remain importable.
+
+Real Chrome business UI + TextEdit, through standard DTW only.
 
 Development-artifact usability evidence, or opt-in installed candidate evidence.
 An unpublished candidate is never reported as a formal release.

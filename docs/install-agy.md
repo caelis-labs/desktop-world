@@ -60,7 +60,7 @@ not a substitute for a valid package or a successful tool call.
 **Verified App scope:** Windows, Antigravity App **2.28.2**. The bundled relative
 command (`./bin/dtw.exe`) with `cwd: "${PLUGIN_ROOT}"` launched the executable
 inside the global plugin directory. A clean installation enabled the plugin and
-verified `apps` plus three `app.windows()` calls through a fresh verifier without
+The historical pre-convergence build verified `apps` plus three `app.windows()` calls through a fresh verifier without
 an App restart. An earlier upgrade check needed a normal full App close/reopen
 because an old MCP process survived manifest refresh while the UI remained green.
 This App verification does not certify the CLI surface.
@@ -78,12 +78,12 @@ complete read-only task, using the host's exposed argument schema:
   "Role": "Desktop Verifier",
   "Model": "inherit",
   "Workspace": "inherit",
-  "Prompt": "Verify the installed desktop-world plugin using its MCP tools. Call apps, choose a returned canonical app ID unchanged, then call exec using that app with source set to 'return await app.windows();'. Report the actual tool result or error. Do not use shell commands, private host RPCs, binary scans, UI input, or file writes."
+  "Prompt": "Verify the installed desktop-world plugin using its MCP tools. Call apps with state=running, choose a returned canonical app ID unchanged, then call exec using that app with source set to 'await app.look();'. Report the actual tool result or error. Do not use shell commands, private host RPCs, binary scans, UI input, or file writes."
 }
 ```
 
 Use its normal completion reply. In this App the exposed MCP server name is
-`desktop-world_desktop-world`, with `apps`, `api`, `exec` and `result` tools.
+`desktop-world_desktop-world`, with `apps` and `exec` tools.
 The fresh verifier tests the existing installation; it does not install another
 copy or register another MCP server. Reading subagent transcript files or
 probing Language Server endpoints is not part of this check.
@@ -112,10 +112,10 @@ you use both surfaces.
 ## Verify the actual plugin connection
 
 1. Load the bundled `desktop-world` Skill (or invoke `/desktop-world`).
-2. Discover the plugin's `apps`, `api`, `exec` and `result` tools. agy may qualify
+2. Discover the plugin's `apps` and `exec` tools. agy may qualify
    their names with the plugin and server names; use the names it actually exposes.
-3. Call `apps`, then `exec` with a returned app ID and
-   `source: "return await app.windows();"`.
+3. Call `apps({state:"running"})`, then `exec` with a returned app ID and
+   `source: "await app.look();"`.
 4. Capture a disposable test window through DTW and confirm the image reaches
    the model before trying input. See [the common installation check](../install.md#check-the-installation).
 
