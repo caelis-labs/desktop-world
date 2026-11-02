@@ -20,6 +20,24 @@ class PackageClient(Mcp):
             return cleanup
         finally:
             self.child.stdout.close();self.stderr.close();self.transcript.close()
+            # Release the completed process object/OS handle as well as its pipes.
+            self.child=None
+
+def native_worker_command(executable):
+    command=[executable,'--dtw-native-worker']
+    if os.name=='nt':
+        import ctypes
+        from ctypes import wintypes as w
+        kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+        kernel.GetCurrentProcess.restype=w.HANDLE
+        kernel.GetProcessTimes.argtypes=[w.HANDLE,*([ctypes.POINTER(w.FILETIME)]*4)]
+        kernel.GetProcessTimes.restype=w.BOOL
+        created,exited,cpu_kernel,cpu_user=(w.FILETIME() for _ in range(4))
+        if not kernel.GetProcessTimes(kernel.GetCurrentProcess(),*(ctypes.byref(v) for v in [created,exited,cpu_kernel,cpu_user])):
+            raise ctypes.WinError(ctypes.get_last_error())
+        birth=(created.dwHighDateTime<<32)|created.dwLowDateTime
+        command.extend([str(os.getpid()),str(birth)])
+    return command
 
 def sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()
 def write(path,value): path.write_text(json.dumps(value,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
@@ -67,11 +85,14 @@ def main():
     # A worker protects itself after the MCP supervisor is already gone. Release
     # of a nonexistent binding performs no AX/SCK/input/desktop operation.
     with (out/'worker-stderr.log').open('w',encoding='utf-8') as error:
-        worker=subprocess.Popen([c['executable'],'--dtw-native-worker'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=error,text=True,encoding='utf-8')
+        worker=subprocess.Popen(native_worker_command(c['executable']),stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=error,text=True,encoding='utf-8')
         try:
             request_id=str(uuid.uuid4());worker.stdin.write(json.dumps({'request_id':request_id,'operation':'release','binding':'never-created-'+str(uuid.uuid4())})+'\n');worker.stdin.flush()
-            messages=queue.Queue();threading.Thread(target=lambda:messages.put(worker.stdout.readline()),daemon=True).start()
-            assert json.loads(messages.get(timeout=5))=={'request_id':request_id,'result':{'released':False}}
+            messages=queue.Queue();output_reader=threading.Thread(target=lambda:messages.put(worker.stdout.readline()),daemon=True);output_reader.start()
+            line=messages.get(timeout=5);output_reader.join(timeout=2)
+            if not line:
+                worker.wait(timeout=5);error.flush();raise AssertionError({'exit':worker.returncode,'stderr':Path(error.name).read_text(encoding='utf-8',errors='replace')[-4096:]})
+            assert json.loads(line)=={'request_id':request_id,'result':{'released':False}}
             rows=cli('gc','--apply')['packages'];assert next(r for r in rows if r['package_id']==c['package_id'])['retained_by']=='running',rows
         finally:
             worker.stdin.close()
@@ -79,6 +100,7 @@ def main():
             except subprocess.TimeoutExpired:worker.kill();worker.wait(timeout=5);raise
             worker.stdout.close()
         assert worker.returncode==0,worker.returncode
+        del worker
     rows=cli('gc','--apply')['packages'];assert next(r for r in rows if r['package_id']==c['package_id'])['action']=='removed',rows
     assert Path(a['package_path']).exists() and Path(b['package_path']).exists() and not Path(c['package_path']).exists()
     (out/'source A/skills/desktop-world/API.md').write_text('corrupt',encoding='utf-8');assert 'checksum' in cli('import',out/'source A',ok=False)
