@@ -23,16 +23,23 @@ development diagnostics, outside the publication gate.
    **Rewrite macOS candidate** builds arm64, signs with Developer ID, submits the
    fixed ZIP for notarization and requires Accepted receipts. It runs same-source
    Rust contracts, native worker shutdown and the same final-package metadata
-   check without desktop access.
+   check without desktop access. The macOS job extracts the final ZIP's exact
+   binary, verifies its Developer ID/runtime/timestamp with `codesign`, and seals
+   `NATIVE-VERIFICATION.json` beside the candidate in its immutable CI artifact.
 4. Only when both builders succeed, a construction plan records the exact source,
    CI receipt, artifact IDs and SHA-256 digests. Artifact names include their
    attempt, so a failed platform can be retried while retaining the other
    platform's original successful bytes.
-5. **Publish release automatically** consumes that successful plan. It preserves
+5. **Publish release automatically** runs on Ubuntu and consumes that successful plan. It preserves
    both ZIPs and original BUILD/CANDIDATE/notarization bytes, verifies all 13
-   assets and native macOS signatures, uploads missing staged assets, downloads
-   and verifies the complete remote set, then publishes it. A post-publication
-   download/audit verifies the same bytes again.
+   prepared assets, and requires the native receipt to match the exact source,
+   archive, BUILD, binary, notarization and signing identity. The receipt is
+   accepted only from the plan's authenticated artifact ID/digest/run. It uploads
+   missing assets, confirms the complete remote inventory using GitHub's asset
+   [size/SHA-256 metadata](https://docs.github.com/en/rest/releases/assets#get-a-release-asset), then publishes it. No second macOS runner or full remote
+   package download is needed. Resume reads only the original RELEASE.json and
+   SHA256SUMS where present. There is no automatic post-publication byte audit;
+   real host validation belongs to the installer/user.
 
 The internal draft is an implementation detail, not a review or operator step.
 It prevents a partial upload from becoming a public/latest release. This follows
@@ -79,9 +86,10 @@ than overwriting an earlier upload.
 For a publication/upload failure, rerun the failed **Publish release
 automatically** run. It downloads the original successful construction again;
 it does not rebuild, re-sign, re-compress or resubmit notarization. Already
-uploaded assets must match exactly. Matching missing draft assets can be added;
-any changed or unexpected asset fails. An already published release is audited
-without repair or replacement. Expired/missing evidence fails rather than being
+uploaded assets must match their expected size and digest. Matching missing draft assets can be added;
+any changed, unhashed, incomplete or unexpected upload fails before publication.
+An already published release is a metadata-only no-op without download, repair
+or replacement. Expired/missing evidence fails rather than being
 interpreted as acceptance. Construction and publication reports are retained for
 90 days. A previous successful construction also prevents a duplicate automatic
 build from creating a different signed package for the same pending tag.
@@ -90,7 +98,7 @@ signing; rerun that construction's original publication instead. An expired
 established plan also fails rather than silently creating replacement packages.
 
 Release writes use `GITHUB_TOKEN`. Such writes do not trigger a second
-release-event workflow, so the publisher performs its own final audit; see
+release-event workflow; see
 [GitHub's token-trigger rules](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
 No manual dispatch or GUI attestation is needed to finish the normal path.
 
@@ -101,8 +109,11 @@ BUILD records, two CANDIDATE records, the three original notarization receipts,
 RELEASE.json and the complete SHA256SUMS. ZIP inventories cover runtime, standard
 plugin/MCP manifests, Skill, installation references, dependency/source notices,
 BUILD identity and all package files. Executable formats, binary/Skill hashes,
-versions, target paths, plugin layouts, Developer ID signatures and original
-Accepted notarization identities are verified before publication.
+versions, target paths, plugin layouts and original Accepted notarization
+identities are verified before publication. Developer ID signatures are checked
+on the final packaged binary in the existing macOS construction job. Its sealed
+receipt stays bound to the GitHub artifact and is recorded with the candidate
+origin in RELEASE.json; the Linux publisher has no signature-waiver flag.
 
 `RELEASE.json` records `automated_ci` and binds the source checks/construction to
 the archive digests. The candidate's original `gui: unverified` and clean-install
@@ -114,8 +125,8 @@ commits. New automatic construction fixes both platforms to one tag source.
 The scripts `scripts/build-rewrite-candidate.py`, `scripts/release-plan.py`,
 `scripts/promote-release.py` and `scripts/verify-release.py` own these contracts.
 Mocked offline controls test stale/foreign/failed CI, source races, digest and
-matrix mismatches, mixed attempts, partial uploads, published reruns, signature
-failures and latest ordering. CI never runs real desktop input.
+matrix mismatches, mixed attempts, partial uploads, published reruns, signature/
+receipt failures, missing asset digests and latest ordering. CI never runs real desktop input.
 
 ## Development and optional diagnostics
 
@@ -147,8 +158,8 @@ optional absolute `--notary-keychain`; the builder does not create credentials.
 ZIP notarization is online and not stapled, so it is not a promise of offline
 Gatekeeper or a substitute for users granting normal macOS permissions.
 
-**Release asset verification** remains an optional read-only audit of an existing
-tag and a post-publication event check. It does not publish anything or introduce
+**Release asset verification** remains a manually dispatched read-only audit of an existing
+tag. It is not triggered by publication, does not publish anything or introduce
 another gate. Real-machine troubleshooting tools and the optional Windows/native
 Agent matrices are described in [building](building.md) and
 [Windows acceptance](../tests/acceptance/windows/README.md). Their results can

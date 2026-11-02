@@ -71,9 +71,13 @@ def stage_candidate(data, artifact_digest, source, tag, target, output):
         if target == verifier.TARGETS[0]:
             for receipt in verifier.RECEIPTS:
                 files[receipt] = member(outer, prefix + receipt)
+            native = json.loads(member(outer, prefix + verifier.NATIVE_RECEIPT))
+            verifier.check_native_verification(native, candidate)
+        else:
+            native = None
         for filename, content in files.items():
             (output / filename).write_bytes(content)
-    return candidate
+    return candidate, native
 
 
 def fetch_candidate(repository, plan, tag, target, output):
@@ -85,9 +89,12 @@ def fetch_candidate(repository, plan, tag, target, output):
     prefix = 'dtw-macos-candidate-' if target == verifier.TARGETS[0] else 'dtw-windows-candidate-'
     require(re.fullmatch(re.escape(prefix + plan['source']) + r'-attempt-[1-9]\d*', artifact['name']), 'Wrong candidate artifact source')
     data = gh('api', f'repos/{repository}/actions/artifacts/{artifact["id"]}/zip', binary=True)
-    candidate = stage_candidate(data, artifact.get('digest'), plan['source'], tag, target, output)
+    candidate, native = stage_candidate(data, artifact.get('digest'), plan['source'], tag, target, output)
     require(candidate['source'].get('tree') == plan['tree'], 'Candidate source tree differs from successful CI')
-    return candidate, {'run_id': plan['build_run_id'], 'artifact_id': artifact['id'], 'artifact_digest': artifact['digest']}
+    origin = {'run_id': plan['build_run_id'], 'artifact_id': artifact['id'], 'artifact_digest': artifact['digest']}
+    if native is not None:
+        origin['native_verification'] = native
+    return candidate, origin
 
 
 def release_record(repository, tag):
@@ -99,10 +106,28 @@ def release_record(repository, tag):
     return matches[0]
 
 
-def download(repository, tag, output):
+def download_metadata(repository, tag, output, names):
+    """Only resume metadata needs downloading; payload identity comes from the API."""
     output.mkdir()
-    subprocess.run(['gh', 'release', 'download', tag, '--repo', repository, '--dir', str(output)],
-                   check=True, timeout=180)
+    selected = sorted(set(names) & {'RELEASE.json', 'SHA256SUMS'})
+    if selected:
+        patterns = [arg for name in selected for arg in ('--pattern', name)]
+        subprocess.run(['gh', 'release', 'download', tag, '--repo', repository, '--dir', str(output), *patterns],
+                       check=True, timeout=180)
+
+
+def uploaded_assets(release, prepared, *, complete):
+    assets = release['assets']
+    names = [asset['name'] for asset in assets]
+    expected = {path.name: path for path in prepared.iterdir()}
+    require(len(names) == len(set(names)) and set(names) <= set(expected), 'Unexpected existing release asset names')
+    require(not complete or set(names) == set(expected), 'Release upload is incomplete')
+    for asset in assets:
+        content = expected[asset['name']].read_bytes()
+        require(asset.get('state') == 'uploaded' and asset.get('size') == len(content)
+                and asset.get('digest') == 'sha256:' + digest(content),
+                'Uploaded asset identity mismatch: ' + asset['name'])
+    return {'assets_confirmed': len(assets), 'method': 'GitHub asset size and SHA-256 metadata'}
 
 
 def prepare_release(output, existing, tag, commit, candidates, origins, ci, actor):
@@ -161,35 +186,36 @@ def promote(repository, plan, actor, output):
             and plan.get('ci', {}).get('source') == plan['source'] and plan['ci'].get('tree') == plan.get('tree'),
             'Incomplete fixed construction plan')
     output.mkdir(parents=True)
+    release = release_record(repository, tag)
+    names = [a['name'] for a in release['assets']]
+    require(len(names) == len(set(names)) and set(names) <= asset_names(tag), 'Unexpected existing release asset names')
+    commit = gh('api', f'repos/{repository}/commits/{tag}')['sha']
+    require(commit == plan['source'], 'Release tag moved after its successful construction')
+    if not release['draft']:
+        require(set(names) == asset_names(tag), 'Published release is incomplete; no repair or replacement is allowed')
+        report = {'tag': tag, 'tag_commit': commit, 'status': 'already_published',
+                  'release_id': release['id'], 'qualification': 'Metadata only; no post-publication asset audit or mutation'}
+        (output / 'report.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
+        return report
     prepared = output / 'prepared'; prepared.mkdir()
     candidates = []; origins = {}
     for target in verifier.TARGETS:
         candidate, origin = fetch_candidate(repository, plan, tag, target, prepared)
         candidates.append(candidate); origins[target] = origin
-    release = release_record(repository, tag)
-    names = [a['name'] for a in release['assets']]
-    require(len(names) == len(set(names)) and set(names) <= asset_names(tag), 'Unexpected existing release asset names')
-    commit = gh('api', f'repos/{repository}/commits/{tag}')['sha']
-    require(re.fullmatch(r'[0-9a-f]{40}', commit), 'Missing immutable release tag')
-    require(commit == plan['source'], 'Release tag moved after its successful construction')
     existing = output / 'existing'
-    if release['assets']:
-        download(repository, tag, existing)
-    else:
-        existing.mkdir()
+    download_metadata(repository, tag, existing, names)
     prepare_release(prepared, existing, tag, commit, candidates, origins, plan['ci'], actor)
-    # Native macOS signature and real archive verification before any upload.
-    verifier.verify(prepared, tag, commit)
-    missing = sorted(p for p in prepared.iterdir() if not (existing / p.name).exists())
-    require(release['draft'] or not missing, 'Published release is incomplete; no repair or replacement is allowed')
+    # The native receipt came from the exact immutable artifact authenticated
+    # above. There is no flag to waive signatures and no native publisher host.
+    native = origins[verifier.TARGETS[0]].get('native_verification')
+    require(native is not None, 'Missing immutable native verification receipt')
+    verified = verifier.verify(prepared, tag, commit, native_verification=native)
+    uploaded_assets(release, prepared, complete=False)
+    missing = sorted(p for p in prepared.iterdir() if p.name not in names)
     if missing:
         subprocess.run(['gh', 'release', 'upload', tag, '--repo', repository, *map(str, missing)],
                        check=True, timeout=180)  # Deliberately no --clobber.
-    remote = output / 'preflight'
-    download(repository, tag, remote)
-    preflight = verifier.verify(remote, tag, commit)
-    for path in prepared.iterdir():
-        require(path.read_bytes() == (remote / path.name).read_bytes(), 'Uploaded asset changed: ' + path.name)
+    preflight = uploaded_assets(release_record(repository, tag), prepared, complete=True)
     require(gh('api', f'repos/{repository}/commits/{tag}')['sha'] == commit, 'Release tag moved before publication')
     if release['draft']:
         latest = '--latest' if latest_allowed(repository, tag) else '--latest=false'
@@ -198,13 +224,8 @@ def promote(repository, plan, actor, output):
     published = release_record(repository, tag)
     require(not published['draft'], 'Release is still a draft')
     require(gh('api', f'repos/{repository}/commits/{tag}')['sha'] == commit, 'Release tag moved during publication')
-    final = output / 'published'
-    download(repository, tag, final)
-    audit = verifier.verify(final, tag, commit)
-    for path in remote.iterdir():
-        require(path.read_bytes() == (final / path.name).read_bytes(), 'Asset changed across publication')
-    report = {'tag': tag, 'tag_commit': commit, 'status': 'published' if release['draft'] else 'already_published',
-              'release_id': published['id'], 'preflight': preflight, 'published_audit': audit,
+    report = {'tag': tag, 'tag_commit': commit, 'status': 'published',
+              'release_id': published['id'], 'prepared': verified, 'preflight': preflight,
               'archives': {c['target']: c['archive_sha256'] for c in candidates}, 'origins': origins,
               'automated_ci': plan['ci'], 'build_run_id': plan['build_run_id']}
     (output / 'report.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')

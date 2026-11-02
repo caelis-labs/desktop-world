@@ -45,7 +45,7 @@ jobs:
   publish:
     needs: plan
     if: needs.plan.outputs.release == 'true'
-    runs-on: macos-26
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
@@ -65,8 +65,6 @@ jobs:
           RELEASE_BUILD_RUN_ID: ${{ github.event.workflow_run.id }}
           RELEASE_BUILD_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
         run: python3 scripts/promote-release.py --output "$RUNNER_TEMP/release-promotion"
-      # GITHUB_TOKEN release writes do not trigger release.published workflows.
-      # The publisher therefore downloads and audits again after publication.
       - uses: actions/upload-artifact@v4
         if: always()
         with:
