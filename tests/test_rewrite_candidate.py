@@ -173,7 +173,7 @@ class Fixture(unittest.TestCase):
         for name in ("LICENSE", "THIRD_PARTY_NOTICES.md", "install.md", "docs/install.md",
                      "docs/install-dsh.md", "docs/install-caelis.md", "docs/install-agy.md", "docs/native-source-provenance.md",
                      "docs/native-source-provenance-cross-platform.md", "docs/background-input-port.md",
-                     "docs/windows-cursor-port.md", "docs/agent-protocol-migration.md",
+                     "docs/windows-cursor-port.md", "docs/agent-protocol-migration.md", "docs/package-management.md",
                      "skills/desktop-world/SKILL.md", "skills/desktop-world/API.md", "skills/desktop-world/PATTERNS.md"):
             put(self.repo, name, "Original reviewed source content\n")
         put(self.repo, "docs/examples/mcp.json", '{"mcpServers":{"desktop-world":{"command":"/absolute/path/to/dtw","args":["mcp"]}}}\n')
@@ -451,7 +451,7 @@ class BinaryAndArchiveTests(Fixture):
             package = self.root / target
             package.mkdir()
             candidate.package_assets(self.repo, package, "0.2.0", target)
-            for guide in ("install.md", "docs/install.md", "docs/install-dsh.md", "docs/install-caelis.md", "docs/install-agy.md", "docs/agent-protocol-migration.md"):
+            for guide in ("install.md", "docs/install.md", "docs/install-dsh.md", "docs/install-caelis.md", "docs/install-agy.md", "docs/agent-protocol-migration.md", "docs/package-management.md"):
                 self.assertEqual((package / guide).read_bytes(), (self.repo / guide).read_bytes())
             config = json.loads((package / ".mcp.json").read_text())
             self.assertEqual(config["mcpServers"]["desktop-world"], {"command": "${CLAUDE_PLUGIN_ROOT}/bin/" + binary, "args": ["mcp"]})

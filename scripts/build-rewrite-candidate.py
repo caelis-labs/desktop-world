@@ -449,7 +449,7 @@ def package_assets(source, package, version, target):
     shutil.copytree(source / "skills/desktop-world", package / "skills/desktop-world")
     for relative in ("docs/native-source-provenance.md", "docs/native-source-provenance-cross-platform.md",
                      "docs/background-input-port.md", "docs/install.md", "docs/install-dsh.md",
-                     "docs/install-caelis.md", "docs/install-agy.md", "docs/agent-protocol-migration.md"):
+                     "docs/install-caelis.md", "docs/install-agy.md", "docs/agent-protocol-migration.md", "docs/package-management.md"):
         dest = package / relative
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source / relative, dest)
@@ -564,7 +564,7 @@ def build(repo, output, target, signing_identity=None, notary_profile=None, nota
         plugin_entries = package_assets(source, package, version, target)
         require(source_identity(repo, commands.run) == identity, "Source changed during candidate build")
         require(digest(source / "cmd/dtw/Cargo.lock") == identity["cargo_lock_sha256"], "Build changed the exported lockfile")
-        build_info = {"schema": 1, "kind": "unpublished-rewrite-candidate", "version": version, "target": target,
+        build_info = {"schema": 1, "package_store_schema": 1, "kind": "unpublished-rewrite-candidate", "version": version, "target": target,
                       "source": identity, "source_archive_sha256": digest(source_tar), "toolchain": toolchain,
                       "build_environment": build_env, "host": {"system": platform.system(), "release": platform.release(), "machine": platform.machine()},
                       "binary": {"path": f"bin/{binary.name}", "sha256": digest(binary), **fmt},

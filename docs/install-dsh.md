@@ -1,7 +1,7 @@
 # Install DTW in DeepSeek Harness
 
-First [download and verify DTW](../install.md#select-and-extract-a-package), extract
-it to a permanent directory, and start DSH once. This guide checks the shipped
+First [download and verify DTW](../install.md#select-and-extract-a-package), import
+it into the managed store, and start DSH once. This guide checks the shipped
 DSH **0.2.1-rc.5** configuration format. On Windows, use the direct file-URL row
 below as the first route. Other versions should use their installed MCP client
 and Skill provider schemas. The bundled Cordis adapter mounts the existing MCP
@@ -203,3 +203,12 @@ MCP servers, model settings and Skill roots. To remove DTW, remove only its
 inserted row/overrides and Skill registration after connections have stopped.
 
 For upstream details, see DSH's [MCP client](https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/mcp/mcp-client).
+
+Use a distinct [managed host/profile pin](package-management.md) (for example
+`dsh-desktop` or `agy`) before configuration changes. Use the recipe's immutable
+path or file URL; there is no shared mutable `current` alias. Activate the pin
+only after old contexts/connections are drained and the new connection and
+matching Skill have been checked. The previous package remains the rollback
+reference; unrelated hosts keep their own versions. For agy copies in its fixed
+plugin slot, stop the host before replacing the entire slot and let agy own its
+removal. Package GC only manages the distribution store.

@@ -15,7 +15,12 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
             .as_array()
             .map(|steps| summarize(steps));
         let mut compact = json!({"app":original["app"],"execution_id":original["execution_id"],"status":original["status"],"view":value["view"]});
-        if !value["result"].is_null() && !same_json(&value["result"], &value["view"]) {
+        if !value["result"].is_null()
+            && !same_json(
+                &value["result"],
+                value.get("snapshot").unwrap_or(&value["view"]),
+            )
+        {
             compact["result"] = value["result"].clone();
         }
         if value["console"].as_array().is_some_and(|v| !v.is_empty()) {

@@ -11,12 +11,14 @@ body with `exec({app, source})`; `app` is always required and fixes the entire
 script's authorization scope.
 
 Start with `await app.look()`. DTW starts a stopped app where supported and
-returns a compact baseline; subsequent looks return changes. Use semantic target
+returns a complete snapshot inside JavaScript. Tool messages show a compact baseline,
+then changes. Use semantic target
 IDs from the latest observation or a unique selector to click known controls.
 Use `await app.capture()` when the UI needs visual understanding or semantics
 are unavailable, then click coordinates in the returned image. After input DTW
 returns a fresh observation automatically. Use `move({x,y})` for hover and
-`drag({path:[{x,y},...]})` for one content drag within one window on one display;
+`drag({path:[{x,y},...]})` for one drag within one window on one display; standard macOS title bars can
+move their window when its native position is writable;
 the runtime pairs releases. Group known sequential steps in one script. Await every app operation.
 
 ```javascript

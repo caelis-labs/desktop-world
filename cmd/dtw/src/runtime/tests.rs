@@ -206,6 +206,7 @@ impl Backend for TestBackend {
             let elements = model.elements.clone().unwrap_or_else(|| {
                 vec![Element {
                     id: ElementId(7),
+                    identity: Some(format!("mock:{}", 7)),
                     label: if model.pressed { "on" } else { "off" }.into(),
                     role: "button".into(),
                     name: None,
@@ -537,6 +538,7 @@ fn element_validation_rejects_before_dispatch_without_consuming_reference() {
         model.elements = Some(vec![
             Element {
                 id: ElementId(7),
+                identity: Some(format!("mock:{}", 7)),
                 label: "button".into(),
                 role: "button".into(),
                 name: None,
@@ -547,6 +549,7 @@ fn element_validation_rejects_before_dispatch_without_consuming_reference() {
             },
             Element {
                 id: ElementId(8),
+                identity: Some(format!("mock:{}", 8)),
                 label: "label".into(),
                 role: "static_text".into(),
                 name: None,
@@ -584,6 +587,7 @@ fn invalid_backend_observations_are_not_published_and_bindings_are_released() {
             if duplicate_elements {
                 let element = Element {
                     id: ElementId(7),
+                    identity: Some(format!("mock:{}", 7)),
                     label: "duplicate".into(),
                     role: "button".into(),
                     name: None,
@@ -1356,6 +1360,7 @@ fn page(id: u64, visited: u32, has_more: bool) -> BackendObservationPage {
         target: target(),
         elements: vec![Element {
             id: ElementId(id),
+            identity: Some(format!("mock:{}", id)),
             label: "next button".into(),
             role: "button".into(),
             name: None,

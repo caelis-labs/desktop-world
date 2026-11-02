@@ -1,7 +1,7 @@
 # Install DTW in Antigravity (agy)
 
 First [download and verify the latest stable DTW package](../install.md#select-and-extract-a-package)
-for your OS. Keep the complete extracted directory, including `bin/`,
+for your OS, then import it into the managed store. Keep the complete package, including `bin/`,
 `skills/`, `.antigravity-plugin/plugin.json` and `mcp_config.json`.
 Install this directory as **one plugin**; a separate `agy mcp add` registration
 or a copied standalone Skill is not needed.
@@ -60,8 +60,8 @@ not a substitute for a valid package or a successful tool call.
 **Verified App scope:** Windows, Antigravity App **2.28.2**. The bundled relative
 command (`./bin/dtw.exe`) with `cwd: "${PLUGIN_ROOT}"` launched the executable
 inside the global plugin directory. A clean installation enabled the plugin and
-The historical pre-convergence build verified `apps` plus three `app.windows()` calls through a fresh verifier without
-an App restart. An earlier upgrade check needed a normal full App close/reopen
+Historical pre-convergence checks verified discovery through a fresh verifier
+without an App restart; they do not certify this release's GUI behavior. An earlier upgrade check needed a normal full App close/reopen
 because an old MCP process survived manifest refresh while the UI remained green.
 This App verification does not certify the CLI surface.
 
@@ -133,7 +133,7 @@ the standard Agent Plugins root manifest or Claude metadata. Its MCP config
 uses the plugin working directory and a relative bundled executable; it does
 not depend on `${CLAUDE_PLUGIN_ROOT}` or a hardcoded external DTW installation.
 
-## Migrate, upgrade or remove
+## Upgrade or remove
 
 Finish active operations before changing the installation. Preserve unrelated
 plugins and settings. Remove only the previous standalone DTW MCP registration
@@ -152,3 +152,12 @@ Host references: [Plugins](https://antigravity.google/docs/plugins),
 [plugin layout and path variables](https://antigravity.google/docs/build-plugins),
 [normal subagents](https://antigravity.google/docs/subagents/),
 [MCP configuration](https://antigravity.google/docs/mcp).
+
+Use a distinct [managed host/profile pin](package-management.md) (for example
+`dsh-desktop` or `agy`) before configuration changes. Use the recipe's immutable
+path or file URL; there is no shared mutable `current` alias. Activate the pin
+only after old contexts/connections are drained and the new connection and
+matching Skill have been checked. The previous package remains the rollback
+reference; unrelated hosts keep their own versions. For agy copies in its fixed
+plugin slot, stop the host before replacing the entire slot and let agy own its
+removal. Package GC only manages the distribution store.

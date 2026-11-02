@@ -98,6 +98,8 @@ jobs:
       # Match the shipping QuickJS build and stack behavior, not an unoptimized VM.
       - name: Script, MCP, native adapters and CLI contracts
         run: cargo test --release --locked --manifest-path cmd/dtw/Cargo.toml --lib --bins --tests
+      - name: Managed packages and live MCP leases (no GUI)
+        run: python3 tests/ci/check_package_upgrade.py --dtw "$CARGO_TARGET_DIR/release/dtw" --output "$RUNNER_TEMP/dtw-package-store"
       - run: python3 tests/ci/run_native_inventory_tests.py
       - run: python3 tests/ci/run_native_input_tests.py
       - name: Native and scene worker shutdown (no desktop access)
@@ -131,6 +133,11 @@ jobs:
         run: |
           cargo test --release --locked --manifest-path cmd/dtw/Cargo.toml --lib --bins --tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Managed packages and live MCP leases (no GUI)
+        shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+        run: python tests/ci/check_package_upgrade.py --dtw "$env:CARGO_TARGET_DIR\release\dtw.exe" --output "$env:RUNNER_TEMP\dtw-package-store"
       - name: Acceptance observer file-sharing controls (no GUI)
         shell: pwsh
         run: python -m unittest discover -s tests -p test_windows_app_protocol_probe.py

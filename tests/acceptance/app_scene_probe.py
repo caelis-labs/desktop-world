@@ -26,17 +26,17 @@ def main():
         images=[c for c in result['content'] if c['type']=='image'];require(len(images)==1,data)
         (out/(name+'.png')).write_bytes(base64.b64decode(images[0]['data']));return data
     def point(view,title):
-        windows=[w for w in view['windows'] if w['visible']];xs=[w['bounds'][0] for w in windows];ys=[w['bounds'][1] for w in windows]
-        left,top=min(xs),min(ys);right=max(w['bounds'][0]+w['bounds'][2] for w in windows);bottom=max(w['bounds'][1]+w['bounds'][3] for w in windows)
         p=state()['buttons'].get(title) or next(w['button'] for w in state()['windows'] if w['title'].endswith(title));image=view['image']
-        return {'x':(p[0]-left)/(right-left)*image['width'],'y':(p[1]-top)/(bottom-top)*image['height']}
+        left,top,width,height=image['bounds']
+        return {'x':(p[0]-left)/width*image['width'],'y':(p[1]-top)/height*image['height']}
+
     try:
         m.rpc('initialize',{'protocolVersion':'2025-06-18','capabilities':{},'clientInfo':{'name':'scene-native-acceptance','version':'1'}});m.notify('notifications/initialized')
         require([t['name'] for t in m.rpc('tools/list',{})['tools']]==['apps','exec'],'two tools only');record('two_public_tools')
         for name,arguments in [('exec',{'source':'return 1'}),('api',{}),('result',{})]:
             data,result=m.tool(name,arguments);require(result.get('isError') is True,data)
         record('required_app_and_retired_routes')
-        stopped,_=m.tool('apps',{'query':'TextEdit','state':'stopped'});require(stopped['apps'] and all(not r['running'] for r in stopped['apps']),stopped);record('installed_stopped_discovery',rows=stopped['apps'],coverage=stopped['coverage'])
+        stopped,_=m.tool('apps',{'state':'stopped','limit':5});require(stopped['apps'] and all(not r['running'] for r in stopped['apps']),stopped);record('installed_stopped_discovery',rows=stopped['apps'],coverage=stopped['coverage'])
         first,_=run('await app.look();');require(state(),'automatic startup');record('automatic_start_and_baseline',view=first['view'])
         image=capture('stack');require(len(image['view']['windows'])>=2,image);record('stacked_capture',image=image['view']['image'])
         before=len(state()['gestures']);a=point(image['view'],'gesture-start');b=point(image['view'],'peer')
@@ -47,7 +47,10 @@ def main():
         command('popup');image=capture('popup');require(len(image['view']['windows'])>=3,image)
         p=point(image['view'],'popup');run('await app.click('+json.dumps(p)+');');wait_until(lambda:state()['counts']['popup']==1);require(state()['counts']['peer']==1,state());record('floating_popup_capture_and_click',state=state())
         command('move_popup');data,result=m.tool('exec',{'app':str(bundle),'source':'await app.click('+json.dumps(p)+');'});require(result.get('isError') is True,data);record('stale_scene_rejected_without_repeat',failure=data)
-        command('close_popup');image=capture('close-peer');p=point(image['view'],'Close DTW Scene peer');run('await app.click('+json.dumps(p)+');');wait_until(lambda:not any(w['title'].endswith('peer') for w in state()['windows']));record('close_window_through_normal_ui')
+        before_close=capture('before-close-popup')['view']['image']
+        command('close_popup');after_close=capture('after-close-popup')['view']['image']
+        require(all(before_close[k]==after_close[k] for k in ['width','height','bounds']),{'before':before_close,'after':after_close});record('closing_popup_preserves_canvas',image=after_close)
+        image=capture('close-peer');p=point(image['view'],'Close DTW Scene peer');run('await app.click('+json.dumps(p)+');');wait_until(lambda:not any(w['title'].endswith('peer') for w in state()['windows']));record('close_window_through_normal_ui')
         run("await app.keypress(['META','O']);");wait_until(lambda:state()['panel']['visible'])
         image=capture('open-panel');record('system_open_panel_capture',coverage=image['view']['coverage'],windows=len(image['view']['windows']))
         run("await app.keypress(['ESC']);");wait_until(lambda:state()['panel']['result']=='cancel');record('system_open_panel_keyboard_cancel')
@@ -67,7 +70,7 @@ def main():
         cancelled,response=m.tool('exec',{'app':str(bundle),'source':'await app.click({target:'+json.dumps(cancel)+'});'})
         if response.get('isError'):require(cancelled.get('effects',{}).get('dispatch',{}).get('unknown')==1,cancelled)
         def underlying_save():
-            observed,result=m.tool('exec',{'app':str(bundle),'source':'await app.look({full:true,screenshot:true});'})
+            observed,result=m.tool('exec',{'app':str(bundle),'source':'await app.capture({full:true});'})
             view=observed.get('view',{});windows=view.get('windows',[])
             return observed if windows and windows[0].get('title')=='Save' and 'error' not in view.get('image',{}) else None
         wait_until(underlying_save);require(state()['panel']['result']=='pending',state());run("await app.keypress(['ESC']);")
@@ -145,6 +148,18 @@ def main():
             offset=len(state()['gestures']);rejected,response=strict.tool('exec',{'app':str(bundle),'source':'await app.click('+json.dumps(p)+');'})
             require(response.get('isError') and rejected.get('failure',{}).get('code')=='foreground_required',rejected);require(len(state()['gestures'])==offset,state());record('visible_pixel_click_respects_background_only')
         finally:strict.close()
+        image=capture('before-window-move');main=next(w for w in image['view']['windows'] if w['title'].endswith('main'));x,y,width,height=main['bounds'];canvas=image['view']['image'];ox,oy,cw,ch=canvas['bounds']
+        start={'x':(x+width/2-ox)/cw*canvas['width'],'y':(y+12-oy)/ch*canvas['height']};end={'x':start['x']+35/cw*canvas['width'],'y':start['y']+45/ch*canvas['height']}
+        offset=len(state()['gestures'])
+        moved,_=run('await app.drag({path:'+json.dumps([start,end])+'});')
+        fresh=capture('after-window-move');changed=next(w for w in fresh['view']['windows'] if w['title'].endswith('main'))['bounds']
+        require(abs(changed[0]-x-35)<2 and abs(changed[1]-y-45)<2,{'before':main,'after':changed,'move':moved});record('native_titlebar_move_changes_exact_window_bounds',before=main['bounds'],after=changed)
+        independent=wait_until(lambda:next((w['bounds'] for w in state()['windows'] if w['title'].endswith('main') and abs(w['bounds'][0]-x-35)<2 and abs(w['bounds'][1]-y-45)<2),None))
+        require(state()['pressed_mouse_buttons']==0 and not any(e['kind'] in ['down','up','drag'] for e in state()['gestures'][offset:]),state());record('titlebar_move_has_no_held_pointer_state',bounds=independent)
+        offset=len(state()['gestures']);run('await app.scroll({delta_y:50});')
+        wait_until(lambda:any(e['kind']=='scroll' and e['dy']!=0 for e in state()['gestures'][offset:]));record('default_scroll_delivers_wheel_without_agent_anchor',events=state()['gestures'][offset:])
+        snapshots,_=run("const a=await app.look(); const b=await app.capture(); return {lookWindows:a.windows.length,captureWindows:b.windows.length};")
+        require(snapshots['result']['lookWindows']>=1 and snapshots['result']['captureWindows']>=1,snapshots);record('script_look_and_capture_always_include_windows')
         image=capture('close-last');p=point(image['view'],'Close DTW Scene main');run('await app.click('+json.dumps(p)+');');wait_until(lambda:not state()['windows'])
         empty,_=run('await app.look({full:true});');require(empty['view']['running'] and not empty['view']['windows'],empty);record('running_app_without_windows')
         strict_dir=out/'strict';strict_dir.mkdir();strict=Mcp(args.dtw.resolve(),strict_dir,mcp_args=('--input-policy','background-only'))

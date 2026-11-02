@@ -37,7 +37,7 @@ def stage(binary, output, repo, target=None):
             shutil.copy2(repo / name, output / name)
         (output / "docs").mkdir()
         for name in ("native-source-provenance.md", "native-source-provenance-cross-platform.md",
-                     "background-input-port.md", "install.md", "install-caelis.md", "install-dsh.md", "install-agy.md", "agent-protocol-migration.md"):
+                     "background-input-port.md", "install.md", "install-caelis.md", "install-dsh.md", "install-agy.md", "agent-protocol-migration.md", "package-management.md"):
             shutil.copy2(repo / "docs" / name, output / "docs" / name)
         shutil.copy2(repo / "install.md", output / "install.md")
         shutil.copytree(repo / "packaging/third-party", output / "packaging/third-party")

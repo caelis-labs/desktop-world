@@ -650,6 +650,10 @@ private func pointerGesture(_ request: [String:Any]) -> [String:Any] {
     }
     do {
         try check(points[0])
+        if dragging,let moved=dtwMoveNativeTitlebar(request,destinationVisible:{ rectangle in
+            let corners=[CGPoint(x:rectangle.minX+1,y:rectangle.minY+1),CGPoint(x:rectangle.maxX-1,y:rectangle.maxY-1)]
+            return corners.allSatisfy{displayProvesPoint($0,bounds:rectangle)}
+        }) { return finished(moved) }
         guard deadline-ProcessInfo.processInfo.systemUptime>0.25,
               let source=CGEventSource(stateID:.privateState),
               let down=CGEvent(mouseEventSource:source,mouseType:.leftMouseDown,mouseCursorPosition:points[0],mouseButton:.left),
@@ -719,7 +723,7 @@ public func dtwSceneCall(_ raw: UnsafePointer<CChar>) -> UnsafeMutablePointer<CC
         } catch { result = fail("invalid_request",String(describing:error)) }
         // The producer owns dispatch classification, including pointer-only effects.
         if let request = try? JSONSerialization.jsonObject(with:Data(String(cString:raw).utf8)) as? [String:Any], ["click","move","drag"].contains(request["operation"] as? String ?? "") {
-            result["dispatch"] = result["delivery"] as? String == "posted" ? "dispatched" : (result["pointer_moved"] as? Bool == true ? "unknown" : "not_dispatched")
+            if result["dispatch"] == nil { result["dispatch"] = result["delivery"] as? String == "posted" ? "dispatched" : (result["pointer_moved"] as? Bool == true ? "unknown" : "not_dispatched") }
             result["evidence"] = "unverified"
         }
         let data = (try? JSONSerialization.data(withJSONObject:result,options:[.sortedKeys])) ?? Data("{}".utf8)

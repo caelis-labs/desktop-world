@@ -2933,6 +2933,11 @@ fn parse_element(value: &Value) -> Result<Element, Error> {
     }
     Ok(Element {
         id: ElementId(number(value, "id")?),
+        identity: match value.get("identity") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(id)) if !id.is_empty() && id.len() <= 256 => Some(id.clone()),
+            _ => return Err(Error::InvalidObservation),
+        },
         label: string(value, "label")?.into(),
         role: string(value, "role")?.into(),
         name: optional_text(value, "name")?,

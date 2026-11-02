@@ -2236,6 +2236,7 @@ private struct RetainedSubtree<Element, Root> {
 
 private struct NativeElement {
     let id: UInt64
+    let identity: UInt64
     let element: AXUIElement
     let label: String
     let role: String
@@ -2247,7 +2248,7 @@ private struct NativeElement {
     let regionProof: RegionElementProof<AXUIElement>?
 
     var json: [String: Any] {
-        ["id": id, "label": label, "role": role,
+        ["id": id, "identity": "ax:\(identity)", "label": label, "role": role,
          "name": name as Any? ?? NSNull(), "value": value as Any? ?? NSNull(),
          "enabled": enabled as Any? ?? NSNull(), "actions": (canPress ? ["press"] : []) + (canSetValue ? ["setValue"] : []), "can_press": canPress]
     }
@@ -2941,6 +2942,17 @@ private final class NativeStore: @unchecked Sendable {
     // later query can distinguish cached enablement from a new setter attempt.
     private var enabledApps: [NativeApp: SemanticEnablement] = [:]
     private var observations: [String: NativeObservation] = [:]
+    private var semanticIdentities: [CFHashCode: [(AXUIElement, UInt64)]] = [:]
+    private var semanticIdentityCount = 0
+    private func semanticIdentity(_ element: AXUIElement) throws -> UInt64 {
+        let hash = CFHash(element)
+        if let old = semanticIdentities[hash]?.first(where: { CFEqual($0.0,element) }) { return old.1 }
+        if semanticIdentityCount >= 4096 { semanticIdentities.removeAll(); semanticIdentityCount = 0 }
+        let id = try nextGeneration()
+        semanticIdentities[hash,default:[]].append((element,id))
+        semanticIdentityCount += 1
+        return id
+    }
     // Avoid deterministic generation-one reuse after worker restart. Runtime's
     // separate provider stamp is the authoritative cross-provider ref boundary.
     private var generation = UInt64.random(in: 1...UInt64(UInt32.max)) << 32
@@ -3646,7 +3658,7 @@ private final class NativeStore: @unchecked Sendable {
                     let canPress = try pressable(element, role: role, enabled: enabled == true,
                                                  window: window.element, target: observation.target,
                                                  deadline: pageDeadline)
-                    let row = NativeElement(id: UInt64(observation.elements.count + 1), element: element,
+                    let row = NativeElement(id: UInt64(observation.elements.count + 1), identity: try semanticIdentity(element), element: element,
                                             label: fields.label, role: normalizedRole, name: fields.name,
                                             value: fields.value, enabled: enabled, canPress: canPress,
                                             canSetValue: try settable(element, role: role, enabled: enabled == true, window: window.element, target: observation.target, deadline: pageDeadline),
@@ -4966,3 +4978,49 @@ public func dtwNativeCall(_ input: UnsafePointer<CChar>?) -> UnsafeMutablePointe
 
 @_cdecl("dtw_native_free")
 public func dtwNativeFree(_ pointer: UnsafeMutablePointer<CChar>?) { free(pointer) }
+
+// A native title bar is a window-manager operation, not a content drag. The
+// close control and AX hit establish the title strip; labels/rectangles alone
+// never identify another application's window. Position is set exactly once.
+func dtwMoveNativeTitlebar(_ request: [String:Any], destinationVisible: (CGRect)->Bool) -> [String:Any]? {
+    nativeStore.lock.lock()
+    defer { nativeStore.lock.unlock() }
+    var attempted = false
+    do {
+        let context = try RequestContext(request)
+        let target = try NativeTarget(request["target"])
+        let window = try nativeStore.validate(target,context)
+        guard let path=request["path"] as? [[String:Double]],let first=path.first,let last=path.last,
+              let x=first["x"],let y=first["y"],let endX=last["x"],let endY=last["y"],
+              let close=axElement(try axAttribute(window.element,kAXCloseButtonAttribute,context.deadline)),
+              let button=try axRect(close,context.deadline),
+              let rect=try axRect(window.element,context.deadline),
+              button.minY >= rect.minY,button.maxY <= rect.minY+80,
+              y >= button.minY,y <= button.maxY,x > button.maxX+12,x < rect.maxX-12 else { return nil }
+        var hit: AXUIElement?
+        try context.deadline.prepare(AXUIElementCreateApplication(target.app.pid))
+        guard AXUIElementCopyElementAtPosition(AXUIElementCreateApplication(target.app.pid),Float(x),Float(y),&hit) == .success,
+              let hit else { return nil }
+        let title=axElement(try axAttribute(window.element,kAXTitleUIElementAttribute,context.deadline))
+        guard CFEqual(hit,window.element) || title.map({CFEqual(hit,$0)}) == true else { return nil }
+        var settable: DarwinBoolean = false
+        try context.deadline.prepare(window.element)
+        guard AXUIElementIsAttributeSettable(window.element,kAXPositionAttribute as CFString,&settable) == .success,settable.boolValue else {
+            return ["dispatch":"not_dispatched","evidence":"unverified","error":"window_move_unsupported","message":"This proven title bar has no writable native window position"]
+        }
+        var point=CGPoint(x:rect.minX+endX-x,y:rect.minY+endY-y)
+        guard destinationVisible(CGRect(origin:point,size:rect.size)) else {
+            return ["dispatch":"not_dispatched","evidence":"unverified","error":"display_proof_unavailable","message":"Window movement must remain fully on one display"]
+        }
+        guard let value=AXValueCreate(.cgPoint,&point) else { throw failure("input_unavailable","Cannot prepare native window position") }
+        _ = try nativeStore.validate(target,context)
+        try context.deadline.check()
+        guard let result=dtwWithInputAdmission({attempted=true;return AXUIElementSetAttributeValue(window.element,kAXPositionAttribute as CFString,value)}),result == .success else {
+            throw failure("window_move_unconfirmed","Native position may have changed; inspect the returned window bounds")
+        }
+        return ["dispatch":"dispatched","evidence":"unverified","route":"native_window_position"]
+    } catch let error as NativeFailure {
+        if !attempted && ["semantic_window_unavailable","ax_unavailable"].contains(error.code) { return nil }
+        return error.json.merging(["dispatch":attempted ? "unknown":"not_dispatched","evidence":"unverified"]){_,new in new}
+    } catch { return ["dispatch":attempted ? "unknown":"not_dispatched","evidence":"unverified","error":"native_error","message":String(describing:error)] }
+}

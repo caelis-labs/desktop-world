@@ -719,6 +719,13 @@ fn parse_elements(v: &Value) -> Result<Vec<Element>, Error> {
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(Element {
                 id: ElementId(number(v, "id")?),
+                identity: match v.get("identity") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(id)) if !id.is_empty() && id.len() <= 256 => {
+                        Some(id.clone())
+                    }
+                    _ => return Err(Error::InvalidObservation),
+                },
                 label: string(v, "label")?.into(),
                 role: string(v, "role")?.into(),
                 name: v["name"].as_str().map(str::to_owned),

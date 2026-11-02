@@ -203,6 +203,9 @@ pub struct ElementId(pub u64);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Element {
     pub id: ElementId,
+    /// Native identity across reads of this exact window; absent means IDs must
+    /// be retired on the next observation, never matched by label or position.
+    pub identity: Option<String>,
     pub label: String,
     /// Semantic role reported independently of the human-readable label.
     pub role: String,

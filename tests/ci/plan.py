@@ -18,7 +18,7 @@ def native_checks(paths):
         elif path.startswith('cmd/dtw/src/backends/linux/'):
             # The dependency-free source checkpoint covers Linux inventory.
             continue
-        elif path.startswith(('cmd/dtw/', '.github/workflows/', '.github/actions/', 'tests/ci/', '.cargo/', 'Cargo.', 'rust-toolchain')):
+        elif path.startswith(('cmd/dtw/', '.github/workflows/', '.github/actions/', 'tests/ci/', 'tests/acceptance/package_store_probe.py', '.cargo/', 'Cargo.', 'rust-toolchain')):
             macos = windows = True
     return macos, windows
 

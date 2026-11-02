@@ -69,3 +69,26 @@ No down/up state is managed by the script. The current path must stay within one
 window on one display, avoiding overlays and transparent gaps. Cancellation or a new obstruction
 releases the button and reports uncertainty; inspect before new input. A second
 coordinate action in the same script needs a fresh capture.
+
+## Script snapshots and scrolling
+
+```javascript
+const view = await app.capture();
+print(view.windows.map(w => ({id:w.id, bounds:w.bounds})));
+```
+
+`look()` also returns all current metadata inside the script, even when its tool
+message is `{changed:false}`. Request `full:true` only to republish a tool baseline.
+
+```javascript
+await app.scroll({delta_y:80});
+```
+
+DTW captures and uses the active surface's center when no anchor is supplied.
+For a nested scroll pane, first inspect a capture and provide its x/y. Deltas
+are integer wheel steps between -100 and 100, not pixel distances.
+
+A standard macOS title-bar drag uses native window position when proven and
+writable. Use a current image, start in empty title-bar space away from buttons,
+and keep the supplied path inside that window. The destination must fit one
+display. Inspect fresh bounds/image afterward; moving a window resets coordinates.

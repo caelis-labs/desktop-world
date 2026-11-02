@@ -46,6 +46,7 @@ impl TestGate {
 }
 
 struct Model {
+    semantic_elements: Option<Vec<Element>>,
     read_gate: Option<WorkerGate>,
     action_gate: Option<WorkerGate>,
     outcome: ActionOutcome,
@@ -78,6 +79,7 @@ impl MockBackend {
     fn new() -> Self {
         Self(Arc::new(Shared {
             model: Mutex::new(Model {
+                semantic_elements: None,
                 read_gate: None,
                 action_gate: None,
                 outcome: ActionOutcome {
@@ -168,16 +170,25 @@ impl MockBackend {
             elements: if pixels {
                 vec![]
             } else {
-                vec![Element {
-                    id: ElementId(9007199254740993),
-                    label: "Increment".into(),
-                    can_press: true,
-                    role: "button".into(),
-                    name: Some("Increment".into()),
-                    value: None,
-                    enabled: Some(true),
-                    actions: vec!["press".into()],
-                }]
+                self.0
+                    .model
+                    .lock()
+                    .unwrap()
+                    .semantic_elements
+                    .clone()
+                    .unwrap_or_else(|| {
+                        vec![Element {
+                            id: ElementId(9007199254740993),
+                            identity: Some("mock:9007199254740993".into()),
+                            label: "Increment".into(),
+                            can_press: true,
+                            role: "button".into(),
+                            name: Some("Increment".into()),
+                            value: None,
+                            enabled: Some(true),
+                            actions: vec!["press".into()],
+                        }]
+                    })
             },
             // Opaque controlled bytes exercise retention/encoding, not PNG or GUI acceptance.
             image: pixels.then(|| ImageFrame {

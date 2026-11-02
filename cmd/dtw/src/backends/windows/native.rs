@@ -1655,7 +1655,7 @@ fn element_row(
             None
         };
         Ok(
-            json!({"id":id,"label":format!("{role} {name}"),"role":role,"name":name,"value":value,"enabled":enabled,"actions":actions}),
+            json!({"id":id,"identity":runtime_id(e).ok().map(|id| format!("uia:{id:?}")).filter(|id|id.len()<=256),"label":format!("{role} {name}"),"role":role,"name":name,"value":value,"enabled":enabled,"actions":actions}),
         )
     }
 }
