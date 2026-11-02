@@ -306,6 +306,9 @@ impl NativeBackend {
                 | Capability::Scroll
                 | Capability::SetValue
                 | Capability::ReadText
+                | Capability::Launch
+                | Capability::Quit
+                | Capability::CloseWindow
         )
     }
     pub fn description() -> Value {
@@ -370,6 +373,33 @@ impl NativeBackend {
                 })
             })
             .collect()
+    }
+    pub fn resolve_target(
+        &self,
+        app_id: &str,
+        timeout: Duration,
+    ) -> Result<ApplicationTarget, Error> {
+        let deadline = Instant::now() + timeout;
+        let poll = || {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                Err(Error::TimedOut)
+            } else {
+                Ok(left)
+            }
+        };
+        let reply = self.read_rpc(
+            json!({"operation":"resolve_app","app_id":app_id}),
+            &CallContext { poll: &poll },
+        )?;
+        Ok(ApplicationTarget {
+            app_id: string(&reply, "app_id")?.into(),
+            name: string(&reply, "name")?.into(),
+            instances: array(&reply, "apps")?
+                .iter()
+                .map(|a| parse_app(&a["app"]))
+                .collect::<Result<_, _>>()?,
+        })
     }
     fn rpc(&self, request: Value, call: &CallContext<'_>) -> Result<Value, (Error, bool)> {
         self.scene.check().map_err(|error| (error, false))?;
@@ -839,6 +869,69 @@ impl Backend for NativeBackend {
     fn conditions(&self) -> &'static [&'static str] {
         CONDITIONS
     }
+    fn launch_application(&self, app_id: &str, call: &CallContext<'_>) -> ApplicationLaunch {
+        // Resolve a canonical bundle path before taking the launch lease. The
+        // native call resolves afresh under that lease and never repeats launch.
+        let resolved = match self.read_rpc(json!({"operation":"resolve_app","app_id":app_id}), call)
+        {
+            Ok(value) => value,
+            Err(error) => {
+                return ApplicationLaunch {
+                    outcome: ActionOutcome::rejected(error),
+                    instances: vec![],
+                }
+            }
+        };
+        let request = json!({"operation":"launch_app","app_id":app_id,"application_key":resolved["bundle_path"]});
+        let reply = match self.rpc(request, call) {
+            Ok(value) => value,
+            Err((error, dispatched)) => {
+                return ApplicationLaunch {
+                    outcome: if dispatched {
+                        ActionOutcome::unknown(error)
+                    } else {
+                        ActionOutcome::rejected(error)
+                    },
+                    instances: vec![],
+                }
+            }
+        };
+        let mut outcome = lifecycle_reply(&reply, "application_running");
+        let instances = if outcome.error.is_none() {
+            match array(&reply, "apps")
+                .and_then(|apps| apps.iter().map(|a| parse_app(&a["app"])).collect())
+            {
+                Ok(instances) => instances,
+                Err(error) => {
+                    outcome = ActionOutcome::unknown(error);
+                    vec![]
+                }
+            }
+        } else {
+            vec![]
+        };
+        ApplicationLaunch { outcome, instances }
+    }
+    fn quit_application(&self, app: &AppInstance, call: &CallContext<'_>) -> ActionOutcome {
+        match self.rpc(
+            json!({"operation":"quit_app","target":{"app":app_json(app)}}),
+            call,
+        ) {
+            Ok(value) => lifecycle_reply(&value, "application_exited"),
+            Err((error, true)) => ActionOutcome::unknown(error),
+            Err((error, false)) => ActionOutcome::rejected(error),
+        }
+    }
+    fn close_window(&self, target: &WindowTarget, call: &CallContext<'_>) -> ActionOutcome {
+        match self.rpc(
+            json!({"operation":"close_window","target":target_json(target)}),
+            call,
+        ) {
+            Ok(value) => lifecycle_reply(&value, "window_closed"),
+            Err((error, true)) => ActionOutcome::unknown(error),
+            Err((error, false)) => ActionOutcome::rejected(error),
+        }
+    }
     fn windows(&self, app: &AppInstance, call: &CallContext<'_>) -> Result<WindowInventory, Error> {
         let result = self.read_rpc(json!({"operation":"windows","app":app_json(app)}), call)?;
         parse_window_inventory(&result, app)
@@ -1265,6 +1358,25 @@ fn parse_delivery(value: Option<&Value>) -> Result<Option<InputDelivery>, ()> {
     }))
 }
 
+fn lifecycle_reply(reply: &Value, expected: &str) -> ActionOutcome {
+    if reply["evidence"] == "confirmed"
+        && reply["postcondition"] == expected
+        && reply.get("error").is_none()
+    {
+        let dispatch = match reply["dispatch"].as_str() {
+            Some("dispatched") => DispatchState::Dispatched,
+            Some("not_dispatched") => DispatchState::NotDispatched,
+            _ => return ActionOutcome::unknown(Error::InvalidObservation),
+        };
+        return ActionOutcome {
+            delivery: None,
+            dispatch,
+            evidence: EffectEvidence::Confirmed(expected.into()),
+            error: None,
+        };
+    }
+    action_reply(reply)
+}
 fn action_reply(reply: &Value) -> ActionOutcome {
     let dispatch = match reply["dispatch"].as_str() {
         Some("not_dispatched") => DispatchState::NotDispatched,
@@ -1294,6 +1406,37 @@ fn action_reply(reply: &Value) -> ActionOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lifecycle_confirmation_requires_the_exact_native_fact() {
+        for dispatch in ["dispatched", "not_dispatched"] {
+            let valid =
+                json!({"dispatch":dispatch,"evidence":"confirmed","postcondition":"window_closed"});
+            assert_eq!(
+                lifecycle_reply(&valid, "window_closed").evidence,
+                EffectEvidence::Confirmed("window_closed".into())
+            );
+            // Ordinary input cannot smuggle a confirmed lifecycle fact.
+            assert_eq!(action_reply(&valid).dispatch, DispatchState::Unknown);
+        }
+        for invalid in [
+            json!({"dispatch":"unknown","evidence":"confirmed","postcondition":"window_closed"}),
+            json!({"dispatch":"dispatched","evidence":"confirmed","postcondition":"application_exited"}),
+            json!({"dispatch":"dispatched","evidence":"confirmed","postcondition":"window_closed","error":null}),
+            json!({"dispatch":"not_dispatched","evidence":"unverified"}),
+        ] {
+            assert_eq!(
+                lifecycle_reply(&invalid, "window_closed").dispatch,
+                DispatchState::Unknown
+            );
+        }
+        let pending = lifecycle_reply(
+            &json!({"dispatch":"dispatched","evidence":"unverified"}),
+            "application_exited",
+        );
+        assert_eq!(pending.dispatch, DispatchState::Dispatched);
+        assert_eq!(pending.evidence, EffectEvidence::Unverified);
+    }
 
     fn capture_target() -> WindowTarget {
         WindowTarget {

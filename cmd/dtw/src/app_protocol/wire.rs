@@ -88,6 +88,16 @@ pub enum Command {
         timeout_ms: u64,
         max_calls: u32,
     },
+    SelectWindow {
+        title: Option<String>,
+        window_ref: Option<String>,
+        timeout_ms: u64,
+    },
+    Launch,
+    Quit {
+        window_ref: Option<String>,
+    },
+    CloseWindow,
     Windows,
     WaitForWindow {
         state: computer::WindowWaitState,
@@ -321,6 +331,46 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
     let command = object(value, "command")?;
     let kind = string(command, "kind", "command")?;
     match kind.as_str() {
+        "window" => {
+            fields(
+                command,
+                &["kind", "title", "window_ref", "timeout_ms"],
+                "command",
+            )?;
+            let title = command
+                .get("title")
+                .map(|_| string(command, "title", "command"))
+                .transpose()?;
+            let window_ref = command
+                .get("window_ref")
+                .map(|_| string(command, "window_ref", "command"))
+                .transpose()?;
+            if title.is_some() && window_ref.is_some() {
+                return Err(invalid("Choose title or window_ref, not both"));
+            }
+            Ok(Command::SelectWindow {
+                title,
+                window_ref,
+                timeout_ms: read_wait_timeout(command)?,
+            })
+        }
+        "launch" | "closeWindow" => {
+            fields(command, &["kind"], "command")?;
+            Ok(if kind == "launch" {
+                Command::Launch
+            } else {
+                Command::CloseWindow
+            })
+        }
+        "quit" => {
+            fields(command, &["kind", "window_ref"], "command")?;
+            Ok(Command::Quit {
+                window_ref: command
+                    .get("window_ref")
+                    .map(|_| string(command, "window_ref", "command"))
+                    .transpose()?,
+            })
+        }
         "script" => {
             fields(
                 command,
@@ -775,7 +825,12 @@ pub fn parse_request(value: Value) -> Result<Request, WireError> {
             let target = object(request.get("target").unwrap_or(&Value::Null), "target")?;
             let window_ref = if matches!(
                 command,
-                Command::Windows | Command::Script { .. } | Command::ContinueObservation { .. }
+                Command::SelectWindow { .. }
+                    | Command::Launch
+                    | Command::Quit { .. }
+                    | Command::Windows
+                    | Command::Script { .. }
+                    | Command::ContinueObservation { .. }
             ) {
                 fields(target, &["app_ref"], "target")?;
                 None

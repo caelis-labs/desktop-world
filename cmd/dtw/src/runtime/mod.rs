@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 #[cfg(test)]
 mod input_tests;
+mod lifecycle;
 #[cfg(test)]
 mod tests;
 mod window_wait;
@@ -129,9 +130,21 @@ pub struct Runtime<B: Backend, C: Clock = MonotonicClock> {
     clock: C,
     observation_ttl: Duration,
     context: u64,
+    application_id: Option<String>,
 }
 
 impl<B: Backend> Runtime<B> {
+    pub fn for_application(
+        backend: B,
+        app_id: String,
+        apps: Vec<AppInstance>,
+        observation_ttl: Duration,
+    ) -> Result<Self, Error> {
+        let mut runtime =
+            Self::with_apps_and_clock_inner(backend, apps, observation_ttl, MonotonicClock, true)?;
+        runtime.application_id = Some(app_id);
+        Ok(runtime)
+    }
     pub fn new(backend: B, app: AppInstance, observation_ttl: Duration) -> Self {
         Self::with_clock(backend, app, observation_ttl, MonotonicClock)
     }
@@ -157,7 +170,21 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         observation_ttl: Duration,
         clock: C,
     ) -> Result<Self, Error> {
-        let apps = normalized_instances(apps)?;
+        Self::with_apps_and_clock_inner(backend, apps, observation_ttl, clock, false)
+    }
+
+    fn with_apps_and_clock_inner(
+        backend: B,
+        apps: Vec<AppInstance>,
+        observation_ttl: Duration,
+        clock: C,
+        dormant: bool,
+    ) -> Result<Self, Error> {
+        let apps = if dormant && apps.is_empty() {
+            apps
+        } else {
+            normalized_instances(apps)?
+        };
         let context = NEXT_CONTEXT
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .expect("execution context identity exhausted");
@@ -166,6 +193,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             clock,
             observation_ttl,
             context,
+            application_id: None,
             state: Mutex::new(State {
                 apps,
                 busy: false,
@@ -188,7 +216,11 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
     /// Reconciliation is an admission operation. Retiring one native member
     /// neither resets logical app state nor shuts down the shared provider.
     pub fn reconcile_instances(&self, apps: Vec<AppInstance>) -> Result<(), Error> {
-        let apps = normalized_instances(apps)?;
+        let apps = if self.application_id.is_some() && apps.is_empty() {
+            apps
+        } else {
+            normalized_instances(apps)?
+        };
         let (flight, retired) = {
             let mut state = self.state();
             self.live_context(&state)?;
@@ -302,6 +334,12 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                 return Err(Error::Busy);
             }
             self.live_context(&state)?;
+            if state.apps.is_empty() {
+                return Err(Error::NativeFailure {
+                    code: "app_unavailable".into(),
+                    message: "Application has no running instance; call app.launch() first".into(),
+                });
+            }
             if !self.backend.supports(Capability::Windows) {
                 return Err(Error::UnsupportedCapability);
             }

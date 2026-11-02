@@ -11,6 +11,20 @@ pub struct AppInstance {
     pub generation: u64,
 }
 
+/// A logical installed target can exist before its first native instance.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApplicationTarget {
+    pub app_id: String,
+    pub name: String,
+    pub instances: Vec<AppInstance>,
+}
+
+pub struct ApplicationLaunch {
+    pub outcome: ActionOutcome,
+    /// Only positively identified instances, including after partial delivery.
+    pub instances: Vec<AppInstance>,
+}
+
 /// Catalog admission is about exact native members, not path equality. A stable
 /// public application ID may cover more than one installed copy of an app.
 pub fn validate_app_instances(apps: &[AppInstance]) -> Result<(), Error> {
@@ -110,6 +124,9 @@ pub struct InputDelivery {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Capability {
+    Launch,
+    Quit,
+    CloseWindow,
     Windows,
     Observe,
     Press,
@@ -124,7 +141,10 @@ pub enum Capability {
 }
 
 impl Capability {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 14] = [
+        Self::Launch,
+        Self::Quit,
+        Self::CloseWindow,
         Self::Windows,
         Self::Observe,
         Self::Press,
@@ -140,6 +160,9 @@ impl Capability {
 
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Launch => "launch",
+            Self::Quit => "quit",
+            Self::CloseWindow => "closeWindow",
             Self::Windows => "windows",
             Self::Observe => "observe",
             Self::Press => "press",
@@ -693,6 +716,18 @@ pub trait Backend: Send + Sync {
     }
     fn conditions(&self) -> &'static [&'static str] {
         &[]
+    }
+    fn launch_application(&self, _app_id: &str, _call: &CallContext<'_>) -> ApplicationLaunch {
+        ApplicationLaunch {
+            outcome: ActionOutcome::rejected(Error::UnsupportedCapability),
+            instances: Vec::new(),
+        }
+    }
+    fn quit_application(&self, _app: &AppInstance, _call: &CallContext<'_>) -> ActionOutcome {
+        ActionOutcome::rejected(Error::UnsupportedCapability)
+    }
+    fn close_window(&self, _target: &WindowTarget, _call: &CallContext<'_>) -> ActionOutcome {
+        ActionOutcome::rejected(Error::UnsupportedCapability)
     }
     fn windows(
         &self,

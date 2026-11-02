@@ -29,6 +29,23 @@ private func classified(pid: Int32 = 100, role: String? = kAXWindowRole,
                        role: { role }, subrole: { subrole }, identifier: { identifier })
 }
 private func checkInventory() throws {
+    func bundle(_ path: String = "/Applications/Test.app", agent: Bool = false,
+                background: Bool = false) -> BundleMetadata {
+        BundleMetadata(path: path, identifier: "dev.dtw.test", name: "Test",
+                       uiElement: agent, backgroundOnly: background)
+    }
+    expect(catalogIncludes(bundle(agent: true), knownRoot: true, hasSurface: true),
+           "windowed LSUIElement app was excluded")
+    expect(catalogIncludes(bundle("/private/tmp/Test.app", agent: true), knownRoot: false, hasSurface: true),
+           "windowed agent outside install roots was excluded")
+    expect(!catalogIncludes(bundle(agent: true), knownRoot: true, hasSurface: false),
+           "windowless agent became a default UI target")
+    expect(!catalogIncludes(bundle(background: true), knownRoot: true, hasSurface: true),
+           "LSBackgroundOnly helper became a user app")
+    expect(!catalogIncludes(bundle("/Applications/Outer.app/Contents/Frameworks/Helper.app", agent: true),
+                            knownRoot: true, hasSurface: true), "nested helper became a user app")
+    expect(catalogIncludes(bundle(), knownRoot: true, hasSurface: false),
+           "ordinary running app without windows disappeared")
     var empty = WindowInventoryDiagnostics()
     let (none, excluded) = appCGInventory([], pid: 100, diagnostics: &empty)
     expect(none.isEmpty && excluded.isEmpty, "empty CG inventory changed")

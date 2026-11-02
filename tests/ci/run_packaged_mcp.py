@@ -244,7 +244,7 @@ def check(binary, version, output, *, timeout=20, cleanup_timeout=2, popen=subpr
         require(isinstance(tools, list) and all(isinstance(tool, dict) for tool in tools), 'Invalid MCP tools list')
         names = [tool.get('name') for tool in tools]
         require(all(isinstance(name, str) and name for name in names) and len(names) == len(set(names))
-                and {'apps', 'api', 'exec', 'result'} <= set(names) and not listed.get('nextCursor'),
+                and {'apps', 'api', 'exec'} <= set(names) and not listed.get('nextCursor'),
                 'Missing, duplicate or incomplete packaged MCP tools')
         response = active.rpc(3, 'tools/call', {'name': 'api', 'arguments': {'methods': ['windows']}}, until)
         require(response.get('isError') is not True, 'Metadata API returned an error result')

@@ -4,13 +4,13 @@ use super::{
     wire::{self, Command, Request, Submit, Target, WireError},
     Coordinator, Reply,
 };
-use crate::computer::{AppInstance, Backend, Error, InputPolicy};
+use crate::computer::{AppInstance, ApplicationTarget, Backend, Error, InputPolicy};
 use serde_json::{json, Value};
 use std::{
     collections::VecDeque,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Condvar, Mutex,
+        Arc, Condvar, Mutex, Weak,
     },
     time::{Duration, Instant},
 };
@@ -19,6 +19,9 @@ use std::{
 // and the newest result remain available; history never expires the app context.
 const RETENTION: super::RetentionPolicy = super::RetentionPolicy::DEFAULT;
 const MAX_SHUTDOWN_ERRORS: usize = 8;
+#[path = "session_execution.rs"]
+mod session_execution;
+
 const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
@@ -31,6 +34,22 @@ pub trait Factory: Send + Sync + 'static {
     type Provider: Backend + 'static;
     fn catalog(&self) -> Result<Vec<Application>, Error>;
     fn connect(&self) -> Result<Self::Provider, Error>;
+    fn resolve(&self, app_id: &str) -> Result<ApplicationTarget, Error> {
+        let apps = self
+            .catalog()?
+            .into_iter()
+            .filter(|a| a.app_id == app_id)
+            .collect::<Vec<_>>();
+        let first = apps.first().ok_or_else(|| Error::NativeFailure {
+            code: "app_unavailable".into(),
+            message: "Application target is unavailable".into(),
+        })?;
+        Ok(ApplicationTarget {
+            app_id: app_id.into(),
+            name: first.name.clone(),
+            instances: apps.into_iter().map(|a| a.app).collect(),
+        })
+    }
     fn permissions(&self) -> Option<Value> {
         None
     }
@@ -55,12 +74,12 @@ struct Record {
     reply: Option<Reply>,
     payload_bytes: usize,
     receipt_bytes: usize,
+    queried_receipts: bool,
 }
 struct AppContext<B: Backend> {
     app_id: String,
     instances: Vec<AppInstance>,
-    // One surviving native instance preserves logical app data. Replacing
-    // every member resets it; individual joins/exits only retire their refs.
+    // Logical JSON survives process replacement; native membership and refs do not.
     script_state: Arc<Mutex<Value>>,
     owner: Option<Arc<Coordinator<B>>>,
 }
@@ -70,10 +89,14 @@ struct State<B: Backend> {
     contexts: VecDeque<AppContext<B>>,
     records: VecDeque<Record>,
     active: Option<Arc<Call<B>>>,
+    session_active: Option<Arc<Call<B>>>,
     closed: bool,
     shutdown_errors: Vec<WireError>,
 }
 pub struct Server<F: Factory> {
+    weak_self: Weak<Self>,
+    session_id: String,
+    session_state: Arc<Mutex<Value>>,
     factory: F,
     state: Mutex<State<F::Provider>>,
     finished: Condvar,
@@ -126,12 +149,16 @@ impl<B: Backend> Call<B> {
 
 impl<F: Factory> Server<F> {
     pub fn new(factory: F) -> Arc<Self> {
-        Arc::new(Self {
+        Arc::new_cyclic(|weak| Self {
+            weak_self: weak.clone(),
+            session_id: format!("session_{}", uuid::Uuid::new_v4()),
+            session_state: Arc::new(Mutex::new(json!({}))),
             factory,
             state: Mutex::new(State {
                 contexts: VecDeque::new(),
                 records: VecDeque::new(),
                 active: None,
+                session_active: None,
                 closed: false,
                 shutdown_errors: Vec::new(),
             }),
@@ -155,8 +182,9 @@ impl<F: Factory> Server<F> {
             }
             if let Some(call) = state
                 .active
-                .as_ref()
-                .filter(|call| call.rpc_id == rpc_id && !call.run_finished.load(Ordering::Acquire))
+                .iter()
+                .chain(state.session_active.iter())
+                .find(|call| call.rpc_id == rpc_id && !call.run_finished.load(Ordering::Acquire))
             {
                 return Started::InFlight(call.clone());
             }
@@ -182,19 +210,29 @@ impl<F: Factory> Server<F> {
             Ok(c) => c,
             Err(e) => return Started::Reply(Reply::error(e)),
         };
-        if state.active.as_ref().is_some_and(|c| c.rpc_id == rpc_id) {
+        let session_only = matches!(&command, ToolCall::Exec {app,..} if app.is_empty());
+        if state
+            .active
+            .iter()
+            .chain(state.session_active.iter())
+            .any(|c| c.rpc_id == rpc_id)
+        {
             return Started::Reply(problem(
                 "duplicate_rpc_id",
                 "The MCP request ID is already active",
             ));
         }
-        if !state.shutdown_errors.is_empty() {
+        if !session_only && !state.shutdown_errors.is_empty() {
             return Started::Reply(shutdown_reply(&state.shutdown_errors));
         }
         if state.closed {
             return Started::Reply(problem("closed", "The MCP server is shutting down"));
         }
-        if state.active.is_some() {
+        if if session_only {
+            state.session_active.is_some()
+        } else {
+            state.active.is_some()
+        } {
             return Started::Reply(problem(
                 "busy",
                 "Another desktop call is active or has not settled; no operation was queued",
@@ -215,6 +253,7 @@ impl<F: Factory> Server<F> {
                     reply: None,
                     payload_bytes: 0,
                     receipt_bytes: 0,
+                    queried_receipts: false,
                 });
                 Some(id.clone())
             }
@@ -232,7 +271,11 @@ impl<F: Factory> Server<F> {
             context_reset: AtomicBool::new(false),
             state_reset: AtomicBool::new(false),
         });
-        state.active = Some(call.clone());
+        if session_only {
+            state.session_active = Some(call.clone());
+        } else {
+            state.active = Some(call.clone());
+        }
         trim_history(&mut state);
         Started::Call(call)
     }
@@ -256,7 +299,7 @@ impl<F: Factory> Server<F> {
             ),
         };
         let stopping = call.cancelled.load(Ordering::Acquire) || self.state.lock().unwrap().closed;
-        if stopping {
+        if stopping && !matches!(&call.command, ToolCall::Exec {app,..} if app.is_empty()) {
             // Cancellation may have closed the reader immediately before a late
             // catalog call created it. Reap again before announcing run completion.
             if let Err(error) = self.factory.close_catalog() {
@@ -304,6 +347,13 @@ impl<F: Factory> Server<F> {
                 {
                     state.active = None;
                 }
+                if state
+                    .session_active
+                    .as_ref()
+                    .is_some_and(|active| Arc::ptr_eq(active, call))
+                {
+                    state.session_active = None;
+                }
             }
         }
         *call.completed.lock().unwrap() = Some(reply.clone());
@@ -323,6 +373,11 @@ impl<F: Factory> Server<F> {
         reply
     }
     fn refresh(&self, state: &mut State<F::Provider>) {
+        if state.session_active.as_ref().is_some_and(|call| {
+            call.run_finished.load(Ordering::Acquire) && !call.stopping.load(Ordering::Acquire)
+        }) {
+            state.session_active = None;
+        }
         let Some(call) = state.active.clone().filter(|call| {
             call.run_finished.load(Ordering::Acquire) && !call.stopping.load(Ordering::Acquire)
         }) else {
@@ -366,7 +421,7 @@ impl<F: Factory> Server<F> {
                 "script":super::description::index(),
                 "limits":{"retained_executions":RETENTION.records,"payload_bytes":RETENTION.payload_bytes,
                     "receipt_bytes":RETENTION.receipt_bytes,"max_steps_per_request":scripts::MAX_CALLS},
-                "semantics":"Every exec requires a stable application identifier. Windows from all its running instances are aggregated; window_ref routes each action to its exact native owner. Membership refreshes before each exec. Switching apps preserves logical state and native references. Instance joins/exits preserve surviving references and committed state; replacing every instance clears state and sets state_reset. Native owner replacement invalidates references and sets context_reset. This connection executes one call at a time. DTW assigns execution_id automatically. result(app) reads the latest retained execution for that app; optional execution_id selects an older retained record. History and MCP request deduplication use a bounded sliding window; expired results are unavailable, not evidence of no effect. Identical requests reuse an execution only while its MCP request ID is retained. New or expired MCP request IDs execute new work; do not resubmit uncertain actions. App state and native references outlive history eviction."}))
+                "semantics":"Desktop exec explicitly selects one app; window_ref binds an exact instance. macOS also resolves stopped installed targets for app.launch(). JSON state survives app switches and relaunch; native refs do not survive their process or owner. Omit app for a separate Session lane that can read original receipts during desktop work or cleanup failure. Use session.result(id?) for recovery; missing history never proves no effect. DTW assigns execution_id. New requests execute new work; never replay unknown actions. History and transport deduplication are bounded; JSON state outlives receipt eviction."}))
             }
             Ok(_) => problem("cancelled", "Application discovery was cancelled"),
             Err(e) => Reply::error(wire::core_error(&e)),
@@ -384,53 +439,50 @@ impl<F: Factory> Server<F> {
         if call.cancelled.load(Ordering::Acquire) {
             return problem("cancelled", "Cancelled before script admission");
         }
-        let entries = match self.factory.catalog() {
-            Ok(apps) => apps
-                .into_iter()
-                .filter(|entry| entry.app_id == app_id)
-                .collect::<Vec<_>>(),
+        if app_id.is_empty() {
+            return self.execute_session(call, id, source, timeout_ms, max_calls);
+        }
+        let target = match self.factory.resolve(app_id) {
+            Ok(target) if target.app_id == app_id => target,
+            Ok(_) => return problem("wrong_app", "Resolver returned another application target"),
             Err(e) => return Reply::error(wire::core_error(&e)),
         };
-        let Some(first) = entries.first() else {
-            return problem(
-                "app_unavailable",
-                "The application is not running. Discover again; no script was dispatched",
-            );
-        };
-        let app_name = first.name.clone();
         let mut instances = Vec::new();
-        for entry in entries {
-            if !instances.contains(&entry.app) {
-                instances.push(entry.app);
+        for app in &target.instances {
+            if !instances.contains(app) {
+                instances.push(app.clone());
             }
         }
-        if let Err(error) = crate::runtime::validate_app_instances(&instances) {
-            return Reply::error(wire::core_error(&error));
+        if !instances.is_empty() {
+            if let Err(error) = crate::runtime::validate_app_instances(&instances) {
+                return Reply::error(wire::core_error(&error));
+            }
         }
         if call.cancelled.load(Ordering::Acquire) {
             return problem("cancelled", "Cancelled before script admission");
         }
-        let (candidate, continuous) = {
+        let candidate = {
             let state = self.state.lock().unwrap();
             match state
                 .contexts
                 .iter()
                 .find(|context| context.app_id == app_id)
             {
-                Some(context) => (
-                    context.owner.clone(),
-                    context.instances.iter().any(|app| instances.contains(app)),
-                ),
-                None => (None, false),
+                Some(context) => context.owner.clone(),
+                None => None,
             }
         };
         let existing = match candidate {
             Some(owner) => {
                 let reusable = {
                     let state = owner.state.lock().unwrap();
-                    continuous && state.terminal.is_none() && owner.runtime.provider_available()
+                    state.terminal.is_none() && owner.runtime.provider_available()
                 };
                 if reusable {
+                    let previous = owner.instances();
+                    if !previous.is_empty() && !previous.iter().any(|app| instances.contains(app)) {
+                        call.context_reset.store(true, Ordering::Release);
+                    }
                     // Reconciliation never closes the shared native provider or
                     // changes committed state when another member is still live.
                     if let Err(error) = owner.reconcile_instances(instances.clone()) {
@@ -472,10 +524,7 @@ impl<F: Factory> Server<F> {
                 }
                 if let Some(context) = state.contexts.iter_mut().find(|c| c.app_id == app_id) {
                     call.context_reset.store(true, Ordering::Release);
-                    if !continuous {
-                        context.script_state = Arc::new(Mutex::new(json!({})));
-                        call.state_reset.store(true, Ordering::Release);
-                    }
+                    // JSON belongs to the logical session; native replacement only retires refs.
                     context.instances = instances.clone();
                     context.script_state.clone()
                 } else {
@@ -493,11 +542,17 @@ impl<F: Factory> Server<F> {
                 Ok(backend) => backend,
                 Err(error) => return Reply::error(wire::core_error(&error)),
             };
-            let owner =
-                match Coordinator::with_app_instances(backend, instances, app_name, script_state) {
-                    Ok(owner) => owner,
-                    Err(error) => return Reply::error(wire::core_error(&error)),
-                };
+            let owner = match Coordinator::with_application_target(
+                backend,
+                ApplicationTarget {
+                    instances,
+                    ..target
+                },
+                script_state,
+            ) {
+                Ok(owner) => owner,
+                Err(error) => return Reply::error(wire::core_error(&error)),
+            };
             // Register even if close/cancel won during connect. close() waits for
             // this run and performs a second pass over all registered owners.
             self.state
@@ -510,6 +565,21 @@ impl<F: Factory> Server<F> {
                 .owner = Some(owner.clone());
             owner
         };
+        let weak = self.weak_self.clone();
+        let bound_app = app_id.to_owned();
+        *owner.session.lock().unwrap() = Some(super::ScriptSession {
+            id: self.session_id.clone(),
+            app: bound_app.clone(),
+            read_receipt: Arc::new(move |current, args| {
+                weak.upgrade()
+                    .ok_or_else(|| WireError {
+                        code: "closed".into(),
+                        message: "The original MCP session is closed".into(),
+                        details: None,
+                    })?
+                    .session_receipt(&bound_app, current, args)
+            }),
+        });
         let admitted = {
             // Lock ordering is always Server state -> call owner -> Coordinator.
             let state = self.state.lock().unwrap();
@@ -603,8 +673,9 @@ impl<F: Factory> Server<F> {
     fn record_reply(&self, state: &State<F::Provider>, record: &Record) -> Reply {
         let active = state
             .active
-            .as_ref()
-            .filter(|active| active.execution_id.as_deref() == Some(&record.id));
+            .iter()
+            .chain(state.session_active.iter())
+            .find(|active| active.execution_id.as_deref() == Some(&record.id));
         let mut reply = if let Some(reply) = &record.reply {
             reply.clone()
         } else {
@@ -634,6 +705,56 @@ impl<F: Factory> Server<F> {
             append_shutdown_errors(&mut reply, &state.shutdown_errors);
         }
         reply
+    }
+    fn session_receipt(&self, app: &str, current: &str, args: &Value) -> Result<Reply, WireError> {
+        let query = super::session::receipt_query(args)?;
+        let mut state = self.state.lock().unwrap();
+        self.refresh(&mut state);
+        if let Some(record) = state.records.iter_mut().find(|record| record.id == current) {
+            record.queried_receipts = true;
+        }
+        let record = if let Some(id) = &query.execution_id {
+            state.records.iter().find(|record| record.id == *id)
+        } else {
+            state.records.iter().rev().find(|record| {
+                (app.is_empty() || record.app == app) && record.id != current
+                    && self.primary_execution(&state, record)
+            })
+        }.ok_or_else(|| WireError { code:"execution_unavailable".into(),
+            message:"No matching original execution is retained in this MCP session; missing history never proves no effect".into(), details:None })?;
+        if !app.is_empty() && record.app != app {
+            return Err(WireError {
+                code: "wrong_app".into(),
+                message: "The execution belongs to another application".into(),
+                details: None,
+            });
+        }
+        let mut reply = self.record_reply(&state, record);
+        super::session::page_receipt(&mut reply.data, query)?;
+        Ok(reply)
+    }
+    fn primary_execution(&self, state: &State<F::Provider>, record: &Record) -> bool {
+        if !record.queried_receipts {
+            return true;
+        }
+        if record.app.is_empty() {
+            return false;
+        }
+        let has_native_work = |reply: &Reply| {
+            reply.data["script"]["steps"]
+                .as_array()
+                .is_some_and(|steps| {
+                    steps
+                        .iter()
+                        .any(|step| step["operation"] != "session.result")
+                })
+        };
+        // Pure receipt queries must not become the next default query target.
+        // Mixed desktop scripts remain visible, including while still running.
+        match &record.reply {
+            Some(reply) => has_native_work(reply),
+            None => has_native_work(&self.record_reply(state, record)),
+        }
     }
     fn result(&self, args: Value) -> Reply {
         let parsed = (|| {
@@ -665,8 +786,16 @@ impl<F: Factory> Server<F> {
         }
     }
     pub fn cancel(&self, rpc_id: &Value) {
-        let active = self.state.lock().unwrap().active.clone();
-        if let Some(call) = active.filter(|call| call.rpc_id == *rpc_id) {
+        let active = {
+            let state = self.state.lock().unwrap();
+            state
+                .active
+                .iter()
+                .chain(state.session_active.iter())
+                .find(|call| call.rpc_id == *rpc_id)
+                .cloned()
+        };
+        if let Some(call) = active {
             self.cancel_call(&call);
         }
     }
@@ -676,8 +805,9 @@ impl<F: Factory> Server<F> {
             let state = self.state.lock().unwrap();
             if !state
                 .active
-                .as_ref()
-                .is_some_and(|active| Arc::ptr_eq(active, call))
+                .iter()
+                .chain(state.session_active.iter())
+                .any(|active| Arc::ptr_eq(active, call))
                 || call.stopping.load(Ordering::Acquire)
             {
                 return;
@@ -686,6 +816,11 @@ impl<F: Factory> Server<F> {
             // catalog cleanup ends. No native I/O runs under the Server lock.
             call.stopping.store(true, Ordering::Release);
             call.cancelled.store(true, Ordering::Release);
+        }
+        if matches!(&call.command, ToolCall::Exec {app,..} if app.is_empty()) {
+            call.stopping.store(false, Ordering::Release);
+            self.finished.notify_all();
+            return;
         }
         let cancelled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let owner = call.owner.lock().unwrap().clone();
@@ -726,9 +861,14 @@ impl<F: Factory> Server<F> {
         let active = {
             let mut state = self.state.lock().unwrap();
             state.closed = true;
-            state.active.clone()
+            state
+                .active
+                .iter()
+                .chain(state.session_active.iter())
+                .cloned()
+                .collect::<Vec<_>>()
         };
-        if let Some(call) = &active {
+        for call in &active {
             call.cancelled.store(true, Ordering::Release);
         }
         if let Err(error) = self.factory.close_catalog() {
@@ -738,7 +878,7 @@ impl<F: Factory> Server<F> {
         if let Err(error) = self.factory.close_session() {
             self.remember_shutdown(wire::core_error(&error));
         }
-        if let Some(call) = active {
+        for call in active {
             let until = Instant::now() + STOP_TIMEOUT;
             let mut state = self.state.lock().unwrap();
             while !call.run_finished.load(Ordering::Acquire)
@@ -799,7 +939,11 @@ impl<F: Factory> Server<F> {
 // execution identifiers and never asks the model to manufacture one.
 fn public_execution(reply: &mut Reply, app: &str, id: &str) {
     reply.data.as_object_mut().unwrap().remove("request_id");
-    reply.data["app"] = json!(app);
+    reply.data["app"] = if app.is_empty() {
+        Value::Null
+    } else {
+        json!(app)
+    };
     reply.data["execution_id"] = json!(id);
 }
 
@@ -845,6 +989,10 @@ fn trim_history<B: Backend>(state: &mut State<B>) {
         .active
         .as_ref()
         .and_then(|call| call.execution_id.as_deref());
+    let session_active = state
+        .session_active
+        .as_ref()
+        .and_then(|call| call.execution_id.as_deref());
     let latest = state.records.back().map(|record| record.id.clone());
     let mut bytes: usize = state
         .records
@@ -855,6 +1003,7 @@ fn trim_history<B: Backend>(state: &mut State<B>) {
         let removable = state.records.iter().position(|record| {
             record.reply.is_some()
                 && Some(record.id.as_str()) != active
+                && Some(record.id.as_str()) != session_active
                 && Some(&record.id) != latest.as_ref()
         });
         let Some(index) = removable else { break };
@@ -933,7 +1082,11 @@ fn append_shutdown_errors(reply: &mut Reply, errors: &[WireError]) {
     if !errors.is_empty() {
         reply.data["shutdown_errors"] =
             json!(errors.iter().map(super::error_json).collect::<Vec<_>>());
-        reply.is_error = true;
+        // The original native failure remains in its record and this metadata.
+        // Independent Session work can still complete successfully.
+        if reply.data["session_only"] != true {
+            reply.is_error = true;
+        }
     }
 }
 fn shutdown_reply(errors: &[WireError]) -> Reply {
@@ -978,7 +1131,11 @@ fn parse_call(name: &str, args: &Value) -> Result<ToolCall, WireError> {
         }
         "exec" => {
             exact_object(args, &["app", "source"])?;
-            let app = app_id::parse(&args["app"])?;
+            let app = args
+                .get("app")
+                .map(app_id::parse)
+                .transpose()?
+                .unwrap_or_default();
             let source = args["source"]
                 .as_str()
                 .filter(|s| !s.is_empty() && s.len() <= scripts::MAX_SOURCE_BYTES)

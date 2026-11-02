@@ -17,6 +17,20 @@ pub(crate) fn lock_scene(timeout: Duration) -> Result<File, String> {
 }
 // This separate lease is scoped to one complete atomic input transaction.
 // Worker process exit releases it only after the native input drain (or kill).
+pub(crate) fn lock_application(target: &str, timeout: Duration) -> Result<File, String> {
+    let uid = unsafe { libc::geteuid() };
+    // FNV-1a has a stable representation across builds. A collision merely
+    // serializes two apps; the native provider still verifies the whole target.
+    let key = target.bytes().fold(0xcbf29ce484222325u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+    });
+    lock_scene_at(
+        std::path::Path::new(&format!(
+            "/private/tmp/dev.caelis.dtw-launch-{uid}-{key:016x}.lock"
+        )),
+        timeout,
+    )
+}
 pub(crate) fn lock_input(timeout: Duration) -> Result<File, String> {
     let uid = unsafe { libc::geteuid() };
     lock_scene_at(

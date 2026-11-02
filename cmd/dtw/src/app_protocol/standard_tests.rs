@@ -1,5 +1,9 @@
 //! Public MCP contract uses one stable app ID and ordinary tool calls.
 use super::*;
+#[path = "app_lifecycle_tests.rs"]
+mod app_lifecycle_tests;
+#[path = "session_tests.rs"]
+mod session_tests;
 use crate::app_protocol::{
     app_id,
     server::{Application, Factory, Server, Started},
@@ -123,11 +127,11 @@ fn ordinary_discovery_and_exec_need_no_custom_host_or_grant() {
     server.close().unwrap();
 }
 #[test]
-fn no_missing_or_unlisted_app_can_dispatch_even_pure_javascript() {
+fn session_only_scripts_require_no_app_and_unknown_apps_never_dispatch() {
     let (server, catalog) = server();
     let mut args = input("return 1");
     args.as_object_mut().unwrap().remove("app");
-    assert!(call(&server, "exec", args).is_error);
+    assert_eq!(success(&call(&server, "exec", args)), 1);
     let mut args = input("return 1");
     args["app"] = json!("com.example.Unknown");
     let reply = call(&server, "exec", args);
@@ -177,7 +181,7 @@ fn original_result_and_duplicate_survive_app_exit_without_replaying() {
     server.close().unwrap();
 }
 #[test]
-fn stable_id_survives_restart_but_state_and_refs_do_not() {
+fn logical_session_survives_restart_while_native_refs_retire() {
     let (server, catalog) = server();
     let first = exec(&server,"first","state.count=7;state.window=(await app.windows()).windows[0].window_ref;return state.window");
     success(&first);
@@ -190,14 +194,14 @@ fn stable_id_survives_restart_but_state_and_refs_do_not() {
         "restart",
         "return {keys:Object.keys(state),window:(await app.windows()).windows[0].window_ref}",
     );
-    assert_eq!(success(&reply)["keys"], json!([]));
+    assert_eq!(success(&reply)["keys"], json!(["count", "window"]));
     let new_window = success(&reply)["window"].as_str().unwrap();
     assert_reference(new_window, "win");
     assert_ne!(old_window, new_window);
     assert_ne!(first.data["execution_id"], reply.data["execution_id"]);
     assert_eq!(reply.data["context_reset"], true);
-    assert_eq!(reply.data["state_reset"], true);
-    assert_eq!(catalog.connects.load(Ordering::SeqCst), 2);
+    assert_eq!(reply.data["state_reset"], false);
+    assert_eq!(catalog.connects.load(Ordering::SeqCst), 1);
     let stale = exec(
         &server,
         "old-window",

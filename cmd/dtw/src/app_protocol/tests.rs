@@ -448,8 +448,20 @@ fn describe_reports_the_bound_app_and_backend_support() {
     assert_eq!(
         description["supported_capabilities"],
         json!([
-            "windows", "observe", "press", "capture", "click", "typeText", "keypress", "scroll",
-            "focus", "setValue", "readText"
+            "launch",
+            "quit",
+            "closeWindow",
+            "windows",
+            "observe",
+            "press",
+            "capture",
+            "click",
+            "typeText",
+            "keypress",
+            "scroll",
+            "focus",
+            "setValue",
+            "readText"
         ])
     );
 }

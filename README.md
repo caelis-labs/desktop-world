@@ -7,6 +7,7 @@ and Obsidian—so you can describe a task and let the Agent operate the interfac
 ## What can it do?
 
 - Find open apps and windows, inspect controls, and take window screenshots.
+- On macOS, launch installed apps, close a selected window, or request normal quit.
 - Click, type, use keyboard shortcuts, scroll, and edit text.
 - Work with forms, file dialogs and menus, then read back the result.
 - Work across several apps within the same conversation.

@@ -42,7 +42,7 @@ for line in sys.stdin:
    'protocolVersion':'2025-06-18','capabilities':{'tools':{}},
    'serverInfo':{'name':'desktop-world','version':'9.8.7'}})
  elif method=='tools/list':
-  reply(request['id'],{'tools':[{'name':name} for name in ['apps','api','exec','result']]})
+  reply(request['id'],{'tools':[{'name':name} for name in ['apps','api','exec']]})
  else:
   assert request['params']=={'name':'api','arguments':{'methods':['windows']}}
   data={'methods':{'windows':{'parameters':None,'returns':{}}}}
@@ -90,7 +90,7 @@ class PackagedMcpTests(unittest.TestCase):
         self.assertEqual({row['role'] for row in report['cleanup']}, {'version', 'mcp'})
         self.assertTrue(all(row['exit_code'] == 0 and not row['forced'] for row in report['cleanup']))
         self.assertIn(b'owned diagnostic', (output / 'mcp/stderr.bin').read_bytes())
-        self.assertEqual(set(report['metadata']['tools']), {'apps', 'api', 'exec', 'result'})
+        self.assertEqual(set(report['metadata']['tools']), {'apps', 'api', 'exec'})
 
     def test_wrong_cli_version_fails_before_mcp_is_started(self):
         report, output = self.exercise('bad_version')

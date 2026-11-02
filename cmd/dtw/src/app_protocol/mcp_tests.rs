@@ -156,7 +156,7 @@ fn decoded(result: &Value) -> Value {
 }
 
 #[tokio::test]
-async fn sdk_lists_four_tools_and_exec_accepts_only_app_and_source() {
+async fn sdk_lists_three_tools_and_exec_supports_session_only_scripts() {
     let (server, catalog) = server();
     let mut client = Client::new(server).await;
     let listed = client.rpc("tools/list", json!({})).await;
@@ -166,15 +166,14 @@ async fn sdk_lists_four_tools_and_exec_accepts_only_app_and_source() {
             .iter()
             .map(|t| t["name"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["apps", "api", "exec", "result"]
+        ["apps", "api", "exec"]
     );
     let schema = &tools[2]["inputSchema"];
-    assert_eq!(schema["required"], json!(["app", "source"]));
+    assert_eq!(schema["required"], json!(["source"]));
     assert_eq!(schema["properties"].as_object().unwrap().len(), 2);
     assert_eq!(schema["properties"]["app"]["type"], "string");
     assert_eq!(schema["additionalProperties"], false);
     assert_eq!(tools[2]["annotations"]["readOnlyHint"], false);
-    assert_eq!(tools[3]["inputSchema"]["required"], json!(["app"]));
     let apps = decoded(&client.tool("apps", json!({})).await);
     assert_eq!(apps["apps"], json!([{"app":APP,"name":"Controlled"}]));
     let entry = apps["script"]["entry"].as_str().unwrap();
@@ -735,7 +734,7 @@ async fn sdk_serves_current_protocol_with_per_request_metadata() {
     let mut client = Client::connect(server, None);
     let meta = json!({"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}});
     let listed = client.rpc("tools/list", json!({"_meta":meta})).await;
-    assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 4);
+    assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 3);
     let response = client
         .rpc(
             "tools/call",

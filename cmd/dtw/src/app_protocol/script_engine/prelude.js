@@ -28,6 +28,8 @@
   const charAt = String.prototype.charCodeAt;
   const root = parse(globalThis.__initial_state);
   const methods = parse(globalThis.__methods);
+  const sessionMetadata = parse(globalThis.__session);
+  delete globalThis.__session;
   delete globalThis.__methods;
   let accepting = true;
   let phaseViolation = false;
@@ -68,46 +70,51 @@
   // omit undefined data properties; persistent state remains strict JSON.
   const encode = (value, label, limit, omitUndefinedProperties = false) => {
     const ancestors = [];
+    const stack = [];
     setPrototype(ancestors, null);
+    setPrototype(stack, null);
+    const holder = create(null);
     let nodes = 0;
-    const copy = (value, depth, objectField = false, path = "$") => {
-      const invalid = (reason, location = path) => fail(`${label} ${reason} at ${location}`, "invalid_json");
-      if (++nodes > 32768 || depth > 64) invalid("exceeds JSON traversal limit");
-      if (omitUndefinedProperties && objectField && value === undefined) return undefined;
-      if (value === null || typeof value === "string" || typeof value === "boolean") return value;
-      if (typeof value === "number") {
-        if (!finite(value)) invalid("contains a non-finite number");
-        return value;
+    const invalid = (reason, path) => fail(`${label} ${reason} at ${path}`, "invalid_json");
+    const enter = (value, depth, objectField, path, parent, key) => {
+      if (++nodes > 32768 || depth > 64) invalid("exceeds JSON traversal limit", path);
+      if (omitUndefinedProperties && objectField && value === undefined) return;
+      if (value === null || typeof value === "string" || typeof value === "boolean" || typeof value === "number") {
+        if (typeof value === "number" && !finite(value)) invalid("contains a non-finite number", path);
+        define(parent, key, {value, enumerable:true, writable:true, configurable:true});
+        return;
       }
-      if (typeof value !== "object") invalid("contains a non-JSON value");
+      if (typeof value !== "object") invalid("contains a non-JSON value", path);
       const proto = prototype(value);
       const array = isArray(value);
-      if (proto !== null && proto !== (array ? arrayPrototype : objectPrototype)) invalid("contains a non-JSON object");
-      for (let i = 0; i < ancestors.length; i++) if (ancestors[i] === value) invalid("contains a cycle");
-      ancestors[ancestors.length] = value;
+      if (proto !== null && proto !== (array ? arrayPrototype : objectPrototype)) invalid("contains a non-JSON object", path);
+      for (let i = 0; i < ancestors.length; i++) if (ancestors[i] === value) invalid("contains a cycle", path);
       const out = array ? [] : create(null);
       if (array) setPrototype(out, null);
-      const keys = ownKeys(value);
-      let count = 0;
-      for (let i = 0; i < keys.length; i++) {
-        const key = keys[i];
-        if (array && key === "length") continue;
-        if (typeof key !== "string") invalid("contains a symbol key");
-        // Bound diagnostic path components independently of the output limit.
-        const location = `${path}[${stringify(apply(slice, key, [0, 128]))}]`;
-        const field = descriptor(value, key);
-        if (!field || !descriptor(field, "value") || !field.enumerable) invalid("contains an accessor or hidden property", location);
-        if (array && (StringClass(count) !== key)) invalid("contains an array hole or extra property", location);
-        const copied = copy(field.value, depth+1, !array, location);
-        if (copied !== undefined)
-          define(out, key, {value:copied, enumerable:true, writable:true, configurable:true});
-        count++;
-      }
-      if (array && count !== value.length) invalid("contains an array hole");
-      ancestors.length--;
-      return out;
+      define(parent, key, {value:out, enumerable:true, writable:true, configurable:true});
+      ancestors[ancestors.length] = value;
+      stack[stack.length] = {value, depth, path, out, array, keys:ownKeys(value), index:0, count:0};
     };
-    const text = stringify(copy(value, 0));
+    enter(value, 0, false, "$", holder, "value");
+    while (stack.length) {
+      const frame = stack[stack.length - 1];
+      if (frame.index === frame.keys.length) {
+        if (frame.array && frame.count !== frame.value.length) invalid("contains an array hole", frame.path);
+        stack.length--;
+        ancestors.length--;
+        continue;
+      }
+      const key = frame.keys[frame.index++];
+      if (frame.array && key === "length") continue;
+      if (typeof key !== "string") invalid("contains a symbol key", frame.path);
+      const location = `${frame.path}[${stringify(apply(slice, key, [0, 128]))}]`;
+      const field = descriptor(frame.value, key);
+      if (!field || !descriptor(field, "value") || !field.enumerable) invalid("contains an accessor or hidden property", location);
+      if (frame.array && StringClass(frame.count) !== key) invalid("contains an array hole or extra property", location);
+      frame.count++;
+      enter(field.value, frame.depth + 1, !frame.array, location, frame.out, key);
+    }
+    const text = stringify(holder.value);
     if (bytes(text) > limit) fail(`${label} exceeds ${limit} bytes`, "output_limit");
     return text;
   };
@@ -128,6 +135,28 @@
     return reply.result;
   };
   const app = create(null);
+  const bindWindow = (row) => {
+    const bound = create(null);
+    const window_ref = row.window_ref;
+    define(bound, "window_ref", {value:window_ref, enumerable:true});
+    define(bound, "title", {value:row.title ?? null, enumerable:true});
+    for (const metadata of methods) {
+      if (!metadata.window) continue;
+      const op = metadata.name;
+      const method = async (...args) => {
+        if (args.length > 1) fail(`window.${op} takes one argument object`, "invalid_args");
+        const options = args.length ? parse(encode(args[0], "window arguments", 65536, true)) : create(null);
+        if (!options || isArray(options) || typeof options !== "object" || descriptor(options, "window_ref"))
+          fail("Bound window arguments must omit window_ref", "invalid_args");
+        if (op === "observe" && descriptor(options, "cursor"))
+          fail("Continue pagination with app.observe({cursor})", "invalid_args");
+        options.window_ref = window_ref;
+        return call(op, options);
+      };
+      define(bound, op === "closeWindow" ? "close" : op, {value:freeze(method),enumerable:true});
+    }
+    return freeze(bound);
+  };
   for (const metadata of methods) {
     const op = metadata.name;
     const method = async (...args) => {
@@ -135,13 +164,27 @@
         if (args.length !== 0) fail("app.windows takes no arguments", "invalid_args");
         return call(op, {});
       }
+      if (metadata.optional && args.length === 0) { const result = call(op, {}); return op === "window" ? bindWindow(result) : result; }
       if (args.length !== 1) fail(`app.${op} takes one exact argument object`, "invalid_args");
-      return call(op, args[0]);
+      const result = call(op, args[0]);
+      return op === "window" ? bindWindow(result) : result;
     };
     define(app, op, {value:freeze(method), enumerable:true});
   }
   define(globalThis, "app", {value:freeze(app), writable:false, configurable:false});
   define(globalThis, "state", {get:()=>root, set:()=>fail("state root cannot be replaced", "invalid_state"), configurable:false});
+  const session = create(null);
+  define(session, "id", {value:sessionMetadata.id, enumerable:true});
+  define(session, "app", {value:sessionMetadata.app, enumerable:true});
+  define(session, "state", {get:()=>root, enumerable:true});
+  const result = async (...args) => {
+    if (args.length > 1) fail("session.result takes one optional argument", "invalid_args");
+    let query = args.length === 0 ? {} : args[0];
+    if (typeof query === "string") query = {execution_id:query};
+    return call("session.result", query);
+  };
+  define(session, "result", {value:freeze(result), enumerable:true});
+  define(globalThis, "session", {value:freeze(session), writable:false, configurable:false});
   const show = (value) => {
     if (typeof value === "string") return value;
     try { return encode(value, "console", 65536); }
@@ -157,6 +200,7 @@
     };
     define(console, level, {value:freeze(log), enumerable:true});
   }
+  define(globalThis, "print", {value:console.log, writable:false, configurable:false});
   define(globalThis, "console", {value:freeze(console), writable:false, configurable:false});
   const envelope = (fields) => {
     const out = create(null);

@@ -24,10 +24,12 @@ mod script_engine;
 mod scripts;
 mod selection;
 pub mod server;
+mod session;
 #[cfg(test)]
 mod tests;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod transport;
+mod window_selection;
 mod window_wait;
 pub mod wire;
 
@@ -98,6 +100,10 @@ fn problem(code: &str, message: &str) -> Reply {
 fn operation(command: &Command) -> &'static str {
     match command {
         Command::Script { .. } => "script",
+        Command::SelectWindow { .. } => "window",
+        Command::Launch => "launch",
+        Command::Quit { .. } => "quit",
+        Command::CloseWindow => "closeWindow",
         Command::Windows => "windows",
         Command::WaitForWindow { .. } => "waitForWindow",
         Command::Observe
@@ -120,7 +126,10 @@ fn operation(command: &Command) -> &'static str {
 fn is_action(command: &Command) -> bool {
     matches!(
         command,
-        Command::Press { .. }
+        Command::Launch
+            | Command::Quit { .. }
+            | Command::CloseWindow
+            | Command::Press { .. }
             | Command::PressSelected { .. }
             | Command::Click { .. }
             | Command::ClickWithOptions { .. }
@@ -222,7 +231,15 @@ struct State {
     // Lock order is Coordinator state, then this cell; never the reverse.
     script_state: Arc<Mutex<Value>>,
 }
+pub(super) type ReceiptReader = Arc<dyn Fn(&str, &Value) -> Result<Reply, WireError> + Send + Sync>;
+#[derive(Clone)]
+pub(super) struct ScriptSession {
+    id: String,
+    app: String,
+    read_receipt: ReceiptReader,
+}
 pub struct Coordinator<B: Backend> {
+    session: Mutex<Option<ScriptSession>>,
     runtime: Runtime<B>,
     coverage: &'static str,
     conditions: &'static [&'static str],
@@ -254,6 +271,30 @@ impl<B: Backend + 'static> Coordinator<B> {
         app_name: String,
         script_state: Arc<Mutex<Value>>,
     ) -> Result<Arc<Self>, Error> {
+        Self::with_target(backend, apps, app_name, script_state, None)
+    }
+
+    pub fn with_application_target(
+        backend: B,
+        target: ApplicationTarget,
+        script_state: Arc<Mutex<Value>>,
+    ) -> Result<Arc<Self>, Error> {
+        Self::with_target(
+            backend,
+            target.instances,
+            target.name,
+            script_state,
+            Some(target.app_id),
+        )
+    }
+
+    fn with_target(
+        backend: B,
+        apps: Vec<AppInstance>,
+        app_name: String,
+        script_state: Arc<Mutex<Value>>,
+        app_id: Option<String>,
+    ) -> Result<Arc<Self>, Error> {
         let app_ref = reference("app")?;
         let supported = Capability::ALL
             .into_iter()
@@ -268,7 +309,11 @@ impl<B: Backend + 'static> Coordinator<B> {
             })
             .collect();
         let owner = Arc::new(Self {
-            runtime: Runtime::with_apps(backend, apps, OBSERVATION_TTL)?,
+            session: Mutex::new(None),
+            runtime: match app_id {
+                Some(id) => Runtime::for_application(backend, id, apps, OBSERVATION_TTL)?,
+                None => Runtime::with_apps(backend, apps, OBSERVATION_TTL)?,
+            },
             coverage,
             conditions,
             observe_scopes,
@@ -567,7 +612,20 @@ impl<B: Backend + 'static> Coordinator<B> {
         // Core is the authority on admission and consumption. Keep only a light
         // tombstone for stale-ref diagnostics after it has released a binding.
         // In particular, an invalid point must not consume a still-live image.
+        let members = self.runtime.instances();
         let mut state = self.state.lock().unwrap();
+        state
+            .windows
+            .retain(|_, target| members.contains(&target.app));
+        if matches!(submitted.command, Command::CloseWindow)
+            && work.completed.receipt.as_ref().is_some_and(|receipt| {
+                receipt.outcome.evidence == EffectEvidence::Confirmed("window_closed".into())
+            })
+        {
+            if let Some(reference) = &submitted.target.window_ref {
+                state.windows.remove(reference);
+            }
+        }
         state
             .observations
             .retain(|snapshot| snapshot.expires_at > Instant::now());
@@ -608,6 +666,35 @@ impl<B: Backend + 'static> Coordinator<B> {
         }
         if let Command::ContinueObservation { cursor } = &submitted.command {
             return self.continue_observation(cursor, deadline);
+        }
+        if let Command::SelectWindow {
+            title,
+            window_ref,
+            timeout_ms,
+        } = &submitted.command
+        {
+            return self.select_window(
+                submitted,
+                title.as_deref(),
+                window_ref.as_deref(),
+                *timeout_ms,
+                deadline,
+            );
+        }
+        if submitted.command == Command::Launch {
+            return Work::action(self.runtime.launch_until(deadline));
+        }
+        if let Command::Quit { window_ref } = &submitted.command {
+            let target = if let Some(reference) = window_ref {
+                let Some(target) = self.state.lock().unwrap().windows.get(reference).cloned()
+                else {
+                    return Work::rejected(&submitted.command, Error::TargetChanged);
+                };
+                Some(target)
+            } else {
+                None
+            };
+            return Work::action(self.runtime.quit_until(target.as_ref(), deadline));
         }
         if submitted.command == Command::Windows {
             return match self.runtime.windows_until(deadline) {
@@ -687,6 +774,9 @@ impl<B: Backend + 'static> Coordinator<B> {
             return Work::rejected(&submitted.command, Error::TargetChanged);
         };
         match &submitted.command {
+            Command::CloseWindow => {
+                Work::action(self.runtime.close_window_until(&target, deadline))
+            }
             Command::WaitForWindow { state, timeout_ms } => {
                 self.wait_for_window(submitted, &target, *state, *timeout_ms, deadline)
             }
@@ -964,7 +1054,10 @@ impl<B: Backend + 'static> Coordinator<B> {
             Command::Input(input) => {
                 Work::action(self.runtime.input_until(&target, input, deadline))
             }
-            Command::Windows
+            Command::SelectWindow { .. }
+            | Command::Launch
+            | Command::Quit { .. }
+            | Command::Windows
             | Command::Script { .. }
             | Command::ContinueObservation { .. }
             | Command::Find { .. }

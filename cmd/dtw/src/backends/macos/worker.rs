@@ -139,7 +139,15 @@ pub(super) fn native(request: &Value, scene: bool) -> Value {
 fn input_operation(op: &str) -> bool {
     matches!(
         op,
-        "press" | "set_value" | "focus" | "type_text" | "keypress" | "scroll" | "click"
+        "press"
+            | "set_value"
+            | "focus"
+            | "type_text"
+            | "keypress"
+            | "scroll"
+            | "click"
+            | "quit_app"
+            | "close_window"
     )
 }
 fn now_ms() -> u64 {
@@ -472,6 +480,39 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
     });
     let op = request["operation"].as_str().unwrap_or("").to_owned();
     let op = op.as_str();
+    if op == "launch_app" {
+        let Some(key) = request["application_key"]
+            .as_str()
+            .filter(|key| key.starts_with('/'))
+        else {
+            return rejected(
+                json!({"error":"invalid_request","message":"Missing canonical launch target"}),
+                op,
+            );
+        };
+        let _coordination = match scene_lease::lock_coordination(
+            scene_lease::InputCoordination::Background,
+            remaining(&request),
+        ) {
+            Ok(lease) => lease,
+            Err(message) => {
+                return rejected(json!({"error":"native_input_busy","message":message}), op)
+            }
+        };
+        let _launch = match scene_lease::lock_application(key, remaining(&request)) {
+            Ok(lease) => lease,
+            Err(message) => {
+                return rejected(json!({"error":"native_input_busy","message":message}), op)
+            }
+        };
+        if TERMINATING.load(Ordering::Relaxed) || remaining(&request).is_zero() {
+            return rejected(
+                json!({"error":"native_stopping","message":"Launch admission is closed"}),
+                op,
+            );
+        }
+        return native(&request, false);
+    }
     if op == "prove_associated_surface" {
         if !scene_worker {
             return json!({"error":"invalid_request","message":"Association pixels require a short-lived Scene owner"});

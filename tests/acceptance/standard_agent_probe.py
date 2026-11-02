@@ -148,6 +148,8 @@ def process_table():
 
 
 class Mcp:
+    # receipt()/execute() retain legacy-result compatibility coverage. The
+    # lifecycle Session probe uses only rpc()/tool() and advertised tools.
     def __init__(self, binary, output, *, mcp_args=()):
         self.output = output
         self.serial = 0
@@ -380,7 +382,7 @@ def run_checks(mcp, target, peer, output, pixel_click, evidence):
     mcp.notify("notifications/initialized")
     tools = mcp.rpc("tools/list", {})["tools"]
     by_name = {tool["name"]: tool for tool in tools}
-    require(set(by_name) == {"apps", "exec", "result"}, tools)
+    require(set(by_name) == {"apps", "api", "exec"}, tools)
     for name in ("exec", "result"):
         schema = by_name[name]["inputSchema"]
         require(schema["properties"]["app"]["type"] == "string" and "app" in schema["required"], schema)

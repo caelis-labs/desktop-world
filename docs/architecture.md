@@ -9,7 +9,7 @@ resource coordination, native execution and honest effect reporting.
 
 ```text
 Agent / Harness policy
-  → standard MCP: apps / api / exec / result
+  → standard MCP: apps / api / exec (session.result inside scripts)
   → session: app contexts, script VM, state, receipts and cancellation
   → Computer Core: typed operations, references, routing and effects
   → native providers: application workers and short-lived scene workers
@@ -17,7 +17,7 @@ Agent / Harness policy
 
 ## Identity, references and state
 
-`exec({app, source})` takes one stable platform app ID and one script. An Agent
+`exec({app?, source})` takes source and an explicit target for desktop work. Omit app for the provider-free Session lane. macOS resolves installed bundle IDs or existing absolute .app paths, including dormant targets. An Agent
 session can use multiple apps. PID, process birth generation and native handles
 remain internal. One app ID may resolve to multiple instances; `windows()`
 aggregates them and each window reference retains its exact owner. A provider
@@ -32,17 +32,14 @@ input where that change can be detected. Live UI trees are not atomic snapshots.
 
 Each MCP connection owns separate app state, references and receipts. Switching
 apps preserves them. Completed receipts use sliding retention independently of
-the latest app state; eviction never replays old work. Same-connection scripts
-execute sequentially. Worker retirement can reset native references without
-discarding committed logical state; actual instance replacement has separate
-state-reset semantics. Connection shutdown ends the session; persistent receipt
+the latest app state; eviction never replays old work. The desktop lane and the provider-free Session lane each execute sequentially, but may run alongside each other. The latter can inspect receipts while desktop work or cleanup is pending. Worker retirement and application replacement invalidate native refs without discarding committed JSON. Ordinary QuickJS variables/functions do not persist; session.state aliases the current lane JSON root. Connection shutdown ends the session; persistent receipt
 recovery across server processes is not promised.
 
 Script state commits on success. Desktop effects are not transactional. Outcomes
 separate `not_dispatched / dispatched / unknown` from concrete effect evidence;
 script completion does not establish business-task completion. Timeout, exception,
-cancellation and unknown effects never authorize automatic replay. `result`
-inspects the original receipt, while successful ordinary `exec` needs no polling.
+cancellation and unknown effects never authorize automatic replay. `session.result()`
+reads original receipt pages independently of native ownership, while successful ordinary `exec` needs no polling.
 See [protocol](app-protocol-v1.md) and [script semantics](app-script-v1.md).
 
 ## Native resources and input
@@ -121,8 +118,7 @@ those boundaries. Source hashes prove attribution, not adapted behavior.
 Each group must identify its state owner, dispatch boundary, failure evidence and
 cleanup on success/cancel/timeout/parent exit. Input groups include held keys,
 buttons and scroll state; browser groups include sessions/tabs/refs; Windows groups
-include COM apartments, DPI and delayed input. App launch/quit needs lifecycle
-semantics beyond operations on an already-running instance. Private SPI stays
+include COM apartments, DPI and delayed input. App launch/quit/closeWindow use distinct typed lifecycle admission. macOS launch serializes a canonical installed path before one NSWorkspace request; quit binds one exact process incarnation and closeWindow one proven native close control. Confirmed facts are process-running, process-exited or exact-window-closed; pending save dialogs remain unverified. No force kill or automatic replay is exposed. Private SPI stays
 isolated and cannot be replaced by approximate ownership guesses.
 
 Prove one complete workflow through schema, script, native operation and independent

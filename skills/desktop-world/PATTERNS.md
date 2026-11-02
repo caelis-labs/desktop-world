@@ -106,3 +106,49 @@ Use `app.observe({window_ref,scope:'menu',...})` to explore the application's me
 Some applications defer a background semantic or coordinate action until their window becomes active. A delivered action with no visible effect may still be pending. First use `focus` and a fresh read in the same script, without repeating the action; the original effect may then appear. When the resulting state calls for new input, keep `focus` and the dependent actions in one script. This also applies to custom controls whose semantic actions are unavailable.
 
 After an action opens a modal, use `waitForWindow` on the selected parent when supported; otherwise refresh inventory and inspect. DTW resolves target ownership, delivery, and foreground return internally. An unrelated pointer movement does not invalidate keyboard input, but a changed target or unproven focus requires fresh inspection. Keep unknown effects separate from new work, and never replay an earlier script merely because its state did not commit.
+
+
+## Image and semantic discovery reference
+
+`app.capture({window_ref})` returns an image and a pixel observation ref. The image accompanying a script is its last explicit capture, not an implicit screenshot after clicks or typing. Check `last_capture.step`, `timing` and `later_calls`; call capture after an action when visual readback is needed. A changed or unchanged image alone does not prove the intended effect or justify replay. Coordinates refer to that image, not desktop or CSS coordinates.
+
+On Windows, an explicit occlusion failure during `exec` can make DTW prepare the selected window's foreground once and capture afresh. This uses ordinary input coordination and the original deadline; its focus receipt is retained in the capture step's `resolution.focus_preparation`. That preparation retires this window's semantic refs too. A denied or unconfirmed preparation stops. No delivery-mode argument is needed, and a failed capture does not authorize repeating prior input.
+
+For pixel grounding, use the returned `image.width` and `image.height`, even if a viewer resizes the image. For 0–1000 grounding, pass `coordinate_space:"normalized_1000"` to `click`; DTW converts both axes through the bound capture. Both coordinates must be in the same space; normalized values are at least 0 and less than 1000. Do not manually rescale normalized coordinates and also mark them normalized.
+
+`app.observe` supports these exclusive scopes, subject to `supported_observe_scopes`:
+
+- Window: `{window_ref, role?, text?, limit?}`.
+- Subtree: `{window_ref, observation_ref, element_ref, role?, text?, limit?}`, using a current semantic container.
+- Region: `{window_ref, observation_ref, region:{x,y,width,height}, role?, text?, limit?}`, using a current capture.
+- App menu: `{window_ref, scope:'menu', role?, text?, limit?}`.
+
+Region queries filter native geometry. macOS clips through proven scroll-area viewports and skips disjoint scroll contents; Windows uses UIA bounding rectangles. Region discovery is not OCR or an occlusion guarantee. Capture support does not imply semantic support.
+
+Each page contains `elements`, `observation_ref`, `next` and `coverage`. Element fields are `role,name,value,label,enabled,actions,element_ref,can_press`. Names, labels and values are bounded excerpts. Roles and advertised actions come from the provider; an intended task does not establish a control's name or capabilities.
+
+`name` is the native accessible name. `label` is a display summary and may include a role prefix, such as `text Example`; that prefix is not part of the native name. Prefer the observed role and name text when constructing selectors. An empty name does not imply a missing element.
+
+`limit` bounds matches per page, not traversal work. Narrow the scope and filters when possible. Continue with only `{cursor:page.next}`; a cursor advances once. An empty page can have a continuation. Earlier-page refs share the same observation.
+
+Text filters apply to label, name and value, including empty-name controls. A filtered page can be empty while `next` is present: continue the same query, or use `find` for a known control. Browser window scope can start with browser chrome before page contents; narrow by role/text or a captured region instead of dumping the full tree. `next:null` does not imply complete discovery. `coverage.complete` describes the live traversal of the selected scope; it is not an atomic snapshot or proof that an element does not exist. Preserve partial-coverage reasons. Missing, disabled, ambiguous and unsupported are different outcomes.
+
+Windows region queries filter returned UIA geometry; they do not necessarily prune traversal work. A retained, observed container subtree is preferable when available. Page bounds describe traversal work separately from returned matches, so an empty bounded page does not establish that the page is still loading or has no matches.
+
+
+
+## Selector and wait reference
+
+DTW refreshes each target, handles pagination and briefly waits, then acts once. If an inactive application exposes only its window shell (`content_unproven`), selector actions may raise the selected window once under the configured delivery policy and resolve afresh before sending input. For `scope:'menu'` actions, DTW first proves a unique match, prepares the selected window's focus and resolves the menu afresh; no separate `focus` call is needed. `find` remains a read. Optional `timeout_ms` defaults to 2000; zero disables polling and cold-window preparation, but retains the menu action's focus preparation. Multiple matches return candidates; incomplete coverage is unproven. Narrow or inspect those cases rather than taking the first match. `app.find({window_ref,selector,timeout_ms?})` waits for one unique element and returns its refs plus `element` metadata, useful for reading its current bounded value. Use `observe` for exploration and large trees requiring a smaller scope.
+
+On supported providers, `app.waitForWindow({window_ref,state:'dialog'})` waits for a proven related modal and returns its own fresh `window_ref`. Use `state:'closed'` to wait for that exact dialog to disappear, or `state:'unblocked'` for the original window's modal gate to clear. It never follows arbitrary new or focused windows. Optional `timeout_ms` has the same default; condition timeout is a normal error and does not replay input. See the file-chooser pattern for nested dialogs.
+
+`app.wait({window_ref,selector,state:'present'|'absent'|'enabled'|'disabled',timeout_ms?})` waits for a semantic condition within this script. Its default is **10000ms**, maximum 30000ms, bounded by the remaining 30-second execution budget; zero checks once. Positive states require a complete traversal and one unique match; enabled/disabled require the explicit Boolean state, never null. They return fresh `observation_ref`, `element_ref` and current `element` metadata like `find`, plus `state`. Absent requires a complete traversal with no exposed match and returns only `window_ref,state`; incomplete coverage cannot establish absence. Every fresh query replaces this window's previous semantic refs while preserving captures and other windows. Polling uses read traversals separated by a 50ms delay; large trees still cost native reads. No focus or input is sent. A `wait_timeout` can be caught for inspection, but execution deadline/cancellation remain terminal. Waiting never extends refs' TTL or proves persistence.
+
+
+
+## Receipt recovery
+
+Ordinary `exec` returns synchronously with a compact summary. After cancellation an execution can remain `running` while cleanup settles. For its original receipt, use a provider-free script: `exec({source:"const r=await session.result('returned execution_id'); return {status:r.status,error:r.error,steps:r.script.steps,next:r.script.next_offset};"})`. `session.result()` selects the latest previously accepted work execution, excluding pure receipt-query executions and the querying execution itself; a bound script restricts queries to its app, while the app-less lane can inspect this connection's records. A lost request may leave an older latest record. Prefer the returned ID when available.
+
+Receipt queries accept `{execution_id?,offset?,limit?}`; default 16 steps, maximum 64, with a 256 KiB step-page budget. Follow `script.next_offset`; project small fields before returning because the ordinary 64 KiB result and print budgets still apply. A single oversized step returns `receipt_page_limit`. Original errors, dispatch facts and payload-expiry flags remain intact. Recovered images are historical (`timing:'historical'`), not a fresh capture or live click binding. Queries never refresh native refs or replay work. The old `result` tool is unadvertised and temporarily retained only for compatibility.
