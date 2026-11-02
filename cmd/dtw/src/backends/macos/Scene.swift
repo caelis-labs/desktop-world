@@ -200,10 +200,14 @@ private func capture(_ request: [String:Any], deadline: TimeInterval? = nil,
         guard let window = content?.windows.first(where: { $0.windowID == id && $0.owningApplication?.processID == pid }) else {
             box.result = fail("window_unavailable",error?.localizedDescription ?? "Window is no longer shareable"); semaphore.signal(); return
         }
-        let filter = SCContentFilter(desktopIndependentWindow:window)
-        // Child-window composition can return a parent+sheet canvas scaled
-        // inside the requested sheet's dimensions. Bind one surface only.
-        guard near(filter.contentRect,window.frame) else {
+        // includeChildWindows applies to display-bound filters. Independent
+        // window streams may include a sheet/popover in the parent's canvas.
+        // Select this exact owned window on its display, then crop its frame;
+        // no display background or other application's window is authorized.
+        let display = content?.displays.first { $0.frame.contains(window.frame) }
+        let filter = display.map { SCContentFilter(display:$0, including:[window]) }
+            ?? SCContentFilter(desktopIndependentWindow:window)
+        guard display != nil || near(filter.contentRect,window.frame) else {
             box.result=fail("capture_geometry_mismatch","SCK content geometry differs from the window; no input binding created");semaphore.signal();return
         }
         let config = SCStreamConfiguration()
@@ -214,6 +218,7 @@ private func capture(_ request: [String:Any], deadline: TimeInterval? = nil,
         // display a larger requested canvas is padded, breaking pixel binding.
         // The captured content must fill the dimensions used by bound_pixel_point.
         config.scalesToFit = true
+        if let display { config.sourceRect = window.frame.offsetBy(dx:-display.frame.minX,dy:-display.frame.minY) }
         config.showsCursor = false; config.ignoreShadowsSingleWindow = true
         config.shouldBeOpaque = false
         config.includeChildWindows = false

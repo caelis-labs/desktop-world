@@ -29,7 +29,7 @@ impl<F: Factory> ServerHandler for Handler<F> {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("desktop-world", env!("CARGO_PKG_VERSION")))
-            .with_instructions("Load the installed DTW Skill through the client's Skill discovery. In a plugin, its file is <plugin-root>/skills/<skill-name>/SKILL.md, where skill-name is the installed Skill name; PATTERNS.md is beside SKILL.md. Call apps for application identifiers and compact method signatures. Call api for selected method schemas when needed. Prefer selector actions for known controls, find for reading one matching element, and waitForWindow for native dialog transitions; DTW handles their discovery and read-only waiting internally. Call exec with app and source; DTW assigns execution_id and waits for completion. Standard MCP cancellation stops the matching call. For original receipts use exec without app and session.result({execution_id}); it remains read-only even while a desktop call is running or cleanup has failed. New MCP requests execute new work. DTW validates targets and confines execution.")
+            .with_instructions("Load the installed desktop-world Skill and its API.md reference. apps searches running and installed applications without reading their contents. exec requires one explicit app authorization identity and an async JavaScript body. DTW owns application startup, window routing and observation state. Use look, then input, then look; screenshots provide a fallback when semantics are incomplete. Never repeat input whose effects are unknown. Standard MCP cancellation stops the matching call.")
     }
 
     async fn list_tools(
@@ -188,15 +188,10 @@ fn result(reply: Reply, compact: bool) -> CallToolResponse {
 
 pub fn tools() -> Value {
     let read = json!({"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true});
-    let methods: Vec<_> = super::methods::Method::ALL
-        .into_iter()
-        .map(|method| method.name())
-        .collect();
     json!([
-        {"name":"apps","description":"List running applications with stable identifiers, compact script method signatures and provider conditions. Use api for selected argument and return schemas. No window contents or screenshots are read.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":read},
-        {"name":"api","description":"Read detailed argument/return schemas and semantics for selected script methods. No native desktop read or input. Omit methods to list compact signatures.","inputSchema":{"type":"object","properties":{"methods":{"type":"array","minItems":1,"maxItems":methods.len(),"items":{"type":"string","enum":methods}}},"additionalProperties":false},"annotations":read},
-        {"name":"exec","description":"Run an async JavaScript body. Provide app for desktop work; omit it for provider-free Session scripts. Await app methods sequentially. Use app.window for a bound window, selector actions for known controls, and wait/readback/capture for verification. print emits bounded output; session.state holds JSON. Returns a compact summary and the last PNG outside JS. session.result(id?) reads original receipt pages without native work, including after app exit or during cleanup. DTW assigns execution_id; new requests execute new work. Never replay unknown effects. Use api for exact schemas and the installed Skill for patterns.",
-            "inputSchema":{"type":"object","additionalProperties":false,"properties":{"app":app_id::schema(),"source":{"type":"string","minLength":1,"maxLength":65536,"description":"JavaScript async function body, at most 64 KiB UTF-8; supports await and return. No imports, filesystem, network or process APIs."}},"required":["source"]},
-            "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}},
+        {"name":"apps","description":"Find installed and running user applications. Search by name or identifier; filter running/stopped/all. Returns authorization identities and running status, with bounded pages and explicit coverage. Reads no window contents.","inputSchema":{"type":"object","properties":{"query":{"type":"string","maxLength":256},"state":{"type":"string","enum":["all","running","stopped"]},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":100}},"additionalProperties":false},"annotations":read},
+        {"name":"exec","description":"Execute an async JavaScript body inside one explicitly authorized app. DTW starts the app when required and handles window routing and input readiness. Use app.look(), app.capture(), app.click(), app.typeText(), app.keypress(), app.scroll() and app.quit(); see the installed Skill API.md. print emits optional bounded output. No Session management. New calls execute new work; never replay unknown effects.",
+            "inputSchema":{"type":"object","additionalProperties":false,"properties":{"app":app_id::schema(),"source":{"type":"string","minLength":1,"maxLength":65536,"description":"Async JavaScript function body; await app operations sequentially. No imports, filesystem, network or process APIs."}},"required":["app","source"]},
+            "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}}
     ])
 }

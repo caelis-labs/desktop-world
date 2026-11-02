@@ -17,6 +17,7 @@ struct Client {
     output: BufReader<ReadHalf<DuplexStream>>,
     service: tokio::task::JoinHandle<Result<(), wire::WireError>>,
     serial: u64,
+    ledger: Box<dyn Fn(Value) -> Reply + Send>,
 }
 
 impl Client {
@@ -31,6 +32,7 @@ impl Client {
             inner: write,
             mode: mode.unwrap_or_default(),
         };
+        let ledger_server = server.clone();
         let service = tokio::spawn(mcp::serve_io(server, read, writer));
         let (output, input) = tokio::io::split(client);
         Self {
@@ -38,6 +40,7 @@ impl Client {
             output: BufReader::new(output),
             service,
             serial: 0,
+            ledger: Box::new(move |args| ledger_server.result(args)),
         }
     }
 
@@ -113,6 +116,15 @@ impl Client {
         response["result"].clone()
     }
 
+    // Private ledger inspection is deliberately not an MCP tool.
+    async fn receipt(&self, args: Value) -> Value {
+        let reply = (self.ledger)(args);
+        let mut content = vec![json!({"type":"text","text":reply.data.to_string()})];
+        if let Some(image) = reply.image {
+            content.push(json!({"type":"image","mimeType":"image/png","data":*image}));
+        }
+        json!({"structuredContent":reply.data,"content":content,"isError":reply.is_error})
+    }
     async fn close(mut self) {
         self.input.shutdown().await.unwrap();
         tokio::time::timeout(RESPONSE_TIMEOUT, self.service)
@@ -156,7 +168,7 @@ fn decoded(result: &Value) -> Value {
 }
 
 #[tokio::test]
-async fn sdk_lists_three_tools_and_exec_supports_session_only_scripts() {
+async fn sdk_lists_two_tools_and_requires_explicit_app() {
     let (server, catalog) = server();
     let mut client = Client::new(server).await;
     let listed = client.rpc("tools/list", json!({})).await;
@@ -166,19 +178,20 @@ async fn sdk_lists_three_tools_and_exec_supports_session_only_scripts() {
             .iter()
             .map(|t| t["name"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["apps", "api", "exec"]
+        ["apps", "exec"]
     );
-    let schema = &tools[2]["inputSchema"];
-    assert_eq!(schema["required"], json!(["source"]));
+    let schema = &tools[1]["inputSchema"];
+    assert_eq!(schema["required"], json!(["app", "source"]));
     assert_eq!(schema["properties"].as_object().unwrap().len(), 2);
     assert_eq!(schema["properties"]["app"]["type"], "string");
     assert_eq!(schema["additionalProperties"], false);
-    assert_eq!(tools[2]["annotations"]["readOnlyHint"], false);
+    assert_eq!(tools[1]["annotations"]["readOnlyHint"], false);
     let apps = decoded(&client.tool("apps", json!({})).await);
-    assert_eq!(apps["apps"], json!([{"app":APP,"name":"Controlled"}]));
-    let entry = apps["script"]["entry"].as_str().unwrap();
-    assert!(entry.contains("exec"));
-    assert!(!entry.contains("request_id"), "{entry}");
+    assert_eq!(
+        apps["apps"],
+        json!([{"app":APP,"name":"Controlled","running":true}])
+    );
+    assert!(apps.get("script").is_none());
     assert_eq!(catalog.connects.load(Ordering::SeqCst), 0);
     for field in [
         "request_id",
@@ -271,7 +284,7 @@ return codes;
 async fn sdk_observe_empty_text_matches_omission_and_keeps_exact_argument_errors() {
     let (server, catalog) = server();
     let mut client = Client::new(server).await;
-    let api = decoded(&client.tool("api", json!({"methods":["observe"]})).await);
+    let api = super::super::description::requested(&json!({"methods":["observe"]})).unwrap();
     let fields = &api["methods"]["observe"]["parameters"]["oneOf"][0]["properties"];
     assert_eq!(fields["text"]["minLength"], 0);
     assert_eq!(fields["text"]["maxLength"], 256);
@@ -416,10 +429,7 @@ async fn sdk_returns_png_as_content_beside_matching_text_and_structured_result()
         vec![7; 4096]
     );
     let retained = client
-        .tool(
-            "result",
-            json!({"app":APP,"execution_id":compact["execution_id"]}),
-        )
+        .receipt(json!({"app":APP,"execution_id":compact["execution_id"]}))
         .await;
     let full = decoded(&retained);
     assert_eq!(retained["isError"], result["isError"]);
@@ -468,7 +478,7 @@ async fn sdk_exec_compacts_repeated_reads_while_result_retains_the_original_ledg
     }
 
     let result_args = json!({"app":APP,"execution_id":compact["execution_id"]});
-    let retained = client.tool("result", result_args.clone()).await;
+    let retained = client.receipt(result_args.clone()).await;
     let full = decoded(&retained);
     assert_eq!(retained["isError"], response["isError"]);
     assert_eq!(full, call(&server, "result", result_args.clone()).data);
@@ -511,8 +521,8 @@ async fn sdk_exec_compacts_repeated_reads_while_result_retains_the_original_ledg
     for field in ["failure", "state_committed", "shutdown_error"] {
         assert_eq!(compact["script"].get(field), full["script"].get(field));
     }
-    assert_eq!(client.tool("result", result_args).await, retained);
-    let mut selected = decoded(&client.tool("result", json!({"app":APP})).await);
+    assert_eq!(client.receipt(result_args).await, retained);
+    let mut selected = decoded(&client.receipt(json!({"app":APP})).await);
     assert!(selected
         .as_object_mut()
         .unwrap()
@@ -593,10 +603,7 @@ async fn sdk_exec_keeps_caught_unknown_and_mismatch_evidence_in_the_summary() {
         assert_eq!(summary["pending"], 0);
         let full = decoded(
             &client
-                .tool(
-                    "result",
-                    json!({"app":APP,"execution_id":compact["execution_id"]}),
-                )
+                .receipt(json!({"app":APP,"execution_id":compact["execution_id"]}))
                 .await,
         );
         let issue = &summary["last_issue"];
@@ -661,10 +668,7 @@ async fn sdk_later_caught_read_error_does_not_hide_an_earlier_unknown_action() {
     assert!(summary["last_issue"]["receipt"].is_null());
     let full = decoded(
         &client
-            .tool(
-                "result",
-                json!({"app":APP,"execution_id":compact["execution_id"]}),
-            )
+            .receipt(json!({"app":APP,"execution_id":compact["execution_id"]}))
             .await,
     );
     let original_action = &full["script"]["steps"][2];
@@ -701,10 +705,7 @@ async fn sdk_completed_exec_retransmission_returns_the_same_summary_without_disp
     }
     let full = decoded(
         &client
-            .tool(
-                "result",
-                json!({"app":APP,"execution_id":compact["execution_id"]}),
-            )
+            .receipt(json!({"app":APP,"execution_id":compact["execution_id"]}))
             .await,
     );
     assert_eq!(full["value"], compact["value"]);
@@ -734,7 +735,7 @@ async fn sdk_serves_current_protocol_with_per_request_metadata() {
     let mut client = Client::connect(server, None);
     let meta = json!({"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}});
     let listed = client.rpc("tools/list", json!({"_meta":meta})).await;
-    assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 3);
+    assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 2);
     let response = client
         .rpc(
             "tools/call",
@@ -785,7 +786,7 @@ async fn sdk_completed_receipt_waits_for_outer_cancellation_cleanup() {
         inner: catalog.clone(),
         close_gate: Arc::default(),
     };
-    let mut client = Client::new(Server::new(factory.clone())).await;
+    let mut client = Client::new(Server::new_atomic_test(factory.clone())).await;
     let initial = decoded(
         &client
             .tool("exec", input("state.before=true;return 1;"))
@@ -800,7 +801,7 @@ async fn sdk_completed_receipt_waits_for_outer_cancellation_cleanup() {
         )
         .await;
     let action = reached(action).await;
-    let running = decoded(&client.tool("result", json!({"app":APP})).await);
+    let running = decoded(&client.receipt(json!({"app":APP})).await);
     let (gate, cleanup) = TestGate::pair();
     *factory.close_gate.lock().unwrap() = Some(gate);
     client
@@ -811,7 +812,7 @@ async fn sdk_completed_receipt_waits_for_outer_cancellation_cleanup() {
     // still holds shared catalog resources. Public completion must cover both.
     let unsettled = tokio::time::timeout(RESPONSE_TIMEOUT, async {
         loop {
-            let current = decoded(&client.tool("result", json!({"app":APP})).await);
+            let current = decoded(&client.receipt(json!({"app":APP})).await);
             if current["error"].is_object() && current["script"]["steps"][2]["receipt"].is_object()
             {
                 break current;
@@ -844,7 +845,7 @@ async fn sdk_completed_receipt_waits_for_outer_cancellation_cleanup() {
     action.release();
     let settled = tokio::time::timeout(RESPONSE_TIMEOUT, async {
         loop {
-            let current = decoded(&client.tool("result", json!({"app":APP})).await);
+            let current = decoded(&client.receipt(json!({"app":APP})).await);
             if current["status"] == "completed" {
                 break current;
             }
@@ -885,14 +886,14 @@ async fn sdk_cancellation_preserves_original_receipt_and_allows_later_work() {
         )
         .await;
     let gate = reached(gate).await;
-    let running = decoded(&client.tool("result", json!({"app":APP})).await);
+    let running = decoded(&client.receipt(json!({"app":APP})).await);
     assert_eq!(running["status"], "running");
     client
         .send(json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":id}}))
         .await;
     let original = tokio::time::timeout(RESPONSE_TIMEOUT, async {
         loop {
-            let current = decoded(&client.tool("result", json!({"app":APP})).await);
+            let current = decoded(&client.receipt(json!({"app":APP})).await);
             if current["status"] == "completed" {
                 break current;
             }
@@ -921,10 +922,7 @@ async fn sdk_cancellation_preserves_original_receipt_and_allows_later_work() {
     );
     let retained = decoded(
         &client
-            .tool(
-                "result",
-                json!({"app":APP,"execution_id":original["execution_id"]}),
-            )
+            .receipt(json!({"app":APP,"execution_id":original["execution_id"]}))
             .await,
     );
     // latest selection adds one presentation field; the stored receipt itself is unchanged.
@@ -970,7 +968,7 @@ async fn sdk_cancelled_exec_retransmission_preserves_provider_evidence_and_inter
     // record, then retransmit the same RPC frame to inspect its exec projection.
     let original = tokio::time::timeout(RESPONSE_TIMEOUT, async {
         loop {
-            let current = decoded(&client.tool("result", json!({"app":APP})).await);
+            let current = decoded(&client.receipt(json!({"app":APP})).await);
             if current["status"] == "completed" {
                 break current;
             }
@@ -1005,10 +1003,7 @@ async fn sdk_cancelled_exec_retransmission_preserves_provider_evidence_and_inter
         })
     );
     let retained = client
-        .tool(
-            "result",
-            json!({"app":APP,"execution_id":compact["execution_id"]}),
-        )
+        .receipt(json!({"app":APP,"execution_id":compact["execution_id"]}))
         .await;
     assert_eq!(retained["isError"], response["result"]["isError"]);
     let full = decoded(&retained);
@@ -1095,7 +1090,7 @@ async fn sdk_duplicate_active_rpc_does_not_replay_or_detach_original_cancellatio
     let params = json!({"name":"exec","arguments":input(PRESS)});
     let id = client.begin("tools/call", params.clone()).await;
     let gate = reached(gate).await;
-    let running = decoded(&client.tool("result", json!({"app":APP})).await);
+    let running = decoded(&client.receipt(json!({"app":APP})).await);
     for _ in 0..3 {
         client
             .send(json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":params}))
@@ -1103,7 +1098,7 @@ async fn sdk_duplicate_active_rpc_does_not_replay_or_detach_original_cancellatio
     }
     // This read lets the SDK dispatch the retransmitted frame before cancelling
     // and also verifies that the duplicate retained the original execution.
-    let duplicate = decoded(&client.tool("result", json!({"app":APP})).await);
+    let duplicate = decoded(&client.receipt(json!({"app":APP})).await);
     assert_eq!(duplicate["execution_id"], running["execution_id"]);
     assert_eq!(duplicate["status"], "running");
     client
@@ -1111,7 +1106,7 @@ async fn sdk_duplicate_active_rpc_does_not_replay_or_detach_original_cancellatio
         .await;
     let original = tokio::time::timeout(RESPONSE_TIMEOUT, async {
         loop {
-            let current = decoded(&client.tool("result", json!({"app":APP})).await);
+            let current = decoded(&client.receipt(json!({"app":APP})).await);
             if current["status"] == "completed" {
                 break current;
             }
@@ -1193,7 +1188,7 @@ async fn sdk_multiple_active_duplicates_return_one_original_effect_and_response(
             .send(json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":params}))
             .await;
     }
-    let running = decoded(&client.tool("result", json!({"app":APP})).await);
+    let running = decoded(&client.receipt(json!({"app":APP})).await);
     assert_eq!(running["status"], "running");
     gate.release();
     let original = decoded(&client.reply(id).await["result"]);

@@ -20,6 +20,7 @@ mod mcp_io;
 mod methods;
 mod projection;
 mod references;
+mod scene;
 mod script_engine;
 mod scripts;
 mod selection;
@@ -226,6 +227,7 @@ struct State {
     reconciling: bool,
     jobs: Vec<Job>,
     windows: HashMap<String, WindowTarget>,
+    scene: scene::SceneState,
     observations: Vec<Snapshot>,
     // Committed logical app data outlives this native execution owner.
     // Lock order is Coordinator state, then this cell; never the reverse.
@@ -237,6 +239,8 @@ pub(super) struct ScriptSession {
     id: String,
     app: String,
     read_receipt: ReceiptReader,
+    #[cfg(test)]
+    atomic_test_surface: bool,
 }
 pub struct Coordinator<B: Backend> {
     session: Mutex<Option<ScriptSession>>,
@@ -327,6 +331,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 reconciling: false,
                 jobs: Vec::new(),
                 windows: HashMap::new(),
+                scene: scene::SceneState::default(),
                 observations: Vec::new(),
                 script_state,
             }),
@@ -351,6 +356,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             }
             state.reconciling = true;
         }
+        let changed = self.runtime.instances() != apps;
         let result = catch_unwind(AssertUnwindSafe(|| self.runtime.reconcile_instances(apps)));
         let (result, panicked) = match result {
             Ok(result) => (result, false),
@@ -375,6 +381,9 @@ impl<B: Backend + 'static> Coordinator<B> {
         let members = self.runtime.instances();
         let mut state = self.state.lock().unwrap();
         if result.is_ok() && state.terminal.is_none() {
+            if changed {
+                state.scene = scene::SceneState::default();
+            }
             state
                 .windows
                 .retain(|_, target| members.contains(&target.app));
@@ -735,9 +744,12 @@ impl<B: Backend + 'static> Coordinator<B> {
                                 Err(error) => return Work::read_error(error),
                             },
                         };
-                        rows.push(
-                            json!({"window_ref":key,"title":window.title,"visible":window.visible}),
-                        );
+                        let mut row =
+                            json!({"window_ref":key,"title":window.title,"visible":window.visible});
+                        if let Some(scene) = window.scene {
+                            row["scene"] = json!({"bounds":scene.bounds(),"rank":scene.rank});
+                        }
+                        rows.push(row);
                         bound.insert(key, window.target);
                     }
                     Work {

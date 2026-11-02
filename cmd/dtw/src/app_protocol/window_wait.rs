@@ -154,6 +154,7 @@ mod tests {
             WindowWaitState::Dialog,
             WindowStateProbe::Window(MatchedWindow {
                 window: WindowInfo {
+                    scene: None,
                     target: next.clone(),
                     title: String::new(),
                     visible: true,

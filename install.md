@@ -144,9 +144,9 @@ only composes DSH's existing MCP and Skill extensions.
 ## Check the installation
 
 1. Check the installed `bin/dtw --version` (`bin/dtw.exe --version` on Windows).
-2. In the Agent, discover `apps`, `api`, `exec`, and `result`, then call `apps`.
+2. In the Agent, discover `apps` and `exec`, then search with `apps({query})`.
 3. Choose a returned app ID unchanged and call `exec` with that `app` and
-   `source: "return await app.windows();"`. Read the bundled Skill before input.
+   `source: "await app.look();"`. Read the bundled Skill before input.
 4. With a test window open, capture it through the documented screenshot API.
    Tool discovery alone does not prove native GUI access works.
 

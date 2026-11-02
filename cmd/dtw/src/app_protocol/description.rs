@@ -317,6 +317,7 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
 }
 
 /// Small default catalog; expensive schemas are opt-in through the api tool.
+#[cfg(test)]
 pub(super) fn index() -> Value {
     let full = super::scripts::description();
     json!({"language":"javascript", "entry":"exec({app?, source}); desktop work requires app; await app methods sequentially; print small output; session.state is JSON",
@@ -326,6 +327,7 @@ pub(super) fn index() -> Value {
         "limits":{"default_timeout_ms":super::scripts::DEFAULT_TIMEOUT_MS,"max_source_utf8_bytes":super::scripts::MAX_SOURCE_BYTES,"max_calls":null}})
 }
 
+#[cfg(test)]
 pub(super) fn requested(args: &Value) -> Result<Value, super::wire::WireError> {
     let invalid = |message: &str| super::wire::WireError {
         code: "invalid_arguments".into(),

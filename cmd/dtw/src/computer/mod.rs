@@ -393,8 +393,26 @@ impl Default for ClickOptions {
     }
 }
 
+/// Validated screen-space layout; native JSON stays outside the portable core.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WindowLayout {
+    bounds: [f64; 4],
+    pub rank: u32,
+}
+impl Eq for WindowLayout {} // The constructor excludes NaN and infinity.
+impl WindowLayout {
+    pub fn new(bounds: [f64; 4], rank: u32) -> Option<Self> {
+        (bounds.iter().all(|v| v.is_finite()) && bounds[2] > 0.0 && bounds[3] > 0.0)
+            .then_some(Self { bounds, rank })
+    }
+    pub fn bounds(&self) -> [f64; 4] {
+        self.bounds
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WindowInfo {
+    pub scene: Option<WindowLayout>,
     pub target: WindowTarget,
     pub title: String,
     pub visible: bool,
@@ -722,6 +740,14 @@ pub trait Backend: Send + Sync {
             outcome: ActionOutcome::rejected(Error::UnsupportedCapability),
             instances: Vec::new(),
         }
+    }
+    fn keypress_application(
+        &self,
+        _app: &AppInstance,
+        _keys: &[String],
+        _call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        ActionOutcome::rejected(Error::UnsupportedCapability)
     }
     fn quit_application(&self, _app: &AppInstance, _call: &CallContext<'_>) -> ActionOutcome {
         ActionOutcome::rejected(Error::UnsupportedCapability)

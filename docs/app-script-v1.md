@@ -1,5 +1,8 @@
 # 单 app 脚本 v1
 
+> 历史原子协议与内部实现参考。当前面向 Agent 的接口以 [Skill API](../skills/desktop-world/API.md) 为准：仅 apps/exec，app 必填，窗口与 Session 管理留在内部。
+
+
 脚本通过标准 MCP `exec` 工具运行。桌面操作显式绑定平台 app ID；macOS 也支持已存在的绝对 `.app` 路径，并可定位未运行的已安装应用。只做 Session 计算、JSON 状态或回执恢复时省略 `app`，不会连接原生 provider，也不能调用 app 方法。审批与授权属于 Harness。[MCP 合同](app-protocol-v1.md)定义发现、调用和标准取消；`apps` 提供紧凑方法索引；`api({methods:[...]})` 按需返回详细 schema。
 
 ## 调用与执行范围

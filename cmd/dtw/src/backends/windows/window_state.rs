@@ -37,6 +37,7 @@ pub(crate) fn parse(reply: &Value, app: &AppInstance) -> Result<WindowStateProbe
             };
             Ok(WindowStateProbe::Window(MatchedWindow {
                 window: WindowInfo {
+                    scene: None,
                     target,
                     title: string(&reply["window"], "title")?.into(),
                     visible: true,

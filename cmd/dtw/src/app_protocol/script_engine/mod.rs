@@ -592,6 +592,9 @@ fn host_call(
 fn validate_args(op: &str, args: &Value) -> Result<(), super::wire::WireError> {
     // Use the coordinator's exact parser so the VM cannot advertise a different
     // argument shape. These placeholders never resolve or dispatch a target.
+    if op.starts_with("scene.") {
+        return super::scene::validate(op, args);
+    }
     if op == "session.result" {
         return super::session::receipt_query(args).map(|_| ());
     }

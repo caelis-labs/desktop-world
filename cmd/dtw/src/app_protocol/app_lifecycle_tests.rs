@@ -162,7 +162,7 @@ fn installed() -> (Arc<Server<Installed>>, Arc<Mutex<Life>>) {
             mock: MockBackend::new(),
         },
     };
-    (Server::new(factory), life)
+    (Server::new_atomic_test(factory), life)
 }
 fn run(server: &Arc<Server<Installed>>, source: &str) -> Reply {
     match server.begin(

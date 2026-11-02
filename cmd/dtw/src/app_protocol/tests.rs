@@ -237,6 +237,7 @@ impl Backend for MockBackend {
             [101, 202]
                 .into_iter()
                 .map(|native_id| WindowInfo {
+                    scene: None,
                     target: WindowTarget {
                         app: app.clone(),
                         native_id,
@@ -575,6 +576,7 @@ fn retired_window_references_are_not_reused_when_the_same_native_target_returns(
     backend.0.model.lock().unwrap().inventory = Some(test_inventory(vec![]));
     assert!(windows(&owner, "disappeared").is_empty());
     backend.0.model.lock().unwrap().inventory = Some(test_inventory(vec![WindowInfo {
+        scene: None,
         target,
         title: "Returned target".into(),
         visible: true,

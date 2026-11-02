@@ -1,5 +1,8 @@
 # 标准 MCP App 协议 v1
 
+> 历史原子协议与内部实现参考。当前面向 Agent 的接口以 [Skill API](../skills/desktop-world/API.md) 为准：仅 apps/exec，app 必填，窗口与 Session 管理留在内部。
+
+
 产品入口为 `dtw mcp`，使用官方 `rmcp 3.8.0` 的 stdio transport、协议协商、消息类型和服务分发；不维护另一套 MCP 解析器。Agent 使用普通 stdio MCP 配置和可选的 [DTW Skill](../skills/desktop-world/SKILL.md)，无需 DTW 专用 Host。审批与授权完全属于 Harness；DTW 对桌面操作要求显式平台稳定 app ID（macOS 也接受已存在的绝对 .app 路径），并执行目标、引用、预算和生命周期校验。
 
 ## 服务输入策略

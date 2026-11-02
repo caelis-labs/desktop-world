@@ -171,6 +171,26 @@
     };
     define(app, op, {value:freeze(method), enumerable:true});
   }
+  const agent = sessionMetadata.agent === true;
+  let dirty = false;
+  if (agent) {
+    const surface = create(null);
+    for (const op of ["look", "capture", "click", "typeText", "keypress", "scroll", "quit"]) {
+      const method = async (...args) => {
+        if (args.length > 1) fail(`app.${op} takes one argument`, "invalid_args");
+        let options = args.length ? args[0] : {};
+        if (op === "typeText" && typeof options === "string") options = {text:options};
+        if (op === "keypress" && isArray(options)) options = {keys:options};
+        if (op === "click" && typeof options === "string") options = {selector:{text:options}};
+        if (op !== "look" && op !== "capture") dirty = true;
+        const result = call(`scene.${op}`, options);
+        if (op === "look" || op === "capture") dirty = false;
+        return result;
+      };
+      define(surface, op, {value:freeze(method), enumerable:true});
+    }
+    define(globalThis, "app", {value:freeze(surface), writable:false, configurable:false});
+  } else {
   define(globalThis, "app", {value:freeze(app), writable:false, configurable:false});
   define(globalThis, "state", {get:()=>root, set:()=>fail("state root cannot be replaced", "invalid_state"), configurable:false});
   const session = create(null);
@@ -185,9 +205,10 @@
   };
   define(session, "result", {value:freeze(result), enumerable:true});
   define(globalThis, "session", {value:freeze(session), writable:false, configurable:false});
+  }
   const show = (value) => {
     if (typeof value === "string") return value;
-    try { return encode(value, "console", 65536); }
+    try { return encode(value, "console", 8 * 1024 * 1024); }
     catch (_) { return "[non-JSON value]"; }
   };
   const console = create(null);
@@ -223,13 +244,17 @@
     } catch (_) { message = "exception could not be inspected"; }
     return envelope({ok:false, name:name === null ? null : apply(slice,name,[0,128]), message:clip(message,4000), line, op:op === null ? null : apply(slice,op,[0,128]), code:code === null ? null : apply(slice,code,[0,128]), call});
   };
-  const reject = (error) => finish(rejectionEnvelope(error));
+  const reject = (error) => {
+    if (agent && dirty && accepting) { try { call("scene.after", {}); } catch (_) {} }
+    finish(rejectionEnvelope(error));
+  };
   // Captured and removed by Rust before user code can execute.
   globalThis.__reject_unhandled = rejectionEnvelope;
   globalThis.__settle = (promise) => apply(then, promise, [
     (value) => {
-      accepting = false;
       try {
+        if (agent && dirty) call("scene.after", {});
+        accepting = false;
         const value_json = encode(value === undefined ? null : value, "result", 65536, true);
         const state_json = encode(root, "state", 65536);
         if (phaseViolation) fail("app calls are unavailable during script settlement", "invalid_phase");

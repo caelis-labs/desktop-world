@@ -6,8 +6,8 @@ and Obsidian—so you can describe a task and let the Agent operate the interfac
 
 ## What can it do?
 
-- Find open apps and windows, inspect controls, and take window screenshots.
-- On macOS, launch installed apps, close a selected window, or request normal quit.
+- Search running and installed apps; inspect compact UI changes and app screenshots.
+- On macOS, start an installed app automatically and request normal quit.
 - Click, type, use keyboard shortcuts, scroll, and edit text.
 - Work with forms, file dialogs and menus, then read back the result.
 - Work across several apps within the same conversation.
@@ -40,7 +40,11 @@ Open the application you want to use, then ask your Agent:
 > Use Desktop World to update this document, save it under a new name, then reopen
 > it and check the changes.
 
-The bundled Skill teaches the Agent the available operations. Your Agent handles
+The MCP interface is `apps` plus app-scoped `exec`; the bundled Skill documents
+the seven app script methods. DTW owns window routing and observation state.
+The Agent follows look → input → look, with semantic targets and pixel fallback.
+[Working protocol plan](docs/agent-protocol-convergence-plan.md) records the current
+implementation and acceptance boundaries. The bundled Skill teaches the Agent the available operations. Your Agent handles
 approvals. On macOS, relevant operations require Accessibility and Screen Recording
 permissions. Keep the desktop unlocked. When foreground interaction is needed,
 DTW brings the target window forward and leaves it there; you can switch away

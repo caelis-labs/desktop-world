@@ -144,6 +144,7 @@ fn input_operation(op: &str) -> bool {
             | "focus"
             | "type_text"
             | "keypress"
+            | "keypress_app"
             | "scroll"
             | "click"
             | "quit_app"
@@ -491,7 +492,11 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
             );
         };
         let _coordination = match scene_lease::lock_coordination(
-            scene_lease::InputCoordination::Background,
+            if request["input_policy"] == "auto" {
+                scene_lease::InputCoordination::Foreground
+            } else {
+                scene_lease::InputCoordination::Background
+            },
             remaining(&request),
         ) {
             Ok(lease) => lease,
@@ -508,6 +513,50 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
         if TERMINATING.load(Ordering::Relaxed) || remaining(&request).is_zero() {
             return rejected(
                 json!({"error":"native_stopping","message":"Launch admission is closed"}),
+                op,
+            );
+        }
+        return native(&request, false);
+    }
+    if op == "keypress_app" {
+        if request["input_policy"] != "auto" {
+            return foreground_required("windowless_app_shortcut");
+        }
+        let (Some(pid), Some(birth)) = (
+            request["target"]["app"]["pid"]
+                .as_u64()
+                .and_then(|p| u32::try_from(p).ok()),
+            request["target"]["app"]["generation"].as_u64(),
+        ) else {
+            return rejected(
+                json!({"error":"invalid_request","message":"Missing application shortcut identity"}),
+                op,
+            );
+        };
+        let _coordination = match scene_lease::lock_coordination(
+            scene_lease::InputCoordination::Foreground,
+            remaining(&request),
+        ) {
+            Ok(v) => v,
+            Err(message) => {
+                return rejected(json!({"error":"native_input_busy","message":message}), op)
+            }
+        };
+        let _instance = match scene_lease::lock_instance(pid, birth, remaining(&request)) {
+            Ok(v) => v,
+            Err(message) => {
+                return rejected(json!({"error":"native_input_busy","message":message}), op)
+            }
+        };
+        let _input = match scene_lease::lock_input(remaining(&request)) {
+            Ok(v) => v,
+            Err(message) => {
+                return rejected(json!({"error":"native_input_busy","message":message}), op)
+            }
+        };
+        if TERMINATING.load(Ordering::Relaxed) || remaining(&request).is_zero() {
+            return rejected(
+                json!({"error":"native_stopping","message":"Application shortcut admission closed"}),
                 op,
             );
         }

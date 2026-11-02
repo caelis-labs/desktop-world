@@ -1204,6 +1204,7 @@ impl Backend for PixelBackend {
     fn windows(&self, app: &AppInstance, call: &CallContext<'_>) -> Result<WindowInventory, Error> {
         call.remaining()?;
         Ok(test_inventory(vec![WindowInfo {
+            scene: None,
             target: WindowTarget {
                 app: app.clone(),
                 native_id: 99,
@@ -1344,6 +1345,7 @@ fn page_fixture() -> (
             visited: 1,
         }),
         inventory: Mutex::new(Ok(test_inventory(vec![WindowInfo {
+            scene: None,
             target: target(),
             title: "window".into(),
             visible: true,
@@ -1438,6 +1440,7 @@ fn inventory_preserves_bindings_until_complete_target_loss_is_proven() {
         let observed = runtime.observe(&target()).unwrap();
         *runtime.backend.inventory.lock().unwrap() = match outcome {
             0 => Ok(test_inventory(vec![WindowInfo {
+                scene: None,
                 target: target(),
                 title: "same".into(),
                 visible: true,
@@ -1445,6 +1448,7 @@ fn inventory_preserves_bindings_until_complete_target_loss_is_proven() {
             1 => Err(Error::InventoryUnproven(test_inventory(Vec::new()).report)),
             2 => Ok(test_inventory(Vec::new())),
             _ => Ok(test_inventory(vec![WindowInfo {
+                scene: None,
                 target: WindowTarget {
                     generation: target().generation + 1,
                     ..target()
@@ -2026,6 +2030,7 @@ impl Backend for BudgetBackend {
             gate.wait();
         }
         Ok(test_inventory(vec![WindowInfo {
+            scene: None,
             target: WindowTarget {
                 app: app.clone(),
                 ..target()
@@ -2486,6 +2491,7 @@ impl Backend for MultiInstanceBackend {
             return result.clone();
         }
         Ok(test_inventory(vec![WindowInfo {
+            scene: None,
             target: WindowTarget {
                 app: app.clone(),
                 ..target()
@@ -2660,6 +2666,7 @@ fn multi_instance_all_failures_are_errors_and_member_spoofing_is_excluded() {
     backend.set_inventory(
         target().app,
         Ok(test_inventory(vec![WindowInfo {
+            scene: None,
             target: second.clone(),
             title: "spoofed".into(),
             visible: true,

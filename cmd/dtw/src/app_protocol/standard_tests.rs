@@ -2,8 +2,8 @@
 use super::*;
 #[path = "app_lifecycle_tests.rs"]
 mod app_lifecycle_tests;
-#[path = "session_tests.rs"]
-mod session_tests;
+#[path = "scene_tests.rs"]
+mod scene_tests;
 use crate::app_protocol::{
     app_id,
     server::{Application, Factory, Server, Started},
@@ -49,7 +49,7 @@ fn server() -> (Arc<Server<Catalog>>, Catalog) {
         connects: Arc::new(AtomicUsize::new(0)),
         shutdowns_before_connect: Arc::new(Mutex::new(Vec::new())),
     };
-    (Server::new(catalog.clone()), catalog)
+    (Server::new_atomic_test(catalog.clone()), catalog)
 }
 fn call_with_rpc(server: &Arc<Server<Catalog>>, rpc_id: Value, name: &str, args: Value) -> Reply {
     match server.begin(rpc_id, name, args) {
@@ -59,6 +59,10 @@ fn call_with_rpc(server: &Arc<Server<Catalog>>, rpc_id: Value, name: &str, args:
     }
 }
 fn call(server: &Arc<Server<Catalog>>, name: &str, args: Value) -> Reply {
+    // Private retained-ledger assertion, not a public MCP route.
+    if name == "result" {
+        return server.result(args);
+    }
     call_with_rpc(server, json!(uuid::Uuid::new_v4().to_string()), name, args)
 }
 fn input(source: &str) -> Value {
@@ -106,14 +110,12 @@ fn app_identifier_is_a_plain_stable_platform_id() {
 fn ordinary_discovery_and_exec_need_no_custom_host_or_grant() {
     let (server, catalog) = server();
     let apps = call(&server, "apps", json!({}));
-    assert_eq!(apps.data["apps"], json!([{"app":APP,"name":"Controlled"}]));
-    assert!(apps.data["script"]["methods"]["observe"].is_string());
-    let api = call(&server, "api", json!({"methods":["observe"]}));
-    assert!(
-        api.data["methods"]["observe"]["returns"]["properties"]["elements"]["items"]["properties"]
-            ["role"]
-            .is_object()
+    assert_eq!(
+        apps.data["apps"],
+        json!([{"app":APP,"name":"Controlled","running":true}])
     );
+    assert!(apps.data.get("script").is_none());
+    assert!(call(&server, "api", json!({"methods":["observe"]})).is_error);
     assert_eq!(catalog.connects.load(Ordering::SeqCst), 0);
     let reply = exec(
         &server,
@@ -127,11 +129,11 @@ fn ordinary_discovery_and_exec_need_no_custom_host_or_grant() {
     server.close().unwrap();
 }
 #[test]
-fn session_only_scripts_require_no_app_and_unknown_apps_never_dispatch() {
+fn missing_or_unknown_app_never_dispatches() {
     let (server, catalog) = server();
     let mut args = input("return 1");
     args.as_object_mut().unwrap().remove("app");
-    assert_eq!(success(&call(&server, "exec", args)), 1);
+    assert!(call(&server, "exec", args).is_error);
     let mut args = input("return 1");
     args["app"] = json!("com.example.Unknown");
     let reply = call(&server, "exec", args);
@@ -438,9 +440,7 @@ return {{old:state.old, fresh}};
 #[test]
 fn sliding_history_preserves_the_app_state_and_window_after_more_than_512_calls() {
     let (server, catalog) = server();
-    let capacity = call(&server, "apps", json!({})).data["limits"]["retained_executions"]
-        .as_u64()
-        .unwrap() as usize;
+    let capacity = crate::app_protocol::RetentionPolicy::DEFAULT.records;
     let seed = exec(&server, "seed", "state.count=0;state.window=(await app.windows()).windows[0].window_ref;return state.window;");
     let original_ref = success(&seed).clone();
     let mut execution_ids = std::collections::HashSet::from([seed.data["execution_id"].clone()]);
@@ -539,14 +539,8 @@ fn one_method_registry_covers_facade_schemas_and_types() {
         .into_iter()
         .map(|method| method.name())
         .collect();
-    assert_eq!(
-        mcp_tools[1]["inputSchema"]["properties"]["methods"]["items"]["enum"],
-        json!(names)
-    );
-    assert_eq!(
-        mcp_tools[1]["inputSchema"]["properties"]["methods"]["maxItems"],
-        names.len()
-    );
+    assert_eq!(mcp_tools.as_array().unwrap().len(), 2);
+    assert_eq!(names.len(), methods.len());
     for method in crate::app_protocol::methods::Method::ALL {
         let spec = &methods[method.name()];
         assert!(spec.get("parameters").is_some());
@@ -733,7 +727,7 @@ fn latest_selects_accepted_failures_and_remains_readable_after_app_exit() {
 fn execution_lookup_and_transport_deduplication_are_session_and_app_scoped() {
     let (left, catalog) = server();
     add_app(&catalog, "org.example.Other", 43);
-    let right = Server::new(catalog.clone());
+    let right = Server::new_atomic_test(catalog.clone());
     let original = exec(&left, "same-rpc", PRESS);
     let other = call(
         &left,
@@ -787,15 +781,7 @@ fn default_discovery_is_bounded_and_method_details_are_opt_in_without_native_acc
         "{}",
         apps.data.to_string().len()
     );
-    let details = call(&server, "api", json!({"methods":["typeText","keypress"]}));
-    assert!(!details.is_error);
-    assert_eq!(details.data["methods"].as_object().unwrap().len(), 2);
-    assert_eq!(
-        details.data["methods"]["typeText"]["parameters"]["required"],
-        json!(["window_ref", "text"])
-    );
-    assert!(details.data["methods"].get("observe").is_none());
-    assert!(call(&server, "api", json!({"methods":["shell"]})).is_error);
+    assert!(call(&server, "api", json!({})).is_error);
     assert_eq!(catalog.connects.load(Ordering::SeqCst), 0);
     assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
 }
@@ -868,19 +854,14 @@ fn unicode_and_json_expansion_are_rejected_before_input_admission() {
 }
 
 #[test]
-fn service_policy_is_discoverable_in_apps_and_filtered_api_without_connecting() {
-    let (server_auto, mut catalog) = server();
-    let automatic = call(&server_auto, "api", json!({}));
-    assert_eq!(automatic.data["service"]["input_policy"], "auto");
+fn removed_api_is_rejected_even_under_restricted_service_policy() {
+    let (_, mut catalog) = server();
     catalog.input_policy = InputPolicy::BackgroundOnly;
-    let server = Server::new(catalog.clone());
-    for args in [json!({}), json!({"methods":["click"]})] {
-        let reply = call(&server, "api", args);
-        assert!(!reply.is_error);
-        assert_eq!(reply.data["service"]["input_policy"], "background_only");
-    }
-    let apps = call(&server, "apps", json!({}));
-    assert_eq!(apps.data["service"]["input_policy"], "background_only");
+    let server = Server::new_atomic_test(catalog.clone());
+    assert!(call(&server, "api", json!({})).is_error);
+    assert!(call(&server, "apps", json!({}))
+        .data
+        .get("script")
+        .is_none());
     assert_eq!(catalog.connects.load(Ordering::SeqCst), 0);
-    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
 }

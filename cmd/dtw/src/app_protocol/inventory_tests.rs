@@ -19,6 +19,7 @@ fn script(source: &str) -> Command {
 fn associated_surface_coverage_preserves_known_count_and_unknown_completeness() {
     let (owner, backend) = coordinator();
     let mut inventory = test_inventory(vec![WindowInfo {
+        scene: None,
         target: WindowTarget {
             app: application(),
             native_id: 42,
@@ -197,6 +198,7 @@ fn successful_empty_inventory_remains_in_ledger_after_later_script_exception() {
 fn application_surface_scope_reaches_scripts_without_claiming_ax_or_helper_coverage() {
     let (owner, backend) = coordinator();
     let mut inventory = test_inventory(vec![WindowInfo {
+        scene: None,
         target: WindowTarget {
             app: application(),
             native_id: 303,

@@ -8,6 +8,43 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
     if !reply.data["execution_id"].is_string() {
         return reply;
     }
+    if reply.data["value"]["agent_protocol"] == true {
+        let original = &reply.data;
+        let value = &original["value"];
+        let summary = original["script"]["steps"]
+            .as_array()
+            .map(|steps| summarize(steps));
+        let mut compact = json!({"app":original["app"],"execution_id":original["execution_id"],"status":original["status"],"view":value["view"]});
+        if !value["result"].is_null() {
+            compact["result"] = value["result"].clone();
+        }
+        if value["console"].as_array().is_some_and(|v| !v.is_empty()) {
+            compact["output"] = value["console"].clone();
+        }
+        if value["console_truncated"] == true {
+            compact["output_truncated"] = json!(true);
+        }
+        if let Some(summary) = summary {
+            if summary["actions"].is_object() {
+                compact["effects"] = json!({"dispatch":summary["actions"]["dispatch"],"evidence":summary["actions"]["evidence"],"interrupted":summary["actions"]["interrupted"]});
+            }
+        }
+        for key in [
+            "error",
+            "shutdown_error",
+            "shutdown_errors",
+            "context_reset",
+        ] {
+            if original.get(key).is_some_and(|v| !v.is_null()) {
+                compact[key] = original[key].clone();
+            }
+        }
+        if original["script"]["failure"].is_object() {
+            compact["failure"] = original["script"]["failure"].clone();
+        }
+        reply.data = compact;
+        return reply;
+    }
     if let Some(script) = reply.data.get_mut("script").and_then(Value::as_object_mut) {
         if let Some(steps) = script.get("steps").and_then(Value::as_array) {
             let summary = summarize(steps);

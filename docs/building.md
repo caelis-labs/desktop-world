@@ -68,23 +68,29 @@ local iteration, but are not the recommended full-contract test lane.
 
 ## Current external-client GUI probe
 
-On a macOS test desktop, the opt-in standard probe builds two uniquely identified
-owned fixtures and launches the selected binary through ordinary stdio MCP:
+On a macOS test desktop, the current app-scene probe builds a uniquely identified
+owned application and exercises the two advertised tools through real stdio:
 
 ```sh
-python3 tests/acceptance/standard_agent_probe.py \
+python3 tests/acceptance/app_scene_probe.py \
   --dtw "$PWD/cmd/dtw/target/release/dtw" \
-  --output /tmp/dtw-standard-agent-new-run
+  --output /tmp/dtw-app-scene-new-run
 ```
 
-It records structured semantic press and independent fixture counters, PNG
-capture, original receipts, stale/cross-app rejection, standard cancellation and
-committed-state recovery, A→B→A retained window refs, and concurrent captures from two independent MCP sessions. Add `--pixel-click` only when the owned window can stay
-foreground and unobscured. Output must be a new directory. The script closes its
-exact server and fixture PIDs and retains evidence even on failure. It does not
-install Agent configuration or retry actions. This proves a standard external
-MCP client plus native GUI, separately from live LLM-host behavior. Historical
-grant probes are marked in their file headers and are not current entry tests.
+It checks discovery/admission, stopped-app startup, overlapping surfaces, popup
+hit-testing, stale geometry rejection, normal window close, save sheets, a running
+app without windows, application shortcuts, background-only refusal and restart.
+Its independent AppKit state records actual events. It never retries input.
+The separate `app_scene_readonly_probe.py` reads already-running Finder, Chrome
+and WPS, redacting UI payloads; absence/unsupported coverage stays explicit.
+These are native/script evidence, not real model/Harness A/B tests or proof that
+all app families are supported. Output directories must be new.
+
+`standard_agent_probe.py`, `app_lifecycle_session_probe.py` and related older
+atomic-protocol runners are historical acceptance for pre-convergence builds;
+the shared Mcp transport helper remains reused. Their original passing evidence
+does not validate the new public facade. Internal atomic cancellation, native
+ownership and resource tests remain in the normal source/Rust suites.
 
 ## Distribution
 

@@ -102,7 +102,13 @@ impl<B: crate::computer::Backend> super::Coordinator<B> {
             .lock()
             .unwrap()
             .as_ref()
-            .map(|session| json!({"id":session.id,"app":session.app}))
+            .map(|session| {
+                #[cfg(test)]
+                let agent = !session.atomic_test_surface;
+                #[cfg(not(test))]
+                let agent = true;
+                json!({"id":session.id,"app":session.app,"agent":agent})
+            })
             .unwrap_or(json!({"id":null,"app":null}))
     }
 }

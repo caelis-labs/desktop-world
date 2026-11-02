@@ -378,6 +378,7 @@ impl<P: Platform> Backend for NativeBackend<P> {
                     return Err(Error::WrongApp);
                 }
                 Ok(WindowInfo {
+                    scene: None,
                     target,
                     title: string(v, "title")?.into(),
                     visible: v["visible"].as_bool().ok_or(Error::InvalidObservation)?,

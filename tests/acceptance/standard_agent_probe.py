@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Opt-in standard MCP + real macOS GUI probe, using only owned AppKit fixtures.
+"""Historical pre-convergence atomic MCP probe; current entry is app_scene_probe.py.
+
+This file also supplies the shared Mcp transport used by the new public probe.
+Opt-in old-protocol GUI probe, using only owned AppKit fixtures.
 
 Run with exclusive access to the test desktop:
   python3 tests/acceptance/standard_agent_probe.py --dtw /path/to/dtw --output /tmp/new-run

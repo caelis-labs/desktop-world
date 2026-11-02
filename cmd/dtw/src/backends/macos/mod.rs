@@ -374,6 +374,25 @@ impl NativeBackend {
             })
             .collect()
     }
+    pub fn discover(&self, timeout: Duration) -> Result<Value, Error> {
+        let deadline = Instant::now() + timeout;
+        let poll = || {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                Err(Error::TimedOut)
+            } else {
+                Ok(left)
+            }
+        };
+        let reply = self.read_rpc(
+            json!({"operation":"discover_apps"}),
+            &CallContext { poll: &poll },
+        )?;
+        if !reply["apps"].is_array() || !reply["coverage"].is_object() {
+            return Err(Error::InvalidObservation);
+        }
+        Ok(reply)
+    }
     pub fn resolve_target(
         &self,
         app_id: &str,
@@ -911,6 +930,17 @@ impl Backend for NativeBackend {
             vec![]
         };
         ApplicationLaunch { outcome, instances }
+    }
+    fn keypress_application(
+        &self,
+        app: &AppInstance,
+        keys: &[String],
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        self.action(
+            json!({"operation":"keypress_app","target":{"app":app_json(app)},"keys":keys}),
+            call,
+        )
     }
     fn quit_application(&self, app: &AppInstance, call: &CallContext<'_>) -> ActionOutcome {
         match self.rpc(
@@ -3206,6 +3236,24 @@ fn parse_window_rows(
                 return Err(Error::InvalidObservation);
             }
             Ok(WindowInfo {
+                scene: row
+                    .get("scene")
+                    .map(|layout| {
+                        let a = layout["bounds"]
+                            .as_array()
+                            .filter(|a| a.len() == 4)
+                            .ok_or(Error::InvalidObservation)?;
+                        let mut rect = [0.0; 4];
+                        for (i, v) in a.iter().enumerate() {
+                            rect[i] = v.as_f64().ok_or(Error::InvalidObservation)?;
+                        }
+                        let rank = layout["rank"]
+                            .as_u64()
+                            .and_then(|r| u32::try_from(r).ok())
+                            .ok_or(Error::InvalidObservation)?;
+                        WindowLayout::new(rect, rank).ok_or(Error::InvalidObservation)
+                    })
+                    .transpose()?,
                 target,
                 title: string(row, "title")?.into(),
                 visible: row["onscreen"].as_bool().ok_or(Error::InvalidObservation)?,

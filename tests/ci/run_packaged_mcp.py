@@ -244,21 +244,19 @@ def check(binary, version, output, *, timeout=20, cleanup_timeout=2, popen=subpr
         require(isinstance(tools, list) and all(isinstance(tool, dict) for tool in tools), 'Invalid MCP tools list')
         names = [tool.get('name') for tool in tools]
         require(all(isinstance(name, str) and name for name in names) and len(names) == len(set(names))
-                and {'apps', 'api', 'exec'} <= set(names) and not listed.get('nextCursor'),
+                and {'apps', 'exec'} == set(names) and not listed.get('nextCursor'),
                 'Missing, duplicate or incomplete packaged MCP tools')
-        response = active.rpc(3, 'tools/call', {'name': 'api', 'arguments': {'methods': ['windows']}}, until)
-        require(response.get('isError') is not True, 'Metadata API returned an error result')
+        response = active.rpc(3, 'tools/call', {'name': 'exec', 'arguments': {'source': 'return 1;'}}, until)
+        require(response.get('isError') is True, 'Missing app was not rejected')
         data = response.get('structuredContent')
         content = response.get('content')
         require(isinstance(data, dict) and isinstance(content, list) and len(content) == 1
                 and content[0].get('type') == 'text' and json.loads(content[0]['text']) == data,
-                'Metadata API text/structured projections disagree')
-        method = data.get('methods', {}).get('windows', {})
-        require(set(data.get('methods', {})) == {'windows'} and 'parameters' in method and method['parameters'] is None
-                and isinstance(method.get('returns'), dict) and 'error' not in data,
-                'Packaged metadata schema missing or invalid')
+                'Admission text/structured projections disagree')
+        require(data.get('error', {}).get('code') == 'invalid_arguments',
+                'Missing app did not return invalid_arguments')
         report['metadata'] = {'server': initialized['serverInfo'], 'protocol': PROTOCOL,
-                              'tools': names, 'api_methods': ['windows']}
+                              'tools': names, 'required_app_rejected': True}
         require(active.proc.poll() is None, 'MCP server exited before client EOF')
         status = active.close(min(cleanup_timeout, remaining(until)))
         active = None

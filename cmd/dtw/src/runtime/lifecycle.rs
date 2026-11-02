@@ -63,6 +63,53 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         ActionReceipt::from_provider(outcome, interruption)
     }
 
+    /// Menu shortcuts for a proven app with no addressable window. The backend
+    /// must independently prove foreground ownership before every key down.
+    pub fn app_keypress_until(&self, keys: &[String], deadline: Instant) -> ActionReceipt {
+        let deadline = self.bounded_deadline(Some(deadline));
+        let prepared = (|| {
+            let mut state = self.state();
+            self.live_context(&state)?;
+            if state.busy {
+                return Err(Error::Busy);
+            }
+            if state.apps.len() != 1 {
+                return Err(Error::NativeFailure {
+                    code: "ambiguous_app".into(),
+                    message: "Application shortcut requires one verified running instance".into(),
+                });
+            }
+            let app = state.apps[0].clone();
+            self.validate_target(&state, &app, Capability::Keypress)?;
+            self.check_deadline(deadline)?;
+            let retired = take_observations(&mut state, |o| o.target.app == app);
+            state.busy = true;
+            Ok((app, Flight::new(&self.state), self.backend.stamp(), retired))
+        })();
+        let (app, flight, provider, retired) = match prepared {
+            Ok(v) => v,
+            Err(e) => return ActionReceipt::rejected(e),
+        };
+        drop(retired);
+        let poll = || self.remaining(deadline.unwrap(), deadline);
+        let outcome = match poll() {
+            Ok(_) if self.backend.stamp() != provider => {
+                ActionOutcome::rejected(Error::WrongProvider)
+            }
+            Ok(_) => self
+                .backend
+                .keypress_application(&app, keys, &CallContext { poll: &poll }),
+            Err(e) => ActionOutcome::rejected(e),
+        };
+        let state = flight.finish();
+        let interruption = self
+            .live_context(&state)
+            .err()
+            .or_else(|| self.check_deadline(deadline).err())
+            .or_else(|| (self.backend.stamp() != provider).then_some(Error::WrongProvider));
+        ActionReceipt::from_provider(outcome, interruption)
+    }
+
     pub fn quit_until(&self, target: Option<&WindowTarget>, deadline: Instant) -> ActionReceipt {
         let app = {
             let state = self.state();
