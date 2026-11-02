@@ -1143,7 +1143,7 @@ fn parse_call(name: &str, args: &Value) -> Result<ToolCall, WireError> {
         }
         "exec" => {
             exact_object(args, &["app", "source"])?;
-            let app = app_id::parse(&args["app"])?;
+            let app = app_id::parse(args.get("app").ok_or_else(|| invalid("app is required"))?)?;
             let source = args["source"]
                 .as_str()
                 .filter(|s| !s.is_empty() && s.len() <= scripts::MAX_SOURCE_BYTES)

@@ -8,7 +8,6 @@ DTW — app-scoped desktop operations
 Usage:
   dtw app catalog
   dtw mcp [--input-policy auto|background-only]
-  dtw api
   dtw --help
   dtw --version
 
@@ -27,7 +26,6 @@ fn run(args: &[String]) -> Result<(), WireError> {
         ["--version" | "-V"] => println!("dtw {}", env!("CARGO_PKG_VERSION")),
         ["app", ..] => return app_protocol::run(&args[1..]),
         ["mcp", ..] => return app_protocol::run(args),
-        ["api"] => print!("{}", app_protocol::script_api_types()),
         _ => {
             return Err(WireError {
                 details: None,

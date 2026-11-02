@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Opt-in real WPS / Obsidian / Chrome tasks through ordinary Agent + DTW.
+"""HISTORICAL pre-convergence protocol (not a current Agent acceptance runner).
+
+Current protocol: app_scene_probe.py, app_lifecycle_probe.py and
+windows/app_protocol_probe.py. Reusable fixture/stdio helpers remain importable.
+
+Opt-in real WPS / Obsidian / Chrome tasks through ordinary Agent + DTW.
 
 Owns only disposable documents, profiles and registrations. Task files are
 prepared/read by the supervisor, never exposed as an alternative Agent route.

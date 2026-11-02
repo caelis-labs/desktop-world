@@ -352,10 +352,10 @@ fn native_cleanup_failure_closes_dispatch_for_every_app_and_keeps_original_recei
     assert!(server.close().is_err());
 }
 #[test]
-fn generated_types_are_the_distributed_contract() {
+fn generated_atomic_types_match_internal_fixture() {
     assert_eq!(
-        crate::app_protocol::script_api_types(),
-        include_str!("../../../../docs/app-script-api.d.ts")
+        super::description::typescript(),
+        include_str!("../../../../tests/fixtures/atomic-script-api.d.ts")
     );
 }
 

@@ -31,6 +31,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             windows.append(window)
             window.makeKeyAndOrderFront(nil)
         }
+        windows.first?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         writeState()
         timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in

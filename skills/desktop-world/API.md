@@ -22,9 +22,13 @@
   accepts an existing absolute `.app` path. It cannot change within a script.
 - `source`: an async JavaScript function body, at most 64 KiB UTF-8. Await calls
   sequentially. No custom session, request ID, timeout or delivery arguments.
+- A missing `app` or malformed argument object returns `invalid_arguments` before
+  provider connection; an invalid app identifier returns `invalid_app`.
 - Normal output is `{app, execution_id, status, view?, result?, output?, effects?}`.
   Errors retain their code, operation and source line when available. `effects`
   preserves dispatch/effect uncertainty; it does not prove the task succeeded.
+  A returned value identical to the final view is coalesced into `view`, rather
+  than repeated in `result`. Task-specific JSON values remain in `result`.
   The last current explicit/fallback PNG is a separate MCP image block.
 - Output is bounded. `print` has 200 lines / 32 KiB aggregate, 2000 characters per
   line, and explicit truncation. Return JSON has a separate 64 KiB budget.
@@ -74,7 +78,7 @@ follow-ups and retiring the previous image binding; unavailable semantics still
 trigger an image fallback.
 
 The compositor currently requires provider layout metadata for multiple
-surfaces (implemented on macOS), supports at most 16 visible surfaces and a
+surfaces (implemented on macOS and Windows), supports at most 16 visible surfaces and a
 1600-pixel maximum canvas dimension. Capture errors appear in `view.image.error`;
 there is no image block or coordinate binding on that failure. Multi-monitor
 space keeps its relative geometry. Offscreen/minimized surfaces are listed where
@@ -94,3 +98,12 @@ a fresh image while in visual mode. Within one script, capture again before a
 second coordinate gesture. Cross-window/app drag, window resizing/moving, held
 buttons/keys and clipboard are not public capabilities. Other providers explicitly
 reject unsupported gestures; macOS acceptance does not establish platform parity.
+
+## Provider boundaries
+
+Windows records physical window bounds and front-to-back order and renders each
+exact HWND for app composition. Covered reads do not relax input visibility or
+receiver checks. Layered/transparent HWNDs are explicitly unsupported by this
+renderer, and blank/unsupported renders do not acquire a coordinate binding.
+macOS capture does not establish Windows GUI or DPI acceptance. Experimental X11
+still requires an unobstructed window and does not claim multi-surface capture.

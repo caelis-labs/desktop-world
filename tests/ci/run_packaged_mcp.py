@@ -246,6 +246,12 @@ def check(binary, version, output, *, timeout=20, cleanup_timeout=2, popen=subpr
         require(all(isinstance(name, str) and name for name in names) and len(names) == len(set(names))
                 and {'apps', 'exec'} == set(names) and not listed.get('nextCursor'),
                 'Missing, duplicate or incomplete packaged MCP tools')
+        schemas = {tool['name']: tool.get('inputSchema', {}) for tool in tools}
+        execution = schemas['exec']
+        require(execution.get('required') == ['app', 'source']
+                and set(execution.get('properties', {})) == {'app', 'source'}
+                and execution.get('additionalProperties') is False,
+                'Packaged exec must expose only required app/source arguments')
         response = active.rpc(3, 'tools/call', {'name': 'exec', 'arguments': {'source': 'return 1;'}}, until)
         require(response.get('isError') is True, 'Missing app was not rejected')
         data = response.get('structuredContent')

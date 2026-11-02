@@ -1492,8 +1492,3 @@ pub fn run(args: &[String]) -> Result<(), WireError> {
         })
     }
 }
-
-/// Generated from the same schemas that apps exposes. No native startup.
-pub fn script_api_types() -> String {
-    description::typescript()
-}

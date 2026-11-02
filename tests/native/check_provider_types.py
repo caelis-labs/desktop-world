@@ -23,7 +23,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="dtw-provider-types-") as directory:
         path = Path(directory)
         (path / "src").mkdir()
-        (path / "Cargo.toml").write_text('[package]\nname="dtw-provider-types"\nversion="0.0.0"\nedition="2021"\n[dependencies]\nserde_json="1"\nbase64="0.22.1"\nuuid={version="1",features=["v4"]}\n' + targets)
+        (path / "Cargo.toml").write_text('[package]\nname="dtw-provider-types"\nversion="0.0.0"\nedition="2021"\n[dependencies]\nserde_json="1"\npng="0.18.1"\nbase64="0.22.1"\nuuid={version="1",features=["v4"]}\n' + targets)
         shutil.copyfile(root / "cmd/dtw/Cargo.lock", path / "Cargo.lock")
         (path / "src/lib.rs").write_text(
             '#[path=' + json.dumps(str(root / "cmd/dtw/src/computer/mod.rs"), ensure_ascii=False) + '] pub mod computer;\n' +

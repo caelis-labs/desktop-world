@@ -21,7 +21,7 @@ def main():
     m=RedactedMcp(a.dtw.resolve(),out)
     try:
         m.rpc('initialize',{'protocolVersion':'2025-06-18','capabilities':{},'clientInfo':{'name':'scene-readonly-corpus','version':'1'}});m.notify('notifications/initialized')
-        for app in ['com.apple.finder','com.google.Chrome','com.kingsoft.wpsoffice.mac']:
+        for app in ['com.apple.finder','com.google.Chrome','com.kingsoft.wpsoffice.mac','dev.caelis.bot']:
             found,_=m.tool('apps',{'query':app,'state':'running'});matches=[r for r in found['apps'] if r['app']==app]
             if not matches:report['cases'].append({'app':app,'status':'not_running_skipped'});continue
             data,result=m.tool('exec',{'app':app,'source':'await app.look({full:true});'})

@@ -32,6 +32,7 @@ fn public_tools_are_apps_and_exec_and_missing_app_never_connects() {
             panic!("invalid public request admitted")
         };
         assert!(reply.is_error);
+        assert_eq!(reply.data["error"]["code"], "invalid_arguments");
     }
     assert_eq!(catalog.connects.load(Ordering::SeqCst), 0);
 }
@@ -128,4 +129,47 @@ fn application_search_is_bounded_and_does_not_connect() {
     ] {
         assert!(call(&server, "apps", args).is_error);
     }
+}
+
+#[test]
+fn direct_return_of_view_is_not_duplicated_and_unchanged_output_is_bounded() {
+    let (server, _) = agent();
+    let first = super::super::projection::execution(exec(
+        &server,
+        "returned_view",
+        "return await app.look();",
+    ));
+    assert!(first.data["view"]["reset"] == true);
+    assert!(first.data.get("result").is_none(), "{:?}", first.data);
+    let unchanged = super::super::projection::execution(exec(
+        &server,
+        "small_delta",
+        "return await app.look();",
+    ));
+    assert_eq!(unchanged.data["view"], json!({"changed":false}));
+    assert!(
+        unchanged.data.to_string().len() <= 512,
+        "{:?}",
+        unchanged.data
+    );
+    let custom = super::super::projection::execution(exec(
+        &server,
+        "task_output",
+        "print('checked');return {count:3};",
+    ));
+    assert_eq!(custom.data["result"], json!({"count":3}));
+    assert_eq!(custom.data["output"], json!(["checked"]));
+}
+
+#[test]
+fn public_print_budget_keeps_its_truncation_signal() {
+    let (server, _) = agent();
+    let output = super::super::projection::execution(exec(
+        &server,
+        "bounded_print",
+        "for(let i=0;i<300;i++)print('row',i);",
+    ));
+    assert!(!output.is_error, "{:?}", output.data);
+    assert!(output.data["output"].as_array().unwrap().len() <= 200);
+    assert_eq!(output.data["output_truncated"], true);
 }

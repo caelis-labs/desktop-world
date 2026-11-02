@@ -187,7 +187,7 @@ capture 只把尺寸、坐标系和 opaque observation_ref 交给 VM；PNG 字�
 
 ## 可发现合同与库存证据
 
-`apps.script.methods` 是紧凑签名索引；参数、返回值、执行条件和引用规则通过 `api({methods:[…]})` 按需查询。组合行为有 Core/VM 回归与真实原生验收。`dtw api` 从同一 Rust schemas 生成 TypeScript；仓库中的 [TypeScript 声明](app-script-api.d.ts) 是生成文件，提交的仍是 JavaScript 函数体，不需要类型编译器或安装旧插件。
+`apps.script.methods` 是紧凑签名索引；参数、返回值、执行条件和引用规则通过 `api({methods:[…]})` 按需查询。组合行为有 Core/VM 回归与真实原生验收。`dtw api` 从同一 Rust schemas 生成 TypeScript；仓库中的 [TypeScript 声明](../tests/fixtures/atomic-script-api.d.ts) 是生成文件，提交的仍是 JavaScript 函数体，不需要类型编译器或安装旧插件。
 
 `app.windows()` 的成功 coverage 与原子入口相同；`empty_within_scope` 不等于应用无窗口。失败可通过 `e.code === "window_inventory_unproven"` 与 `e.details.coverage/diagnostics` 处理，无须解析 message。每次成功 windows 的 `script.steps[].inventory` 保留 coverage 与诊断，即使脚本随后抛错或 value/image 被驱逐，仍可调查首次读到空清单的原因。它不重复保存标题、图片或原生窗口 ID；失败步骤保持完整 error/details。
 
@@ -213,6 +213,6 @@ capture 只把尺寸、坐标系和 opaque observation_ref 交给 VM；PNG 字�
 | app-less 空计算往返 | 未做旧版本同条件对照 | 中位 1.74ms，p95 2.74ms | Python stdio 客户端、debug 构建、含记录 I/O，预热 10 次后测 100 次 |
 | Session 回执查询往返 | 未做旧 result 工具延时对照 | 中位 1.89ms，p95 2.27ms | 同上；不是完整 Agent 任务耗时或常驻 VM 的对比 |
 
-真实 macOS 验收入口为 [app_lifecycle_session_probe.py](../tests/acceptance/app_lifecycle_session_probe.py)，只使用广告的三个工具和本次生成的独立应用。已验证普通应用启动/复用、动作与独立读回、单窗关闭而进程保留、保存提示使 quit 保留 dispatched/unverified、正常退出、重启后 JSON 保留与旧引用失效、UIElement 可发现且可操作、嵌套 helper 排除、运行中的回执读取、取消后保留原 launch 回执及 worker 回收。保存提示由独立 fixture 控制器取消，此项不作为 DTW 操作该提示按钮的证据。原生 cleanup 失败后的恢复由受控故障测试验证；不冒充真实故障设备或实际模型/账号验收。Windows/Linux 新生命周期未实现，未发布安装包。
+真实 macOS 验收入口为 [app_lifecycle_session_probe.py](https://github.com/caelis-labs/desktop-world/blob/5b186b12db87f8bd647de779b2c772e25b6743cc/tests/acceptance/app_lifecycle_session_probe.py)，只使用广告的三个工具和本次生成的独立应用。已验证普通应用启动/复用、动作与独立读回、单窗关闭而进程保留、保存提示使 quit 保留 dispatched/unverified、正常退出、重启后 JSON 保留与旧引用失效、UIElement 可发现且可操作、嵌套 helper 排除、运行中的回执读取、取消后保留原 launch 回执及 worker 回收。保存提示由独立 fixture 控制器取消，此项不作为 DTW 操作该提示按钮的证据。原生 cleanup 失败后的恢复由受控故障测试验证；不冒充真实故障设备或实际模型/账号验收。Windows/Linux 新生命周期未实现，未发布安装包。
 
 完整常驻 VM 可作为下一轮独立实验，但应先明确变量/函数的失败回滚语义、跨执行 Promise 与 bridge 所有权、取消/超时后的 Session 重建、内存回收及失效 Window 的诊断。当前测量不足以证明它能改善 Agent 端到端速度。下一步先在实际 Harness 用同一批任务做三工具路线的对照：成功率、模型工具轮次、真实输入/输出 token、总耗时 p50/p95，以及取消/大回执/审批策略。所有 exec 仍声明可能写入；不得为了让回执查询免审批而把整个 exec 标成只读。验证这些兼容边界后，再决定何时完全删除旧 result 调度和是否引入常驻 VM。

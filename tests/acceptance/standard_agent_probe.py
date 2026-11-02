@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Historical pre-convergence atomic MCP probe; current entry is app_scene_probe.py.
+"""HISTORICAL pre-convergence protocol (not a current Agent acceptance runner).
+
+Current protocol: app_scene_probe.py, app_lifecycle_probe.py and
+windows/app_protocol_probe.py. Reusable fixture/stdio helpers remain importable.
+
+Historical pre-convergence atomic MCP probe; current entry is app_scene_probe.py.
 
 This file also supplies the shared Mcp transport used by the new public probe.
 Opt-in old-protocol GUI probe, using only owned AppKit fixtures.

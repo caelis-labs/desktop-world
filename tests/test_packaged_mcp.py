@@ -42,7 +42,7 @@ for line in sys.stdin:
    'protocolVersion':'2025-06-18','capabilities':{'tools':{}},
    'serverInfo':{'name':'desktop-world','version':'9.8.7'}})
  elif method=='tools/list':
-  reply(request['id'],{'tools':[{'name':name} for name in ['apps','exec']]})
+  reply(request['id'],{'tools':[{'name':name,'inputSchema':{'properties':{'app':{},'source':{}},'required':['app','source'],'additionalProperties':False}} for name in ['apps','exec']]})
  else:
   assert request['params']=={'name':'exec','arguments':{'source':'return 1;'}}
   data={'error':{'code':'invalid_arguments','message':'app is required'}}

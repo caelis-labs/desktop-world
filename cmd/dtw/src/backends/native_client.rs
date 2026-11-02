@@ -378,7 +378,7 @@ impl<P: Platform> Backend for NativeBackend<P> {
                     return Err(Error::WrongApp);
                 }
                 Ok(WindowInfo {
-                    scene: None,
+                    scene: parse_layout(v.get("scene"))?,
                     target,
                     title: string(v, "title")?.into(),
                     visible: v["visible"].as_bool().ok_or(Error::InvalidObservation)?,
@@ -654,6 +654,29 @@ pub fn parse_app(v: &Value) -> Result<AppInstance, Error> {
         generation: number(v, "generation")?,
     })
 }
+/// Optional layout is a provider boundary; malformed facts never become
+/// fabricated image coordinates.
+pub(crate) fn parse_layout(value: Option<&Value>) -> Result<Option<WindowLayout>, Error> {
+    let Some(value) = value.filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let raw = value["bounds"]
+        .as_array()
+        .filter(|b| b.len() == 4)
+        .ok_or(Error::InvalidObservation)?;
+    let mut bounds = [0.0; 4];
+    for (i, component) in raw.iter().enumerate() {
+        bounds[i] = component.as_f64().ok_or(Error::InvalidObservation)?;
+    }
+    let rank = value["rank"]
+        .as_u64()
+        .and_then(|v| u32::try_from(v).ok())
+        .ok_or(Error::InvalidObservation)?;
+    WindowLayout::new(bounds, rank)
+        .map(Some)
+        .ok_or(Error::InvalidObservation)
+}
+
 pub fn parse_target(v: &Value) -> Result<WindowTarget, Error> {
     Ok(WindowTarget {
         app: parse_app(&v["app"])?,
@@ -780,6 +803,24 @@ pub fn encode_png(width: u32, height: u32, rgb: &[u8]) -> Result<Value, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn layout_metadata_is_optional_but_never_invented_or_partially_accepted() {
+        assert!(parse_layout(None).unwrap().is_none());
+        let layout = parse_layout(Some(&json!({"bounds":[-100,20,300,200],"rank":2})))
+            .unwrap()
+            .unwrap();
+        assert_eq!(layout.bounds(), [-100.0, 20.0, 300.0, 200.0]);
+        assert_eq!(layout.rank, 2);
+        for value in [
+            json!({"bounds":[0,0,0,20],"rank":0}),
+            json!({"bounds":[0,0,20],"rank":0}),
+            json!({"bounds":[0,0,20,20],"rank":-1}),
+            json!({"bounds":[0,0,20,20],"rank":4294967296u64}),
+        ] {
+            assert!(parse_layout(Some(&value)).is_err(), "{value}");
+        }
+    }
+
     #[test]
     fn text_range_and_unsupported_native_errors_keep_their_core_identity() {
         for (error, code) in [

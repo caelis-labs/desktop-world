@@ -49,8 +49,10 @@ unknown binding; it does not touch AX, screenshots or desktop input. It requires
 checks also run in CI; see [the CI/release lanes](releasing.md).
 
 The MCP product entry is `dtw mcp`; `dtw app catalog` is a diagnostic CLI.
-`dtw api` prints TypeScript generated from the same Rust schemas advertised by the
-`apps` index and detailed `api` tool; `docs/app-script-api.d.ts` is the checked-in generated contract.
+The public contract is the packaged `skills/desktop-world/SKILL.md` and its
+`API.md` reference. MCP exposes only `apps` and `exec`; the retired `dtw api`
+command is unavailable. The private atomic DSL has a test fixture under
+`tests/fixtures/atomic-script-api.d.ts`; it is not an Agent interface.
 Connect it using standard Agent MCP configuration; see [installation](install.md).
 Bare `dtw` and `--help` display help instead of starting an old MCP executor.
 
@@ -86,11 +88,23 @@ and WPS, redacting UI payloads; absence/unsupported coverage stays explicit.
 These are native/script evidence, not real model/Harness A/B tests or proof that
 all app families are supported. Output directories must be new.
 
-`standard_agent_probe.py`, `app_lifecycle_session_probe.py` and related older
-atomic-protocol runners are historical acceptance for pre-convergence builds;
-the shared Mcp transport helper remains reused. Their original passing evidence
-does not validate the new public facade. Internal atomic cancellation, native
-ownership and resource tests remain in the normal source/Rust suites.
+The current lifecycle/LSUIElement runner uses the same two-tool protocol:
+
+```sh
+python3 tests/acceptance/app_lifecycle_probe.py \
+  --dtw /absolute/path/to/dtw --output /tmp/dtw-lifecycle-new-case
+```
+
+It covers accessory application discovery/input, nested-helper exclusion, normal
+quit/save prompts, restart, and cancellation followed by an ordinary read. The
+Windows current-protocol entry is `tests/acceptance/windows/app_protocol_probe.py`;
+see its [handoff](../tests/acceptance/windows/README.md).
+
+The old `standard_agent_probe.py`, `browser_workbench_probe.py`,
+`real_app_tasks.py` and related atomic-protocol runners retain historical evidence
+and reusable fixtures/transports. They are not current acceptance commands;
+their Session/result/window-ref workflows do not establish the public facade.
+Internal ownership, cancellation and resource tests stay in the source/Rust suites.
 
 ## Distribution
 
@@ -100,39 +114,25 @@ Skill. See [releasing](releasing.md) for candidate preservation and release chec
 Local staging with `scripts/stage-agent-plugin.py` is development evidence, not a
 signed installed artifact or a publication.
 
-## Optional native and Agent usability loop
+## Boundary acceptance after implementation
 
-The existing fast lane also executes the std-only input sequencing regressions and
-pure Swift surface/readiness/input controls. It still never compiles upstream CUA.
-The optional provider checks above type-check Windows/Linux source and tests only.
+Complete the code changes first, then run the source/release-profile checks and
+current native protocol probes together. Real application boundary acceptance
+follows those checks. Run GUI probes serially on disposable owned windows,
+profiles and documents. Preserve original failures and read back unknown effects;
+never retry input solely because its response is missing.
 
-Run the native input probe on the owned macOS test desktop before model tasks:
+For Chrome, explicitly exercise real translation/menu overlays, stacked windows,
+keyboard destination and image fallback. A generic AppKit panel or DOM dialog
+cannot substitute for that native browser surface. Real TextEdit/WPS/Obsidian
+workflows require independent saved-file/control evidence. The matrix below is
+a task specification, not a claim that the new protocol has passed those apps.
+No model/Harness A/B is required for this protocol work. Native protocol metrics
+record source/response bytes, image counts and elapsed time separately.
 
-```sh
-python3 tests/acceptance/native_input_probe.py --dtw /absolute/path/to/dtw \
-  --output /tmp/dtw-native-input-new-case --case all
-```
-
-Then use `tests/acceptance/browser_workbench_probe.py` with `--client dsh` or
-`--client agy` (the existing `claude` adapter remains available), `--dtw` and a fresh
-`--output` directory. DSH takes `--acp-adapter` pointing to its configured ACP launcher. Claude additionally takes
-`--acp-adapter /absolute/path/to/claude-agent-acp`; use the current official adapter
-and installed native Claude executable. This probe opens only its disposable
-Chrome workbench and TextEdit document, uses ordinary MCP/Skills, checks saves
-independently, and retains failures. It must run serially with other GUI probes.
-A local development stage is not an installed-artifact acceptance result.
-
-
-## Optional installed three-app diagnostics (macOS)
-
-Use `tests/acceptance/real_app_tasks.py --task chrome|wps|obsidian --client dsh|agy|claude`
-with a fresh `--output` per attempt and both `--dtw /absolute/package/bin/dtw` and
-`--installed-package /absolute/package`. DSH/Claude additionally use their ACP
-launcher. This keeps the installed executable path, stages only package-owned
-Skill/metadata for the isolated Agent and rechecks the full package manifest after
-cleanup. Omitting `--installed-package` is explicitly development evidence.
-The runner is macOS-specific; Windows uses the bundled Windows matrix/workbench.
-Caelis plugin/model acceptance is separate Core integration work.
+Fixed-source development candidates and installed-package acceptance come after
+these implementation/regression steps. Caelis consumer/model integration and
+final published-asset installation remain separate evidence boundaries.
 
 ## Real-task acceptance principles
 

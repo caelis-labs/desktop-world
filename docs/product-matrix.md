@@ -7,7 +7,7 @@
 | Agent 接入 | 标准本地 stdio MCP + Skill；Caelis、DSH、agy；仅 `apps` + `exec({app, source})` | Harness 自行负责审批；不要求定制 Host；远程传输尚未接入 |
 | 方法发现与结果 | `apps` 检索应用及运行状态；API 文档随 Skill；`exec` 默认返回界面增量、必要动作证据和按需截图；print 可选 | 不需要模型生成 request ID 或对成功执行轮询；未知效果不能自动重放 |
 | 应用与窗口 | 稳定平台 app ID；同 app 多实例窗口聚合、精确 owner 引用 | macOS 自动启动已安装目标并正常 quit；窗口路由和引用保留内部；Windows/Linux 停止应用发现与启动未实现 |
-| 基本视觉操作 | macOS 合成已证明归属的可见窗口，图像坐标命中顶层 surface；Windows 当前单窗截图 | 动作需通过归属、几何及相应可见性检查；截图成功不代表目标支持所有输入 |
+| 基本视觉操作 | macOS 合成已证明归属的可见窗口，图像坐标命中顶层 surface；Windows 源码已补普通不透明窗口的几何、层级及精确 HWND 合成（实机待验收） | 动作需通过归属、几何及相应可见性检查；截图成功不代表目标支持所有输入 |
 | 语义发现 | look 输出当前顶层至多 80 个语义元素；内部保留原子 AX/UIA 查询；语义不足可截图兜底 | 部分遍历会明确返回覆盖不足；自绘控件可能不提供语义对象；不默认输出整棵树 |
 | 常用操作 | Agent 使用 look/capture/click/move/drag/typeText/keypress/scroll/quit；点击可选语义目标、选择器或图像坐标 | macOS move/drag 限一个窗口和单个显示器内的可见内容路径；不暴露跨调用的按下/释放状态；其他平台未实现手势 |
 | 菜单与对话框 | macOS 菜单、sheet、dialog 及有正向归属证明的关联 surface | 不保证穷尽系统 helper；不能按标题或矩形猜跨进程归属 |
