@@ -6,8 +6,6 @@ on:
         description: Existing draft or published release tag to audit (does not publish)
         required: true
         type: string
-  release:
-    types: [published]
 permissions:
   contents: read
 jobs:
@@ -20,10 +18,3 @@ jobs:
     uses: ./.github/workflows/release-verify.yml
     with:
       tag: ${{ inputs.tag }}
-  verify:
-    if: github.event_name == 'release'
-    permissions:
-      contents: read
-    uses: ./.github/workflows/release-verify.yml
-    with:
-      tag: ${{ github.event.release.tag_name }}

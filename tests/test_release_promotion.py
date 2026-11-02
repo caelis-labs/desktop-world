@@ -35,13 +35,15 @@ class PromotionTests(unittest.TestCase):
             archive.writestr('bundle/CANDIDATE.json', (self.assets / f'CANDIDATE-{self.target}.json').read_bytes())
             for name in [self.candidate['archive'], self.candidate['archive'] + '.sha256', *p.verifier.RECEIPTS]:
                 archive.writestr('bundle/' + name, (self.assets / name).read_bytes())
+            archive.writestr('bundle/' + p.verifier.NATIVE_RECEIPT, json.dumps(self.fixture.native_receipt()))
         return data.getvalue()
 
     def test_artifact_staging_preserves_original_bytes_and_notary(self):
         out = self.root / 'staged'; out.mkdir()
         data = self.outer()
-        candidate = p.stage_candidate(data, 'sha256:' + p.digest(data), '1' * 40, self.tag, self.target, out)
+        candidate, native = p.stage_candidate(data, 'sha256:' + p.digest(data), '1' * 40, self.tag, self.target, out)
         self.assertEqual(candidate, self.candidate)
+        self.assertEqual(native, self.fixture.native_receipt())
         for path in out.iterdir():
             self.assertEqual(path.read_bytes(), (self.assets / path.name).read_bytes())
 
@@ -53,6 +55,22 @@ class PromotionTests(unittest.TestCase):
                                           ('sha256:' + p.digest(data), '1' * 40, self.tag, p.verifier.TARGETS[1])]:
             with self.subTest(tag=tag, target=target, source=source), self.assertRaises(ValueError):
                 p.stage_candidate(data, digest, source, tag, target, self.root)
+
+    def test_authenticated_artifact_still_requires_its_matching_native_receipt(self):
+        original = self.outer()
+        for replacement in (None, dict(self.fixture.native_receipt(), binary_sha256='0' * 64)):
+            data = io.BytesIO()
+            with zipfile.ZipFile(io.BytesIO(original)) as source, zipfile.ZipFile(data, 'w') as changed:
+                for info in source.infolist():
+                    if info.filename.endswith(p.verifier.NATIVE_RECEIPT):
+                        if replacement is not None:
+                            changed.writestr(info, json.dumps(replacement))
+                    else:
+                        changed.writestr(info, source.read(info))
+            payload = data.getvalue()
+            with self.subTest(missing=replacement is None), self.assertRaises(ValueError):
+                p.stage_candidate(payload, 'sha256:' + p.digest(payload), '1' * 40,
+                                  self.tag, self.target, self.root)
 
     def plan(self):
         return {'schema': 1, 'release': True, 'tag': self.tag, 'source': self.fixture.tag_commit,
@@ -72,6 +90,7 @@ class PromotionTests(unittest.TestCase):
             candidate, origin = p.fetch_candidate('owner/repo', plan, self.tag, self.target, out)
         self.assertEqual(candidate, self.candidate)
         self.assertEqual(origin['artifact_id'], 7)
+        self.assertEqual(origin['native_verification'], self.fixture.native_receipt())
         for field, value in [('expired', True), ('digest', 'sha256:' + 'f' * 64), ('workflow_run', {'id': 11})]:
             with self.subTest(field=field), patch.object(p, 'gh', return_value=dict(artifact, **{field: value})), self.assertRaises(ValueError):
                 p.fetch_candidate('owner/repo', plan, self.tag, self.target, out)
@@ -109,8 +128,8 @@ class PromotionTests(unittest.TestCase):
         api.assert_not_called()
         self.assertFalse((self.root / 'output').exists())
 
-    def exercise(self, *, bad_signature=False, already_published=False, corrupt_after_publish=False, newer_latest=False,
-                 partial_upload=False, incomplete_published=False, tag_change_at=None):
+    def exercise(self, *, bad_receipt=False, already_published=False, newer_latest=False,
+                 partial_upload=False, incomplete_published=False, tag_change_at=None, bad_upload_metadata=False):
         remote = self.root / 'remote'; remote.mkdir()
         if already_published or partial_upload:
             for path in self.assets.iterdir():
@@ -118,7 +137,7 @@ class PromotionTests(unittest.TestCase):
                     shutil.copyfile(path, remote / path.name)
         if incomplete_published:
             (remote / self.candidate['archive']).unlink()
-        state = {'draft': not already_published, 'mutations': []}
+        state = {'draft': not already_published, 'mutations': [], 'downloads': []}
         commit_reads = 0
         def api(*args, **kwargs):
             nonlocal commit_reads
@@ -132,13 +151,24 @@ class PromotionTests(unittest.TestCase):
                 names += list(p.verifier.RECEIPTS)
             for name in names:
                 shutil.copyfile(self.assets / name, out / name)
-            return c, {'run_id': run}
+            origin = {'run_id': 10}
+            if target == self.target:
+                origin['native_verification'] = self.fixture.native_receipt()
+                if bad_receipt:
+                    origin['native_verification']['archive_sha256'] = 'f' * 64
+            return c, origin
         def record(*_):
-            return {'id': 3, 'draft': state['draft'], 'assets': [{'name': f.name} for f in remote.iterdir()]}
-        def download(repo, tag, out):
+            return {'id': 3, 'draft': state['draft'], 'assets': [
+                {'name': f.name, 'size': f.stat().st_size, 'state': 'uploaded',
+                 'digest': 'sha256:' + ('f' * 64 if bad_upload_metadata else p.digest(f.read_bytes()))}
+                for f in remote.iterdir()]}
+        def download(repo, tag, out, names):
+            self.assertTrue(state['draft'], 'Never download assets after publication')
             out.mkdir()
-            for path in remote.iterdir():
-                shutil.copyfile(path, out / path.name)
+            selected = sorted(set(names) & {'RELEASE.json', 'SHA256SUMS'})
+            state['downloads'].extend(selected)
+            for name in selected:
+                shutil.copyfile(remote / name, out / name)
         def command(args, **_):
             state['mutations'].append(args[2])
             self.assertNotIn('--clobber', args)
@@ -150,22 +180,20 @@ class PromotionTests(unittest.TestCase):
             elif args[2] == 'edit':
                 self.assertIn('--latest=false' if newer_latest else '--latest', args)
                 state['draft'] = False
-                if corrupt_after_publish:
-                    (remote / self.candidate['archive']).write_bytes(b'corrupted after publication')
             else:
                 self.fail(args)
         with patch.object(p, 'fetch_candidate', side_effect=candidate), patch.object(p, 'release_record', side_effect=record), \
-                patch.object(p, 'gh', side_effect=api), patch.object(p, 'download', side_effect=download), \
+                patch.object(p, 'gh', side_effect=api), patch.object(p, 'download_metadata', side_effect=download), \
                 patch.object(p.subprocess, 'run', side_effect=command), patch.object(p.verifier.builder, 'binary_format'), \
                 patch.object(p, 'latest_allowed', return_value=not newer_latest), \
-                patch.object(p.verifier, 'signature', side_effect=ValueError('bad signature') if bad_signature else None):
+                patch.object(p.verifier, 'signature', side_effect=AssertionError('Linux publisher must not invoke codesign')):
             try:
                 report = p.promote('owner/repo', self.plan(), 'github-actions', self.root / 'output')
             except ValueError:
-                if bad_signature:
+                if bad_receipt:
                     self.assertEqual(state['mutations'], [])
-                elif corrupt_after_publish:
-                    self.assertEqual(state['mutations'], ['upload', 'edit'])
+                elif bad_upload_metadata:
+                    self.assertNotIn('edit', state['mutations'])
                 elif incomplete_published:
                     self.assertEqual(state['mutations'], [])
                 elif tag_change_at:
@@ -173,26 +201,30 @@ class PromotionTests(unittest.TestCase):
                 raise
         return report, state
 
-    def test_signature_gate_precedes_upload_and_publication(self):
-        with self.assertRaisesRegex(ValueError, 'bad signature'):
-            self.exercise(bad_signature=True)
+    def test_native_receipt_gate_precedes_upload_and_publication(self):
+        with self.assertRaisesRegex(ValueError, 'Native verification receipt'):
+            self.exercise(bad_receipt=True)
 
-    def test_draft_is_verified_uploaded_preflighted_published_and_audited_again(self):
+    def test_linux_publisher_verifies_construction_and_upload_metadata_without_redownload(self):
         report, state = self.exercise()
         self.assertEqual(state['mutations'], ['upload', 'edit'])
         self.assertEqual(report['status'], 'published')
-        self.assertEqual(report['preflight']['assets_verified'], 13)
-        self.assertEqual(report['published_audit']['assets_verified'], 13)
+        self.assertEqual(report['preflight']['assets_confirmed'], 13)
+        self.assertEqual(report['prepared']['assets_verified'], 13)
+        self.assertEqual(state['downloads'], [])
+        self.assertNotIn('published_audit', report)
 
-    def test_published_rerun_is_audit_only(self):
+    def test_published_rerun_is_metadata_only_without_asset_downloads_or_mutations(self):
         report, state = self.exercise(already_published=True)
         self.assertEqual(state['mutations'], [])
         self.assertEqual(report['status'], 'already_published')
+        self.assertEqual(state['downloads'], [])
 
     def test_partial_upload_resumes_without_replacing_existing_bytes(self):
         report, state = self.exercise(partial_upload=True)
         self.assertEqual(state['mutations'], ['upload', 'edit'])
-        self.assertEqual(report['published_audit']['assets_verified'], 13)
+        self.assertEqual(report['preflight']['assets_confirmed'], 13)
+        self.assertEqual(state['downloads'], ['RELEASE.json', 'SHA256SUMS'])
 
     def test_incomplete_published_release_is_never_repaired(self):
         with self.assertRaisesRegex(ValueError, 'Published release is incomplete'):
@@ -220,9 +252,22 @@ class PromotionTests(unittest.TestCase):
         self.assertEqual(record['acceptance']['ci'], self.plan()['ci'])
         self.assertNotIn('notes', record['acceptance'])
 
-    def test_postpublication_change_is_reported(self):
-        with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
-            self.exercise(corrupt_after_publish=True)
+    def test_wrong_uploaded_digest_blocks_publication_without_redownloading_payload(self):
+        with self.assertRaisesRegex(ValueError, 'Uploaded asset identity mismatch'):
+            self.exercise(bad_upload_metadata=True)
+
+    def test_upload_requires_complete_inventory_and_known_size_digest_state(self):
+        path = self.root / 'one.zip'; path.write_bytes(b'owned asset')
+        prepared = self.root / 'upload'; prepared.mkdir(); shutil.copyfile(path, prepared / path.name)
+        asset = {'name': path.name, 'size': path.stat().st_size, 'digest': 'sha256:' + p.digest(path.read_bytes()),
+                 'state': 'uploaded'}
+        self.assertEqual(p.uploaded_assets({'assets': [asset]}, prepared, complete=True)['assets_confirmed'], 1)
+        for change in ({'size': 1}, {'digest': None}, {'digest': 'sha256:' + 'f' * 64}, {'state': 'starter'}):
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, 'identity mismatch'):
+                p.uploaded_assets({'assets': [dict(asset, **change)]}, prepared, complete=True)
+        for assets in ([], [asset, asset], [dict(asset, name='foreign.zip')]):
+            with self.subTest(assets=assets), self.assertRaises(ValueError):
+                p.uploaded_assets({'assets': assets}, prepared, complete=True)
 
     def test_tag_changes_are_rejected_before_upload_before_publish_and_after_publish(self):
         for position in (1, 2, 3):

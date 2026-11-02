@@ -78,6 +78,61 @@ class ReleaseVerificationTests(unittest.TestCase):
         self.write_json(name, candidate)
         self.resum()
 
+    def native_receipt(self):
+        candidate = json.loads((self.root / f'CANDIDATE-{v.TARGETS[0]}.json').read_bytes())
+        return dict(schema=1, kind='macos-package-verification', signature=dict(v.SIGNATURE),
+                    **{key: candidate[key] for key in v.NATIVE_FIELDS})
+
+    def macos_candidate(self):
+        root = self.root / 'native-candidate'
+        root.mkdir()
+        candidate = json.loads((self.root / f'CANDIDATE-{v.TARGETS[0]}.json').read_bytes())
+        (root / 'CANDIDATE.json').write_text(json.dumps(candidate))
+        for name in [candidate['archive'], candidate['archive'] + '.sha256', *v.RECEIPTS]:
+            (root / name).write_bytes((self.root / name).read_bytes())
+        return root
+
+    def test_native_builder_verifies_binary_from_final_zip_before_sealing_receipt(self):
+        root = self.macos_candidate()
+        def signing(path):
+            self.assertEqual(path.read_bytes(), b'fake binary for offline signature unit tests')
+            return dict(v.SIGNATURE)
+        with patch.object(v.builder, 'binary_format'), patch.object(v, 'signature', side_effect=signing) as native:
+            receipt = v.verify_macos_candidate(root)
+        native.assert_called_once()
+        self.assertEqual(receipt, self.native_receipt())
+        self.assertEqual(json.loads((root / v.NATIVE_RECEIPT).read_bytes()), receipt)
+
+    def test_native_signature_failure_never_produces_receipt(self):
+        root = self.macos_candidate()
+        with patch.object(v.builder, 'binary_format'), patch.object(v, 'signature', side_effect=ValueError('bad signature')):
+            with self.assertRaisesRegex(ValueError, 'bad signature'):
+                v.verify_macos_candidate(root)
+        self.assertFalse((root / v.NATIVE_RECEIPT).exists())
+
+    def test_native_receipt_requires_original_accepted_notary(self):
+        root = self.macos_candidate()
+        (root / v.RECEIPTS[2]).write_text(json.dumps({'id': 'other', 'status': 'Accepted'}))
+        with patch.object(v.builder, 'binary_format'), patch.object(v, 'signature', return_value=dict(v.SIGNATURE)):
+            with self.assertRaisesRegex(ValueError, 'notarization receipt mismatch'):
+                v.verify_macos_candidate(root)
+        self.assertFalse((root / v.NATIVE_RECEIPT).exists())
+
+    def test_portable_verification_consumes_bound_native_receipt_without_codesign(self):
+        with patch.object(v.builder, 'binary_format'), patch.object(v, 'signature') as native:
+            result = v.verify(self.root, 'v0.2.0', self.tag_commit, native_verification=self.native_receipt())
+        native.assert_not_called()
+        self.assertEqual(result['macos_signature'], 'immutable_native_build_receipt')
+
+    def test_receipt_cannot_be_reused_for_another_source_archive_binary_or_signer(self):
+        for key in (*v.NATIVE_FIELDS, 'signature'):
+            receipt = self.native_receipt()
+            receipt[key] = {} if isinstance(receipt[key], dict) else 'other'
+            with self.subTest(key=key), patch.object(v.builder, 'binary_format'), patch.object(v, 'signature') as native:
+                with self.assertRaisesRegex(ValueError, 'Native verification receipt'):
+                    v.verify(self.root, 'v0.2.0', self.tag_commit, native_verification=receipt)
+                native.assert_not_called()
+
     def test_historical_format_different_sources_and_unverified_embedded_notary(self):
         self.assertEqual(self.audit()['assets_verified'], 13)
 
