@@ -16,20 +16,21 @@ The installing Agent owns version management. Follow the
 [installer workflow](docs/package-management.md#installer-agent-update-workflow),
 then the host guide. Users do not run package commands or choose package IDs.
 
-Resolve the official latest stable tag once, then read `install.md` and the host
-instructions from that exact tag (`https://raw.githubusercontent.com/caelis-labs/desktop-world/<tag>/install.md`).
-When entering through `main`, switch to that tagged guide before running its
-recipe. Installer instructions, package, Skill and runtime must be from one
-release; a guide merged ahead of publication is not a reason to run new commands
-against an older release. The managed workflow below requires BUILD's
+Read the current host guide linked below before switching configuration; host
+reload/installation guidance can be corrected independently of binary releases.
+Resolve the official latest stable tag once and obtain its complete package.
+Runtime, Skill, plugin manifests and their API must come from that one release.
+Use the package's own management guide/CLI for package commands; an installation
+guide merged ahead of publication does not add commands to an older executable.
+The managed workflow below requires BUILD's
 `package_store_schema: 1`.
 
 For installer Agents on Windows: use this page's recipe, then the matching host
 guide below. The official latest-release API is the source of the current
-version; an old installation record is not. Complete one plugin route and a
-read-only MCP window check. A conversation created before installation may need
-a fresh verifier context; follow the host guide instead of probing private host
-RPCs or searching its binaries.
+version; an old installation record is not. Complete one plugin route and, after the host reloads that registration, one
+read-only MCP window check. A fresh verifier refreshes a conversation, not a host
+plugin. If an external profile edit needs a host restart, stop there with pending
+state; do not probe private host RPCs or search its binaries for a workaround.
 
 ## Select and extract a package
 
@@ -41,10 +42,11 @@ Download the **latest stable** package from [Releases](https://github.com/caelis
 Use the adjacent `.sha256` for the selected ZIP. Linux desktop support is experimental.
 Release notes identify the exact platform sources, accepted bytes and test scope.
 
-Verify the ZIP's adjacent `.sha256`, extract the complete directory to a temporary
-location outside the source checkout, then verify every entry in `SHA256SUMS`.
-On macOS, use `shasum -a 256 <archive.zip>` and, inside the extracted directory,
-`shasum -a 256 -c SHA256SUMS`.
+Verify the ZIP's adjacent `.sha256`, then extract the complete directory to a
+temporary location outside the source checkout. On macOS, use
+`shasum -a 256 <archive.zip>`. The verified package's native import below verifies
+every entry and the exact inventory in `SHA256SUMS`; do not first run a second
+per-file shell verifier or print hundreds of successful checksum rows.
 
 After transport verification, import once with the packaged executable:
 
@@ -57,12 +59,16 @@ each host/profile to that package before configuring it; see
 [package lifecycle](docs/package-management.md). This native command verifies the
 whole package again, including executable, Skill and plugin versions.
 
+`BUILD.kind` describes construction, not publication. Official stable packages
+may retain `unpublished-rewrite-candidate`; use the official release tag and
+draft/prerelease flags to determine release status.
+
 ### Windows x64: download and verify once
 
 Run this whole block in one Windows PowerShell 5.1 or PowerShell 7 invocation.
 It resolves the official latest stable release once, downloads its exact Windows
-ZIP and adjacent checksum, and verifies both the archive and every packaged
-file. It downloads into a new temporary directory, imports verified bytes into the
+ZIP and adjacent checksum, and verifies the archive. Native import verifies every
+packaged file and the exact inventory. It downloads into a new temporary directory, imports verified bytes into the
 managed store, then returns the permanent package recipe. A failure preserves
 its temporary directory for inspection.
 
@@ -117,29 +123,13 @@ if ($dtwZipAsset[0].digest -and $dtwZipAsset[0].digest -cne "sha256:$dtwArchiveS
 $dtwExpanded = Join-Path $dtwRoot 'expanded'
 Expand-Archive -LiteralPath $dtwZip -DestinationPath $dtwExpanded
 $dtwPackage = Join-Path $dtwExpanded "desktop-world-$dtwVersion-x86_64-pc-windows-msvc"
-$dtwSeen = @{}
-$dtwCount = 0
-foreach ($dtwEntry in (Get-Content -LiteralPath (Join-Path $dtwPackage 'SHA256SUMS') -Encoding UTF8)) {
-  $dtwExpected, $dtwRelative = $dtwEntry -split '  ', 2
-  if ($dtwExpected -cnotmatch '^[0-9a-f]{64}$' -or !$dtwRelative -or
-      $dtwRelative -match '^[/\\]|:|(^|[/\\])\.\.([/\\]|$)' -or $dtwSeen.ContainsKey($dtwRelative)) {
-    throw 'Invalid or duplicate package checksum entry.'
-  }
-  $dtwSeen[$dtwRelative] = $true
-  $dtwActual = Get-DtwFileSha256 -LiteralPath (Join-Path $dtwPackage $dtwRelative)
-  if ($dtwActual -cne $dtwExpected) { throw "Package checksum mismatch: $dtwRelative" }
-  $dtwCount++
-}
-if ($dtwCount -eq 0 -or $dtwCount -ne (@(Get-ChildItem -LiteralPath $dtwPackage -Recurse -File -Force).Count - 1)) {
-  throw 'Package file inventory differs from SHA256SUMS.'
-}
-$dtwBuild = Get-Content -LiteralPath (Join-Path $dtwPackage 'BUILD.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($dtwBuild.version -cne $dtwVersion -or $dtwBuild.target -cne 'x86_64-pc-windows-msvc') {
-  throw 'Package version or target differs from the release.'
-}
 $dtwImport = & (Join-Path $dtwPackage 'bin\dtw.exe') package import $dtwPackage
 if ($LASTEXITCODE -ne 0) { throw "DTW package import failed; inspect $dtwRoot" }
 $dtwRecipe = ($dtwImport -join "`n") | ConvertFrom-Json
+if ($dtwRecipe.version -cne $dtwVersion -or $dtwRecipe.manager_version -cne $dtwVersion -or
+    $dtwRecipe.target -cne 'x86_64-pc-windows-msvc' -or $dtwRecipe.store_schema -ne 1) {
+  throw 'Imported package/manager identity differs from the selected release.'
+}
 $dtwRecipe | Add-Member -NotePropertyName archive_url -NotePropertyValue $dtwZipAsset[0].browser_download_url
 $dtwRecipe | Add-Member -NotePropertyName archive_sha256 -NotePropertyValue $dtwArchiveSha
 $dtwRecipe | ConvertTo-Json -Depth 12
@@ -202,8 +192,9 @@ unknown outcome, inspect the returned evidence and read current app state before
 ## Upgrade or remove
 
 Follow [package lifecycle](docs/package-management.md): import → bind a pending
-package for one host/profile → drain its old contexts/connections → update its
-complete plugin/Skill/MCP registration → verify in a fresh context → activate.
+package for one host/profile → update its complete plugin/Skill/MCP registration
+→ apply the host's supported reload/restart → verify the actual host connection
+and Skill → activate. Use a fresh conversation only for a remaining stale cache.
 Other hosts retain their current versions. Activation collects unpinned packages
 older than seven days; current, pending, rollback and running packages are kept.
 `dtw package gc` previews collection; `gc --apply` applies it only inside the

@@ -23,7 +23,7 @@ Complete the guide's Agent-managed workflow for the latest stable OS package:
 verify bytes, switch the complete plugin/Skill/MCP registration, refresh the
 connection, verify actual tools, and clean owned old packages automatically.
 Preserve other Agents and settings. Do not ask me to choose versions or paths.
-Use a fresh verifier when available; report only an unavoidable host restart.
+Stop at a required host restart; resume verification afterward without reinstalling.
 ```
 
 Download the **latest stable** package from [Releases](https://github.com/caelis-labs/desktop-world/releases/latest).
