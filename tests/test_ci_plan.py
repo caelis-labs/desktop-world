@@ -12,7 +12,7 @@ spec.loader.exec_module(plan)
 
 class PlanTests(unittest.TestCase):
     def test_platform_selection(self):
-        cases = [(['README.md'], (False, False)),
+        cases = [(['README.md'], (False, False)), (['tests/acceptance/package_store_probe.py'], (True,True)),
                  # Both package layouts are covered by portable Python/Node
                  # contracts; manifest generation does not compile a native adapter.
                  (['scripts/plugin_package.py', 'plugins/cordis/index.mjs'], (False, False)),

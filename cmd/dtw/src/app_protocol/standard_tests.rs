@@ -95,6 +95,9 @@ fn app_identifier_is_a_plain_stable_platform_id() {
         "com.google.Chrome"
     );
     for bad in [
+        json!("../../../bin/sh"),
+        json!(r"..\..\bin\sh"),
+        json!("/Applications/../bin/Foo.app"),
         Value::Null,
         json!(42),
         json!({"identity":APP,"pid":42,"generation":"1"}),

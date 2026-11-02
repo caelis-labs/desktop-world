@@ -6,6 +6,24 @@ is always `exec({app, source})`. Approval belongs to the Agent/Harness; DTW does
 not require an approval token or custom Host adapter. The package includes
 standard and host-specific plugin manifests around that same executable.
 
+## Install or update through your Agent
+
+Copy this prompt into the Agent where DTW should be installed or updated:
+
+> 请按 https://github.com/caelis-labs/desktop-world/blob/main/install.md 为当前 Agent 安装或更新 Desktop World。自动识别宿主和系统，使用官方最新稳定版；由你完成版本检查、下载校验、MCP/Skill 整包切换、连接刷新、实际验证和旧包回收。若已经是相同的完整版本，验证后直接结束。保留其他 Agent 的安装和配置，不要求我选择版本、填写路径或手动清理。仅在宿主确实需要用户保存工作或重启时说明具体剩余动作。
+
+The installing Agent owns version management. Follow the
+[installer workflow](docs/package-management.md#installer-agent-update-workflow),
+then the host guide. Users do not run package commands or choose package IDs.
+
+Resolve the official latest stable tag once, then read `install.md` and the host
+instructions from that exact tag (`https://raw.githubusercontent.com/caelis-labs/desktop-world/<tag>/install.md`).
+When entering through `main`, switch to that tagged guide before running its
+recipe. Installer instructions, package, Skill and runtime must be from one
+release; a guide merged ahead of publication is not a reason to run new commands
+against an older release. The managed workflow below requires BUILD's
+`package_store_schema: 1`.
+
 For installer Agents on Windows: use this page's recipe, then the matching host
 guide below. The official latest-release API is the source of the current
 version; an old installation record is not. Complete one plugin route and a
@@ -23,20 +41,30 @@ Download the **latest stable** package from [Releases](https://github.com/caelis
 Use the adjacent `.sha256` for the selected ZIP. Linux desktop support is experimental.
 Release notes identify the exact platform sources, accepted bytes and test scope.
 
-Verify the ZIP's adjacent `.sha256`, extract the complete directory to a permanent
+Verify the ZIP's adjacent `.sha256`, extract the complete directory to a temporary
 location outside the source checkout, then verify every entry in `SHA256SUMS`.
 On macOS, use `shasum -a 256 <archive.zip>` and, inside the extracted directory,
 `shasum -a 256 -c SHA256SUMS`.
+
+After transport verification, import once with the packaged executable:
+
+```sh
+"/absolute/extracted/package/bin/dtw" package import "/absolute/extracted/package"
+```
+
+Use the returned immutable `package_path`, `executable` and `cordis_url`. Bind
+each host/profile to that package before configuring it; see
+[package lifecycle](docs/package-management.md). This native command verifies the
+whole package again, including executable, Skill and plugin versions.
 
 ### Windows x64: download and verify once
 
 Run this whole block in one Windows PowerShell 5.1 or PowerShell 7 invocation.
 It resolves the official latest stable release once, downloads its exact Windows
 ZIP and adjacent checksum, and verifies both the archive and every packaged
-file. It creates a new directory under `%LOCALAPPDATA%\Programs\DesktopWorld\packages`
-and returns the verified absolute `package_path`; it does not overwrite an
-existing installation. Keep that package while an Agent uses it. A failure leaves
-its new directory available for inspection.
+file. It downloads into a new temporary directory, imports verified bytes into the
+managed store, then returns the permanent package recipe. A failure preserves
+its temporary directory for inspection.
 
 ```powershell
 $ErrorActionPreference = 'Stop'
@@ -71,7 +99,7 @@ if ($dtwZipAsset.Count -ne 1 -or $dtwShaAsset.Count -ne 1) { throw 'Missing or d
 $dtwBase = "https://github.com/caelis-labs/desktop-world/releases/download/$dtwTag/"
 if ($dtwZipAsset[0].browser_download_url -cne "$dtwBase$dtwName" -or
     $dtwShaAsset[0].browser_download_url -cne "$dtwBase$dtwName.sha256") { throw 'Unexpected release asset URL.' }
-$dtwRoot = Join-Path $env:LOCALAPPDATA ('Programs\DesktopWorld\packages\' + [guid]::NewGuid().ToString('N'))
+$dtwRoot = Join-Path ([IO.Path]::GetTempPath()) ('dtw-download-' + [guid]::NewGuid().ToString('N'))
 [void](New-Item -ItemType Directory -Path $dtwRoot)
 Write-Host "DTW download directory: $dtwRoot"
 $dtwZip = Join-Path $dtwRoot $dtwName
@@ -109,11 +137,14 @@ $dtwBuild = Get-Content -LiteralPath (Join-Path $dtwPackage 'BUILD.json') -Raw -
 if ($dtwBuild.version -cne $dtwVersion -or $dtwBuild.target -cne 'x86_64-pc-windows-msvc') {
   throw 'Package version or target differs from the release.'
 }
-[pscustomobject]@{ version = $dtwVersion; package_path = $dtwPackage;
-  executable = (Join-Path $dtwPackage 'bin\dtw.exe'); verified_files = $dtwCount;
-  cordis_url = ([uri](Join-Path $dtwPackage 'cordis\index.mjs')).AbsoluteUri;
-  archive_url = $dtwZipAsset[0].browser_download_url;
-  archive_sha256 = $dtwArchiveSha } | ConvertTo-Json
+$dtwImport = & (Join-Path $dtwPackage 'bin\dtw.exe') package import $dtwPackage
+if ($LASTEXITCODE -ne 0) { throw "DTW package import failed; inspect $dtwRoot" }
+$dtwRecipe = ($dtwImport -join "`n") | ConvertFrom-Json
+$dtwRecipe | Add-Member -NotePropertyName archive_url -NotePropertyValue $dtwZipAsset[0].browser_download_url
+$dtwRecipe | Add-Member -NotePropertyName archive_sha256 -NotePropertyValue $dtwArchiveSha
+$dtwRecipe | ConvertTo-Json -Depth 12
+try { Remove-Item -LiteralPath $dtwRoot -Recurse -Force }
+catch { Write-Warning "Verified import succeeded; retry cleanup of this owned download directory: $dtwRoot" }
 ```
 
 Use the returned path in the host guide. The recipe verifies package bytes;
@@ -127,7 +158,7 @@ acceptance scripts have their own Python/PowerShell requirements.
 
 ## Connect your Agent
 
-Install the package once in a permanent directory. Register that same executable
+Import the package once into the managed store. Register that same executable
 and its bundled Skill through your Agent's standard extension points:
 
 | Agent | Setup instructions |
@@ -166,16 +197,20 @@ targeted native delivery for supported controls; independent background input
 and secure-desktop operation are not promised. Supplementary-plane text (including
 emoji) needs readable literal text and a selection in the focused control;
 unsupported/password fields are rejected before dispatch. If a write returns an
-unknown outcome, read its original receipt using `result` instead of replaying it.
+unknown outcome, inspect the returned evidence and read current app state before deciding on new input.
 
 ## Upgrade or remove
 
-Finish active operations and stop the old MCP connections before replacing
-package files. Extract a new verified package, update the Agent registration and
-Skill together, then open a new session. Follow your Agent's linked instructions
-for changing a registered path. Preserve unrelated settings and plugins.
-To uninstall, remove DTW's registration, installed Skill and owned package
-directory after its connections have stopped.
+Follow [package lifecycle](docs/package-management.md): import → bind a pending
+package for one host/profile → drain its old contexts/connections → update its
+complete plugin/Skill/MCP registration → verify in a fresh context → activate.
+Other hosts retain their current versions. Activation collects unpinned packages
+older than seven days; current, pending, rollback and running packages are kept.
+`dtw package gc` previews collection; `gc --apply` applies it only inside the
+owned store. Host-managed plugin copies use that host's own removal controls.
+
+For removal, stop that host's connections, remove its DTW registration and Skill,
+then `dtw package unbind <host-profile>`. Preserve unrelated settings and plugins.
 
 ## Other standard MCP clients
 

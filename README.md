@@ -17,19 +17,20 @@ and Obsidian—so you can describe a task and let the Agent operate the interfac
 Copy this prompt into **Caelis, DSH, or agy**:
 
 ```text
-Install Desktop World for this Agent using:
+Install or update Desktop World for this Agent using:
 https://raw.githubusercontent.com/caelis-labs/desktop-world/main/install.md
-Use the guide's direct route for my Agent and latest stable OS package. Install
-its desktop tools and bundled Skill as one plugin, preserving existing settings.
-Verify open app windows through MCP. If this conversation needs a fresh tool
-context, use a normal read-only verifier subagent or report the required next step.
+Complete the guide's Agent-managed workflow for the latest stable OS package:
+verify bytes, switch the complete plugin/Skill/MCP registration, refresh the
+connection, verify actual tools, and clean owned old packages automatically.
+Preserve other Agents and settings. Do not ask me to choose versions or paths.
+Use a fresh verifier when available; report only an unavoidable host restart.
 ```
 
 Download the **latest stable** package from [Releases](https://github.com/caelis-labs/desktop-world/releases/latest).
 Version PR merges automatically run CI, build and verify both platform packages,
 and publish the complete release; see [the release process](docs/releasing.md).
 You do not need a development toolchain to run the package. See [installation details](install.md) for
-manual setup and upgrades.
+the installer workflow and host guides.
 
 ## Try it
 

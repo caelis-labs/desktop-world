@@ -8,6 +8,7 @@ DTW — app-scoped desktop operations
 Usage:
   dtw app catalog
   dtw mcp [--input-policy auto|background-only]
+  dtw package import|bind|activate|unbind|status|gc [--store <absolute-directory>]
   dtw --help
   dtw --version
 
@@ -24,6 +25,14 @@ fn run(args: &[String]) -> Result<(), WireError> {
     {
         [] | ["--help" | "-h"] | ["app"] | ["app", "--help" | "-h"] => println!("{HELP}"),
         ["--version" | "-V"] => println!("dtw {}", env!("CARGO_PKG_VERSION")),
+        ["package", ..] => {
+            let value = desktop_world::package::run(&args[1..]).map_err(|message| WireError {
+                code: "package_error".into(),
+                message,
+                details: None,
+            })?;
+            println!("{value}");
+        }
         ["app", ..] => return app_protocol::run(&args[1..]),
         ["mcp", ..] => return app_protocol::run(args),
         _ => {
@@ -38,6 +47,23 @@ fn run(args: &[String]) -> Result<(), WireError> {
 }
 
 fn main() -> ExitCode {
+    // Every process, including native/scene/overlay workers, protects its
+    // immutable package independently of its supervisor's lifetime.
+    let _package_lease = match desktop_world::package::runtime_lease() {
+        Ok(lease) => lease,
+        Err(message) => {
+            eprintln!(
+                "{}",
+                Reply::error(WireError {
+                    code: "package_unavailable".into(),
+                    message,
+                    details: None
+                })
+                .data
+            );
+            return ExitCode::from(2);
+        }
+    };
     #[cfg(target_os = "macos")]
     if desktop_world::backends::macos::overlay_worker_entry()
         || desktop_world::backends::macos::worker_entry()

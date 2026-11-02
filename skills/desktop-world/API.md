@@ -23,11 +23,12 @@
 - `source`: an async JavaScript function body, at most 64 KiB UTF-8. Await calls
   sequentially. No custom session, request ID, timeout or delivery arguments.
 - A missing `app` or malformed argument object returns `invalid_arguments` before
-  provider connection; an invalid app identifier returns `invalid_app`.
+  provider connection; a syntactically invalid app identifier returns `invalid_app`; a valid identity
+  that cannot be resolved returns `app_unavailable`.
 - Normal output is `{app, execution_id, status, view?, result?, output?, effects?}`.
   Errors retain their code, operation and source line when available. `effects`
   preserves dispatch/effect uncertainty; it does not prove the task succeeded.
-  A returned value identical to the final view is coalesced into `view`, rather
+  A returned value identical to the final script snapshot is coalesced into `view`, rather
   than repeated in `result`. Task-specific JSON values remain in `result`.
   The last current explicit/fallback PNG is a separate MCP image block.
 - Output is bounded. `print` has 200 lines / 32 KiB aggregate, 2000 characters per
@@ -39,14 +40,14 @@
 
 | Method | Arguments | Behavior |
 | --- | --- | --- |
-| `await app.look(options?)` | `{full?:boolean,screenshot?:boolean}` | Start/reuse the app where supported; observe visible window layering and up to 80 semantic elements in the top surface. First response is a baseline; later views compare with the previous returned tool view. Window metadata is bounded to 32 entries with truncation coverage. `full:true` requests a baseline. |
-| `await app.capture(options?)` | `{full?:boolean}` | Look with a PNG of the authorized app's visible stacked surfaces. Establishes the internal coordinate binding; later input returns an updated visual observation while in visual mode. |
+| `await app.look(options?)` | `{full?:boolean}` | Start/reuse the app where supported; observe visible window layering and up to 80 semantic elements in the top surface. JavaScript always receives the full snapshot. Tool output compares with the previous published view. Window metadata is bounded to 32 entries with truncation coverage. `full:true` forces a tool-output baseline. |
+| `await app.capture(options?)` | `{full?:boolean}` | Return a full snapshot, including `windows`, and a PNG of the authorized app's visible stacked surfaces. Establishes the internal coordinate binding; later input returns an updated visual observation while in visual mode. |
 | `await app.click(target)` | `{target:string}` OR `{selector:{role?:string,text?:string,scope?:'window'\|'menu'}}` OR `{x:number,y:number,button?:'left'\|'right',count?:1\|2}` | Semantic target ID from the latest look or a unique selector, for controls advertising `press`; otherwise use the returned screenshot fallback; or image-pixel coordinates from the last capture. The string shortcut `app.click('Continue')` is a text selector. Never mix target forms. Mouse options apply only to coordinates. On macOS, coordinates use the visible physical pointer and require foreground delivery; `background-only` refuses them before input. |
 | `await app.move(point)` | `{x:number,y:number}` | Move the real pointer to a visible point in the current app image, enabling hover UI. Requires foreground delivery on macOS. |
-| `await app.drag(options)` | `{path:[{x:number,y:number},...]}` | One left-button press, bounded path and paired release. 2–64 supplied points with movement, internally at most 256 samples. Currently the entire path must stay within one observed window on one display; no held button survives a call. |
+| `await app.drag(options)` | `{path:[{x:number,y:number},...]}` | Content drag uses one left-button press, bounded path and paired release. 2–64 supplied points with movement, internally at most 256 samples. The entire path must stay within one observed window on one display. A proven standard macOS title bar moves its window via native position, with the destination fully on that display. Other paths drag content. No held button survives a call. |
 | `await app.typeText(text)` | string, or `{text:string}` | Unicode keyboard input into the active editing control. It may invoke application editing behavior. It does not replace a field value implicitly. |
 | `await app.keypress(keys)` | string array, or `{keys:string[]}` | One press/release chord; on macOS this also works for a running app with no window (e.g. New). Foreground app identity is verified before key downs. E.g. `['META','A']` or `['ESC']`. `META` means Command on macOS and Windows key on Windows. |
-| `await app.scroll(options)` | `{delta_y:number,delta_x?:number,x?:number,y?:number}` | Wheel steps, positive down/right. Optional x/y anchor uses the current screenshot; without it uses the active window. |
+| `await app.scroll(options)` | `{delta_y:number,delta_x?:number,x?:number,y?:number}` | Integer wheel steps in [-100,100] per axis, positive down/right; these are not pixels. Supply both x/y from the current screenshot to target a pane. Without x/y DTW captures the active surface and anchors at its center. |
 | `await app.quit()` | none | Request normal quit of the active app instance. A save dialog remains observable. No forced termination. |
 
 `look`/`capture` accept no native refs. Input routes within the selected app.
@@ -56,20 +57,35 @@ Use `look` or `capture` to inspect the new state before deciding on new input.
 
 ## View
 
-A baseline has `reset:true`, windows in front-to-back order, semantic elements,
+Script `look()` and `capture()` always return `{running,windows,elements,coverage,...}`, even when unchanged. `windows` includes bounds and front-to-back order.
+
+The outward tool baseline has `reset:true`, windows in front-to-back order, semantic elements,
 and explicit coverage/semantic completeness. Semantic element names/values are
 bounded; truncated observations cannot prove absence. Later views use
 `{changed:false}` or added/changed/removed windows/elements and changed coverage.
 Window order is meaningful. Intermediate reads inside one script do not consume
 the baseline before its tool response. A context/process replacement resets it.
 
+While its anchor window stays in place, a previously captured viewport is retained
+when overlays disappear, preserving origin and scale. A new canvas adds
+`image.coordinate_reset:true`; use the new image before choosing coordinates.
+`image.bounds` is the desktop canvas rectangle; width/height relative to those bounds map desktop units
+to image pixels. Input always uses image pixels. Old coordinates are not a
+semantic target guarantee.
+
 Images preserve authorized windows' positions, z-order and alpha, including
 same-app overlays and proven associated surfaces. Empty space is transparent and
 cannot receive input. Coordinate hit-testing selects the top nontransparent app
 surface. Unrelated-app occlusion may still prevent input even though a read can
 show the authorized app. If geometry or layer membership changes during capture,
-no coordinate binding is published. Read errors/partial semantics remain explicit.
+no coordinate binding is published. A transient capture/layer disappearance gets
+one bounded read-only refresh; input is never replayed. Read errors/partial semantics remain explicit.
 
+DTW prioritizes actionable controls, readable values and named content over empty
+structural nodes, with bounded internal continuation. Stable native identities
+keep target IDs across consecutive reads. Missing, omitted or duplicate
+identities cannot revive a removed target ID; labels and traversal positions never establish identity.
+Selectors still require proven uniqueness; incomplete discovery can reject them.
 Semantic output is bounded to 80 elements / 24 KiB; window metadata to 32 rows,
 with titles bounded to 80 characters. Coverage marks omissions. `changed:false`
 compares these observed fields; visual-only changes require capture.
@@ -95,7 +111,7 @@ and absolute positions are both supplied.
 
 After any pointer action, its binding is consumed. The returned tool view supplies
 a fresh image while in visual mode. Within one script, capture again before a
-second coordinate gesture. Cross-window/app drag, window resizing/moving, held
+second coordinate gesture. Cross-window/app drag, window resizing, off-canvas drag endpoints, held
 buttons/keys and clipboard are not public capabilities. Other providers explicitly
 reject unsupported gestures; macOS acceptance does not establish platform parity.
 

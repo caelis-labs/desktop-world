@@ -12,8 +12,16 @@ pub(super) struct SceneState {
     active: Option<String>,
     raster: Option<Raster>,
     pixels: bool,
+    projected: Option<Value>,
+    element_ids: HashMap<String, String>,
+    next_element: u64,
+    viewport: Option<([f64; 4], String, [f64; 4])>,
 }
 impl SceneState {
+    pub(super) fn projection(&self) -> Option<Value> {
+        self.projected.clone()
+    }
+
     // Intermediate script reads must not consume changes the Agent has not seen.
     pub(super) fn publish(&mut self) {
         self.baseline = self.observed.clone();
@@ -36,7 +44,7 @@ struct Raster {
 
 pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
     let allowed: &[&str] = match op {
-        "scene.look" | "scene.capture" | "scene.after" => &["full", "screenshot"],
+        "scene.look" | "scene.capture" | "scene.after" => &["full"],
         "scene.click" => &["target", "selector", "x", "y", "button", "count"],
         "scene.move" => &["x", "y"],
         "scene.drag" => &["path"],
@@ -55,7 +63,7 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
             "Unknown app argument; see Skill API.md",
         ));
     }
-    for key in ["full", "screenshot"] {
+    for key in ["full"] {
         if args.get(key).is_some_and(|v| !v.is_boolean()) {
             return Err(error(
                 "invalid_arguments",
@@ -118,6 +126,26 @@ fn text(value: &Value) -> Value {
         .as_str()
         .map(|s| json!(s.chars().take(240).collect::<String>()))
         .unwrap_or_else(|| value.clone())
+}
+
+fn useful_element(row: &Value) -> bool {
+    element_priority(row) < 3
+}
+fn element_priority(row: &Value) -> u8 {
+    if row["actions"].as_array().is_some_and(|v| !v.is_empty()) {
+        0
+    } else if row["value"].as_str().is_some_and(|s| !s.is_empty()) {
+        1
+    } else if row["name"].as_str().is_some_and(|s| !s.is_empty())
+        && !matches!(
+            row["role"].as_str(),
+            Some("group" | "window" | "toolbar" | "scroll_area")
+        )
+    {
+        2
+    } else {
+        3
+    }
 }
 
 impl<B: Backend + 'static> Coordinator<B> {
@@ -268,6 +296,22 @@ impl<B: Backend + 'static> Coordinator<B> {
             if let Some(v) = args.get("delta_x") {
                 options["delta_x"] = v.clone();
             }
+        } else if op == "scene.scroll" {
+            // The default is the active window's center, through the same
+            // retained pixel route as an explicit anchor. No AX-window shortcut.
+            options["window_ref"] = json!(window);
+            if let Err(e) = wire::script_submit(&self.app_ref, id, "scroll", &options) {
+                return failed(e);
+            }
+            let captured = self.scene_atomic(id, "capture", json!({"window_ref":window}), deadline);
+            if captured.completed.error.is_some() {
+                return captured;
+            }
+            let captured = captured.completed.value.unwrap();
+            options["observation_ref"] = captured["observation_ref"].clone();
+            options["x"] = json!(captured["image"]["width"].as_f64().unwrap_or(0.0) / 2.0);
+            options["y"] = json!(captured["image"]["height"].as_f64().unwrap_or(0.0) / 2.0);
+            self.state.lock().unwrap().scene.pixels = true;
         } else {
             options["window_ref"] = json!(window)
         }
@@ -481,9 +525,10 @@ impl<B: Backend + 'static> Coordinator<B> {
             let mut state = self.state.lock().unwrap();
             state.scene = SceneState::default();
             state.scene.observed = Some(current.clone());
-            let mut view = current;
+            let mut view = current.clone();
             view["reset"] = json!(true);
-            return data(view);
+            state.scene.projected = Some(view);
+            return data(current);
         }
         if self.runtime.instances().is_empty() {
             let work = self.scene_atomic(id, "launch", json!({}), deadline);
@@ -560,19 +605,75 @@ impl<B: Backend + 'static> Coordinator<B> {
                     return failed(e);
                 }
                 semantic = json!({"complete":false,"reason":e.code});
-            } else if let Some(value) = work.completed.value {
-                semantic = json!({"complete":value["coverage"]["complete"]==true && value["next"].is_null(),"reason":value["coverage"]["reason"],"has_more":!value["next"].is_null()});
-                for (n, element) in value["elements"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .enumerate()
-                {
-                    let target = format!(
-                        "{}.e{}",
-                        window_ids[row["window_ref"].as_str().unwrap()],
-                        n + 1
-                    );
+            } else if let Some(mut page) = work.completed.value {
+                let mut candidates = Vec::new();
+                // Bound native work independently of the model's 80-row budget.
+                for page_index in 0..4 {
+                    if let Some(rows) = page["elements"].as_array() {
+                        for row in rows {
+                            if useful_element(row) {
+                                candidates.push((row.clone(), page["observation_ref"].clone()));
+                            }
+                        }
+                    }
+                    semantic = json!({"complete":page["coverage"]["complete"]==true && page["next"].is_null(),
+                        "reason":page["coverage"]["reason"],"has_more":!page["next"].is_null()});
+                    if page["next"].is_null() || candidates.len() >= 80 || page_index == 3 {
+                        break;
+                    }
+                    let more =
+                        self.scene_atomic(id, "observe", json!({"cursor":page["next"]}), deadline);
+                    if let Some(e) = more.completed.error {
+                        return failed(e);
+                    }
+                    page = more.completed.value.unwrap();
+                }
+                candidates.sort_by_key(|(row, _)| element_priority(row));
+                let mut identities = HashMap::<String, usize>::new();
+                for (element, _) in &candidates {
+                    if let Some(identity) = element["identity"].as_str() {
+                        *identities.entry(identity.into()).or_default() += 1;
+                    }
+                }
+
+                let mut state = self.state.lock().unwrap();
+                if state.scene.element_ids.len() > 4096 {
+                    state.scene.element_ids.clear();
+                }
+                for (element, observation) in candidates {
+                    if elements.len() >= 80 {
+                        semantic["complete"] = json!(false);
+                        semantic["reason"] = json!("output_budget");
+                        semantic["has_more"] = json!(true);
+                        break;
+                    }
+                    let key = element["identity"]
+                        .as_str()
+                        .filter(|identity| identities.get(*identity) == Some(&1))
+                        .map(|identity| {
+                            format!(
+                                "{}\0{}\0{}",
+                                row["window_ref"].as_str().unwrap(),
+                                identity,
+                                element["role"]
+                            )
+                        });
+                    let existing = key
+                        .as_ref()
+                        .and_then(|k| state.scene.element_ids.get(k))
+                        .cloned();
+                    let target = existing.unwrap_or_else(|| {
+                        state.scene.next_element += 1;
+                        let target = format!(
+                            "{}.e{}",
+                            window_ids[row["window_ref"].as_str().unwrap()],
+                            state.scene.next_element
+                        );
+                        if let Some(key) = key {
+                            state.scene.element_ids.insert(key, target.clone());
+                        }
+                        target
+                    });
                     let entry = json!({"id":target,"role":element["role"],"name":text(&element["name"]),"value":text(&element["value"]),"enabled":element["enabled"],"actions":element["actions"]});
                     let entry_bytes = entry.to_string().len();
                     if semantic_bytes.saturating_add(entry_bytes) > 24 * 1024 {
@@ -581,14 +682,13 @@ impl<B: Backend + 'static> Coordinator<B> {
                         semantic["has_more"] = json!(true);
                         break;
                     }
-                    nodes.push(json!({"id":target,"window_ref":row["window_ref"],"observation_ref":value["observation_ref"],"element_ref":element["element_ref"]}));
+                    nodes.push(json!({"id":target,"window_ref":row["window_ref"],"observation_ref":observation,"element_ref":element["element_ref"]}));
                     semantic_bytes += entry_bytes;
                     elements.push(entry);
                 }
             }
         }
         let pixel_mode = explicit_pixels
-            || args["screenshot"] == true
             || (after && self.state.lock().unwrap().scene.pixels)
             || (!visible.is_empty() && elements.is_empty());
         let windows:Vec<_>=rows.iter().take(32).map(|r|json!({"id":window_ids[r["window_ref"].as_str().unwrap()],"title":r["title"].as_str().map(|s|s.chars().take(80).collect::<String>()),"title_truncated":r["title"].as_str().is_some_and(|s|s.chars().count()>80),"visible":r["visible"],"bounds":r["scene"]["bounds"]})).collect();
@@ -602,8 +702,26 @@ impl<B: Backend + 'static> Coordinator<B> {
             match self.scene_capture(id, &visible, deadline) {
                 Ok((raster, png)) => {
                     image_info = Some(
-                        json!({"width":raster.width,"height":raster.height,"coordinate_space":"image_pixels"}),
+                        json!({"width":raster.width,"height":raster.height,"bounds":raster.bounds,"coordinate_space":"image_pixels"}),
                     );
+                    let mut state = self.state.lock().unwrap();
+                    if state
+                        .scene
+                        .viewport
+                        .as_ref()
+                        .is_some_and(|v| v.0 != raster.bounds)
+                    {
+                        image_info.as_mut().unwrap()["coordinate_reset"] = json!(true);
+                    }
+                    let anchor = visible.last().unwrap();
+                    if let Some(rect) = bounds(anchor) {
+                        state.scene.viewport = Some((
+                            raster.bounds,
+                            anchor["window_ref"].as_str().unwrap().into(),
+                            rect,
+                        ));
+                    }
+                    drop(state);
                     image = Some(Arc::new(png));
                     let mut state = self.state.lock().unwrap();
                     state.scene.raster = Some(raster);
@@ -618,6 +736,8 @@ impl<B: Backend + 'static> Coordinator<B> {
                                     | "capture_geometry_changed"
                                     | "capture_failed"
                                     | "target_changed"
+                                    | "window_unavailable"
+                                    | "surface_unavailable"
                             )
                         )
                         && Instant::now() + Duration::from_millis(80) < deadline
@@ -657,11 +777,22 @@ impl<B: Backend + 'static> Coordinator<B> {
         if let Some(startup) = startup {
             view["startup"] = startup
         }
+        let mut snapshot = current.clone();
+        if let Some(info) = view.get("image") {
+            snapshot["image"] = info.clone();
+        }
         state.scene.observed = Some(current);
+        state.scene.projected = Some(view);
         state.scene.active = active.and_then(|r| r["window_ref"].as_str().map(str::to_owned));
+        // A disappeared or omitted control never resurrects an old public ID.
+        state.scene.element_ids.retain(|_, id| {
+            nodes
+                .iter()
+                .any(|row| row["id"].as_str() == Some(id.as_str()))
+        });
         state.scene.nodes = nodes;
         drop(state);
-        let mut work = data(view);
+        let mut work = data(snapshot);
         work.completed.image = image;
         work
     }
@@ -763,7 +894,20 @@ impl<B: Backend + 'static> Coordinator<B> {
                 json!({"code":"scene_changed","message":"Visible surface membership changed"}),
             );
         }
-        compose(layers).map_err(|message| json!({"code":"image_encoding","message":message}))
+        let viewport = self
+            .state
+            .lock()
+            .unwrap()
+            .scene
+            .viewport
+            .as_ref()
+            .and_then(|v| {
+                rows.iter()
+                    .any(|r| r["window_ref"] == v.1 && bounds(r) == Some(v.2))
+                    .then_some(v.0)
+            });
+        compose_in(layers, viewport)
+            .map_err(|message| json!({"code":"image_encoding","message":message}))
     }
 }
 // Only app-relative order is a scene fact. Other apps and short-lived SCK
@@ -882,7 +1026,11 @@ fn decode(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     }
     Ok((info.width, info.height, rgba))
 }
+#[cfg(test)]
 fn compose(layers: Vec<Layer>) -> Result<(Raster, String), String> {
+    compose_in(layers, None)
+}
+fn compose_in(layers: Vec<Layer>, viewport: Option<[f64; 4]>) -> Result<(Raster, String), String> {
     let x = layers
         .iter()
         .map(|l| l.bounds[0])
@@ -903,6 +1051,18 @@ fn compose(layers: Vec<Layer>) -> Result<(Raster, String), String> {
     if !bounds.iter().all(|v| v.is_finite()) || bounds[2] <= 0.0 || bounds[3] <= 0.0 {
         return Err("Invalid scene geometry".into());
     }
+    let bounds = if let Some(old) = viewport {
+        let left = bounds[0].min(old[0]);
+        let top = bounds[1].min(old[1]);
+        [
+            left,
+            top,
+            (bounds[0] + bounds[2]).max(old[0] + old[2]) - left,
+            (bounds[1] + bounds[3]).max(old[1] + old[3]) - top,
+        ]
+    } else {
+        bounds
+    };
     let scale = (1600.0 / bounds[2].max(bounds[3])).min(2.0);
     let width = (bounds[2] * scale).round().max(1.0) as u32;
     let height = (bounds[3] * scale).round().max(1.0) as u32;
@@ -1018,6 +1178,31 @@ mod tests {
         assert_eq!(
             raster.point(&json!({"x":8,"y":0})).unwrap_err().code,
             "invalid_arguments"
+        );
+    }
+    #[test]
+    fn closing_an_overlay_preserves_the_canvas_and_existing_base_pixel_mapping() {
+        let (before, _) = compose(vec![
+            layer("popup", [1.0, -4.0, 3.0, 2.0], [255, 0, 0, 255]),
+            layer("base", [-2.0, -2.0, 4.0, 4.0], [0, 0, 255, 255]),
+        ])
+        .unwrap();
+        let (after, _) = compose_in(
+            vec![layer("base", [-2.0, -2.0, 4.0, 4.0], [0, 0, 255, 255])],
+            Some(before.bounds),
+        )
+        .unwrap();
+        assert_eq!(
+            (before.bounds, before.width, before.height),
+            (after.bounds, after.width, after.height)
+        );
+        assert_eq!(
+            before.point(&json!({"x":2,"y":8})).unwrap(),
+            after.point(&json!({"x":2,"y":8})).unwrap()
+        );
+        assert_eq!(
+            after.point(&json!({"x":10,"y":1})).unwrap_err().code,
+            "outside_app"
         );
     }
     #[test]

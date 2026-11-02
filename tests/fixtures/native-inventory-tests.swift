@@ -184,7 +184,7 @@ private func checkSemanticSerialization() throws {
     // Creating an opaque AX object makes no attribute requests or desktop reads.
     let native = AXUIElementCreateApplication(0)
     for enabled: Bool? in [nil, false, true] {
-        let element = NativeElement(id: 1, element: native, label: "display-only text",
+        let element = NativeElement(id: 1, identity: 1, element: native, label: "display-only text",
                                     role: "button", name: "Action", value: "current value",
                                     enabled: enabled, canPress: enabled == true, canSetValue: false, regionProof: nil)
         let bytes = try JSONSerialization.data(withJSONObject: element.json)
@@ -199,7 +199,7 @@ private func checkSemanticSerialization() throws {
                "element advertises an unavailable action")
         expect(wire["can_press"] as? Bool == (enabled == true), "legacy can_press disagrees with actions")
     }
-    let unnamed = NativeElement(id: 2, element: native, label: "AXGroup", role: "group",
+    let unnamed = NativeElement(id: 2, identity: 2, element: native, label: "AXGroup", role: "group",
                                 name: nil, value: nil, enabled: nil, canPress: false, canSetValue: false, regionProof: nil).json
     expect(unnamed["name"] is NSNull && unnamed["value"] is NSNull,
            "missing semantic values must remain null, without label inference")

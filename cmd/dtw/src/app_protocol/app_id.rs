@@ -13,6 +13,13 @@ pub fn parse(value: &Value) -> Result<String, WireError> {
                 && id.len() <= 4096
                 && id.trim() == *id
                 && !id.chars().any(char::is_control)
+                && !id
+                    .split(['/', '\\'])
+                    .any(|part| part == "." || part == "..")
+                && (!id.contains('/')
+                    || id.starts_with('/')
+                    || id.starts_with("windows:")
+                    || id.starts_with("x11:"))
         })
         .map(str::to_owned)
         .ok_or_else(|| WireError {

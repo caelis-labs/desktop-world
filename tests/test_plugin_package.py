@@ -20,7 +20,7 @@ SPEC.loader.exec_module(stager)
 class PluginStageTests(unittest.TestCase):
     def test_both_targets_keep_binary_identity_and_all_hosts_use_the_same_skill(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             binary = root / "original executable"
             binary.write_bytes(b"existing DTW binary bytes\x00\xff")
             binary.chmod(0o755)
@@ -45,7 +45,7 @@ class PluginStageTests(unittest.TestCase):
                 self.assertNotEqual(manifests[0]["$schema"], manifests[2]["$schema"])
                 self.assertEqual(json.loads((output / "mcp_config.json").read_text())["mcpServers"], {
                     "desktop-world": {"command":"./bin/" + name, "args":["mcp"], "cwd":"${PLUGIN_ROOT}"}})
-                for guide in ("install.md", "docs/install-caelis.md", "docs/install-dsh.md", "docs/install-agy.md"):
+                for guide in ("install.md", "docs/install-caelis.md", "docs/install-dsh.md", "docs/install-agy.md", "docs/package-management.md"):
                     self.assertEqual((output / guide).read_bytes(), (ROOT / guide).read_bytes())
                 before = (output / "plugin.json").read_bytes()
                 with self.assertRaises(FileExistsError):
@@ -55,7 +55,7 @@ class PluginStageTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Cordis adapter runs inside the DSH Node host")
     def test_cordis_resolves_installed_components_and_paths_without_installing_dependencies(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             binary = root / "existing executable"
             binary.write_bytes(b"already built")
             binary.chmod(0o755)

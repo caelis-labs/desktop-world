@@ -91,6 +91,7 @@ pub(super) struct ScriptRun {
     pub(super) shutdown_error: Option<WireError>,
     focus_return: Option<FocusReturn>,
     view: Option<Value>,
+    snapshot: Option<Value>,
 }
 impl ScriptRun {
     pub fn new(deadline: Instant) -> Self {
@@ -104,6 +105,7 @@ impl ScriptRun {
             shutdown_error: None,
             focus_return: None,
             view: None,
+            snapshot: None,
         }
     }
     pub fn json(&self) -> Value {
@@ -326,6 +328,17 @@ impl<B: Backend + 'static> Coordinator<B> {
             .clone()
         {
             value["view"] = view;
+            value["snapshot"] = state
+                .jobs
+                .iter()
+                .find(|j| j.submitted.request_id == *id)
+                .unwrap()
+                .script
+                .as_ref()
+                .unwrap()
+                .snapshot
+                .clone()
+                .unwrap_or(Value::Null);
             if agent_surface {
                 state.scene.publish();
             }
@@ -361,17 +374,17 @@ impl<B: Backend + 'static> Coordinator<B> {
         if scene_call && action {
             *last_image = None;
             *last_capture = None;
-            self.state
-                .lock()
-                .unwrap()
+            let mut state = self.state.lock().unwrap();
+            let run = state
                 .jobs
                 .iter_mut()
                 .find(|j| j.submitted.request_id == id)
                 .unwrap()
                 .script
                 .as_mut()
-                .unwrap()
-                .view = None;
+                .unwrap();
+            run.view = None;
+            run.snapshot = None;
         }
         {
             let mut state = self.state.lock().unwrap();
@@ -496,6 +509,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             *last_capture = Some(json!({"step":call.number,"observation":work.completed.value}));
         }
         let mut state = self.state.lock().unwrap();
+        let projected = state.scene.projection();
         let run = state
             .jobs
             .iter_mut()
@@ -511,7 +525,8 @@ impl<B: Backend + 'static> Coordinator<B> {
             )
         {
             if let Some(view) = &work.completed.value {
-                run.view = Some(view.clone());
+                run.snapshot = Some(view.clone());
+                run.view = projected;
             }
         }
         let step = run.steps.last_mut().unwrap();
