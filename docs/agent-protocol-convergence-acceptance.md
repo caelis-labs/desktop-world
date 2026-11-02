@@ -1,5 +1,8 @@
 # Agent protocol convergence — local acceptance (2026-11-02)
 
+Snapshot of `cbb9e07`. Later capabilities and native boundaries are recorded in
+[the follow-up report](agent-capability-followup-acceptance.md).
+
 This is the first implemented convergence, not a declaration of complete desktop
 automation coverage. The [working plan](agent-protocol-convergence-plan.md) records
 the approved scope; the installed [Skill API](../skills/desktop-world/API.md) is

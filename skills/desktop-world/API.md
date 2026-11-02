@@ -38,6 +38,8 @@
 | `await app.look(options?)` | `{full?:boolean,screenshot?:boolean}` | Start/reuse the app where supported; observe visible window layering and up to 80 semantic elements in the top surface. First response is a baseline; later views compare with the previous returned tool view. Window metadata is bounded to 32 entries with truncation coverage. `full:true` requests a baseline. |
 | `await app.capture(options?)` | `{full?:boolean}` | Look with a PNG of the authorized app's visible stacked surfaces. Establishes the internal coordinate binding; later input returns an updated visual observation while in visual mode. |
 | `await app.click(target)` | `{target:string}` OR `{selector:{role?:string,text?:string,scope?:'window'\|'menu'}}` OR `{x:number,y:number,button?:'left'\|'right',count?:1\|2}` | Semantic target ID from the latest look or a unique selector, for controls advertising `press`; otherwise use the returned screenshot fallback; or image-pixel coordinates from the last capture. The string shortcut `app.click('Continue')` is a text selector. Never mix target forms. Mouse options apply only to coordinates. |
+| `await app.move(point)` | `{x:number,y:number}` | Move the real pointer to a visible point in the current app image, enabling hover UI. Requires foreground delivery on macOS. |
+| `await app.drag(options)` | `{path:[{x:number,y:number},...]}` | One left-button press, bounded path and paired release. 2–64 supplied points with movement, internally at most 256 samples. Currently the entire path must stay within one observed window on one display; no held button survives a call. |
 | `await app.typeText(text)` | string, or `{text:string}` | Unicode keyboard input into the active editing control. It may invoke application editing behavior. It does not replace a field value implicitly. |
 | `await app.keypress(keys)` | string array, or `{keys:string[]}` | One press/release chord; on macOS this also works for a running app with no window (e.g. New). Foreground app identity is verified before key downs. E.g. `['META','A']` or `['ESC']`. `META` means Command on macOS and Windows key on Windows. |
 | `await app.scroll(options)` | `{delta_y:number,delta_x?:number,x?:number,y?:number}` | Wheel steps, positive down/right. Optional x/y anchor uses the current screenshot; without it uses the active window. |
@@ -78,5 +80,17 @@ there is no image block or coordinate binding on that failure. Multi-monitor
 space keeps its relative geometry. Offscreen/minimized surfaces are listed where
 available but are not invented in the visible canvas.
 
-Hover, held buttons/keys, drag, clipboard and explicit window geometry controls
-are not yet public capabilities. Do not infer support from fixture success.
+`move` and `drag` are implemented on macOS. They reject stale geometry, unavailable
+images, paths across windows/transparent gaps, and `background-only` delivery
+before pointer dispatch. Spanning-window physical input is refused before pointer dispatch: rectangular
+window geometry does not prove per-display/Space hit ownership. Capture remains
+available. During a drag, a changed/occluded surface or cancellation
+stops the sequence and releases its admitted button. Partial effects remain
+unknown; never repeat a failed drag automatically. Drag relative motion fields
+and absolute positions are both supplied.
+
+After any pointer action, its binding is consumed. The returned tool view supplies
+a fresh image while in visual mode. Within one script, capture again before a
+second coordinate gesture. Cross-window/app drag, window resizing/moving, held
+buttons/keys and clipboard are not public capabilities. Other providers explicitly
+reject unsupported gestures; macOS acceptance does not establish platform parity.

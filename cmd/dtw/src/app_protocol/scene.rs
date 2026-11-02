@@ -38,6 +38,8 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
     let allowed: &[&str] = match op {
         "scene.look" | "scene.capture" | "scene.after" => &["full", "screenshot"],
         "scene.click" => &["target", "selector", "x", "y", "button", "count"],
+        "scene.move" => &["x", "y"],
+        "scene.drag" => &["path"],
         "scene.typeText" => &["text"],
         "scene.keypress" => &["keys"],
         "scene.scroll" => &["delta_y", "delta_x", "x", "y"],
@@ -154,6 +156,9 @@ impl<B: Backend + 'static> Coordinator<B> {
                 active.map(|w| json!({"window_ref":w})).unwrap_or(json!({})),
                 deadline,
             );
+        }
+        if matches!(op, "scene.move" | "scene.drag") {
+            return self.scene_pointer(id, op, args, deadline);
         }
         // Known sequential steps can open a new dialog/window in the same
         // script. Resolve implicit input routing from a fresh app inventory;
@@ -295,6 +300,124 @@ impl<B: Backend + 'static> Coordinator<B> {
         {
             state.scene.pixels = true;
         }
+        work
+    }
+    fn scene_pointer(&self, id: &str, op: &str, args: &Value, deadline: Instant) -> Work {
+        let prepared = (|| {
+            self.scene_validate_frame(id, deadline)?;
+            let supplied = if op == "scene.move" {
+                vec![args.clone()]
+            } else {
+                args["path"]
+                    .as_array()
+                    .filter(|p| (2..=64).contains(&p.len()))
+                    .cloned()
+                    .ok_or_else(|| {
+                        error(
+                            "invalid_arguments",
+                            "drag requires path with 2..64 image points",
+                        )
+                    })?
+            };
+            let mut samples = Vec::new();
+            for (i, point) in supplied.iter().enumerate() {
+                if point
+                    .as_object()
+                    .is_none_or(|p| p.len() != 2 || !p.contains_key("x") || !p.contains_key("y"))
+                {
+                    return Err(error(
+                        "invalid_arguments",
+                        "Each path point has exactly x and y",
+                    ));
+                }
+                let (x, y) = (
+                    point["x"]
+                        .as_f64()
+                        .filter(|v| v.is_finite())
+                        .ok_or_else(|| error("invalid_arguments", "Invalid x"))?,
+                    point["y"]
+                        .as_f64()
+                        .filter(|v| v.is_finite())
+                        .ok_or_else(|| error("invalid_arguments", "Invalid y"))?,
+                );
+                if i > 0 {
+                    let previous = &supplied[i - 1];
+                    let (px, py) = (
+                        previous["x"].as_f64().unwrap(),
+                        previous["y"].as_f64().unwrap(),
+                    );
+                    let steps = ((x - px).hypot(y - py) / 8.0).ceil().max(1.0) as usize;
+                    if samples.len().saturating_add(steps) > 256 {
+                        return Err(error(
+                            "invalid_arguments",
+                            "Drag path exceeds the 256-sample bound",
+                        ));
+                    }
+                    for step in 1..steps {
+                        let f = step as f64 / steps as f64;
+                        samples.push(json!({"x":px+(x-px)*f,"y":py+(y-py)*f}));
+                    }
+                }
+                samples.push(point.clone());
+            }
+            let state = self.state.lock().unwrap();
+            let raster = state
+                .scene
+                .raster
+                .as_ref()
+                .ok_or_else(|| error("capture_required", "Capture before pointer input"))?;
+            let mapped = samples
+                .iter()
+                .map(|p| raster.point(p))
+                .collect::<Result<Vec<_>, _>>()?;
+            let first = &mapped[0];
+            if mapped.iter().any(|p| {
+                p["window_ref"] != first["window_ref"]
+                    || p["observation_ref"] != first["observation_ref"]
+            }) {
+                return Err(error(
+                    "cross_window_drag",
+                    "Drag path must remain in one observed window",
+                ));
+            }
+            let target = state
+                .windows
+                .get(first["window_ref"].as_str().unwrap())
+                .cloned()
+                .ok_or_else(|| error("target_changed", "Window changed"))?;
+            let observation = state
+                .observations
+                .iter()
+                .find(|o| o.public == first["observation_ref"].as_str().unwrap())
+                .map(|o| o.core)
+                .ok_or_else(|| error("stale_observation", "Capture expired"))?;
+            let points: Vec<_> = mapped
+                .iter()
+                .map(|p| PixelPoint {
+                    x: p["x"].as_f64().unwrap(),
+                    y: p["y"].as_f64().unwrap(),
+                })
+                .collect();
+            if op == "scene.drag" && points.iter().all(|p| *p == points[0]) {
+                return Err(error("invalid_arguments", "A drag must contain movement"));
+            }
+            let gesture = if op == "scene.move" {
+                PointerGesture::Move(points[0])
+            } else {
+                PointerGesture::Drag(points)
+            };
+            Ok((target, observation, gesture))
+        })();
+        let (target, observation, gesture) = match prepared {
+            Ok(v) => v,
+            Err(e) => return failed(e),
+        };
+        let work =
+            Work::action(
+                self.runtime
+                    .pointer_until(&target, observation, &gesture, deadline),
+            );
+        self.state.lock().unwrap().scene.raster = None;
         work
     }
     fn scene_validate_frame(&self, id: &str, deadline: Instant) -> Result<(), wire::WireError> {
@@ -490,7 +613,12 @@ impl<B: Backend + 'static> Coordinator<B> {
                     if attempt == 0
                         && matches!(
                             e["code"].as_str(),
-                            Some("scene_changed" | "capture_geometry_changed" | "capture_failed")
+                            Some(
+                                "scene_changed"
+                                    | "capture_geometry_changed"
+                                    | "capture_failed"
+                                    | "target_changed"
+                            )
                         )
                         && Instant::now() + Duration::from_millis(80) < deadline
                     {

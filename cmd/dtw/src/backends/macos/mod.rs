@@ -283,7 +283,7 @@ const COVERAGE: &str =
     "application surfaces and native service dialogs with a proven public-AX relationship; AX semantics remain an exact-surface capability";
 const CONDITIONS: &[&str] = &[
     "semantic and input operations require macOS Accessibility permission",
-    "capture and click require macOS Screen Recording permission",
+    "capture and pixel pointer gestures require macOS Screen Recording permission",
     "input prefers directed background delivery; a side-effect-free preflight decline may use temporary foreground focus",
     "foreground coordinate fallback requires a visible, unobstructed point in the captured window",
     "semantic scopes include retained subtrees, capture-pixel regions and the app menu; region geometry does not prove pixel visibility",
@@ -300,6 +300,8 @@ impl NativeBackend {
                 | Capability::Press
                 | Capability::Capture
                 | Capability::Click
+                | Capability::Move
+                | Capability::Drag
                 | Capability::Focus
                 | Capability::TypeText
                 | Capability::Keypress
@@ -1171,6 +1173,42 @@ impl Backend for NativeBackend {
             Ok(reply) => action_reply(&reply),
             Err((error, true)) => ActionOutcome::unknown(error),
             Err((error, false)) => ActionOutcome::rejected(error),
+        }
+    }
+    fn pointer_gesture(
+        &self,
+        target: &WindowTarget,
+        binding: &NativeBinding,
+        gesture: &PointerGesture,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        let Some((bounds, width, height)) = &binding.pixels else {
+            return ActionOutcome::rejected(Error::InvalidObservation);
+        };
+        let path = gesture
+            .points()
+            .iter()
+            .map(|p| {
+                bound_pixel_point(bounds, *width, *height, *p).map(|(x, y)| json!({"x":x,"y":y}))
+            })
+            .collect::<Result<Vec<_>, _>>();
+        let path = match path {
+            Ok(path) if !path.is_empty() => path,
+            Ok(_) => return ActionOutcome::rejected(Error::InvalidPoint),
+            Err(e) => return ActionOutcome::rejected(e),
+        };
+        let op = match gesture {
+            PointerGesture::Move(_) => "move",
+            PointerGesture::Drag(_) => "drag",
+        };
+        match self.scene_rpc(
+            json!({"operation":op,"target":target_json(target),"bounds":bounds,
+            "screen_x":path[0]["x"],"screen_y":path[0]["y"],"path":path}),
+            call,
+        ) {
+            Ok(reply) => action_reply(&reply),
+            Err((e, true)) => ActionOutcome::unknown(e),
+            Err((e, false)) => ActionOutcome::rejected(e),
         }
     }
     fn supports_scroll_anchor(&self, kind: ObservationKind) -> bool {

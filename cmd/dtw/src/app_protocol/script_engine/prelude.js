@@ -175,7 +175,7 @@
   let dirty = false;
   if (agent) {
     const surface = create(null);
-    for (const op of ["look", "capture", "click", "typeText", "keypress", "scroll", "quit"]) {
+    for (const op of ["look", "capture", "click", "move", "drag", "typeText", "keypress", "scroll", "quit"]) {
       const method = async (...args) => {
         if (args.length > 1) fail(`app.${op} takes one argument`, "invalid_args");
         let options = args.length ? args[0] : {};

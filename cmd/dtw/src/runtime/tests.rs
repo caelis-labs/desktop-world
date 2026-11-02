@@ -1201,6 +1201,15 @@ impl Backend for PixelBackend {
     ) -> ActionOutcome {
         self.0.press(target, binding, ElementId(7), call)
     }
+    fn pointer_gesture(
+        &self,
+        target: &WindowTarget,
+        binding: &Self::Binding,
+        _: &PointerGesture,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        self.0.press(target, binding, ElementId(7), call)
+    }
     fn windows(&self, app: &AppInstance, call: &CallContext<'_>) -> Result<WindowInventory, Error> {
         call.remaining()?;
         Ok(test_inventory(vec![WindowInfo {
@@ -1217,6 +1226,42 @@ impl Backend for PixelBackend {
 }
 fn pixel_runtime(backend: TestBackend) -> Runtime<PixelBackend> {
     Runtime::new(PixelBackend(backend), target().app, Duration::from_secs(30))
+}
+
+#[test]
+fn pointer_path_validation_preserves_binding_until_admission_then_consumes_once() {
+    let (_, backend, _) = fixture();
+    let runtime = pixel_runtime(backend);
+    let shot = runtime.capture(&target()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let bad = PointerGesture::Drag(vec![
+        PixelPoint { x: 10.0, y: 10.0 },
+        PixelPoint { x: 100.0, y: 20.0 },
+    ]);
+    assert_rejected(
+        runtime.pointer_until(&target(), shot.reference, &bad, deadline),
+        Error::InvalidPoint,
+    );
+    let stationary = PointerGesture::Drag(vec![PixelPoint { x: 10.0, y: 10.0 }; 2]);
+    assert_rejected(
+        runtime.pointer_until(&target(), shot.reference, &stationary, deadline),
+        Error::InvalidPoint,
+    );
+    let good = PointerGesture::Drag(vec![
+        PixelPoint { x: 10.0, y: 10.0 },
+        PixelPoint { x: 90.0, y: 70.0 },
+    ]);
+    assert_eq!(
+        runtime
+            .pointer_until(&target(), shot.reference, &good, deadline)
+            .outcome
+            .dispatch,
+        DispatchState::Dispatched
+    );
+    assert_rejected(
+        runtime.pointer_until(&target(), shot.reference, &good, deadline),
+        Error::StaleObservation,
+    );
 }
 
 struct PageBackend {

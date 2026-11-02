@@ -457,6 +457,8 @@ fn describe_reports_the_bound_app_and_backend_support() {
             "press",
             "capture",
             "click",
+            "move",
+            "drag",
             "typeText",
             "keypress",
             "scroll",

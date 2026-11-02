@@ -18,7 +18,7 @@ Agent / Harness policy
 ## Identity, references and state
 
 `exec({app, source})` always binds one logical authorization target. `apps`
-searches installed/running applications; Skill API.md documents the seven public
+searches installed/running applications; Skill API.md documents the public app
 methods. There is no public API/result tool, app-less lane or Session object.
 macOS resolves stopped bundle IDs and explicit .app paths. A look starts a stopped
 app; input readiness and native focus are internal. Process identities and all

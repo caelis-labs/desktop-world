@@ -1033,6 +1033,16 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         )
     }
 
+    pub fn pointer_until(
+        &self,
+        target: &WindowTarget,
+        reference: ObservationRef,
+        gesture: &PointerGesture,
+        deadline: Instant,
+    ) -> ActionReceipt {
+        self.act(target, reference, Action::Pointer(gesture), Some(deadline))
+    }
+
     pub fn scroll_at_until(
         &self,
         target: &WindowTarget,
@@ -1120,6 +1130,10 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         let outcome = match ready {
             Err(error) => ActionOutcome::rejected(error),
             Ok(_) => match action {
+                Action::Pointer(gesture) => {
+                    self.backend
+                        .pointer_gesture(target, &observation.native, gesture, &call)
+                }
                 Action::Scroll(scroll) => {
                     self.backend
                         .scroll_at(target, &observation.native, scroll, &call)
@@ -1174,6 +1188,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             return Err(Error::Busy);
         }
         let (capability, kind) = match action {
+            Action::Pointer(gesture) => (gesture.capability(), ObservationKind::Pixels),
             Action::Press(_) => (Capability::Press, ObservationKind::Semantic),
             Action::Click(_, _) => (Capability::Click, ObservationKind::Pixels),
             Action::SetValue(_, _) => (Capability::SetValue, ObservationKind::Semantic),
@@ -1235,6 +1250,23 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                     }
                 }
             },
+            Action::Pointer(gesture) => {
+                let points = gesture.points();
+                if points.is_empty()
+                    || points.len() > 256
+                    || matches!(gesture, PointerGesture::Drag(_) if points.len() < 2)
+                {
+                    return Err(Error::InvalidPoint);
+                }
+                for point in points {
+                    validate_pixel_point(*point, live.image_size)?;
+                }
+                if matches!(gesture, PointerGesture::Drag(_))
+                    && points.iter().all(|p| *p == points[0])
+                {
+                    return Err(Error::InvalidPoint);
+                }
+            }
             Action::Click(point, options) => {
                 if !(1..=2).contains(&options.count) {
                     return Err(Error::InvalidPoint);
@@ -1445,6 +1477,7 @@ enum Action<'a> {
     Press(ElementId),
     SetValue(ElementId, &'a str),
     Click(PixelPoint, ClickOptions),
+    Pointer(&'a PointerGesture),
     Scroll(ScrollRequest),
 }
 

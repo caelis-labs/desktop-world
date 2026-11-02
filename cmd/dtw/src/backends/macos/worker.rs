@@ -147,6 +147,8 @@ fn input_operation(op: &str) -> bool {
             | "keypress_app"
             | "scroll"
             | "click"
+            | "move"
+            | "drag"
             | "quit_app"
             | "close_window"
     )
@@ -377,6 +379,9 @@ fn modal_input_requires_foreground(validation: &Value) -> Result<bool, Value> {
 
 fn background(request: &mut Value) -> BackgroundAttempt {
     let op = request["operation"].as_str().unwrap_or("").to_owned();
+    if matches!(op.as_str(), "move" | "drag") {
+        return BackgroundAttempt::Declined("pointer_gesture_requires_foreground".into());
+    }
     if !matches!(op.as_str(), "click" | "scroll" | "type_text" | "keypress") {
         return BackgroundAttempt::NotApplicable;
     }
@@ -586,7 +591,7 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
     if background_only && op == "focus" {
         return foreground_required("explicit_focus");
     }
-    if matches!(op, "capture" | "click" | "scroll") && !scene_worker {
+    if matches!(op, "capture" | "click" | "move" | "drag" | "scroll") && !scene_worker {
         return rejected(
             json!({"error":"invalid_request","message":"Scene operations require a short-lived scene owner"}),
             op,
@@ -678,8 +683,10 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
             return foreground_required(reason);
         }
     }
-    let physical = matches!(op, "focus" | "type_text" | "keypress" | "scroll" | "click")
-        || (op == "release_focus" && focus_owner.is_some());
+    let physical = matches!(
+        op,
+        "focus" | "type_text" | "keypress" | "scroll" | "click" | "move" | "drag"
+    ) || (op == "release_focus" && focus_owner.is_some());
     if physical && !known_foreground {
         // A background preflight may have inspected an associated surface in
         // its proof child. Reap that Scene owner before waiting for exclusive
@@ -746,14 +753,14 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
             return result;
         }
         borrowed = prepared["borrowed"].as_bool().unwrap_or(false);
-        if matches!(op, "click" | "scroll") {
+        if matches!(op, "click" | "move" | "drag" | "scroll") {
             // Presentation uses the most recent native proof after focus/lease
             // handover. Input still performs its own target validation below.
             request["surface_owner"] = prepared["surface_owner"].clone();
             request["_pointer_bounds"] = prepared["bounds"].clone();
         }
     }
-    let _presentation = matches!(op, "click" | "scroll").then(|| {
+    let _presentation = matches!(op, "click" | "move" | "drag" | "scroll").then(|| {
         super::pointer_presentation::Scope::new(
             &request,
             &request["_pointer_bounds"],
@@ -791,7 +798,10 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
 }
 fn dispatch_owned(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value {
     let op = request["operation"].as_str().unwrap_or("").to_owned();
-    if !matches!(op.as_str(), "capture" | "click" | "scroll") {
+    if !matches!(
+        op.as_str(),
+        "capture" | "click" | "move" | "drag" | "scroll"
+    ) {
         return native(&request, false);
     }
     if !scene_worker {
@@ -813,7 +823,7 @@ fn dispatch_owned(mut request: Value, leased: &mut bool, scene_worker: bool) -> 
     request["surface_owner"] = before["surface_owner"].clone();
     request["window_id"] = request["target"]["native_id"].clone();
     let mut click_borrowed = None;
-    if op == "click" {
+    if matches!(op.as_str(), "click" | "move" | "drag") {
         let mut focus = request.clone();
         focus["operation"] = json!("focus");
         let raised = native(&focus, false);
@@ -831,7 +841,7 @@ fn dispatch_owned(mut request: Value, leased: &mut bool, scene_worker: bool) -> 
     if let Some(borrowed) = click_borrowed {
         result["borrowed"] = json!(borrowed);
     }
-    if op == "click" || op == "scroll" {
+    if matches!(op.as_str(), "click" | "move" | "drag" | "scroll") {
         return result;
     }
     if result.get("error").is_some() {

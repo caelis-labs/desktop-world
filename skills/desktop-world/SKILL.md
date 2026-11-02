@@ -15,16 +15,18 @@ returns a compact baseline; subsequent looks return changes. Use semantic target
 IDs from the latest observation or a unique selector to click known controls.
 Use `await app.capture()` when the UI needs visual understanding or semantics
 are unavailable, then click coordinates in the returned image. After input DTW
-returns a fresh observation automatically. Group known sequential steps in one
-script. Await every app operation.
+returns a fresh observation automatically. Use `move({x,y})` for hover and
+`drag({path:[{x,y},...]})` for one content drag within one window on one display;
+the runtime pairs releases. Group known sequential steps in one script. Await every app operation.
 
 ```javascript
 await app.look();
 await app.click({selector:{role:'button',text:'Continue'}});
 ```
 
-The public methods are `look`, `capture`, `click`, `typeText`, `keypress`, `scroll`
-and `quit`. Read [API.md](API.md) for exact arguments and output semantics;
+The public methods are `look`, `capture`, `click`, `move`, `drag`, `typeText`,
+`keypress`, `scroll` and `quit`. Read [API.md](API.md) for exact arguments and
+output semantics;
 [PATTERNS.md](PATTERNS.md) covers visual fallback, dialogs and recovery.
 There is no Agent-managed Session, window binding, cursor or native reference.
 Use optional `print(...)` or return a small JSON value for task-specific output.

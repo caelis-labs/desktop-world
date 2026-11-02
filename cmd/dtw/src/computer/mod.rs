@@ -132,6 +132,8 @@ pub enum Capability {
     Press,
     Capture,
     Click,
+    Move,
+    Drag,
     TypeText,
     Keypress,
     Scroll,
@@ -141,7 +143,7 @@ pub enum Capability {
 }
 
 impl Capability {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 16] = [
         Self::Launch,
         Self::Quit,
         Self::CloseWindow,
@@ -150,6 +152,8 @@ impl Capability {
         Self::Press,
         Self::Capture,
         Self::Click,
+        Self::Move,
+        Self::Drag,
         Self::TypeText,
         Self::Keypress,
         Self::Scroll,
@@ -168,6 +172,8 @@ impl Capability {
             Self::Press => "press",
             Self::Capture => "capture",
             Self::Click => "click",
+            Self::Move => "move",
+            Self::Drag => "drag",
             Self::TypeText => "typeText",
             Self::Keypress => "keypress",
             Self::Scroll => "scroll",
@@ -389,6 +395,28 @@ impl Default for ClickOptions {
         Self {
             button: MouseButton::Left,
             count: 1,
+        }
+    }
+}
+
+/// A complete pointer transaction bound to one captured window. Never holds
+/// buttons across calls; providers release an admitted drag on every exit.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PointerGesture {
+    Move(PixelPoint),
+    Drag(Vec<PixelPoint>),
+}
+impl PointerGesture {
+    pub fn points(&self) -> &[PixelPoint] {
+        match self {
+            Self::Move(point) => std::slice::from_ref(point),
+            Self::Drag(path) => path,
+        }
+    }
+    pub fn capability(&self) -> Capability {
+        match self {
+            Self::Move(_) => Capability::Move,
+            Self::Drag(_) => Capability::Drag,
         }
     }
 }
@@ -876,6 +904,15 @@ pub trait Backend: Send + Sync {
         _binding: &Self::Binding,
         _element: ElementId,
         _value: &str,
+        _call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        ActionOutcome::rejected(Error::UnsupportedCapability)
+    }
+    fn pointer_gesture(
+        &self,
+        _target: &WindowTarget,
+        _binding: &Self::Binding,
+        _gesture: &PointerGesture,
         _call: &CallContext<'_>,
     ) -> ActionOutcome {
         ActionOutcome::rejected(Error::UnsupportedCapability)

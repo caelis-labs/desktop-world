@@ -1,5 +1,33 @@
 import AppKit
 import Foundation
+import UniformTypeIdentifiers
+final class SceneWindow:NSWindow {
+    override func constrainFrameRect(_ frameRect:NSRect,to screen:NSScreen?)->NSRect {frameRect}
+}
+final class GesturePad:NSView {
+    weak var controller:Delegate?
+    var tracking:NSTrackingArea?
+    override func updateTrackingAreas() {
+        if let tracking {removeTrackingArea(tracking)}
+        tracking=NSTrackingArea(rect:.zero,options:[.activeAlways,.inVisibleRect,.mouseMoved,.mouseEnteredAndExited],owner:self,userInfo:nil)
+        addTrackingArea(tracking!);super.updateTrackingAreas()
+    }
+    func record(_ kind:String,_ event:NSEvent) {
+        let point=convert(event.locationInWindow,from:nil)
+        controller?.gestureEvents.append(["kind":kind,"x":point.x,"y":point.y,"dx":event.deltaX,"dy":event.deltaY])
+        if kind=="drag",controller?.interruptDrag == true {
+            controller?.interruptDrag=false
+            let obstacle=NSWindow(contentRect:window!.convertToScreen(frame),styleMask:.borderless,backing:.buffered,defer:false)
+            obstacle.title="DTW Drag obstacle";obstacle.isReleasedWhenClosed=false;obstacle.level = .floating
+            obstacle.backgroundColor = .systemOrange;controller?.windows.append(obstacle);obstacle.orderFront(nil)
+        }
+        controller?.write()
+    }
+    override func mouseMoved(with event:NSEvent){record("move",event)}
+    override func mouseDown(with event:NSEvent){record("down",event)}
+    override func mouseDragged(with event:NSEvent){record("drag",event)}
+    override func mouseUp(with event:NSEvent){record("up",event)}
+}
 final class Delegate: NSObject, NSApplicationDelegate {
     let root=Bundle.main.bundleURL.deletingLastPathComponent()
     var windows:[NSWindow]=[]
@@ -9,19 +37,47 @@ final class Delegate: NSObject, NSApplicationDelegate {
     var blocked=false
     var cancelled=0
     var newRequests=0
+    var gestureEvents:[[String:Any]]=[]
+    var interruptDrag=false
+    var panel:NSPanel?
+    var panelKind=""
+    var panelResult=""
+    var opened=""
+    var saved=""
     func make(_ name:String,_ frame:NSRect,_ color:NSColor,_ buttonFrame:NSRect)->NSWindow {
-        let w=NSWindow(contentRect:frame,styleMask:[.titled,.closable],backing:.buffered,defer:false)
+        let w=SceneWindow(contentRect:frame,styleMask:[.titled,.closable],backing:.buffered,defer:false)
         w.title="DTW Scene \(name)";w.isReleasedWhenClosed=false
         w.contentView!.wantsLayer=true;w.contentView!.layer!.backgroundColor=color.cgColor
         let b=NSButton(title:name,target:self,action:#selector(clicked(_:)));b.frame=buttonFrame;b.identifier=NSUserInterfaceItemIdentifier(name)
         w.contentView!.addSubview(b)
         if name=="main" {let field=NSTextField(frame:NSRect(x:40,y:60,width:380,height:28));field.stringValue="initial";field.identifier=NSUserInterfaceItemIdentifier("scene-input");w.contentView!.addSubview(field)}
+        if name=="main" {let slider=NSSlider(value:0,minValue:0,maxValue:100,target:nil,action:nil);slider.frame=NSRect(x:40,y:230,width:420,height:28);w.contentView!.addSubview(slider)}
+        if name=="main" {let pad=GesturePad(frame:NSRect(x:40,y:280,width:420,height:70));pad.controller=self;pad.wantsLayer=true;pad.layer!.backgroundColor=NSColor.systemPurple.cgColor;w.contentView!.addSubview(pad)}
+        w.acceptsMouseMovedEvents=true
         windows.append(w);w.makeKeyAndOrderFront(nil);return w
     }
     @objc func newWindow(){newRequests += 1;_ = make("main",NSRect(x:100,y:200,width:560,height:400),.systemBlue,NSRect(x:220,y:170,width:150,height:40));write()}
+    @objc func openFile() {
+        let open=NSOpenPanel();open.directoryURL=root;open.canChooseDirectories=false;open.allowsMultipleSelection=false
+        panel=open;panelKind="open";panelResult="pending"
+        open.beginSheetModal(for:windows.first(where:{$0.isVisible && $0.title.hasSuffix("main")})!){[weak self] response in
+            self?.panelResult=response == .OK ? "ok":"cancel"
+            self?.opened=open.url?.path ?? "";self?.write()
+        };write()
+    }
+    @objc func saveFile() {
+        let save=NSSavePanel();save.directoryURL=root;save.nameFieldStringValue="saved.txt";save.canCreateDirectories=false;save.allowedContentTypes=[.plainText];save.allowsOtherFileTypes=false;save.isExtensionHidden=false
+        panel=save;panelKind="save";panelResult="pending"
+        save.beginSheetModal(for:windows.first(where:{$0.isVisible && $0.title.hasSuffix("main")})!){[weak self] response in
+            self?.panelResult=response == .OK ? "ok":"cancel"
+            self?.saved=save.url?.path ?? ""
+            if response == .OK,let url=save.url,url.deletingLastPathComponent().resolvingSymlinksInPath().appendingPathComponent(url.lastPathComponent).path==self?.root.resolvingSymlinksInPath().appendingPathComponent("saved.txt").path {try? "saved by native panel".write(to:url,atomically:true,encoding:.utf8)}
+            self?.write()
+        };write()
+    }
     func applicationDidFinishLaunching(_ notification:Notification) {
         let menu=NSMenu();let appItem=NSMenuItem();let appMenu=NSMenu();appMenu.addItem(withTitle:"Quit",action:#selector(NSApplication.terminate(_:)),keyEquivalent:"q");appItem.submenu=appMenu;menu.addItem(appItem)
-        let fileItem=NSMenuItem();let file=NSMenu(title:"File");let new=NSMenuItem(title:"New",action:#selector(newWindow),keyEquivalent:"n");new.target=self;file.addItem(new);fileItem.submenu=file;menu.addItem(fileItem)
+        let fileItem=NSMenuItem();let file=NSMenu(title:"File");let new=NSMenuItem(title:"New",action:#selector(newWindow),keyEquivalent:"n");new.target=self;file.addItem(new);let open=NSMenuItem(title:"Open…",action:#selector(openFile),keyEquivalent:"o");open.target=self;file.addItem(open);let save=NSMenuItem(title:"Save…",action:#selector(saveFile),keyEquivalent:"s");save.target=self;file.addItem(save);fileItem.submenu=file;menu.addItem(fileItem)
         let editItem=NSMenuItem();let edit=NSMenu(title:"Edit");let selectAll=NSMenuItem(title:"Select All",action:#selector(NSText.selectAll(_:)),keyEquivalent:"a");selectAll.keyEquivalentModifierMask = .command;edit.addItem(selectAll);editItem.submenu=edit;menu.addItem(editItem);NSApp.mainMenu=menu
         _=make("main",NSRect(x:100,y:200,width:560,height:400),.systemBlue,NSRect(x:220,y:170,width:150,height:40))
         let peer=make("peer",NSRect(x:280,y:280,width:300,height:200),.systemRed,NSRect(x:40,y:90,width:150,height:40));peer.level = .floating
@@ -37,6 +93,13 @@ final class Delegate: NSObject, NSApplicationDelegate {
             if next=="close_popup" {windows.filter{$0.title.hasSuffix("popup")}.forEach{$0.close()}}
             if next=="move_popup" {windows.last!.setFrameOrigin(NSPoint(x:500,y:500))}
             if next=="move_peer" {windows[1].setFrameOrigin(NSPoint(x:450,y:350))}
+            if next.hasPrefix("move:") {
+                let parts=next.split(separator:":");if parts.count==3,let x=Double(parts[1]),let y=Double(parts[2]),let w=windows.first(where:{$0.isVisible && $0.title.hasSuffix("main")}) {
+                    w.setFrameOrigin(NSPoint(x:x,y:NSScreen.screens.first!.frame.maxY-y-w.frame.height))
+                }
+            }
+            if next=="interrupt_drag" {interruptDrag=true}
+            if next=="clear_obstacle" {windows.filter{$0.title=="DTW Drag obstacle"}.forEach{$0.close()}}
             if next=="block_quit" {blocked=true}
             if next=="allow_quit" {blocked=false}
             if next=="quit" {blocked=false;NSApp.terminate(nil)}
@@ -53,9 +116,16 @@ final class Delegate: NSObject, NSApplicationDelegate {
         let top=NSScreen.screens.first!.frame.maxY
         var buttons:[String:[Double]]=[:]
         var inputs:[String:String]=[:]
+        var sliderValue=0.0
         func visit(_ view:NSView,_ window:NSWindow) {
             if let button=view as? NSButton,!button.title.isEmpty { let p=window.convertPoint(toScreen:button.convert(NSPoint(x:button.bounds.midX,y:button.bounds.midY),to:nil));buttons[button.title]=[p.x,top-p.y] }
             if let field=view as? NSTextField,field.identifier?.rawValue=="scene-input" {let p=window.convertPoint(toScreen:field.convert(NSPoint(x:field.bounds.midX,y:field.bounds.midY),to:nil));buttons["scene-input"]=[p.x,top-p.y];inputs[window.title]=field.currentEditor()?.string ?? field.stringValue}
+            if let slider=view as? NSSlider {sliderValue=slider.doubleValue
+                for (name,x) in [("slider-start",10.0),("slider-end",410.0)] {let p=window.convertPoint(toScreen:slider.convert(NSPoint(x:x,y:slider.bounds.midY),to:nil));buttons[name]=[p.x,top-p.y]}
+            }
+            if let pad=view as? GesturePad {
+                for (name,x,y) in [("gesture-start",60.0,35.0),("gesture-end",340.0,35.0),("gesture-upper",60.0,60.0),("gesture-lower",340.0,10.0)] {let p=window.convertPoint(toScreen:pad.convert(NSPoint(x:x,y:y),to:nil));buttons[name]=[p.x,top-p.y]}
+            }
             for child in view.subviews {visit(child,window)}
         }
         let surfaces=windows+windows.compactMap{ $0.attachedSheet }
@@ -69,7 +139,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
             return row
         }
         let cg=(CGWindowListCopyWindowInfo([.optionOnScreenOnly,.excludeDesktopElements],0) as? [[String:Any]] ?? []).filter{($0[kCGWindowOwnerPID as String] as? Int32)==getpid()}.map{["id":$0[kCGWindowNumber as String] ?? 0,"layer":$0[kCGWindowLayer as String] ?? 0]}
-        let state:[String:Any]=["buttons":buttons,"inputs":inputs,"new_requests":newRequests,"cancelled":cancelled,"cg":cg,"active":NSApp.isActive,"key":NSApp.keyWindow?.title ?? "", "pid":ProcessInfo.processInfo.processIdentifier,"counts":counts,"command":command,"windows":rows]
+        let state:[String:Any]=["slider":sliderValue,"panel":["kind":panelKind,"visible":panel?.isVisible ?? false,"result":panelResult,"opened":opened,"saved":saved],"gestures":gestureEvents,"buttons":buttons,"inputs":inputs,"new_requests":newRequests,"cancelled":cancelled,"cg":cg,"active":NSApp.isActive,"key":NSApp.keyWindow?.title ?? "", "pid":ProcessInfo.processInfo.processIdentifier,"counts":counts,"command":command,"windows":rows]
         if let data=try? JSONSerialization.data(withJSONObject:state){try? data.write(to:root.appendingPathComponent("state.json"),options:.atomic)}
     }
 }

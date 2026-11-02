@@ -260,3 +260,13 @@ precondition(!permissionGranted("screen_recording", request: true, gate: accessG
     preflight: { false }, prompt: { accessPrompts += 1 }))
 precondition(accessPrompts == 2)
 print("Permission preflight, first request, denied and changed grant controls passed; no OS prompts")
+
+// No window rectangle can establish cross-Space physical hit ownership.
+let displayA=CGRect(x:0,y:0,width:1920,height:1080)
+let displayB=CGRect(x:164,y:1080,width:1512,height:982)
+precondition(dtwSingleDisplayPoint(CGPoint(x:500,y:500),bounds:CGRect(x:400,y:400,width:500,height:400),displays:[displayA,displayB]))
+precondition(!dtwSingleDisplayPoint(CGPoint(x:500,y:1050),bounds:CGRect(x:400,y:960,width:500,height:430),displays:[displayA,displayB]))
+precondition(dtwSingleDisplayPoint(CGPoint(x:500,y:500),bounds:CGRect(x:400,y:400,width:500,height:400),displays:[displayA,displayA]))
+precondition(!dtwSingleDisplayPoint(CGPoint(x:-10,y:100),bounds:CGRect(x:-100,y:50,width:200,height:200),displays:[displayA]))
+precondition(dtwSingleDisplayPoint(CGPoint(x:-500,y:100),bounds:CGRect(x:-700,y:50,width:400,height:200),displays:[CGRect(x:-1920,y:0,width:1920,height:1080),displayA]))
+print("Physical display ownership controls passed; spanning and offscreen points refuse before input")

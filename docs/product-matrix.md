@@ -9,7 +9,7 @@
 | 应用与窗口 | 稳定平台 app ID；同 app 多实例窗口聚合、精确 owner 引用 | macOS 自动启动已安装目标并正常 quit；窗口路由和引用保留内部；Windows/Linux 停止应用发现与启动未实现 |
 | 基本视觉操作 | macOS 合成已证明归属的可见窗口，图像坐标命中顶层 surface；Windows 当前单窗截图 | 动作需通过归属、几何及相应可见性检查；截图成功不代表目标支持所有输入 |
 | 语义发现 | look 输出当前顶层至多 80 个语义元素；内部保留原子 AX/UIA 查询；语义不足可截图兜底 | 部分遍历会明确返回覆盖不足；自绘控件可能不提供语义对象；不默认输出整棵树 |
-| 常用操作 | Agent 使用 look/capture/click/typeText/keypress/scroll/quit；点击可选语义目标、选择器或图像坐标 | 支持依应用控件和平台而异；拖拽等后续动作未广告为可用 |
+| 常用操作 | Agent 使用 look/capture/click/move/drag/typeText/keypress/scroll/quit；点击可选语义目标、选择器或图像坐标 | macOS move/drag 限一个窗口和单个显示器内的可见内容路径；不暴露跨调用的按下/释放状态；其他平台未实现手势 |
 | 菜单与对话框 | macOS 菜单、sheet、dialog 及有正向归属证明的关联 surface | 不保证穷尽系统 helper；不能按标题或矩形猜跨进程归属 |
 | 多 app 与多会话 | DTW 维护各 app 的观察状态及回执；跨连接原生资源协调 | 同连接单执行槽；原生上下文更换重置观察；Agent 无 Session 或游标管理；连接不隔离物理桌面 |
 | macOS 输入 | 优先后台目标投递；无副作用预检不支持时自动聚焦；聚焦后保持目标前台 | 普通 UI/快捷键关闭窗口，quit 正常退出；保存提示不强行处理；派发后失败不换路线重投；后台支持按动作判断 |
@@ -26,4 +26,8 @@ macOS 多屏坐标、跨屏移动和不同缩放比例依实际布局验证；�
 使用方法见 [安装](../install.md)、[脚本参考](../skills/desktop-world/API.md) 和随包 Skill。扩展方向与边界见 [架构](architecture.md)；真实任务指标与验证方法见 [构建和验收](building.md)；底层来源见 [原生来源](native-source-provenance.md) 和 [跨平台来源](native-source-provenance-cross-platform.md)。
 
 本轮变更与尚待原生验证的边界见 [临时收敛方案](agent-protocol-convergence-plan.md)。
-合成视图目前限制 16 个可见 surface、1600px 画布、64 MiB 解码数据；跨屏浮层、系统 helper 的归属、hover/drag 和新 Windows 生命周期仍需独立实现或验收。
+合成视图目前限制 16 个可见 surface、1600px 画布、64 MiB 解码数据。
+macOS move/drag、真实系统 Open/Save 面板及单屏内手势的双屏搬移检查见
+[能力补齐验收](agent-capability-followup-acceptance.md)。跨显示器窗口的物理指针输入
+因缺少充分命中证明而前置拒绝，截图仍可用；跨窗口拖放、更多系统 helper、不同缩放
+及 Windows 新生命周期仍需独立实现或验收。
