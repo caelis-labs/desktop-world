@@ -142,6 +142,8 @@ def main():
             shot,_=strict.tool('exec',{'app':str(bundle),'source':'await app.capture({full:true});'});p=point(shot['view'],'gesture-start');offset=len(state()['gestures'])
             rejected,response=strict.tool('exec',{'app':str(bundle),'source':'await app.move('+json.dumps(p)+');'})
             require(response.get('isError') and rejected.get('failure',{}).get('code')=='foreground_required',rejected);require(not any(e['kind']=='move' for e in state()['gestures'][offset:]),state());record('pointer_gesture_respects_background_only')
+            offset=len(state()['gestures']);rejected,response=strict.tool('exec',{'app':str(bundle),'source':'await app.click('+json.dumps(p)+');'})
+            require(response.get('isError') and rejected.get('failure',{}).get('code')=='foreground_required',rejected);require(len(state()['gestures'])==offset,state());record('visible_pixel_click_respects_background_only')
         finally:strict.close()
         image=capture('close-last');p=point(image['view'],'Close DTW Scene main');run('await app.click('+json.dumps(p)+');');wait_until(lambda:not state()['windows'])
         empty,_=run('await app.look({full:true});');require(empty['view']['running'] and not empty['view']['windows'],empty);record('running_app_without_windows')

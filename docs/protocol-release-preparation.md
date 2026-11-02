@@ -47,3 +47,13 @@ Development binary SHA-256:
 Native GUI boundary/candidate results will be recorded separately after code
 completion. The Windows runner is authored and type/build prerequisites remain
 independent of running it on a real Windows desktop.
+
+## Native boundary follow-up
+
+Real Chrome translation-popup testing exposed a PID-directed click cleanup
+failure. Image clicks now use the visible physical-pointer route on macOS, with
+background-only refusing them before input. Semantic background presses remain.
+The corrected binary passed 503 Rust tests and 38 native cases, and the actual
+Chrome popup closed with continued semantic/pixel interaction and clean workers.
+See [boundary evidence](protocol-boundary-acceptance.md) for original failures,
+exact byte boundaries and remaining acceptance scope.

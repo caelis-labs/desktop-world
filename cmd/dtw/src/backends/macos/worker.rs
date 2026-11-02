@@ -379,8 +379,12 @@ fn modal_input_requires_foreground(validation: &Value) -> Result<bool, Value> {
 
 fn background(request: &mut Value) -> BackgroundAttempt {
     let op = request["operation"].as_str().unwrap_or("").to_owned();
-    if matches!(op.as_str(), "move" | "drag") {
-        return BackgroundAttempt::Declined("pointer_gesture_requires_foreground".into());
+    if matches!(op.as_str(), "click" | "move" | "drag") {
+        // Image coordinates describe a visible physical pointer operation.
+        // PID-directed click changes/restores app-local key-window state; a
+        // transient popup can disappear after the click, making that unrelated
+        // restoration fail. Keep semantic presses on their own background path.
+        return BackgroundAttempt::Declined("visible_pointer_requires_foreground".into());
     }
     if !matches!(op.as_str(), "click" | "scroll" | "type_text" | "keypress") {
         return BackgroundAttempt::NotApplicable;
@@ -955,6 +959,18 @@ pub(super) fn validate_reply(reply: &Value, target: &Value) -> Result<(), Value>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visible_pointer_operations_decline_background_before_any_native_preflight() {
+        for operation in ["click", "move", "drag"] {
+            let mut request = json!({"operation":operation});
+            assert!(
+                matches!(background(&mut request), BackgroundAttempt::Declined(reason)
+                if reason == "visible_pointer_requires_foreground")
+            );
+            assert_eq!(request, json!({"operation":operation}));
+        }
+    }
 
     #[test]
     fn association_pixels_require_scene_role_and_live_admission() {
