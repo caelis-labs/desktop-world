@@ -2,7 +2,24 @@
 """Cross-platform package CLI/real MCP lease acceptance; no desktop interaction."""
 import argparse, hashlib, json, os, queue, shutil, subprocess, threading, time, uuid
 from pathlib import Path
-from standard_agent_probe import Mcp
+from standard_agent_probe import Mcp, stop_owned
+
+class PackageClient(Mcp):
+    """This probe initializes MCP only; it never creates native child workers.
+
+    Reap the exact owned process without the GUI probe's Unix process scanner.
+    Native worker lifetime is checked independently below on both platforms.
+    """
+    def close(self):
+        try:
+            if not self.child.stdin.closed:self.child.stdin.close()
+            cleanup=stop_owned(self.child)
+            self.reader.join(timeout=2)
+            assert not self.reader.is_alive(),"MCP output reader did not stop"
+            assert cleanup['returncode']==0 and not cleanup['forced'],cleanup
+            return cleanup
+        finally:
+            self.child.stdout.close();self.stderr.close();self.transcript.close()
 
 def sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()
 def write(path,value): path.write_text(json.dumps(value,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
@@ -31,13 +48,13 @@ def main():
     a=source('A');b=source('B',manager);c=source('C');assert cli('import',out/'source A')['package_id']==a['package_id']
     cli('bind','agy',a['package_id']);cli('activate','agy');cli('bind','dsh-desktop',a['package_id']);cli('activate','dsh-desktop')
     cli('bind','dsh-desktop',b['package_id']);staged=cli('status')['bindings'];dsh=next(r for r in staged if r['host']=='dsh-desktop');assert dsh['current']==a['package_id'] and dsh['pending']==b['package_id']
-    fresh=out/'fresh-version';fresh.mkdir();verified=Mcp(Path(b['executable']),fresh)
+    fresh=out/'fresh-version';fresh.mkdir();verified=PackageClient(Path(b['executable']),fresh)
     try:
         initialized=verified.rpc('initialize',{'protocolVersion':'2025-06-18','capabilities':{},'clientInfo':{'name':'updated-runtime-verifier','version':'1'}});verified.notify('notifications/initialized')
         assert initialized['serverInfo']['version']==b['version'],initialized
         assert [t['name'] for t in verified.rpc('tools/list',{})['tools']]==['apps','exec']
     finally:verified.close()
-    cli('activate','dsh-desktop');live=out/'live';live.mkdir();m=Mcp(Path(c['executable']),live)
+    cli('activate','dsh-desktop');live=out/'live';live.mkdir();m=PackageClient(Path(c['executable']),live)
     try:
         old_runtime=m.rpc('initialize',{'protocolVersion':'2025-06-18','capabilities':{},'clientInfo':{'name':'managed-package-lease','version':'1'}});m.notify('notifications/initialized')
         assert old_runtime['serverInfo']['version']==a['version'],old_runtime
