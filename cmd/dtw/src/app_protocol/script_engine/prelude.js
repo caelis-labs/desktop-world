@@ -26,6 +26,9 @@
   const indexOf = String.prototype.indexOf;
   const slice = String.prototype.slice;
   const charAt = String.prototype.charCodeAt;
+  const split = String.prototype.split;
+  const regexpExec = RegExp.prototype.exec;
+  const targetId = /^w[0-9]+\.e[0-9]+$/;
   const root = parse(globalThis.__initial_state);
   const methods = parse(globalThis.__methods);
   const sessionMetadata = parse(globalThis.__session);
@@ -124,7 +127,11 @@
       fail("app calls are unavailable during script settlement", "invalid_phase");
     }
     const line = lineOf(new ErrorClass().stack);
-    const reply = parse(host(op, encode(args, "host arguments", 65536, true), line));
+    const encoded = encode(args, "host arguments", 65536, true);
+    // A locally rejected argument never starts a read and cannot settle a
+    // preceding action's readback. Clear dirty only at the host handoff.
+    if (agent) dirty = op !== "scene.look" && op !== "scene.capture" && op !== "scene.after";
+    const reply = parse(host(op, encoded, line));
     if (!reply.ok) {
       const error = new ErrorClass(`${op} failed: ${reply.error}`);
       error.name = "DtwError"; error.op = op; error.code = reply.code;
@@ -180,11 +187,10 @@
         if (args.length > 1) fail(`app.${op} takes one argument`, "invalid_args");
         let options = args.length ? args[0] : {};
         if (op === "typeText" && typeof options === "string") options = {text:options};
+        if (op === "keypress" && typeof options === "string") options = {keys:apply(split, options, ["+"])};
         if (op === "keypress" && isArray(options)) options = {keys:options};
-        if (op === "click" && typeof options === "string") options = {selector:{text:options}};
-        if (op !== "look" && op !== "capture") dirty = true;
+        if (op === "click" && typeof options === "string") options = apply(regexpExec, targetId, [options]) !== null ? {target:options} : {selector:{text:options}};
         const result = call(`scene.${op}`, options);
-        if (op === "look" || op === "capture") dirty = false;
         return result;
       };
       define(surface, op, {value:freeze(method), enumerable:true});
@@ -244,8 +250,11 @@
     } catch (_) { message = "exception could not be inspected"; }
     return envelope({ok:false, name:name === null ? null : apply(slice,name,[0,128]), message:clip(message,4000), line, op:op === null ? null : apply(slice,op,[0,128]), code:code === null ? null : apply(slice,code,[0,128]), call});
   };
+  const readAfter = () => {
+    call("scene.after", {});
+  };
   const reject = (error) => {
-    if (agent && dirty && accepting) { try { call("scene.after", {}); } catch (_) {} }
+    if (agent && dirty && accepting) { try { readAfter(); } catch (_) {} }
     finish(rejectionEnvelope(error));
   };
   // Captured and removed by Rust before user code can execute.
@@ -253,7 +262,7 @@
   globalThis.__settle = (promise) => apply(then, promise, [
     (value) => {
       try {
-        if (agent && dirty) call("scene.after", {});
+        if (agent && dirty) readAfter();
         accepting = false;
         const value_json = encode(value === undefined ? null : value, "result", 65536, true);
         const state_json = encode(root, "state", 65536);

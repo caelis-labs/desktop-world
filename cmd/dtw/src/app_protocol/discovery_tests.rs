@@ -3,6 +3,8 @@ use super::*;
 
 #[path = "discovery_evidence_tests.rs"]
 mod discovery_evidence_tests;
+#[path = "scene_failure_tests.rs"]
+mod scene_failure_tests;
 
 #[derive(Clone)]
 struct PagedBackend {
@@ -11,6 +13,7 @@ struct PagedBackend {
     advances: Arc<AtomicUsize>,
     fail_next: Arc<std::sync::atomic::AtomicBool>,
     complete_after_first: Arc<std::sync::atomic::AtomicBool>,
+    semantic_errors: Arc<Mutex<std::collections::VecDeque<Option<Error>>>>,
 }
 impl Backend for PagedBackend {
     type Binding = AtomicUsize;
@@ -73,6 +76,9 @@ impl Backend for PagedBackend {
         query: &ObserveQuery,
         _: &CallContext<'_>,
     ) -> Result<BackendObservation<Self::Binding>, Error> {
+        if let Some(Some(error)) = self.semantic_errors.lock().unwrap().pop_front() {
+            return Err(error);
+        }
         let complete = {
             let mut queries = self.queries.lock().unwrap();
             queries.push(query.clone());
@@ -100,6 +106,9 @@ impl Backend for PagedBackend {
         _: &CallContext<'_>,
     ) -> Result<BackendObservationPage, Error> {
         self.advances.fetch_add(1, Ordering::SeqCst);
+        if let Some(Some(error)) = self.semantic_errors.lock().unwrap().pop_front() {
+            return Err(error);
+        }
         if self.fail_next.swap(false, Ordering::SeqCst) {
             return Err(Error::BackendFailed(
                 "controlled continuation failure".into(),
@@ -124,7 +133,43 @@ impl Backend for PagedBackend {
         target: &WindowTarget,
         call: &CallContext<'_>,
     ) -> Result<BackendObservation<Self::Binding>, Error> {
-        let read = self.base.capture(target, call)?;
+        let mut read = self.base.capture(target, call)?;
+        if let Some(image) = &mut read.image {
+            // Model a constant 2x provider scale for each fixture surface.
+            if let Some(scene) = self
+                .base
+                .0
+                .model
+                .lock()
+                .unwrap()
+                .inventory
+                .as_ref()
+                .and_then(|i| i.windows.iter().find(|w| w.target == *target))
+                .and_then(|w| w.scene.as_ref())
+            {
+                image.width = (scene.bounds()[2] * 2.) as u32;
+                image.height = (scene.bounds()[3] * 2.) as u32;
+            }
+            let mut bytes = Vec::new();
+            {
+                let mut encoder = png::Encoder::new(&mut bytes, image.width, image.height);
+                encoder.set_color(png::ColorType::Rgba);
+                let mut writer = encoder.write_header().unwrap();
+                writer
+                    .write_image_data(
+                        &self
+                            .base
+                            .0
+                            .model
+                            .lock()
+                            .unwrap()
+                            .capture_rgba
+                            .repeat((image.width * image.height) as usize),
+                    )
+                    .unwrap();
+            }
+            image.png = bytes;
+        }
         Ok(BackendObservation {
             target: read.target,
             elements: read.elements,
@@ -132,6 +177,38 @@ impl Backend for PagedBackend {
             binding: AtomicUsize::new(0),
             discovery: None,
         })
+    }
+    fn click_with_options(
+        &self,
+        target: &WindowTarget,
+        _: &Self::Binding,
+        point: PixelPoint,
+        options: ClickOptions,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        self.base
+            .click_with_options(target, &(), point, options, call)
+    }
+    fn supports_scroll_anchor(&self, _: ObservationKind) -> bool {
+        true
+    }
+    fn scroll_at(
+        &self,
+        _: &WindowTarget,
+        _: &Self::Binding,
+        _: ScrollRequest,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        self.base.act(call)
+    }
+    fn pointer_gesture(
+        &self,
+        _: &WindowTarget,
+        _: &Self::Binding,
+        _: &PointerGesture,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        self.base.act(call)
     }
     fn press(
         &self,
@@ -150,6 +227,7 @@ fn setup() -> (Arc<Coordinator<PagedBackend>>, PagedBackend) {
         advances: Arc::new(AtomicUsize::new(0)),
         fail_next: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         complete_after_first: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        semantic_errors: Arc::new(Mutex::new(std::collections::VecDeque::new())),
     };
     (
         Coordinator::new(backend.clone(), application(), "Paged".into()),

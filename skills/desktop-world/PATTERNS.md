@@ -68,7 +68,10 @@ await app.drag({path:[{x:120,y:180},{x:360,y:240}]});
 No down/up state is managed by the script. The current path must stay within one
 window on one display, avoiding overlays and transparent gaps. Cancellation or a new obstruction
 releases the button and reports uncertainty; inspect before new input. A second
-coordinate action in the same script needs a fresh capture.
+coordinate action can use the same image mapping when its target remains valid;
+DTW refreshes and checks the relevant pixels internally. Inspect a new capture
+when hover reveals a control you have not yet seen or the returned view reports
+changed targets/geometry.
 
 ## Script snapshots and scrolling
 

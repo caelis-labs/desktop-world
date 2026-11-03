@@ -203,9 +203,11 @@ pub struct ElementId(pub u64);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Element {
     pub id: ElementId,
-    /// Native identity across reads of this exact window; absent means IDs must
-    /// be retired on the next observation, never matched by label or position.
+    /// Comparison identity for view deltas only. May be reused over time.
     pub identity: Option<String>,
+    /// Provider-retained object credential for renewal across observations.
+    /// Comparison IDs (for example UIA runtime IDs) are not such a credential.
+    pub rebind_identity: Option<String>,
     pub label: String,
     /// Semantic role reported independently of the human-readable label.
     pub role: String,
@@ -429,12 +431,19 @@ impl PointerGesture {
 pub struct WindowLayout {
     bounds: [f64; 4],
     pub rank: u32,
+    /// Optional native keyboard receiver, independent of visual z-order.
+    pub keyboard_focused: Option<bool>,
 }
 impl Eq for WindowLayout {} // The constructor excludes NaN and infinity.
 impl WindowLayout {
     pub fn new(bounds: [f64; 4], rank: u32) -> Option<Self> {
-        (bounds.iter().all(|v| v.is_finite()) && bounds[2] > 0.0 && bounds[3] > 0.0)
-            .then_some(Self { bounds, rank })
+        (bounds.iter().all(|v| v.is_finite()) && bounds[2] > 0.0 && bounds[3] > 0.0).then_some(
+            Self {
+                bounds,
+                rank,
+                keyboard_focused: None,
+            },
+        )
     }
     pub fn bounds(&self) -> [f64; 4] {
         self.bounds

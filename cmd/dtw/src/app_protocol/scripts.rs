@@ -534,8 +534,11 @@ impl<B: Backend + 'static> Coordinator<B> {
                 "scene.look" | "scene.capture" | "scene.after"
             )
         {
-            if let Some(view) = &work.completed.value {
-                run.snapshot = Some(view.clone());
+            if work.completed.error.is_some() {
+                run.snapshot = None;
+                run.view = None;
+            } else {
+                run.snapshot = work.completed.value.clone();
                 run.view = projected;
             }
         }

@@ -40,20 +40,32 @@
 
 | Method | Arguments | Behavior |
 | --- | --- | --- |
-| `await app.look(options?)` | `{full?:boolean}` | Start/reuse the app where supported; observe visible window layering and up to 80 semantic elements in the top surface. JavaScript always receives the full snapshot. Tool output compares with the previous published view. Window metadata is bounded to 32 entries with truncation coverage. `full:true` forces a tool-output baseline. |
+| `await app.look(options?)` | `{full?:boolean}` | Start/reuse the app where supported (nonactivating by default on macOS); observe visible window layering and up to 80 semantic elements in the top surface. JavaScript always receives the full snapshot. Tool output compares with the previous published view. Window metadata is bounded to 32 entries with truncation coverage. `full:true` forces a tool-output baseline. |
 | `await app.capture(options?)` | `{full?:boolean}` | Return a full snapshot, including `windows`, and a PNG of the authorized app's visible stacked surfaces. Establishes the internal coordinate binding; later input returns an updated visual observation while in visual mode. |
-| `await app.click(target)` | `{target:string}` OR `{selector:{role?:string,text?:string,scope?:'window'\|'menu'}}` OR `{x:number,y:number,button?:'left'\|'right',count?:1\|2}` | Semantic target ID from the latest look or a unique selector, for controls advertising `press`; otherwise use the returned screenshot fallback; or image-pixel coordinates from the last capture. The string shortcut `app.click('Continue')` is a text selector. Never mix target forms. Mouse options apply only to coordinates. |
+| `await app.click(target)` | string OR `{target:string}` OR `{selector:{role?:string,text?:string,scope?:'window'\|'menu'}}` OR `{x:number,y:number,button?:'left'\|'right',count?:1\|2}` | Semantic target ID from the latest look or a unique selector, for controls advertising `press`; otherwise use the returned screenshot fallback; or image-pixel coordinates from the last capture. `app.click('w1.e12')` uses a target ID; other strings such as `app.click('Continue')` are text selectors. Never mix target forms. Mouse options apply only to coordinates. |
 | `await app.move(point)` | `{x:number,y:number}` | Hover over a visible point in the current app image, enabling hover UI. |
 | `await app.drag(options)` | `{path:[{x:number,y:number},...]}` | Content drag uses one left-button press, bounded path and paired release. 2–64 supplied points with movement, internally at most 256 samples. The entire path must stay within one observed window. A proven standard macOS title bar moves its window via native position, with the destination fully on one display. Other paths drag content. Unsupported provider/display boundaries are explicit. No held button survives a call. |
 | `await app.typeText(text)` | string, or `{text:string}` | Unicode keyboard input into the active editing control. It may invoke application editing behavior. It does not replace a field value implicitly. |
-| `await app.keypress(keys)` | string array, or `{keys:string[]}` | One press/release chord; on macOS this also works for a running app with no window (e.g. New). Foreground app identity is verified before key downs. E.g. `['META','A']` or `['ESC']`. `META` means Command on macOS and Windows key on Windows. |
+| `await app.keypress(keys)` | chord string, string array, or `{keys:string[]}` | One press/release chord; on macOS this also works for a running app with no window (e.g. New). Native app/window focus is verified before key downs. E.g. `'META+A'`, `'ENTER'`, `['META','A']` or `['ESC']`. Use an array/object for key names containing a literal `+`. `META` means Command on macOS and Windows key on Windows. |
 | `await app.scroll(options)` | `{delta_y:number,delta_x?:number,x?:number,y?:number}` | Integer wheel steps in [-100,100] per axis, positive down/right; these are not pixels. Supply both x/y from the current screenshot to target a pane. Without x/y DTW captures the active surface and anchors at its center. |
 | `await app.quit()` | none | Request normal quit of the active app instance. A save dialog remains observable. No forced termination. |
 
 `look`/`capture` accept no native refs. Input routes within the selected app.
-Target IDs belong to the latest observation and should be used promptly. A
-changed/expired binding rejects input; DTW never silently rebinds and repeats it.
-Use `look` or `capture` to inspect the new state before deciding on new input.
+Known actions can run sequentially without an explicit observation after each
+step. DTW renews single-use native bindings before the next requested action.
+Renewing a semantic target requires a provider-retained object credential plus
+the same role, name, enabled state and actions. View comparison IDs alone do not
+prove object continuity: Windows UIA runtime IDs can be reused, so a consumed
+Windows target requires a fresh observation. Its exact retained original binding
+can still be used once. Labels and positions never retarget an ID. A missing or changed target requires inspection
+of the returned view before choosing new input. Dispatched/unknown input is never
+replayed to renew a binding.
+
+Keyboard input uses the native keyboard window when available, independently of
+visual z-order, within the already selected process instance; a frontmost tooltip or completion surface does not automatically
+receive keys. Focus and app identity checks still apply. On macOS startup requests
+neither activate nor hide the app. An app may activate itself; input that genuinely
+requires foreground still uses the existing controlled borrow and restoration.
 
 ## View
 
@@ -87,16 +99,25 @@ keep target IDs across consecutive reads. Missing, omitted or duplicate
 identities cannot revive a removed target ID; labels and traversal positions never establish identity.
 Selectors still require proven uniqueness; incomplete discovery can reject them.
 Semantic output is bounded to 80 elements / 24 KiB; window metadata to 32 rows,
-with titles bounded to 80 characters. Coverage marks omissions. `changed:false`
+with titles bounded to 80 characters. Coverage marks omissions. Optional native
+read gaps include bounded `coverage.read_error_codes`; a gap never authorizes an
+unproven surface. `changed:false`
 compares these observed fields; visual-only changes require capture.
 An explicit `look()` uses semantics when available, ending automatic visual
 follow-ups and retiring the previous image binding; unavailable semantics still
-trigger an image fallback.
+trigger an image fallback. If any semantic continuation fails, its earlier pages
+are discarded and semantics stay explicitly incomplete; a fresh image may still
+be used. A failed refresh retires previous element and pixel input bindings;
+script settlement does not repeat the failed read. A failed later read also clears
+the current execution's pending view/snapshot and PNG. Arguments rejected locally
+before a read reaches the host do not cancel a preceding action's automatic readback.
 
 The compositor currently requires provider layout metadata for multiple
 surfaces (implemented on macOS and Windows), supports at most 16 visible surfaces and a
-1600-pixel maximum canvas dimension. Capture errors appear in `view.image.error`;
-there is no image block or coordinate binding on that failure. Multi-monitor
+1600-pixel maximum canvas dimension. Recoverable capture errors appear in
+`view.image.error`; there is no image block or coordinate binding on that failure.
+Permission, cancellation, deadline, process/provider identity and invalid-provider
+errors remain operation failures, including when they occur during capture. Multi-monitor
 space keeps its relative geometry. Offscreen/minimized surfaces are listed where
 available but are not invented in the visible canvas.
 
@@ -108,9 +129,19 @@ stops the sequence and releases its admitted button. Partial effects remain
 unknown; never repeat a failed drag automatically. Drag relative motion fields
 and absolute positions are both supplied.
 
-After any pointer action, its binding is consumed. The returned tool view supplies
-a fresh image while in visual mode. Within one script, capture again before a
-second coordinate gesture. Cross-window/app drag, window resizing, off-canvas drag endpoints, held
+Native pointer bindings remain single-use. Before each coordinate gesture DTW
+privately captures fresh app pixels and checks window identity, geometry, layering
+and the receiving surface at each supplied point. Known coordinate actions can
+run sequentially without explicit recapture; an overlay elsewhere does not alone
+invalidate their unchanged receiver. Private refreshes authorize only their current
+dispatch and never replace the script-visible image baseline for later points.
+Geometry, image mapping or receiver
+changes return `stale_scene` without dispatch; inspect the returned image to choose
+new coordinates. Content changes such as animation, typing and scrolling do not
+invalidate a coordinate mapping. A point does not establish semantic identity or
+prove that app content is unchanged; inspect new views when the task needs it.
+The final tool view supplies a fresh image while in visual mode. Cross-window/app
+drag, window resizing, off-canvas drag endpoints, held
 buttons/keys and clipboard are not public capabilities. Other providers explicitly
 reject unsupported gestures; macOS acceptance does not establish platform parity.
 

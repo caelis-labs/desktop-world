@@ -30,6 +30,7 @@ impl Backend for InputBackend {
             discovery: None,
             elements: vec![Element {
                 id: ElementId(1),
+                rebind_identity: None,
                 identity: Some(format!("mock:{}", 1)),
                 label: "Title".into(),
                 role: "text_field".into(),

@@ -95,3 +95,20 @@ expectOverlay((0..<64).contains { y in (0..<88).contains { x in
     bitmap.colorAt(x: x, y: y)!.alphaComponent > 0
 }}, "session-colored arrow remains visible")
 print("overlay contract controls passed (arrow, pulse, lifecycle and no identity badge)")
+
+// The renderer owns a monotonic two-second inactivity lifetime, matching
+// Windows. Maintenance and delayed packets cannot extend or revive it.
+var idle = OverlayPresentationState()
+expectOverlay(idle.begin(1) && idle.accept(pointer(1, 1), at: 10), "idle clock starts only at a pointer event")
+expectOverlay(!idle.expireIdle(at: 11.99) && idle.marker != nil, "cursor stays visible before idle expiry")
+expectOverlay(idle.expireIdle(at: 12) && idle.marker == nil && !idle.active, "idle expiry hides and retires the operation")
+expectOverlay(!idle.accept(pointer(1, 2), at: 12.01), "delayed packets cannot revive an idle cursor")
+expectOverlay(!idle.begin(1), "idle-retired operation cannot restart")
+expectOverlay(idle.begin(2) && idle.accept(pointer(2, 1), at: 20), "new operation can display after idle")
+idle.hide(1)
+expectOverlay(!idle.expireIdle(at: 21), "old cleanup cannot change a newer idle clock")
+expectOverlay(idle.accept(pointer(2, 2), at: 21), "current actual pointer activity renews the lifetime")
+expectOverlay(!idle.expireIdle(at: 22.99) && idle.expireIdle(at: 23), "renewal uses the latest real activity")
+expectOverlay(idle.begin(3) && idle.accept(pointer(3, 1), at: 30), "next operation admitted")
+expectOverlay(!idle.accept(pointer(3, 2), at: 32.1) && idle.marker == nil, "late event cannot beat the maintenance tick")
+expectOverlay(idle.begin(4) && !idle.expireIdle(at: 100), "begin without an event is not visible activity")

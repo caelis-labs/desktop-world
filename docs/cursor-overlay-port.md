@@ -45,6 +45,10 @@ validated and coalesced into one pending main-thread update; press sequence is
 carried into later events so a coalesced release still displays the click pulse.
 The pulse expires after 200 ms even if release feedback is dropped; the same
 press sequence cannot renew it.
+The macOS marker follows Windows' two-second inactivity lifetime. Only accepted
+pointer feedback renews it; target checks and relative z-order maintenance do not.
+Expiry hides the panel and retires its operation, so delayed packets cannot revive
+an old marker. A new native operation can display its own pointer feedback.
 `hide(generation)` invalidates that exact action. A newer generation can start,
 but canceled generations cannot restart or be revived by delayed events. A
 control timeout closes admission and kills the visual helper; its late response

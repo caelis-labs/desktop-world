@@ -59,8 +59,8 @@ surfaceCheck(!associatedGeometry(CGRect(x: -900, y: -30, width: 420, height: 300
 print("Surface ancestry, replacement/cancellation, negative-origin geometry and UTF-16 pages passed")
 
 // Unattributed foreign AX hit failures are partial discovery evidence, never
-// a reason to discard proven same-process windows. Same-app read failures and
-// caller termination retain their exact errors instead of entering that path.
+// a reason to discard proven same-process windows. Caller termination,
+// permissions and failures of already retained proofs remain strict.
 private let foreignHitUnavailable = failure("association_unavailable", "foreign hit busy",
     attributeFailure: AXAttributeFailure(name: "AXElementAtPosition", error: .cannotComplete))
 private var associationChecks = 0
@@ -76,9 +76,10 @@ private let absentAssociation: (Int?, Int32?) = try unprovenAssociationProbe(che
     preconditionFailure("A successful unrelated hit was treated as an error")
 }, read: { nil })
 surfaceCheck(absentAssociation.0 == nil && absentAssociation.1 == nil)
-for original in [failure("ax_unavailable", "same-app AX read failed",
-                        attributeFailure: AXAttributeFailure(name: kAXRoleAttribute, error: .cannotComplete)),
-                 failure("association_unavailable", "unclassified association failure"),
+for original in [failure("association_unavailable", "unclassified association failure"),
+                 failure("ax_unavailable", "untyped failure"),
+                 failure("ax_unavailable", "AX API disabled", attributeFailure:
+                    AXAttributeFailure(name: kAXParentAttribute, error: .apiDisabled)),
                  failure("target_changed", "exact surface changed")] {
     do {
         let _: (Int?, Int32?) = try unprovenAssociationProbe(check: {
@@ -1198,96 +1199,37 @@ for result in [AXError.success, .apiDisabled, .invalidUIElement, .failure] {
 }
 print("Exact window identity rejects zero IDs and native failures without treating them as absence")
 
-// A vanishing association point-hit cannot invalidate independent CG rows or
-// turn partial discovery into an empty/complete result. Recovery takes another
-// whole snapshot and never reuses rows or AX objects from the failed attempt.
-private func expectedDiscoveryFailure(_ read: () throws -> Void) -> NativeFailure {
-    do { try read(); preconditionFailure("Expected discovery error") }
-    catch let error as NativeFailure { return error }
-    catch { preconditionFailure("Unexpected discovery error type") }
-}
-private let expiredPointHit = failure("ax_unavailable", "original AX role read failed",
-    attributeFailure: AXAttributeFailure(name: kAXRoleAttribute, error: .invalidUIElement))
-surfaceCheck(!retryableInventoryFailure(expiredPointHit)) // retained-target paths remain strict.
-private var discoveryCGPasses = 0
-private var discoveryPointObjects: [Int] = []
-private var publishedDiscoveryRows: [[CGWindowID]] = []
-private func completeDiscoveryControl() throws -> [CGWindowID] {
-    discoveryCGPasses += 1
-    let source = discoveryCGPasses == 1 ? [surfaceRow(10), surfaceRow(11)] : [surfaceRow(11), surfaceRow(12)]
-    let (candidates, _) = try surfaceInventory(source, pid: 10)
-    var ids = candidates.map { $0.0.id }
-    let associated: CGWindowID = try readDiscoveryAssociation {
-        discoveryPointObjects.append(discoveryCGPasses)
-        if discoveryCGPasses == 1 { throw expiredPointHit }
-        return 201
+// Telegram can return AXFailure for AXParent while its WindowServer window
+// stays usable. Exercise every stage of the optional proof and retain exact
+// native diagnostics without reusing an earlier proof or authorizing a surface.
+for attribute in ["AXElementAtPosition", kAXParentAttribute, kAXRoleAttribute, "AXPID", "AXMessagingTimeout"] {
+    for result in [AXError.failure, .cannotComplete, .invalidUIElement] {
+        let original = failure("ax_unavailable", "original optional AX cause",
+            attributeFailure: AXAttributeFailure(name: attribute, error: result))
+        let (owned, _) = try surfaceInventory([surfaceRow(10), surfaceRow(11)], pid: 10)
+        var checks = 0
+        let proof: (Int?, Int32?) = try unprovenAssociationProbe(check: { checks += 1 }, read: { throw original })
+        surfaceCheck(owned.map { $0.0.id } == [10, 11] && proof.0 == nil
+            && proof.1 == result.rawValue && checks == 1)
+        // This same AX failure is fatal when checking an existing association.
+        do {
+            _ = try retainedAssociationMatches(901, ownerBirth: 700, birth: { 700 },
+                root: { () -> Int? in throw original }, equal: ==)
+            preconditionFailure("A retained surface lost its ownership guard")
+        } catch let error as NativeFailure {
+            surfaceCheck(error.code == original.code && error.message == original.message
+                && error.attributeFailure?.name == attribute && error.attributeFailure?.error == result)
+        }
+        for stop in ["app_changed", "native_stopping", "deadline_exceeded", "permission_required"] {
+            do {
+                let _: (Int?, Int32?) = try unprovenAssociationProbe(check: { throw failure(stop, "original hard cause") },
+                    read: { throw original })
+                preconditionFailure("Optional degradation masked caller/permission/identity failure")
+            } catch let error as NativeFailure { surfaceCheck(error.code == stop && error.message == "original hard cause") }
+        }
     }
-    ids.append(associated)
-    publishedDiscoveryRows.append(ids)
-    return ids
 }
-private let expiredDiscovery = expectedDiscoveryFailure { _ = try completeDiscoveryControl() }
-surfaceCheck(expiredDiscovery.discoverySnapshotExpired && retryableInventoryFailure(expiredDiscovery))
-surfaceCheck(expiredDiscovery.code == expiredPointHit.code
-    && expiredDiscovery.attributeFailure?.error == .invalidUIElement
-    && expiredDiscovery.attributeFailure?.name == kAXRoleAttribute)
-surfaceCheck(expiredDiscovery.message.contains(expiredPointHit.message)
-    && expiredDiscovery.message.contains("refresh app.windows"))
-surfaceCheck(Set(expiredDiscovery.json.keys) == Set(["error", "message"]))
-surfaceCheck(publishedDiscoveryRows.isEmpty)
-private var discoveryChecks = 0
-private var discoveryWaits = 0
-private let recoveredDiscovery = try retryCompleteInventory(original: expiredDiscovery, remaining: { 0.75 }, check: {
-    discoveryChecks += 1
-}, read: completeDiscoveryControl, wait: { _ in discoveryWaits += 1 })
-surfaceCheck(recoveredDiscovery == [11, 12, 201] && publishedDiscoveryRows == [[11, 12, 201]])
-surfaceCheck(discoveryCGPasses == 2 && discoveryPointObjects == [1, 2] && discoveryChecks >= 3 && discoveryWaits == 1)
-
-private var expiredDiscoveryMS = 0
-private var expiredDiscoveryReads = 0
-private let persistentDiscovery = expectedDiscoveryFailure {
-    let _: [CGWindowID] = try retryCompleteInventory(original: expiredDiscovery,
-        remaining: { Double(300 - expiredDiscoveryMS) / 1_000 }, check: {}, read: {
-            expiredDiscoveryReads += 1; expiredDiscoveryMS += 120
-            return try readDiscoveryAssociation {
-                throw failure("ax_unavailable", "later ancestry read", attributeFailure:
-                    AXAttributeFailure(name: kAXParentAttribute, error: .invalidUIElement))
-            }
-        }, wait: { expiredDiscoveryMS += Int(($0 * 1_000).rounded()) })
-}
-surfaceCheck(expiredDiscoveryReads == 2 && expiredDiscoveryMS == 300)
-surfaceCheck(persistentDiscovery.code == expiredDiscovery.code && persistentDiscovery.message == expiredDiscovery.message
-    && persistentDiscovery.attributeFailure?.name == kAXRoleAttribute)
-
-for fatal in [failure("ax_unavailable", "permission denied", attributeFailure:
-                AXAttributeFailure(name: kAXRoleAttribute, error: .apiDisabled)),
-              failure("ax_unavailable", "untyped invalidUIElement -25202"),
-              failure("app_changed", "kernel birth changed"),
-              failure("native_stopping", "caller cancelled"),
-              failure("deadline_exceeded", "original deadline expired"),
-              failure("window_inventory_unproven", "malformed fresh CG row")] {
-    let unmarked = expectedDiscoveryFailure { let _: Int = try readDiscoveryAssociation { throw fatal } }
-    surfaceCheck(!unmarked.discoverySnapshotExpired && !retryableInventoryFailure(unmarked)
-        && unmarked.code == fatal.code && unmarked.message == fatal.message)
-    var reads = 0
-    let stopped = expectedDiscoveryFailure {
-        let _: [CGWindowID] = try retryCompleteInventory(original: expiredDiscovery, remaining: { 0.75 }, check: {}, read: {
-            reads += 1
-            return try readDiscoveryAssociation { throw fatal }
-        }, wait: { _ in })
-    }
-    surfaceCheck(reads == 1 && stopped.code == fatal.code && stopped.message == fatal.message)
-}
-for stop in ["app_changed", "native_stopping", "deadline_exceeded"] {
-    let stopped = expectedDiscoveryFailure {
-        let _: [CGWindowID] = try retryCompleteInventory(original: expiredDiscovery, remaining: { 0.75 }, check: {
-            throw failure(stop, "caller or identity ended")
-        }, read: { preconditionFailure("Invalid caller cannot take another snapshot") },
-           wait: { _ in preconditionFailure("Invalid caller cannot wait") })
-    }
-    surfaceCheck(stopped.code == stop)
-}
-print("Expired discovery association rebuilds one full snapshot; persistent errors retain cause, while identity/permission/stop remain final")
+print("Optional AX failure/busy/expired ancestry preserves owned CG surfaces; retained ownership and hard errors remain strict")
 
 // Scoped waits must use exact native absence, not incomplete app inventory,
 // visibility, zero-area animation, title matching, or a different owner.
@@ -1400,3 +1342,28 @@ surfaceCheck(orderNumber.matches(nil))
 surfaceCheck(!semanticTextContains(String(repeating: "a", count: 4_096) + "needle", needle: "needle"))
 surfaceCheck(semanticTextContains(String(repeating: "a", count: 300) + "needle", needle: "NEEDLE"))
 print("Semantic selectors match public fallback/composite labels without concatenating fields; no AX or GUI reads")
+
+// Automatic app startup must preserve the user's foreground and leave surfaces
+// shareable; hiding/minimizing is not a substitute for a nonactivating launch.
+private let automaticOpen = applicationOpenConfiguration()
+surfaceCheck(!automaticOpen.activates && !automaticOpen.hides)
+surfaceCheck(!automaticOpen.createsNewApplicationInstance)
+surfaceCheck(!automaticOpen.allowsRunningApplicationSubstitution)
+surfaceCheck(!automaticOpen.addsToRecentItems)
+
+// Missing AXWindows is a read-only semantic gap. The same native error remains
+// a hard modal refusal outside that exact phase; unrelated failures stay hard.
+for missing in [AXError.attributeUnsupported, .noValue] {
+    let unavailable = failure("modal_state_unproven", "Required AX inventory is unavailable",
+        attributeFailure: AXAttributeFailure(name: kAXWindowsAttribute, error: missing))
+    do { let _: Int = try readOnlySemantics { throw unavailable }; preconditionFailure("read did not fail") }
+    catch let error as NativeFailure { surfaceCheck(error.code == "semantic_window_unavailable" && error.attributeFailure?.error == missing) }
+    surfaceCheck(unavailable.code == "modal_state_unproven")
+}
+for original in [failure("modal_state_unproven", "Real modal state is unknown"),
+                 failure("permission_required", "AX denied"), failure("app_changed", "PID reused"),
+                 failure("cancelled", "Canceled"),
+                 failure("modal_state_unproven", "Sheets unavailable", attributeFailure: AXAttributeFailure(name: "AXSheets", error: .noValue))] {
+    do { let _: Int = try readOnlySemantics { throw original }; preconditionFailure("hard error vanished") }
+    catch let error as NativeFailure { surfaceCheck(error.code == original.code && error.message == original.message) }
+}

@@ -748,6 +748,9 @@ impl<B: Backend + 'static> Coordinator<B> {
                             json!({"window_ref":key,"title":window.title,"visible":window.visible});
                         if let Some(scene) = window.scene {
                             row["scene"] = json!({"bounds":scene.bounds(),"rank":scene.rank});
+                            if let Some(focused) = scene.keyboard_focused {
+                                row["scene"]["keyboard_focused"] = json!(focused);
+                            }
                         }
                         rows.push(row);
                         bound.insert(key, window.target);
@@ -1169,7 +1172,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 Ok(key) => key,
                 Err(error) => return Work::read_error(error),
             };
-            let row = json!({"element_ref":id,"identity":element.identity,"label":element.label,"can_press":element.can_press,"role":element.role,"name":element.name,"value":element.value,"enabled":element.enabled,"actions":element.actions});
+            let row = json!({"element_ref":id,"identity":element.identity,"rebind_identity":element.rebind_identity,"label":element.label,"can_press":element.can_press,"role":element.role,"name":element.name,"value":element.value,"enabled":element.enabled,"actions":element.actions});
             snapshot.elements.insert(id, element.id);
             rows.push(row);
         }

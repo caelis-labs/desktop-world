@@ -2,7 +2,10 @@
 //! CUA 0.38.0. DTW owns window incarnation markers, lazy pages and receipts.
 use super::input;
 use crate::backends::input_sequence::{self, Step};
-use crate::{backends::native_client::*, computer::*};
+use crate::{
+    backends::native_client::{error_reply as windows_error_reply, *},
+    computer::*,
+};
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
@@ -11,7 +14,9 @@ use std::{
 use windows::{
     core::{w, Interface, BSTR, HRESULT, PWSTR},
     Win32::{
-        Foundation::{CloseHandle, BOOL, E_NOINTERFACE, FILETIME, HANDLE, HWND, POINT, RECT},
+        Foundation::{
+            CloseHandle, BOOL, E_ACCESSDENIED, E_NOINTERFACE, FILETIME, HANDLE, HWND, POINT, RECT,
+        },
         Graphics::{
             Dwm::{DwmFlush, DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS},
             Gdi::*,
@@ -39,6 +44,18 @@ use windows::{
         },
     },
 };
+
+fn uia_read_failure(error: windows::core::Error) -> Error {
+    Error::NativeFailure {
+        code: if error.code() == E_ACCESSDENIED {
+            "permission_required"
+        } else {
+            "semantic_window_unavailable"
+        }
+        .into(),
+        message: format!("UIA root read failed: {error}"),
+    }
+}
 
 const MARKER: windows::core::PCWSTR = w!("DesktopWorld.WindowIncarnation.v1");
 // PrintWindow is a user32 API; the windows 0.58 binding groups it under the
@@ -312,8 +329,18 @@ impl Store {
     fn uia(&mut self) -> Result<IUIAutomation, Error> {
         if self.uia.is_none() {
             self.uia = Some(
-                unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
-                    .map_err(failed)?,
+                unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }.map_err(
+                    |error: windows::core::Error| {
+                        if error.code() == E_ACCESSDENIED {
+                            Error::NativeFailure {
+                                code: "permission_required".into(),
+                                message: error.to_string(),
+                            }
+                        } else {
+                            failed(error)
+                        }
+                    },
+                )?,
             );
         }
         Ok(self.uia.as_ref().unwrap().clone())
@@ -542,7 +569,13 @@ impl Store {
     fn observe(&mut self, r: &Value, until: Instant, next: bool) -> Result<Value, Error> {
         let target = parse_target(&r["target"])?;
         let window = self.validate(&target)?;
-        let uia = self.uia()?;
+        let uia = self.uia().map_err(|error| match error {
+            Error::BackendFailed(message) => Error::NativeFailure {
+                code: "semantic_window_unavailable".into(),
+                message,
+            },
+            other => other,
+        })?;
         let token = if next {
             string(r, "binding")?.to_owned()
         } else {
@@ -562,7 +595,7 @@ impl Store {
             if !(1..=100).contains(&limit) || text.as_ref().is_some_and(String::is_empty) {
                 return Err(failed("Invalid semantic query"));
             }
-            let root = unsafe { uia.ElementFromHandle(window) }.map_err(failed)?;
+            let root = unsafe { uia.ElementFromHandle(window) }.map_err(uia_read_failure)?;
             let scope = &r["query"]["scope"];
             let mut first = root.clone();
             let mut region = None;
@@ -1472,19 +1505,6 @@ fn finish_delivery_read(
     settle()?;
     result
 }
-fn windows_error_reply(error: Error, action: bool) -> Value {
-    if let Error::NativeFailure { code, message } = error {
-        // Keep explicit native diagnostics readable. Debug-formatting here and
-        // then wrapping them again across IPC escaped context JSON repeatedly.
-        let mut reply = json!({"error":code,"message":message});
-        if action {
-            reply["dispatch"] = json!("not_dispatched");
-        }
-        reply
-    } else {
-        error_reply(error, action)
-    }
-}
 fn optional(
     result: windows::core::Result<IUIAutomationElement>,
 ) -> Result<Option<IUIAutomationElement>, Error> {
@@ -1654,6 +1674,8 @@ fn element_row(
         } else {
             None
         };
+        // Runtime IDs may be reused over time. They support view comparison,
+        // never cross-observation action renewal; no rebind credential is issued.
         Ok(
             json!({"id":id,"identity":runtime_id(e).ok().map(|id| format!("uia:{id:?}")).filter(|id|id.len()<=256),"label":format!("{role} {name}"),"role":role,"name":name,"value":value,"enabled":enabled,"actions":actions}),
         )
@@ -2035,6 +2057,24 @@ fn absolute_move(point: POINT) -> Result<INPUT, Error> {
 #[cfg(test)]
 mod semantic_tests {
     use super::*;
+    #[test]
+    fn uia_root_availability_and_access_denial_survive_the_worker_codec() {
+        use crate::backends::error_wire::reply_error;
+        for (hresult, code) in [
+            (
+                HRESULT(UIA_E_ELEMENTNOTAVAILABLE as i32),
+                "semantic_window_unavailable",
+            ),
+            (E_ACCESSDENIED, "permission_required"),
+        ] {
+            let native = uia_read_failure(windows::core::Error::from_hresult(hresult));
+            let bytes = serde_json::to_vec(&windows_error_reply(native, false)).unwrap();
+            let packet = serde_json::from_slice(&bytes).unwrap();
+            assert!(
+                matches!(reply_error(&packet), Some(Error::NativeFailure { code: actual, .. }) if actual == code)
+            );
+        }
+    }
     #[test]
     fn failed_queue_cleanup_skips_all_delivery_uia_reads_and_preserves_original_error() {
         let original = Error::BackendFailed("original dispatch uncertainty".into());

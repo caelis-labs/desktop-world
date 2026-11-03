@@ -25,9 +25,6 @@ private struct NativeFailure: Error {
     // Private evidence only: a fresh complete parent inventory no longer
     // contains a non-target AX object read from the previous snapshot.
     let modalSnapshotExpired: Bool
-    // Private provenance set only by app.windows association discovery. Input
-    // and retained-target validation never turn invalid AX objects into retries.
-    let discoverySnapshotExpired: Bool
     // A successful System AX application snapshot contradicts the separately
     // queried WindowServer front process. This is not a PID/birth substitution.
     let foregroundSnapshotMismatch: Bool
@@ -52,12 +49,10 @@ private func failure(_ code: String, _ message: String, details: [String: Any]? 
                      attributeFailure: AXAttributeFailure? = nil,
                      focusAbsence: FocusAbsence? = nil,
                      modalSnapshotExpired: Bool = false,
-                     discoverySnapshotExpired: Bool = false,
                      foregroundSnapshotMismatch: Bool = false) -> NativeFailure {
     NativeFailure(code: code, message: message, details: details,
                   attributeFailure: attributeFailure, focusAbsence: focusAbsence,
                   modalSnapshotExpired: modalSnapshotExpired,
-                  discoverySnapshotExpired: discoverySnapshotExpired,
                   foregroundSnapshotMismatch: foregroundSnapshotMismatch)
 }
 
@@ -109,7 +104,8 @@ private struct Deadline {
         guard remaining > 0.001 else { throw failure("deadline_exceeded", "No AX call budget remains") }
         let result = AXUIElementSetMessagingTimeout(element, Float(min(0.2, remaining)))
         guard result == .success else {
-            throw failure("ax_unavailable", "Cannot set AX messaging deadline: \(result.rawValue)")
+            throw failure("ax_unavailable", "Cannot set AX messaging deadline: \(result.rawValue)",
+                          attributeFailure: AXAttributeFailure(name: "AXMessagingTimeout", error: result))
         }
         try check()
     }
@@ -828,7 +824,11 @@ private func axPID(_ element: AXUIElement, _ deadline: Deadline) throws -> Int32
     var pid: pid_t = 0
     let result = AXUIElementGetPid(element, &pid)
     try deadline.check()
-    guard result == .success, pid > 0 else { throw failure("ax_unavailable", "AX process identity unavailable") }
+    guard result == .success else {
+        throw failure("ax_unavailable", "AX process identity unavailable: \(result.rawValue)",
+                      attributeFailure: AXAttributeFailure(name: "AXPID", error: result))
+    }
+    guard pid > 0 else { throw failure("ax_unavailable", "AX process identity unavailable") }
     return pid
 }
 
@@ -1305,6 +1305,18 @@ private func nativeText(_ element: AXUIElement, _ deadline: Deadline) throws -> 
     return text
 }
 
+// Only a read-only semantic query may translate missing AXWindows into a
+// semantic gap. Input/modal validation keeps the original hard refusal.
+private func readOnlySemantics<T>(_ read: () throws -> T) throws -> T {
+    do { return try read() }
+    catch let error as NativeFailure where error.code == "modal_state_unproven"
+        && error.attributeFailure?.name == kAXWindowsAttribute
+        && (error.attributeFailure?.error == .attributeUnsupported || error.attributeFailure?.error == .noValue) {
+        throw failure("semantic_window_unavailable", error.message,
+                      details: error.details, attributeFailure: error.attributeFailure)
+    }
+}
+
 private func axList(_ element: AXUIElement, _ attribute: String, limit: Int,
                     _ deadline: Deadline, required: Bool = false) throws -> [AXUIElement] {
     try deadline.prepare(element)
@@ -1315,7 +1327,8 @@ private func axList(_ element: AXUIElement, _ attribute: String, limit: Int,
     let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
     try deadline.check()
     if result == .attributeUnsupported || result == .noValue {
-        if required { throw failure("modal_state_unproven", "Required AX inventory \(attribute) is unavailable") }
+        if required { throw failure("modal_state_unproven", "Required AX inventory \(attribute) is unavailable",
+                                    attributeFailure: AXAttributeFailure(name: attribute, error: result)) }
         return []
     }
     guard result == .success, let value, CFGetTypeID(value) == CFArrayGetTypeID() else {
@@ -1551,30 +1564,12 @@ private func axAncestor(_ element: AXUIElement, is ancestor: AXUIElement,
     }
 }
 
-// Only app.windows calls this wrapper. A vanished point-hit object or ancestor
-// invalidates the entire discovery snapshot; it is not an absent association.
-// Re-reading the same object, skipping it, or merging partial rows is forbidden.
-private func readDiscoveryAssociation<Value>(_ read: () throws -> Value) throws -> Value {
-    do { return try read() }
-    catch let original as NativeFailure where original.code == "ax_unavailable"
-        && original.attributeFailure?.error == .invalidUIElement {
-        if original.discoverySnapshotExpired { throw original }
-        throw failure(original.code, original.message + "; window discovery changed; refresh app.windows",
-                      details: original.details, attributeFailure: original.attributeFailure,
-                      focusAbsence: original.focusAbsence, modalSnapshotExpired: original.modalSnapshotExpired,
-                      discoverySnapshotExpired: true)
-    }
-}
-
 private func retryableInventoryFailure(_ error: NativeFailure) -> Bool {
-    guard error.code == "ax_unavailable" else { return false }
-    return error.attributeFailure?.error == .cannotComplete
-        || (error.discoverySnapshotExpired && error.attributeFailure?.error == .invalidUIElement)
+    error.code == "ax_unavailable" && error.attributeFailure?.error == .cannotComplete
 }
 
-// Typed AX busy replies, or expired app.windows association discovery, can
-// restart a complete read-only inventory. A partial array is never resumed or
-// merged. Cancellation, identity and the absolute caller deadline remain final.
+// Typed AX busy replies can restart a complete read-only inventory.
+// A partial array is never resumed or merged. Cancellation, identity and the absolute caller deadline remain final.
 private func retryCompleteInventory<Value>(original: NativeFailure,
     remaining: () -> TimeInterval, check: () throws -> Void, read: () throws -> Value,
     wait: (TimeInterval) -> Void) throws -> Value {
@@ -1596,9 +1591,7 @@ private func retryCompleteInventory<Value>(original: NativeFailure,
         }
     }
     try check()
-    // Preserve the original expired hit/ancestor cause if no complete fresh
-    // snapshot settled. A later AX busy read cannot replace it with a guess.
-    throw original.discoverySnapshotExpired ? original : latest
+    throw latest
 }
 
 private func readInventorySnapshot<Value>(_ app: NativeApp, _ context: RequestContext,
@@ -2086,19 +2079,20 @@ func associatedGeometry(_ ax: CGRect, _ surface: CGRect) -> Bool {
 }
 
 // Optional discovery has not established a logical-app relation at this point.
-// Only a failed system hit may be omitted; once the hit names our app, its AX
-// ownership/content failures remain target errors. Known-surface validation
-// calls associatedClientRoot directly and never takes this discovery path.
+// A hit naming our app is not yet a complete surface ownership proof. Typed
+// AX availability failures omit that unproven surface with partial coverage.
+// Known-surface validation calls associatedClientRoot directly and stays strict.
 private func unprovenAssociationProbe<Value>(check: () throws -> Void,
                                             read: () throws -> Value?) throws -> (Value?, Int32?) {
     do { return (try read(), nil) }
-    catch let error as NativeFailure where error.code == "association_unavailable"
-        && error.attributeFailure?.name == "AXElementAtPosition"
-        && error.attributeFailure?.error == .cannotComplete {
-        // Slow optional evidence cannot override caller cancellation/deadline
-        // or a replacement of the requested app.
+    catch let error as NativeFailure where ["association_unavailable", "ax_unavailable"].contains(error.code) {
+        guard let axError = error.attributeFailure?.error,
+              [AXError.failure, .cannotComplete, .invalidUIElement].contains(axError) else { throw error }
+        // This optional proof has not authorized a surface. Losing its hit or
+        // ancestors cannot invalidate independently proven WindowServer rows.
+        // Retained-surface/input validation never uses this discovery wrapper.
         try check()
-        return (nil, AXError.cannotComplete.rawValue)
+        return (nil, axError.rawValue)
     }
 }
 
@@ -2121,8 +2115,8 @@ private func associatedClientRoot(_ surface: CGRecord, app: NativeApp,
         var hit: AXUIElement?
         let result = AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &hit)
         try context.deadline.check()
-        if result == .cannotComplete {
-            throw failure("association_unavailable", "Public AX surface attribution did not complete",
+        if [AXError.failure, .cannotComplete, .invalidUIElement].contains(result) {
+            throw failure("association_unavailable", "Public AX surface attribution failed: \(result.rawValue)",
                           attributeFailure: AXAttributeFailure(name: "AXElementAtPosition", error: result))
         }
         guard result == .success, let hit, try axPID(hit, context.deadline) == app.pid else { continue }
@@ -2267,7 +2261,7 @@ private struct NativeElement {
     let regionProof: RegionElementProof<AXUIElement>?
 
     var json: [String: Any] {
-        ["id": id, "identity": "ax:\(identity)", "label": label, "role": role,
+        ["id": id, "identity": "ax:\(identity)", "rebind_identity": "ax:\(identity)", "label": label, "role": role,
          "name": name as Any? ?? NSNull(), "value": value as Any? ?? NSNull(),
          "enabled": enabled as Any? ?? NSNull(), "actions": (canPress ? ["press"] : []) + (canSetValue ? ["setValue"] : []), "can_press": canPress]
     }
@@ -2990,6 +2984,17 @@ private final class BackgroundInputValidation {
     }
 }
 
+// Launch policy is independent of whether a later input may need foreground.
+private func applicationOpenConfiguration() -> NSWorkspace.OpenConfiguration {
+    let configuration = NSWorkspace.OpenConfiguration()
+    configuration.activates = false
+    configuration.hides = false
+    configuration.createsNewApplicationInstance = false
+    configuration.allowsRunningApplicationSubstitution = false
+    configuration.addsToRecentItems = false
+    return configuration
+}
+
 private final class NativeStore: @unchecked Sendable {
     let lock = NSLock()
     private struct BorrowedFocus {
@@ -3139,11 +3144,11 @@ private final class NativeStore: @unchecked Sendable {
                     try context.deadline.check()
                     try context.verify(app)
                 }, read: {
-                    try readDiscoveryAssociation { try associatedClientRoot(record, app: app, context) }
+                    try associatedClientRoot(record, app: app, context)
                 })
                 if let probeError {
                     associationErrors.append(probeError)
-                    // Stop this optional phase after its first transient failure.
+                    // Stop this optional phase after its first unavailable proof.
                     // More unrelated AX reads must not consume the entire call
                     // budget and discard already proven same-process surfaces.
                     break
@@ -3170,11 +3175,33 @@ private final class NativeStore: @unchecked Sendable {
         let active = Set(candidates.map { WindowSlot(app: app, id: $0.0.id) })
         windows = windows.filter { $0.key.app.pid != app.pid || ($0.key.app == app && active.contains($0.key)) }
         associatedSurfaces = associatedSurfaces.filter { windows[$0.key] != nil }
+        // AX focus is an optional routing hint, never a surface ownership proof.
+        // Omnibox/tooltip surfaces can be in front without receiving keys.
+        var keyboardWindow: CGWindowID?
+        if candidates.count > 1 && dtwAccessibilityGranted() {
+            let hintDeadline = context.deadline.limited(to: ProcessInfo.processInfo.systemUptime + 0.1)
+            do {
+                let application = AXUIElementCreateApplication(app.pid)
+                if let focused = try nativeFocusedWindow(application, pid: app.pid, deadline: hintDeadline) {
+                    let id = try axWindowID(focused, hintDeadline)
+                    if candidates.contains(where: { $0.0.id == id }) { keyboardWindow = id }
+                }
+            } catch let error as NativeFailure where ["ax_unavailable", "window_unproven", "focus_unproven", "deadline_exceeded"].contains(error.code) {
+                // A local hint timeout or unreadable AX must not poison CG reads.
+                try context.deadline.check()
+                try context.verify(app)
+            }
+        }
         var rows: [[String: Any]] = []
         for (record, title) in candidates {
             var row = try registerSurface(record, title: title, app: app, association: associated[record.id])
             row["scene"] = ["bounds": record.coordinates,
                             "rank": visibleSource.firstIndex { ($0[kCGWindowNumber as String] as? UInt32) == record.id } ?? (visibleSource.count + (source.firstIndex { ($0[kCGWindowNumber as String] as? UInt32) == record.id } ?? source.count))]
+            if let keyboardWindow {
+                var scene = row["scene"] as! [String: Any]
+                scene["keyboard_focused"] = record.id == keyboardWindow
+                row["scene"] = scene
+            }
             rows.append(row)
         }
         // Associated AX root replacement can keep the CG ID/owner while making
@@ -4822,10 +4849,7 @@ private final class NativeStore: @unchecked Sendable {
                             "postcondition": "application_running", "apps": running.map(\.json)]
                 }
                 let completion = ApplicationOpenCompletion()
-                let configuration = NSWorkspace.OpenConfiguration()
-                configuration.activates = request["input_policy"] as? String == "auto"
-                configuration.createsNewApplicationInstance = false
-                configuration.addsToRecentItems = false
+                let configuration = applicationOpenConfiguration()
                 try context.deadline.check()
                 guard dtwWithInputAdmission({
                     attempted = true
@@ -5090,8 +5114,8 @@ private final class NativeStore: @unchecked Sendable {
             case "windows": return try listWindows(NativeApp(request["app"]), context)
             case "bind_window": return try bindWindow(request, context)
             case "probe_window_state": return try probeWindowState(request, context)
-            case "observe": return try observe(request, context)
-            case "observe_next": return try observeNext(request, context)
+            case "observe": return try readOnlySemantics { try observe(request, context) }
+            case "observe_next": return try readOnlySemantics { try observeNext(request, context) }
             case "read_text": return try readText(request, context)
             case "resolve_scroll_anchor": return try scrollAnchor(request, context, validating: false)
             case "validate_scroll_anchor": return try scrollAnchor(request, context, validating: true)

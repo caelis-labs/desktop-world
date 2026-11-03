@@ -1296,6 +1296,7 @@ mod lifecycle_tests {
                 image: None,
                 elements: vec![Element {
                     id: ElementId(1),
+                    rebind_identity: None,
                     identity: Some(format!("mock:{}", 1)),
                     label: "Action".into(),
                     role: "button".into(),

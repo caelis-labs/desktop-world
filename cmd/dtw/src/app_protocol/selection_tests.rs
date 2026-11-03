@@ -23,6 +23,7 @@ fn page(elements: Vec<Element>, more: bool, complete: bool, visited: u32) -> Pag
 fn element(id: u64, pressable: bool) -> Element {
     Element {
         id: ElementId(id),
+        rebind_identity: None,
         identity: Some(format!("mock:{}", id)),
         label: "Save".into(),
         role: "button".into(),

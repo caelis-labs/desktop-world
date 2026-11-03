@@ -43,6 +43,26 @@ return their original execution; new request IDs are new work. Full receipts are
 internal diagnostics, with no public query tool. See the [Agent reference](../skills/desktop-world/API.md)
 and [working convergence plan](agent-protocol-convergence-plan.md).
 
+## Read error boundaries
+
+A local accessibility failure must not become application absence or disable
+independently proven pixels. Degradation keeps its diagnostic and incomplete
+coverage; it never grants a new surface or dispatches/replays input.
+
+| Boundary | Failure policy |
+| --- | --- |
+| Optional macOS helper association | Typed AX failure, busy or expired hit/ancestor ends only the optional phase. Keep independently proven WindowServer surfaces and raw error codes; do not authorize the unproven helper. Retained helper validation remains strict. |
+| Semantic first page or continuation | Availability/stale-tree errors retire that query, discard its candidate IDs and allow independently validated fresh pixels. Native provider read errors may be generic (including UIA). No partial query proves selector uniqueness. |
+| Failed scene refresh | Retire the previous semantic and image input bindings before reading. A later input requires a newly established observation. |
+| Image rendering/layer changes | Recoverable errors retain window metadata and an explicit image error, without coordinate authority. Existing bounded transition refresh does not replay input. A failed explicit/automatic read is not repeated during script settlement. |
+| Permission, caller stop/deadline, app/provider identity, malformed replies | Preserve the original operation failure. Do not convert these to partial success. Capture retains structured permission details in its step error. |
+| Input, transport and cleanup | Preserve dispatch/uncertainty and independent cleanup diagnostics. An availability failure cannot authorize physical fallback, action replay, or a replacement owner while cleanup is unsettled. |
+
+Contract coverage uses the real `apps`/`exec` facade with first/later-page faults,
+valid PNG fallback and revoked-binding assertions, plus pure Swift controls for
+optional ancestry failures and strict retained ownership. These controls do not
+prove a particular live application's behavior or Windows GUI acceptance.
+
 ## Native resources and input
 
 Blocking native operations belong to cancellable private workers. Providers own
@@ -97,6 +117,28 @@ window capture does not establish AX operability, lock-screen support or a brows
 tab-sharing implementation. A future exact-tab provider must migrate tab/frame
 lifecycle, navigation invalidation, DOM references and CSS/image transforms
 together; native-window pixels are not tab viewport CSS coordinates.
+
+The scene facade retains model-visible object IDs and image coordinate templates
+across known sequential actions. Before semantic input it renews the native query
+and matches a provider-retained object credential plus role/name/enabled/actions.
+Comparison identities are separate from action credentials: UIA runtime IDs may
+be reused and cannot renew a consumed object binding. Before coordinate
+input it takes a fresh capture and compares scene geometry, layering, image mapping
+and the receiving surface at the supplied anchors. Fresh native bindings remain
+local to the current dispatch; comparisons for later points still use the last
+script-visible image. Content changes alone are not
+an input gate: animation, typing and scrolling must remain operable. Coordinates
+never prove semantic identity or who caused a UI change. Failed reads
+still retire the affected facade bindings. Core and providers retain their
+single-use observation and no-input-replay contracts; no second executor or
+Agent-managed session is introduced.
+
+Window layout can carry a private optional native keyboard-focus hint. Key input
+routes within the selected process instance, independently of visual overlay order;
+a sibling process's local focus hint cannot select that sibling. The hint never authorizes a surface
+or bypasses native focus checks. On macOS the hint is bounded and availability
+failures remain optional inventory gaps. Startup uses a nonactivating, nonhiding
+configuration independently of subsequent input policy.
 
 ## Script and transport boundaries
 

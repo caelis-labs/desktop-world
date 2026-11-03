@@ -2934,6 +2934,11 @@ fn parse_element(value: &Value) -> Result<Element, Error> {
     }
     Ok(Element {
         id: ElementId(number(value, "id")?),
+        rebind_identity: match value.get("rebind_identity") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(id)) if !id.is_empty() && id.len() <= 256 => Some(id.clone()),
+            _ => return Err(Error::InvalidObservation),
+        },
         identity: match value.get("identity") {
             None | Some(Value::Null) => None,
             Some(Value::String(id)) if !id.is_empty() && id.len() <= 256 => Some(id.clone()),
@@ -3295,7 +3300,13 @@ fn parse_window_rows(
                             .as_u64()
                             .and_then(|r| u32::try_from(r).ok())
                             .ok_or(Error::InvalidObservation)?;
-                        WindowLayout::new(rect, rank).ok_or(Error::InvalidObservation)
+                        let mut scene =
+                            WindowLayout::new(rect, rank).ok_or(Error::InvalidObservation)?;
+                        scene.keyboard_focused = layout
+                            .get("keyboard_focused")
+                            .map(|v| v.as_bool().ok_or(Error::InvalidObservation))
+                            .transpose()?;
+                        Ok(scene)
                     })
                     .transpose()?,
                 target,

@@ -273,6 +273,7 @@ fn native_identity_survives_insertion_but_removed_targets_never_retarget() {
         .to_owned();
     let original = Element {
         id: ElementId(9007199254740993),
+        rebind_identity: None,
         identity: Some("mock:9007199254740993".into()),
         label: "Increment".into(),
         name: Some("Increment".into()),
@@ -316,3 +317,6 @@ fn native_identity_survives_insertion_but_removed_targets_never_retarget() {
         b.data["value"]["view"]["elements"][0]["id"]
     );
 }
+
+#[path = "scene_sequence_tests.rs"]
+mod scene_sequence_tests;

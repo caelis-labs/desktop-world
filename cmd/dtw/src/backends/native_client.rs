@@ -1,6 +1,8 @@
 //! Bounded DTW protocol shared by the Windows and experimental X11 adapters.
 //! Native objects never leave their dedicated process; an interrupted call is
 //! never replayed. This module owns framing and validates the returned target.
+pub(crate) use super::error_wire::error_reply;
+use super::error_wire::reply_error;
 use super::process::{StopReason, TransportError, TransportErrorKind, Worker};
 use crate::computer::*;
 use base64::Engine;
@@ -672,9 +674,12 @@ pub(crate) fn parse_layout(value: Option<&Value>) -> Result<Option<WindowLayout>
         .as_u64()
         .and_then(|v| u32::try_from(v).ok())
         .ok_or(Error::InvalidObservation)?;
-    WindowLayout::new(bounds, rank)
-        .map(Some)
-        .ok_or(Error::InvalidObservation)
+    let mut layout = WindowLayout::new(bounds, rank).ok_or(Error::InvalidObservation)?;
+    layout.keyboard_focused = value
+        .get("keyboard_focused")
+        .map(|v| v.as_bool().ok_or(Error::InvalidObservation))
+        .transpose()?;
+    Ok(Some(layout))
 }
 
 pub fn parse_target(v: &Value) -> Result<WindowTarget, Error> {
@@ -719,6 +724,13 @@ fn parse_elements(v: &Value) -> Result<Vec<Element>, Error> {
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(Element {
                 id: ElementId(number(v, "id")?),
+                rebind_identity: match v.get("rebind_identity") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(id)) if !id.is_empty() && id.len() <= 256 => {
+                        Some(id.clone())
+                    }
+                    _ => return Err(Error::InvalidObservation),
+                },
                 identity: match v.get("identity") {
                     None | Some(Value::Null) => None,
                     Some(Value::String(id)) if !id.is_empty() && id.len() <= 256 => {
@@ -736,38 +748,6 @@ fn parse_elements(v: &Value) -> Result<Vec<Element>, Error> {
             })
         })
         .collect()
-}
-fn reply_error(v: &Value) -> Option<Error> {
-    let code = v["error"].as_str()?;
-    Some(match code {
-        "target_changed" => Error::TargetChanged,
-        "stale_observation" => Error::StaleObservation,
-        "timed_out" => Error::TimedOut,
-        "unsupported_capability" => Error::UnsupportedCapability,
-        "busy" => Error::Busy,
-        "invalid_point" => Error::InvalidPoint,
-        _ => Error::NativeFailure {
-            code: code.into(),
-            message: v["message"].as_str().unwrap_or(code).into(),
-        },
-    })
-}
-pub fn error_reply(error: Error, action: bool) -> Value {
-    let code = match &error {
-        Error::TargetChanged | Error::WrongApp => "target_changed",
-        Error::StaleObservation => "stale_observation",
-        Error::TimedOut => "timed_out",
-        Error::UnsupportedCapability => "unsupported_capability",
-        Error::Busy => "busy",
-        Error::InvalidPoint => "invalid_point",
-        Error::NativeFailure { code, .. } => code,
-        _ => "native_failure",
-    };
-    let mut reply = json!({"error":code,"message":format!("{error:?}")});
-    if action {
-        reply["dispatch"] = json!("not_dispatched");
-    }
-    reply
 }
 pub fn deadline(request: &Value) -> Result<Instant, Error> {
     let now = SystemTime::now()
@@ -818,6 +798,14 @@ mod tests {
             .unwrap();
         assert_eq!(layout.bounds(), [-100.0, 20.0, 300.0, 200.0]);
         assert_eq!(layout.rank, 2);
+        assert_eq!(layout.keyboard_focused, None);
+        let hint = json!({"bounds":[-100,20,300,200],"rank":2,"keyboard_focused":true});
+        assert_eq!(
+            parse_layout(Some(&hint)).unwrap().unwrap().keyboard_focused,
+            Some(true)
+        );
+        let invalid_hint = json!({"bounds":[-100,20,300,200],"rank":2,"keyboard_focused":"yes"});
+        assert!(parse_layout(Some(&invalid_hint)).is_err());
         for value in [
             json!({"bounds":[0,0,0,20],"rank":0}),
             json!({"bounds":[0,0,20],"rank":0}),

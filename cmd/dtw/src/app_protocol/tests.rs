@@ -58,10 +58,15 @@ struct Model {
     cleanup_error: Option<Error>,
     cleanup_after_capture: Option<Error>,
     capture_errors: std::collections::VecDeque<Error>,
+    capture_rgba: [u8; 4],
+    capture_error_after_action: Option<Error>,
+    capture_error_at: Option<(usize, Error)>,
     cleanup_after_action: Option<Error>,
     shutdown_gate: Option<(WorkerGate, Error)>,
     windows_error: Option<Error>,
     inventory: Option<WindowInventory>,
+    instance_inventories: HashMap<(u32, u64), WindowInventory>,
+    semantics_after_action: Option<Vec<Element>>,
 }
 struct Shared {
     model: Mutex<Model>,
@@ -70,6 +75,7 @@ struct Shared {
     captures: AtomicUsize,
     actions: AtomicUsize,
     anchored_scrolls: Mutex<Vec<(WindowTarget, ScrollRequest)>>,
+    input_targets: Mutex<Vec<WindowTarget>>,
     shutdowns: AtomicUsize,
     finishes: AtomicUsize,
 }
@@ -96,16 +102,22 @@ impl MockBackend {
                 cleanup_error: None,
                 cleanup_after_capture: None,
                 capture_errors: std::collections::VecDeque::new(),
+                capture_rgba: [255; 4],
+                capture_error_after_action: None,
+                capture_error_at: None,
                 cleanup_after_action: None,
                 shutdown_gate: None,
                 windows_error: None,
                 inventory: None,
+                instance_inventories: HashMap::new(),
+                semantics_after_action: None,
             }),
             windows: AtomicUsize::new(0),
             observes: AtomicUsize::new(0),
             captures: AtomicUsize::new(0),
             actions: AtomicUsize::new(0),
             anchored_scrolls: Mutex::new(Vec::new()),
+            input_targets: Mutex::new(Vec::new()),
             shutdowns: AtomicUsize::new(0),
             finishes: AtomicUsize::new(0),
         }))
@@ -153,6 +165,12 @@ impl MockBackend {
         }
         assert!(!panic, "controlled provider panic");
         let mut model = self.0.model.lock().unwrap();
+        if let Some(elements) = model.semantics_after_action.take() {
+            model.semantic_elements = Some(elements);
+        }
+        if let Some(error) = model.capture_error_after_action.take() {
+            model.capture_errors.push_back(error);
+        }
         if let Some(error) = model.cleanup_after_action.take() {
             model.cleanup_error.get_or_insert(error);
         }
@@ -179,6 +197,7 @@ impl MockBackend {
                     .unwrap_or_else(|| {
                         vec![Element {
                             id: ElementId(9007199254740993),
+                            rebind_identity: Some("retained:9007199254740993".into()),
                             identity: Some("mock:9007199254740993".into()),
                             label: "Increment".into(),
                             can_press: true,
@@ -241,6 +260,17 @@ impl Backend for MockBackend {
         if let Some(error) = self.0.model.lock().unwrap().windows_error.clone() {
             return Err(error);
         }
+        if let Some(inventory) = self
+            .0
+            .model
+            .lock()
+            .unwrap()
+            .instance_inventories
+            .get(&(app.pid, app.generation))
+            .cloned()
+        {
+            return Ok(inventory);
+        }
         if let Some(inventory) = self.0.model.lock().unwrap().inventory.clone() {
             return Ok(inventory);
         }
@@ -273,8 +303,20 @@ impl Backend for MockBackend {
         target: &WindowTarget,
         _: &CallContext<'_>,
     ) -> Result<BackendObservation<()>, Error> {
-        self.0.captures.fetch_add(1, Ordering::SeqCst);
-        if let Some(error) = self.0.model.lock().unwrap().capture_errors.pop_front() {
+        let count = self.0.captures.fetch_add(1, Ordering::SeqCst) + 1;
+        let failure = {
+            let mut model = self.0.model.lock().unwrap();
+            if model
+                .capture_error_at
+                .as_ref()
+                .is_some_and(|(at, _)| *at == count)
+            {
+                model.capture_error_at.take().map(|(_, error)| error)
+            } else {
+                model.capture_errors.pop_front()
+            }
+        };
+        if let Some(error) = failure {
             return Err(error);
         }
         let observation = self.read(target, true);
@@ -293,7 +335,13 @@ impl Backend for MockBackend {
     ) -> ActionOutcome {
         self.act(call)
     }
-    fn input(&self, _: &WindowTarget, _: &WindowInput, call: &CallContext<'_>) -> ActionOutcome {
+    fn input(
+        &self,
+        target: &WindowTarget,
+        _: &WindowInput,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        self.0.input_targets.lock().unwrap().push(target.clone());
         self.act(call)
     }
     fn supports_scroll_anchor(&self, _: ObservationKind) -> bool {
