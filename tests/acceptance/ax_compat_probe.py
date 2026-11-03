@@ -44,6 +44,7 @@ def main():
                         default=['count-range', 'range', 'opaque', 'no-windows'])
     parser.add_argument('--continue-effect-gaps', action='store_true',
                         help='Audit remaining cases after a missing hover effect; the run still fails')
+    parser.add_argument('--only-hover',action='store_true',help='Final acceptance of the only changed fallback shape')
     args = parser.parse_args()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -83,7 +84,8 @@ def main():
         shutil.copy2(fixture, executable)
         with (bundle / 'Contents/Info.plist').open('wb') as stream:
             plistlib.dump({'CFBundleExecutable': 'AXCompat', 'CFBundleIdentifier': 'dev.caelis.dtw.ax.' + uuid.uuid4().hex,
-                          'CFBundleName': 'DTW AX ' + profile, 'CFBundlePackageType': 'APPL'}, stream)
+                          'CFBundleName': 'DTW AX ' + profile, 'CFBundlePackageType': 'APPL',
+                          'NSPrincipalClass':'NSApplication'}, stream)
         log = (directory / 'fixture.log').open('w')
         child = subprocess.Popen([str(executable)], stdout=log, stderr=subprocess.STDOUT)
         owned.append((directory, child, log))
@@ -135,6 +137,18 @@ def main():
             else:
                 require(raw['windows_status'] != 0, raw)
             record(profile + ':provider_fault_proven', ax=raw)
+
+            if args.only_hover:
+                view=capture(bundle,'hover')
+                offset=len(state(directory)['gestures'])
+                client.execute(bundle,'await app.move('+json.dumps(point(view,directory,'pad-start'))+');')
+                wait_until(lambda:'move' in state(directory)['gestures'][offset:])
+                record(profile+':final_hover_callback')
+                client.execute(bundle,'await app.quit();')
+                child=next(child for root,child,_ in owned if root==directory)
+                require(child.wait(timeout=5)==0,'product quit did not close the owned fixture')
+                record(profile+':normal_quit_after_hover')
+                continue
 
             if profile == 'count-range' and args.baseline:
                 old = AppClient(args.baseline, out / 'baseline')
@@ -199,6 +213,12 @@ def main():
                        failure='dispatched but no fixture hover callback; input was not replayed')
             else:
                 record(profile + ':pointer_move')
+            if profile=='count-range' and 'move' in state(directory)['gestures']:
+                view=capture(bundle,'same-window-hover')
+                before=len(state(directory)['gestures'])
+                client.execute(bundle,'await app.move('+json.dumps(point(view,directory,'pad-end'))+');')
+                wait_until(lambda:'move' in state(directory)['gestures'][before:])
+                record('repeated_hover_effect_not_inferred_from_cursor_position')
             view = capture(bundle, profile + '-drag')
             pointer_before = state(directory)['pointer']
             samples_before = len(state(directory)['pointer_samples'])
@@ -238,10 +258,11 @@ def main():
                 before = state(directory)['clicks']
                 data, response = client.execute(bundle,
                     'await app.click(' + json.dumps(point(view, directory, 'button')) + ');', allow_error=True)
-                require(response.get('isError') and data['failure']['code'] == 'target_occluded', data)
-                require(state(directory)['clicks'] == before and state(foreign)['clicks'] == 0,
+                require(not response.get('isError'), data)
+                wait_until(lambda:state(directory)['clicks']==before+1)
+                require(state(foreign)['clicks'] == 0,
                         {'target': state(directory), 'foreign': state(foreign)})
-                record('foreign_occlusion_still_rejected_without_wrong_app_input', failure=data['failure'])
+                record('foreign_occlusion_uses_addressed_input_without_wrong_app_input')
                 stopped(foreign)
 
             view = capture(bundle, profile + '-stale')

@@ -131,6 +131,7 @@ static void unreadable(void) {
         @"window": @(self.window.windowNumber), @"clicks": @(self.clicks), @"keys": @(self.keys),
         @"wheels": @(self.wheels), @"text": text, @"gestures": self.gestures,
         @"active": @(NSApp.active), @"key_window": @(self.window.keyWindow), @"mouse": self.mouse,
+        @"modal": @(NSApp.modalWindow == self.window),
         @"frontmost_pid": @(NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier),
         @"pointer": [self pointer], @"pointer_samples": self.pointerSamples,
         @"pad_frame": NSStringFromRect(self.pad.frame), @"pad_bounds": NSStringFromRect(self.pad.bounds),
@@ -182,14 +183,20 @@ static void unreadable(void) {
     [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskScrollWheel handler:^NSEvent *(NSEvent *event) {
         self.wheels++; [self write]; return event;
     }];
-    [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown | NSEventMaskLeftMouseUp handler:^NSEvent *(NSEvent *event) {
+    [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown | NSEventMaskLeftMouseUp | NSEventMaskMouseMoved handler:^NSEvent *(NSEvent *event) {
         [self.mouse addObject:@{@"kind": @(event.type), @"window": @(event.windowNumber),
+                               @"window_title": event.window.title ?: @"", @"window_class": event.window ? NSStringFromClass(event.window.class) : @"nil",
                                @"x": @(event.locationInWindow.x), @"y": @(event.locationInWindow.y)}];
         [self write]; return event;
     }];
     [self.window makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES];
     NSTimer *timer = [NSTimer timerWithTimeInterval:0.05 repeats:YES block:^(NSTimer *timer) {
         if ([NSFileManager.defaultManager fileExistsAtPath:[self.root URLByAppendingPathComponent:@"quit"].path]) [NSApp terminate:nil];
+        NSURL *modal = [self.root URLByAppendingPathComponent:@"modal"];
+        if ([NSFileManager.defaultManager fileExistsAtPath:modal.path]) {
+            [NSFileManager.defaultManager removeItemAtURL:modal error:nil];
+            [NSApp runModalForWindow:self.window];
+        }
         NSURL *move = [self.root URLByAppendingPathComponent:@"move"];
         if ([NSFileManager.defaultManager fileExistsAtPath:move.path]) {
             [NSFileManager.defaultManager removeItemAtURL:move error:nil];
@@ -199,6 +206,7 @@ static void unreadable(void) {
         [self write];
     }];
     [NSRunLoop.mainRunLoop addTimer:timer forMode:NSRunLoopCommonModes];
+    [NSRunLoop.mainRunLoop addTimer:timer forMode:NSModalPanelRunLoopMode];
     [self write];
 }
 @end

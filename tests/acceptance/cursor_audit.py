@@ -11,6 +11,7 @@ import bisect
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
 import select
@@ -64,6 +65,7 @@ def summarize(root, samples):
                          'methods': methods, 'source_sha256': hashlib.sha256(source.encode()).hexdigest(),
                          'start_unix_ms': start['at_unix_ms'], 'end_unix_ms': frame['at_unix_ms'],
                          'tool_error': message.get('result', {}).get('isError', False),
+                         'dispatch': result.get('effects', {}).get('dispatch', {}),
                          'failure': result.get('failure', {}).get('code'),
                          'cursor': trace(samples[lo:hi])})
         for request_id, frame in pending.items():
@@ -82,6 +84,7 @@ def summarize(root, samples):
                 lo = max(0, bisect.bisect_left(times, frame['at_unix_ms']) - 1)
                 hi = min(len(samples), bisect.bisect_right(times, recovery['at_unix_ms']) + 1)
                 row.update(completion='no_reply_after_cancel',
+                           start_unix_ms=frame['at_unix_ms'],end_unix_ms=recovery['at_unix_ms'],
                            oracle_ends_at='first successful recovery read; not an action receipt',
                            cursor=trace(samples[lo:hi]))
             rows.append(row)
@@ -99,15 +102,46 @@ def directed_experiments(root, samples):
     return rows
 
 
+def attach_routes(root, rows):
+    traces = {}
+    for path in root.rglob('dtw-stderr.log'):
+        transport = str(path.parent.relative_to(root))
+        for line in path.read_text().splitlines():
+            if line.startswith('dtw_input '):
+                traces.setdefault(transport, []).append(json.loads(line.removeprefix('dtw_input ')))
+    for row in rows:
+        if 'start_unix_ms' in row and 'end_unix_ms' in row:
+            row['routes'] = [route for route in traces.get(str(Path(row['transcript']).parent), [])
+                             if row['start_unix_ms'] <= route['at_unix_ms'] <= row['end_unix_ms']]
+
+
+def independence_violation(row):
+    routes = row.get('routes', [])
+    borrowed = [route for route in routes if route['route'] == 'borrowed']
+    supported = {'native_hover_tracking','addressed_event_api_unavailable'}
+    if any(route['reason'] not in supported for route in borrowed):
+        return 'physical borrowing lacks classified capability evidence'
+    if routes and not borrowed and row['cursor']['status'] != 'stable':
+        return 'independent route did not preserve the sampled system cursor'
+    if not routes and any(method in ['click','move','drag','scroll'] for method in row.get('methods', [])) \
+            and any(row.get('dispatch', {}).get(state, 0) for state in ['dispatched', 'unknown']):
+        return 'native input route evidence missing'
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--observer', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--assert-independent', action='store_true',
+                        help='Fail on cursor movement in an addressed/native route or unclassified borrowing (requires DTW_INPUT_TRACE=1)')
     parser.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
     if not command:
         parser.error('a probe command after -- is required')
+    if args.assert_independent and os.environ.get('DTW_INPUT_TRACE') != '1':
+        parser.error('--assert-independent requires DTW_INPUT_TRACE=1')
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     out.chmod(0o700)
@@ -128,17 +162,22 @@ def main():
     # Probe output must be inside the audit directory; exact transcripts are
     # used rather than guessing completion or replaying a failed operation.
     rows = summarize(out, samples)
+    attach_routes(out, rows)
+    violations = [{'request_id': row['request_id'], 'transcript': row['transcript'], 'failure': issue}
+                  for row in rows if (issue := independence_violation(row))]
+    if args.assert_independent and not rows:
+        violations.append({'failure':'no MCP requests were observed inside the audit directory'})
     report = {'coordinate_space': 'global_screen_points', 'requested_sample_interval_ms': 2,
               'limits': ['Actual sample gaps are recorded per call; shorter excursions can be missed.',
                          'Position changes alone do not identify the actor. Match them to delivery source and fixture effects.'],
-              'probe_returncode': code, 'calls': rows,
+              'probe_returncode': code, 'calls': rows, 'independence_violations': violations,
               'directed_experiments': directed_experiments(out, samples), 'scope':
               'sampled actual system cursor, including transient movement; not an input route or virtual overlay'}
     (out / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
     print(json.dumps({'probe_returncode': code, 'observed_calls': len(rows),
                       'moved_calls': sum(row['cursor']['status'] == 'moved' for row in rows),
                       'report': str(out / 'report.json')}))
-    return code
+    return code or (1 if args.assert_independent and violations else 0)
 
 
 if __name__ == '__main__':

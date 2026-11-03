@@ -109,7 +109,7 @@ For a read-only independent system-cursor oracle around either current GUI probe
 
 ```sh
 xcrun swiftc tests/fixtures/cursor-observer/main.swift -o /tmp/dtw-cursor-observer
-python3 tests/acceptance/cursor_audit.py \
+DTW_INPUT_TRACE=1 python3 tests/acceptance/cursor_audit.py --assert-independent \
   --observer /tmp/dtw-cursor-observer --output /tmp/dtw-cursor-new-run -- \
   python3 tests/acceptance/app_scene_probe.py \
     --dtw /absolute/path/to/frozen/dtw --output /tmp/dtw-cursor-new-run/probe
@@ -122,6 +122,11 @@ cancelled request without a reply stays explicitly unreceipted; its cleanup
 interval ends at the first successful recovery read. Sampling cannot exclude
 shorter excursions or attribute ambient user motion by itself. Match each
 detected change to native delivery code and fixture effects.
+The assertion additionally requires classified private native route evidence for
+each observed input. See [input routing](macos-input-routing.md) for the permitted
+borrowing reasons and its evidence limits. For owned Chrome protocol coverage,
+wrap `directed_chromium_probe.py --dtw /absolute/path/to/frozen/dtw` the same way;
+it creates a fresh browser profile and verifies DOM hover, click and text selection.
 
 `directed_pointer_probe.py` is a separate owned AppKit feasibility experiment;
 it is not a product route. Wrap it with the same observer, adding `--peer` to

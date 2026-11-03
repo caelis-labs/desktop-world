@@ -6,6 +6,13 @@ import Darwin
 import Foundation
 
 let args = CommandLine.arguments
+if args.count == 3, args[1] == "inspect", let pid=Int32(args[2]),pid>0 {
+    let rows=(CGWindowListCopyWindowInfo(.optionOnScreenOnly,kCGNullWindowID) as? [[String:Any]] ?? []).filter {
+        ($0[kCGWindowOwnerPID as String] as? Int32)==pid && ($0[kCGWindowLayer as String] as? Int)==0
+    }
+    print(String(data:try! JSONSerialization.data(withJSONObject:rows),encoding:.utf8)!)
+    exit(0)
+}
 guard args.count == 12, ["public", "skylight"].contains(args[11]),
       let pid = Int32(args[2]), let window = UInt32(args[3]),
       let left = Double(args[4]), let top = Double(args[5]),
@@ -32,6 +39,7 @@ let ownerOf = resolveSymbol("SLSGetWindowOwner", (@convention(c) (UInt32, UInt32
 let psnOf = resolveSymbol("SLSGetConnectionPSN", (@convention(c) (UInt32, UnsafeMutableRawPointer) -> Int32).self)
 let postRecord = resolveSymbol("SLPSPostEventRecordTo", (@convention(c) (UnsafeRawPointer, UnsafeRawPointer) -> Int32).self)
 let postToPid = resolveSymbol("SLEventPostToPid", (@convention(c) (Int32, OpaquePointer) -> Void).self)
+let setField = resolveSymbol("SLEventSetIntegerValueField", (@convention(c) (OpaquePointer, UInt32, Int64) -> Void).self)
 var owner: UInt32 = 0
 var psn = [UInt8](repeating: 0, count: 8)
 guard ownerOf(connection(), window, &owner) == 0, owner != 0,
@@ -51,7 +59,7 @@ func post(_ type: CGEventType, _ point: CGPoint, _ previous: CGPoint, _ click: I
     event.setIntegerValueField(.mouseEventDeltaX, value: Int64((point.x - previous.x).rounded()))
     event.setIntegerValueField(.mouseEventDeltaY, value: Int64((point.y - previous.y).rounded()))
     for field: UInt32 in [51, 91, 92] {
-        event.setIntegerValueField(CGEventField(rawValue: field)!, value: Int64(window))
+        setField(OpaquePointer(Unmanaged.passUnretained(event).toOpaque()), field, Int64(window))
     }
     event.setIntegerValueField(CGEventField(rawValue: 40)!, value: Int64(pid))
     event.setIntegerValueField(CGEventField(rawValue: 7)!, value: type == .leftMouseDragged ? 0 : 3)

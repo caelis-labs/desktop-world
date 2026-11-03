@@ -3420,6 +3420,28 @@ private final class NativeStore: @unchecked Sendable {
                 "generation": associated?.ownerBirth ?? target.app.generation]
     }
 
+    private func inputFramework(_ target: NativeTarget, _ context: RequestContext) throws -> String {
+        guard let owner = try context.app(target.app.pid), owner.app == target.app else {
+            throw failure("app_changed", "Input application incarnation changed")
+        }
+        let bundle = URL(fileURLWithPath: owner.metadata.path)
+        let frameworks = bundle.appendingPathComponent("Contents/Frameworks")
+        let known = ["Electron Framework.framework", "Chromium Framework.framework",
+                     "Google Chrome Framework.framework", "Google Chrome Beta Framework.framework",
+                     "Google Chrome Dev Framework.framework", "Google Chrome Canary Framework.framework",
+                     "Microsoft Edge Framework.framework", "Brave Browser Framework.framework"]
+        if known.contains(where: { FileManager.default.fileExists(atPath: frameworks.appendingPathComponent($0).path) }) {
+            return "chromium"
+        }
+        if ["QtCore.framework", "Qt6Core.framework", "QtGui.framework"].contains(where: {
+            FileManager.default.fileExists(atPath: frameworks.appendingPathComponent($0).path)
+        }) { return "qt" }
+        let info = Bundle(url: bundle)?.infoDictionary ?? [:]
+        if info["NSPrincipalClass"] as? String == "NSApplication"
+            || info["NSMainNibFile"] is String || info["NSMainStoryboardFile"] is String { return "appkit" }
+        return "unknown"
+    }
+
     fileprivate func validate(_ target: NativeTarget, _ context: RequestContext,
                               input: Bool = true, phase: FocusValidationPhase = .validation,
                               originalTarget: AXUIElement? = nil,
@@ -4985,6 +5007,7 @@ private final class NativeStore: @unchecked Sendable {
                         throw failure("invalid_request", "Background input step has no matching admitted action")
                     }
                     let current = try validateSurface(target, validation.context)
+                    guard dtwAccessibilityGranted() else {throw failure("permission_required","Accessibility access is no longer granted")}
                     try validation.checkModalState { _ = try self.validateSurface(target, validation.context) }
                     try validation.context.verify(target.app)
                     return ["target": target.json, "bounds": current.coordinates, "surface_owner": surfaceOwner(target),
@@ -4992,6 +5015,23 @@ private final class NativeStore: @unchecked Sendable {
                                 deadline: validation.context.deadline)]
                 }
                 backgroundValidation = nil
+                if !keyboard {
+                    let current = try validateSurface(target, context)
+                    guard dtwAccessibilityGranted(request: true) else {
+                        let error = dtwPermissionError("accessibility")
+                        throw failure("permission_required", error["message"] as! String, details:error["details"] as? [String:Any])
+                    }
+                    // Modal state and AXChildren do not establish a pointer
+                    // delivery restriction. Address the captured CG surface.
+                    let framework = try inputFramework(target, context)
+                    if request["consume"] as? Bool == true {
+                        backgroundValidation = BackgroundInputValidation(target:target, deadlineMilliseconds:milliseconds,
+                            keyboard:false, context:context, window:nil)
+                    }
+                    return ["target":target.json,"bounds":current.coordinates,"surface_owner":surfaceOwner(target),
+                            "input_framework":framework,
+                            "chromium":framework == "chromium"]
+                }
                 do {
                     let current = try validateSurface(target, context)
                     let window = try validate(target, context).element
@@ -5032,6 +5072,13 @@ private final class NativeStore: @unchecked Sendable {
             case "validate_input_owner":
                 let app = try NativeApp(request["app"])
                 try context.verify(app)
+                if let owner = request["surface_owner"] as? [String:Any] {
+                    let pid = try integer(owner["pid"], "surface owner PID")
+                    let birth = try integer(owner["generation"], "surface owner generation")
+                    guard pid > 0, pid <= UInt64(Int32.max), try context.startStamp(Int32(pid)) == birth else {
+                        throw failure("app_changed", "Original input surface owner changed")
+                    }
+                }
                 return ["app": app.json]
             case "resolve_app":
                 guard let identifier = request["app_id"] as? String else { throw failure("invalid_request", "Missing application target") }

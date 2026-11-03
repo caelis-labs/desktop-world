@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 
-from cursor_audit import summarize, trace
+from cursor_audit import independence_violation, summarize, trace
 
 
 class CursorOracleTests(unittest.TestCase):
@@ -24,6 +24,12 @@ class CursorOracleTests(unittest.TestCase):
     def test_stable_cursor(self):
         rows = [{'unix_ms': index * 2, 'x': -20, 'y': 100} for index in range(3)]
         self.assertEqual(trace(rows)['status'], 'stable')
+
+    def test_route_contract_does_not_accept_restore_or_arbitrary_fallback(self):
+        moved={'status':'moved','before':[0,0],'after':[0,0]}
+        self.assertIsNotNone(independence_violation({'cursor':moved,'routes':[{'route':'addressed','reason':'pid_window_event'}]}))
+        self.assertIsNotNone(independence_violation({'cursor':moved,'routes':[{'route':'borrowed','reason':'children_unavailable'}]}))
+        self.assertIsNone(independence_violation({'cursor':moved,'routes':[{'route':'borrowed','reason':'native_hover_tracking'}]}))
 
     def test_cancelled_action_keeps_missing_receipt_and_measures_cleanup(self):
         def frame(direction, at, message):

@@ -4,6 +4,7 @@ mod control;
 mod keyboard;
 mod mouse;
 mod skylight;
+pub(super) use control::pointer_point;
 pub use control::Validate;
 use serde::Deserialize;
 use serde_json::Value;
@@ -38,12 +39,17 @@ struct Request {
     text: String,
     #[serde(default)]
     keys: Vec<String>,
+    #[serde(default)]
+    path: Vec<[f64; 2]>,
 }
 fn one() -> u32 {
     1
 }
 fn left() -> String {
     "left".into()
+}
+pub(super) fn pointer_available() -> bool {
+    skylight::pointer_available()
 }
 impl Request {
     fn validate(&self) -> anyhow::Result<()> {
@@ -66,6 +72,20 @@ impl Request {
                 anyhow::ensure!(
                     self.delta_x.unsigned_abs() <= 100 && self.delta_y.unsigned_abs() <= 100,
                     "scroll step limit exceeded"
+                );
+            }
+            "move" | "drag" => {
+                anyhow::ensure!(
+                    if self.operation == "move" {
+                        self.path.len() == 1
+                    } else {
+                        (2..=256).contains(&self.path.len())
+                    },
+                    "invalid pointer path"
+                );
+                anyhow::ensure!(
+                    self.path.iter().flatten().all(|p| p.is_finite()),
+                    "non-finite pointer path"
                 );
             }
             "type_text" => {}
@@ -106,10 +126,6 @@ impl Request {
         matches!(self.operation.as_str(), "type_text" | "keypress")
     }
     fn foreground_requirement(&self) -> Option<&'static str> {
-        // The donor only encodes a single right click.
-        if self.operation == "click" && self.button == "right" && self.count == 2 {
-            return Some("right double click requires foreground delivery");
-        }
         // Background TextEdit receives ordinary text but can ignore Return
         // inside a multiline request. Select the whole control-bearing request
         // before posting any prefix; never repair it with a replay.
@@ -157,7 +173,9 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
     // Missing background semantics are known before any native preparation or
     // input. The worker can then select its single foreground/HID attempt.
     if let Some(reason) = request.foreground_requirement() {
-        return control::rejected("background_unavailable", reason, true);
+        let mut result = control::rejected("background_unavailable", reason, true);
+        result["capability_evidence"] = serde_json::json!("native_keyboard_semantics");
+        return result;
     }
     let _pool = AutoreleasePool::new();
     let session = match control::Session::start(
@@ -170,6 +188,12 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
         Ok(session) => session,
         Err(error) => return error,
     };
+    if !request.keyboard() {
+        control::set_pointer_point(
+            (request.screen_x, request.screen_y),
+            (request.window_x, request.window_y),
+        );
+    }
     if let Err(error) = control::check() {
         return session.finish(Err(error), false);
     }
@@ -179,27 +203,41 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
         skylight::pointer_available()
     };
     let mut psn = [0u8; 8];
-    if !available || !skylight::get_process_psn_for_window(request.window_id, request.pid, &mut psn)
-    {
-        return session.finish(
+    if !available {
+        let mut result = session.finish(
             Err(anyhow::anyhow!(
                 "background native prerequisites are unavailable"
             )),
             true,
         );
+        result["capability_evidence"] = serde_json::json!("addressed_event_api_unavailable");
+        return result;
     }
-    let mut scope = skylight::WindowKeyScope::capture(request.pid, request.window_id);
-    if !scope.can_restore() {
+    if !skylight::get_process_psn_for_window(request.window_id, request.pid, &mut psn) {
+        return session.finish(
+            Err(anyhow::anyhow!(
+                "Addressed window connection could not be proven"
+            )),
+            false,
+        );
+    }
+    // Pointer events address their own window and do not borrow a sibling's
+    // key window. Requiring AX restoration here blocked sparse-AX apps and
+    // turned a successful popup-closing click into an unrelated cleanup error.
+    let mut scope = request
+        .keyboard()
+        .then(|| skylight::WindowKeyScope::capture(request.pid, request.window_id));
+    if scope.as_ref().is_some_and(|scope| !scope.can_restore()) {
         return session.finish(
             Err(anyhow::anyhow!(
                 "previous key window could not be retained for background cleanup"
             )),
-            true,
+            false,
         );
     }
     let result = (|| {
         if request.keyboard() {
-            scope.prime()?;
+            scope.as_mut().unwrap().prime()?;
             control::arm_keyboard(request.window_id);
         } else {
             anyhow::ensure!(
@@ -231,14 +269,26 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
                 request.count as usize,
                 &[],
             )?,
-            "click" => mouse::right_click_at_xy_with_window_local(
+            "click" => mouse::click_at_xy_button(
                 request.pid,
                 request.screen_x,
                 request.screen_y,
                 request.window_x,
                 request.window_y,
                 request.window_id,
+                request.count as usize,
+                core_graphics::event::CGMouseButton::Right,
                 &[],
+            )?,
+            "move" | "drag" => mouse::pointer_path(
+                request.pid,
+                request.window_id,
+                (
+                    request.screen_x - request.window_x,
+                    request.screen_y - request.window_y,
+                ),
+                &request.path,
+                request.operation == "drag",
             )?,
             "scroll" => {
                 // Split large line deltas without truncating requested movement.
@@ -283,7 +333,9 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
         }
         control::check_completed()
     })();
-    scope.cleanup();
+    if let Some(scope) = scope.as_mut() {
+        scope.cleanup();
+    }
     session.finish(result, false)
 }
 /// Private foreground bridge. Swift owns target validation, the physical
@@ -381,17 +433,10 @@ mod tests {
         assert_eq!(mods, vec!["META", "SHIFT"]);
     }
     #[test]
-    fn public_right_double_click_declines_before_native_preparation() {
-        extern "C" fn unexpected(_: *mut c_void, _: i32) -> i32 {
-            panic!("unsupported route performed native preparation")
-        }
-        let result = call(
-            r#"{"operation":"click","pid":5,"window_id":7,"deadline_unix_ms":100,"button":"right","count":2}"#,
-            std::ptr::null_mut(),
-            unexpected,
-        );
-        assert_eq!(result["dispatch"], "not_dispatched");
-        assert_eq!(result["fallback_allowed"], true);
+    fn right_double_click_is_an_addressed_pointer_capability() {
+        let request:Request=serde_json::from_str(r#"{"operation":"click","pid":5,"window_id":7,"deadline_unix_ms":100,"button":"right","count":2}"#).unwrap();
+        request.validate().unwrap();
+        assert_eq!(request.foreground_requirement(), None);
     }
     #[test]
     fn menu_equivalents_and_chromium_supplementary_text_decline_before_native_preparation() {

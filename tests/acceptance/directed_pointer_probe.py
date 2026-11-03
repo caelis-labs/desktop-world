@@ -20,6 +20,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--peer', action='store_true', help='Keep an owned peer app in front of the target')
+    parser.add_argument('--modal', action='store_true', help='Enter a real NSApplication modal event loop')
     parser.add_argument('--transport', choices=['public', 'skylight'], default='public')
     args = parser.parse_args()
     out = args.output.resolve()
@@ -59,6 +60,9 @@ def main():
     report = {'scope': 'experimental direct PID delivery on owned AppKit; not DTW support', 'cases': []}
     try:
         target = start('target', 'opaque')
+        if args.modal:
+            (target/'modal').touch()
+            wait_until(lambda:state(target).get('modal'))
         peer = start('peer', 'occluder') if args.peer else None
         if peer:
             wait_until(lambda: state(peer)['frontmost_pid'] == state(peer)['pid'])
@@ -78,6 +82,7 @@ def main():
             effect = {'move': 'move' in gestures, 'click': after['clicks'] == before['clicks'] + 1,
                       'drag': all(kind in gestures for kind in ['down', 'drag', 'up'])}[operation]
             row = {'operation': operation, 'transport': args.transport, 'start_unix_ms': started, 'end_unix_ms': ended,
+                   'modal':after.get('modal'),
                    'effect_proven': effect, 'target_active': after['active'],
                    'frontmost_pid': after['frontmost_pid'], 'expected_frontmost_pid': expected_frontmost,
                    'gestures': gestures, 'pressed_mouse_buttons': after['pressed_mouse_buttons'],

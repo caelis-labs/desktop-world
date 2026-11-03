@@ -37,6 +37,8 @@ struct State {
     pid: i32,
     key_window: Option<u32>,
     pointer_public: bool,
+    pointer_point: Option<(f64, f64)>,
+    pointer_local: Option<(f64, f64)>,
     prepared: bool,
     dispatched: bool,
     error: Option<String>,
@@ -80,6 +82,8 @@ impl Session {
                 pid,
                 key_window: None,
                 pointer_public,
+                pointer_point: None,
+                pointer_local: None,
                 prepared: false,
                 dispatched: false,
                 error: None,
@@ -293,6 +297,18 @@ fn owner_gate() -> anyhow::Result<Gate> {
 pub fn check() -> anyhow::Result<()> {
     target_gate()?.validate()
 }
+
+pub fn pointer_point() -> Option<(f64, f64)> {
+    CALL.with(|call| call.borrow().as_ref().and_then(|state| state.pointer_point))
+}
+pub fn set_pointer_point(screen: (f64, f64), local: (f64, f64)) {
+    CALL.with(|call| {
+        if let Some(state) = call.borrow_mut().as_mut() {
+            state.pointer_point = Some(screen);
+            state.pointer_local = Some(local);
+        }
+    });
+}
 /// A completed post may legitimately open a modal or close its window. Keep
 /// cancellation, expiry and the original error, without admitting another input
 /// or requiring the pre-input surface to remain operable after its effect.
@@ -410,6 +426,7 @@ fn key_window_allows(
 
 extern "C" {
     fn CGEventCreateCopy(event: *mut c_void) -> *mut c_void;
+    fn CGEventSetLocation(event: *mut c_void, point: core_graphics::geometry::CGPoint);
 }
 pub fn post_event(pid: i32, event: &CGEvent, auth: bool) {
     post_event_via(pid, event, auth, false)
@@ -518,6 +535,27 @@ pub fn post_event_via(pid: i32, event: &CGEvent, auth: bool, public: bool) {
     if gate.local().is_err() {
         return;
     }
+    if matches!(event.get_type(), CGEventType::LeftMouseDragged) {
+        CALL.with(|call| {
+            if let Some(state) = call.borrow_mut().as_mut() {
+                if let (Some(screen), Some(local)) = (state.pointer_point, state.pointer_local) {
+                    for pending in state.pending.iter_mut().filter(|pending| !pending.keyboard) {
+                        unsafe {
+                            CGEventSetLocation(
+                                pending.event.as_ptr().cast(),
+                                core_graphics::geometry::CGPoint::new(screen.0, screen.1),
+                            )
+                        };
+                        super::skylight::set_window_location(
+                            pending.event.as_ptr().cast(),
+                            local.0,
+                            local.1,
+                        );
+                    }
+                }
+            }
+        });
+    }
     if let Some(release) = release {
         CALL.with(|call| call.borrow_mut().as_mut().unwrap().pending.push(release));
     }
@@ -537,7 +575,7 @@ pub fn post_event_via(pid: i32, event: &CGEvent, auth: bool, public: bool) {
         CGEventType::LeftMouseUp | CGEventType::RightMouseUp | CGEventType::OtherMouseUp => {
             Some(PointerKind::Release)
         }
-        CGEventType::MouseMoved => Some(PointerKind::Move),
+        CGEventType::MouseMoved | CGEventType::LeftMouseDragged => Some(PointerKind::Move),
         CGEventType::ScrollWheel => Some(PointerKind::Scroll),
         _ => None,
     };

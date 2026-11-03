@@ -159,6 +159,15 @@ fn now_ms() -> u64 {
         .unwrap_or_default()
         .as_millis() as u64
 }
+fn trace_route(request: &Value, route: &str, reason: &str) {
+    if std::env::var("DTW_INPUT_TRACE").ok().as_deref() == Some("1") {
+        eprintln!(
+            "dtw_input {}",
+            json!({"at_unix_ms":now_ms(),"pid":std::process::id(),
+            "operation":request["operation"],"window":request["target"]["native_id"],"route":route,"reason":reason})
+        );
+    }
+}
 pub(super) fn remaining(request: &Value) -> Duration {
     Duration::from_millis(
         request["deadline_unix_ms"]
@@ -170,6 +179,7 @@ pub(super) fn remaining(request: &Value) -> Duration {
 
 struct BackgroundTarget {
     target: Value,
+    surface_owner: Value,
     bounds: Value,
     keyboard: bool,
     deadline: u64,
@@ -222,6 +232,7 @@ extern "C" fn validate_background(context: *mut c_void, phase: i32) -> i32 {
         // window must not strand input in its app; a reused PID is never accepted.
         let reply = native(
             &json!({"operation":"validate_input_owner", "app":target.target["app"],
+            "surface_owner":target.surface_owner,
             "deadline_unix_ms":now_ms()+150}),
             false,
         );
@@ -246,7 +257,25 @@ extern "C" fn validate_background(context: *mut c_void, phase: i32) -> i32 {
         "deadline_unix_ms":if phase == 0 {target.deadline} else {now_ms()+150}});
     let reply = native(&check, false);
     match background_validation(&reply, target, phase) {
-        Ok(()) => 1,
+        Ok(()) => {
+            if phase == 0 && !target.keyboard {
+                let Some((x, y)) = super::cua_input::pointer_point() else {
+                    return -1;
+                };
+                let point = native(
+                    &json!({"operation":"validate_directed_point","target":target.target,
+                    "pid":target.surface_owner["pid"],"surface_owner":target.surface_owner,
+                    "window_id":target.target["native_id"],"bounds":target.bounds,
+                    "screen_x":x,"screen_y":y,"deadline_unix_ms":target.deadline}),
+                    true,
+                );
+                if point["valid"] != true {
+                    target.failures.borrow_mut().record(phase, point);
+                    return 0;
+                }
+            }
+            1
+        }
         Err(error) => {
             target.failures.borrow_mut().record(phase, error);
             0
@@ -259,6 +288,11 @@ fn background_validation(
     phase: i32,
 ) -> Result<(), Value> {
     validate_reply(reply, &target.target)?;
+    if reply["surface_owner"] != target.surface_owner {
+        return Err(
+            json!({"error":"target_changed","message":"Addressed surface owner incarnation changed"}),
+        );
+    }
     if phase == 0 && modal_input_requires_foreground(reply)? {
         // The initial side-effect-free preflight has already selected a route.
         // A later modal transition stops this sequence; it cannot replay input
@@ -344,13 +378,8 @@ fn foreground_required(reason: &str) -> Value {
 /// A decline is an explicit, side-effect-free preflight result. An unknown or
 /// dispatched result never selects another route, even with a malformed flag.
 fn background_result(mut result: Value) -> BackgroundAttempt {
-    if result["fallback_allowed"] == true && result["dispatch"] == "not_dispatched" {
-        return BackgroundAttempt::Declined(
-            result["error"]["message"]
-                .as_str()
-                .unwrap_or("background_route_unavailable")
-                .to_owned(),
-        );
+    if let Some(reason) = super::input_route::fallback_reason(&result) {
+        return BackgroundAttempt::Declined(reason.code().into());
     }
     if result["error"].is_object() {
         result["message"] = result["error"]["message"].clone();
@@ -375,16 +404,12 @@ fn modal_input_requires_foreground(validation: &Value) -> Result<bool, Value> {
         )
 }
 
-fn background(request: &mut Value) -> BackgroundAttempt {
+fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> BackgroundAttempt {
     let op = request["operation"].as_str().unwrap_or("").to_owned();
-    if matches!(op.as_str(), "click" | "move" | "drag") {
-        // Image coordinates describe a visible physical pointer operation.
-        // PID-directed click changes/restores app-local key-window state; a
-        // transient popup can disappear after the click, making that unrelated
-        // restoration fail. Keep semantic presses on their own background path.
-        return BackgroundAttempt::Declined("visible_pointer_requires_foreground".into());
-    }
-    if !matches!(op.as_str(), "click" | "scroll" | "type_text" | "keypress") {
+    if !matches!(
+        op.as_str(),
+        "click" | "move" | "drag" | "scroll" | "type_text" | "keypress"
+    ) {
         return BackgroundAttempt::NotApplicable;
     }
     let keyboard = matches!(op.as_str(), "type_text" | "keypress");
@@ -421,22 +446,67 @@ fn background(request: &mut Value) -> BackgroundAttempt {
         ));
     }
     if !keyboard {
+        if op == "drag" && before["surface_owner"]["pid"] == request["target"]["app"]["pid"] {
+            let mut movement = request.clone();
+            movement["operation"] = json!("try_native_window_move");
+            movement["pid"] = before["surface_owner"]["pid"].clone();
+            movement["window_id"] = request["target"]["native_id"].clone();
+            let mut moved = native(&movement, true);
+            if moved["native_move"] != false {
+                trace_route(request, "native", "window_position");
+                moved["delivery"] = delivery(
+                    Some("semantic"),
+                    Some("native_window_position"),
+                    false,
+                    None,
+                );
+                return BackgroundAttempt::Completed(moved);
+            }
+        }
         request["screen_x"] = json!(x);
         request["screen_y"] = json!(y);
         request["_pointer_bounds"] = before["bounds"].clone();
     }
-    if before["surface_owner"]["pid"] != request["target"]["app"]["pid"] {
+    if keyboard && before["surface_owner"]["pid"] != request["target"]["app"]["pid"] {
         // Preserve the independently proven owner for foreground capture and
         // pointer presentation, without changing the logical app identity.
         // CUA cannot direct input to a different process on this app's behalf.
         return BackgroundAttempt::Declined("associated_surface_requires_foreground".into());
     }
-    match modal_input_requires_foreground(&before) {
-        Ok(true) => return BackgroundAttempt::Declined("modal_input_requires_foreground".into()),
-        Ok(false) => (),
-        Err(error) => return BackgroundAttempt::Completed(rejected(error, &op)),
+    if keyboard {
+        match modal_input_requires_foreground(&before) {
+            Ok(true) => {
+                return BackgroundAttempt::Declined("keyboard_focus_requires_activation".into())
+            }
+            Ok(false) => (),
+            Err(error) => return BackgroundAttempt::Completed(rejected(error, &op)),
+        }
     }
-    let mut input = json!({"operation":op,"pid":request["target"]["app"]["pid"],
+    if !keyboard {
+        if let Some(reason) = super::input_route::pointer_reason(
+            &op,
+            before["input_framework"].as_str().unwrap_or("unknown"),
+        ) {
+            return BackgroundAttempt::Declined(reason.code().into());
+        }
+        if !super::cua_input::pointer_available() {
+            return BackgroundAttempt::Declined(
+                super::input_route::PhysicalReason::MissingAddressedApi
+                    .code()
+                    .into(),
+            );
+        }
+        if !scene_worker {
+            return BackgroundAttempt::Completed(rejected(
+                json!({"error":"invalid_request","message":"Pointer input needs its scene owner"}),
+                &op,
+            ));
+        }
+        if let Err(error) = admit_scene(request, leased) {
+            return BackgroundAttempt::Completed(rejected(error, &op));
+        }
+    }
+    let mut input = json!({"operation":op,"pid":if keyboard {request["target"]["app"]["pid"].clone()} else {before["surface_owner"]["pid"].clone()},
         "window_id":request["target"]["native_id"],"deadline_unix_ms":request["deadline_unix_ms"],
         "chromium":before["chromium"].as_bool().unwrap_or(false),
         "screen_x":x,"screen_y":y,"window_x":x-left,"window_y":y-top});
@@ -445,8 +515,12 @@ fn background(request: &mut Value) -> BackgroundAttempt {
             input[key] = value.clone();
         }
     }
+    if let Some(path) = request.get("path").and_then(Value::as_array) {
+        input["path"] = Value::Array(path.iter().map(|p| json!([p["x"], p["y"]])).collect());
+    }
     let mut target = BackgroundTarget {
         target: request["target"].clone(),
+        surface_owner: before["surface_owner"].clone(),
         bounds: before["bounds"].clone(),
         keyboard,
         deadline: request["deadline_unix_ms"].as_u64().unwrap_or(0),
@@ -459,6 +533,7 @@ fn background(request: &mut Value) -> BackgroundAttempt {
             super::overlay::PointerRoute::Background,
         )
     });
+    trace_route(request, "addressed", "pid_window_event");
     let mut result = super::cua_input::call(
         &input.to_string(),
         (&mut target as *mut BackgroundTarget).cast(),
@@ -674,7 +749,7 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
             op,
         );
     }
-    let foreground_reason = match background(&mut request) {
+    let foreground_reason = match background(&mut request, leased, scene_worker) {
         BackgroundAttempt::Completed(result) => return result,
         BackgroundAttempt::Declined(reason) => Some(reason),
         BackgroundAttempt::NotApplicable if op == "focus" => Some("explicit_focus".to_owned()),
@@ -746,11 +821,27 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
     };
     let mut borrowed = false;
     if physical && op != "release_focus" {
+        trace_route(
+            &request,
+            if matches!(op, "click" | "move" | "drag" | "scroll") {
+                "borrowed"
+            } else {
+                "activated"
+            },
+            foreground_reason.as_deref().unwrap_or("explicit_focus"),
+        );
         // A physical route is not conditional on the application's AX tree.
         // Keep explicit semantic focus on its exact-window validation path.
         request["visual"] = json!(op != "focus");
         let mut prepare = request.clone();
         prepare["operation"] = json!("prepare_foreground");
+        // A hover is meaningful only while its borrowed physical pointer stays
+        // on the target. Immediate restoration raced AppKit event processing
+        // and dismissed hover UI before the ordinary read.
+        if op == "move" {
+            prepare.as_object_mut().unwrap().remove("screen_x");
+            prepare.as_object_mut().unwrap().remove("screen_y");
+        }
         let prepared = native(&prepare, false);
         if prepared.get("error").is_some() {
             let mut result = rejected(prepared, op);
@@ -773,6 +864,9 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
         )
     });
     let call_deadline = request["deadline_unix_ms"].as_u64().unwrap_or(0);
+    if matches!(op, "press" | "set_value") {
+        trace_route(&request, "native", "ax_action");
+    }
     let mut result = dispatch_owned(request, leased, scene_worker);
     if physical && op != "release_focus" {
         result["delivery"] =
@@ -962,18 +1056,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn visible_pointer_operations_decline_background_before_any_native_preflight() {
-        for operation in ["click", "move", "drag"] {
-            let mut request = json!({"operation":operation});
-            assert!(
-                matches!(background(&mut request), BackgroundAttempt::Declined(reason)
-                if reason == "visible_pointer_requires_foreground")
-            );
-            assert_eq!(request, json!({"operation":operation}));
-        }
-    }
-
-    #[test]
     fn association_pixels_require_scene_role_and_live_admission() {
         let mut leased = false;
         let request =
@@ -1141,10 +1223,11 @@ mod tests {
 
     #[test]
     fn only_undispatched_preflight_declines_allow_another_route() {
-        let reason = "Unicode payload requires foreground input";
-        let declined =
-            background_result(json!({"dispatch":"not_dispatched","fallback_allowed":true,
-            "error":{"code":"background_unavailable","message":reason}}));
+        let reason = "native_keyboard_semantics";
+        let declined = background_result(
+            json!({"dispatch":"not_dispatched","fallback_allowed":true,
+            "capability_evidence":reason,"error":{"code":"background_unavailable","message":reason}}),
+        );
         assert!(matches!(declined, BackgroundAttempt::Declined(value) if value == reason));
         for dispatch in ["dispatched", "unknown"] {
             let attempt = background_result(json!({"dispatch":dispatch,"fallback_allowed":true}));
@@ -1212,6 +1295,7 @@ mod tests {
         let identity = json!({"app":{"pid":7},"native_id":1,"generation":2});
         let mut target = BackgroundTarget {
             target: identity.clone(),
+            surface_owner: json!({"pid":7,"generation":1}),
             bounds: json!([10, 20, 300, 400]),
             keyboard: true,
             deadline: 0,
@@ -1235,6 +1319,7 @@ mod tests {
         let identity = json!({"app":{"pid":7},"native_id":1,"generation":2});
         let mut target = BackgroundTarget {
             target: identity.clone(),
+            surface_owner: json!({"pid":7,"generation":1}),
             bounds: json!([0, 0, 100, 100]),
             keyboard: true,
             deadline: 0,

@@ -1,5 +1,8 @@
 # macOS AX 与真实光标审查（2026-11-03）
 
+后续路由修复与最新规则见[macOS 输入路由](macos-input-routing.md)。本文保留修复前的
+逐操作证据；下面“当前产品”的结论只适用于本文记录的旧候选。
+
 本轮使用当前 `apps` / `exec` 协议、自建 AppKit 应用和固定开发二进制。
 没有操作 Telegram 聊天、修改 Agent 安装或发布版本。Windows 未做 GUI 验收。
 
