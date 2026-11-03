@@ -108,6 +108,47 @@ fn data(value: Value) -> Work {
         state_update: None,
     }
 }
+// Only semantic availability may degrade to fresh pixels. Caller termination,
+// permissions, process identity and malformed provider replies remain failures.
+fn semantic_fallback(code: &str) -> bool {
+    matches!(
+        code,
+        "ax_unavailable"
+            | "children_unavailable"
+            | "semantic_not_ready"
+            | "semantic_window_unavailable"
+            | "semantic_menu_unavailable"
+            | "window_unproven"
+            | "stale_observation"
+            | "stale_cursor"
+            | "unsupported_capability"
+            | "target_changed"
+            | "stale_window"
+            // UIA/AT-SPI read failures can use the generic provider code.
+            // A pixel read independently validates target and provider health.
+            | "backend_failed"
+    )
+}
+
+fn terminal_read_error(code: &str) -> bool {
+    matches!(
+        code,
+        "cancelled"
+            | "timeout"
+            | "timed_out"
+            | "closed"
+            | "deadline_exceeded"
+            | "native_stopping"
+            | "permission_required"
+            | "permission_denied"
+            | "app_changed"
+            | "wrong_app"
+            | "wrong_provider"
+            | "invalid_observation"
+            | "backend_failed"
+    )
+}
+
 fn bounds(row: &Value) -> Option<[f64; 4]> {
     let a = row["scene"]["bounds"].as_array()?;
     if a.len() != 4 {
@@ -524,6 +565,13 @@ impl<B: Backend + 'static> Coordinator<B> {
         attempt: u8,
         deadline: Instant,
     ) -> Work {
+        // A failed refresh cannot leave old semantic/pixel input authority.
+        // Keep identity labels and the viewport only for a successful new read.
+        {
+            let mut state = self.state.lock().unwrap();
+            state.scene.nodes.clear();
+            state.scene.raster = None;
+        }
         let mut startup = None;
         if self.runtime.instances().is_empty() && after {
             let current = json!({"running":false,"windows":[],"elements":[],"semantics":{"complete":true,"reason":"app_stopped"},"coverage":{"complete_within_scope":true}});
@@ -603,10 +651,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 deadline,
             );
             if let Some(e) = work.completed.error {
-                if matches!(
-                    e.code.as_str(),
-                    "cancelled" | "timeout" | "closed" | "deadline_exceeded"
-                ) {
+                if !semantic_fallback(&e.code) {
                     return failed(e);
                 }
                 semantic = json!({"complete":false,"reason":e.code});
@@ -629,7 +674,14 @@ impl<B: Backend + 'static> Coordinator<B> {
                     let more =
                         self.scene_atomic(id, "observe", json!({"cursor":page["next"]}), deadline);
                     if let Some(e) = more.completed.error {
-                        return failed(e);
+                        if !semantic_fallback(&e.code) {
+                            return failed(e);
+                        }
+                        // A failed continuation retires its observation. None
+                        // of the earlier pages may publish usable element IDs.
+                        candidates.clear();
+                        semantic = json!({"complete":false,"reason":e.code});
+                        break;
                     }
                     page = more.completed.value.unwrap();
                 }
@@ -698,6 +750,17 @@ impl<B: Backend + 'static> Coordinator<B> {
             || (!visible.is_empty() && elements.is_empty());
         let windows:Vec<_>=rows.iter().take(32).map(|r|json!({"id":window_ids[r["window_ref"].as_str().unwrap()],"title":r["title"].as_str().map(|s|s.chars().take(80).collect::<String>()),"title_truncated":r["title"].as_str().is_some_and(|s|s.chars().count()>80),"visible":r["visible"],"bounds":r["scene"]["bounds"]})).collect();
         let mut coverage = inventory["coverage"].clone();
+        // Keep optional native read gaps visible without exposing the full
+        // diagnostic ledger or replacing independently proven window coverage.
+        if let Some(codes) = inventory["diagnostics"]["error_codes"]
+            .as_array()
+            .filter(|v| !v.is_empty())
+        {
+            coverage["read_error_codes"] = json!(codes.iter().take(8).collect::<Vec<_>>());
+            if codes.len() > 8 {
+                coverage["read_errors_truncated"] = json!(true);
+            }
+        }
         coverage["windows_returned"] = json!(windows.len());
         coverage["windows_truncated"] = json!(rows.len() > windows.len());
         let current = json!({"running":true,"windows":windows,"elements":elements,"semantics":semantic,"coverage":coverage});
@@ -733,6 +796,13 @@ impl<B: Backend + 'static> Coordinator<B> {
                     state.scene.pixels = true;
                 }
                 Err(e) => {
+                    if terminal_read_error(e["code"].as_str().unwrap_or("")) {
+                        return failed(wire::WireError {
+                            code: e["code"].as_str().unwrap().into(),
+                            message: e["message"].as_str().unwrap_or("Image read failed").into(),
+                            details: e.get("details").cloned(),
+                        });
+                    }
                     if attempt == 0
                         && matches!(
                             e["code"].as_str(),
@@ -827,7 +897,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 deadline,
             );
             if let Some(e) = work.completed.error {
-                return Err(json!({"code":e.code,"message":e.message}));
+                return Err(error_json(&e));
             }
             let v = work
                 .completed
@@ -866,7 +936,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         // a canvas assembled across a modal, z-order or geometry transition.
         let check = self.scene_atomic(id, "windows", json!({}), deadline);
         if let Some(e) = check.completed.error {
-            return Err(json!({"code":e.code,"message":e.message}));
+            return Err(error_json(&e));
         }
         let after = check.completed.value.unwrap();
         let after_rows = ordered(

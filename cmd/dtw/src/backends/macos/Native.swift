@@ -25,9 +25,6 @@ private struct NativeFailure: Error {
     // Private evidence only: a fresh complete parent inventory no longer
     // contains a non-target AX object read from the previous snapshot.
     let modalSnapshotExpired: Bool
-    // Private provenance set only by app.windows association discovery. Input
-    // and retained-target validation never turn invalid AX objects into retries.
-    let discoverySnapshotExpired: Bool
     // A successful System AX application snapshot contradicts the separately
     // queried WindowServer front process. This is not a PID/birth substitution.
     let foregroundSnapshotMismatch: Bool
@@ -52,12 +49,10 @@ private func failure(_ code: String, _ message: String, details: [String: Any]? 
                      attributeFailure: AXAttributeFailure? = nil,
                      focusAbsence: FocusAbsence? = nil,
                      modalSnapshotExpired: Bool = false,
-                     discoverySnapshotExpired: Bool = false,
                      foregroundSnapshotMismatch: Bool = false) -> NativeFailure {
     NativeFailure(code: code, message: message, details: details,
                   attributeFailure: attributeFailure, focusAbsence: focusAbsence,
                   modalSnapshotExpired: modalSnapshotExpired,
-                  discoverySnapshotExpired: discoverySnapshotExpired,
                   foregroundSnapshotMismatch: foregroundSnapshotMismatch)
 }
 
@@ -109,7 +104,8 @@ private struct Deadline {
         guard remaining > 0.001 else { throw failure("deadline_exceeded", "No AX call budget remains") }
         let result = AXUIElementSetMessagingTimeout(element, Float(min(0.2, remaining)))
         guard result == .success else {
-            throw failure("ax_unavailable", "Cannot set AX messaging deadline: \(result.rawValue)")
+            throw failure("ax_unavailable", "Cannot set AX messaging deadline: \(result.rawValue)",
+                          attributeFailure: AXAttributeFailure(name: "AXMessagingTimeout", error: result))
         }
         try check()
     }
@@ -828,7 +824,11 @@ private func axPID(_ element: AXUIElement, _ deadline: Deadline) throws -> Int32
     var pid: pid_t = 0
     let result = AXUIElementGetPid(element, &pid)
     try deadline.check()
-    guard result == .success, pid > 0 else { throw failure("ax_unavailable", "AX process identity unavailable") }
+    guard result == .success else {
+        throw failure("ax_unavailable", "AX process identity unavailable: \(result.rawValue)",
+                      attributeFailure: AXAttributeFailure(name: "AXPID", error: result))
+    }
+    guard pid > 0 else { throw failure("ax_unavailable", "AX process identity unavailable") }
     return pid
 }
 
@@ -1551,30 +1551,12 @@ private func axAncestor(_ element: AXUIElement, is ancestor: AXUIElement,
     }
 }
 
-// Only app.windows calls this wrapper. A vanished point-hit object or ancestor
-// invalidates the entire discovery snapshot; it is not an absent association.
-// Re-reading the same object, skipping it, or merging partial rows is forbidden.
-private func readDiscoveryAssociation<Value>(_ read: () throws -> Value) throws -> Value {
-    do { return try read() }
-    catch let original as NativeFailure where original.code == "ax_unavailable"
-        && original.attributeFailure?.error == .invalidUIElement {
-        if original.discoverySnapshotExpired { throw original }
-        throw failure(original.code, original.message + "; window discovery changed; refresh app.windows",
-                      details: original.details, attributeFailure: original.attributeFailure,
-                      focusAbsence: original.focusAbsence, modalSnapshotExpired: original.modalSnapshotExpired,
-                      discoverySnapshotExpired: true)
-    }
-}
-
 private func retryableInventoryFailure(_ error: NativeFailure) -> Bool {
-    guard error.code == "ax_unavailable" else { return false }
-    return error.attributeFailure?.error == .cannotComplete
-        || (error.discoverySnapshotExpired && error.attributeFailure?.error == .invalidUIElement)
+    error.code == "ax_unavailable" && error.attributeFailure?.error == .cannotComplete
 }
 
-// Typed AX busy replies, or expired app.windows association discovery, can
-// restart a complete read-only inventory. A partial array is never resumed or
-// merged. Cancellation, identity and the absolute caller deadline remain final.
+// Typed AX busy replies can restart a complete read-only inventory.
+// A partial array is never resumed or merged. Cancellation, identity and the absolute caller deadline remain final.
 private func retryCompleteInventory<Value>(original: NativeFailure,
     remaining: () -> TimeInterval, check: () throws -> Void, read: () throws -> Value,
     wait: (TimeInterval) -> Void) throws -> Value {
@@ -1596,9 +1578,7 @@ private func retryCompleteInventory<Value>(original: NativeFailure,
         }
     }
     try check()
-    // Preserve the original expired hit/ancestor cause if no complete fresh
-    // snapshot settled. A later AX busy read cannot replace it with a guess.
-    throw original.discoverySnapshotExpired ? original : latest
+    throw latest
 }
 
 private func readInventorySnapshot<Value>(_ app: NativeApp, _ context: RequestContext,
@@ -2086,19 +2066,20 @@ func associatedGeometry(_ ax: CGRect, _ surface: CGRect) -> Bool {
 }
 
 // Optional discovery has not established a logical-app relation at this point.
-// Only a failed system hit may be omitted; once the hit names our app, its AX
-// ownership/content failures remain target errors. Known-surface validation
-// calls associatedClientRoot directly and never takes this discovery path.
+// A hit naming our app is not yet a complete surface ownership proof. Typed
+// AX availability failures omit that unproven surface with partial coverage.
+// Known-surface validation calls associatedClientRoot directly and stays strict.
 private func unprovenAssociationProbe<Value>(check: () throws -> Void,
                                             read: () throws -> Value?) throws -> (Value?, Int32?) {
     do { return (try read(), nil) }
-    catch let error as NativeFailure where error.code == "association_unavailable"
-        && error.attributeFailure?.name == "AXElementAtPosition"
-        && error.attributeFailure?.error == .cannotComplete {
-        // Slow optional evidence cannot override caller cancellation/deadline
-        // or a replacement of the requested app.
+    catch let error as NativeFailure where ["association_unavailable", "ax_unavailable"].contains(error.code) {
+        guard let axError = error.attributeFailure?.error,
+              [AXError.failure, .cannotComplete, .invalidUIElement].contains(axError) else { throw error }
+        // This optional proof has not authorized a surface. Losing its hit or
+        // ancestors cannot invalidate independently proven WindowServer rows.
+        // Retained-surface/input validation never uses this discovery wrapper.
         try check()
-        return (nil, AXError.cannotComplete.rawValue)
+        return (nil, axError.rawValue)
     }
 }
 
@@ -2121,8 +2102,8 @@ private func associatedClientRoot(_ surface: CGRecord, app: NativeApp,
         var hit: AXUIElement?
         let result = AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &hit)
         try context.deadline.check()
-        if result == .cannotComplete {
-            throw failure("association_unavailable", "Public AX surface attribution did not complete",
+        if [AXError.failure, .cannotComplete, .invalidUIElement].contains(result) {
+            throw failure("association_unavailable", "Public AX surface attribution failed: \(result.rawValue)",
                           attributeFailure: AXAttributeFailure(name: "AXElementAtPosition", error: result))
         }
         guard result == .success, let hit, try axPID(hit, context.deadline) == app.pid else { continue }
@@ -3139,11 +3120,11 @@ private final class NativeStore: @unchecked Sendable {
                     try context.deadline.check()
                     try context.verify(app)
                 }, read: {
-                    try readDiscoveryAssociation { try associatedClientRoot(record, app: app, context) }
+                    try associatedClientRoot(record, app: app, context)
                 })
                 if let probeError {
                     associationErrors.append(probeError)
-                    // Stop this optional phase after its first transient failure.
+                    // Stop this optional phase after its first unavailable proof.
                     // More unrelated AX reads must not consume the entire call
                     // budget and discard already proven same-process surfaces.
                     break

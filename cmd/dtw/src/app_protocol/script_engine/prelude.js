@@ -182,9 +182,10 @@
         if (op === "typeText" && typeof options === "string") options = {text:options};
         if (op === "keypress" && isArray(options)) options = {keys:options};
         if (op === "click" && typeof options === "string") options = {selector:{text:options}};
-        if (op !== "look" && op !== "capture") dirty = true;
+        // A read attempt settles pending readback even when it fails. Failure
+        // settlement must not silently repeat an explicit or automatic read.
+        dirty = op !== "look" && op !== "capture";
         const result = call(`scene.${op}`, options);
-        if (op === "look" || op === "capture") dirty = false;
         return result;
       };
       define(surface, op, {value:freeze(method), enumerable:true});
@@ -244,8 +245,12 @@
     } catch (_) { message = "exception could not be inspected"; }
     return envelope({ok:false, name:name === null ? null : apply(slice,name,[0,128]), message:clip(message,4000), line, op:op === null ? null : apply(slice,op,[0,128]), code:code === null ? null : apply(slice,code,[0,128]), call});
   };
+  const readAfter = () => {
+    dirty = false;
+    call("scene.after", {});
+  };
   const reject = (error) => {
-    if (agent && dirty && accepting) { try { call("scene.after", {}); } catch (_) {} }
+    if (agent && dirty && accepting) { try { readAfter(); } catch (_) {} }
     finish(rejectionEnvelope(error));
   };
   // Captured and removed by Rust before user code can execute.
@@ -253,7 +258,7 @@
   globalThis.__settle = (promise) => apply(then, promise, [
     (value) => {
       try {
-        if (agent && dirty) call("scene.after", {});
+        if (agent && dirty) readAfter();
         accepting = false;
         const value_json = encode(value === undefined ? null : value, "result", 65536, true);
         const state_json = encode(root, "state", 65536);

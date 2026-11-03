@@ -87,16 +87,23 @@ keep target IDs across consecutive reads. Missing, omitted or duplicate
 identities cannot revive a removed target ID; labels and traversal positions never establish identity.
 Selectors still require proven uniqueness; incomplete discovery can reject them.
 Semantic output is bounded to 80 elements / 24 KiB; window metadata to 32 rows,
-with titles bounded to 80 characters. Coverage marks omissions. `changed:false`
+with titles bounded to 80 characters. Coverage marks omissions. Optional native
+read gaps include bounded `coverage.read_error_codes`; a gap never authorizes an
+unproven surface. `changed:false`
 compares these observed fields; visual-only changes require capture.
 An explicit `look()` uses semantics when available, ending automatic visual
 follow-ups and retiring the previous image binding; unavailable semantics still
-trigger an image fallback.
+trigger an image fallback. If any semantic continuation fails, its earlier pages
+are discarded and semantics stay explicitly incomplete; a fresh image may still
+be used. A failed refresh retires previous element and pixel input bindings;
+script settlement does not repeat the failed read.
 
 The compositor currently requires provider layout metadata for multiple
 surfaces (implemented on macOS and Windows), supports at most 16 visible surfaces and a
-1600-pixel maximum canvas dimension. Capture errors appear in `view.image.error`;
-there is no image block or coordinate binding on that failure. Multi-monitor
+1600-pixel maximum canvas dimension. Recoverable capture errors appear in
+`view.image.error`; there is no image block or coordinate binding on that failure.
+Permission, cancellation, deadline, process/provider identity and invalid-provider
+errors remain operation failures, including when they occur during capture. Multi-monitor
 space keeps its relative geometry. Offscreen/minimized surfaces are listed where
 available but are not invented in the visible canvas.
 
