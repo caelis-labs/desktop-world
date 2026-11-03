@@ -1,0 +1,2164 @@
+{
+  "date": "2026-11-03",
+  "version": "0.3.3",
+  "source_commit": "f07fb78e5013b16744a6694e39e5b2f2479a554f",
+  "latest_release": "https://github.com/caelis-labs/desktop-world/releases/tag/v0.3.3",
+  "windows_build": "10.0.22631",
+  "dpi": 120,
+  "scaling_percent": 125,
+  "primary_working_area": [
+    0,
+    0,
+    2560,
+    1380
+  ],
+  "runs": {
+    "baseline": {
+      "raw_report": "%LOCALAPPDATA%\\Temp\\dtw-win-audit-20261103-baseline\\report.json",
+      "artifact": {
+        "binary_sha256": "32d5585f5bdfa130603cf3bcd32f0aae3b54ddb5a8c6e9070ac70883a7985f83",
+        "scope": "exact installed binary/Skill bytes; signing and source receipts verified separately",
+        "package": "%USERPROFILE%\\.caelis\\builtin-plugins\\desktop-world\\e705a7f1efde6f891584bcef0d025ebeb8dee858148d8c0c1e94e436a5c73b4c",
+        "package_files": {
+          "skills/desktop-world/SKILL.md": "a38efb044dd5f2a281b9071b05a022a789d38d484215f04afee264148461d52d",
+          "skills/desktop-world/API.md": "27d4e58326bd0cae2152acb44d75a2497c6124ec06e8ffbceeca3a9e6752a7d7",
+          "skills/desktop-world/PATTERNS.md": "e6a24b8327ed64a3a02e50ed25eecc75d9a98bd4aeff0ae40ad436af30307f01"
+        }
+      },
+      "cases": [
+        {
+          "name": "discovery_required_app_and_public_surface",
+          "passed": true
+        },
+        {
+          "name": "returned_view_dedup_and_bounded_unchanged_delta",
+          "passed": true
+        },
+        {
+          "name": "semantic_click_unicode_keyboard_and_file_readback",
+          "passed": true
+        },
+        {
+          "name": "physical_bounds_order_and_covered_window_composition",
+          "passed": true
+        },
+        {
+          "name": "modal_close_fresh_read_without_input_replay",
+          "passed": true
+        }
+      ],
+      "passed": true,
+      "mcp_cleanup": {
+        "pid": 5228,
+        "exit_code": 0,
+        "forced": false
+      },
+      "fixture_exit": 0
+    },
+    "features_initial": {
+      "raw_report": "%LOCALAPPDATA%\\Temp\\dtw-win-audit-20261103-features\\report.json",
+      "artifact": {
+        "binary_sha256": "32d5585f5bdfa130603cf3bcd32f0aae3b54ddb5a8c6e9070ac70883a7985f83",
+        "scope": "exact installed binary/Skill bytes; signing and source receipts verified separately",
+        "package": "%USERPROFILE%\\.caelis\\builtin-plugins\\desktop-world\\e705a7f1efde6f891584bcef0d025ebeb8dee858148d8c0c1e94e436a5c73b4c",
+        "package_files": {
+          "skills/desktop-world/SKILL.md": "a38efb044dd5f2a281b9071b05a022a789d38d484215f04afee264148461d52d",
+          "skills/desktop-world/API.md": "27d4e58326bd0cae2152acb44d75a2497c6124ec06e8ffbceeca3a9e6752a7d7",
+          "skills/desktop-world/PATTERNS.md": "e6a24b8327ed64a3a02e50ed25eecc75d9a98bd4aeff0ae40ad436af30307f01"
+        }
+      },
+      "cases": [
+        {
+          "name": "apps_filter_pagination_coverage",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "look_full_and_method_surface",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "unchanged_delta",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "selector_click",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "semantic_id_click",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "unicode_and_keyboard_save",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 3
+            },
+            "evidence": {
+              "unverified": 3
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "saved_bytes",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "capture",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "coordinate_left_click",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "coordinate_right_click",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "coordinate_double_click",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "anchored_vertical_scroll",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "default_vertical_scroll",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "horizontal_scroll_response",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "move_response",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.move failed: This backend does not support the capability"
+          },
+          "failure": {
+            "call": 1,
+            "code": "unsupported_capability",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.move failed: This backend does not support the capability",
+            "operation": "scene.move"
+          },
+          "effects": {
+            "dispatch": {
+              "not_dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "drag_response",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.drag failed: This backend does not support the capability"
+          },
+          "failure": {
+            "call": 1,
+            "code": "unsupported_capability",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.drag failed: This backend does not support the capability",
+            "operation": "scene.drag"
+          },
+          "effects": {
+            "dispatch": {
+              "not_dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "quit_response",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.quit failed: This backend does not support the capability"
+          },
+          "failure": {
+            "call": 1,
+            "code": "unsupported_capability",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.quit failed: This backend does not support the capability",
+            "operation": "scene.quit"
+          },
+          "effects": {
+            "dispatch": {
+              "not_dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "unknown_argument",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.look failed: Unknown app argument; see Skill API.md"
+          },
+          "failure": {
+            "call": 1,
+            "code": "invalid_args",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.look failed: Unknown app argument; see Skill API.md",
+            "operation": "scene.look"
+          },
+          "effects": null
+        },
+        {
+          "name": "invalid_scroll_range",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.scroll failed: command.delta_y must be an integer from -100 to 100"
+          },
+          "failure": {
+            "call": 1,
+            "code": "invalid_request",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.scroll failed: command.delta_y must be an integer from -100 to 100",
+            "operation": "scene.scroll"
+          },
+          "effects": null
+        },
+        {
+          "name": "out_of_image_coordinate",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: Point is outside the returned image"
+          },
+          "failure": {
+            "call": 1,
+            "code": "invalid_arguments",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: Point is outside the returned image",
+            "operation": "scene.click"
+          },
+          "effects": null
+        },
+        {
+          "name": "mixed_click_modes",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: click requires exactly one target, selector or x/y pair"
+          },
+          "failure": {
+            "call": 1,
+            "code": "invalid_arguments",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: click requires exactly one target, selector or x/y pair",
+            "operation": "scene.click"
+          },
+          "effects": null
+        },
+        {
+          "name": "nonexistent_target",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: Target is not in the latest app observation"
+          },
+          "failure": {
+            "call": 1,
+            "code": "target_changed",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: Target is not in the latest app observation",
+            "operation": "scene.click"
+          },
+          "effects": null
+        },
+        {
+          "name": "selector_not_found",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: No element matched the selector. The selected action was not dispatched"
+          },
+          "failure": {
+            "call": 1,
+            "code": "selector_not_found",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: No element matched the selector. The selected action was not dispatched",
+            "operation": "scene.click"
+          },
+          "effects": {
+            "dispatch": {
+              "not_dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "menu_scope_response",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: This backend does not support the capability"
+          },
+          "failure": {
+            "call": 1,
+            "code": "unsupported_capability",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: This backend does not support the capability",
+            "operation": "scene.click"
+          },
+          "effects": {
+            "dispatch": {
+              "not_dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "sandbox_globals",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "stale_geometry_rejected",
+          "observation_collected": false,
+          "error": null,
+          "failure": null,
+          "effects": null,
+          "diagnostic": "AssertionError"
+        },
+        {
+          "name": "modal_open",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "modal_capture",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "modal_keyboard_escape",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "read_only_cancellation_and_recovery",
+          "observation_collected": false,
+          "error": null,
+          "failure": null,
+          "effects": null,
+          "diagnostic": "Empty: "
+        },
+        {
+          "name": "multiple_process_inventory",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "multiple_process_selector_routing",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: Call app.look() before input; typing needs an editing window"
+          },
+          "failure": {
+            "call": 1,
+            "code": "look_required",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: Call app.look() before input; typing needs an editing window",
+            "operation": "scene.click"
+          },
+          "effects": null
+        },
+        {
+          "name": "stopped_path_look_response",
+          "observation_collected": true,
+          "error": {
+            "code": "app_unavailable",
+            "details": {
+              "provider_code": "app_unavailable"
+            },
+            "message": "Application target is unavailable"
+          },
+          "failure": null,
+          "effects": null
+        }
+      ],
+      "cleanup": [
+        {
+          "mcp": {
+            "pid": 43928,
+            "exit_code": 0,
+            "forced": false
+          }
+        },
+        {
+          "fixture_pid": 27080,
+          "exit_code": 0
+        },
+        {
+          "fixture_pid": 44944,
+          "exit_code": 0
+        }
+      ],
+      "artifact_unchanged": true
+    },
+    "features_controls": {
+      "raw_report": "%LOCALAPPDATA%\\Temp\\dtw-win-audit-20261103-features-controls\\report.json",
+      "artifact": {
+        "binary_sha256": "32d5585f5bdfa130603cf3bcd32f0aae3b54ddb5a8c6e9070ac70883a7985f83",
+        "scope": "exact installed binary/Skill bytes; signing and source receipts verified separately",
+        "package": "%USERPROFILE%\\.caelis\\builtin-plugins\\desktop-world\\e705a7f1efde6f891584bcef0d025ebeb8dee858148d8c0c1e94e436a5c73b4c",
+        "package_files": {
+          "skills/desktop-world/SKILL.md": "a38efb044dd5f2a281b9071b05a022a789d38d484215f04afee264148461d52d",
+          "skills/desktop-world/API.md": "27d4e58326bd0cae2152acb44d75a2497c6124ec06e8ffbceeca3a9e6752a7d7",
+          "skills/desktop-world/PATTERNS.md": "e6a24b8327ed64a3a02e50ed25eecc75d9a98bd4aeff0ae40ad436af30307f01"
+        }
+      },
+      "cases": [
+        {
+          "name": "apps_filter_pagination_coverage",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "look_full_and_method_surface",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "unchanged_delta",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "selector_click",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "semantic_id_click",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "unicode_and_keyboard_save",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 3
+            },
+            "evidence": {
+              "unverified": 3
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "saved_bytes",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "capture",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "coordinate_left_click",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "coordinate_right_click",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "coordinate_double_click",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "anchored_vertical_scroll",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "default_vertical_scroll",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "horizontal_scroll_response",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "move_response",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.move failed: This backend does not support the capability"
+          },
+          "failure": {
+            "call": 1,
+            "code": "unsupported_capability",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.move failed: This backend does not support the capability",
+            "operation": "scene.move"
+          },
+          "effects": {
+            "dispatch": {
+              "not_dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "drag_response",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.drag failed: This backend does not support the capability"
+          },
+          "failure": {
+            "call": 1,
+            "code": "unsupported_capability",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.drag failed: This backend does not support the capability",
+            "operation": "scene.drag"
+          },
+          "effects": {
+            "dispatch": {
+              "not_dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "quit_response",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.quit failed: This backend does not support the capability"
+          },
+          "failure": {
+            "call": 1,
+            "code": "unsupported_capability",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.quit failed: This backend does not support the capability",
+            "operation": "scene.quit"
+          },
+          "effects": {
+            "dispatch": {
+              "not_dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "unknown_argument",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.look failed: Unknown app argument; see Skill API.md"
+          },
+          "failure": {
+            "call": 1,
+            "code": "invalid_args",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.look failed: Unknown app argument; see Skill API.md",
+            "operation": "scene.look"
+          },
+          "effects": null
+        },
+        {
+          "name": "invalid_scroll_range",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.scroll failed: command.delta_y must be an integer from -100 to 100"
+          },
+          "failure": {
+            "call": 1,
+            "code": "invalid_request",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.scroll failed: command.delta_y must be an integer from -100 to 100",
+            "operation": "scene.scroll"
+          },
+          "effects": null
+        },
+        {
+          "name": "out_of_image_coordinate",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: Point is outside the returned image"
+          },
+          "failure": {
+            "call": 1,
+            "code": "invalid_arguments",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: Point is outside the returned image",
+            "operation": "scene.click"
+          },
+          "effects": null
+        },
+        {
+          "name": "mixed_click_modes",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: click requires exactly one target, selector or x/y pair"
+          },
+          "failure": {
+            "call": 1,
+            "code": "invalid_arguments",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: click requires exactly one target, selector or x/y pair",
+            "operation": "scene.click"
+          },
+          "effects": null
+        },
+        {
+          "name": "nonexistent_target",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: Target is not in the latest app observation"
+          },
+          "failure": {
+            "call": 1,
+            "code": "target_changed",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: Target is not in the latest app observation",
+            "operation": "scene.click"
+          },
+          "effects": null
+        },
+        {
+          "name": "selector_not_found",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: No element matched the selector. The selected action was not dispatched"
+          },
+          "failure": {
+            "call": 1,
+            "code": "selector_not_found",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: No element matched the selector. The selected action was not dispatched",
+            "operation": "scene.click"
+          },
+          "effects": {
+            "dispatch": {
+              "not_dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "menu_scope_response",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: This backend does not support the capability"
+          },
+          "failure": {
+            "call": 1,
+            "code": "unsupported_capability",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: This backend does not support the capability",
+            "operation": "scene.click"
+          },
+          "effects": {
+            "dispatch": {
+              "not_dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "sandbox_globals",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "stale_geometry_rejected",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: Target window geometry changed; inspect the returned view before new input"
+          },
+          "failure": {
+            "call": 1,
+            "code": "stale_scene",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: Target window geometry changed; inspect the returned view before new input",
+            "operation": "scene.click"
+          },
+          "effects": null
+        },
+        {
+          "name": "modal_open",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "modal_capture",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "modal_keyboard_escape",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "read_only_cancellation_and_recovery",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null,
+          "retained_error": {
+            "code": "backend_failed",
+            "message": "Stopped (request may have been sent: true)"
+          },
+          "recovery_result": "after-cancel"
+        },
+        {
+          "name": "unsupported_menu_foreground_effect",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: This backend does not support the capability"
+          },
+          "failure": {
+            "call": 1,
+            "code": "unsupported_capability",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: This backend does not support the capability",
+            "operation": "scene.click"
+          },
+          "effects": {
+            "dispatch": {
+              "not_dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          },
+          "before_foreground": false,
+          "after_foreground": true
+        },
+        {
+          "name": "multiple_process_inventory",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "multiple_process_selector_routing",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: Call app.look() before input; typing needs an editing window"
+          },
+          "failure": {
+            "call": 1,
+            "code": "look_required",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: Call app.look() before input; typing needs an editing window",
+            "operation": "scene.click"
+          },
+          "effects": null
+        },
+        {
+          "name": "multiple_process_front_order",
+          "observation_collected": false,
+          "error": null,
+          "failure": null,
+          "effects": null,
+          "diagnostic": "AssertionError: owned state did not reach its expected condition",
+          "actual_foreground_a": null,
+          "actual_foreground_b": null,
+          "returned_windows": null
+        },
+        {
+          "name": "stopped_path_look_response",
+          "observation_collected": true,
+          "error": {
+            "code": "app_unavailable",
+            "details": {
+              "provider_code": "app_unavailable"
+            },
+            "message": "Application target is unavailable"
+          },
+          "failure": null,
+          "effects": null
+        }
+      ],
+      "cleanup": [
+        {
+          "mcp": {
+            "pid": 46260,
+            "exit_code": 0,
+            "forced": false
+          }
+        },
+        {
+          "fixture_pid": 15772,
+          "exit_code": 0
+        },
+        {
+          "fixture_pid": 21960,
+          "exit_code": 0
+        },
+        {
+          "fixture_pid": 3932,
+          "exit_code": 0
+        }
+      ],
+      "artifact_unchanged": true
+    },
+    "multi_controls": {
+      "raw_report": "%LOCALAPPDATA%\\Temp\\dtw-win-audit-20261103-multi-controls\\report.json",
+      "artifact": {
+        "binary_sha256": "32d5585f5bdfa130603cf3bcd32f0aae3b54ddb5a8c6e9070ac70883a7985f83",
+        "scope": "exact installed binary/Skill bytes; signing and source receipts verified separately",
+        "package": "%USERPROFILE%\\.caelis\\builtin-plugins\\desktop-world\\e705a7f1efde6f891584bcef0d025ebeb8dee858148d8c0c1e94e436a5c73b4c",
+        "package_files": {
+          "skills/desktop-world/SKILL.md": "a38efb044dd5f2a281b9071b05a022a789d38d484215f04afee264148461d52d",
+          "skills/desktop-world/API.md": "27d4e58326bd0cae2152acb44d75a2497c6124ec06e8ffbceeca3a9e6752a7d7",
+          "skills/desktop-world/PATTERNS.md": "e6a24b8327ed64a3a02e50ed25eecc75d9a98bd4aeff0ae40ad436af30307f01"
+        }
+      },
+      "cases": [
+        {
+          "name": "apps_filter_pagination_coverage",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "look_full_and_method_surface",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "unchanged_delta",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "selector_click",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "semantic_id_click",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "unicode_and_keyboard_save",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 3
+            },
+            "evidence": {
+              "unverified": 3
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "saved_bytes",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "capture",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "coordinate_left_click",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "coordinate_right_click",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "coordinate_double_click",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "anchored_vertical_scroll",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "default_vertical_scroll",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "horizontal_scroll_response",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "move_response",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.move failed: This backend does not support the capability"
+          },
+          "failure": {
+            "call": 1,
+            "code": "unsupported_capability",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.move failed: This backend does not support the capability",
+            "operation": "scene.move"
+          },
+          "effects": {
+            "dispatch": {
+              "not_dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "drag_response",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.drag failed: This backend does not support the capability"
+          },
+          "failure": {
+            "call": 1,
+            "code": "unsupported_capability",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.drag failed: This backend does not support the capability",
+            "operation": "scene.drag"
+          },
+          "effects": {
+            "dispatch": {
+              "not_dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "quit_response",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.quit failed: This backend does not support the capability"
+          },
+          "failure": {
+            "call": 1,
+            "code": "unsupported_capability",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.quit failed: This backend does not support the capability",
+            "operation": "scene.quit"
+          },
+          "effects": {
+            "dispatch": {
+              "not_dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "unknown_argument",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.look failed: Unknown app argument; see Skill API.md"
+          },
+          "failure": {
+            "call": 1,
+            "code": "invalid_args",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.look failed: Unknown app argument; see Skill API.md",
+            "operation": "scene.look"
+          },
+          "effects": null
+        },
+        {
+          "name": "invalid_scroll_range",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.scroll failed: command.delta_y must be an integer from -100 to 100"
+          },
+          "failure": {
+            "call": 1,
+            "code": "invalid_request",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.scroll failed: command.delta_y must be an integer from -100 to 100",
+            "operation": "scene.scroll"
+          },
+          "effects": null
+        },
+        {
+          "name": "out_of_image_coordinate",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: Point is outside the returned image"
+          },
+          "failure": {
+            "call": 1,
+            "code": "invalid_arguments",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: Point is outside the returned image",
+            "operation": "scene.click"
+          },
+          "effects": null
+        },
+        {
+          "name": "mixed_click_modes",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: click requires exactly one target, selector or x/y pair"
+          },
+          "failure": {
+            "call": 1,
+            "code": "invalid_arguments",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: click requires exactly one target, selector or x/y pair",
+            "operation": "scene.click"
+          },
+          "effects": null
+        },
+        {
+          "name": "nonexistent_target",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: Target is not in the latest app observation"
+          },
+          "failure": {
+            "call": 1,
+            "code": "target_changed",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: Target is not in the latest app observation",
+            "operation": "scene.click"
+          },
+          "effects": null
+        },
+        {
+          "name": "selector_not_found",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: No element matched the selector. The selected action was not dispatched"
+          },
+          "failure": {
+            "call": 1,
+            "code": "selector_not_found",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: No element matched the selector. The selected action was not dispatched",
+            "operation": "scene.click"
+          },
+          "effects": {
+            "dispatch": {
+              "not_dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "menu_scope_response",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: This backend does not support the capability"
+          },
+          "failure": {
+            "call": 1,
+            "code": "unsupported_capability",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: This backend does not support the capability",
+            "operation": "scene.click"
+          },
+          "effects": {
+            "dispatch": {
+              "not_dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "sandbox_globals",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "stale_geometry_rejected",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: Target window geometry changed; inspect the returned view before new input"
+          },
+          "failure": {
+            "call": 1,
+            "code": "stale_scene",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: Target window geometry changed; inspect the returned view before new input",
+            "operation": "scene.click"
+          },
+          "effects": null
+        },
+        {
+          "name": "modal_open",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "modal_capture",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "modal_keyboard_escape",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "read_only_cancellation_and_recovery",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null,
+          "retained_error": {
+            "code": "backend_failed",
+            "message": "Stopped (request may have been sent: true)"
+          },
+          "recovery_result": "after-cancel"
+        },
+        {
+          "name": "unsupported_menu_foreground_effect",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: This backend does not support the capability"
+          },
+          "failure": {
+            "call": 1,
+            "code": "unsupported_capability",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: This backend does not support the capability",
+            "operation": "scene.click"
+          },
+          "effects": {
+            "dispatch": {
+              "not_dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          },
+          "before_foreground": false,
+          "after_foreground": true
+        },
+        {
+          "name": "multiple_process_inventory",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "multiple_process_selector_routing",
+          "observation_collected": true,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.click failed: Call app.look() before input; typing needs an editing window"
+          },
+          "failure": {
+            "call": 1,
+            "code": "look_required",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.click failed: Call app.look() before input; typing needs an editing window",
+            "operation": "scene.click"
+          },
+          "effects": null
+        },
+        {
+          "name": "multiple_process_front_order",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          },
+          "actual_foreground_a": true,
+          "actual_foreground_b": false,
+          "returned_windows": [
+            {
+              "bounds": [
+                462.0,
+                16.0,
+                416.0,
+                475.0
+              ],
+              "id": "w1",
+              "title": "DTW Windows Smoke B",
+              "title_truncated": false,
+              "visible": true
+            },
+            {
+              "bounds": [
+                28.0,
+                16.0,
+                416.0,
+                475.0
+              ],
+              "id": "w2",
+              "title": "DTW Windows Smoke A",
+              "title_truncated": false,
+              "visible": true
+            }
+          ]
+        },
+        {
+          "name": "multiple_process_separate_exec_context",
+          "observation_collected": true,
+          "attempts": [
+            {
+              "look_top": "DTW Windows Smoke A",
+              "click_failure": null,
+              "context_reset": false,
+              "a_increments": 3,
+              "b_increments": 0
+            },
+            {
+              "look_top": "DTW Windows Smoke A",
+              "click_failure": null,
+              "context_reset": false,
+              "a_increments": 4,
+              "b_increments": 0
+            },
+            {
+              "look_top": "DTW Windows Smoke B",
+              "click_failure": {
+                "call": 1,
+                "code": "look_required",
+                "kind": "exception",
+                "line": 1,
+                "message": "scene.click failed: Call app.look() before input; typing needs an editing window",
+                "operation": "scene.click"
+              },
+              "context_reset": false,
+              "a_increments": 4,
+              "b_increments": 0
+            },
+            {
+              "look_top": "DTW Windows Smoke B",
+              "click_failure": null,
+              "context_reset": false,
+              "a_increments": 4,
+              "b_increments": 1
+            },
+            {
+              "look_top": "DTW Windows Smoke B",
+              "click_failure": {
+                "call": 1,
+                "code": "look_required",
+                "kind": "exception",
+                "line": 1,
+                "message": "scene.click failed: Call app.look() before input; typing needs an editing window",
+                "operation": "scene.click"
+              },
+              "context_reset": false,
+              "a_increments": 4,
+              "b_increments": 1
+            },
+            {
+              "look_top": "DTW Windows Smoke A",
+              "click_failure": {
+                "call": 1,
+                "code": "look_required",
+                "kind": "exception",
+                "line": 1,
+                "message": "scene.click failed: Call app.look() before input; typing needs an editing window",
+                "operation": "scene.click"
+              },
+              "context_reset": false,
+              "a_increments": 4,
+              "b_increments": 1
+            }
+          ]
+        },
+        {
+          "name": "stopped_path_look_response",
+          "observation_collected": true,
+          "error": {
+            "code": "app_unavailable",
+            "details": {
+              "provider_code": "app_unavailable"
+            },
+            "message": "Application target is unavailable"
+          },
+          "failure": null,
+          "effects": null
+        }
+      ],
+      "cleanup": [
+        {
+          "mcp": {
+            "pid": 18800,
+            "exit_code": 0,
+            "forced": false
+          }
+        },
+        {
+          "fixture_pid": 45212,
+          "exit_code": 0
+        },
+        {
+          "fixture_pid": 19780,
+          "exit_code": 0
+        },
+        {
+          "fixture_pid": 41076,
+          "exit_code": 0
+        }
+      ],
+      "artifact_unchanged": true
+    },
+    "chrome": {
+      "raw_report": "%LOCALAPPDATA%\\Temp\\dtw-win-audit-20261103-chrome\\report.json",
+      "artifact": {
+        "binary_sha256": "32d5585f5bdfa130603cf3bcd32f0aae3b54ddb5a8c6e9070ac70883a7985f83",
+        "scope": "development binary; no installed-package claim"
+      },
+      "cases": [
+        {
+          "name": "chrome_look_capture",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "chrome_unicode_typing",
+          "observation_collected": false,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.typeText failed: Focused native text changed before Unicode input admission"
+          },
+          "failure": {
+            "call": 2,
+            "code": "backend_failed",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.typeText failed: Focused native text changed before Unicode input admission",
+            "operation": "scene.typeText"
+          },
+          "effects": {
+            "dispatch": {
+              "not_dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          },
+          "diagnostic": "see error/failure"
+        },
+        {
+          "name": "chrome_semantic_increment",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          },
+          "effect": {
+            "text": "",
+            "clicks": 1,
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "ready": true,
+            "dpr": 1.25
+          }
+        },
+        {
+          "name": "chrome_semantic_save",
+          "observation_collected": false,
+          "error": {
+            "code": "script_exception",
+            "message": "Error: Owned Chrome is not the selected window"
+          },
+          "failure": {
+            "call": null,
+            "code": null,
+            "kind": "exception",
+            "line": 1,
+            "message": "Error: Owned Chrome is not the selected window",
+            "operation": null
+          },
+          "effects": null,
+          "diagnostic": "owned_window_guard"
+        },
+        {
+          "name": "chrome_vertical_scroll",
+          "observation_collected": false,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          },
+          "diagnostic": "effect_timeout"
+        },
+        {
+          "name": "chrome_horizontal_scroll",
+          "observation_collected": false,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          },
+          "diagnostic": "effect_timeout"
+        },
+        {
+          "name": "chrome_native_open_dialog",
+          "observation_collected": false,
+          "error": {
+            "code": "script_exception",
+            "message": "Error: Owned Chrome is not the selected window"
+          },
+          "failure": {
+            "call": null,
+            "code": null,
+            "kind": "exception",
+            "line": 1,
+            "message": "Error: Owned Chrome is not the selected window",
+            "operation": null
+          },
+          "effects": null,
+          "diagnostic": "owned_window_guard"
+        },
+        {
+          "name": "chrome_after_dialog",
+          "observation_collected": false,
+          "error": {
+            "code": "script_exception",
+            "message": "Error: Owned Chrome is not the selected window"
+          },
+          "failure": {
+            "call": null,
+            "code": null,
+            "kind": "exception",
+            "line": 1,
+            "message": "Error: Owned Chrome is not the selected window",
+            "operation": null
+          },
+          "effects": null,
+          "diagnostic": "owned_window_guard"
+        }
+      ],
+      "mcp_cleanup": {
+        "pid": 6752,
+        "exit_code": 0,
+        "forced": false
+      },
+      "browser_exit": 1,
+      "forced_browser_cleanup": true,
+      "http_state": {
+        "text": "",
+        "clicks": 1,
+        "scroll_x": 0,
+        "scroll_y": 0,
+        "ready": true,
+        "dpr": 1.25
+      }
+    },
+    "edge": {
+      "raw_report": "%LOCALAPPDATA%\\Temp\\dtw-win-audit-20261103-edge\\report.json",
+      "artifact": {
+        "binary_sha256": "32d5585f5bdfa130603cf3bcd32f0aae3b54ddb5a8c6e9070ac70883a7985f83",
+        "scope": "development binary; no installed-package claim"
+      },
+      "cases": [
+        {
+          "name": "chrome_look_capture",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": null
+        },
+        {
+          "name": "chrome_ascii_typing",
+          "observation_collected": true,
+          "error": null,
+          "failure": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          },
+          "effect": {
+            "text": "owned ASCII",
+            "clicks": 0,
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "ready": true,
+            "dpr": 1.25
+          }
+        },
+        {
+          "name": "chrome_unicode_typing",
+          "observation_collected": false,
+          "error": {
+            "code": "script_exception",
+            "message": "scene.typeText failed: This backend does not support the capability"
+          },
+          "failure": {
+            "call": 3,
+            "code": "unsupported_capability",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.typeText failed: This backend does not support the capability",
+            "operation": "scene.typeText"
+          },
+          "effects": {
+            "dispatch": {
+              "dispatched": 1,
+              "not_dispatched": 1
+            },
+            "evidence": {
+              "unverified": 2
+            },
+            "interrupted": 0
+          },
+          "diagnostic": "see error/failure"
+        },
+        {
+          "name": "chrome_semantic_increment",
+          "observation_collected": false,
+          "error": {
+            "code": "script_exception",
+            "message": "Error: Owned Chrome is not the selected window"
+          },
+          "failure": {
+            "call": null,
+            "code": null,
+            "kind": "exception",
+            "line": 1,
+            "message": "Error: Owned Chrome is not the selected window",
+            "operation": null
+          },
+          "effects": null,
+          "diagnostic": "owned_window_guard"
+        },
+        {
+          "name": "chrome_semantic_save",
+          "observation_collected": false,
+          "error": {
+            "code": "script_exception",
+            "message": "Error: Owned Chrome is not the selected window"
+          },
+          "failure": {
+            "call": null,
+            "code": null,
+            "kind": "exception",
+            "line": 1,
+            "message": "Error: Owned Chrome is not the selected window",
+            "operation": null
+          },
+          "effects": null,
+          "diagnostic": "owned_window_guard"
+        },
+        {
+          "name": "chrome_vertical_scroll",
+          "observation_collected": false,
+          "error": {
+            "code": "script_exception",
+            "message": "Error: Owned Chrome is not the selected window"
+          },
+          "failure": {
+            "call": null,
+            "code": null,
+            "kind": "exception",
+            "line": 1,
+            "message": "Error: Owned Chrome is not the selected window",
+            "operation": null
+          },
+          "effects": null,
+          "diagnostic": "owned_window_guard"
+        },
+        {
+          "name": "chrome_horizontal_scroll",
+          "observation_collected": false,
+          "error": {
+            "code": "script_exception",
+            "message": "Error: Owned Chrome is not the selected window"
+          },
+          "failure": {
+            "call": null,
+            "code": null,
+            "kind": "exception",
+            "line": 1,
+            "message": "Error: Owned Chrome is not the selected window",
+            "operation": null
+          },
+          "effects": null,
+          "diagnostic": "owned_window_guard"
+        },
+        {
+          "name": "chrome_native_open_dialog",
+          "observation_collected": false,
+          "error": {
+            "code": "script_exception",
+            "message": "Error: Owned Chrome is not the selected window"
+          },
+          "failure": {
+            "call": null,
+            "code": null,
+            "kind": "exception",
+            "line": 1,
+            "message": "Error: Owned Chrome is not the selected window",
+            "operation": null
+          },
+          "effects": null,
+          "diagnostic": "owned_window_guard"
+        },
+        {
+          "name": "chrome_after_dialog",
+          "observation_collected": false,
+          "error": {
+            "code": "script_exception",
+            "message": "Error: Owned Chrome is not the selected window"
+          },
+          "failure": {
+            "call": null,
+            "code": null,
+            "kind": "exception",
+            "line": 1,
+            "message": "Error: Owned Chrome is not the selected window",
+            "operation": null
+          },
+          "effects": null,
+          "diagnostic": "owned_window_guard"
+        }
+      ],
+      "mcp_cleanup": {
+        "pid": 19624,
+        "exit_code": 0,
+        "forced": false
+      },
+      "browser_exit": 1,
+      "forced_browser_cleanup": true,
+      "http_state": {
+        "text": "owned ASCII",
+        "clicks": 0,
+        "scroll_x": 0,
+        "scroll_y": 0,
+        "ready": true,
+        "dpr": 1.25
+      }
+    }
+  },
+  "checks": {
+    "probe_syntax": "py_compile passed",
+    "state_publication_tests_host": "3/3 passed",
+    "state_publication_tests_sandbox": "2/3 passed; CreateFile sharing test blocked by sandbox; same test passes on Host"
+  },
+  "browser_versions": {
+    "chrome": "156.0.8078.74",
+    "edge": "156.0.4314.58"
+  }
+}

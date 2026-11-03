@@ -1,12 +1,14 @@
 # Agent protocol convergence — local acceptance (2026-11-02)
 
 Snapshot of `cbb9e07`. Later capabilities and native boundaries are recorded in
-[the follow-up report](agent-capability-followup-acceptance.md).
+[the follow-up report](agent-capability-followup-acceptance.md); the method list
+below is what that snapshot exposed, not the current contract.
 
 This is the first implemented convergence, not a declaration of complete desktop
-automation coverage. The [working plan](agent-protocol-convergence-plan.md) records
+automation coverage. The [closed plan](agent-protocol-convergence-plan.md) records
 the approved scope; the installed [Skill API](../skills/desktop-world/API.md) is
-the Agent reference. No real model/Harness A/B, publication or merge was performed.
+the current Agent reference. No real model/Harness A/B, publication or merge was
+performed.
 
 ## Implemented contract
 
@@ -14,7 +16,7 @@ the Agent reference. No real model/Harness A/B, publication or merge was perform
 | --- | --- |
 | Discovery | Only `apps` and `exec` are advertised. `apps` searches/paginates installed and running apps on macOS, including stopped bundles; it reports bounded search coverage. |
 | Authorization | Every `exec` requires an app identity. There is no app-less lane or app switch inside a script. Duplicate installed bundle IDs use explicit bundle paths; running status matches that path. |
-| Scripts | Seven methods: `look`, `capture`, `click`, `typeText`, `keypress`, `scroll`, `quit`. API documentation ships with the Skill. No public `api`, `result`, Session, native refs or window binding methods. |
+| Scripts | Seven methods at this snapshot: `look`, `capture`, `click`, `typeText`, `keypress`, `scroll`, `quit`. `move`/`drag` were added later, so the current Skill API lists nine. Neither the snapshot nor the current surface has a public `api`, `result`, Session, native-ref or window-binding method. |
 | Observation | A first full baseline followed by compact changes. Changes compare with the previous returned tool view, so intermediate script reads cannot consume unseen changes. A new process resets the baseline. |
 | Fallback | Unavailable semantics trigger a stacked app image. Proven no-dispatch semantic activation failures enable image fallback. Coordinates use the same z-order/alpha mapping as the image and recheck current geometry before input. |
 | Lifecycle | macOS look starts a stopped app. Input focus/readiness is internal. Normal quit exposes pending save UI; it does not force termination or automatically restart. A running app without windows can receive a verified foreground shortcut. |
@@ -97,17 +99,17 @@ with the same binary hash and normally reaped native workers.
 
 ## Remaining coverage and capability gaps
 
-| Area | Boundary / next validation |
+| Area | Boundary / next validation at that snapshot |
 | --- | --- |
-| Platform parity | Windows/Linux still report running-only discovery. macOS results do not establish stopped startup, windowless shortcuts, stacked capture or native GUI correctness there. |
+| Platform parity | Discovery and lifecycle behavior are provider-specific. This snapshot covers macOS only; Windows and Linux acceptance must be reported from their own evidence. |
 | Associated/system UI | The existing ownership proofs remain in force. Actual system file dialogs, helper-hosted surfaces and Chrome's translation popup need separate task coverage; an owned popup is not proof of those app families. |
 | Multiple displays | Pure negative-origin/scaling/alpha controls passed. Native cross-display spanning windows, full-screen/Spaces and display changes remain unverified; the independent-filter fallback still needs child-composition checks. |
-| Mouse coverage | Hover, held buttons/keys and drag are not public. Clipboard and explicit window geometry controls are also absent. Keyboard/click workarounds do not prove complete computer-use coverage. |
+| Mouse coverage | Hover and content drag were added afterwards and accepted at that time on macOS; Windows support is recorded separately. Held buttons/keys, clipboard and explicit window geometry controls are still absent. Keyboard/click workarounds do not prove complete computer-use coverage. |
 | Semantic coverage | Only the top surface and bounded elements are returned. Improve viewport/control relevance and cover repeated/virtualized controls; truncation must never prove absence. |
 | Failure recovery | Existing cancellation/unknown-effect/cleanup controls passed; actual permission revocation, stuck OS callbacks and host-reconnection integration still need dedicated native coverage. |
 | Limits | 32 window metadata rows, 80 elements / 24 KiB semantics, 16 visible image surfaces, 1600-pixel maximum canvas dimension. Unsupported/partial reads stay explicit. |
 
-The next capability work should prioritize those boundaries and a richer ordinary
-mouse path, with independent readback, before claiming broad task completeness.
-Protocol steps/output are structurally reduced; model tokens, speed and task
-success improvements have not been measured.
+The subsequent work prioritized those boundaries and a richer ordinary mouse path
+with independent readback, as recorded in the follow-up report. Protocol
+steps/output are structurally reduced; model tokens, speed and task success
+improvements have not been measured.

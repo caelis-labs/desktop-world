@@ -2,10 +2,56 @@
 
 First [download and verify DTW](../install.md#select-and-extract-a-package), import
 it into the managed store. This guide covers the DSH **0.2.1-rc.5** Desktop
-configuration format. Use the direct file-URL row below as the first route.
+configuration format as a tested compatibility baseline, not a required current
+host version. Use the direct file-URL row below when that format is supported.
 Other versions should use their installed MCP client
 and Skill provider schemas. The bundled Cordis adapter mounts the existing MCP
 bridge and filesystem Skill provider together as one plugin.
+
+## Windows host execution and storage
+
+Use the host's supported executable-launch path and permissions for installation
+as well as the later MCP process. Download and extract the verified complete
+package to a host-approved temporary directory **outside the session workspace**
+(and outside the source checkout) before invoking its `bin/dtw.exe package import`.
+The common Windows recipe uses the system temporary directory; confirm its
+resolved path satisfies those conditions first. `%TEMP%` is an example location,
+not a guarantee of host permission.
+
+[Issue #104](https://github.com/caelis-labs/desktop-world/issues/104) reports an A/B
+check on Windows 11 with DSH Desktop 0.2.1-rc.5 and DTW 0.3.3: identical executable
+bytes inside the session workspace failed to access the default external store
+with `os error 5`, even with the host's `danger-full-access` setting. The same
+executable launched from an external temporary directory succeeded while its
+working directory remained inside the workspace. This is a reported host/path
+compatibility condition, not a claim about every DSH version or proof that every
+access-denied error has that cause.
+
+Before installation, establish that the host permits both execution from the
+external staging path and access to `%LOCALAPPDATA%\DesktopWorld` (or an explicitly
+authorized dedicated store). If the host denies either operation, stop and use
+its normal authorization process or an administrator-documented supported route.
+Do not change sandbox policy, disable protection, elevate opportunistically,
+or change filesystem ACLs. Moving an executable is not permission to bypass a
+host restriction; external staging applies only when that route is supported
+and authorized.
+
+After import, use its returned immutable `executable`, `package_path` and
+`cordis_url` for management and registration; do not register the temporary copy.
+The default managed package is outside the workspace, but the host must still
+permit its MCP launch and required file/desktop access. Keep the MCP executable
+and Skill on the same verified release.
+
+If `package import` or `package status` reports access denied, retain the exact
+error and check the resolved executable path, staging path and store against the
+host's supported execution policy. Current package CLI help and argument
+validation run before opening the requested store; older releases, including the
+one in #104, could fail during store initialization even for `package --help`.
+A help failure does not by itself show that the archive is corrupt. Use the
+selected package's own CLI contract; updated documentation does not change an
+older executable. Do not diagnose this by repeatedly changing `--store`, granting
+broader permissions or editing ACLs. Follow the normal host approval route and
+retry only once the required access is authorized.
 
 ## Bundled Cordis plugin
 
@@ -62,7 +108,7 @@ are disposed with the parent by Cordis.
 ### Other local-package routes
 
 For a host version that supports local package installation, the plugin manager
-can install the complete extracted package using its absolute directory and
+can install the complete imported package using its returned absolute directory and
 enable `@caelis-labs/desktop-world`. The package name is not a claim of npm
 publication. A direct file URL also works as above (`file:///absolute/path/...`
 on macOS), with spaces and non-ASCII characters escaped. The adapter derives
@@ -92,7 +138,7 @@ Back up the file before editing and keep unrelated settings intact.
       config:
         serverName: desktop-world
         transport: stdio
-        command: '/absolute/path/to/extracted-package/bin/dtw'
+        command: '/absolute/managed/package/bin/dtw'
         args: ['mcp']
 ```
 
@@ -142,8 +188,8 @@ Skill match the intended package.
 On macOS, these checks do not change your desktop:
 
 ```sh
-/absolute/path/to/extracted-package/bin/dtw --version
-pgrep -fl '/absolute/path/to/extracted-package/bin/dtw'
+/absolute/managed/package/bin/dtw --version
+pgrep -fl '/absolute/managed/package/bin/dtw'
 ```
 
 For a Windows process check, inspect the executable path and arguments in Task
@@ -185,7 +231,7 @@ DTW cannot prove which application macOS records as TCC's responsible process.
 After granting Screen Recording, fully quit and reopen **DeepSeek Harness** when
 macOS requests it or capture remains denied. Save active work first. Merely
 reconnecting `dtw mcp` may leave the host's old permission state in effect.
-Repeat the read-only `apps`, window listing and screenshot checks before resuming
+Repeat the read-only `apps`, `app.look()` and screenshot checks before resuming
 input; do not replay an earlier write whose outcome was uncertain.
 
 Empty window titles alone do **not** prove an Accessibility denial. Check the

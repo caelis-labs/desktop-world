@@ -421,7 +421,22 @@ impl<F: Factory> Server<F> {
                 let page: Vec<_> = rows.into_iter().skip(offset).take(limit).collect();
                 let next =
                     (offset.saturating_add(page.len()) < total).then_some(offset + page.len());
-                Reply::plain(json!({"apps":page,"next":next,"coverage":catalog["coverage"]}))
+                let description = self.factory.description();
+                let mut provider = json!({});
+                for key in [
+                    "provider",
+                    "coverage",
+                    "conditions",
+                    "supported_capabilities",
+                    "supported_observe_scopes",
+                ] {
+                    if let Some(value) = description.get(key) {
+                        provider[key] = value.clone();
+                    }
+                }
+                Reply::plain(
+                    json!({"apps":page,"next":next,"coverage":catalog["coverage"],"provider":provider}),
+                )
             }
             Ok(_) => problem("cancelled", "Application discovery was cancelled"),
             Err(e) => Reply::error(wire::core_error(&e)),
@@ -442,7 +457,17 @@ impl<F: Factory> Server<F> {
         let target = match self.factory.resolve(app_id) {
             Ok(target) if target.app_id == app_id => target,
             Ok(_) => return problem("wrong_app", "Resolver returned another application target"),
-            Err(e) => return Reply::error(wire::core_error(&e)),
+            Err(e) => {
+                let cause = wire::core_error(&e);
+                if call.cancelled.load(Ordering::Acquire) {
+                    return Reply::error(WireError {
+                        code: "cancelled".into(),
+                        message: "Cancelled during application resolution".into(),
+                        details: Some(json!({"cause":super::error_json(&cause)})),
+                    });
+                }
+                return Reply::error(cause);
+            }
         };
         let mut instances = Vec::new();
         for app in &target.instances {

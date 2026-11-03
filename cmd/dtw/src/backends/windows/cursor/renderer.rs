@@ -262,6 +262,14 @@ fn create_window() -> windows::core::Result<Window> {
         Ok(Window(hwnd))
     }
 }
+// Target loss is an ordinary presentation retirement, not a renderer fault.
+// Validate again at paint admission: the target may change after an idle tick.
+fn admit_paint(state: &mut Presentation, valid: impl FnOnce(&Target) -> bool) {
+    if state.target.as_ref().is_some_and(|target| !valid(target)) {
+        state.hide(state.operation);
+    }
+}
+
 fn run(expected: u32, birth: u64) -> Result<(), Box<dyn std::error::Error>> {
     let parent = native::process_stamp(expected).map_err(|e| format!("{e:?}"))?;
     let own = native::process_stamp(std::process::id()).map_err(|e| format!("{e:?}"))?;
@@ -454,6 +462,7 @@ fn run(expected: u32, birth: u64) -> Result<(), Box<dyn std::error::Error>> {
         if dirty {
             dirty = false;
             if let Some(window) = window.as_ref() {
+                admit_paint(&mut state, Target::valid);
                 match (state.target.as_ref(), state.point) {
                     (Some(target), Some(point)) => {
                         // Query the DPI of our own PMv2 window, never the
@@ -467,8 +476,8 @@ fn run(expected: u32, birth: u64) -> Result<(), Box<dyn std::error::Error>> {
                                 },
                                 MONITOR_DEFAULTTONULL,
                             );
-                            if monitor.0.is_null() || !target.valid() {
-                                return Err("cursor monitor/target is unproven".into());
+                            if monitor.0.is_null() {
+                                return Err("cursor monitor is unproven".into());
                             }
                             if MonitorFromWindow(window.0, MONITOR_DEFAULTTONULL) != monitor {
                                 let _ = ShowWindow(window.0, SW_HIDE);
@@ -562,4 +571,72 @@ pub(in crate::backends::windows) fn worker_entry() -> bool {
         std::process::exit(1)
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::computer::{AppIdentity, AppInstance, WindowTarget};
+
+    fn active() -> Presentation {
+        let mut state = Presentation {
+            operation: 7,
+            target: Some(Target {
+                window: WindowTarget {
+                    app: AppInstance {
+                        identity: AppIdentity("not-a-live-test-target".into()),
+                        pid: 1,
+                        generation: 1,
+                    },
+                    native_id: 1,
+                    generation: 1,
+                },
+                bounds: [0, 0, 100, 100],
+                dpi: 96,
+                displays: vec![[0, 0, 100, 100]],
+            }),
+            ..Default::default()
+        };
+        assert!(state.event(
+            &json!({"operation":7,"sequence":1,"press":1,"x":20,"y":20}),
+            Instant::now(),
+        ));
+        state
+    }
+
+    #[test]
+    fn target_loss_between_idle_tick_and_paint_retires_without_reviving() {
+        let mut state = active();
+        // A tick admitted the geometry, then move/close/modal invalidated it.
+        admit_paint(&mut state, |_| true);
+        assert!(state.point.is_some());
+        admit_paint(&mut state, |_| false);
+        assert!(state.target.is_none());
+        assert!(state.point.is_none());
+        assert!(state.pulse_until.is_none());
+        assert_eq!(state.retired, 7);
+        assert!(!state.event(
+            &json!({"operation":7,"sequence":2,"press":1,"x":21,"y":20}),
+            Instant::now(),
+        ));
+        // The renderer's match now takes its hide branch, not paint or exit.
+        assert!(!matches!(
+            (state.target.as_ref(), state.point),
+            (Some(_), Some(_))
+        ));
+        admit_paint(&mut state, |_| {
+            panic!("retired geometry must not be reused")
+        });
+    }
+
+    #[test]
+    fn current_target_preserves_pending_paint_and_pulse() {
+        let mut state = active();
+        let pulse = state.pulse_until;
+        admit_paint(&mut state, |_| true);
+        assert!(state.target.is_some());
+        assert_eq!(state.point, Some((20, 20)));
+        assert_eq!(state.pulse_until, pulse);
+        assert_eq!(state.retired, 0);
+    }
 }

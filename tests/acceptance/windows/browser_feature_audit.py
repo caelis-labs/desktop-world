@@ -1,0 +1,272 @@
+#!/usr/bin/env python3
+"""Opt-in current two-tool Chromium audit with a disposable profile and local page.
+
+Only DTW supplies desktop input. Independent HTTP events establish page effects.
+Protects existing browser windows by checking the owned title before every script.
+"""
+import argparse
+import base64
+import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+from pathlib import Path
+import subprocess
+import sys
+import threading
+import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app_client import AppClient, artifact_identity, require
+from windows.transport import ProcessHandle
+
+
+def owned_dialogs(pid,executable,birth,diagnostics=False):
+    """Prove the retained owner process and same-executable native dialog helper."""
+    import ctypes
+    from ctypes import wintypes as w
+    user=ctypes.WinDLL('user32',use_last_error=True)
+    callback=ctypes.WINFUNCTYPE(w.BOOL,w.HWND,w.LPARAM)
+    user.EnumWindows.argtypes=[callback,w.LPARAM]
+    user.GetWindowThreadProcessId.argtypes=[w.HWND,ctypes.POINTER(w.DWORD)]
+    user.GetWindowTextW.argtypes=[w.HWND,w.LPWSTR,ctypes.c_int]
+    user.GetClassNameW.argtypes=[w.HWND,w.LPWSTR,ctypes.c_int]
+    user.GetWindow.argtypes=[w.HWND,w.UINT];user.GetWindow.restype=w.HWND
+    user.GetAncestor.argtypes=[w.HWND,w.UINT];user.GetAncestor.restype=w.HWND
+    user.IsWindowVisible.argtypes=[w.HWND];user.IsWindowEnabled.argtypes=[w.HWND]
+    user.GetForegroundWindow.restype=w.HWND
+    foreground=user.GetForegroundWindow()
+    root_process=ProcessHandle(pid,executable,birth=birth)
+    result=[]
+    candidates=[]
+    @callback
+    def observe(hwnd,_):
+        owner_pid=w.DWORD()
+        user.GetWindowThreadProcessId(hwnd,ctypes.byref(owner_pid))
+        actual_pid=owner_pid.value
+        if not user.IsWindowVisible(hwnd):return True
+        kind=ctypes.create_unicode_buffer(256);user.GetClassNameW(hwnd,kind,256)
+        owner=user.GetWindow(hwnd,4)
+        root=user.GetAncestor(owner,3) if owner else None
+        root_pid=w.DWORD()
+        if root:user.GetWindowThreadProcessId(root,ctypes.byref(root_pid))
+        if actual_pid==pid or root_pid.value==pid or hwnd==foreground:
+            candidates.append({'hwnd':int(hwnd),'pid':actual_pid,'class':kind.value,'owner':int(owner or 0),'root_owner':int(root or 0),'root_owner_pid':root_pid.value,'foreground':hwnd==foreground})
+        if kind.value=='#32770' and root_pid.value==pid:
+            try: helper=ProcessHandle(actual_pid,executable)
+            except (AssertionError,OSError):return True
+            helper.close()
+            title=ctypes.create_unicode_buffer(512);user.GetWindowTextW(hwnd,title,512)
+            result.append({'hwnd':int(hwnd),'pid':actual_pid,'owner':int(root),'title':title.value,'owner_disabled':not bool(user.IsWindowEnabled(root))})
+        return True
+    try: require(user.EnumWindows(observe,0),'Native dialog inventory failed')
+    finally: root_process.close()
+    return {'proven':result,'candidates':candidates} if diagnostics else result
+
+
+def owned_browser_pid(executable,marker,not_before):
+    import ctypes
+    from ctypes import wintypes as w
+    user=ctypes.WinDLL('user32',use_last_error=True)
+    callback=ctypes.WINFUNCTYPE(w.BOOL,w.HWND,w.LPARAM)
+    user.EnumWindows.argtypes=[callback,w.LPARAM]
+    user.GetWindowThreadProcessId.argtypes=[w.HWND,ctypes.POINTER(w.DWORD)]
+    user.GetWindowTextW.argtypes=[w.HWND,w.LPWSTR,ctypes.c_int]
+    found=set()
+    @callback
+    def observe(hwnd,_):
+        pid=w.DWORD();user.GetWindowThreadProcessId(hwnd,ctypes.byref(pid))
+        try: handle=ProcessHandle(pid.value,executable)
+        except (AssertionError,OSError):return True
+        try:
+            if handle.birth < not_before:return True
+            title=ctypes.create_unicode_buffer(512);user.GetWindowTextW(hwnd,title,512)
+            if title.value.startswith(marker):found.add(pid.value)
+        finally:handle.close()
+        return True
+    require(user.EnumWindows(observe,0),'Owned browser window enumeration failed')
+    require(len(found)<=1,{'owned_browser_pids':sorted(found)})
+    return next(iter(found),None)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--dtw', required=True, type=Path)
+    parser.add_argument('--chrome', required=True, type=Path)
+    parser.add_argument('--output', required=True, type=Path)
+    args = parser.parse_args()
+    out = args.output.resolve()
+    out.mkdir(parents=True, exist_ok=False)
+    marker = 'DTW Browser Audit ' + out.name
+    observed = {'text': '', 'clicks': 0, 'scroll_x': 0, 'scroll_y': 0}
+    lock = threading.Lock()
+    html = '''<!doctype html><meta charset="utf-8"><title>__TITLE__</title>
+<style>body{font:18px sans-serif;margin:20px}h1{font-size:20px;margin:0 0 8px}p{margin:8px 0}textarea{width:90%;height:70px}button{padding:8px}#pane{height:430px;width:90%;overflow:scroll;border:3px solid #579}#content{width:2400px;height:2400px;background:repeating-linear-gradient(45deg,#def,#def 60px,#cde 60px,#cde 120px)}</style>
+<h1>__TITLE__</h1><textarea aria-label="Audit Unicode editor" autofocus></textarea><br>
+<button id="increment">Audit increment</button><button id="save">Audit save</button>
+<input id="choose" type="file" aria-label="Audit choose file">
+<p id="status">Ready</p><div id="pane"><div id="content">Owned scroll area</div></div>
+<script>const e=document.querySelector('textarea'),p=document.querySelector('#pane');
+function publish(v){fetch('/event',{method:'POST',body:JSON.stringify(v)})}
+e.oninput=()=>publish({text:e.value});
+document.querySelector('#increment').onclick=()=>{publish({increment:true});e.focus()};
+document.querySelector('#save').onclick=()=>{publish({saved:e.value});e.focus()};
+document.querySelector('#choose').onclick=e=>publish({picker_requested:true,picker_trusted:e.isTrusted,picker_activation:navigator.userActivation.isActive});
+p.onscroll=()=>publish({scroll_x:p.scrollLeft,scroll_y:p.scrollTop});
+window.onload=()=>{e.focus();publish({ready:true,dpr:devicePixelRatio})};</script>'''.replace('__TITLE__', marker)
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = html.encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            value = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            with lock:
+                if value.pop('increment', False):
+                    observed['clicks'] += 1
+                observed.update(value)
+                with (out / 'events.jsonl').open('a', encoding='utf-8') as log:
+                    log.write(json.dumps(observed, ensure_ascii=True) + '\n')
+            self.send_response(204)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    report = {'artifact': artifact_identity(args.dtw), 'cases': [], 'marker': marker,
+        'browser':str(args.chrome.resolve()),'browser_sha256':hashlib.sha256(args.chrome.read_bytes()).hexdigest()}
+    child = client = launcher = browser_handle = None
+    browser_pid = None
+    app = str(args.chrome.resolve()).lower()
+
+    def execute(source):
+        # Every operation verifies the selected process/window still belongs to this run.
+        guard = 'const v=await app.look();if(!v.windows[0]?.title.startsWith(' + json.dumps(marker) + '))throw new Error("Owned Chrome is not the selected window");'
+        data, response = client.execute(app, guard + source, allow_error=True)
+        for i, content in enumerate(response.get('content', [])):
+            if content.get('type') == 'image':
+                (out / ('image-%03d-%d.png' % (len(client.metrics), i))).write_bytes(base64.b64decode(content['data']))
+        return data
+
+    def wait(predicate, timeout=8):
+        until = time.monotonic() + timeout
+        while time.monotonic() < until:
+            with lock:
+                state = dict(observed)
+            if predicate(state):
+                return state
+            time.sleep(.03)
+        raise AssertionError('HTTP effect did not settle: ' + repr(state))
+
+    def case(name, source, predicate=None, native_dialog=False):
+        row = {'name': name}
+        try:
+            data = execute(source)
+            row['response'] = data
+            require(not data.get('error'), data)
+            if predicate:
+                row['effect'] = wait(predicate)
+            if native_dialog:
+                until=time.monotonic()+8
+                while True:
+                    dialogs=owned_dialogs(browser_pid,args.chrome.resolve(),browser_handle.birth)
+                    if dialogs: break
+                    if time.monotonic()>=until:
+                        row['native_observation']=owned_dialogs(browser_pid,args.chrome.resolve(),browser_handle.birth,diagnostics=True)
+                        client.capture(app,'unproven-native-dialog')
+                        raise AssertionError('Owned native Open dialog did not appear')
+                    time.sleep(.03)
+                view,_=client.execute(app,'await app.look({full:true});')
+                require(any(w['title']==dialogs[0]['title'] for w in view['view']['windows']),view)
+                row['native_dialogs']=dialogs
+                client.capture(app,'native-open-dialog')
+            row['verified'] = True
+        except Exception as error:
+            row.update(verified=False, error=str(error))
+        report['cases'].append(row)
+        print(name + ': ' + str(row['verified']), flush=True)
+
+    try:
+        child = subprocess.Popen([str(args.chrome), '--user-data-dir=' + str(out / 'profile'),
+            '--no-first-run', '--no-default-browser-check', '--disable-sync', '--disable-background-mode', '--guest',
+            '--force-renderer-accessibility', '--new-window', '--window-position=300,200', '--window-size=1000,800',
+            'http://127.0.0.1:%d/' % server.server_address[1]])
+        launcher=ProcessHandle(child.pid,args.chrome.resolve())
+        wait(lambda s: s.get('ready'))
+        title_deadline=time.monotonic()+8
+        while browser_pid is None:
+            browser_pid=owned_browser_pid(args.chrome.resolve(),marker,launcher.birth)
+            if browser_pid is not None:break
+            require(time.monotonic()<title_deadline,'No newly launched browser process published the owned title')
+            time.sleep(.03)
+        browser_handle=ProcessHandle(browser_pid,args.chrome.resolve(),terminate=True)
+        report['launcher_pid']=child.pid
+        report['browser_pid']=browser_pid
+        client = AppClient(args.dtw.resolve(), out / 'protocol')
+        case('chrome_look_capture', 'await app.capture({full:true});')
+        case('chrome_empty_unicode_typing', 'await app.typeText("Empty 中文 😀");', lambda s: s['text'] == 'Empty 中文 😀')
+        case('chrome_ascii_typing', 'await app.keypress("CTRL+A");await app.typeText("owned ASCII");', lambda s: s['text'] == 'owned ASCII')
+        payload = 'Chrome 中文 😀\nowned page'
+        case('chrome_unicode_typing', 'await app.keypress("CTRL+A");await app.typeText(' + json.dumps(payload) + ');', lambda s: s['text'] == payload)
+        case('chrome_terminal_caret_emoji', 'await app.keypress("END");await app.typeText("🚀");', lambda s: s['text'] == payload + '🚀')
+        case('chrome_literal_label', 'await app.keypress("CTRL+A");await app.typeText("Audit Unicode editor");await app.typeText("😀");', lambda s: s['text'] == 'Audit Unicode editor😀')
+        case('chrome_literal_marker', 'await app.keypress("CTRL+A");await app.typeText("\\uFFFC");await app.typeText("😀");', lambda s: s['text'] == '\uFFFC😀')
+        case('chrome_restore_multiline', 'await app.keypress("CTRL+A");await app.typeText(' + json.dumps(payload) + ');', lambda s: s['text'] == payload)
+        case('chrome_semantic_increment', 'await app.click({selector:{role:"button",text:"Audit increment"}});', lambda s: s['clicks'] == 1)
+        case('chrome_semantic_save', 'await app.click({selector:{role:"button",text:"Audit save"}});', lambda s: s.get('saved') == s['text'] and bool(s['text']))
+        # Default anchor is the active surface center; this page places its scroll pane there.
+        case('chrome_vertical_scroll', 'await app.scroll({delta_y:3});', lambda s: s['scroll_y'] > 0)
+        case('chrome_horizontal_scroll', 'await app.scroll({delta_y:0,delta_x:3});', lambda s: s['scroll_x'] > 0)
+        # Park on the owned page's empty lower-left margin before the one chooser
+        # invocation. This lies below the chooser in this controlled layout and
+        # avoids browser-title and shell-file hover previews during modal checks.
+        chooser = 'const rasterView=await app.capture();const b=rasterView.windows.find(w=>w.title.startsWith(' + json.dumps(marker) + ')).bounds;const i=rasterView.image;await app.move({x:(b[0]+20-i.bounds[0])*i.width/i.bounds[2],y:(b[1]+b[3]-20-i.bounds[1])*i.height/i.bounds[3]});await app.click({selector:{role:"button",text:"Audit choose file"}});'
+        case('chrome_native_open_dialog', chooser, native_dialog=True)
+        # Require a dialog at the top and the owned parent before modal input.
+        data, response = client.execute(app, 'const v=await app.look();const t=v.windows[0]?.title;if(!v.windows.some(w=>w.title.startsWith(' + json.dumps(marker) + '))||!(["打开","Open"].includes(t)||t?.startsWith(' + json.dumps(marker) + ')))throw new Error("Owned Chrome modal is not selected");await app.keypress("ESC");', allow_error=True)
+        report['dialog_escape'] = data
+        case('chrome_after_dialog', 'await app.capture({full:true});')
+    except BaseException as error:
+        report['error']=type(error).__name__+': '+str(error)
+        raise
+    finally:
+        if client:
+            report['close_window'] = execute('await app.quit();')
+            report['mcp_cleanup'] = client.close()
+        if browser_handle:
+            try: report['ui_process_exit']=browser_handle.wait(timeout=8)
+            except Exception:
+                browser_handle.terminate()
+                browser_handle.wait(timeout=5)
+                report['forced_browser_cleanup']=True
+            browser_handle.close()
+        if child:
+            try:
+                child.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                child.terminate()  # Exact disposable-profile Popen, recorded as failure.
+                child.wait(timeout=5)
+                report['forced_browser_cleanup'] = True
+            report['browser_exit'] = child.returncode
+        if launcher:launcher.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        report['http_state'] = observed
+        report['passed'] = (bool(report['cases']) and all(c['verified'] for c in report['cases'])
+            and not report.get('close_window',{}).get('error') and report.get('browser_exit') == 0
+            and report.get('ui_process_exit') == 0 and not report.get('forced_browser_cleanup'))
+        (out / 'report.json').write_text(json.dumps(report, ensure_ascii=True, indent=2) + '\n', encoding='utf-8')
+        if not report.get('error'):
+            require(report['passed'],'Browser acceptance failed; inspect original report/wire evidence')
+
+
+if __name__ == '__main__':
+    main()

@@ -1,8 +1,11 @@
 # Protocol release preparation
 
-This execution follows the 2026-11-02 readiness review. Implement the changes as
-one batch, then perform consolidated checks. Native boundary acceptance and
-fixed-source development candidates follow code completion; no Harness A/B.
+Historical batch record (2026-11-02). The changes below were implemented and
+checked together and then released through the normal CI path; this is not a
+current task list. Current references: [Skill API](../skills/desktop-world/API.md),
+[architecture](architecture.md), [product matrix](product-matrix.md).
+
+This execution followed the 2026-11-02 readiness review. No Harness A/B was run.
 
 Implemented scope:
 
@@ -18,13 +21,10 @@ Implemented scope:
   Windows baseline/modal runner. Both record protocol metrics and can bind an
   installed executable/Skill pair. Legacy diagnostics are clearly separated.
 
-Consolidated verification will record actual results below. Until then these
-are implementation statements, not passing GUI or candidate acceptance claims.
-
-Remaining boundary work: real Chrome translation/menu surfaces, real app tasks,
-Windows full build/GUI/DPI verification, installed clean/upgrade permissions,
-consumer-host migration smoke, signing/notarization and fixed-source candidates.
-Cross-display physical input and cross-app drag stay outside this increment.
+Consolidated checks for the batch are recorded below. Boundaries still open at
+that point were carried into the [native boundary
+follow-up](#native-boundary-follow-up) and the [Windows host acceptance](windows-host-acceptance-2026-11-01.md);
+cross-display physical input and cross-app drag stayed outside the increment.
 
 ## Consolidated checks
 
@@ -44,9 +44,9 @@ Logs: `/private/tmp/dtw-protocol-prep-{source-final,rust,win-types,linux-types,i
 Development binary SHA-256:
 `7a1238bf757a162292b5959f3d59f27954fa41c7eda0cec6a1fb60f5f3f1a5d7`.
 
-Native GUI boundary/candidate results will be recorded separately after code
-completion. The Windows runner is authored and type/build prerequisites remain
-independent of running it on a real Windows desktop.
+Native GUI boundary and candidate results are recorded in the native boundary
+follow-up below. The Windows runner's type/build prerequisites stay independent of
+running it on a real Windows desktop.
 
 ## Native boundary follow-up
 

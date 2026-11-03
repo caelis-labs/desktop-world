@@ -17,7 +17,7 @@ IDs from the latest observation or a unique selector to click known controls.
 Use `await app.capture()` when the UI needs visual understanding or semantics
 are unavailable, then click coordinates in the returned image. After input DTW
 returns a fresh observation automatically. Use `move({x,y})` for hover and
-`drag({path:[{x,y},...]})` for one drag within one window on one display; standard macOS title bars can
+`drag({path:[{x,y},...]})` for one drag within one window on one display; standard macOS/Windows title bars can
 move their window when its native position is writable;
 the runtime pairs releases. Group known sequential steps in one script without
 adding a read after every action: DTW renews bindings internally and stops when a

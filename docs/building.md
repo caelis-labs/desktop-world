@@ -144,7 +144,7 @@ python3 tests/acceptance/app_lifecycle_probe.py \
 It covers accessory application discovery/input, nested-helper exclusion, normal
 quit/save prompts, restart, and cancellation followed by an ordinary read. The
 Windows current-protocol entry is `tests/acceptance/windows/app_protocol_probe.py`;
-see its [handoff](../tests/acceptance/windows/README.md).
+see its [acceptance guide](../tests/acceptance/windows/README.md).
 
 The old `standard_agent_probe.py`, `browser_workbench_probe.py`,
 `real_app_tasks.py` and related atomic-protocol runners retain historical evidence
@@ -210,5 +210,5 @@ Batch related changes, run focused source/native controls, freeze source/binary/
 Skill identity, then run real tasks. Attribute failures before changing the next
 candidate; revalidate affected tasks and the final installed workflows. Recheck
 package checksums after cleanup. Optional Windows real-machine
-diagnostics use [its matrix](../tests/acceptance/windows/README.md); macOS evidence
+diagnostics use [its acceptance guide](../tests/acceptance/windows/README.md); macOS evidence
 never implies Windows, older OS, fresh-TCC, multi-display or Linux coverage.

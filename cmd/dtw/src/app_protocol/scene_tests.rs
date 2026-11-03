@@ -318,5 +318,7 @@ fn native_identity_survives_insertion_but_removed_targets_never_retarget() {
     );
 }
 
+#[path = "scene_contract_tests.rs"]
+mod scene_contract_tests;
 #[path = "scene_sequence_tests.rs"]
 mod scene_sequence_tests;

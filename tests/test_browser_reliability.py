@@ -77,7 +77,47 @@ class WindowsBrowserProbeLayoutTests(unittest.TestCase):
             unrelated = Path(directory) / 'other cwd'
             unrelated.mkdir()
             self.assertFalse((package / 'fixtures/browser-workbench').exists())
-            self.preflight(package / 'acceptance/windows', package / 'acceptance/browser-workbench', unrelated)
+            self.assertFalse((package / 'acceptance/browser-workbench').exists())
+            scripts = package / 'acceptance/windows'
+            for legacy in ('browser_reliability_probe.py', 'browser_mouse_probe.py',
+                           'browser_delivery_probe.py', 'cursor_probe.py', 'smoke.ps1'):
+                self.assertFalse((scripts / legacy).exists())
+            preflight = r'''
+import contextlib, ctypes, importlib, io, json, subprocess, sys
+from pathlib import Path
+from unittest.mock import patch
+acceptance = Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(acceptance))
+checked = []
+with patch.object(subprocess, 'Popen', side_effect=AssertionError('No subprocess allowed')), \
+     patch.object(subprocess, 'run', side_effect=AssertionError('No subprocess allowed')), \
+     patch.object(ctypes, 'WinDLL', side_effect=AssertionError('No desktop API allowed'), create=True):
+    transport = importlib.import_module('windows.transport')
+    assert Path(transport.__file__).resolve() == acceptance / 'windows/transport.py'
+    assert not hasattr(transport.Mcp, 'execute')
+    assert not hasattr(transport.Mcp, 'tool')
+    for name in ('app_protocol_probe', 'feature_audit', 'browser_feature_audit'):
+        probe = importlib.import_module('windows.' + name)
+        assert Path(probe.__file__).resolve() == acceptance / 'windows' / (name + '.py')
+        output = io.StringIO()
+        with patch.object(sys, 'argv', [name, '--help']), contextlib.redirect_stdout(output):
+            try:
+                probe.main()
+            except SystemExit as exit:
+                assert exit.code == 0
+            else:
+                raise AssertionError('Help must exit before desktop access')
+        assert '--dtw' in output.getvalue()
+        checked.append(name)
+print(json.dumps(checked))
+'''
+            result = subprocess.run([sys.executable, '-X', 'utf8', '-c', preflight,
+                                     str(package / 'acceptance')], cwd=unrelated,
+                                    capture_output=True, text=True, encoding='utf-8', timeout=15)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout),
+                             ['app_protocol_probe', 'feature_audit', 'browser_feature_audit'])
+            self.assertEqual(list(unrelated.iterdir()), [])
 
     def test_partial_fixture_reports_missing_files_in_both_supported_locations(self):
         spec = importlib.util.spec_from_file_location('dtw_probe_layout_paths',

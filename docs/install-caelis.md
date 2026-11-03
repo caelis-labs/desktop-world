@@ -1,13 +1,17 @@
 # Install DTW in Caelis
 
-First [download and verify the DTW package](../install.md#select-and-extract-a-package).
+First [download, verify and import the DTW package](../install.md#select-and-extract-a-package).
+Use import's immutable `package_path` for the plugin commands below, not the
+extraction directory. Bind a distinct host/profile pin (for example `caelis`)
+before changing registration; [activate it](package-management.md) only after
+checking the new live MCP connection and matching Skill.
 
 The existing package contains a compatible plugin manifest and shares one runtime
 between its MCP and Skill entries. Caelis supports this layout through its normal
 [plugin manager](https://github.com/caelis-labs/caelis/blob/main/docs/plugins.md):
 
 ```sh
-caelis plugin install /absolute/path/to/extracted-package --json
+caelis plugin install /absolute/managed/package --json
 caelis plugin status <installed-id> --json
 ```
 
@@ -20,13 +24,12 @@ Earlier macOS packages use the Claude-compatible format; current Core resolves
 their manifest name to the same `desktop-world` ID. Check the installed status
 rather than registering a second MCP/Skill copy.
 
-Or enter `/plugin install /absolute/path/to/extracted-package` in the Caelis TUI.
+Or enter `/plugin install /absolute/managed/package` in the Caelis TUI.
 Start a new Session to load the MCP/Skill snapshot. Registration alone does not
 prove tools are ready; complete the [first-execution check](../install.md#check-the-installation). Do not separately
 register a second copy of the MCP server.
 
-**Caelis compatibility:** use Core main `d15874f759aae5736b5afecf1060186a23d700bf`
-or a later release containing [Core #185](https://github.com/caelis-labs/caelis/pull/185)
+**Caelis compatibility:** use a Core build containing [Core #185](https://github.com/caelis-labs/caelis/pull/185)
 and [#187](https://github.com/caelis-labs/caelis/pull/187). These changes support the
 standard plugin identity, large results and fixed `tool_search` / `mcp_call` route.
 Core requests approval on first use of each `exec.app` in a Session, then reuses
@@ -39,7 +42,11 @@ may lack these integration fixes.
 Finish active operations before changing the registration. Caelis binds a local
 registration to its canonical directory: to change directories, run
 `caelis plugin remove desktop-world --json`, then install the new verified package
-and start a new Session. Preserve unrelated plugins. Remove the old package only
-when its MCP connections have stopped.
+and start a new Session. Preserve unrelated plugins. Verify the actual new
+connection and bundled Skill, then activate the existing host/profile pin.
+Managed cleanup follows [the package lifecycle](package-management.md); remove
+an old standalone package only after ownership, stopped consumers and absence
+of configuration references are established. For removal, remove the host
+registration first, then `dtw package unbind <host-profile>`.
 
 For macOS permissions, follow [the common installation check](../install.md#check-the-installation).

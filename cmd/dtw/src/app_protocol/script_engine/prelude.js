@@ -184,7 +184,7 @@
     const surface = create(null);
     for (const op of ["look", "capture", "click", "move", "drag", "typeText", "keypress", "scroll", "quit"]) {
       const method = async (...args) => {
-        if (args.length > 1) fail(`app.${op} takes one argument`, "invalid_args");
+        if (args.length > 1) fail(`app.${op} takes one argument`, "invalid_arguments");
         let options = args.length ? args[0] : {};
         if (op === "typeText" && typeof options === "string") options = {text:options};
         if (op === "keypress" && typeof options === "string") options = {keys:apply(split, options, ["+"])};

@@ -1,6 +1,8 @@
 //! Adapted Win32 identity, UIA patterns and SendInput primitives from pinned
 //! CUA 0.38.0. DTW owns window incarnation markers, lazy pages and receipts.
 use super::input;
+mod gestures;
+mod lifecycle;
 use crate::backends::input_sequence::{self, Step};
 use crate::{
     backends::native_client::{error_reply as windows_error_reply, *},
@@ -8,14 +10,15 @@ use crate::{
 };
 use serde_json::{json, Value};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     time::{Duration, Instant},
 };
 use windows::{
     core::{w, Interface, BSTR, HRESULT, PWSTR},
     Win32::{
         Foundation::{
-            CloseHandle, BOOL, E_ACCESSDENIED, E_NOINTERFACE, FILETIME, HANDLE, HWND, POINT, RECT,
+            CloseHandle, BOOL, COLORREF, E_ACCESSDENIED, E_NOINTERFACE, FILETIME, HANDLE, HWND,
+            LPARAM, POINT, RECT, WAIT_OBJECT_0, WPARAM,
         },
         Graphics::{
             Dwm::{DwmFlush, DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS},
@@ -28,8 +31,8 @@ use windows::{
             },
             Ole::*,
             Threading::{
-                GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
-                PROCESS_QUERY_LIMITED_INFORMATION,
+                GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, WaitForSingleObject,
+                PROCESS_ACCESS_RIGHTS, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
             },
             Variant::VT_I4,
         },
@@ -65,10 +68,38 @@ extern "system" {
     #[link_name = "PrintWindow"]
     fn render_window(window: HWND, dc: HDC, flags: u32) -> BOOL;
 }
-pub fn process_stamp(pid: u32) -> Result<AppInstance, Error> {
-    unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).map_err(failed)?;
-        let result = (|| {
+struct ProcessHandle(HANDLE);
+impl Drop for ProcessHandle {
+    fn drop(&mut self) {
+        let _ = unsafe { CloseHandle(self.0) };
+    }
+}
+impl ProcessHandle {
+    fn open(pid: u32, synchronize: bool) -> Result<Self, Error> {
+        unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION
+                    | PROCESS_ACCESS_RIGHTS(if synchronize { 0x100000 } else { 0 }),
+                false,
+                pid,
+            )
+        }
+        .map(Self)
+        .map_err(|error| failed(format!("process_stamp/OpenProcess: {error}")))
+    }
+    fn exited(&self) -> Result<bool, Error> {
+        match unsafe { WaitForSingleObject(self.0, 0) } {
+            WAIT_OBJECT_0 => Ok(true),
+            windows::Win32::Foundation::WAIT_TIMEOUT => Ok(false),
+            _ => Err(failed(format!(
+                "process_stamp/WaitForSingleObject: {}",
+                std::io::Error::last_os_error()
+            ))),
+        }
+    }
+    fn stamp(&self, pid: u32) -> Result<AppInstance, Error> {
+        unsafe {
+            let handle = self.0;
             let (mut birth, mut exit, mut kernel, mut user) = (
                 FILETIME::default(),
                 FILETIME::default(),
@@ -76,7 +107,7 @@ pub fn process_stamp(pid: u32) -> Result<AppInstance, Error> {
                 FILETIME::default(),
             );
             GetProcessTimes(handle, &mut birth, &mut exit, &mut kernel, &mut user)
-                .map_err(failed)?;
+                .map_err(|error| failed(format!("process_stamp/GetProcessTimes: {error}")))?;
             let mut path = vec![0u16; 32768];
             let mut len = path.len() as u32;
             QueryFullProcessImageNameW(
@@ -85,17 +116,126 @@ pub fn process_stamp(pid: u32) -> Result<AppInstance, Error> {
                 PWSTR(path.as_mut_ptr()),
                 &mut len,
             )
-            .map_err(failed)?;
+            .map_err(|error| {
+                failed(format!("process_stamp/QueryFullProcessImageNameW: {error}"))
+            })?;
             let identity = String::from_utf16_lossy(&path[..len as usize]).to_lowercase();
             Ok(AppInstance {
                 identity: AppIdentity(identity),
                 pid,
                 generation: ((birth.dwHighDateTime as u64) << 32) | birth.dwLowDateTime as u64,
             })
-        })();
-        let _ = CloseHandle(handle);
-        result
+        }
     }
+}
+pub fn process_stamp(pid: u32) -> Result<AppInstance, Error> {
+    ProcessHandle::open(pid, false)?.stamp(pid)
+}
+
+// One retained handle per exact quit instance, never per request. Save-dialog
+// cancellation retains its identity proof; the bounded Store owns all cleanup.
+const MAX_PENDING_QUITS: usize = 512;
+struct PendingQuit {
+    app: AppInstance,
+    process: ProcessHandle,
+}
+impl PendingQuit {
+    fn open(app: &AppInstance) -> Result<Self, Error> {
+        let process = ProcessHandle::open(app.pid, true)?;
+        // Birth AND image must come from this handle, not a second PID lookup.
+        if process.stamp(app.pid)? != *app {
+            return Err(Error::TargetChanged);
+        }
+        Ok(Self {
+            app: app.clone(),
+            process,
+        })
+    }
+}
+fn decorative_window_class(class: &str) -> bool {
+    // Exact standard Win32 decorations only. Tool windows, NOACTIVATE windows,
+    // menus (#32768) and custom popup classes can still be interactive.
+    class.eq_ignore_ascii_case("tooltips_class32") || class.eq_ignore_ascii_case("SysShadow")
+}
+fn keyboard_window(window: HWND, pid: u32) -> Result<HWND, Error> {
+    let mut class = [0u16; 256];
+    let len = unsafe { GetClassNameW(window, &mut class) };
+    if String::from_utf16_lossy(&class[..len.max(0) as usize]) != "#32768" {
+        return Ok(window);
+    }
+    let mut info = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+    let thread = unsafe { GetWindowThreadProcessId(window, None) };
+    unsafe { GetGUIThreadInfo(thread, &mut info) }.map_err(failed)?;
+    let mut owner_pid = 0;
+    unsafe {
+        GetWindowThreadProcessId(info.hwndMenuOwner, Some(&mut owner_pid));
+    }
+    if owner_pid != pid || info.hwndMenuOwner.0.is_null() {
+        return Err(Error::TargetChanged);
+    }
+    Ok(unsafe { GetAncestor(info.hwndMenuOwner, GA_ROOT) })
+}
+pub(super) fn user_application_window(window: HWND) -> bool {
+    if !visible(window) || super::cursor::proven_overlay(window) {
+        return false;
+    }
+    let style = unsafe { GetWindowLongW(window, GWL_EXSTYLE) } as u32;
+    if style & WS_EX_APPWINDOW.0 != 0 {
+        return true;
+    }
+    if style & (WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0) != 0 {
+        return false;
+    }
+    let mut class = [0u16; 256];
+    let count = unsafe { GetClassNameW(window, &mut class) };
+    !matches!(
+        String::from_utf16_lossy(&class[..count.max(0) as usize]).as_str(),
+        "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "#32768"
+    )
+}
+fn running_apps(until: Instant, gaps: &mut Vec<String>) -> Result<Vec<Value>, Error> {
+    super::cursor::begin_proof_cycle();
+    let mut apps = BTreeMap::new();
+    for window in all_windows()? {
+        check(until)?;
+        if !user_application_window(window) {
+            continue;
+        }
+        let mut pid = 0;
+        unsafe {
+            GetWindowThreadProcessId(window, Some(&mut pid));
+        }
+        if apps.contains_key(&pid) {
+            continue;
+        }
+        if let Ok(app) = process_stamp(pid) {
+            let app_id = super::applications::process_application_id(pid)
+                .unwrap_or_else(|| app.identity.0.clone());
+            if process_stamp(pid).ok().as_ref() != Some(&app) {
+                gaps.push("running_application_changed".into());
+                continue;
+            }
+            let name = app
+                .identity
+                .0
+                .rsplit('\\')
+                .next()
+                .unwrap_or(&app.identity.0);
+            apps.insert(
+                pid,
+                json!({"app_id":app_id,"app":app_json(&app),"name":name}),
+            );
+        } else {
+            gaps.push("running_application_unreadable".into());
+        }
+        if apps.len() >= 512 {
+            return Err(failed("App inventory exceeds 512 instances"));
+        }
+    }
+    Ok(apps.into_values().collect())
 }
 fn hwnd(id: u64) -> HWND {
     HWND(id as usize as *mut _)
@@ -106,11 +246,10 @@ fn id(window: HWND) -> u64 {
 pub(super) fn rect(window: HWND) -> Result<RECT, Error> {
     let mut result = RECT::default();
     unsafe { GetWindowRect(window, &mut result) }.map_err(failed)?;
-    if unsafe { IsZoomed(window) }.as_bool() {
-        // Like pinned CUA's win32/windows.rs and capture.rs frame geometry,
-        // use DWM's physical visible frame. Maximized GetWindowRect includes
-        // invisible resize borders outside the monitor. Do not clip a genuinely
-        // off-screen window, and keep every retained pixel/region check aligned.
+    {
+        // DWM's visible frame excludes invisible resize borders for restored
+        // windows as well as maximized ones. Keep scene geometry, rendering and
+        // retained input coordinates in that same physical frame.
         let mut frame = RECT::default();
         let read = unsafe {
             DwmGetWindowAttribute(
@@ -185,7 +324,7 @@ pub(super) fn visible(window: HWND) -> bool {
             && cloaked == 0
     }
 }
-fn all_windows() -> Result<Vec<HWND>, Error> {
+pub(super) fn all_windows() -> Result<Vec<HWND>, Error> {
     let inventory = super::desktop::windows()?;
     let mut ranks = HashMap::new();
     let mut current = unsafe { GetTopWindow(None) }.unwrap_or_default();
@@ -228,6 +367,7 @@ struct Query {
     target: WindowTarget,
     root: IUIAutomationElement,
     scope_root: IUIAutomationElement,
+    menu_scope: bool,
     frontier: Vec<(IUIAutomationElement, u32)>,
     visited: HashSet<Vec<i32>>,
     scanned: usize,
@@ -300,10 +440,12 @@ pub struct Store {
     windows: HashMap<u64, WindowTarget>,
     queries: HashMap<String, Query>,
     pixels: HashMap<String, Pixels>,
+    pending_quits: Vec<PendingQuit>,
 }
 impl Drop for Store {
     fn drop(&mut self) {
         self.queries.clear();
+        self.pending_quits.clear();
         self.uia.take();
         unsafe {
             CoUninitialize();
@@ -324,6 +466,7 @@ impl Store {
             windows: HashMap::new(),
             queries: HashMap::new(),
             pixels: HashMap::new(),
+            pending_quits: Vec::new(),
         })
     }
     fn uia(&mut self) -> Result<IUIAutomation, Error> {
@@ -345,6 +488,46 @@ impl Store {
         }
         Ok(self.uia.as_ref().unwrap().clone())
     }
+    fn pending_quit(&self, app: &AppInstance) -> Option<&PendingQuit> {
+        self.pending_quits
+            .iter()
+            .find(|pending| pending.app == *app)
+    }
+    fn retain_quit(&mut self, app: &AppInstance) -> Result<bool, Error> {
+        if self.pending_quit(app).is_some() {
+            return Ok(false);
+        }
+        if self.pending_quits.len() >= MAX_PENDING_QUITS {
+            // Only budget pressure retires old exit proofs. Keep them through
+            // ordinary after-readbacks, and never evict a live/unknown process.
+            // Collect first so WAIT_FAILED preserves the entire existing set.
+            let exited = self
+                .pending_quits
+                .iter()
+                .map(|pending| pending.process.exited())
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut index = 0;
+            self.pending_quits.retain(|_| {
+                let keep = !exited[index];
+                index += 1;
+                keep
+            });
+        }
+        if self.pending_quits.len() >= MAX_PENDING_QUITS {
+            return Err(failed("Pending quit identity budget exhausted"));
+        }
+        self.pending_quits.push(PendingQuit::open(app)?);
+        Ok(true)
+    }
+    fn instance_exited(&self, app: &AppInstance) -> Result<bool, Error> {
+        if let Some(pending) = self.pending_quit(app) {
+            return pending.process.exited();
+        }
+        if process_stamp(app.pid)? != *app {
+            return Err(Error::TargetChanged);
+        }
+        Ok(false)
+    }
     fn validate(&self, target: &WindowTarget) -> Result<HWND, Error> {
         let window = hwnd(target.native_id);
         let mut pid = 0;
@@ -353,7 +536,7 @@ impl Store {
         }
         if self.windows.get(&target.native_id) != Some(target)
             || pid != target.app.pid
-            || process_stamp(pid)? != target.app
+            || self.instance_exited(&target.app)?
             || marker(window, false)? != target.generation
             || unsafe { GetAncestor(window, GA_ROOT) } != window
         {
@@ -366,10 +549,48 @@ impl Store {
         self.pixels.retain(|_, p| p.target != *target);
     }
     pub fn dispatch(&mut self, request: &Value) -> Value {
+        let trace = std::env::var("DTW_INPUT_TRACE").ok().as_deref() == Some("1");
+        // Log only bounded protocol metadata, never targets, paths or UI text.
+        let op = match request["operation"].as_str().unwrap_or("") {
+            op @ ("release" | "prepare_cursor" | "catalog" | "discover_apps" | "resolve_app"
+            | "launch_app" | "quit_app" | "close_window" | "windows" | "observe"
+            | "observe_next" | "probe_window_state" | "read_text" | "capture" | "press"
+            | "setValue" | "click" | "focus" | "typeText" | "keypress" | "scroll"
+            | "move" | "drag") => op,
+            _ => "unknown",
+        };
+        if trace {
+            eprintln!("DTW_NATIVE begin op={op}");
+        }
+        let reply = self.dispatch_inner(request);
+        if trace {
+            let code: String = reply["error"]
+                .as_str()
+                .unwrap_or("none")
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .take(64)
+                .collect();
+            eprintln!("DTW_NATIVE end op={op} error={code}");
+        }
+        reply
+    }
+    fn dispatch_inner(&mut self, request: &Value) -> Value {
         let op = request["operation"].as_str().unwrap_or("");
         let action = matches!(
             op,
-            "press" | "setValue" | "click" | "focus" | "typeText" | "keypress" | "scroll"
+            "press"
+                | "setValue"
+                | "click"
+                | "focus"
+                | "typeText"
+                | "keypress"
+                | "scroll"
+                | "move"
+                | "drag"
+                | "launch_app"
+                | "quit_app"
+                | "close_window"
         );
         self.queries.retain(|_, q| q.expires > Instant::now());
         self.pixels.retain(|_, p| p.expires > Instant::now());
@@ -391,47 +612,27 @@ impl Store {
                     Ok(json!({"cursor_target":proof}))
                 }
                 "catalog" => {
-                    super::cursor::begin_proof_cycle();
-                    let mut apps = HashMap::new();
-                    for window in all_windows()? {
-                        check(until)?;
-                        if !unsafe { IsWindowVisible(window) }.as_bool()
-                            || super::cursor::proven_overlay(window)
-                        {
-                            continue;
-                        }
-                        let mut pid = 0;
-                        unsafe {
-                            GetWindowThreadProcessId(window, Some(&mut pid));
-                        }
-                        if apps.contains_key(&pid) {
-                            continue;
-                        }
-                        if let Ok(app) = process_stamp(pid) {
-                            let name = app
-                                .identity
-                                .0
-                                .rsplit('\\')
-                                .next()
-                                .unwrap_or(&app.identity.0);
-                            apps.insert(
-                                pid,
-                                json!({"app_id":app.identity.0,"app":app_json(&app),"name":name}),
-                            );
-                        }
-                        if apps.len() >= 512 {
-                            return Err(failed("App inventory exceeds 512 instances"));
-                        }
-                    }
-                    Ok(json!({"apps":apps.into_values().collect::<Vec<_>>()}))
+                    let mut gaps = Vec::new();
+                    let apps = running_apps(until, &mut gaps)?;
+                    Ok(json!({"apps":apps,"read_error_codes":gaps}))
                 }
+                "discover_apps" => self.discover_apps(until),
+                "resolve_app" => {
+                    let target =
+                        super::applications::resolve(string(request, "app_id")?, &|| check(until))?;
+                    Ok(
+                        json!({"app_id":target.app_id,"name":target.name,"apps":target.instances.iter().map(|app|json!({"app":app_json(app)})).collect::<Vec<_>>()}),
+                    )
+                }
+                "launch_app" => Ok(self.launch_app(request, until)),
+                "quit_app" | "close_window" => Ok(self.close_application(request, until)),
                 "windows" => {
                     let app = parse_app(&request["app"])?;
-                    if process_stamp(app.pid)? != app {
-                        return Err(Error::TargetChanged);
+                    if self.instance_exited(&app)? {
+                        return Ok(json!({"windows":[]}));
                     }
                     let mut result = Vec::new();
-                    for window in all_windows()? {
+                    for (rank, window) in all_windows()?.into_iter().enumerate() {
                         check(until)?;
                         let mut pid = 0;
                         unsafe {
@@ -450,9 +651,15 @@ impl Store {
                         let shown = visible(window);
                         let scene = if shown {
                             let b = rect(window)?;
-                            Some(
-                                json!({"bounds":[b.left,b.top,b.right-b.left,b.bottom-b.top],"rank":result.len()}),
-                            )
+                            let mut layout = json!({"bounds":[b.left,b.top,b.right-b.left,b.bottom-b.top],"rank":rank,"keyboard_focused":unsafe { GetForegroundWindow() } == window});
+                            let mut class = [0u16; 256];
+                            let count = unsafe { GetClassNameW(window, &mut class) };
+                            if decorative_window_class(&String::from_utf16_lossy(
+                                &class[..count.max(0) as usize],
+                            )) {
+                                layout["semantic_candidate"] = json!(false);
+                            }
+                            Some(layout)
                         } else {
                             None
                         };
@@ -603,6 +810,7 @@ impl Store {
             let mut source_render_size = None;
             match scope["kind"].as_str().unwrap_or("window") {
                 "window" => (),
+                "menu" => (),
                 "subtree" => {
                     let old = self
                         .queries
@@ -672,6 +880,7 @@ impl Store {
                 target: target.clone(),
                 frontier: vec![(first.clone(), 0)],
                 scope_root: first,
+                menu_scope: scope["kind"] == "menu",
                 root,
                 visited: HashSet::new(),
                 scanned: 0,
@@ -744,6 +953,17 @@ impl Store {
                 || runtime_id(&element),
             )? {
                 continue;
+            }
+            if q.menu_scope {
+                match in_menu_scope(&uia, &walker, &element, &q.root, until) {
+                    Ok(true) => (),
+                    Ok(false) => continue,
+                    Err(Error::TimedOut) => return Err(Error::TimedOut),
+                    Err(_) => {
+                        q.gap.get_or_insert("native_read_gap".into());
+                        continue;
+                    }
+                }
             }
             if let Some(expected) = q.role.as_deref() {
                 match unsafe { element.CurrentControlType() } {
@@ -908,16 +1128,7 @@ impl Store {
         // Win32 can publish a new maximized rectangle before DWM displays it.
         unsafe { DwmFlush() }.map_err(failed)?;
         let bounds = capture_bounds(window)?;
-        if unsafe { GetWindowLongW(window, GWL_EXSTYLE) } as u32
-            & (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0)
-            != 0
-        {
-            return Err(Error::NativeFailure {
-                code: "windows_surface_unsupported".into(),
-                message: "Layered window alpha cannot be established by the exact-window renderer"
-                    .into(),
-            });
-        }
+        let alpha = window_alpha(window)?;
         let dpi = unsafe { GetDpiForWindow(window) };
         check(until)?;
         let (image, rendered_size) = capture_rgb(window, bounds)?;
@@ -926,9 +1137,7 @@ impl Store {
         if !equal_rect(bounds, capture_bounds(window)?)
             || dpi == 0
             || dpi != unsafe { GetDpiForWindow(window) }
-            || unsafe { GetWindowLongW(window, GWL_EXSTYLE) } as u32
-                & (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0)
-                != 0
+            || alpha != window_alpha(window)?
         {
             return Err(Error::TargetChanged);
         }
@@ -964,7 +1173,7 @@ impl Store {
         }
         self.validate(target)?;
         if !unsafe { IsWindowEnabled(window) }.as_bool()
-            || unsafe { GetForegroundWindow() } != window
+            || unsafe { GetForegroundWindow() } != keyboard_window(window, target.app.pid)?
         {
             return Err(failed("Exact target is no longer enabled and foreground"));
         }
@@ -1111,7 +1320,7 @@ impl Store {
             };
             if let Some(receiver) = receiver {
                 let mut cursor = super::cursor::Emitter::new(&r["cursor_feedback"], target);
-                let verify = |state: &Self| -> Result<(), Error> {
+                let verify = |state: &Self, initial_anchor: bool| -> Result<(), Error> {
                     state.validate(target)?;
                     check(until)?;
                     input::no_held_keys()?;
@@ -1125,7 +1334,9 @@ impl Store {
                     {
                         return Err(Error::StaleObservation);
                     }
-                    if let Some((uia, element, root, before, region)) = semantic_anchor.as_ref() {
+                    if let Some((uia, element, root, before, region)) =
+                        semantic_anchor.as_ref().filter(|_| initial_anchor)
+                    {
                         if !equal_rect(
                             scroll_element_rect(uia, element, root, *bounds, *region, until)?,
                             *before,
@@ -1137,7 +1348,7 @@ impl Store {
                 };
                 if op == "click" {
                     for index in 0..count {
-                        verify(self)?;
+                        verify(self, true)?;
                         *route = Some("background");
                         receiver.click(index == 1, until, dispatched)?;
                         if let Some(cursor) = cursor.as_mut() {
@@ -1146,9 +1357,10 @@ impl Store {
                         std::thread::sleep(Duration::from_millis(25));
                     }
                 } else if let Some((x, y)) = scroll {
+                    let mut wheel_admitted = false;
                     for (delta, horizontal, sign) in [(y, false, -1), (x, true, 1)] {
                         for _ in 0..delta.unsigned_abs() {
-                            verify(self)?;
+                            verify(self, !wheel_admitted)?;
                             *route = Some("background");
                             receiver.wheel(
                                 horizontal,
@@ -1156,6 +1368,7 @@ impl Store {
                                 until,
                                 dispatched,
                             )?;
+                            wheel_admitted = true;
                             if let Some(cursor) = cursor.as_mut() {
                                 cursor.posted(hit.x, hit.y, false);
                             }
@@ -1173,7 +1386,7 @@ impl Store {
             }
         }
         *route = Some("foreground");
-        input::focus(window, until, dispatched)?;
+        input::focus(keyboard_window(window, target.app.pid)?, until, dispatched)?;
         self.input_boundary(target, window, until)?;
         let text_scalars: Vec<char> = if op == "typeText" {
             input_sequence::normalized_text(string(r, "text")?)
@@ -1224,6 +1437,7 @@ impl Store {
             .as_ref()
             .and_then(|_| super::cursor::Emitter::new(&r["cursor_feedback"], target));
         let mut placed = false;
+        let mut wheel_admitted = false;
         let mut text_index = 0;
         let named_keypress = op == "keypress" && segments.len() == 1;
         let mut terminal_keypress_complete = false;
@@ -1237,7 +1451,9 @@ impl Store {
                 }
                 self.input_boundary(target, window, until)?;
                 input::no_held_keys()?;
-                if let Some((uia, element, root, before, region)) = semantic_anchor.as_ref() {
+                if let Some((uia, element, root, before, region)) =
+                    semantic_anchor.as_ref().filter(|_| !wheel_admitted)
+                {
                     let bounds = unobstructed(window)?;
                     let current = scroll_element_rect(uia, element, root, bounds, *region, until)?;
                     if !equal_rect(current, *before) {
@@ -1292,6 +1508,15 @@ impl Store {
                     })?;
                 } else {
                     terminal_keypress_complete = sent?.terminal_keypress();
+                }
+                if segment.iter().any(|event| unsafe {
+                    event.r#type == INPUT_MOUSE
+                        && event.Anonymous.mi.dwFlags.0 & (MOUSEEVENTF_WHEEL | MOUSEEVENTF_HWHEEL).0
+                            != 0
+                }) {
+                    // The initial element admitted this fixed hit. Its content may
+                    // now move; exact HWND, receiver, bounds, DPI and hit checks remain.
+                    wheel_admitted = true;
                 }
                 if let (Some(cursor), Some((_, hit, _, _, _))) = (cursor.as_mut(), point.as_ref()) {
                     // Emit only after the entire native mouse segment was
@@ -1399,7 +1624,10 @@ impl Store {
             if !unsafe { IsWindowEnabled(window) }.as_bool() {
                 return Err(failed("Target is disabled by a modal window"));
             }
-            if op == "press" || op == "setValue" {
+            if matches!(op, "move" | "drag") {
+                route = Some("foreground");
+                self.pointer_input(&target, window, r, until, &mut dispatched)?;
+            } else if op == "press" || op == "setValue" {
                 let token = string(r, "binding")?;
                 let q = self.queries.remove(token).ok_or(Error::StaleObservation)?;
                 if q.target != target || q.expires <= Instant::now() {
@@ -1464,6 +1692,21 @@ impl Store {
                         self.semantic_admission(&target, window, &uia, &element, &q, until)?;
                     dispatched = true;
                     unsafe { pattern.Select() }.map_err(failed)?;
+                } else if let Some(pattern) = unsafe {
+                    optional_pattern::<IUIAutomationExpandCollapsePattern>(
+                        &element,
+                        UIA_ExpandCollapsePatternId,
+                    )
+                }? {
+                    let state = unsafe { pattern.CurrentExpandCollapseState() }.map_err(failed)?;
+                    let _mutation =
+                        self.semantic_admission(&target, window, &uia, &element, &q, until)?;
+                    dispatched = true;
+                    if state == ExpandCollapseState_Expanded {
+                        unsafe { pattern.Collapse() }.map_err(failed)?;
+                    } else {
+                        unsafe { pattern.Expand() }.map_err(failed)?;
+                    }
                 } else {
                     return Err(Error::ElementNotPressable);
                 }
@@ -1619,6 +1862,31 @@ fn toggle_value(
         _ => None, // Unknown provider values are not evidence that a control is off.
     })
 }
+fn in_menu_scope(
+    uia: &IUIAutomation,
+    walker: &IUIAutomationTreeWalker,
+    element: &IUIAutomationElement,
+    root: &IUIAutomationElement,
+    until: Instant,
+) -> Result<bool, Error> {
+    let mut current = element.clone();
+    for _ in 0..65 {
+        check(until)?;
+        let control = unsafe { current.CurrentControlType() }.map_err(failed)?;
+        if control == UIA_MenuControlTypeId || control == UIA_MenuBarControlTypeId {
+            return Ok(true);
+        }
+        if unsafe { uia.CompareElements(&current, root) }
+            .map_err(failed)?
+            .as_bool()
+        {
+            return Ok(false);
+        }
+        current =
+            optional(unsafe { walker.GetParentElement(&current) })?.ok_or(Error::TargetChanged)?;
+    }
+    Err(Error::TargetChanged)
+}
 fn element_row(
     e: &IUIAutomationElement,
     id: u64,
@@ -1653,6 +1921,13 @@ fn element_row(
                 )?
                 .is_some()
         };
+        let can_press = can_press
+            || (role == "menu_item"
+                && optional_pattern::<IUIAutomationExpandCollapsePattern>(
+                    e,
+                    UIA_ExpandCollapsePatternId,
+                )?
+                .is_some());
         if can_press {
             actions.push("press");
         }
@@ -1917,7 +2192,43 @@ fn render_size(window: HWND) -> Result<(i32, i32), Error> {
         Ok((width, height))
     }
 }
+fn window_alpha(window: HWND) -> Result<Option<(u32, u8, u32)>, Error> {
+    if unsafe { GetWindowLongW(window, GWL_EXSTYLE) } as u32 & WS_EX_LAYERED.0 == 0 {
+        return Ok(None);
+    }
+    let mut key = COLORREF(0);
+    let mut alpha = 255u8;
+    let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
+    unsafe {
+        GetLayeredWindowAttributes(window, Some(&mut key), Some(&mut alpha), Some(&mut flags))
+    }
+    .map_err(|_| Error::NativeFailure {
+        code: "windows_surface_unsupported".into(),
+        message: "Per-pixel layered alpha has no readable global alpha/color-key proof".into(),
+    })?;
+    if flags.0 & !(LWA_ALPHA.0 | LWA_COLORKEY.0) != 0 || flags.0 == 0 {
+        return Err(Error::InvalidObservation);
+    }
+    Ok(Some((key.0, alpha, flags.0)))
+}
+fn apply_alpha(rgb: &[u8], proof: (u32, u8, u32)) -> Vec<u8> {
+    let (key, alpha, flags) = proof;
+    rgb.chunks_exact(3)
+        .flat_map(|pixel| {
+            let color = pixel[0] as u32 | ((pixel[1] as u32) << 8) | ((pixel[2] as u32) << 16);
+            let opacity = if flags & LWA_COLORKEY.0 != 0 && color == key {
+                0
+            } else if flags & LWA_ALPHA.0 != 0 {
+                alpha
+            } else {
+                255
+            };
+            [pixel[0], pixel[1], pixel[2], opacity]
+        })
+        .collect()
+}
 fn capture_rgb(window: HWND, bounds: RECT) -> Result<(Value, (i32, i32)), Error> {
+    let alpha = window_alpha(window)?;
     unsafe {
         let mut raw = RECT::default();
         GetWindowRect(window, &mut raw).map_err(failed)?;
@@ -2010,7 +2321,13 @@ fn capture_rgb(window: HWND, bounds: RECT) -> Result<(Value, (i32, i32)), Error>
                         "Native window render is blank or unsupported; capture content is unproven",
                     ));
                 }
-                Ok((encode_png(width as u32, height as u32, &rgb)?, (rw, rh)))
+                let image = match alpha {
+                    Some(proof) => {
+                        encode_png_rgba(width as u32, height as u32, &apply_alpha(&rgb, proof))?
+                    }
+                    None => encode_png(width as u32, height as u32, &rgb)?,
+                };
+                Ok((image, (rw, rh)))
             });
             SelectObject(memory, old);
             let _ = DeleteObject(bitmap);
@@ -2055,8 +2372,186 @@ fn absolute_move(point: POINT) -> Result<INPUT, Error> {
 }
 
 #[cfg(test)]
+mod pending_quit_tests {
+    use super::*;
+
+    #[test]
+    fn pinned_handle_checks_image_and_birth_from_its_own_process() {
+        let app = process_stamp(std::process::id()).unwrap();
+        let pending = PendingQuit::open(&app).unwrap();
+        assert!(!pending.process.exited().unwrap());
+        assert_eq!(pending.process.stamp(app.pid).unwrap(), app);
+        let mut wrong = app.clone();
+        wrong.generation ^= 1;
+        assert!(matches!(
+            PendingQuit::open(&wrong),
+            Err(Error::TargetChanged)
+        ));
+        wrong = app;
+        wrong.identity.0.push_str(".wrong");
+        assert!(matches!(
+            PendingQuit::open(&wrong),
+            Err(Error::TargetChanged)
+        ));
+    }
+
+    #[test]
+    fn signaled_exact_quit_instance_has_empty_inventory_without_reopening_pid() {
+        use std::os::windows::process::CommandExt;
+        use std::process::{Command, Stdio};
+        let exe = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32")
+            .join("cmd.exe");
+        let mut child = Command::new(exe)
+            .args(["/d", "/c", "set /p dtw= & exit /b 0"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW: no desktop interaction.
+            .spawn()
+            .unwrap();
+        // Saturate the resource budget with independently owned, verified
+        // handles without creating 512 OS processes in a unit test.
+        let pending = process_stamp(child.id()).and_then(|app| {
+            (0..MAX_PENDING_QUITS)
+                .map(|_| PendingQuit::open(&app))
+                .collect::<Result<Vec<_>, _>>()
+        });
+        drop(child.stdin.take());
+        child.wait().unwrap();
+        let pending = pending.unwrap();
+        assert!(pending.iter().all(|p| p.process.exited().unwrap()));
+        let app = pending[0].app.clone();
+        // Only COM lifetime is needed for this Store; no UIA or DPI/GUI calls.
+        unsafe {
+            CoInitializeEx(None, COINIT_MULTITHREADED).ok().unwrap();
+        }
+        let mut store = Store {
+            uia: None,
+            windows: HashMap::new(),
+            queries: HashMap::new(),
+            pixels: HashMap::new(),
+            pending_quits: pending,
+        };
+        assert_eq!(store.instance_exited(&app), Ok(true));
+        let deadline = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+            + 1000;
+        let reply = store.dispatch(
+            &json!({"operation":"windows", "app":app_json(&app), "deadline_unix_ms":deadline}),
+        );
+        assert_eq!(reply["windows"], json!([]), "{reply}");
+        assert!(reply.get("error").is_none());
+        let mut other = app.clone();
+        other.generation ^= 1;
+        assert!(store.pending_quit(&other).is_none());
+        other = app;
+        other.identity.0.push_str(".wrong");
+        assert!(store.pending_quit(&other).is_none());
+        // Reusing the current proof never triggers GC, even at the limit.
+        assert!(!store
+            .retain_quit(&store.pending_quits[0].app.clone())
+            .unwrap());
+        assert_eq!(store.pending_quits.len(), MAX_PENDING_QUITS);
+        let current = process_stamp(std::process::id()).unwrap();
+        assert!(store.retain_quit(&current).unwrap());
+        assert_eq!(store.pending_quits.len(), 1);
+        assert_eq!(store.pending_quits[0].app, current);
+    }
+
+    #[test]
+    fn full_budget_never_evicts_live_proofs_or_duplicates_a_cancelled_quit() {
+        let app = process_stamp(std::process::id()).unwrap();
+        unsafe {
+            CoInitializeEx(None, COINIT_MULTITHREADED).ok().unwrap();
+        }
+        let mut store = Store {
+            uia: None,
+            windows: HashMap::new(),
+            queries: HashMap::new(),
+            pixels: HashMap::new(),
+            pending_quits: (0..MAX_PENDING_QUITS)
+                .map(|_| PendingQuit::open(&app).unwrap())
+                .collect(),
+        };
+        for _ in 0..3 {
+            assert!(!store.retain_quit(&app).unwrap());
+            assert_eq!(store.pending_quits.len(), MAX_PENDING_QUITS);
+        }
+        let mut different = app.clone();
+        different.generation ^= 1;
+        assert!(
+            matches!(store.retain_quit(&different), Err(Error::BackendFailed(message))
+            if message == "Pending quit identity budget exhausted")
+        );
+        assert_eq!(store.pending_quits.len(), MAX_PENDING_QUITS);
+        assert!(store
+            .pending_quits
+            .iter()
+            .all(|p| !p.process.exited().unwrap()));
+        // A real handle without SYNCHRONIZE produces WAIT_FAILED, not proof
+        // of exit. Preserve every record and propagate the diagnostic.
+        store.pending_quits[0].process = ProcessHandle::open(app.pid, false).unwrap();
+        assert!(
+            matches!(store.retain_quit(&different), Err(Error::BackendFailed(message))
+            if message.starts_with("process_stamp/WaitForSingleObject:"))
+        );
+        assert_eq!(store.pending_quits.len(), MAX_PENDING_QUITS);
+    }
+
+    #[test]
+    fn process_api_errors_include_a_bounded_phase() {
+        assert!(
+            matches!(process_stamp(0), Err(Error::BackendFailed(message))
+            if message.starts_with("process_stamp/OpenProcess:"))
+        );
+    }
+}
+
+#[cfg(test)]
 mod semantic_tests {
     use super::*;
+    #[test]
+    fn only_exact_standard_decoration_classes_are_excluded_from_active_semantics() {
+        for class in [
+            "tooltips_class32",
+            "TOOLTIPS_CLASS32",
+            "SysShadow",
+            "sysshadow",
+        ] {
+            assert!(decorative_window_class(class), "{class}");
+        }
+        for class in [
+            "",
+            "#32768",
+            "ComboLBox",
+            "Chrome_WidgetWin_1",
+            "tooltips_class32_custom",
+            "MySysShadow",
+            "ToolWindow",
+            "SysShadow ",
+        ] {
+            assert!(!decorative_window_class(class), "{class}");
+        }
+    }
+    #[test]
+    fn layered_global_alpha_and_color_key_keep_unpremultiplied_content() {
+        let rgb = [173, 216, 230, 255, 0, 255];
+        assert_eq!(
+            apply_alpha(&rgb, (0, 191, LWA_ALPHA.0)),
+            vec![173, 216, 230, 191, 255, 0, 255, 191]
+        );
+        assert_eq!(
+            apply_alpha(&rgb, (0xff00ff, 191, LWA_ALPHA.0 | LWA_COLORKEY.0)),
+            vec![173, 216, 230, 191, 255, 0, 255, 0]
+        );
+        assert_eq!(
+            apply_alpha(&rgb, (0xff00ff, 0, LWA_COLORKEY.0)),
+            vec![173, 216, 230, 255, 255, 0, 255, 0]
+        );
+    }
     #[test]
     fn uia_root_availability_and_access_denial_survive_the_worker_codec() {
         use crate::backends::error_wire::reply_error;

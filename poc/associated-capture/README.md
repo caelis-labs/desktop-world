@@ -1,30 +1,11 @@
-# Application observation extension
+# Application observation extension — historical archive
 
-> Historical archive. This page describes the earlier CUA wrapper and its acceptance tools; it is not a guide to the current rewrite-only runtime. The original files remain available at [the pre-removal revision](https://github.com/caelis-labs/desktop-world/tree/c55348610071e2b26e10ce490744065b0cdd08b7/poc/associated-capture). See the [current README](../../README.md) for supported entry points.
+This directory preserves evidence from the earlier CUA wrapper. Its atomic
+protocol and fixture commands have been retired; they do not describe the current
+DTW runtime. The original implementation and instructions are available at the
+[pre-removal revision](https://github.com/caelis-labs/desktop-world/tree/c55348610071e2b26e10ce490744065b0cdd08b7/poc/associated-capture).
 
-This worktree now implements the runtime-owned session and application-observation
-contract described in [architecture](../../docs/architecture.md), including DTW
-ScreenCaptureKit fallback and guarded pixel input. CUA remains the unmodified
-0.35.4 official prerelease at `d74a9cab3fb2e80ab7f0cef47025ec828586ea75`.
-
-Use `exec` without a `session` parameter. `operation:app` takes the exact target
-PID, enumerates all attributed visible windows, and captures the upper two by
-default (`max_windows:1..8`). `operation:click` takes its `observation_id`,
-`image_index`, and PNG-pixel `x/y`. See the packaged Skill and API reference.
-
-[Runtime acceptance](https://github.com/caelis-labs/desktop-world/blob/f1d243a/docs/runtime-acceptance.md) records the current gates.
 The earlier [acceptance](acceptance.md) and its JSON are historical top2-only POC
-evidence, not the current implementation or binary. The new extension removes
-private AX symbols and does not depend on CUA internal types. Public-API
-attribution remains best effort; top2 is only the presentation limit.
-
-Reproducible GUI fixture:
-
-```sh
-tests/fixtures/scene/build-run.sh /private/tmp/NEW_FIXTURE_DIR
-python3 tests/acceptance/scene_fixture_probe.py /path/to/dtw /private/tmp/NEW_FIXTURE_DIR /private/tmp/NEW_EVIDENCE_DIR
-```
-
-The fixture verifies independent UI effects and refusal after movement, closure,
-reuse, expiry, another script or an unrelated opaque window. It does not replace
-real WPS/Obsidian, multi-display or other-platform acceptance.
+evidence. For supported entry points, use the [current README](../../README.md),
+[Skill API](../../skills/desktop-world/API.md) and
+[building and acceptance guide](../../docs/building.md).

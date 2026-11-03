@@ -433,6 +433,9 @@ pub struct WindowLayout {
     pub rank: u32,
     /// Optional native keyboard receiver, independent of visual z-order.
     pub keyboard_focused: Option<bool>,
+    /// Explicit native exclusion from active semantics, never from pixels or
+    /// pointer hit testing. Unknown providers preserve z-order selection.
+    pub semantic_candidate: Option<bool>,
 }
 impl Eq for WindowLayout {} // The constructor excludes NaN and infinity.
 impl WindowLayout {
@@ -442,6 +445,7 @@ impl WindowLayout {
                 bounds,
                 rank,
                 keyboard_focused: None,
+                semantic_candidate: None,
             },
         )
     }

@@ -124,6 +124,58 @@ impl<P: Platform> NativeBackend<P> {
             })
             .collect()
     }
+    #[cfg(target_os = "windows")]
+    pub fn discover(&self, timeout: Duration) -> Result<Value, Error> {
+        let deadline = Instant::now() + timeout;
+        let poll = || {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                Err(Error::TimedOut)
+            } else {
+                Ok(left)
+            }
+        };
+        let reply = self.read(
+            json!({"operation":"discover_apps"}),
+            &CallContext { poll: &poll },
+        )?;
+        if !reply["apps"].is_array() || !reply["coverage"].is_object() {
+            return Err(Error::InvalidObservation);
+        }
+        Ok(reply)
+    }
+    #[cfg(target_os = "windows")]
+    pub fn resolve_target(
+        &self,
+        app_id: &str,
+        timeout: Duration,
+    ) -> Result<ApplicationTarget, Error> {
+        let deadline = Instant::now() + timeout;
+        let poll = || {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                Err(Error::TimedOut)
+            } else {
+                Ok(left)
+            }
+        };
+        let reply = self.read(
+            json!({"operation":"resolve_app","app_id":app_id}),
+            &CallContext { poll: &poll },
+        )?;
+        let apps = array(&reply, "apps")?;
+        if apps.len() > 32 {
+            return Err(Error::InvalidObservation);
+        }
+        Ok(ApplicationTarget {
+            app_id: string(&reply, "app_id")?.into(),
+            name: string(&reply, "name")?.into(),
+            instances: apps
+                .iter()
+                .map(|row| parse_app(&row["app"]))
+                .collect::<Result<_, _>>()?,
+        })
+    }
     fn rpc(&self, mut request: Value, call: &CallContext<'_>) -> Result<Value, (Error, bool)> {
         if let Some(error) = self.cleanup.lock().unwrap().clone() {
             return Err((error, false));
@@ -154,6 +206,7 @@ impl<P: Platform> NativeBackend<P> {
                         .lock()
                         .unwrap()
                         .take()
+                        .or_else(|| call.remaining().err())
                         .unwrap_or_else(|| transport_error(error)),
                     sent,
                 )
@@ -212,7 +265,8 @@ impl<P: Platform> NativeBackend<P> {
         let (request, mut presentation) = {
             let mut request = request;
             request["input_policy"] = json!(self.input_policy.as_str());
-            let presentation = if matches!(operation.as_str(), "click" | "scroll") {
+            let presentation = if matches!(operation.as_str(), "click" | "scroll" | "move" | "drag")
+            {
                 // Validate the native target before starting optional visuals.
                 // The eventual action repeats every ordinary admission check.
                 self.read(
@@ -365,6 +419,135 @@ impl<P: Platform> Backend for NativeBackend<P> {
         );
         stopped?;
         self.cleanup.lock().unwrap().clone().map_or(Ok(()), Err)
+    }
+    #[cfg(target_os = "windows")]
+    fn launch_application(&self, app_id: &str, call: &CallContext<'_>) -> ApplicationLaunch {
+        let reply = match self.rpc(json!({"operation":"launch_app","app_id":app_id}), call) {
+            Ok(reply) => reply,
+            Err((error, sent)) => {
+                return ApplicationLaunch {
+                    outcome: if sent {
+                        ActionOutcome::unknown(error)
+                    } else {
+                        ActionOutcome::rejected(error)
+                    },
+                    instances: vec![],
+                }
+            }
+        };
+        let error = reply_error(&reply);
+        let mut outcome = match reply["dispatch"].as_str() {
+            Some("not_dispatched")
+                if error.is_none()
+                    && reply["evidence"] == "confirmed"
+                    && reply["postcondition"] == "application_running" =>
+            {
+                ActionOutcome {
+                    delivery: None,
+                    dispatch: DispatchState::NotDispatched,
+                    evidence: EffectEvidence::Confirmed("application_running".into()),
+                    error: None,
+                }
+            }
+            Some("not_dispatched") if error.is_some() => ActionOutcome::rejected(error.unwrap()),
+            Some("dispatched") => ActionOutcome {
+                delivery: None,
+                dispatch: DispatchState::Dispatched,
+                evidence: if error.is_none()
+                    && reply["evidence"] == "confirmed"
+                    && reply["postcondition"] == "application_running"
+                {
+                    EffectEvidence::Confirmed("application_running".into())
+                } else {
+                    EffectEvidence::Unverified
+                },
+                error,
+            },
+            _ => ActionOutcome::unknown(error.unwrap_or(Error::InvalidObservation)),
+        };
+        let instances = match array(&reply, "apps").and_then(|apps| {
+            if apps.len() > 32 {
+                return Err(Error::InvalidObservation);
+            }
+            apps.iter()
+                .map(|row| parse_app(&row["app"]))
+                .collect::<Result<Vec<_>, _>>()
+        }) {
+            Ok(apps) => apps,
+            Err(error) if outcome.dispatch != DispatchState::NotDispatched => {
+                outcome = ActionOutcome::unknown(error);
+                vec![]
+            }
+            Err(_) => vec![],
+        };
+        if instances.is_empty() && matches!(outcome.evidence, EffectEvidence::Confirmed(_)) {
+            outcome = ActionOutcome::unknown(Error::InvalidObservation);
+        }
+        ApplicationLaunch { outcome, instances }
+    }
+    #[cfg(target_os = "windows")]
+    fn quit_application(&self, app: &AppInstance, call: &CallContext<'_>) -> ActionOutcome {
+        match self.rpc(
+            json!({"operation":"quit_app","target":{"app":app_json(app)}}),
+            call,
+        ) {
+            Err((error, true)) => ActionOutcome::unknown(error),
+            Err((error, false)) => ActionOutcome::rejected(error),
+            Ok(reply) => {
+                let error = reply_error(&reply);
+                match reply["dispatch"].as_str() {
+                    Some("not_dispatched") if error.is_some() => {
+                        ActionOutcome::rejected(error.unwrap())
+                    }
+                    Some("dispatched") => ActionOutcome {
+                        delivery: None,
+                        dispatch: DispatchState::Dispatched,
+                        evidence: if error.is_none()
+                            && reply["evidence"] == "confirmed"
+                            && reply["postcondition"] == "application_exited"
+                        {
+                            EffectEvidence::Confirmed("application_exited".into())
+                        } else {
+                            EffectEvidence::Unverified
+                        },
+                        error,
+                    },
+                    _ => ActionOutcome::unknown(error.unwrap_or(Error::InvalidObservation)),
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    fn close_window(&self, target: &WindowTarget, call: &CallContext<'_>) -> ActionOutcome {
+        match self.rpc(
+            json!({"operation":"close_window","target":target_json(target)}),
+            call,
+        ) {
+            Err((error, true)) => ActionOutcome::unknown(error),
+            Err((error, false)) => ActionOutcome::rejected(error),
+            Ok(reply) => {
+                let error = reply_error(&reply);
+                match reply["dispatch"].as_str() {
+                    Some("not_dispatched") if error.is_some() => {
+                        ActionOutcome::rejected(error.unwrap())
+                    }
+                    Some("dispatched") => ActionOutcome {
+                        delivery: None,
+                        dispatch: DispatchState::Dispatched,
+                        evidence: if error.is_none()
+                            && reply["evidence"] == "confirmed"
+                            && reply["postcondition"] == "window_closed"
+                        {
+                            EffectEvidence::Confirmed("window_closed".into())
+                        } else {
+                            EffectEvidence::Unverified
+                        },
+                        error,
+                    },
+                    _ => ActionOutcome::unknown(error.unwrap_or(Error::InvalidObservation)),
+                }
+            }
+        }
     }
     fn windows(&self, app: &AppInstance, call: &CallContext<'_>) -> Result<WindowInventory, Error> {
         let reply = self.read(json!({"operation":"windows","app":app_json(app)}), call)?;
@@ -553,6 +736,25 @@ impl<P: Platform> Backend for NativeBackend<P> {
     ) -> ActionOutcome {
         self.action(json!({"operation":"click","target":target_json(target),"binding":binding.token,"x":point.x,"y":point.y,"button":if options.button==MouseButton::Left{"left"}else{"right"},"count":options.count}),call)
     }
+    #[cfg(target_os = "windows")]
+    fn pointer_gesture(
+        &self,
+        target: &WindowTarget,
+        binding: &Self::Binding,
+        gesture: &PointerGesture,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        let path = gesture
+            .points()
+            .iter()
+            .map(|point| json!({"x":point.x,"y":point.y}))
+            .collect::<Vec<_>>();
+        self.action(
+            json!({"operation":match gesture { PointerGesture::Move(_) => "move", PointerGesture::Drag(_) => "drag" },
+                "target":target_json(target),"binding":binding.token,"path":path}),
+            call,
+        )
+    }
     fn input(
         &self,
         target: &WindowTarget,
@@ -598,7 +800,9 @@ fn operation_route(operation: &str) -> Option<InputRoute> {
         // Windows uses UIA Invoke/Toggle/Select and SetValue without an explicit
         // foreground operation. X11 currently does not advertise these actions.
         "press" | "setValue" => Some(InputRoute::Semantic),
-        "click" | "focus" | "typeText" | "keypress" | "scroll" => Some(InputRoute::Foreground),
+        "click" | "focus" | "typeText" | "keypress" | "scroll" | "move" | "drag" => {
+            Some(InputRoute::Foreground)
+        }
         _ => None,
     }
 }
@@ -677,6 +881,10 @@ pub(crate) fn parse_layout(value: Option<&Value>) -> Result<Option<WindowLayout>
     let mut layout = WindowLayout::new(bounds, rank).ok_or(Error::InvalidObservation)?;
     layout.keyboard_focused = value
         .get("keyboard_focused")
+        .map(|v| v.as_bool().ok_or(Error::InvalidObservation))
+        .transpose()?;
+    layout.semantic_candidate = value
+        .get("semantic_candidate")
         .map(|v| v.as_bool().ok_or(Error::InvalidObservation))
         .transpose()?;
     Ok(Some(layout))
@@ -771,13 +979,24 @@ pub fn check(until: Instant) -> Result<(), Error> {
     }
 }
 pub fn encode_png(width: u32, height: u32, rgb: &[u8]) -> Result<Value, Error> {
+    encode_png_color(width, height, rgb, png::ColorType::Rgb)
+}
+pub fn encode_png_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<Value, Error> {
+    encode_png_color(width, height, rgba, png::ColorType::Rgba)
+}
+fn encode_png_color(
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+    color: png::ColorType,
+) -> Result<Value, Error> {
     let mut png = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut png, width, height);
-        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_color(color);
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder.write_header().map_err(failed)?;
-        writer.write_image_data(rgb).map_err(failed)?;
+        writer.write_image_data(pixels).map_err(failed)?;
     }
     if png.len() > 16 * 1024 * 1024 {
         return Err(failed("PNG exceeds 16 MiB"));
@@ -799,6 +1018,21 @@ mod tests {
         assert_eq!(layout.bounds(), [-100.0, 20.0, 300.0, 200.0]);
         assert_eq!(layout.rank, 2);
         assert_eq!(layout.keyboard_focused, None);
+        assert_eq!(layout.semantic_candidate, None);
+        for candidate in [true, false] {
+            let hint = json!({"bounds":[-100,20,300,200],"rank":2,"semantic_candidate":candidate});
+            assert_eq!(
+                parse_layout(Some(&hint))
+                    .unwrap()
+                    .unwrap()
+                    .semantic_candidate,
+                Some(candidate)
+            );
+        }
+        for invalid in [Value::Null, json!("false"), json!(0), json!({}), json!([])] {
+            let hint = json!({"bounds":[-100,20,300,200],"rank":2,"semantic_candidate":invalid});
+            assert!(parse_layout(Some(&hint)).is_err());
+        }
         let hint = json!({"bounds":[-100,20,300,200],"rank":2,"keyboard_focused":true});
         assert_eq!(
             parse_layout(Some(&hint)).unwrap().unwrap().keyboard_focused,

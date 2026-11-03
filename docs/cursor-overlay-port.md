@@ -172,7 +172,11 @@ owner cleanup. The donor's primary-screen-only guard, large command history,
 8-second animation arrival wait and missing-target top-of-desktop fallback are
 not carried over. The session identity remains internal. User-visible markers use color, arrow geometry and click feedback without a textual or hexadecimal badge.
 
-## Required acceptance after wiring
+## Acceptance scope used for this checkpoint
+
+These controls defined the checkpoint-2 acceptance summarized at the top; their
+results and retained failures live in that evidence rather than in this contract
+page.
 
 - Verify actual directed click/scroll markers and route agree with event journals;
   no marker appears for an undispatched/strictly rejected/semantic action or primer.
