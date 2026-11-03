@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/caelis-labs/desktop-world/compare/v0.3.1...v0.3.2) (2026-11-03)
+
+
+### Bug Fixes
+
+* **macos:** restore AX compatibility and prefer independent pointer input ([#100](https://github.com/caelis-labs/desktop-world/issues/100)) ([2baf89b](https://github.com/caelis-labs/desktop-world/commit/2baf89b3aa23c2fc4e8ae5babb93893f2b191392))
+
 ## [0.3.1](https://github.com/caelis-labs/desktop-world/compare/v0.3.0...v0.3.1) (2026-11-02)
 
 
