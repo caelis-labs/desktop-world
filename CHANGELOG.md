@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/caelis-labs/desktop-world/compare/v0.3.2...v0.3.3) (2026-11-03)
+
+
+### Bug Fixes
+
+* preserve input targets and isolate accessibility read failures ([#102](https://github.com/caelis-labs/desktop-world/issues/102)) ([a698fe2](https://github.com/caelis-labs/desktop-world/commit/a698fe2caf4e70515534af6d570798d8d0d43b6f))
+
 ## [0.3.2](https://github.com/caelis-labs/desktop-world/compare/v0.3.1...v0.3.2) (2026-11-03)
 
 
