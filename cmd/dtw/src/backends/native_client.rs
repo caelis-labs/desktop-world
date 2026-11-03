@@ -672,9 +672,12 @@ pub(crate) fn parse_layout(value: Option<&Value>) -> Result<Option<WindowLayout>
         .as_u64()
         .and_then(|v| u32::try_from(v).ok())
         .ok_or(Error::InvalidObservation)?;
-    WindowLayout::new(bounds, rank)
-        .map(Some)
-        .ok_or(Error::InvalidObservation)
+    let mut layout = WindowLayout::new(bounds, rank).ok_or(Error::InvalidObservation)?;
+    layout.keyboard_focused = value
+        .get("keyboard_focused")
+        .map(|v| v.as_bool().ok_or(Error::InvalidObservation))
+        .transpose()?;
+    Ok(Some(layout))
 }
 
 pub fn parse_target(v: &Value) -> Result<WindowTarget, Error> {
@@ -818,6 +821,14 @@ mod tests {
             .unwrap();
         assert_eq!(layout.bounds(), [-100.0, 20.0, 300.0, 200.0]);
         assert_eq!(layout.rank, 2);
+        assert_eq!(layout.keyboard_focused, None);
+        let hint = json!({"bounds":[-100,20,300,200],"rank":2,"keyboard_focused":true});
+        assert_eq!(
+            parse_layout(Some(&hint)).unwrap().unwrap().keyboard_focused,
+            Some(true)
+        );
+        let invalid_hint = json!({"bounds":[-100,20,300,200],"rank":2,"keyboard_focused":"yes"});
+        assert!(parse_layout(Some(&invalid_hint)).is_err());
         for value in [
             json!({"bounds":[0,0,0,20],"rank":0}),
             json!({"bounds":[0,0,20],"rank":0}),

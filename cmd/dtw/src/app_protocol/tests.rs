@@ -58,6 +58,8 @@ struct Model {
     cleanup_error: Option<Error>,
     cleanup_after_capture: Option<Error>,
     capture_errors: std::collections::VecDeque<Error>,
+    capture_rgba: [u8; 4],
+    capture_error_after_action: Option<Error>,
     cleanup_after_action: Option<Error>,
     shutdown_gate: Option<(WorkerGate, Error)>,
     windows_error: Option<Error>,
@@ -70,6 +72,7 @@ struct Shared {
     captures: AtomicUsize,
     actions: AtomicUsize,
     anchored_scrolls: Mutex<Vec<(WindowTarget, ScrollRequest)>>,
+    input_targets: Mutex<Vec<WindowTarget>>,
     shutdowns: AtomicUsize,
     finishes: AtomicUsize,
 }
@@ -96,6 +99,8 @@ impl MockBackend {
                 cleanup_error: None,
                 cleanup_after_capture: None,
                 capture_errors: std::collections::VecDeque::new(),
+                capture_rgba: [255; 4],
+                capture_error_after_action: None,
                 cleanup_after_action: None,
                 shutdown_gate: None,
                 windows_error: None,
@@ -106,6 +111,7 @@ impl MockBackend {
             captures: AtomicUsize::new(0),
             actions: AtomicUsize::new(0),
             anchored_scrolls: Mutex::new(Vec::new()),
+            input_targets: Mutex::new(Vec::new()),
             shutdowns: AtomicUsize::new(0),
             finishes: AtomicUsize::new(0),
         }))
@@ -153,6 +159,9 @@ impl MockBackend {
         }
         assert!(!panic, "controlled provider panic");
         let mut model = self.0.model.lock().unwrap();
+        if let Some(error) = model.capture_error_after_action.take() {
+            model.capture_errors.push_back(error);
+        }
         if let Some(error) = model.cleanup_after_action.take() {
             model.cleanup_error.get_or_insert(error);
         }
@@ -293,7 +302,13 @@ impl Backend for MockBackend {
     ) -> ActionOutcome {
         self.act(call)
     }
-    fn input(&self, _: &WindowTarget, _: &WindowInput, call: &CallContext<'_>) -> ActionOutcome {
+    fn input(
+        &self,
+        target: &WindowTarget,
+        _: &WindowInput,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        self.0.input_targets.lock().unwrap().push(target.clone());
         self.act(call)
     }
     fn supports_scroll_anchor(&self, _: ObservationKind) -> bool {

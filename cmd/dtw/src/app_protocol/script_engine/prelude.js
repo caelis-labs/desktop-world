@@ -26,6 +26,9 @@
   const indexOf = String.prototype.indexOf;
   const slice = String.prototype.slice;
   const charAt = String.prototype.charCodeAt;
+  const split = String.prototype.split;
+  const regexpExec = RegExp.prototype.exec;
+  const targetId = /^w[0-9]+\.e[0-9]+$/;
   const root = parse(globalThis.__initial_state);
   const methods = parse(globalThis.__methods);
   const sessionMetadata = parse(globalThis.__session);
@@ -180,8 +183,9 @@
         if (args.length > 1) fail(`app.${op} takes one argument`, "invalid_args");
         let options = args.length ? args[0] : {};
         if (op === "typeText" && typeof options === "string") options = {text:options};
+        if (op === "keypress" && typeof options === "string") options = {keys:apply(split, options, ["+"])};
         if (op === "keypress" && isArray(options)) options = {keys:options};
-        if (op === "click" && typeof options === "string") options = {selector:{text:options}};
+        if (op === "click" && typeof options === "string") options = apply(regexpExec, targetId, [options]) !== null ? {target:options} : {selector:{text:options}};
         // A read attempt settles pending readback even when it fails. Failure
         // settlement must not silently repeat an explicit or automatic read.
         dirty = op !== "look" && op !== "capture";

@@ -316,3 +316,6 @@ fn native_identity_survives_insertion_but_removed_targets_never_retarget() {
         b.data["value"]["view"]["elements"][0]["id"]
     );
 }
+
+#[path = "scene_sequence_tests.rs"]
+mod scene_sequence_tests;

@@ -748,6 +748,9 @@ impl<B: Backend + 'static> Coordinator<B> {
                             json!({"window_ref":key,"title":window.title,"visible":window.visible});
                         if let Some(scene) = window.scene {
                             row["scene"] = json!({"bounds":scene.bounds(),"rank":scene.rank});
+                            if let Some(focused) = scene.keyboard_focused {
+                                row["scene"]["keyboard_focused"] = json!(focused);
+                            }
                         }
                         rows.push(row);
                         bound.insert(key, window.target);

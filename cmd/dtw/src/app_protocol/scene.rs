@@ -244,7 +244,12 @@ impl<B: Backend + 'static> Coordinator<B> {
             let rows = ordered(value["windows"].as_array().cloned().unwrap_or_default());
             self.state.lock().unwrap().scene.active = rows
                 .iter()
-                .find(|row| row["visible"] == true)
+                .filter(|row| row["visible"] == true)
+                .find(|row| {
+                    !matches!(op, "scene.typeText" | "scene.keypress")
+                        || row["scene"]["keyboard_focused"] == true
+                })
+                .or_else(|| rows.iter().find(|row| row["visible"] == true))
                 .and_then(|row| row["window_ref"].as_str())
                 .map(str::to_owned);
         }
@@ -300,6 +305,10 @@ impl<B: Backend + 'static> Coordinator<B> {
                         "Semantic targets do not accept mouse button/count",
                     ));
                 }
+                let node = match self.scene_refresh_target(id, node, deadline) {
+                    Ok(node) => node,
+                    Err(error) => return failed(error),
+                };
                 method = "press".into();
                 options = json!({"window_ref":node["window_ref"],"observation_ref":node["observation_ref"],"element_ref":node["element_ref"]});
             } else if args.get("selector").is_some() {
@@ -312,7 +321,8 @@ impl<B: Backend + 'static> Coordinator<B> {
                 method = "press".into();
                 options["window_ref"] = json!(window);
             } else {
-                if let Err(e) = self.scene_validate_frame(id, deadline) {
+                if let Err(e) = self.scene_validate_frame(id, std::slice::from_ref(args), deadline)
+                {
                     return failed(e);
                 }
                 options = match self.scene_point(args) {
@@ -326,7 +336,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 }
             }
         } else if op == "scene.scroll" && (args.get("x").is_some() || args.get("y").is_some()) {
-            if let Err(e) = self.scene_validate_frame(id, deadline) {
+            if let Err(e) = self.scene_validate_frame(id, std::slice::from_ref(args), deadline) {
                 return failed(e);
             }
             options = match self.scene_point(args) {
@@ -363,10 +373,9 @@ impl<B: Backend + 'static> Coordinator<B> {
             }
         }
         let work = self.scene_atomic(id, &method, options, deadline);
-        // Even a rejected action may have consumed its native observation. Never
-        // silently regenerate a binding and deliver input a second time.
+        // Keep the scene mapping for the next requested action. Its native
+        // binding is consumed; preflight renews it without replaying this input.
         let mut state = self.state.lock().unwrap();
-        state.scene.raster = None;
         if method == "press"
             && work
                 .completed
@@ -394,7 +403,6 @@ impl<B: Backend + 'static> Coordinator<B> {
     }
     fn scene_pointer(&self, id: &str, op: &str, args: &Value, deadline: Instant) -> Work {
         let prepared = (|| {
-            self.scene_validate_frame(id, deadline)?;
             let supplied = if op == "scene.move" {
                 vec![args.clone()]
             } else {
@@ -409,6 +417,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                         )
                     })?
             };
+            self.scene_validate_frame(id, &supplied, deadline)?;
             let mut samples = Vec::new();
             for (i, point) in supplied.iter().enumerate() {
                 if point
@@ -507,15 +516,108 @@ impl<B: Backend + 'static> Coordinator<B> {
                 self.runtime
                     .pointer_until(&target, observation, &gesture, deadline),
             );
-        self.state.lock().unwrap().scene.raster = None;
         work
     }
-    fn scene_validate_frame(&self, id: &str, deadline: Instant) -> Result<(), wire::WireError> {
-        if self.state.lock().unwrap().scene.raster.is_none() {
-            return Err(error(
-                "capture_required",
-                "Call app.capture() before coordinate input",
-            ));
+    fn scene_refresh_target(
+        &self,
+        id: &str,
+        node: Value,
+        deadline: Instant,
+    ) -> Result<Value, wire::WireError> {
+        let Some(identity) = node["identity"].as_str() else {
+            // Providers without a stable object identity can use their exact
+            // original binding once; never retarget by a label or array index.
+            let state = self.state.lock().unwrap();
+            return if state.observations.iter().any(|o| {
+                o.public == node["observation_ref"]
+                    && !o.retired
+                    && self.runtime.retains_observation(o.core)
+            }) {
+                Ok(node)
+            } else {
+                Err(error(
+                    "target_changed",
+                    "Target cannot be rebound; inspect the returned view",
+                ))
+            };
+        };
+        // A public scene ID represents an object; Core/native observations
+        // remain single-use. Renew before dispatch, never by retrying input.
+        let mut work = self.scene_atomic(
+            id,
+            "observe",
+            json!({"window_ref":node["window_ref"],"limit":80}),
+            deadline,
+        );
+        let mut found = None;
+        for page_index in 0..4 {
+            if let Some(error) = work.completed.error {
+                let mut state = self.state.lock().unwrap();
+                state.scene.raster = None;
+                state
+                    .scene
+                    .nodes
+                    .retain(|n| n["window_ref"] != node["window_ref"]);
+                return Err(error);
+            }
+            let page = work.completed.value.unwrap();
+            for element in page["elements"].as_array().into_iter().flatten() {
+                if element["identity"] != identity {
+                    continue;
+                }
+                if found.is_some()
+                    || ["role", "name", "actions", "enabled"]
+                        .iter()
+                        .any(|key| element[*key] != node["expected"][*key])
+                {
+                    return Err(error(
+                        "target_changed",
+                        "Target identity or meaning changed; inspect the returned view",
+                    ));
+                }
+                let mut next = node.clone();
+                next["observation_ref"] = page["observation_ref"].clone();
+                next["element_ref"] = element["element_ref"].clone();
+                found = Some(next);
+            }
+            // Opaque object identity does not require selector uniqueness or a
+            // complete tree. Do not let an unrelated later branch retire this
+            // already-proven binding. Reject duplicates in the returned page.
+            if found.is_some() || page["next"].is_null() || page_index == 3 {
+                break;
+            }
+            work = self.scene_atomic(id, "observe", json!({"cursor":page["next"]}), deadline);
+        }
+        found.ok_or_else(|| {
+            error(
+                "target_changed",
+                "Target is no longer available; inspect the returned view",
+            )
+        })
+    }
+    fn scene_validate_frame(
+        &self,
+        id: &str,
+        points: &[Value],
+        deadline: Instant,
+    ) -> Result<(), wire::WireError> {
+        // Take the old mapping out before any read: a failed refresh cannot
+        // leave old coordinates or consumed observations available for input.
+        let previous = self
+            .state
+            .lock()
+            .unwrap()
+            .scene
+            .raster
+            .take()
+            .ok_or_else(|| {
+                error(
+                    "capture_required",
+                    "Call app.capture() before coordinate input",
+                )
+            })?;
+        for point in points {
+            previous.point(point)?;
         }
         let work = self.scene_atomic(id, "windows", json!({}), deadline);
         if let Some(error) = work.completed.error {
@@ -531,19 +633,47 @@ impl<B: Backend + 'static> Coordinator<B> {
                 .cloned()
                 .collect(),
         );
-        let mut state = self.state.lock().unwrap();
-        let frame = state.scene.raster.as_ref().unwrap();
-        let unchanged = rows.len() == frame.layers.len()
-            && rows.iter().zip(&frame.layers).all(|(row, layer)| {
+        for point in points {
+            let receiver = previous.point(point)?;
+            let layer = previous
+                .layers
+                .iter()
+                .find(|l| receiver["window_ref"] == l.window)
+                .unwrap();
+            if !rows.iter().any(|row| {
                 row["window_ref"] == layer.window && bounds(row).is_none_or(|b| b == layer.bounds)
-            });
-        if !unchanged {
-            state.scene.raster = None;
-            return Err(error(
-                "stale_scene",
-                "App geometry or layering changed; inspect the returned view before new input",
-            ));
+            }) {
+                return Err(error(
+                    "stale_scene",
+                    "Target window geometry changed; inspect the returned view before new input",
+                ));
+            }
         }
+        let (fresh, _) = self
+            .scene_capture(id, &rows, deadline)
+            .map_err(|e| wire::WireError {
+                code: e["code"].as_str().unwrap_or("capture_failed").into(),
+                message: e["message"]
+                    .as_str()
+                    .unwrap_or("Image refresh failed")
+                    .into(),
+                details: e.get("details").cloned(),
+            })?;
+        if previous.bounds != fresh.bounds
+            || previous.width != fresh.width
+            || previous.height != fresh.height
+            || points
+                .iter()
+                .any(|point| match (previous.point(point), fresh.point(point)) {
+                    (Ok(before), Ok(after)) => before["window_ref"] != after["window_ref"],
+                    _ => true,
+                })
+        {
+            return Err(error("stale_scene", "Image mapping or receiving surface changed; inspect the returned view before new input"));
+        }
+        // Animation, typing and scrolling do not identify a new receiver.
+        // A coordinate promises a point, never semantic object identity.
+        self.state.lock().unwrap().scene.raster = Some(fresh);
         Ok(())
     }
     fn scene_point(&self, args: &Value) -> Result<Value, wire::WireError> {
@@ -726,8 +856,8 @@ impl<B: Backend + 'static> Coordinator<B> {
                             window_ids[row["window_ref"].as_str().unwrap()],
                             state.scene.next_element
                         );
-                        if let Some(key) = key {
-                            state.scene.element_ids.insert(key, target.clone());
+                        if let Some(key) = &key {
+                            state.scene.element_ids.insert(key.clone(), target.clone());
                         }
                         target
                     });
@@ -739,7 +869,8 @@ impl<B: Backend + 'static> Coordinator<B> {
                         semantic["has_more"] = json!(true);
                         break;
                     }
-                    nodes.push(json!({"id":target,"window_ref":row["window_ref"],"observation_ref":observation,"element_ref":element["element_ref"]}));
+                    nodes.push(json!({"id":target,"window_ref":row["window_ref"],"observation_ref":observation,"element_ref":element["element_ref"],
+                        "identity":key.as_ref().map(|_| element["identity"].clone()), "expected":element}));
                     semantic_bytes += entry_bytes;
                     elements.push(entry);
                 }
@@ -950,10 +1081,11 @@ impl<B: Backend + 'static> Coordinator<B> {
         );
         let before_rows = ordered(rows.to_vec());
         for row in &before_rows {
-            if !after_rows
-                .iter()
-                .any(|r| r["window_ref"] == row["window_ref"] && r["scene"] == row["scene"])
-            {
+            if !after_rows.iter().any(|r| {
+                r["window_ref"] == row["window_ref"]
+                    && bounds(r) == bounds(row)
+                    && r["scene"]["rank"] == row["scene"]["rank"]
+            }) {
                 return Err(
                     json!({"code":"scene_changed","message":"App surfaces changed during capture; look again before input"}),
                 );

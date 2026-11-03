@@ -229,11 +229,10 @@ fn scene_post_dispatch_read_failure_keeps_receipt_and_never_replays_input() {
                 .model
                 .lock()
                 .unwrap()
-                .capture_errors
-                .push_back(Error::NativeFailure {
-                    code: "permission_required".into(),
-                    message: "permission revoked after dispatch".into(),
-                });
+                .capture_error_after_action = Some(Error::NativeFailure {
+                code: "permission_required".into(),
+                message: "permission revoked after dispatch".into(),
+            });
         } else {
             backend
                 .semantic_errors
@@ -249,7 +248,7 @@ fn scene_post_dispatch_read_failure_keeps_receipt_and_never_replays_input() {
         );
         assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
         assert_eq!(reply.data["script"]["steps"].as_array().unwrap().len(), 2);
-        assert_eq!(backend.base.0.captures.load(Ordering::SeqCst), 2);
+        assert_eq!(backend.base.0.captures.load(Ordering::SeqCst), 3);
         if hard {
             assert_eq!(
                 reply.data["script"]["failure"]["code"],
@@ -279,11 +278,10 @@ fn scene_explicit_failed_read_after_input_is_not_repeated_at_settlement() {
         .model
         .lock()
         .unwrap()
-        .capture_errors
-        .push_back(Error::NativeFailure {
-            code: "permission_required".into(),
-            message: "original explicit read failure".into(),
-        });
+        .capture_error_after_action = Some(Error::NativeFailure {
+        code: "permission_required".into(),
+        message: "original explicit read failure".into(),
+    });
     let reply = scene_exec(&server, "await app.click({x:5,y:5}); await app.capture();");
     assert!(reply.is_error, "{}", reply.data);
     assert_eq!(
@@ -291,7 +289,97 @@ fn scene_explicit_failed_read_after_input_is_not_repeated_at_settlement() {
         "permission_required"
     );
     assert_eq!(reply.data["script"]["steps"].as_array().unwrap().len(), 2);
-    assert_eq!(backend.base.0.captures.load(Ordering::SeqCst), 2);
+    assert_eq!(backend.base.0.captures.load(Ordering::SeqCst), 3);
     assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
     assert!(reply.image.is_none());
+}
+
+#[test]
+fn coordinate_gestures_renew_bindings_without_explicit_recapture() {
+    let (server, backend) = scene_agent();
+    let reply = scene_exec(&server, "await app.capture(); await app.click({x:5,y:5}); await app.click({x:6,y:5}); await app.move({x:5,y:5}); await app.drag({path:[{x:4,y:5},{x:8,y:5}]}); await app.scroll({x:5,y:5,delta_y:3});");
+    assert!(!reply.is_error, "{}", reply.data);
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 5);
+}
+
+#[test]
+fn coordinate_preflight_accepts_animation_but_rejects_changed_geometry() {
+    for geometry in [false, true] {
+        let (server, backend) = scene_agent();
+        let seen = scene_exec(&server, "await app.capture();");
+        assert!(!seen.is_error, "{}", seen.data);
+        {
+            let mut model = backend.base.0.model.lock().unwrap();
+            if geometry {
+                model.inventory.as_mut().unwrap().windows[0].scene =
+                    WindowLayout::new([1., 0., 20., 10.], 0);
+            } else {
+                model.capture_rgba = [0, 0, 0, 255];
+            }
+        }
+        let reply = scene_exec(&server, "await app.click({x:5,y:5});");
+        assert_eq!(reply.is_error, geometry, "{}", reply.data);
+        if geometry {
+            assert_eq!(
+                reply.data["script"]["failure"]["code"], "stale_scene",
+                "{}",
+                reply.data
+            );
+        }
+        assert_eq!(
+            backend.base.0.actions.load(Ordering::SeqCst),
+            usize::from(!geometry)
+        );
+    }
+}
+
+#[test]
+fn exact_native_target_does_not_require_discovery_of_unrelated_branches() {
+    let (server, backend) = scene_agent();
+    backend.complete_after_first.store(true, Ordering::SeqCst);
+    backend
+        .queries
+        .lock()
+        .unwrap()
+        .push(ObserveQuery::default());
+    let seed = scene_exec(&server, "await app.look();");
+    assert!(!seed.is_error, "{}", seed.data);
+    backend.complete_after_first.store(false, Ordering::SeqCst);
+    backend
+        .semantic_errors
+        .lock()
+        .unwrap()
+        .extend([None, Some(ax_parent_failure())]);
+    let reply = scene_exec(&server, "await app.click('w1.e1');");
+    assert!(!reply.is_error, "{}", reply.data);
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
+    assert_eq!(backend.advances.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn new_overlay_requires_observation_only_when_it_changes_the_receiver() {
+    for covers_point in [false, true] {
+        let (server, backend) = scene_agent();
+        let seed = scene_exec(&server, "await app.capture();");
+        assert!(!seed.is_error, "{}", seed.data);
+        let mut model = backend.base.0.model.lock().unwrap();
+        let inventory = model.inventory.as_mut().unwrap();
+        inventory.windows[0].scene.as_mut().unwrap().rank = 1;
+        let mut overlay = inventory.windows[0].clone();
+        overlay.target.native_id = 102;
+        overlay.scene = WindowLayout::new([if covers_point { 0. } else { 15. }, 0., 5., 5.], 0);
+        inventory.windows.insert(0, overlay);
+        inventory.report.candidate_count += 1;
+        inventory.report.supported_count += 1;
+        drop(model);
+        let reply = scene_exec(&server, "await app.click({x:5,y:5});");
+        assert_eq!(reply.is_error, covers_point, "{}", reply.data);
+        assert_eq!(
+            backend.base.0.actions.load(Ordering::SeqCst),
+            usize::from(!covers_point)
+        );
+        if covers_point {
+            assert_eq!(reply.data["script"]["failure"]["code"], "stale_scene");
+        }
+    }
 }

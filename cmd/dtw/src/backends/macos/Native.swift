@@ -2971,6 +2971,17 @@ private final class BackgroundInputValidation {
     }
 }
 
+// Launch policy is independent of whether a later input may need foreground.
+private func applicationOpenConfiguration() -> NSWorkspace.OpenConfiguration {
+    let configuration = NSWorkspace.OpenConfiguration()
+    configuration.activates = false
+    configuration.hides = false
+    configuration.createsNewApplicationInstance = false
+    configuration.allowsRunningApplicationSubstitution = false
+    configuration.addsToRecentItems = false
+    return configuration
+}
+
 private final class NativeStore: @unchecked Sendable {
     let lock = NSLock()
     private struct BorrowedFocus {
@@ -3151,11 +3162,33 @@ private final class NativeStore: @unchecked Sendable {
         let active = Set(candidates.map { WindowSlot(app: app, id: $0.0.id) })
         windows = windows.filter { $0.key.app.pid != app.pid || ($0.key.app == app && active.contains($0.key)) }
         associatedSurfaces = associatedSurfaces.filter { windows[$0.key] != nil }
+        // AX focus is an optional routing hint, never a surface ownership proof.
+        // Omnibox/tooltip surfaces can be in front without receiving keys.
+        var keyboardWindow: CGWindowID?
+        if candidates.count > 1 && dtwAccessibilityGranted() {
+            let hintDeadline = context.deadline.limited(to: ProcessInfo.processInfo.systemUptime + 0.1)
+            do {
+                let application = AXUIElementCreateApplication(app.pid)
+                if let focused = try nativeFocusedWindow(application, pid: app.pid, deadline: hintDeadline) {
+                    let id = try axWindowID(focused, hintDeadline)
+                    if candidates.contains(where: { $0.0.id == id }) { keyboardWindow = id }
+                }
+            } catch let error as NativeFailure where ["ax_unavailable", "window_unproven", "focus_unproven", "deadline_exceeded"].contains(error.code) {
+                // A local hint timeout or unreadable AX must not poison CG reads.
+                try context.deadline.check()
+                try context.verify(app)
+            }
+        }
         var rows: [[String: Any]] = []
         for (record, title) in candidates {
             var row = try registerSurface(record, title: title, app: app, association: associated[record.id])
             row["scene"] = ["bounds": record.coordinates,
                             "rank": visibleSource.firstIndex { ($0[kCGWindowNumber as String] as? UInt32) == record.id } ?? (visibleSource.count + (source.firstIndex { ($0[kCGWindowNumber as String] as? UInt32) == record.id } ?? source.count))]
+            if let keyboardWindow {
+                var scene = row["scene"] as! [String: Any]
+                scene["keyboard_focused"] = record.id == keyboardWindow
+                row["scene"] = scene
+            }
             rows.append(row)
         }
         // Associated AX root replacement can keep the CG ID/owner while making
@@ -4803,10 +4836,7 @@ private final class NativeStore: @unchecked Sendable {
                             "postcondition": "application_running", "apps": running.map(\.json)]
                 }
                 let completion = ApplicationOpenCompletion()
-                let configuration = NSWorkspace.OpenConfiguration()
-                configuration.activates = request["input_policy"] as? String == "auto"
-                configuration.createsNewApplicationInstance = false
-                configuration.addsToRecentItems = false
+                let configuration = applicationOpenConfiguration()
                 try context.deadline.check()
                 guard dtwWithInputAdmission({
                     attempted = true

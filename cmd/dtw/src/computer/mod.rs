@@ -429,12 +429,19 @@ impl PointerGesture {
 pub struct WindowLayout {
     bounds: [f64; 4],
     pub rank: u32,
+    /// Optional native keyboard receiver, independent of visual z-order.
+    pub keyboard_focused: Option<bool>,
 }
 impl Eq for WindowLayout {} // The constructor excludes NaN and infinity.
 impl WindowLayout {
     pub fn new(bounds: [f64; 4], rank: u32) -> Option<Self> {
-        (bounds.iter().all(|v| v.is_finite()) && bounds[2] > 0.0 && bounds[3] > 0.0)
-            .then_some(Self { bounds, rank })
+        (bounds.iter().all(|v| v.is_finite()) && bounds[2] > 0.0 && bounds[3] > 0.0).then_some(
+            Self {
+                bounds,
+                rank,
+                keyboard_focused: None,
+            },
+        )
     }
     pub fn bounds(&self) -> [f64; 4] {
         self.bounds

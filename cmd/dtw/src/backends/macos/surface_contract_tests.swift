@@ -1342,3 +1342,11 @@ surfaceCheck(orderNumber.matches(nil))
 surfaceCheck(!semanticTextContains(String(repeating: "a", count: 4_096) + "needle", needle: "needle"))
 surfaceCheck(semanticTextContains(String(repeating: "a", count: 300) + "needle", needle: "NEEDLE"))
 print("Semantic selectors match public fallback/composite labels without concatenating fields; no AX or GUI reads")
+
+// Automatic app startup must preserve the user's foreground and leave surfaces
+// shareable; hiding/minimizing is not a substitute for a nonactivating launch.
+private let automaticOpen = applicationOpenConfiguration()
+surfaceCheck(!automaticOpen.activates && !automaticOpen.hides)
+surfaceCheck(!automaticOpen.createsNewApplicationInstance)
+surfaceCheck(!automaticOpen.allowsRunningApplicationSubstitution)
+surfaceCheck(!automaticOpen.addsToRecentItems)
