@@ -383,3 +383,103 @@ fn new_overlay_requires_observation_only_when_it_changes_the_receiver() {
         }
     }
 }
+
+#[test]
+fn private_pixel_refresh_cannot_authorize_a_later_unseen_overlay_target() {
+    for next in [
+        "await app.click({x:35,y:5});",
+        "await app.move({x:35,y:5});",
+        "await app.drag({path:[{x:32,y:5},{x:36,y:5}]});",
+        "await app.scroll({x:35,y:5,delta_y:3});",
+    ] {
+        let (server, backend) = scene_agent();
+        let seed = scene_exec(&server, "await app.capture();");
+        assert!(!seed.is_error, "{}", seed.data);
+        let mut model = backend.base.0.model.lock().unwrap();
+        let inventory = model.inventory.as_mut().unwrap();
+        inventory.windows[0].scene.as_mut().unwrap().rank = 1;
+        let mut overlay = inventory.windows[0].clone();
+        overlay.target.native_id = 102;
+        overlay.scene = WindowLayout::new([15., 0., 5., 5.], 0);
+        inventory.windows.insert(0, overlay);
+        inventory.report.candidate_count += 1;
+        inventory.report.supported_count += 1;
+        drop(model);
+        let reply = scene_exec(&server, &format!("await app.click({{x:5,y:5}}); {next}"));
+        assert!(reply.is_error, "{next}: {}", reply.data);
+        assert_eq!(reply.data["script"]["failure"]["code"], "stale_scene");
+        assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[test]
+fn failed_second_read_never_publishes_the_first_read_as_current() {
+    for caught in [false, true] {
+        let (server, backend) = scene_agent();
+        backend.base.0.model.lock().unwrap().capture_error_at = Some((
+            2,
+            Error::NativeFailure {
+                code: "permission_required".into(),
+                message: "Screen Recording revoked before second capture".into(),
+            },
+        ));
+        let source = if caught {
+            "await app.capture(); try { await app.capture(); } catch {}"
+        } else {
+            "await app.capture(); await app.capture();"
+        };
+        let reply = scene_exec(&server, source);
+        assert_eq!(reply.is_error, !caught, "{}", reply.data);
+        assert!(reply.image.is_none());
+        assert!(reply.data["value"]["view"].is_null(), "{}", reply.data);
+        assert!(reply.data["value"]["snapshot"].is_null());
+        assert_eq!(backend.base.0.captures.load(Ordering::SeqCst), 2);
+        let projected = crate::app_protocol::projection::execution(reply);
+        assert!(projected.data.get("view").is_none(), "{}", projected.data);
+    }
+}
+
+#[test]
+fn worker_error_roundtrip_preserves_semantic_fallback_and_hard_failures() {
+    use crate::backends::error_wire::{error_reply, reply_error};
+    for cause in [
+        Error::BackendFailed("ElementFromHandle failed: UIA root unavailable".into()),
+        Error::NativeFailure {
+            code: "semantic_window_unavailable".into(),
+            message: "UIA root unavailable".into(),
+        },
+        Error::NativeFailure {
+            code: "native_failure".into(),
+            message: "unclassified worker fault".into(),
+        },
+        Error::NativeFailure {
+            code: "permission_required".into(),
+            message: "UIA access denied".into(),
+        },
+        Error::WrongApp,
+        Error::WrongProvider,
+        Error::InvalidObservation,
+        Error::Cancelled,
+    ] {
+        // Use the production worker encoder, JSON wire bytes and client decoder,
+        // rather than injecting the original Rust error into the facade.
+        let bytes = serde_json::to_vec(&error_reply(cause.clone(), false)).unwrap();
+        let packet: Value = serde_json::from_slice(&bytes).unwrap();
+        let decoded = reply_error(&packet).unwrap();
+        let can_capture = matches!(cause, Error::BackendFailed(_))
+            || matches!(&cause, Error::NativeFailure { code, .. } if code == "semantic_window_unavailable");
+        let (server, backend) = scene_agent();
+        backend
+            .semantic_errors
+            .lock()
+            .unwrap()
+            .push_back(Some(decoded));
+        let reply = scene_exec(&server, "await app.capture();");
+        assert_eq!(reply.is_error, !can_capture, "{cause:?}: {}", reply.data);
+        assert_eq!(reply.image.is_some(), can_capture);
+        assert_eq!(
+            backend.base.0.captures.load(Ordering::SeqCst),
+            usize::from(can_capture)
+        );
+    }
+}

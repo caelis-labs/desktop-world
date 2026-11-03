@@ -2934,6 +2934,11 @@ fn parse_element(value: &Value) -> Result<Element, Error> {
     }
     Ok(Element {
         id: ElementId(number(value, "id")?),
+        rebind_identity: match value.get("rebind_identity") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(id)) if !id.is_empty() && id.len() <= 256 => Some(id.clone()),
+            _ => return Err(Error::InvalidObservation),
+        },
         identity: match value.get("identity") {
             None | Some(Value::Null) => None,
             Some(Value::String(id)) if !id.is_empty() && id.len() <= 256 => Some(id.clone()),

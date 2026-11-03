@@ -1305,6 +1305,18 @@ private func nativeText(_ element: AXUIElement, _ deadline: Deadline) throws -> 
     return text
 }
 
+// Only a read-only semantic query may translate missing AXWindows into a
+// semantic gap. Input/modal validation keeps the original hard refusal.
+private func readOnlySemantics<T>(_ read: () throws -> T) throws -> T {
+    do { return try read() }
+    catch let error as NativeFailure where error.code == "modal_state_unproven"
+        && error.attributeFailure?.name == kAXWindowsAttribute
+        && (error.attributeFailure?.error == .attributeUnsupported || error.attributeFailure?.error == .noValue) {
+        throw failure("semantic_window_unavailable", error.message,
+                      details: error.details, attributeFailure: error.attributeFailure)
+    }
+}
+
 private func axList(_ element: AXUIElement, _ attribute: String, limit: Int,
                     _ deadline: Deadline, required: Bool = false) throws -> [AXUIElement] {
     try deadline.prepare(element)
@@ -1315,7 +1327,8 @@ private func axList(_ element: AXUIElement, _ attribute: String, limit: Int,
     let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
     try deadline.check()
     if result == .attributeUnsupported || result == .noValue {
-        if required { throw failure("modal_state_unproven", "Required AX inventory \(attribute) is unavailable") }
+        if required { throw failure("modal_state_unproven", "Required AX inventory \(attribute) is unavailable",
+                                    attributeFailure: AXAttributeFailure(name: attribute, error: result)) }
         return []
     }
     guard result == .success, let value, CFGetTypeID(value) == CFArrayGetTypeID() else {
@@ -2248,7 +2261,7 @@ private struct NativeElement {
     let regionProof: RegionElementProof<AXUIElement>?
 
     var json: [String: Any] {
-        ["id": id, "identity": "ax:\(identity)", "label": label, "role": role,
+        ["id": id, "identity": "ax:\(identity)", "rebind_identity": "ax:\(identity)", "label": label, "role": role,
          "name": name as Any? ?? NSNull(), "value": value as Any? ?? NSNull(),
          "enabled": enabled as Any? ?? NSNull(), "actions": (canPress ? ["press"] : []) + (canSetValue ? ["setValue"] : []), "can_press": canPress]
     }
@@ -5101,8 +5114,8 @@ private final class NativeStore: @unchecked Sendable {
             case "windows": return try listWindows(NativeApp(request["app"]), context)
             case "bind_window": return try bindWindow(request, context)
             case "probe_window_state": return try probeWindowState(request, context)
-            case "observe": return try observe(request, context)
-            case "observe_next": return try observeNext(request, context)
+            case "observe": return try readOnlySemantics { try observe(request, context) }
+            case "observe_next": return try readOnlySemantics { try observeNext(request, context) }
             case "read_text": return try readText(request, context)
             case "resolve_scroll_anchor": return try scrollAnchor(request, context, validating: false)
             case "validate_scroll_anchor": return try scrollAnchor(request, context, validating: true)

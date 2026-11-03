@@ -120,9 +120,13 @@ together; native-window pixels are not tab viewport CSS coordinates.
 
 The scene facade retains model-visible object IDs and image coordinate templates
 across known sequential actions. Before semantic input it renews the native query
-and matches exact object identity plus role/name/enabled/actions. Before coordinate
+and matches a provider-retained object credential plus role/name/enabled/actions.
+Comparison identities are separate from action credentials: UIA runtime IDs may
+be reused and cannot renew a consumed object binding. Before coordinate
 input it takes a fresh capture and compares scene geometry, layering, image mapping
-and the receiving surface at the supplied anchors. Content changes alone are not
+and the receiving surface at the supplied anchors. Fresh native bindings remain
+local to the current dispatch; comparisons for later points still use the last
+script-visible image. Content changes alone are not
 an input gate: animation, typing and scrolling must remain operable. Coordinates
 never prove semantic identity or who caused a UI change. Failed reads
 still retire the affected facade bindings. Core and providers retain their
@@ -130,7 +134,8 @@ single-use observation and no-input-replay contracts; no second executor or
 Agent-managed session is introduced.
 
 Window layout can carry a private optional native keyboard-focus hint. Key input
-routes independently of visual overlay order; the hint never authorizes a surface
+routes within the selected process instance, independently of visual overlay order;
+a sibling process's local focus hint cannot select that sibling. The hint never authorizes a surface
 or bypasses native focus checks. On macOS the hint is bounded and availability
 failures remain optional inventory gaps. Startup uses a nonactivating, nonhiding
 configuration independently of subsequent input policy.

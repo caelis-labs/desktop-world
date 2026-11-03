@@ -3,6 +3,7 @@ use super::*;
 fn button(id: u64, identity: Option<&str>, name: &str) -> Element {
     Element {
         id: ElementId(id),
+        rebind_identity: identity.map(|id| format!("retained:{id}")),
         identity: identity.map(str::to_owned),
         label: name.into(),
         name: Some(name.into()),
@@ -35,7 +36,10 @@ fn renewed_target_must_keep_object_identity_and_meaning() {
         exec(&server, "seen", "await app.look();");
         let mut next = button(1, Some("one"), "Continue");
         match change {
-            "replace" => next.identity = Some("replacement".into()),
+            "replace" => {
+                next.identity = Some("replacement".into());
+                next.rebind_identity = Some("replacement".into());
+            }
             "rename" => next.name = Some("Delete".into()),
             "disable" => next.enabled = Some(false),
             _ => {}
@@ -110,5 +114,106 @@ fn keyboard_routes_by_native_focus_instead_of_visual_overlay_order() {
             .iter()
             .all(|t| t.native_id == focused.unwrap_or(102)));
         assert!(!reply.data.to_string().contains("keyboard_focused"));
+    }
+}
+
+#[test]
+fn keyboard_focus_hints_cannot_select_a_sibling_process_instance() {
+    for remove_selected in [false, true] {
+        let (server, catalog) = agent();
+        let a = application();
+        let mut b = a.clone();
+        b.pid += 1;
+        b.generation -= 1;
+        catalog.entries.lock().unwrap().push(Application {
+            app_id: APP.into(),
+            app: b.clone(),
+            name: "Second instance".into(),
+        });
+        let row = |app: &AppInstance, native_id, rank, focus| {
+            let mut scene = WindowLayout::new([0., 0., 500., 400.], rank).unwrap();
+            scene.keyboard_focused = focus;
+            WindowInfo {
+                target: WindowTarget {
+                    app: app.clone(),
+                    native_id,
+                    generation: 3,
+                },
+                scene: Some(scene),
+                title: format!("Instance {}", app.pid),
+                visible: true,
+            }
+        };
+        {
+            let mut model = catalog.backend.0.model.lock().unwrap();
+            model.instance_inventories.insert(
+                (a.pid, a.generation),
+                test_inventory(vec![row(&a, 101, 0, None)]),
+            );
+            model.instance_inventories.insert(
+                (b.pid, b.generation),
+                test_inventory(vec![
+                    row(&b, 201, 1, Some(true)),
+                    row(&b, 202, 2, Some(false)),
+                ]),
+            );
+        }
+        let seen = exec(&server, "two_pids_seen", "await app.look();");
+        assert!(!seen.is_error, "{}", seen.data);
+        if remove_selected {
+            catalog
+                .backend
+                .0
+                .model
+                .lock()
+                .unwrap()
+                .instance_inventories
+                .insert((a.pid, a.generation), test_inventory(vec![]));
+        }
+        let reply = exec(
+            &server,
+            "two_pids_input",
+            "await app.typeText('hello'); await app.keypress('META+W');",
+        );
+        assert_eq!(reply.is_error, remove_selected, "{}", reply.data);
+        let inputs = catalog.backend.0.input_targets.lock().unwrap();
+        assert_eq!(inputs.len(), if remove_selected { 0 } else { 2 });
+        assert!(inputs.iter().all(|target| target.app == a));
+    }
+}
+
+#[test]
+fn comparison_id_reuse_cannot_renew_a_consumed_native_object() {
+    let (server, catalog) = agent();
+    let mut original = button(1, Some("uia:reusable-runtime-id"), "Delete");
+    original.rebind_identity = None; // UIA runtime IDs are comparison facts only.
+    let mut replacement = original.clone();
+    replacement.id = ElementId(2);
+    {
+        let mut model = catalog.backend.0.model.lock().unwrap();
+        model.semantic_elements = Some(vec![original]);
+        model.semantics_after_action = Some(vec![replacement]);
+    }
+    let reply = exec(&server, "uia_reuse", "const view=await app.look(); const id=view.elements[0].id; await app.click(id); await app.click(id);");
+    assert!(reply.is_error, "{}", reply.data);
+    assert_eq!(reply.data["script"]["failure"]["code"], "target_changed");
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn invalid_local_read_arguments_do_not_cancel_pending_action_readback() {
+    for read in ["look", "capture"] {
+        let (server, catalog) = agent();
+        let reply = exec(&server, "bad_local_read", &format!("await app.look(); await app.typeText('hello'); try {{ await app.{read}({{full:NaN}}); }} catch {{}}"));
+        assert!(!reply.is_error, "{}", reply.data);
+        let ops: Vec<_> = reply.data["script"]["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["operation"].as_str().unwrap())
+            .collect();
+        assert_eq!(ops, ["scene.look", "scene.typeText", "scene.after"]);
+        assert!(reply.data["value"]["view"].is_object());
+        assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
     }
 }

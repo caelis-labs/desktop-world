@@ -10,6 +10,7 @@ pub(super) struct SceneState {
     window_ids: HashMap<String, String>,
     nodes: Vec<Value>,
     active: Option<String>,
+    // Last image returned to the script. Private refreshes never replace it.
     raster: Option<Raster>,
     pixels: bool,
     projected: Option<Value>,
@@ -236,20 +237,54 @@ impl<B: Backend + 'static> Coordinator<B> {
             || (op == "scene.scroll" && args.get("x").is_none())
             || (op == "scene.click" && args.get("selector").is_some());
         if implicit && self.state.lock().unwrap().scene.observed.is_some() {
+            // Focus is app-instance-local. A background sibling's focus hint
+            // must never redirect input from the instance selected by the view.
+            let selected_instance = {
+                let state = self.state.lock().unwrap();
+                state
+                    .scene
+                    .active
+                    .as_ref()
+                    .and_then(|w| state.windows.get(w))
+                    .map(|target| target.app.clone())
+            };
             let work = self.scene_atomic(id, "windows", json!({}), deadline);
             if work.completed.error.is_some() {
                 return work;
             }
             let value = work.completed.value.unwrap();
             let rows = ordered(value["windows"].as_array().cloned().unwrap_or_default());
-            self.state.lock().unwrap().scene.active = rows
+            let mut state = self.state.lock().unwrap();
+            let instance = selected_instance.or_else(|| {
+                rows.iter()
+                    .find(|row| row["visible"] == true)
+                    .and_then(|row| state.windows.get(row["window_ref"].as_str()?))
+                    .map(|target| target.app.clone())
+            });
+            let candidates: Vec<_> = rows
                 .iter()
-                .filter(|row| row["visible"] == true)
+                .filter(|row| {
+                    row["visible"] == true
+                        && row["window_ref"]
+                            .as_str()
+                            .and_then(|w| state.windows.get(w))
+                            .is_some_and(|target| Some(&target.app) == instance.as_ref())
+                })
+                .collect();
+            let selected = candidates
+                .iter()
                 .find(|row| {
                     !matches!(op, "scene.typeText" | "scene.keypress")
                         || row["scene"]["keyboard_focused"] == true
                 })
-                .or_else(|| rows.iter().find(|row| row["visible"] == true))
+                .or_else(|| candidates.first());
+            if selected.is_none() && rows.iter().any(|row| row["visible"] == true) {
+                return failed(error(
+                    "target_changed",
+                    "The selected application instance lost its window; inspect the returned view",
+                ));
+            }
+            state.scene.active = selected
                 .and_then(|row| row["window_ref"].as_str())
                 .map(str::to_owned);
         }
@@ -321,11 +356,12 @@ impl<B: Backend + 'static> Coordinator<B> {
                 method = "press".into();
                 options["window_ref"] = json!(window);
             } else {
-                if let Err(e) = self.scene_validate_frame(id, std::slice::from_ref(args), deadline)
-                {
-                    return failed(e);
-                }
-                options = match self.scene_point(args) {
+                let frame =
+                    match self.scene_validate_frame(id, std::slice::from_ref(args), deadline) {
+                        Ok(frame) => frame,
+                        Err(e) => return failed(e),
+                    };
+                options = match frame.point(args) {
                     Ok(v) => v,
                     Err(e) => return failed(e),
                 };
@@ -336,10 +372,11 @@ impl<B: Backend + 'static> Coordinator<B> {
                 }
             }
         } else if op == "scene.scroll" && (args.get("x").is_some() || args.get("y").is_some()) {
-            if let Err(e) = self.scene_validate_frame(id, std::slice::from_ref(args), deadline) {
-                return failed(e);
-            }
-            options = match self.scene_point(args) {
+            let frame = match self.scene_validate_frame(id, std::slice::from_ref(args), deadline) {
+                Ok(frame) => frame,
+                Err(e) => return failed(e),
+            };
+            options = match frame.point(args) {
                 Ok(v) => v,
                 Err(e) => return failed(e),
             };
@@ -372,10 +409,19 @@ impl<B: Backend + 'static> Coordinator<B> {
                 return focus;
             }
         }
+        let input_window = options["window_ref"].as_str().map(str::to_owned);
         let work = self.scene_atomic(id, &method, options, deadline);
         // Keep the scene mapping for the next requested action. Its native
         // binding is consumed; preflight renews it without replaying this input.
         let mut state = self.state.lock().unwrap();
+        if work
+            .completed
+            .receipt
+            .as_ref()
+            .is_some_and(|r| r.outcome.dispatch == DispatchState::Dispatched)
+        {
+            state.scene.active = input_window;
+        }
         if method == "press"
             && work
                 .completed
@@ -417,7 +463,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                         )
                     })?
             };
-            self.scene_validate_frame(id, &supplied, deadline)?;
+            let raster = self.scene_validate_frame(id, &supplied, deadline)?;
             let mut samples = Vec::new();
             for (i, point) in supplied.iter().enumerate() {
                 if point
@@ -460,11 +506,6 @@ impl<B: Backend + 'static> Coordinator<B> {
                 samples.push(point.clone());
             }
             let state = self.state.lock().unwrap();
-            let raster = state
-                .scene
-                .raster
-                .as_ref()
-                .ok_or_else(|| error("capture_required", "Capture before pointer input"))?;
             let mapped = samples
                 .iter()
                 .map(|p| raster.point(p))
@@ -524,9 +565,9 @@ impl<B: Backend + 'static> Coordinator<B> {
         node: Value,
         deadline: Instant,
     ) -> Result<Value, wire::WireError> {
-        let Some(identity) = node["identity"].as_str() else {
-            // Providers without a stable object identity can use their exact
-            // original binding once; never retarget by a label or array index.
+        let Some(identity) = node["rebind_identity"].as_str() else {
+            // Comparison identity alone cannot renew an object (UIA IDs can be
+            // reused). Use the exact retained binding once, never a replacement.
             let state = self.state.lock().unwrap();
             return if state.observations.iter().any(|o| {
                 o.public == node["observation_ref"]
@@ -562,7 +603,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             }
             let page = work.completed.value.unwrap();
             for element in page["elements"].as_array().into_iter().flatten() {
-                if element["identity"] != identity {
+                if element["rebind_identity"] != identity {
                     continue;
                 }
                 if found.is_some()
@@ -600,7 +641,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         id: &str,
         points: &[Value],
         deadline: Instant,
-    ) -> Result<(), wire::WireError> {
+    ) -> Result<Raster, wire::WireError> {
         // Take the old mapping out before any read: a failed refresh cannot
         // leave old coordinates or consumed observations available for input.
         let previous = self
@@ -673,18 +714,10 @@ impl<B: Backend + 'static> Coordinator<B> {
         }
         // Animation, typing and scrolling do not identify a new receiver.
         // A coordinate promises a point, never semantic object identity.
-        self.state.lock().unwrap().scene.raster = Some(fresh);
-        Ok(())
-    }
-    fn scene_point(&self, args: &Value) -> Result<Value, wire::WireError> {
-        let state = self.state.lock().unwrap();
-        let frame = state.scene.raster.as_ref().ok_or_else(|| {
-            error(
-                "capture_required",
-                "Call app.capture() before coordinate input",
-            )
-        })?;
-        frame.point(args)
+        // The fresh native observations authorize only this dispatch. Keep the
+        // script-visible image as the baseline for every later point as well.
+        self.state.lock().unwrap().scene.raster = Some(previous);
+        Ok(fresh)
     }
     fn scene_look(
         &self,
@@ -701,6 +734,8 @@ impl<B: Backend + 'static> Coordinator<B> {
             let mut state = self.state.lock().unwrap();
             state.scene.nodes.clear();
             state.scene.raster = None;
+            state.scene.observed = None;
+            state.scene.projected = None;
         }
         let mut startup = None;
         if self.runtime.instances().is_empty() && after {
@@ -817,9 +852,13 @@ impl<B: Backend + 'static> Coordinator<B> {
                 }
                 candidates.sort_by_key(|(row, _)| element_priority(row));
                 let mut identities = HashMap::<String, usize>::new();
+                let mut rebinds = HashMap::<String, usize>::new();
                 for (element, _) in &candidates {
                     if let Some(identity) = element["identity"].as_str() {
                         *identities.entry(identity.into()).or_default() += 1;
+                    }
+                    if let Some(credential) = element["rebind_identity"].as_str() {
+                        *rebinds.entry(credential.into()).or_default() += 1;
                     }
                 }
 
@@ -870,7 +909,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                         break;
                     }
                     nodes.push(json!({"id":target,"window_ref":row["window_ref"],"observation_ref":observation,"element_ref":element["element_ref"],
-                        "identity":key.as_ref().map(|_| element["identity"].clone()), "expected":element}));
+                        "rebind_identity":element["rebind_identity"].as_str().filter(|id| rebinds.get(*id) == Some(&1)), "expected":element}));
                     semantic_bytes += entry_bytes;
                     elements.push(entry);
                 }

@@ -49,23 +49,33 @@ struct OverlayPresentationState {
     private(set) var sequence: UInt64 = 0
     private(set) var pressSequence: UInt64 = 0
     private(set) var marker: OverlayPointerEvent?
+    private var lastActivity: TimeInterval?
+    private static let idleHideAfter: TimeInterval = 2 // Same policy as Windows.
     mutating func begin(_ value: UInt64) -> Bool {
         guard !closed, value > generation else { return false }
-        generation = value; active = true; sequence = 0; pressSequence = 0; marker = nil
+        generation = value; active = true; sequence = 0; pressSequence = 0; marker = nil; lastActivity = nil
         return true
     }
     mutating func hide(_ value: UInt64) {
         guard value == generation else { return }
-        active = false; marker = nil
+        active = false; marker = nil; lastActivity = nil
     }
-    mutating func close() { closed = true; active = false; marker = nil }
-    mutating func hideStaleTarget() { active = false; marker = nil }
-    mutating func accept(_ event: OverlayPointerEvent) -> Bool {
-        guard !closed, active, event.operation == generation, event.sequence > sequence,
+    mutating func close() { closed = true; active = false; marker = nil; lastActivity = nil }
+    mutating func hideStaleTarget() { active = false; marker = nil; lastActivity = nil }
+    mutating func expireIdle(at now: TimeInterval) -> Bool {
+        guard marker != nil, let lastActivity, now - lastActivity >= Self.idleHideAfter else { return false }
+        // Retire this operation so queued packets and z-order maintenance cannot
+        // revive a cursor after its idle lifetime has ended.
+        hide(generation)
+        return true
+    }
+    mutating func accept(_ event: OverlayPointerEvent, at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+        guard !expireIdle(at: now), !closed, active, event.operation == generation, event.sequence > sequence,
               event.position != nil else { return false }
         sequence = event.sequence
         pressSequence = max(pressSequence, event.press_sequence)
         marker = event
+        lastActivity = now
         return true
     }
 }
@@ -255,7 +265,10 @@ private final class OverlayController {
     }
     func receive(_ event: OverlayPointerEvent) {
         let previousPress = state.pressSequence
-        guard state.accept(event) else { return }
+        guard state.accept(event) else {
+            if state.marker == nil { window.orderOut(nil); cursor.pulse.reset() }
+            return
+        }
         guard targetIsCurrent(event.target), let position = event.position,
               let primary = NSScreen.screens.first(where: {
                   ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == CGMainDisplayID()
@@ -295,6 +308,9 @@ private final class OverlayController {
     }
     private func hideStale() { state.hideStaleTarget(); window.orderOut(nil); cursor.pulse.reset() }
     private func checkTarget() {
+        if state.expireIdle(at: ProcessInfo.processInfo.systemUptime) {
+            window.orderOut(nil); cursor.pulse.reset(); return
+        }
         guard let marker = state.marker else { return }
         guard targetIsCurrent(marker.target), displayGeometry == currentDisplayGeometry() else { hideStale(); return }
         window.order(.above, relativeTo: Int(marker.target.window))

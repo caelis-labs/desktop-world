@@ -53,14 +53,16 @@
 `look`/`capture` accept no native refs. Input routes within the selected app.
 Known actions can run sequentially without an explicit observation after each
 step. DTW renews single-use native bindings before the next requested action.
-Semantic IDs require the same native object, role, name, enabled state and actions;
-labels or positions never retarget an ID. Providers without stable object identity
-cannot renew a consumed target. A missing or changed target requires inspection
+Renewing a semantic target requires a provider-retained object credential plus
+the same role, name, enabled state and actions. View comparison IDs alone do not
+prove object continuity: Windows UIA runtime IDs can be reused, so a consumed
+Windows target requires a fresh observation. Its exact retained original binding
+can still be used once. Labels and positions never retarget an ID. A missing or changed target requires inspection
 of the returned view before choosing new input. Dispatched/unknown input is never
 replayed to renew a binding.
 
 Keyboard input uses the native keyboard window when available, independently of
-visual z-order; a frontmost tooltip or completion surface does not automatically
+visual z-order, within the already selected process instance; a frontmost tooltip or completion surface does not automatically
 receive keys. Focus and app identity checks still apply. On macOS startup requests
 neither activate nor hide the app. An app may activate itself; input that genuinely
 requires foreground still uses the existing controlled borrow and restoration.
@@ -106,7 +108,9 @@ follow-ups and retiring the previous image binding; unavailable semantics still
 trigger an image fallback. If any semantic continuation fails, its earlier pages
 are discarded and semantics stay explicitly incomplete; a fresh image may still
 be used. A failed refresh retires previous element and pixel input bindings;
-script settlement does not repeat the failed read.
+script settlement does not repeat the failed read. A failed later read also clears
+the current execution's pending view/snapshot and PNG. Arguments rejected locally
+before a read reaches the host do not cancel a preceding action's automatic readback.
 
 The compositor currently requires provider layout metadata for multiple
 surfaces (implemented on macOS and Windows), supports at most 16 visible surfaces and a
@@ -129,7 +133,9 @@ Native pointer bindings remain single-use. Before each coordinate gesture DTW
 privately captures fresh app pixels and checks window identity, geometry, layering
 and the receiving surface at each supplied point. Known coordinate actions can
 run sequentially without explicit recapture; an overlay elsewhere does not alone
-invalidate their unchanged receiver. Geometry, image mapping or receiver
+invalidate their unchanged receiver. Private refreshes authorize only their current
+dispatch and never replace the script-visible image baseline for later points.
+Geometry, image mapping or receiver
 changes return `stale_scene` without dispatch; inspect the returned image to choose
 new coordinates. Content changes such as animation, typing and scrolling do not
 invalidate a coordinate mapping. A point does not establish semantic identity or

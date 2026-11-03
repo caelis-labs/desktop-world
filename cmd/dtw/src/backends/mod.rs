@@ -1,4 +1,6 @@
 //! Internal native checkpoint implementations. Not a public transport.
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+pub(crate) mod error_wire;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod process;

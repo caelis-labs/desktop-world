@@ -1350,3 +1350,20 @@ surfaceCheck(!automaticOpen.activates && !automaticOpen.hides)
 surfaceCheck(!automaticOpen.createsNewApplicationInstance)
 surfaceCheck(!automaticOpen.allowsRunningApplicationSubstitution)
 surfaceCheck(!automaticOpen.addsToRecentItems)
+
+// Missing AXWindows is a read-only semantic gap. The same native error remains
+// a hard modal refusal outside that exact phase; unrelated failures stay hard.
+for missing in [AXError.attributeUnsupported, .noValue] {
+    let unavailable = failure("modal_state_unproven", "Required AX inventory is unavailable",
+        attributeFailure: AXAttributeFailure(name: kAXWindowsAttribute, error: missing))
+    do { let _: Int = try readOnlySemantics { throw unavailable }; preconditionFailure("read did not fail") }
+    catch let error as NativeFailure { surfaceCheck(error.code == "semantic_window_unavailable" && error.attributeFailure?.error == missing) }
+    surfaceCheck(unavailable.code == "modal_state_unproven")
+}
+for original in [failure("modal_state_unproven", "Real modal state is unknown"),
+                 failure("permission_required", "AX denied"), failure("app_changed", "PID reused"),
+                 failure("cancelled", "Canceled"),
+                 failure("modal_state_unproven", "Sheets unavailable", attributeFailure: AXAttributeFailure(name: "AXSheets", error: .noValue))] {
+    do { let _: Int = try readOnlySemantics { throw original }; preconditionFailure("hard error vanished") }
+    catch let error as NativeFailure { surfaceCheck(error.code == original.code && error.message == original.message) }
+}

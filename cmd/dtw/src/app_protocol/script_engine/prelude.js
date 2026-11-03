@@ -127,7 +127,11 @@
       fail("app calls are unavailable during script settlement", "invalid_phase");
     }
     const line = lineOf(new ErrorClass().stack);
-    const reply = parse(host(op, encode(args, "host arguments", 65536, true), line));
+    const encoded = encode(args, "host arguments", 65536, true);
+    // A locally rejected argument never starts a read and cannot settle a
+    // preceding action's readback. Clear dirty only at the host handoff.
+    if (agent) dirty = op !== "scene.look" && op !== "scene.capture" && op !== "scene.after";
+    const reply = parse(host(op, encoded, line));
     if (!reply.ok) {
       const error = new ErrorClass(`${op} failed: ${reply.error}`);
       error.name = "DtwError"; error.op = op; error.code = reply.code;
@@ -186,9 +190,6 @@
         if (op === "keypress" && typeof options === "string") options = {keys:apply(split, options, ["+"])};
         if (op === "keypress" && isArray(options)) options = {keys:options};
         if (op === "click" && typeof options === "string") options = apply(regexpExec, targetId, [options]) !== null ? {target:options} : {selector:{text:options}};
-        // A read attempt settles pending readback even when it fails. Failure
-        // settlement must not silently repeat an explicit or automatic read.
-        dirty = op !== "look" && op !== "capture";
         const result = call(`scene.${op}`, options);
         return result;
       };
@@ -250,7 +251,6 @@
     return envelope({ok:false, name:name === null ? null : apply(slice,name,[0,128]), message:clip(message,4000), line, op:op === null ? null : apply(slice,op,[0,128]), code:code === null ? null : apply(slice,code,[0,128]), call});
   };
   const readAfter = () => {
-    dirty = false;
     call("scene.after", {});
   };
   const reject = (error) => {
