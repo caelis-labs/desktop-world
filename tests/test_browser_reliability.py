@@ -125,7 +125,7 @@ print(json.dumps(checked))
         paths = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(paths)
         with tempfile.TemporaryDirectory() as directory:
-            package = Path(directory)
+            package = Path(directory).resolve()
             probe = package / 'acceptance/windows/browser_reliability_probe.py'
             probe.parent.mkdir(parents=True)
             probe.touch()
