@@ -22,6 +22,8 @@ def main():
                         str(directory / "module-cache"), str(source), "-o", str(binary)],
                        check=True, timeout=120)
         subprocess.run([str(binary)], check=True, timeout=20)
+    subprocess.run([sys.executable, str(root / "tests/fixtures/app-scene/test_telemetry.py")],
+                   check=True, timeout=120)
 
 
 if __name__ == "__main__":

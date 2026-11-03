@@ -21,6 +21,7 @@ class PlanTests(unittest.TestCase):
                  (['cmd/dtw/Cargo.lock'], (True, True)),
                  (['.cargo/config.toml'], (True, True)),
                  (['cmd/dtw/src/backends/macos/Input.swift'], (True, False)),
+                 (['tests/fixtures/app-scene/test_telemetry.py'], (True, False)),
                  (['cmd/dtw/src/backends/windows/native.rs'], (False, True)),
                  (['tests/acceptance/windows/smoke.ps1'], (False, True)),
                  (['cmd/dtw/src/backends/linux/inventory.rs'], (False, False)),
