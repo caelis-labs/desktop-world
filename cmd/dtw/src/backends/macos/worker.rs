@@ -328,9 +328,7 @@ fn record_foreground_cleanup(result: &mut Value, cleanup: Value) {
 }
 
 fn click_can_follow_focus(result: &Value) -> bool {
-    (result["dispatch"] == "dispatched" && result.get("error").is_none())
-        || (result["dispatch"] == "not_dispatched"
-            && result["error"] == "semantic_window_unavailable")
+    result["dispatch"] == "dispatched" && result.get("error").is_none()
 }
 
 fn foreground_required(reason: &str) -> Value {
@@ -748,6 +746,9 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
     };
     let mut borrowed = false;
     if physical && op != "release_focus" {
+        // A physical route is not conditional on the application's AX tree.
+        // Keep explicit semantic focus on its exact-window validation path.
+        request["visual"] = json!(op != "focus");
         let mut prepare = request.clone();
         prepare["operation"] = json!("prepare_foreground");
         let prepared = native(&prepare, false);
@@ -832,8 +833,8 @@ fn dispatch_owned(mut request: Value, leased: &mut bool, scene_worker: bool) -> 
         focus["operation"] = json!("focus");
         let raised = native(&focus, false);
         click_borrowed = raised["borrowed"].as_bool();
-        // Only a proven lack of AX preserves the visible-point route. Focus
-        // ownership changes and uncertain attempts must not become a click.
+        // This physical focus path proves process/CG ownership without needing
+        // AX children. Failed or uncertain activation never becomes a click.
         if !click_can_follow_focus(&raised) {
             return raised;
         }
@@ -992,9 +993,8 @@ mod tests {
     #[test]
     fn click_never_bypasses_focus_change_or_unknown_effect() {
         assert!(click_can_follow_focus(&json!({"dispatch":"dispatched"})));
-        assert!(click_can_follow_focus(&json!({"dispatch":"not_dispatched",
-            "error":"semantic_window_unavailable"})));
         for result in [
+            json!({"dispatch":"not_dispatched","error":"semantic_window_unavailable"}),
             json!({"dispatch":"not_dispatched","error":"focus_changed"}),
             json!({"dispatch":"not_dispatched","error":"target_changed"}),
             json!({"dispatch":"unknown","error":"semantic_window_unavailable"}),

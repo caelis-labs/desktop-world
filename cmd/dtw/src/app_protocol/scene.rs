@@ -338,6 +338,11 @@ impl<B: Backend + 'static> Coordinator<B> {
                     "element_not_pressable"
                         | "selector_unproven"
                         | "semantic_window_unavailable"
+                        | "semantic_not_ready"
+                        | "children_unavailable"
+                        | "ax_unavailable"
+                        | "modal_state_unproven"
+                        | "unsupported_modal"
                         | "unsupported"
                 )
             })
@@ -736,6 +741,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                                     | "capture_geometry_changed"
                                     | "capture_failed"
                                     | "target_changed"
+                                    | "stale_window"
                                     | "window_unavailable"
                                     | "surface_unavailable"
                             )

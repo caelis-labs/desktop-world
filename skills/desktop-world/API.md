@@ -102,7 +102,11 @@ available but are not invented in the visible canvas.
 
 `move` and `drag` are implemented on macOS. They reject stale geometry, unavailable
 images, paths across windows/transparent gaps, and `background-only` delivery
-before pointer dispatch. Spanning-window physical input is refused before pointer dispatch: rectangular
+before pointer dispatch. The current content-gesture route uses the real system
+pointer. Coordinate clicks and foreground scroll fallback also move that pointer;
+conditional cleanup is not a guarantee of background or cursor-preserving input.
+A proven native title-bar move uses window position instead of a mouse drag.
+Spanning-window physical input is refused before pointer dispatch: rectangular
 window geometry does not prove per-display/Space hit ownership. Capture remains
 available. During a drag, a changed/occluded surface or cancellation
 stops the sequence and releases its admitted button. Partial effects remain
@@ -116,6 +120,14 @@ buttons/keys and clipboard are not public capabilities. Other providers explicit
 reject unsupported gestures; macOS acceptance does not establish platform parity.
 
 ## Provider boundaries
+
+On macOS, AX tree availability is optional for app capture and physical input.
+An unreadable or partial tree does not block screenshot coordinates, hover, drag,
+wheel input or foreground keyboard delivery. A background route may decline
+before input and use the verified foreground route. Semantic actions still need
+their own live target proof; a rejected semantic action is never replayed as a
+mouse click. Process identity, visible-hit, geometry and input-release checks
+continue to apply when no semantic elements are available.
 
 Windows records physical window bounds and front-to-back order and renders each
 exact HWND for app composition. Covered reads do not relax input visibility or

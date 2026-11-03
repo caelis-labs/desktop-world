@@ -599,9 +599,23 @@ pub fn activate_without_raise_with(
     defocus_ok && focus_ok
 }
 
-/// Pinned CUA exact-window foreground primitive. DTW's physical lease owner
-/// validates the target before this call, raises its AX window afterwards, and
-/// proves the resulting focus. No retry or separate foreground owner is added.
+/// App-scoped activation for the physical input owner. It does not depend on
+/// AXRaise or synthesize app-local window-key records.
+pub fn make_process_front(target_pid: pid_t, target_wid: u32) -> bool {
+    let Some(set_front) = set_front_process_fn() else {
+        return false;
+    };
+    let mut target_psn = [0u8; 8];
+    if !get_process_psn_for_window(target_wid, target_pid, &mut target_psn) {
+        return false;
+    }
+    // AppKit activation and the real pointer/keyboard determine
+    // the app-local responder. No synthetic make-key records or AXRaise follow.
+    unsafe { set_front(target_psn.as_ptr() as *const c_void, target_wid, 0x400) == 0 }
+}
+
+/// Pinned CUA exact-window foreground primitive. DTW validates the target,
+/// raises its AX window afterwards, and proves the resulting exact focus.
 pub fn make_exact_window_key(target_pid: pid_t, target_wid: u32) -> bool {
     let Some(set_front) = set_front_process_fn() else {
         return false;
