@@ -830,9 +830,9 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
             },
             foreground_reason.as_deref().unwrap_or("explicit_focus"),
         );
-        // A physical route is not conditional on the application's AX tree.
-        // Keep explicit semantic focus on its exact-window validation path.
-        request["visual"] = json!(op != "focus");
+        // Coordinate input need not depend on AX. Keyboard and explicit focus
+        // retain exact-window and editing-destination validation on every down.
+        request["visual"] = json!(super::input_route::visual_focus(op));
         let mut prepare = request.clone();
         prepare["operation"] = json!("prepare_foreground");
         // A hover is meaningful only while its borrowed physical pointer stays

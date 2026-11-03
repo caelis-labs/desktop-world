@@ -20,6 +20,12 @@ impl PhysicalReason {
     }
 }
 
+/// Coordinate input can prove its surface without AX. Keyboard fallback still
+/// needs the exact AX window and editing destination before every key down.
+pub(super) fn visual_focus(operation: &str) -> bool {
+    matches!(operation, "click" | "move" | "drag" | "scroll")
+}
+
 /// The all-addressed acceptance has effects for every other mouse operation,
 /// but no hover callbacks in AppKit/Chromium. Do not generalize this exception
 /// to their clicks, modal input, scroll or drag. Unknown frameworks stay addressed.
@@ -49,6 +55,16 @@ pub(super) fn fallback_reason(result: &serde_json::Value) -> Option<PhysicalReas
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn visual_pointer_admission_never_bypasses_keyboard_focus_checks() {
+        for operation in ["click", "move", "drag", "scroll"] {
+            assert!(visual_focus(operation), "{operation}");
+        }
+        for operation in ["type_text", "keypress", "focus", "keypress_app", "unknown"] {
+            assert!(!visual_focus(operation), "{operation}");
+        }
+    }
+
     #[test]
     fn only_the_failed_hover_shape_requires_tracking_fallback() {
         for framework in ["appkit", "chromium", "qt", "unknown"] {
