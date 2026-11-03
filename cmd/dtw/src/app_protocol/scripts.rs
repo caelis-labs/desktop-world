@@ -491,7 +491,17 @@ impl<B: Backend + 'static> Coordinator<B> {
                 details: error.details.clone(),
             })
         } else if let Some(receipt) = &work.completed.receipt {
-            Ok(wire::receipt(receipt))
+            let mut receipt = wire::receipt(receipt);
+            if scene_call {
+                // Routing is an implementation detail of the app facade. Keep
+                // exact delivery evidence in the private execution ledger.
+                for field in ["outcome", "provider_outcome"] {
+                    if let Some(outcome) = receipt[field].as_object_mut() {
+                        outcome.remove("delivery");
+                    }
+                }
+            }
+            Ok(receipt)
         } else {
             Ok(work.completed.value.clone().unwrap_or(Value::Null))
         };

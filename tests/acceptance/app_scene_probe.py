@@ -5,15 +5,21 @@ from pathlib import Path
 from standard_agent_probe import Mcp,require,wait_until,write_json
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--dtw',type=Path,required=True);parser.add_argument('--output',type=Path,required=True);parser.add_argument('--display-setup',type=Path);args=parser.parse_args()
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--dtw',type=Path,required=True);parser.add_argument('--output',type=Path,required=True);parser.add_argument('--display-setup',type=Path);parser.add_argument('--continue-effect-gaps',action='store_true');args=parser.parse_args()
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=False);out.chmod(0o700)
     bundle=out/'Scene.app';exe=bundle/'Contents/MacOS/Scene';exe.parent.mkdir(parents=True)
     identifier='dev.caelis.dtw.scene.'+uuid.uuid4().hex
-    with (bundle/'Contents/Info.plist').open('wb') as f:plistlib.dump({'CFBundleExecutable':'Scene','CFBundleIdentifier':identifier,'CFBundleName':'DTW Scene','CFBundlePackageType':'APPL'},f)
+    with (bundle/'Contents/Info.plist').open('wb') as f:plistlib.dump({'CFBundleExecutable':'Scene','CFBundleIdentifier':identifier,'CFBundleName':'DTW Scene','CFBundlePackageType':'APPL','NSPrincipalClass':'NSApplication'},f)
     source=Path(__file__).resolve().parents[1]/'fixtures/app-scene/main.swift'
     subprocess.run(['xcrun','swiftc','-module-cache-path',str(out/'swift-cache'),str(source),'-o',str(exe)],check=True,capture_output=True,timeout=90)
     report={'binary_sha256':hashlib.sha256(args.dtw.read_bytes()).hexdigest(),'cases':[],'limits':['owned AppKit scene; no claim of app-family or cross-platform completeness']};m=Mcp(args.dtw.resolve(),out)
     def record(name,**details): report['cases'].append({'name':name,'passed':True,**details});write_json(out/'report.json',report)
+    def hover_effect(offset,name):
+        try:wait_until(lambda:any(e['kind']=='move' for e in state()['gestures'][offset:]))
+        except AssertionError:
+            if not args.continue_effect_gaps:raise
+            record(name,passed=False,reason='no fixture hover callback after dispatched move');return
+        record(name)
     def state():
         try:return json.loads((out/'state.json').read_text())
         except (FileNotFoundError,json.JSONDecodeError):return None
@@ -114,7 +120,7 @@ def main():
             else:report['display_skip']='No second physical display'
         image=capture('gesture');start=point(image['view'],'gesture-start');end=point(image['view'],'gesture-end')
         offset=len(state()['gestures']);run('await app.move('+json.dumps(start)+');')
-        wait_until(lambda:any(e['kind']=='move' for e in state()['gestures'][offset:]));record('hover_delivers_real_mouse_move')
+        hover_effect(offset,'hover_delivers_real_mouse_move')
         run('await app.drag({path:'+json.dumps([start,end])+'});')
         wait_until(lambda:any(e['kind']=='up' for e in state()['gestures'][offset:]))
         events=state()['gestures'][offset:];require(sum(e['kind']=='down' for e in events)==1 and sum(e['kind']=='up' for e in events)==1,events)
@@ -143,10 +149,15 @@ def main():
         try:
             strict.rpc('initialize',{'protocolVersion':'2025-06-18','capabilities':{},'clientInfo':{'name':'scene-strict-pointer','version':'1'}});strict.notify('notifications/initialized')
             shot,_=strict.tool('exec',{'app':str(bundle),'source':'await app.capture({full:true});'});p=point(shot['view'],'gesture-start');offset=len(state()['gestures'])
-            rejected,response=strict.tool('exec',{'app':str(bundle),'source':'await app.move('+json.dumps(p)+');'})
-            require(response.get('isError') and rejected.get('failure',{}).get('code')=='foreground_required',rejected);require(not any(e['kind']=='move' for e in state()['gestures'][offset:]),state());record('pointer_gesture_respects_background_only')
-            offset=len(state()['gestures']);rejected,response=strict.tool('exec',{'app':str(bundle),'source':'await app.click('+json.dumps(p)+');'})
-            require(response.get('isError') and rejected.get('failure',{}).get('code')=='foreground_required',rejected);require(len(state()['gestures'])==offset,state());record('visible_pixel_click_respects_background_only')
+            accepted,response=strict.tool('exec',{'app':str(bundle),'source':'await app.move('+json.dumps(p)+');'})
+            if response.get('isError'):
+                require(accepted.get('failure',{}).get('code')=='foreground_required',accepted)
+                require(accepted.get('effects',{}).get('dispatch',{}).get('not_dispatched')==1,accepted)
+                require(not any(e['kind']=='move' for e in state()['gestures'][offset:]),state())
+                record('known_hover_limit_respects_background_only')
+            else:hover_effect(offset,'independent_hover_under_background_only')
+            offset=len(state()['gestures']);accepted,response=strict.tool('exec',{'app':str(bundle),'source':'await app.click('+json.dumps(p)+');'})
+            require(not response.get('isError'),accepted);wait_until(lambda:any(e['kind']=='up' for e in state()['gestures'][offset:]));record('addressed_pixel_click_works_under_background_only')
         finally:strict.close()
         image=capture('before-window-move');main=next(w for w in image['view']['windows'] if w['title'].endswith('main'));x,y,width,height=main['bounds'];canvas=image['view']['image'];ox,oy,cw,ch=canvas['bounds']
         start={'x':(x+width/2-ox)/cw*canvas['width'],'y':(y+12-oy)/ch*canvas['height']};end={'x':start['x']+35/cw*canvas['width'],'y':start['y']+45/ch*canvas['height']}
@@ -185,7 +196,7 @@ def main():
         pid=state()['pid'];wait_until(lambda:subprocess.run(['kill','-0',str(pid)],capture_output=True).returncode!=0)
         time.sleep(.2);require(subprocess.run(['kill','-0',str(pid)],capture_output=True).returncode!=0,'quit auto-relaunched');record('quit_does_not_auto_relaunch')
         restarted,_=run('await app.look();');require(state()['pid']!=pid,state());require(restarted['view'].get('reset') is True,restarted);require(restarted['view']['running'] is True,restarted);record('restart_resets_baseline',view=restarted['view'])
-        run('await app.quit();');report['passed']=True
+        run('await app.quit();');report['passed']=all(c['passed'] for c in report['cases'])
     except BaseException as error:
         report['passed']=False;report['failure']=str(error);raise
     finally:
@@ -198,4 +209,5 @@ def main():
                 if owned==str(exe):os.kill(current['pid'],15)
         report['cleanup']=m.close();write_json(out/'report.json',report)
     print(json.dumps({'passed':report['passed'],'cases':len(report['cases']),'report':str(out/'report.json')}))
+    if not report['passed']:raise SystemExit(1)
 if __name__=='__main__':main()

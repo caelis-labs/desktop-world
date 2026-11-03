@@ -212,99 +212,6 @@ pub fn click_at_xy_chromium(
     Ok(())
 }
 
-pub fn right_click_at_xy_with_window_local(
-    pid: i32,
-    x: f64,
-    y: f64,
-    wx: f64,
-    wy: f64,
-    wid: u32,
-    modifiers: &[&str],
-) -> anyhow::Result<()> {
-    right_click_at_xy_inner(
-        pid,
-        x,
-        y,
-        Some((wx, wy)),
-        Some(wid),
-        modifiers,
-        CGMouseButton::Right,
-    )
-}
-
-fn right_click_at_xy_inner(
-    pid: i32,
-    x: f64,
-    y: f64,
-    window_local: Option<(f64, f64)>,
-    wid: Option<u32>,
-    modifiers: &[&str],
-    button: CGMouseButton,
-) -> anyhow::Result<()> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let (down_type, up_type, button_number) = match button {
-        CGMouseButton::Center => (CGEventType::OtherMouseDown, CGEventType::OtherMouseUp, 2),
-        _ => (CGEventType::RightMouseDown, CGEventType::RightMouseUp, 1),
-    };
-
-    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
-        .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
-    let point = CGPoint::new(x, y);
-    let flags = parse_modifier_flags(modifiers);
-
-    let click_group_id: Option<i64> = wid.map(|_| {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .subsec_nanos() as i64
-    });
-
-    post_mouse_moved_primer(
-        pid,
-        &source,
-        point,
-        window_local,
-        wid,
-        click_group_id,
-        pointer_post_mode(),
-    );
-    super::control::sleep(std::time::Duration::from_millis(12));
-
-    let down = CGEvent::new_mouse_event(source.clone(), down_type, point, button)
-        .map_err(|_| anyhow::anyhow!("mouse down failed"))?;
-    set_explicit_flags(&down, flags);
-    post_mouse_event_with_mode(
-        pid,
-        &down,
-        window_local,
-        wid,
-        click_group_id,
-        1,
-        button_number,
-        3,
-        pointer_post_mode(),
-    );
-    super::control::sleep(std::time::Duration::from_millis(28));
-
-    let up = CGEvent::new_mouse_event(source, up_type, point, button)
-        .map_err(|_| anyhow::anyhow!("mouse up failed"))?;
-    set_explicit_flags(&up, flags);
-    post_mouse_event_with_mode(
-        pid,
-        &up,
-        window_local,
-        wid,
-        click_group_id,
-        1,
-        button_number,
-        3,
-        pointer_post_mode(),
-    );
-
-    Ok(())
-}
-
 fn post_mouse_event_with_mode(
     pid: i32,
     event: &CGEvent,
@@ -421,7 +328,7 @@ pub fn scroll_wheel_at_xy(
 
         // Anchor the event at the target screen point so the renderer's wheel
         // hit-test routes the scroll to the element under the cursor.
-        unsafe { CGEventSetLocation(event_ptr, screen_x, screen_y) };
+        unsafe { CGEventSetLocation(event_ptr, CGPoint::new(screen_x, screen_y)) };
 
         // Background-delivery stamps (mirror post_mouse_event).
         if let Some((wx, wy)) = window_local {
@@ -478,7 +385,7 @@ fn dispatch_mouse_event(mode: MousePostMode, pid: i32, event: &CGEvent) {
     super::control::post_event_via(pid, event, false, matches!(mode, MousePostMode::PublicOnly));
 }
 extern "C" {
-    fn CGEventSetLocation(event: *mut std::ffi::c_void, x: f64, y: f64);
+    fn CGEventSetLocation(event: *mut std::ffi::c_void, point: CGPoint);
 }
 
 #[cfg(test)]
@@ -551,12 +458,36 @@ pub fn click_at_xy_generic(
     count: usize,
     modifiers: &[&str],
 ) -> anyhow::Result<()> {
+    click_at_xy_button(
+        pid,
+        x,
+        y,
+        wx,
+        wy,
+        wid,
+        count,
+        CGMouseButton::Left,
+        modifiers,
+    )
+}
+pub fn click_at_xy_button(
+    pid: i32,
+    x: f64,
+    y: f64,
+    wx: f64,
+    wy: f64,
+    wid: u32,
+    count: usize,
+    button: CGMouseButton,
+    modifiers: &[&str],
+) -> anyhow::Result<()> {
     click_at_xy_inner(
         pid,
         (x, y),
         Some((wx, wy)),
         Some(wid),
         count,
+        button,
         modifiers,
         pointer_post_mode(),
     )
@@ -567,6 +498,7 @@ fn click_at_xy_inner(
     window_local: Option<(f64, f64)>,
     wid: Option<u32>,
     count: usize,
+    button: CGMouseButton,
     modifiers: &[&str],
     post_mode: MousePostMode,
 ) -> anyhow::Result<()> {
@@ -577,6 +509,11 @@ fn click_at_xy_inner(
         .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
     let point = CGPoint::new(x, y);
     let flags = parse_modifier_flags(modifiers);
+    let (down_type, up_type, button_number) = if matches!(button, CGMouseButton::Right) {
+        (CGEventType::RightMouseDown, CGEventType::RightMouseUp, 1)
+    } else {
+        (CGEventType::LeftMouseDown, CGEventType::LeftMouseUp, 0)
+    };
 
     // Shared click-group ID (f58) when window_id is known: keeps all pairs
     // in one gesture so WindowServer / Chromium coalesce them correctly.
@@ -607,13 +544,8 @@ fn click_at_xy_inner(
             super::control::check()?;
             let click_state = (pair_index + 1) as i64;
 
-            let down = CGEvent::new_mouse_event(
-                source.clone(),
-                CGEventType::LeftMouseDown,
-                point,
-                CGMouseButton::Left,
-            )
-            .map_err(|_| anyhow::anyhow!("CGEvent::new_mouse_event(down) failed"))?;
+            let down = CGEvent::new_mouse_event(source.clone(), down_type, point, button)
+                .map_err(|_| anyhow::anyhow!("CGEvent::new_mouse_event(down) failed"))?;
             set_explicit_flags(&down, flags);
 
             post_mouse_event_with_mode(
@@ -623,7 +555,7 @@ fn click_at_xy_inner(
                 wid,
                 click_group_id,
                 click_state,
-                0,
+                button_number,
                 3,
                 post_mode,
             );
@@ -632,13 +564,8 @@ fn click_at_xy_inner(
             // gap can race the loop's first poll and the click is dropped.
             super::control::sleep(std::time::Duration::from_millis(28));
 
-            let up = CGEvent::new_mouse_event(
-                source.clone(),
-                CGEventType::LeftMouseUp,
-                point,
-                CGMouseButton::Left,
-            )
-            .map_err(|_| anyhow::anyhow!("CGEvent::new_mouse_event(up) failed"))?;
+            let up = CGEvent::new_mouse_event(source.clone(), up_type, point, button)
+                .map_err(|_| anyhow::anyhow!("CGEvent::new_mouse_event(up) failed"))?;
             set_explicit_flags(&up, flags);
 
             post_mouse_event_with_mode(
@@ -648,7 +575,7 @@ fn click_at_xy_inner(
                 wid,
                 click_group_id,
                 click_state,
-                0,
+                button_number,
                 3,
                 post_mode,
             );
@@ -667,4 +594,64 @@ fn pointer_post_mode() -> MousePostMode {
     } else {
         MousePostMode::SkyLightPreferred
     }
+}
+
+/// A single addressed content gesture. The existing owner reserves the up
+/// before down and updates its endpoint before every drag post, including
+/// cancellation/occlusion cleanup. No HID or system-cursor placement occurs.
+pub fn pointer_path(
+    pid: i32,
+    wid: u32,
+    origin: (f64, f64),
+    path: &[[f64; 2]],
+    dragging: bool,
+) -> anyhow::Result<()> {
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+        .map_err(|_| anyhow::anyhow!("pointer source unavailable"))?;
+    let group = super::control::now_ms() as i64;
+    let first = path[0];
+    let post = |kind: CGEventType,
+                point: [f64; 2],
+                previous: [f64; 2],
+                click: i64|
+     -> anyhow::Result<()> {
+        super::control::set_pointer_point(
+            (point[0], point[1]),
+            (point[0] - origin.0, point[1] - origin.1),
+        );
+        let event = CGEvent::new_mouse_event(
+            source.clone(),
+            kind,
+            CGPoint::new(point[0], point[1]),
+            CGMouseButton::Left,
+        )
+        .map_err(|_| anyhow::anyhow!("pointer event allocation failed"))?;
+        event.set_flags(CGEventFlags::CGEventFlagNull);
+        event.set_integer_value_field(4, (point[0] - previous[0]).round() as i64);
+        event.set_integer_value_field(5, (point[1] - previous[1]).round() as i64);
+        post_mouse_event_with_mode(
+            pid,
+            &event,
+            Some((point[0] - origin.0, point[1] - origin.1)),
+            Some(wid),
+            Some(group),
+            click,
+            0,
+            0,
+            pointer_post_mode(),
+        );
+        super::control::check_completed()
+    };
+    post(CGEventType::MouseMoved, first, first, 0)?;
+    if !dragging {
+        return Ok(());
+    }
+    post(CGEventType::LeftMouseDown, first, first, 1)?;
+    let mut last = first;
+    for point in &path[1..] {
+        post(CGEventType::LeftMouseDragged, *point, last, 1)?;
+        last = *point;
+        super::control::sleep(std::time::Duration::from_millis(10));
+    }
+    post(CGEventType::LeftMouseUp, last, last, 1)
 }

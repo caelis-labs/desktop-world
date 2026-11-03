@@ -38,6 +38,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
     var cancelled=0
     var newRequests=0
     var gestureEvents:[[String:Any]]=[]
+    var pointerEvents:[[String:Any]]=[]
     var interruptDrag=false
     var panel:NSPanel?
     var panelKind=""
@@ -76,6 +77,10 @@ final class Delegate: NSObject, NSApplicationDelegate {
         };write()
     }
     func applicationDidFinishLaunching(_ notification:Notification) {
+        _=NSEvent.addLocalMonitorForEvents(matching:[.mouseMoved,.leftMouseDown,.leftMouseDragged,.leftMouseUp]){[weak self] event in
+            self?.pointerEvents.append(["type":event.type.rawValue,"window":event.windowNumber,
+                "x":event.locationInWindow.x,"y":event.locationInWindow.y]);return event
+        }
         _=NSEvent.addLocalMonitorForEvents(matching:.scrollWheel){[weak self] event in
             if let self,let window=event.window {
                 let p=window.convertPoint(toScreen:event.locationInWindow)
@@ -141,12 +146,14 @@ final class Delegate: NSObject, NSApplicationDelegate {
             if let button=window.standardWindowButton(.closeButton) {let p=window.convertPoint(toScreen:button.convert(NSPoint(x:button.bounds.midX,y:button.bounds.midY),to:nil));buttons["Close "+window.title]=[p.x,top-p.y]}
         }
         let rows=surfaces.filter{$0.isVisible}.map{w->[String:Any] in
-            var row:[String:Any]=["title":w.title,"id":w.windowNumber,"bounds":[w.frame.minX,top-w.frame.maxY,w.frame.width,w.frame.height]]
+            var row:[String:Any]=["title":w.title,"id":w.windowNumber,"bounds":[w.frame.minX,top-w.frame.maxY,w.frame.width,w.frame.height],
+                "accepts_mouse_moved":w.acceptsMouseMovedEvents,"ignores_mouse":w.ignoresMouseEvents,
+                "tracking_areas":w.contentView!.subviews.compactMap{($0 as? GesturePad)?.trackingAreas.count}]
             if let b=w.contentView!.subviews.first as? NSButton {let p=w.convertPoint(toScreen:b.convert(NSPoint(x:b.bounds.midX,y:b.bounds.midY),to:nil));row["button"]=[p.x,top-p.y]}
             return row
         }
         let cg=(CGWindowListCopyWindowInfo([.optionOnScreenOnly,.excludeDesktopElements],0) as? [[String:Any]] ?? []).filter{($0[kCGWindowOwnerPID as String] as? Int32)==getpid()}.map{["id":$0[kCGWindowNumber as String] ?? 0,"layer":$0[kCGWindowLayer as String] ?? 0]}
-        let state:[String:Any]=["pressed_mouse_buttons":NSEvent.pressedMouseButtons,"slider":sliderValue,"panel":["kind":panelKind,"visible":panel?.isVisible ?? false,"result":panelResult,"opened":opened,"saved":saved],"gestures":gestureEvents,"buttons":buttons,"inputs":inputs,"new_requests":newRequests,"cancelled":cancelled,"cg":cg,"active":NSApp.isActive,"key":NSApp.keyWindow?.title ?? "", "pid":ProcessInfo.processInfo.processIdentifier,"counts":counts,"command":command,"windows":rows]
+        let state:[String:Any]=["pointer_events":pointerEvents,"pressed_mouse_buttons":NSEvent.pressedMouseButtons,"slider":sliderValue,"panel":["kind":panelKind,"visible":panel?.isVisible ?? false,"result":panelResult,"opened":opened,"saved":saved],"gestures":gestureEvents,"buttons":buttons,"inputs":inputs,"new_requests":newRequests,"cancelled":cancelled,"cg":cg,"active":NSApp.isActive,"key":NSApp.keyWindow?.title ?? "", "pid":ProcessInfo.processInfo.processIdentifier,"counts":counts,"command":command,"windows":rows]
         if let data=try? JSONSerialization.data(withJSONObject:state){try? data.write(to:root.appendingPathComponent("state.json"),options:.atomic)}
     }
 }

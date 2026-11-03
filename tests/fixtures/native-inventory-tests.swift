@@ -280,4 +280,17 @@ private func checkBackgroundStepScope() throws {
 }
 checkFocusBorrowEpoch()
 try checkBackgroundStepScope()
+private func checkExitedKernelProcess() {
+    var info = kinfo_proc()
+    info.kp_proc.p_pid = 123; info.kp_proc.p_stat = Int8(SZOMB)
+    expect(isExitedKernelProcess(info, pid: 123), "Unreaped exited child was treated as live")
+    expect(!isExitedKernelProcess(info, pid: 124), "Another PID proved death")
+    for status: Int8 in [0, 1, 2, 3, 4] {
+        info.kp_proc.p_stat = status
+        expect(!isExitedKernelProcess(info, pid: 123), "Unknown, sleeping or suspended process was retired")
+    }
+    info.kp_proc.p_stat = Int8(SZOMB); info.kp_proc.p_pid = 0
+    expect(!isExitedKernelProcess(info, pid: 123), "Empty kernel process record proved death")
+}
+checkExitedKernelProcess()
 print("Native inventory controls passed (\(inventoryAssertions) assertions; no GUI access)")

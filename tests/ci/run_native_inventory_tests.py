@@ -24,6 +24,7 @@ def main():
                 native.with_name("surface_contract_tests.swift"),
                 native.with_name("scene_contract_tests.swift"),
                 native.with_name("background_contract_tests.swift"),
+                native.with_name("ax_array_contract_tests.swift"),
             ],
             "cursor-overlay-tests": [
                 native.with_name("Overlay.swift"),
@@ -39,6 +40,13 @@ def main():
                 check=True, timeout=120,
             )
             subprocess.run([str(binary)], check=True, timeout=20)
+        # Compile GUI diagnostics but never sample or operate the CI desktop.
+        for name in ("cursor-observer", "directed-pointer"):
+            subprocess.run(
+                ["swiftc", "-warnings-as-errors", "-module-cache-path", str(directory / "module-cache"),
+                 str(root / "tests/fixtures" / name / "main.swift"), "-o", str(directory / name)],
+                check=True, timeout=120,
+            )
 
 
 

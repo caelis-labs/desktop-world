@@ -88,6 +88,52 @@ and WPS, redacting UI payloads; absence/unsupported coverage stays explicit.
 These are native/script evidence, not real model/Harness A/B tests or proof that
 all app families are supported. Output directories must be new.
 
+The AX compatibility probe creates providers whose count/range methods fail,
+whose children are unreadable, or whose AX window inventory is unavailable:
+
+```sh
+python3 tests/acceptance/ax_compat_probe.py \
+  --dtw /absolute/path/to/dtw --output /tmp/dtw-ax-compat-new-run
+```
+
+It reads actual button, text, wheel, drag/release and normal-quit effects through
+`apps`/`exec`; it also rejects foreign occlusion and stale coordinates. Optional
+`--baseline /absolute/path/to/old/dtw` reproduces the original count-method
+failure before input. This probe uses the current physical pointer routes and
+records the real system pointer during drag; it is not a no-interference or
+model/Harness benchmark. Each disposable app is a directly owned child and is
+cleaned up even when a case fails. Use a fixed candidate executable so another
+build cannot replace worker bytes during the run.
+
+For a read-only independent system-cursor oracle around either current GUI probe:
+
+```sh
+xcrun swiftc tests/fixtures/cursor-observer/main.swift -o /tmp/dtw-cursor-observer
+DTW_INPUT_TRACE=1 python3 tests/acceptance/cursor_audit.py --assert-independent \
+  --observer /tmp/dtw-cursor-observer --output /tmp/dtw-cursor-new-run -- \
+  python3 tests/acceptance/app_scene_probe.py \
+    --dtw /absolute/path/to/frozen/dtw --output /tmp/dtw-cursor-new-run/probe
+```
+
+Keep probe output inside the new audit directory. The observer posts no input,
+reads the actual global cursor throughout each original MCP call and records
+sample gaps. A restored endpoint does not pass as cursor independence. A
+cancelled request without a reply stays explicitly unreceipted; its cleanup
+interval ends at the first successful recovery read. Sampling cannot exclude
+shorter excursions or attribute ambient user motion by itself. Match each
+detected change to native delivery code and fixture effects.
+The assertion additionally requires classified private native route evidence for
+each observed input. See [input routing](macos-input-routing.md) for the permitted
+borrowing reasons and its evidence limits. For owned Chrome protocol coverage,
+wrap `directed_chromium_probe.py --dtw /absolute/path/to/frozen/dtw` the same way;
+it creates a fresh browser profile and verifies DOM hover, click and text selection.
+
+`directed_pointer_probe.py` is a separate owned AppKit feasibility experiment;
+it is not a product route. Wrap it with the same observer, adding `--peer` to
+keep another owned app frontmost. It reports click, hover and drag effects
+separately and returns failure if any effect is missing. In particular, successful
+click/drag delivery does not establish hover or arbitrary-app support.
+
 The current lifecycle/LSUIElement runner uses the same two-tool protocol:
 
 ```sh

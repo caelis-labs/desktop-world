@@ -9,6 +9,8 @@ import Darwin
 
 @_silgen_name("dtw_set_front_process")
 private func dtwSetFrontProcess(_ pid: Int32, _ window: UInt32) -> Bool
+@_silgen_name("dtw_set_visual_front_process")
+private func dtwSetVisualFrontProcess(_ pid: Int32, _ window: UInt32) -> Bool
 @_silgen_name("dtw_front_process_matches")
 private func dtwFrontProcessMatches(_ pid: Int32) -> Int32
 @_silgen_name("dtw_front_process_pid")
@@ -200,6 +202,12 @@ private struct KernelApp {
         ["app": app.json, "name": metadata.name, "bundle_id": metadata.identifier,
          "bundle_path": metadata.path, "executable": executable]
     }
+}
+
+private func isExitedKernelProcess(_ info: kinfo_proc, pid: Int32) -> Bool {
+    // A zombie cannot be any live incarnation of this PID. A missing or
+    // unreadable executable, AX root or process record is never this proof.
+    pid > 0 && info.kp_proc.p_pid == pid && info.kp_proc.p_stat == Int8(SZOMB)
 }
 
 private func appBundlePath(_ executable: String) -> String? {
@@ -401,6 +409,17 @@ private final class RequestContext {
 
     func hasExited(_ expected: NativeApp) throws -> Bool {
         if let current = try startStamp(expected.pid) { return current != expected.generation }
+        // libproc omits unreaped exited children, although kill(pid, 0) still
+        // succeeds. KERN_PROC_PID retains their explicit SZOMB status. Read
+        // failure or a short/empty record remains unproven, not "exited".
+        try deadline.check()
+        var info = kinfo_proc()
+        let size = MemoryLayout<kinfo_proc>.size
+        var length = size
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, expected.pid]
+        let result = sysctl(&mib, UInt32(mib.count), &info, &length, nil, 0)
+        try deadline.check()
+        if result == 0, length == size, isExitedKernelProcess(info, pid: expected.pid) { return true }
         // An unreadable/permission-denied process is not proof of death.
         return kill(expected.pid, 0) == -1 && errno == ESRCH
     }
@@ -2392,11 +2411,55 @@ func textPage(_ text: String, offset: Int, limit: Int) throws -> (String, Int?) 
             end < source.length ? end : nil)
 }
 
-// A child-array offset is part of the native frontier. Never materialize a
-// complete AXChildren array merely to discard most of it after filtering.
+// Healthy providers stay on the bounded count/range path. Some AX servers
+// implement only CopyAttributeValue(AXChildren); count/range support is not a
+// prerequisite for a readable tree. The compatibility copy is request-local.
 private enum DiscoveryFrame {
     case node(AXUIElement, Int, Int)
     case children(AXUIElement, Int, Int, Int?, AXUIElement?)
+}
+
+private func permitsAXArrayCopy(_ error: AXError) -> Bool {
+    [.failure, .attributeUnsupported, .noValue, .notImplemented, .illegalArgument].contains(error)
+}
+
+private func requiresVisualInput(_ error: NativeFailure) -> Bool {
+    ["semantic_window_unavailable", "semantic_not_ready", "ax_unavailable",
+     "children_unavailable", "modal_state_unproven", "unsupported_modal"].contains(error.code)
+}
+
+private func copiedAXChildren(_ element: AXUIElement, _ deadline: Deadline,
+                              required: Bool = false) throws -> CFArray {
+    try deadline.prepare(element)
+    var value: CFTypeRef?
+    let result = AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value)
+    try deadline.check()
+    return try checkedAXChildren(value, result: result, required: required)
+}
+
+private func checkedAXChildren(_ value: CFTypeRef?, result: AXError, required: Bool) throws -> CFArray {
+    if result == .attributeUnsupported || result == .noValue {
+        if required { throw failure("modal_state_unproven", "Required AXChildren inventory is unavailable") }
+        return [] as CFArray
+    }
+    guard result == .success, let value, CFGetTypeID(value) == CFArrayGetTypeID() else {
+        throw failure("children_unavailable", "AX children value failed: \(result.rawValue)",
+                      attributeFailure: AXAttributeFailure(name: kAXChildrenAttribute, error: result))
+    }
+    let array = value as! CFArray
+    guard CFArrayGetCount(array) <= 32_768 else {
+        throw failure("children_unavailable", "Copied AXChildren exceeds the 32768-child compatibility budget")
+    }
+    return array
+}
+
+private func resolvedAXChildCount(result: AXError, count: Int, copy: () throws -> CFArray) throws -> Int {
+    if result == .success, count >= 0 { return count }
+    guard permitsAXArrayCopy(result) || result == .success else {
+        throw failure("children_unavailable", "AX child count failed: \(result.rawValue)",
+                      attributeFailure: AXAttributeFailure(name: kAXChildrenAttribute, error: result))
+    }
+    return CFArrayGetCount(try copy())
 }
 
 private func axChildCount(_ element: AXUIElement, _ deadline: Deadline, required: Bool = false) throws -> Int {
@@ -2404,14 +2467,9 @@ private func axChildCount(_ element: AXUIElement, _ deadline: Deadline, required
     var count: CFIndex = 0
     let result = AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &count)
     try deadline.check()
-    if result == .attributeUnsupported || result == .noValue {
-        if required { throw failure("modal_state_unproven", "Required AXChildren inventory is unavailable") }
-        return 0
+    return try resolvedAXChildCount(result: result, count: count) {
+        try copiedAXChildren(element, deadline, required: required)
     }
-    guard result == .success, count >= 0 else {
-        throw failure("children_unavailable", "AX child count failed: \(result.rawValue)")
-    }
-    return count
 }
 
 private func axChildRange(_ element: AXUIElement, index: Int, count: Int,
@@ -2422,15 +2480,32 @@ private func axChildRange(_ element: AXUIElement, index: Int, count: Int,
     let result = AXUIElementCopyAttributeValues(element, kAXChildrenAttribute as CFString,
                                                index, count, &value)
     try deadline.check()
-    guard result == .success, let value, CFArrayGetCount(value) > 0,
-          CFArrayGetCount(value) <= count else {
-        // A count/range race or illegalArgument is a coverage gap, never an
-        // empty subtree. In particular, count zero never calls this function.
+    return try resolvedAXChildRange(result: result, value: value, index: index, count: count) {
+        try copiedAXChildren(element, deadline, required: true)
+    }
+}
+
+private func resolvedAXChildRange(result: AXError, value: CFArray?, index: Int, count: Int,
+                                  copy: () throws -> CFArray) throws -> [AXUIElement] {
+    let array: CFArray
+    let start: Int
+    if result != .success, permitsAXArrayCopy(result) {
+        array = try copy()
+        start = index
+        guard start < CFArrayGetCount(array) else {
+            throw failure("children_unavailable", "AX child range changed during compatibility read")
+        }
+    } else if result == .success, let value, CFGetTypeID(value) == CFArrayGetTypeID(),
+              CFArrayGetCount(value) > 0, CFArrayGetCount(value) <= count {
+        array = value
+        start = 0
+    } else {
+        // An empty successful range is a coverage gap, never an empty subtree.
         throw failure("children_unavailable", "AX child range failed: \(result.rawValue)")
     }
     var children: [AXUIElement] = []
-    for offset in 0..<CFArrayGetCount(value) {
-        guard let pointer = CFArrayGetValueAtIndex(value, offset) else {
+    for offset in start..<min(start + count, CFArrayGetCount(array)) {
+        guard let pointer = CFArrayGetValueAtIndex(array, offset) else {
             throw failure("children_unavailable", "Null AX child")
         }
         let item = Unmanaged<AnyObject>.fromOpaque(pointer).takeUnretainedValue()
@@ -2669,8 +2744,14 @@ private final class FocusActivationObserver: @unchecked Sendable {
     }
     private func sampleFocus() {
         let started = ProcessInfo.processInfo.systemUptime
-        lock.lock(); let token = serial; let revision = epoch?.sampleRevision; lock.unlock()
+        lock.lock(); let token = serial; let revision = epoch?.sampleRevision
+        let needsWindow = epoch?.targetWindow != nil; lock.unlock()
         guard let revision else { return }
+        if !needsWindow {
+            let pid = dtwFrontProcessPID()
+            if pid > 0 { sampled(pid, window: nil, token: token, revision: revision, source: "sample_visual_application") }
+            return
+        }
         guard let deadline = try? Deadline(["deadline_unix_ms": UInt64((Date().timeIntervalSince1970 + 0.04) * 1_000)]) else { return }
         do {
             guard let app = try nativeFocusedApplication(deadline: deadline) else { return }
@@ -2698,6 +2779,8 @@ private final class FocusActivationObserver: @unchecked Sendable {
         }
     }
     private func windowNotification(_ element: AXUIElement, notification: String) {
+        lock.lock(); let needsWindow = epoch?.targetWindow != nil; lock.unlock()
+        if !needsWindow { sampleFocus(); return }
         guard notificationNamesFocusedWindow(notification) else { sampleFocus(); return }
         guard isTracking,
               let deadline = try? Deadline(["deadline_unix_ms": UInt64((Date().timeIntervalSince1970 + 0.04) * 1_000)]),
@@ -2748,13 +2831,13 @@ private final class FocusActivationObserver: @unchecked Sendable {
         }
         try deadline.check()
     }
-    func begin(initialPID: Int32, targetPID: Int32, window: CGWindowID, deadline: Deadline) throws -> UInt64 {
+    func begin(initialPID: Int32, targetPID: Int32, window: CGWindowID?, deadline: Deadline) throws -> UInt64 {
         while true {
             lock.lock()
             if ready, let loop = observerRunLoop, let timer = pollTimer {
                 serial &+= 1; epoch = FocusBorrowEpoch(initialPID: initialPID, targetPID: targetPID, targetWindow: window)
                 let token = serial; lock.unlock()
-                try observeWindows(targetPID, on: loop, deadline: deadline)
+                if window != nil { try observeWindows(targetPID, on: loop, deadline: deadline) }
                 CFRunLoopPerformBlock(loop, CFRunLoopMode.defaultMode.rawValue) { timer.fireDate = Date() }
                 CFRunLoopWakeUp(loop)
                 return token
@@ -2777,7 +2860,7 @@ private final class FocusActivationObserver: @unchecked Sendable {
     func retarget(_ token: UInt64, to pid: Int32, window: CGWindowID?, deadline: Deadline) throws -> Bool {
         lock.lock(); let loop = observerRunLoop; let valid = token == serial && epoch?.invalidated == false; lock.unlock()
         guard valid, let loop else { return false }
-        try observeWindows(pid, on: loop, deadline: deadline)
+        if window != nil { try observeWindows(pid, on: loop, deadline: deadline) }
         lock.lock(); defer { lock.unlock() }
         guard token == serial, var current = epoch, current.retarget(pid, window: window) else { return false }
         epoch = current
@@ -3337,6 +3420,28 @@ private final class NativeStore: @unchecked Sendable {
                 "generation": associated?.ownerBirth ?? target.app.generation]
     }
 
+    private func inputFramework(_ target: NativeTarget, _ context: RequestContext) throws -> String {
+        guard let owner = try context.app(target.app.pid), owner.app == target.app else {
+            throw failure("app_changed", "Input application incarnation changed")
+        }
+        let bundle = URL(fileURLWithPath: owner.metadata.path)
+        let frameworks = bundle.appendingPathComponent("Contents/Frameworks")
+        let known = ["Electron Framework.framework", "Chromium Framework.framework",
+                     "Google Chrome Framework.framework", "Google Chrome Beta Framework.framework",
+                     "Google Chrome Dev Framework.framework", "Google Chrome Canary Framework.framework",
+                     "Microsoft Edge Framework.framework", "Brave Browser Framework.framework"]
+        if known.contains(where: { FileManager.default.fileExists(atPath: frameworks.appendingPathComponent($0).path) }) {
+            return "chromium"
+        }
+        if ["QtCore.framework", "Qt6Core.framework", "QtGui.framework"].contains(where: {
+            FileManager.default.fileExists(atPath: frameworks.appendingPathComponent($0).path)
+        }) { return "qt" }
+        let info = Bundle(url: bundle)?.infoDictionary ?? [:]
+        if info["NSPrincipalClass"] as? String == "NSApplication"
+            || info["NSMainNibFile"] is String || info["NSMainStoryboardFile"] is String { return "appkit" }
+        return "unknown"
+    }
+
     fileprivate func validate(_ target: NativeTarget, _ context: RequestContext,
                               input: Bool = true, phase: FocusValidationPhase = .validation,
                               originalTarget: AXUIElement? = nil,
@@ -3785,15 +3890,18 @@ private final class NativeStore: @unchecked Sendable {
             let manual = result == .success
             var enhancedResult: Int32?
             var enhancedAttemptedAt: TimeInterval?
-            if result == .attributeUnsupported {
-                enhancedAttemptedAt = ProcessInfo.processInfo.systemUptime
+            if result != .success {
+                let attemptedAt = ProcessInfo.processInfo.systemUptime
+                try context.deadline.prepare(application)
                 result = AXUIElementSetAttributeValue(application, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
                 enhancedResult = result.rawValue
+                if result == .success { enhancedAttemptedAt = attemptedAt }
             }
             try context.deadline.check()
-            guard [.success, .attributeUnsupported, .notImplemented].contains(result) else {
-                throw failure("semantic_not_ready", "Native accessibility opt-in was not accepted (\(result.rawValue))")
-            }
+            // These application opt-ins are optional capabilities. Their AX
+            // errors say nothing about ordinary window/tree readability. The
+            // actual reads below still prove permission, identity and coverage.
+            try context.verify(target.app)
             enablement = SemanticEnablement(manual: manual, manualResult: manualResult,
                                             manualAttemptedAt: manual ? manualAttemptedAt : nil,
                                             enhancedResult: enhancedResult, enhancedAttemptedAt: enhancedAttemptedAt)
@@ -3847,7 +3955,8 @@ private final class NativeStore: @unchecked Sendable {
                 _ = try materializationPending(until: manualUntil ?? materializationUntil)
                 let window = try validate(target, context, input: false)
                 // Breadth-first and bounded: inspect container roots before a
-                // wide toolbar's descendants. Never materialize an entire array.
+                // wide toolbar's descendants. Healthy providers stay paged;
+                // count/range failures use the capped compatibility copy.
                 var queue: [(AXUIElement, Int, String, Bool)] = [(window.element, 0, "", false)]
                 var index = 0
                 var sample = SemanticReadinessSample()
@@ -4125,6 +4234,11 @@ private final class NativeStore: @unchecked Sendable {
 
     private func ownsBorrowedFocus(_ borrowed: BorrowedFocus, _ deadline: Deadline,
                                    traceStage: String) throws -> Bool {
+        if borrowed.window == nil {
+            _ = try validateSurface(borrowed.target, RequestContext(deadline: deadline))
+            return try !focusObserver.invalidated(borrowed.activationEpoch)
+                && windowServerFrontmost(borrowed.target.app.pid, deadline)
+        }
         let started = ProcessInfo.processInfo.systemUptime
         var completed = false
         traceSemanticFailure(["operation":"focus_ownership", "stage":traceStage, "phase":"begin",
@@ -4150,6 +4264,17 @@ private final class NativeStore: @unchecked Sendable {
         return owned
     }
 
+    fileprivate func validateVisualInput(_ target: NativeTarget, _ context: RequestContext) throws {
+        guard dtwAccessibilityGranted() else {
+            let error = dtwPermissionError("accessibility")
+            throw failure("permission_required", error["message"] as! String, details: error["details"] as? [String: Any])
+        }
+        guard let scope = borrowedFocus, scope.target == target,
+              try ownsBorrowedFocus(scope, context.deadline, traceStage: "visual.pixel") else {
+            throw failure("focus_changed", "Visual foreground admission changed; inspect before another input")
+        }
+    }
+
     private func borrowFocus(_ target: NativeTarget, _ window: AXUIElement?, _ context: RequestContext,
                              inputPoint: CGPoint? = nil) throws {
         guard !dtwInputStopping() else { throw failure("native_stopping", "Input admission is closing") }
@@ -4160,7 +4285,7 @@ private final class NativeStore: @unchecked Sendable {
                 try ownsBorrowedFocus(prior, context.deadline, traceStage: "retarget.borrowed_current")
             }, retarget: {
                 try focusObserver.retarget(prior.activationEpoch, to: target.app.pid,
-                                           window: focusID, deadline: context.deadline)
+                                           window: window == nil ? nil : focusID, deadline: context.deadline)
             }, update: { next in
                 next.changedForeground = next.changedForeground || prior.target != target || prior.focusWindowID != focusID
                 if next.target != target { next.semanticReadiness.discard() }
@@ -4184,13 +4309,59 @@ private final class NativeStore: @unchecked Sendable {
         if let window {
             alreadyFocused = try initialPID == target.app.pid && focused(target, window, context.deadline)
         } else {
-            alreadyFocused = false
+            alreadyFocused = initialPID == target.app.pid
         }
         let epoch = try focusObserver.begin(initialPID: initialPID, targetPID: target.app.pid,
-                                            window: focusID, deadline: context.deadline)
+                                            window: window == nil ? nil : focusID, deadline: context.deadline)
         borrowedFocus = BorrowedFocus(activationEpoch: epoch, changedForeground: !alreadyFocused,
                                       target: target, window: window, focusWindowID: focusID,
                                       pointer: CGEvent(source: nil)?.location, inputPoint: inputPoint)
+    }
+
+    private func establishVisualFocus(_ target: NativeTarget, _ context: RequestContext,
+                                      changed: inout Bool) throws -> CGRecord {
+        let surface = try validateSurface(target, context)
+        guard dtwAccessibilityGranted(request: true) else {
+            let error = dtwPermissionError("accessibility")
+            throw failure("permission_required", error["message"] as! String, details: error["details"] as? [String: Any])
+        }
+        guard let scope = borrowedFocus, scope.target == target,
+              !focusObserver.invalidated(scope.activationEpoch) else {
+            throw failure("focus_changed", "Visual input lost its admitted foreground scope")
+        }
+        if try !windowServerFrontmost(target.app.pid, context.deadline) {
+            guard let _: Bool = try dtwWithInputAdmission({
+                try context.deadline.check()
+                changed = true
+                // A foreign sheet/menu ID cannot be made key in its logical
+                // client process. AppKit activation handles that relationship;
+                // the following surface/hit proof must still survive it.
+                if surface.pid == target.app.pid && !dtwSetVisualFrontProcess(target.app.pid, target.nativeID) {
+                    throw failure("focus_failed", "WindowServer did not accept visual foreground activation")
+                }
+                guard let app = NSRunningApplication(processIdentifier: target.app.pid),
+                      app.activate(options: []) else {
+                    throw failure("focus_failed", "AppKit did not accept visual application activation")
+                }
+                return true
+            }) else { throw failure("native_stopping", "Native input admission is closed") }
+        }
+        let until = min(context.deadline.uptime, ProcessInfo.processInfo.systemUptime + 0.75)
+        while true {
+            try context.deadline.check()
+            guard !dtwInputStopping(), !focusObserver.invalidated(scope.activationEpoch) else {
+                throw failure("focus_changed", "Foreground changed while admitting visual input")
+            }
+            let current = try validateSurface(target, context)
+            if try windowServerFrontmost(target.app.pid, context.deadline) {
+                focusObserver.established(scope.activationEpoch, pid: target.app.pid, window: target.nativeID)
+                return current
+            }
+            guard ProcessInfo.processInfo.systemUptime < until else {
+                throw failure("focus_unproven", "Visual application foreground could not be confirmed")
+            }
+            CFRunLoopRunInMode(.defaultMode, 0.01, false)
+        }
     }
 
     private func establishFocus(_ target: NativeTarget, _ context: RequestContext, changed: inout Bool) throws -> CandidateWindow {
@@ -4409,24 +4580,30 @@ private final class NativeStore: @unchecked Sendable {
             guard CGEventSource.flagsState(.combinedSessionState).intersection(physicalModifiers).isEmpty else {
                 throw failure("input_busy", "Session modifiers are already held; no synthetic input was admitted")
             }
-            let window = try establishFocus(target, context, changed: &changed)
+            let visual = request["visual"] as? Bool == true
+            let window: CandidateWindow? = visual ? nil : try establishFocus(target, context, changed: &changed)
+            let surface = try window?.cg ?? establishVisualFocus(target, context, changed: &changed)
             observations = observations.filter { $0.value.target != target }
             func check(focus: Bool = true) throws {
                 try context.deadline.check()
                 if dtwInputStopping() { throw failure("native_stopping", "Input stopped after releasing admitted keys") }
                 if focus {
                     try context.verify(target.app)
-                    if associatedSurfaces[WindowSlot(app: target.app, id: target.nativeID)] != nil {
-                        _ = try validateSurface(target, context)
-                    }
-                    guard try focused(target, window.element, context.deadline) else {
-                        throw failure("focus_changed", "Exact focused window changed before the next input event. Re-observe the target window before continuing; earlier input may have partial effects, so do not replay the entire text or chord")
-                    }
-                    if keyboardSource != nil,
-                       let destination = axElement(try axAttribute(AXUIElementCreateApplication(target.app.pid),
-                                                                   kAXFocusedUIElementAttribute, context.deadline)),
-                       try !owned(destination, by: window.element, target: target, deadline: context.deadline) {
-                        throw failure("focus_changed", "Keyboard destination left the exact target surface, possibly for a dialog; observe again before continuing")
+                    if visual {
+                        try validateVisualInput(target, context)
+                    } else if let window {
+                        if associatedSurfaces[WindowSlot(app: target.app, id: target.nativeID)] != nil {
+                            _ = try validateSurface(target, context)
+                        }
+                        guard try focused(target, window.element, context.deadline) else {
+                            throw failure("focus_changed", "Exact focused window changed before the next input event. Re-observe the target window before continuing; earlier input may have partial effects, so do not replay the entire text or chord")
+                        }
+                        if keyboardSource != nil,
+                           let destination = axElement(try axAttribute(AXUIElementCreateApplication(target.app.pid),
+                                                                       kAXFocusedUIElementAttribute, context.deadline)),
+                           try !owned(destination, by: window.element, target: target, deadline: context.deadline) {
+                            throw failure("focus_changed", "Keyboard destination left the exact target surface, possibly for a dialog; observe again before continuing")
+                        }
                     }
                 }
             }
@@ -4466,12 +4643,12 @@ private final class NativeStore: @unchecked Sendable {
                     return true
                 }) else { throw failure("native_stopping", "Native input admission is closed") }
             } else if let (dx, dy) = scroll {
-                let point = try fixedScrollPoint(request, current: window.cg.bounds)
+                let point = try fixedScrollPoint(request, current: surface.bounds)
                 guard let source = CGEventSource(stateID: .privateState) else {
                     throw failure("input_unavailable", "Cannot allocate scroll event source")
                 }
-                guard let proof = dtwProveSurfacePoint(point, id: target.nativeID, pid: window.cg.pid,
-                                                       bounds: window.cg.bounds, deadline: context.deadline.uptime,
+                guard let proof = dtwProveSurfacePoint(point, id: target.nativeID, pid: surface.pid,
+                                                       bounds: surface.bounds, deadline: context.deadline.uptime,
                                                        overlayCandidates: dtwSceneOverlayCandidates(request)) else {
                     try check(focus: false)
                     throw failure("target_occluded", "Scroll point is not a proven visible point of the target window")
@@ -4806,8 +4983,11 @@ private final class NativeStore: @unchecked Sendable {
                 let target = try NativeTarget(request["target"])
                 let surface = try validateSurface(target, context)
                 let window: CandidateWindow?
-                do { window = try validate(target, context) }
-                catch let error as NativeFailure where error.code == "semantic_window_unavailable" { window = nil }
+                if request["visual"] as? Bool == true { window = nil }
+                else {
+                    do { window = try validate(target, context) }
+                    catch let error as NativeFailure where error.code == "semantic_window_unavailable" { window = nil }
+                }
                 let point: CGPoint?
                 if let x = request["screen_x"] as? Double, let y = request["screen_y"] as? Double {
                     point = CGPoint(x: x, y: y)
@@ -4827,6 +5007,7 @@ private final class NativeStore: @unchecked Sendable {
                         throw failure("invalid_request", "Background input step has no matching admitted action")
                     }
                     let current = try validateSurface(target, validation.context)
+                    guard dtwAccessibilityGranted() else {throw failure("permission_required","Accessibility access is no longer granted")}
                     try validation.checkModalState { _ = try self.validateSurface(target, validation.context) }
                     try validation.context.verify(target.app)
                     return ["target": target.json, "bounds": current.coordinates, "surface_owner": surfaceOwner(target),
@@ -4834,38 +5015,70 @@ private final class NativeStore: @unchecked Sendable {
                                 deadline: validation.context.deadline)]
                 }
                 backgroundValidation = nil
-                let current = try validateSurface(target, context)
-                let window: AXUIElement?
-                do { window = try validate(target, context).element }
-                catch let error as NativeFailure where !keyboard && error.code == "semantic_window_unavailable" { window = nil }
-                var result: [String: Any] = ["target": target.json, "bounds": current.coordinates, "surface_owner": surfaceOwner(target),
-                    "background_requires_foreground": try backgroundRequiresForeground(window,
-                        deadline: context.deadline)]
-                if request["consume"] as? Bool == true {
-                    let validation = BackgroundInputValidation(target: target, deadlineMilliseconds: milliseconds,
-                        keyboard: keyboard, context: context, window: window)
-                    try validation.checkModalState { _ = try self.validateSurface(target, validation.context) }
-                    observations = observations.filter { $0.value.target != target }
-                    guard let owner = try context.app(target.app.pid), owner.app == target.app else {
-                        throw failure("app_changed", "Native app identity changed during input route selection")
+                if !keyboard {
+                    let current = try validateSurface(target, context)
+                    guard dtwAccessibilityGranted(request: true) else {
+                        let error = dtwPermissionError("accessibility")
+                        throw failure("permission_required", error["message"] as! String, details:error["details"] as? [String:Any])
                     }
-                    let frameworks = URL(fileURLWithPath: owner.metadata.path).appendingPathComponent("Contents/Frameworks")
-                    let known = ["Electron Framework.framework", "Chromium Framework.framework",
-                                 "Google Chrome Framework.framework", "Google Chrome Beta Framework.framework",
-                                 "Google Chrome Dev Framework.framework", "Google Chrome Canary Framework.framework",
-                                 "Microsoft Edge Framework.framework", "Brave Browser Framework.framework"]
-                    result["chromium"] = known.contains { name in
-                        var directory: ObjCBool = false
-                        return FileManager.default.fileExists(atPath: frameworks.appendingPathComponent(name).path,
-                                                              isDirectory: &directory) && directory.boolValue
+                    // Modal state and AXChildren do not establish a pointer
+                    // delivery restriction. Address the captured CG surface.
+                    let framework = try inputFramework(target, context)
+                    if request["consume"] as? Bool == true {
+                        backgroundValidation = BackgroundInputValidation(target:target, deadlineMilliseconds:milliseconds,
+                            keyboard:false, context:context, window:nil)
                     }
-                    try context.verify(target.app)
-                    backgroundValidation = validation
+                    return ["target":target.json,"bounds":current.coordinates,"surface_owner":surfaceOwner(target),
+                            "input_framework":framework,
+                            "chromium":framework == "chromium"]
                 }
-                return result
+                do {
+                    let current = try validateSurface(target, context)
+                    let window = try validate(target, context).element
+                    var result: [String: Any] = ["target": target.json, "bounds": current.coordinates, "surface_owner": surfaceOwner(target),
+                        "background_requires_foreground": try backgroundRequiresForeground(window,
+                            deadline: context.deadline)]
+                    if request["consume"] as? Bool == true {
+                        let validation = BackgroundInputValidation(target: target, deadlineMilliseconds: milliseconds,
+                            keyboard: keyboard, context: context, window: window)
+                        try validation.checkModalState { _ = try self.validateSurface(target, validation.context) }
+                        observations = observations.filter { $0.value.target != target }
+                        guard let owner = try context.app(target.app.pid), owner.app == target.app else {
+                            throw failure("app_changed", "Native app identity changed during input route selection")
+                        }
+                        let frameworks = URL(fileURLWithPath: owner.metadata.path).appendingPathComponent("Contents/Frameworks")
+                        let known = ["Electron Framework.framework", "Chromium Framework.framework",
+                                     "Google Chrome Framework.framework", "Google Chrome Beta Framework.framework",
+                                     "Google Chrome Dev Framework.framework", "Google Chrome Canary Framework.framework",
+                                     "Microsoft Edge Framework.framework", "Brave Browser Framework.framework"]
+                        result["chromium"] = known.contains { name in
+                            var directory: ObjCBool = false
+                            return FileManager.default.fileExists(atPath: frameworks.appendingPathComponent(name).path,
+                                                                  isDirectory: &directory) && directory.boolValue
+                        }
+                        try context.verify(target.app)
+                        backgroundValidation = validation
+                    }
+                    return result
+                } catch let error as NativeFailure where requiresVisualInput(error) {
+                    // This is route selection before any background input.
+                    // A missing AX capability declines that optimization; the
+                    // physical route must independently re-prove its admission.
+                    let current = try validateSurface(target, context)
+                    return ["target": target.json, "bounds": current.coordinates,
+                            "surface_owner": surfaceOwner(target), "background_requires_foreground": true,
+                            "foreground_reason": error.code]
+                }
             case "validate_input_owner":
                 let app = try NativeApp(request["app"])
                 try context.verify(app)
+                if let owner = request["surface_owner"] as? [String:Any] {
+                    let pid = try integer(owner["pid"], "surface owner PID")
+                    let birth = try integer(owner["generation"], "surface owner generation")
+                    guard pid > 0, pid <= UInt64(Int32.max), try context.startStamp(Int32(pid)) == birth else {
+                        throw failure("app_changed", "Original input surface owner changed")
+                    }
+                }
                 return ["app": app.json]
             case "resolve_app":
                 guard let identifier = request["app_id"] as? String else { throw failure("invalid_request", "Missing application target") }
@@ -4949,8 +5162,7 @@ func dtwValidatePixelTarget(_ request: [String: Any]) -> [String: Any]? {
               try context.startStamp(pid) == birth else {
             throw failure("target_changed", "Actual surface owner changed before pixel input")
         }
-        do { _ = try nativeStore.validate(target, context) }
-        catch let error as NativeFailure where error.code == "semantic_window_unavailable" { /* Exact pixel-only surface remains usable. */ }
+        try nativeStore.validateVisualInput(target, context)
         return nil
     } catch let error as NativeFailure { return error.json }
     catch { return failure("native_error", String(describing: error)).json }
@@ -4989,7 +5201,7 @@ func dtwMoveNativeTitlebar(_ request: [String:Any], destinationVisible: (CGRect)
     do {
         let context = try RequestContext(request)
         let target = try NativeTarget(request["target"])
-        let window = try nativeStore.validate(target,context)
+        let window = try nativeStore.validate(target,context,input:false)
         guard let path=request["path"] as? [[String:Double]],let first=path.first,let last=path.last,
               let x=first["x"],let y=first["y"],let endX=last["x"],let endY=last["y"],
               let close=axElement(try axAttribute(window.element,kAXCloseButtonAttribute,context.deadline)),
@@ -5013,14 +5225,14 @@ func dtwMoveNativeTitlebar(_ request: [String:Any], destinationVisible: (CGRect)
             return ["dispatch":"not_dispatched","evidence":"unverified","error":"display_proof_unavailable","message":"Window movement must remain fully on one display"]
         }
         guard let value=AXValueCreate(.cgPoint,&point) else { throw failure("input_unavailable","Cannot prepare native window position") }
-        _ = try nativeStore.validate(target,context)
+        _ = try nativeStore.validate(target,context,input:false)
         try context.deadline.check()
         guard let result=dtwWithInputAdmission({attempted=true;return AXUIElementSetAttributeValue(window.element,kAXPositionAttribute as CFString,value)}),result == .success else {
             throw failure("window_move_unconfirmed","Native position may have changed; inspect the returned window bounds")
         }
         return ["dispatch":"dispatched","evidence":"unverified","route":"native_window_position"]
     } catch let error as NativeFailure {
-        if !attempted && ["semantic_window_unavailable","ax_unavailable"].contains(error.code) { return nil }
+        if !attempted && requiresVisualInput(error) { return nil }
         return error.json.merging(["dispatch":attempted ? "unknown":"not_dispatched","evidence":"unverified"]){_,new in new}
     } catch { return ["dispatch":attempted ? "unknown":"not_dispatched","evidence":"unverified","error":"native_error","message":String(describing:error)] }
 }

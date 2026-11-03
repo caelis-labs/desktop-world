@@ -109,6 +109,37 @@ fn compact_scene_output_has_no_native_refs_or_session_ledger() {
     assert!(r.data["output"].is_array());
 }
 #[test]
+fn app_actions_hide_delivery_routing_but_retain_dispatch_and_private_evidence() {
+    let (server, catalog) = agent();
+    catalog.backend.0.model.lock().unwrap().outcome.delivery = Some(InputDelivery {
+        route: Some(InputRoute::Foreground),
+        reason: Some("classified_internal_capability".into()),
+        foreground_borrowed: true,
+        focus_return: Some(FocusReturn::Retained),
+    });
+    let response = exec(
+        &server,
+        "routing_boundary",
+        "await app.look(); return await app.click({target:'w1.e1'});",
+    );
+    assert!(!response.is_error, "{}", response.data);
+    let returned = &response.data["value"]["result"];
+    assert_eq!(returned["outcome"]["dispatch"], "dispatched");
+    assert!(returned["outcome"].get("delivery").is_none());
+    assert!(returned["provider_outcome"].get("delivery").is_none());
+    let steps = response.data["script"]["steps"].as_array().unwrap();
+    assert!(steps
+        .iter()
+        .any(|step| step["receipt"]["outcome"]["delivery"]["reason"]
+            == "classified_internal_capability"));
+    let compact = crate::app_protocol::projection::execution(response);
+    assert!(!compact
+        .data
+        .to_string()
+        .contains("classified_internal_capability"));
+    assert_eq!(compact.data["effects"]["dispatch"]["dispatched"], 1);
+}
+#[test]
 fn application_search_is_bounded_and_does_not_connect() {
     let (server, catalog) = agent();
     let r = call(

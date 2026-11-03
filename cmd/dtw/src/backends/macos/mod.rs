@@ -13,6 +13,7 @@ use std::{
 mod associated_proof;
 mod cua_input;
 mod cursor_session;
+mod input_route;
 mod local_socket;
 mod overlay;
 mod pointer_presentation;

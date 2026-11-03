@@ -654,6 +654,32 @@ private func pointerGesture(_ request: [String:Any]) -> [String:Any] {
             let corners=[CGPoint(x:rectangle.minX+1,y:rectangle.minY+1),CGPoint(x:rectangle.maxX-1,y:rectangle.maxY-1)]
             return corners.allSatisfy{displayProvesPoint($0,bounds:rectangle)}
         }) { return finished(moved) }
+        if !dragging {
+            // CUA move_cursor_desktop, 41404b6e797d9c44894ae910859db60303801b4a.
+            // A warp does not establish AppKit tracking. Its established recipe
+            // uses fresh HID-state sources and two settled moves. No held input
+            // exists here; the same admission gate owns the whole synchronous call.
+            guard let _:Bool=try dtwWithInputAdmission({
+                try check(points[0]);changed=true
+                guard CGWarpMouseCursorPosition(points[0]) == .success,
+                      CGAssociateMouseAndMouseCursorPosition(1) == .success else {
+                    throw PointReadinessFailure(result:fail("input_unavailable","Pointer placement failed"))
+                }
+                for _ in 0..<2 {
+                    guard dtwSettleInput(seconds:0.015,deadline:deadline) else {
+                        throw PointReadinessFailure(result:fail("native_stopping","Pointer routing stopped"))
+                    }
+                    try check(points[0],pointer:true)
+                    guard let source=CGEventSource(stateID:.hidSystemState),
+                          let event=CGEvent(mouseEventSource:source,mouseType:.mouseMoved,mouseCursorPosition:points[0],mouseButton:.left) else {
+                        throw PointReadinessFailure(result:fail("input_unavailable","Pointer event allocation failed"))
+                    }
+                    event.flags=[];event.post(tap:.cghidEventTap);dtwPresentPostedPointer(points[0],kind:0)
+                }
+                return true
+            }) else {return finished(fail("native_stopping","Pointer admission closed"))}
+            return finished(["delivery":"posted","effect":"unverified"])
+        }
         guard deadline-ProcessInfo.processInfo.systemUptime>0.25,
               let source=CGEventSource(stateID:.privateState),
               let down=CGEvent(mouseEventSource:source,mouseType:.leftMouseDown,mouseCursorPosition:points[0],mouseButton:.left),
@@ -704,6 +730,33 @@ private func pointerGesture(_ request: [String:Any]) -> [String:Any] {
     catch {return finished(fail("native_error",String(describing:error)))}
 }
 
+// Addressed input is judged against this application's stack, not whichever
+// unrelated app happens to be physically in front. A new sibling/modal still
+// blocks the path. Native validation separately proves owner birth and scope.
+private func directedPoint(_ request: [String:Any]) -> [String:Any] {
+    guard surfaceOwnerCurrent(request), let b=request["bounds"] as? [Double],b.count==4,
+          let x=request["screen_x"] as? Double,let y=request["screen_y"] as? Double,x.isFinite,y.isFinite,
+          let id=request["window_id"] as? UInt32,let pid=request["pid"] as? Int32,
+          let target=request["target"] as? [String:Any],let app=target["app"] as? [String:Any],
+          let logicalPID=app["pid"] as? Int32 else { return fail("invalid_request","Missing addressed point identity") }
+    let point=CGPoint(x:x,y:y),bounds=CGRect(x:b[0],y:b[1],width:b[2],height:b[3])
+    let scope:Set<Int32>=[pid,logicalPID]
+    let all=windows().filter{scope.contains($0.pid)}
+    guard let window=all.first(where:{$0.id==id && $0.pid==pid}),window.rect==bounds,bounds.contains(point) else {
+        return fail("stale_observation","Addressed surface moved or closed")
+    }
+    let deadline=ProcessInfo.processInfo.systemUptime+max(0,(request["deadline_unix_ms"] as? Double ?? 0)/1000-Date().timeIntervalSince1970)
+    guard visibleAt(point,target:window,all:all,deadline:deadline) else {
+        return fail("target_occluded","Another surface in this application blocks the addressed point")
+    }
+    let current=windows().filter{scope.contains($0.pid)}
+    guard surfaceOwnerCurrent(request),let live=current.first(where:{$0.id==id && $0.pid==pid}),live.rect==bounds,
+          hitStack(current,id:id,point:point)==hitStack(all,id:id,point:point) else {
+        return fail("stale_observation","Application hit stack changed during point validation")
+    }
+    return ["valid":true]
+}
+
 @_cdecl("dtw_scene_call")
 public func dtwSceneCall(_ raw: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>? {
     autoreleasepool {
@@ -717,6 +770,15 @@ public func dtwSceneCall(_ raw: UnsafePointer<CChar>) -> UnsafeMutablePointer<CC
                 else { result = fail("unsupported_platform","SCK screenshots require macOS 14.2+") }
             case "click": result = click(request)
             case "move", "drag": result = pointerGesture(request)
+            case "validate_directed_point": result = directedPoint(request)
+            case "try_native_window_move":
+                // AX hit/position proof makes no SCK request and can precede
+                // scene/physical admission. A failed attempted set never retries.
+                if !surfaceOwnerCurrent(request) {result=fail("target_changed","Native move owner changed")}
+                else {result=dtwMoveNativeTitlebar(request,destinationVisible:{rect in
+                    let corners=[CGPoint(x:rect.minX+1,y:rect.minY+1),CGPoint(x:rect.maxX-1,y:rect.maxY-1)]
+                    return corners.allSatisfy{displayProvesPoint($0,bounds:rect)}
+                }) ?? ["native_move":false,"dispatch":"not_dispatched"]}
             case "prove_associated_surface": result = dtwReadAssociatedSurfaceProof(request)
             default: result = fail("invalid_operation","Unknown native extension operation")
             }

@@ -5,6 +5,11 @@ func dtwSetFrontProcessControlStub(_ pid: Int32, _ window: UInt32) -> Bool {
     preconditionFailure("Pure contracts must not invoke foreground input")
 }
 
+@_cdecl("dtw_set_visual_front_process")
+func dtwSetVisualFrontProcessControlStub(_ pid: Int32, _ window: UInt32) -> Bool {
+    preconditionFailure("Pure contracts must not invoke visual foreground input")
+}
+
 @_cdecl("dtw_front_process_matches")
 func dtwFrontProcessMatchesControlStub(_ pid: Int32) -> Int32 {
     preconditionFailure("Pure contracts must not read the real WindowServer")
