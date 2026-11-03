@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.4](https://github.com/caelis-labs/desktop-world/compare/v0.3.3...v0.3.4) (2026-11-03)
+
+
+### Bug Fixes
+
+* restore Windows app automation parity and installation guidance ([#105](https://github.com/caelis-labs/desktop-world/issues/105)) ([b96ab49](https://github.com/caelis-labs/desktop-world/commit/b96ab49eeff27f4932fba53d19a92a333ff1611b))
+
 ## [0.3.3](https://github.com/caelis-labs/desktop-world/compare/v0.3.2...v0.3.3) (2026-11-03)
 
 
