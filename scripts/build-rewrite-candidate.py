@@ -395,9 +395,12 @@ SHA256SUMS and the outer CANDIDATE.json together as construction evidence.
 The outer archive .sha256 covers the immutable ZIP. Notarization receipts, when
 requested, are external because they are obtained after this ZIP is fixed.
 
-Extract to a stable location. Run `bin/{executable} --version`, then use the
-absolute extracted binary path in examples/mcp.json or examples/codex.toml.
-Use MCP arguments ["mcp"]. DTW manages input routing and foreground access
+Follow install.md to verify and import the complete package from a host-approved
+temporary location outside the session workspace. Register the returned managed
+executable and matching Skill, not a temporary extracted copy. Denied access
+requires normal host authorization, not a sandbox-policy or ACL change.
+Run `bin/{executable} --version`; examples/mcp.json and examples/codex.toml are
+path templates. Use MCP arguments ["mcp"]. DTW manages input routing and foreground access
 when an operation requires it; the Agent needs no extra input-mode argument.
 This same directory includes Agent Plugins 1.0/Caelis, Claude Code, Antigravity
 and DSH Cordis entries around the same executable and Skill. Follow install.md
@@ -410,13 +413,15 @@ anything, edit Agent configuration, or grant OS permissions.
 On Windows, in PowerShell: `& 'C:\\path with spaces\\bin\\dtw.exe' --version`.
 Use escaped backslashes or forward slashes in the JSON/TOML path.
 Windows builds use the static CRT. CI runs native contracts and final-package
-MCP metadata/EOF checks without desktop input. Optional UI diagnostics are in
-the self-contained PowerShell smoke and manual matrix at acceptance/windows/README.md.
-They use the installed DTW through standard MCP and require no Rust or CUA.
-The same-source Chrome workbench server and HTML are in
-acceptance/browser-workbench/; its startup and UTF-8 state readback commands
-are in the Windows acceptance README. Only this optional browser task requires
-Python 3; the installed DTW runtime and WinForms smoke do not.
+MCP metadata/EOF checks without desktop input. Optional current GUI diagnostics
+use the two-tool apps/exec interface: acceptance/windows/app_protocol_probe.py,
+acceptance/windows/feature_audit.py and acceptance/windows/browser_feature_audit.py.
+Run them with Python 3 in UTF-8 mode (`python -X utf8 ...`); image comparisons
+require Pillow. Fixture compilation uses Windows PowerShell 5.1 and the bundled
+C# sources, not Rust or CUA. The browser audit requires Chrome and supplies its
+own local HTTP page/server. See acceptance/windows/README.md for commands and
+scope. Historical atomic-protocol probes are not packaged as current entrypoints.
+These optional diagnostics need Python; the installed DTW runtime does not.
 On macOS, the binary deployment target is 14.2, arm64. The user grants
 Accessibility and Screen Recording permissions when needed. CI verifies signing
 and notarization; interactive GUI checks are optional diagnostics.
@@ -432,7 +437,7 @@ docs/background-input-port.md.
 """
     readme += """
 Caelis integration uses the root Agent Plugins 1.0 plugin.json and
-mcp.json. Install this extracted directory with `caelis plugin install <path>
+mcp.json. Install the imported package directory with `caelis plugin install <path>
 --json`, then check `caelis plugin status desktop-world --json` and start a new
 Session. The stable plugin ID is desktop-world regardless of this directory's
 name. Caelis chooses the standard manifest; Claude continues to use its own
@@ -456,9 +461,13 @@ def package_assets(source, package, version, target):
     shutil.copytree(source / "packaging/third-party", package / "packaging/third-party")
     if target.endswith("msvc"):
         shutil.copy2(source / "docs/windows-cursor-port.md", package / "docs/windows-cursor-port.md")
-        shutil.copytree(source / "tests/acceptance/windows", package / "acceptance/windows")
+        windows_acceptance = package / "acceptance/windows"
+        windows_acceptance.mkdir(parents=True)
+        for name in ("README.md", "app_protocol_probe.py", "feature_audit.py",
+                     "browser_feature_audit.py", "transport.py", "Fixture.cs",
+                     "compile-cursor.ps1", "CursorObserver.cs"):
+            shutil.copy2(source / "tests/acceptance/windows" / name, windows_acceptance / name)
         shutil.copy2(source / "tests/acceptance/app_client.py", package / "acceptance/app_client.py")
-        shutil.copytree(source / "tests/fixtures/browser-workbench", package / "acceptance/browser-workbench")
     (package / "examples").mkdir()
     for name in ("mcp.json", "codex.toml"):
         shutil.copy2(source / "docs/examples" / name, package / "examples" / name)

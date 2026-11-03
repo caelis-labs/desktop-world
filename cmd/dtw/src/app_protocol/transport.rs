@@ -97,11 +97,11 @@ impl Factory for NativeFactory {
                 .collect()
         })
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn discover(&self) -> Result<Value, Error> {
         self.reader()?.discover(Duration::from_secs(12))
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn resolve(&self, app_id: &str) -> Result<crate::computer::ApplicationTarget, Error> {
         self.reader()?
             .resolve_target(app_id, Duration::from_secs(8))

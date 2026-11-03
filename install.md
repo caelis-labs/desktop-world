@@ -43,7 +43,14 @@ Use the adjacent `.sha256` for the selected ZIP. Linux desktop support is experi
 Release notes identify the exact platform sources, accepted bytes and test scope.
 
 Verify the ZIP's adjacent `.sha256`, then extract the complete directory to a
-temporary location outside the source checkout. On macOS, use
+temporary location outside both the source checkout and the Agent's session
+workspace, using the host's supported download and executable-launch route.
+On Windows, `%TEMP%` is suitable only when it is outside that workspace and the
+host permits execution and access to the intended store there. A temporary path
+is not itself an authorization. If policy denies the operation, use the host's
+normal approval process or stop and report the required authorization; do not
+change sandbox policy or filesystem ACLs. See [DSH Windows compatibility](docs/install-dsh.md#windows-host-execution-and-storage).
+On macOS, use
 `shasum -a 256 <archive.zip>`. The verified package's native import below verifies
 every entry and the exact inventory in `SHA256SUMS`; do not first run a second
 per-file shell verifier or print hundreds of successful checksum rows.
@@ -70,7 +77,12 @@ It resolves the official latest stable release once, downloads its exact Windows
 ZIP and adjacent checksum, and verifies the archive. Native import verifies every
 packaged file and the exact inventory. It downloads into a new temporary directory, imports verified bytes into the
 managed store, then returns the permanent package recipe. A failure preserves
-its temporary directory for inspection.
+its temporary directory for inspection. Before running it, confirm that the
+system temporary directory is outside the session workspace and is an approved
+execution location for this host. The host must also allow the packaged CLI to
+access the default `%LOCALAPPDATA%\DesktopWorld` store. Do not run a workspace-local
+copy and assume a host's broad permission label authorizes that child process.
+If either path is denied, request normal host authorization before proceeding.
 
 ```powershell
 $ErrorActionPreference = 'Stop'
@@ -154,7 +166,7 @@ and its bundled Skill through your Agent's standard extension points:
 | Agent | Setup instructions |
 |---|---|
 | Caelis | [Install the package as a plugin](docs/install-caelis.md) |
-| DeepSeek Harness (DSH) | [Install the bundled Cordis plugin](docs/install-dsh.md#bundled-cordis-plugin); Windows 0.2.1-rc.5 uses one file-URL row |
+| DeepSeek Harness (DSH) | [Install the bundled Cordis plugin](docs/install-dsh.md#bundled-cordis-plugin); the tested Desktop format uses one file-URL row |
 | Antigravity App / agy CLI | [Install the package as one plugin](docs/install-agy.md) |
 
 Several Agents can point to the same installed package; each MCP connection has
@@ -211,14 +223,16 @@ Clients accepting `mcpServers` JSON can use:
 {
   "mcpServers": {
     "desktop-world": {
-      "command": "/absolute/path/to/extracted-package/bin/dtw",
+      "command": "/absolute/managed/package/bin/dtw",
       "args": ["mcp"]
     }
   }
 }
 ```
 
-Add the bundled Skill using the client's normal discovery directory. Codex can
+Replace the example command with import's returned `executable` (on Windows,
+`bin/dtw.exe`) and use the same package's bundled Skill through the client's
+normal discovery directory. Codex can
 use `codex mcp add desktop-world -- /absolute/path/to/dtw mcp`. Claude Code can
 load the complete package with `claude --plugin-dir /absolute/path/to/package`;
 its optional layout is described in [the staging guide](https://github.com/caelis-labs/desktop-world/blob/main/plugins/claude/README.md).

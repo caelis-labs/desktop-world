@@ -81,7 +81,10 @@ fn error(code: &str, message: &str) -> wire::WireError {
         details: None,
     }
 }
-fn failed(error: wire::WireError) -> Work {
+fn failed(mut error: wire::WireError) -> Work {
+    if matches!(error.code.as_str(), "invalid_request" | "invalid_args") {
+        error.code = "invalid_arguments".into();
+    }
     Work {
         completed: Completed {
             value: None,
@@ -403,12 +406,8 @@ impl<B: Backend + 'static> Coordinator<B> {
         } else {
             options["window_ref"] = json!(window)
         }
-        if options["selector"]["scope"] == "menu" {
-            let focus = self.scene_atomic(id, "focus", json!({"window_ref":window}), deadline);
-            if focus.completed.error.is_some() {
-                return focus;
-            }
-        }
+        // Selector admission owns menu focus preparation after capability and
+        // unique-target checks, and retains its receipt in the resolution ledger.
         let input_window = options["window_ref"].as_str().map(str::to_owned);
         let work = self.scene_atomic(id, &method, options, deadline);
         // Keep the scene mapping for the next requested action. Its native
@@ -789,7 +788,17 @@ impl<B: Backend + 'static> Coordinator<B> {
             .filter(|r| r["visible"] == true)
             .cloned()
             .collect();
-        let active = visible.first().or_else(|| rows.first()).cloned();
+        // A native decoration can be a real composited surface without being
+        // the active semantic window. Do not substitute keyboard focus here:
+        // menus/dropdowns may be interactive above their focused owner.
+        let active = visible
+            .iter()
+            .find(|row| row["scene"]["semantic_candidate"] != false)
+            .or_else(|| {
+                rows.iter()
+                    .find(|row| row["scene"]["semantic_candidate"] != false)
+            })
+            .cloned();
         let window_ids = {
             let mut state = self.state.lock().unwrap();
             if state.scene.window_ids.len() > 4096 {
@@ -1316,12 +1325,12 @@ fn compose_in(layers: Vec<Layer>, viewport: Option<[f64; 4]>) -> Result<(Raster,
     let mut rgba = vec![0u8; width as usize * height as usize * 4];
     for layer in layers.iter().rev() {
         for py in 0..height {
-            let sy = y + (f64::from(py) + 0.5) / f64::from(height) * bounds[3];
+            let sy = bounds[1] + (f64::from(py) + 0.5) / f64::from(height) * bounds[3];
             if sy < layer.bounds[1] || sy >= layer.bounds[1] + layer.bounds[3] {
                 continue;
             }
             for px in 0..width {
-                let sx = x + (f64::from(px) + 0.5) / f64::from(width) * bounds[2];
+                let sx = bounds[0] + (f64::from(px) + 0.5) / f64::from(width) * bounds[2];
                 if sx < layer.bounds[0] || sx >= layer.bounds[0] + layer.bounds[2] {
                     continue;
                 }
@@ -1452,6 +1461,67 @@ mod tests {
             "outside_app"
         );
     }
+    #[test]
+    fn closing_left_or_top_overlay_keeps_pixels_aligned_with_retained_viewport_points() {
+        let colors = [
+            [255, 0, 0, 255],
+            [0, 255, 0, 255],
+            [0, 0, 255, 255],
+            [255, 255, 0, 255],
+        ];
+        let base = || {
+            let mut base = layer("base", [0.0, 0.0, 2.0, 2.0], [0; 4]);
+            base.rgba = colors.concat();
+            base
+        };
+        for popup in [
+            [-2.0, 0.0, 2.0, 2.0],
+            [0.0, -2.0, 2.0, 2.0],
+            [-2.0, -2.0, 2.0, 2.0],
+        ] {
+            let (before, _) = compose(vec![layer("popup", popup, [255; 4]), base()]).unwrap();
+            let (after, png) = compose_in(vec![base()], Some(before.bounds)).unwrap();
+            assert_eq!(
+                (after.bounds, after.width, after.height),
+                (before.bounds, before.width, before.height)
+            );
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(png)
+                .unwrap();
+            let (width, height, rgba) = decode(&bytes).unwrap();
+            assert_eq!((width, height), (after.width, after.height));
+            for y in 0..height {
+                for x in 0..width {
+                    let point = json!({"x":f64::from(x) + 0.5,"y":f64::from(y) + 0.5});
+                    let sx = before.bounds[0]
+                        + (f64::from(x) + 0.5) / f64::from(width) * before.bounds[2];
+                    let sy = before.bounds[1]
+                        + (f64::from(y) + 0.5) / f64::from(height) * before.bounds[3];
+                    let pixel = &rgba[((y * width + x) * 4) as usize..][..4];
+                    if (0.0..2.0).contains(&sx) && (0.0..2.0).contains(&sy) {
+                        assert_eq!(
+                            pixel,
+                            &colors[sy as usize * 2 + sx as usize],
+                            "popup={popup:?}, pixel=({x},{y})"
+                        );
+                        let mapped = after.point(&point).unwrap();
+                        assert_eq!(mapped, before.point(&point).unwrap());
+                        assert_eq!(mapped["window_ref"], "base");
+                        assert_eq!(mapped["x"], sx);
+                        assert_eq!(mapped["y"], sy);
+                    } else {
+                        assert_eq!(
+                            pixel,
+                            &[0, 0, 0, 0],
+                            "vacated popup={popup:?}, pixel=({x},{y})"
+                        );
+                        assert_eq!(after.point(&point).unwrap_err().code, "outside_app");
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn delta_reports_disappearance_and_reordering_without_repeating_unchanged_controls() {
         let old = json!({"windows":[{"id":"w1"},{"id":"w2"}],"elements":[{"id":"e1","name":"Save"}],"semantics":{"complete":true},"coverage":{}});

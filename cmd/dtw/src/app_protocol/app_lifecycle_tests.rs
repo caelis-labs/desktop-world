@@ -9,6 +9,7 @@ struct Life {
     closed: Vec<u64>,
     quit_pending: bool,
     omit_launch_identity: bool,
+    unverified_launch: bool,
 }
 #[derive(Clone)]
 struct Provider {
@@ -45,7 +46,16 @@ impl Backend for Provider {
             DispatchState::NotDispatched
         };
         ApplicationLaunch {
-            outcome: confirmed(dispatch, "application_running"),
+            outcome: if life.unverified_launch {
+                ActionOutcome {
+                    dispatch,
+                    evidence: EffectEvidence::Unverified,
+                    error: None,
+                    delivery: None,
+                }
+            } else {
+                confirmed(dispatch, "application_running")
+            },
             instances: if life.omit_launch_identity {
                 vec![]
             } else {
@@ -253,6 +263,60 @@ fn quit_requires_exact_instance_when_multiple_members_are_running() {
 }
 
 #[test]
+fn unverified_launch_without_readback_preserves_dispatch_and_membership() {
+    for previous in [vec![], vec![application()]] {
+        let life = Arc::new(Mutex::new(Life {
+            omit_launch_identity: true,
+            unverified_launch: true,
+            ..Life::default()
+        }));
+        let runtime = crate::runtime::Runtime::for_application(
+            Provider {
+                life: life.clone(),
+                mock: MockBackend::new(),
+            },
+            APP.into(),
+            previous.clone(),
+            Duration::from_secs(30),
+        )
+        .unwrap();
+        let receipt = runtime.launch_until(Instant::now() + Duration::from_secs(2));
+        assert_eq!(receipt.outcome.dispatch, DispatchState::Dispatched);
+        assert_eq!(receipt.outcome.evidence, EffectEvidence::Unverified);
+        assert!(receipt.outcome.error.is_none());
+        assert_eq!(runtime.instances(), previous);
+        assert_eq!(life.lock().unwrap().launches, 1);
+    }
+}
+
+#[test]
+fn confirmed_noop_launch_binds_returned_running_instances() {
+    let life = Arc::new(Mutex::new(Life {
+        instances: vec![application()],
+        ..Life::default()
+    }));
+    let runtime = crate::runtime::Runtime::for_application(
+        Provider {
+            life: life.clone(),
+            mock: MockBackend::new(),
+        },
+        APP.into(),
+        vec![],
+        Duration::from_secs(30),
+    )
+    .unwrap();
+    let receipt = runtime.launch_until(Instant::now() + Duration::from_secs(2));
+    assert_eq!(receipt.outcome.dispatch, DispatchState::NotDispatched);
+    assert_eq!(
+        receipt.outcome.evidence,
+        EffectEvidence::Confirmed("application_running".into())
+    );
+    assert!(receipt.outcome.error.is_none());
+    assert_eq!(runtime.instances(), vec![application()]);
+    assert_eq!(life.lock().unwrap().launches, 0);
+}
+
+#[test]
 fn launch_ack_without_native_identity_is_unknown_and_does_not_authorize_input() {
     let (server, life) = installed();
     life.lock().unwrap().omit_launch_identity = true;
@@ -261,6 +325,10 @@ fn launch_ack_without_native_identity_is_unknown_and_does_not_authorize_input() 
     assert_eq!(
         rejected.data["script"]["steps"][0]["receipt"]["outcome"]["dispatch"],
         "unknown"
+    );
+    assert_eq!(
+        rejected.data["script"]["steps"][0]["receipt"]["outcome"]["error"]["code"],
+        "invalid_observation"
     );
     assert_eq!(life.lock().unwrap().launches, 1);
     // A new execution can discover the process, but never replays the launch.

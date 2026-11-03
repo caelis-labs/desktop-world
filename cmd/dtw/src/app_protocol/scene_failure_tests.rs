@@ -45,6 +45,86 @@ fn scene_exec(server: &Arc<Server<SceneCatalog>>, source: &str) -> Reply {
         _ => panic!("Unexpected in-flight scene request"),
     }
 }
+#[test]
+fn decorations_remain_in_pixels_and_inventory_but_not_active_semantics() {
+    let mut reference_image = None;
+    for candidate in [None, Some(true), Some(false)] {
+        let (server, backend) = scene_agent();
+        let rows = [
+            (102, "Popup", [-5., 0., 10., 5.], candidate),
+            (103, "Shadow", [-4., 1., 10., 5.], Some(false)),
+            (101, "Open dialog", [0., 0., 20., 10.], None),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(rank, (native_id, title, bounds, hint))| {
+            let mut scene = WindowLayout::new(bounds, rank as u32).unwrap();
+            scene.semantic_candidate = hint;
+            scene.keyboard_focused = Some(native_id == 101);
+            WindowInfo {
+                target: WindowTarget {
+                    app: application(),
+                    native_id,
+                    generation: 3,
+                },
+                title: title.into(),
+                visible: true,
+                scene: Some(scene),
+            }
+        })
+        .collect();
+        backend.base.0.model.lock().unwrap().inventory = Some(test_inventory(rows));
+        let reply = scene_exec(&server, "await app.capture();");
+        assert!(!reply.is_error, "{}", reply.data);
+        let view = &reply.data["value"]["view"];
+        let prefix = if candidate == Some(false) {
+            "w3."
+        } else {
+            "w1."
+        };
+        let elements = view["elements"].as_array().unwrap();
+        assert!(!elements.is_empty());
+        assert!(
+            elements
+                .iter()
+                .all(|element| element["id"].as_str().unwrap().starts_with(prefix)),
+            "{view}"
+        );
+        assert_eq!(
+            view["windows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|w| w["title"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["Popup", "Shadow", "Open dialog"]
+        );
+        assert_eq!(view["image"]["bounds"], json!([-5.0, 0.0, 25.0, 10.0]));
+        assert_eq!(backend.base.0.captures.load(Ordering::SeqCst), 3);
+        assert!(!view.to_string().contains("semantic_candidate"));
+        let image = reply.image.unwrap();
+        if let Some(reference) = &reference_image {
+            assert_eq!(
+                &image, reference,
+                "Semantic eligibility cannot change composition"
+            );
+        } else {
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(image.as_str())
+                .unwrap();
+            let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes))
+                .read_info()
+                .unwrap();
+            let mut rgba = vec![0; decoder.output_buffer_size().unwrap()];
+            decoder.next_frame(&mut rgba).unwrap();
+            // This pixel is left of the dialog and is supplied only by Popup.
+            assert_eq!(&rgba[..4], &[255, 255, 255, 255]);
+            reference_image = Some(image);
+        }
+    }
+}
+
 fn ax_parent_failure() -> Error {
     Error::NativeFailure {
         code: "ax_unavailable".into(),
@@ -408,6 +488,11 @@ fn private_pixel_refresh_cannot_authorize_a_later_unseen_overlay_target() {
         let reply = scene_exec(&server, &format!("await app.click({{x:5,y:5}}); {next}"));
         assert!(reply.is_error, "{next}: {}", reply.data);
         assert_eq!(reply.data["script"]["failure"]["code"], "stale_scene");
+        assert_eq!(reply.data["status"], "completed");
+        assert_eq!(reply.data["error"]["code"], "stale_scene");
+        let compact = crate::app_protocol::projection::execution(reply);
+        assert_eq!(compact.data["error"]["code"], "stale_scene");
+        assert_eq!(compact.data["failure"]["code"], "stale_scene");
         assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
     }
 }

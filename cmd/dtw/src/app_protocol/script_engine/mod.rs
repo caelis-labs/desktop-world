@@ -496,7 +496,11 @@ fn host_call(
         Err(message) => {
             return failure_reply(
                 Failure::new("exception", message)
-                    .code("invalid_args")
+                    .code(if op.starts_with("scene.") {
+                        "invalid_arguments"
+                    } else {
+                        "invalid_args"
+                    })
                     .at(op, line, number),
                 false,
             )

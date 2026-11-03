@@ -36,6 +36,12 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
             if summary["actions"].is_object() {
                 compact["effects"] = json!({"dispatch":summary["actions"]["dispatch"],"evidence":summary["actions"]["evidence"],"interrupted":summary["actions"]["interrupted"]});
             }
+            if summary["focus_preparation"].is_object() {
+                if !compact["effects"].is_object() {
+                    compact["effects"] = json!({});
+                }
+                compact["effects"]["focus_preparation"] = summary["focus_preparation"].clone();
+            }
         }
         for key in [
             "error",
@@ -121,7 +127,25 @@ fn summarize(steps: &[Value]) -> Value {
     let mut focus_returns = Map::new();
     let mut foreground_borrowed = 0;
     let mut deliveries = 0;
+    let mut preparations = 0;
+    let mut preparation_dispatch = Map::new();
+    let mut preparation_evidence = Map::new();
+    let mut preparation_interrupted = 0;
     for step in steps {
+        // Preparatory focus is a real effect, separate from the requested
+        // action. Aggregate every retained preparation, not just the last one;
+        // never expose private native delivery routes in the public facade.
+        let preparation = &step["resolution"]["focus_preparation"];
+        if preparation["attempted"] == true {
+            preparations += 1;
+            let receipt = &preparation["receipt"];
+            count(&mut preparation_dispatch, &receipt["outcome"]["dispatch"]);
+            count(
+                &mut preparation_evidence,
+                &receipt["outcome"]["evidence"]["kind"],
+            );
+            preparation_interrupted += usize::from(!receipt["interruption"].is_null());
+        }
         if step["resolution"].is_object() {
             summary["last_resolution"] = json!({"number":step["number"],"operation":step["operation"],
                 "resolution":resolution_summary(&step["resolution"])});
@@ -219,6 +243,11 @@ fn summarize(steps: &[Value]) -> Value {
                 summary["last_issue"]["resolution"] = step["resolution"].clone();
             }
         }
+    }
+    if preparations > 0 {
+        summary["focus_preparation"] = json!({"attempted":preparations,
+            "dispatch":preparation_dispatch,"evidence":preparation_evidence,
+            "interrupted":preparation_interrupted});
     }
     summary["failed"] = json!(failed);
     summary["pending"] = json!(pending);
@@ -353,6 +382,34 @@ mod tests {
                 assert_eq!(projected.data["result"], result);
             }
         }
+    }
+
+    #[test]
+    fn public_focus_preparation_counts_every_receipt_without_routing_or_double_counting() {
+        let steps = ["dispatched", "unknown"].into_iter().enumerate().map(|(index, dispatch)| {
+            json!({"number":index + 1,"operation":"scene.click","status":"completed","error":null,
+                "receipt":{"outcome":{"dispatch":"not_dispatched","evidence":{"kind":"unverified"}},"interruption":null},
+                "resolution":{"focus_preparation":{"attempted":true,"receipt":{
+                    "outcome":{"dispatch":dispatch,"evidence":{"kind":"unverified"},
+                        "delivery":{"route":"private_route","reason":"private_reason"}},
+                    "interruption":if dispatch == "unknown" { json!({"code":"cancelled"}) } else { Value::Null }
+                }}}})
+        }).collect();
+        let mut reply = successful_execution(steps);
+        reply.data["value"] = json!({"agent_protocol":true});
+        let projected = execution(reply);
+        assert_eq!(
+            projected.data["effects"]["dispatch"],
+            json!({"not_dispatched":2})
+        );
+        assert_eq!(
+            projected.data["effects"]["focus_preparation"],
+            json!({
+            "attempted":2,"dispatch":{"dispatched":1,"unknown":1},
+            "evidence":{"unverified":2},"interrupted":1})
+        );
+        assert!(!projected.data.to_string().contains("private_route"));
+        assert!(!projected.data.to_string().contains("private_reason"));
     }
 
     fn inventory_step(number: u32, inventory: Value) -> Value {

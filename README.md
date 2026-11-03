@@ -30,7 +30,10 @@ Download the **latest stable** package from [Releases](https://github.com/caelis
 Version PR merges automatically run CI, build and verify both platform packages,
 and publish the complete release; see [the release process](docs/releasing.md).
 You do not need a development toolchain to run the package. See [installation details](install.md) for
-the installer workflow and host guides.
+the installer workflow and host guides. Installation uses a host-approved
+execution path outside the session workspace; denied access requires the host's
+normal authorization process, never a sandbox-policy or ACL change. See
+[DSH Windows compatibility](docs/install-dsh.md#windows-host-execution-and-storage).
 
 ## Try it
 
@@ -41,11 +44,11 @@ Open the application you want to use, then ask your Agent:
 > Use Desktop World to update this document, save it under a new name, then reopen
 > it and check the changes.
 
-The MCP interface is `apps` plus app-scoped `exec`; the bundled Skill documents
+The MCP interface is exactly `apps` plus app-scoped `exec({app, source})`; the bundled Skill documents
 the nine app script methods. DTW owns window routing and observation state.
 The Agent follows look → input → look, with semantic targets and pixel fallback.
-[Working protocol plan](docs/agent-protocol-convergence-plan.md) records the current
-implementation and acceptance boundaries. The bundled Skill teaches the Agent the available operations. Your Agent handles
+[Capabilities and limits](docs/product-matrix.md) describes current support and
+acceptance boundaries. The bundled Skill teaches the Agent the available operations. Your Agent handles
 approvals. On macOS, relevant operations require Accessibility and Screen Recording
 permissions. Keep the desktop unlocked. When foreground interaction is needed,
 DTW brings the target window forward and leaves it there; you can switch away

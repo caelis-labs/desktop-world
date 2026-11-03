@@ -15,7 +15,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app_client import AppClient, METHODS, artifact_identity, require
-from windows.cursor_probe import read
+from windows.transport import read
 
 
 def state(root):

@@ -420,6 +420,8 @@ pub fn runtime_lease() -> Result<Option<File>> {
     Ok(Some(lease))
 }
 
+const USAGE: &str = "Usage: dtw package import <verified-directory> | bind <host-profile> <package-id> | activate <host-profile> | unbind <host-profile> | status | gc [--apply] [--store <absolute-directory>] | --help";
+
 pub fn run(args: &[String]) -> Result<Value> {
     let mut args = args.to_vec();
     let store = if let Some(i) = args.iter().position(|a| a == "--store") {
@@ -428,21 +430,62 @@ pub fn run(args: &[String]) -> Result<Value> {
         }
         let p = PathBuf::from(args.remove(i + 1));
         args.remove(i);
-        p
+        if !p.is_absolute() || p.parent().is_none() {
+            return Err("Store must be an absolute dedicated directory".into());
+        }
+        Some(p)
     } else {
-        default_store()?
+        None
     };
-    let store = Store::open(&store)?;
     let parts: Vec<_> = args.iter().map(String::as_str).collect();
-    let result:Result<Value> = match parts.as_slice(){
-        ["import",source]=>store.import(Path::new(source)),
-        ["bind",host,id]=>store.bind(host,id),
-        ["activate",host]=>store.activate(host),
-        ["unbind",host]=>{let p=store.host(host)?;if p.exists(){regular(&p,false)?;fs::remove_file(p).map_err(io_error)?;}Ok(json!({"host":host,"unbound":true}))},
-        ["status"]=>{let mut packages=Vec::new();for entry in fs::read_dir(store.root.join("packages")).map_err(io_error)?{let id=entry.map_err(io_error)?.file_name().into_string().map_err(|_|"Invalid package name")?;packages.push(store.recipe(&id)?);}Ok(json!({"store":text(&store.root)?,"bindings":store.bindings()?,"packages":packages}))},
-        ["gc"]=>store.gc(false,7),
-        ["gc","--apply"]=>store.gc(true,7),
-        _=>Err("Usage: dtw package import <verified-directory> | bind <host-profile> <package-id> | activate <host-profile> | unbind <host-profile> | status | gc [--apply] [--store <absolute-directory>]".into())
+    // Validate syntax and identifiers before resolving or touching the store.
+    // Help stays machine-readable, like every successful package command.
+    match parts.as_slice() {
+        [] | ["--help" | "-h"] => {
+            return Ok(
+                json!({"usage": USAGE, "manager_version": env!("CARGO_PKG_VERSION"), "store_schema": SCHEMA}),
+            );
+        }
+        ["import", source] if !source.is_empty() && !source.starts_with('-') => {}
+        ["bind", host, id] => {
+            identifier(host)?;
+            package_id(id)?;
+        }
+        ["activate" | "unbind", host] => identifier(host)?,
+        ["status"] | ["gc"] | ["gc", "--apply"] => {}
+        _ => return Err(USAGE.into()),
+    }
+    let store = Store::open(&match store {
+        Some(path) => path,
+        None => default_store()?,
+    })?;
+    let result: Result<Value> = match parts.as_slice() {
+        ["import", source] => store.import(Path::new(source)),
+        ["bind", host, id] => store.bind(host, id),
+        ["activate", host] => store.activate(host),
+        ["unbind", host] => {
+            let p = store.host(host)?;
+            if p.exists() {
+                regular(&p, false)?;
+                fs::remove_file(p).map_err(io_error)?;
+            }
+            Ok(json!({"host":host,"unbound":true}))
+        }
+        ["status"] => {
+            let mut packages = Vec::new();
+            for entry in fs::read_dir(store.root.join("packages")).map_err(io_error)? {
+                let id = entry
+                    .map_err(io_error)?
+                    .file_name()
+                    .into_string()
+                    .map_err(|_| "Invalid package name")?;
+                packages.push(store.recipe(&id)?);
+            }
+            Ok(json!({"store":text(&store.root)?,"bindings":store.bindings()?,"packages":packages}))
+        }
+        ["gc"] => store.gc(false, 7),
+        ["gc", "--apply"] => store.gc(true, 7),
+        _ => unreachable!("package arguments validated before opening the store"),
     };
     result.map(|mut value| {
         value["manager_version"] = json!(env!("CARGO_PKG_VERSION"));

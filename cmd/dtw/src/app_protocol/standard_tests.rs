@@ -2,6 +2,8 @@
 use super::*;
 #[path = "app_lifecycle_tests.rs"]
 mod app_lifecycle_tests;
+#[path = "application_route_tests.rs"]
+mod application_route_tests;
 #[path = "scene_tests.rs"]
 mod scene_tests;
 use crate::app_protocol::{

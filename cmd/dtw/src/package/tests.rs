@@ -13,6 +13,44 @@ impl Drop for Temp {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
+#[test]
+fn help_and_invalid_arguments_do_not_touch_store() {
+    let t = Temp::new();
+    let blocker = t.0.join("not-a-directory");
+    fs::write(&blocker, b"preserve me").unwrap();
+    for store in [t.0.join("absent-store"), blocker.join("unwritable-store")] {
+        for command in [vec![], vec!["--help"], vec!["-h"]] {
+            let mut args: Vec<String> = command.into_iter().map(str::to_owned).collect();
+            args.extend(["--store".into(), store.to_str().unwrap().into()]);
+            let help = run(&args).unwrap();
+            assert!(help["usage"].as_str().unwrap().contains("dtw package"));
+            assert_eq!(help["manager_version"], env!("CARGO_PKG_VERSION"));
+            assert_eq!(help["store_schema"], SCHEMA);
+            assert!(!store.exists());
+        }
+        for command in [
+            vec!["unknown"],
+            vec!["import"],
+            vec!["import", "--unknown"],
+            vec!["status", "extra"],
+            vec!["gc", "--unknown"],
+            vec!["bind", "host", "not-a-package-id"],
+            vec!["activate", "../invalid"],
+            vec!["unbind", "../invalid"],
+            vec!["--help", "extra"],
+            vec!["--store", "duplicate"],
+        ] {
+            let mut args: Vec<String> = command.into_iter().map(str::to_owned).collect();
+            args.extend(["--store".into(), store.to_str().unwrap().into()]);
+            assert!(run(&args).is_err(), "{args:?}");
+            assert!(!store.exists());
+        }
+    }
+    assert_eq!(fs::read(&blocker).unwrap(), b"preserve me");
+    assert_eq!(fs::read_dir(&t.0).unwrap().count(), 1);
+    assert!(run(&["status".into(), "--store".into()]).is_err());
+}
+
 fn fixture(root: &Path, version: &str) -> PathBuf {
     let p = root.join(format!("source-{version}"));
     fs::create_dir(&p).unwrap();

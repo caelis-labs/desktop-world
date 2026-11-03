@@ -7,27 +7,39 @@
 - `query`: case-insensitive name/identifier substring, up to 256 characters.
 - `state`: `all` (default), `running` or `stopped`.
 - `offset`: nonnegative integer; `limit`: 1–100 (default 30).
-- Returns `{apps:[{app,name,running,instances?}], next, coverage}`. Pass `next`
+- Returns `{apps:[{app,name,running,instances?}], next, coverage, provider}`. Pass `next`
   as the next offset with the same query/state. Coverage describes searched
   locations; an empty result does not prove the app is not installed elsewhere.
 - macOS searches standard application folders, including stopped bundles, and
   running user bundles elsewhere. Nested helpers and background-only bundles
   are excluded. Duplicate installed bundle identifiers use explicit bundle paths.
-- Other providers currently report running-only discovery with `installed:false`;
-  stopped-app discovery/startup is not claimed on those providers.
+- Windows reads user/common Start Menu links, App Paths and AppsFolder package
+  identities, and merges running user applications. Argument-bearing shortcuts,
+  unsupported values and native read gaps remain explicit in coverage. Executable
+  paths identify Win32 apps; `win:<AUMID>` identifies proven packaged apps.
+- Experimental X11 reports running-only discovery with `installed:false`.
+- `provider` describes the native provider, capabilities, observe scopes and conditions
+  before input; a public method's presence alone does not prove platform support.
 
 `exec({app, source})`
 
 - `app`: the exact authorization identity returned by discovery; macOS also
-  accepts an existing absolute `.app` path. It cannot change within a script.
+  accepts an existing absolute `.app` path, and Windows accepts an existing
+  absolute executable path. Windows package IDs must come from AppsFolder discovery.
+  The authorization identity cannot change within a script.
 - `source`: an async JavaScript function body, at most 64 KiB UTF-8. Await calls
   sequentially. No custom session, request ID, timeout or delivery arguments.
 - A missing `app` or malformed argument object returns `invalid_arguments` before
   provider connection; a syntactically invalid app identifier returns `invalid_app`; a valid identity
   that cannot be resolved returns `app_unavailable`.
 - Normal output is `{app, execution_id, status, view?, result?, output?, effects?}`.
-  Errors retain their code, operation and source line when available. `effects`
+  `status:completed` means execution has settled; inspect MCP `isError` / `error`
+  for success. App-operation failures expose their business code in `error.code`
+  and retain operation/source details in `failure`. Invalid public arguments use
+  `invalid_arguments`. `effects`
   preserves dispatch/effect uncertainty; it does not prove the task succeeded.
+  Selector focus preparation has a separate `effects.focus_preparation` summary
+  and is not counted again as target dispatch.
   A returned value identical to the final script snapshot is coalesced into `view`, rather
   than repeated in `result`. Task-specific JSON values remain in `result`.
   The last current explicit/fallback PNG is a separate MCP image block.
@@ -44,7 +56,7 @@
 | `await app.capture(options?)` | `{full?:boolean}` | Return a full snapshot, including `windows`, and a PNG of the authorized app's visible stacked surfaces. Establishes the internal coordinate binding; later input returns an updated visual observation while in visual mode. |
 | `await app.click(target)` | string OR `{target:string}` OR `{selector:{role?:string,text?:string,scope?:'window'\|'menu'}}` OR `{x:number,y:number,button?:'left'\|'right',count?:1\|2}` | Semantic target ID from the latest look or a unique selector, for controls advertising `press`; otherwise use the returned screenshot fallback; or image-pixel coordinates from the last capture. `app.click('w1.e12')` uses a target ID; other strings such as `app.click('Continue')` are text selectors. Never mix target forms. Mouse options apply only to coordinates. |
 | `await app.move(point)` | `{x:number,y:number}` | Hover over a visible point in the current app image, enabling hover UI. |
-| `await app.drag(options)` | `{path:[{x:number,y:number},...]}` | Content drag uses one left-button press, bounded path and paired release. 2–64 supplied points with movement, internally at most 256 samples. The entire path must stay within one observed window. A proven standard macOS title bar moves its window via native position, with the destination fully on one display. Other paths drag content. Unsupported provider/display boundaries are explicit. No held button survives a call. |
+| `await app.drag(options)` | `{path:[{x:number,y:number},...]}` | Content drag uses one left-button press, bounded path and paired release. 2–64 supplied points with movement, internally at most 256 samples. The entire path must stay within one observed window. A proven standard macOS or Windows title bar moves its window via native position, with the destination fully on one display. Other paths drag content. Unsupported provider/display boundaries are explicit. No held button survives a call. |
 | `await app.typeText(text)` | string, or `{text:string}` | Unicode keyboard input into the active editing control. It may invoke application editing behavior. It does not replace a field value implicitly. |
 | `await app.keypress(keys)` | chord string, string array, or `{keys:string[]}` | One press/release chord; on macOS this also works for a running app with no window (e.g. New). Native app/window focus is verified before key downs. E.g. `'META+A'`, `'ENTER'`, `['META','A']` or `['ESC']`. Use an array/object for key names containing a literal `+`. `META` means Command on macOS and Windows key on Windows. |
 | `await app.scroll(options)` | `{delta_y:number,delta_x?:number,x?:number,y?:number}` | Integer wheel steps in [-100,100] per axis, positive down/right; these are not pixels. Supply both x/y from the current screenshot to target a pane. Without x/y DTW captures the active surface and anchors at its center. |
@@ -121,13 +133,12 @@ errors remain operation failures, including when they occur during capture. Mult
 space keeps its relative geometry. Offscreen/minimized surfaces are listed where
 available but are not invented in the visible canvas.
 
-`move` and `drag` are implemented on macOS. They reject stale geometry, unavailable
+`move` and `drag` are implemented on macOS and Windows. They reject stale geometry, unavailable
 images and paths across windows/transparent gaps before input. DTW selects the
 native delivery automatically; scripts do not select or manage input routes.
 During a drag, a changed/occluded application surface or cancellation
 stops the sequence and releases its admitted button. Partial effects remain
-unknown; never repeat a failed drag automatically. Drag relative motion fields
-and absolute positions are both supplied.
+unknown; never repeat a failed drag automatically.
 
 Native pointer bindings remain single-use. Before each coordinate gesture DTW
 privately captures fresh app pixels and checks window identity, geometry, layering
@@ -142,8 +153,9 @@ invalidate a coordinate mapping. A point does not establish semantic identity or
 prove that app content is unchanged; inspect new views when the task needs it.
 The final tool view supplies a fresh image while in visual mode. Cross-window/app
 drag, window resizing, off-canvas drag endpoints, held
-buttons/keys and clipboard are not public capabilities. Other providers explicitly
-reject unsupported gestures; macOS acceptance does not establish platform parity.
+buttons/keys and clipboard are not public capabilities. Experimental X11 rejects
+these gestures. Each platform requires its own native/GUI evidence; macOS
+acceptance does not establish Windows parity.
 
 ## Provider boundaries
 
@@ -154,9 +166,14 @@ their own live target proof; a rejected semantic action is never replayed as a
 mouse click. Process identity, visible-hit, geometry and input-release checks
 continue to apply when no semantic elements are available.
 
-Windows records physical window bounds and front-to-back order and renders each
-exact HWND for app composition. Covered reads do not relax input visibility or
-receiver checks. Layered/transparent HWNDs are explicitly unsupported by this
-renderer, and blank/unsupported renders do not acquire a coordinate binding.
-macOS capture does not establish Windows GUI or DPI acceptance. Experimental X11
-still requires an unobstructed window and does not claim multi-surface capture.
+Windows records physical DWM-visible bounds and global window order, and renders
+exact HWNDs for app composition. Covered reads do not relax input visibility or
+receiver checks. Readable global alpha/color-key layered windows are supported;
+per-pixel layered alpha without an independent proof and blank/unsupported renders
+remain explicit failures and do not acquire a coordinate binding. Native menu
+scope stays within its selected window; a popup's keyboard receiver requires
+native owner proof. Normal quit requests close on the selected process instance,
+leaving save prompts observable. Pointer paths remain within one visible window
+and display, with paired release on cancellation/failure. Windows GUI, application
+and DPI conditions require their own acceptance. Experimental X11 still requires
+an unobstructed window and does not claim multi-surface capture.

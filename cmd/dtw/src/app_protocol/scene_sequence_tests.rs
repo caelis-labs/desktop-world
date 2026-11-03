@@ -118,6 +118,53 @@ fn keyboard_routes_by_native_focus_instead_of_visual_overlay_order() {
 }
 
 #[test]
+fn semantic_decoration_hint_does_not_replace_keyboard_focus_or_unfocused_popup_semantics() {
+    for candidate in [None, Some(true), Some(false)] {
+        let (server, catalog) = agent();
+        let rows = [(102, "Popup"), (101, "Editing window")]
+            .into_iter()
+            .enumerate()
+            .map(|(rank, (native_id, title))| {
+                let mut scene = WindowLayout::new([0., 0., 500., 400.], rank as u32).unwrap();
+                scene.keyboard_focused = Some(native_id == 101);
+                scene.semantic_candidate = if native_id == 102 { candidate } else { None };
+                WindowInfo {
+                    target: WindowTarget {
+                        app: application(),
+                        native_id,
+                        generation: 3,
+                    },
+                    title: title.into(),
+                    visible: true,
+                    scene: Some(scene),
+                }
+            })
+            .collect();
+        catalog.backend.0.model.lock().unwrap().inventory = Some(test_inventory(rows));
+        let reply = exec(
+            &server,
+            "hint",
+            "const v=await app.look(); await app.keypress('ENTER'); return v.elements[0].id;",
+        );
+        assert!(!reply.is_error, "{}", reply.data);
+        let prefix = if candidate == Some(false) {
+            "w2."
+        } else {
+            "w1."
+        };
+        assert!(reply.data["value"]["result"]
+            .as_str()
+            .unwrap()
+            .starts_with(prefix));
+        assert_eq!(
+            catalog.backend.0.input_targets.lock().unwrap()[0].native_id,
+            101
+        );
+        assert!(!reply.data.to_string().contains("semantic_candidate"));
+    }
+}
+
+#[test]
 fn keyboard_focus_hints_cannot_select_a_sibling_process_instance() {
     for remove_selected in [false, true] {
         let (server, catalog) = agent();

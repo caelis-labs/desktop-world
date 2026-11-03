@@ -185,9 +185,12 @@ class Fixture(unittest.TestCase):
         put(self.repo, "tests/acceptance/windows/README.md",
             (Path(__file__).parent / "acceptance/windows/README.md").read_bytes())
         put(self.repo, "tests/acceptance/windows/smoke.ps1", "# Owned-window standard MCP smoke\n")
-        for name in ("app_client.py", "windows/app_protocol_probe.py", "windows/cursor_probe.py"):
+        for name in ("app_client.py", "windows/app_protocol_probe.py", "windows/feature_audit.py",
+                     "windows/browser_feature_audit.py", "windows/transport.py", "windows/Fixture.cs",
+                     "windows/compile-cursor.ps1", "windows/CursorObserver.cs"):
             put(self.repo, "tests/acceptance/" + name,
                 (Path(__file__).parent / "acceptance" / name).read_bytes())
+        put(self.repo, "tests/acceptance/windows/cursor_probe.py", "# Historical atomic probe: not a package entrypoint\n")
         for name in ("server.py", "index.html"):
             put(self.repo, "tests/fixtures/browser-workbench/" + name, "Same-source browser task 中文 🐦\n")
         self.sysroot = self.root / "rust"
@@ -508,12 +511,29 @@ class WorkflowTests(Fixture):
         with zipfile.ZipFile(output / result["archive"]) as archive:
             self.assertEqual(archive.read(package_name + "/acceptance/windows/README.md"),
                              (self.repo / "tests/acceptance/windows/README.md").read_bytes())
-            for name in ("app_client.py", "windows/app_protocol_probe.py", "windows/cursor_probe.py"):
-                self.assertEqual(archive.read(package_name + "/acceptance/" + name),
+            expected = {"app_client.py", "windows/README.md", "windows/app_protocol_probe.py",
+                        "windows/feature_audit.py", "windows/browser_feature_audit.py", "windows/transport.py",
+                        "windows/Fixture.cs", "windows/compile-cursor.ps1", "windows/CursorObserver.cs"}
+            prefix = package_name + "/acceptance/"
+            self.assertEqual({name.removeprefix(prefix) for name in archive.namelist()
+                              if name.startswith(prefix)}, expected)
+            for name in expected:
+                self.assertEqual(archive.read(prefix + name),
                                  (self.repo / "tests/acceptance" / name).read_bytes())
-            for name in ("server.py", "index.html"):
-                self.assertEqual(archive.read(package_name + "/acceptance/browser-workbench/" + name),
-                                 (self.repo / "tests/fixtures/browser-workbench" / name).read_bytes())
+            readme = archive.read(package_name + "/README.md").decode("utf-8")
+            for name in ("app_protocol_probe.py", "feature_audit.py", "browser_feature_audit.py", "Pillow"):
+                self.assertIn(name, readme)
+            self.assertNotIn("self-contained PowerShell smoke", readme)
+            helper = archive.read(prefix + "windows/transport.py").decode("utf-8")
+            self.assertNotIn("def execute(", helper)
+            self.assertNotIn("def tool(", helper)
+            self.assertNotIn("self.tool('result'", helper)
+        for name in ("app_protocol_probe.py", "feature_audit.py", "browser_feature_audit.py"):
+            probe = output / package_name / "acceptance/windows" / name
+            result = subprocess.run([os.sys.executable, "-X", "utf8", str(probe), "--help"],
+                                    capture_output=True, text=True, encoding="utf-8")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("--dtw", result.stdout)
 
     def test_native_candidate_is_immutable_unverified_archive_not_a_release(self):
         fake, calls = self.fake_commands()

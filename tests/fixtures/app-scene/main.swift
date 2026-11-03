@@ -1,6 +1,15 @@
 import AppKit
 import Foundation
 import UniformTypeIdentifiers
+func pointerEventTelemetry(_ event:NSEvent)->[String:Any] {
+    let point=event.locationInWindow
+    // AppKit can report unavailable coordinates during keyboard focus delivery.
+    // Keep the event observable without inventing a usable point or invalid JSON.
+    return ["type":event.type.rawValue,"window":event.windowNumber,
+        "x":point.x.isFinite ? point.x as Any:NSNull(),
+        "y":point.y.isFinite ? point.y as Any:NSNull(),
+        "location_valid":point.x.isFinite && point.y.isFinite]
+}
 final class SceneWindow:NSWindow {
     override func constrainFrameRect(_ frameRect:NSRect,to screen:NSScreen?)->NSRect {frameRect}
 }
@@ -78,8 +87,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
     }
     func applicationDidFinishLaunching(_ notification:Notification) {
         _=NSEvent.addLocalMonitorForEvents(matching:[.mouseMoved,.leftMouseDown,.leftMouseDragged,.leftMouseUp]){[weak self] event in
-            self?.pointerEvents.append(["type":event.type.rawValue,"window":event.windowNumber,
-                "x":event.locationInWindow.x,"y":event.locationInWindow.y]);return event
+            self?.pointerEvents.append(pointerEventTelemetry(event));return event
         }
         _=NSEvent.addLocalMonitorForEvents(matching:.scrollWheel){[weak self] event in
             if let self,let window=event.window {

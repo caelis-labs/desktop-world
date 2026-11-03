@@ -299,7 +299,17 @@ impl<B: Backend + 'static> Coordinator<B> {
                 let mut state = self.state.lock().unwrap();
                 completed.error = Some(WireError {
                     details: None,
-                    code: format!("script_{}", failure.kind),
+                    // Completed means settled, not business success. Keep the
+                    // public business reason at the ordinary error boundary;
+                    // script.failure still records VM kind and source location.
+                    code: if agent_surface {
+                        failure
+                            .code
+                            .clone()
+                            .unwrap_or_else(|| format!("script_{}", failure.kind))
+                    } else {
+                        format!("script_{}", failure.kind)
+                    },
                     message: failure.message.clone(),
                 });
                 let run = state

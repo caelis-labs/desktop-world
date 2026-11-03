@@ -352,6 +352,7 @@ impl Worker {
             .stderr(
                 if std::env::var("DTW_AX_READINESS_TRACE").ok().as_deref() == Some("1")
                     || std::env::var("DTW_INPUT_TRACE").ok().as_deref() == Some("1")
+                    || std::env::var("DTW_WINDOWS_TEXT_TRACE").ok().as_deref() == Some("1")
                 {
                     Stdio::inherit()
                 } else {

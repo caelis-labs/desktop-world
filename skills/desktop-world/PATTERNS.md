@@ -91,7 +91,7 @@ DTW captures and uses the active surface's center when no anchor is supplied.
 For a nested scroll pane, first inspect a capture and provide its x/y. Deltas
 are integer wheel steps between -100 and 100, not pixel distances.
 
-A standard macOS title-bar drag uses native window position when proven and
+A standard macOS/Windows title-bar drag uses native window position when proven and
 writable. Use a current image, start in empty title-bar space away from buttons,
 and keep the supplied path inside that window. The destination must fit one
 display. Inspect fresh bounds/image afterward; moving a window resets coordinates.

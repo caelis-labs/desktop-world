@@ -12,7 +12,8 @@ installing for Antigravity App; an `agy` CLI lookup is not part of that route.
 
 ## Antigravity App
 
-For a local package, place the complete extracted package in one discovery root:
+For a local package, copy the complete imported package from `package_path`
+into one discovery root:
 
 - One workspace: `<workspace>/.agents/plugins/desktop-world/`.
 - All workspaces: `~/.gemini/config/plugins/desktop-world/` (on Windows,
@@ -59,9 +60,9 @@ not a substitute for a valid package or a successful tool call.
 
 **Verified App scope:** Windows, Antigravity App **2.28.2**. The bundled relative
 command (`./bin/dtw.exe`) with `cwd: "${PLUGIN_ROOT}"` launched the executable
-inside the global plugin directory. A clean installation enabled the plugin and
-Historical pre-convergence checks verified discovery through a fresh verifier
-without an App restart; they do not certify this release's GUI behavior. An earlier upgrade check needed a normal full App close/reopen
+inside the global plugin directory. Historical pre-convergence checks verified
+a clean installation's plugin enablement and discovery through a fresh verifier
+without an App restart; they do not certify the current release's GUI behavior. An earlier upgrade check needed a normal full App close/reopen
 because an old MCP process survived manifest refresh while the UI remained green.
 This App verification does not certify the CLI surface.
 
@@ -99,8 +100,8 @@ Use this section when installing for the **agy CLI**. It can validate and instal
 that same directory:
 
 ```sh
-agy plugin validate --strict "/absolute/path/to/extracted-package"
-agy plugin install "/absolute/path/to/extracted-package"
+agy plugin validate --strict "/absolute/managed/package"
+agy plugin install "/absolute/managed/package"
 agy plugin list --json
 ```
 

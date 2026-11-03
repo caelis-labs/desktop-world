@@ -356,7 +356,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             }
             state.reconciling = true;
         }
-        let changed = self.runtime.instances() != apps;
+        let previous = self.runtime.instances();
         let result = catch_unwind(AssertUnwindSafe(|| self.runtime.reconcile_instances(apps)));
         let (result, panicked) = match result {
             Ok(result) => (result, false),
@@ -379,6 +379,10 @@ impl<B: Backend + 'static> Coordinator<B> {
             self.close();
         }
         let members = self.runtime.instances();
+        // Enumeration order is presentation, not application membership. Compare
+        // normalized members after reconciliation, including duplicate removal.
+        let changed =
+            previous.len() != members.len() || previous.iter().any(|app| !members.contains(app));
         let mut state = self.state.lock().unwrap();
         if result.is_ok() && state.terminal.is_none() {
             if changed {
@@ -750,6 +754,9 @@ impl<B: Backend + 'static> Coordinator<B> {
                             row["scene"] = json!({"bounds":scene.bounds(),"rank":scene.rank});
                             if let Some(focused) = scene.keyboard_focused {
                                 row["scene"]["keyboard_focused"] = json!(focused);
+                            }
+                            if let Some(candidate) = scene.semantic_candidate {
+                                row["scene"]["semantic_candidate"] = json!(candidate);
                             }
                         }
                         rows.push(row);

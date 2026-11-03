@@ -356,7 +356,7 @@ JavaScript parser is introduced. The fixed CUA donor remains
 | Donor path (under `libs/cua-driver/rust/crates/cua-driver-core/src/script_tool/`) | Original SHA-256 | DTW adaptation |
 | --- | --- | --- |
 | `engine.rs` | `fa61393ba5b685df34858a81e8e32e8fbdab77e17f2e1094514b43510891242d` | QuickJS runtime/context setup, memory/stack limits, interrupt and job draining; `script_engine/mod.rs` uses bounded std channels and an absolute Core deadline |
-| `prelude.js` | `af23eaf9c7c198f7feb6ac38e26c94d5b4d76bc0b794c491b80adb9933ed2865` | Hidden bridge, console/error/settlement mechanics; the initial C5 facade replaces upstream methods with five app-bound methods (now expanded to ten), with strict JSON state/result encoding |
+| `prelude.js` | `af23eaf9c7c198f7feb6ac38e26c94d5b4d76bc0b794c491b80adb9933ed2865` | Hidden bridge, console/error/settlement mechanics; the initial C5 facade replaced upstream methods with five app-bound methods and was expanded afterwards (the current public list is in the bundled `API.md`), with strict JSON state/result encoding |
 
 The complete upstream `App`, `Locator`, raw invocation, global discovery/launch,
 file/network/process and unrestricted platform objects are excluded. DTW owns

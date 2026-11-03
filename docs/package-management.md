@@ -68,6 +68,17 @@ Default stores are `~/Library/Application Support/DesktopWorld` on macOS and
 `%LOCALAPPDATA%\DesktopWorld` on Windows. `--store` accepts an absolute dedicated
 directory. Existing nonempty unmanaged directories are refused. Paths may contain
 spaces/Unicode; use the returned encoded `cordis_url`, not a hand-built file URL.
+Use the host's supported, authorized execution and storage paths; see
+[DSH Windows compatibility](install-dsh.md#windows-host-execution-and-storage)
+for workspace-local executable restrictions and external staging requirements.
+
+`dtw package --help` (also `-h`, or no package subcommand) returns JSON with
+`usage`, `manager_version` and `store_schema` without opening the requested store.
+Invalid command syntax, host/profile identifiers and package IDs also fail
+before store initialization. Errors retain the machine-readable `package_error`
+envelope on stderr and exit code 2; successful help uses stdout and exit code 0.
+Older binaries may initialize the store before rejecting help or invalid syntax;
+use the selected package's own CLI when installing or troubleshooting.
 
 ```sh
 dtw package import "/absolute/verified/package"

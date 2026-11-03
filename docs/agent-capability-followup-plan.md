@@ -1,26 +1,30 @@
-# Capability follow-up (2026-11-02)
+# Capability follow-up — closed plan (2026-11-02)
 
-Continue from `cbb9e07`; retain only `apps` and mandatory-app `exec` tools, ordinary
-JavaScript and runtime-owned scene state. No model/Harness A/B or publication.
+Status: historical. The scope below was implemented and accepted on macOS in the
+`0.3.x` line; this page is not a task list. Verified cases, retained failures and
+the unsupported boundaries are in the
+[capability follow-up acceptance](agent-capability-followup-acceptance.md).
+Current method arguments and limits are in the installed
+[Skill API](../skills/desktop-world/API.md).
 
-Status: local implementation and bounded acceptance completed. The
-[acceptance report](agent-capability-followup-acceptance.md) records the 37 native
-cases and the unsupported spanning-window physical-input boundary.
+## Delivered scope
 
-1. Add atomic `move({x,y})` and `drag({path:[{x,y},...]})` methods. Coordinates
-   refer to the current app image. Validate the entire bounded path before input;
-   initially support content gestures within one proven window. Native macOS
-   input rechecks identity, focus, geometry and visibility and releases every
-   admitted press on success, failure, cancellation and timeout. No input replay.
-2. Extend independent native acceptance with hover/drag event readback, invalid
-   paths, stale frames, changed/occluded surfaces, policy refusal and cleanup.
-3. Exercise real system Open/Save panels on a disposable fixture, including
-   helper-hosted surfaces and keyboard/coordinate fallback. Fix proved gaps;
-   preserve authorization proofs and unsupported/partial coverage.
-4. Inspect actual display availability; exercise available display geometries
-   through the public protocol, including stale mappings after relocation. Add
-   checks for geometry cases unavailable on the attached hardware and report
-   those separately from native GUI acceptance.
-5. Update Skill API, active capability documentation and evidence with explicit
-   limits. Cross-window/app drag, held input APIs, clipboard and broad platform
-   parity are not implied by this increment.
+1. `move({x,y})` and `drag({path:[{x,y},...]})` over the current app image, with the
+   whole bounded path validated before input and one proven window per gesture.
+   Every admitted press is paired with a release on success, failure, cancellation
+   and timeout; input is never replayed.
+2. Native acceptance extended with hover/drag event readback, invalid paths, stale
+   frames, changed/occluded surfaces, refusal and cleanup.
+3. Real system Open/Save panels on a disposable fixture, including helper-hosted
+   surfaces and keyboard/coordinate fallback, keeping the ownership proofs.
+4. Display availability inspected and exercised through the public protocol,
+   including stale mappings after relocation; geometries unavailable on the
+   attached hardware reported separately from native GUI acceptance.
+5. Skill API and capability documentation updated with explicit limits.
+
+## Boundaries this increment did not close
+
+Cross-window/app drag and drop, modifier/right-button drag, held input APIs,
+clipboard, window geometry controls and platform parity beyond macOS remained
+outside it. Provider support for the same gesture set therefore needs its own
+acceptance rather than an inference from these macOS results.

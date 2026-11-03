@@ -47,6 +47,12 @@ namespace DtwWindowsSmoke {
             e.Graphics.DrawString("Owned pointer / wheel pad", Font, Brushes.Black, 12, 12);
         }
         protected override void OnMouseDown(MouseEventArgs e) { Focus(); base.OnMouseDown(e); }
+        public event MouseEventHandler HorizontalWheel;
+        protected override void WndProc(ref Message message) {
+            if (message.Msg == 0x020E && HorizontalWheel != null)
+                HorizontalWheel(this, new MouseEventArgs(MouseButtons.None, 0, 0, 0, (short)((long)message.WParam >> 16)));
+            base.WndProc(ref message);
+        }
     }
 
     public sealed class Fixture : Form, IMessageFilter {
@@ -68,9 +74,9 @@ namespace DtwWindowsSmoke {
         readonly Pad pad = new Pad();
         readonly Timer timer = new Timer();
         readonly bool dpiSet;
-        int sequence, increments, saves, leftUps, rightUps, doubles, wheelDelta, layoutSequence;
+        int sequence, increments, saves, leftUps, rightUps, doubles, wheelDelta, horizontalWheelDelta, moves, dragMoves, layoutSequence;
         string saved = "";
-        bool modalOpen;
+        bool modalOpen, menuOpen;
         bool ready, closed;
 
         Fixture(string directory, string instance, bool awarenessSet) {
@@ -81,7 +87,8 @@ namespace DtwWindowsSmoke {
             StartPosition = FormStartPosition.Manual;
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
-            ClientSize = new Size(410, 440);
+            ClientSize = new Size(410, 480);
+            if (File.Exists(Path.Combine(root, "layered-window"))) Opacity = .75;
             Rectangle area = Screen.PrimaryScreen.WorkingArea;
             Location = new Point(area.Left + 16 + (label == "A" ? 0 : 446), area.Top + 16);
             origin = Location;
@@ -121,7 +128,23 @@ namespace DtwWindowsSmoke {
                 }
             }); };
             Controls.Add(openDialog);
+            // Exercise the native HMENU/UIA provider, independent of managed
+            // ToolStrip accessibility providers which may publish read gaps.
+            var menu = new MainMenu();
+            var file = new MenuItem("Audit File");
+            file.Popup += delegate { menuOpen=true; Publish(); };
+            file.MenuItems.Add(new MenuItem("Commit audit document", delegate { Save("menu"); }));
+            menu.MenuItems.Add(file); Menu=menu;
+            MenuComplete += delegate { menuOpen=false; Publish(); };
             pad.Location = new Point(12, 185); pad.Size = new Size(386, 210);
+            if (label == "B") pad.BackColor=Color.LightPink;
+            pad.MouseMove += delegate(object sender, MouseEventArgs e) {
+                moves++; if ((e.Button & MouseButtons.Left) != 0) dragMoves++;
+                Publish();
+            };
+            pad.HorizontalWheel += delegate(object sender, MouseEventArgs e) {
+                horizontalWheelDelta += e.Delta; Record("pad_horizontal_wheel", new { delta=e.Delta }); Publish();
+            };
             pad.MouseUp += delegate(object sender, MouseEventArgs e) {
                 if (e.Button == MouseButtons.Left) leftUps++;
                 if (e.Button == MouseButtons.Right) rightUps++;
@@ -134,6 +157,13 @@ namespace DtwWindowsSmoke {
             Controls.Add(pad);
             Controls.Add(new BlockingReadLabel(root) { Location=new Point(12,405), Size=new Size(380,25) });
             Shown += delegate { ready = true; editor.Focus(); Record("shown", new { }); Publish(); };
+            FormClosing += delegate(object sender, FormClosingEventArgs e) {
+                if (File.Exists(Path.Combine(root,"require-save")) && editor.Text != saved) {
+                    var answer=MessageBox.Show(this,"Save the owned audit document?","Unsaved audit document",MessageBoxButtons.YesNoCancel);
+                    if(answer==DialogResult.Cancel) e.Cancel=true;
+                    else if(answer==DialogResult.Yes) Save("quit_prompt");
+                }
+            };
             FormClosed += delegate { closed = true; timer.Stop(); Record("closed", new { }); Publish(); Application.RemoveMessageFilter(this); };
             timer.Interval = 50;
             timer.Tick += delegate {
@@ -152,12 +182,13 @@ namespace DtwWindowsSmoke {
             int requested = command["sequence"];
             if (requested <= layoutSequence) return;
             int windowOffset = command["window_offset"], controlOffset = command["control_offset"];
-            if ((windowOffset != 0 && windowOffset != 12) || (controlOffset != 0 && controlOffset != 200))
+            if ((windowOffset != 0 && windowOffset != 12 && windowOffset != -246) || (controlOffset != 0 && controlOffset != 200))
                 throw new InvalidOperationException("Unsupported owned layout command");
             Location = new Point(origin.X + windowOffset, origin.Y);
             editor.Location = new Point(12, 12 + controlOffset);
             increment.Location = new Point(12, 145 + controlOffset);
             layoutSequence = requested;
+            if (command.ContainsKey("activate") && command["activate"] == 1) Activate();
             Record("supervisor_layout", command);
         }
         object ControlBounds(Control control) {
@@ -218,7 +249,8 @@ namespace DtwWindowsSmoke {
                 working_area = new { x = Screen.PrimaryScreen.WorkingArea.X, y = Screen.PrimaryScreen.WorkingArea.Y,
                     width = Screen.PrimaryScreen.WorkingArea.Width, height = Screen.PrimaryScreen.WorkingArea.Height },
                 modal_open = modalOpen, editor_focused = editor.Focused, text = editor.Text, saved = saved, saves = saves, increments = increments,
-                left_up = leftUps, right_up = rightUps, double_clicks = doubles, wheel_delta = wheelDelta,
+                menu_open = menuOpen, moves = moves, drag_moves = dragMoves,
+                left_up = leftUps, right_up = rightUps, double_clicks = doubles, wheel_delta = wheelDelta, horizontal_wheel_delta = horizontalWheelDelta,
                 keys_down_global = held
             });
             string path = Path.Combine(root, "state.json"), temp = path + ".next";
@@ -226,6 +258,7 @@ namespace DtwWindowsSmoke {
             if (File.Exists(path)) File.Replace(temp, path, null); else File.Move(temp, path);
         }
         [STAThread] public static void Main(string[] args) {
+            if (args.Length == 0) args = new [] { Path.Combine(Path.GetDirectoryName(Application.ExecutablePath),"restart"), "A" };
             if ((args.Length != 2 && args.Length != 3) || (args[1] != "A" && args[1] != "B") ||
                 (args.Length == 3 && args[2] != "unaware")) return;
             try {

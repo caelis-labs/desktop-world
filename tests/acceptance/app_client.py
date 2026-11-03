@@ -1,7 +1,7 @@
 """Two-tool acceptance client. No model, result polling or Agent Session API.
 
-Uses the existing owned stdio transports on each platform. Legacy execution
-helpers on those transports are deliberately not part of this client.
+Uses owned stdio transports on each platform. Windows packages include only
+the current transport helper, without the historical execution/result helpers.
 """
 import base64
 import hashlib
@@ -43,7 +43,7 @@ class AppClient:
         self.transport = None
         try:
             if os.name == 'nt':
-                from windows.cursor_probe import Mcp
+                from windows.transport import Mcp
                 self.transport = Mcp(binary, self.output / 'mcp')
             else:
                 from standard_agent_probe import Mcp

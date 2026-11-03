@@ -2,7 +2,8 @@
 
 Implements the [follow-up plan](agent-capability-followup-plan.md) from `cbb9e07`.
 This is development/native protocol evidence, not a release or real model/Harness
-A/B. The two public tools remain `apps` and mandatory-app `exec`.
+A/B. The two public tools remain `apps` and mandatory-app `exec`, and every result
+below is macOS evidence for the exact binary named here.
 
 ## Added capabilities
 
@@ -18,8 +19,9 @@ The runtime validates the bounded full path, its app/window ownership and alpha,
 then consumes its capture binding. Native macOS input verifies foreground,
 identity, geometry and visibility, supplies absolute and relative motion, and
 pairs every admitted press with a release on all exits. No button state persists
-between calls. Background-only policy refuses these physical gestures. Other
-providers reject unsupported gestures explicitly.
+between calls. Background-only policy refuses these physical gestures. At this
+snapshot a provider without a proven gesture route refuses it explicitly instead
+of approximating it with another delivery route.
 
 Capture/read-only recovery now permits one bounded resample when a captured
 surface disappears during a dialog transition. This retries reads only.
@@ -94,7 +96,10 @@ behavior. Clippy remains unavailable in the active toolchain.
 - Actual mixed-scale, negative Quartz origins, display hotplug, full-screen and
   additional helper app families remain independent acceptance conditions.
 - Genuine Open/Save panels are covered; this does not prove every service-hosted
-  surface or Chrome's translation popup. Windows/Linux gesture parity is absent.
+  surface or Chrome's translation popup. Windows/Linux gesture parity is outside
+  this macOS evidence set and needs its own acceptance; consult the installed
+  [Skill API](../skills/desktop-world/API.md) for the provider boundary documented
+  at the time of reading rather than inferring it from these results.
 
 No token/latency/task-success gains have been measured. The public protocol stays
 small while unsupported cases remain explicit.

@@ -11,7 +11,8 @@ import zipfile
 def native_checks(paths):
     macos = windows = False
     for path in paths:
-        if path.startswith('cmd/dtw/src/backends/macos/') or path.endswith('.swift'):
+        if (path.startswith('cmd/dtw/src/backends/macos/') or path.endswith('.swift')
+                or path == 'tests/fixtures/app-scene/test_telemetry.py'):
             macos = True
         elif path.startswith(('cmd/dtw/src/backends/windows/', 'tests/acceptance/windows/')):
             windows = True

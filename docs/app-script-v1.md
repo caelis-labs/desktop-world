@@ -1,14 +1,11 @@
-# Current Agent protocol
+# Superseded: app-script v1
 
-Desktop World exposes only `apps` and `exec({app,source})`. `app` is required.
-The supported script methods, input/output and limits are defined in the
-[bundled Skill API](../skills/desktop-world/API.md). Scripts use ordinary async
-JavaScript, `print` and `return`; window routing, observations, execution history
-and session state remain internal.
+This page carried the v1 script description (pre-`0.3.0`, including the retired
+`session`/`api`/`result` surface) and was later reduced to a copy of the
+current-protocol notice. It is now only a historical entry point, not current
+guidance.
 
-`look`/`capture` return complete snapshots inside scripts. Published MCP views
-are incremental; `full:true` requests a baseline. Normal tasks are look → input
-→ look, with screenshot fallback when semantics are incomplete. Unknown input
-effects require fresh observation before further input.
-
-Installation uses [immutable complete packages and host/profile pins](package-management.md).
+Desktop World exposes only `apps` and mandatory-app `exec`. The supported script
+methods, input/output and limits are in the [bundled Skill API](../skills/desktop-world/API.md),
+and [agent-protocol-migration](agent-protocol-migration.md) records the migration
+from the retired `api`/`result`/Session interface.

@@ -1,0 +1,633 @@
+{
+  "date": "2026-11-03",
+  "scope": "unpublished development branch; installed DTW and Agent configuration not replaced",
+  "source_base_commit": "f07fb78e5013b16744a6694e39e5b2f2479a554f",
+  "branch": "fix/windows-parity-and-install-docs",
+  "binary_sha256": "8ee99280c70cb1f5365753e3f7c4dcba31f2ec57722a70e7cfc47df9fdf6460c",
+  "source_fingerprint": {
+    "algorithm": "SHA256 of sorted relative_path + NUL + lowercase file SHA256 + LF, UTF-8",
+    "byte_scope": "Raw files in the tested Windows working tree; Git checkout line-ending normalization can change file hashes without changing source content",
+    "sha256": "d0193f76d969570b7e6b4736c63b131ca83caa561eb4a204b673c994ed579111",
+    "files": {
+      "cmd/dtw/src/app_protocol/app_id.rs": "787085418f703b238a47a1ae6eb56e3962cb431c0baf77ed59c71befbdae237d",
+      "cmd/dtw/src/app_protocol/app_lifecycle_tests.rs": "f88517166bb045c40275b7906d2842c15bcb16c7410ef9a36a4ae48021918957",
+      "cmd/dtw/src/app_protocol/application_route_tests.rs": "cfdfa39673ceaf2161f3215dbea0d98c90ae8b90f9f1f60fe3dd7ade10041d9c",
+      "cmd/dtw/src/app_protocol/capture.rs": "fccdf30052ee1f3d14c05eff7ba8a6171ad9a5f7544fcd31ceb2bb85ee03d9b1",
+      "cmd/dtw/src/app_protocol/capture_tests.rs": "e40975c23098f7d1c8ad5c9fbab7fd8cdeaff63c197ea2eccdef27ac60019dd2",
+      "cmd/dtw/src/app_protocol/description.rs": "da1aabaa739f9f6b1ad548650d4b54d206219ff4303b0b04f0d12c212fd29076",
+      "cmd/dtw/src/app_protocol/discovery_evidence_tests.rs": "aad699f319b1fe2329ff15ff97dc9c31c45e811a05085fd6e7dfa8d748a67406",
+      "cmd/dtw/src/app_protocol/discovery_tests.rs": "0ee2436cfc69784d57f6f4ed12bd3c341bdb665098b8e083ad30cf1475bf3949",
+      "cmd/dtw/src/app_protocol/inventory_tests.rs": "8996cf4d048f65451fee965caaf1da217ccd251b57189199f5cc8133e76de3c4",
+      "cmd/dtw/src/app_protocol/mcp.rs": "d4c66a85608b8ff3ef68e6ef02de5fe2be7c98f14421ba8551fa5290f7eb62cf",
+      "cmd/dtw/src/app_protocol/mcp_io.rs": "520d0d809db50515251c29cb58340e6cb66b7e6c40c53f1d51aece14b71fd598",
+      "cmd/dtw/src/app_protocol/mcp_tests.rs": "7217902e6a776f69a9a63ee891289a99bda1725e9a565940c0c392faf73fd759",
+      "cmd/dtw/src/app_protocol/methods.rs": "a28e84a58a55948b12c5c14ee6bd67b0284aeecbc02c6922a71fd1e75d5a8d66",
+      "cmd/dtw/src/app_protocol/mod.rs": "0e02296f547c43b4a12367cce4ada73f0e733c7cfe506f7fc11675e5b8ea61ef",
+      "cmd/dtw/src/app_protocol/multi_instance_tests.rs": "468740b4b723d39921a8d564684d6e325bb4a61e3a381c8a34bb3ec8237430db",
+      "cmd/dtw/src/app_protocol/projection.rs": "9805645e644e5ae678712df104dc42991dae64ced438a1fa1bc304e2c3633226",
+      "cmd/dtw/src/app_protocol/references.rs": "731b4a6a329fc0d6b04f4533e26b888f38bb063f9ddc830060ceb473445e0bc2",
+      "cmd/dtw/src/app_protocol/scene.rs": "e29e4b431fcf8c964d236414c023c3f7b8624656378a3dede2e3e310a0b50e9a",
+      "cmd/dtw/src/app_protocol/scene_contract_tests.rs": "81c14e9f71900e352c58d52d2964ca85b6bc91bd2f1594a91eb6ee257bbf9c42",
+      "cmd/dtw/src/app_protocol/scene_failure_tests.rs": "ac70b2c7518d5278ef97bf064e63f4ff67b0f2a852916282f0d627a866b955b0",
+      "cmd/dtw/src/app_protocol/scene_sequence_tests.rs": "01cf60744927eeaea9ed39fbd9a81f730bb7c2e3b39dc804507aaeb3205ed4c9",
+      "cmd/dtw/src/app_protocol/scene_tests.rs": "6a491440f69118da4c67cb7749dae5e1de43d848454bba38b0d9d46737b2fd77",
+      "cmd/dtw/src/app_protocol/script_engine/mod.rs": "119f485e2c75d0e922422b1e2bcd06f68da94df2403c485e4811e96a806f4d3a",
+      "cmd/dtw/src/app_protocol/script_engine/prelude.js": "3b0980c3bc410ea85bee6e7c4d0c1dff15461dc240180cb58363363b01373122",
+      "cmd/dtw/src/app_protocol/script_engine/tests.rs": "e6dcbd6a69206cfc79ff29acf9c09cff762ff615dbbedd9294252f00a3cb626b",
+      "cmd/dtw/src/app_protocol/script_tests.rs": "d4a8f56935e3dd11ed301dbe4cd098d1823ac8e913d4aa4ed3c35d16cd76fe4d",
+      "cmd/dtw/src/app_protocol/scripts.rs": "04fa69b6723254d4f5339443614659d64afb820a945bad11b693789dd24b731a",
+      "cmd/dtw/src/app_protocol/selection.rs": "472ebe1396711aef75e10241ba3a5cbfefa3688507c32b48bfe78926b1a603a9",
+      "cmd/dtw/src/app_protocol/selection_tests.rs": "a72a93971b4d65682bed654a088e5d1b4b953d733f7f9e2825bcc5fbdcab8848",
+      "cmd/dtw/src/app_protocol/server.rs": "ba4b787cbd84cf0e5a9a387960ac17664d13497fbd8828b2235b92ec0ca023b8",
+      "cmd/dtw/src/app_protocol/session.rs": "3cb9acadbbc2ee4ba18281ec962b76920de10d23a8c04deadc90ced42eda722b",
+      "cmd/dtw/src/app_protocol/standard_tests.rs": "b9beaeb795fcea26bb603a2bb04085d3de1573f3f255bf214acc000771ec4ff5",
+      "cmd/dtw/src/app_protocol/tests.rs": "9a2f2ee0c67066065971ebe18f8007657d044e4cb7003ea491a2820d6ce5e944",
+      "cmd/dtw/src/app_protocol/transport.rs": "5d45a0a9c87a9896809679e80d94045148bc1bf1325ab10c8788f7d460eff9c5",
+      "cmd/dtw/src/app_protocol/wait_tests.rs": "8429b928703078ca87fac4084db55e064a05aa255e86e0faf7359ef00bcd0c17",
+      "cmd/dtw/src/app_protocol/window_selection.rs": "8188f8ec3993c6efae15e8690a0fbf6f78169fa4df593ac364dffd9a52ed0ada",
+      "cmd/dtw/src/app_protocol/window_wait.rs": "7d61a8df760da13d2da1d3e7885391910bf56fea5f9d87c352d90ec70c6ef397",
+      "cmd/dtw/src/app_protocol/wire.rs": "18d9f02e589e3a5bd5142b2024b515c67bdb392e2b7d40404d001af6b3a771e9",
+      "cmd/dtw/src/app_protocol/wire_tests.rs": "2d9c027b1596394a84c7259272c71bfb53aaddc1f61f475d201513e95fafc076",
+      "cmd/dtw/src/backends/error_wire.rs": "3294de52418a945bb5cc83c42188e5d736f06895b039f4cf6dc8dde7c0b1e21f",
+      "cmd/dtw/src/backends/input_sequence.rs": "03b992f7b8921bcba7ba9f219b3075188981e655b8841eb4bad453a8421c8092",
+      "cmd/dtw/src/backends/linux/client_pid.rs": "76221cc652791cac2085c59a34a6d6ede77650adc701cfb8d96c4530d9c7211b",
+      "cmd/dtw/src/backends/linux/inventory.rs": "c85108be9ca543a3627331506baaa0fd73a48b4b4dec94c4ae5784873c9aefa4",
+      "cmd/dtw/src/backends/linux/mod.rs": "281baed0302154b6b08f532a871ebce9996d986074365e2b7d5e4e264c09ecd0",
+      "cmd/dtw/src/backends/linux/native.rs": "4abcc589481215ec36c5828914bb707aec2dc04f2b0358aefa735ae3243b4d34",
+      "cmd/dtw/src/backends/linux/worker.rs": "81590a1e2e873b8ca1094da479c3f8f1183fa25f15a7f6027173c6944c0ff4bb",
+      "cmd/dtw/src/backends/macos/associated_proof.rs": "8646fcbe0abd60192808553746e3395806645c563c900604d9772fa4f67807c7",
+      "cmd/dtw/src/backends/macos/ax_array_contract_tests.swift": "6f89d89afc2b18239732bb0ae280ef9fbf023ca182fc44643136ef78e66e50c7",
+      "cmd/dtw/src/backends/macos/background_contract_tests.swift": "f79662a042a0e42ccb0ad8b39cd72acd5eb88d156c046c1caf8af2f89a5b00af",
+      "cmd/dtw/src/backends/macos/cua_input/ax.rs": "51e1f9344551fc06ecd0cdff3e177f6e5fb4c030caebba4d40beaffe38a678a5",
+      "cmd/dtw/src/backends/macos/cua_input/control.rs": "8be98f00c9694d7819c1f59a93a923dce6d500f28125cbfa57cff422ba5f16eb",
+      "cmd/dtw/src/backends/macos/cua_input/keyboard.rs": "76852e3d1b692b1c59836d41fe68fd7c3c8eaf9ae71f9da45fba23f802f445cd",
+      "cmd/dtw/src/backends/macos/cua_input/LICENSE-CUA": "d0a32419a44fa38d5023d1431dfcbedd1457eb5e7b2e6c7c87ca064facb41b41",
+      "cmd/dtw/src/backends/macos/cua_input/mod.rs": "80118b158ffaa7bfb9d52ac15c142eb9c1112130049beef04300a9efdde06850",
+      "cmd/dtw/src/backends/macos/cua_input/mouse.rs": "87c146d6d8516e5a49983ebb00c987dcc7c80484c4280bc9219aeb763e5b426a",
+      "cmd/dtw/src/backends/macos/cua_input/skylight.rs": "b399b65cad33093e01a58c6b658d8a756810a96114b1f9eac096e3ef15b7b2c8",
+      "cmd/dtw/src/backends/macos/cursor_session.rs": "f01b5ca19dd731326847db0885a73f834330f11f36a60bb97f9a6756bd456754",
+      "cmd/dtw/src/backends/macos/Input.swift": "4447a4a28f173884b4021fd9d19cd65a170216c5154d2141411fb95326d0eee3",
+      "cmd/dtw/src/backends/macos/input_contract_tests.swift": "ff126cdaad55fb60b5e1ca8f3f91de0179bd485bbe85c8d99ad2ab64fe9798d4",
+      "cmd/dtw/src/backends/macos/input_route.rs": "4d6e8bb4d047a71f5e8f39d4b6304209d634792ce2038658792800727ce46094",
+      "cmd/dtw/src/backends/macos/local_socket.rs": "ba9b724311c0f24e6ab1ce0f101cf9d32c6ad2396392c100f1cb0a657fd929d5",
+      "cmd/dtw/src/backends/macos/mod.rs": "835699715cb5defffdedc0aece5ef63f7bf56c4c3be5b6afe5b0ddcb0c9ae7fd",
+      "cmd/dtw/src/backends/macos/Native.swift": "dd1361559e50234e3d4aa1874f4a5fe64062f44ee1df95be79e2518d3b5eae75",
+      "cmd/dtw/src/backends/macos/overlay.rs": "18524415871b05cce792a8d0314560fadd4960392854974b82718cf27b9be2c7",
+      "cmd/dtw/src/backends/macos/Overlay.swift": "ca88c8b40277a69e1104d425697774180dfff82c0e8ab2c2b40bb0581c42840f",
+      "cmd/dtw/src/backends/macos/overlay_contract_tests.swift": "c2e5ea2ca644b66c870577d5af640de2345f2109d990f82842a6f243f86ee85c",
+      "cmd/dtw/src/backends/macos/pointer_presentation.rs": "ba6a275cd351249d87a7adbf05fec47d4027ef4f0e6ab95533dc01cb48dbe532",
+      "cmd/dtw/src/backends/macos/Scene.swift": "9ef6e14285ad3247544b1eae993bd8b0eb0075c93daa77e3aa290c5847ade1bc",
+      "cmd/dtw/src/backends/macos/scene_contract_tests.swift": "2b51a700fff18c871334a9896997e565c96f582dd7de348fa902356ae35868e3",
+      "cmd/dtw/src/backends/macos/scroll_guard.rs": "7758eb7dbd4ef2ec0e654842240b25c872f682f20bf589ba0466edd2fa6ef1c1",
+      "cmd/dtw/src/backends/macos/surface_contract_tests.swift": "b0fa4ae53884c9046c5102f1504af0d96caf45d2339eed0716c83a454f83e3cc",
+      "cmd/dtw/src/backends/macos/worker.rs": "c4cc0b7dfed565a9c6782664b7445b631d20e33dc04040f0aaf10c6db447e6e1",
+      "cmd/dtw/src/backends/mod.rs": "ce41451f9052d84656239f2bea559013a13c2c9818736139bd389e944dd80fcb",
+      "cmd/dtw/src/backends/native_client.rs": "46b5d4aad5d96f8c50bee6431f317a18261a68d79b284a4c2ba105c5f9696e73",
+      "cmd/dtw/src/backends/process.rs": "850bea32620435aeefb9d7775ab666ab0f9c4695cfa249f3f0b98d9a4fe62b1f",
+      "cmd/dtw/src/backends/process_fixture.py": "ce9685bea3435c19303283279f7867e1ba2a1cf99762242be3ed4f9349d073e9",
+      "cmd/dtw/src/backends/process_tests.rs": "aa10bd4948dc361a834acab7da5352b919c73f410eaf60254f03f1b9bde7ef22",
+      "cmd/dtw/src/backends/text_page.rs": "bf448d7cf1d69a010f873c8f570011f97aaaeede448f08bcb8bd11eb655ddf82",
+      "cmd/dtw/src/backends/windows/applications.rs": "b8b634e64c660cb205084deaa852320f51832db92812317eca9063d57bd62b9c",
+      "cmd/dtw/src/backends/windows/cursor/identity.rs": "da18fe679d37645b0f5672bc7d432b08934b417751263dd6cce3a9c77bc8493e",
+      "cmd/dtw/src/backends/windows/cursor/mod.rs": "d2cc79e5278d88d5375ff4496905d1ef4948860539f904d7dcf71cef0479a976",
+      "cmd/dtw/src/backends/windows/cursor/owner.rs": "c5cf7c5479db49bd5fdf80612e770dd8f501bbae66205d105461f0a5d5b70b04",
+      "cmd/dtw/src/backends/windows/cursor/raster.rs": "780d29250806962fb99b66f10f954c1d8bc19db1e51ed7c0a62588d19e89c252",
+      "cmd/dtw/src/backends/windows/cursor/renderer.rs": "14dcf2fcc9c18f43f2c7626b7c19556c34ad408f95476d478db4277f09e4aecb",
+      "cmd/dtw/src/backends/windows/desktop.rs": "af0eb26564db86a23f40bb347f01e163f1fa9beac325fec6a3cdc0872fa05b14",
+      "cmd/dtw/src/backends/windows/discovery.rs": "e1ceada71c48eb038fc5edebe428b8b25ec672cc486d239cfb1760ecc91f0820",
+      "cmd/dtw/src/backends/windows/discovery_cache.rs": "68a31c3d309fd662e28b39fc95b4ea32d5a06075baf2d386b7e8a56484230da8",
+      "cmd/dtw/src/backends/windows/edit_delivery.rs": "e368c130017b5ae244b18f453d6c564e25e4551dda76ef5dbc0286216879eecf",
+      "cmd/dtw/src/backends/windows/input.rs": "8b842092cee0e8601e623fb4256ce9008bf7c654c0ce022fb952e8d66c96987b",
+      "cmd/dtw/src/backends/windows/mod.rs": "575f6d27e7438ec6415e9feaac5e1720d5d9fd26da2bbcb600624b15f20b4147",
+      "cmd/dtw/src/backends/windows/native/gestures.rs": "6abed57120a7e0964712f4cee6bd199b63e00dd18a93f8136292c1942ea3d4a0",
+      "cmd/dtw/src/backends/windows/native/lifecycle.rs": "3957684c21d0c7040c17735263fcfdc683a5a81939450123bd18682144efdf73",
+      "cmd/dtw/src/backends/windows/native.rs": "6bafdd31ad1c4553b856c233b68313569c0c77eb938841597c6384101a6576e2",
+      "cmd/dtw/src/backends/windows/pointer.rs": "28ac3001c88976fd4c6250035f06bca6d853b8073dc3845ace4a8a6fe7b654ef",
+      "cmd/dtw/src/backends/windows/posted_mouse.rs": "e4a3861dc9a1882c3a1d5c7a12814aa179f9ec13a04703b31d49090bc427ba70",
+      "cmd/dtw/src/backends/windows/text_delivery.rs": "94bd00629e0ae22698b64277aafb1dcfdc0311f7695fd6adbca7852c47feb1e5",
+      "cmd/dtw/src/backends/windows/window_state.rs": "88ec299da56dffd330b6b548bfddf59a31c352e357a113f6a290f3510ad7091f",
+      "cmd/dtw/src/backends/windows/worker.rs": "a6a3335f8b1cdff251123473777c66c87acce3b231cf7dcaf3726536ceeb5be4",
+      "cmd/dtw/src/computer/mod.rs": "0a01ded4be0bb3fdfc19317e15d92c0010df465006404c19c9cc136f34ef2b13",
+      "cmd/dtw/src/lib.rs": "f1988b496cf7bc326060c7241e31d27abc72f98df7cc985c599effc45859b3c2",
+      "cmd/dtw/src/main.rs": "80941e9ff3a70c4bbd047befbd25ea73cdf467396584711f0c8485480fed381f",
+      "cmd/dtw/src/package/files.rs": "fefd0c14681f1cb84124f2b6d59204d9b238fbbd42cfd15a34fce17359649496",
+      "cmd/dtw/src/package/mod.rs": "3f70d98603ddbd8a2bef2379acb0582de1f626e7a58f9a71b248ac4bf3015894",
+      "cmd/dtw/src/package/tests.rs": "8e84725f15a23bcf602d6d15b4b2b9224a3a4d7e510b021c8a01a6d9da722615",
+      "cmd/dtw/src/runtime/input_tests.rs": "719a4dcc11001595bea7d59efcde63244aa5a8a41aeb859557115b3f4de28723",
+      "cmd/dtw/src/runtime/lifecycle.rs": "b91198fb43897c90da3a52a8c4f77ae9af91eabad06dac0c547aa9355fc3e768",
+      "cmd/dtw/src/runtime/mod.rs": "625bde96a66e4b9d670a07b1c010761b05823f3672a421873688c00fd4f5461e",
+      "cmd/dtw/src/runtime/scoped_text_tests.rs": "f3f8ed23c5e07021bfff721d9430d8c919feecc9ddae47f2008c309d0d891710",
+      "cmd/dtw/src/runtime/tests.rs": "02ef716178cb2b3457eea0000a4d219d3fc955302bb1cd8378639773d22ba9bf",
+      "cmd/dtw/src/runtime/window_wait.rs": "8d104859381586bcb342fae29e7ed54b3f306d60fe4dbeb42c60fbf248d5e88e",
+      "cmd/dtw/src/scene_lease.rs": "28f101e4164b36af18b8a5c38e2516b6f5af8f715c6b2212b89f1141dc41c41e",
+      "cmd/dtw/Cargo.toml": "68e1c1f528967dea2d596068d2eed741a85342ef7596b1ed9af1d1374f4d98b9",
+      "cmd/dtw/Cargo.lock": "289caacf2345bcf57a0e955ce05ab790d22f7b882a92b6f9f566386e818243ed",
+      "cmd/dtw/build.rs": "b39c8074fd5dafe440daf599476d77a895b6cd05a8f981463d6f31af59b08a5c"
+    }
+  },
+  "asset_sha256": {
+    "skills/desktop-world/SKILL.md": "0874a9f18b4626e1c4edd7f8984240f4f76d7adb79b872338547d03f46257a62",
+    "skills/desktop-world/API.md": "6e524f7bbbe62baa0be30352af70508fb63d06cc1f7c6b9e87175f20e33a478e",
+    "skills/desktop-world/PATTERNS.md": "57e5d02c7e9603e4451a5ffd38a37618c32f5f585664cae6c18d3e4065a3d7e7",
+    "tests/acceptance/app_client.py": "78ed569fc2cd84ac61eb0d729dd27b4c45fb74c9f5c2671de55bf245164092a0",
+    "tests/acceptance/windows/app_protocol_probe.py": "58fe6a95cfc3b6ed9fee4e860de9d84622ec08a12a710a5cf5f3d2511e8cdd81",
+    "tests/acceptance/windows/feature_audit.py": "ec7804a5997760e7a7bb2e30e602c78c41b8de2e552cc685f87f5dc445e79578",
+    "tests/acceptance/windows/browser_feature_audit.py": "cb1743bed810f7781b72d254f01aaf0d5db3a3702532c89d1a2dd7679c9d782d",
+    "tests/acceptance/windows/transport.py": "663a046bc3c6751aeb20bfc00bf8869ef9da0441ec41c2bcd9b4e1cde097a1ee",
+    "tests/acceptance/windows/Fixture.cs": "35396d66347c4bb1860cd15d8cde5dd94252c210573d3c5c48e39a370db9efc3",
+    "tests/acceptance/windows/CursorObserver.cs": "590138ed9db493ab4edf1d56d23d932ec97fa6dfcada75bbdc0733f16aade387",
+    "tests/acceptance/windows/compile-cursor.ps1": "57fc5e1e9b89243346915164c45954dbc053f98fbfa56a3e49d3bb5dcfa46867"
+  },
+  "environment": {
+    "os": "Windows 11 10.0.22631",
+    "dpi": 120,
+    "scaling_percent": 125,
+    "primary_working_area": [
+      0,
+      0,
+      2560,
+      1380
+    ],
+    "chrome_version": "156.0.8078.74",
+    "edge_version": "156.0.4314.58",
+    "desktop": "ordinary unlocked interactive user desktop"
+  },
+  "runs": {
+    "baseline": {
+      "raw_report": "%LOCALAPPDATA%/Temp/dtw-win-complete-baseline-20261103/report.json",
+      "raw_report_sha256": "809e8a8a4b4b4c783eccfb1662cc9c44d6c6e22dd408ea294e6140b056ab1024",
+      "binary_sha256": "8ee99280c70cb1f5365753e3f7c4dcba31f2ec57722a70e7cfc47df9fdf6460c",
+      "passed": true,
+      "cases": [
+        {
+          "name": "discovery_required_app_and_public_surface",
+          "passed": true
+        },
+        {
+          "name": "returned_view_dedup_and_bounded_unchanged_delta",
+          "passed": true
+        },
+        {
+          "name": "semantic_click_unicode_keyboard_and_file_readback",
+          "passed": true
+        },
+        {
+          "name": "physical_bounds_order_and_covered_window_composition",
+          "passed": true
+        },
+        {
+          "name": "modal_close_fresh_read_without_input_replay",
+          "passed": true
+        }
+      ],
+      "mcp_cleanup": {
+        "pid": 46988,
+        "exit_code": 0,
+        "forced": false
+      },
+      "fixture_exit": 0
+    },
+    "parity": {
+      "raw_report": "%LOCALAPPDATA%/Temp/dtw-win-complete-parity-20261103/report.json",
+      "raw_report_sha256": "58d2a7e335cbc22fa76e29fd0f44f2f5601471157e826a47688eb89e93c29ba8",
+      "binary_sha256": "8ee99280c70cb1f5365753e3f7c4dcba31f2ec57722a70e7cfc47df9fdf6460c",
+      "passed": true,
+      "cases": [
+        {
+          "name": "installed_discovery_and_observation",
+          "passed": true
+        },
+        {
+          "name": "nine_method_surface",
+          "passed": true
+        },
+        {
+          "name": "unchanged_snapshot_delta",
+          "passed": true
+        },
+        {
+          "name": "semantic_unicode_and_save",
+          "passed": true
+        },
+        {
+          "name": "semantic_id_exact_effect",
+          "passed": true
+        },
+        {
+          "name": "left_click",
+          "passed": true
+        },
+        {
+          "name": "right_click",
+          "passed": true
+        },
+        {
+          "name": "double_click",
+          "passed": true
+        },
+        {
+          "name": "hover",
+          "passed": true
+        },
+        {
+          "name": "content_drag",
+          "passed": true
+        },
+        {
+          "name": "vertical_wheel",
+          "passed": true
+        },
+        {
+          "name": "horizontal_wheel",
+          "passed": true
+        },
+        {
+          "name": "default_center_wheel",
+          "passed": true
+        },
+        {
+          "name": "native_title_bar_drag",
+          "passed": true
+        },
+        {
+          "name": "stale_geometry",
+          "passed": true
+        },
+        {
+          "name": "native_menu",
+          "passed": true
+        },
+        {
+          "name": "modal_composition",
+          "passed": true
+        },
+        {
+          "name": "modal_escape",
+          "passed": true
+        },
+        {
+          "name": "rejected_menu_does_not_focus",
+          "passed": true
+        },
+        {
+          "name": "multi_instance_continuity",
+          "passed": true
+        },
+        {
+          "name": "front_order_B",
+          "passed": true
+        },
+        {
+          "name": "front_order_A",
+          "passed": true
+        },
+        {
+          "name": "layered_global_alpha",
+          "passed": true
+        },
+        {
+          "name": "quit_preserves_save_prompt",
+          "passed": true
+        },
+        {
+          "name": "cancellation_and_retained_reason",
+          "passed": true
+        },
+        {
+          "name": "stopped_absolute_executable_launch_and_quit",
+          "passed": true
+        }
+      ],
+      "cleanup": [
+        {
+          "fixture_pid": 40176,
+          "exit_code": 0
+        },
+        {
+          "fixture_pid": 29164,
+          "exit_code": 0
+        },
+        {
+          "fixture_pid": 23240,
+          "exit_code": 0
+        },
+        {
+          "fixture_pid": 46828,
+          "exit_code": 0
+        },
+        {
+          "fixture_pid": 42012,
+          "exit_code": 0
+        },
+        {
+          "mcp": {
+            "pid": 9684,
+            "exit_code": 0,
+            "forced": false
+          }
+        }
+      ]
+    },
+    "chrome": {
+      "raw_report": "%LOCALAPPDATA%/Temp/dtw-win-complete-chrome-20261103/report.json",
+      "raw_report_sha256": "b67e01447d5691c1d9650ba010e0f76ca4d5c0d8a2c27a9bc1a6ffd2366eafe4",
+      "binary_sha256": "8ee99280c70cb1f5365753e3f7c4dcba31f2ec57722a70e7cfc47df9fdf6460c",
+      "passed": true,
+      "cases": [
+        {
+          "name": "chrome_look_capture",
+          "passed": true
+        },
+        {
+          "name": "chrome_empty_unicode_typing",
+          "passed": true
+        },
+        {
+          "name": "chrome_ascii_typing",
+          "passed": true
+        },
+        {
+          "name": "chrome_unicode_typing",
+          "passed": true
+        },
+        {
+          "name": "chrome_terminal_caret_emoji",
+          "passed": true
+        },
+        {
+          "name": "chrome_literal_label",
+          "passed": true
+        },
+        {
+          "name": "chrome_literal_marker",
+          "passed": true
+        },
+        {
+          "name": "chrome_restore_multiline",
+          "passed": true
+        },
+        {
+          "name": "chrome_semantic_increment",
+          "passed": true
+        },
+        {
+          "name": "chrome_semantic_save",
+          "passed": true
+        },
+        {
+          "name": "chrome_vertical_scroll",
+          "passed": true
+        },
+        {
+          "name": "chrome_horizontal_scroll",
+          "passed": true
+        },
+        {
+          "name": "chrome_native_open_dialog",
+          "passed": true
+        },
+        {
+          "name": "chrome_after_dialog",
+          "passed": true
+        }
+      ],
+      "mcp_cleanup": {
+        "pid": 38672,
+        "exit_code": 0,
+        "forced": false
+      },
+      "browser_exit": 0,
+      "ui_process_exit": 0,
+      "browser_sha256": "4132eb3e9c5b3978874eed48cb45c21debf343a0d383b6d2fb01a5fcf349ec65"
+    },
+    "edge": {
+      "raw_report": "%LOCALAPPDATA%/Temp/dtw-win-complete-edge-20261103/report.json",
+      "raw_report_sha256": "4b691662f86a6cbb1d5a1c97eaaf6b38c49cbc13c4acffa6d147940e36f61252",
+      "binary_sha256": "8ee99280c70cb1f5365753e3f7c4dcba31f2ec57722a70e7cfc47df9fdf6460c",
+      "passed": true,
+      "cases": [
+        {
+          "name": "chrome_look_capture",
+          "passed": true
+        },
+        {
+          "name": "chrome_empty_unicode_typing",
+          "passed": true
+        },
+        {
+          "name": "chrome_ascii_typing",
+          "passed": true
+        },
+        {
+          "name": "chrome_unicode_typing",
+          "passed": true
+        },
+        {
+          "name": "chrome_terminal_caret_emoji",
+          "passed": true
+        },
+        {
+          "name": "chrome_literal_label",
+          "passed": true
+        },
+        {
+          "name": "chrome_literal_marker",
+          "passed": true
+        },
+        {
+          "name": "chrome_restore_multiline",
+          "passed": true
+        },
+        {
+          "name": "chrome_semantic_increment",
+          "passed": true
+        },
+        {
+          "name": "chrome_semantic_save",
+          "passed": true
+        },
+        {
+          "name": "chrome_vertical_scroll",
+          "passed": true
+        },
+        {
+          "name": "chrome_horizontal_scroll",
+          "passed": true
+        },
+        {
+          "name": "chrome_native_open_dialog",
+          "passed": true
+        },
+        {
+          "name": "chrome_after_dialog",
+          "passed": true
+        }
+      ],
+      "mcp_cleanup": {
+        "pid": 13012,
+        "exit_code": 0,
+        "forced": false
+      },
+      "browser_exit": 0,
+      "ui_process_exit": 0,
+      "browser_sha256": "d35d48b11f0439eeeddbbff0bf54856e922f5e1506a2f3098b5a808fcec4068b"
+    }
+  },
+  "earlier_failures_retained": [
+    {
+      "raw_report": "%LOCALAPPDATA%/Temp/dtw-win-fixes-parity-native-20261103/report.json",
+      "raw_report_sha256": "d1671fc9ccc0cdce97f07fd641f187715cb15447e53da0ab81efd9aa805b8b6d",
+      "binary_sha256": "04df51e0082855f794078d3ecd50ba5c96379a13c1e41ddaae82dd48c6efbaf9",
+      "passed": false,
+      "passing_cases": 26,
+      "total_cases": 26,
+      "reason": "26 business cases passed but MCP cursor cleanup failed; historical probe incorrectly exited 0 despite passed:false; final probe now fails cleanup",
+      "forced_browser_cleanup": false
+    },
+    {
+      "raw_report": "%LOCALAPPDATA%/Temp/dtw-win-fixes-edge-ready-20261103/report.json",
+      "raw_report_sha256": "fed60c7dfe1aa9b36467c4aa0088cf2269782215e0980527dd57ad75e8f81afc",
+      "binary_sha256": "5d857b45d2936c68f46ca8daafa06c90f0cccdfcc8748572faa0e2d8d6584639",
+      "passed": false,
+      "passing_cases": 12,
+      "total_cases": 14,
+      "reason": "12/14: native Open proven; tooltip/shadow capture unsupported; title guard prevented modal input and normal quit",
+      "forced_browser_cleanup": true
+    },
+    {
+      "raw_report": "%LOCALAPPDATA%/Temp/dtw-win-release-edge-tooltip-proof-20261103/report.json",
+      "raw_report_sha256": "937c35177a03c352f2c72221ccf4a8760b4825a1fab825e54461cc33ba37ab83",
+      "binary_sha256": "300aab861604e9ed25806121c8c07cedd90961dc61b306fbbd5aca1cf3d958b9",
+      "passed": false,
+      "passing_cases": 12,
+      "total_cases": 14,
+      "reason": "12/14 diagnostic: pre-look class inventory preceded tooltip appearance",
+      "forced_browser_cleanup": true
+    },
+    {
+      "raw_report": "%LOCALAPPDATA%/Temp/dtw-win-release-edge-tooltip-class-20261103/report.json",
+      "raw_report_sha256": "93ae7e3a7cb37c70ac1f4d0eaf753e1543c851d877bcd681048ec3db6034575d",
+      "binary_sha256": "300aab861604e9ed25806121c8c07cedd90961dc61b306fbbd5aca1cf3d958b9",
+      "passed": false,
+      "passing_cases": 12,
+      "total_cases": 14,
+      "reason": "12/14 diagnostic: failure-time native class proof established standard tooltip/shadow",
+      "forced_browser_cleanup": true
+    },
+    {
+      "raw_report": "%LOCALAPPDATA%/Temp/dtw-win-verified-edge-20261103/report.json",
+      "raw_report_sha256": "860bcbd0118e94abf05fbe4338f1eb0199fd26f735818cfbb0dffb6f792ea3bb",
+      "binary_sha256": "5c364b7ea2d1e6378811b65ca968ac2c693ed6335ce8c6f82d35c2f4e6bf81ba",
+      "passed": false,
+      "passing_cases": 0,
+      "total_cases": 14,
+      "reason": "0/14: initial browser title tooltip caused owned-top guard rejection before business input; temporary browser force cleanup recorded",
+      "forced_browser_cleanup": true
+    },
+    {
+      "raw_report": "%LOCALAPPDATA%/Temp/dtw-win-verified-chrome-clear-20261103/report.json",
+      "raw_report_sha256": "cad59679e98094b14e58c2ab60ddbcf44b1ad227ae3e4474bf46d450d407a2e4",
+      "binary_sha256": "5c364b7ea2d1e6378811b65ca968ac2c693ed6335ce8c6f82d35c2f4e6bf81ba",
+      "passed": false,
+      "passing_cases": 13,
+      "total_cases": 14,
+      "reason": "13/14: composite-canvas corner was outside owned window; exact receiver/occlusion check rejected move without dispatch; final probe maps owned window bounds",
+      "forced_browser_cleanup": false
+    },
+    {
+      "raw_report": "%LOCALAPPDATA%/Temp/dtw-win-verified-chrome-owned-point-20261103/report.json",
+      "raw_report_sha256": "8b74db4de5029f1831947c0d6b0f68478fbe5aa3a5059f2c00f8be3fb1812049",
+      "binary_sha256": "5c364b7ea2d1e6378811b65ca968ac2c693ed6335ce8c6f82d35c2f4e6bf81ba",
+      "passed": false,
+      "passing_cases": 13,
+      "total_cases": 14,
+      "reason": "13/14: generated chooser script duplicated a lexical variable from its guard; syntax rejected before dispatch; final combined script independently syntax-checked",
+      "forced_browser_cleanup": false
+    },
+    {
+      "raw_report": "%LOCALAPPDATA%/Temp/dtw-win-verified-edge-final-20261103/report.json",
+      "raw_report_sha256": "1242affd37e46a0a9d02f40d7529aefa8721efeb995e3e9982c06635b4ddbcdc",
+      "binary_sha256": "5c364b7ea2d1e6378811b65ca968ac2c693ed6335ce8c6f82d35c2f4e6bf81ba",
+      "passed": false,
+      "passing_cases": 14,
+      "total_cases": 14,
+      "reason": "14/14 business cases and actual browser exit 0; post-quit scene.after AccessDenied retained as error, therefore overall failure; no forced cleanup",
+      "forced_browser_cleanup": false
+    }
+  ],
+  "tooltip_class_proof": [
+    {
+      "class": "tooltips_class32",
+      "foreground": false,
+      "has_owner": true
+    },
+    {
+      "class": "SysShadow",
+      "foreground": false,
+      "has_owner": false
+    },
+    {
+      "class": "#32770",
+      "foreground": true,
+      "has_owner": true
+    },
+    {
+      "class": "Chrome_WidgetWin_1",
+      "foreground": false,
+      "has_owner": false
+    }
+  ],
+  "fixture_images_sha256": {
+    "single-window.png": "aef0777023209370b83c3af0c1c79e62a0771aedd8c7d57a50d22f7a3c6967d5",
+    "opaque-modal-stack.png": "bc851d84b1da3e8496aa4172f065845970fa2b853d6920e25371dd354ed2eb4a"
+  },
+  "verification": {
+    "rust_release": {
+      "library_passed": 547,
+      "cli_passed": 4,
+      "failed": 0,
+      "raw_log_sha256": "2b1b75b7533c36512fc9bcf19ad88e3ab767c6b231da442389d39571e98b124e"
+    },
+    "managed_package_upgrade": {
+      "passed": true,
+      "binary_sha256": "8ee99280c70cb1f5365753e3f7c4dcba31f2ec57722a70e7cfc47df9fdf6460c",
+      "manager_sha256": "11d652ef166e7e4f2e0203f884f0e81047813b771016115c4e851184840afc75",
+      "baseline_version": "0.3.3",
+      "target_version": "0.3.4",
+      "scope": "synthetic complete packages + real MCP process/locks; no host configuration or GUI",
+      "cases": [
+        "Unicode/space paths",
+        "complete-package deduplication",
+        "two host pins",
+        "manager/runtime version update",
+        "fresh actual runtime version verification",
+        "pending failure protection",
+        "rollback protection",
+        "live MCP shared lease",
+        "independent native worker lease",
+        "collection after process exit",
+        "corruption rejection",
+        "owned cleanup"
+      ],
+      "raw_report": "%LOCALAPPDATA%/Temp/dtw-win-complete-managed-package-20261103/acceptance/report.json",
+      "raw_report_sha256": "8897bb243a1dc49819988c23c7df02482f59c922f8504339ec8fa75ca1d1a9bd",
+      "target_version_is_test_only": true
+    },
+    "python_full_windows": {
+      "total": 133,
+      "passed": 131,
+      "failed": 1,
+      "skipped": 1,
+      "failure": "macOS signing bash test: local default bash exits 127 instead of 2; current packaged probe import/layout tests pass"
+    },
+    "documentation": "current Markdown references and API contract audited; dated evidence retained"
+  },
+  "limits": [
+    "No macOS GUI rerun",
+    "No independent packaged-app AUMID GUI launch acceptance",
+    "No other DPI/multi-display acceptance",
+    "Per-pixel layered alpha remains unsupported without native proof",
+    "No locked/elevated/secure desktop or cross-window drag support claim"
+  ],
+  "privacy": "Only bounded result metadata, source hashes and owned fixture images committed; browser wire/PNG/profile remain local"
+}

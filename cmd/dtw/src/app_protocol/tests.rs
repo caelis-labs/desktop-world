@@ -47,6 +47,7 @@ impl TestGate {
 
 struct Model {
     semantic_elements: Option<Vec<Element>>,
+    filtered_observation: bool,
     read_gate: Option<WorkerGate>,
     action_gate: Option<WorkerGate>,
     outcome: ActionOutcome,
@@ -86,6 +87,7 @@ impl MockBackend {
         Self(Arc::new(Shared {
             model: Mutex::new(Model {
                 semantic_elements: None,
+                filtered_observation: false,
                 read_gate: None,
                 action_gate: None,
                 outcome: ActionOutcome {
@@ -297,6 +299,38 @@ impl Backend for MockBackend {
     ) -> Result<BackendObservation<()>, Error> {
         self.0.observes.fetch_add(1, Ordering::SeqCst);
         Ok(self.read(target, false))
+    }
+    fn observe_page(
+        &self,
+        target: &WindowTarget,
+        query: &ObserveQuery,
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservation<()>, Error> {
+        if !self.0.model.lock().unwrap().filtered_observation
+            && (query.role.is_some() || query.text.is_some())
+        {
+            return Err(Error::UnsupportedCapability);
+        }
+        let mut observed = self.observe(target, call)?;
+        observed.elements.retain(|element| {
+            query.role.as_ref().is_none_or(|role| element.role == *role)
+                && query
+                    .text
+                    .as_ref()
+                    .is_none_or(|text| element.label.to_lowercase().contains(&text.to_lowercase()))
+        });
+        // This controlled provider has no pagination: never claim completeness
+        // when its full filtered result cannot fit the requested page.
+        if observed.elements.len() > query.limit as usize {
+            return Err(Error::UnsupportedCapability);
+        }
+        observed.discovery = Some(DiscoveryPage {
+            has_more: false,
+            complete: true,
+            reason: None,
+            visited: observed.elements.len() as u32,
+        });
+        Ok(observed)
     }
     fn capture(
         &self,

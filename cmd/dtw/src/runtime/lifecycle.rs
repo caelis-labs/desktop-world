@@ -33,10 +33,17 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                 instances: vec![],
             },
         };
-        // A failed/uncertain launch cannot erase previously proven members.
-        // Successful launch must return identities, not just a PID or an ack.
+        // Dispatch can precede observable startup. An unverified launch with no
+        // identities keeps its original receipt and cannot erase proven members.
+        // Only a claim of confirmed startup requires an observable identity.
         let mut outcome = launched.outcome;
-        let retired = if outcome.error.is_none() {
+        if outcome.error.is_none()
+            && launched.instances.is_empty()
+            && matches!(outcome.evidence, EffectEvidence::Confirmed(_))
+        {
+            outcome = ActionOutcome::unknown(Error::InvalidObservation);
+        }
+        let retired = if outcome.error.is_none() && !launched.instances.is_empty() {
             match normalized_instances(launched.instances) {
                 Ok(instances) => {
                     let mut state = self.state();

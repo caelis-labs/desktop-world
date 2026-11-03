@@ -5,6 +5,13 @@ same-executable Win32 presentation worker. This is optional visual feedback;
 Windows selects targeted mouse messages where supported and raises the target
 for other input. It does not establish full macOS background-input parity.
 
+Application discovery, lifecycle (start/quit) and pointer-gesture support are
+separate provider contracts that change more often than this port record. A method
+being public does not mean this provider implements it: read the installed
+[Skill API](../skills/desktop-world/API.md) and the provider's own acceptance
+record for the boundary in force. The current development branch's contracts,
+GUI results and limits are recorded in [Windows fixes acceptance](windows-fixes-acceptance-2026-11-03.md).
+
 ## Visual feedback and input routing
 
 The colored marker is a presentation window, not another OS mouse device.
