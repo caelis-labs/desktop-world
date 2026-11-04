@@ -16,7 +16,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from app_client import AppClient, artifact_identity, require
+from app_client import AppClient, METHODS, artifact_identity, require
 from windows.app_protocol_probe import wait, wait_state
 from windows.transport import ProcessHandle, read
 
@@ -92,8 +92,8 @@ def main():
         require(len(owned['apps']) == 1, owned)
         record(stage, {'coverage': catalog['coverage'], 'provider': catalog['provider'], 'stopped_count': len(stopped['apps'])})
         full = execute('const v=await app.look({full:true});return {methods:Object.keys(app),windows:v.windows};')
-        require(len(full['result']['methods']) == 9, full)
-        record('nine_method_surface', full)
+        require(full['result']['methods'] == METHODS, full)
+        record('public_method_surface', full)
         unchanged = execute('return await app.look();')
         require(unchanged['view'] == {'changed': False}, unchanged)
         record('unchanged_snapshot_delta', unchanged)

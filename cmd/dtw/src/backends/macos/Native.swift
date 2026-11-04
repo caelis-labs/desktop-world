@@ -2311,6 +2311,10 @@ private struct NativeNodeTextMatch {
     private var unsearchedText = false
     var incomplete: Bool { !matched && unsearchedText }
 
+    init(matched: Bool) {
+        self.matched = matched
+    }
+
     mutating func includePreview(_ fields: SemanticTextFields, needle: String?) {
         matched = matched || fields.matches(needle)
     }
