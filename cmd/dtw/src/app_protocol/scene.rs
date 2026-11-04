@@ -125,6 +125,16 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
     }
     Ok(())
 }
+// Sparse filtered pages can spend native work without producing rows. Both
+// discovery and object renewal use this bound under their original deadline.
+fn semantic_page_limit(query: &serde_json::Map<String, Value>) -> usize {
+    if query.contains_key("role") || query.contains_key("text") {
+        32
+    } else {
+        4
+    }
+}
+
 fn error(code: &str, message: &str) -> wire::WireError {
     wire::WireError {
         code: code.into(),
@@ -732,9 +742,10 @@ impl<B: Backend + 'static> Coordinator<B> {
         let mut query = node["query"].as_object().cloned().unwrap_or_default();
         query.insert("window_ref".into(), node["window_ref"].clone());
         query.insert("limit".into(), json!(80));
+        let max_pages = semantic_page_limit(&query);
         let mut work = self.scene_atomic(id, "observe", Value::Object(query), deadline);
         let mut found = None;
-        for page_index in 0..4 {
+        for page_index in 0..max_pages {
             if let Some(error) = work.completed.error {
                 let mut state = self.state.lock().unwrap();
                 state.scene.raster = None;
@@ -767,7 +778,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             // Opaque object identity does not require selector uniqueness or a
             // complete tree. Do not let an unrelated later branch retire this
             // already-proven binding. Reject duplicates in the returned page.
-            if found.is_some() || page["next"].is_null() || page_index == 3 {
+            if found.is_some() || page["next"].is_null() || page_index + 1 == max_pages {
                 break;
             }
             work = self.scene_atomic(id, "observe", json!({"cursor":page["next"]}), deadline);
@@ -1036,8 +1047,8 @@ impl<B: Backend + 'static> Coordinator<B> {
                 semantic = json!({"complete":false,"reason":e.code});
             } else if let Some(mut page) = work.completed.value {
                 let mut candidates = Vec::new();
-                // Bound native work independently of the model's 80-row budget.
-                for page_index in 0..4 {
+                let max_pages = semantic_page_limit(&query);
+                for page_index in 0..max_pages {
                     if let Some(rows) = page["elements"].as_array() {
                         for row in rows {
                             if !query.is_empty() || useful_element(row) {
@@ -1047,7 +1058,10 @@ impl<B: Backend + 'static> Coordinator<B> {
                     }
                     semantic = json!({"complete":page["coverage"]["complete"]==true && page["next"].is_null(),
                         "reason":page["coverage"]["reason"],"has_more":!page["next"].is_null()});
-                    if page["next"].is_null() || candidates.len() >= 80 || page_index == 3 {
+                    if page["next"].is_null()
+                        || candidates.len() >= 80
+                        || page_index + 1 == max_pages
+                    {
                         break;
                     }
                     let more =

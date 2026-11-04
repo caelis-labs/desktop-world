@@ -89,8 +89,6 @@ impl<B: Backend + 'static> Coordinator<B> {
         self.record_resolution(&submitted.request_id, progress.clone());
         let mut attempts = 0_u32;
         let mut pages = 0_u32;
-        let mut focus_attempted = false;
-        let mut focused_window = None;
         loop {
             // The public app selector follows its current top surface while it
             // is only reading. A popup may arrive after the preceding input.
@@ -120,12 +118,6 @@ impl<B: Backend + 'static> Coordinator<B> {
                 let Some(window) = window.and_then(|row| row["window_ref"].as_str()) else {
                     return selection_error(submitted, wire::core_error(&Error::TargetChanged));
                 };
-                if focused_window
-                    .as_deref()
-                    .is_some_and(|focused| focused != window)
-                {
-                    return selection_error(submitted, wire::core_error(&Error::TargetChanged));
-                }
                 routed.target.window_ref = Some(window.to_owned());
                 state.scene.active = routed.target.window_ref.clone();
             }
@@ -223,37 +215,6 @@ impl<B: Backend + 'static> Coordinator<B> {
             let complete = final_page["coverage"]["complete"] == true;
             let disabled =
                 complete && matches.len() == 1 && matches[0]["enabled"] == false && !read_only;
-            if selector.scope == SelectorScope::Menu
-                && complete
-                && matches.len() == 1
-                && !focus_attempted
-                && !read_only
-                && (disabled
-                    || match submitted.command {
-                        Command::PressSelected { .. } => matches[0]["can_press"] == true,
-                        Command::SetValueSelected { .. } => {
-                            matches[0]["actions"].as_array().is_some_and(|actions| {
-                                actions.iter().any(|action| action == "setValue")
-                            })
-                        }
-                        _ => false,
-                    })
-            {
-                // App menus act on the focused window. Prove a unique menu
-                // target before borrowing focus, then discard that discovery:
-                // activation can change both menu content and enabled state.
-                focus_attempted = true;
-                focused_window = submitted.target.window_ref.clone();
-                if let Err(error) = self.prepare_selection_focus(
-                    submitted,
-                    deadline,
-                    &mut progress,
-                    json!("menu_scope"),
-                ) {
-                    return selection_error(submitted, error);
-                }
-                continue;
-            }
             let condition_met = match condition {
                 Some(ElementWaitState::Absent) => matches.is_empty(),
                 Some(ElementWaitState::Enabled) => {
@@ -336,41 +297,15 @@ impl<B: Backend + 'static> Coordinator<B> {
                     deadline,
                 );
             }
-            if !focus_attempted
-                && selector.scope == SelectorScope::Window
-                && timeout_ms != 0
-                && matches!(
-                    submitted.command,
-                    Command::PressSelected { .. } | Command::SetValueSelected { .. }
-                )
-                && !complete
-                && final_page["coverage"]["reason"] == "content_unproven"
-            {
-                focus_attempted = true;
-                focused_window = submitted.target.window_ref.clone();
-                if let Err(error) = self.prepare_selection_focus(
-                    submitted,
-                    deadline,
-                    &mut progress,
-                    final_page["coverage"].clone(),
-                ) {
-                    return selection_error(submitted, error);
-                }
-                // One fresh traversal, even if the first native read consumed
-                // the polling window. Do not restart that window or repeat the
-                // preparation; the original execution deadline still applies.
-                continue;
-            }
-            // Menu readiness can settle asynchronously after activation. Keep
-            // polling reads within the original window without focusing again.
-            // Cold-window recovery retains its existing one-traversal limit.
-            let one_shot_recovery = focus_attempted && selector.scope == SelectorScope::Window;
-            if !one_shot_recovery && timeout_ms != 0 && Instant::now() < wait_until {
+            // Incomplete semantics and menu scope never grant foreground focus.
+            // Readiness may settle through reads; the native action still owns
+            // exact destination admission and any clean foreground_required error.
+            if timeout_ms != 0 && Instant::now() < wait_until {
                 progress["status"] = json!("waiting");
                 self.record_resolution(&submitted.request_id, progress.clone());
                 std::thread::sleep(POLL.min(wait_until.saturating_duration_since(Instant::now())));
             }
-            if one_shot_recovery || timeout_ms == 0 || Instant::now() >= wait_until {
+            if timeout_ms == 0 || Instant::now() >= wait_until {
                 if let Err(error) = self.selection_live(deadline) {
                     progress["status"] = json!("interrupted");
                     progress["error"] = core_error(&error);
@@ -418,55 +353,6 @@ impl<B: Backend + 'static> Coordinator<B> {
                 );
             }
         }
-    }
-
-    fn prepare_selection_focus(
-        &self,
-        submitted: &Submit,
-        deadline: Instant,
-        progress: &mut Value,
-        trigger: Value,
-    ) -> Result<(), WireError> {
-        progress["status"] = json!("preparing_focus");
-        progress["focus_preparation"] = json!({"attempted":true,"trigger":trigger,"receipt":null});
-        self.record_resolution(&submitted.request_id, progress.clone());
-        // Use ordinary action admission, policy, binding retirement and focus
-        // return ownership. A read-only find never enters this preparation.
-        let focus = self.execute_atomic(
-            &Submit {
-                command: Command::Input(WindowInput::Focus),
-                ..submitted.clone()
-            },
-            deadline,
-        );
-        let ready = focus.completed.receipt.as_ref().is_some_and(|receipt| {
-            receipt.outcome.dispatch == DispatchState::Dispatched
-                && receipt.outcome.error.is_none()
-                && receipt.interruption.is_none()
-                && !matches!(receipt.outcome.evidence, EffectEvidence::Mismatch { .. })
-        });
-        progress["focus_preparation"]["receipt"] = focus
-            .completed
-            .receipt
-            .as_ref()
-            .map(wire::receipt)
-            .unwrap_or(Value::Null);
-        if !ready {
-            let error = focus.completed.error.unwrap_or_else(|| {
-                resolution_error(
-                    "focus_preparation_unproven",
-                    "Focus preparation was not proven; the selected action was not dispatched",
-                    progress,
-                )
-            });
-            progress["status"] = json!("focus_failed");
-            progress["error"] = error_json(&error);
-            self.record_resolution(&submitted.request_id, progress.clone());
-            return Err(error);
-        }
-        progress["status"] = json!("reading");
-        self.record_resolution(&submitted.request_id, progress.clone());
-        Ok(())
     }
 
     fn selection_live(&self, deadline: Instant) -> Result<(), Error> {

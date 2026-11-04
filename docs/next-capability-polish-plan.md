@@ -1,6 +1,6 @@
 # 下一阶段：补全现有任务能力，形成 X11 参考基线
 
-状态：首批实现已提交为 `a968b29`；macOS 连续操作增量已通过开发候选的当前 MCP 验收，平台/真实模型任务及安装包验收仍待执行，计划尚未结案。原始源码基线为 `9f5ba8e` / `v0.3.4`；下述进展不是发行或全平台 GUI 验收声明。
+状态：首批实现已提交为 `a968b29`，macOS 连续操作增量为 `f76cdf9`；统一 Computer Use APP 与按失败驱动的修复已形成下一批增量，完整 42 项基准尚未通过。平台/真实模型任务及安装包验收仍待执行，计划尚未结案。原始源码基线为 `9f5ba8e` / `v0.3.4`；下述进展不是发行或全平台 GUI 验收声明。
 
 依据是[方向讨论会话](https://chatgpt.com/c/6aea9228-21d4-83e8-b7a2-f5fcde6528c4)、当前源码、已有平台验收，以及本次通过恢复后的内置 DTW 读取该会话的实际过程。方向保持为：**先完成一个有退出条件的 macOS/Windows 打磨迭代，再启动范围明确的 Linux X11 Alpha；独立桌面无人值守随后推进。**
 
@@ -25,6 +25,18 @@
 - 当前回归为 579 库测试、5 CLI、3 MCP，加原生 inventory 与源码检查。原始失败、候选哈希、清理结果及采样限制见 [验收报告](macos-usability-acceptance-2026-11-04.md) 和 [证据摘要](evidence/macos-usability-2026-11-04/summary.json)。
 
 下一步的 macOS 覆盖重点是有明确原生归属的应用根、Dock 项及无窗口菜单栏项，并在真实应用验证堆叠窗口。当前 Dock 可被发现但仍返回 `no_window`；发现修复和窗口菜单读取没有完成这些根能力。持续焦点/用户键盘目的地、真实 Telegram、模型任务与最终安装包仍缺独立证据。本增量没有因此关闭下述 A/B/C 的完整退出条件。
+
+## 统一 Computer Use APP 与后台优先增量（2026-11-04）
+
+先固定 [42 项目标](../tests/fixtures/computer-use-app/scenarios.json)，再以 [统一 APP](../tests/fixtures/computer-use-app/README.md) 的失败推进产品修复。AppKit 密集原生控件、自绘低 AX 聊天、WKWebView/HTML/Canvas、系统文件面板和多窗口共用一个 shell；保留原有 browser-workbench，不以简化网页代替低 AX 或原生目标。
+
+- 已修复无关长字段造成 selector `text_limit`、深层筛选和观察 ID 续绑页数不一致，以及 move/drag 缺少 overlay 端点。W02 在最终候选后台实机产生恰好一次效果；低 AX 消息的 pin/reply 和真实图像复核也通过独立检查。
+- 默认后台启动；普通 AX/modal 未知、菜单/内容准备、鼠标能力缺口不再授权激活。自动键盘前台仅限具体已验证形状。P03 默认 `auto` 的受控 8 步通过，见证者保持前台且无按键/修饰键；独立物理审计通过。`background-only` 对照也已通过，但它自身不证明 default auto 行为。
+- 真实光标审计收紧为逐借用区间、固定 50ms 最大实际间隙；实际 overlay 检查窗口身份、热点与 PNG 像素。最终候选后台 move 拒绝，因此 P01 全动作仍不完整。
+- 最新整套 a11 由于拖拽期间窗口几何/可见性变化及光标观察间隙超限失败；后续独立通过不拼成整套通过。a13 的业务/图像和三种 overlay 动作通过，物理审计仍因 72.683ms 间隙失败。旧失败和来源未确定的桌面变化保留，不归因于用户，也不放宽阈值。
+- 最终源码通过 590 库测试、5 CLI、3 MCP、新增 Computer Use 单测及原生纯检查；未替换安装的 0.3.4。候选、每次尝试、证据哈希和限制见 [本轮报告](computer-use-benchmark-2026-11-04.md) 及 [脱敏证据](evidence/computer-use-2026-11-04/summary.json)。
+
+下一步仍需取得完整严格运行，再按另外 23 项未完成目标继续；实际 Chromium、模型图片任务、真实 Telegram、Dock/无窗口应用根和 Windows 原生环境不会由本次 APP 验收自动关闭。Windows GUI 在 Windows 机器继续，X11 顺序保持。
 
 ## 1. 基线和证据边界
 

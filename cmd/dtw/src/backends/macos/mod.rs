@@ -450,7 +450,7 @@ impl NativeBackend {
         let request_id = unique_generation();
         request["request_id"] = json!(request_id);
         request["input_policy"] = json!(self.input_policy.as_str());
-        if matches!(request["operation"].as_str(), Some("click" | "scroll")) {
+        if pointer_presentation::observes_operation(request["operation"].as_str()) {
             // scene_rpc already validated the retained target before this point.
             // Presentation never grants input admission or changes its outcome.
             if let Some(endpoint) = self.cursor.begin(call) {

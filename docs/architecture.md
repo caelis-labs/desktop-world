@@ -79,9 +79,13 @@ The scheduler serializes conflicting resources, not unrelated apps by default.
 Closing an owner must settle its native resources before releasing ownership;
 failed cleanup must not silently reopen admission.
 
-macOS prefers background delivery when the action supports it. Only a preflight
-failure with no preparation or dispatch side effect permits foreground fallback.
-Once preparation or dispatch begins, errors do not reroute or replay input.
+macOS prefers background delivery when the action supports it. Automatic keyboard
+foreground fallback requires a known, experimentally established capability shape
+and a preflight refusal with no preparation or dispatch side effect. Unknown AX or
+modal state, incomplete semantic content and menu inspection do not authorize
+activation. Physical-pointer limitations are admitted separately: hover or a missing
+addressed-event ABI cannot authorize activating an inactive app. Once preparation
+or dispatch begins, errors do not reroute or replay input.
 Explicit focus and automatic fallback leave the target in front after completion.
 The user or Agent may switch away or close the owned task window when finished;
 cleanup releases held inputs and respects external focus changes without restoring

@@ -82,8 +82,9 @@ replayed to renew a binding.
 Keyboard input uses the native keyboard window when available, independently of
 visual z-order, within the already selected process instance; a frontmost tooltip or completion surface does not automatically
 receive keys. Focus and app identity checks still apply. On macOS startup requests
-neither activate nor hide the app. An app may activate itself; input that genuinely
-requires foreground still uses the existing controlled borrow and restoration.
+neither activate nor hide the app. An app may activate itself. Input with a proven
+foreground capability requirement may use controlled foreground delivery; completion
+releases held inputs and leaves the target in front, without restoring a previous app.
 
 ## View
 
@@ -117,6 +118,9 @@ structural nodes, with bounded internal continuation. Stable native identities
 keep target IDs across consecutive reads. Missing, omitted or duplicate
 identities cannot revive a removed target ID; labels and traversal positions never establish identity.
 Selectors still require proven uniqueness; incomplete discovery can reject them.
+On macOS, text filtering searches native fields beyond their printed previews with
+a shared search budget. An unsearched suffix leaves `text_limit` coverage incomplete;
+it cannot prove absence or uniqueness. Narrow a query by role when appropriate.
 Names/values longer than 240 Unicode characters carry `<field>_truncated:true`,
 `<field>_length` (Unicode character count) and `<field>_revision` (SHA-256 of the
 provider's full observed field). Revisions signal omitted-content changes, not
@@ -177,11 +181,23 @@ acceptance does not establish Windows parity.
 ## Provider boundaries
 
 On macOS, AX tree availability is optional for app capture and coordinate input.
-An unreadable or partial tree does not block screenshot coordinates, hover, drag,
-wheel input or keyboard delivery. Semantic actions still need
+An unreadable or partial tree does not block proven screenshot coordinates, drag
+or wheel input. Keyboard input still needs its exact editing destination; unknown
+AX/modal state is a refusal, not permission to activate the app. Semantic actions still need
 their own live target proof; a rejected semantic action is never replayed as a
 mouse click. Process identity, visible-hit, geometry and input-release checks
 continue to apply when no semantic elements are available.
+
+macOS prefers background input. Reads and selectors do not activate an app to
+materialize semantics or run a menu command. Menu actions require their exact
+native destination already focused. Automatic keyboard foreground delivery is
+limited to verified framework/operation shapes: Chromium Command+A and supplementary
+Unicode text, and AppKit Command+W and text containing line/tab controls. Other
+admitted keyboard shapes try directed input once. Unknown errors never authorize
+activation or replay. Physical-pointer capability limits are separate from focus:
+an inactive app's hover or missing addressed API cannot by itself activate it and
+may return `foreground_required`. Inspect the returned view and effect before
+choosing a new action; the public facade has no `focus()` method.
 
 Windows records physical DWM-visible bounds and global window order, and renders
 exact HWNDs for app composition. Covered reads do not relax input visibility or

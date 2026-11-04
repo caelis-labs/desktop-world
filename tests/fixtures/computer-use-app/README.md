@@ -1,0 +1,103 @@
+# DTW Computer Use Workbench
+
+统一的 Computer Use 验收 APP。先固定任务与独立效果，再通过当前 `apps` / `exec({app,source})` 执行，保留失败以推动 DTW 修复。目标基准为 [computer-use-v1.2](scenarios.json)：42 项，其中首批自动化 core 业务 16 项，另有虚拟光标、真实光标与后台焦点三项强制目标。完整基准包含尚未执行或尚未支持的目标；core 通过不代表 42 项全部通过。v1 的 39 项原始目标保留，v1.1 追加 P01/P02，v1.2 按前台占用反馈追加 P03。
+
+## 界面和技术栈
+
+| 部分 | 实现 | 信息与交互 |
+| --- | --- | --- |
+| 原生工作台 | macOS AppKit | 190 个审计按钮（含重复名称）、独立编辑与提交、checkbox、下拉选择、滑块、事件面板、并列滚动、超过 20k UTF-16 的长文档 |
+| 原生消息工作台 | AppKit 自绘 NSView | 30 个房间、240 条消息、时间/状态/反应、滚动、真实独立弹出窗口、Pin/Edit/Reply、Unicode 输入；不提供消息和菜单项级 AX |
+| Web 工作台 | 原生 HTML/CSS/JS，在 WKWebView 或 Chromium 中运行 | 240 行、720 个链接/控件、重复 Edit/Reviewed、筛选与分页、嵌套滚动、长文本、异步表单与校验、禁用控件、tooltip、range |
+| 可移植消息页 | HTML Canvas + 少量原生输入控件 | 自绘消息和菜单，独立消息动作日志，滚动与 Unicode composer |
+| 既有浏览器 fixture | 复用 browser-workbench 实例和源码 | 原库存编辑与文件上传、输入可靠性事件、360-link 遍历、纯图片挑战；不复制或删除原入口 |
+| 文件与多窗口 | AppKit 与真实系统面板 | peer 窗口、普通 Close Window、系统 Open/Save、指定临时文件的读写 |
+
+原生消息页用于制造低 AX 条件，不声称复刻 Telegram 实现。Web 页可在 Chromium 中复用，但 WKWebView、Chromium、真实 Telegram 和各系统桌面必须分别验收。当前原生 shell 只在 macOS 实现；Windows/Linux 可先运行可移植 Web 页，其原生控件和系统根仍需对应平台实现。
+
+## 手工运行
+
+macOS 14.2+、Xcode/Swift、Python 3.11+，不需要 npm 依赖或联网加载脚本：
+
+```sh
+python3 tests/fixtures/computer-use-app/run.py \
+  --output /tmp/dtw-computer-use-manual-001 --case manual-001
+```
+
+程序编译并以不主动激活的方式启动唯一 bundle，同时启动两个仅监听 loopback 的自有服务。手工查看时可显式传 `--foreground-preview`；自动验收默认保持目标后台。首行 JSON 给出 app 路径和页面 URL。使用 shell 顶部的 Native controls / Web workspace / Canvas chat 切换；Web 页导航可进入原有 Inventory / Reliability / Workbench vision。
+
+只运行 Web 页，在普通浏览器或独立 Chromium profile 中打开返回的 URL：
+
+```sh
+python3 tests/fixtures/computer-use-app/run.py --web-only \
+  --output /tmp/dtw-computer-use-web-001 --case web-001
+```
+
+每次使用新目录。正常退出 APP、按 Ctrl-C，或创建输出目录中的 `stop` 文件，runner 都会清理其自有资源。`command` 文件只接受 `quit`，用于收尾，不提供业务操作捷径。未正常退出、强制终止和清理错误会使验收失败。
+
+## 当前 MCP 自动基准
+
+先构建并冻结当前 DTW 二进制。不要在验收期间覆盖它，也不要把已安装版本当成工作区代码：
+
+```sh
+python3 tests/acceptance/computer_use_acceptance.py \
+  --dtw /absolute/path/to/frozen/dtw \
+  --output /tmp/dtw-computer-use-core-001 --case core-001 \
+  --source-revision <revision-or-development-candidate>
+```
+
+core 包含首次无 look 输入、噪音 AX 定位、Unicode 提交、完整长文本分页、checkbox、滑块、定点滚动、只读菜单、peer 窗口、系统 Open 取消、低 AX 消息/Pin/Reply 和 WebKit 的输入/噪音/长文本。它使用当前 MCP AppClient；坐标来自 fixture 的独立几何记录，是直接脚本证据，不能当成真实模型识图通过。
+
+标准入口同时编译只读观察器，强制检查 P01/P02/P03。P01 在真实 click/move/drag/scroll 后验证授权 helper 的真实窗口位置和渲染像素；P02 连续采样真实系统光标，并逐段核对原生借用区间。只允许 `native_hover_tracking` 的 move，或有明确 ABI 能力证明的 `addressed_event_api_unavailable` 指针动作。AX 缺失、普通错误、权限/身份/几何失败都不是借用理由；缺少采样、未覆盖完整请求或未知借用也会失败。一次合法 hover 不会放行同脚本其他区间的位移。严格策略 `bounded-pointer-borrow-v3` 固定要求实际采样间隙不超过 50ms；长时间停采后的相同终点不能通过，阈值不会为某次运行临时放宽。
+
+低层 `computer_use_benchmark.py` 保留为业务/fixture 诊断入口；不单独证明光标策略。标准报告中的 `acceptance_passed` 同时要求 core、P01 虚拟光标、P02 真实光标策略和 P03 后台焦点合约通过。AXPress、键盘和 AXPosition 不伪造鼠标轨迹。
+
+C01 还要求检查实际保存的 `cursor/probe/mcp/native-chat.png`：房间与消息应可见，Release check 137 清晰可读，无关窗口不得替代目标。自动部分通过后仍记录为 `pending_review`。检查原图后显式追加复核记录：
+
+```sh
+python3 tests/acceptance/review_computer_use_capture.py \
+  --report /tmp/dtw-computer-use-core-001/report.json --case-id C01 \
+  --reviewer <reviewer> --outcome passed \
+  --notes '<observed rendered content and limits>'
+```
+
+复核绑定原 PNG 的 SHA-256；图像被替换时拒绝。复核失败和后续复核都保留，不能将未检查图像直接标为通过。自动 runner 在仍待复核时返回非零，报告区分 `core_automation_passed`、`core_passed`、`acceptance_passed` 与 `target_baseline_passed`。恢复后的业务效果可通过，但原始工具错误会保留并使 `clean_run:false`，不能通过严格 core/acceptance。
+
+P03 使用一个独立的自有小窗口作为前台见证者，另开采用默认 `auto` 策略的当前 MCP 连接操作后台目标；独立焦点入口可传 `--input-policy background-only` 作严格策略对照。测试准备阶段只显式激活见证者，目标保持后台。它核对实际 UTF-16 全选范围、Unicode 替换、见证者零按键/修饰键事件，并连续采样前台 PID 与激活通知；失去见证前台条件就停止，不重新抢回前台。普通 AX 错误、未证明的快捷键、菜单/内容读取不完整不会触发焦点准备；未验证的后台 hover 干净拒绝。
+
+标准入口已强制使用 [cursor_audit](../../acceptance/cursor_audit.py) 的 `--assert-independent`。复用已编译的观察器可传 `--observer`、`--overlay-observer` 和 `--focus-observer`；通用独立探针用法见 [构建文档](../../../docs/building.md#current-external-client-gui-probe)。采样必须保留实际间隙；前后台的两个端点不证明全程焦点稳定。P03 覆盖受控见证条件下的后台合约；R04 的更多应用/动作与并发用户键盘目的地仍是单独目标。
+
+## 独立效果和失败规则
+
+- `native-state.json`、`native-events.jsonl`：真实控件、消息和窗口效果、实际输入事件、窗口与几何。`native-reference.txt` 是原生文档的私有全文判据。
+- `web/state.json`、`web/events.jsonl`：Web 实际提交、每次动作、消息、表单和渲染几何；每次相同内容提交仍是独立效果。
+- `workbench/state.json`：复用库存、保存、附件、可靠性及纯图挑战的原有独立判据。
+- `report.json`、MCP 原始 transcript、protocol metrics、PNG：记录二进制/源码/目标哈希、各项状态、原始错误及清理。失败不会被下一次运行覆盖。
+
+这些私有文件只供 supervisor 准备和验收。acting Agent 只能通过 DTW 的 GUI 操作完成任务，不读取 fixture 源码、状态文件、HTTP API、DOM/CDP 或几何答案。真实模型图片挑战的答案只在私有状态与 PNG 像素中，每次独立运行重新随机生成。
+
+长文本同时检查 UTF-16 偏移连续性、总长度和全部内容的 FNV-1a 64 位指纹；该指纹用于检测内容差异，不是安全认证。checkbox 等会同时核对最终值和实际动作次数，避免重复操作偶数/奇数抵消。
+
+`failed`、`blocked`、`unsupported`、`pending_review`、`not_run` 都不能通过完整基准。前置导航失败后，依赖其模式的场景标为 blocked，不继续向错误界面输入。未知效果不自动重放。源码单测、脚本集成、人工/模型视觉复核、原生平台和安装包证据分别记录。
+
+## TDD 推进顺序
+
+1. 保持 `scenarios.json` 的目标稳定，为新任务补独立效果判据。
+2. 用固定二进制运行，保留初始失败；先判断是 fixture、runner、DTW 还是环境问题。
+3. 对确证的 DTW 问题增加最小回归，再修拥有该契约的实现。
+4. 重跑受影响任务和 core，保留原失败与新候选身份；扩展/系统/真实模型任务逐项补齐。
+5. 场景全部完成且平台与安装包证据闭环后，才更新完整基准的支持声明。
+
+首轮执行和修复证据见 [首轮基准记录](../../../docs/computer-use-benchmark-2026-11-04.md)。
+
+## 无桌面检查
+
+```sh
+python3 -m unittest discover -s tests/fixtures/computer-use-app -p test_web_server.py
+python3 -m unittest discover -s tests/acceptance -p 'test_computer_use*.py'
+python3 -m unittest discover -s tests/acceptance -p test_cursor_audit.py
+node --check tests/fixtures/computer-use-app/web/app.js
+node --check tests/fixtures/computer-use-app/web/canvas.js
+```
+
+HTTP 控制覆盖重复提交、并发、非法请求、私有判据隔离、UTF-16、日志失败及半截 HTTP headers 的有界清理；报告控制覆盖遗漏目标、未复核截图、强制清理与原始失败保留。普通 CI 只执行这些无桌面检查，不自动启动 APP 或派发桌面输入。

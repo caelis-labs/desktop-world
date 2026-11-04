@@ -790,7 +790,35 @@ do {
     _ = try modalInputRequiresForeground(role: kAXWindowRole) { throw inventoryBusy }
     preconditionFailure("Typed modal read failure was swallowed")
 } catch let error as NativeFailure { surfaceCheck(error.message == inventoryBusy.message && error.attributeFailure?.error == .cannotComplete) }
-print("Associated-menu routing and modal keyboard/pointer preflight controls passed")
+print("Associated-menu routing and modal keyboard restriction controls passed")
+
+// A tracking/cursor need cannot authorize activation. Exercise both admission
+// checks (already foreground, then lost foreground) and unreadable native proof
+// with an activation counter; no desktop or AX access is involved.
+private var activationAttempts = 0
+if try activationRequired(allowed: false, isForeground: { true }) { activationAttempts += 1 }
+surfaceCheck(activationAttempts == 0)
+do {
+    if try activationRequired(allowed: false, isForeground: { false }) { activationAttempts += 1 }
+    preconditionFailure("Inactive hover gained activation permission")
+} catch let error as NativeFailure { surfaceCheck(error.code == "foreground_required") }
+surfaceCheck(activationAttempts == 0)
+for allowed in [false, true] {
+    for code in ["focus_unproven", "ax_unavailable", "modal_state_unproven"] {
+        do {
+            if try activationRequired(allowed: allowed, isForeground: {
+                throw failure(code, "original unreadable proof")
+            }) { activationAttempts += 1 }
+            preconditionFailure("Unreadable proof gained activation permission")
+        } catch let error as NativeFailure {
+            surfaceCheck(error.code == code && error.message == "original unreadable proof")
+        }
+    }
+}
+surfaceCheck(activationAttempts == 0)
+if try activationRequired(allowed: true, isForeground: { false }) { activationAttempts += 1 }
+surfaceCheck(activationAttempts == 1)
+print("Foreground admission controls passed (inactive hover and unreadable proof never activate)")
 
 // FilePanel-shaped control: the large directory precedes the filename field.
 // The ROI excludes the known native viewport, so no directory child is loaded.
@@ -1342,6 +1370,60 @@ surfaceCheck(orderNumber.matches(nil))
 surfaceCheck(!semanticTextContains(String(repeating: "a", count: 4_096) + "needle", needle: "needle"))
 surfaceCheck(semanticTextContains(String(repeating: "a", count: 300) + "needle", needle: "NEEDLE"))
 print("Semantic selectors match public fallback/composite labels without concatenating fields; no AX or GUI reads")
+
+// Shared search coverage, independent of published preview size and page size.
+private var nativeSearchBudget = NativeTextSearchBudget()
+private var nativeButtonMatch = NativeNodeTextMatch(matched: false)
+nativeButtonMatch.inspect("Commit note", needle: "Commit note", budget: &nativeSearchBudget)
+private var unrelatedDocumentMatch = NativeNodeTextMatch(matched: false)
+unrelatedDocumentMatch.inspect(String(repeating: "x", count: 20_971), needle: "Commit note", budget: &nativeSearchBudget)
+surfaceCheck(nativeButtonMatch.matched && !nativeButtonMatch.incomplete)
+surfaceCheck(!unrelatedDocumentMatch.matched && !unrelatedDocumentMatch.incomplete)
+surfaceCheck(nativeSearchBudget.remaining == 1_048_576 - 11 - 20_971)
+
+// A second eligible node after the old prefix must remain a second match.
+private var lateDuplicateMatch = NativeNodeTextMatch(matched: false)
+lateDuplicateMatch.inspect(String(repeating: "x", count: 4_096) + "Commit note", needle: "Commit note", budget: &nativeSearchBudget)
+surfaceCheck(lateDuplicateMatch.matched && !lateDuplicateMatch.incomplete)
+surfaceCheck([nativeButtonMatch, unrelatedDocumentMatch, lateDuplicateMatch].filter(\.matched).count == 2)
+
+private var exhaustedSearchBudget = NativeTextSearchBudget(remaining: 4_096)
+private var unsearchedDuplicateMatch = NativeNodeTextMatch(matched: false)
+unsearchedDuplicateMatch.inspect(String(repeating: "x", count: 4_096) + "Commit note", needle: "Commit note", budget: &exhaustedSearchBudget)
+surfaceCheck(!unsearchedDuplicateMatch.matched && unsearchedDuplicateMatch.incomplete)
+surfaceCheck(exhaustedSearchBudget.remaining == 0)
+private var subsequentNodeMatch = NativeNodeTextMatch(matched: false)
+subsequentNodeMatch.inspect("Commit note", needle: "Commit note", budget: &exhaustedSearchBudget)
+surfaceCheck(!subsequentNodeMatch.matched && subsequentNodeMatch.incomplete)
+
+// A later public description can prove membership after an earlier field
+// exhausts native search; the unsearched suffix then cannot change membership.
+private var previewProvenMatch = unsearchedDuplicateMatch
+previewProvenMatch.includePreview(SemanticTextFields(role: kAXTextAreaRole, title: nil, value: nil, description: "Commit note"), needle: "Commit note")
+surfaceCheck(previewProvenMatch.matched && !previewProvenMatch.incomplete)
+private var compositePreviewMatch = NativeNodeTextMatch(matched: false)
+compositePreviewMatch.includePreview(orderNumber, needle: "Order | Number")
+surfaceCheck(compositePreviewMatch.matched && !compositePreviewMatch.incomplete)
+
+private var titleSearchBudget = NativeTextSearchBudget(remaining: 11)
+private var titleProvenMatch = NativeNodeTextMatch(matched: false)
+titleProvenMatch.inspect("Commit note", needle: "Commit note", budget: &titleSearchBudget)
+titleProvenMatch.inspect(String(repeating: "x", count: 2_000_000), needle: "Commit note", budget: &titleSearchBudget)
+surfaceCheck(titleProvenMatch.matched && !titleProvenMatch.incomplete && titleSearchBudget.remaining == 0)
+private var prefixSearchBudget = NativeTextSearchBudget(remaining: 11)
+private var prefixProvenMatch = NativeNodeTextMatch(matched: false)
+prefixProvenMatch.inspect("Commit note" + String(repeating: "x", count: 100), needle: "Commit note", budget: &prefixSearchBudget)
+surfaceCheck(prefixProvenMatch.matched && !prefixProvenMatch.incomplete)
+
+private var unicodeSearchBudget = NativeTextSearchBudget(remaining: 8)
+private var unicodeMatch = NativeNodeTextMatch(matched: false)
+unicodeMatch.inspect("Cafe\u{301}🙂中", needle: "CAFÉ🙂中", budget: &unicodeSearchBudget)
+surfaceCheck(unicodeMatch.matched && !unicodeMatch.incomplete && unicodeSearchBudget.remaining == 0)
+private var splitScalarBudget = NativeTextSearchBudget(remaining: 1)
+private var splitScalarMatch = NativeNodeTextMatch(matched: false)
+splitScalarMatch.inspect("🙂", needle: "🙂", budget: &splitScalarBudget)
+surfaceCheck(!splitScalarMatch.matched && splitScalarMatch.incomplete)
+print("Native selector text search proves full fields, late duplicates and bounded unknown suffixes; no AX or GUI reads")
 
 // Automatic app startup must preserve the user's foreground and leave surfaces
 // shareable; hiding/minimizing is not a substitute for a nonactivating launch.

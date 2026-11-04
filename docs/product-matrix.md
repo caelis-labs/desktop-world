@@ -12,7 +12,7 @@
 | 常用操作 | Agent 使用 look/capture/readText/click/move/drag/typeText/keypress/scroll/quit；点击可选语义目标、选择器或图像坐标 | macOS/Windows move/drag 限一个窗口和单个显示器内的可见路径；支持已证明的标准标题栏搬窗；不暴露跨调用的按下/释放状态；实验 X11 不支持手势 |
 | 菜单与对话框 | `look({scope:'menu'})` 通过已有应用窗口读取原生菜单；macOS sheet、dialog 及有正向归属证明的关联 surface；Windows 当前窗口内的原生菜单和已证明窗口归属的 modal | 无窗口应用根、Dock 和 menu extras 尚无操作合同；能发现不代表可输入；Windows 弹出菜单键盘路由需原生 menu-owner 证明；helper 按平台证据处理 |
 | 多 app 与多会话 | DTW 维护各 app 的观察状态及回执；跨连接原生资源协调 | 同连接单执行槽；原生上下文更换重置观察；Agent 无 Session 或游标管理；连接不隔离物理桌面 |
-| macOS 输入 | 语义、支持的键盘及坐标点击/内容拖拽/滚动优先定向；已识别 AppKit/Chromium 原生 hover 按已验证边界借用物理光标；必要聚焦后保持目标前台 | 具体动作、框架与物理路线边界见输入路由文档；普通 UI/快捷键关闭窗口，quit 正常退出；保存提示不强行处理；派发后失败不换路线重投 |
+| macOS 输入 | 语义、支持的键盘及坐标点击/内容拖拽/滚动优先后台；仅具体已验证的键盘形状可准备前台；虚拟光标覆盖 click/move/drag/scroll | 未知 AX、菜单、modal 或鼠标能力缺口不授权激活；后台 hover 等未验证路线干净拒绝；已证明的前台派发保持目标前台；派发后失败不换路线重投；具体边界见输入路由文档 |
 | Windows 输入 | 支持的 HWND 客户区定向左键/滚轮；其他鼠标、手势及键盘由 DTW 自动准备前台；UIA、DPI、Unicode 和正常关闭 | 不承诺后台键盘/独立物理指针；保护保存提示；安全桌面、提权与不同 DPI 环境需分别验证 |
 | Agent 光标 | macOS/Windows 按会话颜色显示动作位置和点击反馈；不显示内部身份编号 | 视觉反馈不代表业务完成；只有经证明属于 DTW 的辅助窗口可从截图排除 |
 | 取消与资源回收 | 标准 MCP cancellation、EOF/父进程退出收尾、配对释放、原回执；Windows 新输入前复核当前输入桌面，失败返回 desktop_unavailable | 已排队输入不可撤回；配对释放不被新输入禁令阻止；桌面恢复后重新观察；Windows 锁屏/切桌面的新增准入仍需专用实机验收 |
@@ -26,6 +26,7 @@ macOS 多屏坐标、跨屏移动和不同缩放比例依实际布局验证；�
 使用方法见 [安装](../install.md)、[脚本参考](../skills/desktop-world/API.md) 和随包 Skill。扩展方向与边界见 [架构](architecture.md)；真实任务指标与验证方法见 [构建和验收](building.md)；底层来源见 [原生来源](native-source-provenance.md) 和 [跨平台来源](native-source-provenance-cross-platform.md)。
 
 现行调用合同见 [Skill API](../skills/desktop-world/API.md)；已关闭的协议迁移见 [历史收敛记录](agent-protocol-convergence-plan.md)。
+统一 [Computer Use 验收 APP](../tests/fixtures/computer-use-app/README.md) 定义密集/低 AX、多窗口、文件及光标目标；[首轮基准](computer-use-benchmark-2026-11-04.md) 区分通过、失败、阻塞、未复核和未执行。目标场景不等于平台支持声明。
 合成视图目前限制 16 个可见 surface、1600px 画布、64 MiB 解码数据。
 macOS move/drag、真实系统 Open/Save 面板及单屏内手势的双屏搬移检查见
 [能力补齐验收](agent-capability-followup-acceptance.md)。跨显示器窗口的物理指针输入

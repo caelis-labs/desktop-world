@@ -70,6 +70,30 @@ local iteration, but are not the recommended full-contract test lane.
 
 ## Current external-client GUI probe
 
+The unified [Computer Use Workbench](../tests/fixtures/computer-use-app/README.md)
+combines an AppKit shell, dense native AX, a sparse drawn message feed, embedded
+WebKit, portable HTML/Canvas pages and the existing browser-workbench fixtures.
+Its [target manifest](../tests/fixtures/computer-use-app/scenarios.json) defines 42
+baseline scenarios. The current macOS entry runs 16 core business targets through
+`apps`/`exec`, plus virtual-cursor rendering, strict physical-cursor auditing and a background-focus witness:
+
+```sh
+python3 tests/acceptance/computer_use_acceptance.py \
+  --dtw /absolute/path/to/frozen/dtw --output /tmp/dtw-computer-use-core-new-run \
+  --case core-new-run --source-revision <candidate-source>
+```
+
+Use a new private output directory. The runner retains original failures, exact
+business counters, full-text fingerprints, screenshots and cleanup. Sparse-image
+review remains pending until explicit review of the hash-bound original PNG.
+`core_automation_passed`, `core_passed`, `acceptance_passed` and
+`target_baseline_passed` describe different completion levels. Standard acceptance
+requires the bounded physical-borrow policy, real helper-window position/pixels and
+a continuous foreground-witness check; raw business-runner success cannot substitute
+for these observations. Unrun platform/model/system targets never pass by omission.
+See the [first baseline and repair record](computer-use-benchmark-2026-11-04.md).
+The fixture README also documents a manual app and portable `--web-only` entry.
+
 On a macOS test desktop, the current app-scene probe builds a uniquely identified
 owned application and exercises the two advertised tools through real stdio:
 

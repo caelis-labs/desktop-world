@@ -976,9 +976,9 @@ private func coordinateMenuSurface(role: String?, associated: Bool) -> Bool {
     associated && role == kAXMenuRole
 }
 
-// AppKit modal loops need foreground delivery for keyboard and pointer input.
-// Directed-event success and a matching key window do not prove modal dispatch.
-// This is a pre-dispatch capability decision, never a retry of posted input.
+// Modal keyboard delivery is not proven by a matching key window. Keep this
+// restriction distinct from permission to activate; the worker rejects the
+// unproven route before preparation. Pointer input does not use this gate.
 private func modalInputRequiresForeground(role: String?, modal: () throws -> Bool?) throws -> Bool {
     if role == kAXSheetRole { return true }
     guard role == kAXWindowRole else { return false }
@@ -994,6 +994,17 @@ private func backgroundRequiresForeground(_ window: AXUIElement?, deadline: Dead
               CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
         return value as? Bool
     }
+}
+
+// A physical pointer requirement does not itself grant activation. Recheck at
+// actual focus establishment as well as preparation; unreadable proof propagates
+// without entering the activation branch.
+private func activationRequired(allowed: Bool, isForeground: () throws -> Bool) throws -> Bool {
+    if try isForeground() { return false }
+    guard allowed else {
+        throw failure("foreground_required", "This input has no proven capability to activate an inactive application")
+    }
+    return true
 }
 
 // Keep unavailable native proof distinct from a proven different front app.
@@ -2210,6 +2221,38 @@ private func semanticTextContains(_ text: String, needle: String) -> Bool {
                         range: NSRange(location: 0, length: min(source.length, 4_096))).location != NSNotFound
 }
 
+// Matching has its own observation-wide UTF-16 budget; published fields remain
+// 256-scalar previews. A proven node match needs no further field searches.
+private struct NativeTextSearchBudget {
+    var remaining = 1_048_576
+
+    mutating func search(_ text: String, needle: String) -> (matched: Bool, unsearched: Bool) {
+        let source = text as NSString
+        let length = min(source.length, remaining)
+        remaining -= length
+        let matched = source.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive],
+                                   range: NSRange(location: 0, length: length)).location != NSNotFound
+        return (matched, length < source.length)
+    }
+}
+
+private struct NativeNodeTextMatch {
+    var matched: Bool
+    private var unsearchedText = false
+    var incomplete: Bool { !matched && unsearchedText }
+
+    mutating func includePreview(_ fields: SemanticTextFields, needle: String?) {
+        matched = matched || fields.matches(needle)
+    }
+
+    mutating func inspect(_ text: String, needle: String, budget: inout NativeTextSearchBudget) {
+        guard !matched else { return }
+        let result = budget.search(text, needle: needle)
+        matched = result.matched
+        unsearchedText = unsearchedText || result.unsearched
+    }
+}
+
 private func finitePositiveRect(_ rect: CGRect) -> Bool {
     [rect.minX, rect.minY, rect.width, rect.height].allSatisfy(\.isFinite) && rect.width > 0 && rect.height > 0
 }
@@ -2334,6 +2377,7 @@ private struct NativeObservation {
     var discoveryRoot: AXUIElement? = nil
     var menuScope = false
     var textSnapshots: [UInt64: String] = [:]
+    var textSearchBudget = NativeTextSearchBudget()
     var elements: [NativeElement] = []
     var pending: [DiscoveryFrame]
     var visited: [CFHashCode: [AXUIElement]] = [:]
@@ -3760,26 +3804,28 @@ private final class NativeStore: @unchecked Sendable {
                     // A nonmatching parent is still traversed. Expensive name,
                     // value and pressability reads are needed only for matches.
                     if let required = observation.query.role, required != normalizedRole { continue }
-                    var matched = observation.query.text == nil
+                    var textMatch = NativeNodeTextMatch(matched: observation.query.text == nil)
                     func text(_ attribute: String) throws -> String? {
                         let value = try axAttribute(element, attribute, pageDeadline)
                         guard let text = (value as? String) ?? (value as? NSNumber)?.stringValue else { return nil }
                         if let needle = observation.query.text {
-                            let source = text as NSString
-                            let length = min(source.length, 4_096)
-                            if source.length > length { observation.note("text_limit") }
-                            if semanticTextContains(text, needle: needle) { matched = true }
+                            textMatch.inspect(text, needle: needle, budget: &observation.textSearchBudget)
+                            try pageDeadline.check()
                         }
                         return String(String.UnicodeScalarView(text.unicodeScalars.prefix(256)))
                     }
                     let title = try text(kAXTitleAttribute)
                     let value = try text(kAXValueAttribute)
-                    let descriptionRead = try optionalDescription(alreadyMatched: matched) {
+                    let descriptionRead = try optionalDescription(alreadyMatched: textMatch.matched) {
                         try text(kAXDescriptionAttribute)
                     }
                     if descriptionRead.incompleteMatch { observation.note("node_unavailable") }
                     let fields = SemanticTextFields(role: role, title: title, value: value, description: descriptionRead.text)
-                    guard matched || fields.matches(observation.query.text) else { continue }
+                    textMatch.includePreview(fields, needle: observation.query.text)
+                    guard textMatch.matched else {
+                        if textMatch.incomplete { observation.note("text_limit") }
+                        continue
+                    }
                     // Only possible text/role matches need a visible-region
                     // proof. A native scroll viewport clips its descendants;
                     // this is not WindowServer occlusion or pixel evidence.
@@ -4311,8 +4357,11 @@ private final class NativeStore: @unchecked Sendable {
     }
 
     private func borrowFocus(_ target: NativeTarget, _ window: AXUIElement?, _ context: RequestContext,
-                             inputPoint: CGPoint? = nil) throws {
+                             inputPoint: CGPoint? = nil, allowActivation: Bool = true) throws {
         guard !dtwInputStopping() else { throw failure("native_stopping", "Input admission is closing") }
+        if !allowActivation {
+            _ = try activationRequired(allowed: false) { try windowServerFrontmost(target.app.pid, context.deadline) }
+        }
         let focusID = try window.map { try axWindowID($0, context.deadline) } ?? target.nativeID
         if let focusCleanupFailure { throw focusCleanupFailure }
         if let prior = borrowedFocus {
@@ -4354,7 +4403,7 @@ private final class NativeStore: @unchecked Sendable {
     }
 
     private func establishVisualFocus(_ target: NativeTarget, _ context: RequestContext,
-                                      changed: inout Bool) throws -> CGRecord {
+                                      allowActivation: Bool, changed: inout Bool) throws -> CGRecord {
         let surface = try validateSurface(target, context)
         guard dtwAccessibilityGranted(request: true) else {
             let error = dtwPermissionError("accessibility")
@@ -4364,7 +4413,9 @@ private final class NativeStore: @unchecked Sendable {
               !focusObserver.invalidated(scope.activationEpoch) else {
             throw failure("focus_changed", "Visual input lost its admitted foreground scope")
         }
-        if try !windowServerFrontmost(target.app.pid, context.deadline) {
+        if try activationRequired(allowed: allowActivation, isForeground: {
+            try windowServerFrontmost(target.app.pid, context.deadline)
+        }) {
             guard let _: Bool = try dtwWithInputAdmission({
                 try context.deadline.check()
                 changed = true
@@ -4544,12 +4595,8 @@ private final class NativeStore: @unchecked Sendable {
             guard dtwAccessibilityGranted(request:true) else {let e=dtwPermissionError("accessibility");throw failure("permission_required",e["message"] as! String)}
             guard let keys=request["keys"] as? [String],dtwChordPlan(keys) != nil else {throw failure("invalid_keys","Unsupported application shortcut")}
             guard CGEventSource.flagsState(.combinedSessionState).intersection([.maskCommand,.maskControl,.maskAlternate,.maskShift]).isEmpty else {throw failure("input_busy","Session modifiers are held")}
-            guard let source=CGEventSource(stateID:.privateState),let chord=dtwChord(keys,source:source),let application=NSRunningApplication(processIdentifier:app.pid) else {throw failure("input_unavailable","Cannot prepare application shortcut")}
-            if dtwFrontProcessMatches(app.pid) != 1 {
-                guard let accepted=dtwWithInputAdmission({changed=true;return application.activate(options:[])}),accepted else {throw failure("focus_failed","Application activation was not accepted")}
-                let until=min(context.deadline.uptime,ProcessInfo.processInfo.systemUptime+1)
-                while dtwFrontProcessMatches(app.pid) != 1 && ProcessInfo.processInfo.systemUptime<until {try context.deadline.check();RunLoop.current.run(until:Date().addingTimeInterval(0.01))}
-            }
+            guard let source=CGEventSource(stateID:.privateState),let chord=dtwChord(keys,source:source) else {throw failure("input_unavailable","Cannot prepare application shortcut")}
+            _ = try activationRequired(allowed: false) { try windowServerFrontmost(app.pid, context.deadline) }
             func check() throws {
                 try context.deadline.check();try context.verify(app)
                 guard !dtwInputStopping() else {throw failure("native_stopping","Application shortcut stopped")}
@@ -4617,7 +4664,8 @@ private final class NativeStore: @unchecked Sendable {
             }
             let visual = request["visual"] as? Bool == true
             let window: CandidateWindow? = visual ? nil : try establishFocus(target, context, changed: &changed)
-            let surface = try window?.cg ?? establishVisualFocus(target, context, changed: &changed)
+            let surface = try window?.cg ?? establishVisualFocus(target, context,
+                allowActivation: request["_allow_activation"] as? Bool != false, changed: &changed)
             observations = observations.filter { $0.value.target != target }
             func check(focus: Bool = true) throws {
                 try context.deadline.check()
@@ -4959,7 +5007,7 @@ private final class NativeStore: @unchecked Sendable {
             let enabled = try axAttribute(element.element, kAXEnabledAttribute, context.deadline) as? Bool == true
             if try menuOwned(element.element, target: target, deadline: context.deadline),
                try !focused(target, window.element, context.deadline) {
-                throw failure("target_not_focused", "App menu actions require this exact window focused; focus it and observe the menu again")
+                throw failure("foreground_required", "App menu actions require the exact destination window already focused")
             }
             guard try pressable(element.element, role: role, enabled: enabled, window: window.element,
                                 target: target, deadline: context.deadline) else {
@@ -5025,7 +5073,8 @@ private final class NativeStore: @unchecked Sendable {
                     point = CGPoint(x: x, y: y)
                 } else { point = nil }
                 let isMenu = try window.map { try axAttribute($0.element, kAXRoleAttribute, context.deadline) as? String == kAXMenuRole } ?? false
-                try borrowFocus(target, isMenu ? nil : window?.element, context, inputPoint: point)
+                try borrowFocus(target, isMenu ? nil : window?.element, context, inputPoint: point,
+                                allowActivation: request["_allow_activation"] as? Bool != false)
                 return ["prepared": true, "borrowed": borrowedFocus?.changedForeground ?? false,
                         "target": target.json, "bounds": surface.coordinates, "surface_owner": surfaceOwner(target)]
             case "release_focus": return try releaseFocus(context.deadline)
@@ -5064,43 +5113,24 @@ private final class NativeStore: @unchecked Sendable {
                             "input_framework":framework,
                             "chromium":framework == "chromium"]
                 }
-                do {
-                    let current = try validateSurface(target, context)
-                    let window = try validate(target, context).element
-                    var result: [String: Any] = ["target": target.json, "bounds": current.coordinates, "surface_owner": surfaceOwner(target),
-                        "background_requires_foreground": try backgroundRequiresForeground(window,
-                            deadline: context.deadline)]
-                    if request["consume"] as? Bool == true {
-                        let validation = BackgroundInputValidation(target: target, deadlineMilliseconds: milliseconds,
-                            keyboard: keyboard, context: context, window: window)
-                        try validation.checkModalState { _ = try self.validateSurface(target, validation.context) }
-                        observations = observations.filter { $0.value.target != target }
-                        guard let owner = try context.app(target.app.pid), owner.app == target.app else {
-                            throw failure("app_changed", "Native app identity changed during input route selection")
-                        }
-                        let frameworks = URL(fileURLWithPath: owner.metadata.path).appendingPathComponent("Contents/Frameworks")
-                        let known = ["Electron Framework.framework", "Chromium Framework.framework",
-                                     "Google Chrome Framework.framework", "Google Chrome Beta Framework.framework",
-                                     "Google Chrome Dev Framework.framework", "Google Chrome Canary Framework.framework",
-                                     "Microsoft Edge Framework.framework", "Brave Browser Framework.framework"]
-                        result["chromium"] = known.contains { name in
-                            var directory: ObjCBool = false
-                            return FileManager.default.fileExists(atPath: frameworks.appendingPathComponent(name).path,
-                                                                  isDirectory: &directory) && directory.boolValue
-                        }
-                        try context.verify(target.app)
-                        backgroundValidation = validation
-                    }
-                    return result
-                } catch let error as NativeFailure where requiresVisualInput(error) {
-                    // This is route selection before any background input.
-                    // A missing AX capability declines that optimization; the
-                    // physical route must independently re-prove its admission.
-                    let current = try validateSurface(target, context)
-                    return ["target": target.json, "bounds": current.coordinates,
-                            "surface_owner": surfaceOwner(target), "background_requires_foreground": true,
-                            "foreground_reason": error.code]
+                // Missing or unreadable AX/modal proof stays an error. It cannot
+                // grant activation or replace the exact keyboard destination.
+                let current = try validateSurface(target, context)
+                let window = try validate(target, context).element
+                let framework = try inputFramework(target, context)
+                let result: [String: Any] = ["target": target.json, "bounds": current.coordinates,
+                    "surface_owner": surfaceOwner(target), "input_framework": framework,
+                    "background_requires_foreground": try backgroundRequiresForeground(window,
+                        deadline: context.deadline)]
+                if request["consume"] as? Bool == true {
+                    let validation = BackgroundInputValidation(target: target, deadlineMilliseconds: milliseconds,
+                        keyboard: keyboard, context: context, window: window)
+                    try validation.checkModalState { _ = try self.validateSurface(target, validation.context) }
+                    observations = observations.filter { $0.value.target != target }
+                    try context.verify(target.app)
+                    backgroundValidation = validation
                 }
+                return result
             case "validate_input_owner":
                 let app = try NativeApp(request["app"])
                 try context.verify(app)

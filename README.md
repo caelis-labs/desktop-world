@@ -62,4 +62,4 @@ covers Windows 11, ordinary user access and a primary display at 125% scaling.
 Linux is experimental. Lock-screen use and remote control are not supported.
 
 [Installation](install.md) · [Capabilities and limits](docs/product-matrix.md) ·
-[MIT license](LICENSE)
+[Computer Use acceptance app](tests/fixtures/computer-use-app/README.md) · [MIT license](LICENSE)

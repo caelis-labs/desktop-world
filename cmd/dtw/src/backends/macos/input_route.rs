@@ -34,6 +34,13 @@ pub(super) fn pointer_reason(operation: &str, framework: &str) -> Option<Physica
         .then_some(PhysicalReason::NativeHoverTracking)
 }
 
+/// Physical cursor capability and application activation are separate decisions.
+/// Neither hover tracking nor a missing addressed API proves that an inactive
+/// app must be activated. Unknown reasons cannot grant activation either.
+pub(super) fn allows_activation(reason: &str) -> bool {
+    matches!(reason, "explicit_focus" | "native_keyboard_semantics")
+}
+
 /// An explicit unsupported capability must also be cleanly not dispatched.
 /// A backend flag/message alone cannot authorize a second delivery path.
 pub(super) fn fallback_reason(result: &serde_json::Value) -> Option<PhysicalReason> {
@@ -46,7 +53,19 @@ pub(super) fn fallback_reason(result: &serde_json::Value) -> Option<PhysicalReas
     }
     match result["capability_evidence"].as_str()? {
         "addressed_event_api_unavailable" => Some(PhysicalReason::MissingAddressedApi),
-        "native_keyboard_semantics" => Some(PhysicalReason::KeyboardSemantics),
+        "native_keyboard_semantics"
+            if matches!(
+                result["capability_detail"].as_str(),
+                Some(
+                    "chromium_command_a"
+                        | "chromium_supplementary_unicode"
+                        | "appkit_command_w"
+                        | "appkit_multiline_text"
+                )
+            ) =>
+        {
+            Some(PhysicalReason::KeyboardSemantics)
+        }
         _ => None,
     }
 }
@@ -83,6 +102,50 @@ mod tests {
             Some(PhysicalReason::NativeHoverTracking)
         );
     }
+    #[test]
+    fn cursor_tracking_and_unknown_reasons_never_authorize_activation() {
+        for reason in [
+            "native_hover_tracking",
+            "addressed_event_api_unavailable",
+            "unknown",
+            "ax_unavailable",
+            "modal_state_unproven",
+            "keyboard_focus_requires_activation",
+            "associated_surface_requires_foreground",
+        ] {
+            assert!(!allows_activation(reason), "{reason}");
+        }
+        for reason in ["explicit_focus", "native_keyboard_semantics"] {
+            assert!(allows_activation(reason), "{reason}");
+        }
+    }
+
+    #[test]
+    fn keyboard_fallback_requires_a_known_bounded_capability_detail() {
+        let mut result = json!({"dispatch":"not_dispatched", "fallback_allowed":true,
+            "error":{"code":"background_unavailable"}, "capability_evidence":"native_keyboard_semantics"});
+        for detail in [
+            serde_json::Value::Null,
+            json!("generic_command"),
+            json!(true),
+        ] {
+            result["capability_detail"] = detail;
+            assert_eq!(fallback_reason(&result), None);
+        }
+        for detail in [
+            "chromium_command_a",
+            "chromium_supplementary_unicode",
+            "appkit_command_w",
+            "appkit_multiline_text",
+        ] {
+            result["capability_detail"] = json!(detail);
+            assert_eq!(
+                fallback_reason(&result),
+                Some(PhysicalReason::KeyboardSemantics)
+            );
+        }
+    }
+
     #[test]
     fn errors_or_uncertain_preparation_never_authorize_fallback() {
         for dispatch in ["dispatched", "unknown", "not_dispatched"] {

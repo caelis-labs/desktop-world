@@ -47,8 +47,11 @@ impl TestGate {
     }
 }
 
+type ControlledSemanticPage = Result<(Vec<Element>, DiscoveryPage), Error>;
+
 struct Model {
     semantic_elements: Option<Vec<Element>>,
+    semantic_pages: std::collections::VecDeque<ControlledSemanticPage>,
     window_semantics: HashMap<u64, Vec<Element>>,
     filtered_observation: bool,
     menu_scope: bool,
@@ -96,6 +99,7 @@ impl MockBackend {
         Self(Arc::new(Shared {
             model: Mutex::new(Model {
                 semantic_elements: None,
+                semantic_pages: std::collections::VecDeque::new(),
                 window_semantics: HashMap::new(),
                 filtered_observation: false,
                 menu_scope: false,
@@ -359,6 +363,19 @@ impl Backend for MockBackend {
             return Err(Error::UnsupportedCapability);
         }
         self.0.observe_queries.lock().unwrap().push(query.clone());
+        let controlled = self.0.model.lock().unwrap().semantic_pages.pop_front();
+        if let Some(page) = controlled {
+            call.remaining()?;
+            self.0.observes.fetch_add(1, Ordering::SeqCst);
+            let (elements, discovery) = page?;
+            return Ok(BackendObservation {
+                target: target.clone(),
+                elements,
+                image: None,
+                binding: (),
+                discovery: Some(discovery),
+            });
+        }
         let mut observed = self.observe(target, call)?;
         observed.elements.retain(|element| {
             query.role.as_ref().is_none_or(|role| element.role == *role)
@@ -379,6 +396,28 @@ impl Backend for MockBackend {
             visited: observed.elements.len() as u32,
         });
         Ok(observed)
+    }
+    fn continue_observation(
+        &self,
+        target: &WindowTarget,
+        _: &(),
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservationPage, Error> {
+        call.remaining()?;
+        self.0.observes.fetch_add(1, Ordering::SeqCst);
+        let (elements, discovery) = self
+            .0
+            .model
+            .lock()
+            .unwrap()
+            .semantic_pages
+            .pop_front()
+            .ok_or(Error::UnsupportedCapability)??;
+        Ok(BackendObservationPage {
+            target: target.clone(),
+            elements,
+            discovery,
+        })
     }
     fn read_text(
         &self,

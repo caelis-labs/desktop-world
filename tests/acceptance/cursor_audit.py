@@ -18,19 +18,33 @@ import select
 import subprocess
 import sys
 
+POLICY_VERSION = 'bounded-pointer-borrow-v3'
+MAX_SAMPLE_GAP_MS = 50
+POINTER_OPERATIONS = {'click', 'move', 'drag', 'scroll'}
+
 
 def trace(samples):
-    valid = [row for row in samples if 'x' in row and 'y' in row]
-    if len(valid) < 2 or len(valid) != len(samples):
-        return {'status': 'oracle_unavailable', 'samples': len(samples)}
+    valid = [row for row in samples if all(isinstance(row.get(k), (int, float))
+             and math.isfinite(row[k]) for k in ('x', 'y', 'unix_ms'))]
+    timestamps = [row['unix_ms'] for row in samples
+                  if isinstance(row.get('unix_ms'), (int, float)) and math.isfinite(row['unix_ms'])]
+    max_gap = max((b - a for a, b in zip(timestamps, timestamps[1:])), default=0)
+    if (len(valid) < 2 or len(valid) != len(samples)
+            or any(b['unix_ms'] < a['unix_ms'] for a, b in zip(valid, valid[1:]))):
+        return {'status': 'oracle_unavailable', 'samples': len(samples),
+                'max_sample_gap_ms': max_gap}
     first = valid[0]
     distance = lambda row: math.hypot(row['x'] - first['x'], row['y'] - first['y'])
     transitions = sum((a['x'], a['y']) != (b['x'], b['y']) for a, b in zip(valid, valid[1:]))
     maximum = max(distance(row) for row in valid)
     return {'status': 'moved' if maximum > 0 else 'stable', 'samples': len(samples),
+            'sample_start_unix_ms': first['unix_ms'], 'sample_end_unix_ms': valid[-1]['unix_ms'],
+            'transition_intervals': [{'start_unix_ms': a['unix_ms'], 'end_unix_ms': b['unix_ms']}
+                                     for a, b in zip(valid, valid[1:])
+                                     if (a['x'], a['y']) != (b['x'], b['y'])],
             'before': [first['x'], first['y']], 'after': [valid[-1]['x'], valid[-1]['y']],
             'max_displacement_points': round(maximum, 3), 'transitions': transitions,
-            'max_sample_gap_ms': round(max((b['unix_ms'] - a['unix_ms'] for a, b in zip(valid, valid[1:])), default=0), 3)}
+            'max_sample_gap_ms': max_gap}
 
 
 def summarize(root, samples):
@@ -102,30 +116,123 @@ def directed_experiments(root, samples):
     return rows
 
 
+def borrow_intervals(records):
+    """Pair the complete transport log before assigning intervals to MCP calls."""
+    groups, errors, intervals = {}, [], []
+    for record in records:
+        key = (record.get('pid'), record.get('trace_id'))
+        if not all(isinstance(value, int) and not isinstance(value, bool) and value > 0 for value in key):
+            errors.append('invalid borrow interval identity')
+            continue
+        groups.setdefault(key, []).append(record)
+    for records in groups.values():
+        if len(records) != 2 or [r.get('phase') for r in records] != ['begin', 'end']:
+            errors.append('incomplete or duplicate borrow interval')
+            continue
+        begin, end = records
+        fields = ('pid', 'trace_id', 'operation', 'window', 'route', 'reason')
+        if (any(k not in begin or k not in end or begin[k] != end[k] for k in fields)
+                or begin.get('window') is None):
+            errors.append('borrow interval metadata mismatch')
+            continue
+        start, stop = begin.get('at_unix_ms'), end.get('at_unix_ms')
+        if (not all(isinstance(t, (int, float)) and math.isfinite(t) for t in (start, stop))
+                or start > stop):
+            errors.append('invalid borrow interval bounds')
+            continue
+        intervals.append({**{k: begin.get(k) for k in fields},
+                          'start_unix_ms': start, 'end_unix_ms': stop})
+    return intervals, errors
+
+
 def attach_routes(root, rows):
-    traces = {}
+    traces, interval_records, errors = {}, {}, {}
     for path in root.rglob('dtw-stderr.log'):
         transport = str(path.parent.relative_to(root))
         for line in path.read_text().splitlines():
-            if line.startswith('dtw_input '):
-                traces.setdefault(transport, []).append(json.loads(line.removeprefix('dtw_input ')))
+            for prefix, store in [('dtw_input ', traces), ('dtw_input_interval ', interval_records)]:
+                if line.startswith(prefix):
+                    try:
+                        record = json.loads(line.removeprefix(prefix))
+                        if not isinstance(record, dict):
+                            raise ValueError('trace must be an object')
+                        store.setdefault(transport, []).append(record)
+                    except ValueError:
+                        errors.setdefault(transport, []).append('malformed input trace')
+    transports = set(traces) | set(interval_records) | set(errors)
+    paired = {transport: borrow_intervals(interval_records.get(transport, [])) for transport in transports}
     for row in rows:
+        transport = str(Path(row['transcript']).parent)
+        intervals, issues = paired.get(transport, ([], []))
+        # Unpairable evidence cannot safely be localized to one action.
+        row['interval_errors'] = issues + errors.get(transport, [])
+        row['borrow_intervals'] = []
+        row['routes'] = []
         if 'start_unix_ms' in row and 'end_unix_ms' in row:
-            row['routes'] = [route for route in traces.get(str(Path(row['transcript']).parent), [])
-                             if row['start_unix_ms'] <= route['at_unix_ms'] <= row['end_unix_ms']]
+            start, end = row['start_unix_ms'], row['end_unix_ms']
+            row['routes'] = [route for route in traces.get(transport, [])
+                             if isinstance(route.get('at_unix_ms'), (int, float))
+                             and start <= route['at_unix_ms'] <= end]
+            row['borrow_intervals'] = [interval for interval in intervals
+                                       if interval['start_unix_ms'] <= end
+                                       and interval['end_unix_ms'] >= start]
+
+
+def allowed_borrow(interval):
+    operation, reason = interval.get('operation'), interval.get('reason')
+    return interval.get('route') == 'borrowed' and (
+        (reason == 'native_hover_tracking' and operation == 'move') or
+        (reason == 'addressed_event_api_unavailable' and operation in POINTER_OPERATIONS))
 
 
 def independence_violation(row):
-    routes = row.get('routes', [])
-    borrowed = [route for route in routes if route['route'] == 'borrowed']
-    supported = {'native_hover_tracking','addressed_event_api_unavailable'}
-    if any(route['reason'] not in supported for route in borrowed):
-        return 'physical borrowing lacks classified capability evidence'
-    if routes and not borrowed and row['cursor']['status'] != 'stable':
-        return 'independent route did not preserve the sampled system cursor'
-    if not routes and any(method in ['click','move','drag','scroll'] for method in row.get('methods', [])) \
-            and any(row.get('dispatch', {}).get(state, 0) for state in ['dispatched', 'unknown']):
-        return 'native input route evidence missing'
+    cursor, routes = row['cursor'], row.get('routes', [])
+    if cursor['status'] not in ('stable', 'moved'):
+        return 'system cursor oracle unavailable or request incomplete'
+    gap = cursor.get('max_sample_gap_ms')
+    if (not isinstance(gap, (int, float)) or isinstance(gap, bool)
+            or not math.isfinite(gap) or gap < 0 or gap > MAX_SAMPLE_GAP_MS):
+        return 'system cursor sample gap exceeds policy or is unavailable'
+    start, end = row.get('start_unix_ms'), row.get('end_unix_ms')
+    if (start is None or end is None or start > end
+            or cursor.get('sample_start_unix_ms', float('inf')) > start
+            or cursor.get('sample_end_unix_ms', float('-inf')) < end):
+        return 'system cursor samples do not bracket the complete request and cleanup'
+    if row.get('interval_errors'):
+        return 'invalid or incomplete borrow interval evidence'
+    intervals = row.get('borrow_intervals', [])
+    for interval in intervals:
+        if (not allowed_borrow(interval)
+                or not start <= interval['start_unix_ms'] <= interval['end_unix_ms'] <= end):
+            return 'physical borrowing lacks bounded classified capability evidence'
+    for route in routes:
+        if route.get('route') == 'borrowed':
+            if not allowed_borrow(route):
+                return 'physical borrowing lacks classified capability evidence'
+            if not any(all(route.get(k) == interval.get(k) for k in ('pid', 'window', 'operation', 'reason'))
+                       and interval['start_unix_ms'] <= route.get('at_unix_ms', -1) <= interval['end_unix_ms']
+                       for interval in intervals):
+                return 'event-only borrowed route is insufficient; bounded interval required'
+    pointer_methods = POINTER_OPERATIONS.intersection(row.get('methods', []))
+    if pointer_methods and any(row.get('dispatch', {}).get(state, 0) for state in ('dispatched', 'unknown')):
+        # The aggregate receipt cannot identify individual dispatches in a script;
+        # require metadata for every pointer operation shape it contains.
+        for operation in pointer_methods:
+            evidence = [route for route in routes
+                        if (route.get('operation') == operation
+                            and route.get('route') in ('native', 'addressed', 'borrowed'))
+                        or (operation == 'click' and route.get('operation') == 'press'
+                            and route.get('route') == 'native' and route.get('reason') == 'ax_action')]
+            if len(evidence) < row.get('methods', []).count(operation):
+                return 'native input route evidence missing'
+    if cursor['status'] == 'moved':
+        transitions = cursor.get('transition_intervals', [])
+        if not transitions:
+            return 'cursor movement lacks sample transition evidence'
+        for transition in transitions:
+            if not any(interval['start_unix_ms'] <= transition['start_unix_ms']
+                       <= transition['end_unix_ms'] <= interval['end_unix_ms'] for interval in intervals):
+                return 'sampled system cursor movement outside an allowed borrow interval (actor undetermined)'
     return None
 
 
@@ -167,7 +274,8 @@ def main():
                   for row in rows if (issue := independence_violation(row))]
     if args.assert_independent and not rows:
         violations.append({'failure':'no MCP requests were observed inside the audit directory'})
-    report = {'coordinate_space': 'global_screen_points', 'requested_sample_interval_ms': 2,
+    report = {'policy_version': POLICY_VERSION, 'max_sample_gap_ms_policy': MAX_SAMPLE_GAP_MS,
+              'coordinate_space': 'global_screen_points', 'requested_sample_interval_ms': 2,
               'limits': ['Actual sample gaps are recorded per call; shorter excursions can be missed.',
                          'Position changes alone do not identify the actor. Match them to delivery source and fixture effects.'],
               'probe_returncode': code, 'calls': rows, 'independence_violations': violations,

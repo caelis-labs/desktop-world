@@ -4,7 +4,7 @@ use std::{
     cell::RefCell,
     ffi::{c_void, CStr, CString},
     io::{BufRead, Read, Write},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 #[path = "../../scene_lease.rs"]
@@ -159,15 +159,51 @@ fn now_ms() -> u64 {
         .unwrap_or_default()
         .as_millis() as u64
 }
+fn route_trace(request: &Value, route: &str, reason: &str) -> Value {
+    let mut record = json!({"at_unix_ms":now_ms(),"pid":std::process::id(),
+        "operation":request["operation"],"window":request["target"]["native_id"],"route":route,"reason":reason});
+    if reason == "native_keyboard_semantics" {
+        record["capability_detail"] = request["_keyboard_capability"].clone();
+    }
+    record
+}
 fn trace_route(request: &Value, route: &str, reason: &str) {
     if std::env::var("DTW_INPUT_TRACE").ok().as_deref() == Some("1") {
-        eprintln!(
-            "dtw_input {}",
-            json!({"at_unix_ms":now_ms(),"pid":std::process::id(),
-            "operation":request["operation"],"window":request["target"]["native_id"],"route":route,"reason":reason})
-        );
+        eprintln!("dtw_input {}", route_trace(request, route, reason));
     }
 }
+// Owned metadata survives dispatch_owned consuming the request. Drop closes even
+// early-error paths; a killed worker leaves an incomplete interval for the audit.
+struct PointerBorrowTrace(Value);
+impl PointerBorrowTrace {
+    fn begin(request: &Value, reason: &str) -> Option<Self> {
+        if std::env::var("DTW_INPUT_TRACE").ok().as_deref() != Some("1") {
+            return None;
+        }
+        let trace = Self(Self::metadata(request, reason));
+        trace.emit("begin");
+        Some(trace)
+    }
+    fn metadata(request: &Value, reason: &str) -> Value {
+        static NEXT_TRACE: AtomicU64 = AtomicU64::new(1);
+        json!({"pid":std::process::id(),
+            "trace_id":NEXT_TRACE.fetch_add(1, Ordering::Relaxed),
+            "operation":request["operation"],"window":request["target"]["native_id"],
+            "route":"borrowed","reason":reason})
+    }
+    fn emit(&self, phase: &str) {
+        let mut record = self.0.clone();
+        record["phase"] = json!(phase);
+        record["at_unix_ms"] = json!(now_ms());
+        eprintln!("dtw_input_interval {}", record);
+    }
+}
+impl Drop for PointerBorrowTrace {
+    fn drop(&mut self) {
+        self.emit("end");
+    }
+}
+
 pub(super) fn remaining(request: &Value) -> Duration {
     Duration::from_millis(
         request["deadline_unix_ms"]
@@ -471,12 +507,12 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
         // Preserve the independently proven owner for foreground capture and
         // pointer presentation, without changing the logical app identity.
         // CUA cannot direct input to a different process on this app's behalf.
-        return BackgroundAttempt::Declined("associated_surface_requires_foreground".into());
+        return BackgroundAttempt::Completed(foreground_required("associated_keyboard_unproven"));
     }
     if keyboard {
         match modal_input_requires_foreground(&before) {
             Ok(true) => {
-                return BackgroundAttempt::Declined("keyboard_focus_requires_activation".into())
+                return BackgroundAttempt::Completed(foreground_required("modal_keyboard_unproven"))
             }
             Ok(false) => (),
             Err(error) => return BackgroundAttempt::Completed(rejected(error, &op)),
@@ -508,7 +544,7 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
     }
     let mut input = json!({"operation":op,"pid":if keyboard {request["target"]["app"]["pid"].clone()} else {before["surface_owner"]["pid"].clone()},
         "window_id":request["target"]["native_id"],"deadline_unix_ms":request["deadline_unix_ms"],
-        "chromium":before["chromium"].as_bool().unwrap_or(false),
+        "input_framework":before["input_framework"].as_str().unwrap_or("unknown"),
         "screen_x":x,"screen_y":y,"window_x":x-left,"window_y":y-top});
     for key in ["count", "button", "delta_x", "delta_y", "text", "keys"] {
         if let Some(value) = request.get(key) {
@@ -540,6 +576,9 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
         validate_background,
     );
     target.failures.borrow().apply(&mut result);
+    if result["capability_evidence"] == "native_keyboard_semantics" {
+        request["_keyboard_capability"] = result["capability_detail"].clone();
+    }
     if let Some(error) = super::scroll_guard::failure() {
         if result["error"].is_object() {
             result["error"]["code"] = error["error"].clone();
@@ -819,6 +858,14 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
     } else {
         None
     };
+    let pointer_borrow = if physical && matches!(op, "click" | "move" | "drag" | "scroll") {
+        PointerBorrowTrace::begin(
+            &request,
+            foreground_reason.as_deref().unwrap_or("explicit_focus"),
+        )
+    } else {
+        None
+    };
     let mut borrowed = false;
     if physical && op != "release_focus" {
         trace_route(
@@ -830,6 +877,12 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
             },
             foreground_reason.as_deref().unwrap_or("explicit_focus"),
         );
+        // Cursor borrowing alone never grants application activation. Native
+        // preparation and the eventual focus check both enforce this flag, so
+        // losing foreground after preflight cannot turn hover into activation.
+        request["_allow_activation"] = json!(super::input_route::allows_activation(
+            foreground_reason.as_deref().unwrap_or("explicit_focus")
+        ));
         // Coordinate input need not depend on AX. Keyboard and explicit focus
         // retain exact-window and editing-destination validation on every down.
         request["visual"] = json!(super::input_route::visual_focus(op));
@@ -890,6 +943,9 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
     // action runs in a sibling scene worker. Its final release_focus acquires
     // exclusive coordination anew. If another background operation outlives the
     // cleanup budget, cleanup stays unconfirmed rather than interrupting it.
+    // Includes dispatch, paired input release, and foreground-return cleanup;
+    // close before releasing the HID lease so a peer cannot enter this interval.
+    drop(pointer_borrow);
     drop(_input);
     drop(instance_lease);
     drop(coordination);
@@ -1054,6 +1110,36 @@ pub(super) fn validate_reply(reply: &Value, target: &Value) -> Result<(), Value>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keyboard_trace_identifies_the_capability_without_text_or_key_payloads() {
+        let request = json!({"operation":"keypress", "target":{"native_id":42},
+            "_keyboard_capability":"appkit_command_w", "text":"private note", "keys":["META","W"]});
+        let trace = route_trace(&request, "activated", "native_keyboard_semantics");
+        assert_eq!(trace["capability_detail"], "appkit_command_w");
+        assert_eq!(trace["operation"], "keypress");
+        assert!(trace.get("text").is_none());
+        assert!(trace.get("keys").is_none());
+        assert!(route_trace(&request, "addressed", "pid_window_event")
+            .get("capability_detail")
+            .is_none());
+    }
+
+    #[test]
+    fn pointer_borrow_trace_owns_bounded_metadata_and_unique_identity() {
+        let request = json!({"operation":"move","target":{"native_id":42},
+            "text":"private payload","path":[[1,2],[3,4]]});
+        let first = PointerBorrowTrace::metadata(&request, "native_hover_tracking");
+        let second = PointerBorrowTrace::metadata(&request, "native_hover_tracking");
+        drop(request); // dispatch_owned can consume it before the end trace.
+        assert_eq!(first["operation"], "move");
+        assert_eq!(first["window"], 42);
+        assert_eq!(first["pid"], std::process::id());
+        assert_ne!(first["trace_id"], second["trace_id"]);
+        assert_eq!(first.as_object().unwrap().len(), 6);
+        assert!(first.get("text").is_none());
+        assert!(first.get("path").is_none());
+    }
 
     #[test]
     fn association_pixels_require_scene_role_and_live_admission() {
@@ -1224,10 +1310,10 @@ mod tests {
     #[test]
     fn only_undispatched_preflight_declines_allow_another_route() {
         let reason = "native_keyboard_semantics";
-        let declined = background_result(
-            json!({"dispatch":"not_dispatched","fallback_allowed":true,
-            "capability_evidence":reason,"error":{"code":"background_unavailable","message":reason}}),
-        );
+        let declined =
+            background_result(json!({"dispatch":"not_dispatched","fallback_allowed":true,
+            "capability_evidence":reason,"capability_detail":"chromium_command_a",
+            "error":{"code":"background_unavailable","message":reason}}));
         assert!(matches!(declined, BackgroundAttempt::Declined(value) if value == reason));
         for dispatch in ["dispatched", "unknown"] {
             let attempt = background_result(json!({"dispatch":dispatch,"fallback_allowed":true}));

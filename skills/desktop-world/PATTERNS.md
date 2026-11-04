@@ -74,9 +74,10 @@ await app.look({scope:'menu',text:'File'});
 ```
 
 Menu inspection uses the native app-menu scope without preparing focus. A known
-menu command can use `click({selector:{scope:'menu',text:'Open…'}})`; DTW checks
-uniqueness before any necessary window focus preparation. This scope still needs
-a proven app window. Windowless menu extras and Dock roots are separate capabilities.
+menu command can use `click({selector:{scope:'menu',text:'Open…'}})` when its exact
+native destination is already focused. DTW checks uniqueness and returns
+`foreground_required` rather than implicitly activating an inactive app. This scope
+still needs a proven app window. Windowless menu extras and Dock roots are separate capabilities.
 
 ## Dialogs and application lifecycle
 
@@ -88,7 +89,10 @@ still settling; avoid repeated typing into unproven targets.
 Popovers, menus and save sheets are app scene layers. Use their current semantic
 target or capture coordinates. Normal quit can leave a save sheet; inspect that
 fresh view. Closing a native window is distinct from quitting an app; use its
-ordinary close UI or the platform's close-window chord when appropriate.
+ordinary close UI or the platform's close-window chord when appropriate. Prefer
+the close control for macOS background work: AppKit Command+W has a verified
+foreground limitation. An unavailable background route does not justify repeating
+an action with unknown effects.
 
 ## Errors and interruption
 

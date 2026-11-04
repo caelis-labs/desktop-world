@@ -3,6 +3,12 @@ use super::overlay::{OverlayEmitter, OverlayEndpoint, OverlayTarget, PointerKind
 use serde_json::Value;
 use std::cell::{Cell, RefCell};
 
+/// Prepare feedback for every route that can post pointer input. Semantic AX
+/// actions and keyboard work do not invent a pointer position.
+pub(super) fn observes_operation(operation: Option<&str>) -> bool {
+    matches!(operation, Some("click" | "move" | "drag" | "scroll"))
+}
+
 struct Presentation {
     emitter: OverlayEmitter,
     target: OverlayTarget,
@@ -89,6 +95,24 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::{os::unix::net::UnixDatagram, time::Duration};
+
+    #[test]
+    fn every_pointer_operation_prepares_feedback_but_semantic_and_keyboard_work_do_not() {
+        for operation in ["click", "move", "drag", "scroll"] {
+            assert!(observes_operation(Some(operation)), "{operation}");
+        }
+        for operation in [
+            "press",
+            "set_value",
+            "type_text",
+            "keypress",
+            "focus",
+            "capture",
+        ] {
+            assert!(!observes_operation(Some(operation)), "{operation}");
+        }
+        assert!(!observes_operation(None));
+    }
 
     #[test]
     fn feedback_reports_only_actual_in_scope_posts_and_never_primer_coordinates() {

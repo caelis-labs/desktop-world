@@ -305,7 +305,7 @@ fn selection_read_errors_describe_resolution_without_claiming_an_action() {
 }
 
 #[test]
-fn selection_content_recovery_retains_focus_receipt_and_dispatches_original_action_once() {
+fn selection_content_can_become_readable_without_preparing_focus() {
     for action in [
         "await app.press({window_ref,selector:{text:'Save'}});",
         "await app.setValue({window_ref,selector:{text:'Save'},value:'new'});",
@@ -315,21 +315,9 @@ fn selection_content_recovery_retains_focus_receipt_and_dispatches_original_acti
             Ok(page(vec![element(2, true)], true, false, 1)),
             Ok(page(vec![], false, true, 2)),
         ]);
-        backend.focus.0.model.lock().unwrap().outcome.delivery = Some(InputDelivery {
-            route: Some(InputRoute::Foreground),
-            reason: None,
-            foreground_borrowed: true,
-            focus_return: Some(FocusReturn::Pending),
-        });
-        backend.base.0.model.lock().unwrap().outcome.delivery = Some(InputDelivery {
-            route: Some(InputRoute::Semantic),
-            reason: None,
-            foreground_borrowed: false,
-            focus_return: None,
-        });
-        let reply = script(&owner, "recover", action);
+        let reply = script(&owner, "readiness", action);
         assert!(!reply.is_error, "{}", reply.data);
-        assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 0);
         assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
         assert_eq!(
             *backend.selected_elements.lock().unwrap(),
@@ -337,46 +325,22 @@ fn selection_content_recovery_retains_focus_receipt_and_dispatches_original_acti
         );
         assert_eq!(backend.queries.lock().unwrap().len(), 2);
         assert_eq!(backend.advances.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            step(&reply)["resolution"]["focus_preparation"]["attempted"],
-            true
-        );
-        let preparation = &step(&reply)["resolution"]["focus_preparation"]["receipt"];
-        assert_eq!(preparation["outcome"]["dispatch"], "dispatched");
-        assert_eq!(
-            preparation["outcome"]["delivery"]["focus_return"],
-            "pending"
-        );
-        assert_eq!(step(&reply)["receipt"]["outcome"]["dispatch"], "dispatched");
-        assert_eq!(reply.data["script"]["focus_return"], "restored");
-        let mut external = reply.clone();
-        external.data["execution_id"] = json!("execution_prepared");
-        let compact = projection::execution(external);
-        let summary = &compact.data["script"]["summary"];
-        assert_eq!(
-            summary["last_resolution"]["resolution"]["focus_preparation"],
-            json!({"attempted":true,"dispatch":"dispatched","delivery":preparation["outcome"]["delivery"]})
-        );
-        assert_eq!(summary["actions"]["delivery"]["reported"], 1);
-        assert_eq!(
-            summary["actions"]["delivery"]["routes"],
-            json!({"semantic":1})
-        );
-        assert_eq!(summary["actions"]["delivery"]["foreground_borrowed"], 0);
+        assert!(step(&reply)["resolution"]["focus_preparation"].is_null());
+        assert!(reply.data["script"]["focus_return"].is_null());
     }
 }
 
 #[test]
-fn selection_content_recovery_runs_once_even_after_default_polling_window_expired() {
+fn selection_content_gap_after_poll_window_never_prepares_focus() {
     let (owner, backend) = setup(vec![
         Ok(content_unproven(vec![])),
         Ok(page(vec![element(2, true)], false, true, 1)),
     ]);
     let work = select_after_poll_window(&owner, selected_press(2_000), 2_000);
-    assert!(work.completed.error.is_none());
-    assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 1);
-    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
-    assert_eq!(backend.queries.lock().unwrap().len(), 2);
+    assert_eq!(work.completed.error.unwrap().code, "selector_unproven");
+    assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 0);
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 0);
+    assert_eq!(backend.queries.lock().unwrap().len(), 1);
 }
 
 #[test]
@@ -438,118 +402,47 @@ fn selection_content_recovery_never_focuses_for_read_zero_timeout_other_gaps_or_
 }
 
 #[test]
-fn selection_content_recovery_stops_after_focus_failure_or_unknown_and_preserves_evidence() {
-    let mut strict_rejection = ActionOutcome::rejected(Error::NativeFailure {
-        code: "foreground_required".into(),
-        message: "Service input policy prohibits focus".into(),
-    });
-    strict_rejection.delivery = Some(InputDelivery {
-        route: None,
-        reason: Some("explicit_focus".into()),
-        foreground_borrowed: false,
-        focus_return: None,
-    });
-    for outcome in [
-        strict_rejection,
-        ActionOutcome::rejected(Error::TargetChanged),
-        ActionOutcome::rejected(Error::TimedOut),
-        ActionOutcome::rejected(Error::WrongApp),
-        ActionOutcome::rejected(Error::NativeFailure {
-            code: "permission_denied".into(),
-            message: "Missing accessibility permission".into(),
-        }),
-        ActionOutcome::unknown(Error::NativeFailure {
-            code: "original_focus_unknown".into(),
-            message: "Unknown foreground effect".into(),
-        }),
-        ActionOutcome {
-            delivery: None,
-            dispatch: DispatchState::Unknown,
-            evidence: EffectEvidence::Unverified,
-            error: None,
-        },
-        ActionOutcome {
-            delivery: None,
-            dispatch: DispatchState::Dispatched,
-            evidence: EffectEvidence::Mismatch {
-                expected: "target focus".into(),
-                observed: "another target".into(),
-            },
-            error: None,
-        },
+fn selection_unreadable_errors_never_prepare_focus() {
+    for code in [
+        "ax_unavailable",
+        "children_unavailable",
+        "modal_state_unproven",
+        "semantic_not_ready",
     ] {
-        let (owner, backend) = setup(vec![
-            Ok(content_unproven(vec![])),
-            Ok(page(vec![element(2, true)], false, true, 1)),
-        ]);
-        backend.focus.0.model.lock().unwrap().outcome = outcome.clone();
-        let reply = script(
-            &owner,
-            "focus-error",
-            "await app.press({window_ref,selector:{text:'Save'}});",
-        );
-        assert!(reply.is_error, "{}", reply.data);
-        let expected = outcome
-            .error
-            .as_ref()
-            .map(wire::core_error)
-            .map(|e| e.code)
-            .unwrap_or_else(|| "focus_preparation_unproven".into());
-        assert_eq!(step(&reply)["error"]["code"], expected);
-        assert_eq!(
-            step(&reply)["resolution"]["focus_preparation"]["receipt"]["outcome"],
-            wire::receipt(&ActionReceipt {
-                outcome,
-                provider_outcome: None,
-                interruption: None
-            })["outcome"]
-        );
-        assert_eq!(
-            step(&reply)["receipt"]["outcome"]["dispatch"],
-            "not_dispatched"
-        );
-        assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 1);
+        let (owner, backend) = setup(vec![Err(Error::NativeFailure {
+            code: code.into(),
+            message: "original unreadable proof".into(),
+        })]);
+        let work = select_after_poll_window(&owner, selected_press(2_000), 2_000);
+        let error = work.completed.error.unwrap();
+        assert_eq!(error.code, code);
+        assert_eq!(error.message, "original unreadable proof");
+        assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 0);
         assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 0);
         assert_eq!(backend.queries.lock().unwrap().len(), 1);
     }
 }
 
 #[test]
-fn selection_content_recovery_does_not_restart_preparation_or_poll_after_fresh_failure() {
-    for (second, expected) in [
-        (Ok(content_unproven(vec![])), "selector_unproven"),
-        (Ok(page(vec![], false, true, 1)), "selector_not_found"),
-        (
-            Ok(page(
-                vec![element(2, true), element(3, true)],
-                false,
-                true,
-                2,
-            )),
-            "selector_ambiguous",
-        ),
-        (Err(Error::TargetChanged), "target_changed"),
-    ] {
-        let (owner, backend) = setup(vec![
-            Ok(content_unproven(vec![])),
-            second,
-            Ok(page(vec![element(4, true)], false, true, 1)),
-        ]);
-        let reply = script(
-            &owner,
-            "one-recovery",
-            "await app.press({window_ref,selector:{text:'Save'}});",
-        );
-        assert_eq!(step(&reply)["error"]["code"], expected, "{}", reply.data);
-        assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 1);
-        assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 0);
-        assert_eq!(backend.queries.lock().unwrap().len(), 2);
-        assert_eq!(reply.data["script"]["focus_return"], "restored");
-    }
+fn selection_read_polling_preserves_final_error_without_focus_or_replay() {
+    let (owner, backend) = setup(vec![
+        Ok(content_unproven(vec![])),
+        Err(Error::TargetChanged),
+        Ok(page(vec![element(4, true)], false, true, 1)),
+    ]);
+    let reply = script(
+        &owner,
+        "read-error",
+        "await app.press({window_ref,selector:{text:'Save'}});",
+    );
+    assert_eq!(step(&reply)["error"]["code"], "target_changed");
+    assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 0);
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 0);
+    assert_eq!(backend.queries.lock().unwrap().len(), 2);
 }
 
 #[test]
-fn selection_content_recovery_preserves_original_action_unknown_without_more_reads() {
+fn selection_readiness_preserves_original_action_unknown_without_more_reads() {
     let (owner, backend) = setup(vec![
         Ok(content_unproven(vec![])),
         Ok(page(vec![element(2, true)], false, true, 1)),
@@ -561,57 +454,47 @@ fn selection_content_recovery_preserves_original_action_unknown_without_more_rea
         "await app.press({window_ref,selector:{text:'Save'}});",
     );
     assert_eq!(step(&reply)["receipt"]["outcome"]["dispatch"], "unknown");
-    assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 1);
+    assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 0);
     assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
     assert_eq!(backend.queries.lock().unwrap().len(), 2);
 }
 
 #[test]
-fn selection_content_recovery_cancellation_during_focus_keeps_original_receipt_and_stops() {
+fn selection_cancellation_during_original_action_preserves_receipt_without_focus() {
     let (owner, backend) = setup(vec![
         Ok(content_unproven(vec![])),
         Ok(page(vec![element(2, true)], false, true, 1)),
     ]);
-    backend.focus.0.model.lock().unwrap().poll_action = true;
-    let gate = backend.focus.action_gate();
-    start(&owner, submit(&owner,"focus-cancel",None,Command::Script {
+    backend.base.0.model.lock().unwrap().poll_action = true;
+    let gate = backend.base.action_gate();
+    start(&owner, submit(&owner,"action-cancel",None,Command::Script {
         source:"const window_ref=(await app.windows()).windows[0].window_ref;await app.press({window_ref,selector:{text:'Save'}});".into(),
         timeout_ms:5_000,max_calls:16 }));
     gate.entered();
     owner.handle(Request::Cancel {
-        request_id: "focus-cancel".into(),
+        request_id: "action-cancel".into(),
     });
     gate.release();
-    let reply = finish(&owner, "focus-cancel");
+    let reply = finish(&owner, "action-cancel");
     assert!(reply.is_error);
-    assert_eq!(
-        step(&reply)["resolution"]["focus_preparation"]["receipt"]["outcome"]["dispatch"],
-        "unknown"
-    );
-    assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 1);
-    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 0);
-    assert_eq!(backend.queries.lock().unwrap().len(), 1);
+    assert_eq!(step(&reply)["receipt"]["outcome"]["dispatch"], "unknown");
+    assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 0);
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
+    assert_eq!(backend.queries.lock().unwrap().len(), 2);
 }
 
 #[test]
-fn selection_content_recovery_keeps_cleanup_failure_separate_from_selected_action() {
-    let (owner, backend) = setup(vec![
-        Ok(content_unproven(vec![])),
-        Ok(page(vec![element(2, true)], false, true, 1)),
-    ]);
-    backend.focus.0.model.lock().unwrap().finish_error =
-        Some(Error::BackendFailed("Focus return failed".into()));
+fn selection_explicit_focus_remains_an_explicit_action() {
+    let (owner, backend) = setup(vec![Ok(page(vec![element(2, true)], false, true, 1))]);
     let reply = script(
         &owner,
-        "cleanup-error",
-        "await app.press({window_ref,selector:{text:'Save'}});",
+        "explicit-focus",
+        "await app.focus({window_ref}); await app.press({window_ref,selector:{text:'Save'}});",
     );
-    assert!(reply.is_error, "{}", reply.data);
-    assert_eq!(reply.data["script"]["focus_return"], "unconfirmed");
-    assert_eq!(step(&reply)["receipt"]["outcome"]["dispatch"], "dispatched");
-    assert_eq!(backend.focus.0.finishes.load(Ordering::SeqCst), 1);
+    assert!(!reply.is_error, "{}", reply.data);
     assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 1);
     assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
+    assert_eq!(reply.data["script"]["focus_return"], "restored");
 }
 
 #[test]
@@ -995,7 +878,7 @@ fn menu_selection_find_paginates_only_menu_scope_without_focus() {
 }
 
 #[test]
-fn menu_selection_prepares_focus_then_resolves_fresh_and_dispatches_once() {
+fn menu_selection_dispatches_once_without_preparing_focus() {
     for action in [
         "return await app.press({window_ref,selector:{scope:'menu',text:'Save'},timeout_ms:0});",
         "return await app.setValue({window_ref,selector:{scope:'menu',text:'Save'},value:'new',timeout_ms:0});",
@@ -1003,19 +886,16 @@ fn menu_selection_prepares_focus_then_resolves_fresh_and_dispatches_once() {
         let (owner, backend) = setup(vec![
             Ok(page(vec![element(1, true)], true, false, 1)),
             Ok(page(vec![], false, true, 2)),
-            Ok(page(vec![element(2, true)], true, false, 1)),
-            Ok(page(vec![], false, true, 2)),
         ]);
         let reply = script(&owner, "menu-action", action);
         assert!(!reply.is_error, "{}", reply.data);
-        assert_eq!(*backend.scopes.lock().unwrap(), vec![ObserveScopeKind::Menu; 2]);
-        assert_eq!(backend.advances.load(Ordering::SeqCst), 2);
-        assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 1);
+        assert_eq!(*backend.scopes.lock().unwrap(), vec![ObserveScopeKind::Menu]);
+        assert_eq!(backend.advances.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 0);
         assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
-        assert_eq!(*backend.selected_elements.lock().unwrap(), vec![ElementId(2)]);
-        assert_eq!(step(&reply)["resolution"]["focus_preparation"]["trigger"], "menu_scope");
-        assert_eq!(step(&reply)["resolution"]["focus_preparation"]["receipt"]["outcome"]["dispatch"], "dispatched");
-        assert_eq!(reply.data["script"]["focus_return"], "restored");
+        assert_eq!(*backend.selected_elements.lock().unwrap(), vec![ElementId(1)]);
+        assert!(step(&reply)["resolution"]["focus_preparation"].is_null());
+        assert!(reply.data["script"]["focus_return"].is_null());
     }
 }
 
@@ -1046,46 +926,23 @@ fn menu_selection_never_focuses_an_unproven_or_missing_target() {
 }
 
 #[test]
-fn menu_selection_revalidates_disabled_state_and_ambiguity_after_focus() {
+fn menu_selection_disabled_state_never_authorizes_focus() {
     let mut disabled = element(1, false);
     disabled.enabled = Some(false);
-    for (fresh, expected) in [
-        (page(vec![element(2, true)], false, true, 1), None),
-        (
-            page(vec![element(2, true), element(3, true)], false, true, 2),
-            Some("selector_ambiguous"),
-        ),
-        (
-            page(vec![disabled.clone()], false, true, 1),
-            Some("selector_not_ready"),
-        ),
-    ] {
-        let (owner, backend) = setup(vec![
-            Ok(page(vec![disabled.clone()], false, true, 1)),
-            Ok(fresh),
-        ]);
-        let reply = script(
-            &owner,
-            "menu-enabled",
-            "await app.press({window_ref,selector:{scope:'menu',text:'Save'},timeout_ms:0});",
-        );
-        assert_eq!(
-            step(&reply)["error"]["code"].as_str(),
-            expected,
-            "{}",
-            reply.data
-        );
-        assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            backend.base.0.actions.load(Ordering::SeqCst),
-            usize::from(expected.is_none())
-        );
-        assert_eq!(reply.data["script"]["focus_return"], "restored");
-    }
+    let (owner, backend) = setup(vec![Ok(page(vec![disabled], false, true, 1))]);
+    let reply = script(
+        &owner,
+        "menu-disabled",
+        "await app.press({window_ref,selector:{scope:'menu',text:'Save'},timeout_ms:0});",
+    );
+    assert_eq!(step(&reply)["error"]["code"], "selector_not_ready");
+    assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 0);
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 0);
+    assert_eq!(backend.queries.lock().unwrap().len(), 1);
 }
 
 #[test]
-fn menu_selection_unsupported_or_focus_failure_never_replays_or_dispatches() {
+fn menu_selection_preserves_unsupported_and_native_foreground_rejections_without_focus() {
     let (owner, backend) = setup(vec![]);
     backend.menu_supported.store(false, Ordering::SeqCst);
     let reply = script(
@@ -1099,27 +956,34 @@ fn menu_selection_unsupported_or_focus_failure_never_replays_or_dispatches() {
     assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 0);
 
     for outcome in [
-        ActionOutcome::rejected(Error::TargetChanged),
+        ActionOutcome::rejected(Error::NativeFailure {
+            code: "foreground_required".into(),
+            message: "exact menu destination is not foreground".into(),
+        }),
         ActionOutcome::unknown(Error::TargetChanged),
     ] {
         let (owner, backend) = setup(vec![Ok(page(vec![element(1, true)], false, true, 1))]);
-        backend.focus.0.model.lock().unwrap().outcome = outcome.clone();
+        backend.base.0.model.lock().unwrap().outcome = outcome.clone();
         let reply = script(
             &owner,
-            "menu-focus-failed",
+            "menu-rejected",
             "await app.press({window_ref,selector:{scope:'menu',text:'Save'}});",
         );
         assert_eq!(
-            step(&reply)["resolution"]["focus_preparation"]["receipt"]["outcome"]["dispatch"],
+            step(&reply)["receipt"]["outcome"]["dispatch"],
             if outcome.dispatch == DispatchState::Unknown {
                 "unknown"
             } else {
                 "not_dispatched"
             }
         );
+        assert_eq!(
+            step(&reply)["error"]["code"],
+            outcome.error.as_ref().map(wire::core_error).unwrap().code
+        );
         assert_eq!(backend.queries.lock().unwrap().len(), 1);
-        assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 1);
-        assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
     }
 }
 
@@ -1197,17 +1061,16 @@ fn menu_selection_unsupported_action_does_not_borrow_focus_and_unknown_is_not_re
         "await app.press({window_ref,selector:{scope:'menu',text:'Save'}});",
     );
     assert_eq!(step(&reply)["receipt"]["outcome"]["dispatch"], "unknown");
-    assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 1);
+    assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 0);
     assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
-    assert_eq!(backend.queries.lock().unwrap().len(), 2);
+    assert_eq!(backend.queries.lock().unwrap().len(), 1);
 }
 
 #[test]
-fn menu_selection_waits_for_readiness_after_focus_without_repeating_focus() {
+fn menu_selection_waits_for_readiness_using_reads_without_focus() {
     let mut disabled = element(2, false);
     disabled.enabled = Some(false);
     let (owner, backend) = setup(vec![
-        Ok(page(vec![element(1, true)], false, true, 1)),
         Ok(page(vec![disabled], false, true, 1)),
         Ok(page(vec![element(3, true)], false, true, 1)),
     ]);
@@ -1217,14 +1080,14 @@ fn menu_selection_waits_for_readiness_after_focus_without_repeating_focus() {
         "await app.press({window_ref,selector:{scope:'menu',text:'Save'},timeout_ms:2000});",
     );
     assert!(!reply.is_error, "{}", reply.data);
-    assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 1);
+    assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 0);
     assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
-    assert_eq!(backend.queries.lock().unwrap().len(), 3);
+    assert_eq!(backend.queries.lock().unwrap().len(), 2);
     assert_eq!(
         *backend.selected_elements.lock().unwrap(),
         vec![ElementId(3)]
     );
-    assert_eq!(reply.data["script"]["focus_return"], "restored");
+    assert!(reply.data["script"]["focus_return"].is_null());
 }
 
 #[test]

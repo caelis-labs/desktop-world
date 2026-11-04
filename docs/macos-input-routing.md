@@ -2,7 +2,7 @@
 
 Agent 仍只调用 `apps`、`exec` 和原有 `app` 方法。输入路由是实现细节，脚本不选择
 虚拟/物理光标、不维护 Session，也不根据内部投递方式安排重试。正常脚本回执不暴露
-`delivery`；私有执行账本保留原始投递证据及派发不确定性。
+`delivery`；私有执行账本保留原始投递证据及派发不确定性。虚拟光标反馈覆盖坐标 click/move/drag/scroll；语义 AXPress、键盘和 AXPosition 不伪造鼠标轨迹。
 
 本实现接续[逐操作历史审查](macos-ax-cursor-audit-2026-11-03.md)。历史失败记录保留，
 其“当前产品”描述只对应当时的二进制，不代表本轮修改后的行为。
@@ -13,14 +13,14 @@ Agent 仍只调用 `apps`、`exec` 和原有 `app` 方法。输入路由是实�
 
 | 操作 / 已知条件 | 首选实现 | 自动借用条件 |
 | --- | --- | --- |
-| 有效语义目标 | AX action | 语义失败不自动重放成鼠标点击；返回截图 |
+| 有效语义目标 | AX action | 不为未知 AX 状态或菜单准备焦点；语义失败不自动重放成鼠标点击 |
 | 证明是标准标题栏且位置可写 | AXPosition | 不因 AX 不可读或位置设置结果不确定而改路重放 |
-| 坐标左/右键、单/双击 | 精确 PID + 窗口事件 | 必要的定向事件 ABI 明确不可用，且尚无准备/输入副作用 |
+| 坐标左/右键、单/双击 | 精确 PID + 窗口事件 | 必要的定向事件 ABI 明确不可用且尚无副作用时可选物理路线；不能据此激活后台应用 |
 | 内容拖拽，包括 AppKit 控件、Chrome 文本拖选 | 精确 PID + 窗口事件，逐点验证 | 同上；Chromium 标签本身不是拖拽借用理由 |
 | 锚点或默认中心滚动 | 精确 PID + 窗口 wheel | 同上；不要求 AX children / AX window inventory |
-| 已识别 AppKit / Chromium 的原生悬停 | 在派发前按已复现的原生跟踪限制选择借用 | 当前 PID 事件路径不能可靠建立悬停跟踪状态，证据见下文 |
+| 已识别 AppKit / Chromium 的原生悬停 | 目标已经前台时，按已复现的跟踪限制选择物理光标 | 后台或前台证明不可读时拒绝；悬停的光标限制不证明必须激活应用 |
 | Qt / 未识别框架的悬停 | 定向事件 | 未知不等于不支持；不以未知框架、AX 缺失或普通错误授权借用 |
-| 键盘 | 现有定向键盘路径和明确的键盘能力预检 | 需要激活的原生快捷键等沿用原有键盘路由；不是移动光标的理由 |
+| 键盘 | 定向路径与精确编辑目的地证明 | 仅已验证的 Chromium Command+A/补充平面 Unicode、AppKit Command+W/控制字符文本可选前台；不是移动光标的理由 |
 
 视觉输入的 AX 豁免仅适用于坐标指针操作。前台键盘回退仍逐次验证精确 AX 窗口及编辑
 目的地，应用 PID 仍在前台不能替代该检查；同一应用内焦点离开目标窗口时停止后续按键。
@@ -32,10 +32,18 @@ frameworks / AppKit 元数据，不按 Telegram、fixture bundle ID 或应用名
 只有两种指针借用原因进入内部审计：`native_hover_tracking`（仅已验收的原生悬停）和
 `addressed_event_api_unavailable`。
 缺权限、进程变化、几何过期、遮挡、取消、超时、连接失败和任意 provider 错误均不是借用依据。
+物理光标与应用前台分别准入：鼠标路线的能力限制不授权激活后台应用。未知 AX/modal
+错误保留原因，sheet、关联进程键盘及无窗口快捷键在缺少已满足的前台条件时干净拒绝。
+选择器不会为 `content_unproven` 或菜单自动聚焦；只读语义启用继续不激活应用。
 `fallback_allowed:true` 单独不能改路：还必须是精确的已知能力证据、`not_dispatched`、
-预检能力错误，且没有 cleanup error。已准备、已投递或 `unknown` 的输入不换路重放。
+预检能力错误，且没有 cleanup error。键盘还必须携带已识别的 `capability_detail`：
+`chromium_command_a`、`chromium_supplementary_unicode`、`appkit_command_w`、`appkit_multiline_text`；
+泛化的 `native_keyboard_semantics` 单独不够，实际框架不能从“不是 Chromium”推断为 AppKit。已准备、已投递或 `unknown` 的输入不换路重放。
 
 ## 一次全独立验收与最终例外
+
+下述 2026-11-03 固定候选保留鼠标路线的历史证据；本轮后台优先与焦点策略由
+[统一验收基准](computer-use-benchmark-2026-11-04.md) 单独记录，不能由旧结果外推。
 
 先撤掉全部框架鼠标例外，冻结同一个候选，将点击、悬停、内容拖拽、滑块和滚动全部交给
 独立输入，再完成整套验收。以真实回调、控件值、DOM trusted 事件/选区为效果依据，
@@ -116,9 +124,20 @@ Agent 工具 schema。`cursor_audit.py --assert-independent` 在每个原始 MCP
 完整区间采样真实系统光标，并逐条核对路由；终点归位不算独立，未知借用原因直接失败。
 取消但无回复的请求保持无回执状态，清理区间截至下一次成功读回。
 
+当前严格策略为 `bounded-pointer-borrow-v3`。私有 `dtw_input_interval` 以 worker PID 与 trace ID
+配对每次指针借用的 begin/end，覆盖准备、派发及收尾，并在释放物理输入 lease 前结束。
+只有 `native_hover_tracking` 的 move，或 `addressed_event_api_unavailable` 的指针动作可进入允许区间。
+混合脚本中的每次采样位移都必须完整落在一个允许区间内；一次合法 hover 不放行整段脚本。
+旧的单点借用日志不能单独通过新策略；缺失/不配对日志、采样不可用、未覆盖完整请求及只读期间
+的未获准位移都会使严格验收失败。严格策略的实际最大采样间隙固定为 50ms，任何超过阈值的
+间隙均失败，不能将长时间停采后的相同终点当作连续稳定；报告保留未四舍五入的实际间隙。常见的 AXPress 语义点击按其精确 native action 证据核对。
+
 每条借用记录必须同时检查独立应用效果。采样默认 2 ms，报告实际最大间隔；比间隔更短的
 位移不能排除，位置变化本身也不能证明由 DTW 导致。原始失败、MCP 帧、stderr、fixture
 状态及采样数据保存在同一证据目录，避免重跑后覆盖。
+
+统一 [Computer Use APP](../tests/fixtures/computer-use-app/README.md) 的标准入口强制执行该策略，
+并单独捕获经过身份验证的虚拟光标 helper 窗口，核对实际热点坐标和渲染像素。
 
 自建 AppKit、真实 Chrome 的临时 profile、源码/纯控制测试分别记账。这些不是模型 Harness
 A/B、真实账号验收或所有应用完备性证明。Windows 遵循项目既有 CI 流程；本轮仅完成

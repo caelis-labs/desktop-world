@@ -290,3 +290,220 @@ fn query_and_text_arguments_reject_before_native_reads() {
     assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 0);
     assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
 }
+
+fn queue_deep_target(model: &mut Model, last: ControlledSemanticPage) {
+    model
+        .semantic_pages
+        .extend((0..7).map(|index| controlled_page(index, vec![], true)));
+    model.semantic_pages.push_back(last);
+}
+
+fn deep_button() -> Element {
+    let mut target = content(137, "Audit checkpoint 137");
+    target.role = "button".into();
+    target.can_press = true;
+    target.actions = vec!["press".into()];
+    target
+}
+
+#[test]
+fn observed_id_renews_the_same_object_beyond_four_native_pages() {
+    let (server, catalog) = agent();
+    let target = deep_button();
+    {
+        let mut model = catalog.backend.0.model.lock().unwrap();
+        model.filtered_observation = true;
+        model.semantic_elements = Some(vec![target.clone()]);
+        queue_deep_target(&mut model, controlled_page(7, vec![target.clone()], false));
+    }
+    let looked = exec(
+        &server,
+        "deep_object",
+        "return await app.look({text:'Audit checkpoint 137'});",
+    );
+    assert!(!looked.is_error, "{}", looked.data);
+    let id = looked.data["value"]["result"]["elements"][0]["id"].clone();
+    assert!(id.is_string(), "{}", looked.data);
+    let mut renewed = target;
+    renewed.id = ElementId(80137);
+    queue_deep_target(
+        &mut catalog.backend.0.model.lock().unwrap(),
+        controlled_page(7, vec![renewed], false),
+    );
+    let clicked = exec(
+        &server,
+        "deep_object_click",
+        &format!("await app.click({{target:{id}}});"),
+    );
+    assert!(!clicked.is_error, "{}", clicked.data);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+    let queries = catalog.backend.0.observe_queries.lock().unwrap();
+    assert_eq!(queries[0].text.as_deref(), Some("Audit checkpoint 137"));
+    assert_eq!(queries[1], queries[0]);
+}
+
+#[test]
+fn deep_observed_id_never_dispatches_for_replaced_credentials_or_read_failures() {
+    for read_failure in [false, true] {
+        let (server, catalog) = agent();
+        let target = deep_button();
+        {
+            let mut model = catalog.backend.0.model.lock().unwrap();
+            model.filtered_observation = true;
+            queue_deep_target(&mut model, controlled_page(7, vec![target.clone()], false));
+        }
+        let looked = exec(
+            &server,
+            "deep_reject_object",
+            "return await app.look({text:'Audit checkpoint 137'});",
+        );
+        assert!(!looked.is_error, "{}", looked.data);
+        let id = looked.data["value"]["result"]["elements"][0]["id"].clone();
+        assert!(id.is_string(), "{}", looked.data);
+        let last = if read_failure {
+            Err(Error::NativeFailure {
+                code: "ax_unavailable".into(),
+                message: "controlled eighth-page renewal failure".into(),
+            })
+        } else {
+            let mut replacement = target;
+            replacement.rebind_identity = Some("retained:replacement".into());
+            controlled_page(7, vec![replacement], false)
+        };
+        queue_deep_target(&mut catalog.backend.0.model.lock().unwrap(), last);
+        let clicked = exec(
+            &server,
+            "deep_reject_click",
+            &format!("await app.click({{target:{id}}});"),
+        );
+        assert!(clicked.is_error, "{}", clicked.data);
+        assert_eq!(
+            clicked.data["error"]["code"],
+            if read_failure {
+                "ax_unavailable"
+            } else {
+                "target_changed"
+            }
+        );
+        assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+    }
+}
+
+fn controlled_page(index: u32, elements: Vec<Element>, has_more: bool) -> ControlledSemanticPage {
+    Ok((
+        elements,
+        DiscoveryPage {
+            has_more,
+            complete: !has_more,
+            reason: None,
+            visited: index + 1,
+        },
+    ))
+}
+
+#[test]
+fn filtered_look_continues_beyond_four_native_pages_to_the_match() {
+    for query in ["{text:'Audit checkpoint 137'}", "{role:'static_text'}"] {
+        let (server, catalog) = agent();
+        {
+            let mut model = catalog.backend.0.model.lock().unwrap();
+            model.filtered_observation = true;
+            model.semantic_pages = (0..7)
+                .map(|index| controlled_page(index, vec![], true))
+                .collect();
+            model.semantic_pages.push_back(controlled_page(
+                7,
+                vec![content(137, "Audit checkpoint 137")],
+                false,
+            ));
+        }
+        let reply = exec(
+            &server,
+            "deep_filtered_look",
+            &format!("await app.look({query});"),
+        );
+        assert!(!reply.is_error, "{}", reply.data);
+        let view = &reply.data["value"]["view"];
+        assert_eq!(
+            view["elements"][0]["value"], "Audit checkpoint 137",
+            "{view}"
+        );
+        assert_eq!(view["semantics"]["complete"], true);
+        assert_eq!(view["semantics"]["has_more"], false);
+        assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 8);
+        assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
+fn look_native_page_limits_distinguish_explicit_filters_from_scope_only() {
+    for (query, expected_pages) in [("{}", 4), ("{scope:'window'}", 4), ("{text:'absent'}", 32)] {
+        let (server, catalog) = agent();
+        {
+            let mut model = catalog.backend.0.model.lock().unwrap();
+            model.filtered_observation = true;
+            model.semantic_pages = (0..40)
+                .map(|index| controlled_page(index, vec![], true))
+                .collect();
+        }
+        let reply = exec(
+            &server,
+            "bounded_look",
+            &format!("await app.look({query});"),
+        );
+        assert!(!reply.is_error, "{}", reply.data);
+        let view = &reply.data["value"]["view"];
+        assert_eq!(view["elements"], json!([]));
+        assert_eq!(view["semantics"]["complete"], false);
+        assert_eq!(view["semantics"]["has_more"], true);
+        assert_eq!(
+            catalog.backend.0.observes.load(Ordering::SeqCst),
+            expected_pages
+        );
+    }
+}
+
+#[test]
+fn filtered_look_late_page_failure_discards_candidates_and_previous_targets() {
+    for code in ["ax_unavailable", "permission_required"] {
+        let (server, catalog) = agent();
+        let first = exec(&server, "baseline_target", "await app.look();");
+        assert!(!first.is_error, "{}", first.data);
+        {
+            let mut model = catalog.backend.0.model.lock().unwrap();
+            model.filtered_observation = true;
+            model.semantic_pages.push_back(controlled_page(
+                0,
+                vec![content(137, "Audit checkpoint 137")],
+                true,
+            ));
+            model
+                .semantic_pages
+                .extend((1..5).map(|index| controlled_page(index, vec![], true)));
+            model.semantic_pages.push_back(Err(Error::NativeFailure {
+                code: code.into(),
+                message: "controlled late native read failure".into(),
+            }));
+        }
+        let reply = exec(
+            &server,
+            "failed_deep_look",
+            "return await app.look({text:'Audit checkpoint 137'});",
+        );
+        if code == "ax_unavailable" {
+            assert!(!reply.is_error, "{}", reply.data);
+            let view = &reply.data["value"]["result"];
+            assert_eq!(view["elements"], json!([]));
+            assert_eq!(view["semantics"]["complete"], false);
+            assert_eq!(view["semantics"]["reason"], code);
+        } else {
+            assert!(reply.is_error, "{}", reply.data);
+            assert_eq!(reply.data["error"]["code"], code);
+        }
+        assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 7);
+        let stale = exec(&server, "retired_target", "await app.readText('w1.e1');");
+        assert!(stale.is_error, "{}", stale.data);
+        assert_eq!(stale.data["error"]["code"], "target_changed");
+        assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+    }
+}

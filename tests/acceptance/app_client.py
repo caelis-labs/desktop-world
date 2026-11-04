@@ -36,7 +36,7 @@ def artifact_identity(binary, package=None):
 
 
 class AppClient:
-    def __init__(self, binary, output):
+    def __init__(self, binary, output, *, mcp_args=()):
         self.output = Path(output)
         self.metrics = []
         self.output.mkdir(parents=True, exist_ok=True)
@@ -44,11 +44,11 @@ class AppClient:
         try:
             if os.name == 'nt':
                 from windows.transport import Mcp
-                self.transport = Mcp(binary, self.output / 'mcp')
+                self.transport = Mcp(binary, self.output / 'mcp', options=mcp_args)
             else:
                 from standard_agent_probe import Mcp
                 self.output.mkdir(parents=True, exist_ok=True)
-                self.transport = Mcp(binary, self.output)
+                self.transport = Mcp(binary, self.output, mcp_args=mcp_args)
                 self.transport.rpc('initialize', {'protocolVersion': '2025-06-18', 'capabilities': {},
                     'clientInfo': {'name': 'dtw-app-protocol-acceptance', 'version': '1'}})
                 self.transport.notify('notifications/initialized')
