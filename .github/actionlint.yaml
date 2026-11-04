@@ -1,0 +1,6 @@
+# GitHub's GA hosted arm64 label was added after pinned actionlint 1.7.12.
+# Its label allowlist uses this configuration key for new hosted labels too.
+# https://github.blog/changelog/2026-10-15-xcode-27-runner-image-generally-available/
+self-hosted-runner:
+  labels:
+    - xcode-27
