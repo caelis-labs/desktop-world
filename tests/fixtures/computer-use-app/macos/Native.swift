@@ -34,6 +34,16 @@ extension ComputerUseDelegate {
         choice.frame = NSRect(x: 160, y: 103, width: 160, height: 30); choice.addItems(withTitles: ["Draft", "Review", "Approved"]); choice.setAccessibilityLabel("Workflow status"); choice.target = self; choice.action = #selector(changeChoice); surface.addSubview(choice)
         slider.frame = NSRect(x: 345, y: 104, width: 300, height: 28); slider.setAccessibilityLabel("Priority slider"); slider.target = self; slider.action = #selector(changeSlider); slider.isContinuous = true; surface.addSubview(slider)
         let pad = GestureFixtureView(frame: NSRect(x: 20, y: 148, width: 625, height: 60)); pad.owner = self; surface.addSubview(pad); namedViews["gesture-desk"] = pad
+        let multilineScroll = NSScrollView(frame: NSRect(x: 665, y: 62, width: max(260, frame.width - 685), height: 146))
+        multilineScroll.borderType = .bezelBorder; multilineScroll.hasVerticalScroller = true
+        multilineNote.frame = NSRect(origin: .zero, size: multilineScroll.contentSize)
+        multilineNote.isRichText = false; multilineNote.isEditable = true; multilineNote.isSelectable = true
+        multilineNote.font = NSFont.systemFont(ofSize: 14)
+        multilineNote.string = "Initial multiline note\nSecond line"
+        multilineNote.setAccessibilityLabel("Multiline note")
+        multilineNote.textContainer?.widthTracksTextView = true; multilineNote.isVerticallyResizable = true
+        multilineScroll.documentView = multilineNote; surface.addSubview(multilineScroll)
+        namedViews["native-multiline-note"] = multilineNote
         let left = NSScrollView(frame: NSRect(x: 20, y: 224, width: 420, height: max(240, frame.height - 244)))
         left.hasVerticalScroller = true; left.borderType = .bezelBorder; left.setAccessibilityLabel("Audit controls")
         let document = FlippedFixtureView(frame: NSRect(x: 0, y: 0, width: 395, height: 190 * 34 + 36))

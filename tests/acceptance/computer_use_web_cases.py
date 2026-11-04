@@ -6,7 +6,6 @@ geometry-backed pixel actions do not claim model vision. No write is retried.
 An ``unavailable`` or ``blocked`` result must be recorded as such by the runner.
 """
 import copy
-from datetime import date
 import json
 
 from app_client import require
@@ -78,6 +77,27 @@ class WebExtendedCases:
     def _web_observation(self, predicate):
         return wait_until(lambda: o if predicate(o := self.fixture.web_state().get('observation', {})) else None)
 
+    def _web_review_date(self):
+        """Enter the observed YYYY/MM/DD widget through real segment keystrokes.
+
+        The original W04 AX frame exposes year/month/day as unknown-role, read-only
+        children, not text fields. typeText uses paste and cannot fill this widget.
+        Use one-digit month/day to avoid filling their full numeric width before
+        the explicit Tab. Public AX may omit these segments even after successful
+        input, so complete all keys before requiring the independent date oracle
+        to match exactly; an unexpected locale or navigation fails before save.
+        """
+        expected = '2027-01-02'
+        before = self.fixture.web_state()['observation']['review']['values']['date']
+        require(before == '', {'reason': 'W04 date must start empty', 'date': before})
+        self._web_field('Review date')  # Published anchor is inside the year segment.
+        for digits in ('2027', '1', '2'):
+            self.run(' '.join('await app.keypress(' + json.dumps(key) + ');' for key in digits))
+            self.run("await app.keypress('TAB');")
+        self.capture('W04-date-entered')
+        observed = self._web_observation(lambda o: o.get('review', {}).get('values', {}).get('date') == expected)
+        return expected, observed
+
     def W04(self):
         """Native HTML rejection, one valid save, then GUI reopen with exact fields."""
         self.web_ready()
@@ -93,22 +113,16 @@ class WebExtendedCases:
         self._web_type('Review note', 'W04 review 中文 café 🙂')
         self._web_type('Review quantity', '37')
         self._web_field('Approved')
-        # Keep the default Normal priority. Arrow input uses the actual date widget;
-        # locale-dependent date segments must never be bypassed through DOM writes.
-        self._web_field('Review date')
-        self.run("await app.keypress('UP'); await app.keypress('TAB');")
+        # Keep the default Normal priority; every required date segment is entered.
         try:
-            observed = self._web_observation(lambda o: bool(o.get('review', {}).get('values', {}).get('date')))
-        except AssertionError:
-            return {'blocked': 'WebKit date widget did not accept keyboard date input',
+            requested_date, observed = self._web_review_date()
+        except AssertionError as error:
+            self.capture('W04-date-incomplete')
+            return {'blocked': 'W04 exact date entry did not verify', 'detail': str(error),
                     'observation': self.fixture.web_state().get('observation'), 'records': self.fixture.web_state()['records']}
         fields = observed['review']['values']
-        try:
-            date.fromisoformat(fields['date'])
-        except ValueError:
-            return {'blocked': 'WebKit date widget did not produce a valid ISO date through keyboard input', 'observation': observed}
         expected = {'note': 'W04 review 中文 café 🙂', 'number': 37, 'approved': True,
-                    'priority': 'Normal', 'date': fields['date']}
+                    'priority': 'Normal', 'date': requested_date}
         require(fields == {**expected, 'number': '37', 'approved': 'on'}, fields)
         self._web_click('Save review')
         after = wait_until(lambda: s if (s := self.fixture.web_state())['records'] else None)

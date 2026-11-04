@@ -1,5 +1,5 @@
-//! One read-only semantic admission check for an already bound scroll action.
-//! The existing parent Worker poll services it; there is no extra input owner.
+//! Private read-only admission checks serviced by the parent Worker poll.
+//! Scroll clients retain their one-proof phase; independent checks reuse the owner.
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -155,17 +155,26 @@ impl Drop for Owner {
 }
 impl Request {
     pub fn respond(mut self, result: Value) -> io::Result<()> {
-        if self.owner.closed.load(Ordering::Acquire) {
-            return Err(io::Error::other("scroll guard invalidated"));
+        let result = (|| {
+            if self.owner.closed.load(Ordering::Acquire) {
+                return Err(io::Error::other("scroll guard invalidated"));
+            }
+            let mut bytes = serde_json::to_vec(&result).map_err(io::Error::other)?;
+            if bytes.len() >= MAX_FRAME {
+                return Err(io::Error::other("oversized scroll guard response"));
+            }
+            bytes.push(b'\n');
+            // One small response on a private channel. Backpressure is a failed
+            // proof, never permission to wait beyond the original call budget.
+            self.stream.write_all(&bytes)
+        })();
+        if result.is_ok() {
+            let mut channel = self.owner.channel.lock().unwrap();
+            channel.stream = None;
+            channel.bytes.clear();
+            channel.claimed = false;
         }
-        let mut bytes = serde_json::to_vec(&result).map_err(io::Error::other)?;
-        if bytes.len() >= MAX_FRAME {
-            return Err(io::Error::other("oversized scroll guard response"));
-        }
-        bytes.push(b'\n');
-        // One small response on a private channel. Backpressure is a failed
-        // proof, never permission to wait beyond the original call budget.
-        self.stream.write_all(&bytes)
+        result
     }
 }
 
@@ -211,25 +220,23 @@ impl Drop for Scope {
 fn unavailable(message: impl std::fmt::Display) -> Value {
     json!({"error":"scroll_anchor_unavailable", "message":message.to_string()})
 }
-impl Client {
-    fn live(&self) -> Result<(), Value> {
-        if (self.stopping)() {
-            return Err(
-                json!({"error":"native_stopping","message":"Scroll anchor admission closed"}),
-            );
-        }
-        if Instant::now() >= self.deadline {
-            return Err(
-                json!({"error":"deadline_exceeded","message":"Scroll anchor admission expired"}),
-            );
-        }
-        Ok(())
+fn live(deadline: Instant, stopping: fn() -> bool) -> Result<(), Value> {
+    if stopping() {
+        return Err(json!({"error":"native_stopping","message":"Scroll anchor admission closed"}));
     }
+    if Instant::now() >= deadline {
+        return Err(
+            json!({"error":"deadline_exceeded","message":"Scroll anchor admission expired"}),
+        );
+    }
+    Ok(())
+}
+impl Client {
     fn check(&mut self) -> Result<(), Value> {
         if let Some(error) = &self.error {
             return Err(error.clone());
         }
-        let result = self.live().and_then(|_| {
+        let result = live(self.deadline, self.stopping).and_then(|_| {
             if self.phase != Phase::Awaiting {
                 Ok(())
             } else {
@@ -244,23 +251,29 @@ impl Client {
         result
     }
     fn exchange(&self) -> Result<(), Value> {
-        let endpoint = self
-            .endpoint
+        self.endpoint
             .as_ref()
-            .ok_or_else(|| unavailable("missing scroll anchor endpoint"))?;
+            .ok_or_else(|| unavailable("missing scroll anchor endpoint"))?
+            .check(self.deadline, self.stopping)
+    }
+}
+impl Endpoint {
+    /// One authenticated proof under the caller's original absolute deadline.
+    /// Every call uses a new connection; a previous success grants no admission.
+    pub fn check(&self, deadline: Instant, stopping: fn() -> bool) -> Result<(), Value> {
+        live(deadline, stopping)?;
         let mut stream = super::local_socket::connect_peer(
-            &endpoint.path,
-            self.deadline
-                .min(Instant::now() + Duration::from_millis(50)),
+            &self.path,
+            deadline.min(Instant::now() + Duration::from_millis(50)),
         )
         .map_err(unavailable)?;
-        let mut request = serde_json::to_vec(&json!({"command":"check","token":endpoint.token}))
+        let mut request = serde_json::to_vec(&json!({"command":"check","token":self.token}))
             .map_err(unavailable)?;
         request.push(b'\n');
         let mut sent = 0;
         let mut response = Vec::new();
         loop {
-            self.live()?;
+            live(deadline, stopping)?;
             if sent < request.len() {
                 match stream.write(&request[sent..]) {
                     Ok(0) => return Err(unavailable("scroll guard write closed")),
@@ -294,7 +307,7 @@ impl Client {
                         return Err(unavailable("unexpected scroll guard proofs"));
                     }
                     let reply: Value = serde_json::from_slice(&response).map_err(unavailable)?;
-                    self.live()?;
+                    live(deadline, stopping)?;
                     return if reply["ok"] == true {
                         Ok(())
                     } else if reply["error"].is_string() {
@@ -304,7 +317,7 @@ impl Client {
                     };
                 }
             }
-            std::thread::sleep(POLL.min(self.deadline.saturating_duration_since(Instant::now())));
+            std::thread::sleep(POLL.min(deadline.saturating_duration_since(Instant::now())));
         }
     }
 }

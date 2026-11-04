@@ -283,9 +283,12 @@ def run_background_contract(target_fixture, binary, observer_binary, output: Pat
              verify=lambda: _wait(lambda: target_fixture.state()['native']['note'] == NOTE))
         step('readonly_look', "await app.look({role:'text_field',text:'Native note'});")
         captured = step('readonly_capture', capture='native-readonly')
-        hover = _image_point(captured['view'], target_fixture.state()['anchors']['gesture-desk'])
-        step('inactive_hover_rejected', 'await app.move(' + json.dumps(hover) + ');',
-             expected_rejection='foreground_required')
+        if input_policy == 'background-only':
+            hover = _image_point(captured['view'], target_fixture.state()['anchors']['gesture-desk'])
+            step('inactive_hover_rejected', 'await app.move(' + json.dumps(hover) + ');',
+                 expected_rejection='foreground_required')
+        # Automatic hover borrowing has its own exec-wide lifecycle acceptance
+        # in computer_use_scope.py; this probe proves background-supported work.
         # Wait for independent publications and a post-response focus sample;
         # this performs no input and never retries a declined operation.
         time.sleep(.06)

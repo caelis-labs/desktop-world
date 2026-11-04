@@ -79,17 +79,36 @@ The scheduler serializes conflicting resources, not unrelated apps by default.
 Closing an owner must settle its native resources before releasing ownership;
 failed cleanup must not silently reopen admission.
 
-macOS prefers background delivery when the action supports it. Automatic keyboard
-foreground fallback requires a known, experimentally established capability shape
-and a preflight refusal with no preparation or dispatch side effect. Unknown AX or
-modal state, incomplete semantic content and menu inspection do not authorize
-activation. Physical-pointer limitations are admitted separately: hover or a missing
-addressed-event ABI cannot authorize activating an inactive app. Once preparation
-or dispatch begins, errors do not reroute or replay input.
-Explicit focus and automatic fallback leave the target in front after completion.
-The user or Agent may switch away or close the owned task window when finished;
-cleanup releases held inputs and respects external focus changes without restoring
-an earlier app. Windows selects supported client-area mouse messages and otherwise raises the
+Under macOS `auto`, each script starts with background delivery. A clean
+`not_dispatched` preflight for an allowlisted unsupported capability may authorize
+one resident foreground borrow for the rest of the execution. Capabilities include
+AppKit/Chromium hover tracking, a missing required addressed-event API, proven
+modal/sheet or associated-process keyboard routing, and bounded framework-specific
+keyboard exceptions. Unknown AX/modal state, incomplete semantics and menu reads
+do not authorize activation. Borrowing requires an exact logical window anchor
+and a snapshot of the original foreground app instance and window. Remaining
+actions validate that foreground scope, including proven descendant surfaces;
+supported pointer transport can remain addressed. Once preparation or dispatch
+begins, errors do not reroute or replay input. `background_only` refuses borrowing.
+
+At script settlement the resident finalizer releases held input and restores the
+original app and exact captured window only while scope ownership and original
+identity remain proven. An external app or sibling-window focus change invalidates
+the scope permanently: later focus return cannot rearm it, subsequent payloads
+stop, and cleanup does not reacquire or force restoration. A positively confirmed
+quit or anchor-window close is terminal; cleanup only observes the original
+foreground and never activates a third app. Descendant closure or an unconfirmed
+lifecycle effect does not establish that terminal case. Restoration failures
+remain cleanup failures and close dispatch admission. Normal focus return has a
+separate bounded 2-second cleanup budget.
+
+Semantic AXPress has its own reply timeout of at most 2 seconds within the remaining
+request deadline. Post-dispatch AX errors/timeouts retain unknown effect; positive
+acknowledgement establishes dispatch, not the UI postcondition. This contract is
+grounded in source; historical GUI evidence does not validate the current scope
+lifecycle.
+
+Windows selects supported client-area mouse messages and otherwise raises the
 exact target for foreground input; Agents do not select routes. Background input,
 a stationary user pointer and locked-session operation are distinct capabilities.
 Windows validates the worker/current input desktop before preparation and each new

@@ -12,7 +12,7 @@
 | 常用操作 | Agent 使用 look/capture/readText/click/move/drag/typeText/keypress/scroll/quit；点击可选语义目标、选择器或图像坐标 | macOS/Windows move/drag 限一个窗口和单个显示器内的可见路径；支持已证明的标准标题栏搬窗；不暴露跨调用的按下/释放状态；实验 X11 不支持手势 |
 | 菜单与对话框 | `look({scope:'menu'})` 通过已有应用窗口读取原生菜单；macOS sheet、dialog 及有正向归属证明的关联 surface；Windows 当前窗口内的原生菜单和已证明窗口归属的 modal | 无窗口应用根、Dock 和 menu extras 尚无操作合同；能发现不代表可输入；Windows 弹出菜单键盘路由需原生 menu-owner 证明；helper 按平台证据处理 |
 | 多 app 与多会话 | DTW 维护各 app 的观察状态及回执；跨连接原生资源协调 | 同连接单执行槽；原生上下文更换重置观察；Agent 无 Session 或游标管理；连接不隔离物理桌面 |
-| macOS 输入 | 语义、支持的键盘及坐标点击/内容拖拽/滚动优先后台；仅具体已验证的键盘形状可准备前台；虚拟光标覆盖 click/move/drag/scroll | 未知 AX、菜单、modal 或鼠标能力缺口不授权激活；后台 hover 等未验证路线干净拒绝；已证明的前台派发保持目标前台；派发后失败不换路线重投；具体边界见输入路由文档 |
+| macOS 输入 | `auto` 每段 exec 从后台开始；已知能力缺口且干净 `not_dispatched` 可借用一次前台至脚本结束，余下动作验证前台所有权；虚拟光标覆盖 click/move/drag/scroll | 借用包括已识别的 hover、必要定向 API 缺失、已证明的 modal/关联进程键盘及特定框架键盘形状；需精确逻辑窗口与原前台证明。脚本结束仅在所有权及身份仍有效时恢复原 app/精确窗口；外部切焦点永久失效，不抢回或强制恢复；确认 quit/锚点关闭后只观察、不激活第三 app；unknown 不重投。当前脚本级生命周期有单独的[定向验收与限制](computer-use-script-scope-2026-11-04.md)，详见[输入路由](macos-input-routing.md) |
 | Windows 输入 | 支持的 HWND 客户区定向左键/滚轮；其他鼠标、手势及键盘由 DTW 自动准备前台；UIA、DPI、Unicode 和正常关闭 | 不承诺后台键盘/独立物理指针；保护保存提示；安全桌面、提权与不同 DPI 环境需分别验证 |
 | Agent 光标 | macOS/Windows 按会话颜色显示动作位置和点击反馈；不显示内部身份编号 | 视觉反馈不代表业务完成；只有经证明属于 DTW 的辅助窗口可从截图排除 |
 | 取消与资源回收 | 标准 MCP cancellation、EOF/父进程退出收尾、配对释放、原回执；Windows 新输入前复核当前输入桌面，失败返回 desktop_unavailable | 已排队输入不可撤回；配对释放不被新输入禁令阻止；桌面恢复后重新观察；Windows 锁屏/切桌面的新增准入仍需专用实机验收 |

@@ -1,6 +1,7 @@
 """Supervisor contract checks; these do not claim a GUI acceptance pass."""
 import copy
 import json
+import re
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -21,6 +22,10 @@ class WebHarness(WebExtendedCases):
         self.client = SimpleNamespace(execute=self.execute)
         self.app = 'owned-fixture'
         self.actions = []
+        self.date_segments = {'year': '', 'month': '', 'day': ''}
+        self.date_focus = None
+        self.date_keys_delivered = True
+        self.date_dom_value = '2027-01-02'
         self.scroll_leak = False
         self.invalid_saves = False
         self.ambiguous_write = False
@@ -64,6 +69,8 @@ class WebHarness(WebExtendedCases):
                 stream.write(json.dumps({'type': '/api/catalogue-review', 'data': {'id': 137}}) + '\n')
 
     def _web_field(self, label):
+        if label == 'Review date':
+            self.date_focus = 'year'
         return self._web_click(label)
 
     def _web_type(self, label, value):
@@ -74,8 +81,16 @@ class WebHarness(WebExtendedCases):
 
     def run(self, source):
         self.actions.append(source)
-        if 'keypress' in source:
-            self.web['observation']['review']['values']['date'] = '2026-05-12'
+        if 'app.look({text:' in source:
+            return {'result': {'elements': []}}
+        for key in re.findall(r'app.keypress\([\'\"]([^\'\"]+)[\'\"]\)', source):
+            if self.date_focus and self.date_keys_delivered:
+                if key.isdigit():
+                    self.date_segments[self.date_focus] += key
+                elif key == 'TAB':
+                    self.date_focus = {'year': 'month', 'month': 'day', 'day': None}[self.date_focus]
+                    if self.date_focus is None:
+                        self.web['observation']['review']['values']['date'] = self.date_dom_value
         if 'app.scroll(' in source:
             args = json.loads(source.split('app.scroll(', 1)[1].split(');', 1)[0])
             region, axis = ('inner', 1) if args['x'] == 10 else ('outer', 0)
@@ -243,11 +258,70 @@ class WebCasesTests(unittest.TestCase):
         self.assertEqual(result['saves_delta'], 1)
         self.assertEqual(len(self.case.web['records']), 1)
         self.assertEqual(result['record']['note'], 'W04 review 中文 café 🙂')
+        self.assertEqual(result['record']['date'], '2027-01-02')
+        self.assertEqual(result['reopened']['review']['values']['date'], '2027-01-02')
         actions = self.case.actions
         self.assertLess(actions.index('Save review'), actions.index(('Review note', 'W04 review 中文 café 🙂')))
         self.assertEqual(actions.count('New review record'), 2)
         self.assertEqual(actions.count('Save review'), 2)
         self.assertEqual(actions[0], 'web_ready')
+
+    def test_date_recipe_requires_independent_date_oracle_before_save(self):
+        from unittest.mock import patch
+        self.case.date_keys_delivered = False
+        def observe(predicate):
+            observation = copy.deepcopy(self.case.web['observation'])
+            if not predicate(observation):
+                raise AssertionError('requested date not observed')
+            return observation
+        with patch.object(self.case, '_web_observation', side_effect=observe):
+            result = self.case.W04()
+        self.assertIn('blocked', result)
+        self.assertIn('requested date not observed', result['detail'])
+        self.assertEqual(self.case.web['records'], [])
+        self.assertEqual(self.case.actions.count('Review date'), 1)
+        self.assertEqual(self.case.actions.count('Save review'), 1)
+        self.assertIn('W04-date-entered', self.case.actions)
+        self.assertIn('W04-date-incomplete', self.case.actions)
+
+    def test_date_recipe_rejects_other_valid_date_and_never_replays(self):
+        from unittest.mock import patch
+        self.case.date_dom_value = '2027-01-03'
+        def observe(predicate):
+            observation = copy.deepcopy(self.case.web['observation'])
+            if not predicate(observation):
+                raise AssertionError('requested date not observed')
+            return observation
+        with patch.object(self.case, '_web_observation', side_effect=observe):
+            result = self.case.W04()
+        self.assertIn('blocked', result)
+        self.assertEqual(self.case.actions.count('Review date'), 1)
+        self.assertEqual(self.case.actions.count('Save review'), 1)
+        self.assertEqual(self.case.web['records'], [])
+
+    def test_date_recipe_rejects_prefill_without_sending_input(self):
+        self.case.web['observation']['review']['values']['date'] = '2027-01-02'
+        with self.assertRaisesRegex(AssertionError, 'must start empty'):
+            self.case._web_review_date()
+        self.assertEqual(self.case.actions, [])
+
+    def test_date_recipe_saves_with_no_public_segment_ax_values(self):
+        self.assertEqual(self.case.run('const v=await app.look({text:"year"}); return {elements:v.elements};'),
+                         {'result': {'elements': []}})
+        self.case.actions.clear()
+        result = self.case.W04()
+        self.assertEqual(result['record']['date'], '2027-01-02')
+        self.assertEqual(self.case.web['records'], [result['record']])
+        self.assertFalse(any('app.look' in action for action in self.case.actions if isinstance(action, str)))
+
+    def test_date_recipe_uses_digit_key_events_and_no_paste(self):
+        self.case._web_review_date()
+        scripts = [action for action in self.case.actions if isinstance(action, str) and 'app.' in action]
+        keys = [key for script in scripts for key in re.findall(r'app.keypress\([\'\"]([^\'\"]+)[\'\"]\)', script)]
+        self.assertEqual(keys, ['2', '0', '2', '7', 'TAB', '1', 'TAB', '2', 'TAB'])
+        self.assertFalse(any('typeText' in script or 'setValue' in script or 'app.look' in script
+                             for script in scripts))
+        self.assertEqual(self.case.date_segments, {'year': '2027', 'month': '1', 'day': '2'})
 
     def test_modal_cannot_pass_if_invalid_attempt_writes(self):
         self.case.invalid_saves = True

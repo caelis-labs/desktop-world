@@ -151,6 +151,7 @@ fn input_operation(op: &str) -> bool {
             | "drag"
             | "quit_app"
             | "close_window"
+            | "begin_execution_focus"
     )
 }
 fn now_ms() -> u64 {
@@ -170,6 +171,13 @@ fn route_trace(request: &Value, route: &str, reason: &str) -> Value {
 fn trace_route(request: &Value, route: &str, reason: &str) {
     if std::env::var("DTW_INPUT_TRACE").ok().as_deref() == Some("1") {
         eprintln!("dtw_input {}", route_trace(request, route, reason));
+    }
+}
+pub(super) fn trace_execution_refusal(request: &Value) {
+    if std::env::var("DTW_INPUT_TRACE").ok().as_deref() == Some("1") {
+        let mut record = route_trace(request, "refused", "execution_scope_preflight");
+        record["dispatch"] = json!("not_dispatched");
+        eprintln!("dtw_input {record}");
     }
 }
 // Owned metadata survives dispatch_owned consuming the request. Drop closes even
@@ -218,6 +226,7 @@ struct BackgroundTarget {
     surface_owner: Value,
     bounds: Value,
     keyboard: bool,
+    foreground: bool,
     deadline: u64,
     failures: RefCell<BackgroundValidationFailures>,
 }
@@ -245,6 +254,11 @@ impl BackgroundValidationFailures {
         ] {
             if let Some(cause) = cause {
                 if result[field].is_object() {
+                    // Focus loss has a stable public stop condition even when
+                    // the addressed-event callback carries it through a C ABI.
+                    if cause["error"] == "focus_changed" {
+                        result[field]["code"] = cause["error"].clone();
+                    }
                     result[field]["message"] = json!(format!(
                         "{}: {}",
                         cause["error"].as_str().unwrap_or("validation_failed"),
@@ -290,6 +304,7 @@ extern "C" fn validate_background(context: *mut c_void, phase: i32) -> i32 {
     // Cleanup ignores normal cancellation, focus and geometry changes.
     let check = json!({"operation":if phase == 0 {"validate_background"} else {"validate"},
         "target":target.target,"keyboard":target.keyboard,"step":phase == 0,
+        "_execution_foreground":phase == 0 && target.foreground,
         "deadline_unix_ms":if phase == 0 {target.deadline} else {now_ms()+150}});
     let reply = native(&check, false);
     match background_validation(&reply, target, phase) {
@@ -450,7 +465,8 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
     }
     let keyboard = matches!(op.as_str(), "type_text" | "keypress");
     let check = json!({"operation":"validate_background","target":request["target"],
-        "keyboard":keyboard,"consume":true,"deadline_unix_ms":request["deadline_unix_ms"]});
+        "keyboard":keyboard,"consume":true,"_execution_foreground":request["_execution_foreground"] == true,
+        "deadline_unix_ms":request["deadline_unix_ms"]});
     let before = native(&check, false);
     if let Err(error) = validate_reply(&before, &request["target"]) {
         return BackgroundAttempt::Completed(rejected(error, &op));
@@ -507,13 +523,11 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
         // Preserve the independently proven owner for foreground capture and
         // pointer presentation, without changing the logical app identity.
         // CUA cannot direct input to a different process on this app's behalf.
-        return BackgroundAttempt::Completed(foreground_required("associated_keyboard_unproven"));
+        return BackgroundAttempt::Declined("associated_process_keyboard".into());
     }
     if keyboard {
         match modal_input_requires_foreground(&before) {
-            Ok(true) => {
-                return BackgroundAttempt::Completed(foreground_required("modal_keyboard_unproven"))
-            }
+            Ok(true) => return BackgroundAttempt::Declined("native_modal_keyboard".into()),
             Ok(false) => (),
             Err(error) => return BackgroundAttempt::Completed(rejected(error, &op)),
         }
@@ -559,6 +573,7 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
         surface_owner: before["surface_owner"].clone(),
         bounds: before["bounds"].clone(),
         keyboard,
+        foreground: request["_execution_foreground"] == true,
         deadline: request["deadline_unix_ms"].as_u64().unwrap_or(0),
         failures: RefCell::default(),
     };
@@ -590,9 +605,16 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
 }
 
 fn dispatch(request: Value, leased: &mut bool, scene_worker: bool) -> Value {
+    let _execution = super::execution_guard::Scope::new(&request, remaining(&request), || {
+        TERMINATING.load(Ordering::Relaxed)
+    });
     let proofs = super::associated_proof::Scope::new(scene_worker && *leased, remaining(&request));
     let mut result = dispatch_request(request, leased, scene_worker);
     proofs.finish(&mut result);
+    if let Some(error) = super::execution_guard::failure() {
+        result["error"] = error["error"].clone();
+        result["message"] = error["message"].clone();
+    }
     result
 }
 
@@ -749,7 +771,7 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
     };
     // A directed route first shares coordination with independent background
     // mutations. Known foreground/return routes enter exclusively from the start.
-    let known_foreground = op == "focus" || focus_owner.is_some();
+    let known_foreground = matches!(op, "focus" | "begin_execution_focus") || focus_owner.is_some();
     let mut coordination = if instance.is_some() {
         let mode = if known_foreground {
             scene_lease::InputCoordination::Foreground
@@ -788,6 +810,18 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
             op,
         );
     }
+    if op == "begin_execution_focus" {
+        if background_only {
+            return foreground_required("execution_scope");
+        }
+        let _input = match scene_lease::lock_input(remaining(&request)) {
+            Ok(lease) => lease,
+            Err(message) => {
+                return rejected(json!({"error":"native_input_busy","message":message}), op)
+            }
+        };
+        return native(&request, false);
+    }
     let foreground_reason = match background(&mut request, leased, scene_worker) {
         BackgroundAttempt::Completed(result) => return result,
         BackgroundAttempt::Declined(reason) => Some(reason),
@@ -797,6 +831,13 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
     if background_only {
         if let Some(reason) = &foreground_reason {
             return foreground_required(reason);
+        }
+    }
+    if request["_defer_foreground"] == true && request["_execution_foreground"] != true {
+        if let Some(reason) = &foreground_reason {
+            return json!({"dispatch":"not_dispatched","evidence":"unverified",
+                "foreground_plan":{"reason":reason,"visual":super::input_route::visual_focus(op),
+                    "capability_detail":request["_keyboard_capability"]}});
         }
     }
     let physical = matches!(
@@ -880,9 +921,12 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
         // Cursor borrowing alone never grants application activation. Native
         // preparation and the eventual focus check both enforce this flag, so
         // losing foreground after preflight cannot turn hover into activation.
-        request["_allow_activation"] = json!(super::input_route::allows_activation(
-            foreground_reason.as_deref().unwrap_or("explicit_focus")
-        ));
+        request["_allow_activation"] = json!(
+            request["_execution_foreground"] != true
+                && super::input_route::allows_activation(
+                    foreground_reason.as_deref().unwrap_or("explicit_focus")
+                )
+        );
         // Coordinate input need not depend on AX. Keyboard and explicit focus
         // retain exact-window and editing-destination validation on every down.
         request["visual"] = json!(super::input_route::visual_focus(op));
@@ -934,7 +978,8 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
     }
     if physical && op != "focus" && op != "release_focus" {
         let cleanup = native(
-            &super::focus_return_request(now_ms(), Some(call_deadline)),
+            &json!({"operation":"release_input_focus",
+                "deadline_unix_ms":super::focus_return_deadline_ms(now_ms(), Some(call_deadline))}),
             false,
         );
         record_foreground_cleanup(&mut result, cleanup);
@@ -1384,6 +1429,7 @@ mod tests {
             surface_owner: json!({"pid":7,"generation":1}),
             bounds: json!([10, 20, 300, 400]),
             keyboard: true,
+            foreground: false,
             deadline: 0,
             failures: RefCell::default(),
         };
@@ -1408,6 +1454,7 @@ mod tests {
             surface_owner: json!({"pid":7,"generation":1}),
             bounds: json!([0, 0, 100, 100]),
             keyboard: true,
+            foreground: false,
             deadline: 0,
             failures: RefCell::default(),
         };
@@ -1469,6 +1516,21 @@ mod tests {
             reply["cleanup_error"]["message"],
             "target_changed: Window disappeared"
         );
+    }
+
+    #[test]
+    fn focus_loss_keeps_its_code_without_changing_partial_dispatch() {
+        let mut failures = BackgroundValidationFailures::default();
+        failures.record(
+            0,
+            json!({"error":"focus_changed","message":"Execution scope invalidated"}),
+        );
+        let mut reply = json!({"dispatch":"unknown","fallback_allowed":false,
+            "error":{"code":"background_input_failed","message":"callback denied"}});
+        failures.apply(&mut reply);
+        assert_eq!(reply["error"]["code"], "focus_changed");
+        assert_eq!(reply["dispatch"], "unknown");
+        assert_eq!(reply["fallback_allowed"], false);
     }
 
     #[test]

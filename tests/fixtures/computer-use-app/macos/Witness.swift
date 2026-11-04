@@ -80,6 +80,7 @@ final class ForegroundWitness: NSObject, NSApplicationDelegate {
         let pointer = CGEvent(source: nil)?.location
         let state: [String: Any] = [
             "schema_version": 1, "case": caseName, "pid": ProcessInfo.processInfo.processIdentifier,
+            "process_birth": fixtureProcessBirth() as Any? ?? NSNull(),
             "ready": window.isVisible, "write_error": writeError,
             "environment": ["frontmost_pid": NSWorkspace.shared.frontmostApplication?.processIdentifier as Any? ?? NSNull(), "pointer_screen": pointer.map { [finite($0.x), finite($0.y)] } as Any? ?? NSNull()],
             "witness": ["text": field.currentEditor()?.string ?? field.stringValue, "key_events": keyEvents, "flags_events": flagsEvents]

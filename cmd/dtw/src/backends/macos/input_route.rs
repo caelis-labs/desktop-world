@@ -34,11 +34,57 @@ pub(super) fn pointer_reason(operation: &str, framework: &str) -> Option<Physica
         .then_some(PhysicalReason::NativeHoverTracking)
 }
 
-/// Physical cursor capability and application activation are separate decisions.
-/// Neither hover tracking nor a missing addressed API proves that an inactive
-/// app must be activated. Unknown reasons cannot grant activation either.
+/// Only established capability limits can start a script's foreground borrow.
+/// Pointer transport remains independent: later supported input stays addressed.
 pub(super) fn allows_activation(reason: &str) -> bool {
-    matches!(reason, "explicit_focus" | "native_keyboard_semantics")
+    matches!(
+        reason,
+        "explicit_focus"
+            | "native_keyboard_semantics"
+            | "native_hover_tracking"
+            | "addressed_event_api_unavailable"
+            | "associated_process_keyboard"
+            | "native_modal_keyboard"
+    )
+}
+
+pub(super) fn foreground_plan<'a>(
+    reply: &'a serde_json::Value,
+    operation: &str,
+) -> Option<&'a str> {
+    let plan = reply.get("foreground_plan")?;
+    if reply["dispatch"] != "not_dispatched"
+        || reply["evidence"] != "unverified"
+        || reply.get("error").is_some()
+        || reply.get("cleanup_error").is_some()
+        || reply.get("focus_preparation").is_some()
+        || reply.get("interruption").is_some()
+        || plan["visual"].as_bool()? != visual_focus(operation)
+    {
+        return None;
+    }
+    let reason = plan["reason"].as_str()?;
+    let keyboard = matches!(operation, "keypress" | "type_text");
+    let valid = match reason {
+        "explicit_focus" => operation == "focus",
+        "native_hover_tracking" => operation == "move",
+        "addressed_event_api_unavailable" => visual_focus(operation) || keyboard,
+        "native_modal_keyboard" | "associated_process_keyboard" => keyboard,
+        "native_keyboard_semantics" => {
+            keyboard
+                && matches!(
+                    plan["capability_detail"].as_str(),
+                    Some(
+                        "chromium_command_a"
+                            | "chromium_supplementary_unicode"
+                            | "appkit_command_w"
+                            | "appkit_multiline_text"
+                    )
+                )
+        }
+        _ => false,
+    };
+    valid.then_some(reason)
 }
 
 /// An explicit unsupported capability must also be cleanly not dispatched.
@@ -103,10 +149,8 @@ mod tests {
         );
     }
     #[test]
-    fn cursor_tracking_and_unknown_reasons_never_authorize_activation() {
+    fn only_established_capability_limits_authorize_activation() {
         for reason in [
-            "native_hover_tracking",
-            "addressed_event_api_unavailable",
             "unknown",
             "ax_unavailable",
             "modal_state_unproven",
@@ -115,9 +159,59 @@ mod tests {
         ] {
             assert!(!allows_activation(reason), "{reason}");
         }
-        for reason in ["explicit_focus", "native_keyboard_semantics"] {
+        for reason in [
+            "explicit_focus",
+            "native_keyboard_semantics",
+            "native_hover_tracking",
+            "addressed_event_api_unavailable",
+            "associated_process_keyboard",
+            "native_modal_keyboard",
+        ] {
             assert!(allows_activation(reason), "{reason}");
         }
+    }
+
+    #[test]
+    fn foreground_plans_require_clean_exact_operation_capability() {
+        let base = json!({"dispatch":"not_dispatched","evidence":"unverified",
+            "foreground_plan":{"reason":"native_hover_tracking","visual":true}});
+        assert_eq!(
+            foreground_plan(&base, "move"),
+            Some("native_hover_tracking")
+        );
+        assert_eq!(foreground_plan(&base, "click"), None);
+        for key in [
+            "error",
+            "cleanup_error",
+            "focus_preparation",
+            "interruption",
+        ] {
+            let mut changed = base.clone();
+            changed[key] = json!({});
+            assert_eq!(foreground_plan(&changed, "move"), None, "{key}");
+        }
+        for dispatch in ["unknown", "dispatched"] {
+            let mut changed = base.clone();
+            changed["dispatch"] = json!(dispatch);
+            assert_eq!(foreground_plan(&changed, "move"), None);
+        }
+        let mut keyboard = json!({"dispatch":"not_dispatched","evidence":"unverified",
+            "foreground_plan":{"reason":"native_keyboard_semantics","visual":false}});
+        assert_eq!(foreground_plan(&keyboard, "keypress"), None);
+        keyboard["foreground_plan"]["capability_detail"] = json!("chromium_command_a");
+        assert_eq!(
+            foreground_plan(&keyboard, "keypress"),
+            Some("native_keyboard_semantics")
+        );
+        assert_eq!(foreground_plan(&keyboard, "move"), None);
+        keyboard["foreground_plan"]["reason"] = json!("addressed_event_api_unavailable");
+        assert_eq!(
+            foreground_plan(&keyboard, "keypress"),
+            Some("addressed_event_api_unavailable")
+        );
+        assert_eq!(foreground_plan(&keyboard, "press"), None);
+        keyboard["foreground_plan"]["reason"] = json!("modal_state_unproven");
+        assert_eq!(foreground_plan(&keyboard, "keypress"), None);
     }
 
     #[test]

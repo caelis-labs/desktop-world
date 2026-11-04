@@ -298,7 +298,11 @@ def independence_violation(row):
                         if (route.get('operation') == operation
                             and route.get('route') in ('native', 'addressed', 'borrowed'))
                         or (operation == 'click' and route.get('operation') == 'press'
-                            and route.get('route') == 'native' and route.get('reason') == 'ax_action')]
+                            and route.get('route') == 'native' and route.get('reason') == 'ax_action')
+                        or (route.get('route') == 'refused'
+                            and route.get('reason') == 'execution_scope_preflight'
+                            and route.get('dispatch') == 'not_dispatched'
+                            and route.get('operation') in ((operation, 'press') if operation == 'click' else (operation,)))]
             if len(evidence) < row.get('methods', []).count(operation):
                 return 'native input route evidence missing'
     if cursor['status'] == 'moved':

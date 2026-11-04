@@ -55,8 +55,11 @@ def run_target(args):
         target_manifest_sha256=hashlib.sha256((Path(__file__).parents[1] / 'fixtures/computer-use-app/scenarios.json').read_bytes()).hexdigest())
     identity['helper_files_sha256'] = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(Path(__file__).parent.glob('computer_use_*.py'))}
-    identity['helper_files_sha256']['app_client.py'] = hashlib.sha256(
-        (Path(__file__).parent / 'app_client.py').read_bytes()).hexdigest()
+    for name in ('app_client.py', 'chrome_isolation.py'):
+        identity['helper_files_sha256'][name] = hashlib.sha256(
+            (Path(__file__).parent / name).read_bytes()).hexdigest()
+    identity['chrome_observer_source_sha256'] = hashlib.sha256(
+        (Path(__file__).parents[1] / 'fixtures/chrome-instance-observer.swift').read_bytes()).hexdigest()
     report = BenchmarkReport(load_targets(), identity)
     report.data['selected_scenarios'] = [args.scenario]
     report.data['scope'] = 'one fresh target attempt; other targets remain unexecuted'

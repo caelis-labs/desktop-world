@@ -82,9 +82,19 @@ replayed to renew a binding.
 Keyboard input uses the native keyboard window when available, independently of
 visual z-order, within the already selected process instance; a frontmost tooltip or completion surface does not automatically
 receive keys. Focus and app identity checks still apply. On macOS startup requests
-neither activate nor hide the app. An app may activate itself. Input with a proven
-foreground capability requirement may use controlled foreground delivery; completion
-releases held inputs and leaves the target in front, without restoring a previous app.
+neither activate nor hide the app. An app may activate itself. With the default
+`auto` input policy, each `exec` initially uses background delivery. A known
+unsupported background capability, proved cleanly `not_dispatched` before focus
+preparation or input, may authorize one foreground borrow for the rest of that
+script. Remaining actions require the owned foreground; supported pointer actions
+can still use addressed events. At script end DTW releases held input and restores
+the original app instance and exact window, when one was captured, only while
+foreground ownership and the original identity remain proven. An external app or
+window focus change permanently invalidates this borrow, even if focus later
+returns: DTW stops further input, does not reacquire focus, and does not force a
+restore. Confirmed quit or closure of the borrowed anchor is terminal; cleanup
+only observes whether the original foreground returned and never activates a
+third app. An unconfirmed lifecycle effect does not establish this terminal case.
 
 ## View
 
@@ -190,14 +200,23 @@ continue to apply when no semantic elements are available.
 
 macOS prefers background input. Reads and selectors do not activate an app to
 materialize semantics or run a menu command. Menu actions require their exact
-native destination already focused. Automatic keyboard foreground delivery is
-limited to verified framework/operation shapes: Chromium Command+A and supplementary
-Unicode text, and AppKit Command+W and text containing line/tab controls. Other
-admitted keyboard shapes try directed input once. Unknown errors never authorize
-activation or replay. Physical-pointer capability limits are separate from focus:
-an inactive app's hover or missing addressed API cannot by itself activate it and
-may return `foreground_required`. Inspect the returned view and effect before
-choosing a new action; the public facade has no `focus()` method.
+native destination already focused. Known foreground-borrow capabilities include
+AppKit/Chromium native hover tracking, an unavailable required addressed-event
+API, proven native modal/sheet keyboard input, and proven associated-process
+keyboard receivers. The framework-specific keyboard exceptions are Chromium
+Command+A and supplementary Unicode text, and AppKit Command+W and text containing
+line/tab controls; these four shapes are not the complete borrowing capability
+list. Other admitted shapes try directed input once. Borrowing still requires a
+proven exact logical window anchor and original foreground identity. Unknown AX
+or modal state, stale geometry, permissions, timeouts and arbitrary errors never
+authorize activation or replay. `background_only` refuses a required borrow with
+`foreground_required`. The public facade has no `focus()` method.
+
+A semantic `AXPress` gets a reply budget of at most 2 seconds, capped by the
+remaining request deadline. After dispatch, a timeout or AX error means unknown
+effect, never success or permission to retry. A positive AX acknowledgement is
+dispatch evidence, not proof of the UI effect; inspect the returned view before
+choosing a new action.
 
 Windows records physical DWM-visible bounds and global window order, and renders
 exact HWNDs for app composition. Covered reads do not relax input visibility or

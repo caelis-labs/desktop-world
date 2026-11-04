@@ -94,6 +94,27 @@ the close control for macOS background work: AppKit Command+W has a verified
 foreground limitation. An unavailable background route does not justify repeating
 an action with unknown effects.
 
+## macOS foreground borrowing
+
+Under `auto`, an `exec` starts with background delivery. A known unsupported
+capability with a clean `not_dispatched` preflight can borrow foreground once for
+the rest of that script. This includes AppKit/Chromium hover, a required addressed
+API being unavailable, proven modal/sheet or associated-process keyboard routing,
+and the documented framework-specific keyboard exceptions. Borrowing requires
+an exact logical window anchor and a proven original foreground identity.
+Remaining actions require the owned foreground, while supported pointer transport
+can remain addressed. `background_only` refuses actions that require borrowing.
+
+Keep related hover, inspection and follow-up input in one script when appropriate.
+At script end DTW restores the original app instance and exact captured window
+only if ownership and original identity still hold. Following a proven descendant
+sheet or popup is allowed; choosing a sibling window or another app invalidates
+the scope permanently. Further input stops, even if focus returns, and DTW neither
+reacquires focus nor forces restoration. Confirmed quit or anchor-window closure
+ends the scope: cleanup only observes whether the original foreground returned,
+and never activates a third app. A save prompt or unknown close effect does not
+establish confirmed termination.
+
 ## Errors and interruption
 
 There is no public Session or receipt-query tool. Native references and history
@@ -103,6 +124,9 @@ requests are new work. After an unknown effect, inspect current state before
 new input. Missing history never proves an action had no effect. A native
 cleanup failure closes desktop dispatch in that connection; reconnect only
 after the host has settled it, then perform a fresh look rather than replaying.
+On macOS, semantic `AXPress` allows up to 2 seconds for its reply within the
+remaining request deadline. An AX error or timeout after dispatch has unknown
+effect; a positive acknowledgement alone does not prove the UI change.
 
 ## Hover and content drag
 

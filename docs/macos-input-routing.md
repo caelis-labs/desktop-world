@@ -5,22 +5,28 @@ Agent 仍只调用 `apps`、`exec` 和原有 `app` 方法。输入路由是实�
 `delivery`；私有执行账本保留原始投递证据及派发不确定性。虚拟光标反馈覆盖坐标 click/move/drag/scroll；语义 AXPress、键盘和 AXPosition 不伪造鼠标轨迹。
 
 本实现接续[逐操作历史审查](macos-ax-cursor-audit-2026-11-03.md)。历史失败记录保留，
-其“当前产品”描述只对应当时的二进制，不代表本轮修改后的行为。
+其“当前产品”描述只对应当时的二进制，不代表下述当前源码合同。
 
 ## 分类规则
 
-先证明授权应用、进程出生标识、具体窗口及截图几何，再选择一次路由：
+`auto` 下每次 `exec` 从后台开始。先证明授权应用、进程出生标识、具体窗口及截图几何，
+再选择当前动作的投递路线。只有已知不支持的能力，且预检证明干净 `not_dispatched`、
+尚无焦点准备或输入副作用，才可为整段脚本借用一次前台。剩余动作都受该前台所有权约束，
+但支持的指针动作仍可使用定向事件；前台所有权与真实光标路线不是同一概念。
+`background_only` 不借用，所需动作返回 `foreground_required`。
+
+以下为尚未借用时的能力分类：
 
 | 操作 / 已知条件 | 首选实现 | 自动借用条件 |
 | --- | --- | --- |
 | 有效语义目标 | AX action | 不为未知 AX 状态或菜单准备焦点；语义失败不自动重放成鼠标点击 |
 | 证明是标准标题栏且位置可写 | AXPosition | 不因 AX 不可读或位置设置结果不确定而改路重放 |
-| 坐标左/右键、单/双击 | 精确 PID + 窗口事件 | 必要的定向事件 ABI 明确不可用且尚无副作用时可选物理路线；不能据此激活后台应用 |
+| 坐标左/右键、单/双击 | 精确 PID + 窗口事件 | 必要的定向事件 ABI 明确不可用且干净未派发时可申请脚本级前台借用 |
 | 内容拖拽，包括 AppKit 控件、Chrome 文本拖选 | 精确 PID + 窗口事件，逐点验证 | 同上；Chromium 标签本身不是拖拽借用理由 |
 | 锚点或默认中心滚动 | 精确 PID + 窗口 wheel | 同上；不要求 AX children / AX window inventory |
-| 已识别 AppKit / Chromium 的原生悬停 | 目标已经前台时，按已复现的跟踪限制选择物理光标 | 后台或前台证明不可读时拒绝；悬停的光标限制不证明必须激活应用 |
+| 已识别 AppKit / Chromium 的原生悬停 | 预检识别跟踪限制，选择物理光标 | 干净未派发时可申请脚本级前台借用；未知框架不套用该例外 |
 | Qt / 未识别框架的悬停 | 定向事件 | 未知不等于不支持；不以未知框架、AX 缺失或普通错误授权借用 |
-| 键盘 | 定向路径与精确编辑目的地证明 | 仅已验证的 Chromium Command+A/补充平面 Unicode、AppKit Command+W/控制字符文本可选前台；不是移动光标的理由 |
+| 键盘 | 定向路径与精确编辑目的地证明 | 已证明的 native modal/sheet、关联进程接收者、必要定向 API 缺失，或 Chromium Command+A/补充平面 Unicode、AppKit Command+W/控制字符文本，可申请前台借用；不是移动光标的理由 |
 
 视觉输入的 AX 豁免仅适用于坐标指针操作。前台键盘回退仍逐次验证精确 AX 窗口及编辑
 目的地，应用 PID 仍在前台不能替代该检查；同一应用内焦点离开目标窗口时停止后续按键。
@@ -32,18 +38,50 @@ frameworks / AppKit 元数据，不按 Telegram、fixture bundle ID 或应用名
 只有两种指针借用原因进入内部审计：`native_hover_tracking`（仅已验收的原生悬停）和
 `addressed_event_api_unavailable`。
 缺权限、进程变化、几何过期、遮挡、取消、超时、连接失败和任意 provider 错误均不是借用依据。
-物理光标与应用前台分别准入：鼠标路线的能力限制不授权激活后台应用。未知 AX/modal
-错误保留原因，sheet、关联进程键盘及无窗口快捷键在缺少已满足的前台条件时干净拒绝。
+物理光标与应用前台分别准入：只有上述已知能力与干净预检可发起脚本级前台借用，
+普通鼠标错误不授权激活。未知 AX/modal 错误保留原因，不能当作已证明的 modal 能力。
+无窗口快捷键仍有独立的应用身份、前台及配对释放条件，不能据此推断存在可借用的窗口锚点。
 选择器不会为 `content_unproven` 或菜单自动聚焦；只读语义启用继续不激活应用。
 `fallback_allowed:true` 单独不能改路：还必须是精确的已知能力证据、`not_dispatched`、
-预检能力错误，且没有 cleanup error。键盘还必须携带已识别的 `capability_detail`：
+预检能力错误，且没有 cleanup error。若依据为 `native_keyboard_semantics`，还必须携带已识别的 `capability_detail`：
 `chromium_command_a`、`chromium_supplementary_unicode`、`appkit_command_w`、`appkit_multiline_text`；
-泛化的 `native_keyboard_semantics` 单独不够，实际框架不能从“不是 Chromium”推断为 AppKit。已准备、已投递或 `unknown` 的输入不换路重放。
+这四项只限制 `native_keyboard_semantics`，不是全部前台借用条件。
+泛化的 `native_keyboard_semantics` 单独不够，实际框架不能从“不是 Chromium”推断为 AppKit。
+内部 `foreground_plan` 还必须匹配当前操作及 visual 分类，且无 error、cleanup error、
+focus preparation 或 interruption。已准备、已投递或 `unknown` 的输入不换路重放。
+
+## 脚本级前台所有权与归还
+
+resident worker 在首次借用时保留原前台进程出生标识与精确 AX 窗口对象/窗口 ID，
+并为目标建立精确逻辑窗口锚点。因此坐标输入虽可不依赖 AX，持久前台借用仍需要该锚点与
+原前台证明；缺少这些证明不会退化成仅按 PID 激活。脚本内可以跟随由保留对象 ancestry
+证明的 sheet/popup 后代，不能把同 PID 的兄弟窗口当作原任务窗口。
+
+后续每次输入均复核前台所有权和精确目的地。外部切换到其他 app 或兄弟窗口会使 scope
+永久失效；即使焦点后来回来，也不重新武装、不再次激活，后续 payload 停止。
+脚本结束释放已持有输入，仅在所有权及原身份/窗口仍有效时恢复原 app 实例及精确原窗口；
+若原前台确无窗口，则只恢复原 app。外部切焦点或原身份变化时不强制恢复。
+正常脚本结算的焦点归还有独立、最多 2 秒的清理预算；恢复失败是 sticky cleanup failure，
+关闭后续派发准入，不能当作恢复成功。
+
+只有同 app 的 `quit_app` 得到 confirmed `application_exited`，或 `close_window`
+得到 confirmed `window_closed` 且关闭的是锚点窗口，才是终态。保存提示、后代 sheet
+关闭、按键关闭效果或未知退出结果不自行建立这个终态。确认终态后的清理仅观察原前台是否
+已自然返回；不再激活任何 app，也不会把第三 app 拉到前台。观察不明不能声称恢复成功。
+
+语义 `AXPress` 的 action reply 预算为剩余请求 deadline 与 2 秒的较小值，区别于属性读取
+的短超时。进入派发后 AX 错误或超时均保留 `unknown`，不转换成成功、不改成鼠标重投。
+正向 AX acknowledgement 只证明派发被接受，不证明界面效果；deadline/cancellation
+的不确定性仍由执行层保留。
+
+本节描述当前源码合同。新的脚本级借用、失效及归还证据与剩余限制见
+[脚本级前台验收](computer-use-script-scope-2026-11-04.md)；历史鼠标验收不能代替该生命周期验收。
 
 ## 一次全独立验收与最终例外
 
-下述 2026-11-03 固定候选保留鼠标路线的历史证据；本轮后台优先与焦点策略由
-[统一验收基准](computer-use-benchmark-2026-11-04.md) 单独记录，不能由旧结果外推。
+下述 2026-11-03 固定候选仅保留鼠标路线的历史证据；
+[统一验收基准](computer-use-benchmark-2026-11-04.md) 也对应其当时的候选，
+均不能外推为当前脚本级前台生命周期的 GUI 验收。
 
 先撤掉全部框架鼠标例外，冻结同一个候选，将点击、悬停、内容拖拽、滑块和滚动全部交给
 独立输入，再完成整套验收。以真实回调、控件值、DOM trusted 事件/选区为效果依据，
@@ -78,10 +116,10 @@ WebView/Electron 拖放另有边界；普通文本拖选通过不等于任意 dr
 | Chrome 悬停、点击、文本拖选 | 3/3 | 仅悬停借用；点击和拖选仍独立 |
 | 真实光标审计 | 18 次 MCP 调用，0 个违规 | 5 次借用均为 `native_hover_tracking`；检测到的 2 次位移均在借用区间 |
 
-本次证明的是**当前通用原生事件路径的悬停缺口**，不宣称 macOS 在技术上无法实现独立
+该历史验收证明的是**当时通用原生事件路径的悬停缺口**，不宣称 macOS 在技术上无法实现独立
 悬停。未知框架不因 AX 缺失或一次普通错误进入借用；后续可直接复用上游新增的已验收路径。
 
-借用悬停后不立即归还光标，避免撤掉 hover UI。AppKit 在已建立跟踪的窗口中偶尔接受
+上述历史候选在借用悬停后不立即归还光标，以避免撤掉 hover UI；这不代表当前脚本结束会留下目标 app 前台。AppKit 在已建立跟踪的窗口中偶尔接受
 定向悬停，但“真实指针处于窗口几何范围内”不能证明跟踪就绪，新建窗口会吞事件，
 因此不把该位置推断用作路由规则。
 
@@ -100,13 +138,16 @@ flowchart TD
     B -->|是| C{可证明的语义操作或原生窗口位置}
     C -->|是| N[原生 action / position]
     C -->|否| D{明确的预检能力边界}
-    D -->|原生悬停限制或缺必要 ABI| P[在输入前选择借用]
+    D -->|已知不支持且干净未派发| P[建立一次脚本级前台所有权]
     D -->|没有| I[定向 PID + 窗口事件]
     I --> G{逐点身份 / 几何 / 同应用表面仍有效}
     G -->|是| E[完成并回读]
     G -->|否| R[只释放已持有输入；不换路重放]
     P --> E
     N --> E
+    E --> S{已借用且结算时所有权与原身份有效}
+    S -->|是且非确认终态| F[恢复原 app 与精确原窗口]
+    S -->|未借用或已外部切焦点或确认终态| O[不激活；终态只观察原前台]
 ```
 
 定向输入忽略无关应用的物理覆盖，但仍验证目标应用自身的前后层级、alpha、窗口位置和
@@ -124,7 +165,7 @@ Agent 工具 schema。`cursor_audit.py --assert-independent` 在每个原始 MCP
 完整区间采样真实系统光标，并逐条核对路由；终点归位不算独立，未知借用原因直接失败。
 取消但无回复的请求保持无回执状态，清理区间截至下一次成功读回。
 
-当前严格策略为 `bounded-pointer-borrow-v3`。私有 `dtw_input_interval` 以 worker PID 与 trace ID
+真实光标审计策略为 `bounded-pointer-borrow-v3`，其逐操作区间只审计指针借用，不证明脚本级前台所有权或归还。私有 `dtw_input_interval` 以 worker PID 与 trace ID
 配对每次指针借用的 begin/end，覆盖准备、派发及收尾，并在释放物理输入 lease 前结束。
 只有 `native_hover_tracking` 的 move，或 `addressed_event_api_unavailable` 的指针动作可进入允许区间。
 混合脚本中的每次采样位移都必须完整落在一个允许区间内；一次合法 hover 不放行整段脚本。
@@ -140,5 +181,6 @@ Agent 工具 schema。`cursor_audit.py --assert-independent` 在每个原始 MCP
 并单独捕获经过身份验证的虚拟光标 helper 窗口，核对实际热点坐标和渲染像素。
 
 自建 AppKit、真实 Chrome 的临时 profile、源码/纯控制测试分别记账。这些不是模型 Harness
-A/B、真实账号验收或所有应用完备性证明。Windows 遵循项目既有 CI 流程；本轮仅完成
-Windows 源码/测试类型检查，未做 Windows GUI 验收，不用 macOS 结果代替。
+A/B、真实账号验收或所有应用完备性证明。历史记录中的 Windows 源码/测试类型检查
+也不是 Windows GUI 验收，不能用 macOS 结果代替。本轮 macOS 定向验收的候选身份、
+业务效果、连续焦点、严格光标及清理结果分别记账；未运行 Windows GUI 验收。

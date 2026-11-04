@@ -45,6 +45,8 @@ final class ComputerUseDelegate: NSObject, NSApplicationDelegate, WKNavigationDe
     var sequence = 0
     var namedViews: [String: NSView] = [:]
     let note = NSTextField()
+    let multilineNote = NSTextView()
+    var initialMultilineFocus = false
     let counterLabel = NSTextField(labelWithString: "Counter: 0")
     var reviewed = NSButton()
     let choice = NSPopUpButton()
@@ -76,6 +78,7 @@ final class ComputerUseDelegate: NSObject, NSApplicationDelegate, WKNavigationDe
             guard let name = config?["case"] as? String, let url = config?["web_url"] as? String else { throw NSError(domain: "fixture", code: 1, userInfo: [NSLocalizedDescriptionKey: "config.json requires case and web_url strings"]) }
             caseName = name; webURL = url
             activateOnPresentation = config?["activate"] as? Bool ?? false
+            initialMultilineFocus = config?["initial_multiline_focus"] as? Bool ?? false
             configuredWindowX = (config?["window_x"] as? NSNumber).map { CGFloat(truncating: $0) }
             configuredWindowY = (config?["window_y"] as? NSNumber).map { CGFloat(truncating: $0) }
         } catch { writeError = "configuration: \(error.localizedDescription)" }
@@ -109,9 +112,13 @@ final class ComputerUseDelegate: NSObject, NSApplicationDelegate, WKNavigationDe
             if event.type == .scrollWheel { fields["delta_x"] = self.finite(event.scrollingDeltaX); fields["delta_y"] = self.finite(event.scrollingDeltaY) }
             if event.type == .leftMouseDown || event.type == .rightMouseDown { fields["click_count"] = event.clickCount }
             if event.type == .keyDown { fields["key_code"] = event.keyCode }
+            fields["editing_receiver"] = event.window?.firstResponder === self.multilineNote ? "multiline" :
+                (self.note.currentEditor() != nil && event.window?.firstResponder === self.note.currentEditor() ? "note" : "other")
+            fields["multiline_selection"] = ["location": self.multilineNote.selectedRange().location,
+                                             "length": self.multilineNote.selectedRange().length]
             self.event("input", fields); return event
         }
-        present(mainWindow, firstResponder: note)
+        present(mainWindow, firstResponder: initialMultilineFocus ? multilineNote : note)
         event("launch", [:]); publish()
         timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in self?.tick() }
         for mode in [RunLoop.Mode.common, .modalPanel, .eventTracking] { RunLoop.main.add(timer!, forMode: mode) }
@@ -186,6 +193,8 @@ final class ComputerUseDelegate: NSObject, NSApplicationDelegate, WKNavigationDe
     func event(_ kind: String, _ fields: [String: Any]) {
         sequence += 1
         var row = fields; row["sequence"] = sequence; row["kind"] = kind; row["uptime"] = ProcessInfo.processInfo.systemUptime
+        row["unix_ms"] = Date().timeIntervalSince1970 * 1_000
+        row["frontmost_pid"] = NSWorkspace.shared.frontmostApplication?.processIdentifier as Any? ?? NSNull()
         row["pid"] = ProcessInfo.processInfo.processIdentifier
         row["process_birth"] = fixtureProcessBirth() as Any? ?? NSNull()
         do { guard let journal else { throw CocoaError(.fileWriteUnknown) }; let data = try JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]); try journal.write(contentsOf: data + Data("\n".utf8)) } catch { failIO("append event", error) }
@@ -226,7 +235,7 @@ final class ComputerUseDelegate: NSObject, NSApplicationDelegate, WKNavigationDe
         let rows: [[String: Any]] = windows.filter { $0.isVisible }.map { ["title": $0.title, "id": $0.windowNumber, "bounds": [finite($0.frame.minX), finite(top - $0.frame.maxY), finite($0.frame.width), finite($0.frame.height)]] }
         let pointer = CGEvent(source: nil)?.location
         let noteSelection = (note.currentEditor() as? NSTextView)?.selectedRange()
-        let native: [String: Any] = ["counter": counter, "note": noteText, "dirty": noteText != cleanNote, "quit": ["visible": quitConfirmation != nil, "requests": quitRequests, "cancellations": quitCancellations], "note_selection": noteSelection.map { ["location": $0.location, "length": $0.length, "unit": "utf16"] as [String: Any] } as Any? ?? NSNull(), "saved_note": savedNote, "saves": saves, "reviewed": reviewed.state == .on, "selection": choice.titleOfSelectedItem ?? "", "slider": slider.doubleValue, "slider_changes": sliderChanges, "audit_index": auditIndex, "audit_count": auditCount, "gestures": gestures, "left_scroll_y": leftScroll.contentView.bounds.origin.y, "right_scroll_y": rightScroll.contentView.bounds.origin.y, "peers": peers.enumerated().map { index, window in ["title": window.title, "counter": peerCounts[index], "note": peerFields[index].currentEditor()?.string ?? peerFields[index].stringValue] as [String: Any] }, "panel": ["kind": panelKind, "result": panelResult, "visible": panel?.isVisible ?? false, "opened_text": openedText, "error": fileError, "file_saves": fileSaves]]
+        let native: [String: Any] = ["counter": counter, "multiline_note": multilineNote.string, "multiline_focused": mainWindow.firstResponder === multilineNote, "note": noteText, "dirty": noteText != cleanNote, "quit": ["visible": quitConfirmation != nil, "requests": quitRequests, "cancellations": quitCancellations], "note_selection": noteSelection.map { ["location": $0.location, "length": $0.length, "unit": "utf16"] as [String: Any] } as Any? ?? NSNull(), "saved_note": savedNote, "saves": saves, "reviewed": reviewed.state == .on, "selection": choice.titleOfSelectedItem ?? "", "slider": slider.doubleValue, "slider_changes": sliderChanges, "audit_index": auditIndex, "audit_count": auditCount, "gestures": gestures, "left_scroll_y": leftScroll.contentView.bounds.origin.y, "right_scroll_y": rightScroll.contentView.bounds.origin.y, "peers": peers.enumerated().map { index, window in ["title": window.title, "counter": peerCounts[index], "note": peerFields[index].currentEditor()?.string ?? peerFields[index].stringValue] as [String: Any] }, "panel": ["kind": panelKind, "result": panelResult, "visible": panel?.isVisible ?? false, "opened_text": openedText, "error": fileError, "file_saves": fileSaves]]
         var chatState = chat.state; chatState["pins"] = chat.pinCount
         let state: [String: Any] = ["schema_version": 1, "case": caseName, "pid": ProcessInfo.processInfo.processIdentifier, "process_birth": fixtureProcessBirth() as Any? ?? NSNull(), "pressed_mouse_buttons": NSEvent.pressedMouseButtons, "mode": mode, "ready": mainWindow.isVisible, "write_error": writeError, "environment": ["pointer_screen": pointer.map { [finite($0.x), finite($0.y)] } as Any? ?? NSNull(), "frontmost_pid": NSWorkspace.shared.frontmostApplication?.processIdentifier as Any? ?? NSNull()], "windows": rows, "anchors": anchors, "native": native, "chat": chatState, "web": ["url": webView.url?.absoluteString ?? webURL, "loaded": loaded, "error": webError]]
         do { let data = try JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]); try data.write(to: root.appendingPathComponent("native-state.json"), options: .atomic) } catch { failIO("publish state", error) }

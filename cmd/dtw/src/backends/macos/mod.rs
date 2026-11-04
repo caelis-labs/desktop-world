@@ -13,6 +13,7 @@ use std::{
 mod associated_proof;
 mod cua_input;
 mod cursor_session;
+mod execution_guard;
 mod input_route;
 mod local_socket;
 mod overlay;
@@ -20,11 +21,13 @@ mod pointer_presentation;
 mod scroll_guard;
 pub use cursor_session::CursorSession;
 pub use overlay::worker_entry as overlay_worker_entry;
+#[cfg(test)]
+mod execution_scope_tests;
 mod worker;
 pub use worker::worker_entry;
 
-// Finalize the foreground context and pointer cleanup without activating another
-// application. Emergency shutdown retains its separate drain budget.
+// A script's single foreground borrow is returned after its engine settles.
+// Emergency shutdown retains its separate bounded drain budget.
 const NORMAL_FOCUS_RETURN_BUDGET: Duration = Duration::from_secs(2);
 const FOCUS_RETURN_TRANSPORT_MARGIN: Duration = Duration::from_millis(100);
 
@@ -443,6 +446,7 @@ impl NativeBackend {
         call: &CallContext<'_>,
         guard: Option<(&Arc<scroll_guard::Owner>, &Value)>,
     ) -> Result<Value, (Error, bool)> {
+        let execution_scoped = request["_execution_foreground"] == true;
         let mut cursor_attempt = CursorAttempt {
             cursor: &self.cursor,
             operation: None,
@@ -513,10 +517,23 @@ impl NativeBackend {
                         // A resident pipe/frame failure may retire itself inside
                         // Worker.call; that pre-existing bounded failure path
                         // keeps cleanup uncertainty instead of promising order.
-                        let response = match self.read_rpc(validation.clone(), &nested) {
-                            Ok(_) => json!({"ok":true}),
-                            Err(error) => guard_error(error),
-                        };
+                        let response =
+                            match self.read_rpc(validation.clone(), &nested).and_then(|_| {
+                                if execution_scoped
+                                    && validation["operation"] != "validate_execution_focus"
+                                {
+                                    self.validate_execution_focus(
+                                        &validation["target"],
+                                        &nested,
+                                        true,
+                                    )
+                                    .map_err(|(error, _)| error)?;
+                                }
+                                Ok(())
+                            }) {
+                                Ok(()) => json!({"ok":true}),
+                                Err(error) => guard_error(error),
+                            };
                         if query.respond(response).is_err() {
                             owner.invalidate();
                         }
@@ -592,27 +609,99 @@ impl NativeBackend {
             Ok(reply)
         }
     }
+    fn validate_execution_focus(
+        &self,
+        target: &Value,
+        call: &CallContext<'_>,
+        scene_callback: bool,
+    ) -> Result<Value, (Error, bool)> {
+        // This is a read-only admission check, not another focus attempt.
+        let proof = self
+            .rpc(
+                json!({"operation":"validate_execution_focus","target":target,
+                    "_execution_scope_callback":scene_callback}),
+                call,
+            )
+            .map_err(|(error, _)| (error, false))?;
+        if let Some(error) = reply_error(&proof) {
+            return Err((error, false));
+        }
+        if proof["scope_active"] != true || !proof["borrowed"].is_boolean() {
+            return Err((Error::InvalidObservation, false));
+        }
+        Ok(proof)
+    }
+
+    fn execution_input_rpc(
+        &self,
+        mut request: Value,
+        call: &CallContext<'_>,
+        mut send: impl FnMut(Value) -> Result<Value, (Error, bool)>,
+    ) -> Result<Value, (Error, bool)> {
+        let operation = request["operation"].as_str().unwrap_or("").to_owned();
+        let target = request["target"].clone();
+        let mut scope = if self.focus_pending.load(Ordering::Acquire) {
+            match self.validate_execution_focus(&target, call, false) {
+                Ok(scope) => Some(scope),
+                Err(error) => {
+                    // This action stopped before send(), independently of any
+                    // earlier partial input in the same execution.
+                    worker::trace_execution_refusal(&request);
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
+        request["_defer_foreground"] = json!(true);
+        request["_execution_foreground"] = json!(scope.is_some());
+        let mut reply = send(request.clone())?;
+        if reply.get("foreground_plan").is_some() {
+            let Some(reason) = input_route::foreground_plan(&reply, &operation) else {
+                // A malformed/contradictory action reply cannot certify that no
+                // input was sent, even when it resembles a private plan.
+                return Err((Error::InvalidObservation, true));
+            };
+            if scope.is_some() || self.input_policy != InputPolicy::Auto {
+                return Err((Error::InvalidObservation, true));
+            }
+            // The first attempt proved no preparation or payload was sent. Its
+            // short-lived scene has already exited before this resident borrow.
+            self.focus_pending.store(true, Ordering::Release);
+            let begun = self.rpc(
+                json!({"operation":"begin_execution_focus","target":target,
+                "visual":input_route::visual_focus(&operation),"reason":reason}),
+                call,
+            )?;
+            if begun.get("error").is_some() {
+                // Preserve preparation uncertainty; the original input is not resent.
+                return Ok(begun);
+            }
+            if begun["scope_active"] != true || begun["dispatch"] != "dispatched" {
+                return Err((Error::InvalidObservation, true));
+            }
+            scope = Some(self.validate_execution_focus(&target, call, false)?);
+            request["_execution_foreground"] = json!(true);
+            reply = send(request)?;
+            if reply.get("foreground_plan").is_some() {
+                return Err((Error::InvalidObservation, true));
+            }
+        }
+        if let Some(scope) = scope {
+            reply["delivery"] = json!({"route":"foreground", "reason":"execution_scope",
+                "foreground_borrowed":scope["borrowed"], "focus_return":"pending"});
+        }
+        Ok(reply)
+    }
+
     fn action(&self, request: Value, call: &CallContext<'_>) -> ActionOutcome {
-        // A worker can finish foreground cleanup during cancellation shutdown before the
-        // finalizer can ask for its exact return result. Retain that uncertainty.
-        let explicit_focus = request["operation"] == "focus";
-        let previous_pending = explicit_focus && self.focus_pending.swap(true, Ordering::AcqRel);
-        let reply = match self.rpc(request, call) {
+        let reply = match self.execution_input_rpc(request, call, |request| self.rpc(request, call))
+        {
             Ok(reply) => reply,
             Err((error, true)) => return ActionOutcome::unknown(error),
-            Err((error, false)) => {
-                if explicit_focus {
-                    self.focus_pending
-                        .store(previous_pending, Ordering::Release);
-                }
-                return ActionOutcome::rejected(error);
-            }
+            Err((error, false)) => return ActionOutcome::rejected(error),
         };
         let mut outcome = action_reply(&reply);
-        if explicit_focus && focus_did_not_add_return_obligation(&outcome) {
-            self.focus_pending
-                .store(previous_pending, Ordering::Release);
-        }
         if outcome.error == Some(Error::InvalidObservation) {
             outcome.error = Some(self.retire(Error::InvalidObservation));
         }
@@ -631,11 +720,28 @@ impl NativeBackend {
     }
     fn scene_rpc_guarded(
         &self,
+        request: Value,
+        call: &CallContext<'_>,
+        validation: Option<Value>,
+    ) -> Result<Value, (Error, bool)> {
+        if request["operation"] == "capture" {
+            return self.scene_rpc_once(request, call, validation);
+        }
+        self.execution_input_rpc(request, call, |request| {
+            self.scene_rpc_once(request, call, validation.clone())
+        })
+    }
+
+    fn scene_rpc_once(
+        &self,
         mut request: Value,
         call: &CallContext<'_>,
         validation: Option<Value>,
     ) -> Result<Value, (Error, bool)> {
         let original = request["target"].clone();
+        let execution_scoped = request["_execution_foreground"] == true;
+        let validation = validation.or_else(|| execution_scoped.then(||
+            json!({"operation":"validate_execution_focus","target":original,"_execution_scope_callback":true})));
         // This first validation rejects stale refs before spawning a scene.
         self.validate_window(&original, call)
             .map_err(|error| (error, false))?;
@@ -655,7 +761,15 @@ impl NativeBackend {
             self.scene
                 .attach_guard(&scene.worker, guard.clone())
                 .map_err(|error| (error, false))?;
-            request["_scroll_guard"] = guard.endpoint();
+            if execution_scoped {
+                request["_execution_guard"] = guard.endpoint();
+            }
+            if validation
+                .as_ref()
+                .is_some_and(|proof| proof["operation"] != "validate_execution_focus")
+            {
+                request["_scroll_guard"] = guard.endpoint();
+            }
         }
         let capture = request["operation"] == "capture";
         let result = (|| {
@@ -745,19 +859,6 @@ fn retire_worker(worker: &Worker, error: Error) -> Error {
         )),
     }
 }
-fn focus_did_not_add_return_obligation(outcome: &ActionOutcome) -> bool {
-    let borrowed = outcome
-        .delivery
-        .as_ref()
-        .is_some_and(|value| value.foreground_borrowed);
-    !borrowed
-        && (outcome.dispatch == DispatchState::NotDispatched
-            || outcome.delivery.as_ref().is_some_and(|value| {
-                value.route == Some(InputRoute::Foreground)
-                    && value.focus_return == Some(FocusReturn::Unchanged)
-            }))
-}
-
 fn bind_scene_target(
     original: &Value,
     bind: impl FnOnce(Value) -> Result<Value, Error>,
@@ -946,9 +1047,10 @@ impl Backend for NativeBackend {
         )
     }
     fn quit_application(&self, app: &AppInstance, call: &CallContext<'_>) -> ActionOutcome {
-        match self.rpc(
+        match self.execution_input_rpc(
             json!({"operation":"quit_app","target":{"app":app_json(app)}}),
             call,
+            |request| self.rpc(request, call),
         ) {
             Ok(value) => lifecycle_reply(&value, "application_exited"),
             Err((error, true)) => ActionOutcome::unknown(error),
@@ -956,9 +1058,10 @@ impl Backend for NativeBackend {
         }
     }
     fn close_window(&self, target: &WindowTarget, call: &CallContext<'_>) -> ActionOutcome {
-        match self.rpc(
+        match self.execution_input_rpc(
             json!({"operation":"close_window","target":target_json(target)}),
             call,
+            |request| self.rpc(request, call),
         ) {
             Ok(value) => lifecycle_reply(&value, "window_closed"),
             Err((error, true)) => ActionOutcome::unknown(error),
@@ -1920,6 +2023,8 @@ for line in sys.stdin:
  if r['operation']=='release_focus':
   assert 'ownership_cap_unix_ms' not in r
   result={'focus':'unconfirmed'}
+ elif r['operation']=='validate_execution_focus':
+  result={'scope_active':True,'borrowed':True}
  elif r['operation']=='keypress':
   result={'dispatch':'unknown','evidence':'unverified','error':'ax_unavailable','message':'AXWindows busy','delivery':{'route':'foreground','foreground_borrowed':True,'focus_return':'pending'}}
  else:
@@ -2021,25 +2126,6 @@ for line in sys.stdin:
                 "route":null,"reason":"explicit_focus","foreground_borrowed":false}}));
         assert_eq!(rejected.dispatch, DispatchState::NotDispatched);
         assert_eq!(rejected.delivery.unwrap().route, None);
-    }
-
-    #[test]
-    fn unchanged_focus_does_not_add_pending_return_but_unknown_focus_does() {
-        for borrowed in [false, true] {
-            let outcome = action_reply(&json!({"dispatch":"dispatched","evidence":"unverified",
-                "delivery":{"route":"foreground","foreground_borrowed":borrowed,
-                "focus_return":if borrowed {"pending"} else {"unchanged"}}}));
-            assert_eq!(focus_did_not_add_return_obligation(&outcome), !borrowed);
-        }
-        assert!(focus_did_not_add_return_obligation(
-            &ActionOutcome::rejected(Error::TargetChanged)
-        ));
-        assert!(!focus_did_not_add_return_obligation(
-            &ActionOutcome::unknown(Error::TargetChanged)
-        ));
-        let malformed = action_reply(&json!({"dispatch":"dispatched","evidence":"unverified",
-            "delivery":{"route":"invalid","foreground_borrowed":false,"focus_return":"unchanged"}}));
-        assert!(!focus_did_not_add_return_obligation(&malformed));
     }
 
     #[test]

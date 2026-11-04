@@ -102,6 +102,19 @@ class CursorOracleTests(unittest.TestCase):
         row['methods'] = ['click', 'click']
         self.assertIn('missing', independence_violation(row))
 
+    def test_clean_execution_refusal_accounts_for_attempt_without_allowing_cursor_movement(self):
+        row = self.audited()
+        refusal = {'operation': 'press', 'route': 'refused', 'reason': 'execution_scope_preflight',
+                   'dispatch': 'not_dispatched'}
+        row.update(methods=['click', 'click'], dispatch={'dispatched': 1, 'not_dispatched': 1},
+                   routes=[{'operation': 'press', 'route': 'native', 'reason': 'ax_action'}, refusal])
+        self.assertIsNone(independence_violation(row))
+        for change in ({'dispatch': 'unknown'}, {'reason': 'unclassified'}, {'operation': 'drag'}):
+            candidate = {**row, 'routes': [row['routes'][0], {**refusal, **change}]}
+            self.assertIn('missing', independence_violation(candidate))
+        row['cursor'] = self.audited((0, 0, 5, 5, 5, 5))['cursor']
+        self.assertIn('outside', independence_violation(row))
+
     def test_unavailable_or_unbracketed_samples_fail_policy(self):
         row = self.audited()
         for samples in [[], [{'unix_ms': 1, 'x': 0, 'y': 0}, {'unix_ms': 9, 'x': 0, 'y': 0}],

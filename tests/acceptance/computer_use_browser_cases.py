@@ -1,10 +1,11 @@
 """Browser cases mixed into CoreCases; caller supplies a fresh fixture per case.
 
 All input and capture use current AppClient apps/exec. The caller owns fixture
-lifecycle and continuous focus/cursor auditing. Chrome remains blocked until an
-existing owned-profile facility can establish exact current DTW process binding.
+lifecycle and continuous focus/cursor auditing. Chrome uses a unique copied bundle,
+fresh profile and independent kernel/LaunchServices instance verification.
 B05 waits for an external image reviewer; it never derives an answer from disk.
 """
+import copy
 import hashlib
 import json
 import math
@@ -13,16 +14,12 @@ import re
 import time
 
 from app_client import require
+from chrome_isolation import ChromeIsolationError, IsolatedChrome
 from standard_agent_probe import wait_until
 
 
-CHROME_ISOLATION_BLOCK = (
-    'Existing owned Chrome profile launchers do not establish exact process/profile '
-    'binding through current apps/exec: authorization accepts a bundle ID or .app '
-    'path, while discovery exposes instance counts without an owned PID selector. '
-    'Historical window-selection APIs cannot be reused. No Chrome was launched '
-    'or contacted; an owned profile alone is insufficient isolation evidence.'
-)
+class ChromeImageAnswerTimeout(RuntimeError):
+    pass
 
 
 def _publish(path, value):
@@ -81,14 +78,220 @@ class BrowserExtendedCases:
     atomically publish the answer JSON while this method waits.
     """
 
+    def _chrome_case(self, identifier, url, business):
+        output = Path(self.output)
+        result_path = output / (identifier + '-result.json')
+        require(not result_path.exists(), 'Preserve the original Chrome attempt')
+        result = {'case': identifier, 'classification': 'should_fill_acceptance_harness',
+                  'receipts': [], 'submitted': False}
+        chrome = None
+        try:
+            try:
+                chrome = IsolatedChrome(output, url)
+            except FileNotFoundError as error:
+                raise ChromeIsolationError('Chrome source unavailable: ' + str(error)) from error
+            chrome.start()
+
+            def execute(source, *, allow_error=False):
+                chrome.verify()
+                receipt, response = self.client.execute(chrome.bundle, source, allow_error=True)
+                result['receipts'].append({'source': source, 'receipt': receipt,
+                                           'tool_error': response.get('isError') is True})
+                _publish(result_path, result)
+                if not allow_error:
+                    require(response.get('isError') is not True and receipt.get('status') == 'completed', receipt)
+                return receipt, response
+
+            def window_ready():
+                initial, _ = execute('const v=await app.look(); return {running:v.running,windows:v.windows,coverage:v.coverage};')
+                view = initial.get('result', {})
+                # Exact instance uniqueness is independently established by
+                # chrome.verify(); the public view coverage counts surfaces.
+                require(view.get('running') is True, {'initial_owned_view': view})
+                return view if view.get('windows') else None
+            initial = wait_until(window_ready, timeout=15)
+            result['initial_owned_view'] = initial
+            if len(initial['windows']) > 1:
+                require(any(w.get('title') in ('翻译此页？', 'Translate this page?') for w in initial['windows']),
+                        {'unexpected_owned_popup': initial})
+                observed, _ = execute('const v=await app.look({role:"button"}); return {elements:v.elements};')
+                close = [e for e in observed.get('result', {}).get('elements', [])
+                         if e.get('name') in ('关闭', 'Close') and 'press' in e.get('actions', [])]
+                require(len(close) == 1, {'translation_close': close})
+                execute('await app.click({target:' + json.dumps(close[0]['id']) + '});')
+                result['translation_popup_dismissed'] = True
+            result['target'] = str(chrome.bundle)
+            result.update(business(chrome, execute, result))
+        except ChromeIsolationError as error:
+            result.update(blocked=str(error), classification='technical_isolation_failure')
+        except ChromeImageAnswerTimeout as error:
+            result.update(blocked=str(error), classification='scope_external_image_review')
+        except Exception as error:
+            result['failed'] = str(error)
+            raise
+        finally:
+            if chrome is not None:
+                result['isolation'] = chrome.evidence
+                result['cleanup'] = chrome.close()
+                if result['cleanup']['errors'] or result['cleanup']['forced']:
+                    result['failed'] = 'Owned Chrome cleanup failed or required forced termination'
+            _publish(result_path, result)
+        require('failed' not in result, result)
+        return result
+
+    def _chrome_type(self, chrome, execute, label, value, result):
+        source = ('const v=await app.look(' + json.dumps({'role': 'text_field', 'text': label})
+                  + '); return {elements:v.elements};')
+        observed, _ = execute(source)
+        fields = [e for e in observed.get('result', {}).get('elements', [])
+                  if e.get('name') == label and e.get('role') == 'text_field']
+        require(len(fields) <= 1, {'field_observation': fields})
+        if fields and 'press' in fields[0].get('actions', []):
+            target = {'target': fields[0]['id']}
+        else:
+            name = result['case'] + '-field-' + str(len(result['receipts']))
+            target = self._chrome_pointer(chrome, result, capture_name=name, target_label=label)
+            if target is None:
+                raise ChromeImageAnswerTimeout('External image point deadline elapsed for ' + label)
+        execute('await app.click(' + json.dumps(target) + "); await app.keypress('META+A');"
+                ' await app.typeText(' + json.dumps(value) + ');')
+        data, _ = execute(source)
+        fields = [e for e in data.get('result', {}).get('elements', [])
+                  if e.get('name') == label and e.get('role') == 'text_field']
+        if fields:
+            require(len(fields) == 1 and fields[0].get('value') == value, {'readback': fields})
+        result.setdefault('field_readbacks', []).append({'label': label, 'elements': fields,
+            'verification': 'public AX value' if fields else 'deferred to exact independent business oracle'})
+
     def B01(self):
-        return {'blocked': CHROME_ISOLATION_BLOCK, 'case': 'B01',
-                'required_tasks': ['Unicode web-note commit once', 'noisy catalogue checkpoint 137']}
+        def business(chrome, execute, result):
+            value = '基准 Web café العربية 🙂 — once'
+            before = copy.deepcopy(self.fixture.web_state())
+            self._chrome_type(chrome, execute, 'Web note', value, result)
+            result.update(submission_attempted=True, submitted=None)
+            execute("await app.click({selector:{role:'button',text:'Commit web note'}});")
+            after = wait_until(lambda: s if len((s := self.fixture.web_state())['saves']) != len(before['saves']) else None)
+            result['submitted'] = True
+            require(after['note'] == value and len(after['saves']) == len(before['saves']) + 1, after)
+            execute("await app.click('Load noisy catalogue');")
+            wait_until(lambda: self.fixture.web_state()['catalogue_loaded'])
+            observed, _ = execute("const v=await app.look({text:'Audit checkpoint 137'}); return {elements:v.elements};")
+            matches = [e for e in observed.get('result', {}).get('elements', []) if e.get('name') == 'Audit checkpoint 137']
+            require(len(matches) == 1, observed)
+            execute('await app.click({target:' + json.dumps(matches[0]['id']) + '});')
+            after = wait_until(lambda: s if len((s := self.fixture.web_state())['checkpoint_hits']) != len(before['checkpoint_hits']) else None)
+            require(after['checkpoint_hits'] == before['checkpoint_hits'] + [{'id': 137, 'activation': len(before['checkpoint_hits']) + 1}]
+                    and len(after['saves']) == len(before['saves']) + 1 and after['note'] == value
+                    and after['records'] == before['records'] and after['catalogue_reviews'] == before['catalogue_reviews'], after)
+            return {'note': value, 'saves_delta': 1, 'checkpoint_hits_delta': 1, 'oracle': after}
+        return self._chrome_case('B01', self.fixture.web_url, business)
+
+    def _chrome_pointer(self, chrome, result, *, capture_name='B04-pointer', target_label='Create test record'):
+        chrome.verify()
+        data = self.client.capture(chrome.bundle, capture_name)
+        path = Path(self.client.output) / (capture_name + '.png')
+        request = {'schema_version': 1, 'case': result.get('case', 'B04'), 'stage': 'awaiting_pointer_answer',
+                   'target_label': target_label,
+                   'capture': str(path.resolve()),
+                   'capture_sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                   'view': data['view'], 'answer_file': str((Path(self.output) / (capture_name + '-answer.json')).resolve()),
+                   'instructions': 'Inspect DTW PNG; publish capture_sha256, reviewer, and input_point at ' + target_label + ' center.',
+                   'answer_schema': {'capture_sha256': 'copy the PNG hash above', 'reviewer': 'agent identity',
+                                     'input_point': {'x': target_label + ' center in PNG pixels',
+                                                     'y': target_label + ' center in PNG pixels'}}}
+        require(not Path(request['answer_file']).exists(), 'B04 requires a fresh pointer answer')
+        _publish(Path(self.output) / (capture_name + '-request.json'), request)
+        result['pointer_request'] = request
+        callback = getattr(self, 'chrome_pointer_point', None)
+        if callback is not None:
+            answer = callback(request)
+        else:
+            timeout = getattr(self, 'chrome_pointer_timeout', 180)
+            require(type(timeout) in (int, float) and math.isfinite(timeout) and 0 < timeout <= 600,
+                    'B04 pointer timeout must be finite and in (0, 600] seconds')
+            deadline = time.monotonic() + timeout
+            while not Path(request['answer_file']).exists():
+                if time.monotonic() >= deadline:
+                    return None
+                time.sleep(0.1)
+            require(Path(request['answer_file']).stat().st_size <= 8192, 'Oversized B04 pointer answer')
+            answer = json.loads(Path(request['answer_file']).read_bytes())
+        point = answer.get('input_point')
+        image = data['view']['image']
+        require(answer.get('capture_sha256') == request['capture_sha256']
+                and isinstance(answer.get('reviewer'), str) and answer['reviewer'].strip()
+                and isinstance(point, dict) and set(point) == {'x', 'y'}
+                and all(type(point[k]) in (int, float) and math.isfinite(point[k]) and 0 <= point[k] < image[d]
+                        for k, d in (('x', 'width'), ('y', 'height'))), 'Invalid B04 image pointer answer')
+        require(hashlib.sha256(path.read_bytes()).hexdigest() == request['capture_sha256'], 'B04 capture changed')
+        result['pointer_answer'] = answer
+        chrome.verify()
+        current = self.client.capture(chrome.bundle, capture_name + '-preflight')['view']
+        geometry = lambda view: {'image': {key: view['image'][key] for key in ('bounds', 'width', 'height')},
+                                 'windows': view.get('windows', [])}
+        result['pointer_geometry'] = {'requested': geometry(data['view']), 'current': geometry(current)}
+        require(result['pointer_geometry']['requested'] == result['pointer_geometry']['current'],
+                'Chrome pointer geometry changed during external review; no dispatch')
+        result.setdefault('image_points', []).append({'request': request, 'answer': answer,
+                                                      'geometry': result['pointer_geometry']})
+        return point
 
     def B04(self):
-        return {'blocked': CHROME_ISOLATION_BLOCK, 'case': 'B04',
-                'required_tasks': ['normal submission', 'explicit trusted-pointer submission'],
-                'oracle': 'original reliability attempts/events and distinct business effects'}
+        def oracle():
+            return json.loads((self.fixture.output / 'workbench/state.json').read_text())['reliability']
+
+        def business(chrome, execute, result):
+            before = copy.deepcopy(oracle())
+            require(not before['attempts'] and not before['submissions'], 'B04 requires fresh original reliability fixture')
+            result['modes'] = []
+            for index, mode in enumerate(('normal', 'trusted-pointer')):
+                label = 'B04-' + mode
+                self._chrome_type(chrome, execute, 'Run label', label, result)
+                self._chrome_type(chrome, execute, 'Record title', label + ' 中文 café', result)
+                if mode == 'trusted-pointer':
+                    execute("await app.click({selector:{role:'checkbox',text:'Require trusted pointer sequence'}});")
+                    point = self._chrome_pointer(chrome, result)
+                    if point is None:
+                        return {'blocked': 'External image pointer answer deadline elapsed',
+                                'classification': 'scope_external_image_review', 'modes': result['modes']}
+                    source = 'await app.click(' + json.dumps(point) + ');'
+                else:
+                    source = "await app.click({selector:{role:'button',text:'Create test record'}});"
+                result.update(submission_attempted=True, submitted=None)
+                receipt, response = execute(source, allow_error=True)
+                row = {'mode': mode, 'receipt': receipt, 'tool_error': response.get('isError') is True}
+                result['modes'].append(row)
+                _publish(Path(self.output) / 'B04-result.json', result)
+                dispatch = receipt.get('effects', {}).get('dispatch', {})
+                require(any(type(dispatch.get(k)) is int and dispatch[k] > 0 for k in ('dispatched', 'unknown')), row)
+                after = wait_until(lambda: s if len((s := oracle())['attempts']) > index else None)
+                result['submitted'] = True
+                row.update(attempts=after['attempts'], events=after['events'], submissions=after['submissions'],
+                           attempts_delta=len(after['attempts']) - index,
+                           submissions_delta=len(after['submissions']) - index)
+                _publish(Path(self.output) / 'B04-result.json', result)
+                attempt = after['attempts'][index]
+                events = [e for e in after['events'] if e.get('run') == label]
+                row['activation_counts'] = {
+                    'attempts': row['attempts_delta'], 'submissions': row['submissions_delta'],
+                    'submit_events': sum(e['kind'] == 'submit' and e.get('target') == 'form'
+                                         and e.get('trusted') is True for e in events),
+                    'create_clicks': sum(e['kind'] == 'click' and e.get('target') == 'create' for e in events)}
+                _publish(Path(self.output) / 'B04-result.json', result)
+                require(all(count == 1 for count in row['activation_counts'].values()), row)
+                require(len(after['attempts']) == index + 1 and len(after['submissions']) == index + 1
+                        and attempt['run'] == label and attempt['title'] == label + ' 中文 café'
+                        and attempt['mode'] == mode and attempt['accepted'] is True
+                        and attempt['duplicate'] is False, row)
+                if mode == 'trusted-pointer':
+                    require(all(attempt['gesture'].values()) and all(any(e['kind'] == kind and e.get('trusted') is True
+                            and e.get('target') == 'create' and e.get('run') == label for e in after['events'])
+                            for kind in ('pointerdown', 'pointerup', 'click')), row)
+                require(not response.get('isError') and receipt.get('status') == 'completed', row)
+            require(after['icon_activations'] == before['icon_activations']
+                    and len({a['nonce'] for a in after['attempts']}) == 2, after)
+            return {'modes': result['modes'], 'submitted': True, 'oracle': after}
+        return self._chrome_case('B04', self.fixture.workbench_url.rstrip('/') + '/reliability', business)
 
     def B05(self):
         """Capture through DTW, wait for image answer, submit once, then read oracle."""
