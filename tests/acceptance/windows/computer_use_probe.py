@@ -141,7 +141,16 @@ def main():
         execute('await app.keypress("ALT+N");await app.typeText(' + json.dumps(str(destination)) + ');await app.keypress("ENTER");')
         confirm = execute('await app.look({full:true});')
         require(len(confirm['view']['windows']) >= 3, confirm)
-        execute('await app.keypress("ESC");await app.keypress("ESC");')
+        # The standard overwrite panel has Yes/No, without an IDCANCEL button;
+        # Escape is not a rejection on this Windows dialog. Choose the actual
+        # observed No control, then cancel the still-open Save panel separately.
+        reject = next((row for row in confirm['view']['elements']
+                       if row['role'] == 'button' and row['name'] in ('No', '否(N)', '&No')), None)
+        require(reject, confirm)
+        execute('await app.click(' + json.dumps(reject['id']) + ');')
+        save_panel = execute('await app.look({full:true});')
+        require(save_panel['view']['windows'][0]['title'] == 'Save owned document', save_panel)
+        execute('await app.keypress("ESC");')
         wait(lambda: not state()['modal'])
         require(state()['saves'] == 1 and destination.read_bytes().decode('utf-8') == payload, state())
         record(stage, confirm)

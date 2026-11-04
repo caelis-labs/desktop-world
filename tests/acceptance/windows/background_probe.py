@@ -26,7 +26,11 @@ def main():
               'scope': 'Windows UIA/posted input and clean background-only refusals; no background keyboard claim'}
     children, clients, intervals = [], [], []
     user = ctypes.WinDLL('user32')
+    # Read in the same physical coordinate space as the native observer.
+    # On this host GetPhysicalCursorPos is also virtualized for unaware Python.
     user.GetCursorPos.argtypes = [ctypes.POINTER(w.POINT)]
+    user.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+    user.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
 
     def state(root):
         return wait_state(root, lambda state: True)
@@ -54,7 +58,12 @@ def main():
 
         def exercise(name, source, active=client, refusal=False):
             cursor = w.POINT()
-            require(user.GetCursorPos(ctypes.byref(cursor)), 'system cursor unreadable')
+            previous = user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+            require(previous, 'cannot enter read-only physical DPI context')
+            try:
+                require(user.GetCursorPos(ctypes.byref(cursor)), 'system cursor unreadable')
+            finally:
+                user.SetThreadDpiAwarenessContext(previous)
             start = time.time() * 1000
             response = active.execute(app, source, allow_error=refusal)[0]
             end = time.time() * 1000
@@ -73,8 +82,10 @@ def main():
         wait_state(target, lambda state: state['increments'] == 1)
         report['uia_provider_effect'] = {'response': invoked, 'target_foreground': state(target)['foreground'],
                                          'background_guarantee': False}
-        (witness / 'layout.json').write_text(json.dumps({'sequence':1,'window_offset':0,'control_offset':0,'activate':1}), encoding='utf-8')
-        wait_state(witness, lambda state: state['layout_sequence'] == 1 and state['foreground'])
+        # Ordinary Form.Activate can be refused by Windows foreground locking.
+        # An explicit DTW request prepares our own witness before measurement.
+        report['witness_setup'] = client.execute(out / 'Witness.exe', 'await app.keypress("F24");')[0]
+        wait_state(witness, lambda state: state['foreground'])
         image = client.capture(app, 'after-uia-provider')['view']['image']
         point = state(target)['pad_point']
         b = image['bounds']

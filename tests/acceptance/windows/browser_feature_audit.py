@@ -233,7 +233,17 @@ window.onload=()=>{e.focus();publish({ready:true,dpr:devicePixelRatio,text:e.val
                 view,_=client.execute(app,'await app.look({full:true});')
                 require(any(w['title']==dialogs[0]['title'] for w in view['view']['windows']),view)
                 row['native_dialogs']=dialogs
-                client.capture(app,'native-open-dialog')
+                native_capture, _ = client.execute(app, 'await app.capture({full:true});')
+                image_error = native_capture.get('view', {}).get('image', {}).get('error')
+                if image_error:
+                    # The ordinary pointer may already expose a tooltip at
+                    # first open. Keep that refusal without moving the cursor.
+                    proof = owned_dialogs(browser_pid, args.chrome.resolve(), browser_handle.birth, diagnostics=True)
+                    require(args.allow_decoration_image_limit and image_error.get('code') == 'windows_surface_unsupported'
+                            and any(w['class'] in ('tooltips_class32', 'SysShadow') for w in proof['candidates']), native_capture)
+                    row['initial_decoration_image_limit'] = {'capture': native_capture, 'native': proof}
+                else:
+                    client.capture(app,'native-open-dialog')
             row['verified'] = True
         except Exception as error:
             row.update(verified=False, error=str(error))
@@ -243,7 +253,7 @@ window.onload=()=>{e.focus();publish({ready:true,dpr:devicePixelRatio,text:e.val
     try:
         neighbour = subprocess.Popen([str(args.chrome), '--user-data-dir=' + str(out / 'neighbour-profile'),
             '--no-first-run', '--no-default-browser-check', '--disable-sync', '--disable-background-mode', '--guest',
-            '--force-renderer-accessibility', '--new-window', '--window-position=1500,200', '--window-size=800,800',
+            '--force-renderer-accessibility', '--new-window', '--window-position=1150,200', '--window-size=800,800',
             'http://127.0.0.1:%d/neighbour' % server.server_address[1]])
         neighbour_launcher = ProcessHandle(neighbour.pid, args.chrome.resolve())
         until = time.monotonic() + 10

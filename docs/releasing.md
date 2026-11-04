@@ -76,11 +76,13 @@ identity/profile; raw credentials are removed from the builder environment. Its
 private files/keychain are removed and the original search list restored even
 when construction fails.
 
-macOS CI, construction and optional byte audit use the supported `macos-15`
-arm64 image, with the existing 14.2 deployment target. This replaces `macos-26`
-after GitHub abandoned queued jobs for hosted arm64 capacity on 2026-11-04;
-compilation, source tests, signing and notarization gates are unchanged. Runner
-images are listed in [GitHub's native image inventory](https://github.com/actions/runner-images#available-images).
+macOS CI uses the supported `macos-15-intel` native runner, with the existing
+14.2 deployment target and every compilation/runtime gate. GitHub repeatedly
+abandoned both `macos-26` and `macos-15` arm64 CI jobs for hosted capacity on
+2026-11-04. Construction and the optional byte audit retain `macos-15` arm64;
+Intel CI does not replace the shipping candidate's native arm64 source/package
+tests, signing or notarization. Runner images are listed in
+[GitHub's native image inventory](https://github.com/actions/runner-images#available-images).
 
 Use Actions **Re-run failed jobs** for a failed construction. Successful platform
 outputs remain bound by ID/digest; different successful attempts may coexist for

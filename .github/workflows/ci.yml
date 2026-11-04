@@ -77,9 +77,10 @@ jobs:
     name: macOS inventory controls
     needs: plan
     if: needs.plan.outputs.macos == 'true'
-    # macOS 26 arm64 jobs were abandoned for hosted-runner capacity. Keep a
-    # supported native arm64 image and all the same compilation/runtime gates.
-    runs-on: macos-15
+    # Both macOS 26 and 15 arm64 jobs were abandoned for hosted capacity.
+    # Run the same native contracts on the supported Intel pool. Shipping
+    # arm64 candidates still require their own native source/package tests.
+    runs-on: macos-15-intel
     timeout-minutes: 15
     env:
       MACOSX_DEPLOYMENT_TARGET: '14.2'
@@ -96,7 +97,7 @@ jobs:
         with:
           cache-on-failure: true
           workspaces: cmd/dtw -> ../../target-ci
-          key: macos-runtime-release
+          key: macos-x64-runtime-release
       # Match the shipping QuickJS build and stack behavior, not an unoptimized VM.
       - name: Script, MCP, native adapters and CLI contracts
         run: cargo test --release --locked --manifest-path cmd/dtw/Cargo.toml --lib --bins --tests
