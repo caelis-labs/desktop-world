@@ -43,6 +43,41 @@ class WebServerTests(unittest.TestCase):
     def state(self):
         return json.loads((self.output / 'state.json').read_text())
 
+    def test_catalogue_review_is_persisted_and_neighbours_unchanged(self):
+        before = self.state()
+        self.assertEqual(self.request('/api/catalogue-review', {'id': 137})[0], 200)
+        after = self.state()
+        self.assertEqual(after['catalogue_reviews'], {'137': True})
+        for key in ('records', 'saves', 'note', 'chat', 'slider'):
+            self.assertEqual(after[key], before[key])
+        status, body = self.request('/api/data')
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['catalogue_reviews'], {'137': True})
+        rows = [json.loads(line) for line in (self.output / 'events.jsonl').read_text().splitlines()]
+        self.assertEqual([(r['type'], r['data']) for r in rows], [('/api/catalogue-review', {'id': 137})])
+
+    def test_catalogue_review_rejects_unknown_or_coerced_ids(self):
+        for payload in ({'id': True}, {'id': 0}, {'id': 241}, {'id': '137'}, {'id': 137, 'reviewed': True}):
+            self.assertEqual(self.request('/api/catalogue-review', payload)[0], 400)
+        self.assertEqual(self.state()['catalogue_reviews'], {})
+
+    def test_observation_is_oracle_only_and_validates_scroll_coordinates(self):
+        observation = {'review': {'open': True, 'invalid': 1,
+            'values': {'note': '', 'number': '', 'approved': '', 'priority': 'Normal', 'date': ''}},
+            'scrolls': {'inner': [0, 42], 'outer': [12, 0], 'document': [0, 300]}}
+        self.assertEqual(self.request('/api/observation', observation)[0], 200)
+        state = self.state()
+        self.assertEqual(state['observation'], observation)
+        self.assertEqual(state['records'], [])
+        self.assertEqual(state['saves'], [])
+        public = json.loads(self.request('/api/data')[1])
+        self.assertNotIn('observation', public)
+        observation['scrolls']['inner'] = [-1, 0]
+        self.assertEqual(self.request('/api/observation', observation)[0], 400)
+        self.assertEqual(self.state()['observation'], state['observation'])
+        observation['scrolls']['inner'] = [True, 0]
+        self.assertEqual(self.request('/api/observation', observation)[0], 400)
+
     def test_partial_headers_do_not_block_owned_handler_shutdown(self):
         parsing = threading.Event()
         closed = threading.Event()
@@ -144,7 +179,10 @@ class WebServerTests(unittest.TestCase):
         self.assertFalse(self.state()['vision']['attempts'][0]['passed'])
 
     def test_layout_validation_and_action_preserves_geometry(self):
-        layout = {'viewport': [900, 700], 'anchors': {'web-note': [100.5, 80]}}
+        layout = {'viewport': [900, 700], 'anchors': {'web-note': [100.5, 80],
+            'review-note': [400, 250], 'review-number': [400, 300],
+            'review-approved': [200, 350], 'review-date': [400, 450],
+            'catalogue-search': [350, 600]}}
         self.assertEqual(self.request('/api/layout', layout)[0], 200)
         self.request('/api/note', {'note': 'geometry survives'})
         self.assertEqual(self.state()['layout'], layout)

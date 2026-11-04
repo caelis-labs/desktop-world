@@ -1,5 +1,7 @@
 # 统一 Computer Use 基准与后台输入验收（2026-11-04）
 
+本文保留首轮历史结果。`0fd00c1` 提交后的剩余 23 项和单项重跑结果见 [扩展验收](computer-use-extended-acceptance-2026-11-04.md)，不能把后续独立通过改写为本轮整套通过。
+
 已实现一个可手工运行的多技术栈验收 APP，并用它发现和修复长文本搜索、深层目标续绑、虚拟光标及不必要的前台激活问题。**完整基准尚未通过。** 最新整套运行 a11 在拖拽期间失去有效窗口，严格真实光标审计也因采样间隙超限失败；后续独立验证只证明各自检查的合同，不能拼成整套通过。
 
 任务入口、界面和运行命令见 [APP README](../tests/fixtures/computer-use-app/README.md)，固定目标见 [computer-use-v1.2](../tests/fixtures/computer-use-app/scenarios.json)，脱敏证据及原报告哈希见 [summary.json](evidence/computer-use-2026-11-04/summary.json)。所有输入通过当前源码候选的标准 `apps` / `exec({app,source})`；独立状态、事件日志和几何仅用于验收。当前安装的 0.3.4 没有替换，本报告不构成安装包或发行验收。

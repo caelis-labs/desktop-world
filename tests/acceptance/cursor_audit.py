@@ -47,12 +47,84 @@ def trace(samples):
             'max_sample_gap_ms': max_gap}
 
 
+def eof_recovery(root, path, request_id, start, boundaries, transcripts):
+    """Use sidecars only to locate independently verified recovery wire evidence."""
+    def timestamp(value):
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+    def same_id(left, right):
+        return type(left) is type(right) and left == right
+
+    def owned_path(value):
+        if not isinstance(value, str) or not Path(value).is_absolute():
+            return None
+        resolved = Path(value).resolve()
+        return resolved if resolved.is_relative_to(root.resolve()) else None
+
+    for boundary in boundaries:
+        try:
+            if (boundary['mode'] != 'eof' or owned_path(boundary['transcript']) != path.resolve()
+                    or not same_id(boundary['request_id'], request_id)
+                    or boundary['async_response']['outcome'] != 'no-response'):
+                continue
+            cleanup = boundary['cleanup_read']
+            recovery_path = owned_path(cleanup['transcript'])
+            if recovery_path is None or recovery_path == path.resolve():
+                continue
+            frames = transcripts.get(recovery_path, [])
+            requests = [f for f in frames if f['direction'] == 'request'
+                        and same_id(f['message'].get('id'), cleanup['request_id'])]
+            responses = [f for f in frames if f['direction'] == 'response'
+                         and same_id(f['message'].get('id'), cleanup['request_id'])]
+            if len(requests) != 1 or len(responses) != 1:
+                continue
+            request, response = requests[0], responses[0]
+            message = request['message']
+            if message.get('method') != 'tools/call' or message.get('params', {}).get('name') != 'exec':
+                continue
+            source = message['params']['arguments']['source']
+            # Every app reference must be a direct read call, including in mixed scripts.
+            reads = re.sub(r'\bapp\.(look|capture)\s*\(', '(', source)
+            if reads == source or re.search(r'\bapp\b', reads):
+                continue
+            envelope = response['message'].get('result', {})
+            result = envelope.get('structuredContent', {})
+            execution = result.get('execution_id')
+            if (response['message'].get('error') or envelope.get('isError')
+                    or result.get('error') or result.get('failure')
+                    or result.get('status') != 'completed' or cleanup['status'] != 'completed'
+                    or not isinstance(execution, str) or not execution
+                    or cleanup['execution_id'] != execution):
+                continue
+            bounds = (start, cleanup['start_unix_ms'], request['at_unix_ms'],
+                      response['at_unix_ms'], boundary['async_response']['observed_until_unix_ms'],
+                      cleanup['end_unix_ms'])
+            if not all(timestamp(t) for t in bounds) or any(a > b for a, b in zip(bounds, bounds[1:])):
+                continue
+            return response
+        except (KeyError, TypeError, ValueError, OSError):
+            # A partial or malformed sidecar never proves recovery.
+            continue
+    return None
+
+
 def summarize(root, samples):
     times = [row['unix_ms'] for row in samples]
     rows = []
+    boundaries = []
+    for sidecar in root.rglob('boundary-interruptions.jsonl'):
+        for line in sidecar.read_text().splitlines():
+            try:
+                boundary = json.loads(line)
+                if isinstance(boundary, dict):
+                    boundaries.append(boundary)
+            except ValueError:
+                continue
+    transcripts = {path.resolve(): [json.loads(line) for line in path.read_text().splitlines()]
+                   for path in sorted(root.rglob('mcp.jsonl'))}
     for path in sorted(root.rglob('mcp.jsonl')):
+        frames = transcripts[path.resolve()]
         pending = {}
-        frames = [json.loads(line) for line in path.read_text().splitlines()]
         reads = {f['message'].get('id') for f in frames if f['direction'] == 'request'
                  and re.search(r'\bapp\.(look|capture)\s*\(',
                                f['message'].get('params', {}).get('arguments', {}).get('source', ''))}
@@ -94,10 +166,14 @@ def summarize(root, samples):
             row = {'transcript': str(path.relative_to(root)), 'request_id': request_id,
                    'methods': re.findall(r'\bapp\.(\w+)\s*\(', source),
                    'cursor': {'status': 'incomplete_request'}}
+            completion = 'no_reply_after_cancel'
+            if recovery is None:
+                recovery = eof_recovery(root, path, request_id, frame['at_unix_ms'], boundaries, transcripts)
+                completion = 'no_reply_after_eof'
             if recovery:
                 lo = max(0, bisect.bisect_left(times, frame['at_unix_ms']) - 1)
                 hi = min(len(samples), bisect.bisect_right(times, recovery['at_unix_ms']) + 1)
-                row.update(completion='no_reply_after_cancel',
+                row.update(completion=completion,
                            start_unix_ms=frame['at_unix_ms'],end_unix_ms=recovery['at_unix_ms'],
                            oracle_ends_at='first successful recovery read; not an action receipt',
                            cursor=trace(samples[lo:hi]))

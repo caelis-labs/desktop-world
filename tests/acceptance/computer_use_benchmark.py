@@ -77,6 +77,15 @@ def summarize(original):
     data['acceptance_passed'] = (data['core_passed'] and pointer.get('P01') == 'passed'
         and pointer.get('P02') == 'passed' and pointer.get('P03') == 'passed'
         and data.get('cursor_policy', {}).get('passed') is True)
+    if data.get('selected_scenarios'):
+        selected = [row for row in data['cases'] if row['id'] in data['selected_scenarios']]
+        data['targeted_automation_passed'] = (clean and bool(selected)
+            and all(row['status'] in {'passed', 'pending_review'} for row in selected))
+        data['targeted_passed'] = (data['targeted_automation_passed']
+            and (data.get('clean_run') is True or data.get('expected_errors_verified') is True)
+            and all(row['status'] == 'passed' for row in selected))
+        data['targeted_acceptance_passed'] = (data['targeted_passed']
+            and data.get('cursor_policy', {}).get('passed') is True)
     return data
 
 

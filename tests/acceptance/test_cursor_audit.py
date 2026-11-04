@@ -209,5 +209,158 @@ class CursorOracleTests(unittest.TestCase):
         self.assertNotIn('tool_error', cancelled)
 
 
+class EofRecoveryTests(unittest.TestCase):
+    def fixture(self, root):
+        original = root / 'before/mcp.jsonl'
+        recovery = root / 'after/mcp.jsonl'
+        for path in (original, recovery):
+            path.parent.mkdir()
+        request = {'direction': 'request', 'at_unix_ms': 0,
+                   'message': {'id': 1, 'method': 'tools/call',
+                               'params': {'name': 'exec', 'arguments': {'source': 'await app.drag({path:[]});'}}}}
+        read = {'direction': 'request', 'at_unix_ms': 6,
+                'message': {'id': 1, 'method': 'tools/call',
+                            'params': {'name': 'exec', 'arguments': {'source': 'await app.look();'}}}}
+        response = {'direction': 'response', 'at_unix_ms': 8,
+                    'message': {'id': 1, 'result': {'structuredContent': {
+                        'status': 'completed', 'execution_id': 'recovery-execution'}}}}
+        boundary = {'mode': 'eof', 'transcript': str(original), 'request_id': 1,
+                    'async_response': {'outcome': 'no-response', 'observed_until_unix_ms': 9},
+                    'cleanup_read': {'transcript': str(recovery), 'request_id': 1,
+                                     'start_unix_ms': 5, 'end_unix_ms': 9,
+                                     'execution_id': 'recovery-execution', 'status': 'completed'}}
+        return original, recovery, request, read, response, boundary
+
+    def summarize_fixture(self, root, fixture, positions=(0, 0, 0, 0, 0, 0)):
+        original, recovery, request, read, response, boundary = fixture
+        original.write_text(json.dumps(request) + '\n')
+        recovery.write_text('\n'.join(json.dumps(f) for f in (read, response)))
+        (root / 'boundary-interruptions.jsonl').write_text(json.dumps(boundary) + '\n')
+        samples = [{'unix_ms': i * 2, 'x': x, 'y': 0} for i, x in enumerate(positions)]
+        return next(row for row in summarize(root, samples) if row['transcript'] == 'before/mcp.jsonl')
+
+    def test_verified_cross_connection_read_bounds_oracle_without_action_receipt(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            row = self.summarize_fixture(root, self.fixture(root))
+        self.assertEqual(row['completion'], 'no_reply_after_eof')
+        self.assertEqual((row['start_unix_ms'], row['end_unix_ms']), (0, 8))
+        self.assertEqual(row['methods'], ['drag'])
+        self.assertIn('not an action receipt', row['oracle_ends_at'])
+        self.assertNotIn('dispatch', row)
+        self.assertNotIn('tool_error', row)
+        self.assertIsNone(independence_violation(row))
+
+    def test_eof_cleanup_motion_still_requires_fully_bounded_borrow(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            row = self.summarize_fixture(root, self.fixture(root), (0, 0, 20, 20, 0, 0))
+        self.assertIn('outside', independence_violation(row))
+        row['borrow_intervals'] = [{'route': 'borrowed', 'operation': 'drag',
+                                    'reason': 'addressed_event_api_unavailable',
+                                    'start_unix_ms': 2, 'end_unix_ms': 8}]
+        self.assertIsNone(independence_violation(row))
+        row['borrow_intervals'][0]['start_unix_ms'] = 3
+        self.assertIn('outside', independence_violation(row))
+        row['cursor']['max_sample_gap_ms'] = 51
+        self.assertIn('sample gap', independence_violation(row))
+
+    def test_unverified_sidecars_preserve_incomplete_request(self):
+        changes = [
+            ('wrong original', ('transcript',), '/outside/mcp.jsonl'),
+            ('relative original', ('transcript',), 'before/mcp.jsonl'),
+            ('wrong original id', ('request_id',), 2),
+            ('boolean original id', ('request_id',), True),
+            ('wrong mode', ('mode',), 'cancel'),
+            ('claimed reply', ('async_response', 'outcome'), 'response'),
+            ('outside recovery', ('cleanup_read', 'transcript'), '/outside/mcp.jsonl'),
+            ('wrong recovery id', ('cleanup_read', 'request_id'), 2),
+            ('late start', ('cleanup_read', 'start_unix_ms'), 7),
+            ('early end', ('cleanup_read', 'end_unix_ms'), 7),
+            ('nonfinite time', ('cleanup_read', 'start_unix_ms'), float('nan')),
+            ('early observation', ('async_response', 'observed_until_unix_ms'), 7),
+            ('wrong execution', ('cleanup_read', 'execution_id'), 'forged'),
+            ('wrong status', ('cleanup_read', 'status'), 'running'),
+            ('malformed cleanup', ('cleanup_read',), None),
+        ]
+        for label, keys, value in changes:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as scratch:
+                root = Path(scratch)
+                fixture = self.fixture(root)
+                target = fixture[-1]
+                for key in keys[:-1]:
+                    target = target[key]
+                target[keys[-1]] = value
+                row = self.summarize_fixture(root, fixture)
+                self.assertEqual(row['cursor']['status'], 'incomplete_request')
+                self.assertIsNotNone(independence_violation(row))
+                self.assertNotIn('completion', row)
+
+    def test_sidecar_cannot_forge_recovery_wire_evidence(self):
+        changes = [
+            ('input script', 3, ('message', 'params', 'arguments', 'source'), 'await app.look(); await app.click({});'),
+            ('non exec', 3, ('message', 'params', 'name'), 'other'),
+            ('non tools call', 3, ('message', 'method'), 'other'),
+            ('wrong request', 3, ('message', 'id'), 2),
+            ('wrong response', 4, ('message', 'id'), 2),
+            ('wire before bounds', 3, ('at_unix_ms',), 4),
+            ('wire after bounds', 4, ('at_unix_ms',), 10),
+            ('response before request', 4, ('at_unix_ms',), 5),
+            ('tool error', 4, ('message', 'result', 'isError'), True),
+            ('protocol error', 4, ('message', 'error'), {'code': -1}),
+            ('failed execution', 4, ('message', 'result', 'structuredContent', 'status'), 'failed'),
+            ('missing execution', 4, ('message', 'result', 'structuredContent', 'execution_id'), None),
+            ('execution failure', 4, ('message', 'result', 'structuredContent', 'failure'), {'code': 'failed'}),
+        ]
+        for label, index, keys, value in changes:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as scratch:
+                root = Path(scratch)
+                fixture = self.fixture(root)
+                target = fixture[index]
+                for key in keys[:-1]:
+                    target = target[key]
+                target[keys[-1]] = value
+                row = self.summarize_fixture(root, fixture)
+                self.assertEqual(row['cursor']['status'], 'incomplete_request')
+                self.assertIsNotNone(independence_violation(row))
+
+    def test_real_outside_recovery_and_symlink_escape_are_rejected(self):
+        for symlink in (False, True):
+            with self.subTest(symlink=symlink), tempfile.TemporaryDirectory() as scratch:
+                base = Path(scratch)
+                root = base / 'audit'
+                root.mkdir()
+                fixture = self.fixture(root)
+                self.summarize_fixture(root, fixture)
+                outside = base / 'mcp.jsonl'
+                fixture[1].replace(outside)
+                if symlink:
+                    fixture[1].symlink_to(outside)
+                else:
+                    fixture[-1]['cleanup_read']['transcript'] = str(outside)
+                (root / 'boundary-interruptions.jsonl').write_text(json.dumps(fixture[-1]))
+                row = next(row for row in summarize(root, []) if row['transcript'] == 'before/mcp.jsonl')
+                self.assertEqual(row['cursor']['status'], 'incomplete_request')
+
+    def test_missing_malformed_or_same_connection_sidecar_cannot_bound_eof(self):
+        for sidecar in (None, '{broken', '{}', 'null', '[]'):
+            with self.subTest(sidecar=sidecar), tempfile.TemporaryDirectory() as scratch:
+                root = Path(scratch)
+                self.summarize_fixture(root, self.fixture(root))
+                path = root / 'boundary-interruptions.jsonl'
+                if sidecar is None:
+                    path.unlink()
+                else:
+                    path.write_text(sidecar)
+                row = next(row for row in summarize(root, []) if row['transcript'] == 'before/mcp.jsonl')
+                self.assertEqual(row['cursor']['status'], 'incomplete_request')
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            fixture = self.fixture(root)
+            fixture[-1]['cleanup_read']['transcript'] = str(fixture[0])
+            row = self.summarize_fixture(root, fixture)
+            self.assertEqual(row['cursor']['status'], 'incomplete_request')
+
+
 if __name__ == '__main__':
     unittest.main()

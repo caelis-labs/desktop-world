@@ -21,7 +21,8 @@ MAX_MESSAGES = 300
 MAX_STATE_BYTES = 8 * 1024 * 1024
 LAYOUT_KEYS = frozenset(('web-note', 'web-commit', 'web-reference', 'web-checkpoint', 'web-catalogue',
                          'canvas-message-137', 'canvas-pin', 'canvas-edit', 'canvas-reply',
-                         'canvas-compose', 'canvas-send'))
+                         'canvas-compose', 'canvas-send', 'scroll-inner', 'scroll-outer',
+                         'review-note', 'review-number', 'review-approved', 'review-date', 'catalogue-search'))
 WEB = Path(__file__).with_name('web')
 
 
@@ -53,7 +54,8 @@ class Store:
         messages.insert(12, {'id': 'release-137', 'text': 'Release check 137', 'pinned': False})
         self.state = {'schema_version': 1, 'case': case, 'note': '', 'saves': [],
                       'checkpoint_hits': [], 'reference': ('Reference entry 中文🙂 — verify the release ledger.\n' * 230) + 'WEB-END-137-中文🙂',
-                      'catalogue_loaded': False, 'records': [], 'slider': 35,
+                      'catalogue_loaded': False, 'catalogue_reviews': {}, 'records': [], 'slider': 35,
+                      'observation': {},
                       'chat': {'messages': messages, 'actions': []},
                       'vision': {'expected_token': token, 'attempts': []}, 'layout': {}, 'events': 0}
         atomic_json(output / 'state.json', self.state)
@@ -61,7 +63,7 @@ class Store:
 
     def public(self):
         with self.lock:
-            return copy.deepcopy({key: self.state[key] for key in ('note', 'reference', 'catalogue_loaded', 'chat', 'slider')})
+            return copy.deepcopy({key: self.state[key] for key in ('note', 'reference', 'catalogue_loaded', 'catalogue_reviews', 'chat', 'slider')})
 
     def transact(self, kind, payload, effect=None, error=None):
         with self.lock:
@@ -116,6 +118,27 @@ def apply_action(state, route, data):
             raise ValueError('complete the required record fields')
         date.fromisoformat(text(data, 'date', 10, True))
         state['records'].append(dict(data, note=note))
+    elif route == '/api/catalogue-review':
+        number = data.get('id')
+        if type(number) is not int or not 1 <= number <= 240 or set(data) != {'id'}:
+            raise ValueError('invalid catalogue review')
+        state['catalogue_reviews'][str(number)] = True
+    elif route == '/api/observation':
+        if set(data) != {'review', 'scrolls'} or not isinstance(data['review'], dict) or not isinstance(data['scrolls'], dict):
+            raise ValueError('invalid observation')
+        review = data['review']
+        if (set(review) != {'open', 'invalid', 'values'} or type(review['open']) is not bool
+                or type(review['invalid']) is not int or review['invalid'] < 0
+                or not isinstance(review['values'], dict)
+                or set(review['values']) != {'note', 'number', 'approved', 'priority', 'date'}
+                or any(not isinstance(v, str) or len(v) > 1000 for v in review['values'].values())):
+            raise ValueError('invalid review observation')
+        if (set(data['scrolls']) != {'inner', 'outer', 'document'} or
+                any(not isinstance(p, list) or len(p) != 2 or
+                    any(type(v) not in (int, float) or not math.isfinite(v) or v < 0 for v in p)
+                    for p in data['scrolls'].values())):
+            raise ValueError('invalid scroll observation')
+        state['observation'] = copy.deepcopy(data)
     elif route == '/api/slider':
         if type(data.get('value')) is not int or not 0 <= data['value'] <= 100:
             raise ValueError('invalid slider value')

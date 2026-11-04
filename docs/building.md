@@ -91,7 +91,12 @@ review remains pending until explicit review of the hash-bound original PNG.
 requires the bounded physical-borrow policy, real helper-window position/pixels and
 a continuous foreground-witness check; raw business-runner success cannot substitute
 for these observations. Unrun platform/model/system targets never pass by omission.
-See the [first baseline and repair record](computer-use-benchmark-2026-11-04.md).
+See the [first baseline and repair record](computer-use-benchmark-2026-11-04.md)
+and the [remaining-target acceptance record](computer-use-extended-acceptance-2026-11-04.md).
+Use `--scenario C04` with a fresh output directory to verify one target independently;
+`targeted_acceptance_passed` does not establish full-baseline success. B05 publishes
+an exact-PNG answer handoff; inspect that capture before supplying an answer as
+described in the fixture README. Repeated attempts preserve all earlier failures.
 The fixture README also documents a manual app and portable `--web-only` entry.
 
 On a macOS test desktop, the current app-scene probe builds a uniquely identified

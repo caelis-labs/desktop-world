@@ -166,6 +166,19 @@ class ComputerUseFixture:
                         self.child.kill()
                         self.child.wait(timeout=2)
                 cleanup['native'].update(pid=self.child.pid, returncode=self.child.returncode)
+                observe_exit = getattr(self.child, 'cleanup_evidence', None)
+                if self.child.returncode is None and callable(observe_exit):
+                    evidence = observe_exit()
+                    if (evidence.get('pid') == self.child.pid and type(evidence.get('birth')) is int
+                            and evidence['birth'] > 0 and evidence.get('exit_observed') is True
+                            and evidence.get('expected_detached_exit') is True
+                            and evidence.get('exit_reason') in ('absent', 'birth_changed', 'zombie')):
+                        journal = self.output / 'native-events.jsonl'
+                        rows = [json.loads(line) for line in journal.read_text(encoding='utf-8').splitlines()]
+                        evidence['quit_event_verified'] = any(row.get('kind') == 'quit'
+                            and row.get('pid') == evidence['pid'] and row.get('process_birth') == evidence['birth']
+                            for row in rows)
+                        cleanup['native'].update(evidence)
         except Exception as error:
             cleanup['errors'].append(str(error))
         finally:
@@ -180,7 +193,10 @@ class ComputerUseFixture:
                 except Exception as error:
                     cleanup['errors'].append(str(error))
         cleanup['passed'] = (not cleanup['errors'] and not cleanup['native']['forced']
-            and cleanup['native'].get('returncode', 0) == 0
+            and (cleanup['native'].get('returncode', 0) == 0
+                 or (cleanup['native'].get('returncode') is None
+                     and cleanup['native'].get('exit_observed') is True
+                     and cleanup['native'].get('quit_event_verified') is True))
             and all(row['stopped'] for row in cleanup['servers']))
         self.cleanup = cleanup
         return cleanup

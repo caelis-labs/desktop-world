@@ -36,7 +36,9 @@
 - 最新整套 a11 由于拖拽期间窗口几何/可见性变化及光标观察间隙超限失败；后续独立通过不拼成整套通过。a13 的业务/图像和三种 overlay 动作通过，物理审计仍因 72.683ms 间隙失败。旧失败和来源未确定的桌面变化保留，不归因于用户，也不放宽阈值。
 - 最终源码通过 590 库测试、5 CLI、3 MCP、新增 Computer Use 单测及原生纯检查；未替换安装的 0.3.4。候选、每次尝试、证据哈希和限制见 [本轮报告](computer-use-benchmark-2026-11-04.md) 及 [脱敏证据](evidence/computer-use-2026-11-04/summary.json)。
 
-下一步仍需取得完整严格运行，再按另外 23 项未完成目标继续；实际 Chromium、模型图片任务、真实 Telegram、Dock/无窗口应用根和 Windows 原生环境不会由本次 APP 验收自动关闭。Windows GUI 在 Windows 机器继续，X11 顺序保持。
+首轮之后已完成 [剩余 23 项的逐项评估](computer-use-extended-acceptance-2026-11-04.md)：47 次独立尝试均保留；最新 13 项业务或独立中断效果成立、3 unsupported、7 blocked。其中 8 项单项严格通过（7 后台、1 显式前台诊断），实际模型 PNG 挑战也已通过。未知 AXPress、无回执中断、日期控件、Chrome 实例隔离及系统根没有改记为严格通过。
+
+完整严格运行仍待取得；真实 Chromium、真实 Telegram、Dock/无窗口应用根和 Windows 原生环境不会由单项结果自动关闭。Windows GUI 在 Windows 机器继续，X11 顺序保持。
 
 ## 1. 基线和证据边界
 

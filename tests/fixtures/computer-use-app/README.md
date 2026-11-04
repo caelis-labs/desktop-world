@@ -67,6 +67,23 @@ P03 使用一个独立的自有小窗口作为前台见证者，另开采用默�
 
 标准入口已强制使用 [cursor_audit](../../acceptance/cursor_audit.py) 的 `--assert-independent`。复用已编译的观察器可传 `--observer`、`--overlay-observer` 和 `--focus-observer`；通用独立探针用法见 [构建文档](../../../docs/building.md#current-external-client-gui-probe)。采样必须保留实际间隙；前后台的两个端点不证明全程焦点稳定。P03 覆盖受控见证条件下的后台合约；R04 的更多应用/动作与并发用户键盘目的地仍是单独目标。
 
+## 单项复验
+
+扩展/边界/系统目标和任意 core 可在 fresh fixture 中单独执行：
+
+```sh
+python3 tests/acceptance/computer_use_acceptance.py \
+  --dtw /absolute/path/to/frozen/dtw --scenario C04 \
+  --output /tmp/dtw-computer-use-C04-a01 --case C04-a01 \
+  --source-revision <source-identity>
+```
+
+重跑使用新的输出目录。单项入口仍记录完整目标清单，未选目标保持 not_run；`targeted_acceptance_passed` 只证明该项效果、错误分级、清理与严格真实光标，不会使完整 baseline 通过。确定的预期拒绝须精确对应 execution ID、纯 not_dispatched、无 focus preparation/interrupted，原始 tool error 与 clean_run 仍保留；unknown 不属于豁免。
+
+默认保持后台。只有已有同项目后台失败证据并经调用者核对后，才可显式使用 `--fixture-foreground --background-failure <原始报告>` 建立前台诊断条件；报告保留原报告 SHA256、实际配置与前台条件。这不增加产品自动激活许可，也不能替代后台通过。
+
+B05 异步启动后会在 `cursor/probe/B05-answer-request.json` 发布实际 PNG 路径和 SHA256，最多等待 `--vision-answer-timeout` 秒（默认 180，最大 600）。实际检查该 DTW PNG 后，将 `{capture_sha256,answer,reviewer,input_point:{x,y},notes?}` 写入同目录 `B05-answer.json`；输入点为 PNG 像素。用例根据当前已观察的字段 press 能力或该像素点聚焦，公开读回答案后只提交一次，之后才读取隐藏 judge。超时为 blocked；旧图片答案、未知输入与失败不自动重试。
+
 ## 独立效果和失败规则
 
 - `native-state.json`、`native-events.jsonl`：真实控件、消息和窗口效果、实际输入事件、窗口与几何。`native-reference.txt` 是原生文档的私有全文判据。
@@ -88,7 +105,7 @@ P03 使用一个独立的自有小窗口作为前台见证者，另开采用默�
 4. 重跑受影响任务和 core，保留原失败与新候选身份；扩展/系统/真实模型任务逐项补齐。
 5. 场景全部完成且平台与安装包证据闭环后，才更新完整基准的支持声明。
 
-首轮执行和修复证据见 [首轮基准记录](../../../docs/computer-use-benchmark-2026-11-04.md)。
+首轮执行和修复证据见 [首轮基准记录](../../../docs/computer-use-benchmark-2026-11-04.md)；剩余 23 项、47 次单项尝试及当前限制见 [扩展验收记录](../../../docs/computer-use-extended-acceptance-2026-11-04.md)。
 
 ## 无桌面检查
 

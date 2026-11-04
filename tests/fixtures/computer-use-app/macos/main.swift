@@ -1,12 +1,32 @@
 import AppKit
 import WebKit
 import UniformTypeIdentifiers
+import Darwin
+
+func fixtureProcessBirth() -> UInt64? {
+    let pid = ProcessInfo.processInfo.processIdentifier
+    var info = proc_bsdinfo()
+    let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+    guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size,
+          info.pbi_pid == UInt32(pid), info.pbi_start_tvusec < 1_000_000 else { return nil }
+    return info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec
+}
+
+func fixtureRoot() -> URL {
+    let arguments = CommandLine.arguments
+    if let index = arguments.firstIndex(of: "--fixture-root"), index + 1 < arguments.count {
+        return URL(fileURLWithPath: arguments[index + 1], isDirectory: true).standardizedFileURL
+    }
+    return Bundle.main.bundleURL.deletingLastPathComponent()
+}
 
 final class ComputerUseDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
-    let root = Bundle.main.bundleURL.deletingLastPathComponent()
+    let root = fixtureRoot()
     var caseName = "unconfigured"
     var webURL = ""
     var activateOnPresentation = false
+    var configuredWindowX: CGFloat?
+    var configuredWindowY: CGFloat?
     var writeError = ""
     var mainWindow: NSWindow!
     var peers: [NSWindow] = []
@@ -34,6 +54,11 @@ final class ComputerUseDelegate: NSObject, NSApplicationDelegate, WKNavigationDe
     var counter = 0
     var saves = 0
     var savedNote = ""
+    var cleanNote = "Initial native note"
+    var quitConfirmation: NSAlert?
+    var cleanupRequested = false
+    var quitRequests = 0
+    var quitCancellations = 0
     var sliderChanges = 0
     var auditIndex = -1
     var auditCount = 0
@@ -51,6 +76,8 @@ final class ComputerUseDelegate: NSObject, NSApplicationDelegate, WKNavigationDe
             guard let name = config?["case"] as? String, let url = config?["web_url"] as? String else { throw NSError(domain: "fixture", code: 1, userInfo: [NSLocalizedDescriptionKey: "config.json requires case and web_url strings"]) }
             caseName = name; webURL = url
             activateOnPresentation = config?["activate"] as? Bool ?? false
+            configuredWindowX = (config?["window_x"] as? NSNumber).map { CGFloat(truncating: $0) }
+            configuredWindowY = (config?["window_y"] as? NSNumber).map { CGFloat(truncating: $0) }
         } catch { writeError = "configuration: \(error.localizedDescription)" }
         let journalURL = root.appendingPathComponent("native-events.jsonl")
         do {
@@ -61,6 +88,10 @@ final class ComputerUseDelegate: NSObject, NSApplicationDelegate, WKNavigationDe
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 900)
         let size = NSSize(width: min(1050, screen.width - 40), height: min(800, screen.height - 50))
         mainWindow = NSWindow(contentRect: NSRect(x: screen.minX + 20, y: screen.maxY - size.height - 30, width: size.width, height: size.height), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+        if let x = configuredWindowX, let y = configuredWindowY {
+            let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
+            mainWindow.setFrameOrigin(NSPoint(x: x, y: primaryTop - y - mainWindow.frame.height))
+        }
         mainWindow.title = "DTW Computer Use — \(caseName)"; mainWindow.isReleasedWhenClosed = false; mainWindow.acceptsMouseMovedEvents = true
         let content = FlippedFixtureView(frame: NSRect(origin: .zero, size: size)); mainWindow.contentView = content
         let items: [(String, Selector, CGFloat)] = [("Native controls", #selector(showNative), 140), ("Web workspace", #selector(showWeb), 145), ("Canvas chat", #selector(showChat), 125), ("Open file…", #selector(openFile), 110), ("Save file…", #selector(saveFile), 110), ("New peer window", #selector(newPeer), 155)]
@@ -155,6 +186,8 @@ final class ComputerUseDelegate: NSObject, NSApplicationDelegate, WKNavigationDe
     func event(_ kind: String, _ fields: [String: Any]) {
         sequence += 1
         var row = fields; row["sequence"] = sequence; row["kind"] = kind; row["uptime"] = ProcessInfo.processInfo.systemUptime
+        row["pid"] = ProcessInfo.processInfo.processIdentifier
+        row["process_birth"] = fixtureProcessBirth() as Any? ?? NSNull()
         do { guard let journal else { throw CocoaError(.fileWriteUnknown) }; let data = try JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]); try journal.write(contentsOf: data + Data("\n".utf8)) } catch { failIO("append event", error) }
     }
     func point(_ view: NSView, _ local: NSPoint? = nil) -> [Any]? {
@@ -176,6 +209,10 @@ final class ComputerUseDelegate: NSObject, NSApplicationDelegate, WKNavigationDe
         anchors["slider-start"] = point(slider, NSPoint(x: 7, y: slider.bounds.midY)); anchors["slider-end"] = point(slider, NSPoint(x: slider.bounds.width - 7, y: slider.bounds.midY))
         let visibleMessage137 = chat.messageRect.intersection(chat.feedRect)
         if !visibleMessage137.isEmpty { anchors["chat-message-137"] = point(chat, NSPoint(x: visibleMessage137.midX, y: visibleMessage137.midY)) }
+        for index in 1...chat.messageCount {
+            let visible = chat.rect(for: index).intersection(chat.feedRect)
+            if !visible.isEmpty { anchors["chat-message-\(index)"] = point(chat, NSPoint(x: visible.midX, y: visible.midY)) }
+        }
         anchors["chat-feed"] = point(chat, NSPoint(x: chat.feedRect.midX, y: chat.feedRect.midY))
         anchors["chat-compose"] = point(chat.compose); anchors["chat-send"] = point(chat.send)
         anchors["web-origin"] = point(webView, NSPoint(x: webView.bounds.minX, y: webView.isFlipped ? webView.bounds.minY : webView.bounds.maxY))
@@ -189,18 +226,46 @@ final class ComputerUseDelegate: NSObject, NSApplicationDelegate, WKNavigationDe
         let rows: [[String: Any]] = windows.filter { $0.isVisible }.map { ["title": $0.title, "id": $0.windowNumber, "bounds": [finite($0.frame.minX), finite(top - $0.frame.maxY), finite($0.frame.width), finite($0.frame.height)]] }
         let pointer = CGEvent(source: nil)?.location
         let noteSelection = (note.currentEditor() as? NSTextView)?.selectedRange()
-        let native: [String: Any] = ["counter": counter, "note": noteText, "note_selection": noteSelection.map { ["location": $0.location, "length": $0.length, "unit": "utf16"] as [String: Any] } as Any? ?? NSNull(), "saved_note": savedNote, "saves": saves, "reviewed": reviewed.state == .on, "selection": choice.titleOfSelectedItem ?? "", "slider": slider.doubleValue, "slider_changes": sliderChanges, "audit_index": auditIndex, "audit_count": auditCount, "gestures": gestures, "left_scroll_y": leftScroll.contentView.bounds.origin.y, "right_scroll_y": rightScroll.contentView.bounds.origin.y, "peers": peers.enumerated().map { index, window in ["title": window.title, "counter": peerCounts[index], "note": peerFields[index].currentEditor()?.string ?? peerFields[index].stringValue] as [String: Any] }, "panel": ["kind": panelKind, "result": panelResult, "visible": panel?.isVisible ?? false, "opened_text": openedText, "error": fileError, "file_saves": fileSaves]]
+        let native: [String: Any] = ["counter": counter, "note": noteText, "dirty": noteText != cleanNote, "quit": ["visible": quitConfirmation != nil, "requests": quitRequests, "cancellations": quitCancellations], "note_selection": noteSelection.map { ["location": $0.location, "length": $0.length, "unit": "utf16"] as [String: Any] } as Any? ?? NSNull(), "saved_note": savedNote, "saves": saves, "reviewed": reviewed.state == .on, "selection": choice.titleOfSelectedItem ?? "", "slider": slider.doubleValue, "slider_changes": sliderChanges, "audit_index": auditIndex, "audit_count": auditCount, "gestures": gestures, "left_scroll_y": leftScroll.contentView.bounds.origin.y, "right_scroll_y": rightScroll.contentView.bounds.origin.y, "peers": peers.enumerated().map { index, window in ["title": window.title, "counter": peerCounts[index], "note": peerFields[index].currentEditor()?.string ?? peerFields[index].stringValue] as [String: Any] }, "panel": ["kind": panelKind, "result": panelResult, "visible": panel?.isVisible ?? false, "opened_text": openedText, "error": fileError, "file_saves": fileSaves]]
         var chatState = chat.state; chatState["pins"] = chat.pinCount
-        let state: [String: Any] = ["schema_version": 1, "case": caseName, "pid": ProcessInfo.processInfo.processIdentifier, "pressed_mouse_buttons": NSEvent.pressedMouseButtons, "mode": mode, "ready": mainWindow.isVisible, "write_error": writeError, "environment": ["pointer_screen": pointer.map { [finite($0.x), finite($0.y)] } as Any? ?? NSNull(), "frontmost_pid": NSWorkspace.shared.frontmostApplication?.processIdentifier as Any? ?? NSNull()], "windows": rows, "anchors": anchors, "native": native, "chat": chatState, "web": ["url": webView.url?.absoluteString ?? webURL, "loaded": loaded, "error": webError]]
+        let state: [String: Any] = ["schema_version": 1, "case": caseName, "pid": ProcessInfo.processInfo.processIdentifier, "process_birth": fixtureProcessBirth() as Any? ?? NSNull(), "pressed_mouse_buttons": NSEvent.pressedMouseButtons, "mode": mode, "ready": mainWindow.isVisible, "write_error": writeError, "environment": ["pointer_screen": pointer.map { [finite($0.x), finite($0.y)] } as Any? ?? NSNull(), "frontmost_pid": NSWorkspace.shared.frontmostApplication?.processIdentifier as Any? ?? NSNull()], "windows": rows, "anchors": anchors, "native": native, "chat": chatState, "web": ["url": webView.url?.absoluteString ?? webURL, "loaded": loaded, "error": webError]]
         do { let data = try JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]); try data.write(to: root.appendingPathComponent("native-state.json"), options: .atomic) } catch { failIO("publish state", error) }
     }
-    func tick() { if let command = try? String(contentsOf: root.appendingPathComponent("command"), encoding: .utf8), command.trimmingCharacters(in: .whitespacesAndNewlines) == "quit" { NSApp.terminate(nil); return }; publish() }
+    func tick() { if let command = try? String(contentsOf: root.appendingPathComponent("command"), encoding: .utf8), command.trimmingCharacters(in: .whitespacesAndNewlines) == "quit" { cleanupRequested = true; NSApp.terminate(nil); return }; publish() }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if cleanupRequested { return .terminateNow }
+        guard noteText != cleanNote else { return .terminateNow }
+        if quitConfirmation != nil { return .terminateLater }
+        quitRequests += 1
+        let alert = NSAlert()
+        alert.messageText = "Quit with unsaved note?"
+        alert.informativeText = "The edited native note has not been committed."
+        alert.addButton(withTitle: "Keep Open")
+        alert.addButton(withTitle: "Discard and Quit")
+        quitConfirmation = alert
+        event("quit-confirmation", ["note": noteText]); publish()
+        alert.beginSheetModal(for: mainWindow) { [weak self] response in
+            guard let self else { return }
+            self.quitConfirmation = nil
+            let discard = response == .alertSecondButtonReturn
+            if !discard { self.quitCancellations += 1 }
+            self.event("quit-decision", ["discard": discard, "note": self.noteText]); self.publish()
+            sender.reply(toApplicationShouldTerminate: discard)
+        }
+        return .terminateLater
+    }
     func applicationWillTerminate(_ notification: Notification) { timer?.invalidate(); if let monitor { NSEvent.removeMonitor(monitor) }; chat?.closePopup(); event("quit", [:]); do { try journal?.close() } catch { failIO("close journal", error) } }
 }
 let app = NSApplication.shared
-let routingConfiguration = (try? Data(contentsOf: Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("config.json")))
+let routingConfiguration = (try? Data(contentsOf: fixtureRoot().appendingPathComponent("config.json")))
     .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-let delegate: NSObject & NSApplicationDelegate = routingConfiguration?["role"] as? String == "witness" ? ForegroundWitness() : ComputerUseDelegate()
+let role = routingConfiguration?["role"] as? String ?? "target"
+let delegate: NSObject & NSApplicationDelegate
+switch role {
+case "witness": delegate = ForegroundWitness()
+case "accessory": delegate = ComputerUseAccessory(root: fixtureRoot())
+default: delegate = ComputerUseDelegate()
+}
 app.delegate = delegate
-app.setActivationPolicy(.regular)
+app.setActivationPolicy(role == "accessory" ? .accessory : .regular)
 app.run()

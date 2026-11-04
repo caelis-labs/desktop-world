@@ -60,6 +60,12 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--case', default='acceptance')
     parser.add_argument('--source-revision', default='unrecorded')
+    parser.add_argument('--scenario', choices=[row['id'] for row in load_targets()['scenarios'] if row['id'] != 'P02'],
+                        help='Run one target in a fresh fixture; never implies full baseline success')
+    parser.add_argument('--fixture-binary', type=Path, help='Reuse an already compiled owned fixture executable for a single target')
+    parser.add_argument('--vision-answer-timeout', type=int, default=180)
+    parser.add_argument('--fixture-foreground', action='store_true', help='Explicit diagnostic condition after a preserved background failure')
+    parser.add_argument('--background-failure', type=Path)
     parser.add_argument('--observer', type=Path, help='Already compiled read-only system cursor observer')
     parser.add_argument('--overlay-observer', type=Path, help='Already compiled exact-owned virtual cursor observer')
     parser.add_argument('--focus-observer', type=Path, help='Already compiled continuous foreground observer')
@@ -78,9 +84,17 @@ def main():
         probe_output = output / 'cursor/probe'
         command = [sys.executable, str(HERE / 'cursor_audit.py'), '--assert-independent',
             '--observer', str(observer.resolve()), '--output', str(output / 'cursor'), '--',
-            sys.executable, str(HERE / 'computer_use_benchmark.py'), '--dtw', str(args.dtw.resolve()),
+            sys.executable, str(HERE / ('computer_use_target.py' if args.scenario else 'computer_use_benchmark.py')), '--dtw', str(args.dtw.resolve()),
             '--output', str(probe_output), '--case', args.case, '--source-revision', args.source_revision,
             '--overlay-observer', str(overlay_observer.resolve()), '--focus-observer', str(focus_observer.resolve())]
+        if args.scenario:
+            command += ['--scenario', args.scenario, '--vision-answer-timeout', str(args.vision_answer_timeout)]
+            if args.fixture_binary:
+                command += ['--fixture-binary', str(args.fixture_binary.resolve())]
+            if args.fixture_foreground:
+                command += ['--fixture-foreground']
+                if args.background_failure:
+                    command += ['--background-failure', str(args.background_failure.resolve())]
         import os
         environment = dict(os.environ, DTW_INPUT_TRACE='1')
         audit_result = subprocess.run(command, env=environment, check=False)
@@ -98,8 +112,9 @@ def main():
     finally:
         module.write_json(output / 'report.json', report)
     print(json.dumps({key: report.get(key) for key in
-        ('counts', 'core_automation_passed', 'core_passed', 'clean_run', 'acceptance_passed', 'target_baseline_passed')}))
-    raise SystemExit(0 if report.get('acceptance_passed') else 1)
+        ('counts', 'core_automation_passed', 'core_passed', 'clean_run', 'acceptance_passed', 'target_baseline_passed',
+         'targeted_automation_passed', 'targeted_passed', 'targeted_acceptance_passed')}))
+    raise SystemExit(0 if report.get('targeted_acceptance_passed' if args.scenario else 'acceptance_passed') else 1)
 
 
 if __name__ == '__main__':

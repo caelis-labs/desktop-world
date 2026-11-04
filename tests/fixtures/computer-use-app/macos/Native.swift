@@ -15,6 +15,8 @@ final class GestureFixtureView: NSView {
     }
     override func mouseEntered(with event: NSEvent) { owner?.gesture("hover", event) }
     override func mouseDown(with event: NSEvent) { owner?.gesture(event.clickCount == 2 ? "double_click" : "click", event) }
+    override func mouseDragged(with event: NSEvent) { owner?.gesture("drag", event) }
+    override func mouseUp(with event: NSEvent) { owner?.gesture("up", event) }
     override func rightMouseDown(with event: NSEvent) { owner?.gesture("right_click", event) }
 }
 
@@ -55,10 +57,19 @@ extension ComputerUseDelegate {
     }
     @objc func increment() { counter += 1; counterLabel.stringValue = "Counter: \(counter)"; event("increment", ["counter": counter]); publish() }
     var noteText: String { note.currentEditor()?.string ?? note.stringValue }
-    @objc func commitNote() { savedNote = noteText; saves += 1; event("commit-note", ["note": savedNote, "saves": saves]); publish() }
+    @objc func commitNote() { savedNote = noteText; cleanNote = savedNote; saves += 1; event("commit-note", ["note": savedNote, "saves": saves]); publish() }
     @objc func changeReviewed() { event("reviewed", ["value": reviewed.state == .on]); publish() }
     @objc func changeChoice() { event("workflow", ["value": choice.titleOfSelectedItem ?? ""]); publish() }
     @objc func changeSlider() { sliderChanges += 1; event("slider", ["value": slider.doubleValue]); publish() }
     @objc func audit(_ sender: NSButton) { auditIndex = sender.tag; auditCount += 1; event("audit", ["index": sender.tag, "count": auditCount]); publish() }
-    func gesture(_ kind: String, _ input: NSEvent) { gestures[kind, default: 0] += 1; event("gesture", ["kind": kind, "click_count": input.clickCount]); publish() }
+    func gesture(_ kind: String, _ input: NSEvent) {
+        gestures[kind, default: 0] += 1
+        var fields: [String: Any] = ["phase": kind, "click_count": input.clickCount]
+        if let window = input.window {
+            let screen = window.convertPoint(toScreen: input.locationInWindow)
+            fields["screen_x"] = finite(screen.x)
+            fields["screen_y"] = finite((NSScreen.screens.first?.frame.maxY ?? 0) - screen.y)
+        }
+        event("gesture", fields); publish()
+    }
 }

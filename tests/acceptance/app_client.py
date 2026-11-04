@@ -74,7 +74,9 @@ class AppClient:
             'source_bytes': len(arguments.get('source', '').encode()),
             'json_bytes': len(json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode()),
             'image_count': sum(c.get('type') == 'image' for c in response.get('content', [])),
-            'is_error': response.get('isError') is True})
+            'is_error': response.get('isError') is True,
+            'execution_id': data.get('execution_id'), 'error_code': data.get('error', {}).get('code'),
+            'effects': data.get('effects', {})})
         return data, response
 
     def execute(self, app, source, *, allow_error=False):
