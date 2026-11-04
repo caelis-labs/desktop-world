@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "scope": "PR 107 Windows source-built acceptance; not installed 0.3.4 or full 42-target model acceptance",
-  "production_revision": "b422b2994fac87a7ef67559c1fdbfb0e0aece554",
-  "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
-  "candidate_scope": "Windows implementation at b422b29; later macOS-only C ABI imports are covered by their native CI, not Windows GUI evidence",
+  "production_revision": "7822f1017d5c7c8c60f366729dd15adfc141b5bf",
+  "binary_sha256": "a80b1ae6e980f58e4a264f252f71b69598a6035c2a0aa4814d1478430dc764bb",
+  "candidate_scope": "Windows binary frozen from clean 7822f10; macOS behavior is covered separately by native CI/preflight",
   "macos_abi_source_sha256": {
     "cmd/dtw/src/backends/macos/NativeBridge.h": "e0618e6a8e9ed8483b9500ba15e84b2a45e282e5e6570b28707115d8863a6eb0",
     "cmd/dtw/src/backends/macos/Native.swift": "1363caa96a47127a406bd990a2190ac3002f285425c739e332669e228fdd2afe",
@@ -35,7 +35,7 @@
       }
     ]
   },
-  "audit_revision_before_report_commit": "e9b61753d36a40a83a6246580b79124b7c28c287",
+  "audit_revision_before_report_commit": "7822f1017d5c7c8c60f366729dd15adfc141b5bf",
   "audit_source_sha256": {
     "tests/acceptance/anchored_scroll_probe.py": "e9da038f28b8d659eac37ade1692494333ba612c7452f822ca6b83b7288590f8",
     "tests/acceptance/application_surface_probe.py": "24065d40cf9d7fff820f461d3a21776e75a474d4e28acee0f4fd2770a2a0316a",
@@ -138,13 +138,24 @@
     "tests/acceptance/windows/transport.py": "663a046bc3c6751aeb20bfc00bf8869ef9da0441ec41c2bcd9b4e1cde097a1ee"
   },
   "observer_sha256": "e1709dba136dcb6077f5dd90acf121f74dfd34dca30abc0827da1bc195662c54",
+  "macos_preflight": {
+    "run_id": 41870189478,
+    "head_sha": "72e210b0e07b414c7bff1b2a728276d88d3b57bf",
+    "conclusion": "success",
+    "artifact_id": 13343838811,
+    "artifact_digest": "sha256:2a69431b0587636839c815d300fa1b606e2b6fc88de19547e919677725a2ab1a",
+    "library_passed": 601,
+    "cli_passed": 5,
+    "mcp_passed": 3,
+    "meaning": "non-release source version 0.3.4; native arm64 source tests, signed/notarized ZIP and native package verification; no GUI claim"
+  },
   "fixture_sha256": "02f69855ff9fb9e740a46bfaff6b9d4e59ebbca5452803f53b95155cd2749d4e",
   "native_tests": {
     "library_passed": 584,
     "cli_passed": 4,
     "mcp_integration_count_on_windows": 0,
-    "log": "artifacts/pr107/test-dpi-a01.log",
-    "sha256": "e5655d1e926c4ed9aac03174a2ed3f9b758e7413dfcd8e1901a6f85b18e3fd61"
+    "log": "artifacts/pr107/test-7822f10-a01.log",
+    "sha256": "9f309bbb4046ec172c25ce111e205bc5c1aba7f5a6dd3bd1f61d22ddcb3690bd"
   },
   "user_skips": {
     "S04": "single monitor; user explicitly chose skip",
@@ -155,91 +166,91 @@
       "name": "super",
       "business_passed": true,
       "observer_passed": true,
-      "whole_run_max_gap_ms": 10.8559,
-      "call_max_gap_ms": 10.8559,
-      "business_report": "artifacts/pr107/strict-a01-super/report.json",
-      "observer_report": "artifacts/pr107/strict-a01-super-observed/report.json"
+      "whole_run_max_gap_ms": 10.2454,
+      "call_max_gap_ms": 10.2454,
+      "business_report": "artifacts/pr107/strict-a02-super/report.json",
+      "observer_report": "artifacts/pr107/strict-a02-super-observed/report.json"
     },
     {
       "name": "background",
       "business_passed": true,
       "observer_passed": true,
-      "whole_run_max_gap_ms": 9.4363,
-      "call_max_gap_ms": 7.1468,
-      "business_report": "artifacts/pr107/strict-a01-background/report.json",
-      "observer_report": "artifacts/pr107/strict-a01-background-observed/report.json"
+      "whole_run_max_gap_ms": 10.0037,
+      "call_max_gap_ms": 7.9596,
+      "business_report": "artifacts/pr107/strict-a02-background/report.json",
+      "observer_report": "artifacts/pr107/strict-a02-background-observed/report.json"
     },
     {
       "name": "cancel",
       "business_passed": true,
       "observer_passed": true,
-      "whole_run_max_gap_ms": 10.477,
-      "call_max_gap_ms": 10.23,
-      "business_report": "artifacts/pr107/strict-a01-cancel/report.json",
-      "observer_report": "artifacts/pr107/strict-a01-cancel-observed/report.json"
+      "whole_run_max_gap_ms": 10.4318,
+      "call_max_gap_ms": 8.8235,
+      "business_report": "artifacts/pr107/strict-a02-cancel/report.json",
+      "observer_report": "artifacts/pr107/strict-a02-cancel-observed/report.json"
     },
     {
       "name": "eof",
       "business_passed": true,
       "observer_passed": true,
-      "whole_run_max_gap_ms": 8.0811,
-      "call_max_gap_ms": 5.6564,
-      "business_report": "artifacts/pr107/strict-a01-eof/report.json",
-      "observer_report": "artifacts/pr107/strict-a01-eof-observed/report.json"
+      "whole_run_max_gap_ms": 8.0555,
+      "call_max_gap_ms": 7.0297,
+      "business_report": "artifacts/pr107/strict-a02-eof/report.json",
+      "observer_report": "artifacts/pr107/strict-a02-eof-observed/report.json"
     },
     {
       "name": "host-death",
       "business_passed": true,
       "observer_passed": true,
-      "whole_run_max_gap_ms": 10.1317,
-      "call_max_gap_ms": 8.0961,
-      "business_report": "artifacts/pr107/strict-a01-host-death/report.json",
-      "observer_report": "artifacts/pr107/strict-a01-host-death-observed/report.json"
+      "whole_run_max_gap_ms": 10.3411,
+      "call_max_gap_ms": 8.6419,
+      "business_report": "artifacts/pr107/strict-a02-host-death/report.json",
+      "observer_report": "artifacts/pr107/strict-a02-host-death-observed/report.json"
     },
     {
       "name": "deadline",
       "business_passed": true,
       "observer_passed": true,
-      "whole_run_max_gap_ms": 9.85,
-      "call_max_gap_ms": 9.132,
-      "business_report": "artifacts/pr107/strict-a01-deadline/report.json",
-      "observer_report": "artifacts/pr107/strict-a01-deadline-observed/report.json"
+      "whole_run_max_gap_ms": 8.8222,
+      "call_max_gap_ms": 8.8222,
+      "business_report": "artifacts/pr107/strict-a02-deadline/report.json",
+      "observer_report": "artifacts/pr107/strict-a02-deadline-observed/report.json"
     },
     {
       "name": "baseline",
       "business_passed": true,
       "observer_passed": true,
-      "whole_run_max_gap_ms": 9.3191,
-      "call_max_gap_ms": 5.5223,
-      "business_report": "artifacts/pr107/strict-a01-baseline/report.json",
-      "observer_report": "artifacts/pr107/strict-a01-baseline-observed/report.json"
+      "whole_run_max_gap_ms": 8.8382,
+      "call_max_gap_ms": 6.6007,
+      "business_report": "artifacts/pr107/strict-a02-baseline/report.json",
+      "observer_report": "artifacts/pr107/strict-a02-baseline-observed/report.json"
     },
     {
       "name": "feature",
       "business_passed": true,
       "observer_passed": true,
-      "whole_run_max_gap_ms": 12.1711,
-      "call_max_gap_ms": 9.2592,
-      "business_report": "artifacts/pr107/strict-a01-feature/report.json",
-      "observer_report": "artifacts/pr107/strict-a01-feature-observed/report.json"
+      "whole_run_max_gap_ms": 12.1476,
+      "call_max_gap_ms": 12.1476,
+      "business_report": "artifacts/pr107/strict-a02-feature/report.json",
+      "observer_report": "artifacts/pr107/strict-a02-feature-observed/report.json"
     },
     {
       "name": "chrome",
       "business_passed": true,
       "observer_passed": true,
-      "whole_run_max_gap_ms": 11.2911,
-      "call_max_gap_ms": 11.2911,
-      "business_report": "artifacts/pr107/strict-a01-chrome/report.json",
-      "observer_report": "artifacts/pr107/strict-a01-chrome-observed/report.json"
+      "whole_run_max_gap_ms": 11.6652,
+      "call_max_gap_ms": 11.6652,
+      "business_report": "artifacts/pr107/strict-a02-chrome/report.json",
+      "observer_report": "artifacts/pr107/strict-a02-chrome-observed/report.json"
     },
     {
       "name": "edge",
       "business_passed": true,
       "observer_passed": true,
-      "whole_run_max_gap_ms": 11.2884,
-      "call_max_gap_ms": 11.2884,
-      "business_report": "artifacts/pr107/strict-a01-edge/report.json",
-      "observer_report": "artifacts/pr107/strict-a01-edge-observed/report.json"
+      "whole_run_max_gap_ms": 11.1244,
+      "call_max_gap_ms": 11.1244,
+      "business_report": "artifacts/pr107/strict-a02-edge/report.json",
+      "observer_report": "artifacts/pr107/strict-a02-edge-observed/report.json"
     }
   ],
   "attempts": [
@@ -1140,6 +1151,8 @@
         "scroll_y": 0,
         "input_events": 0
       },
+      "neighbour_journal_records": 1,
+      "neighbour_all_states_unchanged": true,
       "browser_sha256": "4132eb3e9c5b3978874eed48cb45c21debf343a0d383b6d2fb01a5fcf349ec65",
       "selection_sha256": "7518e86a6abdd3384ecc232751af2e7d4871e72566edc29c4f2d07327c3b803b",
       "tooltip_classes": [
@@ -1308,6 +1321,46 @@
       },
       "scope": "entire stream",
       "call_max_gap_ms": null
+    },
+    {
+      "report": "artifacts/pr107/desktop-7822-a01/report.json",
+      "sha256": "5d2d42d1f47659f6d53583840c36b2a6c600a502ff7d079405f17cf81a2391ae",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "a80b1ae6e980f58e4a264f252f71b69598a6035c2a0aa4814d1478430dc764bb",
+      "failed_stage": null,
+      "cases": [
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        }
+      ],
+      "fixture_exit": 0,
+      "worker_exit": 0,
+      "owned_desktop_removed": true
     },
     {
       "report": "artifacts/pr107/desktop-b422-a01/report.json",
@@ -1487,6 +1540,8 @@
         "scroll_y": 0,
         "input_events": 0
       },
+      "neighbour_journal_records": 1,
+      "neighbour_all_states_unchanged": true,
       "browser_sha256": "d35d48b11f0439eeeddbbff0bf54856e922f5e1506a2f3098b5a808fcec4068b",
       "selection_sha256": "7518e86a6abdd3384ecc232751af2e7d4871e72566edc29c4f2d07327c3b803b",
       "tooltip_classes": [
@@ -1567,6 +1622,8 @@
         "scroll_y": 0,
         "input_events": 0
       },
+      "neighbour_journal_records": 1,
+      "neighbour_all_states_unchanged": true,
       "browser_sha256": "d35d48b11f0439eeeddbbff0bf54856e922f5e1506a2f3098b5a808fcec4068b",
       "selection_sha256": "7518e86a6abdd3384ecc232751af2e7d4871e72566edc29c4f2d07327c3b803b",
       "tooltip_classes": [
@@ -2383,6 +2440,8 @@
         "scroll_y": 0,
         "input_events": 0
       },
+      "neighbour_journal_records": 1,
+      "neighbour_all_states_unchanged": true,
       "browser_sha256": "4132eb3e9c5b3978874eed48cb45c21debf343a0d383b6d2fb01a5fcf349ec65",
       "selection_sha256": "7518e86a6abdd3384ecc232751af2e7d4871e72566edc29c4f2d07327c3b803b",
       "tooltip_classes": [
@@ -2523,6 +2582,8 @@
         "scroll_y": 0,
         "input_events": 0
       },
+      "neighbour_journal_records": 1,
+      "neighbour_all_states_unchanged": true,
       "browser_sha256": "d35d48b11f0439eeeddbbff0bf54856e922f5e1506a2f3098b5a808fcec4068b",
       "selection_sha256": "7518e86a6abdd3384ecc232751af2e7d4871e72566edc29c4f2d07327c3b803b",
       "tooltip_classes": [
@@ -2971,6 +3032,838 @@
       },
       "scope": "entire stream plus bracketing of every recorded MCP call and interrupted execution interval",
       "call_max_gap_ms": 10.8559
+    },
+    {
+      "report": "artifacts/pr107/strict-a02-background/report.json",
+      "sha256": "11785abdeffd5ce9c3adb83bad23c53470e5deae8a55307edebeb8d611e3188e",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "a80b1ae6e980f58e4a264f252f71b69598a6035c2a0aa4814d1478430dc764bb",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "posted_click",
+          "passed": true
+        },
+        {
+          "name": "posted_wheel",
+          "passed": true
+        },
+        {
+          "name": "focused_read",
+          "passed": true
+        },
+        {
+          "name": "keyboard_clean_refusal",
+          "passed": true
+        },
+        {
+          "name": "hover_clean_refusal",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "report": "artifacts/pr107/strict-a02-background-observed/report.json",
+      "sha256": "81480727d906649ad6c28dd0e2a62522681fa674ea799ea98b397e10e1f0f6ff",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 3084,
+        "max_gap_ms": 10.0037,
+        "warmup_ms": 46.3306,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream plus bracketing of every recorded MCP call and interrupted execution interval",
+      "call_max_gap_ms": 7.9596,
+      "intervals": [
+        {
+          "name": "posted_click",
+          "passed": true,
+          "samples": 289,
+          "max_gap_ms": 4.5458,
+          "foreground_preserved": true,
+          "cursor_preserved": true
+        },
+        {
+          "name": "posted_wheel",
+          "passed": true,
+          "samples": 293,
+          "max_gap_ms": 4.9812,
+          "foreground_preserved": true,
+          "cursor_preserved": true
+        },
+        {
+          "name": "focused_read",
+          "passed": true,
+          "samples": 219,
+          "max_gap_ms": 4.0267,
+          "foreground_preserved": true,
+          "cursor_preserved": true
+        },
+        {
+          "name": "keyboard_clean_refusal",
+          "passed": true,
+          "samples": 245,
+          "max_gap_ms": 4.8182,
+          "foreground_preserved": true,
+          "cursor_preserved": true
+        },
+        {
+          "name": "hover_clean_refusal",
+          "passed": true,
+          "samples": 263,
+          "max_gap_ms": 4.0352,
+          "foreground_preserved": true,
+          "cursor_preserved": true
+        }
+      ]
+    },
+    {
+      "report": "artifacts/pr107/strict-a02-baseline/report.json",
+      "sha256": "5b19a5ecddef8293a79a9aedee23c64cf90207071c045fe6cbc2963622b847eb",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "a80b1ae6e980f58e4a264f252f71b69598a6035c2a0aa4814d1478430dc764bb",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "discovery_required_app_and_public_surface",
+          "passed": true
+        },
+        {
+          "name": "returned_view_dedup_and_bounded_unchanged_delta",
+          "passed": true
+        },
+        {
+          "name": "semantic_click_unicode_keyboard_and_file_readback",
+          "passed": true
+        },
+        {
+          "name": "physical_bounds_order_and_covered_window_composition",
+          "passed": true
+        },
+        {
+          "name": "modal_close_fresh_read_without_input_replay",
+          "passed": true
+        }
+      ],
+      "fixture_exit": 0
+    },
+    {
+      "report": "artifacts/pr107/strict-a02-baseline-observed/report.json",
+      "sha256": "c985a3a6e3fb0f92f9be249122d4fc9b9c68a46edfa844c6e81f85b49f64c0ce",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 3749,
+        "max_gap_ms": 8.8382,
+        "warmup_ms": 48.0951,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream plus bracketing of every recorded MCP call and interrupted execution interval",
+      "call_max_gap_ms": 6.6007
+    },
+    {
+      "report": "artifacts/pr107/strict-a02-cancel/report.json",
+      "sha256": "b92ceba9818b42e6d4134c657d2cbf65594485d504a233e36e115848ce390a27",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "a80b1ae6e980f58e4a264f252f71b69598a6035c2a0aa4814d1478430dc764bb",
+      "failed_stage": null,
+      "cases": [],
+      "fixture_exit": 0,
+      "held_observed": true,
+      "original_interruption_result": "unknown: cancellation suppressed original reply"
+    },
+    {
+      "report": "artifacts/pr107/strict-a02-cancel-observed/report.json",
+      "sha256": "b4d2c3a1ec647f38f32dc5cfb1bf645469300146d797c0a979ee9fd32cd006f1",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 2854,
+        "max_gap_ms": 10.4318,
+        "warmup_ms": 46.7755,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream plus bracketing of every recorded MCP call and interrupted execution interval",
+      "call_max_gap_ms": 8.8235
+    },
+    {
+      "report": "artifacts/pr107/strict-a02-chrome/report.json",
+      "sha256": "7945627413fb21d56b2325d5f89889dc3fc56242d8b9595be22ed6d0be54b5ce",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "a80b1ae6e980f58e4a264f252f71b69598a6035c2a0aa4814d1478430dc764bb",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "chrome_look_capture",
+          "verified": true
+        },
+        {
+          "name": "chrome_empty_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_ascii_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_terminal_caret_emoji",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_label",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_marker",
+          "verified": true
+        },
+        {
+          "name": "chrome_restore_multiline",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_increment",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_save",
+          "verified": true
+        },
+        {
+          "name": "chrome_vertical_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_horizontal_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_native_open_dialog",
+          "verified": true
+        },
+        {
+          "name": "chrome_after_dialog",
+          "verified": true
+        }
+      ],
+      "strict_s03_capture_passed": false,
+      "neighbour": {
+        "text": "NEIGHBOUR_SENTINEL",
+        "clicks": 0,
+        "scroll_x": 0,
+        "scroll_y": 0,
+        "input_events": 0
+      },
+      "neighbour_journal_records": 1,
+      "neighbour_all_states_unchanged": true,
+      "browser_sha256": "4132eb3e9c5b3978874eed48cb45c21debf343a0d383b6d2fb01a5fcf349ec65",
+      "selection_sha256": "7518e86a6abdd3384ecc232751af2e7d4871e72566edc29c4f2d07327c3b803b",
+      "tooltip_classes": [
+        "SysShadow",
+        "tooltips_class32"
+      ]
+    },
+    {
+      "report": "artifacts/pr107/strict-a02-chrome-observed/report.json",
+      "sha256": "42a520823458a5da69f0e7e18d589d0ab84d7c662fd3acea3b8c62e38ebdfdd5",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 40890,
+        "max_gap_ms": 11.6652,
+        "warmup_ms": 48.4923,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream plus bracketing of every recorded MCP call and interrupted execution interval",
+      "call_max_gap_ms": 11.6652
+    },
+    {
+      "report": "artifacts/pr107/strict-a02-deadline/report.json",
+      "sha256": "b047bf5ae2b72d72d26b5612b860098366eec3a31831826466ca4239eb343aa8",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "a80b1ae6e980f58e4a264f252f71b69598a6035c2a0aa4814d1478430dc764bb",
+      "failed_stage": null,
+      "cases": [],
+      "fixture_exit": 0,
+      "held_observed": true,
+      "original_interruption_result": {
+        "error": {
+          "code": "timeout",
+          "message": "the script's wall-time limit was reached"
+        },
+        "effects": {
+          "dispatch": {
+            "unknown": 1
+          },
+          "evidence": {
+            "unverified": 1
+          },
+          "interrupted": 1
+        }
+      }
+    },
+    {
+      "report": "artifacts/pr107/strict-a02-deadline-observed/report.json",
+      "sha256": "832903facdb89f45c0be82ebc42cb0c3e4aa087bc6fb9dde1473d2d6cb025273",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 11492,
+        "max_gap_ms": 8.8222,
+        "warmup_ms": 46.8662,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream plus bracketing of every recorded MCP call and interrupted execution interval",
+      "call_max_gap_ms": 8.8222
+    },
+    {
+      "report": "artifacts/pr107/strict-a02-edge/report.json",
+      "sha256": "57aaf6d017cedcabc85884644994160af62c8453c2fed8694290840a7c470c50",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "a80b1ae6e980f58e4a264f252f71b69598a6035c2a0aa4814d1478430dc764bb",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "chrome_look_capture",
+          "verified": true
+        },
+        {
+          "name": "chrome_empty_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_ascii_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_terminal_caret_emoji",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_label",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_marker",
+          "verified": true
+        },
+        {
+          "name": "chrome_restore_multiline",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_increment",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_save",
+          "verified": true
+        },
+        {
+          "name": "chrome_vertical_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_horizontal_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_native_open_dialog",
+          "verified": true
+        },
+        {
+          "name": "chrome_after_dialog",
+          "verified": true
+        }
+      ],
+      "strict_s03_capture_passed": false,
+      "neighbour": {
+        "text": "NEIGHBOUR_SENTINEL",
+        "clicks": 0,
+        "scroll_x": 0,
+        "scroll_y": 0,
+        "input_events": 0
+      },
+      "neighbour_journal_records": 1,
+      "neighbour_all_states_unchanged": true,
+      "browser_sha256": "d35d48b11f0439eeeddbbff0bf54856e922f5e1506a2f3098b5a808fcec4068b",
+      "selection_sha256": "7518e86a6abdd3384ecc232751af2e7d4871e72566edc29c4f2d07327c3b803b",
+      "tooltip_classes": [
+        "SysShadow",
+        "tooltips_class32"
+      ]
+    },
+    {
+      "report": "artifacts/pr107/strict-a02-edge-observed/report.json",
+      "sha256": "892b86c5cca82f3d9bcbb3009e093905903b022ade73d8e2e13d07d76f99c936",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 34967,
+        "max_gap_ms": 11.1244,
+        "warmup_ms": 53.0449,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream plus bracketing of every recorded MCP call and interrupted execution interval",
+      "call_max_gap_ms": 11.1244
+    },
+    {
+      "report": "artifacts/pr107/strict-a02-eof/report.json",
+      "sha256": "2370854bc64eeba8b9fb0fb955f16080691fb2aeff3dcca59c4726b8bf953ee5",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "a80b1ae6e980f58e4a264f252f71b69598a6035c2a0aa4814d1478430dc764bb",
+      "failed_stage": null,
+      "cases": [],
+      "fixture_exit": 0,
+      "held_observed": true
+    },
+    {
+      "report": "artifacts/pr107/strict-a02-eof-observed/report.json",
+      "sha256": "0e30bd57417c4f04003a161aa898b858f82fde3745c555e2b319d43369596412",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 803,
+        "max_gap_ms": 8.0555,
+        "warmup_ms": 48.9861,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream plus bracketing of every recorded MCP call and interrupted execution interval",
+      "call_max_gap_ms": 7.0297
+    },
+    {
+      "report": "artifacts/pr107/strict-a02-feature/report.json",
+      "sha256": "31cdaff75ed997338cf691cd7b5f64f5c71d91578b2d3e3ebfcb86d804f74e76",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "a80b1ae6e980f58e4a264f252f71b69598a6035c2a0aa4814d1478430dc764bb",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "installed_discovery_and_observation",
+          "passed": true
+        },
+        {
+          "name": "public_method_surface",
+          "passed": true
+        },
+        {
+          "name": "unchanged_snapshot_delta",
+          "passed": true
+        },
+        {
+          "name": "semantic_unicode_and_save",
+          "passed": true
+        },
+        {
+          "name": "semantic_id_exact_effect",
+          "passed": true
+        },
+        {
+          "name": "left_click",
+          "passed": true
+        },
+        {
+          "name": "right_click",
+          "passed": true
+        },
+        {
+          "name": "double_click",
+          "passed": true
+        },
+        {
+          "name": "hover",
+          "passed": true
+        },
+        {
+          "name": "content_drag",
+          "passed": true
+        },
+        {
+          "name": "vertical_wheel",
+          "passed": true
+        },
+        {
+          "name": "horizontal_wheel",
+          "passed": true
+        },
+        {
+          "name": "default_center_wheel",
+          "passed": true
+        },
+        {
+          "name": "native_title_bar_drag",
+          "passed": true
+        },
+        {
+          "name": "stale_geometry",
+          "passed": true
+        },
+        {
+          "name": "native_menu",
+          "passed": true
+        },
+        {
+          "name": "modal_composition",
+          "passed": true
+        },
+        {
+          "name": "modal_escape",
+          "passed": true
+        },
+        {
+          "name": "rejected_menu_does_not_focus",
+          "passed": true
+        },
+        {
+          "name": "multi_instance_continuity",
+          "passed": true
+        },
+        {
+          "name": "front_order_B",
+          "passed": true
+        },
+        {
+          "name": "front_order_A",
+          "passed": true
+        },
+        {
+          "name": "layered_global_alpha",
+          "passed": true
+        },
+        {
+          "name": "quit_preserves_save_prompt",
+          "passed": true
+        },
+        {
+          "name": "cancellation_and_retained_reason",
+          "passed": true
+        },
+        {
+          "name": "stopped_absolute_executable_launch_and_quit",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "report": "artifacts/pr107/strict-a02-feature-observed/report.json",
+      "sha256": "081e0914ac1c3caa7c251d3c7804e845c376ba86cb0a6e0f9286633a69575fc5",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 19437,
+        "max_gap_ms": 12.1476,
+        "warmup_ms": 48.532,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream plus bracketing of every recorded MCP call and interrupted execution interval",
+      "call_max_gap_ms": 12.1476
+    },
+    {
+      "report": "artifacts/pr107/strict-a02-host-death/report.json",
+      "sha256": "d159c7fa1f1aedb0b05611529e283f3118d6c0dad0f7c0c7f1659913c9a14ff7",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "a80b1ae6e980f58e4a264f252f71b69598a6035c2a0aa4814d1478430dc764bb",
+      "failed_stage": null,
+      "cases": [],
+      "fixture_exit": 0,
+      "held_observed": true
+    },
+    {
+      "report": "artifacts/pr107/strict-a02-host-death-observed/report.json",
+      "sha256": "48f8da61ae9fddbecf21ab18177b91f4b288e2b695617057f718d8dee25f263e",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 823,
+        "max_gap_ms": 10.3411,
+        "warmup_ms": 47.1562,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream plus bracketing of every recorded MCP call and interrupted execution interval",
+      "call_max_gap_ms": 8.6419
+    },
+    {
+      "report": "artifacts/pr107/strict-a02-super/report.json",
+      "sha256": "c370c3ecf977fb6401679c21b92e193147aed6e68c61fe983f0513756b56d755",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "a80b1ae6e980f58e4a264f252f71b69598a6035c2a0aa4814d1478430dc764bb",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "Cold known selector",
+          "id": "N01",
+          "status": "passed"
+        },
+        {
+          "name": "Native AX noise",
+          "id": "N02",
+          "status": "passed"
+        },
+        {
+          "name": "Unicode editing and commit",
+          "id": "N03",
+          "status": "passed"
+        },
+        {
+          "name": "Long native text paging",
+          "id": "N04",
+          "status": "passed"
+        },
+        {
+          "name": "Checkbox effect",
+          "id": "N05",
+          "status": "passed"
+        },
+        {
+          "name": "Slider drag",
+          "id": "N06",
+          "status": "not_run"
+        },
+        {
+          "name": "Anchored nested scrolling",
+          "id": "N07",
+          "status": "not_run"
+        },
+        {
+          "name": "Read-only app menu",
+          "id": "N08",
+          "status": "passed"
+        },
+        {
+          "name": "Independent peer window",
+          "id": "N09",
+          "status": "not_run"
+        },
+        {
+          "name": "Real Open panel cancel",
+          "id": "N10",
+          "status": "passed"
+        },
+        {
+          "name": "Real Save panel write",
+          "id": "N11",
+          "status": "passed"
+        },
+        {
+          "name": "Overwrite and cancellation",
+          "id": "N12",
+          "status": "passed"
+        },
+        {
+          "name": "Native hover and double click",
+          "id": "N13",
+          "status": "not_run"
+        },
+        {
+          "name": "Stale image geometry",
+          "id": "N14",
+          "status": "not_run"
+        },
+        {
+          "name": "Unsaved quit and restart",
+          "id": "N15",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message AX",
+          "id": "C01",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse context menu pin",
+          "id": "C02",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse Unicode reply",
+          "id": "C03",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message edit",
+          "id": "C04",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse feed scrolling",
+          "id": "C05",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit Unicode commit",
+          "id": "W01",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit AX noise",
+          "id": "W02",
+          "status": "not_run"
+        },
+        {
+          "name": "Long Web reference",
+          "id": "W03",
+          "status": "not_run"
+        },
+        {
+          "name": "Web modal validation",
+          "id": "W04",
+          "status": "not_run"
+        },
+        {
+          "name": "Web nested scrolling",
+          "id": "W05",
+          "status": "not_run"
+        },
+        {
+          "name": "Portable canvas context menu",
+          "id": "W06",
+          "status": "not_run"
+        },
+        {
+          "name": "Chromium rendering and input",
+          "id": "B01",
+          "status": "not_run"
+        },
+        {
+          "name": "Inventory pagination and neighbours",
+          "id": "B02",
+          "status": "not_run"
+        },
+        {
+          "name": "Dense duplicate labels",
+          "id": "B03",
+          "status": "not_run"
+        },
+        {
+          "name": "Input event reliability",
+          "id": "B04",
+          "status": "not_run"
+        },
+        {
+          "name": "Actual image-channel challenge",
+          "id": "B05",
+          "status": "not_run"
+        },
+        {
+          "name": "Interrupted held gesture",
+          "id": "R01",
+          "status": "not_run"
+        },
+        {
+          "name": "MCP EOF resource cleanup",
+          "id": "R02",
+          "status": "not_run"
+        },
+        {
+          "name": "Wrong instance and foreign occlusion",
+          "id": "R03",
+          "status": "not_run"
+        },
+        {
+          "name": "Background interference",
+          "id": "R04",
+          "status": "not_run"
+        },
+        {
+          "name": "Dock and app roots",
+          "id": "S01",
+          "status": "not_run"
+        },
+        {
+          "name": "Windowless menu extra",
+          "id": "S02",
+          "status": "not_run"
+        },
+        {
+          "name": "Windows chooser tooltip",
+          "id": "S03",
+          "status": "not_run"
+        },
+        {
+          "name": "Display and desktop conditions",
+          "id": "S04",
+          "status": "not_run"
+        },
+        {
+          "name": "Virtual cursor follows pointer actions",
+          "id": "P01",
+          "status": "not_run"
+        },
+        {
+          "name": "Strict system cursor occupancy",
+          "id": "P02",
+          "status": "not_run"
+        },
+        {
+          "name": "Background focus contract",
+          "id": "P03",
+          "status": "not_run"
+        }
+      ],
+      "target_baseline_passed": false
+    },
+    {
+      "report": "artifacts/pr107/strict-a02-super-observed/report.json",
+      "sha256": "594afe4b334cb07caf414fcb65e41ef326dee7c8b8d0608d8c1cfc60a9dc4103",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 28308,
+        "max_gap_ms": 10.2454,
+        "warmup_ms": 46.5525,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream plus bracketing of every recorded MCP call and interrupted execution interval",
+      "call_max_gap_ms": 10.2454
     },
     {
       "report": "artifacts/pr107/super-a01/report.json",
@@ -5807,7 +6700,7 @@
   ],
   "input_desktop": {
     "passed": true,
-    "report": "artifacts/pr107/desktop-b422-a01/report.json",
-    "sha256": "611aca8a410aa64a7321502a5d5ec1a8f028e96838cd58552f5e65b2a5e45f4c"
+    "report": "artifacts/pr107/desktop-7822-a01/report.json",
+    "sha256": "5d2d42d1f47659f6d53583840c36b2a6c600a502ff7d079405f17cf81a2391ae"
   }
 }

@@ -77,11 +77,11 @@ jobs:
     name: macOS inventory controls
     needs: plan
     if: needs.plan.outputs.macos == 'true'
-    # Both macOS 26 and 15 arm64 jobs were abandoned for hosted capacity.
-    # Run the same native contracts on the supported Intel pool. Shipping
-    # arm64 candidates still require their own native source/package tests.
-    runs-on: macos-15-intel
-    # Cold Intel release compilation is slower than the prior arm64 pool.
+    # The 15/26 arm64 pools failed admission; the standard GA Xcode image has
+    # passed a full native signed/notarized candidate preflight. Match shipping
+    # architecture/toolchain here and retain every native gate.
+    runs-on: xcode-27
+    # Include both cold release compilation and the two-version upgrade build.
     timeout-minutes: 30
     env:
       MACOSX_DEPLOYMENT_TARGET: '14.2'
@@ -98,7 +98,7 @@ jobs:
         with:
           cache-on-failure: true
           workspaces: cmd/dtw -> ../../target-ci
-          key: macos-x64-runtime-release
+          key: macos-arm64-runtime-release
       # Compile pure Swift/C-ABI controls first so bridge failures fail before
       # the slower cold release build. These checks never operate a desktop.
       - run: python3 tests/ci/run_native_inventory_tests.py

@@ -8,15 +8,15 @@
 | --- | --- |
 | OS | Windows 11 23H2，10.0.22631；普通、未提权、解锁的交互桌面 |
 | 显示 | 单屏 2560×1440，工作区 2560×1380，120 DPI / 125%，原点 (0,0) |
-| Windows 原生源码候选 | `b422b2994fac87a7ef67559c1fdbfb0e0aece554`；后续 Windows 生产实现不变。macOS 的 C ABI 声明修复及 CI 调整另见下文，不冒充本机重新执行过 macOS GUI |
-| dtw.exe SHA256 | `e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4` |
+| Windows 原生源码候选 | 干净提交 `7822f1017d5c7c8c60f366729dd15adfc141b5bf`；后续报告/CI 调整不改变 Windows 生产实现。同提交已含 macOS C ABI 修复；macOS 的原生 CI、ARM 构包及 GUI 历史分别记账 |
+| dtw.exe SHA256 | `a80b1ae6e980f58e4a264f252f71b69598a6035c2a0aa4814d1478430dc764bb` |
 | SKILL.md SHA256 | `3d213f3ed75a8d5b3a301b39126c3208d23f1ee4add779d5fa65e86c4fb7c559` |
 | API.md SHA256 | `3d84080774cd2aa13e9b550277ee4ac218a693a1544b1f43fe22d84b84354781` |
 | PATTERNS.md SHA256 | `90734729b06164021b99aac68870ec0b16806bd8258b85cb2a6e373f770b83af` |
 | 最终原生 fixture / observer SHA256 | `02f69855ff9fb9e740a46bfaff6b9d4e59ebbca5452803f53b95155cd2749d4e` / `e1709dba136dcb6077f5dd90acf121f74dfd34dca30abc0827da1bc195662c54`（observer-build-a08；更早 helper 的身份分别保留） |
 | 浏览器 | Chrome 156.0.8078.74；Edge 156.0.4314.58；均用独占临时 profile，另建同 executable 邻居 profile |
 
-原始文件保存在 `artifacts/pr107/`。`frozen-b422b29/IDENTITY.json` 固定二进制、源码文件、Skill 和原生观察器哈希。[脱敏证据摘要](evidence/windows-pr107-2026-11-05/summary.json) 记录每次尝试的报告路径/哈希和结果；原始 wire frames、截图、独立业务文件与失败均保留。本轮没有修改用户已安装的插件或浏览器配置。
+原始文件保存在 `artifacts/pr107/`。`frozen-7822f10/IDENTITY.json` 固定最终二进制、源码文件、Skill 和原生观察器哈希。[脱敏证据摘要](evidence/windows-pr107-2026-11-05/summary.json) 记录每次尝试的报告路径/哈希和结果；原始 wire frames、截图、独立业务文件与失败均保留。本轮没有修改用户已安装的插件或浏览器配置。更早 `b422b29` 候选及其 `strict-a01-*` 结果单独保留；构建桥接声明调整后，最终当前提交重新冻结并完整执行 `strict-a02-*`。
 
 ## 优化点与平台对齐
 
@@ -54,16 +54,18 @@
 
 | 最终已核对尝试 | 业务 / 清理 | 整段最大间隔 ms | 调用或中断区间最大间隔 ms |
 | --- | --- | --- | --- |
-| `strict-a01-super` | 通过 / 正常退出 | 10.8559 | 10.8559 |
-| `strict-a01-baseline` | 5 项通过 / 正常退出 | 9.3191 | 5.5223 |
-| `strict-a01-feature` | 26 项通过 / 正常退出 | 12.1711 | 9.2592 |
-| `strict-a01-cancel` | 通过 / 正常退出 | 10.4770 | 10.2300 |
-| `strict-a01-eof` | 通过 / 正常退出 | 8.0811 | 5.6564 |
-| `strict-a01-host-death` | 通过 / 按预期注入宿主退出，workers 正常 | 10.1317 | 8.0961 |
-| `strict-a01-deadline` | 通过 / 正常退出 | 9.8500 | 9.1320 |
-| `strict-a01-background` | 五项通过 / 正常退出 | 9.4363 | 7.1468 |
-| `strict-a01-chrome` | 14 项通过 / 正常退出，S03 图像限制保留 | 11.2911 | 11.2911 |
-| `strict-a01-edge` | 14 项通过 / 正常退出，S03 图像限制保留 | 11.2884 | 11.2884 |
+| `strict-a02-super` | 通过 / 正常退出 | 10.2454 | 10.2454 |
+| `strict-a02-baseline` | 5 项通过 / 正常退出 | 8.8382 | 6.6007 |
+| `strict-a02-feature` | 26 项通过 / 正常退出 | 12.1476 | 12.1476 |
+| `strict-a02-cancel` | 通过 / 正常退出 | 10.4318 | 8.8235 |
+| `strict-a02-eof` | 通过 / 正常退出 | 8.0555 | 7.0297 |
+| `strict-a02-host-death` | 通过 / 按预期注入宿主退出，workers 正常 | 10.3411 | 8.6419 |
+| `strict-a02-deadline` | 通过 / 正常退出 | 8.8222 | 8.8222 |
+| `strict-a02-background` | 五项通过 / 正常退出 | 10.0037 | 7.9596 |
+| `strict-a02-chrome` | 14 项通过 / 正常退出，S03 图像限制保留 | 11.6652 | 11.6652 |
+| `strict-a02-edge` | 14 项通过 / 正常退出，S03 图像限制保留 | 11.1244 | 11.1244 |
+
+两个浏览器的邻居独立 HTTP journal 都只有初始 ready 一条；所有记录及最终完整状态与初始状态一致，覆盖 saved/picker 等字段，未只依靠目标窗口标题或派发回执推导隔离。
 
 旧 `feature-b422-a01`（51.5510ms）和 `background-b422-a04`（50.0302ms）虽然业务及调用区间成立，整段采样仍不通过。历史采用调用区间单独门槛的过渡报告在摘要中保留原 scope，未计入上表；最终十组全部重新执行，满足整段及调用区间两重要求。
 
@@ -75,6 +77,6 @@
 
 Intel macOS CI 实际通过了 601 个库测试、5 个 CLI、3 个 MCP 测试和包升级/lease 验证，随后纯 Swift controls 编译发现 `@_silgen_name` 的 Swift 调用约定与 C stub 不一致。改用共享 `NativeBridge.h` 的 Clang C ABI 导入，并让产品构建及纯 controls 使用同一 header。旧 Swift 编译器对同一 module 中导入/定义相同 C symbol 会触发 SIL linkage assertion，因此测试通过独立 C translation unit 转发到原 Swift controls，实际穿过 C ABI，计数与断言保留；没有删除 stub、关闭 warnings-as-errors 或绕过原生断言。纯 Swift controls 移到冷 Rust 编译之前，缩短同类失败的反馈时间。
 
-macOS 26 与 15 ARM runner 均被 GitHub 以 capacity / 未获取 runner 取消。日常 CI 转到受支持的 `macos-15-intel` 原生池，原生测试门槛保留；为冷 Intel release 编译及第二版本升级构建保留 30 分钟作业预算，产品调用与测试断言的 deadline 未改变。正式 ARM64 构建改用标准、已 GA 的 `xcode-27` 镜像，仍要求 ARM64 原生源测试、包测试、签名与公证；14.2 部署目标不变，不使用付费 larger runner。
+macOS 26 与 15 ARM runner 均被 GitHub 以 capacity / 未获取 runner 取消，曾用受支持的 Intel runner 定位上述桥接问题。新的标准 GA `xcode-27` ARM64 镜像已在[固定源码构包预检](https://github.com/caelis-labs/desktop-world/actions/runs/41870189478)中完整通过源测试、Developer ID 签名、公证及最终 ZIP 原生验证；因此最终 CI、构包和字节审计统一到该 ARM64 镜像，保留全部原生门槛。冷 release 编译及第二版本升级构建保留 30 分钟作业预算，产品调用与测试断言的 deadline 未改变；14.2 部署目标不变，不使用付费 larger runner。该预检为源码版本 0.3.4 的非发布候选，不能拿来冒充下一版 Release 字节。
 
 Windows 实机范围按以上两项用户跳过边界完成。合并仍以 PR 当前提交的全部 required checks 成功为门槛；正式 Release 的精确 source/tag、平台候选和校验和由发布资产中的 `RELEASE.json` 绑定。本报告不预先宣告排队作业、尚未执行的 ARM64 构包或公证成功。
