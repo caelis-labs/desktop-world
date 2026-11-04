@@ -6,14 +6,22 @@
 
 | 部分 | 实现 | 信息与交互 |
 | --- | --- | --- |
-| 原生工作台 | macOS AppKit | 190 个审计按钮（含重复名称）、独立编辑与提交、checkbox、下拉选择、滑块、事件面板、并列滚动、超过 20k UTF-16 的长文档 |
+| 原生工作台 | macOS AppKit；Windows WinForms | 共用任务清单与 runner 生命周期。Windows 复用原有 `Fixture.cs`，增加 190 个按钮、独立 Unicode 编辑与提交、checkbox、超过 20k UTF-16 的只读文档、原生菜单、owned modal 和真实 Open/Save；AppKit 另外覆盖重复名称、滑块、并列滚动 |
 | 原生消息工作台 | AppKit 自绘 NSView | 30 个房间、240 条消息、时间/状态/反应、滚动、真实独立弹出窗口、Pin/Edit/Reply、Unicode 输入；不提供消息和菜单项级 AX |
 | Web 工作台 | 原生 HTML/CSS/JS，在 WKWebView 或 Chromium 中运行 | 240 行、720 个链接/控件、重复 Edit/Reviewed、筛选与分页、嵌套滚动、长文本、异步表单与校验、禁用控件、tooltip、range |
 | 可移植消息页 | HTML Canvas + 少量原生输入控件 | 自绘消息和菜单，独立消息动作日志，滚动与 Unicode composer |
 | 既有浏览器 fixture | 复用 browser-workbench 实例和源码 | 原库存编辑与文件上传、输入可靠性事件、360-link 遍历、纯图片挑战；不复制或删除原入口 |
 | 文件与多窗口 | AppKit 与真实系统面板 | peer 窗口、普通 Close Window、系统 Open/Save、指定临时文件的读写 |
 
-原生消息页用于制造低 AX 条件，不声称复刻 Telegram 实现。Web 页可在 Chromium 中复用，但 WKWebView、Chromium、真实 Telegram 和各系统桌面必须分别验收。当前原生 shell 只在 macOS 实现；Windows/Linux 可先运行可移植 Web 页，其原生控件和系统根仍需对应平台实现。
+原生消息页用于制造低 AX 条件，不声称复刻 Telegram 实现。Web 页可在 Chromium 中复用，但 WKWebView、Chromium、真实 Telegram 和各系统桌面必须分别验收。Windows 原生 shell 与已有 smoke fixture 共用 C# 源码，不使用旧 IE WebBrowser 冒充 WKWebView/Chromium；Web/Canvas 页由同一 runner 的 loopback 服务交给独占 Chromium profile。Linux 暂用可移植 Web 页。
+
+Windows 使用普通 Windows PowerShell 5.1/.NET Framework 编译，无外部 GUI 依赖：
+
+```powershell
+python -X utf8 tests/fixtures/computer-use-app/run.py --output C:\Temp\dtw-super-manual-001 --case windows-manual
+```
+
+Windows 启动普通自有 WinForms 窗口，会按系统正常规则取得前台；不继承 macOS 的后台启动或脚本级前台归还承诺。关闭窗口或创建 `stop` 文件正常收尾。Windows 直接脚本核心入口是 `tests/acceptance/windows/computer_use_probe.py`，与三项原有回归探针互补；报告保留全部 42 个目标，未执行项仍为 `not_run`。本轮整合没有宣称 Windows 已实现 AppKit 自绘消息页、原生 WebKit、Dock 或无窗口系统根。
 
 ## 手工运行
 

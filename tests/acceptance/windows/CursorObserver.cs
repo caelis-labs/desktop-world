@@ -33,6 +33,9 @@ namespace DtwWindowsCursorAcceptance {
         [DllImport("user32.dll")]static extern bool IsWindowEnabled(IntPtr h);
         [DllImport("user32.dll")]static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")]static extern bool GetCursorPos(out Point p);
+        [DllImport("user32.dll")]static extern short GetAsyncKeyState(int key);
+        [DllImport("winmm.dll")]static extern uint timeBeginPeriod(uint milliseconds);
+        [DllImport("winmm.dll")]static extern uint timeEndPeriod(uint milliseconds);
         [DllImport("user32.dll")]static extern IntPtr GetDC(IntPtr h);
         [DllImport("user32.dll")]static extern int ReleaseDC(IntPtr h,IntPtr dc);
         [DllImport("gdi32.dll",SetLastError=true)]static extern bool BitBlt(IntPtr destination,int x,int y,int width,int height,IntPtr source,int sx,int sy,uint operation);
@@ -116,10 +119,42 @@ namespace DtwWindowsCursorAcceptance {
                 while(!File.Exists(output+".stop")){Application.DoEvents();Thread.Sleep(10);}
             }finally{DestroyWindow(hwnd);GC.KeepAlive(proc);}
         }
+        // A separate native process, independent of Python, MCP and the UIA
+        // worker. Retain every sample and the actual gaps; never infer a quiet
+        // interval or input release from sparse before/after snapshots.
+        static void Stream(string output) {
+            bool timer=timeBeginPeriod(1)==0;
+            int count=0;long previous=0;double largest=0;
+            Process.GetCurrentProcess().PriorityClass=ProcessPriorityClass.AboveNormal;
+            try {
+                using(var writer=new StreamWriter(output,false,Utf8)) {
+                    while(!File.Exists(output+".stop")) {
+                        long now=Stopwatch.GetTimestamp();
+                        double gap=previous==0?0:(now-previous)*1000.0/Stopwatch.Frequency;
+                        previous=now;largest=Math.Max(largest,gap);
+                        IntPtr foreground=GetForegroundWindow();uint pid;
+                        GetWindowThreadProcessId(foreground,out pid);
+                        Point point;bool readable=GetCursorPos(out point);
+                        var held=new List<int>();
+                        for(int key=1;key<256;key++)if(GetAsyncKeyState(key)<0)held.Add(key);
+                        writer.WriteLine(Json.Serialize(new {timestamp=now,frequency=Stopwatch.Frequency,
+                            unix_ms=(DateTime.UtcNow.Ticks-621355968000000000L)/10000.0,
+                            gap_ms=gap,foreground=foreground.ToInt64(),foreground_pid=pid,
+                            cursor_readable=readable,cursor=new{x=point.X,y=point.Y},held=held}));
+                        count++;if(count==1||count%32==0)writer.Flush();Thread.Sleep(5);
+                    }
+                }
+            }finally {
+                if(timer)timeEndPeriod(1);
+                File.WriteAllText(output+".summary.json",Json.Serialize(new {samples=count,max_gap_ms=largest,
+                    timer_resolution_acquired=timer,period_released=true}),Utf8);
+            }
+        }
         [STAThread]public static void Main(string[] args) {
             SetProcessDpiAwarenessContext(new IntPtr(-4));
             try {if(args.Length!=3)throw new ArgumentException("--snapshot|--spoof output.json owned-target-hwnd");
                 if(args[0]=="--snapshot")Snapshot(args[1],new IntPtr(long.Parse(args[2])));
+                else if(args[0]=="--stream")Stream(args[1]);
                 else if(args[0]=="--spoof")Spoof(args[1],new IntPtr(long.Parse(args[2])));
                 else throw new ArgumentException("Unknown observer mode");
             }catch(Exception e){if(args.Length>1)File.WriteAllText(args[1]+".error.txt",e.ToString(),Utf8);Console.Error.WriteLine(e);Environment.ExitCode=1;}

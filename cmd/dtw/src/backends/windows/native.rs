@@ -940,6 +940,35 @@ impl Store {
             let (element, depth) = q.frontier.pop().unwrap();
             q.scanned += 1;
             steps += 1;
+            // UIA may attach a newly opened owned top-level dialog beneath its
+            // disabled owner. It is a different semantic receiver, not content
+            // of this query's HWND. Keep independent siblings, but prune that
+            // dialog so app-selector read polling can select its own fresh root.
+            let separate_window = if !q.menu_scope && depth > 0 {
+                match unsafe { element.CurrentControlType() } {
+                    Ok(control) if control == UIA_WindowControlTypeId => {
+                        match unsafe { element.CurrentNativeWindowHandle() } {
+                            Ok(handle) => {
+                                let native = HWND(handle.0);
+                                !native.0.is_null()
+                                    && native != window
+                                    && unsafe { GetAncestor(native, GA_ROOT) } == native
+                            }
+                            Err(_) => {
+                                q.gap.get_or_insert("native_read_gap".into());
+                                false
+                            }
+                        }
+                    }
+                    Ok(_) => false,
+                    Err(_) => {
+                        q.gap.get_or_insert("native_read_gap".into());
+                        false
+                    }
+                }
+            } else {
+                false
+            };
             if !(super::discovery::Branches {
                 frontier: &mut q.frontier,
                 visited: &mut q.visited,
@@ -948,10 +977,19 @@ impl Store {
             .admit(
                 depth,
                 || optional(unsafe { walker.GetNextSiblingElement(&element) }),
-                || optional(unsafe { walker.GetFirstChildElement(&element) }),
+                || {
+                    if separate_window {
+                        Ok(None)
+                    } else {
+                        optional(unsafe { walker.GetFirstChildElement(&element) })
+                    }
+                },
                 || owned_with_walker(&uia, &walker, &element, &q.scope_root, until),
                 || runtime_id(&element),
             )? {
+                continue;
+            }
+            if separate_window {
                 continue;
             }
             if q.menu_scope {
@@ -1089,7 +1127,7 @@ impl Store {
             owned(&uia, &element, &q.root, until).map_err(retained_error)?;
             owned(&uia, &element, &current_root, until).map_err(retained_error)?;
             q.validate_region(window, &element, until)?;
-            let current = element_text(&element)?;
+            let current = element_text(&element, window)?;
             check(until)?;
             self.validate(&target)?;
             let current_root = unsafe { uia.ElementFromHandle(window) }.map_err(failed)?;
@@ -1956,10 +1994,17 @@ fn element_row(
         )
     }
 }
-fn element_text(element: &IUIAutomationElement) -> Result<String, Error> {
+fn element_text(element: &IUIAutomationElement, window: HWND) -> Result<String, Error> {
     unsafe {
         if element.CurrentIsPassword().map_err(failed)?.as_bool() {
             return Err(Error::UnsupportedCapability);
+        }
+        let native = HWND(element.CurrentNativeWindowHandle().map_err(failed)?.0);
+        if let Some(text) = super::edit_delivery::read_control(native, window)? {
+            if element.CurrentNativeWindowHandle().map_err(failed)?.0 != native.0 {
+                return Err(Error::StaleObservation);
+            }
+            return Ok(text);
         }
         let text = if let Some(pattern) =
             optional_pattern::<IUIAutomationTextPattern>(element, UIA_TextPatternId)?

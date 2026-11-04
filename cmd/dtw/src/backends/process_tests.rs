@@ -4,6 +4,10 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
+// Hundreds of parallel Rust contracts must not concurrently cold-start Python
+// interpreters on a small Windows runner. Serialize startup only, not requests,
+// cancellation, exit or any product cleanup deadline.
+static FIXTURE_STARTUP: Mutex<()> = Mutex::new(());
 
 struct Fixture {
     path: PathBuf,
@@ -21,6 +25,7 @@ impl Fixture {
     }
 
     fn worker(&self, mode: &str) -> Worker {
+        let _startup = FIXTURE_STARTUP.lock().unwrap_or_else(|p| p.into_inner());
         let python = std::env::var_os("DTW_TEST_PYTHON").unwrap_or_else(|| {
             if cfg!(windows) {
                 "python".into()
@@ -29,17 +34,20 @@ impl Fixture {
             }
         });
         let ready = self.path.join("ready");
-        Worker::spawn(
+        let worker = Worker::spawn(
             Path::new(&python),
             &[
                 "-u",
+                "-S",
                 "-c",
                 include_str!("process_fixture.py"),
                 mode,
                 ready.to_str().unwrap(),
             ],
         )
-        .unwrap()
+        .unwrap();
+        self.wait_file(&format!("started-{}", worker.id()));
+        worker
     }
 
     fn wait_ready(&self) {
@@ -51,7 +59,7 @@ impl Fixture {
         while !self.path.join(name).exists() {
             assert!(
                 Instant::now() < deadline,
-                "worker did not reach fixture handshake"
+                "worker did not reach fixture handshake: {name}"
             );
             thread::sleep(Duration::from_millis(2));
         }
@@ -628,11 +636,13 @@ fn control_can_borrow_non_send_state() {
 
 #[cfg(target_os = "windows")]
 fn cooperative_windows_fixture(fixture: &Fixture, fail_cleanup: bool) -> Worker {
+    let _startup = FIXTURE_STARTUP.lock().unwrap_or_else(|p| p.into_inner());
     let python = std::env::var_os("DTW_TEST_PYTHON").unwrap_or_else(|| "python".into());
-    Worker::spawn_cooperative(
+    let worker = Worker::spawn_cooperative(
         Path::new(&python),
         &[
             "-u",
+            "-S",
             "-c",
             r#"
 import ctypes, os, pathlib, sys
@@ -645,6 +655,7 @@ k.WaitForSingleObject.restype=wintypes.DWORD
 h=k.CreateEventW(None,True,False,'Local\\DesktopWorld.NativeStop.'+str(os.getpid()))
 if not h: raise ctypes.WinError(ctypes.get_last_error())
 pathlib.Path(sys.argv[1]).write_text('ready')
+pathlib.Path(sys.argv[1]).with_name('started-'+str(os.getpid())).write_text('started')
 if k.WaitForSingleObject(h,10000)!=0: os._exit(2)
 os._exit(74 if sys.argv[2]=='fail' else 0)
 "#,
@@ -652,7 +663,9 @@ os._exit(74 if sys.argv[2]=='fail' else 0)
             if fail_cleanup { "fail" } else { "clean" },
         ],
     )
-    .unwrap()
+    .unwrap();
+    fixture.wait_file(&format!("started-{}", worker.id()));
+    worker
 }
 
 #[cfg(target_os = "windows")]

@@ -229,3 +229,10 @@ leaving save prompts observable. Pointer paths remain within one visible window
 and display, with paired release on cancellation/failure. Windows GUI, application
 and DPI conditions require their own acceptance. Experimental X11 still requires
 an unobstructed window and does not claim multi-surface capture.
+
+For native Unicode Win32/WinForms Edit controls, Windows `readText` reads the
+exact UIA-advertised child HWND with bounded read-only system messages. This
+avoids truncated UIA proxy text being reported as a complete document. Ownership,
+root, native handle, password state, length and retained revision are checked;
+the read does not focus the editor. Other controls use native UIA text/value
+patterns. A short provider preview is not proof of full document content.

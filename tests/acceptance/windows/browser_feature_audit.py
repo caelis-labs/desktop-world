@@ -93,6 +93,8 @@ def main():
     parser.add_argument('--dtw', required=True, type=Path)
     parser.add_argument('--chrome', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--review-chooser-hover', action='store_true',
+                        help='Publish an actual chooser PNG and wait for a hash-bound pixel hover answer')
     args = parser.parse_args()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -111,6 +113,7 @@ e.oninput=()=>publish({text:e.value});
 document.querySelector('#increment').onclick=()=>{publish({increment:true});e.focus()};
 document.querySelector('#save').onclick=()=>{publish({saved:e.value});e.focus()};
 document.querySelector('#choose').onclick=e=>publish({picker_requested:true,picker_trusted:e.isTrusted,picker_activation:navigator.userActivation.isActive});
+document.querySelector('#choose').onchange=async event=>{const f=event.target.files[0];if(f)publish({selected_file:f.name,selected_text:await f.text()})};
 p.onscroll=()=>publish({scroll_x:p.scrollLeft,scroll_y:p.scrollTop});
 window.onload=()=>{e.focus();publish({ready:true,dpr:devicePixelRatio})};</script>'''.replace('__TITLE__', marker)
 
@@ -224,11 +227,48 @@ window.onload=()=>{e.focus();publish({ready:true,dpr:devicePixelRatio})};</scrip
         # Default anchor is the active surface center; this page places its scroll pane there.
         case('chrome_vertical_scroll', 'await app.scroll({delta_y:3});', lambda s: s['scroll_y'] > 0)
         case('chrome_horizontal_scroll', 'await app.scroll({delta_y:0,delta_x:3});', lambda s: s['scroll_x'] > 0)
-        # Park on the owned page's empty lower-left margin before the one chooser
-        # invocation. This lies below the chooser in this controlled layout and
-        # avoids browser-title and shell-file hover previews during modal checks.
-        chooser = 'const rasterView=await app.capture();const b=rasterView.windows.find(w=>w.title.startsWith(' + json.dumps(marker) + ')).bounds;const i=rasterView.image;await app.move({x:(b[0]+20-i.bounds[0])*i.width/i.bounds[2],y:(b[1]+b[3]-20-i.bounds[1])*i.height/i.bounds[3]});await app.click({selector:{role:"button",text:"Audit choose file"}});'
+        # Leave the real pointer in its ordinary position. No preparatory
+        # parking: tooltip/shadow failures must remain visible to this probe.
+        chooser = 'await app.click({selector:{role:"button",text:"Audit choose file"}});'
         case('chrome_native_open_dialog', chooser, native_dialog=True)
+        require(report['cases'][-1]['verified'], report['cases'][-1])
+        selected_directory = out / 'selection'
+        selected_directory.mkdir()
+        selected = selected_directory / ('DTW-owned-' + 'long-name-' * 12 + '中文-137.txt')
+        selected_text = 'Exact browser file selection 中文 😀\r\nowned bytes 137'
+        selected.write_bytes(selected_text.encode('utf-8'))
+        navigation, _ = client.execute(app, 'await app.keypress("ALT+D");await app.typeText(' + json.dumps(str(selected_directory)) + ');await app.keypress("ENTER");')
+        require(not navigation.get('error'), navigation)
+        if args.review_chooser_hover:
+            capture = client.capture(app, 'chooser-hover')
+            png = client.output / 'chooser-hover.png'
+            digest = hashlib.sha256(png.read_bytes()).hexdigest()
+            (out / 'hover-request.json').write_text(json.dumps({'capture': str(png), 'sha256': digest,
+                'image': capture['view']['image'], 'instruction': 'Hover the visible owned long-name file row; image pixels only.'}), encoding='utf-8')
+            answer = out / 'hover-answer.json'
+            until = time.monotonic() + 240
+            while not answer.exists():
+                require(time.monotonic() < until, 'chooser pixel review timed out')
+                time.sleep(.1)
+            point = json.loads(answer.read_text(encoding='utf-8'))
+            require(point['sha256'] == digest, 'stale chooser hover answer')
+            hovered, _ = client.execute(app, 'await app.move(' + json.dumps({'x': point['x'], 'y': point['y']}) + ');')
+            require(not hovered.get('error'), hovered)
+            time.sleep(2)
+            decorations = owned_dialogs(browser_pid, args.chrome.resolve(), browser_handle.birth, diagnostics=True)
+            report['tooltip_observation'] = decorations
+            require(any(row['class'] in ('tooltips_class32', 'SysShadow') for row in decorations['candidates']),
+                    {'missing_real_tooltip_or_shadow': decorations})
+            # Read while the actual decoration remains present.
+            client.capture(app, 'chooser-with-tooltip')
+        selected_response, _ = client.execute(app, 'await app.keypress("ALT+N");await app.typeText(' + json.dumps(str(selected)) + ');await app.keypress("ENTER");')
+        require(not selected_response.get('error'), selected_response)
+        selected_state = wait(lambda s: s.get('selected_file') == selected.name and s.get('selected_text') == selected_text)
+        report['exact_file_selection'] = {'response': selected_response, 'effect': selected_state,
+                                         'sha256': hashlib.sha256(selected.read_bytes()).hexdigest()}
+        # Open a fresh chooser for the separate Escape/cancellation contract.
+        reopened, _ = client.execute(app, chooser)
+        require(not reopened.get('error'), reopened)
         # Require a dialog at the top and the owned parent before modal input.
         data, response = client.execute(app, 'const v=await app.look();const t=v.windows[0]?.title;if(!v.windows.some(w=>w.title.startsWith(' + json.dumps(marker) + '))||!(["打开","Open"].includes(t)||t?.startsWith(' + json.dumps(marker) + ')))throw new Error("Owned Chrome modal is not selected");await app.keypress("ESC");', allow_error=True)
         report['dialog_escape'] = data

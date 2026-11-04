@@ -2,6 +2,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import platform
 import plistlib
@@ -41,7 +42,9 @@ def source_identity():
                    and '__pycache__' not in p.parts and p.suffix in {'.py', '.swift', '.html', '.js', '.json', '.css'})
     workbench = HERE.parent / 'browser-workbench'
     paths.extend(workbench / name for name in ('server.py', 'index.html', 'reliability.html', 'vision.html'))
-    return {str(path.relative_to(HERE.parent)): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
+    windows = HERE.parents[1] / 'acceptance/windows'
+    paths.extend(windows / name for name in ('Fixture.cs', 'CursorObserver.cs', 'compile-cursor.ps1'))
+    return {Path(os.path.relpath(path, HERE.parent)).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
 
 
 class ComputerUseFixture:
@@ -52,6 +55,8 @@ class ComputerUseFixture:
         self.case = case
         self.bundle = self.output / 'ComputerUse.app'
         self.executable = self.bundle / 'Contents/MacOS/ComputerUse'
+        if platform.system() == 'Windows':
+            self.bundle = self.executable = self.output / 'ComputerUse.exe'
         self.servers = []
         self.child = None
         self.log = None
@@ -96,6 +101,19 @@ class ComputerUseFixture:
             raise
 
     def build(self, *, compiled_native=None):
+        if platform.system() == 'Windows':
+            import shutil
+            reference = ('Windows reference 文😀 café\r\n' * 1000) + 'END-OF-NATIVE-REFERENCE-137🚀'
+            (self.output / 'native-reference.txt').write_text(reference, encoding='utf-8', newline='')
+            if compiled_native is None:
+                with (self.output / 'build.log').open('wb') as log:
+                    subprocess.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                        str(HERE.parents[1] / 'acceptance/windows/compile-cursor.ps1'),
+                        '-OutputDirectory', str(self.output / 'build')], stdout=log, stderr=subprocess.STDOUT,
+                        check=True, timeout=60)
+                compiled_native = self.output / 'build/Fixture.exe'
+            shutil.copy2(Path(compiled_native).resolve(strict=True), self.executable)
+            return self.bundle
         self.executable.parent.mkdir(parents=True, exist_ok=False)
         metadata = {'CFBundleExecutable': self.executable.name,
             'CFBundleIdentifier': 'dev.caelis.dtw.computeruse.' + uuid.uuid4().hex,
@@ -123,7 +141,10 @@ class ComputerUseFixture:
         if self.child is not None:
             raise RuntimeError('fixture already started')
         self.log = (self.output / 'native.log').open('w')
-        self.child = subprocess.Popen([str(self.executable)], stdout=self.log, stderr=subprocess.STDOUT)
+        command = [str(self.executable)]
+        if platform.system() == 'Windows':
+            command += [str(self.output), 'A', 'workbench']
+        self.child = subprocess.Popen(command, stdout=self.log, stderr=subprocess.STDOUT)
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             if self.child.poll() is not None:
@@ -135,7 +156,12 @@ class ComputerUseFixture:
         raise TimeoutError('native fixture did not publish ready state')
 
     def state(self):
-        state = read_json(self.output / 'native-state.json')
+        if platform.system() == 'Windows':
+            # Share deletion with the WinForms atomic publisher.
+            from windows.transport import read
+            state = read(self.output / 'native-state.json')
+        else:
+            state = read_json(self.output / 'native-state.json')
         if state is not None:
             if self.child is not None and state['pid'] != self.child.pid:
                 raise RuntimeError('native state belongs to a different process')

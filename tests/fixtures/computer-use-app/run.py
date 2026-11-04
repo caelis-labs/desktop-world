@@ -16,8 +16,10 @@ def main():
     parser.add_argument('--web-only', action='store_true', help='Portable loopback pages; no native build or launch')
     parser.add_argument('--foreground-preview', action='store_true', help='Explicitly activate the owned app for manual inspection')
     args = parser.parse_args()
-    if not args.web_only and sys.platform != 'darwin':
-        parser.error('The native shell currently requires macOS; use --web-only for a browser workspace')
+    if not args.web_only and sys.platform not in ('darwin', 'win32'):
+        parser.error('The native shell requires macOS or Windows; use --web-only for a browser workspace')
+    if sys.platform == 'win32':
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'acceptance'))
     fixture = ComputerUseFixture(args.output, args.case)
     cleanup = None
     try:

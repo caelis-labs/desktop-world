@@ -25,6 +25,7 @@ python3 -m unittest discover -s tests/acceptance -p test_anchored_scroll_probe.p
 python3 -m unittest discover -s tests/acceptance -p test_real_app_tasks.py
 python3 -m unittest discover -s tests/acceptance -p test_current_real_app_tasks.py
 python3 -m unittest discover -s tests/acceptance -p test_macos_scene_sequence_probe.py
+python3 -m unittest discover -s tests/acceptance -p test_windows_computer_use_fixture.py
 python3 -m unittest discover -s tests/acceptance -p 'test_computer_use*.py'
 python3 -m unittest discover -s tests/fixtures/computer-use-app -p test_web_server.py
 
