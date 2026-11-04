@@ -95,7 +95,9 @@ admission does not establish locked-session support.
 
 ## Window and semantic paths
 
-The public path is apps → app look → input → look. The facade selects current
+The public path is apps → optional inspection → known input → automatic observation.
+Known selectors and keyboard/default-scroll operations prepare their receiver lazily;
+Agent scripts do not need an initial look on each execution. The facade selects current
 app surfaces internally and compares compact window/semantic baselines. macOS
 composes independently owned surface images in app-relative z-order; image hit
 testing uses the same layers and alpha. Coordinate input rechecks current app
@@ -133,10 +135,12 @@ across known sequential actions. Before semantic input it renews the native quer
 and matches a provider-retained object credential plus role/name/enabled/actions.
 Comparison identities are separate from action credentials: UIA runtime IDs may
 be reused and cannot renew a consumed object binding. Before coordinate
-input it takes a fresh capture and compares scene geometry, layering, image mapping
-and the receiving surface at the supplied anchors. Fresh native bindings remain
-local to the current dispatch; comparisons for later points still use the last
-script-visible image. Content changes alone are not
+input it takes a fresh capture and proves the current top receiver, stable canvas
+anchor/mapping and the original point's process incarnation. Each image layer retains
+that AppInstance even if its popup disappears. Same-instance layer transitions do
+not require an explicit recapture; sibling processes cannot acquire a point through
+an unseen refresh. Fresh native bindings remain local to the current dispatch;
+comparisons for later points still use the last script-visible image. Content changes alone are not
 an input gate: animation, typing and scrolling must remain operable. Coordinates
 never prove semantic identity or who caused a UI change. Failed reads
 still retire the affected facade bindings. Core and providers retain their

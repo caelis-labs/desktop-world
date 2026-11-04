@@ -1,5 +1,7 @@
 //! The production app facade; the surrounding suite tests the private atomic DSL.
 use super::*;
+#[path = "scene_lazy_tests.rs"]
+mod scene_lazy_tests;
 #[path = "scene_reading_tests.rs"]
 mod scene_reading_tests;
 fn agent() -> (Arc<Server<Catalog>>, Catalog) {
@@ -320,6 +322,8 @@ fn native_identity_survives_insertion_but_removed_targets_never_retarget() {
     );
 }
 
+#[path = "scene_canvas_tests.rs"]
+mod scene_canvas_tests;
 #[path = "scene_contract_tests.rs"]
 mod scene_contract_tests;
 #[path = "scene_sequence_tests.rs"]

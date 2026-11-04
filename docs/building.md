@@ -88,6 +88,23 @@ and WPS, redacting UI payloads; absence/unsupported coverage stays explicit.
 These are native/script evidence, not real model/Harness A/B tests or proof that
 all app families are supported. Output directories must be new.
 
+The macOS sequence probe checks a cold MCP context with no initial look, then
+capture → right-click → popup action → base-window action in one script. It tests
+both semantic and pixel popup actions, plus read-only app-menu observation:
+
+```sh
+python3 tests/acceptance/macos_scene_sequence_probe.py \
+  --dtw /absolute/path/to/frozen/dtw --output /tmp/dtw-macos-sequence-new-run
+```
+
+Independent fixture counters, unchanged base geometry and cleanup results decide
+the outcome. A forced fixture/MCP cleanup fails the run. Wrap this probe with the
+cursor audit below to measure pointer movement across full calls; its own
+before/after cursor and foreground samples cannot exclude transient changes.
+The [2026-11-04 acceptance](macos-usability-acceptance-2026-11-04.md) records the
+fixed candidate, original failures and scope. This owned popup does not establish
+real Telegram, Dock or windowless menu-extra coverage.
+
 The AX compatibility probe creates providers whose count/range methods fail,
 whose children are unreadable, or whose AX window inventory is unavailable:
 

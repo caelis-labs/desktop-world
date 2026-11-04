@@ -1,16 +1,16 @@
 # 功能与支持范围
 
-此页描述当前源码能力；已发行版本以对应 [Release](https://github.com/caelis-labs/desktop-world/releases) 的资产和说明为准。构建、原生测试、真实 Agent 任务和最终安装包验收是不同证据，不相互替代。当前开发分支的实机条件与结果见 [Windows 修复验收](windows-fixes-acceptance-2026-11-03.md)。
+此页描述当前源码能力；已发行版本以对应 [Release](https://github.com/caelis-labs/desktop-world/releases) 的资产和说明为准。构建、原生测试、真实 Agent 任务和最终安装包验收是不同证据，不相互替代。当前开发分支的实机条件与结果见 [Windows 修复验收](windows-fixes-acceptance-2026-11-03.md) 和 [macOS 连续操作验收](macos-usability-acceptance-2026-11-04.md)。
 
 | 能力 | 当前支持 | 限制 |
 | --- | --- | --- |
 | Agent 接入 | 标准本地 stdio MCP + Skill；Caelis、DSH、agy；仅 `apps` + `exec({app, source})` | Harness 自行负责审批；不要求定制 Host；远程传输尚未接入 |
-| 方法发现与结果 | `apps` 检索应用及运行状态；API 文档随 Skill；`exec` 默认返回界面增量、必要动作证据和按需截图；print 可选 | 不需要模型生成 request ID 或对成功执行轮询；未知效果不能自动重放 |
+| 方法发现与结果 | `apps` 检索应用及运行状态；API 文档随 Skill；已知 selector、键盘及默认滚动按需准备接收者，无需每段脚本先 look；`exec` 返回界面增量、必要动作证据和按需截图；print 可选 | 显式 ID 需已有观察，坐标需已返回的 capture；未知效果不能自动重放 |
 | 应用与窗口 | 稳定平台 app ID；同 app 多实例窗口聚合、精确 owner 引用；macOS/Windows 发现安装目标、按需启动并正常 quit | Windows 读取 Start Menu、App Paths、AppsFolder，以 exe 路径或已证明的 `win:<AUMID>` 定位；跳过/不可读来源明确标记覆盖不足；Linux 仍仅发现运行目标 |
-| 基本视觉操作 | macOS/Windows 按已证明归属和全局窗口顺序合成可见 surface；Windows 使用精确 HWND 和 DWM 可见边框 | Windows 支持可读取的全局 alpha/color-key，未证明的 per-pixel layered alpha 仍明确拒绝；covered capture 不放宽输入可见性；实机结果按具体构建记录 |
+| 基本视觉操作 | macOS/Windows 按已证明归属和全局窗口顺序合成可见 surface；原坐标可连续命中同一进程实例内出现或消失的弹层，画布锚点和映射须保持；Windows 使用精确 HWND 和 DWM 可见边框 | 连续弹层的新增 GUI 证据仅来自 macOS 自有 fixture；Windows 支持可读取的全局 alpha/color-key，未证明的 per-pixel layered alpha 仍拒绝；covered capture 不放宽输入可见性 |
 | 语义发现与阅读 | look 输出当前顶层至多 80 个语义元素；可用 role/text 按需筛选原生遍历；readText 按观察目标读取原生文本分页；语义不足可截图兜底 | 截断字段标记长度与内容版本；筛选完整性只适用于该查询；文本分页使用同一观察及 UTF-16 偏移；不默认输出整棵树或全文 |
 | 常用操作 | Agent 使用 look/capture/readText/click/move/drag/typeText/keypress/scroll/quit；点击可选语义目标、选择器或图像坐标 | macOS/Windows move/drag 限一个窗口和单个显示器内的可见路径；支持已证明的标准标题栏搬窗；不暴露跨调用的按下/释放状态；实验 X11 不支持手势 |
-| 菜单与对话框 | macOS 菜单、sheet、dialog 及有正向归属证明的关联 surface；Windows 当前窗口内的原生菜单和已证明窗口归属的 modal | Windows 弹出菜单键盘路由需原生 menu-owner 证明；系统 helper 按平台证据处理，不按标题或矩形猜跨进程归属 |
+| 菜单与对话框 | `look({scope:'menu'})` 通过已有应用窗口读取原生菜单；macOS sheet、dialog 及有正向归属证明的关联 surface；Windows 当前窗口内的原生菜单和已证明窗口归属的 modal | 无窗口应用根、Dock 和 menu extras 尚无操作合同；能发现不代表可输入；Windows 弹出菜单键盘路由需原生 menu-owner 证明；helper 按平台证据处理 |
 | 多 app 与多会话 | DTW 维护各 app 的观察状态及回执；跨连接原生资源协调 | 同连接单执行槽；原生上下文更换重置观察；Agent 无 Session 或游标管理；连接不隔离物理桌面 |
 | macOS 输入 | 语义、支持的键盘及坐标点击/内容拖拽/滚动优先定向；已识别 AppKit/Chromium 原生 hover 按已验证边界借用物理光标；必要聚焦后保持目标前台 | 具体动作、框架与物理路线边界见输入路由文档；普通 UI/快捷键关闭窗口，quit 正常退出；保存提示不强行处理；派发后失败不换路线重投 |
 | Windows 输入 | 支持的 HWND 客户区定向左键/滚轮；其他鼠标、手势及键盘由 DTW 自动准备前台；UIA、DPI、Unicode 和正常关闭 | 不承诺后台键盘/独立物理指针；保护保存提示；安全桌面、提权与不同 DPI 环境需分别验证 |

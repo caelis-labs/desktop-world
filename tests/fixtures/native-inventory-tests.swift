@@ -46,6 +46,38 @@ private func checkInventory() throws {
                             knownRoot: true, hasSurface: true), "nested helper became a user app")
     expect(catalogIncludes(bundle(), knownRoot: true, hasSurface: false),
            "ordinary running app without windows disappeared")
+    let windowlessAgent = bundle("/private/tmp/MenuOnly.app", agent: true)
+    expect(!catalogIncludes(windowlessAgent, knownRoot: false, hasSurface: false),
+           "outside-root windowless agent became a default catalog target")
+    let liveRows: [[String: Any]] = [
+        ["bundle_path": windowlessAgent.path, "app": ["pid": 100]],
+        ["bundle_path": windowlessAgent.path, "app": ["pid": 101]],
+    ]
+    let background = bundle("/private/tmp/Background.app", background: true)
+    let nested = bundle("/Applications/Outer.app/Contents/Helpers/Nested.app", agent: true)
+    let cached = [windowlessAgent.path: windowlessAgent, background.path: background, nested.path: nested]
+    let discovered = RequestContext.discoveredApplicationRows(installed: [:],
+        inventory: ["apps": [[String: Any]](), "running_bundles": liveRows], metadata: cached)
+    expect(discovered.count == 1, "live-only agent was lost or excluded cached helpers were discovered")
+    expect(discovered.first?["app"] as? String == windowlessAgent.identifier,
+           "unique live-only bundle did not resolve by identifier")
+    expect(discovered.first?["running"] as? Bool == true && discovered.first?["instances"] as? Int == 2,
+           "live-only agent did not retain both running instances")
+    let installed = bundle()
+    let merged = RequestContext.discoveredApplicationRows(
+        installed: [installed.path: installed, windowlessAgent.path: windowlessAgent],
+        inventory: ["apps": [[String: Any]](), "running_bundles": liveRows], metadata: cached)
+    expect(merged.count == 2, "installed and live rows were not deduplicated by bundle path")
+    expect(merged.contains { $0["app"] as? String == windowlessAgent.path
+        && $0["running"] as? Bool == true && $0["instances"] as? Int == 2 },
+        "duplicate bundle identifier lost the live path or instance count")
+    expect(merged.contains { $0["app"] as? String == installed.path
+        && $0["running"] as? Bool == false && $0["instances"] as? Int == 0 },
+        "non-running installed bundle inherited another path's instances")
+    let fallback = RequestContext.discoveredApplicationRows(installed: [:],
+        inventory: ["apps": liveRows], metadata: cached)
+    expect(NSDictionary(dictionary: fallback[0]).isEqual(to: discovered[0]),
+           "catalog-only inventory fallback changed discovery")
     var empty = WindowInventoryDiagnostics()
     let (none, excluded) = appCGInventory([], pid: 100, diagnostics: &empty)
     expect(none.isEmpty && excluded.isEmpty, "empty CG inventory changed")

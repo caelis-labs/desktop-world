@@ -474,8 +474,6 @@ private final class RequestContext {
 
     func discoverApplications() throws -> [String: Any] {
         let inventory = try catalog()
-        let running = inventory["apps"] as? [[String: Any]] ?? []
-        let live = inventory["running_bundles"] as? [[String: Any]] ?? running
         let roots = ["/Applications", "/System/Applications", "/System/Library/CoreServices/Applications",
                      "/Users/Shared/Applications", NSHomeDirectory() + "/Applications"]
         var found: [String: BundleMetadata] = [:]
@@ -501,18 +499,28 @@ private final class RequestContext {
                 found[entry.path] = entry
             }
         }
-        for row in running {
+        let rows = Self.discoveredApplicationRows(installed: found, inventory: inventory, metadata: metadata)
+        return ["apps": rows, "coverage": ["scope":"installed_application_folders_and_running_user_bundles",
+                "complete":false, "installed":true, "unreadable":unreadable,
+                "excludes":["unregistered_locations_not_running", "nested_helpers", "background_only_bundles", "unreadable_bundles"]]]
+    }
+
+    static func discoveredApplicationRows(installed: [String: BundleMetadata], inventory: [String: Any],
+                                          metadata: [String: BundleMetadata]) -> [[String: Any]] {
+        let running = inventory["apps"] as? [[String: Any]] ?? []
+        let live = inventory["running_bundles"] as? [[String: Any]] ?? running
+        var found = installed
+        // Default catalog targets omit windowless agents; discovery still lists
+        // their proven running bundles, including those outside installed roots.
+        for row in live {
             if let path = row["bundle_path"] as? String, let entry = metadata[path] { found[path] = entry }
         }
         let counts = Dictionary(grouping: Array(found.values), by: \.identifier).mapValues(\.count)
-        let rows: [[String: Any]] = found.values.sorted { ($0.name, $0.path) < ($1.name, $1.path) }.map { entry in
+        return found.values.sorted { ($0.name, $0.path) < ($1.name, $1.path) }.map { entry in
             let instances = live.filter { $0["bundle_path"] as? String == entry.path }.count
             return ["app": counts[entry.identifier] == 1 ? entry.identifier : entry.path,
                     "name": entry.name, "running": instances > 0, "instances": instances]
         }
-        return ["apps": rows, "coverage": ["scope":"installed_application_folders_and_running_user_bundles",
-                "complete":false, "installed":true, "unreadable":unreadable,
-                "excludes":["unregistered_locations_not_running", "nested_helpers", "background_only_bundles", "unreadable_bundles"]]]
     }
 
     func catalog() throws -> [String: Any] {

@@ -1,6 +1,6 @@
 # 下一阶段：补全现有任务能力，形成 X11 参考基线
 
-状态：首批实现已完成，平台/真实任务验收仍待执行，计划尚未结案。原始源码基线为 `9f5ba8e` / `v0.3.4`；下述实现进展不是发行或全平台 GUI 验收声明。
+状态：首批实现已提交为 `a968b29`；macOS 连续操作增量已通过开发候选的当前 MCP 验收，平台/真实模型任务及安装包验收仍待执行，计划尚未结案。原始源码基线为 `9f5ba8e` / `v0.3.4`；下述进展不是发行或全平台 GUI 验收声明。
 
 依据是[方向讨论会话](https://chatgpt.com/c/6aea9228-21d4-83e8-b7a2-f5fcde6528c4)、当前源码、已有平台验收，以及本次通过恢复后的内置 DTW 读取该会话的实际过程。方向保持为：**先完成一个有退出条件的 macOS/Windows 打磨迭代，再启动范围明确的 Linux X11 Alpha；独立桌面无人值守随后推进。**
 
@@ -12,7 +12,19 @@
 - B：已新增 `current_real_app_tasks.py` 与 current metrics，复用原 fixture/oracle。业务完成、运行干净程度和 GUI review 分别记录；原始失败与重复保存 journal 保留。尚未执行这批代码对应的真实模型/GUI 任务和最终安装包验收。
 - C：Windows 输入桌面证明已接入首次准备和每个新 payload；清理 UP 不受新输入禁令阻止。已有权限失败回归补齐新读取恢复，不重写既有取消/EOF。Windows 仅完成源码/测试类型检查，仍需专用实机验证。
 - 尚未实施 Windows tooltip/shadow 原生渲染扩展；普通文件选择无需预停放鼠标的目标仍是后续工作。混合 DPI/helper 条件和严格后台矩阵也没有因此通过。
-- 本轮 Rust release 全目标通过：562 库测试、5 CLI、3 MCP；源码检查通过（含 current task 单测）。没有替换当前 MCP 安装、提交或发布。
+- 首批 Rust release 全目标通过：562 库测试、5 CLI、3 MCP；源码检查通过（含 current task 单测）。首批已提交为 `a968b29`，没有替换当前 MCP 安装或发布。
+
+## macOS 连续操作增量（2026-11-04）
+
+按后续优先级，当前机器只推进 macOS 的效率、干扰和覆盖；Windows 剩余工作在 Windows 机器上继续，Linux X11 仍排在参考基线之后。
+
+- 已知 selector、键盘、文本插入和默认滚动按需准备接收者，不要求每段脚本以 `look()` 开始；纯 JS 不做桌面观察。
+- app selector 的只读等待跟随原进程实例当前顶层 surface；同实例弹层出现/消失可连续使用原图坐标，仍校验画布和原点归属，不重放输入。
+- `look({scope:'menu',role?,text?})` 复用已有窗口的菜单观察；运行 bundle 合并补齐安装目录之外的 accessory 应用发现。
+- 固定开发候选在当前 MCP 上通过四个自有 AppKit 用例：新上下文直接 selector、右键后语义连续操作、右键后像素连续操作、只读菜单。5 个 exec 区间未检测到光标移动，任务前后前台应用保持；这不证明中途焦点恒定或任意应用零干扰。
+- 当前回归为 579 库测试、5 CLI、3 MCP，加原生 inventory 与源码检查。原始失败、候选哈希、清理结果及采样限制见 [验收报告](macos-usability-acceptance-2026-11-04.md) 和 [证据摘要](evidence/macos-usability-2026-11-04/summary.json)。
+
+下一步的 macOS 覆盖重点是有明确原生归属的应用根、Dock 项及无窗口菜单栏项，并在真实应用验证堆叠窗口。当前 Dock 可被发现但仍返回 `no_window`；发现修复和窗口菜单读取没有完成这些根能力。持续焦点/用户键盘目的地、真实 Telegram、模型任务与最终安装包仍缺独立证据。本增量没有因此关闭下述 A/B/C 的完整退出条件。
 
 ## 1. 基线和证据边界
 
@@ -21,7 +33,7 @@
 | 本次 MCP 恢复检查 | `apps` 与必填 `app/source` 的 `exec` 已暴露；配套 Skill 来自 Caelis 内置包；应用发现及 Chrome `look/capture/语义点击/锚点滚动` 实际可用 | 没有重新校验运行二进制哈希，也没有覆盖键入、拖拽、保存或所有平台 |
 | 本次长会话阅读 | 首次 80 项输出大多被工具栏和侧栏占用；收起侧栏后才得到正文前部；继续滚动主要依靠 PNG 阅读 | 单次任务不构成耗时、模型成本或总体成功率基准 |
 | Windows 后续修复验收 | 同一开发二进制完成官方基线 5/5、功能 26/26、Chrome/Edge 各 14/14 | 旧审查的 W/G 项不是现存待办；其他 DPI、多屏和所有透明浮层没有因此通过 |
-| macOS 后续输入路由 | 点击、内容拖拽、滚动优先定向；已识别 AppKit/Chromium 原生 hover 按已验证限制借用物理光标 | 旧 AX audit 的“独立输入未完成/hover 失败”不代表当前版本；也不能承诺所有动作都不干扰用户 |
+| macOS 后续输入路由与连续操作 | 点击、内容拖拽、滚动优先定向；新增自有 popup 连续操作及 5 个区间光标采样通过；已识别 AppKit/Chromium 原生 hover 按已验证限制借用物理光标 | 不替代真实 Telegram/Dock、持续焦点或所有动作的零干扰证明；旧 AX audit 也不代表当前版本 |
 | 当前任务验收设施 | 当前 native/client 探针与协议指标存在，真实任务 fixture 和独立 oracle 可复用 | 历史 `real_app_tasks.py` 不能直接证明当前两工具协议的模型任务体验 |
 
 当前合同见 [Skill API](../skills/desktop-world/API.md)；平台证据见 [Windows 修复验收](windows-fixes-acceptance-2026-11-03.md) 和 [macOS 输入路由](macos-input-routing.md)。两个旧 plan 已关闭，不再作为待办清单：
@@ -30,6 +42,8 @@
 在原始 v0.3.4 基线，`apps.provider.supported_capabilities` 描述原生 provider，并不等于公共 app 方法。首批源码增量已将 `readText` 包装为公共方法；`setValue`、原子 `observe` 等仍不是直接公开的脚本方法。现行合同以随包 Skill API 为准。
 
 ## 2. 从本次操作得到的优先级修正
+
+本节保留原始 v0.3.4 操作中的问题依据；后续实现状态以上述进展和当前 API 为准。
 
 ### 2.1 接入恢复完成，生效来源仍值得更容易诊断
 
@@ -41,13 +55,13 @@
 
 本次在 Chrome 中可以发现应用、取得正确会话窗口、收起侧栏、截图并连续滚动，没有重放失败输入。但默认 `look` 的 80 项预算先消耗在浏览器和侧栏控件上；收起侧栏后，正文前部才进入输出。滚动到后续章节时，PNG 已变化，语义输出仍常为 `changed:false`。
 
-这与 `scene.rs` 的实现一致：从当前语义窗口开始，先收集有限原生页，再优先保留可操作节点，输出至多 80 项/24 KiB。公共 `look` 只有 `full` 参数；`full:true` 重发完整基线，不是读取后续内容。当前完整正文阅读因此需要较多截图和滚动轮次。
+这与 `scene.rs` 的实现一致：从当前语义窗口开始，先收集有限原生页，再优先保留可操作节点，输出至多 80 项/24 KiB。当时公共 `look` 只有 `full` 参数；`full:true` 重发完整基线，不是读取后续内容。该基线的完整正文阅读因此需要较多截图和滚动轮次。
 
 `changed:false` 比较的是有限语义/窗口投影；API 已声明视觉变化需看图。**不能把滚动后这个字段不变单独判为错误。** 应改进的是相关内容的可达性，以及 Agent 对“本次到底观察了什么”的判断。
 
 ### 2.3 长字段截断会影响结果验证，优先于性能优化
 
-`scene.rs::text` 无字段标志地截取 name/value 的前 240 字符；后续差分只比较投影。因此，原生值只在被省略的尾部发生变化时，可能无法通过外部 view 区分。这个判断来自源码，本次没有修改长文本实测它。
+原始基线的 `scene.rs::text` 无字段标志地截取 name/value 的前 240 字符；后续差分只比较投影。因此，原生值只在被省略的尾部发生变化时，可能无法通过外部 view 区分。这个判断来自源码，本次没有修改长文本实测它。
 
 先让截断和未完整读回明确可见，并使被省略内容的变化能被识别，再讨论减少 PNG 或加速。内容摘要/版本变化只能证明变化，不能冒充全文或末尾文字的读回。
 
@@ -146,5 +160,5 @@ X11 当前仍是 experimental/unverified：本地 native X11、EWMH、XRes 1.2�
 - [selection.rs](../cmd/dtw/src/app_protocol/selection.rs)、[wire.rs](../cmd/dtw/src/app_protocol/wire.rs)：唯一性及已有 selector 只读轮询；不能笼统声称当前完全没有等待。
 - [真实任务规格](building.md#real-task-acceptance-principles)、[历史真实任务 runner](../tests/acceptance/real_app_tasks.py)、[当前 client 指标](../tests/acceptance/app_client.py)。
 - [Windows 后续验收](windows-fixes-acceptance-2026-11-03.md)：最终条件、Edge 原始失败和鼠标停放、AUMID/显示边界。
-- [macOS 输入路由](macos-input-routing.md)、[能力矩阵](product-matrix.md)：当前证据与需收敛的描述；[能力验收](agent-capability-followup-acceptance.md) 保留其特定候选和环境边界。
+- [macOS 连续操作验收](macos-usability-acceptance-2026-11-04.md)、[输入路由](macos-input-routing.md)、[能力矩阵](product-matrix.md)：当前证据与需收敛的描述；[能力验收](agent-capability-followup-acceptance.md) 保留其特定候选和环境边界。
 - [Windows 桌面诊断](../cmd/dtw/src/backends/windows/desktop.rs)、[实验 X11 声明](../cmd/dtw/src/backends/linux/mod.rs)。

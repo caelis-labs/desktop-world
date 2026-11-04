@@ -52,7 +52,7 @@
 
 | Method | Arguments | Behavior |
 | --- | --- | --- |
-| `await app.look(options?)` | `{full?:boolean,role?:string,text?:string}` | Start/reuse the app where supported (nonactivating by default on macOS); observe visible window layering and up to 80 semantic elements in the top surface. Optional role (1–64 characters) and text (1–256) filter the native traversal, so relevant content beyond the default preview can be reached. `semantics.query` identifies the filtered scope; completeness and absence apply only within it. JavaScript always receives the full snapshot. Tool output compares with the previous published view. Window metadata is bounded to 32 entries. `full:true` forces a tool-output baseline, not continuation. |
+| `await app.look(options?)` | `{full?:boolean,role?:string,text?:string,scope?:'window'\|'menu'}` | Start/reuse the app where supported (nonactivating by default on macOS); observe visible window layering and up to 80 semantic elements in the top surface. Optional role (1–64 characters) and text (1–256) filter the native traversal, so relevant content beyond the default preview can be reached. `scope:'menu'` reads the selected window's app menu through the native menu scope without activating it; the default is window content. It requires a proven app window and does not expose Dock roots or menu extras. `semantics.query` identifies the filtered scope; completeness and absence apply only within it. JavaScript always receives the full snapshot. Tool output compares with the previous published view. Window metadata is bounded to 32 entries. `full:true` forces a tool-output baseline, not continuation. |
 | `await app.capture(options?)` | `{full?:boolean}` | Return a full snapshot, including `windows`, and a PNG of the authorized app's visible stacked surfaces. Establishes the internal coordinate binding; later input returns an updated visual observation while in visual mode. |
 | `await app.readText(target)` | observed ID string OR `{target:string,offset?:number,limit?:number}` | Read native textual content of an observed element. Returns `{text,offset,next_offset,total_length,unit:'utf16'}` inside JavaScript; use `return` or `print` for requested tool output. Offset defaults to 0; limit defaults to 4096, from 2–16384 UTF-16 units. Reuse `next_offset` and the same target without a new look to continue one retained text revision. This read does not refresh the scene or request a PNG. A fresh look/input can retire its source; stale reads fail instead of joining revisions. Titles/descriptions are not substituted for document text. Unsupported native text remains explicit. |
 | `await app.click(target)` | string OR `{target:string}` OR `{selector:{role?:string,text?:string,scope?:'window'\|'menu'}}` OR `{x:number,y:number,button?:'left'\|'right',count?:1\|2}` | Semantic target ID from the latest look or a unique selector, for controls advertising `press`; otherwise use the returned screenshot fallback; or image-pixel coordinates from the last capture. `app.click('w1.e12')` uses a target ID; other strings such as `app.click('Continue')` are text selectors. Never mix target forms. Mouse options apply only to coordinates. |
@@ -64,8 +64,13 @@
 | `await app.quit()` | none | Request normal quit of the active app instance. A save dialog remains observable. No forced termination. |
 
 `look`/`capture` accept no native refs. Input routes within the selected app.
-Known actions can run sequentially without an explicit observation after each
-step. DTW renews single-use native bindings before the next requested action.
+Known selectors, keyboard input and default scrolling can begin an `exec`
+directly. DTW prepares the app/current receiver on demand and returns observation
+after input; no initial or per-script `look` is required. Context persists within
+the MCP connection. Explicit IDs still require an observed target, and coordinates
+require a returned capture; new unknown controls require inspection. Known actions
+can run sequentially without an explicit observation after each step. DTW renews
+single-use native bindings before the next requested action.
 Renewing a semantic target requires a provider-retained object credential plus
 the same role, name, enabled state and actions. View comparison IDs alone do not
 prove object continuity: Windows UIA runtime IDs can be reused, so a consumed
@@ -104,7 +109,8 @@ cannot receive input. Coordinate hit-testing selects the top nontransparent app
 surface. Unrelated-app occlusion may still prevent input even though a read can
 show the authorized app. If geometry or layer membership changes during capture,
 no coordinate binding is published. A transient capture/layer disappearance gets
-one bounded read-only refresh; input is never replayed. Read errors/partial semantics remain explicit.
+one bounded read-only refresh, including during coordinate preflight before input;
+input is never replayed. Read errors/partial semantics remain explicit.
 
 DTW prioritizes actionable controls, readable values and named content over empty
 structural nodes, with bounded internal continuation. Stable native identities
@@ -150,14 +156,16 @@ stops the sequence and releases its admitted button. Partial effects remain
 unknown; never repeat a failed drag automatically.
 
 Native pointer bindings remain single-use. Before each coordinate gesture DTW
-privately captures fresh app pixels and checks window identity, geometry, layering
-and the receiving surface at each supplied point. Known coordinate actions can
-run sequentially without explicit recapture; an overlay elsewhere does not alone
-invalidate their unchanged receiver. Private refreshes authorize only their current
-dispatch and never replace the script-visible image baseline for later points.
-Geometry, image mapping or receiver
-changes return `stale_scene` without dispatch; inspect the returned image to choose
-new coordinates. Content changes such as animation, typing and scrolling do not
+privately captures fresh app pixels and checks the current receiver, canvas geometry
+and process ownership at each supplied point. Known coordinate actions can
+run sequentially without explicit recapture. They hit the current top nontransparent
+surface within the original point's app process instance: a popup appearing or
+disappearing does not alone invalidate a point. Each original layer retains its
+process incarnation, so a sibling process cannot acquire that point. Private
+refreshes authorize only their current dispatch and never replace the script-visible
+image baseline for later points. A changed canvas anchor, image mapping or
+process instance returns `stale_scene`; a point with no authorized app pixel returns
+`outside_app`. Both refuse before dispatch; inspect the returned image to choose new coordinates. Content changes such as animation, typing and scrolling do not
 invalidate a coordinate mapping. A point does not establish semantic identity or
 prove that app content is unchanged; inspect new views when the task needs it.
 The final tool view supplies a fresh image while in visual mode. Cross-window/app

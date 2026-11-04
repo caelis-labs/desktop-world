@@ -27,6 +27,50 @@ impl<B: Backend + 'static> Coordinator<B> {
         deadline: Instant,
         wait_until: Instant,
     ) -> Work {
+        self.select_element_in_scene_until(
+            submitted, selector, timeout_ms, deadline, wait_until, None,
+        )
+    }
+
+    pub(super) fn select_scene_element(
+        &self,
+        submitted: &Submit,
+        selector: &ElementSelector,
+        timeout_ms: u64,
+        deadline: Instant,
+    ) -> Work {
+        let instance = {
+            let state = self.state.lock().unwrap();
+            submitted
+                .target
+                .window_ref
+                .as_ref()
+                .and_then(|reference| state.windows.get(reference))
+                .map(|target| target.app.clone())
+        };
+        let Some(instance) = instance else {
+            return selection_error(submitted, wire::core_error(&Error::TargetChanged));
+        };
+        let wait_until = (Instant::now() + Duration::from_millis(timeout_ms)).min(deadline);
+        self.select_element_in_scene_until(
+            submitted,
+            selector,
+            timeout_ms,
+            deadline,
+            wait_until,
+            Some(instance),
+        )
+    }
+
+    fn select_element_in_scene_until(
+        &self,
+        submitted: &Submit,
+        selector: &ElementSelector,
+        timeout_ms: u64,
+        deadline: Instant,
+        wait_until: Instant,
+        instance: Option<AppInstance>,
+    ) -> Work {
         let condition = match submitted.command {
             Command::Wait { state, .. } => Some(state),
             _ => None,
@@ -46,7 +90,46 @@ impl<B: Backend + 'static> Coordinator<B> {
         let mut attempts = 0_u32;
         let mut pages = 0_u32;
         let mut focus_attempted = false;
+        let mut focused_window = None;
         loop {
+            // The public app selector follows its current top surface while it
+            // is only reading. A popup may arrive after the preceding input.
+            // Atomic window selectors and app menus keep their explicit target.
+            let mut routed = submitted.clone();
+            if let Some(instance) = &instance {
+                let inventory =
+                    self.scene_atomic(&submitted.request_id, "windows", json!({}), deadline);
+                if let Some(error) = inventory.completed.error {
+                    return selection_error(submitted, error);
+                }
+                let rows = super::scene::ordered(
+                    inventory.completed.value.unwrap()["windows"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default(),
+                );
+                let mut state = self.state.lock().unwrap();
+                let window = rows.iter().find(|row| {
+                    row["visible"] == true
+                        && row["scene"]["semantic_candidate"] != false
+                        && row["window_ref"]
+                            .as_str()
+                            .and_then(|reference| state.windows.get(reference))
+                            .is_some_and(|target| &target.app == instance)
+                });
+                let Some(window) = window.and_then(|row| row["window_ref"].as_str()) else {
+                    return selection_error(submitted, wire::core_error(&Error::TargetChanged));
+                };
+                if focused_window
+                    .as_deref()
+                    .is_some_and(|focused| focused != window)
+                {
+                    return selection_error(submitted, wire::core_error(&Error::TargetChanged));
+                }
+                routed.target.window_ref = Some(window.to_owned());
+                state.scene.active = routed.target.window_ref.clone();
+            }
+            let submitted = &routed;
             attempts += 1;
             let mut matches = Vec::<Value>::new();
             let query = ObserveQuery {
@@ -160,6 +243,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 // target before borrowing focus, then discard that discovery:
                 // activation can change both menu content and enabled state.
                 focus_attempted = true;
+                focused_window = submitted.target.window_ref.clone();
                 if let Err(error) = self.prepare_selection_focus(
                     submitted,
                     deadline,
@@ -263,6 +347,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 && final_page["coverage"]["reason"] == "content_unproven"
             {
                 focus_attempted = true;
+                focused_window = submitted.target.window_ref.clone();
                 if let Err(error) = self.prepare_selection_focus(
                     submitted,
                     deadline,

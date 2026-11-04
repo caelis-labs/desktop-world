@@ -24,6 +24,7 @@ python3 -m unittest discover -s tests/acceptance -p test_cursor_audit.py
 python3 -m unittest discover -s tests/acceptance -p test_anchored_scroll_probe.py
 python3 -m unittest discover -s tests/acceptance -p test_real_app_tasks.py
 python3 -m unittest discover -s tests/acceptance -p test_current_real_app_tasks.py
+python3 -m unittest discover -s tests/acceptance -p test_macos_scene_sequence_probe.py
 
 python3 -m unittest discover -s tests -p test_ci_plan.py
 python3 -m unittest discover -s tests -p test_release_verification.py

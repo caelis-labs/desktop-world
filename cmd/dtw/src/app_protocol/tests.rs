@@ -49,7 +49,9 @@ impl TestGate {
 
 struct Model {
     semantic_elements: Option<Vec<Element>>,
+    window_semantics: HashMap<u64, Vec<Element>>,
     filtered_observation: bool,
+    menu_scope: bool,
     text_error: Option<Error>,
     read_gate: Option<WorkerGate>,
     action_gate: Option<WorkerGate>,
@@ -78,10 +80,12 @@ struct Shared {
     windows: AtomicUsize,
     observes: AtomicUsize,
     observe_queries: Mutex<Vec<ObserveQuery>>,
+    observe_scopes: Mutex<Vec<ObserveScopeKind>>,
     captures: AtomicUsize,
     actions: AtomicUsize,
     anchored_scrolls: Mutex<Vec<(WindowTarget, ScrollRequest)>>,
     input_targets: Mutex<Vec<WindowTarget>>,
+    press_targets: Mutex<Vec<WindowTarget>>,
     shutdowns: AtomicUsize,
     finishes: AtomicUsize,
 }
@@ -92,7 +96,9 @@ impl MockBackend {
         Self(Arc::new(Shared {
             model: Mutex::new(Model {
                 semantic_elements: None,
+                window_semantics: HashMap::new(),
                 filtered_observation: false,
+                menu_scope: false,
                 text_error: None,
                 read_gate: None,
                 action_gate: None,
@@ -124,10 +130,12 @@ impl MockBackend {
             windows: AtomicUsize::new(0),
             observes: AtomicUsize::new(0),
             observe_queries: Mutex::new(Vec::new()),
+            observe_scopes: Mutex::new(Vec::new()),
             captures: AtomicUsize::new(0),
             actions: AtomicUsize::new(0),
             anchored_scrolls: Mutex::new(Vec::new()),
             input_targets: Mutex::new(Vec::new()),
+            press_targets: Mutex::new(Vec::new()),
             shutdowns: AtomicUsize::new(0),
             finishes: AtomicUsize::new(0),
         }))
@@ -198,26 +206,28 @@ impl MockBackend {
             elements: if pixels {
                 vec![]
             } else {
-                self.0
-                    .model
-                    .lock()
-                    .unwrap()
-                    .semantic_elements
-                    .clone()
-                    .unwrap_or_else(|| {
-                        vec![Element {
-                            id: ElementId(9007199254740993),
-                            rebind_identity: Some("retained:9007199254740993".into()),
-                            identity: Some("mock:9007199254740993".into()),
-                            label: "Increment".into(),
-                            can_press: true,
-                            role: "button".into(),
-                            name: Some("Increment".into()),
-                            value: None,
-                            enabled: Some(true),
-                            actions: vec!["press".into()],
-                        }]
-                    })
+                {
+                    let model = self.0.model.lock().unwrap();
+                    model
+                        .window_semantics
+                        .get(&target.native_id)
+                        .cloned()
+                        .or_else(|| model.semantic_elements.clone())
+                }
+                .unwrap_or_else(|| {
+                    vec![Element {
+                        id: ElementId(9007199254740993),
+                        rebind_identity: Some("retained:9007199254740993".into()),
+                        identity: Some("mock:9007199254740993".into()),
+                        label: "Increment".into(),
+                        can_press: true,
+                        role: "button".into(),
+                        name: Some("Increment".into()),
+                        value: None,
+                        enabled: Some(true),
+                        actions: vec!["press".into()],
+                    }]
+                })
             },
             // Opaque controlled bytes exercise retention/encoding, not PNG or GUI acceptance.
             image: pixels.then(|| ImageFrame {
@@ -315,6 +325,28 @@ impl Backend for MockBackend {
         self.0.observes.fetch_add(1, Ordering::SeqCst);
         Ok(self.read(target, false))
     }
+    fn supports_observe_scope(&self, scope: ObserveScopeKind) -> bool {
+        scope == ObserveScopeKind::Window
+            || (scope == ObserveScopeKind::Menu && self.0.model.lock().unwrap().menu_scope)
+    }
+    fn observe_scoped(
+        &self,
+        target: &WindowTarget,
+        query: &ObserveQuery,
+        scope: ObserveScope,
+        binding: Option<&()>,
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservation<()>, Error> {
+        if scope == ObserveScope::Window {
+            return self.observe_page(target, query, call);
+        }
+        if scope != ObserveScope::Menu || !self.0.model.lock().unwrap().menu_scope {
+            return Err(Error::UnsupportedCapability);
+        }
+        assert!(binding.is_none());
+        self.0.observe_scopes.lock().unwrap().push(scope.kind());
+        self.observe_page(target, query, call)
+    }
     fn observe_page(
         &self,
         target: &WindowTarget,
@@ -361,8 +393,9 @@ impl Backend for MockBackend {
             return Err(error);
         }
         let text = model
-            .semantic_elements
-            .as_ref()
+            .window_semantics
+            .get(&target.native_id)
+            .or(model.semantic_elements.as_ref())
             .and_then(|elements| {
                 elements
                     .iter()
@@ -405,11 +438,12 @@ impl Backend for MockBackend {
     }
     fn press(
         &self,
-        _: &WindowTarget,
+        target: &WindowTarget,
         _: &(),
         _: ElementId,
         call: &CallContext<'_>,
     ) -> ActionOutcome {
+        self.0.press_targets.lock().unwrap().push(target.clone());
         self.act(call)
     }
     fn input(

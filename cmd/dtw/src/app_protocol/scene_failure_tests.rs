@@ -46,6 +46,36 @@ fn scene_exec(server: &Arc<Server<SceneCatalog>>, source: &str) -> Reply {
     }
 }
 #[test]
+fn a_transient_preflight_capture_refreshes_reads_once_before_any_input() {
+    for failures in [1, 2] {
+        let (server, backend) = scene_agent();
+        let captured = scene_exec(&server, "await app.capture();");
+        assert!(!captured.is_error, "{}", captured.data);
+        for _ in 0..failures {
+            backend
+                .base
+                .0
+                .model
+                .lock()
+                .unwrap()
+                .capture_errors
+                .push_back(Error::NativeFailure {
+                    code: "scene_changed".into(),
+                    message: "popup joined capture".into(),
+                });
+        }
+        let clicked = scene_exec(&server, "await app.click({x:5,y:5});");
+        assert_eq!(clicked.is_error, failures == 2, "{}", clicked.data);
+        assert_eq!(
+            backend.base.0.actions.load(Ordering::SeqCst),
+            usize::from(failures == 1)
+        );
+        // Initial capture, at most two preflight reads and one final observation.
+        assert_eq!(backend.base.0.captures.load(Ordering::SeqCst), 4);
+    }
+}
+
+#[test]
 fn decorations_remain_in_pixels_and_inventory_but_not_active_semantics() {
     let mut reference_image = None;
     for candidate in [None, Some(true), Some(false)] {
@@ -456,7 +486,7 @@ fn exact_native_target_does_not_require_discovery_of_unrelated_branches() {
 }
 
 #[test]
-fn new_overlay_requires_observation_only_when_it_changes_the_receiver() {
+fn new_same_instance_overlay_receives_current_canvas_coordinates() {
     for covers_point in [false, true] {
         let (server, backend) = scene_agent();
         let seed = scene_exec(&server, "await app.capture();");
@@ -472,19 +502,13 @@ fn new_overlay_requires_observation_only_when_it_changes_the_receiver() {
         inventory.report.supported_count += 1;
         drop(model);
         let reply = scene_exec(&server, "await app.click({x:5,y:5});");
-        assert_eq!(reply.is_error, covers_point, "{}", reply.data);
-        assert_eq!(
-            backend.base.0.actions.load(Ordering::SeqCst),
-            usize::from(!covers_point)
-        );
-        if covers_point {
-            assert_eq!(reply.data["script"]["failure"]["code"], "stale_scene");
-        }
+        assert!(!reply.is_error, "{}", reply.data);
+        assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
     }
 }
 
 #[test]
-fn private_pixel_refresh_cannot_authorize_a_later_unseen_overlay_target() {
+fn private_pixel_refresh_routes_later_points_to_current_same_instance_overlay() {
     for next in [
         "await app.click({x:35,y:5});",
         "await app.move({x:35,y:5});",
@@ -505,15 +529,142 @@ fn private_pixel_refresh_cannot_authorize_a_later_unseen_overlay_target() {
         inventory.report.supported_count += 1;
         drop(model);
         let reply = scene_exec(&server, &format!("await app.click({{x:5,y:5}}); {next}"));
-        assert!(reply.is_error, "{next}: {}", reply.data);
-        assert_eq!(reply.data["script"]["failure"]["code"], "stale_scene");
-        assert_eq!(reply.data["status"], "completed");
-        assert_eq!(reply.data["error"]["code"], "stale_scene");
-        let compact = crate::app_protocol::projection::execution(reply);
-        assert_eq!(compact.data["error"]["code"], "stale_scene");
-        assert_eq!(compact.data["failure"]["code"], "stale_scene");
-        assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
+        assert!(!reply.is_error, "{next}: {}", reply.data);
+        assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 2);
     }
+}
+
+#[test]
+fn closing_observed_popup_routes_canvas_point_back_to_base() {
+    let (server, backend) = scene_agent();
+    {
+        let mut model = backend.base.0.model.lock().unwrap();
+        let base = model.inventory.as_ref().unwrap().windows[0].clone();
+        let mut popup = base.clone();
+        popup.target.native_id = 102;
+        popup.scene = WindowLayout::new([0., 0., 5., 5.], 0);
+        let mut base = base;
+        base.scene.as_mut().unwrap().rank = 1;
+        model.inventory = Some(test_inventory(vec![popup, base]));
+    }
+    assert!(!scene_exec(&server, "await app.capture();").is_error);
+    {
+        let mut model = backend.base.0.model.lock().unwrap();
+        let mut base = model.inventory.as_ref().unwrap().windows[1].clone();
+        base.scene.as_mut().unwrap().rank = 0;
+        model.inventory = Some(test_inventory(vec![base]));
+    }
+    let reply = scene_exec(
+        &server,
+        "await app.click({x:5,y:5}); await app.click({x:5,y:5});",
+    );
+    assert!(!reply.is_error, "{}", reply.data);
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn moving_internal_popup_preserves_unaffected_base_canvas_input() {
+    let (server, backend) = scene_agent();
+    {
+        let mut model = backend.base.0.model.lock().unwrap();
+        let mut base = model.inventory.as_ref().unwrap().windows[0].clone();
+        base.scene.as_mut().unwrap().rank = 1;
+        let mut popup = base.clone();
+        popup.target.native_id = 102;
+        popup.scene = WindowLayout::new([10., 0., 5., 5.], 0);
+        model.inventory = Some(test_inventory(vec![popup, base]));
+    }
+    assert!(!scene_exec(&server, "await app.capture();").is_error);
+    backend
+        .base
+        .0
+        .model
+        .lock()
+        .unwrap()
+        .inventory
+        .as_mut()
+        .unwrap()
+        .windows[0]
+        .scene = WindowLayout::new([15., 0., 5., 5.], 0);
+    let reply = scene_exec(&server, "await app.click({x:5,y:5});");
+    assert!(!reply.is_error, "{}", reply.data);
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn canvas_refresh_rejects_transparent_current_receiver() {
+    let (server, backend) = scene_agent();
+    assert!(!scene_exec(&server, "await app.capture();").is_error);
+    backend.base.0.model.lock().unwrap().capture_rgba = [0; 4];
+    let reply = scene_exec(&server, "await app.click({x:5,y:5});");
+    assert!(reply.is_error, "{}", reply.data);
+    assert_eq!(reply.data["script"]["failure"]["code"], "outside_app");
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn canvas_refresh_rejects_unproven_foreign_surface() {
+    let (server, backend) = scene_agent();
+    assert!(!scene_exec(&server, "await app.capture();").is_error);
+    {
+        let mut model = backend.base.0.model.lock().unwrap();
+        let mut foreign = model.inventory.as_ref().unwrap().windows[0].clone();
+        foreign.target.native_id = 102;
+        foreign.target.app.pid += 1;
+        model.inventory.as_mut().unwrap().windows.insert(0, foreign);
+    }
+    let reply = scene_exec(&server, "await app.click({x:5,y:5});");
+    assert!(reply.is_error, "{}", reply.data);
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn canvas_refresh_rejects_changed_mapping_when_anchor_disappears() {
+    let (server, backend) = scene_agent();
+    assert!(!scene_exec(&server, "await app.capture();").is_error);
+    {
+        let mut model = backend.base.0.model.lock().unwrap();
+        let base = &mut model.inventory.as_mut().unwrap().windows[0];
+        base.target.native_id = 102;
+        base.scene = WindowLayout::new([0., 0., 40., 20.], 0);
+    }
+    let reply = scene_exec(&server, "await app.click({x:5,y:5});");
+    assert!(reply.is_error, "{}", reply.data);
+    assert_eq!(reply.data["script"]["failure"]["code"], "stale_scene");
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn new_popup_outside_canvas_requires_a_new_mapping() {
+    let (server, backend) = scene_agent();
+    assert!(!scene_exec(&server, "await app.capture();").is_error);
+    {
+        let mut model = backend.base.0.model.lock().unwrap();
+        let mut base = model.inventory.as_ref().unwrap().windows[0].clone();
+        base.scene.as_mut().unwrap().rank = 1;
+        let mut popup = base.clone();
+        popup.target.native_id = 102;
+        popup.scene = WindowLayout::new([15., 0., 10., 5.], 0);
+        model.inventory = Some(test_inventory(vec![popup, base]));
+    }
+    let reply = scene_exec(&server, "await app.click({x:5,y:5});");
+    assert!(reply.is_error, "{}", reply.data);
+    assert_eq!(reply.data["script"]["failure"]["code"], "stale_scene");
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn canvas_input_with_unknown_effect_is_never_replayed() {
+    let (server, backend) = scene_agent();
+    assert!(!scene_exec(&server, "await app.capture();").is_error);
+    backend.base.0.model.lock().unwrap().outcome =
+        ActionOutcome::unknown(Error::BackendFailed("interrupted".into()));
+    let reply = scene_exec(
+        &server,
+        "await app.click({x:5,y:5}); await app.click({x:5,y:5});",
+    );
+    assert!(reply.is_error, "{}", reply.data);
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
 }
 
 #[test]

@@ -46,7 +46,8 @@ Open the application you want to use, then ask your Agent:
 
 The MCP interface is exactly `apps` plus app-scoped `exec({app, source})`; the bundled Skill documents
 the app script methods, including filtered observations and explicit text reading. DTW owns window routing and observation state.
-The Agent follows look → input → look, with semantic targets and pixel fallback.
+The Agent observes when needed and batches known actions, using semantic targets
+and pixel fallback. DTW prepares receivers and returns observations after input.
 [Capabilities and limits](docs/product-matrix.md) describes current support and
 acceptance boundaries. The bundled Skill teaches the Agent the available operations. Your Agent handles
 approvals. On macOS, relevant operations require Accessibility and Screen Recording
