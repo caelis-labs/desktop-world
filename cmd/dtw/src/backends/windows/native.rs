@@ -39,8 +39,9 @@ use windows::{
         UI::{
             Accessibility::*,
             HiDpi::{
-                GetDpiForWindow, PhysicalToLogicalPointForPerMonitorDPI,
-                SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+                GetDpiForWindow, GetWindowDpiAwarenessContext, SetProcessDpiAwarenessContext,
+                SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT,
+                DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
             },
             Input::KeyboardAndMouse::*,
             WindowsAndMessaging::*,
@@ -2220,25 +2221,28 @@ fn rendered_content(rgb: &[u8]) -> bool {
     sampled > 0 && black * 200 < sampled * 199
 }
 fn render_size(window: HWND) -> Result<(i32, i32), Error> {
+    struct DpiScope(DPI_AWARENESS_CONTEXT);
+    impl Drop for DpiScope {
+        fn drop(&mut self) {
+            unsafe { SetThreadDpiAwarenessContext(self.0) };
+        }
+    }
     unsafe {
+        // GetWindowRect is virtualized to the calling thread's DPI context.
+        // Read in the receiver's context to obtain its backing dimensions.
+        // Converting the exclusive bottom/right corner as a point can fail for
+        // native confirmation windows because that point is outside the HWND.
+        // This scope changes only our worker thread and restores it on errors.
+        let previous = SetThreadDpiAwarenessContext(GetWindowDpiAwarenessContext(window));
+        if previous.0.is_null() {
+            return Err(failed("render_size/Cannot enter receiver DPI context"));
+        }
+        let _scope = DpiScope(previous);
         let mut raw = RECT::default();
-        GetWindowRect(window, &mut raw).map_err(failed)?;
-        let mut first = POINT {
-            x: raw.left,
-            y: raw.top,
-        };
-        let mut last = POINT {
-            x: raw.right,
-            y: raw.bottom,
-        };
-        PhysicalToLogicalPointForPerMonitorDPI(window, &mut first)
-            .ok()
-            .map_err(failed)?;
-        PhysicalToLogicalPointForPerMonitorDPI(window, &mut last)
-            .ok()
-            .map_err(failed)?;
-        let width = last.x.checked_sub(first.x).ok_or(Error::InvalidPoint)?;
-        let height = last.y.checked_sub(first.y).ok_or(Error::InvalidPoint)?;
+        GetWindowRect(window, &mut raw)
+            .map_err(|error| failed(format!("render_size/GetWindowRect: {error}")))?;
+        let width = raw.right.checked_sub(raw.left).ok_or(Error::InvalidPoint)?;
+        let height = raw.bottom.checked_sub(raw.top).ok_or(Error::InvalidPoint)?;
         if width <= 0
             || height <= 0
             || width > 8192
@@ -2355,7 +2359,9 @@ fn capture_rgb(window: HWND, bounds: RECT) -> Result<(Value, (i32, i32)), Error>
             // BitBlt can return another app during maximize/restore animation
             // even when Win32 rectangles and hit tests already name this HWND.
             // Render only this exact window; there is no desktop-copy fallback.
-            let captured = render_window(window, memory, 2).ok().map_err(failed);
+            let captured = render_window(window, memory, 2)
+                .ok()
+                .map_err(|error| failed(format!("capture/PrintWindow: {error}")));
             let result = captured.and_then(|_| {
                 let bgra =
                     std::slice::from_raw_parts(bits as *const u8, rw as usize * rh as usize * 4);

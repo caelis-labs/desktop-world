@@ -38,6 +38,9 @@ class NativeSamplingTests(unittest.TestCase):
         interval = dict(self.interval, end_ms=75)
         self.assertFalse(observer.check_intervals(self.rows, [interval])[0]['passed'])
 
+    def test_missing_call_times_do_not_create_sampling_success(self):
+        self.assertFalse(observer.check_intervals(self.rows, [{'name': 'missing'}])[0]['passed'])
+
 
 if __name__ == '__main__':
     unittest.main()

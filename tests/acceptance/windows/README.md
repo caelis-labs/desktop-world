@@ -71,7 +71,11 @@ python -X utf8 tests/acceptance/windows/observe_run.py --observer C:\Temp\dtw-ob
 
 `observe_run.py` uses a separate native process to retain foreground HWND/PID,
 real cursor position and global held-key samples. Actual gaps above 50ms fail the
-strict observation check even if business effects pass. Sampling records Windows
+strict observation check even if business effects pass. With `--metrics-root`,
+every recorded MCP call (and the interrupted execution through worker exit) must
+have bracketing samples with gaps no greater than 50ms; the whole-run maximum is
+also retained separately, including fixture startup and server teardown. Without
+that option the whole-run maximum gates the result. Sampling records Windows
 foreground input honestly; it does not grant the macOS pointer-borrow policy to
 Windows or prove zero interference for foreground routes.
 
@@ -92,6 +96,14 @@ actual PNG/hash and waits for `hover-answer.json` (`sha256`, image-pixel `x`, `y
 The reviewer must inspect that PNG; the probe then hovers the visible file and
 requires a real `tooltips_class32`/`SysShadow` before capturing and selecting it.
 No unknown popup or menu is excluded by this diagnostic.
+
+The browser audit launches a second owned profile of the same executable with
+duplicate controls and an independent input journal; it must remain unchanged.
+`--allow-decoration-image-limit` permits only the documented
+`windows_surface_unsupported` tooltip/shadow image subcase, retaining its original
+error and `strict_s03_capture_passed:false`. Fresh semantic receiver proof, exact
+selected contents and a fresh post-tooltip image are still required. See the
+[pinned upstream investigation](../../../docs/windows-tooltip-upstream-research-2026-11-04.md).
 
 Windows capture uses exact HWND rendering and DWM visible frames. It can read a
 covered opaque window, but input still requires visibility and the exact receiver.

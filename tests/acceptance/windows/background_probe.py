@@ -67,8 +67,19 @@ def main():
                 require(dispatch.get('not_dispatched') == 1 and not dispatch.get('unknown') and not dispatch.get('dispatched'), response)
             report['cases'].append({'name': name, 'response': response, 'passed': True})
 
-        exercise('uia_click', 'await app.click({selector:{role:"button",text:"Increment"}});')
+        # UIA Invoke may itself focus/click in a provider implementation. Its
+        # business effect is checked, but it is not a Windows background promise.
+        invoked = client.execute(app, 'await app.click({selector:{role:"button",text:"Increment"}});')[0]
         wait_state(target, lambda state: state['increments'] == 1)
+        report['uia_provider_effect'] = {'response': invoked, 'target_foreground': state(target)['foreground'],
+                                         'background_guarantee': False}
+        (witness / 'layout.json').write_text(json.dumps({'sequence':1,'window_offset':0,'control_offset':0,'activate':1}), encoding='utf-8')
+        wait_state(witness, lambda state: state['layout_sequence'] == 1 and state['foreground'])
+        image = client.capture(app, 'after-uia-provider')['view']['image']
+        point = state(target)['pad_point']
+        b = image['bounds']
+        pixel = {'x': (point['x'] - b[0]) * image['width'] / b[2],
+                 'y': (point['y'] - b[1]) * image['height'] / b[3]}
         exercise('posted_click', 'await app.click(' + json.dumps(pixel) + ');')
         wait_state(target, lambda state: state['left_up'] == 1)
         exercise('posted_wheel', 'await app.scroll(' + json.dumps({**pixel, 'delta_y': 2}) + ');')

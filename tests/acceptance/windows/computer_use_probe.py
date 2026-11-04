@@ -39,7 +39,9 @@ def main():
     stage = 'setup'
 
     def state():
-        return fixture.state()
+        # Atomic replacement can briefly report no publication. Only a real
+        # same-process state is an oracle; absence is bounded readiness polling.
+        return wait(lambda: fixture.state())
 
     def execute(source, allow_error=False):
         return client.execute(fixture.bundle, source, allow_error=allow_error)[0]

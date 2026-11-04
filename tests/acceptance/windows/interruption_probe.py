@@ -53,6 +53,7 @@ def main():
                 for index in range(8)]
         delay = 'const end=Date.now()+29400;while(Date.now()<end){};await app.capture();' if args.mode == 'deadline' else ''
         source = delay + 'await app.drag(' + json.dumps({'path': path}) + ');await app.click({selector:{role:"button",text:"Increment"}});'
+        request_started_ms = time.time() * 1000
         request = client.begin_execute(exe, source)
         until = time.monotonic() + (32 if args.mode == 'deadline' else 8)
         while not left_held():
@@ -96,6 +97,8 @@ def main():
             report['mcp_cleanup'] = client.close()
             client = None
         report['workers'] = [{'pid': handle.pid, 'exit': handle.wait(timeout=8)} for handle in handles]
+        (out / 'rpc-intervals.json').write_text(json.dumps([{'name': 'interrupted-exec-and-cleanup',
+            'start_ms': request_started_ms, 'end_ms': time.time() * 1000}], indent=2), encoding='utf-8')
         require(all(row['exit'] == 0 for row in report['workers']), report['workers'])
         report['passed'] = True
     except BaseException as error:

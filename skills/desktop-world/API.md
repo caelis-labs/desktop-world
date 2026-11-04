@@ -230,6 +230,12 @@ and display, with paired release on cancellation/failure. Windows GUI, applicati
 and DPI conditions require their own acceptance. Experimental X11 still requires
 an unobstructed window and does not claim multi-surface capture.
 
+Windows UIA patterns execute provider code: an Invoke provider can activate its
+window or move the physical pointer. UIA dispatch does not promise background
+execution. Supported posted client-area clicks/wheels avoid those changes;
+keyboard and other pointer routes can require foreground coordination. Windows
+does not implement the macOS script-level foreground borrowing/restoration scope.
+
 For native Unicode Win32/WinForms Edit controls, Windows `readText` reads the
 exact UIA-advertised child HWND with bounded read-only system messages. This
 avoids truncated UIA proxy text being reported as a complete document. Ownership,

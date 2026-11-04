@@ -347,6 +347,7 @@ namespace DtwWindowsSmoke {
         }
         void Event(string kind) {File.AppendAllText(Path.Combine(root,"native-events.jsonl"),json.Serialize(new{kind=kind,pid=Process.GetCurrentProcess().Id,unix_ms=(DateTime.UtcNow.Ticks-621355968000000000L)/10000.0})+"\n",utf8);}
         void Publish() {
+            if(IsDisposed||Disposing||!IsHandleCreated)return;
             string path=Path.Combine(root,"native-state.json"),temporary=path+".next";
             File.WriteAllText(temporary,json.Serialize(new{pid=Process.GetCurrentProcess().Id,ready=ready,modal=modal,hwnd=Handle.ToInt64(),
                 text=editor.Text,saved=saved,commits=commits,checkpoint=checkpoint,reviewed=reviewed.Checked,checks=checks,opens=opens,saves=saves}),utf8);
