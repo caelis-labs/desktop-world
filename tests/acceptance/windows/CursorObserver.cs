@@ -184,11 +184,27 @@ namespace DtwWindowsCursorAcceptance {
         // A separate native process, independent of Python, MCP and the UIA
         // worker. Retain every sample and the actual gaps; never infer a quiet
         // interval or input release from sparse before/after snapshots.
+        static string Sample(long now,double gap) {
+            IntPtr foreground=GetForegroundWindow();uint pid;
+            GetWindowThreadProcessId(foreground,out pid);
+            Point point;bool readable=GetCursorPos(out point);
+            var held=new List<int>();
+            for(int key=1;key<256;key++)if(GetAsyncKeyState(key)<0)held.Add(key);
+            return Json.Serialize(new {timestamp=now,frequency=Stopwatch.Frequency,
+                unix_ms=(DateTime.UtcNow.Ticks-621355968000000000L)/10000.0,
+                gap_ms=gap,foreground=foreground.ToInt64(),foreground_pid=pid,
+                cursor_readable=readable,cursor=new{x=point.X,y=point.Y},held=held});
+        }
         static void Stream(string output) {
             bool timer=timeBeginPeriod(1)==0;
             int count=0;long previous=0;double largest=0;
             Process.GetCurrentProcess().PriorityClass=ProcessPriorityClass.High;
             Thread.CurrentThread.Priority=ThreadPriority.Highest;
+            // Prime CLR reflection/JSON and Win32 imports before publishing
+            // readiness. The probe starts only after the first flushed sample;
+            // every sample from that point remains in the strict gap check.
+            long warmupStart=Stopwatch.GetTimestamp();Sample(warmupStart,0);
+            double warmupMs=(Stopwatch.GetTimestamp()-warmupStart)*1000.0/Stopwatch.Frequency;
             var rows=new BlockingCollection<string>(8192);
             Exception writeError=null;
             var writerThread=new Thread(delegate() {
@@ -207,15 +223,7 @@ namespace DtwWindowsCursorAcceptance {
                         long now=Stopwatch.GetTimestamp();
                         double gap=previous==0?0:(now-previous)*1000.0/Stopwatch.Frequency;
                         previous=now;largest=Math.Max(largest,gap);
-                        IntPtr foreground=GetForegroundWindow();uint pid;
-                        GetWindowThreadProcessId(foreground,out pid);
-                        Point point;bool readable=GetCursorPos(out point);
-                        var held=new List<int>();
-                        for(int key=1;key<256;key++)if(GetAsyncKeyState(key)<0)held.Add(key);
-                        string row=Json.Serialize(new {timestamp=now,frequency=Stopwatch.Frequency,
-                            unix_ms=(DateTime.UtcNow.Ticks-621355968000000000L)/10000.0,
-                            gap_ms=gap,foreground=foreground.ToInt64(),foreground_pid=pid,
-                            cursor_readable=readable,cursor=new{x=point.X,y=point.Y},held=held});
+                        string row=Sample(now,gap);
                         if(!rows.TryAdd(row))throw new IOException("Independent observer queue overflow; samples are incomplete");
                         count++;Thread.Sleep(2);
                     }
@@ -223,7 +231,7 @@ namespace DtwWindowsCursorAcceptance {
                 bool released=!timer||timeEndPeriod(1)==0;
                 rows.CompleteAdding();bool writerStopped=writerThread.Join(5000);
                 File.WriteAllText(output+".summary.json",Json.Serialize(new {samples=count,max_gap_ms=largest,
-                    timer_resolution_acquired=timer,period_released=released,writer_stopped=writerStopped,write_error=writeError==null?null:writeError.ToString()}),Utf8);
+                    warmup_ms=warmupMs,timer_resolution_acquired=timer,period_released=released,writer_stopped=writerStopped,write_error=writeError==null?null:writeError.ToString()}),Utf8);
                 if(!writerStopped||writeError!=null||!released)throw new IOException("Independent observer cleanup failed");
             }
         }

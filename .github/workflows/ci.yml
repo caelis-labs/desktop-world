@@ -81,7 +81,8 @@ jobs:
     # Run the same native contracts on the supported Intel pool. Shipping
     # arm64 candidates still require their own native source/package tests.
     runs-on: macos-15-intel
-    timeout-minutes: 15
+    # Cold Intel release compilation is slower than the prior arm64 pool.
+    timeout-minutes: 30
     env:
       MACOSX_DEPLOYMENT_TARGET: '14.2'
       CARGO_TARGET_DIR: ${{ github.workspace }}/target-ci
@@ -98,13 +99,15 @@ jobs:
           cache-on-failure: true
           workspaces: cmd/dtw -> ../../target-ci
           key: macos-x64-runtime-release
+      # Compile pure Swift/C-ABI controls first so bridge failures fail before
+      # the slower cold release build. These checks never operate a desktop.
+      - run: python3 tests/ci/run_native_inventory_tests.py
+      - run: python3 tests/ci/run_native_input_tests.py
       # Match the shipping QuickJS build and stack behavior, not an unoptimized VM.
       - name: Script, MCP, native adapters and CLI contracts
         run: cargo test --release --locked --manifest-path cmd/dtw/Cargo.toml --lib --bins --tests
       - name: Managed packages and live MCP leases (no GUI)
         run: python3 tests/ci/check_package_upgrade.py --dtw "$CARGO_TARGET_DIR/release/dtw" --output "$RUNNER_TEMP/dtw-package-store"
-      - run: python3 tests/ci/run_native_inventory_tests.py
-      - run: python3 tests/ci/run_native_input_tests.py
       - name: Native and scene worker shutdown (no desktop access)
         run: python3 tests/ci/run_native_worker_tests.py "$CARGO_TARGET_DIR/release/dtw"
 

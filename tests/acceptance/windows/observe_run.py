@@ -36,7 +36,7 @@ def main():
     parser.add_argument('--observer', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--intervals', type=Path, help='Probe-owned background interval assertions against native samples')
-    parser.add_argument('--metrics-root', type=Path, help='Require <=50ms bracketing for every recorded MCP call, retaining whole-run gaps separately')
+    parser.add_argument('--metrics-root', type=Path, help='Also require <=50ms bracketing for every recorded MCP call')
     parser.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
@@ -86,8 +86,8 @@ def main():
                 if extra.exists():
                     calls.extend(json.loads(extra.read_text(encoding='utf-8')))
                 report['call_sampling'] = check_intervals(rows, calls)
-                report['strict_sampling_scope'] = 'every recorded MCP call plus interrupted execution interval; whole-run max retained'
-                sampling_ok = bool(calls) and all(row['passed'] for row in report['call_sampling'])
+                report['strict_sampling_scope'] = 'entire stream plus bracketing of every recorded MCP call and interrupted execution interval'
+                sampling_ok = sampling_ok and bool(calls) and all(row['passed'] for row in report['call_sampling'])
             report['passed'] = (report.get('probe_exit') == 0 and report.get('observer_exit') == 0
                                 and sampling.get('samples', 0) > 1
                                 and sampling_ok

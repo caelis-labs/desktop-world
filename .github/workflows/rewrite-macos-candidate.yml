@@ -39,7 +39,9 @@ jobs:
       inputs.source_sha != '' || github.event_name == 'workflow_dispatch' ||
       (github.event.label.name == 'build-macos-candidate' &&
        github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: macos-15
+    # The standard 15/26 arm64 pools repeatedly failed hosted admission.
+    # Use the GA Xcode-based arm64 image; retain native tests and signing gates.
+    runs-on: xcode-27
     timeout-minutes: 60
     env:
       DTW_CARGO_TARGET_DIR: ${{ github.workspace }}/../dtw-candidate-release-target

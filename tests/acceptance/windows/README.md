@@ -73,9 +73,10 @@ python -X utf8 tests/acceptance/windows/observe_run.py --observer C:\Temp\dtw-ob
 real cursor position and global held-key samples. Actual gaps above 50ms fail the
 strict observation check even if business effects pass. With `--metrics-root`,
 every recorded MCP call (and the interrupted execution through worker exit) must
-have bracketing samples with gaps no greater than 50ms; the whole-run maximum is
-also retained separately, including fixture startup and server teardown. Without
-that option the whole-run maximum gates the result. Sampling records Windows
+also have bracketing samples with gaps no greater than 50ms. The whole-run maximum
+always gates the result, including fixture startup and server teardown. The
+observer primes CLR serialization before publishing readiness; the probe starts
+only after its first flushed sample. Sampling records Windows
 foreground input honestly; it does not grant the macOS pointer-borrow policy to
 Windows or prove zero interference for foreground routes.
 

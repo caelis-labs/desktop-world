@@ -7,14 +7,12 @@ import ApplicationServices
 import AppKit
 import Darwin
 
-@_silgen_name("dtw_set_front_process")
-private func dtwSetFrontProcess(_ pid: Int32, _ window: UInt32) -> Bool
-@_silgen_name("dtw_set_visual_front_process")
-private func dtwSetVisualFrontProcess(_ pid: Int32, _ window: UInt32) -> Bool
-@_silgen_name("dtw_front_process_matches")
-private func dtwFrontProcessMatches(_ pid: Int32) -> Int32
-@_silgen_name("dtw_front_process_pid")
-private func dtwFrontProcessPID() -> Int32
+// NativeBridge.h imports the Rust exports with their C ABI in both the product
+// build and pure Swift controls. Keep the existing Swift-facing names local.
+private func dtwSetFrontProcess(_ pid: Int32, _ window: UInt32) -> Bool { dtw_set_front_process(pid, window) }
+private func dtwSetVisualFrontProcess(_ pid: Int32, _ window: UInt32) -> Bool { dtw_set_visual_front_process(pid, window) }
+private func dtwFrontProcessMatches(_ pid: Int32) -> Int32 { dtw_front_process_matches(pid) }
+private func dtwFrontProcessPID() -> Int32 { dtw_front_process_pid() }
 
 private struct NativeFailure: Error {
     let code: String
@@ -2430,9 +2428,9 @@ func fixedScrollPoint(_ request: [String: Any], current: CGRect) throws -> CGPoi
           x < current.maxX, y < current.maxY else { throw failure("invalid_point", "Bound scroll point is outside its window") }
     return CGPoint(x: x, y: y)
 }
-@_silgen_name("dtw_execution_scope_check") private func executionScopeCheck() -> UnsafeMutablePointer<CChar>?
-@_silgen_name("dtw_execution_scope_free") private func executionScopeFree(_ value: UnsafeMutablePointer<CChar>)
-@_silgen_name("dtw_execution_scope_active") private func executionScopeActive() -> Bool
+private func executionScopeCheck() -> UnsafeMutablePointer<CChar>? { dtw_execution_scope_check() }
+private func executionScopeFree(_ value: UnsafeMutablePointer<CChar>) { dtw_execution_scope_free(value) }
+private func executionScopeActive() -> Bool { dtw_execution_scope_active() }
 private func admitExecutionScope() throws {
     guard let response = executionScopeCheck() else { return }
     defer { executionScopeFree(response) }
@@ -2444,9 +2442,9 @@ private func admitExecutionScope() throws {
     throw failure(code, message)
 }
 
-@_silgen_name("dtw_scroll_anchor_check") private func scrollAnchorCheck() -> UnsafeMutablePointer<CChar>?
-@_silgen_name("dtw_scroll_anchor_free") private func scrollAnchorFree(_ value: UnsafeMutablePointer<CChar>)
-@_silgen_name("dtw_scroll_anchor_posted") private func scrollAnchorPosted()
+private func scrollAnchorCheck() -> UnsafeMutablePointer<CChar>? { dtw_scroll_anchor_check() }
+private func scrollAnchorFree(_ value: UnsafeMutablePointer<CChar>) { dtw_scroll_anchor_free(value) }
+private func scrollAnchorPosted() { dtw_scroll_anchor_posted() }
 private func admitScrollAnchor() throws {
     guard let response = scrollAnchorCheck() else { return }
     defer { scrollAnchorFree(response) }

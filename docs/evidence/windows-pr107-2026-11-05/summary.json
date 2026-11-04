@@ -1,0 +1,5813 @@
+{
+  "schema": 1,
+  "scope": "PR 107 Windows source-built acceptance; not installed 0.3.4 or full 42-target model acceptance",
+  "production_revision": "b422b2994fac87a7ef67559c1fdbfb0e0aece554",
+  "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+  "candidate_scope": "Windows implementation at b422b29; later macOS-only C ABI imports are covered by their native CI, not Windows GUI evidence",
+  "macos_abi_source_sha256": {
+    "cmd/dtw/src/backends/macos/NativeBridge.h": "e0618e6a8e9ed8483b9500ba15e84b2a45e282e5e6570b28707115d8863a6eb0",
+    "cmd/dtw/src/backends/macos/Native.swift": "1363caa96a47127a406bd990a2190ac3002f285425c739e332669e228fdd2afe",
+    "cmd/dtw/build.rs": "06284369f8cb5206b65d638738e8490009c6ebd988953c1a8bccaa458bd44715"
+  },
+  "skill_sha256": {
+    "skills/desktop-world/API.md": "3d84080774cd2aa13e9b550277ee4ac218a693a1544b1f43fe22d84b84354781",
+    "skills/desktop-world/PATTERNS.md": "90734729b06164021b99aac68870ec0b16806bd8258b85cb2a6e373f770b83af",
+    "skills/desktop-world/SKILL.md": "3d213f3ed75a8d5b3a301b39126c3208d23f1ee4add779d5fa65e86c4fb7c559"
+  },
+  "environment": {
+    "windows_build": "10.0.22631",
+    "desktop": "ordinary unlocked interactive, not elevated",
+    "displays": [
+      {
+        "bounds": [
+          0,
+          0,
+          2560,
+          1440
+        ],
+        "work_area": [
+          0,
+          0,
+          2560,
+          1380
+        ],
+        "dpi": 120
+      }
+    ]
+  },
+  "audit_revision_before_report_commit": "e9b61753d36a40a83a6246580b79124b7c28c287",
+  "audit_source_sha256": {
+    "tests/acceptance/anchored_scroll_probe.py": "e9da038f28b8d659eac37ade1692494333ba612c7452f822ca6b83b7288590f8",
+    "tests/acceptance/application_surface_probe.py": "24065d40cf9d7fff820f461d3a21776e75a474d4e28acee0f4fd2770a2a0316a",
+    "tests/acceptance/app_client.py": "c3bdc59d59ef1d9eb7b8dd48ee291aa1cb74984b4c053d2c2fd80febe7377b7a",
+    "tests/acceptance/app_lifecycle_probe.py": "3e2404ff684845342a535dadcbfce03638a5eceacbf5f7f59112d5900f83dd7f",
+    "tests/acceptance/app_protocol_probe.py": "2eae831eac5758cfadbb338d52eb3db5701ef44f3fb7f80c7eb7e3538559c1f9",
+    "tests/acceptance/app_scene_probe.py": "1eace6286832e91190e79fd5c2013e4cebf2432ca7b756b7bef16ad6037e1217",
+    "tests/acceptance/app_scene_readonly_probe.py": "0ac1d734acaf620d3bf4b285d70a516615482a1221d1c76252c62c2dddbecf94",
+    "tests/acceptance/app_script_probe.py": "2f7ef1cb23c5135dc5078ae6a3aaf438f27769c903d7f25b7cab89ccb59f58e7",
+    "tests/acceptance/ax_compat_probe.py": "5c064d2830d59728f5d6e414212e5c883aeedc848943e7619de93aa089b36306",
+    "tests/acceptance/background_browser_probe.py": "cf52cec05c59a6ac5b51a7d4dbc9ebe18a15f0bf95c35d98f549e98ac0c8ed17",
+    "tests/acceptance/background_input_probe.py": "84127aaab98e9603bd377c58ef2c3bb7f4a1e51019306e9778d00faf768277c1",
+    "tests/acceptance/background_lifecycle_probe.py": "38133724bd167cc63b98247726b72b01b047573d58cbebf547acc98f60983e98",
+    "tests/acceptance/browser_workbench_probe.py": "88cf1f4acd293bf23c949d6c9c72bd0589e612554d8dac0b8f99253ec42582a5",
+    "tests/acceptance/chrome_isolation.py": "1e6afd5968e1a1a661beb45f4a6d699d6cbc83149ebee72af08e581c72945931",
+    "tests/acceptance/computer_use_acceptance.py": "41c6de88c8353c639ccff61292ebde098cc33cbd159580ecd7b309031b93d086",
+    "tests/acceptance/computer_use_benchmark.py": "b291b892fe66ca2ea0228bc3d54632fc874be46229f15d2d8ada28f6ac101162",
+    "tests/acceptance/computer_use_boundary_cases.py": "8c520e8c4b49d5c5770916a892afe099d2062b7dd038f8c7688c242b84c1e928",
+    "tests/acceptance/computer_use_browser_cases.py": "a743a3b618c437ad15aa36f3aed41ebaae87eb83e9e652cc1bddcca3bd438226",
+    "tests/acceptance/computer_use_cursor.py": "518c0dd028184ff12bff4953399cd9eeb89bbbf0e31432c1da916eb59a2155a6",
+    "tests/acceptance/computer_use_focus.py": "39733dd4d8085c8f0f95d99017c348276f94be86bdba2c2b752a664946c428ad",
+    "tests/acceptance/computer_use_native_cases.py": "fbb2384f156cf2a3394c3233cc064609044c09ff9912cc583f7812f7c0fdfd5e",
+    "tests/acceptance/computer_use_scope.py": "8cd0e2c3a39e90b692f951b1cc6b48bf78522bfa9de02cb1fd982f6b898c4cb8",
+    "tests/acceptance/computer_use_target.py": "7d0bed88761c0b103f68c88053404f14b11933d77a2d4026cadf5da40fc66c9f",
+    "tests/acceptance/computer_use_web_cases.py": "0012e8619f117ad8c36d3c3ddfbef5f097768795377db87171da9be37a109c26",
+    "tests/acceptance/current_real_app_tasks.py": "a6b3f7345260f985125700fcd4299e4ff99bb722f3f10bdec087d1dc662ee014",
+    "tests/acceptance/current_task_metrics.py": "1bdff67091f7e70de669fc7660453117f91f2fd1e069e3af71ef560ccd788a7b",
+    "tests/acceptance/cursor_audit.py": "78e76e8dc3ecebde8543fccd6f4e817b2d19f088b4caa5bea6e79d5630ae84a8",
+    "tests/acceptance/cursor_overlay_probe.py": "38760c5006c04ea91e7d4d8d31492ee472be16d1deee74e50486b14dba2fc1df",
+    "tests/acceptance/directed_chromium_probe.py": "9e7073f59025c09b69cde0f8db639aa4cec8e685fc603fe31b80bee2aa7b0bbb",
+    "tests/acceptance/directed_pointer_probe.py": "6bb1cb565178835cb42ec5b7a92a4694cb0d6e7672794c1720e9e1ca303bb6cd",
+    "tests/acceptance/input_cleanup_probe.py": "729eb852857e2a9d3082834a2d1da8b7ef94540cbab7a555e2e7952d62f418fb",
+    "tests/acceptance/macos_scene_sequence_probe.py": "f9959dfd427d1186c85afc7c26421b23d6290d555939c8898b9c5219f0f51709",
+    "tests/acceptance/multidisplay_browser_probe.py": "d71d9483b274c76ead8c2e552eb36217fa6fcd5a05d7a8a82a3da90c800e75e8",
+    "tests/acceptance/multi_instance_probe.py": "d02521d593f796cbff0453494f96a1830b96cadc0e5410696a40c882808859cb",
+    "tests/acceptance/native_checkpoint_probe.py": "03ef5a2d73121db9083695a19d22669e5d95293873e9ee8caf2b5264bf4ef787",
+    "tests/acceptance/native_input_probe.py": "03aa2ccb13e66b58266f2fd335e10a1ba852753395622dca1a8e84f6ecc05fdd",
+    "tests/acceptance/package_store_probe.py": "716489df4f599a252bbde57b6d54a2781e6114178a3b40134f1dac4ddb1860c3",
+    "tests/acceptance/paged_discovery_probe.py": "94585ecec42feb498a08ef4f6c68d8219133faed1fe6b3507206b1469e1f3448",
+    "tests/acceptance/real_app_inventory_probe.py": "7211dc2f83844e61581906de9ca62235b79a7e6001670152127e085992e4a07e",
+    "tests/acceptance/real_app_tasks.py": "962bbe7e85e6c8ba84ba97e0f398030e51e01430b6f4e48ed322c65c181901cc",
+    "tests/acceptance/review_computer_use_capture.py": "3b1cd71bcfd49168e94d709d8488b06ed8647b5de3af0aac83e1659ecdee7f15",
+    "tests/acceptance/standard_agent_probe.py": "1d695729523f1a6cac2f7121998736e0b1555a3ad1b183ceaa56f86b10950f47",
+    "tests/acceptance/test_anchored_scroll_probe.py": "d99414cca04a9bb75c9244b6b69f5a5ef746187ffd6ffb8bd4975d504a49dc12",
+    "tests/acceptance/test_application_surface_probe.py": "3e505179882080576e6f9d1f0cfe7c5bfa272bda47ae02eae95bb5cd272bca58",
+    "tests/acceptance/test_background_input_probe.py": "aef6799e830cce972c965834f4d4dc25dfbf50151100632954abbd64da3b3eb3",
+    "tests/acceptance/test_browser_workbench_probe.py": "fae38d4910baa8e77fa43ad4ad0677cfd5999eda00aea17b06fa8ced53c19689",
+    "tests/acceptance/test_computer_use_acceptance.py": "c86bf734f5f2bcb7bc722186eb67b7ec6e119384d0a9b3cb01c7d9a55253bfd1",
+    "tests/acceptance/test_computer_use_benchmark.py": "8e3715de3659591805804b0a4d6553b663f1dd0c17e25501815c76dc901cdc84",
+    "tests/acceptance/test_computer_use_boundary_cases.py": "52866e7cea8034d9d1d0ee536e7495fba67d9b30406dd9c84a8bc61b59690d7a",
+    "tests/acceptance/test_computer_use_browser_cases.py": "ca33a73719fa61654c1534f7203c8b20a6b36f74afbc3a3310b52f24b36813dc",
+    "tests/acceptance/test_computer_use_cursor.py": "ce4cd368850a7c97d04106a5f392fe1f1a0ed58bf778bccff5cff69f2fc8a2fe",
+    "tests/acceptance/test_computer_use_focus.py": "6e59a2cd5b1ace348d97cedef0c86b5677a80f399320d25ba978f24f9bd18251",
+    "tests/acceptance/test_computer_use_native_cases.py": "ac869609422990b874bbc58457e7501a0090ca6e433540e910b58615b64759a2",
+    "tests/acceptance/test_computer_use_scope.py": "76345add7f2e9ed6ed296e21181b0924a1e6391c667c502c8d59e006a733f881",
+    "tests/acceptance/test_computer_use_target.py": "a9e65c84c359b32a75009f82944cedbf6af7c24c3c4957b1cb42f3f883a08028",
+    "tests/acceptance/test_computer_use_web_cases.py": "77d94110eec36a92efcc4a9a0489713c4edc7fd28c99c7181e9f691ae3fbbdd2",
+    "tests/acceptance/test_current_real_app_tasks.py": "fae47bff45970dfd70d58561e566c1ce234cbc930c709952dab3e47a5202a716",
+    "tests/acceptance/test_cursor_audit.py": "c68d2ff8cf1056098705502de57015bf91640b0ee6a2d322b2635bc44657f170",
+    "tests/acceptance/test_cursor_overlay_probe.py": "fcb75b6a8c4f643d5a4e2dfcb60ddfff2981240956ece3189a28f7d9e3177a07",
+    "tests/acceptance/test_macos_scene_sequence_probe.py": "0d17e8484270a609737f567bc9e770ad389a9d6a6d56015fbd0c443e8f6b31da",
+    "tests/acceptance/test_native_input_probe.py": "7999c5d48eb8538be9587d39134fd1df9d27f9ee57a7e8fcf66e1b50acecdc37",
+    "tests/acceptance/test_real_app_tasks.py": "a102beb1b72ce82439991efc74eb84c6e5047b3090e92c88d37e0f76e60f6042",
+    "tests/acceptance/test_windows_computer_use_fixture.py": "37a3a42b6f6e60b4960475db743b350eea7b4bd433ff1b4472b47e6a8e3e5ca9",
+    "tests/acceptance/test_windows_observer.py": "eb5f34e1dc4cd0e2010dc8f8accb314331b9a63d51634112c8ebc37525afbe3b",
+    "tests/acceptance/textedit_control_probe.py": "1e7e04327a2b58ffbc1ebd6c01b294b51c1fd34d957630afa5aebcac9fee469e",
+    "tests/acceptance/web_discovery_probe.py": "8bcda7960b8d34f39880f832fad25c3b3150ea4819014d833743e15cc4afc5a4",
+    "tests/acceptance/window_inventory_probe.py": "476e0c92c484072185a15ee226d3f1f26a35f008ffbc7f6719e64d7e4a359c32",
+    "tests/acceptance/windows/app_protocol_probe.py": "58fe6a95cfc3b6ed9fee4e860de9d84622ec08a12a710a5cf5f3d2511e8cdd81",
+    "tests/acceptance/windows/background_probe.py": "3638882167a3b945b36d512ce399c3c17d4e1c1fb7b1a5cd34baf9fec9436c8b",
+    "tests/acceptance/windows/blocking_probe.py": "e0a5e141a9ff5aeff8ccf837b76eb626fc001af64a282dbf72722939bb8c1bbf",
+    "tests/acceptance/windows/browser_delivery_probe.py": "7d95458e5a6790b32d7575be7ec29cee003a6b25f83c213cd4b7ac0b41c0497d",
+    "tests/acceptance/windows/browser_feature_audit.py": "d2d94b74ad98eb81dfa159082b382d957f75dc221c3dc878131f5b4c09fad461",
+    "tests/acceptance/windows/browser_mouse_probe.py": "8197ff353e66546d103957d9036b2e6d2b4cf8a73c31c19c8d01bc0177675178",
+    "tests/acceptance/windows/browser_reliability_probe.py": "c4dc403fc95f27f982ac111b49e9c14bdf4879e70859f8e3ab6434beb63165e6",
+    "tests/acceptance/windows/capture_preparation_probe.py": "931824e3ae3bc4cab9ecd5b5979f0caa29aa148e299bbd70b89bea26d0c8a7cf",
+    "tests/acceptance/windows/compile-cursor.ps1": "57fc5e1e9b89243346915164c45954dbc053f98fbfa56a3e49d3bb5dcfa46867",
+    "tests/acceptance/windows/computer_use_probe.py": "6e8f1db4f244216249d6eada8ec1cca3935b47360f1ef71903429ef805d70e14",
+    "tests/acceptance/windows/CursorObserver.cs": "19ff0d6e3049eb43737595560549cb27b5b3c8f45de4e0e66070359020e7d486",
+    "tests/acceptance/windows/cursor_idle_probe.py": "b438779ee938c8fd2168c9360f44cd256eb3c68346047aec8b87b52e96795451",
+    "tests/acceptance/windows/cursor_probe.py": "696876c821a70b36be825d84c4a6c5050f264c354c66c383a495ab818d3e6244",
+    "tests/acceptance/windows/delivery_guard_probe.py": "7571ae410b74e3b7c6471448e69881c221b8aacac7e7fbcb930b17f06d5c082a",
+    "tests/acceptance/windows/delivery_probe.py": "a837aa0c15db093fd1150e2e895cb5796cf931df8bcc363ab8cbe27950cee5e9",
+    "tests/acceptance/windows/desktop_probe.py": "2d0d680e1b9cd1902842694be65ad88d0a64a1dd14d3644899535273e9b9c5cd",
+    "tests/acceptance/windows/desktop_process.py": "0e2bece0ed903a5e700e1e8b2f90b191babbb61360dcc9e7f80f71c7e1bf0725",
+    "tests/acceptance/windows/dpi_probe.py": "cf8727014cfe20151b28bf73072e7ebedc9017608f175470546afea9244961b2",
+    "tests/acceptance/windows/feature_audit.py": "da82b4cf119b64bdc056a287346621d8bb0370e5e131831993d48dcff22dacd2",
+    "tests/acceptance/windows/Fixture.cs": "a2ba5421210694f73461c39baa7b388bc3a319c60d37870ab38c600f4cd8c2cb",
+    "tests/acceptance/windows/input_desktop_probe.py": "8add6cadffb3859204ffa91f0b13eb351a599020461fc42774b38412f02eda4a",
+    "tests/acceptance/windows/input_queue_observer.py": "37e5e00d26df05f465726925183f7658f6b2f32d34949af212adbc9831f7495e",
+    "tests/acceptance/windows/interruption_probe.py": "e9075e639d83c98af4b3190f8951cd0e976a570dd799436a26319f0eac0aa380",
+    "tests/acceptance/windows/keyboard_terminal_probe.py": "aeffd8598e432f0fc29c2a5d331a728dceb19b1196710d5dee6612591185ec58",
+    "tests/acceptance/windows/McpPipe.cs": "66bd8ef84201227fc04be8dc4debabf7d17f36bd497a80afc877d194f90d49b4",
+    "tests/acceptance/windows/notepad_shortcut_probe.py": "589b52912558e0fd260d7f3ffe2a1cf129384f25c185d912e6749f25e3946137",
+    "tests/acceptance/windows/observe_run.py": "f0d630cb5a7cb9ca31c40233e4ff6390297b124574d7dd74e6473a118b516eb4",
+    "tests/acceptance/windows/posted_mouse_probe.py": "2918b0b7030e94ce1f0f100a51b38960323b9e55d220811d08d4e1f023dffc75",
+    "tests/acceptance/windows/probe_paths.py": "8847f9f3829d73b886bfb0c0b96985704a1f77d4c09a4db5e46de3a72ea6ec42",
+    "tests/acceptance/windows/restart_probe.py": "111648f790b2c533b08a9c8198bb44cd881d784ef75815761675c8479ee81f11",
+    "tests/acceptance/windows/smoke.ps1": "a1c21127b46a00e82fb70dbbdd50787bf02b203525cc86f2decdfcd6254d6e43",
+    "tests/acceptance/windows/transport.py": "663a046bc3c6751aeb20bfc00bf8869ef9da0441ec41c2bcd9b4e1cde097a1ee"
+  },
+  "observer_sha256": "e1709dba136dcb6077f5dd90acf121f74dfd34dca30abc0827da1bc195662c54",
+  "fixture_sha256": "02f69855ff9fb9e740a46bfaff6b9d4e59ebbca5452803f53b95155cd2749d4e",
+  "native_tests": {
+    "library_passed": 584,
+    "cli_passed": 4,
+    "mcp_integration_count_on_windows": 0,
+    "log": "artifacts/pr107/test-dpi-a01.log",
+    "sha256": "e5655d1e926c4ed9aac03174a2ed3f9b758e7413dfcd8e1901a6f85b18e3fd61"
+  },
+  "user_skips": {
+    "S04": "single monitor; user explicitly chose skip",
+    "S03_full_shadow_image": "conditional skip after pinned upstream and real native capture investigation; semantic/file/recovery flow still required"
+  },
+  "final": [
+    {
+      "name": "super",
+      "business_passed": true,
+      "observer_passed": true,
+      "whole_run_max_gap_ms": 10.8559,
+      "call_max_gap_ms": 10.8559,
+      "business_report": "artifacts/pr107/strict-a01-super/report.json",
+      "observer_report": "artifacts/pr107/strict-a01-super-observed/report.json"
+    },
+    {
+      "name": "background",
+      "business_passed": true,
+      "observer_passed": true,
+      "whole_run_max_gap_ms": 9.4363,
+      "call_max_gap_ms": 7.1468,
+      "business_report": "artifacts/pr107/strict-a01-background/report.json",
+      "observer_report": "artifacts/pr107/strict-a01-background-observed/report.json"
+    },
+    {
+      "name": "cancel",
+      "business_passed": true,
+      "observer_passed": true,
+      "whole_run_max_gap_ms": 10.477,
+      "call_max_gap_ms": 10.23,
+      "business_report": "artifacts/pr107/strict-a01-cancel/report.json",
+      "observer_report": "artifacts/pr107/strict-a01-cancel-observed/report.json"
+    },
+    {
+      "name": "eof",
+      "business_passed": true,
+      "observer_passed": true,
+      "whole_run_max_gap_ms": 8.0811,
+      "call_max_gap_ms": 5.6564,
+      "business_report": "artifacts/pr107/strict-a01-eof/report.json",
+      "observer_report": "artifacts/pr107/strict-a01-eof-observed/report.json"
+    },
+    {
+      "name": "host-death",
+      "business_passed": true,
+      "observer_passed": true,
+      "whole_run_max_gap_ms": 10.1317,
+      "call_max_gap_ms": 8.0961,
+      "business_report": "artifacts/pr107/strict-a01-host-death/report.json",
+      "observer_report": "artifacts/pr107/strict-a01-host-death-observed/report.json"
+    },
+    {
+      "name": "deadline",
+      "business_passed": true,
+      "observer_passed": true,
+      "whole_run_max_gap_ms": 9.85,
+      "call_max_gap_ms": 9.132,
+      "business_report": "artifacts/pr107/strict-a01-deadline/report.json",
+      "observer_report": "artifacts/pr107/strict-a01-deadline-observed/report.json"
+    },
+    {
+      "name": "baseline",
+      "business_passed": true,
+      "observer_passed": true,
+      "whole_run_max_gap_ms": 9.3191,
+      "call_max_gap_ms": 5.5223,
+      "business_report": "artifacts/pr107/strict-a01-baseline/report.json",
+      "observer_report": "artifacts/pr107/strict-a01-baseline-observed/report.json"
+    },
+    {
+      "name": "feature",
+      "business_passed": true,
+      "observer_passed": true,
+      "whole_run_max_gap_ms": 12.1711,
+      "call_max_gap_ms": 9.2592,
+      "business_report": "artifacts/pr107/strict-a01-feature/report.json",
+      "observer_report": "artifacts/pr107/strict-a01-feature-observed/report.json"
+    },
+    {
+      "name": "chrome",
+      "business_passed": true,
+      "observer_passed": true,
+      "whole_run_max_gap_ms": 11.2911,
+      "call_max_gap_ms": 11.2911,
+      "business_report": "artifacts/pr107/strict-a01-chrome/report.json",
+      "observer_report": "artifacts/pr107/strict-a01-chrome-observed/report.json"
+    },
+    {
+      "name": "edge",
+      "business_passed": true,
+      "observer_passed": true,
+      "whole_run_max_gap_ms": 11.2884,
+      "call_max_gap_ms": 11.2884,
+      "business_report": "artifacts/pr107/strict-a01-edge/report.json",
+      "observer_report": "artifacts/pr107/strict-a01-edge-observed/report.json"
+    }
+  ],
+  "attempts": [
+    {
+      "report": "artifacts/pr107/background-b422-a01/report.json",
+      "sha256": "fe535086abac80695de0b0e691142b6279d2b24a1dad98221c3aedace58949ea",
+      "passed": false,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": []
+    },
+    {
+      "report": "artifacts/pr107/background-b422-a02/report.json",
+      "sha256": "068bcf01fe8e9c7a0bd51a4fbca411af035c98a397ebc20989080148c8d3c242",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "posted_click",
+          "passed": true
+        },
+        {
+          "name": "posted_wheel",
+          "passed": true
+        },
+        {
+          "name": "focused_read",
+          "passed": true
+        },
+        {
+          "name": "keyboard_clean_refusal",
+          "passed": true
+        },
+        {
+          "name": "hover_clean_refusal",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "report": "artifacts/pr107/background-b422-a03/report.json",
+      "sha256": "e46d27d581b0b8737f7737f8b962f065ec8b7d7a3cbf9ff8ea3e93cd67930220",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "posted_click",
+          "passed": true
+        },
+        {
+          "name": "posted_wheel",
+          "passed": true
+        },
+        {
+          "name": "focused_read",
+          "passed": true
+        },
+        {
+          "name": "keyboard_clean_refusal",
+          "passed": true
+        },
+        {
+          "name": "hover_clean_refusal",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "report": "artifacts/pr107/background-b422-a04/report.json",
+      "sha256": "53ed8c953c1bc14e1edf359bacbccb8e07c03e33b84a3e7846a814355d434f91",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "posted_click",
+          "passed": true
+        },
+        {
+          "name": "posted_wheel",
+          "passed": true
+        },
+        {
+          "name": "focused_read",
+          "passed": true
+        },
+        {
+          "name": "keyboard_clean_refusal",
+          "passed": true
+        },
+        {
+          "name": "hover_clean_refusal",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "report": "artifacts/pr107/background-b422-observed-a01/report.json",
+      "sha256": "306e74dbe2de287f0ffce82dd4b14ff102d3c88677f36596724a5580bbda96b3",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 3845,
+        "max_gap_ms": 49.1389,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "every recorded MCP call plus interrupted execution interval; whole-run max retained",
+      "call_max_gap_ms": 7.5349,
+      "intervals": []
+    },
+    {
+      "report": "artifacts/pr107/background-b422-observed-a02/report.json",
+      "sha256": "2b96208c3cdb712ac205f463d30c9669145ee2ce062be1602fb2df37a60521f3",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 3072,
+        "max_gap_ms": 51.7918,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "every recorded MCP call plus interrupted execution interval; whole-run max retained",
+      "call_max_gap_ms": 7.3875,
+      "intervals": [
+        {
+          "name": "posted_click",
+          "passed": false,
+          "samples": 290,
+          "max_gap_ms": 4.5106,
+          "foreground_preserved": true,
+          "cursor_preserved": false
+        },
+        {
+          "name": "posted_wheel",
+          "passed": false,
+          "samples": 277,
+          "max_gap_ms": 5.0216,
+          "foreground_preserved": true,
+          "cursor_preserved": false
+        },
+        {
+          "name": "focused_read",
+          "passed": false,
+          "samples": 222,
+          "max_gap_ms": 4.4722,
+          "foreground_preserved": true,
+          "cursor_preserved": false
+        },
+        {
+          "name": "keyboard_clean_refusal",
+          "passed": false,
+          "samples": 241,
+          "max_gap_ms": 5.1205,
+          "foreground_preserved": true,
+          "cursor_preserved": false
+        },
+        {
+          "name": "hover_clean_refusal",
+          "passed": false,
+          "samples": 267,
+          "max_gap_ms": 5.1166,
+          "foreground_preserved": true,
+          "cursor_preserved": false
+        }
+      ]
+    },
+    {
+      "report": "artifacts/pr107/background-b422-observed-a03/report.json",
+      "sha256": "e1faa2d0a471a7b4fe5a7824e204b8c2e73bcd3aea91901da1b77bbf4451e069",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 3085,
+        "max_gap_ms": 48.5245,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "every recorded MCP call plus interrupted execution interval; whole-run max retained",
+      "call_max_gap_ms": 8.1326,
+      "intervals": [
+        {
+          "name": "posted_click",
+          "passed": false,
+          "samples": 296,
+          "max_gap_ms": 4.1573,
+          "foreground_preserved": true,
+          "cursor_preserved": false
+        },
+        {
+          "name": "posted_wheel",
+          "passed": false,
+          "samples": 284,
+          "max_gap_ms": 4.5326,
+          "foreground_preserved": true,
+          "cursor_preserved": false
+        },
+        {
+          "name": "focused_read",
+          "passed": false,
+          "samples": 228,
+          "max_gap_ms": 4.1898,
+          "foreground_preserved": true,
+          "cursor_preserved": false
+        },
+        {
+          "name": "keyboard_clean_refusal",
+          "passed": false,
+          "samples": 243,
+          "max_gap_ms": 4.0959,
+          "foreground_preserved": true,
+          "cursor_preserved": false
+        },
+        {
+          "name": "hover_clean_refusal",
+          "passed": false,
+          "samples": 261,
+          "max_gap_ms": 4.4852,
+          "foreground_preserved": true,
+          "cursor_preserved": false
+        }
+      ]
+    },
+    {
+      "report": "artifacts/pr107/background-b422-observed-a04/report.json",
+      "sha256": "15754a51854052bd6ed6f483d4f9b20a1f1a8febcccc4c77e622e9682a8164d2",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 3052,
+        "max_gap_ms": 50.0302,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "every recorded MCP call plus interrupted execution interval; whole-run max retained",
+      "call_max_gap_ms": 7.649,
+      "intervals": [
+        {
+          "name": "posted_click",
+          "passed": true,
+          "samples": 281,
+          "max_gap_ms": 5.4782,
+          "foreground_preserved": true,
+          "cursor_preserved": true
+        },
+        {
+          "name": "posted_wheel",
+          "passed": true,
+          "samples": 292,
+          "max_gap_ms": 5.5702,
+          "foreground_preserved": true,
+          "cursor_preserved": true
+        },
+        {
+          "name": "focused_read",
+          "passed": true,
+          "samples": 219,
+          "max_gap_ms": 5.0737,
+          "foreground_preserved": true,
+          "cursor_preserved": true
+        },
+        {
+          "name": "keyboard_clean_refusal",
+          "passed": true,
+          "samples": 249,
+          "max_gap_ms": 4.2967,
+          "foreground_preserved": true,
+          "cursor_preserved": true
+        },
+        {
+          "name": "hover_clean_refusal",
+          "passed": true,
+          "samples": 269,
+          "max_gap_ms": 5.1749,
+          "foreground_preserved": true,
+          "cursor_preserved": true
+        }
+      ]
+    },
+    {
+      "report": "artifacts/pr107/background-final-a01/report.json",
+      "sha256": "e51b38bd1f965bd863453a12e31077eb09feb69720dbb423e588c90f2a5037a1",
+      "passed": false,
+      "kind": "business",
+      "binary_sha256": "de9ce44f02b2353578f52fa9ebb7ad8f89658d67e80479933178e78912b10c59",
+      "failed_stage": null,
+      "cases": []
+    },
+    {
+      "report": "artifacts/pr107/background-observed-final-a01/report.json",
+      "sha256": "8dc5429484a635c607148a3c74f1a0eb78dfb063f85fce59de06e5295e6b1bc5",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 977,
+        "max_gap_ms": 52.7554,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream",
+      "call_max_gap_ms": null,
+      "intervals": [
+        {
+          "name": "uia_click",
+          "passed": false,
+          "samples": 292,
+          "max_gap_ms": 7.096923828125,
+          "foreground_preserved": false,
+          "cursor_preserved": false
+        }
+      ]
+    },
+    {
+      "report": "artifacts/pr107/baseline-a01/report.json",
+      "sha256": "4bfcf00a937c6eecdc46c25321995937d793a2c6d63387673687275952dc2ad8",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "be1a3e6117c08cb57db19bed69ac48f8852b96d3555c73657877ba72e0677a7c",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "discovery_required_app_and_public_surface",
+          "passed": true
+        },
+        {
+          "name": "returned_view_dedup_and_bounded_unchanged_delta",
+          "passed": true
+        },
+        {
+          "name": "semantic_click_unicode_keyboard_and_file_readback",
+          "passed": true
+        },
+        {
+          "name": "physical_bounds_order_and_covered_window_composition",
+          "passed": true
+        },
+        {
+          "name": "modal_close_fresh_read_without_input_replay",
+          "passed": true
+        }
+      ],
+      "fixture_exit": 0
+    },
+    {
+      "report": "artifacts/pr107/baseline-b422-a01/report.json",
+      "sha256": "da7be1926d017a0138a8efeb93ccc927a80d645bab05c6f5de694905b7d9e432",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "discovery_required_app_and_public_surface",
+          "passed": true
+        },
+        {
+          "name": "returned_view_dedup_and_bounded_unchanged_delta",
+          "passed": true
+        },
+        {
+          "name": "semantic_click_unicode_keyboard_and_file_readback",
+          "passed": true
+        },
+        {
+          "name": "physical_bounds_order_and_covered_window_composition",
+          "passed": true
+        },
+        {
+          "name": "modal_close_fresh_read_without_input_replay",
+          "passed": true
+        }
+      ],
+      "fixture_exit": 0
+    },
+    {
+      "report": "artifacts/pr107/baseline-b422-observed-a01/report.json",
+      "sha256": "013e43799c9fa00a9cde66f761e62f6de7576d6eeb22ef2a3104f3a360404f8e",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 3747,
+        "max_gap_ms": 47.5063,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "every recorded MCP call plus interrupted execution interval; whole-run max retained",
+      "call_max_gap_ms": 5.6424
+    },
+    {
+      "report": "artifacts/pr107/baseline-final-a01/report.json",
+      "sha256": "e35751ae0c468eab372603e8ffa222ca5cfd6d1e4403fbb463426bece87b7a60",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "de9ce44f02b2353578f52fa9ebb7ad8f89658d67e80479933178e78912b10c59",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "discovery_required_app_and_public_surface",
+          "passed": true
+        },
+        {
+          "name": "returned_view_dedup_and_bounded_unchanged_delta",
+          "passed": true
+        },
+        {
+          "name": "semantic_click_unicode_keyboard_and_file_readback",
+          "passed": true
+        },
+        {
+          "name": "physical_bounds_order_and_covered_window_composition",
+          "passed": true
+        },
+        {
+          "name": "modal_close_fresh_read_without_input_replay",
+          "passed": true
+        }
+      ],
+      "fixture_exit": 0
+    },
+    {
+      "report": "artifacts/pr107/baseline-observed-final-a01/report.json",
+      "sha256": "e9e7d7751add80d556783b455b6b06744d2be3f080655958eeb3ba3ac18baba7",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 3774,
+        "max_gap_ms": 48.507,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream",
+      "call_max_gap_ms": null
+    },
+    {
+      "report": "artifacts/pr107/cancel-a01/report.json",
+      "sha256": "89d08eff55dedaebd240b06327dc887ace37fc9997895f91697c8369c6d3c899",
+      "passed": false,
+      "kind": "business",
+      "binary_sha256": "0ac2a0a8786f35a9b14f8d4e23fb442f667f47cf4ef11346d2866fb69faf1ced",
+      "failed_stage": null,
+      "cases": [],
+      "fixture_exit": 0
+    },
+    {
+      "report": "artifacts/pr107/cancel-a02/report.json",
+      "sha256": "15158dc42147ea129f2e8d7a7526936c81d1f08d7a4e4e41dcc58886b429af00",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "0ac2a0a8786f35a9b14f8d4e23fb442f667f47cf4ef11346d2866fb69faf1ced",
+      "failed_stage": null,
+      "cases": [],
+      "fixture_exit": 0,
+      "held_observed": true,
+      "original_interruption_result": "unknown: cancellation suppressed original reply"
+    },
+    {
+      "report": "artifacts/pr107/cancel-b422-a01/report.json",
+      "sha256": "23a8e9873aa521b5a431b5cdb71f815908cfb8fcda4b9481ab93a746e0e449a6",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [],
+      "fixture_exit": 0,
+      "held_observed": true,
+      "original_interruption_result": "unknown: cancellation suppressed original reply"
+    },
+    {
+      "report": "artifacts/pr107/cancel-b422-observed-a01/report.json",
+      "sha256": "69d22a67259a41eadcb83117208587b7b61936af65256cab4a8965180db5622f",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 2860,
+        "max_gap_ms": 47.1757,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "every recorded MCP call plus interrupted execution interval; whole-run max retained",
+      "call_max_gap_ms": 8.1554
+    },
+    {
+      "report": "artifacts/pr107/cancel-final-a01/report.json",
+      "sha256": "28fc2c841af692853a8487800d7c58a8301fdac0f4783464082b9732250224f2",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "de9ce44f02b2353578f52fa9ebb7ad8f89658d67e80479933178e78912b10c59",
+      "failed_stage": null,
+      "cases": [],
+      "fixture_exit": 0,
+      "held_observed": true,
+      "original_interruption_result": "unknown: cancellation suppressed original reply"
+    },
+    {
+      "report": "artifacts/pr107/cancel-observed-a01/report.json",
+      "sha256": "75321a4ceb0b4af495676b5e30a43e2dfc8f5be16d08acfd983bfb05772dcf05",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 1635,
+        "max_gap_ms": 54.7804,
+        "timer_resolution_acquired": true,
+        "period_released": true
+      },
+      "scope": "entire stream",
+      "call_max_gap_ms": null
+    },
+    {
+      "report": "artifacts/pr107/cancel-observed-a02/report.json",
+      "sha256": "416a2cd4402e562002a871d488ccd5d72ad024c76a2fb7e03c3b85a44af4cc55",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 2048,
+        "max_gap_ms": 80.6741,
+        "timer_resolution_acquired": true,
+        "period_released": true
+      },
+      "scope": "entire stream",
+      "call_max_gap_ms": null
+    },
+    {
+      "report": "artifacts/pr107/cancel-observed-final-a01/report.json",
+      "sha256": "192d63c5ed48d2ea05e556f9885edcd89760b7fffa3feb11a2064bdf5451965d",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 2838,
+        "max_gap_ms": 48.7844,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream",
+      "call_max_gap_ms": null
+    },
+    {
+      "report": "artifacts/pr107/chrome-a01/report.json",
+      "sha256": "162670a7bb7b7c49e17d0805fb4484b6304303e49713680224fef1d99114053b",
+      "passed": false,
+      "kind": "business",
+      "binary_sha256": "0ac2a0a8786f35a9b14f8d4e23fb442f667f47cf4ef11346d2866fb69faf1ced",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "chrome_look_capture",
+          "verified": true
+        },
+        {
+          "name": "chrome_empty_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_ascii_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_terminal_caret_emoji",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_label",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_marker",
+          "verified": true
+        },
+        {
+          "name": "chrome_restore_multiline",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_increment",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_save",
+          "verified": true
+        },
+        {
+          "name": "chrome_vertical_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_horizontal_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_native_open_dialog",
+          "verified": true
+        }
+      ],
+      "browser_sha256": "4132eb3e9c5b3978874eed48cb45c21debf343a0d383b6d2fb01a5fcf349ec65",
+      "selection_sha256": null,
+      "tooltip_classes": [
+        "tooltips_class32"
+      ]
+    },
+    {
+      "report": "artifacts/pr107/chrome-a02/report.json",
+      "sha256": "0592f6afd396c207c22db7a73072a9b2b93b87be41cfe0f90f64a14f0b596a4b",
+      "passed": false,
+      "kind": "business",
+      "binary_sha256": "4138c0b38021a94186f0215b0df19edb2969c717c62ed9672bd8e8d3395c92d2",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "chrome_look_capture",
+          "verified": true
+        },
+        {
+          "name": "chrome_empty_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_ascii_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_terminal_caret_emoji",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_label",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_marker",
+          "verified": true
+        },
+        {
+          "name": "chrome_restore_multiline",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_increment",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_save",
+          "verified": true
+        },
+        {
+          "name": "chrome_vertical_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_horizontal_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_native_open_dialog",
+          "verified": true
+        }
+      ],
+      "browser_sha256": "4132eb3e9c5b3978874eed48cb45c21debf343a0d383b6d2fb01a5fcf349ec65",
+      "selection_sha256": null,
+      "tooltip_classes": [
+        "tooltips_class32"
+      ]
+    },
+    {
+      "report": "artifacts/pr107/chrome-a03/report.json",
+      "sha256": "1d43e4d0fa02df94b2d0161f745045bdc81ca4c0274ec8cb15b239164c990e4a",
+      "passed": false,
+      "kind": "business",
+      "binary_sha256": "de9ce44f02b2353578f52fa9ebb7ad8f89658d67e80479933178e78912b10c59",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "chrome_look_capture",
+          "verified": true
+        },
+        {
+          "name": "chrome_empty_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_ascii_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_terminal_caret_emoji",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_label",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_marker",
+          "verified": true
+        },
+        {
+          "name": "chrome_restore_multiline",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_increment",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_save",
+          "verified": true
+        },
+        {
+          "name": "chrome_vertical_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_horizontal_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_native_open_dialog",
+          "verified": true
+        }
+      ],
+      "strict_s03_capture_passed": false,
+      "browser_sha256": "4132eb3e9c5b3978874eed48cb45c21debf343a0d383b6d2fb01a5fcf349ec65",
+      "selection_sha256": null,
+      "tooltip_classes": [
+        "SysShadow",
+        "tooltips_class32"
+      ]
+    },
+    {
+      "report": "artifacts/pr107/chrome-b422-a01/report.json",
+      "sha256": "a2c49f2e1e3955ced3b36bd441f994dfae41d2c8de00339ac0f126753f41409e",
+      "passed": false,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "chrome_look_capture",
+          "verified": false
+        },
+        {
+          "name": "chrome_empty_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_ascii_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_terminal_caret_emoji",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_label",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_marker",
+          "verified": true
+        },
+        {
+          "name": "chrome_restore_multiline",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_increment",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_save",
+          "verified": true
+        },
+        {
+          "name": "chrome_vertical_scroll",
+          "verified": false
+        },
+        {
+          "name": "chrome_horizontal_scroll",
+          "verified": false
+        },
+        {
+          "name": "chrome_native_open_dialog",
+          "verified": false
+        }
+      ],
+      "browser_sha256": "4132eb3e9c5b3978874eed48cb45c21debf343a0d383b6d2fb01a5fcf349ec65",
+      "selection_sha256": null,
+      "tooltip_classes": []
+    },
+    {
+      "report": "artifacts/pr107/chrome-b422-a02/report.json",
+      "sha256": "3e47aa861bcc2fb9790a05505b994c1cd1a45d2f7088ed63a2a5821a2a144bcd",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "chrome_look_capture",
+          "verified": true
+        },
+        {
+          "name": "chrome_empty_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_ascii_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_terminal_caret_emoji",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_label",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_marker",
+          "verified": true
+        },
+        {
+          "name": "chrome_restore_multiline",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_increment",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_save",
+          "verified": true
+        },
+        {
+          "name": "chrome_vertical_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_horizontal_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_native_open_dialog",
+          "verified": true
+        },
+        {
+          "name": "chrome_after_dialog",
+          "verified": true
+        }
+      ],
+      "strict_s03_capture_passed": false,
+      "neighbour": {
+        "text": "NEIGHBOUR_SENTINEL",
+        "clicks": 0,
+        "scroll_x": 0,
+        "scroll_y": 0,
+        "input_events": 0
+      },
+      "browser_sha256": "4132eb3e9c5b3978874eed48cb45c21debf343a0d383b6d2fb01a5fcf349ec65",
+      "selection_sha256": "7518e86a6abdd3384ecc232751af2e7d4871e72566edc29c4f2d07327c3b803b",
+      "tooltip_classes": [
+        "SysShadow",
+        "tooltips_class32"
+      ]
+    },
+    {
+      "report": "artifacts/pr107/chrome-b422-observed-a01/report.json",
+      "sha256": "3ce7822edd54366614e313ddfb74299c1d418b9c0bfc8ff3f55b57f95da9c571",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 17486,
+        "max_gap_ms": 48.9195,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "every recorded MCP call plus interrupted execution interval; whole-run max retained",
+      "call_max_gap_ms": 10.2058
+    },
+    {
+      "report": "artifacts/pr107/chrome-b422-observed-a02/report.json",
+      "sha256": "93d73648a6e0dac76f67043a1d7af1cf78cd4068f360db40cb1552c9b8ea8c69",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 31139,
+        "max_gap_ms": 49.1692,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "every recorded MCP call plus interrupted execution interval; whole-run max retained",
+      "call_max_gap_ms": 9.105
+    },
+    {
+      "report": "artifacts/pr107/chrome-observed-a01/report.json",
+      "sha256": "beee9d5d71f3bcee1823b690c53a0339731bab796b0c1b6d192f881763b662cf",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 16938,
+        "max_gap_ms": 68.9944,
+        "timer_resolution_acquired": true,
+        "period_released": true
+      },
+      "scope": "entire stream",
+      "call_max_gap_ms": null
+    },
+    {
+      "report": "artifacts/pr107/chrome-observed-a02/report.json",
+      "sha256": "04949ad24857a0ee2387f7f7cfdf5af60312d539fc2bfdf5afde07317279ed30",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 15624,
+        "max_gap_ms": 53.4865,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream",
+      "call_max_gap_ms": null
+    },
+    {
+      "report": "artifacts/pr107/chrome-observed-a03/report.json",
+      "sha256": "f276678626f4a5c6961c550f96c9d0058497f9e2be7349ea3bbe8a3a004d9188",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 27446,
+        "max_gap_ms": 53.7608,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream",
+      "call_max_gap_ms": null
+    },
+    {
+      "report": "artifacts/pr107/deadline-b422-a01/report.json",
+      "sha256": "4bbba125d10bdd0ce10d36e7ad1bd35c86248f3259e0ad770061f787797d64ae",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [],
+      "fixture_exit": 0,
+      "held_observed": true,
+      "original_interruption_result": {
+        "error": {
+          "code": "timeout",
+          "message": "the script's wall-time limit was reached"
+        },
+        "effects": {
+          "dispatch": {
+            "unknown": 1
+          },
+          "evidence": {
+            "unverified": 1
+          },
+          "interrupted": 1
+        }
+      }
+    },
+    {
+      "report": "artifacts/pr107/deadline-b422-observed-a01/report.json",
+      "sha256": "f6791dd6bc8fd2652b803d1f610e65126d709faf2351dec4be183a8912059aa3",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 11604,
+        "max_gap_ms": 47.3593,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "every recorded MCP call plus interrupted execution interval; whole-run max retained",
+      "call_max_gap_ms": 10.8745
+    },
+    {
+      "report": "artifacts/pr107/deadline-final-a01/report.json",
+      "sha256": "34040bb2a88373af65ca50fcac964968cbcd8c9b741eb4422e7785efdfabaf81",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "de9ce44f02b2353578f52fa9ebb7ad8f89658d67e80479933178e78912b10c59",
+      "failed_stage": null,
+      "cases": [],
+      "fixture_exit": 0,
+      "held_observed": true,
+      "original_interruption_result": {
+        "error": {
+          "code": "timeout",
+          "message": "the script's wall-time limit was reached"
+        },
+        "effects": {
+          "dispatch": {
+            "unknown": 1
+          },
+          "evidence": {
+            "unverified": 1
+          },
+          "interrupted": 1
+        }
+      }
+    },
+    {
+      "report": "artifacts/pr107/deadline-observed-final-a01/report.json",
+      "sha256": "eba80cc2090310f569a3a9a262dc37875d1131374b7d2623bb4c9125a9d37f1e",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 11676,
+        "max_gap_ms": 54.8945,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream",
+      "call_max_gap_ms": null
+    },
+    {
+      "report": "artifacts/pr107/desktop-b422-a01/report.json",
+      "sha256": "611aca8a410aa64a7321502a5d5ec1a8f028e96838cd58552f5e65b2a5e45f4c",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        }
+      ],
+      "fixture_exit": 0,
+      "worker_exit": 0,
+      "owned_desktop_removed": true
+    },
+    {
+      "report": "artifacts/pr107/edge-b422-a01/report.json",
+      "sha256": "f771b67f6508bf09739c2d6d5b5f0b1efaa5ca9ed026aff8944fba67dca39b78",
+      "passed": false,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "chrome_look_capture",
+          "verified": true
+        },
+        {
+          "name": "chrome_empty_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_ascii_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_terminal_caret_emoji",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_label",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_marker",
+          "verified": true
+        },
+        {
+          "name": "chrome_restore_multiline",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_increment",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_save",
+          "verified": true
+        },
+        {
+          "name": "chrome_vertical_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_horizontal_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_native_open_dialog",
+          "verified": false
+        }
+      ],
+      "browser_sha256": "d35d48b11f0439eeeddbbff0bf54856e922f5e1506a2f3098b5a808fcec4068b",
+      "selection_sha256": null,
+      "tooltip_classes": []
+    },
+    {
+      "report": "artifacts/pr107/edge-b422-a02/report.json",
+      "sha256": "e26b6e9b09bb7ffe7bb7766247a195b3b7286d2cb18a0ba1e697997f75f977cb",
+      "passed": false,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "chrome_look_capture",
+          "verified": true
+        },
+        {
+          "name": "chrome_empty_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_ascii_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_terminal_caret_emoji",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_label",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_marker",
+          "verified": true
+        },
+        {
+          "name": "chrome_restore_multiline",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_increment",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_save",
+          "verified": true
+        },
+        {
+          "name": "chrome_vertical_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_horizontal_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_native_open_dialog",
+          "verified": true
+        },
+        {
+          "name": "chrome_after_dialog",
+          "verified": false
+        }
+      ],
+      "strict_s03_capture_passed": false,
+      "neighbour": {
+        "text": "NEIGHBOUR_SENTINEL",
+        "clicks": 0,
+        "scroll_x": 0,
+        "scroll_y": 0,
+        "input_events": 0
+      },
+      "browser_sha256": "d35d48b11f0439eeeddbbff0bf54856e922f5e1506a2f3098b5a808fcec4068b",
+      "selection_sha256": "7518e86a6abdd3384ecc232751af2e7d4871e72566edc29c4f2d07327c3b803b",
+      "tooltip_classes": [
+        "SysShadow",
+        "tooltips_class32"
+      ]
+    },
+    {
+      "report": "artifacts/pr107/edge-b422-a03/report.json",
+      "sha256": "fde7c74d6729161a4b4078e5030f5ec9b6c7669da70c8c5a3e7e6116afbd4c7b",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "chrome_look_capture",
+          "verified": true
+        },
+        {
+          "name": "chrome_empty_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_ascii_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_terminal_caret_emoji",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_label",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_marker",
+          "verified": true
+        },
+        {
+          "name": "chrome_restore_multiline",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_increment",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_save",
+          "verified": true
+        },
+        {
+          "name": "chrome_vertical_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_horizontal_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_native_open_dialog",
+          "verified": true
+        },
+        {
+          "name": "chrome_after_dialog",
+          "verified": true
+        }
+      ],
+      "strict_s03_capture_passed": false,
+      "neighbour": {
+        "text": "NEIGHBOUR_SENTINEL",
+        "clicks": 0,
+        "scroll_x": 0,
+        "scroll_y": 0,
+        "input_events": 0
+      },
+      "browser_sha256": "d35d48b11f0439eeeddbbff0bf54856e922f5e1506a2f3098b5a808fcec4068b",
+      "selection_sha256": "7518e86a6abdd3384ecc232751af2e7d4871e72566edc29c4f2d07327c3b803b",
+      "tooltip_classes": [
+        "SysShadow",
+        "tooltips_class32"
+      ]
+    },
+    {
+      "report": "artifacts/pr107/edge-b422-observed-a01/report.json",
+      "sha256": "e8a223094dcac190862a6f55f67d3395941aee848d93b9e6b14e3d4f5cbe1a54",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 19430,
+        "max_gap_ms": 49.0138,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "every recorded MCP call plus interrupted execution interval; whole-run max retained",
+      "call_max_gap_ms": 9.6248
+    },
+    {
+      "report": "artifacts/pr107/edge-b422-observed-a02/report.json",
+      "sha256": "559258d6db5bb4b5445ea94fdc695cc4f29e82b8d66f3a16922f6066a9ff152c",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 35488,
+        "max_gap_ms": 47.1278,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "every recorded MCP call plus interrupted execution interval; whole-run max retained",
+      "call_max_gap_ms": 11.0852
+    },
+    {
+      "report": "artifacts/pr107/edge-b422-observed-a03/report.json",
+      "sha256": "871fbc9e87f0bf884c72076381960b3d9eee581ea15d086778389004d2bd7ee0",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 45141,
+        "max_gap_ms": 47.278,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "every recorded MCP call plus interrupted execution interval; whole-run max retained",
+      "call_max_gap_ms": 10.2022
+    },
+    {
+      "report": "artifacts/pr107/eof-b422-a01/report.json",
+      "sha256": "33db72f3399a0894d72f2b2351c81b1a60b115c8c10e6386691d9f9bb1e58842",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [],
+      "fixture_exit": 0,
+      "held_observed": true
+    },
+    {
+      "report": "artifacts/pr107/eof-b422-observed-a01/report.json",
+      "sha256": "675353c74ee02f5ec0b982a75bad31c406f575a2838da293c0a80052f5ac725b",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 812,
+        "max_gap_ms": 46.6786,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "every recorded MCP call plus interrupted execution interval; whole-run max retained",
+      "call_max_gap_ms": 8.4141
+    },
+    {
+      "report": "artifacts/pr107/eof-final-a01/report.json",
+      "sha256": "6ff7b65bf79696d2710708cfda2b89d8f4f315b47deedc583c91b55f9da2f245",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "de9ce44f02b2353578f52fa9ebb7ad8f89658d67e80479933178e78912b10c59",
+      "failed_stage": null,
+      "cases": [],
+      "fixture_exit": 0,
+      "held_observed": true
+    },
+    {
+      "report": "artifacts/pr107/eof-observed-final-a01/report.json",
+      "sha256": "1fd6e08ea8ff26d55a29db6ec91c89597c0008df31273fb8c9cda7c35df34605",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 773,
+        "max_gap_ms": 50.7505,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream",
+      "call_max_gap_ms": null
+    },
+    {
+      "report": "artifacts/pr107/feature-a01/report.json",
+      "sha256": "a32c61016cff663b058f480c3faf2b1edde0549d5b430fcfac89c60ecddc9efa",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "be1a3e6117c08cb57db19bed69ac48f8852b96d3555c73657877ba72e0677a7c",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "installed_discovery_and_observation",
+          "passed": true
+        },
+        {
+          "name": "public_method_surface",
+          "passed": true
+        },
+        {
+          "name": "unchanged_snapshot_delta",
+          "passed": true
+        },
+        {
+          "name": "semantic_unicode_and_save",
+          "passed": true
+        },
+        {
+          "name": "semantic_id_exact_effect",
+          "passed": true
+        },
+        {
+          "name": "left_click",
+          "passed": true
+        },
+        {
+          "name": "right_click",
+          "passed": true
+        },
+        {
+          "name": "double_click",
+          "passed": true
+        },
+        {
+          "name": "hover",
+          "passed": true
+        },
+        {
+          "name": "content_drag",
+          "passed": true
+        },
+        {
+          "name": "vertical_wheel",
+          "passed": true
+        },
+        {
+          "name": "horizontal_wheel",
+          "passed": true
+        },
+        {
+          "name": "default_center_wheel",
+          "passed": true
+        },
+        {
+          "name": "native_title_bar_drag",
+          "passed": true
+        },
+        {
+          "name": "stale_geometry",
+          "passed": true
+        },
+        {
+          "name": "native_menu",
+          "passed": true
+        },
+        {
+          "name": "modal_composition",
+          "passed": true
+        },
+        {
+          "name": "modal_escape",
+          "passed": true
+        },
+        {
+          "name": "rejected_menu_does_not_focus",
+          "passed": true
+        },
+        {
+          "name": "multi_instance_continuity",
+          "passed": true
+        },
+        {
+          "name": "front_order_B",
+          "passed": true
+        },
+        {
+          "name": "front_order_A",
+          "passed": true
+        },
+        {
+          "name": "layered_global_alpha",
+          "passed": true
+        },
+        {
+          "name": "quit_preserves_save_prompt",
+          "passed": true
+        },
+        {
+          "name": "cancellation_and_retained_reason",
+          "passed": true
+        },
+        {
+          "name": "stopped_absolute_executable_launch_and_quit",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "report": "artifacts/pr107/feature-b422-a01/report.json",
+      "sha256": "54bfd9d2f53f6bb83d5d394c6956ae1fdb126a6c63639b4410a2135a5f308843",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "installed_discovery_and_observation",
+          "passed": true
+        },
+        {
+          "name": "public_method_surface",
+          "passed": true
+        },
+        {
+          "name": "unchanged_snapshot_delta",
+          "passed": true
+        },
+        {
+          "name": "semantic_unicode_and_save",
+          "passed": true
+        },
+        {
+          "name": "semantic_id_exact_effect",
+          "passed": true
+        },
+        {
+          "name": "left_click",
+          "passed": true
+        },
+        {
+          "name": "right_click",
+          "passed": true
+        },
+        {
+          "name": "double_click",
+          "passed": true
+        },
+        {
+          "name": "hover",
+          "passed": true
+        },
+        {
+          "name": "content_drag",
+          "passed": true
+        },
+        {
+          "name": "vertical_wheel",
+          "passed": true
+        },
+        {
+          "name": "horizontal_wheel",
+          "passed": true
+        },
+        {
+          "name": "default_center_wheel",
+          "passed": true
+        },
+        {
+          "name": "native_title_bar_drag",
+          "passed": true
+        },
+        {
+          "name": "stale_geometry",
+          "passed": true
+        },
+        {
+          "name": "native_menu",
+          "passed": true
+        },
+        {
+          "name": "modal_composition",
+          "passed": true
+        },
+        {
+          "name": "modal_escape",
+          "passed": true
+        },
+        {
+          "name": "rejected_menu_does_not_focus",
+          "passed": true
+        },
+        {
+          "name": "multi_instance_continuity",
+          "passed": true
+        },
+        {
+          "name": "front_order_B",
+          "passed": true
+        },
+        {
+          "name": "front_order_A",
+          "passed": true
+        },
+        {
+          "name": "layered_global_alpha",
+          "passed": true
+        },
+        {
+          "name": "quit_preserves_save_prompt",
+          "passed": true
+        },
+        {
+          "name": "cancellation_and_retained_reason",
+          "passed": true
+        },
+        {
+          "name": "stopped_absolute_executable_launch_and_quit",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "report": "artifacts/pr107/feature-b422-observed-a01/report.json",
+      "sha256": "5dbd16a0c778faad1f0524d3717898cd5534e96f02e39122d24387b990e2239d",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 19381,
+        "max_gap_ms": 51.551,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "every recorded MCP call plus interrupted execution interval; whole-run max retained",
+      "call_max_gap_ms": 10.9816
+    },
+    {
+      "report": "artifacts/pr107/feature-final-a01/report.json",
+      "sha256": "3e0cd7fa255ff9e051b9f0a2cb7ed875f64dc2607508eaaced3aef86cedee91c",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "de9ce44f02b2353578f52fa9ebb7ad8f89658d67e80479933178e78912b10c59",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "installed_discovery_and_observation",
+          "passed": true
+        },
+        {
+          "name": "public_method_surface",
+          "passed": true
+        },
+        {
+          "name": "unchanged_snapshot_delta",
+          "passed": true
+        },
+        {
+          "name": "semantic_unicode_and_save",
+          "passed": true
+        },
+        {
+          "name": "semantic_id_exact_effect",
+          "passed": true
+        },
+        {
+          "name": "left_click",
+          "passed": true
+        },
+        {
+          "name": "right_click",
+          "passed": true
+        },
+        {
+          "name": "double_click",
+          "passed": true
+        },
+        {
+          "name": "hover",
+          "passed": true
+        },
+        {
+          "name": "content_drag",
+          "passed": true
+        },
+        {
+          "name": "vertical_wheel",
+          "passed": true
+        },
+        {
+          "name": "horizontal_wheel",
+          "passed": true
+        },
+        {
+          "name": "default_center_wheel",
+          "passed": true
+        },
+        {
+          "name": "native_title_bar_drag",
+          "passed": true
+        },
+        {
+          "name": "stale_geometry",
+          "passed": true
+        },
+        {
+          "name": "native_menu",
+          "passed": true
+        },
+        {
+          "name": "modal_composition",
+          "passed": true
+        },
+        {
+          "name": "modal_escape",
+          "passed": true
+        },
+        {
+          "name": "rejected_menu_does_not_focus",
+          "passed": true
+        },
+        {
+          "name": "multi_instance_continuity",
+          "passed": true
+        },
+        {
+          "name": "front_order_B",
+          "passed": true
+        },
+        {
+          "name": "front_order_A",
+          "passed": true
+        },
+        {
+          "name": "layered_global_alpha",
+          "passed": true
+        },
+        {
+          "name": "quit_preserves_save_prompt",
+          "passed": true
+        },
+        {
+          "name": "cancellation_and_retained_reason",
+          "passed": true
+        },
+        {
+          "name": "stopped_absolute_executable_launch_and_quit",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "report": "artifacts/pr107/feature-observed-final-a01/report.json",
+      "sha256": "9e01c024b933eb7f1f08dac974c1bc002b53865e79015bfbd2ac9cc91599868d",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 19362,
+        "max_gap_ms": 53.1542,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream",
+      "call_max_gap_ms": null
+    },
+    {
+      "report": "artifacts/pr107/host-death-b422-a01/report.json",
+      "sha256": "dc985b678d1520a8654d47887bc526dd0f6b18bc87755b66d4a9cd67e29e7031",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [],
+      "fixture_exit": 0,
+      "held_observed": true
+    },
+    {
+      "report": "artifacts/pr107/host-death-b422-observed-a01/report.json",
+      "sha256": "a92ed3dae58178663d866c7a60f6ae5c03dfd6ed4483181c22cd4a154683ca36",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 767,
+        "max_gap_ms": 47.4932,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "every recorded MCP call plus interrupted execution interval; whole-run max retained",
+      "call_max_gap_ms": 7.6284
+    },
+    {
+      "report": "artifacts/pr107/host-death-final-a01/report.json",
+      "sha256": "26a5b8335ceea8127171db10c07ec26e9f84fbd18e81314667f99b8144586784",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "de9ce44f02b2353578f52fa9ebb7ad8f89658d67e80479933178e78912b10c59",
+      "failed_stage": null,
+      "cases": [],
+      "fixture_exit": 0,
+      "held_observed": true
+    },
+    {
+      "report": "artifacts/pr107/host-death-observed-final-a01/report.json",
+      "sha256": "1589be596b5e04845949edbb51e4dc47470f05ec8ba174a65cc6e69480058942",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 874,
+        "max_gap_ms": 48.2192,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream",
+      "call_max_gap_ms": null
+    },
+    {
+      "report": "artifacts/pr107/input-desktop-a01/report.json",
+      "sha256": "6e550e1ae68023766725044c51d4d4271f2dabfddce6c0f57f857bab74b5a39f",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "40a42fd9e83c0c85f6d3313a76353bb21071ba1d670791760c7c83ce717aac14",
+      "failed_stage": null,
+      "cases": [
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        },
+        {
+          "passed": true
+        }
+      ],
+      "fixture_exit": 0,
+      "worker_exit": 0,
+      "owned_desktop_removed": true
+    },
+    {
+      "report": "artifacts/pr107/strict-a01-background/report.json",
+      "sha256": "29559a84f06de92e01d83e116a442d48ab87312cfbf6121c814ce3c711a1287e",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "posted_click",
+          "passed": true
+        },
+        {
+          "name": "posted_wheel",
+          "passed": true
+        },
+        {
+          "name": "focused_read",
+          "passed": true
+        },
+        {
+          "name": "keyboard_clean_refusal",
+          "passed": true
+        },
+        {
+          "name": "hover_clean_refusal",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "report": "artifacts/pr107/strict-a01-background-observed/report.json",
+      "sha256": "635fdf122851d93827bb54aa9373f98e4410d7c5b495c96aba393337d2b169aa",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 3073,
+        "max_gap_ms": 9.4363,
+        "warmup_ms": 47.2518,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream plus bracketing of every recorded MCP call and interrupted execution interval",
+      "call_max_gap_ms": 7.1468,
+      "intervals": [
+        {
+          "name": "posted_click",
+          "passed": true,
+          "samples": 289,
+          "max_gap_ms": 5.0362,
+          "foreground_preserved": true,
+          "cursor_preserved": true
+        },
+        {
+          "name": "posted_wheel",
+          "passed": true,
+          "samples": 283,
+          "max_gap_ms": 4.4504,
+          "foreground_preserved": true,
+          "cursor_preserved": true
+        },
+        {
+          "name": "focused_read",
+          "passed": true,
+          "samples": 226,
+          "max_gap_ms": 4.5531,
+          "foreground_preserved": true,
+          "cursor_preserved": true
+        },
+        {
+          "name": "keyboard_clean_refusal",
+          "passed": true,
+          "samples": 251,
+          "max_gap_ms": 4.0639,
+          "foreground_preserved": true,
+          "cursor_preserved": true
+        },
+        {
+          "name": "hover_clean_refusal",
+          "passed": true,
+          "samples": 265,
+          "max_gap_ms": 5.1744,
+          "foreground_preserved": true,
+          "cursor_preserved": true
+        }
+      ]
+    },
+    {
+      "report": "artifacts/pr107/strict-a01-baseline/report.json",
+      "sha256": "028cf87a6025ede928dc0564353dad6d086e233f9770b12719dd33f289e5baa3",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "discovery_required_app_and_public_surface",
+          "passed": true
+        },
+        {
+          "name": "returned_view_dedup_and_bounded_unchanged_delta",
+          "passed": true
+        },
+        {
+          "name": "semantic_click_unicode_keyboard_and_file_readback",
+          "passed": true
+        },
+        {
+          "name": "physical_bounds_order_and_covered_window_composition",
+          "passed": true
+        },
+        {
+          "name": "modal_close_fresh_read_without_input_replay",
+          "passed": true
+        }
+      ],
+      "fixture_exit": 0
+    },
+    {
+      "report": "artifacts/pr107/strict-a01-baseline-observed/report.json",
+      "sha256": "3d0618e3bdbeda6f38528c20f2e02728233d8b10a2e6cdc037453386f4729880",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 3752,
+        "max_gap_ms": 9.3191,
+        "warmup_ms": 47.6995,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream plus bracketing of every recorded MCP call and interrupted execution interval",
+      "call_max_gap_ms": 5.5223
+    },
+    {
+      "report": "artifacts/pr107/strict-a01-cancel/report.json",
+      "sha256": "fbb2318271a8ffa85efcba81f140dbe7e41ce791c8eedd042e1f33bd3deed2f3",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [],
+      "fixture_exit": 0,
+      "held_observed": true,
+      "original_interruption_result": "unknown: cancellation suppressed original reply"
+    },
+    {
+      "report": "artifacts/pr107/strict-a01-cancel-observed/report.json",
+      "sha256": "4c17144ddad204912f4aa2dfb87f203b455459ce5b07788951fb4e138191005e",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 2877,
+        "max_gap_ms": 10.477,
+        "warmup_ms": 48.0986,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream plus bracketing of every recorded MCP call and interrupted execution interval",
+      "call_max_gap_ms": 10.23
+    },
+    {
+      "report": "artifacts/pr107/strict-a01-chrome/report.json",
+      "sha256": "81f5dcfb7543ac2bdf0a391355edec3afc30fb84aee15b4a336f97e8862fe2e1",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "chrome_look_capture",
+          "verified": true
+        },
+        {
+          "name": "chrome_empty_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_ascii_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_terminal_caret_emoji",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_label",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_marker",
+          "verified": true
+        },
+        {
+          "name": "chrome_restore_multiline",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_increment",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_save",
+          "verified": true
+        },
+        {
+          "name": "chrome_vertical_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_horizontal_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_native_open_dialog",
+          "verified": true
+        },
+        {
+          "name": "chrome_after_dialog",
+          "verified": true
+        }
+      ],
+      "strict_s03_capture_passed": false,
+      "neighbour": {
+        "text": "NEIGHBOUR_SENTINEL",
+        "clicks": 0,
+        "scroll_x": 0,
+        "scroll_y": 0,
+        "input_events": 0
+      },
+      "browser_sha256": "4132eb3e9c5b3978874eed48cb45c21debf343a0d383b6d2fb01a5fcf349ec65",
+      "selection_sha256": "7518e86a6abdd3384ecc232751af2e7d4871e72566edc29c4f2d07327c3b803b",
+      "tooltip_classes": [
+        "SysShadow",
+        "tooltips_class32"
+      ]
+    },
+    {
+      "report": "artifacts/pr107/strict-a01-chrome-observed/report.json",
+      "sha256": "8e0e40cacb068f5b6281f19112ef621bda3c244dfe130a41bf46b205f1126323",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 33824,
+        "max_gap_ms": 11.2911,
+        "warmup_ms": 48.7071,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream plus bracketing of every recorded MCP call and interrupted execution interval",
+      "call_max_gap_ms": 11.2911
+    },
+    {
+      "report": "artifacts/pr107/strict-a01-deadline/report.json",
+      "sha256": "2afd6c836f562496c69d424a457167466dc750399f0a30531ecf45752e2e886d",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [],
+      "fixture_exit": 0,
+      "held_observed": true,
+      "original_interruption_result": {
+        "error": {
+          "code": "timeout",
+          "message": "the script's wall-time limit was reached"
+        },
+        "effects": {
+          "dispatch": {
+            "unknown": 1
+          },
+          "evidence": {
+            "unverified": 1
+          },
+          "interrupted": 1
+        }
+      }
+    },
+    {
+      "report": "artifacts/pr107/strict-a01-deadline-observed/report.json",
+      "sha256": "94d0f11b9389a5f354e2523fa03798adb6a2f3c158d0386a04dd6d94d5c24598",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 11586,
+        "max_gap_ms": 9.85,
+        "warmup_ms": 47.9562,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream plus bracketing of every recorded MCP call and interrupted execution interval",
+      "call_max_gap_ms": 9.132
+    },
+    {
+      "report": "artifacts/pr107/strict-a01-edge/report.json",
+      "sha256": "9c017facf4a9a95a5a63beb4f94bde375247c65b28b3887751d08b095654d29b",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "chrome_look_capture",
+          "verified": true
+        },
+        {
+          "name": "chrome_empty_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_ascii_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_unicode_typing",
+          "verified": true
+        },
+        {
+          "name": "chrome_terminal_caret_emoji",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_label",
+          "verified": true
+        },
+        {
+          "name": "chrome_literal_marker",
+          "verified": true
+        },
+        {
+          "name": "chrome_restore_multiline",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_increment",
+          "verified": true
+        },
+        {
+          "name": "chrome_semantic_save",
+          "verified": true
+        },
+        {
+          "name": "chrome_vertical_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_horizontal_scroll",
+          "verified": true
+        },
+        {
+          "name": "chrome_native_open_dialog",
+          "verified": true
+        },
+        {
+          "name": "chrome_after_dialog",
+          "verified": true
+        }
+      ],
+      "strict_s03_capture_passed": false,
+      "neighbour": {
+        "text": "NEIGHBOUR_SENTINEL",
+        "clicks": 0,
+        "scroll_x": 0,
+        "scroll_y": 0,
+        "input_events": 0
+      },
+      "browser_sha256": "d35d48b11f0439eeeddbbff0bf54856e922f5e1506a2f3098b5a808fcec4068b",
+      "selection_sha256": "7518e86a6abdd3384ecc232751af2e7d4871e72566edc29c4f2d07327c3b803b",
+      "tooltip_classes": [
+        "SysShadow",
+        "tooltips_class32"
+      ]
+    },
+    {
+      "report": "artifacts/pr107/strict-a01-edge-observed/report.json",
+      "sha256": "ef8e852a15937a08cefdcd2eddc5846e729c793118f61155dca4507162d34b94",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 33030,
+        "max_gap_ms": 11.2884,
+        "warmup_ms": 48.2705,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream plus bracketing of every recorded MCP call and interrupted execution interval",
+      "call_max_gap_ms": 11.2884
+    },
+    {
+      "report": "artifacts/pr107/strict-a01-eof/report.json",
+      "sha256": "bedd89d9764223f4c4e83b2522ac76fb36ad122039b832342f2b5f6dac7ee1a3",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [],
+      "fixture_exit": 0,
+      "held_observed": true
+    },
+    {
+      "report": "artifacts/pr107/strict-a01-eof-observed/report.json",
+      "sha256": "977f384932ad88033255b6b87fe4532b932ef9c50d2faf24b5e8754ad72dd90c",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 806,
+        "max_gap_ms": 8.0811,
+        "warmup_ms": 47.919,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream plus bracketing of every recorded MCP call and interrupted execution interval",
+      "call_max_gap_ms": 5.6564
+    },
+    {
+      "report": "artifacts/pr107/strict-a01-feature/report.json",
+      "sha256": "74b5b0657abab6bf2eefc7bfd610f77cb2e26a1493345472233eaad184590d87",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "installed_discovery_and_observation",
+          "passed": true
+        },
+        {
+          "name": "public_method_surface",
+          "passed": true
+        },
+        {
+          "name": "unchanged_snapshot_delta",
+          "passed": true
+        },
+        {
+          "name": "semantic_unicode_and_save",
+          "passed": true
+        },
+        {
+          "name": "semantic_id_exact_effect",
+          "passed": true
+        },
+        {
+          "name": "left_click",
+          "passed": true
+        },
+        {
+          "name": "right_click",
+          "passed": true
+        },
+        {
+          "name": "double_click",
+          "passed": true
+        },
+        {
+          "name": "hover",
+          "passed": true
+        },
+        {
+          "name": "content_drag",
+          "passed": true
+        },
+        {
+          "name": "vertical_wheel",
+          "passed": true
+        },
+        {
+          "name": "horizontal_wheel",
+          "passed": true
+        },
+        {
+          "name": "default_center_wheel",
+          "passed": true
+        },
+        {
+          "name": "native_title_bar_drag",
+          "passed": true
+        },
+        {
+          "name": "stale_geometry",
+          "passed": true
+        },
+        {
+          "name": "native_menu",
+          "passed": true
+        },
+        {
+          "name": "modal_composition",
+          "passed": true
+        },
+        {
+          "name": "modal_escape",
+          "passed": true
+        },
+        {
+          "name": "rejected_menu_does_not_focus",
+          "passed": true
+        },
+        {
+          "name": "multi_instance_continuity",
+          "passed": true
+        },
+        {
+          "name": "front_order_B",
+          "passed": true
+        },
+        {
+          "name": "front_order_A",
+          "passed": true
+        },
+        {
+          "name": "layered_global_alpha",
+          "passed": true
+        },
+        {
+          "name": "quit_preserves_save_prompt",
+          "passed": true
+        },
+        {
+          "name": "cancellation_and_retained_reason",
+          "passed": true
+        },
+        {
+          "name": "stopped_absolute_executable_launch_and_quit",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "report": "artifacts/pr107/strict-a01-feature-observed/report.json",
+      "sha256": "079da148a51de05b52e0a40a9a38f100bac118a041becaa336ce001878b622eb",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 19330,
+        "max_gap_ms": 12.1711,
+        "warmup_ms": 47.9944,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream plus bracketing of every recorded MCP call and interrupted execution interval",
+      "call_max_gap_ms": 9.2592
+    },
+    {
+      "report": "artifacts/pr107/strict-a01-host-death/report.json",
+      "sha256": "2826b3fe1ff37282c8f3764e94fa9cec01edd3bf8efc795b08daa6624de5f4ae",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [],
+      "fixture_exit": 0,
+      "held_observed": true
+    },
+    {
+      "report": "artifacts/pr107/strict-a01-host-death-observed/report.json",
+      "sha256": "b928c581602d2a984d2a363f4881190ad1909af91c6f468e853219c06088986e",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 844,
+        "max_gap_ms": 10.1317,
+        "warmup_ms": 50.1918,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream plus bracketing of every recorded MCP call and interrupted execution interval",
+      "call_max_gap_ms": 8.0961
+    },
+    {
+      "report": "artifacts/pr107/strict-a01-super/report.json",
+      "sha256": "3c6ee82435edd2b77e363067ddaf2a4555a82351f2419c003a35eef7f275edf7",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "Cold known selector",
+          "id": "N01",
+          "status": "passed"
+        },
+        {
+          "name": "Native AX noise",
+          "id": "N02",
+          "status": "passed"
+        },
+        {
+          "name": "Unicode editing and commit",
+          "id": "N03",
+          "status": "passed"
+        },
+        {
+          "name": "Long native text paging",
+          "id": "N04",
+          "status": "passed"
+        },
+        {
+          "name": "Checkbox effect",
+          "id": "N05",
+          "status": "passed"
+        },
+        {
+          "name": "Slider drag",
+          "id": "N06",
+          "status": "not_run"
+        },
+        {
+          "name": "Anchored nested scrolling",
+          "id": "N07",
+          "status": "not_run"
+        },
+        {
+          "name": "Read-only app menu",
+          "id": "N08",
+          "status": "passed"
+        },
+        {
+          "name": "Independent peer window",
+          "id": "N09",
+          "status": "not_run"
+        },
+        {
+          "name": "Real Open panel cancel",
+          "id": "N10",
+          "status": "passed"
+        },
+        {
+          "name": "Real Save panel write",
+          "id": "N11",
+          "status": "passed"
+        },
+        {
+          "name": "Overwrite and cancellation",
+          "id": "N12",
+          "status": "passed"
+        },
+        {
+          "name": "Native hover and double click",
+          "id": "N13",
+          "status": "not_run"
+        },
+        {
+          "name": "Stale image geometry",
+          "id": "N14",
+          "status": "not_run"
+        },
+        {
+          "name": "Unsaved quit and restart",
+          "id": "N15",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message AX",
+          "id": "C01",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse context menu pin",
+          "id": "C02",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse Unicode reply",
+          "id": "C03",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message edit",
+          "id": "C04",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse feed scrolling",
+          "id": "C05",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit Unicode commit",
+          "id": "W01",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit AX noise",
+          "id": "W02",
+          "status": "not_run"
+        },
+        {
+          "name": "Long Web reference",
+          "id": "W03",
+          "status": "not_run"
+        },
+        {
+          "name": "Web modal validation",
+          "id": "W04",
+          "status": "not_run"
+        },
+        {
+          "name": "Web nested scrolling",
+          "id": "W05",
+          "status": "not_run"
+        },
+        {
+          "name": "Portable canvas context menu",
+          "id": "W06",
+          "status": "not_run"
+        },
+        {
+          "name": "Chromium rendering and input",
+          "id": "B01",
+          "status": "not_run"
+        },
+        {
+          "name": "Inventory pagination and neighbours",
+          "id": "B02",
+          "status": "not_run"
+        },
+        {
+          "name": "Dense duplicate labels",
+          "id": "B03",
+          "status": "not_run"
+        },
+        {
+          "name": "Input event reliability",
+          "id": "B04",
+          "status": "not_run"
+        },
+        {
+          "name": "Actual image-channel challenge",
+          "id": "B05",
+          "status": "not_run"
+        },
+        {
+          "name": "Interrupted held gesture",
+          "id": "R01",
+          "status": "not_run"
+        },
+        {
+          "name": "MCP EOF resource cleanup",
+          "id": "R02",
+          "status": "not_run"
+        },
+        {
+          "name": "Wrong instance and foreign occlusion",
+          "id": "R03",
+          "status": "not_run"
+        },
+        {
+          "name": "Background interference",
+          "id": "R04",
+          "status": "not_run"
+        },
+        {
+          "name": "Dock and app roots",
+          "id": "S01",
+          "status": "not_run"
+        },
+        {
+          "name": "Windowless menu extra",
+          "id": "S02",
+          "status": "not_run"
+        },
+        {
+          "name": "Windows chooser tooltip",
+          "id": "S03",
+          "status": "not_run"
+        },
+        {
+          "name": "Display and desktop conditions",
+          "id": "S04",
+          "status": "not_run"
+        },
+        {
+          "name": "Virtual cursor follows pointer actions",
+          "id": "P01",
+          "status": "not_run"
+        },
+        {
+          "name": "Strict system cursor occupancy",
+          "id": "P02",
+          "status": "not_run"
+        },
+        {
+          "name": "Background focus contract",
+          "id": "P03",
+          "status": "not_run"
+        }
+      ],
+      "target_baseline_passed": false
+    },
+    {
+      "report": "artifacts/pr107/strict-a01-super-observed/report.json",
+      "sha256": "245840067994f03f44c5affd62ef94f548f037aebb88e74fa3e95f0d7a20d160",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 28444,
+        "max_gap_ms": 10.8559,
+        "warmup_ms": 49.1267,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream plus bracketing of every recorded MCP call and interrupted execution interval",
+      "call_max_gap_ms": 10.8559
+    },
+    {
+      "report": "artifacts/pr107/super-a01/report.json",
+      "sha256": "4abd6abb1766f907289c872c5ef07a47284df4b2bccdb53a116b90119c84d241",
+      "passed": false,
+      "kind": "business",
+      "binary_sha256": "be1a3e6117c08cb57db19bed69ac48f8852b96d3555c73657877ba72e0677a7c",
+      "failed_stage": "N04",
+      "cases": [
+        {
+          "name": "Cold known selector",
+          "id": "N01",
+          "status": "passed"
+        },
+        {
+          "name": "Native AX noise",
+          "id": "N02",
+          "status": "passed"
+        },
+        {
+          "name": "Unicode editing and commit",
+          "id": "N03",
+          "status": "passed"
+        },
+        {
+          "name": "Long native text paging",
+          "id": "N04",
+          "status": "failed"
+        },
+        {
+          "name": "Checkbox effect",
+          "id": "N05",
+          "status": "not_run"
+        },
+        {
+          "name": "Slider drag",
+          "id": "N06",
+          "status": "not_run"
+        },
+        {
+          "name": "Anchored nested scrolling",
+          "id": "N07",
+          "status": "not_run"
+        },
+        {
+          "name": "Read-only app menu",
+          "id": "N08",
+          "status": "not_run"
+        },
+        {
+          "name": "Independent peer window",
+          "id": "N09",
+          "status": "not_run"
+        },
+        {
+          "name": "Real Open panel cancel",
+          "id": "N10",
+          "status": "not_run"
+        },
+        {
+          "name": "Real Save panel write",
+          "id": "N11",
+          "status": "not_run"
+        },
+        {
+          "name": "Overwrite and cancellation",
+          "id": "N12",
+          "status": "not_run"
+        },
+        {
+          "name": "Native hover and double click",
+          "id": "N13",
+          "status": "not_run"
+        },
+        {
+          "name": "Stale image geometry",
+          "id": "N14",
+          "status": "not_run"
+        },
+        {
+          "name": "Unsaved quit and restart",
+          "id": "N15",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message AX",
+          "id": "C01",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse context menu pin",
+          "id": "C02",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse Unicode reply",
+          "id": "C03",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message edit",
+          "id": "C04",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse feed scrolling",
+          "id": "C05",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit Unicode commit",
+          "id": "W01",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit AX noise",
+          "id": "W02",
+          "status": "not_run"
+        },
+        {
+          "name": "Long Web reference",
+          "id": "W03",
+          "status": "not_run"
+        },
+        {
+          "name": "Web modal validation",
+          "id": "W04",
+          "status": "not_run"
+        },
+        {
+          "name": "Web nested scrolling",
+          "id": "W05",
+          "status": "not_run"
+        },
+        {
+          "name": "Portable canvas context menu",
+          "id": "W06",
+          "status": "not_run"
+        },
+        {
+          "name": "Chromium rendering and input",
+          "id": "B01",
+          "status": "not_run"
+        },
+        {
+          "name": "Inventory pagination and neighbours",
+          "id": "B02",
+          "status": "not_run"
+        },
+        {
+          "name": "Dense duplicate labels",
+          "id": "B03",
+          "status": "not_run"
+        },
+        {
+          "name": "Input event reliability",
+          "id": "B04",
+          "status": "not_run"
+        },
+        {
+          "name": "Actual image-channel challenge",
+          "id": "B05",
+          "status": "not_run"
+        },
+        {
+          "name": "Interrupted held gesture",
+          "id": "R01",
+          "status": "not_run"
+        },
+        {
+          "name": "MCP EOF resource cleanup",
+          "id": "R02",
+          "status": "not_run"
+        },
+        {
+          "name": "Wrong instance and foreign occlusion",
+          "id": "R03",
+          "status": "not_run"
+        },
+        {
+          "name": "Background interference",
+          "id": "R04",
+          "status": "not_run"
+        },
+        {
+          "name": "Dock and app roots",
+          "id": "S01",
+          "status": "not_run"
+        },
+        {
+          "name": "Windowless menu extra",
+          "id": "S02",
+          "status": "not_run"
+        },
+        {
+          "name": "Windows chooser tooltip",
+          "id": "S03",
+          "status": "not_run"
+        },
+        {
+          "name": "Display and desktop conditions",
+          "id": "S04",
+          "status": "not_run"
+        },
+        {
+          "name": "Virtual cursor follows pointer actions",
+          "id": "P01",
+          "status": "not_run"
+        },
+        {
+          "name": "Strict system cursor occupancy",
+          "id": "P02",
+          "status": "not_run"
+        },
+        {
+          "name": "Background focus contract",
+          "id": "P03",
+          "status": "not_run"
+        }
+      ],
+      "target_baseline_passed": false
+    },
+    {
+      "report": "artifacts/pr107/super-a02/report.json",
+      "sha256": "912d23fb6b89470180c05b82edd181f110cc70da9a662aee01b9612c79dc95e0",
+      "passed": false,
+      "kind": "business",
+      "binary_sha256": "40a42fd9e83c0c85f6d3313a76353bb21071ba1d670791760c7c83ce717aac14",
+      "failed_stage": "N04",
+      "cases": [
+        {
+          "name": "Cold known selector",
+          "id": "N01",
+          "status": "passed"
+        },
+        {
+          "name": "Native AX noise",
+          "id": "N02",
+          "status": "passed"
+        },
+        {
+          "name": "Unicode editing and commit",
+          "id": "N03",
+          "status": "passed"
+        },
+        {
+          "name": "Long native text paging",
+          "id": "N04",
+          "status": "failed"
+        },
+        {
+          "name": "Checkbox effect",
+          "id": "N05",
+          "status": "not_run"
+        },
+        {
+          "name": "Slider drag",
+          "id": "N06",
+          "status": "not_run"
+        },
+        {
+          "name": "Anchored nested scrolling",
+          "id": "N07",
+          "status": "not_run"
+        },
+        {
+          "name": "Read-only app menu",
+          "id": "N08",
+          "status": "not_run"
+        },
+        {
+          "name": "Independent peer window",
+          "id": "N09",
+          "status": "not_run"
+        },
+        {
+          "name": "Real Open panel cancel",
+          "id": "N10",
+          "status": "not_run"
+        },
+        {
+          "name": "Real Save panel write",
+          "id": "N11",
+          "status": "not_run"
+        },
+        {
+          "name": "Overwrite and cancellation",
+          "id": "N12",
+          "status": "not_run"
+        },
+        {
+          "name": "Native hover and double click",
+          "id": "N13",
+          "status": "not_run"
+        },
+        {
+          "name": "Stale image geometry",
+          "id": "N14",
+          "status": "not_run"
+        },
+        {
+          "name": "Unsaved quit and restart",
+          "id": "N15",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message AX",
+          "id": "C01",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse context menu pin",
+          "id": "C02",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse Unicode reply",
+          "id": "C03",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message edit",
+          "id": "C04",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse feed scrolling",
+          "id": "C05",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit Unicode commit",
+          "id": "W01",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit AX noise",
+          "id": "W02",
+          "status": "not_run"
+        },
+        {
+          "name": "Long Web reference",
+          "id": "W03",
+          "status": "not_run"
+        },
+        {
+          "name": "Web modal validation",
+          "id": "W04",
+          "status": "not_run"
+        },
+        {
+          "name": "Web nested scrolling",
+          "id": "W05",
+          "status": "not_run"
+        },
+        {
+          "name": "Portable canvas context menu",
+          "id": "W06",
+          "status": "not_run"
+        },
+        {
+          "name": "Chromium rendering and input",
+          "id": "B01",
+          "status": "not_run"
+        },
+        {
+          "name": "Inventory pagination and neighbours",
+          "id": "B02",
+          "status": "not_run"
+        },
+        {
+          "name": "Dense duplicate labels",
+          "id": "B03",
+          "status": "not_run"
+        },
+        {
+          "name": "Input event reliability",
+          "id": "B04",
+          "status": "not_run"
+        },
+        {
+          "name": "Actual image-channel challenge",
+          "id": "B05",
+          "status": "not_run"
+        },
+        {
+          "name": "Interrupted held gesture",
+          "id": "R01",
+          "status": "not_run"
+        },
+        {
+          "name": "MCP EOF resource cleanup",
+          "id": "R02",
+          "status": "not_run"
+        },
+        {
+          "name": "Wrong instance and foreign occlusion",
+          "id": "R03",
+          "status": "not_run"
+        },
+        {
+          "name": "Background interference",
+          "id": "R04",
+          "status": "not_run"
+        },
+        {
+          "name": "Dock and app roots",
+          "id": "S01",
+          "status": "not_run"
+        },
+        {
+          "name": "Windowless menu extra",
+          "id": "S02",
+          "status": "not_run"
+        },
+        {
+          "name": "Windows chooser tooltip",
+          "id": "S03",
+          "status": "not_run"
+        },
+        {
+          "name": "Display and desktop conditions",
+          "id": "S04",
+          "status": "not_run"
+        },
+        {
+          "name": "Virtual cursor follows pointer actions",
+          "id": "P01",
+          "status": "not_run"
+        },
+        {
+          "name": "Strict system cursor occupancy",
+          "id": "P02",
+          "status": "not_run"
+        },
+        {
+          "name": "Background focus contract",
+          "id": "P03",
+          "status": "not_run"
+        }
+      ],
+      "target_baseline_passed": false
+    },
+    {
+      "report": "artifacts/pr107/super-a03/report.json",
+      "sha256": "47b4770fa75ec2cfb04baafda3154ad7f2a96c526bbf89704db3ce7d5d79991c",
+      "passed": false,
+      "kind": "business",
+      "binary_sha256": "1b083f235db75e46f2967241420b998aed99e935b654b80be8dd0d7eeefa2811",
+      "failed_stage": "N04",
+      "cases": [
+        {
+          "name": "Cold known selector",
+          "id": "N01",
+          "status": "passed"
+        },
+        {
+          "name": "Native AX noise",
+          "id": "N02",
+          "status": "passed"
+        },
+        {
+          "name": "Unicode editing and commit",
+          "id": "N03",
+          "status": "passed"
+        },
+        {
+          "name": "Long native text paging",
+          "id": "N04",
+          "status": "failed"
+        },
+        {
+          "name": "Checkbox effect",
+          "id": "N05",
+          "status": "not_run"
+        },
+        {
+          "name": "Slider drag",
+          "id": "N06",
+          "status": "not_run"
+        },
+        {
+          "name": "Anchored nested scrolling",
+          "id": "N07",
+          "status": "not_run"
+        },
+        {
+          "name": "Read-only app menu",
+          "id": "N08",
+          "status": "not_run"
+        },
+        {
+          "name": "Independent peer window",
+          "id": "N09",
+          "status": "not_run"
+        },
+        {
+          "name": "Real Open panel cancel",
+          "id": "N10",
+          "status": "not_run"
+        },
+        {
+          "name": "Real Save panel write",
+          "id": "N11",
+          "status": "not_run"
+        },
+        {
+          "name": "Overwrite and cancellation",
+          "id": "N12",
+          "status": "not_run"
+        },
+        {
+          "name": "Native hover and double click",
+          "id": "N13",
+          "status": "not_run"
+        },
+        {
+          "name": "Stale image geometry",
+          "id": "N14",
+          "status": "not_run"
+        },
+        {
+          "name": "Unsaved quit and restart",
+          "id": "N15",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message AX",
+          "id": "C01",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse context menu pin",
+          "id": "C02",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse Unicode reply",
+          "id": "C03",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message edit",
+          "id": "C04",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse feed scrolling",
+          "id": "C05",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit Unicode commit",
+          "id": "W01",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit AX noise",
+          "id": "W02",
+          "status": "not_run"
+        },
+        {
+          "name": "Long Web reference",
+          "id": "W03",
+          "status": "not_run"
+        },
+        {
+          "name": "Web modal validation",
+          "id": "W04",
+          "status": "not_run"
+        },
+        {
+          "name": "Web nested scrolling",
+          "id": "W05",
+          "status": "not_run"
+        },
+        {
+          "name": "Portable canvas context menu",
+          "id": "W06",
+          "status": "not_run"
+        },
+        {
+          "name": "Chromium rendering and input",
+          "id": "B01",
+          "status": "not_run"
+        },
+        {
+          "name": "Inventory pagination and neighbours",
+          "id": "B02",
+          "status": "not_run"
+        },
+        {
+          "name": "Dense duplicate labels",
+          "id": "B03",
+          "status": "not_run"
+        },
+        {
+          "name": "Input event reliability",
+          "id": "B04",
+          "status": "not_run"
+        },
+        {
+          "name": "Actual image-channel challenge",
+          "id": "B05",
+          "status": "not_run"
+        },
+        {
+          "name": "Interrupted held gesture",
+          "id": "R01",
+          "status": "not_run"
+        },
+        {
+          "name": "MCP EOF resource cleanup",
+          "id": "R02",
+          "status": "not_run"
+        },
+        {
+          "name": "Wrong instance and foreign occlusion",
+          "id": "R03",
+          "status": "not_run"
+        },
+        {
+          "name": "Background interference",
+          "id": "R04",
+          "status": "not_run"
+        },
+        {
+          "name": "Dock and app roots",
+          "id": "S01",
+          "status": "not_run"
+        },
+        {
+          "name": "Windowless menu extra",
+          "id": "S02",
+          "status": "not_run"
+        },
+        {
+          "name": "Windows chooser tooltip",
+          "id": "S03",
+          "status": "not_run"
+        },
+        {
+          "name": "Display and desktop conditions",
+          "id": "S04",
+          "status": "not_run"
+        },
+        {
+          "name": "Virtual cursor follows pointer actions",
+          "id": "P01",
+          "status": "not_run"
+        },
+        {
+          "name": "Strict system cursor occupancy",
+          "id": "P02",
+          "status": "not_run"
+        },
+        {
+          "name": "Background focus contract",
+          "id": "P03",
+          "status": "not_run"
+        }
+      ],
+      "target_baseline_passed": false
+    },
+    {
+      "report": "artifacts/pr107/super-a04/report.json",
+      "sha256": "c8805985a8babdac4b572c6d3fa38f7db2b254c4a009afc1e20b9c7194636d2f",
+      "passed": false,
+      "kind": "business",
+      "binary_sha256": "1b083f235db75e46f2967241420b998aed99e935b654b80be8dd0d7eeefa2811",
+      "failed_stage": "N04",
+      "cases": [
+        {
+          "name": "Cold known selector",
+          "id": "N01",
+          "status": "passed"
+        },
+        {
+          "name": "Native AX noise",
+          "id": "N02",
+          "status": "passed"
+        },
+        {
+          "name": "Unicode editing and commit",
+          "id": "N03",
+          "status": "passed"
+        },
+        {
+          "name": "Long native text paging",
+          "id": "N04",
+          "status": "failed"
+        },
+        {
+          "name": "Checkbox effect",
+          "id": "N05",
+          "status": "not_run"
+        },
+        {
+          "name": "Slider drag",
+          "id": "N06",
+          "status": "not_run"
+        },
+        {
+          "name": "Anchored nested scrolling",
+          "id": "N07",
+          "status": "not_run"
+        },
+        {
+          "name": "Read-only app menu",
+          "id": "N08",
+          "status": "not_run"
+        },
+        {
+          "name": "Independent peer window",
+          "id": "N09",
+          "status": "not_run"
+        },
+        {
+          "name": "Real Open panel cancel",
+          "id": "N10",
+          "status": "not_run"
+        },
+        {
+          "name": "Real Save panel write",
+          "id": "N11",
+          "status": "not_run"
+        },
+        {
+          "name": "Overwrite and cancellation",
+          "id": "N12",
+          "status": "not_run"
+        },
+        {
+          "name": "Native hover and double click",
+          "id": "N13",
+          "status": "not_run"
+        },
+        {
+          "name": "Stale image geometry",
+          "id": "N14",
+          "status": "not_run"
+        },
+        {
+          "name": "Unsaved quit and restart",
+          "id": "N15",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message AX",
+          "id": "C01",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse context menu pin",
+          "id": "C02",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse Unicode reply",
+          "id": "C03",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message edit",
+          "id": "C04",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse feed scrolling",
+          "id": "C05",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit Unicode commit",
+          "id": "W01",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit AX noise",
+          "id": "W02",
+          "status": "not_run"
+        },
+        {
+          "name": "Long Web reference",
+          "id": "W03",
+          "status": "not_run"
+        },
+        {
+          "name": "Web modal validation",
+          "id": "W04",
+          "status": "not_run"
+        },
+        {
+          "name": "Web nested scrolling",
+          "id": "W05",
+          "status": "not_run"
+        },
+        {
+          "name": "Portable canvas context menu",
+          "id": "W06",
+          "status": "not_run"
+        },
+        {
+          "name": "Chromium rendering and input",
+          "id": "B01",
+          "status": "not_run"
+        },
+        {
+          "name": "Inventory pagination and neighbours",
+          "id": "B02",
+          "status": "not_run"
+        },
+        {
+          "name": "Dense duplicate labels",
+          "id": "B03",
+          "status": "not_run"
+        },
+        {
+          "name": "Input event reliability",
+          "id": "B04",
+          "status": "not_run"
+        },
+        {
+          "name": "Actual image-channel challenge",
+          "id": "B05",
+          "status": "not_run"
+        },
+        {
+          "name": "Interrupted held gesture",
+          "id": "R01",
+          "status": "not_run"
+        },
+        {
+          "name": "MCP EOF resource cleanup",
+          "id": "R02",
+          "status": "not_run"
+        },
+        {
+          "name": "Wrong instance and foreign occlusion",
+          "id": "R03",
+          "status": "not_run"
+        },
+        {
+          "name": "Background interference",
+          "id": "R04",
+          "status": "not_run"
+        },
+        {
+          "name": "Dock and app roots",
+          "id": "S01",
+          "status": "not_run"
+        },
+        {
+          "name": "Windowless menu extra",
+          "id": "S02",
+          "status": "not_run"
+        },
+        {
+          "name": "Windows chooser tooltip",
+          "id": "S03",
+          "status": "not_run"
+        },
+        {
+          "name": "Display and desktop conditions",
+          "id": "S04",
+          "status": "not_run"
+        },
+        {
+          "name": "Virtual cursor follows pointer actions",
+          "id": "P01",
+          "status": "not_run"
+        },
+        {
+          "name": "Strict system cursor occupancy",
+          "id": "P02",
+          "status": "not_run"
+        },
+        {
+          "name": "Background focus contract",
+          "id": "P03",
+          "status": "not_run"
+        }
+      ],
+      "target_baseline_passed": false
+    },
+    {
+      "report": "artifacts/pr107/super-a05/report.json",
+      "sha256": "141ac9c2017fdd3e4a4b4c42053419ce686b04e469963cf2dda06789037516f3",
+      "passed": false,
+      "kind": "business",
+      "binary_sha256": "42c27019b00026964d6851d5d3ff336ea797fe34155bd57e70dfd24fd2814d88",
+      "failed_stage": "owned_popup_sequence",
+      "cases": [
+        {
+          "name": "Cold known selector",
+          "id": "N01",
+          "status": "passed"
+        },
+        {
+          "name": "Native AX noise",
+          "id": "N02",
+          "status": "passed"
+        },
+        {
+          "name": "Unicode editing and commit",
+          "id": "N03",
+          "status": "passed"
+        },
+        {
+          "name": "Long native text paging",
+          "id": "N04",
+          "status": "passed"
+        },
+        {
+          "name": "Checkbox effect",
+          "id": "N05",
+          "status": "passed"
+        },
+        {
+          "name": "Slider drag",
+          "id": "N06",
+          "status": "not_run"
+        },
+        {
+          "name": "Anchored nested scrolling",
+          "id": "N07",
+          "status": "not_run"
+        },
+        {
+          "name": "Read-only app menu",
+          "id": "N08",
+          "status": "passed"
+        },
+        {
+          "name": "Independent peer window",
+          "id": "N09",
+          "status": "not_run"
+        },
+        {
+          "name": "Real Open panel cancel",
+          "id": "N10",
+          "status": "not_run"
+        },
+        {
+          "name": "Real Save panel write",
+          "id": "N11",
+          "status": "not_run"
+        },
+        {
+          "name": "Overwrite and cancellation",
+          "id": "N12",
+          "status": "not_run"
+        },
+        {
+          "name": "Native hover and double click",
+          "id": "N13",
+          "status": "not_run"
+        },
+        {
+          "name": "Stale image geometry",
+          "id": "N14",
+          "status": "not_run"
+        },
+        {
+          "name": "Unsaved quit and restart",
+          "id": "N15",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message AX",
+          "id": "C01",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse context menu pin",
+          "id": "C02",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse Unicode reply",
+          "id": "C03",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message edit",
+          "id": "C04",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse feed scrolling",
+          "id": "C05",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit Unicode commit",
+          "id": "W01",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit AX noise",
+          "id": "W02",
+          "status": "not_run"
+        },
+        {
+          "name": "Long Web reference",
+          "id": "W03",
+          "status": "not_run"
+        },
+        {
+          "name": "Web modal validation",
+          "id": "W04",
+          "status": "not_run"
+        },
+        {
+          "name": "Web nested scrolling",
+          "id": "W05",
+          "status": "not_run"
+        },
+        {
+          "name": "Portable canvas context menu",
+          "id": "W06",
+          "status": "not_run"
+        },
+        {
+          "name": "Chromium rendering and input",
+          "id": "B01",
+          "status": "not_run"
+        },
+        {
+          "name": "Inventory pagination and neighbours",
+          "id": "B02",
+          "status": "not_run"
+        },
+        {
+          "name": "Dense duplicate labels",
+          "id": "B03",
+          "status": "not_run"
+        },
+        {
+          "name": "Input event reliability",
+          "id": "B04",
+          "status": "not_run"
+        },
+        {
+          "name": "Actual image-channel challenge",
+          "id": "B05",
+          "status": "not_run"
+        },
+        {
+          "name": "Interrupted held gesture",
+          "id": "R01",
+          "status": "not_run"
+        },
+        {
+          "name": "MCP EOF resource cleanup",
+          "id": "R02",
+          "status": "not_run"
+        },
+        {
+          "name": "Wrong instance and foreign occlusion",
+          "id": "R03",
+          "status": "not_run"
+        },
+        {
+          "name": "Background interference",
+          "id": "R04",
+          "status": "not_run"
+        },
+        {
+          "name": "Dock and app roots",
+          "id": "S01",
+          "status": "not_run"
+        },
+        {
+          "name": "Windowless menu extra",
+          "id": "S02",
+          "status": "not_run"
+        },
+        {
+          "name": "Windows chooser tooltip",
+          "id": "S03",
+          "status": "not_run"
+        },
+        {
+          "name": "Display and desktop conditions",
+          "id": "S04",
+          "status": "not_run"
+        },
+        {
+          "name": "Virtual cursor follows pointer actions",
+          "id": "P01",
+          "status": "not_run"
+        },
+        {
+          "name": "Strict system cursor occupancy",
+          "id": "P02",
+          "status": "not_run"
+        },
+        {
+          "name": "Background focus contract",
+          "id": "P03",
+          "status": "not_run"
+        }
+      ],
+      "target_baseline_passed": false
+    },
+    {
+      "report": "artifacts/pr107/super-a06/report.json",
+      "sha256": "6111f89f12c02f457a1cc2124822185d0737c652a87aae0bc7ca7d431fa440ba",
+      "passed": false,
+      "kind": "business",
+      "binary_sha256": "0ac2a0a8786f35a9b14f8d4e23fb442f667f47cf4ef11346d2866fb69faf1ced",
+      "failed_stage": "owned_popup_sequence",
+      "cases": [
+        {
+          "name": "Cold known selector",
+          "id": "N01",
+          "status": "passed"
+        },
+        {
+          "name": "Native AX noise",
+          "id": "N02",
+          "status": "passed"
+        },
+        {
+          "name": "Unicode editing and commit",
+          "id": "N03",
+          "status": "passed"
+        },
+        {
+          "name": "Long native text paging",
+          "id": "N04",
+          "status": "passed"
+        },
+        {
+          "name": "Checkbox effect",
+          "id": "N05",
+          "status": "passed"
+        },
+        {
+          "name": "Slider drag",
+          "id": "N06",
+          "status": "not_run"
+        },
+        {
+          "name": "Anchored nested scrolling",
+          "id": "N07",
+          "status": "not_run"
+        },
+        {
+          "name": "Read-only app menu",
+          "id": "N08",
+          "status": "passed"
+        },
+        {
+          "name": "Independent peer window",
+          "id": "N09",
+          "status": "not_run"
+        },
+        {
+          "name": "Real Open panel cancel",
+          "id": "N10",
+          "status": "not_run"
+        },
+        {
+          "name": "Real Save panel write",
+          "id": "N11",
+          "status": "not_run"
+        },
+        {
+          "name": "Overwrite and cancellation",
+          "id": "N12",
+          "status": "not_run"
+        },
+        {
+          "name": "Native hover and double click",
+          "id": "N13",
+          "status": "not_run"
+        },
+        {
+          "name": "Stale image geometry",
+          "id": "N14",
+          "status": "not_run"
+        },
+        {
+          "name": "Unsaved quit and restart",
+          "id": "N15",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message AX",
+          "id": "C01",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse context menu pin",
+          "id": "C02",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse Unicode reply",
+          "id": "C03",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message edit",
+          "id": "C04",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse feed scrolling",
+          "id": "C05",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit Unicode commit",
+          "id": "W01",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit AX noise",
+          "id": "W02",
+          "status": "not_run"
+        },
+        {
+          "name": "Long Web reference",
+          "id": "W03",
+          "status": "not_run"
+        },
+        {
+          "name": "Web modal validation",
+          "id": "W04",
+          "status": "not_run"
+        },
+        {
+          "name": "Web nested scrolling",
+          "id": "W05",
+          "status": "not_run"
+        },
+        {
+          "name": "Portable canvas context menu",
+          "id": "W06",
+          "status": "not_run"
+        },
+        {
+          "name": "Chromium rendering and input",
+          "id": "B01",
+          "status": "not_run"
+        },
+        {
+          "name": "Inventory pagination and neighbours",
+          "id": "B02",
+          "status": "not_run"
+        },
+        {
+          "name": "Dense duplicate labels",
+          "id": "B03",
+          "status": "not_run"
+        },
+        {
+          "name": "Input event reliability",
+          "id": "B04",
+          "status": "not_run"
+        },
+        {
+          "name": "Actual image-channel challenge",
+          "id": "B05",
+          "status": "not_run"
+        },
+        {
+          "name": "Interrupted held gesture",
+          "id": "R01",
+          "status": "not_run"
+        },
+        {
+          "name": "MCP EOF resource cleanup",
+          "id": "R02",
+          "status": "not_run"
+        },
+        {
+          "name": "Wrong instance and foreign occlusion",
+          "id": "R03",
+          "status": "not_run"
+        },
+        {
+          "name": "Background interference",
+          "id": "R04",
+          "status": "not_run"
+        },
+        {
+          "name": "Dock and app roots",
+          "id": "S01",
+          "status": "not_run"
+        },
+        {
+          "name": "Windowless menu extra",
+          "id": "S02",
+          "status": "not_run"
+        },
+        {
+          "name": "Windows chooser tooltip",
+          "id": "S03",
+          "status": "not_run"
+        },
+        {
+          "name": "Display and desktop conditions",
+          "id": "S04",
+          "status": "not_run"
+        },
+        {
+          "name": "Virtual cursor follows pointer actions",
+          "id": "P01",
+          "status": "not_run"
+        },
+        {
+          "name": "Strict system cursor occupancy",
+          "id": "P02",
+          "status": "not_run"
+        },
+        {
+          "name": "Background focus contract",
+          "id": "P03",
+          "status": "not_run"
+        }
+      ],
+      "target_baseline_passed": false
+    },
+    {
+      "report": "artifacts/pr107/super-a07/report.json",
+      "sha256": "6b82fa2790fa42b14d767eaba0361ac0202794ce781aa3252d41e484bc33ebc2",
+      "passed": false,
+      "kind": "business",
+      "binary_sha256": "4138c0b38021a94186f0215b0df19edb2969c717c62ed9672bd8e8d3395c92d2",
+      "failed_stage": "N12",
+      "cases": [
+        {
+          "name": "Cold known selector",
+          "id": "N01",
+          "status": "passed"
+        },
+        {
+          "name": "Native AX noise",
+          "id": "N02",
+          "status": "passed"
+        },
+        {
+          "name": "Unicode editing and commit",
+          "id": "N03",
+          "status": "passed"
+        },
+        {
+          "name": "Long native text paging",
+          "id": "N04",
+          "status": "passed"
+        },
+        {
+          "name": "Checkbox effect",
+          "id": "N05",
+          "status": "passed"
+        },
+        {
+          "name": "Slider drag",
+          "id": "N06",
+          "status": "not_run"
+        },
+        {
+          "name": "Anchored nested scrolling",
+          "id": "N07",
+          "status": "not_run"
+        },
+        {
+          "name": "Read-only app menu",
+          "id": "N08",
+          "status": "passed"
+        },
+        {
+          "name": "Independent peer window",
+          "id": "N09",
+          "status": "not_run"
+        },
+        {
+          "name": "Real Open panel cancel",
+          "id": "N10",
+          "status": "passed"
+        },
+        {
+          "name": "Real Save panel write",
+          "id": "N11",
+          "status": "passed"
+        },
+        {
+          "name": "Overwrite and cancellation",
+          "id": "N12",
+          "status": "failed"
+        },
+        {
+          "name": "Native hover and double click",
+          "id": "N13",
+          "status": "not_run"
+        },
+        {
+          "name": "Stale image geometry",
+          "id": "N14",
+          "status": "not_run"
+        },
+        {
+          "name": "Unsaved quit and restart",
+          "id": "N15",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message AX",
+          "id": "C01",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse context menu pin",
+          "id": "C02",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse Unicode reply",
+          "id": "C03",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message edit",
+          "id": "C04",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse feed scrolling",
+          "id": "C05",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit Unicode commit",
+          "id": "W01",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit AX noise",
+          "id": "W02",
+          "status": "not_run"
+        },
+        {
+          "name": "Long Web reference",
+          "id": "W03",
+          "status": "not_run"
+        },
+        {
+          "name": "Web modal validation",
+          "id": "W04",
+          "status": "not_run"
+        },
+        {
+          "name": "Web nested scrolling",
+          "id": "W05",
+          "status": "not_run"
+        },
+        {
+          "name": "Portable canvas context menu",
+          "id": "W06",
+          "status": "not_run"
+        },
+        {
+          "name": "Chromium rendering and input",
+          "id": "B01",
+          "status": "not_run"
+        },
+        {
+          "name": "Inventory pagination and neighbours",
+          "id": "B02",
+          "status": "not_run"
+        },
+        {
+          "name": "Dense duplicate labels",
+          "id": "B03",
+          "status": "not_run"
+        },
+        {
+          "name": "Input event reliability",
+          "id": "B04",
+          "status": "not_run"
+        },
+        {
+          "name": "Actual image-channel challenge",
+          "id": "B05",
+          "status": "not_run"
+        },
+        {
+          "name": "Interrupted held gesture",
+          "id": "R01",
+          "status": "not_run"
+        },
+        {
+          "name": "MCP EOF resource cleanup",
+          "id": "R02",
+          "status": "not_run"
+        },
+        {
+          "name": "Wrong instance and foreign occlusion",
+          "id": "R03",
+          "status": "not_run"
+        },
+        {
+          "name": "Background interference",
+          "id": "R04",
+          "status": "not_run"
+        },
+        {
+          "name": "Dock and app roots",
+          "id": "S01",
+          "status": "not_run"
+        },
+        {
+          "name": "Windowless menu extra",
+          "id": "S02",
+          "status": "not_run"
+        },
+        {
+          "name": "Windows chooser tooltip",
+          "id": "S03",
+          "status": "not_run"
+        },
+        {
+          "name": "Display and desktop conditions",
+          "id": "S04",
+          "status": "not_run"
+        },
+        {
+          "name": "Virtual cursor follows pointer actions",
+          "id": "P01",
+          "status": "not_run"
+        },
+        {
+          "name": "Strict system cursor occupancy",
+          "id": "P02",
+          "status": "not_run"
+        },
+        {
+          "name": "Background focus contract",
+          "id": "P03",
+          "status": "not_run"
+        }
+      ],
+      "target_baseline_passed": false
+    },
+    {
+      "report": "artifacts/pr107/super-b422-a01/report.json",
+      "sha256": "cb1bbade3424d41696ece11ad7e2294159f90b35fe257a3d753473bbecadbc5d",
+      "passed": false,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": "N12",
+      "cases": [
+        {
+          "name": "Cold known selector",
+          "id": "N01",
+          "status": "passed"
+        },
+        {
+          "name": "Native AX noise",
+          "id": "N02",
+          "status": "passed"
+        },
+        {
+          "name": "Unicode editing and commit",
+          "id": "N03",
+          "status": "passed"
+        },
+        {
+          "name": "Long native text paging",
+          "id": "N04",
+          "status": "passed"
+        },
+        {
+          "name": "Checkbox effect",
+          "id": "N05",
+          "status": "passed"
+        },
+        {
+          "name": "Slider drag",
+          "id": "N06",
+          "status": "not_run"
+        },
+        {
+          "name": "Anchored nested scrolling",
+          "id": "N07",
+          "status": "not_run"
+        },
+        {
+          "name": "Read-only app menu",
+          "id": "N08",
+          "status": "passed"
+        },
+        {
+          "name": "Independent peer window",
+          "id": "N09",
+          "status": "not_run"
+        },
+        {
+          "name": "Real Open panel cancel",
+          "id": "N10",
+          "status": "passed"
+        },
+        {
+          "name": "Real Save panel write",
+          "id": "N11",
+          "status": "passed"
+        },
+        {
+          "name": "Overwrite and cancellation",
+          "id": "N12",
+          "status": "failed"
+        },
+        {
+          "name": "Native hover and double click",
+          "id": "N13",
+          "status": "not_run"
+        },
+        {
+          "name": "Stale image geometry",
+          "id": "N14",
+          "status": "not_run"
+        },
+        {
+          "name": "Unsaved quit and restart",
+          "id": "N15",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message AX",
+          "id": "C01",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse context menu pin",
+          "id": "C02",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse Unicode reply",
+          "id": "C03",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message edit",
+          "id": "C04",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse feed scrolling",
+          "id": "C05",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit Unicode commit",
+          "id": "W01",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit AX noise",
+          "id": "W02",
+          "status": "not_run"
+        },
+        {
+          "name": "Long Web reference",
+          "id": "W03",
+          "status": "not_run"
+        },
+        {
+          "name": "Web modal validation",
+          "id": "W04",
+          "status": "not_run"
+        },
+        {
+          "name": "Web nested scrolling",
+          "id": "W05",
+          "status": "not_run"
+        },
+        {
+          "name": "Portable canvas context menu",
+          "id": "W06",
+          "status": "not_run"
+        },
+        {
+          "name": "Chromium rendering and input",
+          "id": "B01",
+          "status": "not_run"
+        },
+        {
+          "name": "Inventory pagination and neighbours",
+          "id": "B02",
+          "status": "not_run"
+        },
+        {
+          "name": "Dense duplicate labels",
+          "id": "B03",
+          "status": "not_run"
+        },
+        {
+          "name": "Input event reliability",
+          "id": "B04",
+          "status": "not_run"
+        },
+        {
+          "name": "Actual image-channel challenge",
+          "id": "B05",
+          "status": "not_run"
+        },
+        {
+          "name": "Interrupted held gesture",
+          "id": "R01",
+          "status": "not_run"
+        },
+        {
+          "name": "MCP EOF resource cleanup",
+          "id": "R02",
+          "status": "not_run"
+        },
+        {
+          "name": "Wrong instance and foreign occlusion",
+          "id": "R03",
+          "status": "not_run"
+        },
+        {
+          "name": "Background interference",
+          "id": "R04",
+          "status": "not_run"
+        },
+        {
+          "name": "Dock and app roots",
+          "id": "S01",
+          "status": "not_run"
+        },
+        {
+          "name": "Windowless menu extra",
+          "id": "S02",
+          "status": "not_run"
+        },
+        {
+          "name": "Windows chooser tooltip",
+          "id": "S03",
+          "status": "not_run"
+        },
+        {
+          "name": "Display and desktop conditions",
+          "id": "S04",
+          "status": "not_run"
+        },
+        {
+          "name": "Virtual cursor follows pointer actions",
+          "id": "P01",
+          "status": "not_run"
+        },
+        {
+          "name": "Strict system cursor occupancy",
+          "id": "P02",
+          "status": "not_run"
+        },
+        {
+          "name": "Background focus contract",
+          "id": "P03",
+          "status": "not_run"
+        }
+      ],
+      "target_baseline_passed": false
+    },
+    {
+      "report": "artifacts/pr107/super-b422-a02/report.json",
+      "sha256": "cb08ea8d3ea75c9848c874825e55bd960502b4e752654fc35363c1973d1e4fb2",
+      "passed": true,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": null,
+      "cases": [
+        {
+          "name": "Cold known selector",
+          "id": "N01",
+          "status": "passed"
+        },
+        {
+          "name": "Native AX noise",
+          "id": "N02",
+          "status": "passed"
+        },
+        {
+          "name": "Unicode editing and commit",
+          "id": "N03",
+          "status": "passed"
+        },
+        {
+          "name": "Long native text paging",
+          "id": "N04",
+          "status": "passed"
+        },
+        {
+          "name": "Checkbox effect",
+          "id": "N05",
+          "status": "passed"
+        },
+        {
+          "name": "Slider drag",
+          "id": "N06",
+          "status": "not_run"
+        },
+        {
+          "name": "Anchored nested scrolling",
+          "id": "N07",
+          "status": "not_run"
+        },
+        {
+          "name": "Read-only app menu",
+          "id": "N08",
+          "status": "passed"
+        },
+        {
+          "name": "Independent peer window",
+          "id": "N09",
+          "status": "not_run"
+        },
+        {
+          "name": "Real Open panel cancel",
+          "id": "N10",
+          "status": "passed"
+        },
+        {
+          "name": "Real Save panel write",
+          "id": "N11",
+          "status": "passed"
+        },
+        {
+          "name": "Overwrite and cancellation",
+          "id": "N12",
+          "status": "passed"
+        },
+        {
+          "name": "Native hover and double click",
+          "id": "N13",
+          "status": "not_run"
+        },
+        {
+          "name": "Stale image geometry",
+          "id": "N14",
+          "status": "not_run"
+        },
+        {
+          "name": "Unsaved quit and restart",
+          "id": "N15",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message AX",
+          "id": "C01",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse context menu pin",
+          "id": "C02",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse Unicode reply",
+          "id": "C03",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message edit",
+          "id": "C04",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse feed scrolling",
+          "id": "C05",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit Unicode commit",
+          "id": "W01",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit AX noise",
+          "id": "W02",
+          "status": "not_run"
+        },
+        {
+          "name": "Long Web reference",
+          "id": "W03",
+          "status": "not_run"
+        },
+        {
+          "name": "Web modal validation",
+          "id": "W04",
+          "status": "not_run"
+        },
+        {
+          "name": "Web nested scrolling",
+          "id": "W05",
+          "status": "not_run"
+        },
+        {
+          "name": "Portable canvas context menu",
+          "id": "W06",
+          "status": "not_run"
+        },
+        {
+          "name": "Chromium rendering and input",
+          "id": "B01",
+          "status": "not_run"
+        },
+        {
+          "name": "Inventory pagination and neighbours",
+          "id": "B02",
+          "status": "not_run"
+        },
+        {
+          "name": "Dense duplicate labels",
+          "id": "B03",
+          "status": "not_run"
+        },
+        {
+          "name": "Input event reliability",
+          "id": "B04",
+          "status": "not_run"
+        },
+        {
+          "name": "Actual image-channel challenge",
+          "id": "B05",
+          "status": "not_run"
+        },
+        {
+          "name": "Interrupted held gesture",
+          "id": "R01",
+          "status": "not_run"
+        },
+        {
+          "name": "MCP EOF resource cleanup",
+          "id": "R02",
+          "status": "not_run"
+        },
+        {
+          "name": "Wrong instance and foreign occlusion",
+          "id": "R03",
+          "status": "not_run"
+        },
+        {
+          "name": "Background interference",
+          "id": "R04",
+          "status": "not_run"
+        },
+        {
+          "name": "Dock and app roots",
+          "id": "S01",
+          "status": "not_run"
+        },
+        {
+          "name": "Windowless menu extra",
+          "id": "S02",
+          "status": "not_run"
+        },
+        {
+          "name": "Windows chooser tooltip",
+          "id": "S03",
+          "status": "not_run"
+        },
+        {
+          "name": "Display and desktop conditions",
+          "id": "S04",
+          "status": "not_run"
+        },
+        {
+          "name": "Virtual cursor follows pointer actions",
+          "id": "P01",
+          "status": "not_run"
+        },
+        {
+          "name": "Strict system cursor occupancy",
+          "id": "P02",
+          "status": "not_run"
+        },
+        {
+          "name": "Background focus contract",
+          "id": "P03",
+          "status": "not_run"
+        }
+      ],
+      "target_baseline_passed": false
+    },
+    {
+      "report": "artifacts/pr107/super-b422-observed-a01/report.json",
+      "sha256": "0c4b05d853f7343496606e311ea1b0bb80c71dcd1950ab390234bbaf0518c36c",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 30605,
+        "max_gap_ms": 48.1336,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "every recorded MCP call plus interrupted execution interval; whole-run max retained",
+      "call_max_gap_ms": 10.5463
+    },
+    {
+      "report": "artifacts/pr107/super-b422-observed-a02/report.json",
+      "sha256": "50f26c67721cb7b6fa08d969951c9e7ac7cdb1cde267475e1fc0446a8fe7fa1f",
+      "passed": true,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 28089,
+        "max_gap_ms": 47.6983,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "every recorded MCP call plus interrupted execution interval; whole-run max retained",
+      "call_max_gap_ms": 10.6725
+    },
+    {
+      "report": "artifacts/pr107/super-dpi-a01/report.json",
+      "sha256": "3109928140bdecdde0f7c7b277010ed72a7741b8cfe074ec2d2ae4a4bd11bdb5",
+      "passed": false,
+      "kind": "business",
+      "binary_sha256": "e339c75d9da7b40d6384ebd3f0c8b155b16fb544a83d4d441bebb14ba592eed4",
+      "failed_stage": "N12",
+      "cases": [
+        {
+          "name": "Cold known selector",
+          "id": "N01",
+          "status": "passed"
+        },
+        {
+          "name": "Native AX noise",
+          "id": "N02",
+          "status": "passed"
+        },
+        {
+          "name": "Unicode editing and commit",
+          "id": "N03",
+          "status": "passed"
+        },
+        {
+          "name": "Long native text paging",
+          "id": "N04",
+          "status": "passed"
+        },
+        {
+          "name": "Checkbox effect",
+          "id": "N05",
+          "status": "passed"
+        },
+        {
+          "name": "Slider drag",
+          "id": "N06",
+          "status": "not_run"
+        },
+        {
+          "name": "Anchored nested scrolling",
+          "id": "N07",
+          "status": "not_run"
+        },
+        {
+          "name": "Read-only app menu",
+          "id": "N08",
+          "status": "passed"
+        },
+        {
+          "name": "Independent peer window",
+          "id": "N09",
+          "status": "not_run"
+        },
+        {
+          "name": "Real Open panel cancel",
+          "id": "N10",
+          "status": "passed"
+        },
+        {
+          "name": "Real Save panel write",
+          "id": "N11",
+          "status": "passed"
+        },
+        {
+          "name": "Overwrite and cancellation",
+          "id": "N12",
+          "status": "failed"
+        },
+        {
+          "name": "Native hover and double click",
+          "id": "N13",
+          "status": "not_run"
+        },
+        {
+          "name": "Stale image geometry",
+          "id": "N14",
+          "status": "not_run"
+        },
+        {
+          "name": "Unsaved quit and restart",
+          "id": "N15",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message AX",
+          "id": "C01",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse context menu pin",
+          "id": "C02",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse Unicode reply",
+          "id": "C03",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message edit",
+          "id": "C04",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse feed scrolling",
+          "id": "C05",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit Unicode commit",
+          "id": "W01",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit AX noise",
+          "id": "W02",
+          "status": "not_run"
+        },
+        {
+          "name": "Long Web reference",
+          "id": "W03",
+          "status": "not_run"
+        },
+        {
+          "name": "Web modal validation",
+          "id": "W04",
+          "status": "not_run"
+        },
+        {
+          "name": "Web nested scrolling",
+          "id": "W05",
+          "status": "not_run"
+        },
+        {
+          "name": "Portable canvas context menu",
+          "id": "W06",
+          "status": "not_run"
+        },
+        {
+          "name": "Chromium rendering and input",
+          "id": "B01",
+          "status": "not_run"
+        },
+        {
+          "name": "Inventory pagination and neighbours",
+          "id": "B02",
+          "status": "not_run"
+        },
+        {
+          "name": "Dense duplicate labels",
+          "id": "B03",
+          "status": "not_run"
+        },
+        {
+          "name": "Input event reliability",
+          "id": "B04",
+          "status": "not_run"
+        },
+        {
+          "name": "Actual image-channel challenge",
+          "id": "B05",
+          "status": "not_run"
+        },
+        {
+          "name": "Interrupted held gesture",
+          "id": "R01",
+          "status": "not_run"
+        },
+        {
+          "name": "MCP EOF resource cleanup",
+          "id": "R02",
+          "status": "not_run"
+        },
+        {
+          "name": "Wrong instance and foreign occlusion",
+          "id": "R03",
+          "status": "not_run"
+        },
+        {
+          "name": "Background interference",
+          "id": "R04",
+          "status": "not_run"
+        },
+        {
+          "name": "Dock and app roots",
+          "id": "S01",
+          "status": "not_run"
+        },
+        {
+          "name": "Windowless menu extra",
+          "id": "S02",
+          "status": "not_run"
+        },
+        {
+          "name": "Windows chooser tooltip",
+          "id": "S03",
+          "status": "not_run"
+        },
+        {
+          "name": "Display and desktop conditions",
+          "id": "S04",
+          "status": "not_run"
+        },
+        {
+          "name": "Virtual cursor follows pointer actions",
+          "id": "P01",
+          "status": "not_run"
+        },
+        {
+          "name": "Strict system cursor occupancy",
+          "id": "P02",
+          "status": "not_run"
+        },
+        {
+          "name": "Background focus contract",
+          "id": "P03",
+          "status": "not_run"
+        }
+      ],
+      "target_baseline_passed": false
+    },
+    {
+      "report": "artifacts/pr107/super-dpi-observed-a01/report.json",
+      "sha256": "0240643de096d0886ec0ef0a4f46f65fd5db2b0fdec4359317be223a0852d5e5",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 28681,
+        "max_gap_ms": 47.5433,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "every recorded MCP call plus interrupted execution interval; whole-run max retained",
+      "call_max_gap_ms": 9.1025
+    },
+    {
+      "report": "artifacts/pr107/super-final-a01/report.json",
+      "sha256": "907b251edf356c2a3f96251f803d84a4531950f940dfc17efc6dca4ebbfc4846",
+      "passed": false,
+      "kind": "business",
+      "binary_sha256": "de9ce44f02b2353578f52fa9ebb7ad8f89658d67e80479933178e78912b10c59",
+      "failed_stage": "N12",
+      "cases": [
+        {
+          "name": "Cold known selector",
+          "id": "N01",
+          "status": "passed"
+        },
+        {
+          "name": "Native AX noise",
+          "id": "N02",
+          "status": "passed"
+        },
+        {
+          "name": "Unicode editing and commit",
+          "id": "N03",
+          "status": "passed"
+        },
+        {
+          "name": "Long native text paging",
+          "id": "N04",
+          "status": "passed"
+        },
+        {
+          "name": "Checkbox effect",
+          "id": "N05",
+          "status": "passed"
+        },
+        {
+          "name": "Slider drag",
+          "id": "N06",
+          "status": "not_run"
+        },
+        {
+          "name": "Anchored nested scrolling",
+          "id": "N07",
+          "status": "not_run"
+        },
+        {
+          "name": "Read-only app menu",
+          "id": "N08",
+          "status": "passed"
+        },
+        {
+          "name": "Independent peer window",
+          "id": "N09",
+          "status": "not_run"
+        },
+        {
+          "name": "Real Open panel cancel",
+          "id": "N10",
+          "status": "passed"
+        },
+        {
+          "name": "Real Save panel write",
+          "id": "N11",
+          "status": "passed"
+        },
+        {
+          "name": "Overwrite and cancellation",
+          "id": "N12",
+          "status": "failed"
+        },
+        {
+          "name": "Native hover and double click",
+          "id": "N13",
+          "status": "not_run"
+        },
+        {
+          "name": "Stale image geometry",
+          "id": "N14",
+          "status": "not_run"
+        },
+        {
+          "name": "Unsaved quit and restart",
+          "id": "N15",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message AX",
+          "id": "C01",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse context menu pin",
+          "id": "C02",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse Unicode reply",
+          "id": "C03",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message edit",
+          "id": "C04",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse feed scrolling",
+          "id": "C05",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit Unicode commit",
+          "id": "W01",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit AX noise",
+          "id": "W02",
+          "status": "not_run"
+        },
+        {
+          "name": "Long Web reference",
+          "id": "W03",
+          "status": "not_run"
+        },
+        {
+          "name": "Web modal validation",
+          "id": "W04",
+          "status": "not_run"
+        },
+        {
+          "name": "Web nested scrolling",
+          "id": "W05",
+          "status": "not_run"
+        },
+        {
+          "name": "Portable canvas context menu",
+          "id": "W06",
+          "status": "not_run"
+        },
+        {
+          "name": "Chromium rendering and input",
+          "id": "B01",
+          "status": "not_run"
+        },
+        {
+          "name": "Inventory pagination and neighbours",
+          "id": "B02",
+          "status": "not_run"
+        },
+        {
+          "name": "Dense duplicate labels",
+          "id": "B03",
+          "status": "not_run"
+        },
+        {
+          "name": "Input event reliability",
+          "id": "B04",
+          "status": "not_run"
+        },
+        {
+          "name": "Actual image-channel challenge",
+          "id": "B05",
+          "status": "not_run"
+        },
+        {
+          "name": "Interrupted held gesture",
+          "id": "R01",
+          "status": "not_run"
+        },
+        {
+          "name": "MCP EOF resource cleanup",
+          "id": "R02",
+          "status": "not_run"
+        },
+        {
+          "name": "Wrong instance and foreign occlusion",
+          "id": "R03",
+          "status": "not_run"
+        },
+        {
+          "name": "Background interference",
+          "id": "R04",
+          "status": "not_run"
+        },
+        {
+          "name": "Dock and app roots",
+          "id": "S01",
+          "status": "not_run"
+        },
+        {
+          "name": "Windowless menu extra",
+          "id": "S02",
+          "status": "not_run"
+        },
+        {
+          "name": "Windows chooser tooltip",
+          "id": "S03",
+          "status": "not_run"
+        },
+        {
+          "name": "Display and desktop conditions",
+          "id": "S04",
+          "status": "not_run"
+        },
+        {
+          "name": "Virtual cursor follows pointer actions",
+          "id": "P01",
+          "status": "not_run"
+        },
+        {
+          "name": "Strict system cursor occupancy",
+          "id": "P02",
+          "status": "not_run"
+        },
+        {
+          "name": "Background focus contract",
+          "id": "P03",
+          "status": "not_run"
+        }
+      ],
+      "target_baseline_passed": false
+    },
+    {
+      "report": "artifacts/pr107/super-observed-a01/report.json",
+      "sha256": "cec33ac38bac9f8858e9eefc7720b3d0107260f9c205421a46e115cde16b5a0d",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 4164,
+        "max_gap_ms": 53.5549,
+        "timer_resolution_acquired": true,
+        "period_released": true
+      },
+      "scope": "entire stream",
+      "call_max_gap_ms": null
+    },
+    {
+      "report": "artifacts/pr107/super-observed-a02/report.json",
+      "sha256": "55a9ca6ef759beaab033659bc4ef7cf8e4f9a4046f6d42e33f8e343d3e69b560",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 4190,
+        "max_gap_ms": 52.8908,
+        "timer_resolution_acquired": true,
+        "period_released": true
+      },
+      "scope": "entire stream",
+      "call_max_gap_ms": null
+    },
+    {
+      "report": "artifacts/pr107/super-observed-a03/report.json",
+      "sha256": "8af80d42ebfb456c9df6155cd076a6f2b5b586747daadb575cf698accafa0fbf",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 6114,
+        "max_gap_ms": 50.3746,
+        "timer_resolution_acquired": true,
+        "period_released": true
+      },
+      "scope": "entire stream",
+      "call_max_gap_ms": null
+    },
+    {
+      "report": "artifacts/pr107/super-observed-a04/report.json",
+      "sha256": "80118b37034327d5bcae891988bcbca3b86fbf18c1afa1f0ceaa96b277f1be66",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 4862,
+        "max_gap_ms": 50.5575,
+        "timer_resolution_acquired": true,
+        "period_released": true
+      },
+      "scope": "entire stream",
+      "call_max_gap_ms": null
+    },
+    {
+      "report": "artifacts/pr107/super-observed-a05/report.json",
+      "sha256": "2c53a1648ae00e47ed628ca63e2e15887d7010f6d738b4130c68fdad4bcf7648",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 7184,
+        "max_gap_ms": 78.5147,
+        "timer_resolution_acquired": true,
+        "period_released": true
+      },
+      "scope": "entire stream",
+      "call_max_gap_ms": null
+    },
+    {
+      "report": "artifacts/pr107/super-observed-a06/report.json",
+      "sha256": "f73d2ac798411747a00a4cf0cf3a32f260cdb967cb0144d94683d1f84181317d",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 6884,
+        "max_gap_ms": 51.7174,
+        "timer_resolution_acquired": true,
+        "period_released": true
+      },
+      "scope": "entire stream",
+      "call_max_gap_ms": null
+    },
+    {
+      "report": "artifacts/pr107/super-observed-a07/report.json",
+      "sha256": "7e978a586e1238fbb9f3d39387b266e94f3b7758767db999d24a7e9eef74afec",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 13092,
+        "max_gap_ms": 51.5455,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream",
+      "call_max_gap_ms": null
+    },
+    {
+      "report": "artifacts/pr107/super-observed-final-a01/report.json",
+      "sha256": "67ed6fd922c2e14c5e623dc11e710da3aeac6a9fef45918346f5f04ae2df0fc7",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 26268,
+        "max_gap_ms": 48.7208,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "entire stream",
+      "call_max_gap_ms": null
+    },
+    {
+      "report": "artifacts/pr107/super-phase-a01/report.json",
+      "sha256": "15ecdaccd795859cd66f49d3ea135a5bfdbc1d4c6a41c98721575169828b1f20",
+      "passed": false,
+      "kind": "business",
+      "binary_sha256": "cc1199af6de6fc249298188b210bfd1a53f99c53bb4bf58e83ab18dbf4619cd5",
+      "failed_stage": "N12",
+      "cases": [
+        {
+          "name": "Cold known selector",
+          "id": "N01",
+          "status": "passed"
+        },
+        {
+          "name": "Native AX noise",
+          "id": "N02",
+          "status": "passed"
+        },
+        {
+          "name": "Unicode editing and commit",
+          "id": "N03",
+          "status": "passed"
+        },
+        {
+          "name": "Long native text paging",
+          "id": "N04",
+          "status": "passed"
+        },
+        {
+          "name": "Checkbox effect",
+          "id": "N05",
+          "status": "passed"
+        },
+        {
+          "name": "Slider drag",
+          "id": "N06",
+          "status": "not_run"
+        },
+        {
+          "name": "Anchored nested scrolling",
+          "id": "N07",
+          "status": "not_run"
+        },
+        {
+          "name": "Read-only app menu",
+          "id": "N08",
+          "status": "passed"
+        },
+        {
+          "name": "Independent peer window",
+          "id": "N09",
+          "status": "not_run"
+        },
+        {
+          "name": "Real Open panel cancel",
+          "id": "N10",
+          "status": "passed"
+        },
+        {
+          "name": "Real Save panel write",
+          "id": "N11",
+          "status": "passed"
+        },
+        {
+          "name": "Overwrite and cancellation",
+          "id": "N12",
+          "status": "failed"
+        },
+        {
+          "name": "Native hover and double click",
+          "id": "N13",
+          "status": "not_run"
+        },
+        {
+          "name": "Stale image geometry",
+          "id": "N14",
+          "status": "not_run"
+        },
+        {
+          "name": "Unsaved quit and restart",
+          "id": "N15",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message AX",
+          "id": "C01",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse context menu pin",
+          "id": "C02",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse Unicode reply",
+          "id": "C03",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse message edit",
+          "id": "C04",
+          "status": "not_run"
+        },
+        {
+          "name": "Sparse feed scrolling",
+          "id": "C05",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit Unicode commit",
+          "id": "W01",
+          "status": "not_run"
+        },
+        {
+          "name": "WebKit AX noise",
+          "id": "W02",
+          "status": "not_run"
+        },
+        {
+          "name": "Long Web reference",
+          "id": "W03",
+          "status": "not_run"
+        },
+        {
+          "name": "Web modal validation",
+          "id": "W04",
+          "status": "not_run"
+        },
+        {
+          "name": "Web nested scrolling",
+          "id": "W05",
+          "status": "not_run"
+        },
+        {
+          "name": "Portable canvas context menu",
+          "id": "W06",
+          "status": "not_run"
+        },
+        {
+          "name": "Chromium rendering and input",
+          "id": "B01",
+          "status": "not_run"
+        },
+        {
+          "name": "Inventory pagination and neighbours",
+          "id": "B02",
+          "status": "not_run"
+        },
+        {
+          "name": "Dense duplicate labels",
+          "id": "B03",
+          "status": "not_run"
+        },
+        {
+          "name": "Input event reliability",
+          "id": "B04",
+          "status": "not_run"
+        },
+        {
+          "name": "Actual image-channel challenge",
+          "id": "B05",
+          "status": "not_run"
+        },
+        {
+          "name": "Interrupted held gesture",
+          "id": "R01",
+          "status": "not_run"
+        },
+        {
+          "name": "MCP EOF resource cleanup",
+          "id": "R02",
+          "status": "not_run"
+        },
+        {
+          "name": "Wrong instance and foreign occlusion",
+          "id": "R03",
+          "status": "not_run"
+        },
+        {
+          "name": "Background interference",
+          "id": "R04",
+          "status": "not_run"
+        },
+        {
+          "name": "Dock and app roots",
+          "id": "S01",
+          "status": "not_run"
+        },
+        {
+          "name": "Windowless menu extra",
+          "id": "S02",
+          "status": "not_run"
+        },
+        {
+          "name": "Windows chooser tooltip",
+          "id": "S03",
+          "status": "not_run"
+        },
+        {
+          "name": "Display and desktop conditions",
+          "id": "S04",
+          "status": "not_run"
+        },
+        {
+          "name": "Virtual cursor follows pointer actions",
+          "id": "P01",
+          "status": "not_run"
+        },
+        {
+          "name": "Strict system cursor occupancy",
+          "id": "P02",
+          "status": "not_run"
+        },
+        {
+          "name": "Background focus contract",
+          "id": "P03",
+          "status": "not_run"
+        }
+      ],
+      "target_baseline_passed": false
+    },
+    {
+      "report": "artifacts/pr107/super-phase-observed-a01/report.json",
+      "sha256": "3e8a52327663fdeca51e1de9d9ba900d6c0e52843079d032188925ba37195cdf",
+      "passed": false,
+      "kind": "independent_observer",
+      "sampling": {
+        "samples": 25930,
+        "max_gap_ms": 50.6956,
+        "timer_resolution_acquired": true,
+        "period_released": true,
+        "writer_stopped": true,
+        "write_error": null
+      },
+      "scope": "every recorded MCP call plus interrupted execution interval; whole-run max retained",
+      "call_max_gap_ms": 10.185
+    }
+  ],
+  "input_desktop": {
+    "passed": true,
+    "report": "artifacts/pr107/desktop-b422-a01/report.json",
+    "sha256": "611aca8a410aa64a7321502a5d5ec1a8f028e96838cd58552f5e65b2a5e45f4c"
+  }
+}

@@ -10,6 +10,7 @@ fn main() {
         let swift_target = format!("{arch}-apple-macosx14.2");
         println!("cargo:rerun-if-changed=src/backends/macos/Scene.swift");
         println!("cargo:rerun-if-changed=src/backends/macos/Native.swift");
+        println!("cargo:rerun-if-changed=src/backends/macos/NativeBridge.h");
         println!("cargo:rerun-if-changed=src/backends/macos/Input.swift");
         println!("cargo:rerun-if-changed=src/backends/macos/Overlay.swift");
         let mut command = std::process::Command::new("xcrun");
@@ -21,6 +22,8 @@ fn main() {
             "-O",
             "-module-name",
             "DTWScene",
+            "-import-objc-header",
+            "src/backends/macos/NativeBridge.h",
             "-target",
             &swift_target,
             "-module-cache-path",

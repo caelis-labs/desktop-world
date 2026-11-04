@@ -358,9 +358,17 @@ window.onload=()=>{e.focus();publish({ready:true,dpr:devicePixelRatio,text:e.val
         # Open a fresh chooser for the separate Escape/cancellation contract.
         reopened, _ = client.execute(app, chooser)
         require(not reopened.get('error'), reopened)
-        # Require a dialog at the top and the owned parent before modal input.
-        data, response = client.execute(app, 'const v=await app.look();const t=v.windows[0]?.title;if(!v.windows.some(w=>w.title.startsWith(' + json.dumps(marker) + '))||!(["打开","Open"].includes(t)||t?.startsWith(' + json.dumps(marker) + ')))throw new Error("Owned Chrome modal is not selected");await app.keypress("ESC");', allow_error=True)
+        # Decorations retain their true z-order. Prove the semantic receiver
+        # against our native-owned modal rather than assuming windows[0] is it.
+        dialogs = owned_dialogs(browser_pid, args.chrome.resolve(), browser_handle.birth)
+        require(len(dialogs) == 1, dialogs)
+        data, response = client.execute(app, 'const v=await app.look();const m=v.windows.find(w=>w.title===' + json.dumps(dialogs[0]['title']) + ');if(!v.windows.some(w=>w.title.startsWith(' + json.dumps(marker) + '))||!m||!v.elements.length||!v.elements.every(e=>e.id.startsWith(m.id+".")))throw new Error("Owned Chrome modal is not selected");await app.keypress("ESC");', allow_error=True)
         report['dialog_escape'] = data
+        require(not data.get('error'), data)
+        until = time.monotonic() + 8
+        while owned_dialogs(browser_pid, args.chrome.resolve(), browser_handle.birth):
+            require(time.monotonic() < until, 'owned chooser did not close after Escape')
+            time.sleep(.03)
         case('chrome_after_dialog', 'await app.capture({full:true});')
         with lock:
             report['neighbour_unchanged'] = dict(neighbour_state)

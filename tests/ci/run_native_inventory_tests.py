@@ -36,6 +36,7 @@ def main():
             binary = directory / name
             subprocess.run(
                 ["swiftc", "-warnings-as-errors", "-module-cache-path", str(directory / "module-cache"),
+                 *(["-import-objc-header", str(native.with_name("NativeBridge.h"))] if native in paths else []),
                  str(source), "-o", str(binary)],
                 check=True, timeout=120,
             )
