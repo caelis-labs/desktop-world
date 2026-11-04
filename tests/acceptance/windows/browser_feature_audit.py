@@ -301,6 +301,8 @@ window.onload=()=>{e.focus();publish({ready:true,dpr:devicePixelRatio})};</scrip
         thread.join(timeout=2)
         report['http_state'] = observed
         report['passed'] = (bool(report['cases']) and all(c['verified'] for c in report['cases'])
+            and not report.get('error') and bool(report.get('exact_file_selection'))
+            and not report.get('dialog_escape',{}).get('error')
             and not report.get('close_window',{}).get('error') and report.get('browser_exit') == 0
             and report.get('ui_process_exit') == 0 and not report.get('forced_browser_cleanup'))
         (out / 'report.json').write_text(json.dumps(report, ensure_ascii=True, indent=2) + '\n', encoding='utf-8')

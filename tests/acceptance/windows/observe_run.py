@@ -6,10 +6,29 @@ import subprocess
 import time
 
 
+def check_intervals(rows, intervals):
+    results = []
+    for interval in intervals:
+        before = [index for index, row in enumerate(rows) if row['unix_ms'] < interval['start_ms']]
+        after = [index for index, row in enumerate(rows) if row['unix_ms'] > interval['end_ms']]
+        result = {'name': interval['name'], 'passed': False}
+        if before and after:
+            samples = rows[before[-1]:after[0] + 1]
+            gaps = [b['unix_ms'] - a['unix_ms'] for a, b in zip(samples, samples[1:])]
+            result.update(samples=len(samples), max_gap_ms=max(gaps, default=0),
+                          foreground_preserved=all(row['foreground_pid'] == interval['foreground_pid'] for row in samples),
+                          cursor_preserved=all(row['cursor_readable'] and row['cursor'] == interval['cursor'] for row in samples))
+            result['passed'] = (bool(gaps) and min(gaps) >= 0 and max(gaps) <= 50
+                                and result['foreground_preserved'] and result['cursor_preserved'])
+        results.append(result)
+    return results
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--observer', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--intervals', type=Path, help='Probe-owned background interval assertions against native samples')
     parser.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
@@ -45,10 +64,14 @@ def main():
             sampling = report.get('sampling', {})
             rows = [json.loads(line) for line in trace.read_text(encoding='utf-8').splitlines()] if trace.exists() else []
             report['cursor_readable'] = bool(rows) and all(row.get('cursor_readable') is True for row in rows)
+            if args.intervals:
+                intervals = json.loads(args.intervals.read_text(encoding='utf-8')) if args.intervals.exists() else []
+                report['intervals'] = check_intervals(rows, intervals)
             report['passed'] = (report.get('probe_exit') == 0 and report.get('observer_exit') == 0
                                 and sampling.get('samples', 0) > 1
                                 and sampling.get('max_gap_ms', float('inf')) <= 50
                                 and report['cursor_readable']
+                                and (not args.intervals or bool(report['intervals']) and all(row['passed'] for row in report['intervals']))
                                 and not report.get('forced_observer_cleanup'))
             (out / 'report.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
     print(json.dumps(report, indent=2))

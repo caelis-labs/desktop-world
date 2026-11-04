@@ -89,6 +89,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         self.record_resolution(&submitted.request_id, progress.clone());
         let mut attempts = 0_u32;
         let mut pages = 0_u32;
+        let mut followed_surface_transition = false;
         loop {
             // The public app selector follows its current top surface while it
             // is only reading. A popup may arrive after the preceding input.
@@ -225,6 +226,42 @@ impl<B: Backend + 'static> Coordinator<B> {
                 }
                 _ => matches.len() == 1 && !disabled,
             };
+            if let Some(instance) = &instance {
+                // A slow traversal can finish after both the selector polling
+                // window and a newly opened dialog's arrival. Before choosing
+                // any action (including absence), re-read the app's receiver.
+                // Follow one proven same-instance surface transition through
+                // reads only; never retry an action or extend its deadline.
+                let inventory =
+                    self.scene_atomic(&submitted.request_id, "windows", json!({}), deadline);
+                if let Some(error) = inventory.completed.error {
+                    return selection_error(submitted, error);
+                }
+                let rows = super::scene::ordered(
+                    inventory.completed.value.unwrap()["windows"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default(),
+                );
+                let state = self.state.lock().unwrap();
+                let current = rows.iter().find(|row| {
+                    row["visible"] == true
+                        && row["scene"]["semantic_candidate"] != false
+                        && row["window_ref"]
+                            .as_str()
+                            .and_then(|reference| state.windows.get(reference))
+                            .is_some_and(|target| &target.app == instance)
+                });
+                let current = current.and_then(|row| row["window_ref"].as_str());
+                if current != submitted.target.window_ref.as_deref() {
+                    if current.is_none() || followed_surface_transition {
+                        return selection_error(submitted, wire::core_error(&Error::TargetChanged));
+                    }
+                    followed_surface_transition = true;
+                    drop(state);
+                    continue;
+                }
+            }
             if complete && condition_met {
                 progress["status"] = json!("resolved");
                 self.record_resolution(&submitted.request_id, progress);

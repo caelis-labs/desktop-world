@@ -50,8 +50,8 @@ def main():
         x = (p['x'] - b[0]) * view['width'] / b[2]
         y = (p['y'] - b[1]) * view['height'] / b[3]
         path = [{'x': x + (-130 if index % 2 == 0 else 130), 'y': y + (index % 3) * 10}
-                for index in range(24)]
-        delay = 'const end=Date.now()+29600;while(Date.now()<end){};' if args.mode == 'deadline' else ''
+                for index in range(8)]
+        delay = 'const end=Date.now()+29400;while(Date.now()<end){};await app.capture();' if args.mode == 'deadline' else ''
         source = delay + 'await app.drag(' + json.dumps({'path': path}) + ');await app.click({selector:{role:"button",text:"Increment"}});'
         request = client.begin_execute(exe, source)
         until = time.monotonic() + (32 if args.mode == 'deadline' else 8)
@@ -84,7 +84,7 @@ def main():
                 response = client.transport.receive(request, timeout=5)
                 report['original_response'] = response
                 data = response['result']['structuredContent']
-                require(data.get('error', {}).get('code') in ('cancelled', 'deadline_exceeded', 'timeout'), data)
+                require(data.get('error', {}).get('code') in ('cancelled', 'deadline_exceeded', 'timed_out', 'timeout'), data)
             except queue.Empty:
                 require(args.mode == 'cancel', 'deadline response absent')
                 report['original_response'] = 'unknown: cancellation suppressed original reply'

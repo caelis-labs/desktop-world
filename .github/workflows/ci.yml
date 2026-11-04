@@ -77,7 +77,9 @@ jobs:
     name: macOS inventory controls
     needs: plan
     if: needs.plan.outputs.macos == 'true'
-    runs-on: macos-26
+    # macOS 26 arm64 jobs were abandoned for hosted-runner capacity. Keep a
+    # supported native arm64 image and all the same compilation/runtime gates.
+    runs-on: macos-15
     timeout-minutes: 15
     env:
       MACOSX_DEPLOYMENT_TARGET: '14.2'

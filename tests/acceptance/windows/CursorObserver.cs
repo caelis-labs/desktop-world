@@ -2,6 +2,7 @@
 // negative-control window, never an alternate route for driving application UI.
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -125,10 +126,23 @@ namespace DtwWindowsCursorAcceptance {
         static void Stream(string output) {
             bool timer=timeBeginPeriod(1)==0;
             int count=0;long previous=0;double largest=0;
-            Process.GetCurrentProcess().PriorityClass=ProcessPriorityClass.AboveNormal;
+            Process.GetCurrentProcess().PriorityClass=ProcessPriorityClass.High;
+            Thread.CurrentThread.Priority=ThreadPriority.Highest;
+            var rows=new BlockingCollection<string>(8192);
+            Exception writeError=null;
+            var writerThread=new Thread(delegate() {
+                try{using(var writer=new StreamWriter(output,false,Utf8)) {
+                    int written=0;
+                    foreach(string row in rows.GetConsumingEnumerable()) {
+                        writer.WriteLine(row);written++;
+                        if(written==1||written%32==0)writer.Flush();
+                    }
+                }}catch(Exception error){writeError=error;}
+            });
+            writerThread.Start();
             try {
-                using(var writer=new StreamWriter(output,false,Utf8)) {
                     while(!File.Exists(output+".stop")) {
+                        if(writeError!=null)throw new IOException("Independent observer writer failed",writeError);
                         long now=Stopwatch.GetTimestamp();
                         double gap=previous==0?0:(now-previous)*1000.0/Stopwatch.Frequency;
                         previous=now;largest=Math.Max(largest,gap);
@@ -137,17 +151,19 @@ namespace DtwWindowsCursorAcceptance {
                         Point point;bool readable=GetCursorPos(out point);
                         var held=new List<int>();
                         for(int key=1;key<256;key++)if(GetAsyncKeyState(key)<0)held.Add(key);
-                        writer.WriteLine(Json.Serialize(new {timestamp=now,frequency=Stopwatch.Frequency,
+                        string row=Json.Serialize(new {timestamp=now,frequency=Stopwatch.Frequency,
                             unix_ms=(DateTime.UtcNow.Ticks-621355968000000000L)/10000.0,
                             gap_ms=gap,foreground=foreground.ToInt64(),foreground_pid=pid,
-                            cursor_readable=readable,cursor=new{x=point.X,y=point.Y},held=held}));
-                        count++;if(count==1||count%32==0)writer.Flush();Thread.Sleep(5);
+                            cursor_readable=readable,cursor=new{x=point.X,y=point.Y},held=held});
+                        if(!rows.TryAdd(row))throw new IOException("Independent observer queue overflow; samples are incomplete");
+                        count++;Thread.Sleep(2);
                     }
-                }
             }finally {
-                if(timer)timeEndPeriod(1);
+                bool released=!timer||timeEndPeriod(1)==0;
+                rows.CompleteAdding();bool writerStopped=writerThread.Join(5000);
                 File.WriteAllText(output+".summary.json",Json.Serialize(new {samples=count,max_gap_ms=largest,
-                    timer_resolution_acquired=timer,period_released=true}),Utf8);
+                    timer_resolution_acquired=timer,period_released=released,writer_stopped=writerStopped,write_error=writeError==null?null:writeError.ToString()}),Utf8);
+                if(!writerStopped||writeError!=null||!released)throw new IOException("Independent observer cleanup failed");
             }
         }
         [STAThread]public static void Main(string[] args) {

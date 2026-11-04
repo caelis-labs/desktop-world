@@ -1169,7 +1169,20 @@ impl Store {
         let alpha = window_alpha(window)?;
         let dpi = unsafe { GetDpiForWindow(window) };
         check(until)?;
-        let (image, rendered_size) = capture_rgb(window, bounds)?;
+        let captured = capture_rgb(window, bounds);
+        let (image, rendered_size) = captured.map_err(|error| {
+            // A tooltip/dialog can disappear inside PrintWindow. Only a new
+            // native proof of that identity/geometry change permits the scene's
+            // bounded read refresh; a live unchanged renderer keeps its error.
+            if !unsafe { IsWindow(window) }.as_bool()
+                || matches!(self.validate(target), Err(Error::TargetChanged))
+                || capture_bounds(window).is_ok_and(|now| !equal_rect(bounds, now))
+            {
+                Error::TargetChanged
+            } else {
+                error
+            }
+        })?;
         unsafe { DwmFlush() }.map_err(failed)?;
         self.validate(target)?;
         if !equal_rect(bounds, capture_bounds(window)?)

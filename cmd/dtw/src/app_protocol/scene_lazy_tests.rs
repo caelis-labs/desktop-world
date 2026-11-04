@@ -33,6 +33,15 @@ fn a_known_selector_can_start_a_script_without_publishing_a_redundant_baseline()
 
 #[test]
 fn selector_wait_follows_a_popup_that_arrives_after_its_first_read() {
+    selector_follows_popup_after_read(Duration::ZERO);
+}
+
+#[test]
+fn slow_selector_follows_a_proven_new_surface_after_its_polling_budget_ends() {
+    selector_follows_popup_after_read(Duration::from_millis(2100));
+}
+
+fn selector_follows_popup_after_read(read_delay: Duration) {
     let (server, catalog) = agent();
     let window = |native_id, rank| WindowInfo {
         target: WindowTarget {
@@ -69,6 +78,7 @@ fn selector_wait_follows_a_popup_that_arrives_after_its_first_read() {
         exec(&running, "late_popup", "await app.click('Popup action');")
     });
     gate.entered();
+    std::thread::sleep(read_delay);
     catalog.backend.0.model.lock().unwrap().inventory =
         Some(test_inventory(vec![window(102, 0), window(101, 1)]));
     gate.release();
