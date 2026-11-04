@@ -73,7 +73,7 @@
 
 原始 macOS CI 的 Swift 私有 initializer 导致编译失败，已补明确 initializer。Windows CI 的 Python fixture 启动握手在并发冷启动时失败，已用 `-S`、仅串行化启动握手和精确 PID marker 修复；没有延长产品 deadline 或削弱进程回收断言。
 
-Intel macOS CI 实际通过了 601 个库测试、5 个 CLI、3 个 MCP 测试和包升级/lease 验证，随后纯 Swift controls 编译发现 `@_silgen_name` 的 Swift 调用约定与 C stub 不一致。改用共享 `NativeBridge.h` 的 Clang C ABI 导入，并让产品构建及纯 controls 使用同一 header；没有删除 stub、关闭 warnings-as-errors 或绕过原生断言。纯 Swift controls 移到冷 Rust 编译之前，缩短同类失败的反馈时间。
+Intel macOS CI 实际通过了 601 个库测试、5 个 CLI、3 个 MCP 测试和包升级/lease 验证，随后纯 Swift controls 编译发现 `@_silgen_name` 的 Swift 调用约定与 C stub 不一致。改用共享 `NativeBridge.h` 的 Clang C ABI 导入，并让产品构建及纯 controls 使用同一 header。旧 Swift 编译器对同一 module 中导入/定义相同 C symbol 会触发 SIL linkage assertion，因此测试通过独立 C translation unit 转发到原 Swift controls，实际穿过 C ABI，计数与断言保留；没有删除 stub、关闭 warnings-as-errors 或绕过原生断言。纯 Swift controls 移到冷 Rust 编译之前，缩短同类失败的反馈时间。
 
 macOS 26 与 15 ARM runner 均被 GitHub 以 capacity / 未获取 runner 取消。日常 CI 转到受支持的 `macos-15-intel` 原生池，原生测试门槛保留；为冷 Intel release 编译及第二版本升级构建保留 30 分钟作业预算，产品调用与测试断言的 deadline 未改变。正式 ARM64 构建改用标准、已 GA 的 `xcode-27` 镜像，仍要求 ARM64 原生源测试、包测试、签名与公证；14.2 部署目标不变，不使用付费 larger runner。
 

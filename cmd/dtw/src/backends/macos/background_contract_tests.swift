@@ -1,21 +1,21 @@
 // Native.swift's Rust foreground bridge is linked only in the product binary.
 // Pure controls must never activate a real application.
-@_cdecl("dtw_set_front_process")
+@_cdecl("dtw_control_set_front_process")
 func dtwSetFrontProcessControlStub(_ pid: Int32, _ window: UInt32) -> Bool {
     preconditionFailure("Pure contracts must not invoke foreground input")
 }
 
-@_cdecl("dtw_set_visual_front_process")
+@_cdecl("dtw_control_set_visual_front_process")
 func dtwSetVisualFrontProcessControlStub(_ pid: Int32, _ window: UInt32) -> Bool {
     preconditionFailure("Pure contracts must not invoke visual foreground input")
 }
 
-@_cdecl("dtw_front_process_matches")
+@_cdecl("dtw_control_front_process_matches")
 func dtwFrontProcessMatchesControlStub(_ pid: Int32) -> Int32 {
     preconditionFailure("Pure contracts must not read the real WindowServer")
 }
 
-@_cdecl("dtw_front_process_pid")
+@_cdecl("dtw_control_front_process_pid")
 func dtwFrontProcessPIDControlStub() -> Int32 {
     preconditionFailure("Pure contracts must not resolve the real foreground PID")
 }
@@ -370,11 +370,11 @@ for unavailable: Int32 in [-1, 2, Int32.min] {
 print("Fresh WindowServer foreground proof controls passed (5 pure scenarios)")
 
 
-@_cdecl("dtw_scroll_anchor_check")
+@_cdecl("dtw_control_scroll_anchor_check")
 func testScrollAnchorCheck() -> UnsafeMutablePointer<CChar>? { nil }
-@_cdecl("dtw_scroll_anchor_free")
+@_cdecl("dtw_control_scroll_anchor_free")
 func testScrollAnchorFree(_ value: UnsafeMutablePointer<CChar>) { preconditionFailure("pure geometry controls never allocate a guard response") }
-@_cdecl("dtw_scroll_anchor_posted")
+@_cdecl("dtw_control_scroll_anchor_posted")
 func testScrollAnchorPosted() { preconditionFailure("pure geometry controls never post a wheel") }
 
 private let scrollWindow = CGRect(x: -1200, y: -100, width: 800, height: 600)

@@ -3,17 +3,17 @@ private var executionScopeControlReply: String?
 private var executionScopeControlActive = false
 private var executionScopeControlChecks = 0
 private var executionScopeControlFrees = 0
-@_cdecl("dtw_execution_scope_check")
+@_cdecl("dtw_control_execution_scope_check")
 func executionScopeCheckControlStub() -> UnsafeMutablePointer<CChar>? {
     executionScopeControlChecks += 1
     return executionScopeControlReply.flatMap { strdup($0) }
 }
-@_cdecl("dtw_execution_scope_free")
+@_cdecl("dtw_control_execution_scope_free")
 func executionScopeFreeControlStub(_ response: UnsafeMutablePointer<CChar>) {
     executionScopeControlFrees += 1
     free(response)
 }
-@_cdecl("dtw_execution_scope_active")
+@_cdecl("dtw_control_execution_scope_active")
 func executionScopeActiveControlStub() -> Bool { executionScopeControlActive }
 
 private func surfaceCheck(_ ok: @autoclosure () -> Bool) { precondition(ok()) }
