@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.5](https://github.com/caelis-labs/desktop-world/compare/v0.3.4...v0.3.5) (2026-11-04)
+
+
+### Features
+
+* improve scoped app scripting and Windows native workflows ([#107](https://github.com/caelis-labs/desktop-world/issues/107)) ([e702094](https://github.com/caelis-labs/desktop-world/commit/e7020940dd56a6ee861ae756b299327333b3b3b6))
+
 ## [0.3.4](https://github.com/caelis-labs/desktop-world/compare/v0.3.3...v0.3.4) (2026-11-03)
 
 
