@@ -130,7 +130,7 @@
     const encoded = encode(args, "host arguments", 65536, true);
     // A locally rejected argument never starts a read and cannot settle a
     // preceding action's readback. Clear dirty only at the host handoff.
-    if (agent) dirty = op !== "scene.look" && op !== "scene.capture" && op !== "scene.after";
+    if (agent) dirty = op !== "scene.look" && op !== "scene.capture" && op !== "scene.after" && op !== "scene.readText";
     const reply = parse(host(op, encoded, line));
     if (!reply.ok) {
       const error = new ErrorClass(`${op} failed: ${reply.error}`);
@@ -182,11 +182,12 @@
   let dirty = false;
   if (agent) {
     const surface = create(null);
-    for (const op of ["look", "capture", "click", "move", "drag", "typeText", "keypress", "scroll", "quit"]) {
+    for (const op of ["look", "capture", "readText", "click", "move", "drag", "typeText", "keypress", "scroll", "quit"]) {
       const method = async (...args) => {
         if (args.length > 1) fail(`app.${op} takes one argument`, "invalid_arguments");
         let options = args.length ? args[0] : {};
         if (op === "typeText" && typeof options === "string") options = {text:options};
+        if (op === "readText" && typeof options === "string") options = {target:options};
         if (op === "keypress" && typeof options === "string") options = {keys:apply(split, options, ["+"])};
         if (op === "keypress" && isArray(options)) options = {keys:options};
         if (op === "click" && typeof options === "string") options = apply(regexpExec, targetId, [options]) !== null ? {target:options} : {selector:{text:options}};

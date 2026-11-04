@@ -376,7 +376,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         let action = if scene_call {
             !matches!(
                 call.op.as_str(),
-                "scene.look" | "scene.capture" | "scene.after"
+                "scene.look" | "scene.capture" | "scene.after" | "scene.readText"
             )
         } else {
             parsed.as_ref().is_ok_and(|s| is_action(&s.command))
@@ -530,6 +530,8 @@ impl<B: Backend + 'static> Coordinator<B> {
         }
         let mut state = self.state.lock().unwrap();
         let projected = state.scene.projection();
+        let text_read_failed =
+            call.op == "scene.readText" && work.completed.error.is_some() && projected.is_none();
         let run = state
             .jobs
             .iter_mut()
@@ -551,6 +553,12 @@ impl<B: Backend + 'static> Coordinator<B> {
                 run.snapshot = work.completed.value.clone();
                 run.view = projected;
             }
+        }
+        if text_read_failed {
+            run.snapshot = None;
+            run.view = None;
+            *last_image = None;
+            *last_capture = None;
         }
         let step = run.steps.last_mut().unwrap();
         if call.op == "windows" && work.completed.error.is_none() {

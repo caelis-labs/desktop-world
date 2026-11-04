@@ -1,4 +1,4 @@
-//! Audit regressions through the production nine-method app facade.
+//! Audit regressions through the production app facade.
 use super::*;
 
 struct InterruptedResolver {

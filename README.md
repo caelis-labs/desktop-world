@@ -45,7 +45,7 @@ Open the application you want to use, then ask your Agent:
 > it and check the changes.
 
 The MCP interface is exactly `apps` plus app-scoped `exec({app, source})`; the bundled Skill documents
-the nine app script methods. DTW owns window routing and observation state.
+the app script methods, including filtered observations and explicit text reading. DTW owns window routing and observation state.
 The Agent follows look → input → look, with semantic targets and pixel fallback.
 [Capabilities and limits](docs/product-matrix.md) describes current support and
 acceptance boundaries. The bundled Skill teaches the Agent the available operations. Your Agent handles

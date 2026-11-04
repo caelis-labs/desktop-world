@@ -1,5 +1,7 @@
 //! The production app facade; the surrounding suite tests the private atomic DSL.
 use super::*;
+#[path = "scene_reading_tests.rs"]
+mod scene_reading_tests;
 fn agent() -> (Arc<Server<Catalog>>, Catalog) {
     let (_, catalog) = server();
     (Server::new(catalog.clone()), catalog)
@@ -42,7 +44,7 @@ fn agent_sees_only_app_operations_and_has_no_session_or_state() {
     let r=exec(&server,"surface","return {methods:Object.keys(app),session:typeof session,state:typeof state,host:typeof __host};");
     assert_eq!(
         *success(&r),
-        json!({"methods":["look","capture","click","move","drag","typeText","keypress","scroll","quit"],"session":"undefined","state":"undefined","host":"undefined"})
+        json!({"methods":["look","capture","readText","click","move","drag","typeText","keypress","scroll","quit"],"session":"undefined","state":"undefined","host":"undefined"})
     );
 }
 #[test]

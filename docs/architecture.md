@@ -88,6 +88,10 @@ cleanup releases held inputs and respects external focus changes without restori
 an earlier app. Windows selects supported client-area mouse messages and otherwise raises the
 exact target for foreground input; Agents do not select routes. Background input,
 a stationary user pointer and locked-session operation are distinct capabilities.
+Windows validates the worker/current input desktop before preparation and each new
+input payload. Desktop loss prevents new input while the original receiver's paired
+releases retain their cleanup route; restoration requires fresh observation. This
+admission does not establish locked-session support.
 
 ## Window and semantic paths
 
@@ -105,7 +109,12 @@ conditions for their selected delivery route.
 Semantic discovery is filtered by role/text and bounded by region/subtree where
 supported. Native traversal retains a continuation frontier rather than rescanning
 a truncated prefix. Matching count, visited nodes, time and output bytes are
-separate budgets. Partial coverage with no matches does not establish absence.
+separate budgets. Partial coverage with no matches does not establish absence. Public `look({role,text})`
+reuses this native query path without exposing its native cursors. Truncated preview
+fields retain a content revision so omitted changes remain observable; the revision
+does not prove textual readback. Explicit `readText` maps an observed app target to
+the existing Core/provider text operation, retaining its exact observation across
+UTF-16 pages. It does not rebind a target or refresh the scene between text pages.
 References remain scoped to their window and kind; observing a different window
 must not discard unrelated usable references. Only bounded semantic changes are public; unsupported semantic activation returns
 an explicit no-dispatch error and enables the screenshot fallback. Full native

@@ -344,6 +344,25 @@ fn scene_post_dispatch_read_failure_keeps_receipt_and_never_replays_input() {
         }
         let projected = crate::app_protocol::projection::execution(reply);
         assert_eq!(projected.data["effects"]["dispatch"]["dispatched"], 1);
+        if hard {
+            backend
+                .base
+                .0
+                .model
+                .lock()
+                .unwrap()
+                .capture_error_after_action = None;
+            let recovered = scene_exec(&server, "await app.capture();");
+            assert!(
+                !recovered.is_error && recovered.image.is_some(),
+                "{}",
+                recovered.data
+            );
+            assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
+            let next = scene_exec(&server, "await app.click({x:6,y:5});");
+            assert!(!next.is_error, "{}", next.data);
+            assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 2);
+        }
     }
 }
 

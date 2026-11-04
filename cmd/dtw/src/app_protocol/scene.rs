@@ -1,6 +1,7 @@
 //! Agent-facing app scene. Native refs, layering and image bindings stay here.
 use super::*;
 use base64::Engine;
+use sha2::{Digest, Sha256};
 use std::io::Cursor;
 
 #[derive(Default)]
@@ -45,7 +46,9 @@ struct Raster {
 
 pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
     let allowed: &[&str] = match op {
-        "scene.look" | "scene.capture" | "scene.after" => &["full"],
+        "scene.look" => &["full", "role", "text"],
+        "scene.capture" | "scene.after" => &["full"],
+        "scene.readText" => &["target", "offset", "limit"],
         "scene.click" => &["target", "selector", "x", "y", "button", "count"],
         "scene.move" => &["x", "y"],
         "scene.drag" => &["path"],
@@ -70,6 +73,43 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
                 "invalid_arguments",
                 "Observation flags must be Boolean",
             ));
+        }
+    }
+    if op == "scene.look" {
+        for (key, maximum) in [("role", 64), ("text", 256)] {
+            if args.get(key).is_some_and(|value| {
+                value
+                    .as_str()
+                    .is_none_or(|text| text.is_empty() || text.chars().count() > maximum)
+            }) {
+                return Err(error(
+                    "invalid_arguments",
+                    "Observation role/text must be bounded nonempty strings",
+                ));
+            }
+        }
+    }
+    if op == "scene.readText" {
+        if args["target"]
+            .as_str()
+            .is_none_or(|target| target.is_empty())
+        {
+            return Err(error(
+                "invalid_arguments",
+                "readText requires an observed target ID",
+            ));
+        }
+        for (key, minimum, maximum) in [("offset", 0, u32::MAX as u64), ("limit", 2, 16384)] {
+            if args.get(key).is_some_and(|value| {
+                value
+                    .as_u64()
+                    .is_none_or(|number| number < minimum || number > maximum)
+            }) {
+                return Err(error(
+                    "invalid_arguments",
+                    "Invalid readText offset or limit",
+                ));
+            }
         }
     }
     Ok(())
@@ -166,11 +206,22 @@ fn bounds(row: &Value) -> Option<[f64; 4]> {
     ];
     (b.iter().all(|v| v.is_finite()) && b[2] > 0.0 && b[3] > 0.0).then_some(b)
 }
-fn text(value: &Value) -> Value {
-    value
-        .as_str()
-        .map(|s| json!(s.chars().take(240).collect::<String>()))
-        .unwrap_or_else(|| value.clone())
+fn project_text(entry: &mut Value, field: &str, value: &Value) -> bool {
+    let Some(text) = value.as_str() else {
+        entry[field] = value.clone();
+        return false;
+    };
+    entry[field] = json!(text.chars().take(240).collect::<String>());
+    let length = text.chars().count();
+    if length <= 240 {
+        return false;
+    }
+    entry[format!("{field}_truncated")] = json!(true);
+    entry[format!("{field}_length")] = json!(length);
+    // Only omitted content needs a revision in the view. It signals change,
+    // never full readback or object identity; ordinary fields stay compact.
+    entry[format!("{field}_revision")] = json!(format!("{:x}", Sha256::digest(text.as_bytes())));
+    true
 }
 
 fn useful_element(row: &Value) -> bool {
@@ -217,6 +268,9 @@ impl<B: Backend + 'static> Coordinator<B> {
                 0,
                 deadline,
             );
+        }
+        if op == "scene.readText" {
+            return self.scene_read_text(id, args, deadline);
         }
         if op == "scene.quit" {
             let mut state = self.state.lock().unwrap();
@@ -558,6 +612,46 @@ impl<B: Backend + 'static> Coordinator<B> {
             );
         work
     }
+    fn scene_read_text(&self, id: &str, args: &Value, deadline: Instant) -> Work {
+        let node = self
+            .state
+            .lock()
+            .unwrap()
+            .scene
+            .nodes
+            .iter()
+            .find(|node| node["id"] == args["target"])
+            .cloned();
+        let Some(node) = node else {
+            return failed(error(
+                "target_changed",
+                "Read text from a target in the latest look",
+            ));
+        };
+        // Retain this exact observation across pages. Renewing here could join
+        // different text revisions or revive an ID with a reused native object.
+        let mut request = json!({"window_ref":node["window_ref"],
+            "observation_ref":node["observation_ref"],"element_ref":node["element_ref"]});
+        for key in ["offset", "limit"] {
+            if let Some(value) = args.get(key) {
+                request[key] = value.clone();
+            }
+        }
+        let work = self.scene_atomic(id, "readText", request, deadline);
+        if let Some(error) = &work.completed.error {
+            if !matches!(
+                error.code.as_str(),
+                "invalid_text_range" | "unsupported_capability"
+            ) {
+                let mut state = self.state.lock().unwrap();
+                state.scene.nodes.clear();
+                state.scene.raster = None;
+                state.scene.observed = None;
+                state.scene.projected = None;
+            }
+        }
+        work
+    }
     fn scene_refresh_target(
         &self,
         id: &str,
@@ -583,12 +677,10 @@ impl<B: Backend + 'static> Coordinator<B> {
         };
         // A public scene ID represents an object; Core/native observations
         // remain single-use. Renew before dispatch, never by retrying input.
-        let mut work = self.scene_atomic(
-            id,
-            "observe",
-            json!({"window_ref":node["window_ref"],"limit":80}),
-            deadline,
-        );
+        let mut query = node["query"].as_object().cloned().unwrap_or_default();
+        query.insert("window_ref".into(), node["window_ref"].clone());
+        query.insert("limit".into(), json!(80));
+        let mut work = self.scene_atomic(id, "observe", Value::Object(query), deadline);
         let mut found = None;
         for page_index in 0..4 {
             if let Some(error) = work.completed.error {
@@ -813,17 +905,19 @@ impl<B: Backend + 'static> Coordinator<B> {
             }
             state.scene.window_ids.clone()
         };
+        let query: serde_json::Map<String, Value> = ["role", "text"]
+            .into_iter()
+            .filter_map(|key| args.get(key).map(|value| (key.to_owned(), value.clone())))
+            .collect();
         let mut nodes = Vec::new();
         let mut elements = Vec::new();
         let mut semantic_bytes = 0usize;
         let mut semantic = json!({"complete":false,"reason":"no_window"});
         if let Some(row) = &active {
-            let work = self.scene_atomic(
-                id,
-                "observe",
-                json!({"window_ref":row["window_ref"],"limit":80}),
-                deadline,
-            );
+            let mut request = query.clone();
+            request.insert("window_ref".into(), row["window_ref"].clone());
+            request.insert("limit".into(), json!(80));
+            let work = self.scene_atomic(id, "observe", Value::Object(request), deadline);
             if let Some(e) = work.completed.error {
                 if !semantic_fallback(&e.code) {
                     return failed(e);
@@ -835,7 +929,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 for page_index in 0..4 {
                     if let Some(rows) = page["elements"].as_array() {
                         for row in rows {
-                            if useful_element(row) {
+                            if !query.is_empty() || useful_element(row) {
                                 candidates.push((row.clone(), page["observation_ref"].clone()));
                             }
                         }
@@ -909,7 +1003,16 @@ impl<B: Backend + 'static> Coordinator<B> {
                         }
                         target
                     });
-                    let entry = json!({"id":target,"role":element["role"],"name":text(&element["name"]),"value":text(&element["value"]),"enabled":element["enabled"],"actions":element["actions"]});
+                    let mut entry = json!({"id":target,"role":element["role"],"enabled":element["enabled"],"actions":element["actions"]});
+                    let name_truncated = project_text(&mut entry, "name", &element["name"]);
+                    let value_truncated = project_text(&mut entry, "value", &element["value"]);
+                    if name_truncated || value_truncated {
+                        semantic["text_truncated"] = json!(true);
+                        if semantic["complete"] == true {
+                            semantic["complete"] = json!(false);
+                            semantic["reason"] = json!("text_truncated");
+                        }
+                    }
                     let entry_bytes = entry.to_string().len();
                     if semantic_bytes.saturating_add(entry_bytes) > 24 * 1024 {
                         semantic["complete"] = json!(false);
@@ -918,11 +1021,14 @@ impl<B: Backend + 'static> Coordinator<B> {
                         break;
                     }
                     nodes.push(json!({"id":target,"window_ref":row["window_ref"],"observation_ref":observation,"element_ref":element["element_ref"],
-                        "rebind_identity":element["rebind_identity"].as_str().filter(|id| rebinds.get(*id) == Some(&1)), "expected":element}));
+                        "rebind_identity":element["rebind_identity"].as_str().filter(|id| rebinds.get(*id) == Some(&1)), "expected":element,"query":query}));
                     semantic_bytes += entry_bytes;
                     elements.push(entry);
                 }
             }
+        }
+        if !query.is_empty() {
+            semantic["query"] = Value::Object(query);
         }
         let pixel_mode = explicit_pixels
             || (after && self.state.lock().unwrap().scene.pixels)

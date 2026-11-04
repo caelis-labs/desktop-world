@@ -4,6 +4,8 @@ use std::sync::{
     mpsc,
 };
 use wire::Target;
+#[path = "../backends/text_page.rs"]
+mod text_page;
 
 struct WorkerGate {
     entered: mpsc::Sender<()>,
@@ -48,6 +50,7 @@ impl TestGate {
 struct Model {
     semantic_elements: Option<Vec<Element>>,
     filtered_observation: bool,
+    text_error: Option<Error>,
     read_gate: Option<WorkerGate>,
     action_gate: Option<WorkerGate>,
     outcome: ActionOutcome,
@@ -60,6 +63,7 @@ struct Model {
     cleanup_after_capture: Option<Error>,
     capture_errors: std::collections::VecDeque<Error>,
     capture_rgba: [u8; 4],
+    capture_png: Option<Vec<u8>>,
     capture_error_after_action: Option<Error>,
     capture_error_at: Option<(usize, Error)>,
     cleanup_after_action: Option<Error>,
@@ -73,6 +77,7 @@ struct Shared {
     model: Mutex<Model>,
     windows: AtomicUsize,
     observes: AtomicUsize,
+    observe_queries: Mutex<Vec<ObserveQuery>>,
     captures: AtomicUsize,
     actions: AtomicUsize,
     anchored_scrolls: Mutex<Vec<(WindowTarget, ScrollRequest)>>,
@@ -88,6 +93,7 @@ impl MockBackend {
             model: Mutex::new(Model {
                 semantic_elements: None,
                 filtered_observation: false,
+                text_error: None,
                 read_gate: None,
                 action_gate: None,
                 outcome: ActionOutcome {
@@ -105,6 +111,7 @@ impl MockBackend {
                 cleanup_after_capture: None,
                 capture_errors: std::collections::VecDeque::new(),
                 capture_rgba: [255; 4],
+                capture_png: None,
                 capture_error_after_action: None,
                 capture_error_at: None,
                 cleanup_after_action: None,
@@ -116,6 +123,7 @@ impl MockBackend {
             }),
             windows: AtomicUsize::new(0),
             observes: AtomicUsize::new(0),
+            observe_queries: Mutex::new(Vec::new()),
             captures: AtomicUsize::new(0),
             actions: AtomicUsize::new(0),
             anchored_scrolls: Mutex::new(Vec::new()),
@@ -215,7 +223,14 @@ impl MockBackend {
             image: pixels.then(|| ImageFrame {
                 width: 20,
                 height: 10,
-                png: vec![7; 4096],
+                png: self
+                    .0
+                    .model
+                    .lock()
+                    .unwrap()
+                    .capture_png
+                    .clone()
+                    .unwrap_or_else(|| vec![7; 4096]),
             }),
         }
     }
@@ -311,6 +326,7 @@ impl Backend for MockBackend {
         {
             return Err(Error::UnsupportedCapability);
         }
+        self.0.observe_queries.lock().unwrap().push(query.clone());
         let mut observed = self.observe(target, call)?;
         observed.elements.retain(|element| {
             query.role.as_ref().is_none_or(|role| element.role == *role)
@@ -331,6 +347,33 @@ impl Backend for MockBackend {
             visited: observed.elements.len() as u32,
         });
         Ok(observed)
+    }
+    fn read_text(
+        &self,
+        target: &WindowTarget,
+        _: &(),
+        request: TextRequest,
+        call: &CallContext<'_>,
+    ) -> Result<BackendTextPage, Error> {
+        call.remaining()?;
+        let mut model = self.0.model.lock().unwrap();
+        if let Some(error) = model.text_error.take() {
+            return Err(error);
+        }
+        let text = model
+            .semantic_elements
+            .as_ref()
+            .and_then(|elements| {
+                elements
+                    .iter()
+                    .find(|element| element.id == request.element)
+            })
+            .and_then(|element| element.value.as_deref())
+            .ok_or(Error::UnsupportedCapability)?;
+        Ok(BackendTextPage {
+            target: target.clone(),
+            page: text_page::page(text, request.offset, request.limit)?,
+        })
     }
     fn capture(
         &self,

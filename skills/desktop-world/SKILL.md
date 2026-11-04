@@ -29,7 +29,13 @@ await app.look();
 await app.click({selector:{role:'button',text:'Continue'}});
 ```
 
-The public methods are `look`, `capture`, `click`, `move`, `drag`, `typeText`,
+For crowded pages, use `look({role:'static_text',text:'relevant phrase'})` to
+query native semantics beyond the default preview. Truncated fields are explicit.
+Read textual content on demand with `return await app.readText('w1.e12')`;
+continue with `{target:'w1.e12',offset:page.next_offset}` without a new look.
+Text offsets are UTF-16; a fresh look starts a new content observation.
+
+The public methods are `look`, `capture`, `readText`, `click`, `move`, `drag`, `typeText`,
 `keypress`, `scroll` and `quit`. Read [API.md](API.md) for exact arguments and
 output semantics;
 [PATTERNS.md](PATTERNS.md) covers visual fallback, dialogs and recovery.

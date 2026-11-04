@@ -8,14 +8,14 @@
 | 方法发现与结果 | `apps` 检索应用及运行状态；API 文档随 Skill；`exec` 默认返回界面增量、必要动作证据和按需截图；print 可选 | 不需要模型生成 request ID 或对成功执行轮询；未知效果不能自动重放 |
 | 应用与窗口 | 稳定平台 app ID；同 app 多实例窗口聚合、精确 owner 引用；macOS/Windows 发现安装目标、按需启动并正常 quit | Windows 读取 Start Menu、App Paths、AppsFolder，以 exe 路径或已证明的 `win:<AUMID>` 定位；跳过/不可读来源明确标记覆盖不足；Linux 仍仅发现运行目标 |
 | 基本视觉操作 | macOS/Windows 按已证明归属和全局窗口顺序合成可见 surface；Windows 使用精确 HWND 和 DWM 可见边框 | Windows 支持可读取的全局 alpha/color-key，未证明的 per-pixel layered alpha 仍明确拒绝；covered capture 不放宽输入可见性；实机结果按具体构建记录 |
-| 语义发现 | look 输出当前顶层至多 80 个语义元素；内部保留原子 AX/UIA 查询；语义不足可截图兜底 | 部分遍历会明确返回覆盖不足；自绘控件可能不提供语义对象；不默认输出整棵树 |
-| 常用操作 | Agent 使用 look/capture/click/move/drag/typeText/keypress/scroll/quit；点击可选语义目标、选择器或图像坐标 | macOS/Windows move/drag 限一个窗口和单个显示器内的可见路径；支持已证明的标准标题栏搬窗；不暴露跨调用的按下/释放状态；实验 X11 不支持手势 |
+| 语义发现与阅读 | look 输出当前顶层至多 80 个语义元素；可用 role/text 按需筛选原生遍历；readText 按观察目标读取原生文本分页；语义不足可截图兜底 | 截断字段标记长度与内容版本；筛选完整性只适用于该查询；文本分页使用同一观察及 UTF-16 偏移；不默认输出整棵树或全文 |
+| 常用操作 | Agent 使用 look/capture/readText/click/move/drag/typeText/keypress/scroll/quit；点击可选语义目标、选择器或图像坐标 | macOS/Windows move/drag 限一个窗口和单个显示器内的可见路径；支持已证明的标准标题栏搬窗；不暴露跨调用的按下/释放状态；实验 X11 不支持手势 |
 | 菜单与对话框 | macOS 菜单、sheet、dialog 及有正向归属证明的关联 surface；Windows 当前窗口内的原生菜单和已证明窗口归属的 modal | Windows 弹出菜单键盘路由需原生 menu-owner 证明；系统 helper 按平台证据处理，不按标题或矩形猜跨进程归属 |
 | 多 app 与多会话 | DTW 维护各 app 的观察状态及回执；跨连接原生资源协调 | 同连接单执行槽；原生上下文更换重置观察；Agent 无 Session 或游标管理；连接不隔离物理桌面 |
-| macOS 输入 | 语义及支持的键盘路径可后台投递；图像坐标点击/手势走可见物理指针；必要时自动聚焦并保持目标前台 | 普通 UI/快捷键关闭窗口，quit 正常退出；保存提示不强行处理；派发后失败不换路线重投；后台支持按动作判断 |
+| macOS 输入 | 语义、支持的键盘及坐标点击/内容拖拽/滚动优先定向；已识别 AppKit/Chromium 原生 hover 按已验证边界借用物理光标；必要聚焦后保持目标前台 | 具体动作、框架与物理路线边界见输入路由文档；普通 UI/快捷键关闭窗口，quit 正常退出；保存提示不强行处理；派发后失败不换路线重投 |
 | Windows 输入 | 支持的 HWND 客户区定向左键/滚轮；其他鼠标、手势及键盘由 DTW 自动准备前台；UIA、DPI、Unicode 和正常关闭 | 不承诺后台键盘/独立物理指针；保护保存提示；安全桌面、提权与不同 DPI 环境需分别验证 |
 | Agent 光标 | macOS/Windows 按会话颜色显示动作位置和点击反馈；不显示内部身份编号 | 视觉反馈不代表业务完成；只有经证明属于 DTW 的辅助窗口可从截图排除 |
-| 取消与资源回收 | 标准 MCP cancellation、EOF/父进程退出收尾、配对释放、原回执 | 已排队输入不可撤回；强杀或丢失结果不能证明动作未发生 |
+| 取消与资源回收 | 标准 MCP cancellation、EOF/父进程退出收尾、配对释放、原回执；Windows 新输入前复核当前输入桌面，失败返回 desktop_unavailable | 已排队输入不可撤回；配对释放不被新输入禁令阻止；桌面恢复后重新观察；Windows 锁屏/切桌面的新增准入仍需专用实机验收 |
 | 浏览器 | 原生窗口、AX/UIA 与像素路线，支持复杂网页通用交互 | DOM、CDP、profile、exact-tab provider 未接入 |
 | 锁屏 | 不承诺支持 | 后台输入不意味着锁屏可用；无解锁或绕过认证能力 |
 | Linux | 保留实验 X11/XRes 身份、XGetImage、XTest 实现 | 无正式桌面支持承诺；不承诺 Wayland/XWayland 或 AT-SPI 语义能力 |

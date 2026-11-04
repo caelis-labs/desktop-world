@@ -99,6 +99,7 @@ impl Store {
             if !equal_rect(pixels.bounds, unobstructed(window)?) {
                 return Err(Error::StaleObservation);
             }
+            super::super::desktop::ensure_input_desktop()?;
             *dispatched = true;
             unsafe {
                 SetWindowPos(

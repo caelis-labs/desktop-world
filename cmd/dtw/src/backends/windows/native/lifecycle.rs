@@ -135,6 +135,7 @@ impl Store {
                     let _mutation = input::mutation(until)?;
                     self.validate(target)?;
                     check(until)?;
+                    super::super::desktop::ensure_input_desktop()?;
                     unsafe { PostMessageW(window, WM_CLOSE, WPARAM(0), LPARAM(0)) }
                         .map_err(failed)?;
                     dispatched = true;

@@ -1,6 +1,6 @@
 # Harness integration
 
-DTW uses standard MCP tools and Agent Skills. Start `dtw mcp` through the Harness's normal stdio server configuration; see [installation](install.md). The same server exposes exactly two tools, `apps` and `exec({app, source})`, for every client. The bundled Skill describes the nine app script methods: `look`, `capture`, `click`, `move`, `drag`, `typeText`, `keypress`, `scroll` and `quit`. It does not need custom Host code.
+DTW uses standard MCP tools and Agent Skills. Start `dtw mcp` through the Harness's normal stdio server configuration; see [installation](install.md). The same server exposes exactly two tools, `apps` and `exec({app, source})`, for every client. The bundled Skill describes the app script methods: `look`, `capture`, `readText`, `click`, `move`, `drag`, `typeText`, `keypress`, `scroll` and `quit`. It does not need custom Host code.
 
 ## Explicit target for policy inspection
 

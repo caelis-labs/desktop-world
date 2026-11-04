@@ -34,6 +34,29 @@ new work; never repeat a possibly delivered action to wait for its effect.
 Semantic failure can trigger a screenshot fallback. An image error is explicit;
 a partially observed semantic tree cannot prove absence or unique targeting.
 
+## Relevant content and full text
+
+On a crowded page, narrow the native traversal instead of repeating the same
+bounded preview:
+
+```javascript
+await app.look({role:'static_text',text:'order number'});
+```
+
+Inspect the returned targets, then request only the text the task needs:
+
+```javascript
+return await app.readText('w1.e12');
+```
+
+A page returns `text`, `next_offset`, `total_length` and `unit:'utf16'`. Continue
+with `{target:'w1.e12',offset:page.next_offset}` while it is non-null; do not insert
+a new look between pages of one revision. A fresh look establishes new content.
+Keep reads bounded by the task and return/print the relevant part rather than
+collecting a whole document into the tool output. A field's truncation marker or
+revision is not proof of its omitted text. Unsupported text can still use images;
+permission/identity failures require recovery before more work.
+
 ## Dialogs and application lifecycle
 
 A look starts a stopped installed app on supported providers and waits briefly

@@ -148,8 +148,9 @@ see its [acceptance guide](../tests/acceptance/windows/README.md).
 
 The old `standard_agent_probe.py`, `browser_workbench_probe.py`,
 `real_app_tasks.py` and related atomic-protocol runners retain historical evidence
-and reusable fixtures/transports. They are not current acceptance commands;
-their Session/result/window-ref workflows do not establish the public facade.
+and reusable fixtures/transports. Their default Session/result/window-ref workflows
+are not current acceptance commands. `current_real_app_tasks.py` is the explicit
+current entry and reuses only their task/oracle/Agent plumbing through small hooks.
 Internal ownership, cancellation and resource tests stay in the source/Rust suites.
 
 ## Distribution
@@ -181,6 +182,25 @@ these implementation/regression steps. Caelis consumer/model integration and
 final published-asset installation remain separate evidence boundaries.
 
 ## Real-task acceptance principles
+
+The current opt-in macOS runner uses only `apps` and `exec({app,source})` for
+Agent GUI work. It defaults to DSH and supports `chrome`, `wps` and `obsidian`:
+
+```sh
+python3 tests/acceptance/current_real_app_tasks.py \
+  --dtw /absolute/path/to/candidate/bin/dtw \
+  --output /new/private/current-task-evidence \
+  --task chrome --acp-adapter /absolute/path/to/dsh-wrapper
+```
+
+Use `--installed-package /absolute/package/root` for exact package/Skill evidence.
+Independent business readback, transcript cleanliness and GUI review are distinct:
+`business_passed` can be true after a recovered failure while `clean_run` and the
+automatic check remain false. Every completed run still requires GUI review;
+filesystem results alone do not pass it. WPS documents stay open for review/manual
+close, avoiding the historical window-ref cleanup. Original failures and the
+independent duplicate-save journal are retained. Compact responses do not expose
+native call or read-refresh counts; unavailable metrics remain explicitly unknown.
 
 Use disposable profiles, documents and vaults with unique markers. A supervisor
 may prepare and independently inspect data; the acting Agent completes the task
