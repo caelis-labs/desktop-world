@@ -44,10 +44,14 @@ pub(super) fn fail_delivery() {
     GATE.close();
 }
 pub fn mutation(until: Instant) -> Result<Mutation<'static>, Error> {
-    GATE.admit_before(until).map_err(|error| match error {
+    let admission = GATE.admit_before(until).map_err(|error| match error {
         AdmissionError::Expired => Error::TimedOut,
         AdmissionError::Closed => Error::Closed,
-    })
+    })?;
+    // Shared by foreground preparation, UIA actions and posted input. Paired
+    // releases retain their original admission and bypass this new-input gate.
+    super::desktop::ensure_input_desktop()?;
+    Ok(admission)
 }
 pub fn quiesce(budget: Duration) -> bool {
     quiesce_transaction(&GATE, &LEASE_STATE, budget)
@@ -239,6 +243,7 @@ pub fn focus(hwnd: HWND, until: Instant, dispatched: &mut bool) -> Result<(), Er
             let attachment = ForegroundAttachment::acquire(hwnd);
             check(until)?;
             no_held_keys()?;
+            super::desktop::ensure_input_desktop()?;
             *dispatched = true;
             let before = GetForegroundWindow();
             let accepted = SetForegroundWindow(hwnd).as_bool();
@@ -443,6 +448,7 @@ pub fn send(
                 if keyboard {
                     keyboard_preflight(until, Instant::now(), closing(), cleanup_failed())?;
                 }
+                super::desktop::ensure_input_desktop()?;
                 *dispatched = true;
                 Ok(())
             },

@@ -1,6 +1,7 @@
 //! Agent-facing app scene. Native refs, layering and image bindings stay here.
 use super::*;
 use base64::Engine;
+use sha2::{Digest, Sha256};
 use std::io::Cursor;
 
 #[derive(Default)]
@@ -9,7 +10,7 @@ pub(super) struct SceneState {
     observed: Option<Value>,
     window_ids: HashMap<String, String>,
     nodes: Vec<Value>,
-    active: Option<String>,
+    pub(super) active: Option<String>,
     // Last image returned to the script. Private refreshes never replace it.
     raster: Option<Raster>,
     pixels: bool,
@@ -29,6 +30,8 @@ impl SceneState {
     }
 }
 struct Layer {
+    // Ownership evidence of the script-visible image survives transient windows.
+    instance: AppInstance,
     window: String,
     observation: String,
     bounds: [f64; 4],
@@ -45,7 +48,9 @@ struct Raster {
 
 pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
     let allowed: &[&str] = match op {
-        "scene.look" | "scene.capture" | "scene.after" => &["full"],
+        "scene.look" => &["full", "role", "text", "scope"],
+        "scene.capture" | "scene.after" => &["full"],
+        "scene.readText" => &["target", "offset", "limit"],
         "scene.click" => &["target", "selector", "x", "y", "button", "count"],
         "scene.move" => &["x", "y"],
         "scene.drag" => &["path"],
@@ -72,8 +77,64 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
             ));
         }
     }
+    if op == "scene.look" {
+        if args
+            .get("scope")
+            .is_some_and(|scope| !matches!(scope.as_str(), Some("window" | "menu")))
+        {
+            return Err(error(
+                "invalid_arguments",
+                "look scope must be window or menu",
+            ));
+        }
+        for (key, maximum) in [("role", 64), ("text", 256)] {
+            if args.get(key).is_some_and(|value| {
+                value
+                    .as_str()
+                    .is_none_or(|text| text.is_empty() || text.chars().count() > maximum)
+            }) {
+                return Err(error(
+                    "invalid_arguments",
+                    "Observation role/text must be bounded nonempty strings",
+                ));
+            }
+        }
+    }
+    if op == "scene.readText" {
+        if args["target"]
+            .as_str()
+            .is_none_or(|target| target.is_empty())
+        {
+            return Err(error(
+                "invalid_arguments",
+                "readText requires an observed target ID",
+            ));
+        }
+        for (key, minimum, maximum) in [("offset", 0, u32::MAX as u64), ("limit", 2, 16384)] {
+            if args.get(key).is_some_and(|value| {
+                value
+                    .as_u64()
+                    .is_none_or(|number| number < minimum || number > maximum)
+            }) {
+                return Err(error(
+                    "invalid_arguments",
+                    "Invalid readText offset or limit",
+                ));
+            }
+        }
+    }
     Ok(())
 }
+// Sparse filtered pages can spend native work without producing rows. Both
+// discovery and object renewal use this bound under their original deadline.
+fn semantic_page_limit(query: &serde_json::Map<String, Value>) -> usize {
+    if query.contains_key("role") || query.contains_key("text") {
+        32
+    } else {
+        4
+    }
+}
+
 fn error(code: &str, message: &str) -> wire::WireError {
     wire::WireError {
         code: code.into(),
@@ -153,6 +214,19 @@ fn terminal_read_error(code: &str) -> bool {
     )
 }
 
+fn transient_capture_error(code: &str) -> bool {
+    matches!(
+        code,
+        "scene_changed"
+            | "capture_geometry_changed"
+            | "capture_failed"
+            | "target_changed"
+            | "stale_window"
+            | "window_unavailable"
+            | "surface_unavailable"
+    )
+}
+
 fn bounds(row: &Value) -> Option<[f64; 4]> {
     let a = row["scene"]["bounds"].as_array()?;
     if a.len() != 4 {
@@ -166,11 +240,22 @@ fn bounds(row: &Value) -> Option<[f64; 4]> {
     ];
     (b.iter().all(|v| v.is_finite()) && b[2] > 0.0 && b[3] > 0.0).then_some(b)
 }
-fn text(value: &Value) -> Value {
-    value
-        .as_str()
-        .map(|s| json!(s.chars().take(240).collect::<String>()))
-        .unwrap_or_else(|| value.clone())
+fn project_text(entry: &mut Value, field: &str, value: &Value) -> bool {
+    let Some(text) = value.as_str() else {
+        entry[field] = value.clone();
+        return false;
+    };
+    entry[field] = json!(text.chars().take(240).collect::<String>());
+    let length = text.chars().count();
+    if length <= 240 {
+        return false;
+    }
+    entry[format!("{field}_truncated")] = json!(true);
+    entry[format!("{field}_length")] = json!(length);
+    // Only omitted content needs a revision in the view. It signals change,
+    // never full readback or object identity; ordinary fields stay compact.
+    entry[format!("{field}_revision")] = json!(format!("{:x}", Sha256::digest(text.as_bytes())));
+    true
 }
 
 fn useful_element(row: &Value) -> bool {
@@ -194,12 +279,20 @@ fn element_priority(row: &Value) -> u8 {
 }
 
 impl<B: Backend + 'static> Coordinator<B> {
-    fn scene_atomic(&self, id: &str, op: &str, args: Value, deadline: Instant) -> Work {
+    pub(super) fn scene_atomic(&self, id: &str, op: &str, args: Value, deadline: Instant) -> Work {
         let submitted = match wire::script_submit(&self.app_ref, id, op, &args) {
             Ok(v) => v,
             Err(e) => return failed(e),
         };
-        let mut work = self.execute_atomic(&submitted, deadline);
+        let mut work = match &submitted.command {
+            Command::PressSelected {
+                selector,
+                timeout_ms,
+            } if selector.scope == wire::SelectorScope::Window => {
+                self.select_scene_element(&submitted, selector, *timeout_ms, deadline)
+            }
+            _ => self.execute_atomic(&submitted, deadline),
+        };
         let publication = std::mem::replace(&mut work.publication, Publication::None);
         apply_publication(&mut self.state.lock().unwrap(), publication);
         work
@@ -217,6 +310,9 @@ impl<B: Backend + 'static> Coordinator<B> {
                 0,
                 deadline,
             );
+        }
+        if op == "scene.readText" {
+            return self.scene_read_text(id, args, deadline);
         }
         if op == "scene.quit" {
             let mut state = self.state.lock().unwrap();
@@ -239,7 +335,16 @@ impl<B: Backend + 'static> Coordinator<B> {
         let implicit = matches!(op, "scene.typeText" | "scene.keypress")
             || (op == "scene.scroll" && args.get("x").is_none())
             || (op == "scene.click" && args.get("selector").is_some());
-        if implicit && self.state.lock().unwrap().scene.observed.is_some() {
+        if implicit && self.runtime.instances().is_empty() {
+            // Reuse the existing launch/readiness path only for stopped apps.
+            // Running apps need inventory, not a redundant semantic look before
+            // a known selector, key chord, text insertion or default scroll.
+            let prepared = self.scene_look(id, &json!({}), false, false, 0, deadline);
+            if prepared.completed.error.is_some() || self.runtime.instances().is_empty() {
+                return prepared;
+            }
+        }
+        if implicit {
             // Focus is app-instance-local. A background sibling's focus hint
             // must never redirect input from the instance selected by the view.
             let selected_instance = {
@@ -277,10 +382,17 @@ impl<B: Backend + 'static> Coordinator<B> {
             let selected = candidates
                 .iter()
                 .find(|row| {
-                    !matches!(op, "scene.typeText" | "scene.keypress")
-                        || row["scene"]["keyboard_focused"] == true
+                    if matches!(op, "scene.typeText" | "scene.keypress") {
+                        row["scene"]["keyboard_focused"] == true
+                    } else {
+                        row["scene"]["semantic_candidate"] != false
+                    }
                 })
-                .or_else(|| candidates.first());
+                .or_else(|| {
+                    matches!(op, "scene.typeText" | "scene.keypress")
+                        .then(|| candidates.first())
+                        .flatten()
+                });
             if selected.is_none() && rows.iter().any(|row| row["visible"] == true) {
                 return failed(error(
                     "target_changed",
@@ -293,7 +405,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         }
         let active = self.state.lock().unwrap().scene.active.clone();
         let Some(window) = active else {
-            if op == "scene.keypress" && self.state.lock().unwrap().scene.observed.is_some() {
+            if op == "scene.keypress" && !self.runtime.instances().is_empty() {
                 let mut options = args.clone();
                 options["window_ref"] = json!("internal-app-shortcut");
                 let parsed = match wire::script_submit(&self.app_ref, id, "keypress", &options) {
@@ -306,7 +418,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             }
             return failed(error(
                 "look_required",
-                "Call app.look() before input; typing needs an editing window",
+                "No current editing surface; inspect the app with look or capture",
             ));
         };
         let mut options = args.clone();
@@ -409,15 +521,19 @@ impl<B: Backend + 'static> Coordinator<B> {
         // Selector admission owns menu focus preparation after capability and
         // unique-target checks, and retains its receipt in the resolution ledger.
         let input_window = options["window_ref"].as_str().map(str::to_owned);
+        let follows_scene = method == "press"
+            && options.get("selector").is_some()
+            && options["selector"]["scope"] != "menu";
         let work = self.scene_atomic(id, &method, options, deadline);
         // Keep the scene mapping for the next requested action. Its native
         // binding is consumed; preflight renews it without replaying this input.
         let mut state = self.state.lock().unwrap();
-        if work
-            .completed
-            .receipt
-            .as_ref()
-            .is_some_and(|r| r.outcome.dispatch == DispatchState::Dispatched)
+        if !follows_scene
+            && work
+                .completed
+                .receipt
+                .as_ref()
+                .is_some_and(|r| r.outcome.dispatch == DispatchState::Dispatched)
         {
             state.scene.active = input_window;
         }
@@ -558,6 +674,46 @@ impl<B: Backend + 'static> Coordinator<B> {
             );
         work
     }
+    fn scene_read_text(&self, id: &str, args: &Value, deadline: Instant) -> Work {
+        let node = self
+            .state
+            .lock()
+            .unwrap()
+            .scene
+            .nodes
+            .iter()
+            .find(|node| node["id"] == args["target"])
+            .cloned();
+        let Some(node) = node else {
+            return failed(error(
+                "target_changed",
+                "Read text from a target in the latest look",
+            ));
+        };
+        // Retain this exact observation across pages. Renewing here could join
+        // different text revisions or revive an ID with a reused native object.
+        let mut request = json!({"window_ref":node["window_ref"],
+            "observation_ref":node["observation_ref"],"element_ref":node["element_ref"]});
+        for key in ["offset", "limit"] {
+            if let Some(value) = args.get(key) {
+                request[key] = value.clone();
+            }
+        }
+        let work = self.scene_atomic(id, "readText", request, deadline);
+        if let Some(error) = &work.completed.error {
+            if !matches!(
+                error.code.as_str(),
+                "invalid_text_range" | "unsupported_capability"
+            ) {
+                let mut state = self.state.lock().unwrap();
+                state.scene.nodes.clear();
+                state.scene.raster = None;
+                state.scene.observed = None;
+                state.scene.projected = None;
+            }
+        }
+        work
+    }
     fn scene_refresh_target(
         &self,
         id: &str,
@@ -583,14 +739,13 @@ impl<B: Backend + 'static> Coordinator<B> {
         };
         // A public scene ID represents an object; Core/native observations
         // remain single-use. Renew before dispatch, never by retrying input.
-        let mut work = self.scene_atomic(
-            id,
-            "observe",
-            json!({"window_ref":node["window_ref"],"limit":80}),
-            deadline,
-        );
+        let mut query = node["query"].as_object().cloned().unwrap_or_default();
+        query.insert("window_ref".into(), node["window_ref"].clone());
+        query.insert("limit".into(), json!(80));
+        let max_pages = semantic_page_limit(&query);
+        let mut work = self.scene_atomic(id, "observe", Value::Object(query), deadline);
         let mut found = None;
-        for page_index in 0..4 {
+        for page_index in 0..max_pages {
             if let Some(error) = work.completed.error {
                 let mut state = self.state.lock().unwrap();
                 state.scene.raster = None;
@@ -623,7 +778,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             // Opaque object identity does not require selector uniqueness or a
             // complete tree. Do not let an unrelated later branch retire this
             // already-proven binding. Reject duplicates in the returned page.
-            if found.is_some() || page["next"].is_null() || page_index == 3 {
+            if found.is_some() || page["next"].is_null() || page_index + 1 == max_pages {
                 break;
             }
             work = self.scene_atomic(id, "observe", json!({"cursor":page["next"]}), deadline);
@@ -656,67 +811,123 @@ impl<B: Backend + 'static> Coordinator<B> {
                     "Call app.capture() before coordinate input",
                 )
             })?;
-        for point in points {
-            previous.point(point)?;
-        }
-        let work = self.scene_atomic(id, "windows", json!({}), deadline);
-        if let Some(error) = work.completed.error {
-            return Err(error);
-        }
-        let value = work.completed.value.unwrap();
-        let rows = ordered(
-            value["windows"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|r| r["visible"] == true)
-                .cloned()
-                .collect(),
-        );
-        for point in points {
-            let receiver = previous.point(point)?;
-            let layer = previous
-                .layers
+        // Coordinates retain their application instance and canvas, not the
+        // identity of a transient layer that happened to receive them before.
+        let (instances, anchor) = {
+            let state = self.state.lock().unwrap();
+            let instances = points
                 .iter()
-                .find(|l| receiver["window_ref"] == l.window)
-                .unwrap();
-            if !rows.iter().any(|row| {
-                row["window_ref"] == layer.window && bounds(row).is_none_or(|b| b == layer.bounds)
-            }) {
+                .map(|point| {
+                    let receiver = previous.point(point)?;
+                    previous
+                        .layers
+                        .iter()
+                        .find(|layer| receiver["window_ref"] == layer.window)
+                        .map(|layer| layer.instance.clone())
+                        .ok_or_else(|| {
+                            error(
+                                "stale_scene",
+                                "The original application instance is unavailable",
+                            )
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let anchor = state
+                .scene
+                .viewport
+                .as_ref()
+                .map(|v| (v.1.clone(), v.2))
+                .or_else(|| {
+                    previous
+                        .layers
+                        .last()
+                        .map(|layer| (layer.window.clone(), layer.bounds))
+                })
+                .ok_or_else(|| error("stale_scene", "The canvas anchor is unavailable"))?;
+            (instances, anchor)
+        };
+        let mut refreshed = false;
+        loop {
+            let work = self.scene_atomic(id, "windows", json!({}), deadline);
+            if let Some(error) = work.completed.error {
+                return Err(error);
+            }
+            let value = work.completed.value.unwrap();
+            let rows = ordered(
+                value["windows"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|r| r["visible"] == true)
+                    .cloned()
+                    .collect(),
+            );
+            // The canvas anchor must retain its geometry. Other app surfaces may
+            // move, appear or disappear while the canvas mapping remains stable.
+            if !rows
+                .iter()
+                .any(|row| row["window_ref"] == anchor.0 && bounds(row) == Some(anchor.1))
+            {
                 return Err(error(
                     "stale_scene",
-                    "Target window geometry changed; inspect the returned view before new input",
+                    "Canvas anchor geometry changed; inspect the returned view before new input",
                 ));
             }
+            let (fresh, _) = match self.scene_capture(id, &rows, deadline) {
+                Ok(capture) => capture,
+                Err(e)
+                    if !refreshed
+                        && transient_capture_error(e["code"].as_str().unwrap_or(""))
+                        && Instant::now() + Duration::from_millis(80) < deadline =>
+                {
+                    // A popup can join the scene between inventory and capture.
+                    // Refresh reads once before admission; no input has occurred.
+                    refreshed = true;
+                    std::thread::sleep(Duration::from_millis(80));
+                    continue;
+                }
+                Err(e) => {
+                    return Err(wire::WireError {
+                        code: e["code"].as_str().unwrap_or("capture_failed").into(),
+                        message: e["message"]
+                            .as_str()
+                            .unwrap_or("Image refresh failed")
+                            .into(),
+                        details: e.get("details").cloned(),
+                    })
+                }
+            };
+            if previous.bounds != fresh.bounds
+                || previous.width != fresh.width
+                || previous.height != fresh.height
+            {
+                return Err(error(
+                    "stale_scene",
+                    "Image canvas mapping changed; inspect the returned view before new input",
+                ));
+            }
+            {
+                let state = self.state.lock().unwrap();
+                for (point, instance) in points.iter().zip(&instances) {
+                    let receiver = fresh.point(point)?;
+                    if !state
+                        .windows
+                        .get(receiver["window_ref"].as_str().unwrap())
+                        .is_some_and(|target| &target.app == instance)
+                    {
+                        return Err(error(
+                            "stale_scene",
+                            "The current pixel receiver belongs to another application instance",
+                        ));
+                    }
+                }
+            }
+            // A coordinate selects the current top app pixel, not a semantic object.
+            // Keep the original canvas and per-point instance authorization baseline.
+            // Fresh native observations authorize only this dispatch.
+            self.state.lock().unwrap().scene.raster = Some(previous);
+            return Ok(fresh);
         }
-        let (fresh, _) = self
-            .scene_capture(id, &rows, deadline)
-            .map_err(|e| wire::WireError {
-                code: e["code"].as_str().unwrap_or("capture_failed").into(),
-                message: e["message"]
-                    .as_str()
-                    .unwrap_or("Image refresh failed")
-                    .into(),
-                details: e.get("details").cloned(),
-            })?;
-        if previous.bounds != fresh.bounds
-            || previous.width != fresh.width
-            || previous.height != fresh.height
-            || points
-                .iter()
-                .any(|point| match (previous.point(point), fresh.point(point)) {
-                    (Ok(before), Ok(after)) => before["window_ref"] != after["window_ref"],
-                    _ => true,
-                })
-        {
-            return Err(error("stale_scene", "Image mapping or receiving surface changed; inspect the returned view before new input"));
-        }
-        // Animation, typing and scrolling do not identify a new receiver.
-        // A coordinate promises a point, never semantic object identity.
-        // The fresh native observations authorize only this dispatch. Keep the
-        // script-visible image as the baseline for every later point as well.
-        self.state.lock().unwrap().scene.raster = Some(previous);
-        Ok(fresh)
     }
     fn scene_look(
         &self,
@@ -813,17 +1024,22 @@ impl<B: Backend + 'static> Coordinator<B> {
             }
             state.scene.window_ids.clone()
         };
+        let mut query: serde_json::Map<String, Value> = ["role", "text", "scope"]
+            .into_iter()
+            .filter_map(|key| args.get(key).map(|value| (key.to_owned(), value.clone())))
+            .collect();
+        if query.get("scope").and_then(Value::as_str) == Some("window") {
+            query.remove("scope");
+        }
         let mut nodes = Vec::new();
         let mut elements = Vec::new();
         let mut semantic_bytes = 0usize;
         let mut semantic = json!({"complete":false,"reason":"no_window"});
         if let Some(row) = &active {
-            let work = self.scene_atomic(
-                id,
-                "observe",
-                json!({"window_ref":row["window_ref"],"limit":80}),
-                deadline,
-            );
+            let mut request = query.clone();
+            request.insert("window_ref".into(), row["window_ref"].clone());
+            request.insert("limit".into(), json!(80));
+            let work = self.scene_atomic(id, "observe", Value::Object(request), deadline);
             if let Some(e) = work.completed.error {
                 if !semantic_fallback(&e.code) {
                     return failed(e);
@@ -831,18 +1047,21 @@ impl<B: Backend + 'static> Coordinator<B> {
                 semantic = json!({"complete":false,"reason":e.code});
             } else if let Some(mut page) = work.completed.value {
                 let mut candidates = Vec::new();
-                // Bound native work independently of the model's 80-row budget.
-                for page_index in 0..4 {
+                let max_pages = semantic_page_limit(&query);
+                for page_index in 0..max_pages {
                     if let Some(rows) = page["elements"].as_array() {
                         for row in rows {
-                            if useful_element(row) {
+                            if !query.is_empty() || useful_element(row) {
                                 candidates.push((row.clone(), page["observation_ref"].clone()));
                             }
                         }
                     }
                     semantic = json!({"complete":page["coverage"]["complete"]==true && page["next"].is_null(),
                         "reason":page["coverage"]["reason"],"has_more":!page["next"].is_null()});
-                    if page["next"].is_null() || candidates.len() >= 80 || page_index == 3 {
+                    if page["next"].is_null()
+                        || candidates.len() >= 80
+                        || page_index + 1 == max_pages
+                    {
                         break;
                     }
                     let more =
@@ -909,7 +1128,16 @@ impl<B: Backend + 'static> Coordinator<B> {
                         }
                         target
                     });
-                    let entry = json!({"id":target,"role":element["role"],"name":text(&element["name"]),"value":text(&element["value"]),"enabled":element["enabled"],"actions":element["actions"]});
+                    let mut entry = json!({"id":target,"role":element["role"],"enabled":element["enabled"],"actions":element["actions"]});
+                    let name_truncated = project_text(&mut entry, "name", &element["name"]);
+                    let value_truncated = project_text(&mut entry, "value", &element["value"]);
+                    if name_truncated || value_truncated {
+                        semantic["text_truncated"] = json!(true);
+                        if semantic["complete"] == true {
+                            semantic["complete"] = json!(false);
+                            semantic["reason"] = json!("text_truncated");
+                        }
+                    }
                     let entry_bytes = entry.to_string().len();
                     if semantic_bytes.saturating_add(entry_bytes) > 24 * 1024 {
                         semantic["complete"] = json!(false);
@@ -918,11 +1146,14 @@ impl<B: Backend + 'static> Coordinator<B> {
                         break;
                     }
                     nodes.push(json!({"id":target,"window_ref":row["window_ref"],"observation_ref":observation,"element_ref":element["element_ref"],
-                        "rebind_identity":element["rebind_identity"].as_str().filter(|id| rebinds.get(*id) == Some(&1)), "expected":element}));
+                        "rebind_identity":element["rebind_identity"].as_str().filter(|id| rebinds.get(*id) == Some(&1)), "expected":element,"query":query}));
                     semantic_bytes += entry_bytes;
                     elements.push(entry);
                 }
             }
+        }
+        if !query.is_empty() {
+            semantic["query"] = Value::Object(query);
         }
         let pixel_mode = explicit_pixels
             || (after && self.state.lock().unwrap().scene.pixels)
@@ -983,18 +1214,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                         });
                     }
                     if attempt == 0
-                        && matches!(
-                            e["code"].as_str(),
-                            Some(
-                                "scene_changed"
-                                    | "capture_geometry_changed"
-                                    | "capture_failed"
-                                    | "target_changed"
-                                    | "stale_window"
-                                    | "window_unavailable"
-                                    | "surface_unavailable"
-                            )
-                        )
+                        && transient_capture_error(e["code"].as_str().unwrap_or(""))
                         && Instant::now() + Duration::from_millis(80) < deadline
                     {
                         self.state.lock().unwrap().scene.raster = None;
@@ -1099,7 +1319,12 @@ impl<B: Backend + 'static> Coordinator<B> {
                     json!({"code":"scene_limit","message":"Scene exceeds 64 MiB decoded budget"}),
                 );
             }
+            let instance = self.state.lock().unwrap().windows
+                .get(row["window_ref"].as_str().unwrap())
+                .map(|target| target.app.clone())
+                .ok_or(json!({"code":"invalid_image_binding","message":"Captured surface ownership is unavailable"}))?;
             layers.push(Layer {
+                instance,
                 window: row["window_ref"].as_str().unwrap().into(),
                 observation: v["observation_ref"]
                     .as_str()
@@ -1168,7 +1393,7 @@ impl<B: Backend + 'static> Coordinator<B> {
 }
 // Only app-relative order is a scene fact. Other apps and short-lived SCK
 // clients can shift global WindowServer ranks without changing this app.
-fn ordered(mut rows: Vec<Value>) -> Vec<Value> {
+pub(super) fn ordered(mut rows: Vec<Value>) -> Vec<Value> {
     rows.sort_by_key(|r| r["scene"]["rank"].as_u64().unwrap_or(u64::MAX));
     for (rank, row) in rows.iter_mut().enumerate() {
         if row["scene"].is_object() {
@@ -1378,6 +1603,11 @@ mod tests {
     use super::*;
     fn layer(window: &str, rect: [f64; 4], color: [u8; 4]) -> Layer {
         Layer {
+            instance: AppInstance {
+                identity: AppIdentity("org.example.Scene".into()),
+                pid: 42,
+                generation: 1,
+            },
             window: window.into(),
             observation: format!("obs_{window}"),
             bounds: rect,

@@ -39,8 +39,9 @@ use windows::{
         UI::{
             Accessibility::*,
             HiDpi::{
-                GetDpiForWindow, PhysicalToLogicalPointForPerMonitorDPI,
-                SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+                GetDpiForWindow, GetWindowDpiAwarenessContext, SetProcessDpiAwarenessContext,
+                SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT,
+                DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
             },
             Input::KeyboardAndMouse::*,
             WindowsAndMessaging::*,
@@ -940,6 +941,35 @@ impl Store {
             let (element, depth) = q.frontier.pop().unwrap();
             q.scanned += 1;
             steps += 1;
+            // UIA may attach a newly opened owned top-level dialog beneath its
+            // disabled owner. It is a different semantic receiver, not content
+            // of this query's HWND. Keep independent siblings, but prune that
+            // dialog so app-selector read polling can select its own fresh root.
+            let separate_window = if !q.menu_scope && depth > 0 {
+                match unsafe { element.CurrentControlType() } {
+                    Ok(control) if control == UIA_WindowControlTypeId => {
+                        match unsafe { element.CurrentNativeWindowHandle() } {
+                            Ok(handle) => {
+                                let native = HWND(handle.0);
+                                !native.0.is_null()
+                                    && native != window
+                                    && unsafe { GetAncestor(native, GA_ROOT) } == native
+                            }
+                            Err(_) => {
+                                q.gap.get_or_insert("native_read_gap".into());
+                                false
+                            }
+                        }
+                    }
+                    Ok(_) => false,
+                    Err(_) => {
+                        q.gap.get_or_insert("native_read_gap".into());
+                        false
+                    }
+                }
+            } else {
+                false
+            };
             if !(super::discovery::Branches {
                 frontier: &mut q.frontier,
                 visited: &mut q.visited,
@@ -948,10 +978,19 @@ impl Store {
             .admit(
                 depth,
                 || optional(unsafe { walker.GetNextSiblingElement(&element) }),
-                || optional(unsafe { walker.GetFirstChildElement(&element) }),
+                || {
+                    if separate_window {
+                        Ok(None)
+                    } else {
+                        optional(unsafe { walker.GetFirstChildElement(&element) })
+                    }
+                },
                 || owned_with_walker(&uia, &walker, &element, &q.scope_root, until),
                 || runtime_id(&element),
             )? {
+                continue;
+            }
+            if separate_window {
                 continue;
             }
             if q.menu_scope {
@@ -1089,7 +1128,7 @@ impl Store {
             owned(&uia, &element, &q.root, until).map_err(retained_error)?;
             owned(&uia, &element, &current_root, until).map_err(retained_error)?;
             q.validate_region(window, &element, until)?;
-            let current = element_text(&element)?;
+            let current = element_text(&element, window)?;
             check(until)?;
             self.validate(&target)?;
             let current_root = unsafe { uia.ElementFromHandle(window) }.map_err(failed)?;
@@ -1131,7 +1170,20 @@ impl Store {
         let alpha = window_alpha(window)?;
         let dpi = unsafe { GetDpiForWindow(window) };
         check(until)?;
-        let (image, rendered_size) = capture_rgb(window, bounds)?;
+        let captured = capture_rgb(window, bounds);
+        let (image, rendered_size) = captured.map_err(|error| {
+            // A tooltip/dialog can disappear inside PrintWindow. Only a new
+            // native proof of that identity/geometry change permits the scene's
+            // bounded read refresh; a live unchanged renderer keeps its error.
+            if !unsafe { IsWindow(window) }.as_bool()
+                || matches!(self.validate(target), Err(Error::TargetChanged))
+                || capture_bounds(window).is_ok_and(|now| !equal_rect(bounds, now))
+            {
+                Error::TargetChanged
+            } else {
+                error
+            }
+        })?;
         unsafe { DwmFlush() }.map_err(failed)?;
         self.validate(target)?;
         if !equal_rect(bounds, capture_bounds(window)?)
@@ -1956,10 +2008,17 @@ fn element_row(
         )
     }
 }
-fn element_text(element: &IUIAutomationElement) -> Result<String, Error> {
+fn element_text(element: &IUIAutomationElement, window: HWND) -> Result<String, Error> {
     unsafe {
         if element.CurrentIsPassword().map_err(failed)?.as_bool() {
             return Err(Error::UnsupportedCapability);
+        }
+        let native = HWND(element.CurrentNativeWindowHandle().map_err(failed)?.0);
+        if let Some(text) = super::edit_delivery::read_control(native, window)? {
+            if element.CurrentNativeWindowHandle().map_err(failed)?.0 != native.0 {
+                return Err(Error::StaleObservation);
+            }
+            return Ok(text);
         }
         let text = if let Some(pattern) =
             optional_pattern::<IUIAutomationTextPattern>(element, UIA_TextPatternId)?
@@ -2162,25 +2221,28 @@ fn rendered_content(rgb: &[u8]) -> bool {
     sampled > 0 && black * 200 < sampled * 199
 }
 fn render_size(window: HWND) -> Result<(i32, i32), Error> {
+    struct DpiScope(DPI_AWARENESS_CONTEXT);
+    impl Drop for DpiScope {
+        fn drop(&mut self) {
+            unsafe { SetThreadDpiAwarenessContext(self.0) };
+        }
+    }
     unsafe {
+        // GetWindowRect is virtualized to the calling thread's DPI context.
+        // Read in the receiver's context to obtain its backing dimensions.
+        // Converting the exclusive bottom/right corner as a point can fail for
+        // native confirmation windows because that point is outside the HWND.
+        // This scope changes only our worker thread and restores it on errors.
+        let previous = SetThreadDpiAwarenessContext(GetWindowDpiAwarenessContext(window));
+        if previous.0.is_null() {
+            return Err(failed("render_size/Cannot enter receiver DPI context"));
+        }
+        let _scope = DpiScope(previous);
         let mut raw = RECT::default();
-        GetWindowRect(window, &mut raw).map_err(failed)?;
-        let mut first = POINT {
-            x: raw.left,
-            y: raw.top,
-        };
-        let mut last = POINT {
-            x: raw.right,
-            y: raw.bottom,
-        };
-        PhysicalToLogicalPointForPerMonitorDPI(window, &mut first)
-            .ok()
-            .map_err(failed)?;
-        PhysicalToLogicalPointForPerMonitorDPI(window, &mut last)
-            .ok()
-            .map_err(failed)?;
-        let width = last.x.checked_sub(first.x).ok_or(Error::InvalidPoint)?;
-        let height = last.y.checked_sub(first.y).ok_or(Error::InvalidPoint)?;
+        GetWindowRect(window, &mut raw)
+            .map_err(|error| failed(format!("render_size/GetWindowRect: {error}")))?;
+        let width = raw.right.checked_sub(raw.left).ok_or(Error::InvalidPoint)?;
+        let height = raw.bottom.checked_sub(raw.top).ok_or(Error::InvalidPoint)?;
         if width <= 0
             || height <= 0
             || width > 8192
@@ -2297,7 +2359,9 @@ fn capture_rgb(window: HWND, bounds: RECT) -> Result<(Value, (i32, i32)), Error>
             // BitBlt can return another app during maximize/restore animation
             // even when Win32 rectangles and hit tests already name this HWND.
             // Render only this exact window; there is no desktop-copy fallback.
-            let captured = render_window(window, memory, 2).ok().map_err(failed);
+            let captured = render_window(window, memory, 2)
+                .ok()
+                .map_err(|error| failed(format!("capture/PrintWindow: {error}")));
             let result = captured.and_then(|_| {
                 let bgra =
                     std::slice::from_raw_parts(bits as *const u8, rw as usize * rh as usize * 4);

@@ -1,0 +1,2356 @@
+{
+  "schema_version": 1,
+  "source_base_commit": "0fd00c1",
+  "baseline": "computer-use-v1.2",
+  "manifest_sha256": "d69b667a8482a4fa09728df84f9d3584928b8f8b3bb049c0e5741ca28dd7e226",
+  "remaining_target_count": 23,
+  "attempt_count": 47,
+  "raw_evidence_root": "/tmp/dtw-computer-use-targets-b01",
+  "full_baseline_passed": false,
+  "installed_package_validated": false,
+  "production_code_changed_in_this_increment": false,
+  "latest_status_counts": {
+    "blocked": 7,
+    "passed": 13,
+    "unsupported": 3
+  },
+  "latest_strict_pass_count": 8,
+  "latest_background_strict_pass_count": 7,
+  "latest": [
+    {
+      "scenario": "B01",
+      "attempt": "B01-a01",
+      "status": "blocked",
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "limitation": "Existing owned Chrome profile launchers do not establish exact process/profile binding through current apps/exec: authorization accepts a bundle ID or .app path, while discovery exposes instance counts without an owned PID selector. Historical window-selection APIs cannot be reused. No Chrome was launched or contacted; an owned profile alone is insufficient isolation evidence."
+    },
+    {
+      "scenario": "B02",
+      "attempt": "B02-a02",
+      "status": "passed",
+      "targeted_passed": true,
+      "strict_passed": true,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "limitation": null
+    },
+    {
+      "scenario": "B03",
+      "attempt": "B03-a03",
+      "status": "passed",
+      "targeted_passed": true,
+      "strict_passed": true,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "limitation": null
+    },
+    {
+      "scenario": "B04",
+      "attempt": "B04-a01",
+      "status": "blocked",
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "limitation": "Existing owned Chrome profile launchers do not establish exact process/profile binding through current apps/exec: authorization accepts a bundle ID or .app path, while discovery exposes instance counts without an owned PID selector. Historical window-selection APIs cannot be reused. No Chrome was launched or contacted; an owned profile alone is insufficient isolation evidence."
+    },
+    {
+      "scenario": "B05",
+      "attempt": "B05-a03",
+      "status": "passed",
+      "targeted_passed": true,
+      "strict_passed": true,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "limitation": null
+    },
+    {
+      "scenario": "C04",
+      "attempt": "C04-a02",
+      "status": "passed",
+      "targeted_passed": true,
+      "strict_passed": true,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "limitation": null
+    },
+    {
+      "scenario": "C05",
+      "attempt": "C05-a01",
+      "status": "passed",
+      "targeted_passed": true,
+      "strict_passed": true,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "limitation": null
+    },
+    {
+      "scenario": "N11",
+      "attempt": "N11-a02",
+      "status": "passed",
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "limitation": null
+    },
+    {
+      "scenario": "N12",
+      "attempt": "N12-a02",
+      "status": "passed",
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "limitation": null
+    },
+    {
+      "scenario": "N13",
+      "attempt": "N13-a02",
+      "status": "unsupported",
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "limitation": "Background hover unsupported; no activation or replay."
+    },
+    {
+      "scenario": "N14",
+      "attempt": "N14-a01",
+      "status": "unsupported",
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "limitation": "GUI movement refreshes the canvas baseline; simplified points cannot retain old image identity."
+    },
+    {
+      "scenario": "N15",
+      "attempt": "N15-a02",
+      "status": "passed",
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "limitation": null
+    },
+    {
+      "scenario": "R01",
+      "attempt": "R01-a04",
+      "status": "passed",
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": true,
+      "limitation": null
+    },
+    {
+      "scenario": "R02",
+      "attempt": "R02-a03",
+      "status": "passed",
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": true,
+      "limitation": null
+    },
+    {
+      "scenario": "R03",
+      "attempt": "R03-a02",
+      "status": "unsupported",
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "limitation": "Public look_required rejection lacks dispatch/focus-preparation evidence; unchanged independent business states do not prove the not_dispatched contract."
+    },
+    {
+      "scenario": "R04",
+      "attempt": "R04-a02",
+      "status": "passed",
+      "targeted_passed": true,
+      "strict_passed": true,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "limitation": null
+    },
+    {
+      "scenario": "S01",
+      "attempt": "S01-a02",
+      "status": "blocked",
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "limitation": "Dock observation alone does not prove an exact authorized app-root item action; current fixture has no Dock-item action oracle"
+    },
+    {
+      "scenario": "S02",
+      "attempt": "S02-a02",
+      "status": "blocked",
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "limitation": "Windowless accessory observation succeeded, but exact app-root menu action and ownership have not been verified"
+    },
+    {
+      "scenario": "S03",
+      "attempt": "S03-a02",
+      "status": "blocked",
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "limitation": "Windows-only chooser tooltip acceptance requires a native Windows host and real tooltip/shadow plus selected-file oracle"
+    },
+    {
+      "scenario": "S04",
+      "attempt": "S04-a02",
+      "status": "blocked",
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "limitation": "Actual display inventory does not establish mixed-DPI placement/input or unavailable-desktop refusal. The fixture has no acknowledged display-relocation or isolated unavailable-desktop facility; changing the user session is outside scope."
+    },
+    {
+      "scenario": "W04",
+      "attempt": "W04-a03",
+      "status": "blocked",
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "limitation": "WebKit date widget did not accept keyboard date input"
+    },
+    {
+      "scenario": "W05",
+      "attempt": "W05-a04",
+      "status": "passed",
+      "targeted_passed": true,
+      "strict_passed": true,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "limitation": null
+    },
+    {
+      "scenario": "W06",
+      "attempt": "W06-a03",
+      "status": "passed",
+      "targeted_passed": true,
+      "strict_passed": true,
+      "clean_run": true,
+      "foreground_fixture_requested": true,
+      "limitation": null
+    }
+  ],
+  "attempts": [
+    {
+      "attempt": "B01-a01",
+      "scenario": "B01",
+      "status": "blocked",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {},
+      "expected_errors_verified": false,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": false,
+        "exec_intervals": 0,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": null,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [
+        "no MCP requests were observed inside the audit directory"
+      ],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "8302da5a7cd5a179dc38162312ef96cbf82f5af74518e1678beddccbae4c74bd",
+        "cursor/report.json": "60839136a904cb617d924be8a6237a0684ec4400b2e116bd2055adc5a7ece3d9",
+        "cursor/probe/report.json": "24273262d023fc79a877565c8afcc4f8f8aee15f7adfbaa3a6985884980f5d9b"
+      },
+      "limitation": "Existing owned Chrome profile launchers do not establish exact process/profile binding through current apps/exec: authorization accepts a bundle ID or .app path, while discovery exposes instance counts without an owned PID selector. Historical window-selection APIs cannot be reused. No Chrome was launched or contacted; an owned profile alone is insufficient isolation evidence."
+    },
+    {
+      "attempt": "B02-a01",
+      "scenario": "B02",
+      "status": "failed",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {},
+      "expected_errors_verified": false,
+      "tool_error_count": 1,
+      "tool_error_codes": [
+        "selector_ambiguous"
+      ],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 2,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 16.910888671875,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "e1574fc0e7c77c23dbde5c3b281cd487127aca909ae6be2e577d13417e53c94a",
+        "cursor/report.json": "452048f0175a6629e801e66bb54acdd58ec35f7ba1658bb18324fe1c0cab7c8c",
+        "cursor/probe/report.json": "74f3665de9f9b7ef9540e30897f9902e7d912b024a29d780afa4483c60f30e3d"
+      },
+      "failure_digest": "53a39210277105fe8b30fe3976efc8b339584ffbf6c6c24cd68d9a57668c088a"
+    },
+    {
+      "attempt": "B02-a02",
+      "scenario": "B02",
+      "status": "passed",
+      "business_passed": true,
+      "targeted_passed": true,
+      "strict_passed": true,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "9e7665dd2354cc6e33c39547b5cedbbe8dc1c12889b128157169cdcec9924138",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "5078182b7e41fcaada1c8d6b0ad8700e26f655597fb663b32bb49166cf7f26f0",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "4237a184824a246c88e9cc07618f9ef372ff5eca59df160149e69aaf77effc09",
+        "computer_use_browser_cases.py": "fdfd70a983ca7dab428d9d04e820e45a9836631f282448d31f69b4ccb151b42d",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "7cdced7c66a07246d3b4324076eb6474292db0c0d2577a9a02044990ad0921d9",
+        "computer_use_web_cases.py": "85de31c06c7ceb0808970ee350444659a37183137c56a431e945ad7e6f6af11d",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": true,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 34,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 21.145751953125,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "64ff108ad3c5caed2954127615f5afd236a24dc68c02bde5309e335a138ee81b",
+        "cursor/report.json": "59e6051cb0abbaae1478acce1f3b100b42aa3849655105493f37450f0c3f2919",
+        "cursor/probe/report.json": "beaa8d324e755161e8f47f8dd9a4860c5c99370bb575d8646c12917da70c8778"
+      }
+    },
+    {
+      "attempt": "B03-a01",
+      "scenario": "B03",
+      "status": "failed",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {},
+      "expected_errors_verified": false,
+      "tool_error_count": 2,
+      "tool_error_codes": [
+        "selector_ambiguous"
+      ],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": false,
+        "exec_intervals": 4,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 97.94091796875,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [
+        "system cursor sample gap exceeds policy or is unavailable"
+      ],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "84b9d8c1528e80b470f94ec2e544acc71e12eca87d12aa6179de60041aa84036",
+        "cursor/report.json": "b193b7800cd6eb42144a59ac27aacc36c07e0d2f7d91fccec2db6bfbed23977c",
+        "cursor/probe/report.json": "b62e1426f0c0c0e27aa30f170c614496e45d6be2d5c690b2ec841d380b897c0e"
+      },
+      "failure_digest": "003cad0c7f9306e06a01214598867038701991e637db674d4541264e48e07419"
+    },
+    {
+      "attempt": "B03-a02",
+      "scenario": "B03",
+      "status": "failed",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "9e7665dd2354cc6e33c39547b5cedbbe8dc1c12889b128157169cdcec9924138",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "5078182b7e41fcaada1c8d6b0ad8700e26f655597fb663b32bb49166cf7f26f0",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "4237a184824a246c88e9cc07618f9ef372ff5eca59df160149e69aaf77effc09",
+        "computer_use_browser_cases.py": "fdfd70a983ca7dab428d9d04e820e45a9836631f282448d31f69b4ccb151b42d",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "7cdced7c66a07246d3b4324076eb6474292db0c0d2577a9a02044990ad0921d9",
+        "computer_use_web_cases.py": "85de31c06c7ceb0808970ee350444659a37183137c56a431e945ad7e6f6af11d",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": false,
+      "tool_error_count": 2,
+      "tool_error_codes": [
+        "selector_ambiguous"
+      ],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 7,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 47.94091796875,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "62b35d85f3b273361bc2850f255e9b8f0e0f908b3b48ef20eb79a5d4b975d4a5",
+        "cursor/report.json": "f85c3177334ad66b78e7d3134c4e94f2473a02cfb448a202114d1493437e409f",
+        "cursor/probe/report.json": "d0243cd2fbf6a900c23a841e7f2e32e7b64e66c02c0f8e45706f6e5b0ea57074"
+      },
+      "failure_digest": "dfebb9997832a8b4c528645fe6d4a4187d3f604ae2d23175357b13ba2d6fc8d8"
+    },
+    {
+      "attempt": "B03-a03",
+      "scenario": "B03",
+      "status": "passed",
+      "business_passed": true,
+      "targeted_passed": true,
+      "strict_passed": true,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "9e7665dd2354cc6e33c39547b5cedbbe8dc1c12889b128157169cdcec9924138",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "16708c7fb3f194e4679750057e0ad0b7ca538d9e4230aec1c08b3e2f49679711",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "ae80c66ce5bd9ef8537df4233b532e1e058d75a975f98fdd86c3ff435becdf8d",
+        "computer_use_browser_cases.py": "fdfd70a983ca7dab428d9d04e820e45a9836631f282448d31f69b4ccb151b42d",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "a505959b792068154a953ee6976fd771e99b45d3a460dada15a35189bc06347a",
+        "computer_use_web_cases.py": "031e8543551e457acf355518c3430cb4dc25b257cf51a6bb749fcb27b410c8e5",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": true,
+      "tool_error_count": 1,
+      "tool_error_codes": [
+        "selector_ambiguous"
+      ],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 8,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 25.26806640625,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "f9ac70a641de380044d3be17655e4407a52131f61ff3bcdb84d22a34e91941e2",
+        "cursor/report.json": "e98327673e966ef793b9e84f258f0418aa5c4b05f944fe8f8674cac2d2686fbb",
+        "cursor/probe/report.json": "3dda5f5145baa210bb2cf9f5f4967e3585ee42acf166789ea3e93e97a05aadd9"
+      }
+    },
+    {
+      "attempt": "B04-a01",
+      "scenario": "B04",
+      "status": "blocked",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {},
+      "expected_errors_verified": false,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": false,
+        "exec_intervals": 0,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": null,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [
+        "no MCP requests were observed inside the audit directory"
+      ],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "c517d2854edc4851b46b0d54d62ff6dce074f448fccbd914b43e5a67d137f9c3",
+        "cursor/report.json": "60839136a904cb617d924be8a6237a0684ec4400b2e116bd2055adc5a7ece3d9",
+        "cursor/probe/report.json": "32bd7757b307cb41766c3d30a8a3a8ce16559098e75bc92afd3dcc2a38e32c23"
+      },
+      "limitation": "Existing owned Chrome profile launchers do not establish exact process/profile binding through current apps/exec: authorization accepts a bundle ID or .app path, while discovery exposes instance counts without an owned PID selector. Historical window-selection APIs cannot be reused. No Chrome was launched or contacted; an owned profile alone is insufficient isolation evidence."
+    },
+    {
+      "attempt": "B05-a01",
+      "scenario": "B05",
+      "status": "failed",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "5078182b7e41fcaada1c8d6b0ad8700e26f655597fb663b32bb49166cf7f26f0",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "ee9dfae4d168d8794149486b55fcc222efde892488186ea28c5955320afe1307",
+        "computer_use_browser_cases.py": "f5de6cda954d1c26dd7df78e1f2e92528fbbaf583b0d1e9cef597e1f96457c59",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "7cdced7c66a07246d3b4324076eb6474292db0c0d2577a9a02044990ad0921d9",
+        "computer_use_web_cases.py": "ee1df256ddf3aba18780639bfb2fca1ba8b83f42d7d720c120e176ab212155a7",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": false,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 5,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 33.56494140625,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "97e425caa7be218beeb8bfa957429000b1eca6cf6a9383f6f4f6dd24d18503ca",
+        "cursor/report.json": "f5694ef4822a905c53471fe10a21171dcd8b622073e7c75953df60f5b3238e12",
+        "cursor/probe/report.json": "52f1e30b26b95194d9eb53318d08a61b378331d1a891fea3bd3095f75c9a7f94",
+        "cursor/probe/B05-answer-request.json": "227c0e9a117fa2ea6aa469f80c3bff3213dcb53f824d7f5444ffc138866f1378",
+        "cursor/probe/B05-answer.json": "a36acdad547f398663cd40ba7736a7541f2fc8d5f1985efae10044f62a7bd2c5"
+      },
+      "failure_digest": "4bd873050d5424d807ea1b8b41108c3412a3bf031b292a032f4414c293ac31c1"
+    },
+    {
+      "attempt": "B05-a02",
+      "scenario": "B05",
+      "status": "passed",
+      "business_passed": true,
+      "targeted_passed": true,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "9e7665dd2354cc6e33c39547b5cedbbe8dc1c12889b128157169cdcec9924138",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "16708c7fb3f194e4679750057e0ad0b7ca538d9e4230aec1c08b3e2f49679711",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "4237a184824a246c88e9cc07618f9ef372ff5eca59df160149e69aaf77effc09",
+        "computer_use_browser_cases.py": "fdfd70a983ca7dab428d9d04e820e45a9836631f282448d31f69b4ccb151b42d",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "a505959b792068154a953ee6976fd771e99b45d3a460dada15a35189bc06347a",
+        "computer_use_web_cases.py": "85de31c06c7ceb0808970ee350444659a37183137c56a431e945ad7e6f6af11d",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": true,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": false,
+        "exec_intervals": 6,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 50.800048828125,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [
+        "system cursor sample gap exceeds policy or is unavailable"
+      ],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "d49b4a78107910d02d28b3e424dd07a39fd7c822d967595ba0fd1c086648aad9",
+        "cursor/report.json": "82bb58f4a6172a68f9918b60bca4b2a97a38cb978413263a3e7403343ad8e081",
+        "cursor/probe/report.json": "b678e283542b5dc02a57c0e31520a2532bca0d36d727f98143210e646c08e4fd",
+        "cursor/probe/B05-answer-request.json": "dcc5c3915a6bc6caf2926d813904fe940d2c22c1c2960bb79370c384c81ddd29",
+        "cursor/probe/B05-answer.json": "9d19a3c5f131622e1392b7adc45eb3a4a47f87ef2b96945f7312013da3c308c1",
+        "cursor/probe/B05-result.json": "68f2fa1790d4dad090fb747c0baf3bae5cd64e2120fef98a784704e1a8893261"
+      },
+      "image_evidence": {
+        "capture_sha256": "f26612b9715e303914764b33d150200a5a49d2388961fe6c043ace0631168ebf",
+        "reviewer": "Codex via ViewImage",
+        "readback_matched": true,
+        "input_route": "semantic_press",
+        "attempt_count": 1,
+        "submission_passed": [
+          true
+        ]
+      }
+    },
+    {
+      "attempt": "B05-a03",
+      "scenario": "B05",
+      "status": "passed",
+      "business_passed": true,
+      "targeted_passed": true,
+      "strict_passed": true,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "9e7665dd2354cc6e33c39547b5cedbbe8dc1c12889b128157169cdcec9924138",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "16708c7fb3f194e4679750057e0ad0b7ca538d9e4230aec1c08b3e2f49679711",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "ae80c66ce5bd9ef8537df4233b532e1e058d75a975f98fdd86c3ff435becdf8d",
+        "computer_use_browser_cases.py": "fdfd70a983ca7dab428d9d04e820e45a9836631f282448d31f69b4ccb151b42d",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "a505959b792068154a953ee6976fd771e99b45d3a460dada15a35189bc06347a",
+        "computer_use_web_cases.py": "bac928b453d60d91dabc6511c021d2a95520d2278b59c9e09e4cdd7abd62f598",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": true,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 6,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 27.241943359375,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "0dbb0d544e5d16a8d6b342aabad57db99f097b49ae4820684e37ae29b118b26a",
+        "cursor/report.json": "5d31ce2c921ff6a1d8eef0480f90296861cdec67c192da49e875217e1f4043d5",
+        "cursor/probe/report.json": "8908112ad3d935d8e30e259b8bc3642748c4422ae2290c82ad786af1e35fae52",
+        "cursor/probe/B05-answer-request.json": "c53c6b8c758021a32654d3200afca0aec3d519bd1eaa06d8122dd97093c49728",
+        "cursor/probe/B05-answer.json": "64615cda70bf25e9ac902c78f7a06289d1416c2b3bdeb59835ae329b4783ddeb",
+        "cursor/probe/B05-result.json": "4dd055934e0fb046810951fae625cfd5261d6945336daac50e1081c0972566b6"
+      },
+      "image_evidence": {
+        "capture_sha256": "1e404d5f2c387021f168080dbaf6cb8cf075ff11f2822bf8d6239ca4367a2883",
+        "reviewer": "Codex via ViewImage",
+        "readback_matched": true,
+        "input_route": "semantic_press",
+        "attempt_count": 1,
+        "submission_passed": [
+          true
+        ]
+      }
+    },
+    {
+      "attempt": "C04-a01",
+      "scenario": "C04",
+      "status": "passed",
+      "business_passed": true,
+      "targeted_passed": true,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {},
+      "expected_errors_verified": true,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": false,
+        "exec_intervals": 9,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 130.308837890625,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [
+        "system cursor sample gap exceeds policy or is unavailable"
+      ],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "b26b9151ab9c0a7fd57a557d16a8dbd06342a3d62b2d031cfb762270f0e557e9",
+        "cursor/report.json": "5272fb9034b622c379d1532a59173aef5eb0329979f50f61e7bb47d346707522",
+        "cursor/probe/report.json": "cff572930c38aa49dae532c7bedefa777131249480679d507e3c53e4465f44f0"
+      }
+    },
+    {
+      "attempt": "C04-a02",
+      "scenario": "C04",
+      "status": "passed",
+      "business_passed": true,
+      "targeted_passed": true,
+      "strict_passed": true,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {},
+      "expected_errors_verified": true,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 9,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 38.943115234375,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "90e8733b8ea252a8130e7a407c241e73eb60392f67eb8dda4365bba7372c2ffe",
+        "cursor/report.json": "2bed385722220f358bba560c1004df9a1808c271a2aac1de5c6c74b1a3ae0c06",
+        "cursor/probe/report.json": "faea8a1cf0e4418f063229d647d406aaa5a5650757cfae0f67295bebf4bf5120"
+      }
+    },
+    {
+      "attempt": "C05-a01",
+      "scenario": "C05",
+      "status": "passed",
+      "business_passed": true,
+      "targeted_passed": true,
+      "strict_passed": true,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {},
+      "expected_errors_verified": true,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 23,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 38.108154296875,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "9ff249a027e876a2bed4a95b2f18e626c204bbf2a5ddbed3768749e240c09adc",
+        "cursor/report.json": "d4164238fb970a9e018beeab5f9ee53927ad9afdf44ee935b42c664bfb3c51e0",
+        "cursor/probe/report.json": "ddea940276843385af294aea5eb9ea4ef9b1b6af2525c84c2ead8e0272fc9e6f"
+      }
+    },
+    {
+      "attempt": "N11-a01",
+      "scenario": "N11",
+      "status": "passed",
+      "business_passed": true,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {},
+      "expected_errors_verified": false,
+      "tool_error_count": 1,
+      "tool_error_codes": [
+        "ax_action_failed"
+      ],
+      "unknown_dispatch_count": 1,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 8,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 22.720703125,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "70e5ae19845abe40cd22983230cc23f70c24d9b7b28a7d856ecb7d515921b355",
+        "cursor/report.json": "3c52a22f51def90a93556327b8bc8e6c9f0636a48942563104614906b41fd8f6",
+        "cursor/probe/report.json": "f285fc2e2e4c60b4372c607aea577072b575fe70a33e4c4f7c128914b5e735c8"
+      }
+    },
+    {
+      "attempt": "N11-a02",
+      "scenario": "N11",
+      "status": "passed",
+      "business_passed": true,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {},
+      "expected_errors_verified": false,
+      "tool_error_count": 1,
+      "tool_error_codes": [
+        "ax_action_failed"
+      ],
+      "unknown_dispatch_count": 1,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": false,
+        "exec_intervals": 8,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 78.606201171875,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [
+        "system cursor sample gap exceeds policy or is unavailable"
+      ],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "7ddc0ca2523f957d48ee8276abff0c905e2d14f3df31472978c96d2c8984fd54",
+        "cursor/report.json": "d0de52afd8217e215830715ca6a4546494b4bba598cdc4759ac849cb7339f959",
+        "cursor/probe/report.json": "ebe8f7ae8b4edf332d61d6f24480fb4ce94274a8de4a89207783f42079181e66"
+      }
+    },
+    {
+      "attempt": "N12-a01",
+      "scenario": "N12",
+      "status": "passed",
+      "business_passed": true,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {},
+      "expected_errors_verified": false,
+      "tool_error_count": 3,
+      "tool_error_codes": [
+        "ax_action_failed"
+      ],
+      "unknown_dispatch_count": 3,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": false,
+        "exec_intervals": 12,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 51.212890625,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [
+        "system cursor sample gap exceeds policy or is unavailable"
+      ],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "22203092656c2a945072f216f494042e9514203f947bd12ea9ec91bb1a8d2a40",
+        "cursor/report.json": "5fe3ab518ee61c0e0f5d55d8c1f33898f7f5e88c29eca54ff46a213fd853c60b",
+        "cursor/probe/report.json": "35c1225cb3fe8c111dc840f0e901b264645920abbac1bfadc03870936173e713"
+      }
+    },
+    {
+      "attempt": "N12-a02",
+      "scenario": "N12",
+      "status": "passed",
+      "business_passed": true,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "5078182b7e41fcaada1c8d6b0ad8700e26f655597fb663b32bb49166cf7f26f0",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "72e40421dd4368615b76a17a7dd2fb41815af72fc25c91612be985d2b26c81e1",
+        "computer_use_browser_cases.py": "f5de6cda954d1c26dd7df78e1f2e92528fbbaf583b0d1e9cef597e1f96457c59",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "7cdced7c66a07246d3b4324076eb6474292db0c0d2577a9a02044990ad0921d9",
+        "computer_use_web_cases.py": "148761889e84507dc85ecf1d9e21ef6a9e38abb65b741857a18be7676a941b94",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": false,
+      "tool_error_count": 3,
+      "tool_error_codes": [
+        "ax_action_failed"
+      ],
+      "unknown_dispatch_count": 3,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 12,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 36.60400390625,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "26680acfa40ac0f6546a77d612d4fdfbf28a6cb3bbb4057fa44d9c3dcd53ca5e",
+        "cursor/report.json": "9a489a58e5f6497e81523840b8cd57a781710557783c15005a6e55ac23195ac9",
+        "cursor/probe/report.json": "b5d49678e6435b29516e4e147f20a8c32c1a99ffe065c3fa73f31b54828d2681"
+      }
+    },
+    {
+      "attempt": "N13-a01",
+      "scenario": "N13",
+      "status": "failed",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {},
+      "expected_errors_verified": false,
+      "tool_error_count": 1,
+      "tool_error_codes": [
+        "foreground_required"
+      ],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 3,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 27.463134765625,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "9a8cad06cf3e70447bae765a801e772f74969e5169ea01981ac2d78adfef5d5d",
+        "cursor/report.json": "cd06f2bc094ef2357bbecc5a7ef7e195077b6a649a0bd1435bfbff8f33c0454b",
+        "cursor/probe/report.json": "162a60d080e0b0271d5e2d1b4884a8acdd8128f9c1234143f68b8e7cb03f8315"
+      },
+      "failure_digest": "4d20da2f79efd49c0e2fa8b465e2cb02742b57852e63ec608e37b5fdd1641f40"
+    },
+    {
+      "attempt": "N13-a02",
+      "scenario": "N13",
+      "status": "unsupported",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "9e7665dd2354cc6e33c39547b5cedbbe8dc1c12889b128157169cdcec9924138",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "5078182b7e41fcaada1c8d6b0ad8700e26f655597fb663b32bb49166cf7f26f0",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "4237a184824a246c88e9cc07618f9ef372ff5eca59df160149e69aaf77effc09",
+        "computer_use_browser_cases.py": "fdfd70a983ca7dab428d9d04e820e45a9836631f282448d31f69b4ccb151b42d",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "7cdced7c66a07246d3b4324076eb6474292db0c0d2577a9a02044990ad0921d9",
+        "computer_use_web_cases.py": "85de31c06c7ceb0808970ee350444659a37183137c56a431e945ad7e6f6af11d",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": false,
+      "tool_error_count": 1,
+      "tool_error_codes": [
+        "foreground_required"
+      ],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": false,
+        "exec_intervals": 3,
+        "moved_intervals": 1,
+        "max_sample_gap_ms": 21.742919921875,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [
+        "sampled system cursor movement outside an allowed borrow interval (actor undetermined)"
+      ],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "f0cb4d38a1940609d8358db204f98b9d9ba902738085d34914255599a0120059",
+        "cursor/report.json": "486dcdc9b61921b8b2975e5d5df4f498d8cd27f75d8a9ba14387ae5efda6d414",
+        "cursor/probe/report.json": "e331a5147cb69e73463c833a762cc38a0a209d8a74bcb4b66160cced94a1bd54"
+      },
+      "limitation": "Background hover unsupported; no activation or replay."
+    },
+    {
+      "attempt": "N14-a01",
+      "scenario": "N14",
+      "status": "unsupported",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {},
+      "expected_errors_verified": false,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 3,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 27.380859375,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "32963441e2b4b032edc5a1c9d5a472e972d110d030a8364026311ec39f49b082",
+        "cursor/report.json": "68eeeca96994c12180b361206cb8e52bec3b4d2382224ad71f2f3809e7fe099b",
+        "cursor/probe/report.json": "6441453565885a23825761789cae5379ac1feeb4ac36ec514e246611c5d8c846"
+      },
+      "limitation": "GUI movement refreshes the canvas baseline; simplified points cannot retain old image identity."
+    },
+    {
+      "attempt": "N15-a01",
+      "scenario": "N15",
+      "status": "passed",
+      "business_passed": true,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {},
+      "expected_errors_verified": false,
+      "tool_error_count": 1,
+      "tool_error_codes": [
+        "ax_action_failed"
+      ],
+      "unknown_dispatch_count": 1,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 11,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 41.198974609375,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": true,
+      "detached_quit_event_verified": true,
+      "original_artifacts_sha256": {
+        "report.json": "2db63b75990f70bfd984f470d43a2d7ab3f723ea86bf762b76444cc0d692ca62",
+        "cursor/report.json": "f5b57e7584585362f2b3b1dc2210bd94d1acd852d3b74ca8848b0942e6f7e4b2",
+        "cursor/probe/report.json": "71ec33f7b945d9cb981bac3de7b045ecf0a9bb35b605fb7423ebe61fd1b4821b"
+      }
+    },
+    {
+      "attempt": "N15-a02",
+      "scenario": "N15",
+      "status": "passed",
+      "business_passed": true,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "5078182b7e41fcaada1c8d6b0ad8700e26f655597fb663b32bb49166cf7f26f0",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "72e40421dd4368615b76a17a7dd2fb41815af72fc25c91612be985d2b26c81e1",
+        "computer_use_browser_cases.py": "f5de6cda954d1c26dd7df78e1f2e92528fbbaf583b0d1e9cef597e1f96457c59",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "7cdced7c66a07246d3b4324076eb6474292db0c0d2577a9a02044990ad0921d9",
+        "computer_use_web_cases.py": "148761889e84507dc85ecf1d9e21ef6a9e38abb65b741857a18be7676a941b94",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": false,
+      "tool_error_count": 1,
+      "tool_error_codes": [
+        "ax_action_failed"
+      ],
+      "unknown_dispatch_count": 1,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 11,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 39.857177734375,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": true,
+      "detached_quit_event_verified": true,
+      "original_artifacts_sha256": {
+        "report.json": "b7c1485bbd62799acf280cbab77d8d7d8c8d13d377a88c50f3bbbe9e29b058a8",
+        "cursor/report.json": "59a63a5f37e79be5aa1083dfbc48af7a4e17f1eb0cc672b3a73e2a3d6db0ffee",
+        "cursor/probe/report.json": "0dd38f12c3dbda1221dda15c2b3b56be68a14330f0e71be1658c6aa7f89c364a"
+      }
+    },
+    {
+      "attempt": "R01-a01",
+      "scenario": "R01",
+      "status": "failed",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {},
+      "expected_errors_verified": false,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 3,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 13.898681640625,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "cf0cb54bc433ec02884d9dc5d35a73fa1bc3d6a3f04eb133f94a64340deff33a",
+        "cursor/report.json": "543e3f0800ceb875e2ba6b6c274081706db8a772d59ccbcc1bef1db752f1a650",
+        "cursor/probe/report.json": "83843d8f74f556b6bb861ee5d53a9509f21328e2fcbe4c1d0de900592707e560"
+      },
+      "failure_digest": "dd4f4fa2bc6a8a973f3133d905dcea4aa68c1775b301cd35864be9a761b62bfa"
+    },
+    {
+      "attempt": "R01-a02",
+      "scenario": "R01",
+      "status": "failed",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "9e7665dd2354cc6e33c39547b5cedbbe8dc1c12889b128157169cdcec9924138",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "5078182b7e41fcaada1c8d6b0ad8700e26f655597fb663b32bb49166cf7f26f0",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "4237a184824a246c88e9cc07618f9ef372ff5eca59df160149e69aaf77effc09",
+        "computer_use_browser_cases.py": "fdfd70a983ca7dab428d9d04e820e45a9836631f282448d31f69b4ccb151b42d",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "7cdced7c66a07246d3b4324076eb6474292db0c0d2577a9a02044990ad0921d9",
+        "computer_use_web_cases.py": "85de31c06c7ceb0808970ee350444659a37183137c56a431e945ad7e6f6af11d",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": false,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 3,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 18.98095703125,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "f78eb8c0b8f8ca62a6c2dcb46b1b83c330ea49d2fba2cced56ec165726eb8664",
+        "cursor/report.json": "d09ff29253d0e538581efd6f4be76185e6818d0539f5e1cba60fa81619041ad8",
+        "cursor/probe/report.json": "cff755d745569b5ea6f7e0713087d5bcc4b7e932223b057a9e3e339447a69e64"
+      },
+      "failure_digest": "1de39d58b219a01e400241d3324d828e1dba905d9a6faeac91d22e65938b10e6"
+    },
+    {
+      "attempt": "R01-a03",
+      "scenario": "R01",
+      "status": "failed",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": true,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "9e7665dd2354cc6e33c39547b5cedbbe8dc1c12889b128157169cdcec9924138",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "16708c7fb3f194e4679750057e0ad0b7ca538d9e4230aec1c08b3e2f49679711",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "4237a184824a246c88e9cc07618f9ef372ff5eca59df160149e69aaf77effc09",
+        "computer_use_browser_cases.py": "fdfd70a983ca7dab428d9d04e820e45a9836631f282448d31f69b4ccb151b42d",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "a505959b792068154a953ee6976fd771e99b45d3a460dada15a35189bc06347a",
+        "computer_use_web_cases.py": "031e8543551e457acf355518c3430cb4dc25b257cf51a6bb749fcb27b410c8e5",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": false,
+      "tool_error_count": 1,
+      "tool_error_codes": [
+        "busy"
+      ],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": false,
+        "exec_intervals": 4,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 39.81591796875,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [
+        "system cursor oracle unavailable or request incomplete"
+      ],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "dfe311cefa4fdfe3aca2f5254ef4630f6c7ace1c760ad8ae2f5e00d629b6f156",
+        "cursor/report.json": "1483516dd0c0718a70425dd16d1b91148964076966b6495795ef0faded8bac78",
+        "cursor/probe/report.json": "862fa926fb655e334fe7c52704a524c4e8e652bf14663beb3d28bfa6406dc14f"
+      },
+      "failure_digest": "fbe7583cc325dcc2d9ff5894a8e7603ec6bff34307abee5593fc9e1933b191b1",
+      "background_failure_basis": {
+        "sha256": "f78eb8c0b8f8ca62a6c2dcb46b1b83c330ea49d2fba2cced56ec165726eb8664",
+        "attempt": "R01-a02"
+      }
+    },
+    {
+      "attempt": "R01-a04",
+      "scenario": "R01",
+      "status": "passed",
+      "business_passed": true,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": true,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "9e7665dd2354cc6e33c39547b5cedbbe8dc1c12889b128157169cdcec9924138",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "16708c7fb3f194e4679750057e0ad0b7ca538d9e4230aec1c08b3e2f49679711",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "ae80c66ce5bd9ef8537df4233b532e1e058d75a975f98fdd86c3ff435becdf8d",
+        "computer_use_browser_cases.py": "fdfd70a983ca7dab428d9d04e820e45a9836631f282448d31f69b4ccb151b42d",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "a505959b792068154a953ee6976fd771e99b45d3a460dada15a35189bc06347a",
+        "computer_use_web_cases.py": "bac928b453d60d91dabc6511c021d2a95520d2278b59c9e09e4cdd7abd62f598",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": false,
+      "tool_error_count": 2,
+      "tool_error_codes": [
+        "async_outcome_unknown",
+        "busy"
+      ],
+      "unknown_dispatch_count": 1,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 5,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 41.770751953125,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "56e5baf4065884a094bed372ffe194f6d4259a58a219dff4d8e5f30d519b106c",
+        "cursor/report.json": "80732598c57262f625dc767f3ffae0e6b4164697a11616b79219249784a1cc68",
+        "cursor/probe/report.json": "1dd94c5721bf563ad8da3f924c7650a352da9e72af382366f895f5d02ab2737f",
+        "cursor/probe/boundary-interruptions.jsonl": "a29771e8d946c596fa48d6ee7fd274174c1dd902d28fcdd90c42e0e983241e86"
+      },
+      "background_failure_basis": {
+        "sha256": "f78eb8c0b8f8ca62a6c2dcb46b1b83c330ea49d2fba2cced56ec165726eb8664",
+        "attempt": "R01-a02"
+      }
+    },
+    {
+      "attempt": "R02-a01",
+      "scenario": "R02",
+      "status": "failed",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {},
+      "expected_errors_verified": false,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 3,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 22.80078125,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "8b7bdab79e7bb95d5754d5db2076669ecf0f1dfa376434e39cbbb888569f2d99",
+        "cursor/report.json": "e37f2b7ab275c442c4d5c52b6ac8cd97f81d482ee4b32a71f787176fff606029",
+        "cursor/probe/report.json": "82bc5c012e5d3ea8d19346797a9aea98de5498068bb52c9259b9d6c188892470"
+      },
+      "failure_digest": "415e8f36c82e9ebea0c276c51e1bf4190d6504382eca9ab932c927b56836490a"
+    },
+    {
+      "attempt": "R02-a02",
+      "scenario": "R02",
+      "status": "failed",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "9e7665dd2354cc6e33c39547b5cedbbe8dc1c12889b128157169cdcec9924138",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "5078182b7e41fcaada1c8d6b0ad8700e26f655597fb663b32bb49166cf7f26f0",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "4237a184824a246c88e9cc07618f9ef372ff5eca59df160149e69aaf77effc09",
+        "computer_use_browser_cases.py": "fdfd70a983ca7dab428d9d04e820e45a9836631f282448d31f69b4ccb151b42d",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "7cdced7c66a07246d3b4324076eb6474292db0c0d2577a9a02044990ad0921d9",
+        "computer_use_web_cases.py": "85de31c06c7ceb0808970ee350444659a37183137c56a431e945ad7e6f6af11d",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": false,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 3,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 30.583251953125,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "5d73c9d10fe12e588204a52b451ee2e16e4de590c98d290a20ca27c4db24ec32",
+        "cursor/report.json": "566f8badb65c22fee2c4af354808ce30b74e1ac3419a93feab9fb0a8e0e3c496",
+        "cursor/probe/report.json": "031625b48c4b065749ec470bea9a4cdd01c88ed4e0d35c61641f28928c6a811f"
+      },
+      "failure_digest": "fc09934c129e5f453960f3f2bfdeaa2492a8bc890ce6c8ffefe6e325015304bb"
+    },
+    {
+      "attempt": "R02-a03",
+      "scenario": "R02",
+      "status": "passed",
+      "business_passed": true,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": true,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "9e7665dd2354cc6e33c39547b5cedbbe8dc1c12889b128157169cdcec9924138",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "16708c7fb3f194e4679750057e0ad0b7ca538d9e4230aec1c08b3e2f49679711",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "4237a184824a246c88e9cc07618f9ef372ff5eca59df160149e69aaf77effc09",
+        "computer_use_browser_cases.py": "fdfd70a983ca7dab428d9d04e820e45a9836631f282448d31f69b4ccb151b42d",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "a505959b792068154a953ee6976fd771e99b45d3a460dada15a35189bc06347a",
+        "computer_use_web_cases.py": "031e8543551e457acf355518c3430cb4dc25b257cf51a6bb749fcb27b410c8e5",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": false,
+      "tool_error_count": 1,
+      "tool_error_codes": [
+        "cancelled"
+      ],
+      "unknown_dispatch_count": 1,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 4,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 29.160888671875,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "242f945ff2aa2e0cf3412f5eddbc957905dc9f87148303ff6566efcd27182296",
+        "cursor/report.json": "c07c4a1f2eec1c7a9bd17dbf5ca12d24a6781539a45987261bc7ed1597d9ea1c",
+        "cursor/probe/report.json": "c93475f90ec6b975cec18e6664c4897391492405dd4137f785d2f0d08f9fffda",
+        "cursor/probe/boundary-interruptions.jsonl": "0abbc29ea966e9930db01cade80be8fdbd9bb3822b57c421e07df50fc2cad9ea"
+      },
+      "background_failure_basis": {
+        "sha256": "5d73c9d10fe12e588204a52b451ee2e16e4de590c98d290a20ca27c4db24ec32",
+        "attempt": "R02-a02"
+      }
+    },
+    {
+      "attempt": "R03-a01",
+      "scenario": "R03",
+      "status": "failed",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {},
+      "expected_errors_verified": false,
+      "tool_error_count": 1,
+      "tool_error_codes": [
+        "look_required"
+      ],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 3,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 45.20703125,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "d4752fcb5fe13b444e7b401bf1bd93d2f4cdca658210620f7d1f17e2c677ba08",
+        "cursor/report.json": "eba3c29ab61f7571d551520faa35691201d0d8a5c3addd12d10ff11fd302bd91",
+        "cursor/probe/report.json": "b1dc524c6106eb73923d64119332f6c704fb93798242e44d665fc5a89d0ff7d3"
+      },
+      "failure_digest": "b7025e348111df2b2f93dadf7314b4de0942b85342ec384c9e12295a64082d3d"
+    },
+    {
+      "attempt": "R03-a02",
+      "scenario": "R03",
+      "status": "unsupported",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "9e7665dd2354cc6e33c39547b5cedbbe8dc1c12889b128157169cdcec9924138",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "5078182b7e41fcaada1c8d6b0ad8700e26f655597fb663b32bb49166cf7f26f0",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "4237a184824a246c88e9cc07618f9ef372ff5eca59df160149e69aaf77effc09",
+        "computer_use_browser_cases.py": "fdfd70a983ca7dab428d9d04e820e45a9836631f282448d31f69b4ccb151b42d",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "7cdced7c66a07246d3b4324076eb6474292db0c0d2577a9a02044990ad0921d9",
+        "computer_use_web_cases.py": "85de31c06c7ceb0808970ee350444659a37183137c56a431e945ad7e6f6af11d",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": false,
+      "tool_error_count": 1,
+      "tool_error_codes": [
+        "look_required"
+      ],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 3,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 46.083984375,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "8d804de30cdf0f329409a3bbd172d347847532bc36e404cd2bff79e122646ea2",
+        "cursor/report.json": "2489eef9973cd3eeb496368a8099e79d7353898164d7d9b717ef44595ea2a6c7",
+        "cursor/probe/report.json": "79249304f35f5d37df6d9c225ceec549cb68a69fd731ce9b24f88c6a82da4e31"
+      },
+      "limitation": "Public look_required rejection lacks dispatch/focus-preparation evidence; unchanged independent business states do not prove the not_dispatched contract."
+    },
+    {
+      "attempt": "R04-a01",
+      "scenario": "R04",
+      "status": "passed",
+      "business_passed": true,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {},
+      "expected_errors_verified": true,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 9,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 30.094970703125,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": false,
+      "native_forced_cleanup": [
+        "terminate"
+      ],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "d5f46157668c7b0309238cbc0089deed3eadeda8cce669cbb3ed4cbbd8b11240",
+        "cursor/report.json": "e51fd73e5addb94f164e9cc6677cf4394ac199a87b568573cb6a46bb79fd022d",
+        "cursor/probe/report.json": "c4a146bb7b2806a674f8a44868048b1f55803b8412f971ca714dbc7136cc0112"
+      }
+    },
+    {
+      "attempt": "R04-a02",
+      "scenario": "R04",
+      "status": "passed",
+      "business_passed": true,
+      "targeted_passed": true,
+      "strict_passed": true,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "9e7665dd2354cc6e33c39547b5cedbbe8dc1c12889b128157169cdcec9924138",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "5078182b7e41fcaada1c8d6b0ad8700e26f655597fb663b32bb49166cf7f26f0",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "4237a184824a246c88e9cc07618f9ef372ff5eca59df160149e69aaf77effc09",
+        "computer_use_browser_cases.py": "fdfd70a983ca7dab428d9d04e820e45a9836631f282448d31f69b4ccb151b42d",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "7cdced7c66a07246d3b4324076eb6474292db0c0d2577a9a02044990ad0921d9",
+        "computer_use_web_cases.py": "85de31c06c7ceb0808970ee350444659a37183137c56a431e945ad7e6f6af11d",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": true,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 9,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 47.828857421875,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "778e01885e607c676055770bc7e83ad3f73c0eb5d18c54d28b4b3e2ad81d91ca",
+        "cursor/report.json": "8f90b6db87ceb79a703ea0d360ff746531aafd2afd0d55dec7a902a95924116b",
+        "cursor/probe/report.json": "a37fa1a7e5dae400b20ebb2005b603e5697f4fab50fbc5ec9c0d91e751bc014d"
+      }
+    },
+    {
+      "attempt": "S01-a02",
+      "scenario": "S01",
+      "status": "blocked",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "5078182b7e41fcaada1c8d6b0ad8700e26f655597fb663b32bb49166cf7f26f0",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "72e40421dd4368615b76a17a7dd2fb41815af72fc25c91612be985d2b26c81e1",
+        "computer_use_browser_cases.py": "f5de6cda954d1c26dd7df78e1f2e92528fbbaf583b0d1e9cef597e1f96457c59",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "7cdced7c66a07246d3b4324076eb6474292db0c0d2577a9a02044990ad0921d9",
+        "computer_use_web_cases.py": "148761889e84507dc85ecf1d9e21ef6a9e38abb65b741857a18be7676a941b94",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": false,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 1,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 5.266357421875,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "ef0561badcb0422a938962e5cd42dc0b7931e563dcd73ea4f0e80ce66680fcb8",
+        "cursor/report.json": "4e82f90d0ce4c033f73a252182ad00f93b0f2d639f5d8e8906fa2c9da435be7f",
+        "cursor/probe/report.json": "5f6030521cccb349e2a37bedca7b616b8269c2c8b911ae78ae32167859d26b5f"
+      },
+      "limitation": "Dock observation alone does not prove an exact authorized app-root item action; current fixture has no Dock-item action oracle"
+    },
+    {
+      "attempt": "S02-a02",
+      "scenario": "S02",
+      "status": "blocked",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "5078182b7e41fcaada1c8d6b0ad8700e26f655597fb663b32bb49166cf7f26f0",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "7c2b977fe5fa14b28754b75ea7542a19de83164463ee49fb448989c6b63c3beb",
+        "computer_use_browser_cases.py": "f5de6cda954d1c26dd7df78e1f2e92528fbbaf583b0d1e9cef597e1f96457c59",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "7cdced7c66a07246d3b4324076eb6474292db0c0d2577a9a02044990ad0921d9",
+        "computer_use_web_cases.py": "148761889e84507dc85ecf1d9e21ef6a9e38abb65b741857a18be7676a941b94",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": false,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 1,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 9.98486328125,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "99f8cedf190b5b93917aed0e2b4cb02dff943ebad7de7b159b3da855466678d7",
+        "cursor/report.json": "cb91b2a41bcedffefc0329574910cfc0cdcd633d804eee9fb02e4b3ed2a6683d",
+        "cursor/probe/report.json": "742881d2f894d627c6147ce0ddca2fd417607bf973306df8c1943503c1b6f8e1"
+      },
+      "limitation": "Windowless accessory observation succeeded, but exact app-root menu action and ownership have not been verified"
+    },
+    {
+      "attempt": "S03-a02",
+      "scenario": "S03",
+      "status": "blocked",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "5078182b7e41fcaada1c8d6b0ad8700e26f655597fb663b32bb49166cf7f26f0",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "7c2b977fe5fa14b28754b75ea7542a19de83164463ee49fb448989c6b63c3beb",
+        "computer_use_browser_cases.py": "f5de6cda954d1c26dd7df78e1f2e92528fbbaf583b0d1e9cef597e1f96457c59",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "7cdced7c66a07246d3b4324076eb6474292db0c0d2577a9a02044990ad0921d9",
+        "computer_use_web_cases.py": "148761889e84507dc85ecf1d9e21ef6a9e38abb65b741857a18be7676a941b94",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": false,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": false,
+        "exec_intervals": 0,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": null,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [
+        "no MCP requests were observed inside the audit directory"
+      ],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "174b6c5fcd4520bec66047004f196c32d9cbc79516a99fbe417ce78cb81153ab",
+        "cursor/report.json": "60839136a904cb617d924be8a6237a0684ec4400b2e116bd2055adc5a7ece3d9",
+        "cursor/probe/report.json": "2ca81dfce977a4760cd668b5a3ae0575716b87316413eb1ae3e1fb5d3c228e9b"
+      },
+      "limitation": "Windows-only chooser tooltip acceptance requires a native Windows host and real tooltip/shadow plus selected-file oracle"
+    },
+    {
+      "attempt": "S04-a02",
+      "scenario": "S04",
+      "status": "blocked",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "5078182b7e41fcaada1c8d6b0ad8700e26f655597fb663b32bb49166cf7f26f0",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "7c2b977fe5fa14b28754b75ea7542a19de83164463ee49fb448989c6b63c3beb",
+        "computer_use_browser_cases.py": "f5de6cda954d1c26dd7df78e1f2e92528fbbaf583b0d1e9cef597e1f96457c59",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "7cdced7c66a07246d3b4324076eb6474292db0c0d2577a9a02044990ad0921d9",
+        "computer_use_web_cases.py": "148761889e84507dc85ecf1d9e21ef6a9e38abb65b741857a18be7676a941b94",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": false,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": false,
+        "exec_intervals": 0,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": null,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [
+        "no MCP requests were observed inside the audit directory"
+      ],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "906213dfaed0468f0430bd2cc1a17323b7b8aa966c532dd5444ac746773ff431",
+        "cursor/report.json": "60839136a904cb617d924be8a6237a0684ec4400b2e116bd2055adc5a7ece3d9",
+        "cursor/probe/report.json": "0a910b4dd8ec9f09c02147b9894fcca07760e7ae74acba09044514be5a649b24"
+      },
+      "limitation": "Actual display inventory does not establish mixed-DPI placement/input or unavailable-desktop refusal. The fixture has no acknowledged display-relocation or isolated unavailable-desktop facility; changing the user session is outside scope."
+    },
+    {
+      "attempt": "W04-a01",
+      "scenario": "W04",
+      "status": "failed",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {},
+      "expected_errors_verified": false,
+      "tool_error_count": 1,
+      "tool_error_codes": [
+        "semantic_window_unavailable"
+      ],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 5,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 48.84716796875,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "f34bf41f0a631b7b130149cc98e0c2e2c31708d8a9c9eb75525a81e92062a3dc",
+        "cursor/report.json": "bb98dc634376502c6f5a5107ffc6738a1f7793b6a6dc07b8bb3bf8e3c2c29f52",
+        "cursor/probe/report.json": "9b67459e2867eb225e41da8ad93b4af7c6b5d4d8e29e8d167a8a2ace05ef88bc"
+      },
+      "failure_digest": "022684f10679f8f3a5ded83dc156413d2750c3ca83836869b7f58a14da583dbd"
+    },
+    {
+      "attempt": "W04-a02",
+      "scenario": "W04",
+      "status": "blocked",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "9e7665dd2354cc6e33c39547b5cedbbe8dc1c12889b128157169cdcec9924138",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "5078182b7e41fcaada1c8d6b0ad8700e26f655597fb663b32bb49166cf7f26f0",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "4237a184824a246c88e9cc07618f9ef372ff5eca59df160149e69aaf77effc09",
+        "computer_use_browser_cases.py": "fdfd70a983ca7dab428d9d04e820e45a9836631f282448d31f69b4ccb151b42d",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "7cdced7c66a07246d3b4324076eb6474292db0c0d2577a9a02044990ad0921d9",
+        "computer_use_web_cases.py": "85de31c06c7ceb0808970ee350444659a37183137c56a431e945ad7e6f6af11d",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": false,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 15,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 33.065673828125,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "e591dc56cc9bcfca6c2d3e3e4e08ced070bf4f781d73cfee79342d8023c382f2",
+        "cursor/report.json": "1710c4b8aec4c4577b90627de2619a60cf002879b7a4af57c41dfcd349432a70",
+        "cursor/probe/report.json": "2ce8772d125600493627bd85c40783d73bfa04cbc3fd8df7694830074afa5533"
+      },
+      "limitation": "WebKit date widget did not accept keyboard date input"
+    },
+    {
+      "attempt": "W04-a03",
+      "scenario": "W04",
+      "status": "blocked",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "9e7665dd2354cc6e33c39547b5cedbbe8dc1c12889b128157169cdcec9924138",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "16708c7fb3f194e4679750057e0ad0b7ca538d9e4230aec1c08b3e2f49679711",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "ae80c66ce5bd9ef8537df4233b532e1e058d75a975f98fdd86c3ff435becdf8d",
+        "computer_use_browser_cases.py": "fdfd70a983ca7dab428d9d04e820e45a9836631f282448d31f69b4ccb151b42d",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "a505959b792068154a953ee6976fd771e99b45d3a460dada15a35189bc06347a",
+        "computer_use_web_cases.py": "bac928b453d60d91dabc6511c021d2a95520d2278b59c9e09e4cdd7abd62f598",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": false,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 16,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 29.086181640625,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "fbeca1927c2d75ecc2df804e5efcfe960acd771859664f9823543e0786488e82",
+        "cursor/report.json": "664dcee2c519d086bde3942f162574ee422d43ba694d732206f508d5da2dc78e",
+        "cursor/probe/report.json": "6cee5ab4252a75b08e3de0c85a827a208f83631fc183e4ce1296f550c2ab13fe"
+      },
+      "limitation": "WebKit date widget did not accept keyboard date input"
+    },
+    {
+      "attempt": "W05-a01",
+      "scenario": "W05",
+      "status": "failed",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {},
+      "expected_errors_verified": false,
+      "tool_error_count": 1,
+      "tool_error_codes": [
+        "selector_ambiguous"
+      ],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 3,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 44.0830078125,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "50da3ffdfe50c6df6f75849c2567b99e9055b1bfbe261263c3663c1c113c78b6",
+        "cursor/report.json": "407da0f0b317957dfca68899543bbea152d451490d4cffdfc7a13ae7881a4404",
+        "cursor/probe/report.json": "eeb91bbc2abef1e4e91a659a0f63fe286386d769fadae59da1fcb53971376a22"
+      },
+      "failure_digest": "5c764e84b4d2cf8efe9fa055a87c46f03f09dd42223a9d8e845c2fc18596e808"
+    },
+    {
+      "attempt": "W05-a02",
+      "scenario": "W05",
+      "status": "failed",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "9e7665dd2354cc6e33c39547b5cedbbe8dc1c12889b128157169cdcec9924138",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "5078182b7e41fcaada1c8d6b0ad8700e26f655597fb663b32bb49166cf7f26f0",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "4237a184824a246c88e9cc07618f9ef372ff5eca59df160149e69aaf77effc09",
+        "computer_use_browser_cases.py": "fdfd70a983ca7dab428d9d04e820e45a9836631f282448d31f69b4ccb151b42d",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "7cdced7c66a07246d3b4324076eb6474292db0c0d2577a9a02044990ad0921d9",
+        "computer_use_web_cases.py": "85de31c06c7ceb0808970ee350444659a37183137c56a431e945ad7e6f6af11d",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": false,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": false,
+        "exec_intervals": 5,
+        "moved_intervals": 2,
+        "max_sample_gap_ms": 43.18212890625,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [
+        "sampled system cursor movement outside an allowed borrow interval (actor undetermined)",
+        "sampled system cursor movement outside an allowed borrow interval (actor undetermined)"
+      ],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "f323b5b901057292f991d422b3c0cfd4913799c156cb468637e199c734765647",
+        "cursor/report.json": "37bb2f31011f689c931e3dc1148aac168a1c6e3a2f691308c2ec12d836fe8912",
+        "cursor/probe/report.json": "ee8128fc7dd9c254d6e62802e2abb67351da8cbb250305d650760d1faf294364"
+      },
+      "failure_digest": "e8f5b0b8c52393a2ef6cf46b135aa732cc92a28c490459582a745a48496ffe57"
+    },
+    {
+      "attempt": "W05-a03",
+      "scenario": "W05",
+      "status": "failed",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "9e7665dd2354cc6e33c39547b5cedbbe8dc1c12889b128157169cdcec9924138",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "16708c7fb3f194e4679750057e0ad0b7ca538d9e4230aec1c08b3e2f49679711",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "ae80c66ce5bd9ef8537df4233b532e1e058d75a975f98fdd86c3ff435becdf8d",
+        "computer_use_browser_cases.py": "fdfd70a983ca7dab428d9d04e820e45a9836631f282448d31f69b4ccb151b42d",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "a505959b792068154a953ee6976fd771e99b45d3a460dada15a35189bc06347a",
+        "computer_use_web_cases.py": "031e8543551e457acf355518c3430cb4dc25b257cf51a6bb749fcb27b410c8e5",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": false,
+      "tool_error_count": 1,
+      "tool_error_codes": [
+        "invalid_arguments"
+      ],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 8,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 22.51220703125,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "521d729374444fcc1b4e823bd99151d9311cd9710bf8ee1ce50fa9418c6c01f7",
+        "cursor/report.json": "0c38965af25a69dc4a0dcb9110e9538eafb3db0d753c671d08643411e6624b07",
+        "cursor/probe/report.json": "d11f0d757c089ca260a1bae6828d974aa50372ba80d6a9e40679ffdb50c217d5"
+      },
+      "failure_digest": "9ac006055505087e20f727edfe33b7f46f567ef0af8b45991fffe9231cb2e4f0"
+    },
+    {
+      "attempt": "W05-a04",
+      "scenario": "W05",
+      "status": "passed",
+      "business_passed": true,
+      "targeted_passed": true,
+      "strict_passed": true,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "9e7665dd2354cc6e33c39547b5cedbbe8dc1c12889b128157169cdcec9924138",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "16708c7fb3f194e4679750057e0ad0b7ca538d9e4230aec1c08b3e2f49679711",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "ae80c66ce5bd9ef8537df4233b532e1e058d75a975f98fdd86c3ff435becdf8d",
+        "computer_use_browser_cases.py": "fdfd70a983ca7dab428d9d04e820e45a9836631f282448d31f69b4ccb151b42d",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "a505959b792068154a953ee6976fd771e99b45d3a460dada15a35189bc06347a",
+        "computer_use_web_cases.py": "bac928b453d60d91dabc6511c021d2a95520d2278b59c9e09e4cdd7abd62f598",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": true,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 8,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 22.62890625,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "eb83f57f9edd8a00cbd50b68e50bcac0f4a00f0b66451b9b80db9cb7044e1e89",
+        "cursor/report.json": "96108ac1fa4d3bc2fbd5acc3f3960ba6572293e860e5a84f88cd0e7aa6c79401",
+        "cursor/probe/report.json": "ce9cd8690688a7b6597c406387bcede762fd86c1ec5df9afe94d21ad3bed5f8e"
+      }
+    },
+    {
+      "attempt": "W06-a01",
+      "scenario": "W06",
+      "status": "failed",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": false,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "37cacaea8bc719eab4f71627ca6be49319ecd9ee4d05b22ead2757c127004f7c",
+      "helper_files_sha256": {},
+      "expected_errors_verified": false,
+      "tool_error_count": 1,
+      "tool_error_codes": [
+        "selector_ambiguous"
+      ],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 2,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 23.887939453125,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "c5c95ce6c5c1f5b9a0d72e40a4385f283690f1fb077c2a8c105db96a35dd8d75",
+        "cursor/report.json": "3b9085269af2bb21be0ec6cc95fd93eb4736f575b3d157862ebc98b551996cee",
+        "cursor/probe/report.json": "f2ba1d09bd42f17ac5921558436c2631246f470845d3ee52b1aa12181c23732b"
+      },
+      "failure_digest": "fc046215115642ea4d471b663cdf657ebfe8b9def5c0c24e3a1cc080ea3f7489"
+    },
+    {
+      "attempt": "W06-a02",
+      "scenario": "W06",
+      "status": "failed",
+      "business_passed": false,
+      "targeted_passed": false,
+      "strict_passed": false,
+      "clean_run": true,
+      "foreground_fixture_requested": false,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "9e7665dd2354cc6e33c39547b5cedbbe8dc1c12889b128157169cdcec9924138",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "5078182b7e41fcaada1c8d6b0ad8700e26f655597fb663b32bb49166cf7f26f0",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "4237a184824a246c88e9cc07618f9ef372ff5eca59df160149e69aaf77effc09",
+        "computer_use_browser_cases.py": "fdfd70a983ca7dab428d9d04e820e45a9836631f282448d31f69b4ccb151b42d",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "7cdced7c66a07246d3b4324076eb6474292db0c0d2577a9a02044990ad0921d9",
+        "computer_use_web_cases.py": "85de31c06c7ceb0808970ee350444659a37183137c56a431e945ad7e6f6af11d",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": false,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 7,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 34.110107421875,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "2ea0beddb197350bd310a69f7b960be9cec5cbe3df7ace59729b56f6a6937b41",
+        "cursor/report.json": "151b1f35b06ffe08f29dc9d25d6dd075eedf61606b115c1833457eda7dca179d",
+        "cursor/probe/report.json": "c6e946b1a3b015e2558b4f794764298a8a91265fff1118dff9d8ea78b5dccbf0"
+      },
+      "failure_digest": "8f2198135cc7481ce5f16e27dc1db9df2215f71ce21fe00b3296daa15861e044"
+    },
+    {
+      "attempt": "W06-a03",
+      "scenario": "W06",
+      "status": "passed",
+      "business_passed": true,
+      "targeted_passed": true,
+      "strict_passed": true,
+      "clean_run": true,
+      "foreground_fixture_requested": true,
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "fixture_binary_sha256": "9e7665dd2354cc6e33c39547b5cedbbe8dc1c12889b128157169cdcec9924138",
+      "helper_files_sha256": {
+        "computer_use_acceptance.py": "16708c7fb3f194e4679750057e0ad0b7ca538d9e4230aec1c08b3e2f49679711",
+        "computer_use_benchmark.py": "ba9ffe1ebfc2771ab9fbceb3333c2ae9c890768f600933790613ef1760dbf56f",
+        "computer_use_boundary_cases.py": "4237a184824a246c88e9cc07618f9ef372ff5eca59df160149e69aaf77effc09",
+        "computer_use_browser_cases.py": "fdfd70a983ca7dab428d9d04e820e45a9836631f282448d31f69b4ccb151b42d",
+        "computer_use_cursor.py": "d238cd38d81f0b3aa5d318ce82215067a444f39ba929269c4d3b18cfa74c3267",
+        "computer_use_focus.py": "e48aee3c2ac089321b03b417460fa133c1253c193329c59df834da5f0be9a711",
+        "computer_use_native_cases.py": "8c0c8931222231e1e5cec96dc9fa877aff63490dfa30f01f20cbcdfb0eee80c5",
+        "computer_use_target.py": "a505959b792068154a953ee6976fd771e99b45d3a460dada15a35189bc06347a",
+        "computer_use_web_cases.py": "031e8543551e457acf355518c3430cb4dc25b257cf51a6bb749fcb27b410c8e5",
+        "app_client.py": "c241c30ca48962b674143c28a534098e6ead930a74a195d49e5301c2045ca9ef"
+      },
+      "expected_errors_verified": true,
+      "tool_error_count": 0,
+      "tool_error_codes": [],
+      "unknown_dispatch_count": 0,
+      "cursor": {
+        "version": "bounded-pointer-borrow-v3",
+        "passed": true,
+        "exec_intervals": 16,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 43.88916015625,
+        "max_sample_gap_ms_policy": 50
+      },
+      "cursor_failure_reasons": [],
+      "cleanup_passed": true,
+      "native_forced_cleanup": [],
+      "detached_exit_observed": null,
+      "detached_quit_event_verified": null,
+      "original_artifacts_sha256": {
+        "report.json": "0ea4225872fa66d70081af66e70c86de1ff5ee04907ddc5af82328bc6715a425",
+        "cursor/report.json": "d2f7ad5625305185803a9ef8d57f8716784a30d3c63804ebfc74c58f67a2f64b",
+        "cursor/probe/report.json": "a7b56d5b05522c846702a9d3d0119ab5e0a2eab7a5e2a1c7585a3bd466052ddf"
+      },
+      "background_failure_basis": {
+        "sha256": "2ea0beddb197350bd310a69f7b960be9cec5cbe3df7ace59729b56f6a6937b41",
+        "attempt": "W06-a02"
+      }
+    }
+  ],
+  "verification": {
+    "source_checks_passed": true,
+    "computer_use_unit_tests_passed": 110,
+    "cursor_audit_unit_tests_passed": 26,
+    "fixture_http_tests_passed": 14,
+    "all_fixture_swift_typecheck_passed": true,
+    "source_check_a02_log_sha256": "e372ece68128a7b8fe0e636f352acffa6a17cbd86f7b22431c7b61c7f6c0b2b8",
+    "initial_source_check_failed_log_sha256": "b2dbd472143a5fc30e8f9e86389d85f0bac28a3e848ac9a765bc48ae61e42131"
+  },
+  "limits": [
+    "Independent fresh target attempts under different conditions do not establish a complete single-run baseline.",
+    "Foreground fixture activation was explicit and linked to the preserved failed background attempt; no automatic product activation exception was added.",
+    "Original unknown/error dispatch remains unclean even when independent business or interruption effects pass.",
+    "Every cursor gap over 50ms and unattributed movement remains a failure; no attempt overwrites an earlier attempt.",
+    "Browser profile isolation, actual Windows conditions and system roots remain blocked or unsupported as recorded.",
+    "Image answers were supplied only after viewing the exact DTW PNG; private oracle access occurred after submission."
+  ]
+}

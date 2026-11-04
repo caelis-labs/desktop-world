@@ -35,7 +35,7 @@ They do not automate an existing user's browser document.
 
 | Entry | Independently checked contracts |
 | --- | --- |
-| `app_protocol_probe.py` | App admission, nine-method surface, complete fixture semantics, returned-view deduplication, bounded unchanged delta, semantic action, Unicode/keyboard/save bytes, native modal bounds/order and covered opaque-window composition |
+| `app_protocol_probe.py` | App admission, current ten-method surface (including `readText`), complete fixture semantics, returned-view deduplication, bounded unchanged delta, semantic action, Unicode/keyboard/save bytes, native modal bounds/order and covered opaque-window composition |
 | `feature_audit.py` | Installed/running discovery and provider metadata; semantic IDs and selectors; left/right/double click; hover/content/title-bar drag; vertical/horizontal/default wheel effects; stale geometry; native menu; modal keyboard routing; rejected selector foreground invariants; two-instance continuity and overlapping pixels; global layered alpha; normal quit/save cancellation; cancellation/retransmission; stopped executable startup |
 | `browser_feature_audit.py` | Empty-field Unicode, selection replacement, terminal caret, literal label/U+FFFC content, multiline text, semantic save/click, both wheel axes, independently owned native Open dialog, Escape and normal browser quit |
 
@@ -52,6 +52,59 @@ read-only readiness/effect polling is bounded. A retransmission of the identical
 MCP request ID inspects its retained execution. Forced termination of an exact
 owned test process is recorded as cleanup failure, never an ordinary passing run.
 Normal cleanup requests close only the fixtures/profiles created by that run.
+
+## Shared workbench and development diagnostics
+
+The source checkout also contains the Windows native shell of the shared
+[Computer Use workbench](../../fixtures/computer-use-app/README.md). It reuses
+`Fixture.cs`, the portable Web/Canvas servers, the 42-scenario manifest and owned
+lifecycle. `computer_use_probe.py` checks cold input, dense focused discovery,
+Unicode commit, exact long-text UTF-16 paging, stale reads, checkbox, read-only
+menu, same-instance modal sequences and real Open/Save/overwrite cancellation.
+Unselected scenarios remain `not_run`; this is a direct-script core, not the
+complete macOS benchmark or model image-channel acceptance.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/acceptance/windows/compile-cursor.ps1 -OutputDirectory C:\Temp\dtw-observer-new
+python -X utf8 tests/acceptance/windows/observe_run.py --observer C:\Temp\dtw-observer-new\CursorObserver.exe --output C:\Temp\dtw-observed-new -- python -X utf8 tests/acceptance/windows/computer_use_probe.py --dtw '<candidate>\dtw.exe' --fixture-binary C:\Temp\dtw-observer-new\Fixture.exe --output C:\Temp\dtw-core-new
+```
+
+`observe_run.py` uses a separate native process to retain foreground HWND/PID,
+real cursor position and global held-key samples. Actual gaps above 50ms fail the
+strict observation check even if business effects pass. With `--metrics-root`,
+every recorded MCP call (and the interrupted execution through worker exit) must
+also have bracketing samples with gaps no greater than 50ms. The whole-run maximum
+always gates the result, including fixture startup and server teardown. The
+observer primes CLR serialization before publishing readiness; the probe starts
+only after its first flushed sample. Sampling records Windows
+foreground input honestly; it does not grant the macOS pointer-borrow policy to
+Windows or prove zero interference for foreground routes.
+
+`input_desktop_probe.py` launches an owned fixture and the actual native worker
+on an invisible, non-input desktop. It checks nine new-input admission refusals,
+unchanged business state and normal process/desktop cleanup without switching
+desktops, locking Windows or changing ACLs. It is a native-boundary diagnostic;
+it does not claim to induce secure-desktop or mid-dispatch desktop loss.
+`interruption_probe.py --mode cancel|eof|host-death|deadline` requires an actually
+observed held drag, exactly one paired up, no suffix, and worker shutdown. Each
+attempt needs a fresh output directory. These development-only probes require the
+source tree and are not installed-package entrypoints.
+
+The browser audit no longer parks the pointer before opening a chooser. It
+verifies exact selected Unicode file contents through the independent page.
+`--review-chooser-hover` additionally publishes `hover-request.json` with the
+actual PNG/hash and waits for `hover-answer.json` (`sha256`, image-pixel `x`, `y`).
+The reviewer must inspect that PNG; the probe then hovers the visible file and
+requires a real `tooltips_class32`/`SysShadow` before capturing and selecting it.
+No unknown popup or menu is excluded by this diagnostic.
+
+The browser audit launches a second owned profile of the same executable with
+duplicate controls and an independent input journal; it must remain unchanged.
+`--allow-decoration-image-limit` permits only the documented
+`windows_surface_unsupported` tooltip/shadow image subcase, retaining its original
+error and `strict_s03_capture_passed:false`. Fresh semantic receiver proof, exact
+selected contents and a fresh post-tooltip image are still required. See the
+[pinned upstream investigation](../../../docs/windows-tooltip-upstream-research-2026-11-04.md).
 
 Windows capture uses exact HWND rendering and DWM visible frames. It can read a
 covered opaque window, but input still requires visibility and the exact receiver.

@@ -6,6 +6,7 @@ import sys
 import time
 
 mode, ready_path = sys.argv[1:3]
+pathlib.Path(ready_path).with_name('started-' + str(os.getpid())).write_text('started', encoding='utf-8')
 stop_requested = False
 
 

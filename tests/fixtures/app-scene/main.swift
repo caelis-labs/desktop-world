@@ -13,6 +13,12 @@ func pointerEventTelemetry(_ event:NSEvent)->[String:Any] {
 final class SceneWindow:NSWindow {
     override func constrainFrameRect(_ frameRect:NSRect,to screen:NSScreen?)->NSRect {frameRect}
 }
+final class SequenceMessage:NSButton {
+    weak var controller:Delegate?
+    override func rightMouseDown(with event:NSEvent) {
+        controller?.openSequencePopup(self)
+    }
+}
 final class GesturePad:NSView {
     weak var controller:Delegate?
     var tracking:NSTrackingArea?
@@ -48,6 +54,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
     var newRequests=0
     var gestureEvents:[[String:Any]]=[]
     var pointerEvents:[[String:Any]]=[]
+    var sequencePopup:NSWindow?
+    var sequenceCounts=["right":0,"opened":0,"action":0,"base":0]
     var interruptDrag=false
     var panel:NSPanel?
     var panelKind=""
@@ -60,12 +68,35 @@ final class Delegate: NSObject, NSApplicationDelegate {
         w.contentView!.wantsLayer=true;w.contentView!.layer!.backgroundColor=color.cgColor
         let b=NSButton(title:name,target:self,action:#selector(clicked(_:)));b.frame=buttonFrame;b.identifier=NSUserInterfaceItemIdentifier(name)
         w.contentView!.addSubview(b)
+        if name=="main" {
+            let message=SequenceMessage(title:"Sequence message",target:self,action:#selector(sequenceBase))
+            message.controller=self;message.frame=NSRect(x:40,y:120,width:160,height:36)
+            w.contentView!.addSubview(message)
+        }
         if name=="main" {let field=NSTextField(frame:NSRect(x:40,y:60,width:380,height:28));field.stringValue="initial";field.identifier=NSUserInterfaceItemIdentifier("scene-input");w.contentView!.addSubview(field)}
         if name=="main" {let slider=NSSlider(value:0,minValue:0,maxValue:100,target:nil,action:nil);slider.frame=NSRect(x:40,y:230,width:420,height:28);w.contentView!.addSubview(slider)}
         if name=="main" {let pad=GesturePad(frame:NSRect(x:40,y:280,width:420,height:70));pad.controller=self;pad.wantsLayer=true;pad.layer!.backgroundColor=NSColor.systemPurple.cgColor;w.contentView!.addSubview(pad)}
         w.acceptsMouseMovedEvents=true
         windows.append(w);w.makeKeyAndOrderFront(nil);return w
     }
+    func openSequencePopup(_ message:SequenceMessage) {
+        sequenceCounts["right",default:0]+=1
+        guard sequencePopup?.isVisible != true,let owner=message.window else {write();return}
+        // The popup is a separate CG surface entirely inside the owner's frame.
+        // Its action occupies the same screen point as the underlying message.
+        let rect=owner.convertToScreen(message.convert(message.bounds,to:nil))
+        let popup=NSWindow(contentRect:rect,styleMask:.borderless,backing:.buffered,defer:false)
+        popup.title="DTW Sequence popup";popup.isReleasedWhenClosed=false
+        popup.level = .popUpMenu;popup.backgroundColor = .systemGreen
+        let action=NSButton(title:"Sequence action",target:self,action:#selector(sequenceAction))
+        action.frame=NSRect(origin:.zero,size:rect.size);popup.contentView!.addSubview(action)
+        sequencePopup=popup;windows.append(popup);popup.orderFront(nil)
+        sequenceCounts["opened",default:0]+=1;write()
+    }
+    @objc func sequenceAction() {
+        sequenceCounts["action",default:0]+=1;sequencePopup?.close();write()
+    }
+    @objc func sequenceBase() {sequenceCounts["base",default:0]+=1;write()}
     @objc func newWindow(){newRequests += 1;_ = make("main",NSRect(x:100,y:200,width:560,height:400),.systemBlue,NSRect(x:220,y:170,width:150,height:40));write()}
     @objc func openFile() {
         let open=NSOpenPanel();open.directoryURL=root;open.canChooseDirectories=false;open.allowsMultipleSelection=false
@@ -86,7 +117,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         };write()
     }
     func applicationDidFinishLaunching(_ notification:Notification) {
-        _=NSEvent.addLocalMonitorForEvents(matching:[.mouseMoved,.leftMouseDown,.leftMouseDragged,.leftMouseUp]){[weak self] event in
+        _=NSEvent.addLocalMonitorForEvents(matching:[.mouseMoved,.leftMouseDown,.leftMouseDragged,.leftMouseUp,.rightMouseDown,.rightMouseUp]){[weak self] event in
             self?.pointerEvents.append(pointerEventTelemetry(event));return event
         }
         _=NSEvent.addLocalMonitorForEvents(matching:.scrollWheel){[weak self] event in
@@ -161,7 +192,11 @@ final class Delegate: NSObject, NSApplicationDelegate {
             return row
         }
         let cg=(CGWindowListCopyWindowInfo([.optionOnScreenOnly,.excludeDesktopElements],0) as? [[String:Any]] ?? []).filter{($0[kCGWindowOwnerPID as String] as? Int32)==getpid()}.map{["id":$0[kCGWindowNumber as String] ?? 0,"layer":$0[kCGWindowLayer as String] ?? 0]}
-        let state:[String:Any]=["pointer_events":pointerEvents,"pressed_mouse_buttons":NSEvent.pressedMouseButtons,"slider":sliderValue,"panel":["kind":panelKind,"visible":panel?.isVisible ?? false,"result":panelResult,"opened":opened,"saved":saved],"gestures":gestureEvents,"buttons":buttons,"inputs":inputs,"new_requests":newRequests,"cancelled":cancelled,"cg":cg,"active":NSApp.isActive,"key":NSApp.keyWindow?.title ?? "", "pid":ProcessInfo.processInfo.processIdentifier,"counts":counts,"command":command,"windows":rows]
+        let pointer=CGEvent(source:nil)?.location
+        let environment:[String:Any]=["pointer_screen":pointer.map{[$0.x,$0.y]} as Any? ?? NSNull(),
+            "frontmost_pid":NSWorkspace.shared.frontmostApplication?.processIdentifier as Any? ?? NSNull(),
+            "uptime":ProcessInfo.processInfo.systemUptime]
+        let state:[String:Any]=["environment":environment,"sequence":sequenceCounts,"pointer_events":pointerEvents,"pressed_mouse_buttons":NSEvent.pressedMouseButtons,"slider":sliderValue,"panel":["kind":panelKind,"visible":panel?.isVisible ?? false,"result":panelResult,"opened":opened,"saved":saved],"gestures":gestureEvents,"buttons":buttons,"inputs":inputs,"new_requests":newRequests,"cancelled":cancelled,"cg":cg,"active":NSApp.isActive,"key":NSApp.keyWindow?.title ?? "", "pid":ProcessInfo.processInfo.processIdentifier,"counts":counts,"command":command,"windows":rows]
         if let data=try? JSONSerialization.data(withJSONObject:state){try? data.write(to:root.appendingPathComponent("state.json"),options:.atomic)}
     }
 }

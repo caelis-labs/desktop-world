@@ -174,6 +174,9 @@ pub fn dispatch(
                 Event::Down => input::mouse(MOUSEEVENTF_LEFTDOWN, 0, 0, 0),
                 Event::Up => input::mouse(MOUSEEVENTF_LEFTUP, 0, 0, 0),
             };
+            if !matches!(event, Event::Up) {
+                super::desktop::ensure_input_desktop()?;
+            }
             *self.dispatched = true;
             let count = unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
             *self.accepted += count as usize;

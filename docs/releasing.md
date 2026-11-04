@@ -76,6 +76,17 @@ identity/profile; raw credentials are removed from the builder environment. Its
 private files/keychain are removed and the original search list restored even
 when construction fails.
 
+macOS CI, construction and the optional byte audit use the standard `xcode-27`
+arm64 image, with every compilation/runtime gate. GitHub repeatedly abandoned
+both `macos-26` and `macos-15` arm64 jobs for hosted capacity on 2026-11-04.
+The Xcode-based image passed a full signed/notarized candidate preflight before
+unifying CI and construction. GitHub declared it
+[generally available on October 15](https://github.blog/changelog/2026-10-15-xcode-27-runner-image-generally-available/).
+The 14.2 deployment target remains within [Apple's supported deployment range](https://developer.apple.com/xcode/system-requirements/).
+The shipping candidate still requires native arm64 source/package tests,
+signing and notarization; this change does not use a larger paid runner.
+Runner images are listed in [GitHub's native image inventory](https://github.com/actions/runner-images#available-images).
+
 Use Actions **Re-run failed jobs** for a failed construction. Successful platform
 outputs remain bound by ID/digest; different successful attempts may coexist for
 the same source. The plan itself is uploaded only after both platforms succeed.

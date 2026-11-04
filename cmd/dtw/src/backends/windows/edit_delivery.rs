@@ -3,7 +3,7 @@
 use crate::{backends::native_client::failed, computer::Error};
 use windows::Win32::{Foundation::*, UI::WindowsAndMessaging::*};
 
-pub(super) struct Edit(HWND, HWND);
+pub(super) struct Edit(HWND, HWND, bool);
 impl Edit {
     pub(super) fn new(window: HWND) -> Result<Self, Error> {
         let mut gui = GUITHREADINFO {
@@ -22,16 +22,24 @@ impl Edit {
         {
             return Err(Error::UnsupportedCapability);
         }
-        Ok(Self(gui.hwndFocus, window))
+        Ok(Self(gui.hwndFocus, window, true))
     }
     fn validate(&self) -> Result<(), Error> {
+        if !unsafe { IsWindowUnicode(self.0) }.as_bool()
+            || unsafe { GetWindowLongW(self.0, GWL_STYLE) } & 0x20 != 0
+        {
+            return Err(Error::UnsupportedCapability);
+        }
         let mut gui = GUITHREADINFO {
             cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
             ..Default::default()
         };
-        unsafe { GetGUIThreadInfo(GetWindowThreadProcessId(self.1, None), &mut gui) }
-            .map_err(failed)?;
-        if gui.hwndFocus != self.0 || unsafe { GetAncestor(self.0, GA_ROOT) } != self.1 {
+        if self.2 {
+            unsafe { GetGUIThreadInfo(GetWindowThreadProcessId(self.1, None), &mut gui) }
+                .map_err(failed)?;
+        }
+        if (self.2 && gui.hwndFocus != self.0) || unsafe { GetAncestor(self.0, GA_ROOT) } != self.1
+        {
             return Err(Error::TargetChanged);
         }
         let (mut child, mut root) = (0, 0);
@@ -67,8 +75,11 @@ impl Edit {
         Ok(reply)
     }
     pub(super) fn text(&self) -> Result<String, Error> {
+        self.text_bounded(65_534)
+    }
+    fn text_bounded(&self, maximum: usize) -> Result<String, Error> {
         let len = self.message(WM_GETTEXTLENGTH, WPARAM(0), LPARAM(0))?;
-        if len >= 65_535 {
+        if len > maximum {
             return Err(Error::UnsupportedCapability);
         }
         let mut buffer = vec![0u16; len + 1];
@@ -95,6 +106,29 @@ impl Edit {
         }
         selection_parts(&full, start, end)
     }
+}
+
+// UIA's proxy for a standard Edit can publish truncated Value/TextPattern
+// content. Read only the exact native child advertised by that retained UIA
+// element. These system-marshalled messages neither focus nor modify it.
+pub(super) fn read_control(child: HWND, root: HWND) -> Result<Option<String>, Error> {
+    if child.0.is_null() {
+        return Ok(None);
+    }
+    let mut name = [0u16; 256];
+    let len = unsafe { GetClassNameW(child, &mut name) };
+    let name = String::from_utf16_lossy(&name[..len.max(0) as usize]);
+    if !(name.eq_ignore_ascii_case("Edit") || name.starts_with("WindowsForms10.EDIT.")) {
+        return Ok(None);
+    }
+    if !unsafe { IsWindowUnicode(child) }.as_bool()
+        || unsafe { GetWindowLongW(child, GWL_STYLE) } & 0x20 != 0
+    {
+        return Err(Error::UnsupportedCapability);
+    }
+    let edit = Edit(child, root, false);
+    edit.validate()?;
+    edit.text_bounded(1_048_576).map(Some)
 }
 fn selection_parts(full: &str, start: usize, end: usize) -> Result<(String, String), Error> {
     let units: Vec<_> = full.encode_utf16().collect();

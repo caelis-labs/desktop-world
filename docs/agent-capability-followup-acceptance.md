@@ -7,7 +7,7 @@ below is macOS evidence for the exact binary named here.
 
 ## Added capabilities
 
-The installed [API](../skills/desktop-world/API.md) now exposes nine app methods.
+At this snapshot the app facade exposed nine methods; the installed [API](../skills/desktop-world/API.md) records subsequent additions.
 Two additions use current screenshot pixels:
 
 ```javascript

@@ -18,6 +18,10 @@ def main():
     with tempfile.TemporaryDirectory(prefix="dtw-native-inventory-") as scratch:
         directory = Path(scratch)
         source = directory / "main.swift"
+        bridge = directory / "native-bridge-stubs.o"
+        subprocess.run(["xcrun", "clang", "-Wall", "-Wextra", "-Werror", "-c",
+                        str(root / "tests/fixtures/native-bridge-stubs.c"), "-o", str(bridge)],
+                       check=True, timeout=60)
         groups = {
             "native-inventory-tests": [
                 admission, native, scene, controls,
@@ -36,7 +40,8 @@ def main():
             binary = directory / name
             subprocess.run(
                 ["swiftc", "-warnings-as-errors", "-module-cache-path", str(directory / "module-cache"),
-                 str(source), "-o", str(binary)],
+                 *(["-import-objc-header", str(native.with_name("NativeBridge.h"))] if native in paths else []),
+                 str(source), *([str(bridge)] if native in paths else []), "-o", str(binary)],
                 check=True, timeout=120,
             )
             subprocess.run([str(binary)], check=True, timeout=20)

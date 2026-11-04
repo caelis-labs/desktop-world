@@ -148,7 +148,18 @@ impl Target {
         }
         Ok(())
     }
-    fn post(&self, message: u32, wparam: usize, position: LPARAM) -> Result<(), Error> {
+    fn post(
+        &self,
+        message: u32,
+        wparam: usize,
+        position: LPARAM,
+        dispatched: &mut bool,
+    ) -> Result<(), Error> {
+        // The original receiver still owns its paired up after desktop loss.
+        if message != WM_LBUTTONUP {
+            super::desktop::ensure_input_desktop()?;
+        }
+        *dispatched = true;
         unsafe { PostMessageW(self.window, message, WPARAM(wparam), position) }.map_err(failed)
     }
     pub(super) fn click(
@@ -159,18 +170,17 @@ impl Target {
     ) -> Result<(), Error> {
         self.validate()?;
         let _mutation = input::mutation(until)?;
-        self.post(WM_MOUSEMOVE, 0, self.client)?;
-        *dispatched = true;
+        self.post(WM_MOUSEMOVE, 0, self.client, dispatched)?;
         let down = if second && self.double_clicks {
             WM_LBUTTONDBLCLK
         } else {
             WM_LBUTTONDOWN
         };
-        self.post(down, 1, self.client)?;
+        self.post(down, 1, self.client, dispatched)?;
         // The admitted segment always pairs its accepted down, even if close or
         // deadline occurs between these posts. Never replay a possibly sent click.
-        if let Err(error) = self.post(WM_LBUTTONUP, 0, self.client) {
-            if self.post(WM_LBUTTONUP, 0, self.client).is_err() {
+        if let Err(error) = self.post(WM_LBUTTONUP, 0, self.client, dispatched) {
+            if self.post(WM_LBUTTONUP, 0, self.client, dispatched).is_err() {
                 input::fail_delivery();
             }
             return Err(error);
@@ -194,8 +204,8 @@ impl Target {
             },
             (delta as u16 as usize) << 16,
             self.screen_param,
+            dispatched,
         )?;
-        *dispatched = true;
         Ok(())
     }
 }

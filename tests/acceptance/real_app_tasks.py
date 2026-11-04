@@ -247,7 +247,9 @@ def agy_gui_settings(name):
                             'deny': ['command(*)', 'write_file(*)', 'read_url(*)', 'execute_url(*)']}}
 
 
-def run_agent(repo, root, binary, client, adapter, name, prompt, evidence, installed_package=None):
+def run_agent(repo, root, binary, client, adapter, name, prompt, evidence, installed_package=None, *,
+              tools=('apps', 'api', 'exec', 'result'), measure=metrics,
+              measure_recovery=recovery_metrics, current_routes=None):
     stage, skill = stage_agent_plugin(repo, root, binary, name, installed_package)
     mcp = recorded_mcp_command(root, binary)
     evidence['mcp_stdio'] = {'command': mcp, 'launcher_sha256': file_sha256(root/'mcp-stdio.py'),
@@ -265,7 +267,9 @@ def run_agent(repo, root, binary, client, adapter, name, prompt, evidence, insta
             write_json(config, {'mcpServers': [{'name': name, 'command': mcp[0], 'args': mcp[1:], 'env': []}]})
             command = ['acpx'] + (['--agent', str(adapter)] if adapter else [])
             allowed = ['Skill', f"Read({local/'PATTERNS.md'})"]
-            allowed += [f'mcp__{name}__{m}' for m in ('apps','api','exec','result')]
+            if current_routes:
+                allowed.append(f"Read({local/'API.md'})")
+            allowed += [f'mcp__{name}__{m}' for m in tools]
             command += ['--cwd', str(root), '--mcp-config', str(config), '--format', 'json',
                         '--timeout', '900', '--model', 'codex/gpt-6.1-terra', '--deny-all',
                         '--allowed-tools', ','.join(allowed),
@@ -314,10 +318,10 @@ def run_agent(repo, root, binary, client, adapter, name, prompt, evidence, insta
                        else normalize_acp(root/'agent.jsonl', client))
     write_json(root/'normalized-calls.json', calls)
     evidence['terminal'] = terminal
-    evidence['metrics'] = metrics(calls, name, allowed_apps=(APPS[evidence['task']][0],))
-    evidence['recovery'] = recovery_metrics(calls, name)
+    evidence['metrics'] = measure(calls, name, allowed_apps=(APPS[evidence['task']][0],))
+    evidence['recovery'] = measure_recovery(calls, name)
     require(not evidence.get('agent_deadline_exceeded'), 'Agent resource deadline elapsed; partial transcript retained')
-    check_routes(calls, name, root)
+    (current_routes or check_routes)(calls, name, root)
     check_skill_loaded(calls, name, root)
     check_terminal(client, terminal, process.returncode, (root/'agent-stderr.log').read_text())
     require(not evidence['registration_cleanup']['failed'], 'Temporary Agent registration cleanup failed')
@@ -350,14 +354,14 @@ def launch_task(kind, root, spec, case, resources, evidence):
     return 'DTW Workbench '+case if kind == 'chrome' else 'Obsidian'
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(*, current=None):
+    parser = argparse.ArgumentParser(description=current.__doc__ if current else __doc__)
     parser.add_argument('--dtw', type=Path, required=True)
     parser.add_argument('--installed-package', type=Path,
                         help='Extracted unpublished macOS candidate; execute its bin/dtw in place')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--task', choices=APPS, required=True)
-    parser.add_argument('--client', choices=('claude','agy','dsh'), required=True)
+    parser.add_argument('--client', choices=('claude','agy','dsh'), required=current is None, default='dsh' if current else None)
     parser.add_argument('--acp-adapter', type=Path)
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[2]
@@ -380,18 +384,25 @@ def main():
                 'passed':False,'business_passed':False,'clean_run':False,
                 'gui_subtasks':'Inspect transcript for reopen/search/link coverage; disk readback alone is insufficient',
                 'started_unix_ms':int(time.time()*1000)}
+    if current:
+        evidence.update(protocol='apps/exec', runner='current_real_app_tasks',
+                        evidence_kind='real-Agent-task; GUI review required')
     resources = {}; supervisor = None; spec = None
     try:
         spec = task_spec(args.task, root, case); write_json(root/'task.json', spec)
-        supervisor = initialize(binary, root/'supervisor')
+        supervisor = (current.initialize if current else initialize)(binary, root/'supervisor')
         title = launch_task(args.task, root, spec, case, resources, evidence)
         def ready():
-            record, _ = supervisor.execute(app_id,'setup-window','return await app.windows();')
-            if record.get('error'): return None
-            candidates = [w for w in successful(record)['windows'] if title in w['title']]
+            if current:
+                snapshot = current.inventory(supervisor, app_id)
+            else:
+                record, _ = supervisor.execute(app_id,'setup-window','return await app.windows();')
+                if record.get('error'): return None
+                snapshot = successful(record)
+            candidates = [w for w in snapshot['windows'] if title in w['title']]
             if args.task == 'obsidian':
-                coverage = successful(record).get('coverage') or {}
-                require(coverage.get('complete_within_scope') is True,
+                coverage = snapshot.get('coverage') or {}
+                require((current.inventory_complete(snapshot) if current else coverage.get('complete_within_scope') is True),
                         'Incomplete app inventory cannot establish a unique welcome window')
                 candidates = [w for w in candidates if w['title'] == 'Obsidian']
                 native_titles = owned_window_titles(resources['app'])
@@ -406,14 +417,16 @@ def main():
         evidence['starting_window'] = wait_until(ready, timeout=20)
         prompt = f'''Use the {name} Skill and its DTW MCP server. {spec['prompt']}
 Perform GUI work only through this DTW server and the selected app. Only the disposable resources named above and their new dialogs/windows are authorized. Preserve personal documents, vaults and browser tabs. No shell, filesystem editing, DOM/CDP, HTTP or another desktop tool may perform the task. Ordinary Skill and MCP metadata discovery is allowed. Batch known actions into scripts; use fresh observation when the target changes. Do not replay an uncertain action. Report which subgoals completed, any blocker, unnecessary discovery/retry steps, and specific usability difficulties. Leave the requested final UI open; the supervisor owns cleanup.'''
+        if current and args.task == 'wps':
+            prompt += '\nKeep the owned WPS documents open for GUI review and manual close by the supervisor.'
         (root/'prompt.txt').write_text(prompt)
         print(json.dumps({'output':str(root),'task':args.task,'client':args.client,'case':case}),flush=True)
-        run_agent(repo, root, binary, args.client, args.acp_adapter, name, prompt, evidence,
-                  installed_package=package)
+        (current.run_agent if current else run_agent)(
+            repo, root, binary, args.client, args.acp_adapter, name, prompt, evidence, installed_package=package)
         evidence['readback'] = independent_readback(args.task, spec, root, case)
         evidence['business_passed'] = True
         evidence['clean_run'] = not evidence['metrics']['issues']
-        evidence['passed'] = True
+        evidence['passed'] = evidence['clean_run'] if current else True
     except BaseException as error:
         evidence['failure'] = {'type':type(error).__name__,'message':str(error)}
         (root/'failure.txt').write_text(traceback.format_exc())
@@ -423,7 +436,11 @@ Perform GUI work only through this DTW server and the selected app. Only the dis
             except Exception as read_error: evidence['readback_failure'] = str(read_error)
     finally:
         steps = []
-        if args.task == 'wps' and supervisor is not None and evidence['business_passed']:
+        if current and args.task == 'wps':
+            evidence['retained_documents'] = {
+                'reason': 'Current app protocol cannot target a background document by window_ref; review and close owned documents manually',
+                'paths': [spec['seed'], spec['output']] if spec else []}
+        if current is None and args.task == 'wps' and supervisor is not None and evidence['business_passed']:
             def close_documents():
                 return [close_visible_owned_document(supervisor, app_id, path)
                         for path in (spec['output'], spec['seed'])]

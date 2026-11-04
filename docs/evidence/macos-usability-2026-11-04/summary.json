@@ -1,0 +1,123 @@
+{
+  "source_base": "a968b29",
+  "scope": "development candidate over standard MCP on owned AppKit fixture; no installed-package, real Telegram, or Windows claim",
+  "binary_sha256": "ed11b0a20b5ad4ca8d10955be401ba237e0761cdc2647a9b3765a787f8a333db",
+  "source_files_sha256": {
+    "cmd/dtw/src/app_protocol/scene.rs": "70d8834a704e217a9b05c4b7a5ba19081127fd60b5e13b328c2baccbfce71683",
+    "cmd/dtw/src/app_protocol/selection.rs": "f1ea3371ac0313e710a25ea2287257309577cb6c06e2e0dd07b77842320bb87c",
+    "cmd/dtw/src/backends/macos/Native.swift": "6d1ad86e7fc4df0bba10ff1ff755046bcf958e3b408c00b485755e7c338464ed",
+    "tests/fixtures/app-scene/main.swift": "b94d6ea63bac03dbdb6041ddcc257946a8528bd0cc0bd8424aa7fd07dfdab828",
+    "tests/acceptance/macos_scene_sequence_probe.py": "9e73eed181441366844a4b00ada21ff0e952e8686b6bae91927c89034910e59d",
+    "skills/desktop-world/SKILL.md": "7b97e0af5c896c9c84c851404277b86f65fc7c5bb3616f28e7a62b2ecc94324d",
+    "skills/desktop-world/API.md": "e0728ad34bb4f1ada299b39a4e52d17614eaf5acef2e607d7b542e58f1740b5d",
+    "skills/desktop-world/PATTERNS.md": "51536d1a133d9ca7a708f1028e491750b986e52ec0b8b6ea24b6c8b706a76f83"
+  },
+  "source_identity_note": "Production and probe sources match the audited candidate. API.md was clarified after the run to distinguish outside_app from stale_scene; this did not change executable behavior.",
+  "cases": [
+    {
+      "mode": "cold_known_selector",
+      "passed": true,
+      "source": "await app.click({selector:{role:'button',text:'peer'}});",
+      "mcp_image_count": 0,
+      "frontmost_before_after_unchanged": true,
+      "before_counts": {"main": 0, "peer": 0, "popup": 0},
+      "after_counts": {"main": 0, "peer": 1, "popup": 0}
+    },
+    {
+      "mode": "selector",
+      "passed": true,
+      "source": "const v=await app.capture({full:true}); const b=v.image.bounds; const s=[220, 742]; const p={x:(s[0]-b[0])*v.image.width/b[2],y:(s[1]-b[1])*v.image.height/b[3]}; await app.click({...p,button:'right'}); await app.click({selector:{text:'Sequence action'}}); await app.click(p);",
+      "mcp_image_count": 1,
+      "frontmost_before_after_unchanged": true,
+      "before_effects": {"action": 0, "base": 0, "opened": 0, "right": 0},
+      "after_effects": {"action": 1, "base": 1, "opened": 1, "right": 1}
+    },
+    {
+      "mode": "pixel",
+      "passed": true,
+      "source": "const v=await app.capture({full:true}); const b=v.image.bounds; const s=[220, 742]; const p={x:(s[0]-b[0])*v.image.width/b[2],y:(s[1]-b[1])*v.image.height/b[3]}; await app.click({...p,button:'right'}); await app.click(p); await app.click(p);",
+      "mcp_image_count": 1,
+      "frontmost_before_after_unchanged": true,
+      "before_effects": {"action": 1, "base": 1, "opened": 1, "right": 1},
+      "after_effects": {"action": 2, "base": 2, "opened": 2, "right": 2}
+    },
+    {
+      "mode": "readonly_menu",
+      "passed": true,
+      "source": "await app.look({scope:'menu',text:'File',full:true});",
+      "mcp_image_count": null,
+      "frontmost_before_after_unchanged": true,
+      "menu_names": ["File"],
+      "effects_unchanged": true
+    }
+  ],
+  "cursor_audit": {
+    "exec_intervals": 5,
+    "moved_intervals": 0,
+    "violations": [],
+    "requested_sample_interval_ms": 2,
+    "max_sample_gap_ms": 79.755,
+    "input_routes": {"native_ax_press": 2, "addressed_click": 5},
+    "limits": [
+      "Actual sample gaps are recorded per call; shorter excursions can be missed.",
+      "Position changes alone do not identify the actor. Match them to delivery source and fixture effects."
+    ]
+  },
+  "cleanup": {
+    "pid": 46933,
+    "returncode": 0,
+    "forced": [],
+    "native_workers": [
+      46935,
+      46936
+    ],
+    "native_workers_reaped": true
+  },
+  "cold_context_cleanup": {
+    "pid": 47003,
+    "returncode": 0,
+    "forced": [],
+    "native_workers": [
+      47004,
+      47006
+    ],
+    "native_workers_reaped": true
+  },
+  "fixture_cleanup": {
+    "quit_requested": true,
+    "pids": [],
+    "forced": [],
+    "status": "not_running_after_quit"
+  },
+  "checks": {
+    "rust_library": 579,
+    "cli": 5,
+    "mcp_stdio": 3,
+    "native_inventory_assertions": 158,
+    "source_checks": "passed; one platform-specific skip",
+    "cleanup_controls": 3
+  },
+  "evidence": {
+    "final_probe": "/tmp/dtw-macos-sequence-audit-20261104-a04/probe/report.json",
+    "final_cursor": "/tmp/dtw-macos-sequence-audit-20261104-a04/report.json",
+    "retained_candidate": "/tmp/dtw-macos-usability-candidate-a03/bin/dtw",
+    "earlier_attempts": [
+      {
+        "path": "/private/tmp/dtw-macos-sequence-20261104-a01-sandbox-failure/report.json",
+        "result": "launch unconfirmed and sandbox ps cleanup denied"
+      },
+      {
+        "path": "/private/tmp/dtw-macos-sequence-20261104-a01/report.json",
+        "result": "selector stayed on old window; failed"
+      },
+      {
+        "path": "/private/tmp/dtw-macos-sequence-audit-20261104-a02/report.json",
+        "result": "selector passed; pixel preflight capture raced popup; cursor movement recorded without attribution"
+      },
+      {
+        "path": "/private/tmp/dtw-macos-sequence-audit-20261104-a03/report.json",
+        "result": "three cases passed; four exec intervals, zero detected cursor movement"
+      }
+    ]
+  }
+}

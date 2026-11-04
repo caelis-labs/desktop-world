@@ -4,6 +4,8 @@ use std::sync::{
     mpsc,
 };
 use wire::Target;
+#[path = "../backends/text_page.rs"]
+mod text_page;
 
 struct WorkerGate {
     entered: mpsc::Sender<()>,
@@ -45,9 +47,15 @@ impl TestGate {
     }
 }
 
+type ControlledSemanticPage = Result<(Vec<Element>, DiscoveryPage), Error>;
+
 struct Model {
     semantic_elements: Option<Vec<Element>>,
+    semantic_pages: std::collections::VecDeque<ControlledSemanticPage>,
+    window_semantics: HashMap<u64, Vec<Element>>,
     filtered_observation: bool,
+    menu_scope: bool,
+    text_error: Option<Error>,
     read_gate: Option<WorkerGate>,
     action_gate: Option<WorkerGate>,
     outcome: ActionOutcome,
@@ -60,6 +68,7 @@ struct Model {
     cleanup_after_capture: Option<Error>,
     capture_errors: std::collections::VecDeque<Error>,
     capture_rgba: [u8; 4],
+    capture_png: Option<Vec<u8>>,
     capture_error_after_action: Option<Error>,
     capture_error_at: Option<(usize, Error)>,
     cleanup_after_action: Option<Error>,
@@ -73,10 +82,13 @@ struct Shared {
     model: Mutex<Model>,
     windows: AtomicUsize,
     observes: AtomicUsize,
+    observe_queries: Mutex<Vec<ObserveQuery>>,
+    observe_scopes: Mutex<Vec<ObserveScopeKind>>,
     captures: AtomicUsize,
     actions: AtomicUsize,
     anchored_scrolls: Mutex<Vec<(WindowTarget, ScrollRequest)>>,
     input_targets: Mutex<Vec<WindowTarget>>,
+    press_targets: Mutex<Vec<WindowTarget>>,
     shutdowns: AtomicUsize,
     finishes: AtomicUsize,
 }
@@ -87,7 +99,11 @@ impl MockBackend {
         Self(Arc::new(Shared {
             model: Mutex::new(Model {
                 semantic_elements: None,
+                semantic_pages: std::collections::VecDeque::new(),
+                window_semantics: HashMap::new(),
                 filtered_observation: false,
+                menu_scope: false,
+                text_error: None,
                 read_gate: None,
                 action_gate: None,
                 outcome: ActionOutcome {
@@ -105,6 +121,7 @@ impl MockBackend {
                 cleanup_after_capture: None,
                 capture_errors: std::collections::VecDeque::new(),
                 capture_rgba: [255; 4],
+                capture_png: None,
                 capture_error_after_action: None,
                 capture_error_at: None,
                 cleanup_after_action: None,
@@ -116,10 +133,13 @@ impl MockBackend {
             }),
             windows: AtomicUsize::new(0),
             observes: AtomicUsize::new(0),
+            observe_queries: Mutex::new(Vec::new()),
+            observe_scopes: Mutex::new(Vec::new()),
             captures: AtomicUsize::new(0),
             actions: AtomicUsize::new(0),
             anchored_scrolls: Mutex::new(Vec::new()),
             input_targets: Mutex::new(Vec::new()),
+            press_targets: Mutex::new(Vec::new()),
             shutdowns: AtomicUsize::new(0),
             finishes: AtomicUsize::new(0),
         }))
@@ -190,32 +210,41 @@ impl MockBackend {
             elements: if pixels {
                 vec![]
             } else {
-                self.0
-                    .model
-                    .lock()
-                    .unwrap()
-                    .semantic_elements
-                    .clone()
-                    .unwrap_or_else(|| {
-                        vec![Element {
-                            id: ElementId(9007199254740993),
-                            rebind_identity: Some("retained:9007199254740993".into()),
-                            identity: Some("mock:9007199254740993".into()),
-                            label: "Increment".into(),
-                            can_press: true,
-                            role: "button".into(),
-                            name: Some("Increment".into()),
-                            value: None,
-                            enabled: Some(true),
-                            actions: vec!["press".into()],
-                        }]
-                    })
+                {
+                    let model = self.0.model.lock().unwrap();
+                    model
+                        .window_semantics
+                        .get(&target.native_id)
+                        .cloned()
+                        .or_else(|| model.semantic_elements.clone())
+                }
+                .unwrap_or_else(|| {
+                    vec![Element {
+                        id: ElementId(9007199254740993),
+                        rebind_identity: Some("retained:9007199254740993".into()),
+                        identity: Some("mock:9007199254740993".into()),
+                        label: "Increment".into(),
+                        can_press: true,
+                        role: "button".into(),
+                        name: Some("Increment".into()),
+                        value: None,
+                        enabled: Some(true),
+                        actions: vec!["press".into()],
+                    }]
+                })
             },
             // Opaque controlled bytes exercise retention/encoding, not PNG or GUI acceptance.
             image: pixels.then(|| ImageFrame {
                 width: 20,
                 height: 10,
-                png: vec![7; 4096],
+                png: self
+                    .0
+                    .model
+                    .lock()
+                    .unwrap()
+                    .capture_png
+                    .clone()
+                    .unwrap_or_else(|| vec![7; 4096]),
             }),
         }
     }
@@ -300,6 +329,28 @@ impl Backend for MockBackend {
         self.0.observes.fetch_add(1, Ordering::SeqCst);
         Ok(self.read(target, false))
     }
+    fn supports_observe_scope(&self, scope: ObserveScopeKind) -> bool {
+        scope == ObserveScopeKind::Window
+            || (scope == ObserveScopeKind::Menu && self.0.model.lock().unwrap().menu_scope)
+    }
+    fn observe_scoped(
+        &self,
+        target: &WindowTarget,
+        query: &ObserveQuery,
+        scope: ObserveScope,
+        binding: Option<&()>,
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservation<()>, Error> {
+        if scope == ObserveScope::Window {
+            return self.observe_page(target, query, call);
+        }
+        if scope != ObserveScope::Menu || !self.0.model.lock().unwrap().menu_scope {
+            return Err(Error::UnsupportedCapability);
+        }
+        assert!(binding.is_none());
+        self.0.observe_scopes.lock().unwrap().push(scope.kind());
+        self.observe_page(target, query, call)
+    }
     fn observe_page(
         &self,
         target: &WindowTarget,
@@ -310,6 +361,20 @@ impl Backend for MockBackend {
             && (query.role.is_some() || query.text.is_some())
         {
             return Err(Error::UnsupportedCapability);
+        }
+        self.0.observe_queries.lock().unwrap().push(query.clone());
+        let controlled = self.0.model.lock().unwrap().semantic_pages.pop_front();
+        if let Some(page) = controlled {
+            call.remaining()?;
+            self.0.observes.fetch_add(1, Ordering::SeqCst);
+            let (elements, discovery) = page?;
+            return Ok(BackendObservation {
+                target: target.clone(),
+                elements,
+                image: None,
+                binding: (),
+                discovery: Some(discovery),
+            });
         }
         let mut observed = self.observe(target, call)?;
         observed.elements.retain(|element| {
@@ -331,6 +396,56 @@ impl Backend for MockBackend {
             visited: observed.elements.len() as u32,
         });
         Ok(observed)
+    }
+    fn continue_observation(
+        &self,
+        target: &WindowTarget,
+        _: &(),
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservationPage, Error> {
+        call.remaining()?;
+        self.0.observes.fetch_add(1, Ordering::SeqCst);
+        let (elements, discovery) = self
+            .0
+            .model
+            .lock()
+            .unwrap()
+            .semantic_pages
+            .pop_front()
+            .ok_or(Error::UnsupportedCapability)??;
+        Ok(BackendObservationPage {
+            target: target.clone(),
+            elements,
+            discovery,
+        })
+    }
+    fn read_text(
+        &self,
+        target: &WindowTarget,
+        _: &(),
+        request: TextRequest,
+        call: &CallContext<'_>,
+    ) -> Result<BackendTextPage, Error> {
+        call.remaining()?;
+        let mut model = self.0.model.lock().unwrap();
+        if let Some(error) = model.text_error.take() {
+            return Err(error);
+        }
+        let text = model
+            .window_semantics
+            .get(&target.native_id)
+            .or(model.semantic_elements.as_ref())
+            .and_then(|elements| {
+                elements
+                    .iter()
+                    .find(|element| element.id == request.element)
+            })
+            .and_then(|element| element.value.as_deref())
+            .ok_or(Error::UnsupportedCapability)?;
+        Ok(BackendTextPage {
+            target: target.clone(),
+            page: text_page::page(text, request.offset, request.limit)?,
+        })
     }
     fn capture(
         &self,
@@ -362,11 +477,12 @@ impl Backend for MockBackend {
     }
     fn press(
         &self,
-        _: &WindowTarget,
+        target: &WindowTarget,
         _: &(),
         _: ElementId,
         call: &CallContext<'_>,
     ) -> ActionOutcome {
+        self.0.press_targets.lock().unwrap().push(target.clone());
         self.act(call)
     }
     fn input(

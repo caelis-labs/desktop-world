@@ -34,6 +34,59 @@ pub(super) fn pointer_reason(operation: &str, framework: &str) -> Option<Physica
         .then_some(PhysicalReason::NativeHoverTracking)
 }
 
+/// Only established capability limits can start a script's foreground borrow.
+/// Pointer transport remains independent: later supported input stays addressed.
+pub(super) fn allows_activation(reason: &str) -> bool {
+    matches!(
+        reason,
+        "explicit_focus"
+            | "native_keyboard_semantics"
+            | "native_hover_tracking"
+            | "addressed_event_api_unavailable"
+            | "associated_process_keyboard"
+            | "native_modal_keyboard"
+    )
+}
+
+pub(super) fn foreground_plan<'a>(
+    reply: &'a serde_json::Value,
+    operation: &str,
+) -> Option<&'a str> {
+    let plan = reply.get("foreground_plan")?;
+    if reply["dispatch"] != "not_dispatched"
+        || reply["evidence"] != "unverified"
+        || reply.get("error").is_some()
+        || reply.get("cleanup_error").is_some()
+        || reply.get("focus_preparation").is_some()
+        || reply.get("interruption").is_some()
+        || plan["visual"].as_bool()? != visual_focus(operation)
+    {
+        return None;
+    }
+    let reason = plan["reason"].as_str()?;
+    let keyboard = matches!(operation, "keypress" | "type_text");
+    let valid = match reason {
+        "explicit_focus" => operation == "focus",
+        "native_hover_tracking" => operation == "move",
+        "addressed_event_api_unavailable" => visual_focus(operation) || keyboard,
+        "native_modal_keyboard" | "associated_process_keyboard" => keyboard,
+        "native_keyboard_semantics" => {
+            keyboard
+                && matches!(
+                    plan["capability_detail"].as_str(),
+                    Some(
+                        "chromium_command_a"
+                            | "chromium_supplementary_unicode"
+                            | "appkit_command_w"
+                            | "appkit_multiline_text"
+                    )
+                )
+        }
+        _ => false,
+    };
+    valid.then_some(reason)
+}
+
 /// An explicit unsupported capability must also be cleanly not dispatched.
 /// A backend flag/message alone cannot authorize a second delivery path.
 pub(super) fn fallback_reason(result: &serde_json::Value) -> Option<PhysicalReason> {
@@ -46,7 +99,19 @@ pub(super) fn fallback_reason(result: &serde_json::Value) -> Option<PhysicalReas
     }
     match result["capability_evidence"].as_str()? {
         "addressed_event_api_unavailable" => Some(PhysicalReason::MissingAddressedApi),
-        "native_keyboard_semantics" => Some(PhysicalReason::KeyboardSemantics),
+        "native_keyboard_semantics"
+            if matches!(
+                result["capability_detail"].as_str(),
+                Some(
+                    "chromium_command_a"
+                        | "chromium_supplementary_unicode"
+                        | "appkit_command_w"
+                        | "appkit_multiline_text"
+                )
+            ) =>
+        {
+            Some(PhysicalReason::KeyboardSemantics)
+        }
         _ => None,
     }
 }
@@ -83,6 +148,98 @@ mod tests {
             Some(PhysicalReason::NativeHoverTracking)
         );
     }
+    #[test]
+    fn only_established_capability_limits_authorize_activation() {
+        for reason in [
+            "unknown",
+            "ax_unavailable",
+            "modal_state_unproven",
+            "keyboard_focus_requires_activation",
+            "associated_surface_requires_foreground",
+        ] {
+            assert!(!allows_activation(reason), "{reason}");
+        }
+        for reason in [
+            "explicit_focus",
+            "native_keyboard_semantics",
+            "native_hover_tracking",
+            "addressed_event_api_unavailable",
+            "associated_process_keyboard",
+            "native_modal_keyboard",
+        ] {
+            assert!(allows_activation(reason), "{reason}");
+        }
+    }
+
+    #[test]
+    fn foreground_plans_require_clean_exact_operation_capability() {
+        let base = json!({"dispatch":"not_dispatched","evidence":"unverified",
+            "foreground_plan":{"reason":"native_hover_tracking","visual":true}});
+        assert_eq!(
+            foreground_plan(&base, "move"),
+            Some("native_hover_tracking")
+        );
+        assert_eq!(foreground_plan(&base, "click"), None);
+        for key in [
+            "error",
+            "cleanup_error",
+            "focus_preparation",
+            "interruption",
+        ] {
+            let mut changed = base.clone();
+            changed[key] = json!({});
+            assert_eq!(foreground_plan(&changed, "move"), None, "{key}");
+        }
+        for dispatch in ["unknown", "dispatched"] {
+            let mut changed = base.clone();
+            changed["dispatch"] = json!(dispatch);
+            assert_eq!(foreground_plan(&changed, "move"), None);
+        }
+        let mut keyboard = json!({"dispatch":"not_dispatched","evidence":"unverified",
+            "foreground_plan":{"reason":"native_keyboard_semantics","visual":false}});
+        assert_eq!(foreground_plan(&keyboard, "keypress"), None);
+        keyboard["foreground_plan"]["capability_detail"] = json!("chromium_command_a");
+        assert_eq!(
+            foreground_plan(&keyboard, "keypress"),
+            Some("native_keyboard_semantics")
+        );
+        assert_eq!(foreground_plan(&keyboard, "move"), None);
+        keyboard["foreground_plan"]["reason"] = json!("addressed_event_api_unavailable");
+        assert_eq!(
+            foreground_plan(&keyboard, "keypress"),
+            Some("addressed_event_api_unavailable")
+        );
+        assert_eq!(foreground_plan(&keyboard, "press"), None);
+        keyboard["foreground_plan"]["reason"] = json!("modal_state_unproven");
+        assert_eq!(foreground_plan(&keyboard, "keypress"), None);
+    }
+
+    #[test]
+    fn keyboard_fallback_requires_a_known_bounded_capability_detail() {
+        let mut result = json!({"dispatch":"not_dispatched", "fallback_allowed":true,
+            "error":{"code":"background_unavailable"}, "capability_evidence":"native_keyboard_semantics"});
+        for detail in [
+            serde_json::Value::Null,
+            json!("generic_command"),
+            json!(true),
+        ] {
+            result["capability_detail"] = detail;
+            assert_eq!(fallback_reason(&result), None);
+        }
+        for detail in [
+            "chromium_command_a",
+            "chromium_supplementary_unicode",
+            "appkit_command_w",
+            "appkit_multiline_text",
+        ] {
+            result["capability_detail"] = json!(detail);
+            assert_eq!(
+                fallback_reason(&result),
+                Some(PhysicalReason::KeyboardSemantics)
+            );
+        }
+    }
+
     #[test]
     fn errors_or_uncertain_preparation_never_authorize_fallback() {
         for dispatch in ["dispatched", "unknown", "not_dispatched"] {

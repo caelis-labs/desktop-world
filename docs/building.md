@@ -70,6 +70,35 @@ local iteration, but are not the recommended full-contract test lane.
 
 ## Current external-client GUI probe
 
+The unified [Computer Use Workbench](../tests/fixtures/computer-use-app/README.md)
+combines an AppKit shell, dense native AX, a sparse drawn message feed, embedded
+WebKit, portable HTML/Canvas pages and the existing browser-workbench fixtures.
+Its [target manifest](../tests/fixtures/computer-use-app/scenarios.json) defines 42
+baseline scenarios. The current macOS entry runs 16 core business targets through
+`apps`/`exec`, plus virtual-cursor rendering, strict physical-cursor auditing and a background-focus witness:
+
+```sh
+python3 tests/acceptance/computer_use_acceptance.py \
+  --dtw /absolute/path/to/frozen/dtw --output /tmp/dtw-computer-use-core-new-run \
+  --case core-new-run --source-revision <candidate-source>
+```
+
+Use a new private output directory. The runner retains original failures, exact
+business counters, full-text fingerprints, screenshots and cleanup. Sparse-image
+review remains pending until explicit review of the hash-bound original PNG.
+`core_automation_passed`, `core_passed`, `acceptance_passed` and
+`target_baseline_passed` describe different completion levels. Standard acceptance
+requires the bounded physical-borrow policy, real helper-window position/pixels and
+a continuous foreground-witness check; raw business-runner success cannot substitute
+for these observations. Unrun platform/model/system targets never pass by omission.
+See the [first baseline and repair record](computer-use-benchmark-2026-11-04.md)
+and the [remaining-target acceptance record](computer-use-extended-acceptance-2026-11-04.md).
+Use `--scenario C04` with a fresh output directory to verify one target independently;
+`targeted_acceptance_passed` does not establish full-baseline success. B05 publishes
+an exact-PNG answer handoff; inspect that capture before supplying an answer as
+described in the fixture README. Repeated attempts preserve all earlier failures.
+The fixture README also documents a manual app and portable `--web-only` entry.
+
 On a macOS test desktop, the current app-scene probe builds a uniquely identified
 owned application and exercises the two advertised tools through real stdio:
 
@@ -87,6 +116,23 @@ The separate `app_scene_readonly_probe.py` reads already-running Finder, Chrome
 and WPS, redacting UI payloads; absence/unsupported coverage stays explicit.
 These are native/script evidence, not real model/Harness A/B tests or proof that
 all app families are supported. Output directories must be new.
+
+The macOS sequence probe checks a cold MCP context with no initial look, then
+capture → right-click → popup action → base-window action in one script. It tests
+both semantic and pixel popup actions, plus read-only app-menu observation:
+
+```sh
+python3 tests/acceptance/macos_scene_sequence_probe.py \
+  --dtw /absolute/path/to/frozen/dtw --output /tmp/dtw-macos-sequence-new-run
+```
+
+Independent fixture counters, unchanged base geometry and cleanup results decide
+the outcome. A forced fixture/MCP cleanup fails the run. Wrap this probe with the
+cursor audit below to measure pointer movement across full calls; its own
+before/after cursor and foreground samples cannot exclude transient changes.
+The [2026-11-04 acceptance](macos-usability-acceptance-2026-11-04.md) records the
+fixed candidate, original failures and scope. This owned popup does not establish
+real Telegram, Dock or windowless menu-extra coverage.
 
 The AX compatibility probe creates providers whose count/range methods fail,
 whose children are unreadable, or whose AX window inventory is unavailable:
@@ -148,8 +194,9 @@ see its [acceptance guide](../tests/acceptance/windows/README.md).
 
 The old `standard_agent_probe.py`, `browser_workbench_probe.py`,
 `real_app_tasks.py` and related atomic-protocol runners retain historical evidence
-and reusable fixtures/transports. They are not current acceptance commands;
-their Session/result/window-ref workflows do not establish the public facade.
+and reusable fixtures/transports. Their default Session/result/window-ref workflows
+are not current acceptance commands. `current_real_app_tasks.py` is the explicit
+current entry and reuses only their task/oracle/Agent plumbing through small hooks.
 Internal ownership, cancellation and resource tests stay in the source/Rust suites.
 
 ## Distribution
@@ -181,6 +228,25 @@ these implementation/regression steps. Caelis consumer/model integration and
 final published-asset installation remain separate evidence boundaries.
 
 ## Real-task acceptance principles
+
+The current opt-in macOS runner uses only `apps` and `exec({app,source})` for
+Agent GUI work. It defaults to DSH and supports `chrome`, `wps` and `obsidian`:
+
+```sh
+python3 tests/acceptance/current_real_app_tasks.py \
+  --dtw /absolute/path/to/candidate/bin/dtw \
+  --output /new/private/current-task-evidence \
+  --task chrome --acp-adapter /absolute/path/to/dsh-wrapper
+```
+
+Use `--installed-package /absolute/package/root` for exact package/Skill evidence.
+Independent business readback, transcript cleanliness and GUI review are distinct:
+`business_passed` can be true after a recovered failure while `clean_run` and the
+automatic check remain false. Every completed run still requires GUI review;
+filesystem results alone do not pass it. WPS documents stay open for review/manual
+close, avoiding the historical window-ref cleanup. Original failures and the
+independent duplicate-save journal are retained. Compact responses do not expose
+native call or read-refresh counts; unavailable metrics remain explicitly unknown.
 
 Use disposable profiles, documents and vaults with unique markers. A supervisor
 may prepare and independently inspect data; the acting Agent completes the task

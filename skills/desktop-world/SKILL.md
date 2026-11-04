@@ -10,10 +10,14 @@ installed or running app and its authorization identity. Run an async JavaScript
 body with `exec({app, source})`; `app` is always required and fixes the entire
 script's authorization scope.
 
-Start with `await app.look()`. DTW starts a stopped app where supported (without requesting foreground on macOS) and
-returns a complete snapshot inside JavaScript. Tool messages show a compact baseline,
-then changes. Use semantic target
-IDs from the latest observation or a unique selector to click known controls.
+Use `await app.look()` when the task needs inspection. Known selectors, keyboard
+commands, text insertion and default scrolling can start a script directly; DTW
+prepares the app and current receiver internally. A stopped app starts where
+supported (without requesting foreground on macOS). App context survives between
+`exec` calls, so do not prepend a redundant look to each script. Explicit looks
+return complete snapshots inside JavaScript; tool messages show a compact baseline,
+then changes. Use semantic target IDs from a returned observation or a unique
+selector to click known controls.
 Use `await app.capture()` when the UI needs visual understanding or semantics
 are unavailable, then click coordinates in the returned image. After input DTW
 returns a fresh observation automatically. Use `move({x,y})` for hover and
@@ -25,11 +29,16 @@ target or its relevant state changes. `click('w1.e12')` selects an observed ID;
 `keypress('META+L')` sends a chord. Await every app operation.
 
 ```javascript
-await app.look();
 await app.click({selector:{role:'button',text:'Continue'}});
 ```
 
-The public methods are `look`, `capture`, `click`, `move`, `drag`, `typeText`,
+For crowded pages, use `look({role:'static_text',text:'relevant phrase'})` to
+query native semantics beyond the default preview. Truncated fields are explicit.
+Read textual content on demand with `return await app.readText('w1.e12')`;
+continue with `{target:'w1.e12',offset:page.next_offset}` without a new look.
+Text offsets are UTF-16; a fresh look starts a new content observation.
+
+The public methods are `look`, `capture`, `readText`, `click`, `move`, `drag`, `typeText`,
 `keypress`, `scroll` and `quit`. Read [API.md](API.md) for exact arguments and
 output semantics;
 [PATTERNS.md](PATTERNS.md) covers visual fallback, dialogs and recovery.

@@ -77,8 +77,12 @@ jobs:
     name: macOS inventory controls
     needs: plan
     if: needs.plan.outputs.macos == 'true'
-    runs-on: macos-26
-    timeout-minutes: 15
+    # The 15/26 arm64 pools failed admission; the standard GA Xcode image has
+    # passed a full native signed/notarized candidate preflight. Match shipping
+    # architecture/toolchain here and retain every native gate.
+    runs-on: xcode-27
+    # Include both cold release compilation and the two-version upgrade build.
+    timeout-minutes: 30
     env:
       MACOSX_DEPLOYMENT_TARGET: '14.2'
       CARGO_TARGET_DIR: ${{ github.workspace }}/target-ci
@@ -94,14 +98,16 @@ jobs:
         with:
           cache-on-failure: true
           workspaces: cmd/dtw -> ../../target-ci
-          key: macos-runtime-release
+          key: macos-arm64-runtime-release
+      # Compile pure Swift/C-ABI controls first so bridge failures fail before
+      # the slower cold release build. These checks never operate a desktop.
+      - run: python3 tests/ci/run_native_inventory_tests.py
+      - run: python3 tests/ci/run_native_input_tests.py
       # Match the shipping QuickJS build and stack behavior, not an unoptimized VM.
       - name: Script, MCP, native adapters and CLI contracts
         run: cargo test --release --locked --manifest-path cmd/dtw/Cargo.toml --lib --bins --tests
       - name: Managed packages and live MCP leases (no GUI)
         run: python3 tests/ci/check_package_upgrade.py --dtw "$CARGO_TARGET_DIR/release/dtw" --output "$RUNNER_TEMP/dtw-package-store"
-      - run: python3 tests/ci/run_native_inventory_tests.py
-      - run: python3 tests/ci/run_native_input_tests.py
       - name: Native and scene worker shutdown (no desktop access)
         run: python3 tests/ci/run_native_worker_tests.py "$CARGO_TARGET_DIR/release/dtw"
 

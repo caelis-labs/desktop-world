@@ -11,7 +11,7 @@ from pathlib import Path
 import time
 
 
-METHODS = ['look', 'capture', 'click', 'move', 'drag', 'typeText', 'keypress', 'scroll', 'quit']
+METHODS = ['look', 'capture', 'readText', 'click', 'move', 'drag', 'typeText', 'keypress', 'scroll', 'quit']
 
 
 def require(condition, detail):
@@ -36,7 +36,7 @@ def artifact_identity(binary, package=None):
 
 
 class AppClient:
-    def __init__(self, binary, output):
+    def __init__(self, binary, output, *, mcp_args=()):
         self.output = Path(output)
         self.metrics = []
         self.output.mkdir(parents=True, exist_ok=True)
@@ -44,11 +44,11 @@ class AppClient:
         try:
             if os.name == 'nt':
                 from windows.transport import Mcp
-                self.transport = Mcp(binary, self.output / 'mcp')
+                self.transport = Mcp(binary, self.output / 'mcp', options=mcp_args)
             else:
                 from standard_agent_probe import Mcp
                 self.output.mkdir(parents=True, exist_ok=True)
-                self.transport = Mcp(binary, self.output)
+                self.transport = Mcp(binary, self.output, mcp_args=mcp_args)
                 self.transport.rpc('initialize', {'protocolVersion': '2025-06-18', 'capabilities': {},
                     'clientInfo': {'name': 'dtw-app-protocol-acceptance', 'version': '1'}})
                 self.transport.notify('notifications/initialized')
@@ -64,6 +64,7 @@ class AppClient:
 
     def tool(self, name, arguments):
         started = time.monotonic()
+        started_unix_ms = time.time() * 1000
         # Both transports retain the original wire frames. Decode the same
         # envelope here rather than using legacy execute()/receipt() helpers.
         response = self.transport.rpc('tools/call', {'name': name, 'arguments': arguments})
@@ -71,10 +72,13 @@ class AppClient:
         texts = [c['text'] for c in response.get('content', []) if c.get('type') == 'text']
         require(isinstance(data, dict) and len(texts) == 1 and json.loads(texts[0]) == data, response)
         self.metrics.append({'tool': name, 'seconds': time.monotonic() - started,
+            'started_unix_ms': started_unix_ms, 'ended_unix_ms': time.time() * 1000,
             'source_bytes': len(arguments.get('source', '').encode()),
             'json_bytes': len(json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode()),
             'image_count': sum(c.get('type') == 'image' for c in response.get('content', [])),
-            'is_error': response.get('isError') is True})
+            'is_error': response.get('isError') is True,
+            'execution_id': data.get('execution_id'), 'error_code': data.get('error', {}).get('code'),
+            'effects': data.get('effects', {})})
         return data, response
 
     def execute(self, app, source, *, allow_error=False):

@@ -16,7 +16,7 @@ performed.
 | --- | --- |
 | Discovery | Only `apps` and `exec` are advertised. `apps` searches/paginates installed and running apps on macOS, including stopped bundles; it reports bounded search coverage. |
 | Authorization | Every `exec` requires an app identity. There is no app-less lane or app switch inside a script. Duplicate installed bundle IDs use explicit bundle paths; running status matches that path. |
-| Scripts | Seven methods at this snapshot: `look`, `capture`, `click`, `typeText`, `keypress`, `scroll`, `quit`. `move`/`drag` were added later, so the current Skill API lists nine. Neither the snapshot nor the current surface has a public `api`, `result`, Session, native-ref or window-binding method. |
+| Scripts | Seven methods at this snapshot: `look`, `capture`, `click`, `typeText`, `keypress`, `scroll`, `quit`. `move`/`drag` were added later; subsequent methods are recorded in the current Skill API. Neither the snapshot nor the current surface has a public `api`, `result`, Session, native-ref or window-binding method. |
 | Observation | A first full baseline followed by compact changes. Changes compare with the previous returned tool view, so intermediate script reads cannot consume unseen changes. A new process resets the baseline. |
 | Fallback | Unavailable semantics trigger a stacked app image. Proven no-dispatch semantic activation failures enable image fallback. Coordinates use the same z-order/alpha mapping as the image and recheck current geometry before input. |
 | Lifecycle | macOS look starts a stopped app. Input focus/readiness is internal. Normal quit exposes pending save UI; it does not force termination or automatically restart. A running app without windows can receive a verified foreground shortcut. |

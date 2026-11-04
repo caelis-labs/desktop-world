@@ -1,0 +1,1070 @@
+{
+  "schema_version": 1,
+  "baseline": "computer-use-v1.2",
+  "target_count": 42,
+  "complete_baseline_passed": false,
+  "installed_package_validated": false,
+  "latest_candidate": {
+    "source_base": "f76cdf9",
+    "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+    "source_files_sha256": {
+      "cmd/dtw/src/app_protocol/scene.rs": "d71fbd941be8be7d08f317e641b4237f600d70ac5639074757989de7f97fde6f",
+      "cmd/dtw/src/app_protocol/selection.rs": "e82fac6cb42f984344642a54993854b7e23725e1bdbc6a1c4bf925413cf9ea47",
+      "cmd/dtw/src/backends/macos/Native.swift": "770d494f63d70e1017870b2d5a3cefd2fd2939aa0722c47c3e903a0b05a1a9c4",
+      "cmd/dtw/src/backends/macos/cua_input/mod.rs": "702b7d08a79afe726dfdc13877535fff67acf0b97c4e5c63784bb92a6335cbf1",
+      "cmd/dtw/src/backends/macos/input_route.rs": "b2e6f170fda83cb7deebe5c7e76c64ab32499804de92902cf364077ec2b17a23",
+      "cmd/dtw/src/backends/macos/worker.rs": "c24a595a090b5aa222cf37584b041ff7e5cbf8ca7e30d810051950c5a97896a2",
+      "cmd/dtw/src/backends/macos/mod.rs": "1112824c1862652221f834d0211785b8b3bdd889b5e52410d6839b5cc1a626cf",
+      "cmd/dtw/src/backends/macos/pointer_presentation.rs": "0560af2fff58ed0b71332ee674ccdc4ff2dcc18987b05bf5c083e7f2f33b38e3"
+    }
+  },
+  "historical_evidence": {
+    "schema": "dtw-computer-use-evidence-summary-v1",
+    "scope": "actual report.json files a01-a11 and current scenarios.json; no GUI run",
+    "scenario_source": {
+      "name": "scenarios.json",
+      "sha256": "d69b667a8482a4fa09728df84f9d3584928b8f8b3bb049c0e5741ca28dd7e226",
+      "schema_version": 1,
+      "baseline": "computer-use-v1.2",
+      "scenario_count": 42,
+      "scenario_ids": [
+        "N01",
+        "N02",
+        "N03",
+        "N04",
+        "N05",
+        "N06",
+        "N07",
+        "N08",
+        "N09",
+        "N10",
+        "N11",
+        "N12",
+        "N13",
+        "N14",
+        "N15",
+        "C01",
+        "C02",
+        "C03",
+        "C04",
+        "C05",
+        "W01",
+        "W02",
+        "W03",
+        "W04",
+        "W05",
+        "W06",
+        "B01",
+        "B02",
+        "B03",
+        "B04",
+        "B05",
+        "R01",
+        "R02",
+        "R03",
+        "R04",
+        "S01",
+        "S02",
+        "S03",
+        "S04",
+        "P01",
+        "P02",
+        "P03"
+      ]
+    },
+    "attempt_count": 11,
+    "attempts": [
+      {
+        "id": "a01",
+        "evidence_status": "present",
+        "source_reports": [
+          {
+            "scope": "probe",
+            "sha256": "f599a45b0ff46259dd2ba1c37342a19531cf1f2b7707d995e1a8d93ccca15484"
+          },
+          {
+            "scope": ".",
+            "sha256": "71e755cde75d2ce3fcb5c74c22b62f8777c093b59c35bc9194fc40dcfd203894"
+          }
+        ],
+        "artifact_hashes": {
+          "binary_sha256": [
+            "ed11b0a20b5ad4ca8d10955be401ba237e0761cdc2647a9b3765a787f8a333db"
+          ],
+          "target_manifest_sha256": [
+            "c78544c9364716b264aa43816e7fc1a2d8b91e7c9ac9c168fba5a2cf887296ef"
+          ]
+        },
+        "failure_attribution": "unknown_not_attributed_to_user",
+        "business": {
+          "source_scope": "probe",
+          "case_count": 39,
+          "counts": {
+            "passed": 4,
+            "failed": 12,
+            "unsupported": 0,
+            "blocked": 0,
+            "not_run": 23
+          },
+          "failed_case_ids": [
+            "N02",
+            "N03",
+            "N07",
+            "N08",
+            "N09",
+            "N10",
+            "C01",
+            "C02",
+            "C03",
+            "W01",
+            "W02",
+            "W03"
+          ],
+          "failed_case_metrics": {
+            "N02": {},
+            "N03": {},
+            "N07": {},
+            "N08": {},
+            "N09": {},
+            "N10": {},
+            "C01": {},
+            "C02": {},
+            "C03": {},
+            "W01": {},
+            "W02": {},
+            "W03": {}
+          }
+        },
+        "physical_focus": {
+          "cursor_probe": {
+            "call_count": 22,
+            "tool_error_count": 8,
+            "dispatch_totals": {
+              "dispatched": 8,
+              "not_dispatched": 6
+            },
+            "failure_counts": {
+              "invalid_arguments": 1,
+              "selector_unproven": 4,
+              "semantic_window_unavailable": 2
+            },
+            "cursor": {
+              "measured_calls": 22,
+              "nonzero_displacement_calls": 0,
+              "max_displacement_points": 0.0,
+              "total_transitions": 0,
+              "max_sample_gap_ms": 158.404,
+              "max_sample_gap_ms_policy": null
+            },
+            "probe_returncode": 1
+          },
+          "source_scope": "."
+        },
+        "cleanup": {
+          "status": "passed"
+        }
+      },
+      {
+        "id": "a02",
+        "evidence_status": "present",
+        "source_reports": [
+          {
+            "scope": "probe",
+            "sha256": "0268d2a4667b15dfbc14aee478063460604b7a8e4ce464257a153a24fece84b2"
+          },
+          {
+            "scope": ".",
+            "sha256": "e227bd001b877e73fccfdea14eaee31c55c1ded2af7e3b98fd81373819a5bc35"
+          }
+        ],
+        "artifact_hashes": {
+          "binary_sha256": [
+            "403827003431baf85013ee22590dbcf90ed7328ff544903800c53c2b7678f1d7"
+          ],
+          "runner_sha256": [
+            "f495374395be7021cd5e6c3f3908fc6902255e7e09008f1aa54fa715650ba1e9"
+          ],
+          "target_manifest_sha256": [
+            "c78544c9364716b264aa43816e7fc1a2d8b91e7c9ac9c168fba5a2cf887296ef"
+          ]
+        },
+        "failure_attribution": "unknown_not_attributed_to_user",
+        "business": {
+          "source_scope": "probe",
+          "case_count": 39,
+          "counts": {
+            "passed": 9,
+            "failed": 3,
+            "unsupported": 0,
+            "blocked": 4,
+            "pending_review": 0,
+            "not_run": 23
+          },
+          "failed_case_ids": [
+            "N10",
+            "C01",
+            "W01"
+          ],
+          "blocked_case_ids": [
+            "C02",
+            "C03",
+            "W02",
+            "W03"
+          ],
+          "failed_case_metrics": {
+            "N10": {},
+            "C01": {},
+            "W01": {}
+          }
+        },
+        "physical_focus": {
+          "cursor_probe": {
+            "call_count": 19,
+            "tool_error_count": 3,
+            "dispatch_totals": {
+              "dispatched": 12,
+              "not_dispatched": 2,
+              "unknown": 1
+            },
+            "failure_counts": {
+              "ax_action_failed": 1,
+              "selector_unproven": 2
+            },
+            "cursor": {
+              "measured_calls": 19,
+              "nonzero_displacement_calls": 0,
+              "max_displacement_points": 0.0,
+              "total_transitions": 0,
+              "max_sample_gap_ms": 72.246,
+              "max_sample_gap_ms_policy": null
+            },
+            "probe_returncode": 1
+          },
+          "source_scope": "."
+        },
+        "cleanup": {
+          "status": "passed"
+        }
+      },
+      {
+        "id": "a03",
+        "evidence_status": "present",
+        "source_reports": [
+          {
+            "scope": "probe",
+            "sha256": "8735651792e14648f03feceeef8dafc551a43994d0e879caba849bc5a14252d4"
+          },
+          {
+            "scope": ".",
+            "sha256": "9e3d7ff3c93bf459f6eb48afd8dc0fbe0c31fd963c7485819fd27a8c9a38aeb3"
+          }
+        ],
+        "artifact_hashes": {
+          "binary_sha256": [
+            "403827003431baf85013ee22590dbcf90ed7328ff544903800c53c2b7678f1d7"
+          ],
+          "capture_sha256": [
+            "73c530dbbd994939f7191da1b6f7eb64debea8bdc7c1eea1fc11ccd78aaa8f59"
+          ],
+          "runner_sha256": [
+            "d21c025f38ca4f8c8d2a988810953a990c03bf32b8fbd335b5cdf2d452f02f11"
+          ],
+          "target_manifest_sha256": [
+            "c78544c9364716b264aa43816e7fc1a2d8b91e7c9ac9c168fba5a2cf887296ef"
+          ]
+        },
+        "failure_attribution": "unknown_not_attributed_to_user",
+        "business": {
+          "source_scope": "probe",
+          "case_count": 39,
+          "counts": {
+            "passed": 15,
+            "failed": 1,
+            "unsupported": 0,
+            "blocked": 0,
+            "pending_review": 0,
+            "not_run": 23
+          },
+          "failed_case_ids": [
+            "W02"
+          ],
+          "failed_case_metrics": {
+            "W02": {}
+          }
+        },
+        "physical_focus": {
+          "cursor_probe": {
+            "call_count": 39,
+            "tool_error_count": 1,
+            "dispatch_totals": {
+              "dispatched": 29,
+              "unknown": 1
+            },
+            "failure_counts": {
+              "ax_action_failed": 1
+            },
+            "cursor": {
+              "measured_calls": 39,
+              "nonzero_displacement_calls": 0,
+              "max_displacement_points": 0.0,
+              "total_transitions": 0,
+              "max_sample_gap_ms": 62.042,
+              "max_sample_gap_ms_policy": null
+            },
+            "probe_returncode": 1
+          },
+          "source_scope": "."
+        },
+        "cleanup": {
+          "status": "passed"
+        }
+      },
+      {
+        "id": "a04",
+        "evidence_status": "present",
+        "source_reports": [
+          {
+            "scope": ".",
+            "sha256": "815c67df663d63509d14a35cca3b9a290a23986797da9a8702719f38b332b8a5"
+          }
+        ],
+        "artifact_hashes": {
+          "binary_sha256": [
+            "1f130952969149e23c5756e78d771c6c8e69377e0d001a7ac63e77f1643791a3"
+          ]
+        },
+        "failure_attribution": "unknown_not_attributed_to_user",
+        "business": {
+          "source_scope": ".",
+          "case_count": 41,
+          "counts": {
+            "passed": 0,
+            "failed": 0,
+            "unsupported": 0,
+            "blocked": 0,
+            "pending_review": 0,
+            "not_run": 41
+          },
+          "failed_case_ids": []
+        },
+        "physical_focus": {
+          "status": "unknown"
+        },
+        "cleanup": {
+          "status": "partially_unknown"
+        }
+      },
+      {
+        "id": "a05",
+        "evidence_status": "present",
+        "source_reports": [
+          {
+            "scope": "cursor/probe",
+            "sha256": "e0f1ee6a44652409792bf1b6cde02402360a34072c5e83718f5618e391d66535"
+          },
+          {
+            "scope": "cursor",
+            "sha256": "0393f44a3a866de5198f65fe3f5f558feb6dd8a6f2724e40470bd33199d268f6"
+          },
+          {
+            "scope": ".",
+            "sha256": "918ec66da43d0df287e7d06655cd5fa6bfa7ad64d3770307435fee32d7913cf9"
+          }
+        ],
+        "artifact_hashes": {
+          "binary_sha256": [
+            "1f130952969149e23c5756e78d771c6c8e69377e0d001a7ac63e77f1643791a3"
+          ],
+          "capture_sha256": [
+            "79ef04b64aa0a1194a9a1dd8ebbf55682829532ccbc97b6b394895e3fa8ff4b3",
+            "abc8e1cb0a2d66ce83dd87eb9e0534bc598f94bfac5e1ad8f463d6f18a237d32"
+          ],
+          "runner_sha256": [
+            "1d04ce3889510d960acf72ec9eea2db2899b7ec57de47dd8949b26ee6f65b045"
+          ],
+          "target_manifest_sha256": [
+            "612f028dfce65b2e71bf74136c2b038275e2b7153a260b16cc2941f37e68084f"
+          ]
+        },
+        "failure_attribution": "unknown_not_attributed_to_user",
+        "business": {
+          "source_scope": ".",
+          "case_count": 41,
+          "counts": {
+            "passed": 15,
+            "failed": 2,
+            "unsupported": 0,
+            "blocked": 0,
+            "pending_review": 1,
+            "not_run": 23
+          },
+          "failed_case_ids": [
+            "W02",
+            "P02"
+          ],
+          "pending_review_case_ids": [
+            "C01"
+          ],
+          "failed_case_metrics": {
+            "W02": {},
+            "P02": {
+              "exec_intervals": 46,
+              "moved_intervals": 15,
+              "max_sample_gap_ms": 156.22802734375,
+              "max_sample_gap_ms_policy": 50,
+              "passed": false
+            }
+          }
+        },
+        "physical_focus": {
+          "cursor_probe": {
+            "call_count": 46,
+            "tool_error_count": 2,
+            "dispatch_totals": {
+              "dispatched": 34,
+              "unknown": 1
+            },
+            "failure_counts": {
+              "ax_action_failed": 1,
+              "target_changed": 1
+            },
+            "cursor": {
+              "measured_calls": 46,
+              "nonzero_displacement_calls": 15,
+              "max_displacement_points": 1097.499,
+              "total_transitions": 565,
+              "max_sample_gap_ms": 156.22802734375,
+              "max_sample_gap_ms_policy": 50
+            },
+            "probe_returncode": 1
+          },
+          "source_scope": "cursor"
+        },
+        "cleanup": {
+          "status": "passed"
+        }
+      },
+      {
+        "id": "a06",
+        "evidence_status": "present",
+        "source_reports": [
+          {
+            "scope": "background",
+            "sha256": "77927282e5b554507e6548d646faf2f3696072adbbe776056f23e3f5f3237a23"
+          },
+          {
+            "scope": ".",
+            "sha256": "448ff1e3835fb88c840e2a499c507963fefd1ae9849c2c5d6896999e35563b8d"
+          }
+        ],
+        "failure_attribution": "unknown_not_attributed_to_user",
+        "business": {
+          "source_scope": ".",
+          "case_count": 3,
+          "counts": {
+            "passed": 2,
+            "failed": 1,
+            "unsupported": 0,
+            "blocked": 0,
+            "pending_review": 0,
+            "not_run": 0
+          },
+          "failed_case_ids": [
+            "case_3"
+          ]
+        },
+        "physical_focus": {
+          "focus": {
+            "passed": false,
+            "case_count": 3,
+            "case_passed": 2,
+            "case_failed": 1,
+            "max_sample_gap_ms": 207.4638671875,
+            "span_passed": false,
+            "span_failure_count": 116,
+            "span_failure_reasons": {
+              "activation_read_disagrees": 1,
+              "foreign_foreground": 114,
+              "sampling_gap": 1
+            },
+            "counter_delta": null,
+            "selection_match": null,
+            "witness_no_input": true,
+            "witness_flags_events": 0,
+            "witness_key_events": 0,
+            "cleanup_activation_count": 0,
+            "activation_scope": "cleanup.focus_activations; excluded from graded focus span",
+            "interpretation": "graded span has foreign_foreground failures; cleanup activation count 0 does not imply no foreground loss"
+          },
+          "focus_source_scope": "background"
+        },
+        "cleanup": {
+          "status": "passed"
+        }
+      },
+      {
+        "id": "a07",
+        "evidence_status": "present",
+        "source_reports": [
+          {
+            "scope": "background",
+            "sha256": "3a8d51b05ef9cad5556d85acc386ccec34135ff092d294fc3ee8af4a6b841ff7"
+          },
+          {
+            "scope": ".",
+            "sha256": "f7ef91ac26c4debc95b7f698ca8b449c5133ef0ee6d0d3c8b2cac35a011626da"
+          }
+        ],
+        "artifact_hashes": {
+          "binary_sha256": [
+            "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47"
+          ],
+          "helper_sha256": [
+            "9f35ae7afd6306ea7f8139d0d2370b59fe1754ce3fbc60c8f069a4fb80fba61a"
+          ],
+          "observer_sha256": [
+            "10745aee4341374bb8dd97fb140d95e90bf5e26a0ae0e023a770dc4ff900eba1"
+          ]
+        },
+        "failure_attribution": "unknown_not_attributed_to_user",
+        "business": {
+          "source_scope": ".",
+          "case_count": 8,
+          "counts": {
+            "passed": 8,
+            "failed": 0,
+            "unsupported": 0,
+            "blocked": 0,
+            "pending_review": 0,
+            "not_run": 0
+          },
+          "failed_case_ids": []
+        },
+        "physical_focus": {
+          "focus": {
+            "passed": true,
+            "case_count": 8,
+            "case_passed": 8,
+            "case_failed": 0,
+            "max_sample_gap_ms": 19.77099609375,
+            "span_passed": true,
+            "span_failure_count": 0,
+            "span_failure_reasons": {},
+            "counter_delta": 1,
+            "selection_match": true,
+            "witness_no_input": true,
+            "witness_flags_events": 0,
+            "witness_key_events": 0,
+            "cleanup_activation_count": 1,
+            "activation_scope": "cleanup.focus_activations; excluded from graded focus span",
+            "interpretation": "graded span passed; the single activation is a cleanup observation, not a graded-span activation"
+          },
+          "focus_source_scope": "background"
+        },
+        "cleanup": {
+          "status": "passed"
+        }
+      },
+      {
+        "id": "a08",
+        "evidence_status": "directory_present_report_missing",
+        "source_reports": [],
+        "failure_attribution": "unknown_not_attributed_to_user",
+        "business": {
+          "status": "unknown"
+        },
+        "physical_focus": {
+          "status": "unknown"
+        },
+        "cleanup": {
+          "status": "unknown"
+        }
+      },
+      {
+        "id": "a09",
+        "evidence_status": "present",
+        "source_reports": [
+          {
+            "scope": "probe",
+            "sha256": "db087b0f39527964924a3746a15dcbdbeaf9d455093b21d65a99a5219c1d22db"
+          },
+          {
+            "scope": ".",
+            "sha256": "60839136a904cb617d924be8a6237a0684ec4400b2e116bd2055adc5a7ece3d9"
+          }
+        ],
+        "artifact_hashes": {
+          "binary_sha256": [
+            "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47"
+          ]
+        },
+        "failure_attribution": "unknown_not_attributed_to_user",
+        "business": {
+          "source_scope": "probe",
+          "scenario_result": {
+            "scenario": "W02",
+            "passed": false,
+            "failure": "fixture_startup_exit_-6"
+          }
+        },
+        "physical_focus": {
+          "cursor_probe": {
+            "call_count": 0,
+            "tool_error_count": 0,
+            "cursor": {
+              "measured_calls": 0,
+              "nonzero_displacement_calls": 0,
+              "max_displacement_points": null,
+              "total_transitions": 0,
+              "max_sample_gap_ms": null,
+              "max_sample_gap_ms_policy": 50
+            },
+            "probe_returncode": 1
+          },
+          "source_scope": "."
+        },
+        "cleanup": {
+          "status": "partial_failure"
+        }
+      },
+      {
+        "id": "a10",
+        "evidence_status": "present",
+        "source_reports": [
+          {
+            "scope": "probe",
+            "sha256": "33d57e3fb6f1cd4824f41ded07f04455f628c182c81162ad277a967e41cb265c"
+          },
+          {
+            "scope": ".",
+            "sha256": "72e56e1f5355ed5c270900b2743dc5cdbb8adbf0e7ae05a1c40cb65373a64b88"
+          }
+        ],
+        "artifact_hashes": {
+          "binary_sha256": [
+            "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47"
+          ]
+        },
+        "failure_attribution": "unknown_not_attributed_to_user",
+        "business": {
+          "source_scope": "probe",
+          "scenario_result": {
+            "scenario": "W02",
+            "passed": true,
+            "effect": {
+              "checkpoint_hits_delta": 1,
+              "catalogue_loaded": true
+            }
+          }
+        },
+        "physical_focus": {
+          "cursor_probe": {
+            "call_count": 4,
+            "tool_error_count": 0,
+            "dispatch_totals": {
+              "dispatched": 3
+            },
+            "cursor": {
+              "measured_calls": 4,
+              "nonzero_displacement_calls": 0,
+              "max_displacement_points": 0.0,
+              "total_transitions": 0,
+              "max_sample_gap_ms": 34.124755859375,
+              "max_sample_gap_ms_policy": 50
+            },
+            "probe_returncode": 0
+          },
+          "source_scope": "."
+        },
+        "cleanup": {
+          "status": "passed"
+        }
+      },
+      {
+        "id": "a11",
+        "evidence_status": "present",
+        "source_reports": [
+          {
+            "scope": "cursor/probe",
+            "sha256": "b057f2aeb0ec810531add5758d1e72b8c55ecdad1bd4f9a42268c89323183b12"
+          },
+          {
+            "scope": "cursor",
+            "sha256": "d882e2ea6dc2eeb75e5ec8dd9d621d76d2e2ee603c0400247d8f9c85502c70fd"
+          },
+          {
+            "scope": ".",
+            "sha256": "4902d4b81799a34b4d74bfdfcca22da3ee3aa909590fa51baaf28669d8394df7"
+          }
+        ],
+        "artifact_hashes": {
+          "binary_sha256": [
+            "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47"
+          ],
+          "runner_sha256": [
+            "69b3756a28c30337699982e9b4e92bbc7c7541e4059790f046a2735f56e8837a"
+          ],
+          "target_manifest_sha256": [
+            "d69b667a8482a4fa09728df84f9d3584928b8f8b3bb049c0e5741ca28dd7e226"
+          ]
+        },
+        "failure_attribution": "unknown_not_attributed_to_user",
+        "business": {
+          "source_scope": ".",
+          "case_count": 42,
+          "counts": {
+            "passed": 5,
+            "failed": 10,
+            "unsupported": 0,
+            "blocked": 4,
+            "pending_review": 0,
+            "not_run": 23
+          },
+          "failed_case_ids": [
+            "N06",
+            "N07",
+            "N08",
+            "N09",
+            "N10",
+            "C01",
+            "W01",
+            "P01",
+            "P02",
+            "P03"
+          ],
+          "blocked_case_ids": [
+            "C02",
+            "C03",
+            "W02",
+            "W03"
+          ],
+          "failed_case_metrics": {
+            "N06": {},
+            "N07": {},
+            "N08": {},
+            "N09": {},
+            "N10": {},
+            "C01": {},
+            "W01": {},
+            "P01": {},
+            "P02": {
+              "exec_intervals": 18,
+              "moved_intervals": 0,
+              "max_sample_gap_ms": 203.69189453125,
+              "max_sample_gap_ms_policy": 50,
+              "passed": false
+            },
+            "P03": {}
+          },
+          "verified_failure_details": {
+            "N06": {
+              "source_field": "cases[N06].detail.error",
+              "windows.changed.bounds": [
+                184.0,
+                1113.0,
+                1050.0,
+                832.0
+              ],
+              "visible": false,
+              "actor": "unknown"
+            },
+            "P03": {
+              "source_field": "cases[P03].detail.traceback",
+              "exception_class": "AssertionError",
+              "failing_source": {
+                "file": "computer_use_benchmark.py",
+                "line": 398,
+                "operation": "app.click"
+              },
+              "following_contract": {
+                "symbol": "run_background_contract",
+                "line": 400
+              },
+              "witness_reached": false
+            }
+          }
+        },
+        "physical_focus": {
+          "cursor_probe": {
+            "call_count": 18,
+            "tool_error_count": 7,
+            "dispatch_totals": {
+              "dispatched": 7,
+              "unknown": 1
+            },
+            "failure_counts": {
+              "background_input_failed": 1,
+              "look_required": 6
+            },
+            "cursor": {
+              "measured_calls": 18,
+              "nonzero_displacement_calls": 0,
+              "max_displacement_points": 0.0,
+              "total_transitions": 0,
+              "max_sample_gap_ms": 203.69189453125,
+              "max_sample_gap_ms_policy": 50
+            },
+            "probe_returncode": 1
+          },
+          "source_scope": "cursor"
+        },
+        "cleanup": {
+          "status": "passed"
+        }
+      }
+    ],
+    "checkpoint_findings": [
+      {
+        "attempt": "a08",
+        "status": "not_verifiable",
+        "finding": "No report.json found recursively; observer-path/no-GUI claim is uncorroborated."
+      },
+      {
+        "attempt": "a09",
+        "status": "partially_confirmed",
+        "finding": "W02 fixture startup exit -6 and cursor call_count 0 are recorded; AppKit/sandbox attribution is unknown."
+      },
+      {
+        "attempt": "a10",
+        "status": "confirmed_with_counter_naming_limit",
+        "finding": "W02 passed; 4 cursor calls (3 click, 1 look), 0 displacement, max gap 34.124755859375 ms against 50 ms policy. No separate exec counter."
+      },
+      {
+        "attempt": "a11",
+        "status": "confirmed_with_field_boundaries",
+        "finding": "Candidate hash and 5/10/4/23 counts match. P02 and cleanup match. N06 error contains changed bounds and visible=false; actor unknown. P03 traceback places the click at line 398 before run_background_contract at line 400, so witness was not reached."
+      }
+    ],
+    "failure_attribution": "Historical failures remain unattributed; no failure is assigned to the user."
+  },
+  "additional_experiments": [
+    {
+      "id": "focus-auto-a12",
+      "evidence_class": "direct-script/current-MCP/auto",
+      "input_policy": "auto",
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "contract_passed": true,
+      "steps": [
+        {
+          "name": "known_counter_without_look",
+          "passed": true,
+          "error_code": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "capture_for_geometry",
+          "passed": true,
+          "error_code": null,
+          "effects": null
+        },
+        {
+          "name": "background_coordinate_click",
+          "passed": true,
+          "error_code": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "select_all_separate_keypress",
+          "passed": true,
+          "error_code": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "exact_unicode_replace",
+          "passed": true,
+          "error_code": null,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        },
+        {
+          "name": "readonly_look",
+          "passed": true,
+          "error_code": null,
+          "effects": null
+        },
+        {
+          "name": "readonly_capture",
+          "passed": true,
+          "error_code": null,
+          "effects": null
+        },
+        {
+          "name": "inactive_hover_rejected",
+          "passed": true,
+          "error_code": "foreground_required",
+          "effects": {
+            "dispatch": {
+              "not_dispatched": 1
+            },
+            "evidence": {
+              "unverified": 1
+            },
+            "interrupted": 0
+          }
+        }
+      ],
+      "focus_passed": true,
+      "focus_max_sample_gap_ms": 30.845703125,
+      "exact_selection_verified": true,
+      "witness_no_input": true,
+      "cleanup_passed": true,
+      "cursor": {
+        "policy": "bounded-pointer-borrow-v3",
+        "threshold_ms": 50,
+        "passed": true,
+        "exec_intervals": 8,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 30.2119140625,
+        "failures": []
+      },
+      "original_artifacts_sha256": {
+        "report.json": "e2e0bde0ceab7de16ca829c1203abe3c7cf85babf1afe7d11f73a7769f91443e",
+        "probe/report.json": "2fc72c38c2b638083fdfc896eed03b5ccedb81e5ebb1b05174f0dc41eaa17bfa",
+        "probe/background/report.json": "6297fbdcc24dc087e3ceb5f80426e3e0c685da174685266acdc3dd06082590ec",
+        "probe/background/mcp/mcp.jsonl": "7e7d994ab12dbc0fd7bc15ec6dad464983c216e7e3708a58e42be37370e5eee5",
+        "probe/background/focus.jsonl": "c046de003d5b40e5a89348054aa65c645ebdb8630c50d1aa7b41da2713f4c466",
+        "cursor.jsonl": "5dfc153f26a74f2fc51eb6dbdeff76ad3916c51a910abdc54fc8c8ecd0d7b589"
+      }
+    },
+    {
+      "id": "sparse-a13",
+      "binary_sha256": "8cf5a7b28847b57fa25a1a153bd66c88d1c4078ab3cb3db27d93011e48e0df47",
+      "scope": "targeted C01/C02/C03/P01; no full baseline claim",
+      "cases": [
+        {
+          "id": "C01",
+          "status": "passed"
+        },
+        {
+          "id": "C02",
+          "status": "passed"
+        },
+        {
+          "id": "C03",
+          "status": "passed"
+        },
+        {
+          "id": "P01",
+          "status": "unsupported"
+        }
+      ],
+      "visual_review": [
+        {
+          "case_id": "C01",
+          "capture_sha256": "ca19c19beba32a4954d790f872fa6b495571601652618cb4947a21ebf8136fcd",
+          "reviewer": "Codex via ViewImage",
+          "notes": "Inspected original PNG: Release check 137 is visibly rendered between Artifact review completed item 136 and Waiting for approval item 138, in a dense 30-room/240-message chat. The screenshot proves rendered presence; the separate complete AX query proves absence from semantics. This does not establish model-directed pixel targeting; task points came from the private supervisor.",
+          "outcome": "passed"
+        }
+      ],
+      "pointer_operations": [
+        {
+          "operation": "click",
+          "passed": true,
+          "position_verified": true,
+          "rendering_verified": true,
+          "distance": 0.5,
+          "capture_sha256": "60821e147fa6035ff94d3850ac604509e2941d56dfae23b135bfd511caf39e6d"
+        },
+        {
+          "operation": "move",
+          "passed": false,
+          "unsupported": "foreground_required"
+        },
+        {
+          "operation": "drag",
+          "passed": true,
+          "position_verified": true,
+          "rendering_verified": true,
+          "distance": 0.0,
+          "capture_sha256": "60821e147fa6035ff94d3850ac604509e2941d56dfae23b135bfd511caf39e6d"
+        },
+        {
+          "operation": "scroll",
+          "passed": true,
+          "position_verified": true,
+          "rendering_verified": true,
+          "distance": 0.0,
+          "capture_sha256": "60821e147fa6035ff94d3850ac604509e2941d56dfae23b135bfd511caf39e6d"
+        }
+      ],
+      "cursor": {
+        "policy": "bounded-pointer-borrow-v3",
+        "threshold_ms": 50,
+        "passed": false,
+        "exec_intervals": 22,
+        "moved_intervals": 0,
+        "max_sample_gap_ms": 72.683349609375,
+        "failures": [
+          "system cursor sample gap exceeds policy or is unavailable"
+        ]
+      },
+      "cleanup_passed": true,
+      "raw_projection_issue": "Temporary helper tagged P01 passed despite unavailable move; derived reviewed-report.json corrects it to unsupported. Original report is retained.",
+      "original_artifacts_sha256": {
+        "report.json": "16a437dbad4bc4645c14327248787a3afd5e8c88f9d0e61eb1d1c76852fb80b8",
+        "probe/report.json": "37bcd367b0ff1247fd2730516731d014b1b58971ab0091f2eba81a0945e380e9",
+        "probe/reviewed-report.json": "9f24b52ac440264e800d2cf003f588827a3d193df387b30756a31dbb59935de9",
+        "probe/mcp/mcp.jsonl": "6ec2aec8719cfc734ac4af71137902fcf1bd8953c35a27c43ae0265d76fb2016",
+        "probe/mcp/native-chat.png": "ca19c19beba32a4954d790f872fa6b495571601652618cb4947a21ebf8136fcd",
+        "cursor.jsonl": "bcebbfb8cf6e933bcd6dff602a0c770302b6fdeaf0fb2824a39b96b3b3897500"
+      }
+    }
+  ],
+  "verification": {
+    "rust_release_all_targets": {
+      "passed": true,
+      "library": 590,
+      "cli": 5,
+      "mcp": 3,
+      "log_sha256": "99e6c7dca3624aef65cbda1edaa69f4e05c13d96d8223a0a6761f8b44090a052"
+    },
+    "source_checks": {
+      "passed": true,
+      "log_sha256": "f3a9a20f65f18f216d070cdc8a92a7887374089eb774dfe12483bbee0a0fa9b4"
+    },
+    "computer_use_python_tests": 41,
+    "cursor_audit_python_tests": 20,
+    "web_http_python_tests": 11,
+    "swift_native_pure_checks_passed": true,
+    "git_diff_check_passed": true
+  },
+  "limits": [
+    "Raw files remain in independent temporary evidence directories; hashes bind this sanitized summary to their exact bytes.",
+    "No observed pointer movement does not prove complete independence when sample gaps exceed 50ms.",
+    "Position changes and foreign foreground samples do not identify the actor.",
+    "Independent targeted passes cannot be combined into a complete standard acceptance pass.",
+    "Coordinates for direct-script business tasks came from the private supervisor, not autonomous model image reasoning."
+  ]
+}

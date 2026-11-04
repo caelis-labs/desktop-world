@@ -79,19 +79,48 @@ The scheduler serializes conflicting resources, not unrelated apps by default.
 Closing an owner must settle its native resources before releasing ownership;
 failed cleanup must not silently reopen admission.
 
-macOS prefers background delivery when the action supports it. Only a preflight
-failure with no preparation or dispatch side effect permits foreground fallback.
-Once preparation or dispatch begins, errors do not reroute or replay input.
-Explicit focus and automatic fallback leave the target in front after completion.
-The user or Agent may switch away or close the owned task window when finished;
-cleanup releases held inputs and respects external focus changes without restoring
-an earlier app. Windows selects supported client-area mouse messages and otherwise raises the
+Under macOS `auto`, each script starts with background delivery. A clean
+`not_dispatched` preflight for an allowlisted unsupported capability may authorize
+one resident foreground borrow for the rest of the execution. Capabilities include
+AppKit/Chromium hover tracking, a missing required addressed-event API, proven
+modal/sheet or associated-process keyboard routing, and bounded framework-specific
+keyboard exceptions. Unknown AX/modal state, incomplete semantics and menu reads
+do not authorize activation. Borrowing requires an exact logical window anchor
+and a snapshot of the original foreground app instance and window. Remaining
+actions validate that foreground scope, including proven descendant surfaces;
+supported pointer transport can remain addressed. Once preparation or dispatch
+begins, errors do not reroute or replay input. `background_only` refuses borrowing.
+
+At script settlement the resident finalizer releases held input and restores the
+original app and exact captured window only while scope ownership and original
+identity remain proven. An external app or sibling-window focus change invalidates
+the scope permanently: later focus return cannot rearm it, subsequent payloads
+stop, and cleanup does not reacquire or force restoration. A positively confirmed
+quit or anchor-window close is terminal; cleanup only observes the original
+foreground and never activates a third app. Descendant closure or an unconfirmed
+lifecycle effect does not establish that terminal case. Restoration failures
+remain cleanup failures and close dispatch admission. Normal focus return has a
+separate bounded 2-second cleanup budget.
+
+Semantic AXPress has its own reply timeout of at most 2 seconds within the remaining
+request deadline. Post-dispatch AX errors/timeouts retain unknown effect; positive
+acknowledgement establishes dispatch, not the UI postcondition. This contract is
+grounded in source; historical GUI evidence does not validate the current scope
+lifecycle.
+
+Windows selects supported client-area mouse messages and otherwise raises the
 exact target for foreground input; Agents do not select routes. Background input,
 a stationary user pointer and locked-session operation are distinct capabilities.
+Windows validates the worker/current input desktop before preparation and each new
+input payload. Desktop loss prevents new input while the original receiver's paired
+releases retain their cleanup route; restoration requires fresh observation. This
+admission does not establish locked-session support.
 
 ## Window and semantic paths
 
-The public path is apps → app look → input → look. The facade selects current
+The public path is apps → optional inspection → known input → automatic observation.
+Known selectors and keyboard/default-scroll operations prepare their receiver lazily;
+Agent scripts do not need an initial look on each execution. The facade selects current
 app surfaces internally and compares compact window/semantic baselines. macOS
 composes independently owned surface images in app-relative z-order; image hit
 testing uses the same layers and alpha. Coordinate input rechecks current app
@@ -105,7 +134,12 @@ conditions for their selected delivery route.
 Semantic discovery is filtered by role/text and bounded by region/subtree where
 supported. Native traversal retains a continuation frontier rather than rescanning
 a truncated prefix. Matching count, visited nodes, time and output bytes are
-separate budgets. Partial coverage with no matches does not establish absence.
+separate budgets. Partial coverage with no matches does not establish absence. Public `look({role,text})`
+reuses this native query path without exposing its native cursors. Truncated preview
+fields retain a content revision so omitted changes remain observable; the revision
+does not prove textual readback. Explicit `readText` maps an observed app target to
+the existing Core/provider text operation, retaining its exact observation across
+UTF-16 pages. It does not rebind a target or refresh the scene between text pages.
 References remain scoped to their window and kind; observing a different window
 must not discard unrelated usable references. Only bounded semantic changes are public; unsupported semantic activation returns
 an explicit no-dispatch error and enables the screenshot fallback. Full native
@@ -124,10 +158,12 @@ across known sequential actions. Before semantic input it renews the native quer
 and matches a provider-retained object credential plus role/name/enabled/actions.
 Comparison identities are separate from action credentials: UIA runtime IDs may
 be reused and cannot renew a consumed object binding. Before coordinate
-input it takes a fresh capture and compares scene geometry, layering, image mapping
-and the receiving surface at the supplied anchors. Fresh native bindings remain
-local to the current dispatch; comparisons for later points still use the last
-script-visible image. Content changes alone are not
+input it takes a fresh capture and proves the current top receiver, stable canvas
+anchor/mapping and the original point's process incarnation. Each image layer retains
+that AppInstance even if its popup disappears. Same-instance layer transitions do
+not require an explicit recapture; sibling processes cannot acquire a point through
+an unseen refresh. Fresh native bindings remain local to the current dispatch;
+comparisons for later points still use the last script-visible image. Content changes alone are not
 an input gate: animation, typing and scrolling must remain operable. Coordinates
 never prove semantic identity or who caused a UI change. Failed reads
 still retire the affected facade bindings. Core and providers retain their

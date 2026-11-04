@@ -96,6 +96,8 @@ namespace DtwWindowsSmoke {
             editor.Multiline = true; editor.AcceptsReturn = true;
             if (File.Exists(Path.Combine(root,"password-editor"))) editor.PasswordChar='*';
             editor.ScrollBars = ScrollBars.Vertical; editor.AccessibleName = "Message";
+            string seed=Path.Combine(root,"seed-editor.txt");
+            if(File.Exists(seed))editor.Text=File.ReadAllText(seed,utf8);
             editor.TextChanged += delegate {
                 Record("text_changed", new { length = editor.Text.Length });
                 if (editor.Text.Length>0 && char.IsHighSurrogate(editor.Text[editor.Text.Length-1]) &&
@@ -260,17 +262,96 @@ namespace DtwWindowsSmoke {
         [STAThread] public static void Main(string[] args) {
             if (args.Length == 0) args = new [] { Path.Combine(Path.GetDirectoryName(Application.ExecutablePath),"restart"), "A" };
             if ((args.Length != 2 && args.Length != 3) || (args[1] != "A" && args[1] != "B") ||
-                (args.Length == 3 && args[2] != "unaware")) return;
+                (args.Length == 3 && args[2] != "unaware" && args[2] != "workbench")) return;
             try {
                 Directory.CreateDirectory(args[0]);
                 bool dpi = SetProcessDpiAwarenessContext(new IntPtr(args.Length == 3 ? -1 : -4));
                 Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
                 Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
-                using (Fixture form = new Fixture(args[0], args[1], dpi)) Application.Run(form);
+                if(args.Length==3&&args[2]=="workbench") {
+                    using(var form=new Workbench(args[0]))Application.Run(form);
+                } else using (Fixture form = new Fixture(args[0], args[1], dpi)) Application.Run(form);
             } catch (Exception error) {
                 File.WriteAllText(Path.Combine(args[0], "fixture-error.txt"), error.ToString());
                 Environment.ExitCode = 1;
             }
+        }
+    }
+
+    // The Windows native shell of computer-use-app. The legacy smoke fixture,
+    // dense controls, native file panels and portable web/canvas pages share one
+    // source/lifecycle instead of maintaining another set of miniature apps.
+    public sealed class Workbench : Form {
+        readonly string root;
+        readonly UTF8Encoding utf8=new UTF8Encoding(false);
+        readonly JavaScriptSerializer json=new JavaScriptSerializer();
+        readonly TextBox editor=new TextBox();
+        readonly TextBox reference=new TextBox();
+        readonly CheckBox reviewed=new CheckBox();
+        readonly Timer timer=new Timer();
+        int commits,checkpoint,checks,opens,saves;
+        bool ready,modal;
+        string saved="";
+        static Button Button(string name,int x,int y,int width) {
+            return new Button{Text=name,AccessibleName=name,Location=new Point(x,y),Size=new Size(width,30)};
+        }
+        public Workbench(string directory) {
+            root=directory;Text="DTW Computer Use Windows";AccessibleName=Text;
+            StartPosition=FormStartPosition.Manual;Location=new Point(30,30);
+            ClientSize=new Size(1040,850);AutoScaleMode=AutoScaleMode.None;
+            editor.AccessibleName="Document editor";editor.Multiline=true;editor.AcceptsReturn=true;
+            editor.Location=new Point(12,12);editor.Size=new Size(640,110);Controls.Add(editor);
+            var commit=Button("Commit document",12,130,155);
+            commit.Click+=delegate{saved=editor.Text;commits++;Event("commit");editor.Focus();Publish();};Controls.Add(commit);
+            reviewed.Text="Reviewed";reviewed.AccessibleName="Reviewed";reviewed.Location=new Point(180,134);
+            reviewed.CheckedChanged+=delegate{checks++;Event("reviewed");Publish();};Controls.Add(reviewed);
+            var open=Button("Open document",12,170,155);Controls.Add(open);
+            open.Click+=delegate{BeginInvoke((Action)delegate{
+                modal=true;Publish();
+                try{using(var panel=new OpenFileDialog{InitialDirectory=root,Title="Open owned document",Filter="Text documents|*.txt|All files|*.*"}) {
+                    if(panel.ShowDialog(this)==DialogResult.OK){editor.Text=File.ReadAllText(panel.FileName,utf8);opens++;Event("open");}
+                }}finally{modal=false;Publish();}
+            });};
+            var save=Button("Save document as",180,170,155);Controls.Add(save);
+            save.Click+=delegate{BeginInvoke((Action)delegate{
+                modal=true;Publish();
+                try{using(var panel=new SaveFileDialog{InitialDirectory=root,Title="Save owned document",Filter="Text documents|*.txt",DefaultExt="txt",AddExtension=true}) {
+                    if(panel.ShowDialog(this)==DialogResult.OK){File.WriteAllText(panel.FileName,editor.Text,utf8);saves++;Event("save");}
+                }}finally{modal=false;Publish();}
+            });};
+            var show=Button("Show owned modal",348,170,155);Controls.Add(show);
+            show.Click+=delegate{BeginInvoke((Action)delegate{
+                modal=true;Publish();try{using(var dialog=new Form{Text="Workbench owned modal",AccessibleName="Workbench owned modal",ClientSize=new Size(300,100),StartPosition=FormStartPosition.CenterParent}) {
+                    var close=Button("Close owned modal",20,20,220);close.DialogResult=DialogResult.Cancel;dialog.CancelButton=close;dialog.Controls.Add(close);dialog.ShowDialog(this);
+                }}finally{modal=false;Publish();}
+            });};
+            reference.AccessibleName="Long native reference";reference.Multiline=true;reference.ReadOnly=true;
+            reference.ScrollBars=ScrollBars.Both;reference.Location=new Point(12,220);reference.Size=new Size(640,180);
+            reference.Text=File.ReadAllText(Path.Combine(root,"native-reference.txt"),utf8);Controls.Add(reference);
+            var dense=new FlowLayoutPanel{Location=new Point(670,12),Size=new Size(355,820),AutoScroll=true};
+            for(int i=1;i<=190;i++) {
+                int index=i;var button=Button("Checkpoint "+i,0,0,150);
+                button.Click+=delegate{checkpoint=index;Event("checkpoint");Publish();};dense.Controls.Add(button);
+            }
+            Controls.Add(dense);
+            var menu=new MainMenu();var file=new MenuItem("Workbench File");
+            file.MenuItems.Add(new MenuItem("Commit document",delegate{saved=editor.Text;commits++;Event("menu_commit");Publish();}));
+            menu.MenuItems.Add(file);Menu=menu;
+            var label=new Label{Text="Web / Canvas chat / Inventory use the same loopback workspace and independent journal.\nThe supervisor starts an isolated Chromium profile; no legacy WebBrowser/IE substitute.",
+                Location=new Point(12,420),Size=new Size(640,80)};Controls.Add(label);
+            Shown+=delegate{ready=true;editor.Focus();Event("ready");Publish();};
+            FormClosed+=delegate{timer.Stop();Event("quit");};
+            timer.Interval=30;timer.Tick+=delegate{
+                if(File.Exists(Path.Combine(root,"stop"))||File.Exists(Path.Combine(root,"command"))){Close();return;}Publish();
+            };timer.Start();
+        }
+        void Event(string kind) {File.AppendAllText(Path.Combine(root,"native-events.jsonl"),json.Serialize(new{kind=kind,pid=Process.GetCurrentProcess().Id,unix_ms=(DateTime.UtcNow.Ticks-621355968000000000L)/10000.0})+"\n",utf8);}
+        void Publish() {
+            if(IsDisposed||Disposing||!IsHandleCreated)return;
+            string path=Path.Combine(root,"native-state.json"),temporary=path+".next";
+            File.WriteAllText(temporary,json.Serialize(new{pid=Process.GetCurrentProcess().Id,ready=ready,modal=modal,hwnd=Handle.ToInt64(),
+                text=editor.Text,saved=saved,commits=commits,checkpoint=checkpoint,reviewed=reviewed.Checked,checks=checks,opens=opens,saves=saves}),utf8);
+            if(File.Exists(path))File.Replace(temporary,path,null);else File.Move(temporary,path);
         }
     }
 }

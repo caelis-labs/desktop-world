@@ -155,6 +155,34 @@ unsafe fn token_flag(
         |_| json!(flag != 0),
     )
 }
+// A successful enumeration proves only the worker's desktop. New input also
+// requires that desktop to be the current input desktop; never switch desktops.
+pub(super) fn ensure_input_desktop() -> Result<(), Error> {
+    let names = unsafe {
+        (|| {
+            let thread = object_name(HANDLE(GetThreadDesktop(GetCurrentThreadId())?.0))?;
+            let input = OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_READOBJECTS)?;
+            let name = object_name(HANDLE(input.0));
+            let closed = CloseDesktop(input);
+            let name = name?;
+            closed?;
+            Ok((thread, name))
+        })()
+    };
+    validate_input_desktop(names)
+}
+fn validate_input_desktop(names: windows::core::Result<(String, String)>) -> Result<(), Error> {
+    let reason = match names {
+        Ok((thread, input)) if !thread.is_empty() && thread == input => return Ok(()),
+        Ok(_) => "Worker desktop is not the current input desktop".to_owned(),
+        Err(error) => format!("Current input desktop could not be proved: {error}"),
+    };
+    Err(Error::NativeFailure {
+        code: "desktop_unavailable".into(),
+        message: format!("{reason}; new input stopped. Restore the authorized interactive desktop and read fresh state before another action."),
+    })
+}
+
 pub(super) fn context() -> Value {
     unsafe {
         let pid = std::process::id();
@@ -202,6 +230,22 @@ pub(super) fn context() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn input_admission_requires_fresh_matching_desktop_metadata() {
+        assert!(validate_input_desktop(Ok(("Default".into(), "Default".into()))).is_ok());
+        for names in [
+            Ok(("Default".into(), "Winlogon".into())),
+            Ok((String::new(), String::new())),
+            Err(windows::core::Error::from(windows::core::HRESULT(
+                0x80070005u32 as i32,
+            ))),
+        ] {
+            assert!(matches!(validate_input_desktop(names),
+                Err(Error::NativeFailure { code, .. }) if code == "desktop_unavailable"));
+        }
+        // No sticky failure: a later action must acquire its own fresh proof.
+        assert!(validate_input_desktop(Ok(("Default".into(), "Default".into()))).is_ok());
+    }
     fn failure(state: Inventory, returned: bool, error: u32) -> (String, String) {
         match finish_inventory(
             state,

@@ -1,4 +1,21 @@
 // Append after Input.swift + Native.swift. Pure rows only, no desktop/AX reads.
+private var executionScopeControlReply: String?
+private var executionScopeControlActive = false
+private var executionScopeControlChecks = 0
+private var executionScopeControlFrees = 0
+@_cdecl("dtw_control_execution_scope_check")
+func executionScopeCheckControlStub() -> UnsafeMutablePointer<CChar>? {
+    executionScopeControlChecks += 1
+    return executionScopeControlReply.flatMap { strdup($0) }
+}
+@_cdecl("dtw_control_execution_scope_free")
+func executionScopeFreeControlStub(_ response: UnsafeMutablePointer<CChar>) {
+    executionScopeControlFrees += 1
+    free(response)
+}
+@_cdecl("dtw_control_execution_scope_active")
+func executionScopeActiveControlStub() -> Bool { executionScopeControlActive }
+
 private func surfaceCheck(_ ok: @autoclosure () -> Bool) { precondition(ok()) }
 private func surfaceRow(_ id: UInt32, pid: Int32 = 10, layer: Int = 0, width: Double = 100) -> [String: Any] {
     [kCGWindowNumber as String:id, kCGWindowOwnerPID as String:pid, kCGWindowLayer as String:layer,
@@ -166,6 +183,117 @@ sheetFocusCheck(sheetEpoch.invalidated)
 sheetNotification(kAXFocusedWindowChangedNotification, objectID: 200, sampledID: 200)
 sheetFocusCheck(sheetEpoch.invalidated) // A genuine leave-return is never rearmed.
 print("Sheet activation, exact focus and main-window notification controls passed")
+
+// The resident execution epoch follows app activation, while exact logical
+// ancestry permits sheets/popups and rejects an unrelated same-app window.
+private var executionEpoch = FocusBorrowEpoch(initialPID: 20, targetPID: 10)
+executionEpoch.established(10, window: 100)
+executionEpoch.focusedWindow(200)
+surfaceCheck(!executionEpoch.invalidated)
+private let executionParents = [2: 1, 3: 2, 4: 0, 1: 0, 5: 1]
+private func executionFamily(_ surface: Int, owner: (Int) throws -> Int32 = { _ in 10 }) throws -> Bool {
+    try executionFocusFamilyMatches(surface, anchor: 1, pid: 10, equal: ==,
+                                    owner: owner, parent: { executionParents[$0] })
+}
+sheetFocusCheck(try executionFamily(1))
+sheetFocusCheck(try executionFamily(2))
+sheetFocusCheck(try executionFamily(3))
+sheetFocusCheck(try executionFamily(5))
+sheetFocusCheck(try !executionFamily(4))
+sheetFocusCheck(try !executionFamily(2, owner: { $0 == 1 ? 11 : 10 }))
+sheetFocusCheck(try !executionFamily(3, owner: { $0 == 2 ? 11 : 10 }))
+sheetFocusCheck(try !executionFocusFamilyMatches(3, anchor: 1, pid: 10, equal: ==,
+    owner: { _ in 10 }, parent: { $0 == 3 ? 2 : 3 }))
+for code in ["native_stopping", "deadline_exceeded", "ax_unavailable"] {
+    do {
+        _ = try executionFocusFamilyMatches(3, anchor: 1, pid: 10, equal: ==,
+            owner: { _ in 10 }, parent: { _ -> Int? in throw failure(code, "unreadable execution ancestry") })
+        preconditionFailure("Unknown ancestry authorized execution focus")
+    } catch let error as NativeFailure { surfaceCheck(error.code == code) }
+}
+executionEpoch.activated(20)
+executionEpoch.activated(10)
+surfaceCheck(executionEpoch.invalidated)
+surfaceCheck(!executionEpoch.retarget(10)) // Leave/return cannot create another borrow.
+private var siblingEpoch = FocusBorrowEpoch(initialPID: 20, targetPID: 10)
+siblingEpoch.established(10, window: 100)
+if try !executionFamily(4) { siblingEpoch.invalidate() }
+siblingEpoch.established(10, window: 100)
+surfaceCheck(siblingEpoch.invalidated) // Same-app sibling leave/return is sticky too.
+
+// Restoration validates birth before and after the exact retained window read.
+// Reused PIDs and changed roots never reach the activation boundary.
+private var restoreWindowReads = 0
+sheetFocusCheck(try !executionRestoreIdentityCurrent(pid: 20, generation: 700,
+    birth: { _ in 701 }, windowMatches: { restoreWindowReads += 1; return true }))
+surfaceCheck(restoreWindowReads == 0)
+sheetFocusCheck(try !executionRestoreIdentityCurrent(pid: 20, generation: 700,
+    birth: { _ in 700 }, windowMatches: { false }))
+private var restoreBirthReads = 0
+sheetFocusCheck(try !executionRestoreIdentityCurrent(pid: 20, generation: 700, birth: { _ in
+    restoreBirthReads += 1; return restoreBirthReads == 1 ? 700 : 701
+}, windowMatches: { true }))
+surfaceCheck(restoreBirthReads == 2)
+sheetFocusCheck(try executionRestoreIdentityCurrent(pid: 20, generation: 700,
+    birth: { _ in 700 }, windowMatches: { true }))
+do {
+    _ = try executionRestoreIdentityCurrent(pid: 20, generation: 700, birth: { _ in 700 },
+        windowMatches: { throw failure("ax_unavailable", "Original exact root cannot be proven") })
+    preconditionFailure("Unknown prior window permitted restoration")
+} catch let error as NativeFailure { surfaceCheck(error.code == "ax_unavailable") }
+print("Execution focus modal family, irreversible external invalidation and PID-birth restoration controls passed")
+
+// Each payload guard reads anew, preserving denial details and freeing every
+// producer-owned JSON response. Unknown/malformed proof cannot authorize input.
+try admitExecutionScope()
+try admitExecutionScope()
+surfaceCheck(executionScopeControlChecks == 2 && executionScopeControlFrees == 0)
+executionScopeControlReply = "{\"error\":\"focus_changed\",\"message\":\"Resident epoch invalidated\"}"
+do {
+    try admitExecutionScope()
+    preconditionFailure("Resident epoch denial admitted another payload")
+} catch let error as NativeFailure {
+    surfaceCheck(error.code == "focus_changed" && error.message == "Resident epoch invalidated")
+}
+surfaceCheck(executionScopeControlChecks == 3 && executionScopeControlFrees == 1)
+for reply in ["{invalid", "{}", "{\"error\":\"focus_changed\"}"] {
+    executionScopeControlReply = reply
+    do { try admitExecutionScope(); preconditionFailure("Malformed guard evidence admitted input") }
+    catch let error as NativeFailure { surfaceCheck(error.code == "execution_scope_unavailable") }
+}
+surfaceCheck(executionScopeControlChecks == 6 && executionScopeControlFrees == 4)
+executionScopeControlReply = nil
+surfaceCheck(!executionScopeActive())
+executionScopeControlActive = true
+surfaceCheck(executionScopeActive())
+executionScopeControlActive = false
+
+// Only confirmed exact lifecycle outcomes retire the anchor. Neither an
+// unknown quit receipt nor closing a descendant popup has terminal authority.
+surfaceCheck(confirmedExecutionTerminal(operation: "quit_app", evidence: "confirmed", postcondition: "application_exited",
+    sameApp: true, closedWindow: nil, anchorWindow: 100) == "application_exited")
+surfaceCheck(confirmedExecutionTerminal(operation: "close_window", evidence: "confirmed", postcondition: "window_closed",
+    sameApp: true, closedWindow: 100, anchorWindow: 100) == "window_closed")
+for evidence in [nil, "unverified", "unknown"] as [String?] {
+    surfaceCheck(confirmedExecutionTerminal(operation: "quit_app", evidence: evidence, postcondition: "application_exited",
+        sameApp: true, closedWindow: nil, anchorWindow: 100) == nil)
+}
+surfaceCheck(confirmedExecutionTerminal(operation: "quit_app", evidence: "confirmed", postcondition: "application_exited",
+    sameApp: false, closedWindow: nil, anchorWindow: 100) == nil)
+surfaceCheck(confirmedExecutionTerminal(operation: "close_window", evidence: "confirmed", postcondition: "window_closed",
+    sameApp: true, closedWindow: 200, anchorWindow: 100) == nil)
+surfaceCheck(confirmedExecutionTerminal(operation: "quit_app", evidence: "confirmed", postcondition: "application_running",
+    sameApp: true, closedWindow: nil, anchorWindow: 100) == nil)
+private let terminalRestored = settledExecutionTerminal("application_exited", originalCurrent: { true })
+surfaceCheck(terminalRestored["focus"] as? String == "restored" && terminalRestored["error"] == nil)
+private let terminalForeign = settledExecutionTerminal("window_closed", originalCurrent: { false })
+surfaceCheck(terminalForeign["focus"] as? String == "changed_externally" && terminalForeign["terminal"] as? String == "window_closed")
+private let terminalUnknown = settledExecutionTerminal("application_exited", originalCurrent: {
+    throw failure("focus_unproven", "Original exact focus cannot be proven")
+})
+surfaceCheck(terminalUnknown["focus"] as? String == "changed_externally" && terminalUnknown["error"] == nil)
+surfaceCheck(terminalUnknown["terminal_focus"] as? String == "unproven")
+print("Execution payload guard replies and confirmed quit/root-close settlement passed; no AX or GUI reads")
 
 // Readiness distinguishes a temporal web stub from persistent custom decoration.
 private var ordinary = SemanticReadinessSample()
@@ -790,7 +918,35 @@ do {
     _ = try modalInputRequiresForeground(role: kAXWindowRole) { throw inventoryBusy }
     preconditionFailure("Typed modal read failure was swallowed")
 } catch let error as NativeFailure { surfaceCheck(error.message == inventoryBusy.message && error.attributeFailure?.error == .cannotComplete) }
-print("Associated-menu routing and modal keyboard/pointer preflight controls passed")
+print("Associated-menu routing and modal keyboard restriction controls passed")
+
+// A tracking/cursor need cannot authorize activation. Exercise both admission
+// checks (already foreground, then lost foreground) and unreadable native proof
+// with an activation counter; no desktop or AX access is involved.
+private var activationAttempts = 0
+if try activationRequired(allowed: false, isForeground: { true }) { activationAttempts += 1 }
+surfaceCheck(activationAttempts == 0)
+do {
+    if try activationRequired(allowed: false, isForeground: { false }) { activationAttempts += 1 }
+    preconditionFailure("Inactive hover gained activation permission")
+} catch let error as NativeFailure { surfaceCheck(error.code == "foreground_required") }
+surfaceCheck(activationAttempts == 0)
+for allowed in [false, true] {
+    for code in ["focus_unproven", "ax_unavailable", "modal_state_unproven"] {
+        do {
+            if try activationRequired(allowed: allowed, isForeground: {
+                throw failure(code, "original unreadable proof")
+            }) { activationAttempts += 1 }
+            preconditionFailure("Unreadable proof gained activation permission")
+        } catch let error as NativeFailure {
+            surfaceCheck(error.code == code && error.message == "original unreadable proof")
+        }
+    }
+}
+surfaceCheck(activationAttempts == 0)
+if try activationRequired(allowed: true, isForeground: { false }) { activationAttempts += 1 }
+surfaceCheck(activationAttempts == 1)
+print("Foreground admission controls passed (inactive hover and unreadable proof never activate)")
 
 // FilePanel-shaped control: the large directory precedes the filename field.
 // The ROI excludes the known native viewport, so no directory child is loaded.
@@ -1343,6 +1499,60 @@ surfaceCheck(!semanticTextContains(String(repeating: "a", count: 4_096) + "needl
 surfaceCheck(semanticTextContains(String(repeating: "a", count: 300) + "needle", needle: "NEEDLE"))
 print("Semantic selectors match public fallback/composite labels without concatenating fields; no AX or GUI reads")
 
+// Shared search coverage, independent of published preview size and page size.
+private var nativeSearchBudget = NativeTextSearchBudget()
+private var nativeButtonMatch = NativeNodeTextMatch(matched: false)
+nativeButtonMatch.inspect("Commit note", needle: "Commit note", budget: &nativeSearchBudget)
+private var unrelatedDocumentMatch = NativeNodeTextMatch(matched: false)
+unrelatedDocumentMatch.inspect(String(repeating: "x", count: 20_971), needle: "Commit note", budget: &nativeSearchBudget)
+surfaceCheck(nativeButtonMatch.matched && !nativeButtonMatch.incomplete)
+surfaceCheck(!unrelatedDocumentMatch.matched && !unrelatedDocumentMatch.incomplete)
+surfaceCheck(nativeSearchBudget.remaining == 1_048_576 - 11 - 20_971)
+
+// A second eligible node after the old prefix must remain a second match.
+private var lateDuplicateMatch = NativeNodeTextMatch(matched: false)
+lateDuplicateMatch.inspect(String(repeating: "x", count: 4_096) + "Commit note", needle: "Commit note", budget: &nativeSearchBudget)
+surfaceCheck(lateDuplicateMatch.matched && !lateDuplicateMatch.incomplete)
+surfaceCheck([nativeButtonMatch, unrelatedDocumentMatch, lateDuplicateMatch].filter(\.matched).count == 2)
+
+private var exhaustedSearchBudget = NativeTextSearchBudget(remaining: 4_096)
+private var unsearchedDuplicateMatch = NativeNodeTextMatch(matched: false)
+unsearchedDuplicateMatch.inspect(String(repeating: "x", count: 4_096) + "Commit note", needle: "Commit note", budget: &exhaustedSearchBudget)
+surfaceCheck(!unsearchedDuplicateMatch.matched && unsearchedDuplicateMatch.incomplete)
+surfaceCheck(exhaustedSearchBudget.remaining == 0)
+private var subsequentNodeMatch = NativeNodeTextMatch(matched: false)
+subsequentNodeMatch.inspect("Commit note", needle: "Commit note", budget: &exhaustedSearchBudget)
+surfaceCheck(!subsequentNodeMatch.matched && subsequentNodeMatch.incomplete)
+
+// A later public description can prove membership after an earlier field
+// exhausts native search; the unsearched suffix then cannot change membership.
+private var previewProvenMatch = unsearchedDuplicateMatch
+previewProvenMatch.includePreview(SemanticTextFields(role: kAXTextAreaRole, title: nil, value: nil, description: "Commit note"), needle: "Commit note")
+surfaceCheck(previewProvenMatch.matched && !previewProvenMatch.incomplete)
+private var compositePreviewMatch = NativeNodeTextMatch(matched: false)
+compositePreviewMatch.includePreview(orderNumber, needle: "Order | Number")
+surfaceCheck(compositePreviewMatch.matched && !compositePreviewMatch.incomplete)
+
+private var titleSearchBudget = NativeTextSearchBudget(remaining: 11)
+private var titleProvenMatch = NativeNodeTextMatch(matched: false)
+titleProvenMatch.inspect("Commit note", needle: "Commit note", budget: &titleSearchBudget)
+titleProvenMatch.inspect(String(repeating: "x", count: 2_000_000), needle: "Commit note", budget: &titleSearchBudget)
+surfaceCheck(titleProvenMatch.matched && !titleProvenMatch.incomplete && titleSearchBudget.remaining == 0)
+private var prefixSearchBudget = NativeTextSearchBudget(remaining: 11)
+private var prefixProvenMatch = NativeNodeTextMatch(matched: false)
+prefixProvenMatch.inspect("Commit note" + String(repeating: "x", count: 100), needle: "Commit note", budget: &prefixSearchBudget)
+surfaceCheck(prefixProvenMatch.matched && !prefixProvenMatch.incomplete)
+
+private var unicodeSearchBudget = NativeTextSearchBudget(remaining: 8)
+private var unicodeMatch = NativeNodeTextMatch(matched: false)
+unicodeMatch.inspect("Cafe\u{301}🙂中", needle: "CAFÉ🙂中", budget: &unicodeSearchBudget)
+surfaceCheck(unicodeMatch.matched && !unicodeMatch.incomplete && unicodeSearchBudget.remaining == 0)
+private var splitScalarBudget = NativeTextSearchBudget(remaining: 1)
+private var splitScalarMatch = NativeNodeTextMatch(matched: false)
+splitScalarMatch.inspect("🙂", needle: "🙂", budget: &splitScalarBudget)
+surfaceCheck(!splitScalarMatch.matched && splitScalarMatch.incomplete)
+print("Native selector text search proves full fields, late duplicates and bounded unknown suffixes; no AX or GUI reads")
+
 // Automatic app startup must preserve the user's foreground and leave surfaces
 // shareable; hiding/minimizing is not a substitute for a nonactivating launch.
 private let automaticOpen = applicationOpenConfiguration()
@@ -1367,3 +1577,79 @@ for original in [failure("modal_state_unproven", "Real modal state is unknown"),
     do { let _: Int = try readOnlySemantics { throw original }; preconditionFailure("hard error vanished") }
     catch let error as NativeFailure { surfaceCheck(error.code == original.code && error.message == original.message) }
 }
+
+// AX action reply budgeting is separate from attribute reads. These injected
+// calls never create an AX object, operate the desktop, or wait in real time.
+private let pressDeadline = try Deadline(["deadline_unix_ms": UInt64((Date().timeIntervalSince1970 + 30) * 1_000)])
+private var pressClock = pressDeadline.uptime - 10
+private var pressTimeouts: [Float] = []
+private var pressDispatches = 0
+private let modalPressReply = try performSemanticPress(deadline: pressDeadline, now: { pressClock }, setTimeout: {
+    pressTimeouts.append($0); return .success
+}, dispatch: {
+    pressDispatches += 1
+    pressClock += 0.35 // A modal callback exceeding the old 200 ms read budget.
+    return .success
+})
+surfaceCheck(pressTimeouts == [2] && pressDispatches == 1)
+surfaceCheck(modalPressReply["dispatch"] as? String == "dispatched")
+surfaceCheck(modalPressReply["evidence"] as? String == "unverified" && modalPressReply["error"] == nil)
+
+// A short caller deadline always bounds the one action timeout.
+pressClock = pressDeadline.uptime - 0.075
+pressTimeouts = []; pressDispatches = 0
+private let shortPressReply = try performSemanticPress(deadline: pressDeadline, now: { pressClock }, setTimeout: {
+    pressTimeouts.append($0); return .success
+}, dispatch: {
+    pressDispatches += 1; pressClock = pressDeadline.uptime
+    return .cannotComplete
+})
+surfaceCheck(pressTimeouts.count == 1 && abs(pressTimeouts[0] - 0.075) < 0.00001 && pressDispatches == 1)
+surfaceCheck(shortPressReply["dispatch"] as? String == "unknown" && shortPressReply["error"] as? String == "deadline_exceeded")
+
+// An AX acknowledgement remains original provider evidence at the deadline;
+// Core owns the separate context timeout/cancellation conclusion.
+pressClock = pressDeadline.uptime - 0.1
+pressDispatches = 0
+private let latePressReply = try performSemanticPress(deadline: pressDeadline, now: { pressClock }, setTimeout: { _ in .success }, dispatch: {
+    pressDispatches += 1; pressClock = pressDeadline.uptime + 0.1
+    return .success
+})
+surfaceCheck(pressDispatches == 1 && latePressReply["dispatch"] as? String == "dispatched")
+surfaceCheck(latePressReply["evidence"] as? String == "unverified" && latePressReply["error"] == nil)
+
+// Neither timeout nor a different native error is positive acceptance evidence.
+for axError in [AXError.cannotComplete, .attributeUnsupported, .actionUnsupported,
+                .invalidUIElement, .failure, .notImplemented, .illegalArgument, .apiDisabled] {
+    pressClock = pressDeadline.uptime - 5; pressDispatches = 0
+    let reply = try performSemanticPress(deadline: pressDeadline, now: { pressClock }, setTimeout: { _ in .success }, dispatch: {
+        pressDispatches += 1; return axError
+    })
+    surfaceCheck(pressDispatches == 1 && reply["dispatch"] as? String == "unknown")
+    surfaceCheck(reply["evidence"] as? String == "unverified" && reply["error"] as? String == "ax_action_failed")
+    surfaceCheck((reply["message"] as? String)?.contains(String(axError.rawValue)) == true)
+}
+
+// All throwing paths are before the native call; none may be mislabelled as
+// post-dispatch refusal by press()'s outer not_dispatched error handler.
+for phase in ["already_expired", "timeout_configuration", "expired_during_configuration", "admission_closed"] {
+    pressClock = pressDeadline.uptime - (phase == "already_expired" ? 0 : 5)
+    pressTimeouts = []; pressDispatches = 0
+    do {
+        _ = try performSemanticPress(deadline: pressDeadline, now: { pressClock }, setTimeout: {
+            pressTimeouts.append($0)
+            if phase == "expired_during_configuration" { pressClock = pressDeadline.uptime }
+            return phase == "timeout_configuration" ? .invalidUIElement : .success
+        }, dispatch: {
+            surfaceCheck(phase == "admission_closed")
+            // The closed gate returns nil without executing any native action.
+            return nil
+        })
+        preconditionFailure("AXPress admitted after a pre-dispatch refusal")
+    } catch let error as NativeFailure {
+        let expected = phase == "timeout_configuration" ? "ax_unavailable" : phase == "admission_closed" ? "closed" : "deadline_exceeded"
+        surfaceCheck(error.code == expected && pressDispatches == 0)
+        surfaceCheck(pressTimeouts.count == (phase == "already_expired" ? 0 : 1))
+    }
+}
+print("Semantic AXPress uses one bounded action reply and preserves unknown/late provider evidence; no AX or GUI reads")
