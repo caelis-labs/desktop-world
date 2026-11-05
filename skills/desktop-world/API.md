@@ -106,7 +106,7 @@ addressed. A proved missing keyboard receiver, native modal/service surface or u
 text-input capability can borrow foreground before input. The scope lasts for
 the rest of the script. Remaining actions require the owned foreground; supported pointer actions
 can still use addressed events. At script end DTW releases held input and restores
-the original app instance and exact window, when one was captured, only while
+the original app instance and exact window, raising that original window when one was captured, only while
 foreground ownership and the original identity remain proven. A new owned
 window created during admitted input stays in the scope. Selecting an already
 existing sibling window or an external app permanently invalidates this borrow, even if focus later

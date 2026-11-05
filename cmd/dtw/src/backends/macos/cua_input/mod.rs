@@ -346,7 +346,7 @@ pub extern "C" fn dtw_set_front_process(pid: i32, window_id: u32) -> bool {
     pid > 0 && window_id > 0 && skylight::make_exact_window_key(pid, window_id)
 }
 
-/// Physical input needs app activation, not AX-style synthetic window-key
+/// Physical pointer input needs app activation, not AX-style synthetic window-key
 /// records. Swift retains the same foreground/input lease and readback proof.
 #[no_mangle]
 pub extern "C" fn dtw_set_visual_front_process(pid: i32, window_id: u32) -> bool {

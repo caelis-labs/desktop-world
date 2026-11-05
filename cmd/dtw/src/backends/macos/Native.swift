@@ -5265,6 +5265,24 @@ private final class NativeStore: @unchecked Sendable {
                     guard try focused(original.pid, window, windowID: id, deadline) else {
                         throw failure("focus_restore_failed", "Original exact focused window was not restored")
                     }
+                    // Make-key/activation can restore keyboard ownership while
+                    // leaving our dialog above the original window. Raise only
+                    // that proven original window, once, after focus settles.
+                    // A layering issue must not retire otherwise usable input.
+                    do {
+                        try deadline.prepare(window)
+                        guard try windowServerFrontmost(original.pid, deadline),
+                              try context.startStamp(original.pid) == original.generation else {
+                            return "changed_externally"
+                        }
+                        let raised = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+                        traceSemanticFailure(["operation":"foreground_window_order_return",
+                            "pid":original.pid, "window":id, "ax_error":raised.rawValue])
+                    } catch {
+                        traceSemanticFailure(["operation":"foreground_window_order_return",
+                            "pid":original.pid, "window":id, "status":"unverified",
+                            "error":(error as? NativeFailure)?.code ?? "native_error"])
+                    }
                 }
                 return "restored"
             }

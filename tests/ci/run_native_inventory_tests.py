@@ -46,7 +46,7 @@ def main():
             )
             subprocess.run([str(binary)], check=True, timeout=20)
         # Compile GUI diagnostics but never sample or operate the CI desktop.
-        for name in ("cursor-observer", "directed-pointer"):
+        for name in ("cursor-observer", "directed-pointer", "window-order-observer"):
             subprocess.run(
                 ["swiftc", "-warnings-as-errors", "-module-cache-path", str(directory / "module-cache"),
                  str(root / "tests/fixtures" / name / "main.swift"), "-o", str(directory / name)],
