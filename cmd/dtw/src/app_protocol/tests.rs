@@ -74,6 +74,7 @@ struct Model {
     cleanup_after_action: Option<Error>,
     shutdown_gate: Option<(WorkerGate, Error)>,
     windows_error: Option<Error>,
+    application_input: bool,
     inventory: Option<WindowInventory>,
     instance_inventories: HashMap<(u32, u64), WindowInventory>,
     semantics_after_action: Option<Vec<Element>>,
@@ -127,6 +128,7 @@ impl MockBackend {
                 cleanup_after_action: None,
                 shutdown_gate: None,
                 windows_error: None,
+                application_input: false,
                 inventory: None,
                 instance_inventories: HashMap::new(),
                 semantics_after_action: None,
@@ -285,6 +287,17 @@ impl Backend for MockBackend {
             .shutdown_error
             .clone()
             .map_or(Ok(()), Err)
+    }
+    fn keypress_application(
+        &self,
+        _: &AppInstance,
+        _: &[String],
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        if !self.0.model.lock().unwrap().application_input {
+            return ActionOutcome::rejected(Error::UnsupportedCapability);
+        }
+        self.act(call)
     }
     fn windows(&self, app: &AppInstance, _: &CallContext<'_>) -> Result<WindowInventory, Error> {
         self.0.windows.fetch_add(1, Ordering::SeqCst);

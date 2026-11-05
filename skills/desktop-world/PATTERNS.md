@@ -101,7 +101,11 @@ capability with a clean `not_dispatched` preflight can borrow foreground once fo
 the rest of that script. This includes AppKit/Chromium hover, a required addressed
 API being unavailable, proven modal/sheet or associated-process keyboard routing,
 and the documented framework-specific keyboard exceptions. Borrowing requires
-an exact logical window anchor and a proven original foreground identity.
+a proven original foreground identity and an exact logical window anchor when
+a window exists. A proven windowless shortcut starts an app scope and binds its
+first focused window once. A known absent background key window may also borrow;
+unreadable AX proof does not authorize it. `await app.focus()` explicitly starts
+the same scope. Keep its follow-up input in the same script.
 Remaining actions require the owned foreground, while supported pointer transport
 can remain addressed. `background_only` refuses actions that require borrowing.
 

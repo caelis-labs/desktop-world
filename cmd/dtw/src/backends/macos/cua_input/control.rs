@@ -397,18 +397,41 @@ pub fn with_cleanup<T>(body: impl FnOnce() -> T) -> T {
     let _reset = Reset(previous);
     body()
 }
+// CGEventCreateKeyboardEvent emits FlagsChanged for both modifier edges.
+// Normalize direction for admission/pairing, while preserving the actual
+// FlagsChanged transport for the reserved release.
+fn modifier_flag(code: u32) -> Option<CGEventFlags> {
+    match code {
+        54 | 55 => Some(CGEventFlags::CGEventFlagCommand),
+        56 | 60 => Some(CGEventFlags::CGEventFlagShift),
+        58 | 61 => Some(CGEventFlags::CGEventFlagAlternate),
+        59 | 62 => Some(CGEventFlags::CGEventFlagControl),
+        63 => Some(CGEventFlags::CGEventFlagSecondaryFn),
+        _ => None,
+    }
+}
+fn logical_event_type(event: &CGEvent) -> CGEventType {
+    let actual = event.get_type();
+    if matches!(actual, CGEventType::FlagsChanged) {
+        if let Some(flag) = modifier_flag(event.get_integer_value_field(9) as u32) {
+            return if event.get_flags().contains(flag) {
+                CGEventType::KeyDown
+            } else {
+                CGEventType::KeyUp
+            };
+        }
+    }
+    actual
+}
 fn pair(event: &CGEvent) -> Option<(u32, CGEventType, bool)> {
-    match event.get_type() {
-        CGEventType::KeyDown => Some((
-            event.get_integer_value_field(9) as u32,
-            CGEventType::KeyUp,
-            true,
-        )),
-        CGEventType::KeyUp => Some((
-            event.get_integer_value_field(9) as u32,
-            CGEventType::KeyUp,
-            false,
-        )),
+    let up = if matches!(event.get_type(), CGEventType::FlagsChanged) {
+        CGEventType::FlagsChanged
+    } else {
+        CGEventType::KeyUp
+    };
+    match logical_event_type(event) {
+        CGEventType::KeyDown => Some((event.get_integer_value_field(9) as u32, up, true)),
+        CGEventType::KeyUp => Some((event.get_integer_value_field(9) as u32, up, false)),
         CGEventType::LeftMouseDown => Some((0x10000, CGEventType::LeftMouseUp, true)),
         CGEventType::LeftMouseUp => Some((0x10000, CGEventType::LeftMouseUp, false)),
         CGEventType::RightMouseDown => Some((0x10001, CGEventType::RightMouseUp, true)),
@@ -452,7 +475,8 @@ fn input_event_gate(event: CGEventType, paired_release: bool) -> anyhow::Result<
 }
 pub fn post_event_via(pid: i32, event: &CGEvent, auth: bool, public: bool) {
     let paired = pair(event);
-    let release_transport = if is_release(event.get_type()) {
+    let logical_type = logical_event_type(event);
+    let release_transport = if is_release(logical_type) {
         paired.and_then(|(id, _, _)| {
             CALL.with(|call| {
                 call.borrow().as_ref().and_then(|state| {
@@ -462,8 +486,7 @@ pub fn post_event_via(pid: i32, event: &CGEvent, auth: bool, public: bool) {
                         .rev()
                         .find(|pending| {
                             pending.id == id
-                                && pending.keyboard
-                                    == matches!(event.get_type(), CGEventType::KeyUp)
+                                && pending.keyboard == matches!(logical_type, CGEventType::KeyUp)
                         })
                         .map(|pending| (pending.auth, pending.public))
                 })
@@ -472,7 +495,7 @@ pub fn post_event_via(pid: i32, event: &CGEvent, auth: bool, public: bool) {
     } else {
         None
     };
-    let gate = input_event_gate(event.get_type(), release_transport.is_some());
+    let gate = input_event_gate(logical_type, release_transport.is_some());
     let Ok(gate) = gate else { return };
     if gate.validate().is_err() {
         return;
@@ -481,7 +504,7 @@ pub fn post_event_via(pid: i32, event: &CGEvent, auth: bool, public: bool) {
     // The same app can change key windows without changing target identity or bounds.
     // Arm only after priming; paired releases deliberately ignore current focus.
     let target = CALL.with(|c| c.borrow().as_ref().and_then(|s| s.key_window));
-    if !key_window_allows(event.get_type(), target, |wid| {
+    if !key_window_allows(logical_type, target, |wid| {
         super::skylight::key_window_matches(pid, wid)
     }) {
         fail("app key window changed during input; refresh app/window state".into());
@@ -495,7 +518,14 @@ pub fn post_event_via(pid: i32, event: &CGEvent, auth: bool, public: bool) {
         }
         let release = unsafe { CGEvent::from_ptr(raw.cast()) };
         release.set_type(up);
-        release.set_flags(CGEventFlags::CGEventFlagNull);
+        let mut release_flags = CGEventFlags::CGEventFlagNull;
+        if matches!(up, CGEventType::FlagsChanged) {
+            release_flags = event.get_flags();
+            if let Some(flag) = modifier_flag(id) {
+                release_flags.remove(flag);
+            }
+        }
+        release.set_flags(release_flags);
         if id >= 0x10000 {
             let phase = if event.get_integer_value_field(0) == 1 {
                 2
@@ -509,7 +539,7 @@ pub fn post_event_via(pid: i32, event: &CGEvent, auth: bool, public: bool) {
             event: release,
             auth,
             public,
-            keyboard: matches!(event.get_type(), CGEventType::KeyDown),
+            keyboard: matches!(logical_type, CGEventType::KeyDown),
         })
     } else {
         None
@@ -993,4 +1023,36 @@ fn send_event(pid: i32, event: &CGEvent, auth: bool, public: bool) -> bool {
 }
 pub fn pointer_uses_public() -> bool {
     CALL.with(|c| c.borrow().as_ref().is_some_and(|s| s.pointer_public))
+}
+
+#[cfg(test)]
+mod modifier_edge_tests {
+    use super::*;
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+    #[test]
+    fn real_modifier_event_types_keep_paired_release_after_window_close() {
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState).unwrap();
+        for (code, flag) in [
+            (55, CGEventFlags::CGEventFlagCommand),
+            (56, CGEventFlags::CGEventFlagShift),
+            (58, CGEventFlags::CGEventFlagAlternate),
+            (59, CGEventFlags::CGEventFlagControl),
+        ] {
+            let down = CGEvent::new_keyboard_event(source.clone(), code, true).unwrap();
+            down.set_flags(flag);
+            let up = CGEvent::new_keyboard_event(source.clone(), code, false).unwrap();
+            up.set_flags(CGEventFlags::CGEventFlagNull);
+            assert!(matches!(down.get_type(), CGEventType::FlagsChanged));
+            assert!(matches!(up.get_type(), CGEventType::FlagsChanged));
+            assert!(matches!(logical_event_type(&down), CGEventType::KeyDown));
+            assert!(matches!(logical_event_type(&up), CGEventType::KeyUp));
+            assert!(
+                matches!(pair(&down), Some((id, CGEventType::FlagsChanged, true)) if id == u32::from(code))
+            );
+            assert!(
+                matches!(pair(&up), Some((id, CGEventType::FlagsChanged, false)) if id == u32::from(code))
+            );
+            assert!(is_release(logical_event_type(&up)));
+        }
+    }
 }

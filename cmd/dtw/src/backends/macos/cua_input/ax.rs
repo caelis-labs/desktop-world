@@ -39,6 +39,26 @@ pub unsafe fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef {
     }
     app
 }
+/// Only AXNoValue proves absence. Unsupported attributes, timeouts and invalid
+/// elements remain unknown and never authorize foreground borrowing.
+pub fn focused_window_absent(pid: i32) -> bool {
+    unsafe {
+        let app = AXUIElementCreateApplication(pid);
+        if app.is_null() {
+            return false;
+        }
+        let attr = CFStr::new("AXFocusedWindow");
+        let mut value: CFTypeRef = std::ptr::null();
+        let status = AXUIElementCopyAttributeValue(app, attr.as_concrete_TypeRef(), &mut value);
+        CFRelease(app as CFTypeRef);
+        let absent = status == -25212 && value.is_null();
+        if !value.is_null() {
+            CFRelease(value);
+        }
+        absent
+    }
+}
+
 pub fn focused_window_id_of_pid(pid: i32) -> Option<u32> {
     unsafe {
         let app = AXUIElementCreateApplication(pid);

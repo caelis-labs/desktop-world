@@ -9,6 +9,7 @@ pub(super) enum PhysicalReason {
     NativeHoverTracking,
     MissingAddressedApi,
     KeyboardSemantics,
+    KeyboardFocusAbsent,
 }
 impl PhysicalReason {
     pub(super) fn code(self) -> &'static str {
@@ -16,6 +17,7 @@ impl PhysicalReason {
             Self::NativeHoverTracking => "native_hover_tracking",
             Self::MissingAddressedApi => "addressed_event_api_unavailable",
             Self::KeyboardSemantics => "native_keyboard_semantics",
+            Self::KeyboardFocusAbsent => "background_key_window_absent",
         }
     }
 }
@@ -45,6 +47,9 @@ pub(super) fn allows_activation(reason: &str) -> bool {
             | "addressed_event_api_unavailable"
             | "associated_process_keyboard"
             | "native_modal_keyboard"
+            | "background_key_window_absent"
+            | "windowless_application"
+            | "native_open_panel_click"
     )
 }
 
@@ -66,8 +71,11 @@ pub(super) fn foreground_plan<'a>(
     let reason = plan["reason"].as_str()?;
     let keyboard = matches!(operation, "keypress" | "type_text");
     let valid = match reason {
-        "explicit_focus" => operation == "focus",
+        "explicit_focus" => matches!(operation, "focus" | "focus_app"),
+        "windowless_application" => operation == "keypress_app",
+        "background_key_window_absent" => keyboard,
         "native_hover_tracking" => operation == "move",
+        "native_open_panel_click" => operation == "click",
         "addressed_event_api_unavailable" => visual_focus(operation) || keyboard,
         "native_modal_keyboard" | "associated_process_keyboard" => keyboard,
         "native_keyboard_semantics" => {
@@ -98,6 +106,7 @@ pub(super) fn fallback_reason(result: &serde_json::Value) -> Option<PhysicalReas
         return None;
     }
     match result["capability_evidence"].as_str()? {
+        "background_key_window_absent" => Some(PhysicalReason::KeyboardFocusAbsent),
         "addressed_event_api_unavailable" => Some(PhysicalReason::MissingAddressedApi),
         "native_keyboard_semantics"
             if matches!(
@@ -120,6 +129,29 @@ pub(super) fn fallback_reason(result: &serde_json::Value) -> Option<PhysicalReas
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn absent_background_key_window_and_windowless_shortcuts_have_exact_plans() {
+        for (operation, reason) in [
+            ("keypress", "background_key_window_absent"),
+            ("type_text", "background_key_window_absent"),
+            ("keypress_app", "windowless_application"),
+            ("focus_app", "explicit_focus"),
+        ] {
+            let mut reply = json!({"dispatch":"not_dispatched","evidence":"unverified",
+                "foreground_plan":{"reason":reason,"visual":false}});
+            assert_eq!(foreground_plan(&reply, operation), Some(reason));
+            assert!(allows_activation(reason));
+            reply["dispatch"] = json!("unknown");
+            assert_eq!(foreground_plan(&reply, operation), None);
+        }
+        let absent = json!({"dispatch":"not_dispatched","fallback_allowed":true,
+            "error":{"code":"background_unavailable"},"capability_evidence":"background_key_window_absent"});
+        assert_eq!(
+            fallback_reason(&absent),
+            Some(PhysicalReason::KeyboardFocusAbsent)
+        );
+    }
+
     #[test]
     fn visual_pointer_admission_never_bypasses_keyboard_focus_checks() {
         for operation in ["click", "move", "drag", "scroll"] {

@@ -21,7 +21,10 @@ func dtwFrontProcessPIDControlStub() -> Int32 {
 }
 
 // Pure target-read recovery controls; no desktop, AX server or input events.
-private func backgroundCheck(_ value: @autoclosure () -> Bool) { precondition(value()) }
+private func backgroundCheck(_ value: @autoclosure () -> Bool,
+                             file: StaticString = #file, line: UInt = #line) {
+    precondition(value(), file: file, line: line)
+}
 private func busyAttribute(_ name: String = "AXModal") -> NativeFailure {
     failure("ax_unavailable", "busy \(name)", details:["attribute":name, "ax_error":AXError.cannotComplete.rawValue],
             attributeFailure:AXAttributeFailure(name:name,error:.cannotComplete))
@@ -899,3 +902,59 @@ private let typedSnapshotMismatch = expectedBackgroundError("focus_unproven") {
 backgroundCheck(typedSnapshotMismatch.foregroundSnapshotMismatch)
 backgroundCheck(typedSnapshotMismatch.details?["ax_pid"] as? Int32 == 10)
 print("System AX/WindowServer disagreement retains typed mismatch evidence")
+
+backgroundCheck(nativeOpenPanelClick(role: kAXWindowRole, identifier: "open-panel"))
+backgroundCheck(nativeOpenPanelClick(role: kAXSheetRole, identifier: "open-panel"))
+for identifier in [nil, "save-panel", "custom-modal"] as [String?] {
+    backgroundCheck(!nativeOpenPanelClick(role: kAXWindowRole, identifier: identifier))
+}
+backgroundCheck(!nativeOpenPanelClick(role: kAXGroupRole, identifier: "open-panel"))
+
+// A window transition revokes input but cannot erase later app leave/return.
+var closedAnchorEpoch = FocusBorrowEpoch(initialPID: 20, targetPID: 20, targetWindow: 200)
+closedAnchorEpoch.established(20, window: 200)
+closedAnchorEpoch.focusedWindow(201)
+precondition(closedAnchorEpoch.invalidated && !closedAnchorEpoch.applicationInvalidated)
+let closedRevision = closedAnchorEpoch.sampleRevision
+precondition(!closedAnchorEpoch.sampled(30, window: nil, revision: closedRevision))
+precondition(closedAnchorEpoch.applicationInvalidated)
+closedAnchorEpoch.activated(20)
+precondition(closedAnchorEpoch.applicationInvalidated)
+
+
+// Restore confirmation observes delayed WindowServer effects without replaying
+// the warp, and cannot exceed the original cleanup deadline.
+var pointerReturnClock: TimeInterval = 0
+var pointerReturnReads = 0
+precondition(dtwPointerReturnConfirmed(CGPoint(x: 10, y: 20), deadline: 0.02, read: {
+    pointerReturnReads += 1
+    return pointerReturnReads < 3 ? CGPoint(x: 100, y: 200) : CGPoint(x: 10, y: 20)
+}, now: { pointerReturnClock }, pause: { pointerReturnClock += $0 }))
+precondition(pointerReturnReads == 3 && pointerReturnClock == 0.004)
+pointerReturnClock = 0
+precondition(!dtwPointerReturnConfirmed(CGPoint(x: 10, y: 20), deadline: 0.01,
+    read: { CGPoint(x: 100, y: 200) }, now: { pointerReturnClock },
+    pause: { pointerReturnClock += $0 }))
+precondition(pointerReturnClock == 0.01)
+pointerReturnReads = 0
+precondition(!dtwPointerReturnConfirmed(CGPoint(x: 10, y: 20), deadline: 0.01,
+    read: { pointerReturnReads += 1; return nil }, now: { 0.01 },
+    pause: { _ in preconditionFailure("Expired cleanup cannot wait") }))
+precondition(pointerReturnReads == 0)
+print("Pointer return waits for observed restoration within the original cleanup budget; no warp replay")
+
+
+// Cold native-panel focus can be busy during cleanup. A bounded fresh proof,
+// rather than another input/activation, resolves only typed cannotComplete.
+var cleanupFocusClock: TimeInterval = 0
+var cleanupFocusReads = 0
+private let focusBusy = failure("ax_unavailable", "AXFocusedWindow busy",
+    attributeFailure: AXAttributeFailure(name: kAXFocusedWindowAttribute, error: .cannotComplete))
+let cleanupFocusOwned: Bool = try retryCompleteAXRead(original: focusBusy,
+    remaining: { 0.1 - cleanupFocusClock }, check: {}, read: {
+        cleanupFocusReads += 1
+        if cleanupFocusReads == 1 { throw focusBusy }
+        return true
+    }, wait: { cleanupFocusClock += $0 })
+precondition(cleanupFocusOwned && cleanupFocusReads == 2 && cleanupFocusClock <= 0.1)
+print("Cold focus cleanup retries only complete read-only AX busy proof, under the original deadline")

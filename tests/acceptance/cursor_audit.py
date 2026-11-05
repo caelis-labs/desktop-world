@@ -18,8 +18,8 @@ import select
 import subprocess
 import sys
 
-POLICY_VERSION = 'bounded-pointer-borrow-v3'
-MAX_SAMPLE_GAP_MS = 50
+POLICY_VERSION = 'observed-pointer-borrow-v5'
+RESTORE_TOLERANCE_POINTS = 1.0
 POINTER_OPERATIONS = {'click', 'move', 'drag', 'scroll'}
 
 
@@ -39,7 +39,8 @@ def trace(samples):
     maximum = max(distance(row) for row in valid)
     return {'status': 'moved' if maximum > 0 else 'stable', 'samples': len(samples),
             'sample_start_unix_ms': first['unix_ms'], 'sample_end_unix_ms': valid[-1]['unix_ms'],
-            'transition_intervals': [{'start_unix_ms': a['unix_ms'], 'end_unix_ms': b['unix_ms']}
+            'transition_intervals': [{'start_unix_ms': a['unix_ms'], 'end_unix_ms': b['unix_ms'],
+                                      'before': [a['x'], a['y']], 'after': [b['x'], b['y']]}
                                      for a, b in zip(valid, valid[1:])
                                      if (a['x'], a['y']) != (b['x'], b['y'])],
             'before': [first['x'], first['y']], 'after': [valid[-1]['x'], valid[-1]['y']],
@@ -258,6 +259,7 @@ def allowed_borrow(interval):
     operation, reason = interval.get('operation'), interval.get('reason')
     return interval.get('route') == 'borrowed' and (
         (reason == 'native_hover_tracking' and operation == 'move') or
+        (reason == 'native_open_panel_click' and operation == 'click') or
         (reason == 'addressed_event_api_unavailable' and operation in POINTER_OPERATIONS))
 
 
@@ -265,10 +267,6 @@ def independence_violation(row):
     cursor, routes = row['cursor'], row.get('routes', [])
     if cursor['status'] not in ('stable', 'moved'):
         return 'system cursor oracle unavailable or request incomplete'
-    gap = cursor.get('max_sample_gap_ms')
-    if (not isinstance(gap, (int, float)) or isinstance(gap, bool)
-            or not math.isfinite(gap) or gap < 0 or gap > MAX_SAMPLE_GAP_MS):
-        return 'system cursor sample gap exceeds policy or is unavailable'
     start, end = row.get('start_unix_ms'), row.get('end_unix_ms')
     if (start is None or end is None or start > end
             or cursor.get('sample_start_unix_ms', float('inf')) > start
@@ -310,25 +308,55 @@ def independence_violation(row):
         if not transitions:
             return 'cursor movement lacks sample transition evidence'
         for transition in transitions:
-            if not any(interval['start_unix_ms'] <= transition['start_unix_ms']
-                       <= transition['end_unix_ms'] <= interval['end_unix_ms'] for interval in intervals):
+            if not any(transition['start_unix_ms'] <= interval['end_unix_ms']
+                       and transition['end_unix_ms'] >= interval['start_unix_ms'] for interval in intervals):
                 return 'sampled system cursor movement outside an allowed borrow interval (actor undetermined)'
+        # A classified interval does not authorize leaving the cursor displaced.
+        # Checking only transitions used to miss this permanent displacement.
+        if intervals and not cursor_returned(cursor):
+            return 'borrowed system cursor was not restored by request completion (actor undetermined)'
     return None
+
+
+def cursor_returned(cursor):
+    before, after = cursor.get('before'), cursor.get('after')
+    return (isinstance(before, list) and isinstance(after, list) and len(before) == len(after) == 2
+            and math.dist(before, after) <= RESTORE_TOLERANCE_POINTS)
+
+
+def movement_assessment(row):
+    cursor = row['cursor']
+    intervals = row.get('borrow_intervals', [])
+    transitions = cursor.get('transition_intervals', [])
+    boundaries = [t for t in transitions if any(
+        t['start_unix_ms'] <= interval['end_unix_ms'] and t['end_unix_ms'] >= interval['start_unix_ms']
+        for interval in intervals) and not any(
+        interval['start_unix_ms'] <= t['start_unix_ms'] <= t['end_unix_ms'] <= interval['end_unix_ms']
+        for interval in intervals)]
+    issue = independence_violation(row)
+    return {'classification': ('unexpected_or_unproven' if issue else
+                'borrowed_and_restored' if cursor['status'] == 'moved' else 'no_observed_movement'),
+            'fully_independent': not issue and cursor['status'] == 'stable' and not intervals,
+            'cursor_restored': cursor_returned(cursor),
+            'return_distance_points': math.dist(cursor['before'], cursor['after']) if 'before' in cursor else None,
+            'boundary_uncertainty': boundaries, 'failure': issue}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--observer', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--assert-policy', action='store_true',
+                        help='Require classified bounded borrowing, no out-of-interval movement, and cursor restoration')
     parser.add_argument('--assert-independent', action='store_true',
-                        help='Fail on cursor movement in an addressed/native route or unclassified borrowing (requires DTW_INPUT_TRACE=1)')
+                        help='Require zero observed real cursor movement, including otherwise permitted borrowing')
     parser.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
     if not command:
         parser.error('a probe command after -- is required')
-    if args.assert_independent and os.environ.get('DTW_INPUT_TRACE') != '1':
-        parser.error('--assert-independent requires DTW_INPUT_TRACE=1')
+    if (args.assert_independent or args.assert_policy) and os.environ.get('DTW_INPUT_TRACE') != '1':
+        parser.error('cursor assertions require DTW_INPUT_TRACE=1')
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     out.chmod(0o700)
@@ -352,9 +380,22 @@ def main():
     attach_routes(out, rows)
     violations = [{'request_id': row['request_id'], 'transcript': row['transcript'], 'failure': issue}
                   for row in rows if (issue := independence_violation(row))]
-    if args.assert_independent and not rows:
+    for row in rows:
+        row['movement_assessment'] = movement_assessment(row)
+    if (args.assert_independent or args.assert_policy) and not rows:
         violations.append({'failure':'no MCP requests were observed inside the audit directory'})
-    report = {'policy_version': POLICY_VERSION, 'max_sample_gap_ms_policy': MAX_SAMPLE_GAP_MS,
+    whole_run = trace(samples)
+    outside_calls = [transition for transition in whole_run.get('transition_intervals', [])
+                     if math.dist(transition['before'], transition['after']) > RESTORE_TOLERANCE_POINTS
+                     and not any(row.get('start_unix_ms', float('inf')) <= transition['end_unix_ms']
+                                 and row.get('end_unix_ms', float('-inf')) >= transition['start_unix_ms'] for row in rows)]
+    report = {'policy_version': POLICY_VERSION,
+              'outside_call_movements': outside_calls,
+              'outside_call_actor': 'undetermined; includes probe setup, cleanup and user activity', 'sample_gaps_are_diagnostic': True,
+              'restore_tolerance_points': RESTORE_TOLERANCE_POINTS,
+              'fully_independent': bool(rows) and not outside_calls and all(row['movement_assessment']['fully_independent'] for row in rows),
+              'outside_call_movement_requires_review': bool(outside_calls),
+              'borrow_policy_passed': bool(rows) and not violations,
               'coordinate_space': 'global_screen_points', 'requested_sample_interval_ms': 2,
               'limits': ['Actual sample gaps are recorded per call; shorter excursions can be missed.',
                          'Position changes alone do not identify the actor. Match them to delivery source and fixture effects.'],
@@ -364,8 +405,11 @@ def main():
     (out / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
     print(json.dumps({'probe_returncode': code, 'observed_calls': len(rows),
                       'moved_calls': sum(row['cursor']['status'] == 'moved' for row in rows),
+                      'borrowed_and_restored_calls': sum(row['movement_assessment']['classification'] == 'borrowed_and_restored' for row in rows),
+                      'violations': len(violations), 'fully_independent': report['fully_independent'],
+                      'outside_call_movements': len(outside_calls),
                       'report': str(out / 'report.json')}))
-    return code or (1 if args.assert_independent and violations else 0)
+    return code or (1 if args.assert_policy and violations or args.assert_independent and not report['fully_independent'] else 0)
 
 
 if __name__ == '__main__':

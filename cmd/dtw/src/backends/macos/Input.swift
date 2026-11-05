@@ -397,3 +397,19 @@ func dtwSettleInput(seconds: TimeInterval, deadline: TimeInterval,
     }
     return false
 }
+
+// A successful warp only queues WindowServer work. Keep the input lease and
+// borrow trace until a fresh read confirms return; never repost a warp here.
+func dtwPointerReturnConfirmed(_ expected: CGPoint, deadline: TimeInterval,
+    read: () -> CGPoint?,
+    now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+    pause: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }) -> Bool {
+    guard expected.x.isFinite, expected.y.isFinite else { return false }
+    while now() < deadline {
+        if let point = read(), point.x.isFinite, point.y.isFinite,
+           hypot(point.x - expected.x, point.y - expected.y) <= 1 { return true }
+        let left = deadline - now()
+        if left > 0 { pause(min(0.002, left)) }
+    }
+    return false
+}

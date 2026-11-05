@@ -61,6 +61,7 @@
 | `await app.typeText(text)` | string, or `{text:string}` | Unicode keyboard input into the active editing control. It may invoke application editing behavior. It does not replace a field value implicitly. |
 | `await app.keypress(keys)` | chord string, string array, or `{keys:string[]}` | One press/release chord; on macOS this also works for a running app with no window (e.g. New). Native app/window focus is verified before key downs. E.g. `'META+A'`, `'ENTER'`, `['META','A']` or `['ESC']`. Use an array/object for key names containing a literal `+`. `META` means Command on macOS and Windows key on Windows. |
 | `await app.scroll(options)` | `{delta_y:number,delta_x?:number,x?:number,y?:number}` | Integer wheel steps in [-100,100] per axis, positive down/right; these are not pixels. Supply both x/y from the current screenshot to target a pane. Without x/y DTW captures the active surface and anchors at its center. |
+| `await app.focus()` | none | Focus the current authorized app/window. On macOS `auto`, borrow foreground for this script and restore its original owner at settlement while ownership remains valid; `background_only` refuses. A windowless macOS app is supported, and its first focused window becomes the script anchor. Use related input in the same `exec`. |
 | `await app.quit()` | none | Request normal quit of the active app instance. A save dialog remains observable. No forced termination. |
 
 `look`/`capture` accept no native refs. Input routes within the selected app.
@@ -117,8 +118,9 @@ semantic target guarantee.
 Images preserve authorized windows' positions, z-order and alpha, including
 same-app overlays and proven associated surfaces. Empty space is transparent and
 cannot receive input. Coordinate hit-testing selects the top nontransparent app
-surface. Unrelated-app occlusion may still prevent input even though a read can
-show the authorized app. If geometry or layer membership changes during capture,
+surface. macOS addressed input ignores unrelated-app coverage; same-app layers still block it.
+Physical pointer routes require the target point visible after foreground preparation.
+Windows input can still be blocked by unrelated-app coverage. If geometry or layer membership changes during capture,
 no coordinate binding is published. A transient capture/layer disappearance gets
 one bounded read-only refresh, including during coordinate preflight before input;
 input is never replayed. Read errors/partial semantics remain explicit.
@@ -210,7 +212,10 @@ list. Other admitted shapes try directed input once. Borrowing still requires a
 proven exact logical window anchor and original foreground identity. Unknown AX
 or modal state, stale geometry, permissions, timeouts and arbitrary errors never
 authorize activation or replay. `background_only` refuses a required borrow with
-`foreground_required`. The public facade has no `focus()` method.
+`foreground_required`. `app.focus()` explicitly borrows foreground under the same
+script lifecycle. Known absent background key windows and windowless application
+shortcuts also enter this scope automatically. Missing or unreadable AX evidence
+is not the same as a proven absent key window.
 
 A semantic `AXPress` gets a reply budget of at most 2 seconds, capped by the
 remaining request deadline. After dispatch, a timeout or AX error means unknown

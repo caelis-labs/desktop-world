@@ -145,6 +145,7 @@ fn input_operation(op: &str) -> bool {
             | "type_text"
             | "keypress"
             | "keypress_app"
+            | "focus_app"
             | "scroll"
             | "click"
             | "move"
@@ -160,8 +161,15 @@ fn now_ms() -> u64 {
         .unwrap_or_default()
         .as_millis() as u64
 }
+fn trace_now_ms() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+        * 1_000.0
+}
 fn route_trace(request: &Value, route: &str, reason: &str) -> Value {
-    let mut record = json!({"at_unix_ms":now_ms(),"pid":std::process::id(),
+    let mut record = json!({"at_unix_ms":trace_now_ms(),"pid":std::process::id(),
         "operation":request["operation"],"window":request["target"]["native_id"],"route":route,"reason":reason});
     if reason == "native_keyboard_semantics" {
         record["capability_detail"] = request["_keyboard_capability"].clone();
@@ -202,7 +210,7 @@ impl PointerBorrowTrace {
     fn emit(&self, phase: &str) {
         let mut record = self.0.clone();
         record["phase"] = json!(phase);
-        record["at_unix_ms"] = json!(now_ms());
+        record["at_unix_ms"] = json!(trace_now_ms());
         eprintln!("dtw_input_interval {}", record);
     }
 }
@@ -533,6 +541,13 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
         }
     }
     if !keyboard {
+        if op == "click"
+            && before["native_open_panel"] == true
+            && request["button"].as_str().unwrap_or("left") == "left"
+            && request["count"].as_u64().unwrap_or(1) == 1
+        {
+            return BackgroundAttempt::Declined("native_open_panel_click".into());
+        }
         if let Some(reason) = super::input_route::pointer_reason(
             &op,
             before["input_framework"].as_str().unwrap_or("unknown"),
@@ -661,7 +676,7 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
         }
         return native(&request, false);
     }
-    if op == "keypress_app" {
+    if matches!(op, "keypress_app" | "focus_app") {
         if request["input_policy"] != "auto" {
             return foreground_required("windowless_app_shortcut");
         }
@@ -1546,6 +1561,50 @@ mod tests {
         }
     }
 }
+// Keep blocking pipe reads off the Cocoa main thread. Otherwise an activation
+// notification can sit behind stdin and invalidate a later execution epoch.
+fn read_requests(input: &mut impl BufRead, mut publish: impl FnMut(Vec<u8>) -> bool) {
+    loop {
+        let mut bytes = Vec::new();
+        let size = (&mut *input)
+            .take(64 * 1024 + 2)
+            .read_until(b'\n', &mut bytes)
+            .unwrap_or(0);
+        if size == 0 || size > 64 * 1024 + 1 || bytes.last() != Some(&b'\n') || !publish(bytes) {
+            break;
+        }
+    }
+}
+fn next_request(
+    requests: &std::sync::mpsc::Receiver<Vec<u8>>,
+    mut pump: impl FnMut(),
+    stopped: impl Fn() -> bool,
+) -> Option<Vec<u8>> {
+    loop {
+        if stopped() {
+            return None;
+        }
+        pump();
+        match requests.recv_timeout(Duration::from_millis(20)) {
+            Ok(bytes) => {
+                // Drain already queued workspace history before arming or
+                // validating an execution, even when another frame is ready.
+                pump();
+                return Some(bytes);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return None,
+        }
+    }
+}
+fn pump_workspace_notifications() {
+    core_foundation::runloop::CFRunLoop::run_in_mode(
+        unsafe { core_foundation::runloop::kCFRunLoopDefaultMode },
+        Duration::from_millis(1),
+        false,
+    );
+}
+
 /// Called at executable startup on its main thread for private worker processes.
 pub fn worker_entry() -> bool {
     let scene_worker = match std::env::args().nth(1).as_deref() {
@@ -1573,27 +1632,14 @@ pub fn worker_entry() -> bool {
         }
         std::thread::sleep(Duration::from_millis(10));
     });
-    let stdin = std::io::stdin();
-    let mut input = stdin.lock();
+    let (publish, requests) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        read_requests(&mut stdin.lock(), |bytes| publish.send(bytes).is_ok());
+    });
     let mut output = std::io::stdout().lock();
     let mut leased = false;
-    loop {
-        // Cancellation can arrive during dispatch. Reach the shutdown run loop
-        // before blocking on another request, even while the parent retains stdin.
-        if TERMINATING.load(Ordering::Relaxed) {
-            break;
-        }
-        let mut bytes = Vec::new();
-        let size = (&mut input)
-            .take(64 * 1024 + 2)
-            .read_until(b'\n', &mut bytes)
-            .unwrap_or(0);
-        if size == 0 {
-            break;
-        }
-        if size > 64 * 1024 + 1 || bytes.last() != Some(&b'\n') {
-            break;
-        }
+    while let Some(bytes) = next_request(&requests, pump_workspace_notifications, stopping) {
         let request: Value = match serde_json::from_slice(&bytes) {
             Ok(v) => v,
             Err(_) => break,
@@ -1614,4 +1660,62 @@ pub fn worker_entry() -> bool {
     // EOF, malformed input and broken output use the same closed admission and
     // input drain as SIGTERM and parent death.
     shutdown_worker()
+}
+
+#[cfg(test)]
+mod workspace_dispatch_tests {
+    use super::*;
+    #[test]
+    fn idle_notifications_are_serviced_before_the_next_request() {
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        let mut pumps = 0;
+        let until = Instant::now() + Duration::from_secs(1);
+        let frame = next_request(
+            &receive,
+            || {
+                pumps += 1;
+                if pumps == 3 {
+                    send.send(b"ready\n".to_vec()).unwrap();
+                }
+            },
+            || Instant::now() > until,
+        );
+        assert_eq!(frame, Some(b"ready\n".to_vec()));
+        assert!(
+            pumps >= 3,
+            "No new request may be needed to deliver pending history"
+        );
+    }
+    #[test]
+    fn request_reader_preserves_frame_bounds_eof_and_backpressure() {
+        for (input, expected) in [
+            (b"one\ntwo\n".to_vec(), 2),
+            (b"incomplete".to_vec(), 0),
+            ([vec![b'x'; 64 * 1024 + 1], vec![b'\n']].concat(), 0),
+        ] {
+            let mut frames = Vec::new();
+            read_requests(&mut std::io::Cursor::new(input), |frame| {
+                frames.push(frame);
+                true
+            });
+            assert_eq!(frames.len(), expected);
+        }
+        let mut count = 0;
+        read_requests(&mut std::io::Cursor::new(b"one\ntwo\n"), |_| {
+            count += 1;
+            false
+        });
+        assert_eq!(count, 1);
+    }
+    #[test]
+    fn stopped_request_wait_never_admits_a_ready_frame() {
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        send.send(vec![1]).unwrap();
+        assert!(next_request(
+            &receive,
+            || panic!("stopping does not dispatch callbacks"),
+            || true
+        )
+        .is_none());
+    }
 }

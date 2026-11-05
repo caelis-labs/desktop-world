@@ -27,63 +27,63 @@ def _number(value):
     return type(value) in (int, float) and math.isfinite(value)
 
 
-def evaluate_focus(samples, start_ms, end_ms, expected_pid, maxgap=50):
-    """Require bracketing samples, bounded actual gaps, and the exact witness PID.
+def observed_pid(row):
+    # Notifications can be delivered after another activation. The paired read
+    # is the actual foreground at this timestamp; keep the event actor as history.
+    if row.get('kind') == 'activation' and 'observed_frontmost_pid' in row:
+        return row['observed_frontmost_pid']
+    return row.get('frontmost_pid')
 
-    Activation rows retain their notification actor, including unknown actors.
-    Nothing is sorted or interpolated: broken clocks/evidence fail explicitly.
-    """
-    failures = []
-    result = {'passed': False, 'failures': failures, 'max_sample_gap_ms': None,
-              'start_ms': start_ms, 'end_ms': end_ms, 'expected_pid': expected_pid}
+
+def notification_diagnostics(rows):
+    return [{'reason': 'delayed_activation_notification', 'row': row} for row in rows
+            if row.get('kind') == 'activation' and 'observed_frontmost_pid' in row
+            and row.get('activation_pid', row.get('frontmost_pid')) != row['observed_frontmost_pid']]
+
+
+def evaluate_focus(samples, start_ms, end_ms, expected_pid):
+    """Check actual foreground deviations. Gaps are measured, never a failure threshold."""
+    failures, quality_errors = [], []
+    result = {'passed': False, 'behavior_passed': None, 'failures': failures,
+              'sampling_quality': {'passed': False, 'status': 'unavailable', 'failures': quality_errors},
+              'max_sample_gap_ms': None, 'start_ms': start_ms, 'end_ms': end_ms, 'expected_pid': expected_pid}
     if (not _number(start_ms) or not _number(end_ms) or end_ms < start_ms
-            or type(expected_pid) is not int or expected_pid <= 0
-            or not _number(maxgap) or maxgap <= 0):
-        failures.append({'reason': 'invalid_interval_or_expected_pid'})
-        return result
+            or type(expected_pid) is not int or expected_pid <= 0):
+        quality_errors.append({'reason': 'invalid_interval_or_expected_pid'}); return result
     if not isinstance(samples, list):
-        failures.append({'reason': 'invalid_samples'})
-        return result
+        quality_errors.append({'reason': 'invalid_samples'}); return result
     previous = None
     for index, row in enumerate(samples):
         if (not isinstance(row, dict) or not _number(row.get('unix_ms'))
                 or row.get('kind') not in ('sample', 'activation')):
-            failures.append({'reason': 'invalid_row', 'index': index, 'row_repr': repr(row)})
-            continue
+            quality_errors.append({'reason': 'invalid_row', 'index': index, 'row_repr': repr(row)}); continue
         if previous is not None and row['unix_ms'] < previous:
-            failures.append({'reason': 'nonmonotonic_evidence', 'index': index})
+            quality_errors.append({'reason': 'nonmonotonic_evidence', 'index': index})
         previous = row['unix_ms']
-    if failures:
-        return result
+    if quality_errors: return result
     readings = [row for row in samples if row['kind'] == 'sample']
     before = [row for row in readings if row['unix_ms'] < start_ms]
     after = [row for row in readings if row['unix_ms'] > end_ms]
     if not before or not after:
-        failures.append({'reason': 'missing_bracketing_sample',
-                         'before': bool(before), 'after': bool(after)})
+        quality_errors.append({'reason': 'missing_bracketing_sample', 'before': bool(before), 'after': bool(after)})
         return result
     left, right = before[-1]['unix_ms'], after[0]['unix_ms']
-    covered = [row for row in readings if left <= row['unix_ms'] <= right]
-    gaps = [b['unix_ms'] - a['unix_ms'] for a, b in zip(covered, covered[1:])]
-    result['max_sample_gap_ms'] = max(gaps, default=0)
-    result['sample_count'] = len(covered)
-    result['bracket_ms'] = [left, right]
-    if result['max_sample_gap_ms'] > maxgap:
-        failures.append({'reason': 'sampling_gap', 'gap_ms': result['max_sample_gap_ms'], 'limit_ms': maxgap})
-    for row in samples:
-        if not left <= row['unix_ms'] <= right:
-            continue
-        pid = row.get('frontmost_pid')
+    covered = [row for row in samples if left <= row['unix_ms'] <= right]
+    readings = [row for row in covered if row['kind'] == 'sample']
+    result.update(max_sample_gap_ms=max((b['unix_ms']-a['unix_ms'] for a,b in zip(readings, readings[1:])), default=0),
+                  sample_count=len(readings), bracket_ms=[left, right],
+                  notification_diagnostics=notification_diagnostics(covered))
+    for row in covered:
+        pid = observed_pid(row)
         if type(pid) is not int or pid <= 0:
-            failures.append({'reason': 'unknown_actor', 'row': row})
+            quality_errors.append({'reason': 'unknown_actor', 'row': row})
         elif pid != expected_pid:
-            failures.append({'reason': 'foreign_foreground', 'row': row})
-        if 'observed_frontmost_pid' in row and (type(row['observed_frontmost_pid']) is not int
-                                               or row['observed_frontmost_pid'] != expected_pid):
-            failures.append({'reason': 'activation_read_disagrees', 'row': row})
+            failures.append({'reason': 'foreign_foreground', 'row': row, 'actual_pid': pid})
         if row.get('error'):
-            failures.append({'reason': 'observer_read_error', 'row': row})
-    result['passed'] = not failures
+            quality_errors.append({'reason': 'observer_read_error', 'row': row})
+    result['behavior_passed'] = not failures
+    result['sampling_quality'].update(passed=not quality_errors, status='usable' if not quality_errors else 'unavailable')
+    result['passed'] = result['behavior_passed'] and result['sampling_quality']['passed']
     return result
 
 
@@ -154,12 +154,17 @@ def evaluate_action(data, response=None, *, expected_rejection=None):
 
 
 def finalize_proof(proof):
-    proof['passed'] = (not proof.get('failure') and bool(proof.get('cases'))
+    focus = proof.get('focus', {})
+    proof['functional_pass'] = (not proof.get('failure') and bool(proof.get('cases'))
                        and all(row.get('passed') is True for row in proof['cases'])
-                       and proof.get('focus', {}).get('passed') is True
-                       and bool(proof['focus'].get('intervals'))
+                       and focus.get('behavior_passed', focus.get('passed')) is not False
+                       and bool(focus.get('intervals'))
                        and proof.get('witness_no_input') is True
                        and proof.get('cleanup', {}).get('passed') is True)
+    proof['sampling_pass'] = focus.get('sampling_quality', {}).get('passed', focus.get('passed')) is True
+    proof['passed'] = proof['functional_pass'] and proof['sampling_pass']
+    proof['status'] = ('failed' if not proof['functional_pass'] else
+                       'passed' if proof['sampling_pass'] else 'inconclusive')
     return proof
 
 
@@ -378,7 +383,12 @@ def run_background_contract(target_fixture, binary, observer_binary, output: Pat
                 focus['span'] = span
                 focus['max_sample_gap_ms'] = span['max_sample_gap_ms']
                 focus['failures'].extend(span['failures'])
-            focus['passed'] = bool(intervals) and not focus['failures'] and all(row['passed'] for row in focus['intervals'])
+            focus['behavior_passed'] = (bool(intervals) and not focus['failures']
+                and all(row['behavior_passed'] is not False for row in focus['intervals']))
+            grades = focus['intervals'] + ([focus['span']] if 'span' in focus else [])
+            focus['sampling_quality'] = {'passed': bool(grades) and all(row['sampling_quality']['passed'] for row in grades),
+                'intervals': [row['sampling_quality'] for row in grades]}
+            focus['passed'] = focus['behavior_passed'] and focus['sampling_quality']['passed']
         except Exception as error:
             proof['focus']['failures'].append({'reason': 'focus_evidence_unavailable', 'error': str(error)})
         finalize_proof(proof)

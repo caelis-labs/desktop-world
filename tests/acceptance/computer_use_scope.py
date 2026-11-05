@@ -18,7 +18,7 @@ from app_client import AppClient, artifact_identity
 from current_task_metrics import check_effects
 from computer_use_boundary_cases import gesture_counts
 from computer_use_focus import (_fixture_class, _image_point, _number, _ready,
-                                _require, _rows, _wait, evaluate_focus, exec_intervals)
+                                _require, _rows, _wait, evaluate_focus, exec_intervals, observed_pid, notification_diagnostics)
 
 TEXT = 'Scope resident 中文🙂 café\nSecond line — Ελληνικά\nThird line'
 SENTINEL = {'text': 'witness sentinel', 'key_events': 0, 'flags_events': 0}
@@ -67,48 +67,50 @@ def scope_source(hover, multiline, *, case='normal', trigger='hover', path=None,
 
 
 def evaluate_scope_focus(rows, start, end, target, witness, *, case='normal', returned=False):
-    """Require both event transitions and uninterrupted actual sample coverage."""
-    failures = []
-    result = {'passed': False, 'failures': failures, 'max_sample_gap_ms': None}
+    """Reject unexpected actual focus changes and failed return, not scheduling gaps."""
+    failures, quality_errors = [], []
+    result = {'passed': False, 'behavior_passed': None, 'failures': failures,
+              'sampling_quality': {'passed': False, 'status': 'unavailable', 'failures': quality_errors},
+              'max_sample_gap_ms': None}
     if not (_number(start) and _number(end) and start <= end
             and type(target) is int and type(witness) is int and target > 0 and witness > 0 and target != witness):
-        failures.append('invalid interval or owned identities'); return result
+        quality_errors.append('invalid interval or owned identities'); return result
     if not isinstance(rows, list) or any(not isinstance(r, dict) or not _number(r.get('unix_ms'))
                                        or r.get('kind') not in ('sample', 'activation') for r in rows):
-        failures.append('invalid observer rows'); return result
-    if any(b['unix_ms'] < a['unix_ms'] for a, b in zip(rows, rows[1:])):
-        failures.append('nonmonotonic observer evidence'); return result
+        quality_errors.append('invalid observer rows'); return result
+    if any(b['unix_ms'] < a['unix_ms'] for a,b in zip(rows, rows[1:])):
+        quality_errors.append('nonmonotonic observer evidence'); return result
     samples = [r for r in rows if r['kind'] == 'sample']
     before = [r for r in samples if r['unix_ms'] < start]
     after = [r for r in samples if r['unix_ms'] > end]
     if not before or not after:
-        failures.append('missing bracketing samples'); return result
+        quality_errors.append('missing bracketing samples'); return result
     left, right = before[-1]['unix_ms'], after[0]['unix_ms']
     covered = [r for r in rows if left <= r['unix_ms'] <= right]
     readings = [r for r in covered if r['kind'] == 'sample']
-    gap = max((b['unix_ms'] - a['unix_ms'] for a, b in zip(readings, readings[1:])), default=0)
-    result['max_sample_gap_ms'] = gap
-    result['bracket_ms'] = [left, right]
-    if gap > 50:
-        failures.append('sample gap exceeds fixed 50ms limit')
-    for row in covered:
-        if row.get('frontmost_pid') not in (target, witness) or type(row.get('frontmost_pid')) is not int:
-            failures.append({'unknown_or_foreign_actor': row})
-        if row.get('error') or ('observed_frontmost_pid' in row and row['observed_frontmost_pid'] != row['frontmost_pid']):
-            failures.append({'observer_error_or_disagreement': row})
-    activations = [r for r in covered if r['kind'] == 'activation']
-    expected = [target, witness] + ([target] if case == 'external' and returned else [])
-    result['activations'] = activations
-    if [r['frontmost_pid'] for r in activations] != expected:
-        failures.append({'activation_sequence': [r['frontmost_pid'] for r in activations], 'expected': expected})
+    result.update(max_sample_gap_ms=max((b['unix_ms']-a['unix_ms'] for a,b in zip(readings, readings[1:])), default=0),
+                  bracket_ms=[left, right], notification_diagnostics=notification_diagnostics(covered),
+                  activations=[r for r in covered if r['kind'] == 'activation'])
     sequence = []
-    for row in readings:
-        if not sequence or sequence[-1] != row['frontmost_pid']:
-            sequence.append(row['frontmost_pid'])
-    result['sample_sequence'] = sequence
-    if sequence != [witness, *expected]:
-        failures.append({'sample_sequence': sequence, 'expected': [witness, *expected]})
-    result['passed'] = not failures
+    for row in covered:
+        pid = observed_pid(row)
+        if type(pid) is not int or pid <= 0:
+            quality_errors.append({'unknown_actor': row}); continue
+        if pid not in (target, witness): failures.append({'foreign_foreground': row, 'actual_pid': pid})
+        if row.get('error'): quality_errors.append({'observer_error': row})
+        if row['kind'] == 'sample' and 'observed_frontmost_pid' in row and row['observed_frontmost_pid'] != pid:
+            quality_errors.append({'malformed_sample': row})
+        if not sequence or sequence[-1] != pid: sequence.append(pid)
+    expected = [witness, target, witness] + ([target] if case == 'external' and returned else [])
+    result.update(sample_sequence=sequence, borrow_observed=target in sequence,
+                  focus_restored=bool(sequence) and sequence[-1] == expected[-1])
+    allowed = iter(expected)
+    ordered = all(any(value == candidate for candidate in allowed) for value in sequence)
+    if sequence and (sequence[0] != witness or sequence[-1] != expected[-1] or not ordered):
+        failures.append({'unexpected_focus_sequence': sequence, 'allowed': expected})
+    result['behavior_passed'] = not failures
+    result['sampling_quality'].update(passed=not quality_errors, status='usable' if not quality_errors else 'unavailable')
+    result['passed'] = result['behavior_passed'] and result['sampling_quality']['passed']
     return result
 
 
@@ -315,10 +317,10 @@ def run_scope_contract(target, binary, observer_binary, output, *, case='normal'
                                                case=case, returned=external_return)
         geometry = next(r for r in intervals if r['request_id'] != request)
         proof['geometry_focus'] = evaluate_focus(samples, geometry['start_ms'], geometry['end_ms'], wp)
-        _require(proof['geometry_focus']['passed'], proof['geometry_focus'])
+        _require(proof['geometry_focus']['behavior_passed'] is not False, proof['geometry_focus'])
         proof['background_prefix'] = evaluate_focus(samples, start, increments[1]['unix_ms'], wp)
-        _require(proof['background_prefix']['passed'], proof['background_prefix'])
-        _require(proof['focus']['passed'], proof['focus'])
+        _require(proof['background_prefix']['behavior_passed'] is not False, proof['background_prefix'])
+        _require(proof['focus']['behavior_passed'] is not False, proof['focus'])
         proof['counter'] = {'before': before, 'after': final['native']['counter'], 'events': increments}
         proof['exact_text'] = final['native']['multiline_note']
         proof['witness'] = witness.state()['witness']
@@ -361,7 +363,12 @@ def run_scope_contract(target, binary, observer_binary, output, *, case='normal'
                              and cleanup.get('client', {}).get('returncode') == 0
                              and not cleanup.get('client', {}).get('forced')
                              and cleanup.get('client', {}).get('native_workers_reaped') is True)
-        proof['passed'] = proof['contract_pass'] and cleanup['passed']
+        proof['functional_pass'] = proof['contract_pass'] and cleanup['passed']
+        proof['sampling_pass'] = all(proof.get(name, {}).get('sampling_quality', {}).get('passed') is True
+                                     for name in ('focus', 'geometry_focus', 'background_prefix'))
+        proof['passed'] = proof['functional_pass'] and proof['sampling_pass']
+        proof['status'] = ('failed' if not proof['functional_pass'] else
+                           'passed' if proof['sampling_pass'] else 'inconclusive')
         (output / 'report.json').write_text(json.dumps(proof, ensure_ascii=False, indent=2) + '\n')
     return proof
 

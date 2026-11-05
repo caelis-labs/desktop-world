@@ -1,11 +1,20 @@
 # macOS 输入路由与真实光标
 
-Agent 仍只调用 `apps`、`exec` 和原有 `app` 方法。输入路由是实现细节，脚本不选择
+Agent 仍只调用 `apps`、`exec` 和 `app` 方法。输入路由是实现细节，脚本不选择
 虚拟/物理光标、不维护 Session，也不根据内部投递方式安排重试。正常脚本回执不暴露
 `delivery`；私有执行账本保留原始投递证据及派发不确定性。虚拟光标反馈覆盖坐标 click/move/drag/scroll；语义 AXPress、键盘和 AXPosition 不伪造鼠标轨迹。
 
 本实现接续[逐操作历史审查](macos-ax-cursor-audit-2026-11-03.md)。历史失败记录保留，
 其“当前产品”描述只对应当时的二进制，不代表下述当前源码合同。
+
+## Agent 合同优先级
+
+首先保证任务功能和可验证的结果。已知的路由选择、准备及必要等待由 DTW 内部处理，
+普通调用不需要 Agent 编排焦点、重放或睡眠。已派发但无法证明效果时如实保留不确定性，
+不把发送成功当作操作成功。只有明确的前置拒绝才能触发安全的自动路线切换。
+
+在此基础上持续减少真实光标位移与前台占用，并归还借用的资源。协议保持少量清晰方法；
+`app.focus()` 是明确需要前台时的入口，正常输入仍自动选择可用路线。
 
 ## 分类规则
 
@@ -21,26 +30,38 @@ Agent 仍只调用 `apps`、`exec` 和原有 `app` 方法。输入路由是实�
 | --- | --- | --- |
 | 有效语义目标 | AX action | 不为未知 AX 状态或菜单准备焦点；语义失败不自动重放成鼠标点击 |
 | 证明是标准标题栏且位置可写 | AXPosition | 不因 AX 不可读或位置设置结果不确定而改路重放 |
-| 坐标左/右键、单/双击 | 精确 PID + 窗口事件 | 必要的定向事件 ABI 明确不可用且干净未派发时可申请脚本级前台借用 |
+| 坐标左/右键、单/双击 | 精确 PID + 窗口事件 | 定向 ABI 明确不可用，或已证明为标准 Open 面板的左键单击；均需干净未派发 |
 | 内容拖拽，包括 AppKit 控件、Chrome 文本拖选 | 精确 PID + 窗口事件，逐点验证 | 同上；Chromium 标签本身不是拖拽借用理由 |
 | 锚点或默认中心滚动 | 精确 PID + 窗口 wheel | 同上；不要求 AX children / AX window inventory |
 | 已识别 AppKit / Chromium 的原生悬停 | 预检识别跟踪限制，选择物理光标 | 干净未派发时可申请脚本级前台借用；未知框架不套用该例外 |
 | Qt / 未识别框架的悬停 | 定向事件 | 未知不等于不支持；不以未知框架、AX 缺失或普通错误授权借用 |
-| 键盘 | 定向路径与精确编辑目的地证明 | 已证明的 native modal/sheet、关联进程接收者、必要定向 API 缺失，或 Chromium Command+A/补充平面 Unicode、AppKit Command+W/控制字符文本，可申请前台借用；不是移动光标的理由 |
+| 键盘 | 定向路径与精确编辑目的地证明 | 已证明没有可保留的后台 key window（AX noValue）时可借用； 已证明的 native modal/sheet、关联进程接收者、必要定向 API 缺失，或 Chromium Command+A/补充平面 Unicode、AppKit Command+W/控制字符文本，可申请前台借用；不是移动光标的理由 |
 
 视觉输入的 AX 豁免仅适用于坐标指针操作。前台键盘回退仍逐次验证精确 AX 窗口及编辑
 目的地，应用 PID 仍在前台不能替代该检查；同一应用内焦点离开目标窗口时停止后续按键。
 
 模态状态本身不要求借用光标。真实 `NSApplication.runModal` 中的定向点击、拖拽已有
-独立效果证据，因此指针预检不再依赖 AXModal 或语义树。框架分类读取实际 bundle 的
+独立效果证据，因此普通模态指针预检不依赖 AXModal 或语义树。框架分类读取实际 bundle 的
 frameworks / AppKit 元数据，不按 Telegram、fixture bundle ID 或应用名称开白名单。
 
-只有两种指针借用原因进入内部审计：`native_hover_tracking`（仅已验收的原生悬停）和
-`addressed_event_api_unavailable`。
+指针借用原因进入内部审计：`native_hover_tracking`（已验收的原生悬停）、
+`addressed_event_api_unavailable`、`native_open_panel_click`（只限标准 Open 面板左键单击）。
+
+标准 Open 面板以原生 AXWindow/AXSheet 的 `AXIdentifier=open-panel` 分类；不依赖标题、
+语言、应用名或 AXModal。其 NSRemoteView 不等于普通 `runModal` 控件；定向事件到达宿主
+不代表远程按钮收到有效点击。该已知形状在任何点击派发前选择物理路径，不能等无效果后再点一次。
+普通原生窗口的后台点击和文字录入不要求目标无遮挡；物理回退仍须即时证明可见命中点。
 缺权限、进程变化、几何过期、遮挡、取消、超时、连接失败和任意 provider 错误均不是借用依据。
+resident 建立视觉 scope 时必须使用调用方的 `visual` 分类。视觉输入及标准 Open 面板
+使用不注入 AX-style make-key records 的 WindowServer 前台序列；随后仍以 AXRaise、
+AppKit activation 和精确聚焦窗口回读证明目标。后台语义 key-window 准备记录不能当作
+物理输入的前台激活；先前忽略 `visual` 会破坏原生远程面板的事件处理。
+
 物理光标与应用前台分别准入：只有上述已知能力与干净预检可发起脚本级前台借用，
 普通鼠标错误不授权激活。未知 AX/modal 错误保留原因，不能当作已证明的 modal 能力。
-无窗口快捷键仍有独立的应用身份、前台及配对释放条件，不能据此推断存在可借用的窗口锚点。
+无窗口快捷键先证明完整窗口清单为空，再以唯一应用实例及出生标识建立 scope；
+第一扇实际聚焦窗口到来时一次性绑定其根对象，之后继续执行原有窗口家族约束。
+新窗口异步出现时，下一条输入只读等待最多 2 秒，沿用请求总 deadline，不重发创建窗口的按键。
 选择器不会为 `content_unproven` 或菜单自动聚焦；只读语义启用继续不激活应用。
 `fallback_allowed:true` 单独不能改路：还必须是精确的已知能力证据、`not_dispatched`、
 预检能力错误，且没有 cleanup error。若依据为 `native_keyboard_semantics`，还必须携带已识别的 `capability_detail`：
@@ -52,9 +73,14 @@ focus preparation 或 interruption。已准备、已投递或 `unknown` 的输�
 
 ## 脚本级前台所有权与归还
 
+`app.focus()` 是显式入口，不接受 PID、窗口坐标或策略参数。它聚焦当前已授权的窗口，
+或经完整清单证明无窗口的唯一实例；后续同一 exec 内输入共享借用，结束时归还。
+它不提供跨 exec 永久抢焦点的模式，`background_only` 仍在派发前拒绝。
+
 resident worker 在首次借用时保留原前台进程出生标识与精确 AX 窗口对象/窗口 ID，
-并为目标建立精确逻辑窗口锚点。因此坐标输入虽可不依赖 AX，持久前台借用仍需要该锚点与
-原前台证明；缺少这些证明不会退化成仅按 PID 激活。脚本内可以跟随由保留对象 ancestry
+并为有窗口目标建立精确逻辑窗口锚点；完整清单证明无窗口时才允许尚未绑定的锚点。
+因此坐标输入虽可不依赖 AX，持久前台借用仍需目标实例和原前台证明；
+AX 不可读不等于无窗口，也不会退化成按 PID 猜测窗口。脚本内可以跟随由保留对象 ancestry
 证明的 sheet/popup 后代，不能把同 PID 的兄弟窗口当作原任务窗口。
 
 后续每次输入均复核前台所有权和精确目的地。外部切换到其他 app 或兄弟窗口会使 scope
@@ -63,6 +89,11 @@ resident worker 在首次借用时保留原前台进程出生标识与精确 AX 
 若原前台确无窗口，则只恢复原 app。外部切焦点或原身份变化时不强制恢复。
 正常脚本结算的焦点归还有独立、最多 2 秒的清理预算；恢复失败是 sticky cleanup failure，
 关闭后续派发准入，不能当作恢复成功。
+
+窗口关闭和前台 app 离开分别记录：旧根窗口销毁永远不授权新输入。清理阶段可在
+原 app 实例持续前台、没有离开再返回、原根已从 WindowServer 消失时，恢复原前台。
+这仅适用于完整清单证明目标已无窗口，或已准入的标准 Open 面板点击产生了先前不存在的
+新窗口；已有兄弟窗口、未知身份或实际外部切焦点都不适用。新窗口的输入需要重新观察并建立有效 scope。
 
 只有同 app 的 `quit_app` 得到 confirmed `application_exited`，或 `close_window`
 得到 confirmed `window_closed` 且关闭的是锚点窗口，才是终态。保存提示、后代 sheet
@@ -76,6 +107,35 @@ resident worker 在首次借用时保留原前台进程出生标识与精确 AX 
 
 本节描述当前源码合同。新的脚本级借用、失效及归还证据与剩余限制见
 [脚本级前台验收](computer-use-script-scope-2026-11-04.md)；历史鼠标验收不能代替该生命周期验收。
+
+## 关闭窗口后的按键释放
+
+CoreGraphics 为 Command、Shift、Option、Control 的按下和松开都生成 `FlagsChanged`，
+不能仅凭 `KeyUp` 枚举判断释放。定向输入按 keycode 与对应 modifier flag 判定方向，
+为按下保留实际 `FlagsChanged` 释放事件；释放只检查原应用出生标识，不再要求已被操作
+关闭的窗口仍能读取 AXParent。修饰键松开不授权新输入，也不能切换投递路线。
+这修复了 TextEdit 取消面板实际生效后仍返回 `unknown` 的问题，后台能力得以保留。
+
+前台归还遇到新面板短暂的 typed AX `cannotComplete` 时，仅在原有清理预算内重读完整
+所有权证明；不重发激活或输入，不忽略权限、进程替换和外部焦点变化。
+
+原生 worker 的 stdin 读取放在有界队列的独立线程；主线程在空闲时和接纳请求前处理
+Cocoa 回调。否则上一执行的归还通知可能堵在 stdin 后，直到下一次激活才送达，错误地
+作废新借用。这里的运行循环调度不是采样通过门槛，也不忽略真正的外部 leave/return。
+
+## 观察与功能结果
+
+验收优先验证真实 UI 后置条件和确定的工具结果。采样间隔只保留实际统计，不以 50 ms
+或其他固定空档阈值判定功能失败，也不要求 Agent 分析这些开发诊断。
+
+观察器检查实际发生的异常：未获准的真实光标位移、借用结束未归还、预期之外的前台应用
+及错误的焦点归还。焦点读取使用即时 WindowServer PSN/PID/PSN 证明；NSWorkspace
+通知只作历史辅助，不能把延迟通知中的旧应用当作回调时的前台应用。
+缺少可用观察数据仍明确标为不可验证，不伪造成功；实际间隔、边界不确定性和原始记录保留供定位。
+
+报告分别输出功能效果、观察可用性和鼠标体验。发生过合法的物理借用就不能声称全程后台独立；
+`borrowed_and_restored` 表示真实光标临时移动且归还，`fully_independent` 只用于未观察到真实位移
+且未发生指针借用的调用。一次合法借用不放行后续动作的位移，回到原位置也不抹去中间移动。
 
 ## 一次全独立验收与最终例外
 
@@ -161,21 +221,23 @@ owner 和传输路径，即使原窗口已关闭也不能把释放发送给重�
 ## 验证方式
 
 `DTW_INPUT_TRACE=1` 仅向开发诊断 stderr 写入原生 route / reason / worker PID / window，不更改
-Agent 工具 schema。`cursor_audit.py --assert-independent` 在每个原始 MCP request ID 的
+Agent 工具 schema。`cursor_audit.py` 在每个原始 MCP request ID 的
 完整区间采样真实系统光标，并逐条核对路由；终点归位不算独立，未知借用原因直接失败。
 取消但无回复的请求保持无回执状态，清理区间截至下一次成功读回。
 
-真实光标审计策略为 `bounded-pointer-borrow-v3`，其逐操作区间只审计指针借用，不证明脚本级前台所有权或归还。私有 `dtw_input_interval` 以 worker PID 与 trace ID
-配对每次指针借用的 begin/end，覆盖准备、派发及收尾，并在释放物理输入 lease 前结束。
-只有 `native_hover_tracking` 的 move，或 `addressed_event_api_unavailable` 的指针动作可进入允许区间。
-混合脚本中的每次采样位移都必须完整落在一个允许区间内；一次合法 hover 不放行整段脚本。
-旧的单点借用日志不能单独通过新策略；缺失/不配对日志、采样不可用、未覆盖完整请求及只读期间
-的未获准位移都会使严格验收失败。严格策略的实际最大采样间隙固定为 50ms，任何超过阈值的
-间隙均失败，不能将长时间停采后的相同终点当作连续稳定；报告保留未四舍五入的实际间隙。常见的 AXPress 语义点击按其精确 native action 证据核对。
+真实光标审计策略为 `observed-pointer-borrow-v5`。私有 `dtw_input_interval` 以 worker PID
+与 trace ID 配对指针借用的 begin/end，覆盖准备、派发和收尾。允许原因仅为
+`native_hover_tracking` 的 move、`native_open_panel_click` 的 click，或已证明定向 ABI
+不可用的指针动作。未知、缺失或不配对的路由记录不能通过借用策略。
 
-每条借用记录必须同时检查独立应用效果。采样默认 2 ms，报告实际最大间隔；比间隔更短的
-位移不能排除，位置变化本身也不能证明由 DTW 导致。原始失败、MCP 帧、stderr、fixture
-状态及采样数据保存在同一证据目录，避免重跑后覆盖。
+`cursor_audit.py --assert-policy` 检查真实位移是否得到分类和区间许可，并强制在请求完成时
+归还原光标位置（允许 1 point 的系统坐标舍入）。跨借用边界的采样变化保留为时间归属不明，
+明确在区间外发生的变化仍失败；间隔变长不会抹去已观察到的异常，也不会单独导致失败。
+`--assert-independent` 则要求没有任何已观察到的真实位移，包括合法的临时借用。
+
+报告另列 MCP 调用以外的位移，避免漏掉准备、迟到清理或调用间发生的移动；这些记录保留
+actor undetermined，不仅凭位置变化就归因于 DTW。连续观察仍可能漏掉短于采样间隔的变化，
+因此报告说明观察范围，不宣称数学上的连续不变。原始 MCP、路由、应用状态、观察数据及失败尝试均保留。
 
 统一 [Computer Use APP](../tests/fixtures/computer-use-app/README.md) 的标准入口强制执行该策略，
 并单独捕获经过身份验证的虚拟光标 helper 窗口，核对实际热点坐标和渲染像素。

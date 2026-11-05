@@ -785,6 +785,9 @@ pub trait Backend: Send + Sync {
             instances: Vec::new(),
         }
     }
+    fn focus_application(&self, _app: &AppInstance, _call: &CallContext<'_>) -> ActionOutcome {
+        ActionOutcome::rejected(Error::UnsupportedCapability)
+    }
     fn keypress_application(
         &self,
         _app: &AppInstance,

@@ -257,3 +257,54 @@ fn implicit_semantic_and_scroll_routes_skip_decorations_without_changing_keyboar
         assert_eq!(received.native_id, 101, "{operation}");
     }
 }
+
+#[test]
+fn explicit_focus_can_start_without_look_and_keeps_the_public_app_scope() {
+    let (server, catalog) = agent();
+    let focused = exec(&server, "explicit_focus", "await app.focus();");
+    assert!(!focused.is_error, "{}", focused.data);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+    assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 1);
+    let invalid = exec(&server, "focus_arguments", "await app.focus({pid:7});");
+    assert!(invalid.is_error);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn windowless_shortcut_waits_for_its_new_surface_before_following_text_without_replay() {
+    let (server, catalog) = agent();
+    {
+        let mut model = catalog.backend.0.model.lock().unwrap();
+        model.inventory = Some(test_inventory(vec![]));
+        model.application_input = true;
+    }
+    let gate = catalog.backend.action_gate();
+    let running = server.clone();
+    let worker = std::thread::spawn(move || {
+        exec(
+            &running,
+            "new_then_text",
+            "await app.keypress('META+N'); await app.typeText('new document text');",
+        )
+    });
+    gate.entered();
+    gate.release();
+    std::thread::sleep(Duration::from_millis(80));
+    catalog.backend.0.model.lock().unwrap().inventory = Some(test_inventory(vec![WindowInfo {
+        target: WindowTarget {
+            app: application(),
+            native_id: 301,
+            generation: 3,
+        },
+        title: "New document".into(),
+        visible: true,
+        scene: WindowLayout::new([0., 0., 500., 400.], 0),
+    }]));
+    let reply = worker.join().unwrap();
+    assert!(!reply.is_error, "{}", reply.data);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        catalog.backend.0.input_targets.lock().unwrap()[0].native_id,
+        301
+    );
+}

@@ -32,12 +32,14 @@ class FocusEvidenceTests(unittest.TestCase):
         self.assertEqual(result['max_sample_gap_ms'], 2)
         self.assertEqual(result['bracket_ms'], [4, 36])
 
-    def test_gap_limit_includes_both_bracketing_samples(self):
+    def test_gap_statistics_include_both_bracketing_samples_without_a_limit(self):
         accepted = evaluate_focus([sample(0), sample(50)], 1, 49, 7)
         self.assertTrue(accepted['passed'])
         stalled = evaluate_focus([sample(0), sample(51)], 1, 49, 7)
-        self.assertFalse(stalled['passed'])
+        self.assertTrue(stalled['passed'])
         self.assertEqual(stalled['max_sample_gap_ms'], 51)
+        self.assertTrue(stalled['behavior_passed'])
+        self.assertEqual(stalled['sampling_quality']['status'], 'usable')
 
     def test_missing_empty_or_only_in_call_samples_cannot_prove_focus(self):
         for rows in ([], [sample(6), sample(34)], self.samples[3:], self.samples[:-3], None):
@@ -64,8 +66,8 @@ class FocusEvidenceTests(unittest.TestCase):
             rows[10]['frontmost_pid'] = pid
             result = self.grade(rows)
             self.assertFalse(result['passed'])
-            self.assertEqual(result['failures'][0]['reason'], 'unknown_actor')
-            self.assertEqual(result['failures'][0]['row']['frontmost_pid'], pid)
+            self.assertEqual(result['sampling_quality']['failures'][0]['reason'], 'unknown_actor')
+            self.assertEqual(result['sampling_quality']['failures'][0]['row']['frontmost_pid'], pid)
         rows = self.samples[:9] + [sample(17, None, 'activation')] + self.samples[9:]
         self.assertFalse(self.grade(rows)['passed'])
 
@@ -84,6 +86,14 @@ class FocusEvidenceTests(unittest.TestCase):
         self.assertFalse(self.grade(rows)['passed'])
         for args in ((35, 5, 7), (5, 35, 0), (5, 35, True), (float('inf'), 35, 7)):
             self.assertFalse(evaluate_focus(self.samples, *args)['passed'])
+
+    def test_notification_lag_is_diagnostic_but_actual_foreign_foreground_fails(self):
+        rows = self.samples[:9] + [sample(17, 99, 'activation', observed_frontmost_pid=7)] + self.samples[9:]
+        result = self.grade(rows)
+        self.assertTrue(result['passed'])
+        self.assertEqual(len(result['notification_diagnostics']), 1)
+        rows[9]['observed_frontmost_pid'] = 99
+        self.assertFalse(self.grade(rows)['passed'])
 
     def test_cleanup_activation_outside_brackets_is_not_graded(self):
         self.samples.extend([sample(60, 99, 'activation'), sample(62, 99)])
@@ -136,6 +146,17 @@ class CurrentWireAndBusinessTests(unittest.TestCase):
             changed = copy.deepcopy(self.rejected)
             changed['effects']['focus_preparation'] = preparation
             self.assertFalse(evaluate_action(changed, expected_rejection='foreground_required')['passed'])
+
+    def test_unavailable_observer_keeps_functional_result_and_marks_overall_inconclusive(self):
+        proof = {'cases': [{'passed': True}],
+                 'focus': {'passed': False, 'behavior_passed': True,
+                           'sampling_quality': {'passed': False}, 'intervals': [{'passed': False}]},
+                 'witness_no_input': True, 'cleanup': {'passed': True}}
+        result = finalize_proof(proof)
+        self.assertTrue(result['functional_pass'])
+        self.assertFalse(result['sampling_pass'])
+        self.assertFalse(result['passed'])
+        self.assertEqual(result['status'], 'inconclusive')
 
     def test_expected_rejection_never_masks_business_or_evidence_failure(self):
         proof = {'cases': [evaluate_action(self.rejected, expected_rejection='foreground_required')],

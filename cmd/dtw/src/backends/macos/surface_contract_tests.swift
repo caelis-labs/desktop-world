@@ -839,7 +839,7 @@ private let inventoryBusy = failure("ax_unavailable", "original AXRole busy",
     attributeFailure: AXAttributeFailure(name: kAXRoleAttribute, error: .cannotComplete))
 private var inventoryTime = 0.0
 private var inventoryReads = 0
-private let recoveredInventory: [Int] = try retryCompleteInventory(original: inventoryBusy,
+private let recoveredInventory: [Int] = try retryCompleteAXRead(original: inventoryBusy,
     remaining: { 0.75 - inventoryTime }, check: {}, read: {
         inventoryReads += 1
         if inventoryReads == 1 {
@@ -852,7 +852,7 @@ surfaceCheck(recoveredInventory == [3, 4] && inventoryReads == 2)
 inventoryTime = 0
 private var lastInventoryError = ""
 do {
-    let _: [Int] = try retryCompleteInventory(original: inventoryBusy,
+    let _: [Int] = try retryCompleteAXRead(original: inventoryBusy,
         remaining: { 0.25 - inventoryTime }, check: {}, read: {
             inventoryTime += 0.1
             lastInventoryError = "AXWindows busy at \(inventoryTime)"
@@ -865,7 +865,7 @@ do {
 }
 for code in ["native_stopping", "deadline_exceeded", "app_changed"] {
     do {
-        let _: [Int] = try retryCompleteInventory(original: inventoryBusy, remaining: { 0.75 },
+        let _: [Int] = try retryCompleteAXRead(original: inventoryBusy, remaining: { 0.75 },
             check: { throw failure(code, "caller cause") },
             read: { preconditionFailure("Read continued after caller stop") }, wait: { _ in })
         preconditionFailure("Caller error lost")
@@ -874,14 +874,14 @@ for code in ["native_stopping", "deadline_exceeded", "app_changed"] {
 for original in [failure("ax_unavailable", "target object expired", attributeFailure: AXAttributeFailure(name: kAXRoleAttribute, error: .invalidUIElement)),
                  failure("ax_unavailable", "untyped failure"), failure("target_changed", "target changed")] {
     do {
-        let _: [Int] = try retryCompleteInventory(original: inventoryBusy, remaining: { 0.75 },
+        let _: [Int] = try retryCompleteAXRead(original: inventoryBusy, remaining: { 0.75 },
             check: {}, read: { throw original }, wait: { _ in })
         preconditionFailure("A non-busy error was retried")
     } catch let error as NativeFailure { surfaceCheck(error.code == original.code && error.message == original.message) }
 }
 inventoryTime = 0
 do {
-    let _: [Int] = try retryCompleteInventory(original: inventoryBusy,
+    let _: [Int] = try retryCompleteAXRead(original: inventoryBusy,
         remaining: { 0.25 - inventoryTime }, check: {}, read: {
             inventoryTime = 0.25
             throw failure("deadline_exceeded", "local read window expired")
@@ -890,7 +890,7 @@ do {
 } catch let error as NativeFailure { surfaceCheck(error.message == inventoryBusy.message) }
 private var inventoryChecks = 0
 do {
-    let _: [Int] = try retryCompleteInventory(original: inventoryBusy, remaining: { 0.75 }, check: {
+    let _: [Int] = try retryCompleteAXRead(original: inventoryBusy, remaining: { 0.75 }, check: {
         inventoryChecks += 1
         if inventoryChecks == 3 { throw failure("app_changed", "after fresh snapshot") }
     }, read: { [7] }, wait: { _ in })

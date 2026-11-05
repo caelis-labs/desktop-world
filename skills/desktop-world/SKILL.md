@@ -38,8 +38,12 @@ Read textual content on demand with `return await app.readText('w1.e12')`;
 continue with `{target:'w1.e12',offset:page.next_offset}` without a new look.
 Text offsets are UTF-16; a fresh look starts a new content observation.
 
+Use `await app.focus()` when the task explicitly needs the app foreground. On macOS,
+keep related input in that same script: focus is borrowed and returned at settlement.
+Normal input still chooses its route automatically.
+
 The public methods are `look`, `capture`, `readText`, `click`, `move`, `drag`, `typeText`,
-`keypress`, `scroll` and `quit`. Read [API.md](API.md) for exact arguments and
+`keypress`, `scroll`, `focus` and `quit`. Read [API.md](API.md) for exact arguments and
 output semantics;
 [PATTERNS.md](PATTERNS.md) covers visual fallback, dialogs and recovery.
 There is no Agent-managed Session, window binding, cursor or native reference.

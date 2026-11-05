@@ -73,6 +73,14 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
     /// Menu shortcuts for a proven app with no addressable window. The backend
     /// must independently prove foreground ownership before every key down.
     pub fn app_keypress_until(&self, keys: &[String], deadline: Instant) -> ActionReceipt {
+        self.application_input_until(Some(keys), deadline)
+    }
+
+    pub fn app_focus_until(&self, deadline: Instant) -> ActionReceipt {
+        self.application_input_until(None, deadline)
+    }
+
+    fn application_input_until(&self, keys: Option<&[String]>, deadline: Instant) -> ActionReceipt {
         let deadline = self.bounded_deadline(Some(deadline));
         let prepared = (|| {
             let mut state = self.state();
@@ -87,7 +95,15 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                 });
             }
             let app = state.apps[0].clone();
-            self.validate_target(&state, &app, Capability::Keypress)?;
+            self.validate_target(
+                &state,
+                &app,
+                if keys.is_some() {
+                    Capability::Keypress
+                } else {
+                    Capability::Focus
+                },
+            )?;
             self.check_deadline(deadline)?;
             let retired = take_observations(&mut state, |o| o.target.app == app);
             state.busy = true;
@@ -103,9 +119,15 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             Ok(_) if self.backend.stamp() != provider => {
                 ActionOutcome::rejected(Error::WrongProvider)
             }
-            Ok(_) => self
-                .backend
-                .keypress_application(&app, keys, &CallContext { poll: &poll }),
+            Ok(_) => match keys {
+                Some(keys) => {
+                    self.backend
+                        .keypress_application(&app, keys, &CallContext { poll: &poll })
+                }
+                None => self
+                    .backend
+                    .focus_application(&app, &CallContext { poll: &poll }),
+            },
             Err(e) => ActionOutcome::rejected(e),
         };
         let state = flight.finish();

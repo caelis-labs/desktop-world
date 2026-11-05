@@ -18,6 +18,7 @@ pub(super) struct SceneState {
     element_ids: HashMap<String, String>,
     next_element: u64,
     viewport: Option<([f64; 4], String, [f64; 4])>,
+    window_wait_pending: bool,
 }
 impl SceneState {
     pub(super) fn projection(&self) -> Option<Value> {
@@ -57,7 +58,7 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
         "scene.typeText" => &["text"],
         "scene.keypress" => &["keys"],
         "scene.scroll" => &["delta_y", "delta_x", "x", "y"],
-        "scene.quit" => &[],
+        "scene.quit" | "scene.focus" => &[],
         _ => return Err(error("invalid_arguments", "Unknown app operation")),
     };
     let object = args
@@ -297,6 +298,16 @@ impl<B: Backend + 'static> Coordinator<B> {
         apply_publication(&mut self.state.lock().unwrap(), publication);
         work
     }
+    fn scene_wait_after_application_input(&self, work: &Work) {
+        if work
+            .completed
+            .receipt
+            .as_ref()
+            .is_some_and(|r| r.outcome.dispatch == DispatchState::Dispatched)
+        {
+            self.state.lock().unwrap().scene.window_wait_pending = true;
+        }
+    }
     pub(super) fn scene_call(&self, id: &str, op: &str, args: &Value, deadline: Instant) -> Work {
         if let Err(e) = validate(op, args) {
             return failed(e);
@@ -332,7 +343,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         // Known sequential steps can open a new dialog/window in the same
         // script. Resolve implicit input routing from a fresh app inventory;
         // explicit semantic IDs and pixels remain bound to what was observed.
-        let implicit = matches!(op, "scene.typeText" | "scene.keypress")
+        let implicit = matches!(op, "scene.typeText" | "scene.keypress" | "scene.focus")
             || (op == "scene.scroll" && args.get("x").is_none())
             || (op == "scene.click" && args.get("selector").is_some());
         if implicit && self.runtime.instances().is_empty() {
@@ -356,12 +367,29 @@ impl<B: Backend + 'static> Coordinator<B> {
                     .and_then(|w| state.windows.get(w))
                     .map(|target| target.app.clone())
             };
-            let work = self.scene_atomic(id, "windows", json!({}), deadline);
-            if work.completed.error.is_some() {
-                return work;
-            }
-            let value = work.completed.value.unwrap();
-            let rows = ordered(value["windows"].as_array().cloned().unwrap_or_default());
+            let wait = self.state.lock().unwrap().scene.window_wait_pending;
+            let until = (Instant::now()
+                + if wait {
+                    Duration::from_secs(2)
+                } else {
+                    Duration::ZERO
+                })
+            .min(deadline);
+            let rows = loop {
+                let work = self.scene_atomic(id, "windows", json!({}), deadline);
+                if work.completed.error.is_some() {
+                    return work;
+                }
+                let value = work.completed.value.unwrap();
+                let rows = ordered(value["windows"].as_array().cloned().unwrap_or_default());
+                if rows.iter().any(|row| row["visible"] == true) || Instant::now() >= until {
+                    break rows;
+                }
+                std::thread::sleep(
+                    Duration::from_millis(20).min(until.saturating_duration_since(Instant::now())),
+                );
+            };
+            self.state.lock().unwrap().scene.window_wait_pending = false;
             let mut state = self.state.lock().unwrap();
             let instance = selected_instance.or_else(|| {
                 rows.iter()
@@ -405,6 +433,9 @@ impl<B: Backend + 'static> Coordinator<B> {
         }
         let active = self.state.lock().unwrap().scene.active.clone();
         let Some(window) = active else {
+            if op == "scene.focus" && !self.runtime.instances().is_empty() {
+                return Work::action(self.runtime.app_focus_until(deadline));
+            }
             if op == "scene.keypress" && !self.runtime.instances().is_empty() {
                 let mut options = args.clone();
                 options["window_ref"] = json!("internal-app-shortcut");
@@ -413,7 +444,9 @@ impl<B: Backend + 'static> Coordinator<B> {
                     Err(e) => return failed(e),
                 };
                 if let Command::Input(WindowInput::Keypress { keys }) = parsed.command {
-                    return Work::action(self.runtime.app_keypress_until(&keys, deadline));
+                    let work = Work::action(self.runtime.app_keypress_until(&keys, deadline));
+                    self.scene_wait_after_application_input(&work);
+                    return work;
                 }
             }
             return failed(error(

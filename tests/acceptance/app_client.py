@@ -11,7 +11,7 @@ from pathlib import Path
 import time
 
 
-METHODS = ['look', 'capture', 'readText', 'click', 'move', 'drag', 'typeText', 'keypress', 'scroll', 'quit']
+METHODS = ['look', 'capture', 'readText', 'click', 'move', 'drag', 'typeText', 'keypress', 'scroll', 'focus', 'quit']
 
 
 def require(condition, detail):

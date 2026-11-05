@@ -2,7 +2,7 @@ import unittest
 
 from computer_use_acceptance import merge_evidence
 from computer_use_benchmark import BenchmarkReport, load_targets
-from cursor_audit import MAX_SAMPLE_GAP_MS, POLICY_VERSION, trace
+from cursor_audit import POLICY_VERSION, trace
 
 
 class UnifiedAcceptanceTests(unittest.TestCase):
@@ -15,9 +15,17 @@ class UnifiedAcceptanceTests(unittest.TestCase):
         report.data['clean_run'] = clean
         return report.snapshot()
 
+    def test_sampling_inconclusive_is_counted_separately_and_cannot_pass_acceptance(self):
+        report = BenchmarkReport(load_targets(), {})
+        report.record('P03', 'inconclusive', {'functional_pass': True, 'sampling_pass': False})
+        result = report.snapshot()
+        self.assertEqual(result['counts']['inconclusive'], 1)
+        self.assertEqual(result['counts']['failed'], 0)
+        self.assertFalse(result['acceptance_passed'])
+
     def audit(self, points=(0, 0, 0)):
         samples = [{'unix_ms': index * 4, 'x': x, 'y': 10} for index, x in enumerate(points)]
-        return {'policy_version': POLICY_VERSION, 'max_sample_gap_ms_policy': MAX_SAMPLE_GAP_MS, 'independence_violations': [], 'calls': [{
+        return {'policy_version': POLICY_VERSION, 'sample_gaps_are_diagnostic': True, 'independence_violations': [], 'calls': [{
             'request_id': 1, 'start_unix_ms': 2, 'end_unix_ms': 6, 'methods': ['look'],
             'routes': [], 'borrow_intervals': [], 'interval_errors': [], 'cursor': trace(samples)}]}
 
@@ -44,7 +52,7 @@ class UnifiedAcceptanceTests(unittest.TestCase):
         audit.pop('policy_version')
         self.assertFalse(self.merge(self.benchmark(), audit)['acceptance_passed'])
         audit['policy_version'] = POLICY_VERSION
-        audit.pop('independence_violations')
+        audit.pop('sample_gaps_are_diagnostic')
         self.assertFalse(self.merge(self.benchmark(), audit)['acceptance_passed'])
 
     def test_outer_review_retains_original_image_location(self):

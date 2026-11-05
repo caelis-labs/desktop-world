@@ -526,6 +526,7 @@ impl NativeBackend {
                                         &validation["target"],
                                         &nested,
                                         true,
+                                        None,
                                     )
                                     .map_err(|(error, _)| error)?;
                                 }
@@ -614,12 +615,13 @@ impl NativeBackend {
         target: &Value,
         call: &CallContext<'_>,
         scene_callback: bool,
+        requested_input: Option<&str>,
     ) -> Result<Value, (Error, bool)> {
         // This is a read-only admission check, not another focus attempt.
         let proof = self
             .rpc(
                 json!({"operation":"validate_execution_focus","target":target,
-                    "_execution_scope_callback":scene_callback}),
+                    "_execution_scope_callback":scene_callback, "requested_input":requested_input}),
                 call,
             )
             .map_err(|(error, _)| (error, false))?;
@@ -641,7 +643,7 @@ impl NativeBackend {
         let operation = request["operation"].as_str().unwrap_or("").to_owned();
         let target = request["target"].clone();
         let mut scope = if self.focus_pending.load(Ordering::Acquire) {
-            match self.validate_execution_focus(&target, call, false) {
+            match self.validate_execution_focus(&target, call, false, Some(&operation)) {
                 Ok(scope) => Some(scope),
                 Err(error) => {
                     // This action stopped before send(), independently of any
@@ -680,7 +682,7 @@ impl NativeBackend {
             if begun["scope_active"] != true || begun["dispatch"] != "dispatched" {
                 return Err((Error::InvalidObservation, true));
             }
-            scope = Some(self.validate_execution_focus(&target, call, false)?);
+            scope = Some(self.validate_execution_focus(&target, call, false, Some(&operation))?);
             request["_execution_foreground"] = json!(true);
             reply = send(request)?;
             if reply.get("foreground_plan").is_some() {
@@ -1034,6 +1036,12 @@ impl Backend for NativeBackend {
             vec![]
         };
         ApplicationLaunch { outcome, instances }
+    }
+    fn focus_application(&self, app: &AppInstance, call: &CallContext<'_>) -> ActionOutcome {
+        self.action(
+            json!({"operation":"focus_app","target":{"app":app_json(app)}}),
+            call,
+        )
     }
     fn keypress_application(
         &self,

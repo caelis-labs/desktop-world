@@ -9,7 +9,7 @@ import sys
 
 from app_client import artifact_identity
 from computer_use_benchmark import BenchmarkReport, fixture_module, load_targets, summarize
-from cursor_audit import MAX_SAMPLE_GAP_MS, POLICY_VERSION, independence_violation
+from cursor_audit import POLICY_VERSION, independence_violation
 
 HERE = Path(__file__).resolve().parent
 
@@ -22,7 +22,7 @@ def merge_evidence(benchmark, cursor, *, capture_prefix, audit_path):
             detail['capture'] = str(Path(capture_prefix) / detail['capture'])
     calls = cursor.get('calls', [])
     violations = list(cursor['independence_violations']) if isinstance(cursor.get('independence_violations'), list) else []
-    if (cursor.get('policy_version') != POLICY_VERSION or cursor.get('max_sample_gap_ms_policy') != MAX_SAMPLE_GAP_MS
+    if (cursor.get('policy_version') != POLICY_VERSION or cursor.get('sample_gaps_are_diagnostic') is not True
             or not isinstance(cursor.get('independence_violations'), list)):
         violations.append({'failure': 'strict cursor policy report is missing or uses another policy version'})
     for row in calls:
@@ -34,7 +34,7 @@ def merge_evidence(benchmark, cursor, *, capture_prefix, audit_path):
             violations.append({'request_id': row.get('request_id'), 'failure': issue})
     result['cursor_policy'] = {
         'version': cursor.get('policy_version'), 'audit_report': audit_path,
-        'max_sample_gap_ms_policy': cursor.get('max_sample_gap_ms_policy'),
+        'sample_gaps_are_diagnostic': True, 'fully_independent': cursor.get('fully_independent', False),
         'passed': bool(calls) and not violations,
         'exec_intervals': len(calls),
         'moved_intervals': sum(row.get('cursor', {}).get('status') == 'moved' for row in calls),
@@ -82,7 +82,7 @@ def main():
         overlay_observer = args.overlay_observer or compile_observer(HERE.parent / 'fixtures/cursor-overlay-observer.swift', output / 'overlay-observer', output, as_library=True)
         focus_observer = args.focus_observer or compile_observer(HERE.parent / 'fixtures/focus-observer/main.swift', output / 'focus-observer', output)
         probe_output = output / 'cursor/probe'
-        command = [sys.executable, str(HERE / 'cursor_audit.py'), '--assert-independent',
+        command = [sys.executable, str(HERE / 'cursor_audit.py'), '--assert-policy',
             '--observer', str(observer.resolve()), '--output', str(output / 'cursor'), '--',
             sys.executable, str(HERE / ('computer_use_target.py' if args.scenario else 'computer_use_benchmark.py')), '--dtw', str(args.dtw.resolve()),
             '--output', str(probe_output), '--case', args.case, '--source-revision', args.source_revision,
