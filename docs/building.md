@@ -93,6 +93,10 @@ a continuous foreground-witness check; raw business-runner success cannot substi
 for these observations. Unrun platform/model/system targets never pass by omission.
 See the [first baseline and repair record](computer-use-benchmark-2026-11-04.md)
 and the [remaining-target acceptance record](computer-use-extended-acceptance-2026-11-04.md).
+These direct-client runs do not establish a real DSH model/Skill/plugin path.
+The [DSH Cordis acceptance plan](dsh-cordis-acceptance-plan-2026-11-05.md) defines
+the frozen complete candidate, host switch/restart boundary and 56 pending rows.
+It is a plan, not a completed host or GUI acceptance claim.
 Use `--scenario C04` with a fresh output directory to verify one target independently;
 `targeted_acceptance_passed` does not establish full-baseline success. B05 publishes
 an exact-PNG answer handoff; inspect that capture before supplying an answer as

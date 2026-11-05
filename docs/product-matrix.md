@@ -1,6 +1,6 @@
 # 功能与支持范围
 
-此页描述当前源码能力；已发行版本以对应 [Release](https://github.com/caelis-labs/desktop-world/releases) 的资产和说明为准。构建、原生测试、真实 Agent 任务和最终安装包验收是不同证据，不相互替代。当前开发分支的实机条件与结果见 [PR #107 Windows 验收](windows-pr107-acceptance-2026-11-05.md)、[Windows 修复验收](windows-fixes-acceptance-2026-11-03.md) 和 [macOS 连续操作验收](macos-usability-acceptance-2026-11-04.md)。
+此页描述当前源码能力；已发行版本以对应 [Release](https://github.com/caelis-labs/desktop-world/releases) 的资产和说明为准。构建、原生测试、真实 Agent 任务和最终安装包验收是不同证据，不相互替代。当前开发分支的实机条件与结果见 [PR #107 Windows 验收](windows-pr107-acceptance-2026-11-05.md)、[Windows 修复验收](windows-fixes-acceptance-2026-11-03.md) 和 [macOS 连续操作验收](macos-usability-acceptance-2026-11-04.md)。DSH 输入问题的[定向回归](dsh-v035-input-regression-2026-11-05.md)与完整 Cordis 插件的[56 项待测方案](dsh-cordis-acceptance-plan-2026-11-05.md)另列；不能把后者视为已通过。
 
 | 能力 | 当前支持 | 限制 |
 | --- | --- | --- |
@@ -9,10 +9,10 @@
 | 应用与窗口 | 稳定平台 app ID；同 app 多实例窗口聚合、精确 owner 引用；macOS/Windows 发现安装目标、按需启动并正常 quit | Windows 读取 Start Menu、App Paths、AppsFolder，以 exe 路径或已证明的 `win:<AUMID>` 定位；跳过/不可读来源明确标记覆盖不足；Linux 仍仅发现运行目标 |
 | 基本视觉操作 | macOS/Windows 按已证明归属和全局窗口顺序合成可见 surface；原坐标可连续命中同一进程实例内出现或消失的弹层，画布锚点和映射须保持；Windows 使用精确 HWND 和 DWM 可见边框 | Windows 的 owned modal、原生 Open/Save/覆盖确认已有实机证据；全局 alpha/color-key 可读取，未证明的 per-pixel layered alpha 仍拒绝，真实 SysShadow 的本机限制见专项报告；covered capture 不放宽输入可见性 |
 | 语义发现与阅读 | look 输出当前顶层至多 80 个语义元素；可用 role/text 按需筛选原生遍历；readText 按观察目标读取原生文本分页；语义不足可截图兜底 | 截断字段标记长度与内容版本；筛选完整性只适用于该查询；文本分页使用同一观察及 UTF-16 偏移；不默认输出整棵树或全文 |
-| 常用操作 | Agent 使用 look/capture/readText/click/move/drag/typeText/keypress/scroll/quit；点击可选语义目标、选择器或图像坐标 | macOS/Windows move/drag 限一个窗口和单个显示器内的可见路径；支持已证明的标准标题栏搬窗；不暴露跨调用的按下/释放状态；实验 X11 不支持手势 |
+| 常用操作 | Agent 使用 look/capture/readText/click/move/drag/typeText/keypress/scroll/focus/quit；点击可选语义目标、选择器或图像坐标；macOS focus 明确作用于同一 exec 的后续输入 | macOS/Windows move/drag 限一个窗口和单个显示器内的可见路径；支持已证明的标准标题栏搬窗；不暴露跨调用的按下/释放状态；实验 X11 不支持手势 |
 | 菜单与对话框 | `look({scope:'menu'})` 通过已有应用窗口读取原生菜单；macOS sheet、dialog 及有正向归属证明的关联 surface；Windows 当前窗口内的原生菜单和已证明窗口归属的 modal | 无窗口应用根、Dock 和 menu extras 尚无操作合同；能发现不代表可输入；Windows 弹出菜单键盘路由需原生 menu-owner 证明；helper 按平台证据处理 |
 | 多 app 与多会话 | DTW 维护各 app 的观察状态及回执；跨连接原生资源协调 | 同连接单执行槽；原生上下文更换重置观察；Agent 无 Session 或游标管理；连接不隔离物理桌面 |
-| macOS 输入 | `auto` 每段 exec 从后台开始；已知能力缺口且干净 `not_dispatched` 可借用一次前台至脚本结束，余下动作验证前台所有权；虚拟光标覆盖 click/move/drag/scroll | 借用包括已识别的 hover、必要定向 API 缺失、已证明的 modal/关联进程键盘及特定框架键盘形状；需精确逻辑窗口与原前台证明。脚本结束仅在所有权及身份仍有效时恢复原 app/精确窗口；外部切焦点永久失效，不抢回或强制恢复；确认 quit/锚点关闭后只观察、不激活第三 app；unknown 不重投。当前脚本级生命周期有单独的[定向验收与限制](computer-use-script-scope-2026-11-04.md)，详见[输入路由](macos-input-routing.md) |
+| macOS 输入 | `auto` 每段 exec 从后台开始；已知能力缺口且干净 `not_dispatched` 可借用一次前台至脚本结束，余下动作验证前台所有权；虚拟光标覆盖 click/move/drag/scroll | 借用包括已识别 hover、标准 Open 面板坐标点击、必要定向 API 缺失、后台 key window 缺失及已证明的键盘形状；唯一无窗口应用可自动借用接收快捷键或 focus，首个实际聚焦窗口只绑定一次。脚本结束按原身份/所有权归还，外切永久失效；窗口关闭后不授权新输入，仅严格证明的 windowless/Open→文稿转换可继续归还。unknown 不重投。当前定向结果见[修复回归](dsh-v035-input-regression-2026-11-05.md)，精确合同见[输入路由](macos-input-routing.md) |
 | Windows 输入 | 支持的 HWND 客户区定向左键/滚轮；其他鼠标、手势及键盘由 DTW 自动准备前台；UIA、DPI、Unicode 和正常关闭 | UIA provider 可自行激活窗口/移动指针；不承诺后台键盘/独立物理指针或 macOS 脚本级前台借用；保护保存提示；安全桌面、提权与 mixed-DPI 环境需分别验证 |
 | Agent 光标 | macOS/Windows 按会话颜色显示动作位置和点击反馈；不显示内部身份编号 | 视觉反馈不代表业务完成；只有经证明属于 DTW 的辅助窗口可从截图排除 |
 | 取消与资源回收 | 标准 MCP cancellation、EOF/父进程退出收尾、配对释放、原回执；Windows 新输入前复核当前输入桌面，失败返回 desktop_unavailable | 已排队输入不可撤回；配对释放不被新输入禁令阻止；桌面恢复后重新观察；Windows 已验证真实非 input desktop 准入与四类 held drag 中断，未诱发锁屏、安全桌面或中途 desktop 切换 |

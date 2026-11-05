@@ -56,7 +56,7 @@ python3 tests/acceptance/computer_use_acceptance.py \
 
 core 包含首次无 look 输入、噪音 AX 定位、Unicode 提交、完整长文本分页、checkbox、滑块、定点滚动、只读菜单、peer 窗口、系统 Open 取消、低 AX 消息/Pin/Reply 和 WebKit 的输入/噪音/长文本。它使用当前 MCP AppClient；坐标来自 fixture 的独立几何记录，是直接脚本证据，不能当成真实模型识图通过。
 
-标准入口同时编译只读观察器，强制检查 P01/P02/P03。P01 在真实 click/move/drag/scroll 后验证授权 helper 的真实窗口位置和渲染像素；P02 连续采样真实系统光标，并逐段核对原生借用区间。只允许 `native_hover_tracking` 的 move，或有明确 ABI 能力证明的 `addressed_event_api_unavailable` 指针动作。AX 缺失、普通错误、权限/身份/几何失败都不是借用理由；缺少采样、未覆盖完整请求或未知借用也会失败。一次合法 hover 不会放行同脚本其他区间的位移。严格策略 `bounded-pointer-borrow-v3` 固定要求实际采样间隙不超过 50ms；长时间停采后的相同终点不能通过，阈值不会为某次运行临时放宽。
+标准入口同时编译只读观察器，检查 P01/P02/P03。P01 在真实 click/move/drag/scroll 后验证授权 helper 的真实窗口位置和渲染像素；P02 连续采样真实系统光标，并逐段核对原生借用区间。当前 `observed-pointer-borrow-v5` 允许有证据的 `native_hover_tracking` move、`addressed_event_api_unavailable` 指针动作及标准 Open 面板的 `native_open_panel_click`；每段还必须证明结束归位。AX 缺失、普通错误、权限/身份/几何失败都不是借用理由。一次合法 hover 不会放行同脚本其他区间的位移。最大采样空档只作诊断，不设 50ms 硬门槛；实际未知 PID、缺少采样或边界证据仍独立标为不足，不因端点相同就宣称全程独立。功能结果、观察质量及调用外未归因位移分别报告。
 
 低层 `computer_use_benchmark.py` 保留为业务/fixture 诊断入口；不单独证明光标策略。标准报告中的 `acceptance_passed` 同时要求 core、P01 虚拟光标、P02 真实光标策略和 P03 后台焦点合约通过。AXPress、键盘和 AXPosition 不伪造鼠标轨迹。
 
@@ -73,7 +73,9 @@ python3 tests/acceptance/review_computer_use_capture.py \
 
 P03 使用一个独立的自有小窗口作为前台见证者，另开采用默认 `auto` 策略的当前 MCP 连接操作后台目标；独立焦点入口可传 `--input-policy background-only` 作严格策略对照。测试准备阶段只显式激活见证者，目标保持后台。它核对实际 UTF-16 全选范围、Unicode 替换、见证者零按键/修饰键事件，并连续采样前台 PID 与激活通知；失去见证前台条件就停止，不重新抢回前台。普通 AX 错误、未证明的快捷键、菜单/内容读取不完整不会触发焦点准备；未验证的后台 hover 干净拒绝。
 
-标准入口已强制使用 [cursor_audit](../../acceptance/cursor_audit.py) 的 `--assert-independent`。复用已编译的观察器可传 `--observer`、`--overlay-observer` 和 `--focus-observer`；通用独立探针用法见 [构建文档](../../../docs/building.md#current-external-client-gui-probe)。采样必须保留实际间隙；前后台的两个端点不证明全程焦点稳定。P03 覆盖受控见证条件下的后台合约；R04 的更多应用/动作与并发用户键盘目的地仍是单独目标。
+标准入口使用 [cursor_audit](../../acceptance/cursor_audit.py) 的 `--assert-policy` 验证有界借用；更严格的 `--assert-independent` 另行要求没有真实光标位移。复用已编译的观察器可传 `--observer`、`--overlay-observer` 和 `--focus-observer`；通用独立探针用法见 [构建文档](../../../docs/building.md#current-external-client-gui-probe)。采样必须保留实际间隙；前后台的两个端点不证明全程焦点稳定。P03 覆盖受控见证条件下的后台合约；R04 的更多应用/动作与并发用户键盘目的地仍是单独目标。
+
+上述直接客户端 runner 不证明 DSH 已加载同一插件或实际模型能完成任务。完整本地候选经 Cordis 接入 DSH 的宿主链路、自然语言任务、独立观察与待测矩阵见 [DSH 实机验收方案](../../../docs/dsh-cordis-acceptance-plan-2026-11-05.md)。方案不是已完成的验收结果。
 
 ## 单项复验
 

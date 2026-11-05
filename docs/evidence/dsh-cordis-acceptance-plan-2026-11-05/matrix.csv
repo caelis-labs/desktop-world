@@ -1,0 +1,57 @@
+﻿id,priority,target,agent_goal,effect_oracle,facade_methods,execution_lane,scope,execution_status,functional_status,agent_ease_status,experience_status,evidence_status,historical_boundary
+G01,P0,DSH Cordis 完整插件,确认 DSH 加载预期本地候选，而非旧安装或终端副本。,实际 DSH-owned MCP 路径、二进制 SHA、包 ID、完整注册行与候选一致；临时握手进程不误判成重复注册。,,installer_gate,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+G02,P0,DSH Skill 与 facade,从实际加载的 bundled Skill 发现方法并确认 focus 入口。,Skill/API 路径和摘要属于同一包；实际发现 apps/exec 与 11 个 app 方法；不以旧会话缓存为证据。,"look,focus",dsh_gate,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+G03,P0,DSH 工具与图片链路,枚举运行应用，观察并截图自有目标。,实际工具调用成功；原始 tool result 与 image attachment 可关联；模型上下文收到图像。识图正确性另由 B05 判断。,"look,capture",dsh_gate,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+G04,P0,新 DSH 会话与模型,使用当前已配置的模型和匹配 Skill 开始独立验收会话。,记录宿主、模型 ID、推理级别、权限和 argv；确认默认 auto；不用旧会话关于 none/前台要求的结论。,,dsh_gate,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+N01,P0,AppKit 工作台,首次调用直接让计数器增加一次，不预先 look。,counter 精确 +1，无无关变化。,click,dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+N02,P0,AppKit 密集 AX,在密集控件中找到 Audit checkpoint 137 并操作一次。,只命中指定 checkpoint，邻居不变；不泄露 fixture 坐标。,"look,click",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+N03,P0,AppKit 原生编辑,替换并提交指定中英、emoji、换行文本。,原生字段与提交内容逐字节/UTF-16 一致，提交一次。,"typeText,keypress,click",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+N04,P0,原生长文本,读完 Long reference，给出末尾标记及文本核对值。,同一观察分页到真实末尾，全文指纹一致；不可读/截断不称全文。,"look,readText",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+N05,P0,原生 checkbox,切换 Reviewed 一次。,状态反转一次，无邻居副作用。,click,dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+N06,P0,原生 slider,把滑块拖至指定位置。,真实拖动回调和数值变化，鼠标释放；不能只写状态。,"capture,drag",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+N07,P0,原生并列滚动区,滚动左侧指定区域，保持右侧不变。,左侧偏移变化，右侧及另一轴不变。,"capture,scroll",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+N08,P0,真实应用菜单,只读观察 File 菜单，报告实际项目。,菜单内容来自 DTW；业务、前台与真实光标不因读取改变。,look,dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+N09,P0,同应用 peer 窗口,新建 peer，仅增加其计数器，然后关闭该窗口。,新窗口真实出现，peer +1、主窗口不变，只关闭自有 peer。,"look,click,keypress",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+N10,P0,真实系统 Open 面板,打开文件选择面板并取消。,面板真实出现后消失，无误打开文件、unknown 或误报焦点。,"click,capture,keypress",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+N11,P0,真实系统 Save 面板,将提交内容保存到指定自有文件。,实际文件精确字节、保存日志一次；真实系统面板操作。,"capture,click,typeText,keypress",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+N12,P0,覆盖确认与取消,触发自有 seed 文件的覆盖确认，取消覆盖并取消面板。,seed 摘要不变，保存计数零增量；效果与工具 unknown 独立记录。,"capture,click,keypress",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+N13,P1,原生 hover/双击,悬停事件区域并双击指定目标。,真实 hover/double-click 回调正确；必要物理借用结束归位。,"capture,move,click",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+N14,P0,几何/图层变化,在真实窗口移动后继续定位，验证过期几何不会误击。,命中归属无法证明则无派发；合法的新观察/同实例刷新可成功，不要求旧数值坐标一律拒绝。,"capture,drag,click",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+N15,P0,未保存退出与重启,编辑后取消退出，确认内容保留；再正常退出并重新打开。,真实确认对话框、内容保留、新 PID/birth 和新 baseline；不关闭用户文档。,"typeText,quit,capture,click,look",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+C01,P0,低 AX 原生画布,识别可见的 Release check 137 消息。,模型检查真实 DTW PNG 后回答；图像摘要和视觉复核记录匹配。,"look,capture",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+C02,P0,低 AX 独立弹出菜单,对指定消息右键并 Pin，再回到消息列表。,只 pin 目标消息一次；真实 popup 及邻居不变。,"capture,click",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+C03,P0,低 AX 回复,回复指定消息并发送一次 Unicode 内容。,reply-to 精确、文本完整、发送恰好一次。,"capture,click,typeText,keypress",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+C04,P1,低 AX 编辑,只编辑指定历史消息。,目标正文精确变化，邻居和日志计数正确。,"capture,click,typeText,keypress",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+C05,P1,低 AX 历史滚动,滚到指定旧消息并操作。,滚动到真实历史目标；不能用附近可见消息替代。,"capture,scroll,click",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+W01,P0,WKWebView,替换 Web note 并提交一次。,真实页面内容、Unicode 和一次提交计数正确。,"look,typeText,click",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+W02,P1,WKWebView 密集 AX,在大量控件中定位并点击指定 checkpoint。,只命中目标，遍历覆盖和歧义诊断可解释。,"look,click",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+W03,P1,Web 长文本,读完 Web reference 到末尾。,全文指纹和末尾标记正确；无重复/漏页。,"look,readText",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+W04,P0,Web 原生表单,先提交非法表单，再填入有效内容与日期，保存并重开。,非法保存零次；有效值、日期、保存次数及重开数据精确；不写 DOM。,"look,click,typeText,keypress,capture",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+W05,P1,Web 嵌套滚动,分别滚动目标纵向与横向区域。,内外层和轴隔离，邻区不动。,"capture,scroll",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+W06,P0,Web Canvas,从画布菜单 pin 目标消息并发送一条回复。,实际 canvas 动作与文本正确；后台/借用路线单列，不人工先置前台。,"capture,click,typeText,keypress",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+B01,P0,隔离 Chrome,在独占实例中完成网页 Unicode 编辑及 checkpoint 操作。,明确 owned bundle/profile/PID；实际渲染、输入与提交正确；不碰用户 profile。,"look,capture,click,typeText,keypress",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+B02,P1,浏览器库存分页,找到不同页的两条记录，编辑、保存、重开。,两条目标精确变化，各保存一次，全邻居不变。,"look,capture,click,typeText",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+B03,P0,重复 label,在重复 Edit/Reviewed 中拒绝歧义，再定位精确目标。,预期歧义无派发；定位后只改指定行；预期负向错误不算模型失控。,"look,click",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+B04,P0,浏览器真实输入事件,分别完成普通及 trusted-pointer 模式的提交。,真实 down/up/click 和 trusted 模式独立效果；不以 AXPress 的普通提交替代。,"capture,click,typeText,keypress",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+B05,P0,真实模型图片挑战,只从 DTW 返回的随机栅格图回答并提交一次。,无 AX/源码/配置答案泄露；实际 DSH 图片附件、模型回答和私有 judge 一致。,"capture,click,typeText",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+R01,P0,DSH Stop / MCP cancellation,在自有 held gesture 中用 DSH Stop 中断，随后只读恢复。,实际 partial 路径、配对释放、无 suffix、读取可恢复；原未知回执保留，clean_run 单列。,"drag,look",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+R02,P1,独占传输诊断,在独占 MCP 测试连接 EOF 后验证 worker 回收和新连接恢复。,不关闭 DSH 共享桥或其他会话；仅证明传输边界，不算 DSH 模型通过。,"drag,look",isolated_transport,isolated_transport_only,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+R03,P0,错误实例/外来遮挡,让同 executable sibling 或外来窗口尝试获取旧图点。,双方业务不变、明确拒绝；不通过公有 PID 猜测或用户窗口试探。,"capture,click",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+R04,P0,前台 witness,在另一自有应用前台期间操作后台目标。,真实背景点击/编辑生效，witness 不收业务按键；不得人工激活目标后声称后台成功。,"click,typeText,keypress",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+S01,P2,Dock 根,记录授权 Dock item 的真实 root 能力边界。,当前缺 root action 合同；不把任意桌面截图点当精确授权。,"look,capture",dsh_goal_only,unsupported_current,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+S02,P2,无窗口 menu extra,记录 accessory/status-item 的 root/popup 能力边界。,不能把本次 windowless Cmd+N/focus 支持外推为 menu-extra 支持。,"look,capture",dsh_goal_only,unsupported_current,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+S03,P2,Windows chooser/tooltip,在 Windows 原生宿主选择文件并验证真实 tooltip/shadow。,本机 macOS 不执行，不从其他平台结果外推。,"capture,click",dsh_goal_only,blocked_platform,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+S04,P2,显示/不可用桌面,分项记录单屏、多屏搬移、mixed-DPI 与 unavailable-desktop 条件。,执行前读取实际显示条件；无 mixed-DPI/隔离桌面则 blocked，不改用户显示或锁屏。,"capture,drag,click",dsh_goal_only,environment_dependent,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+P01,P0,DTW 虚拟光标,核对 click/move/drag/scroll 的真实 overlay 位置和反馈。,独立实际窗口/像素证明；AXPress/键盘不伪造鼠标动画。,"click,move,drag,scroll",observer,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+P02,P0,真实系统光标,连续审计全部 DSH 业务调用、借用区间与结束归位。,移动逐段记录；必要借用有真实路线证据且结束归位；调用外/未归因位移单列。,,observer,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+P03,P0,真实系统焦点,连续审计后台稳定、必要借用、归还及外部选择。,即时 WindowServer PID、真实按键目的地；外部选择不被重新抢回；空档只作诊断。,focus,observer,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+T01,P0,无窗口应用,在无窗口状态直接新建并输入，不要求用户手动激活。,新建一次、文本精确、自动等待在内部；无 foreground_required/重复 shortcut。,"keypress,typeText",dsh_directed_regression,eligible,not_run,not_run,not_run,not_run,not_run,旧终端候选定向 GUI 已测；本轮重建包/DSH 链路未测
+T02,P0,TextEdit Open → New,从后台标准 Open 面板点击新建文稿。,真实新文稿替换面板、前台归还、必要光标借用归位；不是只证明事件到宿主。,"capture,click",dsh_directed_regression,eligible,not_run,not_run,not_run,not_run,not_run,旧终端候选定向 GUI 已测；本轮重建包/DSH 链路未测
+T03,P0,TextEdit 关闭,关闭本轮自有空文稿。,窗口确实关闭、没有访问旧 AX 焦点引起的假 unknown。,"keypress,look",dsh_directed_regression,eligible,not_run,not_run,not_run,not_run,not_run,旧终端候选定向 GUI 已测；本轮重建包/DSH 链路未测
+T04,P0,TextEdit 取消,再次打开 Open 面板并按 Cmd+. 取消。,真实取消、修饰键配对释放、无 AXParent 假错误及残留按键。,"keypress,look",dsh_directed_regression,eligible,not_run,not_run,not_run,not_run,not_run,旧终端候选定向 GUI 已测；本轮重建包/DSH 链路未测
+T05,P0,明确 focus 入口,在同一 exec 中 focus 后输入/点击，覆盖窗口及无窗口情况。,入口简单、后续输入成功、结算归还；不把跨 exec 的 focus 当持久会话。,"focus,click,typeText",dsh_directed_regression,eligible,not_run,not_run,not_run,not_run,not_run,旧终端候选定向 GUI 已测；本轮重建包/DSH 链路未测
+T06,P0,外部切走再返回,在本次借用中外切并返回，然后尝试后续输入。,当前执行不可重获；后续输入拒绝且不改业务；下一次新执行独立验证。,"focus,click,drag,keypress,typeText",dsh_directed_regression,eligible,not_run,not_run,not_run,not_run,not_run,旧终端候选定向 GUI 已测；本轮重建包/DSH 链路未测
+A01,P0,真实 Calculator,清零，完成 1234 × 56，并显示结果后正常收尾。,实际计算器 UI 为 69104；不能只用模型心算报告结果。,"look,click,capture,quit",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+A02,P0,真实 TextEdit 文件工作流,在本轮自有文稿输入 Unicode，保存到指定新文件、关闭并重开核对。,实际文件字节、重开文本、窗口与焦点正确；不保存/关闭用户原文稿。,"look,capture,click,typeText,keypress,readText",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+A03,P0,真实 Finder,只在自有临时目录窗口定位文件、重命名并关闭该测试窗口。,实际自有文件名变化，内容及邻居不变；窗口身份未证明不得操作既有用户窗口。,"look,capture,click,keypress,typeText",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
+A04,P0,真实 Chrome 多步工作流,在独占 Chrome/profile 中找到指定记录，修改表单，保存并重开。,实际页面、持久数据、邻居及真实输入事件一致；禁止 DOM/CDP/用户 profile。,"look,capture,click,scroll,typeText,keypress",dsh_goal_only,eligible,not_run,not_run,not_run,not_run,not_run,历史证据不转记本轮通过
