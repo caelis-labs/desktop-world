@@ -178,14 +178,34 @@ fn route_trace(request: &Value, route: &str, reason: &str) -> Value {
 }
 fn trace_route(request: &Value, route: &str, reason: &str) {
     if std::env::var("DTW_INPUT_TRACE").ok().as_deref() == Some("1") {
-        eprintln!("dtw_input {}", route_trace(request, route, reason));
+        emit_input_trace("dtw_input", &route_trace(request, route, reason));
+    }
+}
+fn emit_input_trace(kind: &str, record: &Value) {
+    let line = format!("{kind} {record}\n");
+    eprint!("{line}");
+    // Some hosts discard child stderr on failed tools. An opt-in private file
+    // keeps the same bounded, payload-free records independently of the host.
+    if let Some(path) = std::env::var_os("DTW_INPUT_TRACE_FILE") {
+        use std::os::unix::fs::OpenOptionsExt;
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(path)
+        {
+            if file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+                let _ = file.write_all(line.as_bytes());
+            }
+        }
     }
 }
 pub(super) fn trace_execution_refusal(request: &Value) {
     if std::env::var("DTW_INPUT_TRACE").ok().as_deref() == Some("1") {
         let mut record = route_trace(request, "refused", "execution_scope_preflight");
         record["dispatch"] = json!("not_dispatched");
-        eprintln!("dtw_input {record}");
+        emit_input_trace("dtw_input", &record);
     }
 }
 // Owned metadata survives dispatch_owned consuming the request. Drop closes even
@@ -211,7 +231,7 @@ impl PointerBorrowTrace {
         let mut record = self.0.clone();
         record["phase"] = json!(phase);
         record["at_unix_ms"] = json!(trace_now_ms());
-        eprintln!("dtw_input_interval {}", record);
+        emit_input_trace("dtw_input_interval", &record);
     }
 }
 impl Drop for PointerBorrowTrace {
@@ -1174,9 +1194,9 @@ mod tests {
     #[test]
     fn keyboard_trace_identifies_the_capability_without_text_or_key_payloads() {
         let request = json!({"operation":"keypress", "target":{"native_id":42},
-            "_keyboard_capability":"appkit_command_w", "text":"private note", "keys":["META","W"]});
+            "_keyboard_capability":"appkit_multiline_text", "text":"private note", "keys":["META","W"]});
         let trace = route_trace(&request, "activated", "native_keyboard_semantics");
-        assert_eq!(trace["capability_detail"], "appkit_command_w");
+        assert_eq!(trace["capability_detail"], "appkit_multiline_text");
         assert_eq!(trace["operation"], "keypress");
         assert!(trace.get("text").is_none());
         assert!(trace.get("keys").is_none());
@@ -1372,7 +1392,7 @@ mod tests {
         let reason = "native_keyboard_semantics";
         let declined =
             background_result(json!({"dispatch":"not_dispatched","fallback_allowed":true,
-            "capability_evidence":reason,"capability_detail":"chromium_command_a",
+            "capability_evidence":reason,"capability_detail":"chromium_supplementary_unicode",
             "error":{"code":"background_unavailable","message":reason}}));
         assert!(matches!(declined, BackgroundAttempt::Declined(value) if value == reason));
         for dispatch in ["dispatched", "unknown"] {

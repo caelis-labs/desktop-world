@@ -165,6 +165,51 @@ fn semantic_decoration_hint_does_not_replace_keyboard_focus_or_unfocused_popup_s
 }
 
 #[test]
+fn read_time_decoration_proof_can_choose_content_but_arbitrary_ax_errors_cannot() {
+    for code in ["non_content_surface", "ax_unavailable"] {
+        let (server, catalog) = agent();
+        let rows = [(102, "Decoration"), (101, "Document")]
+            .into_iter()
+            .enumerate()
+            .map(|(rank, (native_id, title))| WindowInfo {
+                target: WindowTarget {
+                    app: application(),
+                    native_id,
+                    generation: 3,
+                },
+                title: title.into(),
+                visible: true,
+                scene: Some(WindowLayout::new([0., 0., 500., 400.], rank as u32).unwrap()),
+            })
+            .collect();
+        {
+            let mut model = catalog.backend.0.model.lock().unwrap();
+            model.inventory = Some(test_inventory(rows));
+            model.semantic_pages.push_back(Err(Error::NativeFailure {
+                code: code.into(),
+                message: "Native read proof".into(),
+            }));
+        }
+        let reply = exec(
+            &server,
+            "read_proof",
+            "const v=await app.look(); return v.elements.map(e=>e.id);",
+        );
+        assert!(!reply.is_error, "{}", reply.data);
+        if code == "non_content_surface" {
+            assert!(reply.data["value"]["result"][0]
+                .as_str()
+                .unwrap()
+                .starts_with("w2."));
+            assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 2);
+        } else {
+            assert_eq!(reply.data["value"]["result"], json!([]));
+            assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 1);
+        }
+    }
+}
+
+#[test]
 fn keyboard_focus_hints_cannot_select_a_sibling_process_instance() {
     for remove_selected in [false, true] {
         let (server, catalog) = agent();

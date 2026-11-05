@@ -129,29 +129,24 @@ impl Request {
         self.input_framework == "chromium"
     }
     fn foreground_requirement(&self) -> Option<&'static str> {
-        // These whole-request declines match the retained application-effect
-        // evidence. Unknown frameworks and other chords get one directed attempt;
-        // a posted event without an effect never authorizes replay.
-        if self.operation == "type_text" {
-            if self.input_framework == "appkit" && self.text.contains(['\n', '\r']) {
-                return Some("appkit_multiline_text");
-            }
-            if self.chromium() && self.text.chars().any(|ch| ch.len_utf16() > 1) {
-                return Some("chromium_supplementary_unicode");
-            }
-        }
+        // Choose reliable shortcut dispatch before sending any key. Literal text,
+        // plain keys and Shift-only typing retain the addressed path.
         if self.operation == "keypress" {
             let (key, modifiers) = self.key_chord().ok()?;
-            if modifiers.len() == 1 && keyboard::key_name_to_code(modifiers[0]).ok() == Some(55) {
-                match (
-                    self.input_framework.as_str(),
-                    keyboard::key_name_to_code(key).ok(),
-                ) {
-                    ("chromium", Some(0)) => return Some("chromium_command_a"),
-                    ("appkit", Some(13)) => return Some("appkit_command_w"),
-                    _ => (),
-                }
-            }
+            return (!keyboard::is_modifier(key)
+                && modifiers.iter().any(|modifier| {
+                    matches!(keyboard::key_name_to_code(modifier), Ok(55 | 58 | 59))
+                }))
+            .then_some("modified_key_chord");
+        }
+        if self.operation != "type_text" {
+            return None;
+        }
+        if self.input_framework == "appkit" && self.text.contains(['\n', '\r']) {
+            return Some("appkit_multiline_text");
+        }
+        if self.chromium() && self.text.chars().any(|ch| ch.len_utf16() > 1) {
+            return Some("chromium_supplementary_unicode");
         }
         None
     }
@@ -164,8 +159,6 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
     if let Err(error) = request.validate() {
         return control::rejected("invalid_arguments", &error.to_string(), false);
     }
-    // Missing background semantics are known before any native preparation or
-    // input. The worker can then select its single foreground/HID attempt.
     if let Some(reason) = request.foreground_requirement() {
         let mut result = control::rejected("background_unavailable", reason, true);
         result["capability_evidence"] = serde_json::json!("native_keyboard_semantics");
@@ -432,6 +425,53 @@ impl Drop for AutoreleasePool {
 mod tests {
     use super::*;
     #[test]
+    fn shortcut_policy_preserves_literal_and_shift_only_background_input() {
+        let make = |operation: &str, framework: &str, keys: &[&str], text: &str| {
+            serde_json::from_value::<Request>(serde_json::json!({"operation":operation,
+                "input_framework":framework,"pid":5,"window_id":7,"deadline_unix_ms":100,
+                "keys":keys,"text":text}))
+            .unwrap()
+        };
+        for framework in ["appkit", "chromium", "unknown"] {
+            for keys in [
+                &["META", "S"][..],
+                &["META", "SHIFT", "T"],
+                &["CTRL", "A"],
+                &["ALT", "LEFT"],
+                &["META", "Z"],
+            ] {
+                let request = make("keypress", framework, keys, "");
+                request.validate().unwrap();
+                assert_eq!(request.foreground_requirement(), Some("modified_key_chord"));
+            }
+            for keys in [
+                &["A"][..],
+                &["LEFT"],
+                &["DELETE"],
+                &["SHIFT", "A"],
+                &["META"],
+            ] {
+                let request = make("keypress", framework, keys, "");
+                request.validate().unwrap();
+                assert_eq!(request.foreground_requirement(), None);
+            }
+            for text in ["hello 123", "普通中文文本框输入"] {
+                assert_eq!(
+                    make("type_text", framework, &[], text).foreground_requirement(),
+                    None
+                );
+            }
+        }
+        assert_eq!(
+            make("type_text", "appkit", &[], "line\n").foreground_requirement(),
+            Some("appkit_multiline_text")
+        );
+        assert_eq!(
+            make("type_text", "chromium", &[], "🌍").foreground_requirement(),
+            Some("chromium_supplementary_unicode")
+        );
+    }
+    #[test]
     fn public_key_array_is_preserved() {
         let request:Request=serde_json::from_value(serde_json::json!({"operation":"keypress","pid":5,"window_id":7,"deadline_unix_ms":100,"keys":["META","SHIFT","A"]})).unwrap();
         request.validate().unwrap();
@@ -446,155 +486,50 @@ mod tests {
         assert_eq!(request.foreground_requirement(), None);
     }
     #[test]
-    fn evidenced_keyboard_shapes_decline_before_native_preparation() {
+    fn shortcut_decline_precedes_native_preparation_and_any_input() {
         extern "C" fn unexpected(_: *mut c_void, _: i32) -> i32 {
-            panic!("unsupported route performed native preparation");
+            panic!("foreground policy reached native preparation")
         }
-        for (args, capability) in [
+        for (framework, args, detail) in [
             (
-                serde_json::json!({"input_framework":"chromium", "operation":"keypress", "keys":["META", "A"]}),
-                "chromium_command_a",
+                "unknown",
+                serde_json::json!({"operation":"keypress","keys":["CMD","SHIFT","T"]}),
+                "modified_key_chord",
             ),
             (
-                serde_json::json!({"input_framework":"chromium", "operation":"keypress", "keys":["command", "a"]}),
-                "chromium_command_a",
+                "appkit",
+                serde_json::json!({"operation":"keypress","keys":["CTRL","A"]}),
+                "modified_key_chord",
             ),
             (
-                serde_json::json!({"input_framework":"appkit", "operation":"keypress", "keys":["CMD", "W"]}),
-                "appkit_command_w",
+                "chromium",
+                serde_json::json!({"operation":"keypress","keys":["ALT","LEFT"]}),
+                "modified_key_chord",
             ),
             (
-                serde_json::json!({"input_framework":"chromium", "operation":"type_text", "text":"BMP prefix then 🐦 and suffix"}),
+                "appkit",
+                serde_json::json!({"operation":"type_text","text":"prefix\nsecond line"}),
+                "appkit_multiline_text",
+            ),
+            (
+                "chromium",
+                serde_json::json!({"operation":"type_text","text":"prefix 🌍 suffix"}),
                 "chromium_supplementary_unicode",
             ),
-            (
-                serde_json::json!({"input_framework":"appkit", "operation":"type_text", "text":"prefix\nsecond line\tsuffix"}),
-                "appkit_multiline_text",
-            ),
-            (
-                serde_json::json!({"input_framework":"appkit", "operation":"type_text", "text":"prefix\r\nsuffix"}),
-                "appkit_multiline_text",
-            ),
         ] {
-            let mut request = serde_json::json!({"input_framework":"chromium","pid":5,"window_id":7,"deadline_unix_ms":100});
+            let mut request = serde_json::json!({"input_framework":framework,"pid":5,"window_id":7,"deadline_unix_ms":100});
             request
                 .as_object_mut()
                 .unwrap()
                 .extend(args.as_object().unwrap().clone());
             let result = call(&request.to_string(), std::ptr::null_mut(), unexpected);
-            assert_eq!(result["dispatch"], "not_dispatched", "{request}");
-            assert_eq!(result["fallback_allowed"], true, "{request}");
-            assert_eq!(result["capability_detail"], capability, "{request}");
+            assert_eq!(result["dispatch"], "not_dispatched", "{result}");
+            assert_eq!(result["fallback_allowed"], true, "{result}");
+            assert_eq!(result["capability_detail"], detail, "{result}");
             assert!(
                 super::super::input_route::fallback_reason(&result).is_some(),
                 "{result}"
             );
-            assert_eq!(
-                result["error"]["code"], "background_unavailable",
-                "{request}"
-            );
-        }
-    }
-    #[test]
-    fn unproven_chords_and_missing_framework_metadata_never_authorize_activation() {
-        for framework in [
-            None,
-            Some("unknown"),
-            Some("qt"),
-            Some("appkit"),
-            Some("chromium"),
-        ] {
-            for args in [
-                serde_json::json!({"operation":"keypress", "keys":["META", "S"]}),
-                serde_json::json!({"operation":"keypress", "keys":["META", "SHIFT", "A"]}),
-                serde_json::json!({"operation":"keypress", "keys":["META", "SHIFT", "W"]}),
-                serde_json::json!({"operation":"keypress", "keys":["RETURN"]}),
-                serde_json::json!({"operation":"keypress", "keys":["SHIFT", "TAB"]}),
-                serde_json::json!({"operation":"type_text", "text":"tab\tonly"}),
-            ] {
-                let mut value = serde_json::json!({"pid":5,"window_id":7,"deadline_unix_ms":100});
-                value
-                    .as_object_mut()
-                    .unwrap()
-                    .extend(args.as_object().unwrap().clone());
-                if let Some(framework) = framework {
-                    value["input_framework"] = serde_json::json!(framework);
-                }
-                let request: Request = serde_json::from_value(value.clone()).unwrap();
-                request.validate().unwrap();
-                assert_eq!(request.foreground_requirement(), None, "{value}");
-            }
-        }
-        for (framework, args) in [
-            (
-                "appkit",
-                serde_json::json!({"operation":"keypress","keys":["META","A"]}),
-            ),
-            (
-                "chromium",
-                serde_json::json!({"operation":"keypress","keys":["META","W"]}),
-            ),
-            (
-                "unknown",
-                serde_json::json!({"operation":"keypress","keys":["META","A"]}),
-            ),
-            (
-                "unknown",
-                serde_json::json!({"operation":"keypress","keys":["META","W"]}),
-            ),
-            (
-                "unknown",
-                serde_json::json!({"operation":"type_text","text":"prefix\n🐦"}),
-            ),
-            (
-                "chromium",
-                serde_json::json!({"operation":"type_text","text":"prefix\nline"}),
-            ),
-        ] {
-            let mut value = serde_json::json!({"input_framework":framework,"pid":5,"window_id":7,"deadline_unix_ms":100});
-            value
-                .as_object_mut()
-                .unwrap()
-                .extend(args.as_object().unwrap().clone());
-            let request: Request = serde_json::from_value(value.clone()).unwrap();
-            request.validate().unwrap();
-            assert_eq!(request.foreground_requirement(), None, "{value}");
-        }
-    }
-
-    #[test]
-    fn chromium_preflight_keeps_plain_text_and_non_menu_modifiers_on_background_route() {
-        for args in [
-            serde_json::json!({"operation":"type_text", "text":"后台复核 café"}),
-            serde_json::json!({"operation":"keypress", "keys":["A"]}),
-            serde_json::json!({"operation":"keypress", "keys":["SHIFT", "A"]}),
-            serde_json::json!({"operation":"keypress", "keys":["CTRL", "A"]}),
-            serde_json::json!({"operation":"keypress", "keys":["ALT", "LEFT"]}),
-            serde_json::json!({"operation":"keypress", "keys":["META", "LEFT"]}),
-            serde_json::json!({"operation":"keypress", "keys":["META"]}),
-            serde_json::json!({"operation":"keypress", "keys":["BACKSPACE"]}),
-        ] {
-            let mut request = serde_json::json!({"input_framework":"chromium","pid":5,"window_id":7,"deadline_unix_ms":100});
-            request
-                .as_object_mut()
-                .unwrap()
-                .extend(args.as_object().unwrap().clone());
-            let request: Request = serde_json::from_value(request).unwrap();
-            request.validate().unwrap();
-            assert_eq!(request.foreground_requirement(), None);
-        }
-        for args in [
-            serde_json::json!({"operation":"type_text", "text":"AppKit 😀"}),
-            serde_json::json!({"operation":"keypress", "keys":["CTRL", "A"]}),
-        ] {
-            let mut request = serde_json::json!({"pid":5,"window_id":7,"deadline_unix_ms":100});
-            request
-                .as_object_mut()
-                .unwrap()
-                .extend(args.as_object().unwrap().clone());
-            let request: Request = serde_json::from_value(request).unwrap();
-            request.validate().unwrap();
-            assert_eq!(request.foreground_requirement(), None);
         }
     }
     #[test]

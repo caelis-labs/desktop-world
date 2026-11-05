@@ -288,7 +288,7 @@ const COVERAGE: &str =
 const CONDITIONS: &[&str] = &[
     "semantic and input operations require macOS Accessibility permission",
     "capture and pixel pointer gestures require macOS Screen Recording permission",
-    "input prefers directed background delivery; a side-effect-free preflight decline may use temporary foreground focus",
+    "ordinary text and plain keys prefer directed background delivery; modified shortcuts borrow foreground automatically",
     "foreground coordinate fallback requires a visible, unobstructed point in the captured window",
     "semantic scopes include retained subtrees, capture-pixel regions and the app menu; region geometry does not prove pixel visibility",
     "readText requires native textual content and preserves one content revision across UTF-16 pages; titles and descriptions are not document text",
@@ -2570,6 +2570,23 @@ for line in sys.stdin:
     }
 
     #[test]
+    fn missing_ax_enabled_allows_only_proven_native_text_focus() {
+        let mut value = json!({"id":1,"label":"text","role":"text_area","name":null,
+            "value":"body","enabled":null,"actions":["press"],"can_press":true});
+        assert!(parse_element(&value).is_err());
+        value["native_text_focus"] = json!(true);
+        assert!(parse_element(&value).is_ok());
+        value["enabled"] = json!(false);
+        assert!(parse_element(&value).is_err());
+        value["enabled"] = Value::Null;
+        value["role"] = json!("button");
+        assert!(parse_element(&value).is_err());
+        value["role"] = json!("text_area");
+        value["actions"] = json!(["press", "setValue"]);
+        assert!(parse_element(&value).is_err());
+    }
+
+    #[test]
     fn native_discovery_pages_preserve_partial_progress_without_claiming_absence() {
         let mut value = json!({
             "target":{"app":{"identity":"test","pid":2,"generation":3},"native_id":4,"generation":5},
@@ -3023,7 +3040,16 @@ fn parse_element(value: &Value) -> Result<Element, Error> {
         Some(Value::Bool(value)) => Some(*value),
         _ => return Err(Error::InvalidObservation),
     };
-    if !actions.is_empty() && enabled != Some(true) {
+    let native_text_focus = value.get("native_text_focus") == Some(&Value::Bool(true));
+    let focus_without_enabled = native_text_focus
+        && enabled.is_none()
+        && can_press
+        && actions.len() == 1
+        && matches!(
+            value["role"].as_str(),
+            Some("text_field" | "text_area" | "combo_box")
+        );
+    if !actions.is_empty() && enabled != Some(true) && !focus_without_enabled {
         return Err(Error::InvalidObservation);
     }
     Ok(Element {
@@ -3398,6 +3424,10 @@ fn parse_window_rows(
                             WindowLayout::new(rect, rank).ok_or(Error::InvalidObservation)?;
                         scene.keyboard_focused = layout
                             .get("keyboard_focused")
+                            .map(|v| v.as_bool().ok_or(Error::InvalidObservation))
+                            .transpose()?;
+                        scene.semantic_candidate = layout
+                            .get("semantic_candidate")
                             .map(|v| v.as_bool().ok_or(Error::InvalidObservation))
                             .transpose()?;
                         Ok(scene)

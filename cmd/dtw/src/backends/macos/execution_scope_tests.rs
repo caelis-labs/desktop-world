@@ -45,7 +45,7 @@ for line in sys.stdin:
   v={'begins':begins,'payloads':payloads,'background':background,'restores':restores}
  elif r.get('need_foreground') and not active:
   assert r.get('_defer_foreground') is True
-  v={'dispatch':'not_dispatched','evidence':'unverified','foreground_plan':{'reason':'native_keyboard_semantics','visual':False,'capability_detail':'chromium_command_a'}}
+  v={'dispatch':'not_dispatched','evidence':'unverified','foreground_plan':{'reason':'background_key_window_absent','visual':False}}
  else:
   assert r.get('_execution_foreground')==active
   payloads+=1; background+=int(not active)
@@ -187,11 +187,13 @@ for line in sys.stdin:
     let poll = || Ok(Duration::from_secs(3));
     let call = CallContext { poll: &poll };
     let mut calls = 0;
-    let reply = backend.execution_input_rpc(input(true), &call, |_| {
-        calls += 1;
-        Ok(json!({"dispatch":"not_dispatched","evidence":"unverified",
-            "foreground_plan":{"reason":"native_keyboard_semantics","visual":false,"capability_detail":"chromium_command_a"}}))
-    }).unwrap();
+    let reply = backend
+        .execution_input_rpc(input(true), &call, |_| {
+            calls += 1;
+            Ok(json!({"dispatch":"not_dispatched","evidence":"unverified",
+            "foreground_plan":{"reason":"background_key_window_absent","visual":false}}))
+        })
+        .unwrap();
     assert_eq!(action_reply(&reply).dispatch, DispatchState::Unknown);
     assert_eq!(calls, 1);
     assert!(backend.focus_pending.load(Ordering::Acquire));

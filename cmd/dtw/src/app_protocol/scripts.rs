@@ -376,7 +376,11 @@ impl<B: Backend + 'static> Coordinator<B> {
         let action = if scene_call {
             !matches!(
                 call.op.as_str(),
-                "scene.look" | "scene.capture" | "scene.after" | "scene.readText"
+                "scene.look"
+                    | "scene.capture"
+                    | "scene.after"
+                    | "scene.readText"
+                    | "scene.waitForNewWindow"
             )
         } else {
             parsed.as_ref().is_ok_and(|s| is_action(&s.command))
@@ -518,7 +522,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         if scene_call
             && matches!(
                 call.op.as_str(),
-                "scene.look" | "scene.capture" | "scene.after"
+                "scene.look" | "scene.capture" | "scene.after" | "scene.waitForNewWindow"
             )
         {
             *last_image = None;
@@ -543,10 +547,16 @@ impl<B: Backend + 'static> Coordinator<B> {
         if scene_call
             && matches!(
                 call.op.as_str(),
-                "scene.look" | "scene.capture" | "scene.after"
+                "scene.look" | "scene.capture" | "scene.after" | "scene.waitForNewWindow"
             )
         {
-            if work.completed.error.is_some() {
+            let wait_timeout = call.op == "scene.waitForNewWindow"
+                && work
+                    .completed
+                    .error
+                    .as_ref()
+                    .is_some_and(|e| e.code == "wait_timeout");
+            if work.completed.error.is_some() && !wait_timeout {
                 run.snapshot = None;
                 run.view = None;
             } else {

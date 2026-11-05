@@ -20,6 +20,8 @@
 - Experimental X11 reports running-only discovery with `installed:false`.
 - `provider` describes the native provider, capabilities, observe scopes and conditions
   before input; a public method's presence alone does not prove platform support.
+  `supported_capabilities` lists native primitives, not extra JavaScript methods.
+  Use the public methods below; `setValue` and `closeWindow` are not script methods.
 
 `exec({app, source})`
 
@@ -53,9 +55,10 @@
 | Method | Arguments | Behavior |
 | --- | --- | --- |
 | `await app.look(options?)` | `{full?:boolean,role?:string,text?:string,scope?:'window'\|'menu'}` | Start/reuse the app where supported (nonactivating by default on macOS); observe visible window layering and up to 80 semantic elements in the top surface. Optional role (1–64 characters) and text (1–256) filter the native traversal, so relevant content beyond the default preview can be reached. `scope:'menu'` reads the selected window's app menu through the native menu scope without activating it; the default is window content. It requires a proven app window and does not expose Dock roots or menu extras. `semantics.query` identifies the filtered scope; completeness and absence apply only within it. JavaScript always receives the full snapshot. Tool output compares with the previous published view. Window metadata is bounded to 32 entries. `full:true` forces a tool-output baseline, not continuation. |
+| `await app.waitForNewWindow(options?)` | `{timeout_ms?:number}` (default 2000, max 10000) | Wait for a new content window since the latest dispatched click/keypress, including one in the preceding exec. Returns a full snapshot. Read-only; never repeats input. `wait_timeout` means the expected window did not appear within the budget. Use after New/Open commands before typing; no hand-written polling loop is needed. |
 | `await app.capture(options?)` | `{full?:boolean}` | Return a full snapshot, including `windows`, and a PNG of the authorized app's visible stacked surfaces. Establishes the internal coordinate binding; later input returns an updated visual observation while in visual mode. |
 | `await app.readText(target)` | observed ID string OR `{target:string,offset?:number,limit?:number}` | Read native textual content of an observed element. Returns `{text,offset,next_offset,total_length,unit:'utf16'}` inside JavaScript; use `return` or `print` for requested tool output. Offset defaults to 0; limit defaults to 4096, from 2–16384 UTF-16 units. Reuse `next_offset` and the same target without a new look to continue one retained text revision. This read does not refresh the scene or request a PNG. A fresh look/input can retire its source; stale reads fail instead of joining revisions. Titles/descriptions are not substituted for document text. Unsupported native text remains explicit. |
-| `await app.click(target)` | string OR `{target:string}` OR `{selector:{role?:string,text?:string,scope?:'window'\|'menu'}}` OR `{x:number,y:number,button?:'left'\|'right',count?:1\|2}` | Semantic target ID from the latest look or a unique selector, for controls advertising `press`; otherwise use the returned screenshot fallback; or image-pixel coordinates from the last capture. `app.click('w1.e12')` uses a target ID; other strings such as `app.click('Continue')` are text selectors. Never mix target forms. Mouse options apply only to coordinates. |
+| `await app.click(target)` | string OR `{target:string}` OR `{selector:{role?:string,text?:string,scope?:'window'\|'menu'}}` OR `{x:number,y:number,button?:'left'\|'right',count?:1\|2}` | Semantic target ID from the latest look or a unique selector, for controls advertising `press`. Editable text controls can advertise this action to focus the control without changing its text. Unsupported controls use screenshot coordinates. `app.click('w1.e12')` uses a target ID; other strings such as `app.click('Continue')` are text selectors. Never mix target forms. Mouse options apply only to coordinates. |
 | `await app.move(point)` | `{x:number,y:number}` | Hover over a visible point in the current app image, enabling hover UI. |
 | `await app.drag(options)` | `{path:[{x:number,y:number},...]}` | Content drag uses one left-button press, bounded path and paired release. 2–64 supplied points with movement, internally at most 256 samples. The entire path must stay within one observed window. A proven standard macOS or Windows title bar moves its window via native position, with the destination fully on one display. Other paths drag content. Unsupported provider/display boundaries are explicit. No held button survives a call. |
 | `await app.typeText(text)` | string, or `{text:string}` | Unicode keyboard input into the active editing control. It may invoke application editing behavior. It does not replace a field value implicitly. |
@@ -65,6 +68,14 @@
 | `await app.quit()` | none | Request normal quit of the active app instance. A save dialog remains observable. No forced termination. |
 
 `look`/`capture` accept no native refs. Input routes within the selected app.
+`look()`, `capture()` and `waitForNewWindow()` return full JavaScript snapshots. `readText()` returns
+text pages. Input methods (`click`, `move`, `drag`, `scroll`, `typeText`, `keypress`,
+`focus`, `quit`) return action receipts with `outcome.dispatch` and
+`outcome.evidence`, not snapshots. Inspect the outer tool `view` for the current
+UI; call `look()` inside a script when the script itself needs its contents.
+For example: `await app.click(id); const view=await app.look(); return view.elements;`.
+`dispatched` means the action was sent; `evidence.kind:'unverified'` means its UI
+effect has not been established. Dispatch itself is not unknown in this case.
 Known selectors, keyboard input and default scrolling can begin an `exec`
 directly. DTW prepares the app/current receiver on demand and returns observation
 after input; no initial or per-script `look` is required. Context persists within
@@ -84,18 +95,26 @@ Keyboard input uses the native keyboard window when available, independently of
 visual z-order, within the already selected process instance; a frontmost tooltip or completion surface does not automatically
 receive keys. Focus and app identity checks still apply. On macOS startup requests
 neither activate nor hide the app. An app may activate itself. With the default
-`auto` input policy, each `exec` initially uses background delivery. A known
-unsupported background capability, proved cleanly `not_dispatched` before focus
-preparation or input, may authorize one foreground borrow for the rest of that
-script. Remaining actions require the owned foreground; supported pointer actions
+`auto` input policy, reads, ordinary text and supported pointer actions use
+background delivery. Command/Control/Option chords borrow foreground before
+any key is sent, then restore it at script settlement. This reliability policy
+has no per-app/key whitelists; it also routes shortcuts that might work in the
+background through foreground. Plain keys and Shift-only typing remain
+addressed. A proved missing keyboard receiver, native modal/service surface or unsupported
+text-input capability can borrow foreground before input. The scope lasts for
+the rest of the script. Remaining actions require the owned foreground; supported pointer actions
 can still use addressed events. At script end DTW releases held input and restores
 the original app instance and exact window, when one was captured, only while
-foreground ownership and the original identity remain proven. An external app or
-window focus change permanently invalidates this borrow, even if focus later
+foreground ownership and the original identity remain proven. A new owned
+window created during admitted input stays in the scope. Selecting an already
+existing sibling window or an external app permanently invalidates this borrow, even if focus later
 returns: DTW stops further input, does not reacquire focus, and does not force a
-restore. Confirmed quit or closure of the borrowed anchor is terminal; cleanup
-only observes whether the original foreground returned and never activates a
-third app. An unconfirmed lifecycle effect does not establish this terminal case.
+restore. Confirmed quit or closure of the borrowed anchor ends its input scope.
+For a proved closure that leaves the same live app windowless or reveals another
+owned window, cleanup may restore the original foreground while ownership still holds.
+This does not admit further input after the close. Other terminal cases only
+observe whether the original foreground returned. An unconfirmed lifecycle
+effect does not establish this terminal case.
 
 ## View
 
@@ -200,15 +219,14 @@ their own live target proof; a rejected semantic action is never replayed as a
 mouse click. Process identity, visible-hit, geometry and input-release checks
 continue to apply when no semantic elements are available.
 
-macOS prefers background input. Reads and selectors do not activate an app to
+macOS preserves background reads and supported pointer input. Reads and selectors do not activate an app to
 materialize semantics or run a menu command. Menu actions require their exact
 native destination already focused. Known foreground-borrow capabilities include
 AppKit/Chromium native hover tracking, an unavailable required addressed-event
-API, proven native modal/sheet keyboard input, and proven associated-process
-keyboard receivers. The framework-specific keyboard exceptions are Chromium
-Command+A and supplementary Unicode text, and AppKit Command+W and text containing
-line/tab controls; these four shapes are not the complete borrowing capability
-list. Other admitted shapes try directed input once. Borrowing still requires a
+API, native modal/service keyboard receivers and semantic focus of editable controls.
+Ordinary single-line text, including Chinese, retains its background route.
+Retained text-specific boundaries are AppKit line breaks and Chromium supplementary
+Unicode; these do not classify keyboard chords. Borrowing requires a
 proven exact logical window anchor and original foreground identity. Unknown AX
 or modal state, stale geometry, permissions, timeouts and arbitrary errors never
 authorize activation or replay. `background_only` refuses a required borrow with

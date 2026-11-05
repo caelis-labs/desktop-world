@@ -325,4 +325,51 @@ private func checkExitedKernelProcess() {
     expect(!isExitedKernelProcess(info, pid: 123), "Empty kernel process record proved death")
 }
 checkExitedKernelProcess()
+private func checkSharingIndicatorSurface() throws {
+    struct Node { var role: String; var identity: String? = nil; var description: String? = nil; var title: String? = nil; var children: [Int] }
+    var nodes = [
+        Node(role: kAXWindowRole, children: [1]),
+        Node(role: kAXGroupRole, children: [2]),
+        Node(role: kAXButtonRole, description: "WindowSharingSessionButton", children: [])
+    ]
+    func check() throws -> Bool {
+        try sharingIndicatorSurface(0, role: { nodes[$0].role }, identifier: { nodes[$0].identity },
+            description: { nodes[$0].description }, title: { nodes[$0].title }, children: { nodes[$0].children })
+    }
+    var matched = try check()
+    expect(matched, "Native sharing indicator was treated as document content")
+    nodes[0].children = [1, 2]
+    matched = try check()
+    expect(!matched, "A real window with other content was hidden")
+    nodes[0].children = [1]; nodes[2].description = "Sharing"
+    matched = try check()
+    expect(!matched, "A label/shape heuristic excluded a normal button")
+    nodes[2].identity = "WindowSharingSessionButton"
+    matched = try check()
+    expect(matched, "Native indicator identifier was ignored")
+    nodes[2].identity = nil; nodes[2].description = nil; nodes[2].title = "WindowSharingSessionButton"
+    matched = try check()
+    expect(matched, "Real AppKit sharing control AXTitle was ignored")
+    nodes[2].title = nil; nodes[0].title = "WindowSharingSessionButton"
+    matched = try check()
+    expect(!matched, "A document title alone hid its content")
+}
+try checkSharingIndicatorSurface()
+let mergedWindows = mergeWindowInventoryRows(
+    all: [[kCGWindowNumber as String: UInt32(10), "revision":"old"], [kCGWindowNumber as String: UInt32(20)]],
+    visible: [[kCGWindowNumber as String: UInt32(30)], [kCGWindowNumber as String: UInt32(10), "revision":"new"]])
+expect(mergedWindows.compactMap { $0[kCGWindowNumber as String] as? UInt32 } == [30,10,20], "New visible window was lost or duplicated")
+expect(mergedWindows[1]["revision"] as? String == "new", "Older all-window metadata replaced visible metadata")
+expect(inputCreatedWindowAllowed(admitted:true, candidate:12, known:[10,11]), "Input-created window was rejected")
+expect(!inputCreatedWindowAllowed(admitted:false, candidate:12, known:[10,11]), "Read/focus alone authorized a new window")
+expect(!inputCreatedWindowAllowed(admitted:true, candidate:11, known:[10,11]), "Existing sibling selection was treated as input-created")
+expect(!inputCreatedWindowAllowed(admitted:true, candidate:0, known:[10,11]), "Unproven window identity was admitted")
+for (alias, expected) in [("CTRL", "control"), ("WIN", "meta"), ("FN", "fn")] {
+    expect(dtwModifier(alias)?.0 == dtwModifier(expected)?.0, "Foreground modifier alias diverged")
+}
+for (alias, expected) in [("PG_DOWN", "pagedown"), ("LEFT_ARROW", "left"),
+    ("DELETE_FORWARD", "forwarddelete"), ("BKSP", "backspace"), ("KP_ENTER", "enter"),
+    ("CAPS_LOCK", "capslock")] {
+    expect(dtwKeyCode(alias) != nil && dtwKeyCode(alias) == dtwKeyCode(expected), "Foreground key alias diverged")
+}
 print("Native inventory controls passed (\(inventoryAssertions) assertions; no GUI access)")

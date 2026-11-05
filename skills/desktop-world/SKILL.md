@@ -42,7 +42,10 @@ Use `await app.focus()` when the task explicitly needs the app foreground. On ma
 keep related input in that same script: focus is borrowed and returned at settlement.
 Normal input still chooses its route automatically.
 
-The public methods are `look`, `capture`, `readText`, `click`, `move`, `drag`, `typeText`,
+After a New/Open action, use `await app.waitForNewWindow()` before typing in the new
+window. It waits without repeating the action; `wait_timeout` means no new window appeared.
+
+The public methods are `look`, `capture`, `readText`, `waitForNewWindow`, `click`, `move`, `drag`, `typeText`,
 `keypress`, `scroll`, `focus` and `quit`. Read [API.md](API.md) for exact arguments and
 output semantics;
 [PATTERNS.md](PATTERNS.md) covers visual fallback, dialogs and recovery.

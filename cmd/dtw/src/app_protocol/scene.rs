@@ -19,6 +19,7 @@ pub(super) struct SceneState {
     next_element: u64,
     viewport: Option<([f64; 4], String, [f64; 4])>,
     window_wait_pending: bool,
+    pending_new_window: Option<std::collections::HashSet<String>>,
 }
 impl SceneState {
     pub(super) fn projection(&self) -> Option<Value> {
@@ -52,6 +53,7 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
         "scene.look" => &["full", "role", "text", "scope"],
         "scene.capture" | "scene.after" => &["full"],
         "scene.readText" => &["target", "offset", "limit"],
+        "scene.waitForNewWindow" => &["timeout_ms"],
         "scene.click" => &["target", "selector", "x", "y", "button", "count"],
         "scene.move" => &["x", "y"],
         "scene.drag" => &["path"],
@@ -68,6 +70,16 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
         return Err(error(
             "invalid_arguments",
             "Unknown app argument; see Skill API.md",
+        ));
+    }
+    if op == "scene.waitForNewWindow"
+        && args
+            .get("timeout_ms")
+            .is_some_and(|v| v.as_u64().is_none_or(|ms| !(1..=10_000).contains(&ms)))
+    {
+        return Err(error(
+            "invalid_arguments",
+            "timeout_ms must be an integer from 1 to 10000",
         ));
     }
     for key in ["full"] {
@@ -305,7 +317,9 @@ impl<B: Backend + 'static> Coordinator<B> {
             .as_ref()
             .is_some_and(|r| r.outcome.dispatch == DispatchState::Dispatched)
         {
-            self.state.lock().unwrap().scene.window_wait_pending = true;
+            let mut state = self.state.lock().unwrap();
+            state.scene.window_wait_pending = true;
+            state.scene.pending_new_window = Some(state.windows.keys().cloned().collect());
         }
     }
     pub(super) fn scene_call(&self, id: &str, op: &str, args: &Value, deadline: Instant) -> Work {
@@ -321,6 +335,9 @@ impl<B: Backend + 'static> Coordinator<B> {
                 0,
                 deadline,
             );
+        }
+        if op == "scene.waitForNewWindow" {
+            return self.scene_wait_for_new_window(id, args, deadline);
         }
         if op == "scene.readText" {
             return self.scene_read_text(id, args, deadline);
@@ -418,7 +435,11 @@ impl<B: Backend + 'static> Coordinator<B> {
                 })
                 .or_else(|| {
                     matches!(op, "scene.typeText" | "scene.keypress")
-                        .then(|| candidates.first())
+                        .then(|| {
+                            candidates
+                                .iter()
+                                .find(|row| row["scene"]["semantic_candidate"] != false)
+                        })
                         .flatten()
                 });
             if selected.is_none() && rows.iter().any(|row| row["visible"] == true) {
@@ -561,6 +582,15 @@ impl<B: Backend + 'static> Coordinator<B> {
         // Keep the scene mapping for the next requested action. Its native
         // binding is consumed; preflight renews it without replaying this input.
         let mut state = self.state.lock().unwrap();
+        if matches!(method.as_str(), "press" | "click" | "keypress")
+            && work
+                .completed
+                .receipt
+                .as_ref()
+                .is_some_and(|r| r.outcome.dispatch != DispatchState::NotDispatched)
+        {
+            state.scene.pending_new_window = Some(state.windows.keys().cloned().collect());
+        }
         if !follows_scene
             && work
                 .completed
@@ -595,6 +625,65 @@ impl<B: Backend + 'static> Coordinator<B> {
         }
         work
     }
+    fn scene_wait_for_new_window(&self, id: &str, args: &Value, deadline: Instant) -> Work {
+        let Some(before) = self.state.lock().unwrap().scene.pending_new_window.take() else {
+            return failed(error(
+                "input_required",
+                "waitForNewWindow requires a preceding dispatched click or keypress",
+            ));
+        };
+        let until = (Instant::now()
+            + Duration::from_millis(args["timeout_ms"].as_u64().unwrap_or(2_000)))
+        .min(deadline);
+        let timeout = |last: Option<Work>| {
+            let mut result = failed(error(
+                "wait_timeout",
+                "No new content window appeared before the deadline; input was not repeated",
+            ));
+            if let Some(last) = last {
+                result.completed.value = last.completed.value;
+                result.completed.image = last.completed.image;
+            } else {
+                result.completed.value = self.state.lock().unwrap().scene.observed.clone();
+            }
+            result
+        };
+        let mut last = None;
+        loop {
+            if Instant::now() >= until {
+                return timeout(last);
+            }
+            let work = self.scene_look(id, &json!({}), false, true, 0, until);
+            if let Some(error) = &work.completed.error {
+                if until < deadline
+                    && Instant::now() >= until
+                    && matches!(
+                        error.code.as_str(),
+                        "timed_out" | "timeout" | "deadline_exceeded"
+                    )
+                {
+                    return timeout(last);
+                }
+                return work;
+            }
+            let matched = self
+                .state
+                .lock()
+                .unwrap()
+                .scene
+                .active
+                .as_ref()
+                .is_some_and(|window| !before.contains(window));
+            if matched {
+                return work;
+            }
+            last = Some(work);
+            std::thread::sleep(
+                Duration::from_millis(20).min(until.saturating_duration_since(Instant::now())),
+            );
+        }
+    }
+
     fn scene_pointer(&self, id: &str, op: &str, args: &Value, deadline: Instant) -> Work {
         let prepared = (|| {
             let supplied = if op == "scene.move" {
@@ -973,13 +1062,14 @@ impl<B: Backend + 'static> Coordinator<B> {
     ) -> Work {
         // A failed refresh cannot leave old semantic/pixel input authority.
         // Keep identity labels and the viewport only for a successful new read.
-        {
+        let wait_for_window = {
             let mut state = self.state.lock().unwrap();
             state.scene.nodes.clear();
             state.scene.raster = None;
             state.scene.observed = None;
             state.scene.projected = None;
-        }
+            std::mem::take(&mut state.scene.window_wait_pending)
+        };
         let mut startup = None;
         if self.runtime.instances().is_empty() && after {
             let current = json!({"running":false,"windows":[],"elements":[],"semantics":{"complete":true,"reason":"app_stopped"},"coverage":{"complete_within_scope":true}});
@@ -1005,7 +1095,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             self.state.lock().unwrap().scene = SceneState::default();
         }
         let until = (Instant::now()
-            + if startup.is_some() || after {
+            + if startup.is_some() || after || wait_for_window {
                 Duration::from_secs(2)
             } else {
                 Duration::ZERO
@@ -1035,14 +1125,14 @@ impl<B: Backend + 'static> Coordinator<B> {
         // A native decoration can be a real composited surface without being
         // the active semantic window. Do not substitute keyboard focus here:
         // menus/dropdowns may be interactive above their focused owner.
-        let active = visible
+        let semantic_windows: Vec<_> = visible
             .iter()
-            .find(|row| row["scene"]["semantic_candidate"] != false)
-            .or_else(|| {
-                rows.iter()
-                    .find(|row| row["scene"]["semantic_candidate"] != false)
-            })
-            .cloned();
+            .chain(rows.iter().filter(|row| row["visible"] != true))
+            .filter(|row| row["scene"]["semantic_candidate"] != false)
+            .take(32)
+            .cloned()
+            .collect();
+        let mut active = None;
         let window_ids = {
             let mut state = self.state.lock().unwrap();
             if state.scene.window_ids.len() > 4096 {
@@ -1068,11 +1158,29 @@ impl<B: Backend + 'static> Coordinator<B> {
         let mut elements = Vec::new();
         let mut semantic_bytes = 0usize;
         let mut semantic = json!({"complete":false,"reason":"no_window"});
-        if let Some(row) = &active {
+        let mut observation = None;
+        for row in semantic_windows {
             let mut request = query.clone();
             request.insert("window_ref".into(), row["window_ref"].clone());
             request.insert("limit".into(), json!(80));
             let work = self.scene_atomic(id, "observe", Value::Object(request), deadline);
+            // Optional window metadata can miss a newly materialized system
+            // decoration. Only exact read-time proof permits choosing another
+            // content window; arbitrary AX errors keep the original target.
+            if work
+                .completed
+                .error
+                .as_ref()
+                .is_some_and(|e| e.code == "non_content_surface")
+            {
+                continue;
+            }
+            active = Some(row);
+            observation = Some(work);
+            break;
+        }
+        if let Some(row) = &active {
+            let work = observation.unwrap();
             if let Some(e) = work.completed.error {
                 if !semantic_fallback(&e.code) {
                     return failed(e);

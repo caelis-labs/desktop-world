@@ -50,6 +50,8 @@ pub(super) fn allows_activation(reason: &str) -> bool {
             | "background_key_window_absent"
             | "windowless_application"
             | "native_open_panel_click"
+            | "semantic_text_focus"
+            | "native_modal_press"
     )
 }
 
@@ -76,19 +78,18 @@ pub(super) fn foreground_plan<'a>(
         "background_key_window_absent" => keyboard,
         "native_hover_tracking" => operation == "move",
         "native_open_panel_click" => operation == "click",
+        "semantic_text_focus" | "native_modal_press" => {
+            operation == "press" && plan["visual"] == false
+        }
         "addressed_event_api_unavailable" => visual_focus(operation) || keyboard,
         "native_modal_keyboard" | "associated_process_keyboard" => keyboard,
         "native_keyboard_semantics" => {
-            keyboard
-                && matches!(
-                    plan["capability_detail"].as_str(),
-                    Some(
-                        "chromium_command_a"
-                            | "chromium_supplementary_unicode"
-                            | "appkit_command_w"
-                            | "appkit_multiline_text"
+            (operation == "keypress" && plan["capability_detail"] == "modified_key_chord")
+                || operation == "type_text"
+                    && matches!(
+                        plan["capability_detail"].as_str(),
+                        Some("chromium_supplementary_unicode" | "appkit_multiline_text")
                     )
-                )
         }
         _ => false,
     };
@@ -112,9 +113,8 @@ pub(super) fn fallback_reason(result: &serde_json::Value) -> Option<PhysicalReas
             if matches!(
                 result["capability_detail"].as_str(),
                 Some(
-                    "chromium_command_a"
+                    "modified_key_chord"
                         | "chromium_supplementary_unicode"
-                        | "appkit_command_w"
                         | "appkit_multiline_text"
                 )
             ) =>
@@ -230,9 +230,9 @@ mod tests {
         let mut keyboard = json!({"dispatch":"not_dispatched","evidence":"unverified",
             "foreground_plan":{"reason":"native_keyboard_semantics","visual":false}});
         assert_eq!(foreground_plan(&keyboard, "keypress"), None);
-        keyboard["foreground_plan"]["capability_detail"] = json!("chromium_command_a");
+        keyboard["foreground_plan"]["capability_detail"] = json!("chromium_supplementary_unicode");
         assert_eq!(
-            foreground_plan(&keyboard, "keypress"),
+            foreground_plan(&keyboard, "type_text"),
             Some("native_keyboard_semantics")
         );
         assert_eq!(foreground_plan(&keyboard, "move"), None);
@@ -259,9 +259,8 @@ mod tests {
             assert_eq!(fallback_reason(&result), None);
         }
         for detail in [
-            "chromium_command_a",
+            "modified_key_chord",
             "chromium_supplementary_unicode",
-            "appkit_command_w",
             "appkit_multiline_text",
         ] {
             result["capability_detail"] = json!(detail);

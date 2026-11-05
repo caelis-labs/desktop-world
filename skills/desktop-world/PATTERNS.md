@@ -16,6 +16,7 @@ within the authorized app; script completion returns the latest view. UI work
 can settle asynchronously: perform another look when the expected change has
 not appeared. A successful native dispatch alone does not prove the result.
 
+`click(id)` can focus an editable text control when it advertises `press`.
 A text field without an advertised `press` action needs a visual click before
 `typeText`. A proven undelivered semantic rejection can return an image for this
 fallback; it never repeats a potentially delivered action.
@@ -96,18 +97,20 @@ an action with unknown effects.
 
 ## macOS foreground borrowing
 
-Under `auto`, an `exec` starts with background delivery. A known unsupported
-capability with a clean `not_dispatched` preflight can borrow foreground once for
-the rest of that script. This includes AppKit/Chromium hover, a required addressed
-API being unavailable, proven modal/sheet or associated-process keyboard routing,
-and the documented framework-specific keyboard exceptions. Borrowing requires
+Under `auto`, reads and supported pointer actions remain in the background.
+Ordinary text, plain keys and Shift-only typing keep background delivery.
+Command/Control/Option chords borrow foreground before dispatch and restore
+it at script settlement, without per-app/key whitelists. Proven native modal/service
+receivers, a missing key window and retained text-input limits can borrow before
+dispatch. AppKit/Chromium hover and an unavailable required addressed API can also borrow.
+Borrowing requires
 a proven original foreground identity and an exact logical window anchor when
 a window exists. A proven windowless shortcut starts an app scope and binds its
 first focused window once. A known absent background key window may also borrow;
 unreadable AX proof does not authorize it. `await app.focus()` explicitly starts
 the same scope. Keep its follow-up input in the same script.
 Remaining actions require the owned foreground, while supported pointer transport
-can remain addressed. `background_only` refuses actions that require borrowing.
+can remain addressed. `background_only` refuses actions requiring a borrow.
 
 Keep related hover, inspection and follow-up input in one script when appropriate.
 At script end DTW restores the original app instance and exact captured window
@@ -171,3 +174,17 @@ A standard macOS/Windows title-bar drag uses native window position when proven 
 writable. Use a current image, start in empty title-bar space away from buttons,
 and keep the supplied path inside that window. The destination must fit one
 display. Inspect fresh bounds/image afterward; moving a window resets coordinates.
+
+## New document windows
+
+Wait for a new window after an input that should create one. A delivered chord
+alone does not prove that the app has finished creating the window.
+
+```javascript
+await app.keypress('META+N');
+await app.waitForNewWindow();
+await app.typeText('New document text');
+```
+
+The wait also works in the next exec. A timeout stops with the latest view;
+it does not resend the shortcut.

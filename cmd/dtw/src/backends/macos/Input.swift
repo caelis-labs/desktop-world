@@ -283,7 +283,7 @@ func dtwPostKey(_ event: CGEvent, input: NativePendingInput) {
 func dtwKeyCode(_ key: String) -> CGKeyCode? {
     let named: [String: CGKeyCode] = [
         "return":36,"enter":36,"tab":48,"space":49,"delete":51,"backspace":51,
-        "escape":53,"esc":53,"home":115,"pageup":116,"forwarddelete":117,"del":117,
+        "escape":53,"esc":53,"capslock":57,"home":115,"pageup":116,"forwarddelete":117,"del":117,
         "end":119,"pagedown":121,"left":123,"arrowleft":123,"right":124,"arrowright":124,
         "down":125,"arrowdown":125,"up":126,"arrowup":126,
         "f1":122,"f2":120,"f3":99,"f4":118,"f5":96,"f6":97,"f7":98,"f8":100,
@@ -294,15 +294,22 @@ func dtwKeyCode(_ key: String) -> CGKeyCode? {
         "]":30,"o":31,"u":32,"[":33,"i":34,"p":35,"l":37,"j":38,"'":39,"k":40,
         ";":41,"\\":42,",":43,"/":44,"n":45,"m":46,".":47,"`":50
     ]
-    return named[key.lowercased().replacingOccurrences(of: "_", with: "")]
+    var name = key.trimmingCharacters(in: .whitespaces).lowercased()
+    if name.count > 1 { name = name.filter { ![" ", "_", "-"].contains($0) } }
+    let aliases = ["pgdn":"pagedown", "pgdown":"pagedown", "pgup":"pageup",
+        "leftarrow":"left", "rightarrow":"right", "uparrow":"up", "downarrow":"down",
+        "fwddelete":"forwarddelete", "deleteforward":"forwarddelete", "bksp":"backspace",
+        "kpenter":"enter", "numpadenter":"enter"]
+    return named[aliases[name] ?? name]
 }
 
 func dtwModifier(_ key: String) -> (CGKeyCode, CGEventFlags)? {
     switch key.lowercased() {
-    case "cmd", "command", "meta", "super": return (55, .maskCommand)
+    case "cmd", "command", "meta", "super", "win": return (55, .maskCommand)
     case "shift": return (56, .maskShift)
     case "option", "alt": return (58, .maskAlternate)
     case "control", "ctrl": return (59, .maskControl)
+    case "fn": return (63, .maskSecondaryFn)
     default: return nil
     }
 }
