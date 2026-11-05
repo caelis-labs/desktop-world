@@ -53,6 +53,9 @@
   A returned value identical to the final script snapshot is coalesced into `view`, rather
   than repeated in `result`. Task-specific JSON values remain in `result`.
   The last current explicit/fallback PNG is a separate MCP image block.
+- An incomplete default semantic view can include `semantics.hint` suggesting a
+  `role` or `text` filter. This preserves the original read reason and performs
+  no extra observation or input; use freshly returned target IDs.
 - Output is bounded. `print` has 200 lines / 32 KiB aggregate, 2000 characters per
   line, and explicit truncation. Return JSON has a separate 64 KiB budget.
 - A retransmitted identical MCP request ID refers to its retained execution;

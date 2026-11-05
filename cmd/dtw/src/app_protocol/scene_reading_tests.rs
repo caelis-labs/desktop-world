@@ -30,6 +30,7 @@ fn omitted_text_is_explicit_and_tail_only_edits_change_the_view() {
     assert!(preview.get("name_truncated").is_none());
     assert_eq!(view["semantics"]["complete"], false);
     assert_eq!(view["semantics"]["reason"], "text_truncated");
+    assert!(view["semantics"].get("hint").is_none());
     let revision = preview["value_revision"].clone();
     catalog.backend.0.model.lock().unwrap().semantic_elements =
         Some(vec![content(1, &format!("{prefix}other"))]);
@@ -456,6 +457,11 @@ fn look_native_page_limits_distinguish_explicit_filters_from_scope_only() {
         assert_eq!(view["elements"], json!([]));
         assert_eq!(view["semantics"]["complete"], false);
         assert_eq!(view["semantics"]["has_more"], true);
+        assert_eq!(
+            view["semantics"].get("hint").is_some(),
+            query != "{text:'absent'}"
+        );
+        assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
         assert_eq!(
             catalog.backend.0.observes.load(Ordering::SeqCst),
             expected_pages

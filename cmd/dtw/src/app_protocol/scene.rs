@@ -1311,6 +1311,17 @@ impl<B: Backend + 'static> Coordinator<B> {
                 }
             }
         }
+        if query.is_empty()
+            && semantic["complete"] == false
+            && (semantic["has_more"] == true
+                || (!elements.is_empty()
+                    && matches!(
+                        semantic["reason"].as_str(),
+                        Some("node_unavailable" | "ownership_unproven" | "children_unavailable")
+                    )))
+        {
+            semantic["hint"] = json!("Inspect a narrower view with look({role:'button'}) or look({text:'...'}); use returned target IDs.");
+        }
         if !query.is_empty() {
             semantic["query"] = Value::Object(query);
         }
