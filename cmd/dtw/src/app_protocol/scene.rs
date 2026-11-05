@@ -635,7 +635,12 @@ impl<B: Backend + 'static> Coordinator<B> {
         let until = (Instant::now()
             + Duration::from_millis(args["timeout_ms"].as_u64().unwrap_or(2_000)))
         .min(deadline);
-        let timeout = |last: Option<Work>| {
+        let previous = self.state.lock().unwrap().scene.observed.clone();
+        let mut last_projection = self.state.lock().unwrap().scene.projection();
+        let timeout = |last: Option<Work>, projection: Option<Value>| {
+            if until == deadline {
+                return failed(error("timed_out", "Execution deadline exceeded"));
+            }
             let mut result = failed(error(
                 "wait_timeout",
                 "No new content window appeared before the deadline; input was not repeated",
@@ -644,26 +649,26 @@ impl<B: Backend + 'static> Coordinator<B> {
                 result.completed.value = last.completed.value;
                 result.completed.image = last.completed.image;
             } else {
-                result.completed.value = self.state.lock().unwrap().scene.observed.clone();
+                result.completed.value = previous.clone();
             }
+            // The last attempted refresh can clear projection before its local
+            // deadline expires. Preserve display evidence, never stale input
+            // credentials: nodes and raster remain retired by that refresh.
+            let mut state = self.state.lock().unwrap();
+            state.scene.observed = result.completed.value.clone();
+            state.scene.projected = projection;
             result
         };
         let mut last = None;
         loop {
             if Instant::now() >= until {
-                return timeout(last);
+                return timeout(last, last_projection);
             }
-            let work = self.scene_look(id, &json!({}), false, true, 0, until);
-            if let Some(error) = &work.completed.error {
-                if until < deadline
-                    && Instant::now() >= until
-                    && matches!(
-                        error.code.as_str(),
-                        "timed_out" | "timeout" | "deadline_exceeded"
-                    )
-                {
-                    return timeout(last);
-                }
+            // A condition budget stops new probes; it is not the transport
+            // deadline of an in-flight native read. Match Runtime's window-wait
+            // contract, preserving the caller budget and original read errors.
+            let work = self.scene_look(id, &json!({}), false, true, 0, deadline);
+            if work.completed.error.is_some() {
                 return work;
             }
             let matched = self
@@ -677,6 +682,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             if matched {
                 return work;
             }
+            last_projection = self.state.lock().unwrap().scene.projection();
             last = Some(work);
             std::thread::sleep(
                 Duration::from_millis(20).min(until.saturating_duration_since(Instant::now())),

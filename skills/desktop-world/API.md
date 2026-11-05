@@ -68,6 +68,8 @@
 | `await app.quit()` | none | Request normal quit of the active app instance. A save dialog remains observable. No forced termination. |
 
 `look`/`capture` accept no native refs. Input routes within the selected app.
+`waitForNewWindow`'s condition budget stops new probes; an in-flight bounded read
+can finish within the script deadline. A condition timeout does not retire the connection.
 `look()`, `capture()` and `waitForNewWindow()` return full JavaScript snapshots. `readText()` returns
 text pages. Input methods (`click`, `move`, `drag`, `scroll`, `typeText`, `keypress`,
 `focus`, `quit`) return action receipts with `outcome.dispatch` and

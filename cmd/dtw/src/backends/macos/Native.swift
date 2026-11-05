@@ -4844,7 +4844,7 @@ private final class NativeStore: @unchecked Sendable {
             // after background delivery is not WindowServer activation; AppKit
             // activate() may accept that already-active state without fronting it.
             trace("front_process_requested")
-            // Physical/remote-view input must not receive AX-style synthetic
+            // Physical pointer/remote-view clicks must not receive AX-style synthetic
             // make-key records. AXRaise + AppKit activation below still have to
             // establish the exact retained window before any payload is admitted.
             let fronted = visualActivation
@@ -5118,7 +5118,10 @@ private final class NativeStore: @unchecked Sendable {
                 if let target, let window {
                     try borrowFocus(target, window.element, context)
                     _ = try establishFocus(target, context, changed: &changed,
-                        visualActivation: request["visual"] as? Bool == true || nativeOpenPanel)
+                        // Choose activation by the admitted input route. An
+                        // OpenPanel keyboard receiver still needs make-key;
+                        // its surface kind alone cannot select pointer activation.
+                        visualActivation: request["visual"] as? Bool == true)
                 } else {
                     guard !executionFocusObserver.invalidated(epoch) else {
                         throw failure("focus_changed", "Foreground changed before windowless activation")

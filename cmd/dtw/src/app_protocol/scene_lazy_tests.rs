@@ -398,3 +398,27 @@ fn new_window_wait_requires_input_and_times_out_without_replaying_it() {
         timeout.data
     );
 }
+
+#[test]
+fn condition_expiry_during_a_read_keeps_caller_budget_and_display_evidence() {
+    let (server, catalog) = agent();
+    let input = exec(&server, "input", "await app.keypress('META+N');");
+    assert!(!input.is_error, "{}", input.data);
+    let gate = catalog.backend.read_gate();
+    let running = server.clone();
+    let worker = std::thread::spawn(move || {
+        exec(
+            &running,
+            "wait",
+            "await app.waitForNewWindow({timeout_ms:40});",
+        )
+    });
+    gate.entered();
+    std::thread::sleep(Duration::from_millis(80));
+    gate.release();
+    let reply = worker.join().unwrap();
+    assert!(reply.is_error, "{}", reply.data);
+    assert_eq!(reply.data["error"]["code"], "wait_timeout");
+    assert!(reply.data["value"]["view"].is_object(), "{}", reply.data);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+}
