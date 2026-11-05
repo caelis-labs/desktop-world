@@ -2,6 +2,7 @@
 mod ax;
 mod control;
 mod keyboard;
+mod menu_equivalent;
 mod mouse;
 mod skylight;
 pub(super) use control::pointer_point;
@@ -15,6 +16,8 @@ use std::ffi::{c_char, c_void, CStr, CString};
 struct Request {
     #[serde(default)]
     input_framework: String,
+    #[serde(default)]
+    native_modal: bool,
     operation: String,
     pid: i32,
     window_id: u32,
@@ -129,15 +132,20 @@ impl Request {
         self.input_framework == "chromium"
     }
     fn foreground_requirement(&self) -> Option<&'static str> {
-        // Choose reliable shortcut dispatch before sending any key. Literal text,
-        // plain keys and Shift-only typing retain the addressed path.
-        if self.operation == "keypress" {
+        // Chromium's Command chords have an observed renderer-focus boundary.
+        // Native menu shortcuts use the CUA menu route below; Control/Option
+        // editing chords keep PID delivery rather than being broadly fronted.
+        if self.operation == "keypress" && (self.chromium() || self.native_modal) {
             let (key, modifiers) = self.key_chord().ok()?;
             return (!keyboard::is_modifier(key)
-                && modifiers.iter().any(|modifier| {
-                    matches!(keyboard::key_name_to_code(modifier), Ok(55 | 58 | 59))
-                }))
-            .then_some("modified_key_chord");
+                && modifiers
+                    .iter()
+                    .any(|modifier| matches!(keyboard::key_name_to_code(modifier), Ok(55))))
+            .then_some(if self.chromium() {
+                "chromium_command_chord"
+            } else {
+                "native_modal_command_chord"
+            });
         }
         if self.operation != "type_text" {
             return None;
@@ -185,6 +193,34 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
     if let Err(error) = control::check() {
         return session.finish(Err(error), false);
     }
+    // A sheet/dialog receives window-local shortcuts, not its parent
+    // document's menu commands. Never dispatch that sibling's menu on its behalf.
+    let combo = if request.operation == "keypress" && !request.chromium() && !request.native_modal {
+        let (key, modifiers) = request.key_chord().expect("validated chord");
+        menu_equivalent::Combo::parse(
+            &modifiers.iter().map(|m| m.to_string()).collect::<Vec<_>>(),
+            key,
+        )
+    } else {
+        None
+    };
+    let menu = if let Some(combo) = &combo {
+        match menu_equivalent::find(request.pid, request.window_id, combo) {
+            Ok(menu_equivalent::Lookup::Match(item)) => Some(item),
+            Ok(menu_equivalent::Lookup::NoMatch) => None,
+            Ok(menu_equivalent::Lookup::Unavailable(detail)) => {
+                // Lookup and destination checks are read-only; no menu level
+                // was opened and no key-window preparation has run.
+                let mut result = session.finish(Err(anyhow::anyhow!(detail)), true);
+                result["capability_evidence"] = serde_json::json!("native_keyboard_semantics");
+                result["capability_detail"] = serde_json::json!(detail);
+                return result;
+            }
+            Err(error) => return session.finish(Err(error), false),
+        }
+    } else {
+        None
+    };
     let available = if request.keyboard() {
         skylight::keyboard_available()
     } else {
@@ -245,6 +281,10 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
             control::sleep(std::time::Duration::from_millis(50));
         }
         control::check()?;
+        if let Some(menu) = &menu {
+            menu.invoke(request.pid, request.window_id, combo.as_ref().unwrap())?;
+            return Ok(());
+        }
         let local = Some((request.window_x, request.window_y));
         match request.operation.as_str() {
             "click" if request.button == "left" && request.chromium() => {
@@ -336,7 +376,11 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
     if let Some(scope) = scope.as_mut() {
         scope.cleanup();
     }
-    session.finish(result, false)
+    let mut result = session.finish(result, false);
+    if menu.is_some() {
+        result["transport"] = serde_json::json!("ax_menu_equivalent");
+    }
+    result
 }
 /// Private foreground bridge. Swift owns target validation, the physical
 /// lease, dispatch uncertainty, and restoration around this single exact-window
@@ -442,7 +486,11 @@ mod tests {
             ] {
                 let request = make("keypress", framework, keys, "");
                 request.validate().unwrap();
-                assert_eq!(request.foreground_requirement(), Some("modified_key_chord"));
+                assert_eq!(
+                    request.foreground_requirement(),
+                    (framework == "chromium" && keys.contains(&"META"))
+                        .then_some("chromium_command_chord")
+                );
             }
             for keys in [
                 &["A"][..],
@@ -492,19 +540,14 @@ mod tests {
         }
         for (framework, args, detail) in [
             (
-                "unknown",
-                serde_json::json!({"operation":"keypress","keys":["CMD","SHIFT","T"]}),
-                "modified_key_chord",
+                "chromium",
+                serde_json::json!({"operation":"keypress","keys":["CMD","A"]}),
+                "chromium_command_chord",
             ),
             (
                 "appkit",
-                serde_json::json!({"operation":"keypress","keys":["CTRL","A"]}),
-                "modified_key_chord",
-            ),
-            (
-                "chromium",
-                serde_json::json!({"operation":"keypress","keys":["ALT","LEFT"]}),
-                "modified_key_chord",
+                serde_json::json!({"operation":"keypress","keys":["META","SHIFT","G"],"native_modal":true}),
+                "native_modal_command_chord",
             ),
             (
                 "appkit",

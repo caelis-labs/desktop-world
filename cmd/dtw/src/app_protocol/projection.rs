@@ -35,6 +35,13 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
         if let Some(summary) = summary {
             if summary["actions"].is_object() {
                 compact["effects"] = json!({"dispatch":summary["actions"]["dispatch"],"evidence":summary["actions"]["evidence"],"interrupted":summary["actions"]["interrupted"]});
+                if summary["actions"]["delivery"].is_object() {
+                    let delivery = &summary["actions"]["delivery"];
+                    compact["effects"]["delivery"] = json!({
+                        "reported":delivery["reported"], "routes":delivery["routes"],
+                        "foreground_borrowed":delivery["foreground_borrowed"],
+                        "focus_returns":delivery["focus_returns"]});
+                }
             }
             if summary["focus_preparation"].is_object() {
                 if !compact["effects"].is_object() {
@@ -42,6 +49,14 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
                 }
                 compact["effects"]["focus_preparation"] = summary["focus_preparation"].clone();
             }
+        }
+        // Settlement happens after the action receipt. Preserve that later
+        // fact separately; a pending loan is not proof that focus returned.
+        if original["script"]["focus_return"].is_string() {
+            if !compact["effects"].is_object() {
+                compact["effects"] = json!({});
+            }
+            compact["effects"]["focus_return"] = original["script"]["focus_return"].clone();
         }
         for key in [
             "error",
@@ -382,6 +397,41 @@ mod tests {
                 assert_eq!(projected.data["result"], result);
             }
         }
+    }
+
+    #[test]
+    fn public_execution_retains_reported_delivery_and_later_settlement() {
+        let steps = vec![
+            json!({"number":1,"operation":"focus","status":"completed","error":null,
+            "receipt":{"outcome":{"dispatch":"dispatched","evidence":{"kind":"unverified"},
+                "delivery":{"route":"foreground","reason":"execution_scope","foreground_borrowed":true,"focus_return":"pending"}},
+                "interruption":null}}),
+        ];
+        let mut reply = successful_execution(steps);
+        reply.data["value"] = json!({"agent_protocol":true});
+        reply.data["script"]["focus_return"] = json!("restored");
+        let projected = execution(reply);
+        assert_eq!(
+            projected.data["effects"]["delivery"]["routes"],
+            json!({"foreground":1})
+        );
+        assert_eq!(
+            projected.data["effects"]["delivery"]["foreground_borrowed"],
+            1
+        );
+        assert_eq!(
+            projected.data["effects"]["delivery"]["focus_returns"],
+            json!({"pending":1})
+        );
+        assert_eq!(projected.data["effects"]["focus_return"], "restored");
+        assert_eq!(
+            projected.data["effects"]["evidence"],
+            json!({"unverified":1})
+        );
+
+        let mut read = successful_execution(vec![]);
+        read.data["value"] = json!({"agent_protocol":true});
+        assert!(execution(read).data.get("effects").is_none());
     }
 
     #[test]

@@ -297,6 +297,32 @@ fn owner_gate() -> anyhow::Result<Gate> {
 pub fn check() -> anyhow::Result<()> {
     target_gate()?.validate()
 }
+pub fn check_local() -> anyhow::Result<()> {
+    target_gate()?.local()
+}
+pub fn remaining() -> Duration {
+    CALL.with(|c| {
+        c.borrow()
+            .as_ref()
+            .map(|s| Duration::from_millis(s.deadline.saturating_sub(now_ms())))
+            .unwrap_or_default()
+    })
+}
+/// AX dispatch has no paired key release. Once entered, an API error cannot
+/// prove that the app did not act; preserve it as an unknown, non-replayable write.
+pub fn native_action(
+    validate: impl FnOnce() -> anyhow::Result<()>,
+    action: impl FnOnce() -> i32,
+) -> anyhow::Result<()> {
+    let gate = target_gate()?;
+    gate.validate()?;
+    validate()?;
+    gate.local()?;
+    CALL.with(|c| c.borrow_mut().as_mut().expect("input owner").dispatched = true);
+    let status = action();
+    anyhow::ensure!(status == 0, "AX menu action failed ({status})");
+    Ok(())
+}
 
 pub fn pointer_point() -> Option<(f64, f64)> {
     CALL.with(|call| call.borrow().as_ref().and_then(|state| state.pointer_point))
@@ -676,6 +702,40 @@ pub fn quiesce(timeout_ms: u32) -> bool {
 mod tests {
     use super::*;
     static OWNER_TEST: Mutex<()> = Mutex::new(());
+    #[test]
+    fn native_action_failure_is_unknown_and_never_replayed_but_preflight_is_not_dispatched() {
+        let _owner = OWNER_TEST.lock().unwrap();
+        extern "C" fn valid(_: *mut c_void, _: i32) -> i32 {
+            1
+        }
+        let calls = std::cell::Cell::new(0);
+        let session =
+            Session::start(7, now_ms() + 10_000, std::ptr::null_mut(), valid, false).unwrap();
+        let result = native_action(
+            || Ok(()),
+            || {
+                calls.set(calls.get() + 1);
+                -25204
+            },
+        );
+        let outcome = session.finish(result, true);
+        assert_eq!(calls.get(), 1);
+        assert_eq!(outcome["dispatch"], "unknown");
+        assert_eq!(outcome["fallback_allowed"], false);
+        let session =
+            Session::start(7, now_ms() + 10_000, std::ptr::null_mut(), valid, false).unwrap();
+        let result = native_action(
+            || anyhow::bail!("menu destination changed"),
+            || {
+                calls.set(2);
+                0
+            },
+        );
+        let outcome = session.finish(result, false);
+        assert_eq!(calls.get(), 1);
+        assert_eq!(outcome["dispatch"], "not_dispatched");
+        assert_eq!(outcome["fallback_allowed"], false);
+    }
     #[test]
     fn preparation_is_not_safe_to_replay() {
         let v = outcome(true, false, Some("failed".into()), None, true);

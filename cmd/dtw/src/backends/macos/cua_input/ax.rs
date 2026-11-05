@@ -5,7 +5,9 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 use core_foundation::{
     array::CFArray,
-    base::{CFRelease, CFRetain, CFTypeID, CFTypeRef, TCFType},
+    base::{CFRelease, CFRetain, CFType, CFTypeID, CFTypeRef, TCFType},
+    boolean::CFBoolean,
+    number::CFNumber,
     string::{CFString as CFStr, CFStringRef},
 };
 use std::os::raw::{c_int, c_void};
@@ -30,7 +32,154 @@ extern "C" {
     ) -> AXError;
     fn AXUIElementSetMessagingTimeout(element: AXUIElementRef, seconds: f32) -> AXError;
     fn AXUIElementGetTypeID() -> CFTypeID;
+    fn AXUIElementCopyActionNames(element: AXUIElementRef, names: *mut CFTypeRef) -> AXError;
+    fn AXUIElementPerformAction(element: AXUIElementRef, action: CFStringRef) -> AXError;
     fn _AXUIElementGetWindow(element: AXUIElementRef, wid: *mut u32) -> AXError;
+}
+
+// The menu port uses the same CUA bindings with retained ownership and explicit
+// read failures. An AX timeout must not become a proven absence of a shortcut.
+pub(super) struct Element(AXUIElementRef);
+impl Drop for Element {
+    fn drop(&mut self) {
+        unsafe { CFRelease(self.0 as _) }
+    }
+}
+impl Element {
+    pub fn application(pid: i32) -> anyhow::Result<Self> {
+        let raw = unsafe { AXUIElementCreateApplication(pid) };
+        anyhow::ensure!(!raw.is_null(), "AX application is unavailable");
+        Ok(Self(raw))
+    }
+    fn attribute(&self, name: &str) -> anyhow::Result<Option<CFType>> {
+        super::control::check_local()?;
+        let name = CFStr::new(name);
+        let mut raw = std::ptr::null();
+        let status =
+            unsafe { AXUIElementCopyAttributeValue(self.0, name.as_concrete_TypeRef(), &mut raw) };
+        let value = (!raw.is_null()).then(|| unsafe { CFType::wrap_under_create_rule(raw) });
+        anyhow::ensure!(
+            matches!(status, 0 | -25205 | -25212),
+            "AX menu attribute read failed ({status})"
+        );
+        super::control::check_local()?;
+        Ok(value)
+    }
+    pub fn string(&self, name: &str) -> anyhow::Result<Option<String>> {
+        let Some(value) = self.attribute(name)? else {
+            return Ok(None);
+        };
+        anyhow::ensure!(
+            value.type_of() == CFStr::type_id(),
+            "AX menu attribute is not a string"
+        );
+        Ok(Some(
+            unsafe { CFStr::wrap_under_get_rule(value.as_CFTypeRef() as _) }.to_string(),
+        ))
+    }
+    pub fn number(&self, name: &str) -> anyhow::Result<Option<i64>> {
+        let Some(value) = self.attribute(name)? else {
+            return Ok(None);
+        };
+        anyhow::ensure!(
+            value.type_of() == CFNumber::type_id(),
+            "AX menu attribute is not a number"
+        );
+        let number = unsafe { CFNumber::wrap_under_get_rule(value.as_CFTypeRef() as _) };
+        Ok(number.to_i64())
+    }
+    pub fn boolean(&self, name: &str) -> anyhow::Result<Option<bool>> {
+        let Some(value) = self.attribute(name)? else {
+            return Ok(None);
+        };
+        if value.type_of() == CFBoolean::type_id() {
+            return Ok(Some(
+                unsafe { CFBoolean::wrap_under_get_rule(value.as_CFTypeRef() as _) }.into(),
+            ));
+        }
+        anyhow::ensure!(
+            value.type_of() == CFNumber::type_id(),
+            "AX menu attribute is not a boolean"
+        );
+        Ok(
+            unsafe { CFNumber::wrap_under_get_rule(value.as_CFTypeRef() as _) }
+                .to_i64()
+                .map(|n| n != 0),
+        )
+    }
+    pub fn element(&self, name: &str) -> anyhow::Result<Option<Self>> {
+        let Some(value) = self.attribute(name)? else {
+            return Ok(None);
+        };
+        anyhow::ensure!(
+            value.type_of() == unsafe { AXUIElementGetTypeID() },
+            "AX menu attribute is not an element"
+        );
+        Ok(Some(unsafe { Self::retain(value.as_CFTypeRef()) }))
+    }
+    unsafe fn retain(raw: CFTypeRef) -> Self {
+        CFRetain(raw);
+        AXUIElementSetMessagingTimeout(raw as _, 0.15);
+        Self(raw as _)
+    }
+    pub fn children(&self) -> anyhow::Result<Vec<Self>> {
+        let Some(value) = self.attribute("AXChildren")? else {
+            return Ok(vec![]);
+        };
+        anyhow::ensure!(
+            value.type_of() == CFArray::<CFTypeRef>::type_id(),
+            "AX menu children are not an array"
+        );
+        let array = unsafe { CFArray::<CFTypeRef>::wrap_under_get_rule(value.as_CFTypeRef() as _) };
+        anyhow::ensure!(array.len() <= 2000, "AX menu child limit exceeded");
+        let mut out = Vec::new();
+        for item in array.iter() {
+            anyhow::ensure!(
+                unsafe { core_foundation::base::CFGetTypeID(*item) }
+                    == unsafe { AXUIElementGetTypeID() },
+                "AX menu child is not an element"
+            );
+            out.push(unsafe { Self::retain(*item) });
+        }
+        Ok(out)
+    }
+    pub fn actions(&self) -> anyhow::Result<Vec<String>> {
+        super::control::check_local()?;
+        let mut raw = std::ptr::null();
+        let status = unsafe { AXUIElementCopyActionNames(self.0, &mut raw) };
+        let value = (!raw.is_null()).then(|| unsafe { CFType::wrap_under_create_rule(raw) });
+        anyhow::ensure!(status == 0, "AX menu actions unavailable ({status})");
+        let value = value.ok_or_else(|| anyhow::anyhow!("AX menu actions absent"))?;
+        anyhow::ensure!(
+            value.type_of() == CFArray::<CFTypeRef>::type_id(),
+            "AX menu actions are not an array"
+        );
+        let array = unsafe { CFArray::<CFTypeRef>::wrap_under_get_rule(value.as_CFTypeRef() as _) };
+        let mut out = Vec::new();
+        for item in array.iter() {
+            anyhow::ensure!(
+                unsafe { core_foundation::base::CFGetTypeID(*item) } == CFStr::type_id(),
+                "AX menu action is not a string"
+            );
+            out.push(unsafe { CFStr::wrap_under_get_rule(*item as _) }.to_string());
+        }
+        Ok(out)
+    }
+    pub fn window_id(&self) -> Option<u32> {
+        unsafe { ax_get_window_id(self.0) }
+    }
+    pub fn perform(&self, action: &str) -> AXError {
+        let remaining = super::control::remaining().as_secs_f32().min(2.0);
+        if remaining <= 0.001 {
+            return -25204;
+        }
+        let configured = unsafe { AXUIElementSetMessagingTimeout(self.0, remaining) };
+        if configured != 0 {
+            return configured;
+        }
+        let action = CFStr::new(action);
+        unsafe { AXUIElementPerformAction(self.0, action.as_concrete_TypeRef()) }
+    }
 }
 pub unsafe fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef {
     let app = create_application(pid);
@@ -159,7 +308,24 @@ impl WindowEvidence {
             if app.is_null() {
                 return None;
             }
-            let mut found = None;
+            // AXFocusedWindow can be a real sheet absent from AXWindows.
+            // Retain that exact CUA focus source before the ordinary inventory
+            // fallback; enumerating only top-level windows rejected valid input.
+            let mut found = copy_element_attr(app, "AXFocusedWindow").and_then(|window| {
+                if ax_get_window_id(window) == Some(id) {
+                    Some(Self {
+                        element: window,
+                        id,
+                    })
+                } else {
+                    CFRelease(window as _);
+                    None
+                }
+            });
+            if found.is_some() {
+                CFRelease(app as _);
+                return found;
+            }
             for window in copy_ax_windows(app) {
                 if found.is_none() && ax_get_window_id(window) == Some(id) {
                     found = Some(Self {

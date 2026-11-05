@@ -424,23 +424,29 @@ impl<B: Backend + 'static> Coordinator<B> {
                             .is_some_and(|target| Some(&target.app) == instance.as_ref())
                 })
                 .collect();
+            let keyboard = matches!(op, "scene.typeText" | "scene.keypress");
+            // Background AppKit dialogs can own input while AXFocusedWindow
+            // still names their parent document. Modal proof wins over that
+            // stale hint; ordinary overlays preserve the native focus route.
             let selected = candidates
                 .iter()
                 .find(|row| {
-                    if matches!(op, "scene.typeText" | "scene.keypress") {
-                        row["scene"]["keyboard_focused"] == true
-                    } else {
-                        row["scene"]["semantic_candidate"] != false
-                    }
+                    row["scene"]["keyboard_modal"] == true
+                        && row["scene"]["semantic_candidate"] != false
                 })
                 .or_else(|| {
-                    matches!(op, "scene.typeText" | "scene.keypress")
+                    keyboard
                         .then(|| {
                             candidates
                                 .iter()
-                                .find(|row| row["scene"]["semantic_candidate"] != false)
+                                .find(|row| row["scene"]["keyboard_focused"] == true)
                         })
                         .flatten()
+                })
+                .or_else(|| {
+                    candidates
+                        .iter()
+                        .find(|row| row["scene"]["semantic_candidate"] != false)
                 });
             if selected.is_none() && rows.iter().any(|row| row["visible"] == true) {
                 return failed(error(
@@ -1133,6 +1139,12 @@ impl<B: Backend + 'static> Coordinator<B> {
         // menus/dropdowns may be interactive above their focused owner.
         let semantic_windows: Vec<_> = visible
             .iter()
+            .filter(|row| row["scene"]["keyboard_modal"] == true)
+            .chain(
+                visible
+                    .iter()
+                    .filter(|row| row["scene"]["keyboard_modal"] != true),
+            )
             .chain(rows.iter().filter(|row| row["visible"] != true))
             .filter(|row| row["scene"]["semantic_candidate"] != false)
             .take(32)

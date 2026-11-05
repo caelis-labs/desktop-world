@@ -883,6 +883,10 @@ pub(crate) fn parse_layout(value: Option<&Value>) -> Result<Option<WindowLayout>
         .get("keyboard_focused")
         .map(|v| v.as_bool().ok_or(Error::InvalidObservation))
         .transpose()?;
+    layout.keyboard_modal = value
+        .get("keyboard_modal")
+        .map(|v| v.as_bool().ok_or(Error::InvalidObservation))
+        .transpose()?;
     layout.semantic_candidate = value
         .get("semantic_candidate")
         .map(|v| v.as_bool().ok_or(Error::InvalidObservation))
@@ -1038,6 +1042,13 @@ mod tests {
             parse_layout(Some(&hint)).unwrap().unwrap().keyboard_focused,
             Some(true)
         );
+        let modal = json!({"bounds":[-100,20,300,200],"rank":2,"keyboard_modal":true});
+        assert_eq!(
+            parse_layout(Some(&modal)).unwrap().unwrap().keyboard_modal,
+            Some(true)
+        );
+        let bad_modal = json!({"bounds":[-100,20,300,200],"rank":2,"keyboard_modal":"true"});
+        assert!(parse_layout(Some(&bad_modal)).is_err());
         let invalid_hint = json!({"bounds":[-100,20,300,200],"rank":2,"keyboard_focused":"yes"});
         assert!(parse_layout(Some(&invalid_hint)).is_err());
         for value in [

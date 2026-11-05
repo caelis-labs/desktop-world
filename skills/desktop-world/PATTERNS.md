@@ -91,18 +91,20 @@ Popovers, menus and save sheets are app scene layers. Use their current semantic
 target or capture coordinates. Normal quit can leave a save sheet; inspect that
 fresh view. Closing a native window is distinct from quitting an app; use its
 ordinary close UI or the platform's close-window chord when appropriate. Prefer
-the close control for macOS background work: AppKit Command+W has a verified
-foreground limitation. An unavailable background route does not justify repeating
+the close control for macOS background work: an unavailable or disabled close-menu command can require
+foreground borrowing. An unavailable background route does not justify repeating
 an action with unknown effects.
 
 ## macOS foreground borrowing
 
-Under `auto`, reads and supported pointer actions remain in the background.
-Ordinary text, plain keys and Shift-only typing keep background delivery.
-Command/Control/Option chords borrow foreground before dispatch and restore
-it at script settlement, without per-app/key whitelists. Proven native modal/service
-receivers, a missing key window and retained text-input limits can borrow before
-dispatch. AppKit/Chromium hover and an unavailable required addressed API can also borrow.
+Under `auto`, reads, ordinary text, plain/Shift keys, Control/Option editing
+chords and supported pointer actions keep background delivery. Native Command
+shortcuts use enabled, exactly bound AX menu equivalents where available.
+Disabled/unbound menu commands, Chromium Command chords and native modal Command
+shortcuts borrow before dispatch. Keep dialog navigation and subsequent input in
+one script so they share one borrow. Missing key receivers, associated-process
+receivers, retained text-input limits, hover and missing addressed APIs can also
+borrow. No individual shortcut whitelist is required.
 Borrowing requires
 a proven original foreground identity and an exact logical window anchor when
 a window exists. A proven windowless shortcut starts an app scope and binds its

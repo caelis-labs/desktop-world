@@ -35,7 +35,7 @@ Agent 仍只调用 `apps`、`exec` 和 `app` 方法。输入路由是实现细�
 | 锚点或默认中心滚动 | 精确 PID + 窗口 wheel | 同上；不要求 AX children / AX window inventory |
 | 已识别 AppKit / Chromium 的原生悬停 | 预检识别跟踪限制，选择物理光标 | 干净未派发时可申请脚本级前台借用；未知框架不套用该例外 |
 | Qt / 未识别框架的悬停 | 定向事件 | 未知不等于不支持；不以未知框架、AX 缺失或普通错误授权借用 |
-| 键盘 | 定向路径与精确编辑目的地证明 | 已证明没有可保留的后台 key window（AX noValue）时可借用； 已证明的 native modal/sheet、关联进程接收者、必要定向 API 缺失，或 Chromium Command+A/补充平面 Unicode、AppKit Command+W/控制字符文本，可申请前台借用；不是移动光标的理由 |
+| 键盘 | 定向路径与精确编辑目的地证明 | 已证明没有可保留的后台 key window（AX noValue）时可借用； 已证明的 native modal Command 组合键、关联进程接收者、必要定向 API 缺失，或 Chromium Command 组合键/补充平面 Unicode、AppKit 控制字符文本及未启用/未绑定的菜单等价项，可申请前台借用；不是移动光标的理由 |
 
 视觉输入的 AX 豁免仅适用于坐标指针操作。前台键盘回退仍逐次验证精确 AX 窗口及编辑
 目的地，应用 PID 仍在前台不能替代该检查；同一应用内焦点离开目标窗口时停止后续按键。

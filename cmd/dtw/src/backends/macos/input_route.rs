@@ -22,6 +22,12 @@ impl PhysicalReason {
     }
 }
 
+/// Foreground ownership is already proven by the execution scope; only keyboard
+/// transport changes. Pointer operations keep their addressed route where supported.
+pub(super) fn owned_foreground_keyboard(operation: &str, owned: bool) -> bool {
+    owned && matches!(operation, "type_text" | "keypress")
+}
+
 /// Coordinate input can prove its surface without AX. Keyboard fallback still
 /// needs the exact AX window and editing destination before every key down.
 pub(super) fn visual_focus(operation: &str) -> bool {
@@ -84,7 +90,17 @@ pub(super) fn foreground_plan<'a>(
         "addressed_event_api_unavailable" => visual_focus(operation) || keyboard,
         "native_modal_keyboard" | "associated_process_keyboard" => keyboard,
         "native_keyboard_semantics" => {
-            (operation == "keypress" && plan["capability_detail"] == "modified_key_chord")
+            (operation == "keypress"
+                && matches!(
+                    plan["capability_detail"].as_str(),
+                    Some(
+                        "chromium_command_chord"
+                            | "native_modal_command_chord"
+                            | "native_menu_disabled"
+                            | "native_menu_window_unbound"
+                            | "native_menu_unavailable"
+                    )
+                ))
                 || operation == "type_text"
                     && matches!(
                         plan["capability_detail"].as_str(),
@@ -113,7 +129,11 @@ pub(super) fn fallback_reason(result: &serde_json::Value) -> Option<PhysicalReas
             if matches!(
                 result["capability_detail"].as_str(),
                 Some(
-                    "modified_key_chord"
+                    "chromium_command_chord"
+                        | "native_modal_command_chord"
+                        | "native_menu_disabled"
+                        | "native_menu_window_unbound"
+                        | "native_menu_unavailable"
                         | "chromium_supplementary_unicode"
                         | "appkit_multiline_text"
                 )
@@ -127,6 +147,27 @@ pub(super) fn fallback_reason(result: &serde_json::Value) -> Option<PhysicalReas
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn owned_scope_uses_foreground_keyboard_without_broadening_other_actions() {
+        for op in [
+            "keypress",
+            "type_text",
+            "press",
+            "click",
+            "move",
+            "drag",
+            "scroll",
+            "focus",
+        ] {
+            assert_eq!(
+                super::owned_foreground_keyboard(op, true),
+                matches!(op, "keypress" | "type_text")
+            );
+            assert!(!super::owned_foreground_keyboard(op, false));
+        }
+        assert!(!super::allows_activation("owned_foreground_keyboard"));
+    }
+
     use super::*;
     use serde_json::json;
     #[test]
@@ -259,7 +300,11 @@ mod tests {
             assert_eq!(fallback_reason(&result), None);
         }
         for detail in [
-            "modified_key_chord",
+            "chromium_command_chord",
+            "native_modal_command_chord",
+            "native_menu_disabled",
+            "native_menu_window_unbound",
+            "native_menu_unavailable",
             "chromium_supplementary_unicode",
             "appkit_multiline_text",
         ] {

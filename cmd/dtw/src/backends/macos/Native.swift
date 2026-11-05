@@ -1043,6 +1043,17 @@ private func backgroundRequiresForeground(_ window: AXUIElement?, deadline: Dead
     }
 }
 
+// Native dialogs remain keyboard receivers even while a background app's
+// AXFocusedWindow still names its document. This is routing proof, not a grant
+// to activate the application or a claim that background delivery cannot work.
+private func nativeModalKeyboardReceiver(_ window: AXUIElement?, deadline: Deadline) throws -> Bool {
+    guard let window else { return false }
+    if try backgroundRequiresForeground(window, deadline: deadline) { return true }
+    return try nativeOpenPanelClick(
+        role: axAttribute(window, kAXRoleAttribute, deadline) as? String,
+        identifier: axAttribute(window, kAXIdentifierAttribute, deadline) as? String)
+}
+
 // A physical pointer requirement does not itself grant activation. Recheck at
 // actual focus establishment as well as preparation; unreadable proof propagates
 // without entering the activation branch.
@@ -2378,6 +2389,11 @@ private struct RetainedSubtree<Element, Root> {
     }
 }
 
+private enum NativePressCapability {
+    case action, focus
+    case selection(AXUIElement)
+}
+
 private struct NativeElement {
     let id: UInt64
     let identity: UInt64
@@ -2387,7 +2403,8 @@ private struct NativeElement {
     let name: String?
     let value: String?
     let enabled: Bool?
-    let canPress: Bool
+    let pressCapability: NativePressCapability?
+    var canPress: Bool { pressCapability != nil }
     let canSetValue: Bool
     let regionProof: RegionElementProof<AXUIElement>?
 
@@ -3504,9 +3521,18 @@ private final class NativeStore: @unchecked Sendable {
         // Omnibox/tooltip surfaces can be in front without receiving keys.
         var keyboardWindow: CGWindowID?
         var decorations: Set<CGWindowID> = []
+        var modalReceivers: Set<CGWindowID> = []
         if !candidates.isEmpty && dtwAccessibilityGranted() {
             let hintDeadline = context.deadline.limited(to: ProcessInfo.processInfo.systemUptime + 0.1)
             do {
+                // AXWindows can retain the parent while a descendant sheet has
+                // its own CG surface. Its existing ancestry/owner proof also
+                // supplies the routing hint; do not hide it behind its parent.
+                for (id, association) in associated {
+                    if try nativeModalKeyboardReceiver(association.root, deadline: hintDeadline) {
+                        modalReceivers.insert(id)
+                    }
+                }
                 let application = AXUIElementCreateApplication(app.pid)
                 if let focused = try nativeFocusedWindow(application, pid: app.pid, deadline: hintDeadline) {
                     let id = try axWindowID(focused, hintDeadline)
@@ -3517,10 +3543,11 @@ private final class NativeStore: @unchecked Sendable {
                         throw failure("window_inventory_changed", "A newly focused owned window appeared after the WindowServer snapshot")
                     }
                 }
-                let roots = try axList(application, kAXWindowsAttribute, limit: 129, hintDeadline)
+                let roots = try semanticWindowRoots(application, hintDeadline)
                 for root in roots.prefix(128) {
                     guard let id = try? axWindowID(root, hintDeadline),
                           candidates.contains(where: { $0.0.id == id && $0.0.pid == app.pid }) else { continue }
+                    if try nativeModalKeyboardReceiver(root, deadline: hintDeadline) { modalReceivers.insert(id) }
                     if try sharingIndicatorSurface(root,
                         role: { try axAttribute($0, kAXRoleAttribute, hintDeadline) as? String },
                         identifier: { try axAttribute($0, kAXIdentifierAttribute, hintDeadline) as? String },
@@ -3544,6 +3571,11 @@ private final class NativeStore: @unchecked Sendable {
             if let keyboardWindow {
                 var scene = row["scene"] as! [String: Any]
                 scene["keyboard_focused"] = record.id == keyboardWindow
+                row["scene"] = scene
+            }
+            if modalReceivers.contains(record.id) {
+                var scene = row["scene"] as! [String: Any]
+                scene["keyboard_modal"] = true
                 row["scene"] = scene
             }
             if decorations.contains(record.id) {
@@ -3944,22 +3976,60 @@ private final class NativeStore: @unchecked Sendable {
     }
 
 
-    private func pressable(_ element: AXUIElement, role: String, enabled: Bool?, window: AXUIElement,
-                           target: NativeTarget, deadline: Deadline) throws -> Bool {
+    // CUA input/ax_actions.rs (96b18ccd): select the nearest collection
+    // container, not its label. Copyright (c) 2026 Cua AI, Inc., MIT.
+    // DTW additionally requires writable selection and retains the exact
+    // container with the observed label; no pointer fallback follows a write.
+    private func selectionContainer(_ element: AXUIElement, role: String, window: AXUIElement,
+                                    target: NativeTarget, deadline: Deadline) throws -> AXUIElement? {
+        let containers = ["AXRow", "AXCell", "AXListItem", "AXImage"]
+        guard (containers + [kAXTextFieldRole, kAXStaticTextRole]).contains(role) else { return nil }
+        var cursor = element
+        var seen: [AXUIElement] = []
+        for _ in 0..<8 {
+            guard !seen.contains(where: { CFEqual($0, cursor) }) else { return nil }
+            seen.append(cursor)
+            let currentRole = try axAttribute(cursor, kAXRoleAttribute, deadline) as? String ?? ""
+            if containers.contains(currentRole),
+               try axAttribute(cursor, kAXSelectedAttribute, deadline) is Bool {
+                try deadline.prepare(cursor)
+                var writable = DarwinBoolean(false)
+                let status = AXUIElementIsAttributeSettable(cursor, kAXSelectedAttribute as CFString, &writable)
+                try deadline.check()
+                if status == .success && writable.boolValue,
+                   try owned(cursor, by: window, target: target, deadline: deadline) { return cursor }
+                if ![.success, .attributeUnsupported, .noValue].contains(status) {
+                    throw failure("ax_unavailable", "Collection selection writability unavailable",
+                                  attributeFailure: AXAttributeFailure(name: kAXSelectedAttribute, error: status))
+                }
+            }
+            if CFEqual(cursor, window) { return nil }
+            guard let parent = axElement(try axAttribute(cursor, kAXParentAttribute, deadline)) else { return nil }
+            cursor = parent
+        }
+        return nil
+    }
+
+    private func pressCapability(_ element: AXUIElement, role: String, enabled: Bool?, window: AXUIElement,
+                                 target: NativeTarget, deadline: Deadline) throws -> NativePressCapability? {
         guard ![kAXWindowRole, kAXApplicationRole].contains(role), enabled != false,
-              try owned(element, by: window, target: target, deadline: deadline) else { return false }
-        if try actions(element, deadline).contains(kAXPressAction) { return enabled == true }
-        guard supportsStringValueEditing(role) else { return false }
+              try owned(element, by: window, target: target, deadline: deadline) else { return nil }
+        if enabled == true,
+           let container = try selectionContainer(element, role: role, window: window, target: target, deadline: deadline) {
+            return .selection(container)
+        }
+        if try actions(element, deadline).contains(kAXPressAction) { return enabled == true ? .action : nil }
+        guard supportsStringValueEditing(role) else { return nil }
         try deadline.prepare(element)
         var writable = DarwinBoolean(false)
         let result = AXUIElementIsAttributeSettable(element, kAXFocusedAttribute as CFString, &writable)
         try deadline.check()
-        if result == .attributeUnsupported || result == .noValue { return false }
+        if result == .attributeUnsupported || result == .noValue { return nil }
         guard result == .success else {
             throw failure("ax_unavailable", "Control focus writability unavailable",
                           attributeFailure: AXAttributeFailure(name: kAXFocusedAttribute, error: result))
         }
-        return writable.boolValue
+        return writable.boolValue ? .focus : nil
     }
 
     private func settable(_ element: AXUIElement, role: String, enabled: Bool, window: AXUIElement,
@@ -4150,12 +4220,12 @@ private final class NativeStore: @unchecked Sendable {
                     }
                     // Advisory support only. Press performs full modal, current
                     // ownership and enabled-state checks immediately before input.
-                    let canPress = try pressable(element, role: role, enabled: enabled,
+                    let press = try pressCapability(element, role: role, enabled: enabled,
                                                  window: window.element, target: observation.target,
                                                  deadline: pageDeadline)
                     let row = NativeElement(id: UInt64(observation.elements.count + 1), identity: try semanticIdentity(element), element: element,
                                             label: fields.label, role: normalizedRole, name: fields.name,
-                                            value: fields.value, enabled: enabled, canPress: canPress,
+                                            value: fields.value, enabled: enabled, pressCapability: press,
                                             canSetValue: try settable(element, role: role, enabled: enabled == true, window: window.element, target: observation.target, deadline: pageDeadline),
                                             regionProof: regionProof)
                     let size = try rowBytes(row)
@@ -5351,7 +5421,7 @@ private final class NativeStore: @unchecked Sendable {
             }
             try requireExecutionForeground(request, app, context)
             guard try windowServerFrontmost(app.pid, context.deadline) else { throw failure("focus_changed", "Application foreground changed") }
-            if onlyFocus { return ["dispatch":"dispatched", "evidence":"unverified"] }
+            if onlyFocus { return ["dispatch":"dispatched", "evidence":"confirmed", "postcondition":"application_focused"] }
             guard let source=CGEventSource(stateID:.privateState),let chord=dtwChord(keys,source:source) else {throw failure("input_unavailable","Cannot prepare application shortcut")}
             func check() throws {
                 try context.deadline.check();try context.verify(app)
@@ -5555,7 +5625,9 @@ private final class NativeStore: @unchecked Sendable {
                 scope.semanticReadiness.arm(now: ProcessInfo.processInfo.systemUptime)
                 borrowedFocus = scope
             }
-            return finished(["dispatch": "dispatched", "evidence": "unverified"])
+            return finished(operation == "focus"
+                ? ["dispatch":"dispatched", "evidence":"confirmed", "postcondition":"window_focused"]
+                : ["dispatch":"dispatched", "evidence":"unverified"])
         } catch let error as NativeFailure {
             return finished(error.json.merging(["dispatch": changed ? "unknown" : "not_dispatched", "evidence": "unverified"]) { _, new in new })
         } catch {
@@ -5788,12 +5860,21 @@ private final class NativeStore: @unchecked Sendable {
                try !focused(target, window.element, context.deadline) {
                 throw failure("foreground_required", "App menu actions require the exact destination window already focused")
             }
-            guard try pressable(element.element, role: role, enabled: enabled, window: window.element,
-                                target: target, deadline: context.deadline) else {
+            guard let capability = try pressCapability(element.element, role: role, enabled: enabled, window: window.element,
+                                                       target: target, deadline: context.deadline) else {
                 throw failure("element_not_pressable", "Current role, enabled state, ancestry or AXPress support changed")
             }
-            let focusText = try !actions(element.element, context.deadline).contains(kAXPressAction)
-            if focusText {
+            let focusText: Bool
+            let selection: AXUIElement?
+            switch (element.pressCapability, capability) {
+            case (.action?, .action): focusText = false; selection = nil
+            case (.focus?, .focus): focusText = true; selection = nil
+            case (.selection(let observed)?, .selection(let current)):
+                guard CFEqual(observed, current) else { throw failure("target_changed", "Collection item changed before selection") }
+                focusText = false; selection = current
+            default: throw failure("target_changed", "Semantic press capability changed; observe again")
+            }
+            if focusText || selection != nil {
                 // A reusable native text object must retain its observed meaning
                 // across activation; never focus a replacement file-list cell.
                 func preview(_ attribute: String) throws -> String? {
@@ -5807,7 +5888,7 @@ private final class NativeStore: @unchecked Sendable {
                     throw failure("target_changed", "Editable control changed before semantic focus")
                 }
             }
-            let modalPress = try backgroundRequiresForeground(window.element, deadline: context.deadline)
+            let modalPress = try selection == nil && backgroundRequiresForeground(window.element, deadline: context.deadline)
             if focusText || modalPress {
                 if try !focused(target, window.element, context.deadline) {
                     guard request["input_policy"] as? String == "auto" else {
@@ -5826,8 +5907,10 @@ private final class NativeStore: @unchecked Sendable {
             }
             try validateRegionElement(element, root: finalWindow.element, target: target,
                                       bounds: finalWindow.cg.bounds, deadline: context.deadline)
-            return try performSemanticPress(deadline: context.deadline, actionName: focusText ? "AXFocus" : "AXPress", setTimeout: {
-                AXUIElementSetMessagingTimeout(element.element, $0)
+            let actionElement = selection ?? element.element
+            var result = try performSemanticPress(deadline: context.deadline,
+                actionName: selection != nil ? "AXSelected" : focusText ? "AXFocus" : "AXPress", setTimeout: {
+                AXUIElementSetMessagingTimeout(actionElement, $0)
             }, dispatch: {
                 do { try self.requireExecutionForeground(request, target, context) }
                 catch let error as NativeFailure { scopeFailure = error; return nil }
@@ -5836,12 +5919,34 @@ private final class NativeStore: @unchecked Sendable {
                 // have delivered effects, regardless of its eventual error.
                 return dtwWithInputAdmission {
                     self.executionFocus?.anchor.admitInput()
+                    if let selection {
+                        return AXUIElementSetAttributeValue(selection, kAXSelectedAttribute as CFString, kCFBooleanTrue)
+                    }
                     if focusText {
                         return AXUIElementSetAttributeValue(element.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
                     }
                     return AXUIElementPerformAction(element.element, kAXPressAction as CFString)
                 }
             })
+            if let selection, result["dispatch"] as? String == "dispatched" {
+                do {
+                    let currentWindow = try validate(target, context)
+                    guard try owned(selection, by: currentWindow.element, target: target, deadline: context.deadline),
+                          try axAttribute(selection, kAXSelectedAttribute, context.deadline) as? Bool == true else {
+                        result["error"] = "selection_unconfirmed"
+                        result["message"] = "Collection selection was dispatched but its selected state was not confirmed; inspect before another action"
+                        result["dispatch"] = "unknown"
+                        return result
+                    }
+                    result["evidence"] = "confirmed"
+                    result["postcondition"] = "element_selected"
+                } catch {
+                    result["dispatch"] = "unknown"
+                    result["error"] = "selection_unconfirmed"
+                    result["message"] = "Collection selection readback failed after dispatch: \(error)"
+                }
+            }
+            return result
         } catch let error as NativeFailure {
             return (scopeFailure ?? error).json.merging(["dispatch": "not_dispatched", "evidence": "unverified"]) { _, new in new }
         } catch {
@@ -5907,7 +6012,7 @@ private final class NativeStore: @unchecked Sendable {
                     try validation.context.verify(target.app)
                     try requireExecutionForeground(request, target, validation.context)
                     return ["target": target.json, "bounds": current.coordinates, "surface_owner": surfaceOwner(target),
-                            "background_requires_foreground": try backgroundRequiresForeground(validation.window,
+                            "background_requires_foreground": try nativeModalKeyboardReceiver(validation.window,
                                 deadline: validation.context.deadline)]
                 }
                 backgroundValidation = nil
@@ -5942,7 +6047,7 @@ private final class NativeStore: @unchecked Sendable {
                 let framework = try inputFramework(target, context)
                 let result: [String: Any] = ["target": target.json, "bounds": current.coordinates,
                     "surface_owner": surfaceOwner(target), "input_framework": framework,
-                    "background_requires_foreground": try backgroundRequiresForeground(window,
+                    "background_requires_foreground": try nativeModalKeyboardReceiver(window,
                         deadline: context.deadline)]
                 if request["consume"] as? Bool == true {
                     let validation = BackgroundInputValidation(target: target, deadlineMilliseconds: milliseconds,

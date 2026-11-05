@@ -118,6 +118,45 @@ fn keyboard_routes_by_native_focus_instead_of_visual_overlay_order() {
 }
 
 #[test]
+fn proven_modal_receiver_overrides_stale_document_keyboard_focus() {
+    for modal in [Some(true), Some(false), None] {
+        let (server, catalog) = agent();
+        let rows = [(101, "Editing window"), (102, "Open dialog")]
+            .into_iter()
+            .enumerate()
+            .map(|(rank, (native_id, title))| {
+                let mut scene = WindowLayout::new([0., 0., 500., 400.], rank as u32).unwrap();
+                scene.keyboard_focused = Some(native_id == 101);
+                scene.keyboard_modal = if native_id == 102 { modal } else { None };
+                WindowInfo {
+                    target: WindowTarget {
+                        app: application(),
+                        native_id,
+                        generation: 3,
+                    },
+                    title: title.into(),
+                    visible: true,
+                    scene: Some(scene),
+                }
+            })
+            .collect();
+        catalog.backend.0.model.lock().unwrap().inventory = Some(test_inventory(rows));
+        let reply = exec(
+            &server,
+            "modal",
+            "await app.look(); await app.keypress('META+SHIFT+G'); await app.typeText('/tmp');",
+        );
+        assert!(!reply.is_error, "{}", reply.data);
+        let targets = catalog.backend.0.input_targets.lock().unwrap();
+        assert_eq!(targets.len(), 2);
+        assert!(targets
+            .iter()
+            .all(|t| t.native_id == if modal == Some(true) { 102 } else { 101 }));
+        assert!(!reply.data.to_string().contains("keyboard_modal"));
+    }
+}
+
+#[test]
 fn semantic_decoration_hint_does_not_replace_keyboard_focus_or_unfocused_popup_semantics() {
     for candidate in [None, Some(true), Some(false)] {
         let (server, catalog) = agent();

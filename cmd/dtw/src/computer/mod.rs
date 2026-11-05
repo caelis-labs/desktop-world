@@ -433,6 +433,8 @@ pub struct WindowLayout {
     pub rank: u32,
     /// Optional native keyboard receiver, independent of visual z-order.
     pub keyboard_focused: Option<bool>,
+    /// A proven modal receiver overrides its parent's stale focus hint.
+    pub keyboard_modal: Option<bool>,
     /// Explicit native exclusion from active semantics, never from pixels or
     /// pointer hit testing. Unknown providers preserve z-order selection.
     pub semantic_candidate: Option<bool>,
@@ -445,6 +447,7 @@ impl WindowLayout {
                 bounds,
                 rank,
                 keyboard_focused: None,
+                keyboard_modal: None,
                 semantic_candidate: None,
             },
         )

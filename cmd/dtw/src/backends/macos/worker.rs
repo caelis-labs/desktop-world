@@ -254,6 +254,7 @@ struct BackgroundTarget {
     surface_owner: Value,
     bounds: Value,
     keyboard: bool,
+    native_modal: bool,
     foreground: bool,
     deadline: u64,
     failures: RefCell<BackgroundValidationFailures>,
@@ -372,12 +373,12 @@ fn background_validation(
             json!({"error":"target_changed","message":"Addressed surface owner incarnation changed"}),
         );
     }
-    if phase == 0 && modal_input_requires_foreground(reply)? {
+    if phase == 0 && target.keyboard && native_modal_input(reply)? != target.native_modal {
         // The initial side-effect-free preflight has already selected a route.
         // A later modal transition stops this sequence; it cannot replay input
         // through the foreground route. Paired cleanup uses phases 1/2.
         return Err(json!({"error":"background_route_changed",
-            "message":"The target became modal during background input; refresh before new work"}));
+            "message":"The modal keyboard context changed during background input; inspect before new work"}));
     }
     if phase == 0 && !target.keyboard && reply["bounds"] != target.bounds {
         return Err(
@@ -465,22 +466,32 @@ fn background_result(mut result: Value) -> BackgroundAttempt {
         result["error"] = result["error"]["code"].clone();
     }
     result["evidence"] = json!("unverified");
-    result["route"] = json!("cua_pid_window");
+    let menu = result["transport"] == "ax_menu_equivalent";
+    result["route"] = json!(if menu {
+        "cua_ax_menu"
+    } else {
+        "cua_pid_window"
+    });
     result["delivery"] = delivery(
         Some("background"),
-        Some("background_supported"),
+        Some(if menu {
+            "native_menu_equivalent"
+        } else {
+            "background_supported"
+        }),
         false,
         None,
     );
     BackgroundAttempt::Completed(result)
 }
 
-fn modal_input_requires_foreground(validation: &Value) -> Result<bool, Value> {
+fn native_modal_input(validation: &Value) -> Result<bool, Value> {
     validation["background_requires_foreground"]
         .as_bool()
         .ok_or_else(
             || json!({"error":"invalid_response","message":"Missing native modal input preflight"}),
         )
+        .map(|modal| modal || validation["native_open_panel"] == true)
 }
 
 fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> BackgroundAttempt {
@@ -492,6 +503,13 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
         return BackgroundAttempt::NotApplicable;
     }
     let keyboard = matches!(op.as_str(), "type_text" | "keypress");
+    // Once a script owns foreground, keep its keyboard on the existing native
+    // foreground route. PID events can still be ignored by remote/modal views
+    // even while their app is active. This grants no activation or reacquisition.
+    if super::input_route::owned_foreground_keyboard(&op, request["_execution_foreground"] == true)
+    {
+        return BackgroundAttempt::Declined("owned_foreground_keyboard".into());
+    }
     let check = json!({"operation":"validate_background","target":request["target"],
         "keyboard":keyboard,"consume":true,"_execution_foreground":request["_execution_foreground"] == true,
         "deadline_unix_ms":request["deadline_unix_ms"]});
@@ -553,13 +571,14 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
         // CUA cannot direct input to a different process on this app's behalf.
         return BackgroundAttempt::Declined("associated_process_keyboard".into());
     }
-    if keyboard {
-        match modal_input_requires_foreground(&before) {
-            Ok(true) => return BackgroundAttempt::Declined("native_modal_keyboard".into()),
-            Ok(false) => (),
+    let native_modal = if keyboard {
+        match native_modal_input(&before) {
+            Ok(modal) => modal,
             Err(error) => return BackgroundAttempt::Completed(rejected(error, &op)),
         }
-    }
+    } else {
+        false
+    };
     if !keyboard {
         if op == "click"
             && before["native_open_panel"] == true
@@ -593,7 +612,7 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
     }
     let mut input = json!({"operation":op,"pid":if keyboard {request["target"]["app"]["pid"].clone()} else {before["surface_owner"]["pid"].clone()},
         "window_id":request["target"]["native_id"],"deadline_unix_ms":request["deadline_unix_ms"],
-        "input_framework":before["input_framework"].as_str().unwrap_or("unknown"),
+        "input_framework":before["input_framework"].as_str().unwrap_or("unknown"),"native_modal":native_modal,
         "screen_x":x,"screen_y":y,"window_x":x-left,"window_y":y-top});
     for key in ["count", "button", "delta_x", "delta_y", "text", "keys"] {
         if let Some(value) = request.get(key) {
@@ -608,6 +627,7 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
         surface_owner: before["surface_owner"].clone(),
         bounds: before["bounds"].clone(),
         keyboard,
+        native_modal,
         foreground: request["_execution_foreground"] == true,
         deadline: request["deadline_unix_ms"].as_u64().unwrap_or(0),
         failures: RefCell::default(),
@@ -625,6 +645,9 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
         (&mut target as *mut BackgroundTarget).cast(),
         validate_background,
     );
+    if result["transport"] == "ax_menu_equivalent" {
+        trace_route(request, "native", "ax_menu_equivalent");
+    }
     target.failures.borrow().apply(&mut result);
     if result["capability_evidence"] == "native_keyboard_semantics" {
         request["_keyboard_capability"] = result["capability_detail"].clone();
@@ -1360,9 +1383,9 @@ mod tests {
     #[test]
     fn modal_input_preflight_is_typed_and_strict_policy_never_borrows_foreground() {
         let modal = json!({"background_requires_foreground":true});
-        assert_eq!(modal_input_requires_foreground(&modal), Ok(true));
+        assert_eq!(native_modal_input(&modal), Ok(true));
         assert_eq!(
-            modal_input_requires_foreground(&json!({"background_requires_foreground":false})),
+            native_modal_input(&json!({"background_requires_foreground":false})),
             Ok(false)
         );
         for malformed in [
@@ -1372,7 +1395,7 @@ mod tests {
             json!({"background_requires_foreground":"false"}),
         ] {
             assert_eq!(
-                modal_input_requires_foreground(&malformed).unwrap_err()["error"],
+                native_modal_input(&malformed).unwrap_err()["error"],
                 "invalid_response"
             );
         }
@@ -1464,6 +1487,7 @@ mod tests {
             surface_owner: json!({"pid":7,"generation":1}),
             bounds: json!([10, 20, 300, 400]),
             keyboard: true,
+            native_modal: false,
             foreground: false,
             deadline: 0,
             failures: RefCell::default(),
@@ -1489,19 +1513,24 @@ mod tests {
             surface_owner: json!({"pid":7,"generation":1}),
             bounds: json!([0, 0, 100, 100]),
             keyboard: true,
+            native_modal: false,
             foreground: false,
             deadline: 0,
             failures: RefCell::default(),
         };
         let modal = json!({"target":identity,"bounds":target.bounds,
             "surface_owner":{"pid":7,"generation":1},"background_requires_foreground":true});
-        for keyboard in [false, true] {
-            target.keyboard = keyboard;
-            let error = background_validation(&modal, &target, 0).unwrap_err();
+        for initially_modal in [false, true] {
+            target.native_modal = initially_modal;
+            let mut initial = modal.clone();
+            initial["background_requires_foreground"] = json!(initially_modal);
+            assert!(background_validation(&initial, &target, 0).is_ok());
+            let mut changed = initial.clone();
+            changed["background_requires_foreground"] = json!(!initially_modal);
+            let error = background_validation(&changed, &target, 0).unwrap_err();
             assert_eq!(error["error"], "background_route_changed");
-            assert!(background_validation(&modal, &target, 1).is_ok());
-            let mut clear = modal.clone();
-            clear["background_requires_foreground"] = json!(false);
+            assert!(background_validation(&changed, &target, 1).is_ok());
+            let mut clear = initial.clone();
             assert!(background_validation(&clear, &target, 0).is_ok());
             clear
                 .as_object_mut()
@@ -1512,6 +1541,9 @@ mod tests {
                 "invalid_response"
             );
             assert!(background_validation(&clear, &target, 1).is_ok());
+            target.keyboard = false;
+            assert!(background_validation(&clear, &target, 0).is_ok());
+            target.keyboard = true;
             for dispatch in ["not_dispatched", "unknown"] {
                 let attempt = background_result(json!({"error":error, "dispatch":dispatch,
                     "fallback_allowed":false}));

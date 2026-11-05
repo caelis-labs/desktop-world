@@ -40,6 +40,14 @@
   and retain operation/source details in `failure`. Invalid public arguments use
   `invalid_arguments`. `effects`
   preserves dispatch/effect uncertainty; it does not prove the task succeeded.
+  When reported, `effects.delivery` counts `background`, `foreground` and
+  `semantic` routes and actual `foreground_borrowed` actions. These count action
+  reports, not separate activations; several actions can share one borrow. Its per-action
+  `focus_returns` may include `pending`; `effects.focus_return` separately gives
+  the later script-settlement result (`restored`, `changed_externally`, etc.).
+  Confirmed focus means the destination was proven at that action; later
+  `focus_return` describes settlement, not persistent target focus.
+  Missing fields mean no evidence was reported, not zero disturbance.
   Selector focus preparation has a separate `effects.focus_preparation` summary
   and is not counted again as target dispatch.
   A returned value identical to the final script snapshot is coalesced into `view`, rather
@@ -93,17 +101,19 @@ can still be used once. Labels and positions never retarget an ID. A missing or 
 of the returned view before choosing new input. Dispatched/unknown input is never
 replayed to renew a binding.
 
-Keyboard input uses the native keyboard window when available, independently of
-visual z-order, within the already selected process instance; a frontmost tooltip or completion surface does not automatically
-receive keys. Focus and app identity checks still apply. On macOS startup requests
-neither activate nor hide the app. An app may activate itself. With the default
-`auto` input policy, reads, ordinary text and supported pointer actions use
-background delivery. Command/Control/Option chords borrow foreground before
-any key is sent, then restore it at script settlement. This reliability policy
-has no per-app/key whitelists; it also routes shortcuts that might work in the
-background through foreground. Plain keys and Shift-only typing remain
-addressed. A proved missing keyboard receiver, native modal/service surface or unsupported
-text-input capability can borrow foreground before input. The scope lasts for
+Keyboard input prefers a proven native modal receiver, then the app-local
+keyboard window, within the selected process instance. Tooltips and completion
+surfaces do not automatically receive keys. A background dialog can override a
+stale document focus hint. Focus and app identity checks still apply. On macOS
+startup neither activates nor hides the app; an app may activate itself.
+Under `auto`, ordinary text, plain/Shift keys, Control/Option editing chords and
+supported pointer actions keep background delivery. Native Command shortcuts
+use matching enabled menu commands when their exact destination is bound,
+without opening menus or sending keys. A disabled or unbound menu command borrows foreground before dispatch.
+Chromium Command chords and native modal Command shortcuts also borrow before
+dispatch; this is a capability class, not a list of individual shortcuts.
+A proved missing keyboard receiver, associated-process receiver or retained
+text-input limit can borrow before input. The scope lasts for
 the rest of the script. Remaining actions require the owned foreground; supported pointer actions
 can still use addressed events. At script end DTW releases held input and restores
 the original app instance and exact window, raising that original window when one was captured, only while

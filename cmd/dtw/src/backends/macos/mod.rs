@@ -697,13 +697,21 @@ impl NativeBackend {
     }
 
     fn action(&self, request: Value, call: &CallContext<'_>) -> ActionOutcome {
+        let confirmation = match request["operation"].as_str() {
+            Some("press") => Some("element_selected"),
+            Some("focus") => Some("window_focused"),
+            Some("focus_app") => Some("application_focused"),
+            _ => None,
+        };
         let reply = match self.execution_input_rpc(request, call, |request| self.rpc(request, call))
         {
             Ok(reply) => reply,
             Err((error, true)) => return ActionOutcome::unknown(error),
             Err((error, false)) => return ActionOutcome::rejected(error),
         };
-        let mut outcome = action_reply(&reply);
+        let mut outcome = confirmation
+            .map(|expected| confirmed_action_reply(&reply, expected))
+            .unwrap_or_else(|| action_reply(&reply));
         if outcome.error == Some(Error::InvalidObservation) {
             outcome.error = Some(self.retire(Error::InvalidObservation));
         }
@@ -1557,6 +1565,22 @@ fn lifecycle_reply(reply: &Value, expected: &str) -> ActionOutcome {
     }
     action_reply(reply)
 }
+fn confirmed_action_reply(reply: &Value, expected: &str) -> ActionOutcome {
+    if reply["evidence"] != "confirmed" {
+        return action_reply(reply);
+    }
+    if reply["postcondition"] != expected || reply["dispatch"] != "dispatched" {
+        return ActionOutcome::unknown(Error::InvalidObservation);
+    }
+    let mut dispatch = reply.clone();
+    dispatch["evidence"] = json!("unverified");
+    let mut outcome = action_reply(&dispatch);
+    if outcome.dispatch == DispatchState::Dispatched && outcome.error.is_none() {
+        outcome.evidence = EffectEvidence::Confirmed(expected.into());
+    }
+    outcome
+}
+
 fn action_reply(reply: &Value) -> ActionOutcome {
     let dispatch = match reply["dispatch"].as_str() {
         Some("not_dispatched") => DispatchState::NotDispatched,
@@ -3426,6 +3450,10 @@ fn parse_window_rows(
                             .get("keyboard_focused")
                             .map(|v| v.as_bool().ok_or(Error::InvalidObservation))
                             .transpose()?;
+                        scene.keyboard_modal = layout
+                            .get("keyboard_modal")
+                            .map(|v| v.as_bool().ok_or(Error::InvalidObservation))
+                            .transpose()?;
                         scene.semantic_candidate = layout
                             .get("semantic_candidate")
                             .map(|v| v.as_bool().ok_or(Error::InvalidObservation))
@@ -3439,4 +3467,28 @@ fn parse_window_rows(
             })
         })
         .collect()
+}
+#[test]
+fn confirmed_actions_keep_delivery_and_reject_unrelated_postconditions() {
+    for expected in ["element_selected", "window_focused", "application_focused"] {
+        let confirmed = json!({"dispatch":"dispatched","evidence":"confirmed","postcondition":expected,
+            "delivery":{"route":"foreground","reason":"execution_scope","foreground_borrowed":true,"focus_return":"pending"}});
+        let outcome = confirmed_action_reply(&confirmed, expected);
+        assert_eq!(outcome.evidence, EffectEvidence::Confirmed(expected.into()));
+        assert_eq!(
+            outcome.delivery.unwrap().focus_return,
+            Some(FocusReturn::Pending)
+        );
+        assert_eq!(action_reply(&confirmed).dispatch, DispatchState::Unknown);
+        for invalid in [
+            json!({"dispatch":"not_dispatched","evidence":"confirmed","postcondition":expected}),
+            json!({"dispatch":"dispatched","evidence":"confirmed","postcondition":"window_closed"}),
+            json!({"dispatch":"dispatched","evidence":"confirmed","postcondition":expected,"error":"postcondition_unconfirmed"}),
+        ] {
+            assert_eq!(
+                confirmed_action_reply(&invalid, expected).dispatch,
+                DispatchState::Unknown
+            );
+        }
+    }
 }
