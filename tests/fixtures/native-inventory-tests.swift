@@ -206,7 +206,8 @@ private func checkSemanticSerialization() throws {
     for (native, expected) in [(NSAccessibility.Role.link.rawValue, "link"), (kAXTableRole, "table"),
                                (kAXRowRole, "row"), (kAXCellRole, "cell"), (kAXListRole, "list"),
                                (kAXTabGroupRole, "tab_group"), (kAXPopUpButtonRole, "pop_up_button"),
-                               (kAXMenuItemRole, "menu_item"), (kAXHeadingRole, "heading")] {
+                               (kAXMenuItemRole, "menu_item"), (kAXMenuBarItemRole, "menu_item"),
+                               (kAXMenuBarRole, "menu_bar"), (kAXMenuRole, "menu"), (kAXHeadingRole, "heading")] {
         expect(semanticRole(native) == expected, "known native role was not normalized: \(expected)")
     }
     expect(semanticRole(kAXRadioButtonRole, subrole: NSAccessibility.Subrole.tabButtonSubrole.rawValue) == "tab",

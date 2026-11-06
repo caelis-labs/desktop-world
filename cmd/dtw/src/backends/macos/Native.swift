@@ -2305,7 +2305,9 @@ private func semanticRole(_ role: String, subrole: String? = nil) -> String {
     case kAXListRole: return "list"
     case kAXTabGroupRole: return "tab_group"
     case kAXPopUpButtonRole: return "pop_up_button"
-    case kAXMenuItemRole: return "menu_item"
+    case kAXMenuItemRole, kAXMenuBarItemRole: return "menu_item"
+    case kAXMenuBarRole: return "menu_bar"
+    case kAXMenuRole: return "menu"
     case kAXHeadingRole: return "heading"
     default: return "unknown"
     }

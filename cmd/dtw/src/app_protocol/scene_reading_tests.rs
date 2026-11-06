@@ -84,6 +84,7 @@ fn native_query_reaches_content_beyond_the_default_budget_and_keeps_scope_explic
     );
     assert_eq!(absent.data["value"]["view"]["semantics"]["complete"], true);
     assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+    assert_eq!(catalog.backend.0.captures.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -631,4 +632,101 @@ fn unsupported_or_unknown_subtree_never_broadens_to_window_or_pixels() {
     assert!(mixed.is_error);
     assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
     assert_eq!(catalog.backend.0.captures.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn exact_object_ids_survive_filters_without_preserving_omitted_input_authority() {
+    let (server, catalog) = agent();
+    let mut a = content(70, "First");
+    a.name = Some("First".into());
+    a.identity = Some("same weak identity".into());
+    let mut b = content(71, "Other");
+    b.name = Some("Other".into());
+    b.identity = a.identity.clone();
+    {
+        let mut m = catalog.backend.0.model.lock().unwrap();
+        m.filtered_observation = true;
+        m.semantic_elements = Some(vec![a.clone(), b.clone()]);
+    }
+    let first = exec(&server, "first", "return await app.look();");
+    let original = first.data["value"]["view"]["elements"][0]["id"].clone();
+    let filtered = exec(&server, "filter", "return await app.look({text:'Other'});");
+    assert!(!filtered.is_error);
+    let stale = exec(&server, "omitted", &format!("await app.click({original});"));
+    assert!(stale.is_error);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+    let again = exec(&server, "again", "return await app.look({text:'First'});");
+    assert_eq!(again.data["value"]["view"]["elements"][0]["id"], original);
+    a.rebind_identity = None;
+    catalog.backend.0.model.lock().unwrap().semantic_elements = Some(vec![a.clone()]);
+    let gap = exec(
+        &server,
+        "credential-gap",
+        "return await app.look({text:'First',full:true});",
+    );
+    assert_eq!(gap.data["value"]["view"]["elements"][0]["id"], original);
+    a.rebind_identity = Some("new exact object with reused weak identity".into());
+    catalog.backend.0.model.lock().unwrap().semantic_elements = Some(vec![a]);
+    let replacement = exec(
+        &server,
+        "replacement",
+        "return await app.look({text:'First',full:true});",
+    );
+    assert_ne!(
+        replacement.data["value"]["view"]["elements"][0]["id"],
+        original
+    );
+    let stale = exec(
+        &server,
+        "replaced",
+        &format!("await app.click({original});"),
+    );
+    assert!(stale.is_error);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn duplicate_exact_credentials_do_not_establish_display_identity() {
+    let (server, catalog) = agent();
+    let mut a = content(1, "First");
+    a.identity = None;
+    let mut b = content(2, "Other");
+    b.identity = None;
+    b.rebind_identity = a.rebind_identity.clone();
+    catalog.backend.0.model.lock().unwrap().semantic_elements = Some(vec![a, b]);
+    let first = exec(&server, "first", "return await app.look({full:true});");
+    let next = exec(&server, "next", "return await app.look({full:true});");
+    assert_ne!(
+        first.data["value"]["view"]["elements"][0]["id"],
+        next.data["value"]["view"]["elements"][0]["id"]
+    );
+}
+
+#[test]
+fn changing_query_publishes_a_compact_baseline_instead_of_removed_ids() {
+    let (server, catalog) = agent();
+    {
+        let mut m = catalog.backend.0.model.lock().unwrap();
+        m.filtered_observation = true;
+        m.semantic_elements = Some(vec![content(1, "First"), content(2, "Other")]);
+    }
+    exec(&server, "first", "await app.look();");
+    let filtered = crate::app_protocol::projection::execution(exec(
+        &server,
+        "filter",
+        "await app.look({text:'Other'});",
+    ));
+    assert_eq!(filtered.data["view"]["reset"], true);
+    assert!(filtered.data["view"]["elements"].is_array());
+    assert_eq!(
+        filtered.data["view"]["elements"].as_array().unwrap().len(),
+        1
+    );
+    assert!(!filtered.data.to_string().contains("removed"));
+    let unchanged = crate::app_protocol::projection::execution(exec(
+        &server,
+        "same",
+        "await app.look({text:'Other'});",
+    ));
+    assert_eq!(unchanged.data["view"], json!({"changed":false}));
 }

@@ -15,11 +15,16 @@ pub(super) struct SceneState {
     raster: Option<Raster>,
     pixels: bool,
     projected: Option<Value>,
-    element_ids: HashMap<String, String>,
+    element_ids: HashMap<String, DisplayIdentity>,
+    retained_ids: HashMap<String, String>,
     next_element: u64,
     viewport: Option<([f64; 4], String, [f64; 4])>,
     window_wait_pending: bool,
     pending_new_window: Option<std::collections::HashSet<String>>,
+}
+struct DisplayIdentity {
+    id: String,
+    retained_identity: Option<String>,
 }
 impl SceneState {
     pub(super) fn projection(&self) -> Option<Value> {
@@ -1318,8 +1323,8 @@ impl<B: Backend + 'static> Coordinator<B> {
                 }
 
                 let mut state = self.state.lock().unwrap();
-                if state.scene.element_ids.len() > 4096 {
-                    state.scene.element_ids.clear();
+                if state.scene.retained_ids.len() > 4096 {
+                    state.scene.retained_ids.clear();
                 }
                 for (element, observation) in candidates {
                     if elements.len() >= 80 {
@@ -1328,6 +1333,17 @@ impl<B: Backend + 'static> Coordinator<B> {
                         semantic["has_more"] = json!(true);
                         break;
                     }
+                    let retained = element["rebind_identity"]
+                        .as_str()
+                        .filter(|credential| rebinds.get(*credential) == Some(&1));
+                    let retained_key = retained.map(|credential| {
+                        format!(
+                            "{}\0{}\0{}",
+                            row["window_ref"].as_str().unwrap(),
+                            credential,
+                            element["role"]
+                        )
+                    });
                     let key = element["identity"]
                         .as_str()
                         .filter(|identity| identities.get(*identity) == Some(&1))
@@ -1339,10 +1355,23 @@ impl<B: Backend + 'static> Coordinator<B> {
                                 element["role"]
                             )
                         });
-                    let existing = key
+                    let existing = retained_key
                         .as_ref()
-                        .and_then(|k| state.scene.element_ids.get(k))
-                        .cloned();
+                        .and_then(|key| state.scene.retained_ids.get(key))
+                        .cloned()
+                        .or_else(|| {
+                            key.as_ref()
+                                .and_then(|key| state.scene.element_ids.get(key))
+                                .filter(|old| {
+                                    // A changed exact-object credential overrides a reused
+                                    // weaker identity, even on consecutive observations.
+                                    old.retained_identity
+                                        .as_deref()
+                                        .zip(retained)
+                                        .is_none_or(|(old, new)| old == new)
+                                })
+                                .map(|old| old.id.clone())
+                        });
                     let target = existing.unwrap_or_else(|| {
                         state.scene.next_element += 1;
                         let target = format!(
@@ -1350,11 +1379,28 @@ impl<B: Backend + 'static> Coordinator<B> {
                             window_ids[row["window_ref"].as_str().unwrap()],
                             state.scene.next_element
                         );
-                        if let Some(key) = &key {
-                            state.scene.element_ids.insert(key.clone(), target.clone());
-                        }
                         target
                     });
+                    if let Some(key) = key {
+                        let retained_identity = retained.map(str::to_owned).or_else(|| {
+                            state
+                                .scene
+                                .element_ids
+                                .get(&key)
+                                .filter(|old| old.id == target)
+                                .and_then(|old| old.retained_identity.clone())
+                        });
+                        state.scene.element_ids.insert(
+                            key,
+                            DisplayIdentity {
+                                id: target.clone(),
+                                retained_identity,
+                            },
+                        );
+                    }
+                    if let Some(key) = retained_key {
+                        state.scene.retained_ids.insert(key, target.clone());
+                    }
                     let mut entry = json!({"id":target,"role":element["role"],"enabled":element["enabled"],"actions":element["actions"]});
                     let name_truncated = project_text(&mut entry, "name", &element["name"]);
                     let value_truncated = project_text(&mut entry, "value", &element["value"]);
@@ -1396,6 +1442,8 @@ impl<B: Backend + 'static> Coordinator<B> {
                 "The subtree's original window is no longer available",
             ));
         }
+        let semantic_empty =
+            elements.is_empty() && (query.is_empty() || semantic["complete"] != true);
         if !query.is_empty() || subtree.is_some() {
             let mut public_query = query;
             if let Some(target) = args.get("target") {
@@ -1405,7 +1453,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         }
         let pixel_mode = explicit_pixels
             || (after && self.state.lock().unwrap().scene.pixels)
-            || (subtree.is_none() && !visible.is_empty() && elements.is_empty());
+            || (subtree.is_none() && !visible.is_empty() && semantic_empty);
         let windows:Vec<_>=rows.iter().take(32).map(|r|json!({"id":window_ids[r["window_ref"].as_str().unwrap()],"title":r["title"].as_str().map(|s|s.chars().take(80).collect::<String>()),"title_truncated":r["title"].as_str().is_some_and(|s|s.chars().count()>80),"visible":r["visible"],"bounds":r["scene"]["bounds"]})).collect();
         let mut coverage = inventory["coverage"].clone();
         // Keep optional native read gaps visible without exposing the full
@@ -1486,7 +1534,11 @@ impl<B: Backend + 'static> Coordinator<B> {
             state.scene.pixels = false;
         }
         let mut state = self.state.lock().unwrap();
-        let reset = state.scene.baseline.is_none() || args["full"] == true;
+        let reset = state.scene.baseline.is_none()
+            || args["full"] == true
+            || state.scene.baseline.as_ref().is_some_and(|previous| {
+                previous["semantics"]["query"] != current["semantics"]["query"]
+            });
         let mut view = if reset {
             let mut v = current.clone();
             v["reset"] = json!(true);
@@ -1507,11 +1559,14 @@ impl<B: Backend + 'static> Coordinator<B> {
         state.scene.observed = Some(current);
         state.scene.projected = Some(view);
         state.scene.active = active.and_then(|r| r["window_ref"].as_str().map(str::to_owned));
-        // A disappeared or omitted control never resurrects an old public ID.
-        state.scene.element_ids.retain(|_, id| {
+        // This bounded label cache carries no input authority. Exact native
+        // object credentials can retain their display IDs across filters;
+        // omitted nodes themselves are still retired below. Weak identities
+        // require continuous observation and cannot revive a removed target.
+        state.scene.element_ids.retain(|_, cached| {
             nodes
                 .iter()
-                .any(|row| row["id"].as_str() == Some(id.as_str()))
+                .any(|row| row["id"].as_str() == Some(cached.id.as_str()))
         });
         state.scene.nodes = nodes;
         drop(state);

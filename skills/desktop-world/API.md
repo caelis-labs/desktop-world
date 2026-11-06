@@ -172,8 +172,7 @@ input is never replayed. Read errors/partial semantics remain explicit.
 
 DTW prioritizes actionable controls, readable values and named content over empty
 structural nodes, with bounded internal continuation. Stable native identities
-keep target IDs across consecutive reads. Missing, omitted or duplicate
-identities cannot revive a removed target ID; labels and traversal positions never establish identity.
+keep target IDs across consecutive reads. A bounded exact-object credential cache also keeps display IDs across filtered reads; this carries no input authority. An input ID must still be present in the latest observation. Omitted nodes retire their input authority, and replaced objects or missing/duplicate credentials cannot reclaim an old ID. Weak identities require continuous observation; labels and traversal positions never establish identity. Changing the observation query publishes a new compact baseline instead of a large removed-ID list.
 Selectors still require proven uniqueness; incomplete discovery can reject them.
 On macOS, text filtering searches native fields beyond their printed previews with
 a shared search budget. An unsearched suffix leaves `text_limit` coverage incomplete;
