@@ -6136,8 +6136,44 @@ private final class NativeStore: @unchecked Sendable {
         }
     }
 
+    private func validateEditableMeaning(_ element: NativeElement, role: String, deadline: Deadline) throws {
+        func preview(_ attribute: String) throws -> String? {
+            let raw = try axAttribute(element.element, attribute, deadline)
+            guard let value = (raw as? String) ?? (raw as? NSNumber)?.stringValue else { return nil }
+            return String(String.UnicodeScalarView(value.unicodeScalars.prefix(256)))
+        }
+        let description = try optionalDescription(alreadyMatched: true) { try preview(kAXDescriptionAttribute) }
+        let fields = try SemanticTextFields(role: role, title: preview(kAXTitleAttribute),
+            value: preview(kAXValueAttribute), description: description.text)
+        guard semanticRole(role) == element.role, fields.name == element.name, fields.value == element.value else {
+            throw failure("target_changed", "Editable control changed before semantic focus")
+        }
+    }
+
+    private func webTextValueControl(_ element: AXUIElement, root: AXUIElement,
+                                     target: NativeTarget, deadline: Deadline) throws -> Bool {
+        var cursor = element
+        var web = false
+        for _ in 0..<40 {
+            guard try axPID(cursor, deadline) == target.app.pid else { break }
+            if CFEqual(cursor, root) { return web }
+            if try axAttribute(cursor, kAXRoleAttribute, deadline) as? String == "AXWebArea" { web = true }
+            guard let parent = axElement(try axAttribute(cursor, kAXParentAttribute, deadline)) else { break }
+            cursor = parent
+        }
+        throw failure("target_changed", "Text control no longer belongs to its observed root")
+    }
+
+    private func valueReceiverMatches(_ element: AXUIElement, target: NativeTarget,
+                                      deadline: Deadline) throws -> Bool {
+        let application = AXUIElementCreateApplication(target.app.pid)
+        guard let receiver = axElement(try axAttribute(application, kAXFocusedUIElementAttribute, deadline)) else { return false }
+        return try axPID(receiver, deadline) == target.app.pid && CFEqual(receiver, element)
+    }
+
     private func setValue(_ request: [String: Any]) -> [String: Any] {
         var dispatched = false
+        var setterAcknowledged = false
         do {
             guard let binding = request["binding"] as? String,
                   let observation = observations.removeValue(forKey: binding) else { throw failure("stale_observation", "Native observation was retired or consumed") }
@@ -6157,23 +6193,71 @@ private final class NativeStore: @unchecked Sendable {
             guard try settable(element.element, role: role, enabled: enabled, window: window.element, target: target, deadline: context.deadline) else { throw failure("element_not_settable", "Current AXValue writability or ownership changed") }
             try validateRegionElement(element, root: window.element, target: target,
                                       bounds: window.cg.bounds, deadline: context.deadline)
+            // Web AX setters can acknowledge a different, still-focused DOM
+            // control. Bind the exact receiver before the first value payload.
+            // Independent native controls keep their existing background setter.
+            let webControl = try webTextValueControl(element.element, root: window.element,
+                                                     target: target, deadline: context.deadline)
+            if webControl {
+                try validateEditableMeaning(element, role: role, deadline: context.deadline)
+                if try !valueReceiverMatches(element.element, target: target, deadline: context.deadline) {
+                    if try !focused(target, window.element, context.deadline) {
+                        guard request["input_policy"] as? String == "auto" else {
+                            throw failure("foreground_required", "The requested text receiver needs focus preparation")
+                        }
+                        observations[binding] = observation
+                        return ["dispatch":"not_dispatched", "evidence":"unverified",
+                                "foreground_plan":["reason":"semantic_value_focus", "visual":false]]
+                    }
+                    guard let focus = try dtwWithInputAdmission({
+                        try self.requireExecutionForeground(request, target, context)
+                        self.executionFocus?.anchor.admitInput()
+                        dispatched = true
+                        return AXUIElementSetAttributeValue(element.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+                    }), focus == .success else {
+                        throw failure("text_focus_unconfirmed", "The intended text control could not be focused; no value payload was sent")
+                    }
+                    let focusDeadline = context.deadline.limited(to: ProcessInfo.processInfo.systemUptime + 0.25)
+                    do {
+                        let _: Bool = try waitForEstablishedFocus(remaining: {
+                            focusDeadline.uptime - ProcessInfo.processInfo.systemUptime
+                        }, check: {
+                            try focusDeadline.check(); try context.verify(target.app)
+                            try self.requireExecutionForeground(request, target, context)
+                        }, read: {
+                            try self.valueReceiverMatches(element.element, target: target, deadline: focusDeadline) ? true : nil
+                        }, wait: { CFRunLoopRunInMode(.defaultMode, $0, false) })
+                    } catch let error as NativeFailure where error.code == "focus_unproven" && error.focusAbsence == nil {
+                        throw failure("text_focus_unconfirmed", "The exact intended text receiver was not confirmed; no value payload was sent")
+                    }
+                }
+            }
+            let ready = try validate(target, context)
+            guard try owned(element.element, by: ready.element, target: target, deadline: context.deadline) else {
+                throw failure("target_changed", "Text control ancestry changed before value input")
+            }
             try context.deadline.prepare(element.element)
             guard let result = try dtwWithInputAdmission({
                 try self.requireExecutionForeground(request, target, context)
+                if webControl, try !self.valueReceiverMatches(element.element, target: target, deadline: context.deadline) {
+                    throw failure("target_changed", "The exact text receiver changed before value input; no value payload was sent")
+                }
+                self.executionFocus?.anchor.admitInput()
                 dispatched = true
                 return AXUIElementSetAttributeValue(element.element, kAXValueAttribute as CFString, value as CFString)
             }) else { throw failure("native_stopping", "Native input admission is closed") }
             try context.deadline.check()
             guard result == .success else { throw failure("ax_action_failed", "AXValue update returned \(result.rawValue); inspect before another action") }
+            setterAcknowledged = true
             let current = try validate(target, context)
             guard try owned(element.element, by: current.element, target: target, deadline: context.deadline),
                   try axAttribute(element.element, kAXValueAttribute, context.deadline) as? String == value else {
-                throw failure("value_unconfirmed", "Native value was written but exact readback did not confirm it; inspect before another action")
+                throw failure("value_unconfirmed", "Native setter returned success, but the requested value was not observed; inspect before another action")
             }
             return ["dispatch": "dispatched", "evidence": "confirmed", "postcondition": "element_value_set"]
         } catch let error as NativeFailure {
-            return error.json.merging(["dispatch": dispatched ? "unknown" : "not_dispatched", "evidence": "unverified"]) { _, new in new }
-        } catch { return ["dispatch": dispatched ? "unknown" : "not_dispatched", "evidence": "unverified", "error": "native_error", "message": String(describing: error)] }
+            return error.json.merging(["dispatch": setterAcknowledged ? "dispatched" : dispatched ? "unknown" : "not_dispatched", "evidence": "unverified"]) { _, new in new }
+        } catch { return ["dispatch": setterAcknowledged ? "dispatched" : dispatched ? "unknown" : "not_dispatched", "evidence": "unverified", "error": "native_error", "message": String(describing: error)] }
     }
 
     private func lifecycle(_ request: [String: Any]) -> [String: Any] {
@@ -6380,19 +6464,7 @@ private final class NativeStore: @unchecked Sendable {
             default: throw failure("target_changed", "Semantic press capability changed; observe again")
             }
             if focusText || selection != nil {
-                // A reusable native text object must retain its observed meaning
-                // across activation; never focus a replacement file-list cell.
-                func preview(_ attribute: String) throws -> String? {
-                    let raw = try axAttribute(element.element, attribute, context.deadline)
-                    guard let value = (raw as? String) ?? (raw as? NSNumber)?.stringValue else { return nil }
-                    return String(String.UnicodeScalarView(value.unicodeScalars.prefix(256)))
-                }
-                let description = try optionalDescription(alreadyMatched: true) { try preview(kAXDescriptionAttribute) }
-                let fields = try SemanticTextFields(role: role, title: preview(kAXTitleAttribute),
-                    value: preview(kAXValueAttribute), description: description.text)
-                guard semanticRole(role) == element.role, fields.name == element.name, fields.value == element.value else {
-                    throw failure("target_changed", "Editable control changed before semantic focus")
-                }
+                try validateEditableMeaning(element, role: role, deadline: context.deadline)
             }
             let modalPress = try selection == nil && backgroundRequiresForeground(window.element, deadline: context.deadline)
             let menuNeedsForeground = try menuAction && !menuDestinationBound(target, deadline: context.deadline)

@@ -57,6 +57,7 @@ pub(super) fn allows_activation(reason: &str) -> bool {
             | "windowless_application"
             | "native_open_panel_click"
             | "semantic_text_focus"
+            | "semantic_value_focus"
             | "native_modal_press"
             | "native_menu_press"
     )
@@ -85,6 +86,7 @@ pub(super) fn foreground_plan<'a>(
         "background_key_window_absent" => keyboard,
         "native_hover_tracking" => operation == "move",
         "native_open_panel_click" => operation == "click",
+        "semantic_value_focus" => operation == "set_value" && plan["visual"] == false,
         "semantic_text_focus" | "native_modal_press" | "native_menu_press" => {
             operation == "press" && plan["visual"] == false
         }
@@ -258,6 +260,27 @@ mod tests {
             reply["dispatch"] = json!(dispatch);
             assert_eq!(foreground_plan(&reply, "press"), None);
         }
+    }
+
+    #[test]
+    fn native_value_receiver_preparation_cannot_replay_an_acknowledged_setter() {
+        let mut reply = json!({"dispatch":"not_dispatched","evidence":"unverified",
+            "foreground_plan":{"reason":"semantic_value_focus","visual":false}});
+        assert!(allows_activation("semantic_value_focus"));
+        assert_eq!(
+            foreground_plan(&reply, "set_value"),
+            Some("semantic_value_focus")
+        );
+        for operation in ["press", "click", "keypress", "type_text"] {
+            assert_eq!(foreground_plan(&reply, operation), None);
+        }
+        for dispatch in ["dispatched", "unknown"] {
+            reply["dispatch"] = json!(dispatch);
+            assert_eq!(foreground_plan(&reply, "set_value"), None);
+        }
+        reply["dispatch"] = json!("not_dispatched");
+        reply["focus_preparation"] = json!({"dispatch":"dispatched"});
+        assert_eq!(foreground_plan(&reply, "set_value"), None);
     }
 
     #[test]
