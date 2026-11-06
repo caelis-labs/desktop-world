@@ -510,6 +510,21 @@ fn native_modal_input(validation: &Value) -> Result<bool, Value> {
         .map(|modal| modal || validation["native_open_panel"] == true)
 }
 
+fn native_menu_click(
+    request: &Value,
+    x: f64,
+    y: f64,
+    send: impl FnOnce(&Value, bool) -> Value,
+) -> Value {
+    let mut menu = request.clone();
+    menu["operation"] = json!("try_native_menu_click");
+    menu["screen_x"] = json!(x);
+    menu["screen_y"] = json!(y);
+    // NativeStore owns AX actions and this process's bound target. The scene
+    // extension is a separate entry point for SCK and pointer presentation.
+    send(&menu, false)
+}
+
 fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> BackgroundAttempt {
     let op = request["operation"].as_str().unwrap_or("").to_owned();
     if !matches!(
@@ -574,11 +589,7 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
             if let Err(error) = admit_scene(request, leased) {
                 return BackgroundAttempt::Completed(rejected(error, &op));
             }
-            let mut menu = request.clone();
-            menu["operation"] = json!("try_native_menu_click");
-            menu["screen_x"] = json!(x);
-            menu["screen_y"] = json!(y);
-            let mut selected = native(&menu, true);
+            let mut selected = native_menu_click(request, x, y, native);
             if selected["native_menu"] != false {
                 trace_route(request, "native", "menu_point_press");
                 selected["delivery"] =
@@ -1255,6 +1266,38 @@ pub(super) fn validate_reply(reply: &Value, target: &Value) -> Result<(), Value>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn menu_pixels_use_the_bound_native_action_bridge_once() {
+        let request = json!({"operation":"click", "target":{"app":{"pid":7,"generation":8},"native_id":9},
+            "deadline_unix_ms":123456,"screen_x":1,"screen_y":2});
+        for reply in [
+            json!({"native_menu":false}),
+            json!({"native_menu":true,"dispatch":"dispatched","evidence":"unverified"}),
+            json!({"native_menu":true,"dispatch":"unknown","evidence":"unverified","error":"ax_action_failed"}),
+        ] {
+            let calls = std::cell::Cell::new(0);
+            let result = native_menu_click(&request, 42.5, -71.25, |sent, scene| {
+                calls.set(calls.get() + 1);
+                assert!(
+                    !scene,
+                    "AX menu actions belong to NativeStore, not the SCK extension"
+                );
+                assert_eq!(sent["operation"], "try_native_menu_click");
+                assert_eq!(sent["target"], request["target"]);
+                assert_eq!(sent["deadline_unix_ms"], request["deadline_unix_ms"]);
+                assert_eq!(sent["screen_x"], 42.5);
+                assert_eq!(sent["screen_y"], -71.25);
+                reply.clone()
+            });
+            assert_eq!(
+                result, reply,
+                "No synthetic acknowledgement or replay after an AX result"
+            );
+            assert_eq!(calls.get(), 1);
+        }
+        assert_eq!(request["operation"], "click");
+    }
 
     #[test]
     fn keyboard_trace_identifies_the_capability_without_text_or_key_payloads() {
