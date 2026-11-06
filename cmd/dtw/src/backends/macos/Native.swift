@@ -3516,8 +3516,16 @@ private final class NativeStore: @unchecked Sendable {
             coverage["association_error_codes"] = [Int32]()
             try current.verify(app)
             try current.deadline.check()
-            let association = selected.association.map {
+            var association = selected.association.map {
                 SurfaceAssociation(ownerPID: selected.record.pid, ownerBirth: $0.birth, root: $0.root)
+            }
+            let slot = WindowSlot(app: app, id: id)
+            if selected.record.pid == app.pid, let retained = windows[slot],
+               let clientMenu = associatedSurfaces[slot] {
+                // A scoped bind must not erase a client menu's proven AX root
+                // merely because its backing surface has the same PID.
+                _ = try validateSurface(retained, current)
+                association = clientMenu
             }
             let row = try self.registerSurface(selected.record, title: selected.title, app: app, association: association)
             self.reconcileWindowBindings()
