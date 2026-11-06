@@ -23,30 +23,61 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         };
         let poll = || self.remaining(deadline, Some(deadline));
         let call = CallContext { poll: &poll };
-        let mut exited = Vec::new();
-        for app in apps {
-            call.remaining()?;
-            if self.backend.application_exited(&app, &call)? {
-                exited.push(app);
+        // Exit is asynchronous: the first failed inventory can precede kernel
+        // process death. Retry only this read-only proof, under one shared cap.
+        let result = (|| {
+            let until = deadline.min(Instant::now() + Duration::from_millis(500));
+            let mut exited = Vec::new();
+            loop {
+                exited.clear();
+                let mut identity_gap = None;
+                for app in &apps {
+                    call.remaining()?;
+                    match self.backend.application_exited(app, &call) {
+                        Ok(true) => exited.push(app.clone()),
+                        Ok(false) => {}
+                        Err(error) if matches!(&error, Error::NativeFailure { code, .. } if code == "app_changed") => {
+                            identity_gap = Some(error)
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                if identity_gap.is_none() && !exited.is_empty() {
+                    break;
+                }
+                if Instant::now() >= until {
+                    if let Some(error) = identity_gap {
+                        return Err(error);
+                    }
+                    break;
+                }
+                std::thread::sleep(
+                    Duration::from_millis(10).min(until.saturating_duration_since(Instant::now())),
+                );
             }
-        }
-        let retired = {
-            let mut state = self.state();
-            self.live_context(&state)?;
-            self.check_deadline(Some(deadline))?;
-            if self.backend.stamp() != provider {
-                return Err(Error::WrongProvider);
-            }
-            state.apps.retain(|app| !exited.contains(app));
-            take_observations(&mut state, |observation| {
-                exited.contains(&observation.target.app)
-            })
-        };
-        drop(retired);
+            let retired = {
+                let mut state = self.state();
+                self.live_context(&state)?;
+                self.check_deadline(Some(deadline))?;
+                if self.backend.stamp() != provider {
+                    return Err(Error::WrongProvider);
+                }
+                state.apps.retain(|app| !exited.contains(app));
+                take_observations(&mut state, |observation| {
+                    exited.contains(&observation.target.app)
+                })
+            };
+            drop(retired);
+            Ok(exited.len())
+        })();
+        // A read failure is not an unwound native operation. Always complete
+        // this flight; dropping an unfinished flight seals the whole context.
         let state = flight.finish();
         self.live_context(&state)?;
-        self.backend.cleanup_error().map_or(Ok(exited.len()), Err)
+        let count = result?;
+        self.backend.cleanup_error().map_or(Ok(count), Err)
     }
+
     pub fn launch_until(&self, deadline: Instant) -> ActionReceipt {
         let Some(app_id) = &self.application_id else {
             return ActionReceipt::rejected(Error::UnsupportedCapability);

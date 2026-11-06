@@ -13,6 +13,8 @@ struct Life {
     exit_on_press: bool,
     exit_probe_live: bool,
     exit_probe_error: bool,
+    exit_probe_gaps: usize,
+    exit_reads: usize,
     presses: usize,
 }
 #[derive(Clone)]
@@ -142,7 +144,14 @@ impl Backend for Provider {
         outcome
     }
     fn application_exited(&self, app: &AppInstance, _: &CallContext<'_>) -> Result<bool, Error> {
-        let life = self.life.lock().unwrap();
+        let mut life = self.life.lock().unwrap();
+        life.exit_reads += 1;
+        if life.exit_reads <= life.exit_probe_gaps {
+            return Err(Error::NativeFailure {
+                code: "app_changed".into(),
+                message: "Terminating process metadata is transitional".into(),
+            });
+        }
         if life.exit_probe_error {
             return Err(Error::BackendFailed("Exit metadata unavailable".into()));
         }
@@ -364,11 +373,17 @@ fn launch_ack_without_native_identity_is_unknown_and_does_not_authorize_input() 
 
 #[test]
 fn final_view_after_self_terminating_button_requires_separate_exit_proof_and_never_replays() {
-    for (live, unreadable) in [(false, false), (true, false), (false, true)] {
+    for (live, unreadable, gaps) in [
+        (false, false, 0),
+        (false, false, 2),
+        (true, false, 0),
+        (false, true, 0),
+    ] {
         let life = Arc::new(Mutex::new(Life {
             exit_on_press: true,
             exit_probe_live: live,
             exit_probe_error: unreadable,
+            exit_probe_gaps: gaps,
             ..Life::default()
         }));
         let server = Server::new(Installed {
@@ -397,6 +412,17 @@ fn final_view_after_self_terminating_button_requires_separate_exit_proof_and_nev
         } else {
             assert!(result.is_error, "{}", result.data);
             assert_eq!(result.data["error"]["code"], "app_changed");
+            {
+                let mut life = life.lock().unwrap();
+                life.exit_probe_live = false;
+                life.exit_probe_error = false;
+            }
+            let reopened = run(&server, "await app.look();");
+            assert!(
+                !reopened.is_error,
+                "An ordinary failed exit read must not seal the context: {}",
+                reopened.data
+            );
         }
         let life = life.lock().unwrap();
         assert_eq!(life.presses, 1);

@@ -1162,11 +1162,10 @@ impl Backend for NativeBackend {
         }
     }
     fn application_exited(&self, app: &AppInstance, call: &CallContext<'_>) -> Result<bool, Error> {
-        self.rpc(
+        self.read_rpc(
             json!({"operation":"application_exited","app":app_json(app)}),
             call,
-        )
-        .map_err(|(error, _)| error)?["exited"]
+        )?["exited"]
             .as_bool()
             .ok_or(Error::InvalidObservation)
     }
