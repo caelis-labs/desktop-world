@@ -1514,6 +1514,32 @@ surfaceCheck(!originalAboveOtherApps(originalOrder, original: 2, owner: 10))
 surfaceCheck(originalAboveOtherApps([orderRow(4, 10), orderRow(2, 10), orderRow(3, 20)], original: 2, owner: 10))
 surfaceCheck(!originalAboveOtherApps(originalOrder, original: 2, owner: 99))
 
+// A menu's accessibility focus is not keyboard foreground. Passive order return
+// needs the original actual foreground and exact local window, including a
+// second foreground proof after the potentially blocking AX read.
+private var passiveFrontReads = 0
+private let passiveSameOwner = try passiveOrderOwner(requested: 42, requestedWindow: 42,
+    frontmost: { passiveFrontReads += 1; return true }, focusedWindow: { 42 },
+    equal: ==, windowID: { CGWindowID($0) })
+surfaceCheck(passiveSameOwner)
+surfaceCheck(passiveFrontReads == 2)
+private let passiveOtherForeground = try passiveOrderOwner(requested: 42, requestedWindow: 42,
+    frontmost: { false }, focusedWindow: { preconditionFailure("Do not query a different foreground owner") },
+    equal: ==, windowID: { CGWindowID($0) })
+surfaceCheck(!passiveOtherForeground)
+private let passiveOtherWindow = try passiveOrderOwner(requested: 42, requestedWindow: 42,
+    frontmost: { true }, focusedWindow: { 43 }, equal: ==, windowID: { CGWindowID($0) })
+surfaceCheck(!passiveOtherWindow)
+private let passiveMissingWindow = try passiveOrderOwner(requested: 42, requestedWindow: 42,
+    frontmost: { true }, focusedWindow: { nil }, equal: ==, windowID: { CGWindowID($0) })
+surfaceCheck(!passiveMissingWindow)
+passiveFrontReads = 0
+private let passiveOwnerChangedDuringRead = try passiveOrderOwner(requested: 42, requestedWindow: 42,
+    frontmost: { passiveFrontReads += 1; return passiveFrontReads == 1 }, focusedWindow: { 42 },
+    equal: ==, windowID: { CGWindowID($0) })
+surfaceCheck(!passiveOwnerChangedDuringRead)
+surfaceCheck(passiveFrontReads == 2)
+
 // Public composite labels are matchable verbatim. Separately returned fields
 // never create an implicit whitespace-joined match, nor an extra role alias.
 private let orderNumber = SemanticTextFields(role: kAXTextFieldRole, title: "Order", value: "Number", description: nil)

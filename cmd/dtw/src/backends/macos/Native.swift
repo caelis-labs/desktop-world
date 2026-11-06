@@ -961,6 +961,19 @@ private func exactFocusedSurface<Element>(requested: Element, requestedWindow: C
     try equal(requested, focused) && windowID(focused) == requestedWindow
 }
 
+// Background menus may own accessibility focus while keyboard foreground stays
+// with the user. Passive AXRaise restores only order, so use the real front
+// process and that app's exact local focused window, not global AX focus. This
+// proof grants no keyboard/pointer input or activation authority.
+private func passiveOrderOwner<Element>(requested: Element, requestedWindow: CGWindowID,
+    frontmost: () throws -> Bool, focusedWindow: () throws -> Element?,
+    equal: (Element, Element) -> Bool, windowID: (Element) throws -> CGWindowID) throws -> Bool {
+    guard try frontmost(), let current = try focusedWindow(),
+          try exactFocusedSurface(requested: requested, requestedWindow: requestedWindow,
+              focused: current, equal: equal, windowID: windowID) else { return false }
+    return try frontmost()
+}
+
 private func resolveActivationWindow<Element>(_ surface: Element, pid: Int32,
                                               owner: (Element) throws -> Int32,
                                               role: (Element) throws -> String?,
@@ -5440,7 +5453,16 @@ private final class NativeStore: @unchecked Sendable {
             let context = RequestContext(deadline: deadline)
             func ownerStillCurrent() throws -> Bool {
                 guard !executionFocusObserver.invalidated(scope.epoch) else { return false }
-                return try priorForegroundIsCurrent(scope.original, context)
+                return try executionRestoreIdentityCurrent(pid: scope.original.pid, generation: scope.original.generation,
+                    birth: { try context.startStamp($0) }, windowMatches: {
+                        guard !scope.original.application.isTerminated else { return false }
+                        return try passiveOrderOwner(requested: window, requestedWindow: id,
+                            frontmost: { try windowServerFrontmost(scope.original.pid, deadline) },
+                            focusedWindow: {
+                                try nativeFocusedWindow(AXUIElementCreateApplication(scope.original.pid),
+                                    pid: scope.original.pid, deadline: deadline)
+                            }, equal: CFEqual, windowID: { try axWindowID($0, deadline) })
+                    })
             }
             guard try ownerStillCurrent() else { return "changed_externally" }
             let rows = try visibleWindowOrder(deadline)

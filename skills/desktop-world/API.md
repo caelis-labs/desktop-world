@@ -188,6 +188,9 @@ follow-ups while retaining a previously returned image's coordinate mapping.
 Within one script, a successful `look()` also preserves an earlier requested PNG
 when the window layout is unchanged; `view.image.captured_at_call` identifies its
 capture call. Input, changed surfaces and failed reads discard that pending PNG.
+This retention belongs to the tool response and image attachment. The script's
+semantic `look()` snapshot still has `image:null`; keep the `capture()` result
+when the script needs image geometry.
 The next coordinate gesture privately refreshes pixels and verifies its original
 canvas geometry and application instance before input, then resumes visual
 follow-ups. Without a prior capture, coordinates still require `capture()`;
