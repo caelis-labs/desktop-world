@@ -1000,3 +1000,57 @@ do {
     precondition(error.attributeFailure?.error == .cannotComplete && restoredClock == 0.05)
 }
 print("Foreground return waits for exact AX readiness within cleanup; mismatch, identity change and busy expiry remain strict")
+
+// A later ownership read can become busy after activation was already proved.
+// Restart app/window/app proof together; never retry an input or cached half-proof.
+private var focusProofClock: TimeInterval = 0
+private var focusProofApps = 0
+private var focusProofWindows = 0
+private var focusProofAfter = 0
+private let laterFocus: Bool = try readFocusSnapshot(remaining: { 0.75 - focusProofClock }, check: {}, read: {
+    focusProofApps += 1
+    focusProofWindows += 1
+    if focusProofWindows == 1 { throw busyAttribute("AXFocusedWindow") }
+    focusProofAfter += 1
+    return true
+}, wait: { focusProofClock += $0 })
+backgroundCheck(laterFocus && focusProofApps == 2 && focusProofWindows == 2 && focusProofAfter == 1)
+
+// Recovery discovering an external focus choice is final, never a new activation.
+focusProofClock = 0; focusProofApps = 0
+private let noLongerOwned: Bool = try readFocusSnapshot(remaining: { 0.75 - focusProofClock }, check: {}, read: {
+    focusProofApps += 1
+    if focusProofApps == 1 { throw busyAttribute("AXFocusedWindow") }
+    return false
+}, wait: { focusProofClock += $0 })
+backgroundCheck(!noLongerOwned && focusProofApps == 2)
+
+focusProofClock = 0; focusProofApps = 0
+_ = expectedBackgroundError("ax_unavailable") {
+    let _: Bool = try readFocusSnapshot(remaining: { 0.04 - focusProofClock }, check: {}, read: {
+        focusProofApps += 1; throw busyAttribute("AXFocusedWindow")
+    }, wait: { focusProofClock += $0 })
+}
+backgroundCheck(focusProofApps == 2 && focusProofClock == 0.04)
+
+for stop in ["native_stopping", "deadline_exceeded", "app_changed"] {
+    focusProofClock = 0; focusProofApps = 0
+    _ = expectedBackgroundError(stop) {
+        let _: Bool = try readFocusSnapshot(remaining: { 0.75 - focusProofClock }, check: {
+            if focusProofClock > 0 { throw failure(stop, "proof cancelled") }
+        }, read: {
+            focusProofApps += 1; throw busyAttribute("AXFocusedWindow")
+        }, wait: { focusProofClock += $0 })
+    }
+    backgroundCheck(focusProofApps == 1)
+}
+
+focusProofApps = 0
+_ = expectedBackgroundError("ax_unavailable") {
+    let _: Bool = try readFocusSnapshot(remaining: { 1 }, check: {}, read: {
+        focusProofApps += 1
+        throw failure("ax_unavailable", "invalid focused window",
+            attributeFailure: AXAttributeFailure(name:"AXFocusedWindow",error:.invalidUIElement))
+    }, wait: { _ in preconditionFailure("Invalid objects never authorize a retry") })
+}
+backgroundCheck(focusProofApps == 1)

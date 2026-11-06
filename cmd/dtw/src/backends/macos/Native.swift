@@ -1729,6 +1729,22 @@ private func retryCompleteAXRead<Value>(original: NativeFailure,
     throw latest
 }
 
+// Focus can become AX-busy again after a successful activation poll. Restart
+// the complete read-only proof, never activation, payload, or a partial result.
+private func readFocusSnapshot<Value>(remaining: () -> TimeInterval,
+    check: () throws -> Void, read: () throws -> Value,
+    wait: (TimeInterval) -> Void) throws -> Value {
+    try check()
+    do {
+        let value = try read()
+        try check()
+        return value
+    } catch let original as NativeFailure where retryableAXBusyFailure(original) {
+        return try retryCompleteAXRead(original: original, remaining: remaining,
+            check: check, read: read, wait: wait)
+    }
+}
+
 private func readInventorySnapshot<Value>(_ app: NativeApp, _ context: RequestContext,
                                           read: (RequestContext) throws -> Value) throws -> Value {
     func check() throws {
@@ -5104,6 +5120,15 @@ private final class NativeStore: @unchecked Sendable {
 
     private func ownsExecutionFocus(_ scope: ExecutionFocus, _ context: RequestContext,
                                     allowClosedAnchor: Bool = false) throws -> Bool {
+        let until = min(context.deadline.uptime, ProcessInfo.processInfo.systemUptime + 0.75)
+        return try readFocusSnapshot(remaining: { until - ProcessInfo.processInfo.systemUptime },
+            check: { try context.deadline.check(); try context.verify(scope.app) },
+            read: { try self.executionFocusOwnershipSnapshot(scope, context, allowClosedAnchor: allowClosedAnchor) },
+            wait: { CFRunLoopRunInMode(.defaultMode, $0, false) })
+    }
+
+    private func executionFocusOwnershipSnapshot(_ scope: ExecutionFocus, _ context: RequestContext,
+                                                allowClosedAnchor: Bool) throws -> Bool {
         if allowClosedAnchor, let owned = try closedAnchorRestorationOwnership(scope, context) { return owned }
         guard !scope.invalidated, !executionFocusObserver.invalidated(scope.activationEpoch) else { return false }
         try context.verify(scope.app)
@@ -5149,6 +5174,16 @@ private final class NativeStore: @unchecked Sendable {
     }
 
     private func validateExecutionFocus(_ request: [String: Any], _ context: RequestContext) throws -> [String: Any] {
+        guard let raw = request["target"] as? [String: Any] else { throw failure("invalid_request", "Missing execution focus target") }
+        let app = try NativeApp(raw["app"])
+        let until = min(context.deadline.uptime, ProcessInfo.processInfo.systemUptime + 0.75)
+        return try readFocusSnapshot(remaining: { until - ProcessInfo.processInfo.systemUptime },
+            check: { try context.deadline.check(); try context.verify(app) },
+            read: { try self.executionFocusAdmissionSnapshot(request, context) },
+            wait: { CFRunLoopRunInMode(.defaultMode, $0, false) })
+    }
+
+    private func executionFocusAdmissionSnapshot(_ request: [String: Any], _ context: RequestContext) throws -> [String: Any] {
         guard let rawTarget = request["target"] as? [String: Any] else {
             throw failure("invalid_request", "Missing execution focus target")
         }
@@ -5188,6 +5223,7 @@ private final class NativeStore: @unchecked Sendable {
 
     private func beginExecutionFocus(_ request: [String: Any]) -> [String: Any] {
         var changed = false
+        var stage = "preflight"
         do {
             let context = try RequestContext(request)
             // A real borrow supersedes the passive order guard. Settle any
@@ -5231,6 +5267,7 @@ private final class NativeStore: @unchecked Sendable {
                     role: (try? axAttribute($0.element, kAXRoleAttribute, context.deadline)) as? String,
                     identifier: (try? axAttribute($0.element, kAXIdentifierAttribute, context.deadline)) as? String) } ?? false)
             let allowPanelRestoration = nativeOpenPanel && request["reason"] as? String == "native_open_panel_click"
+            stage = "capture_original"
             let original = try capturePriorForeground(context)
             let epoch = try executionFocusObserver.begin(initialPID: original.pid, targetPID: app.pid,
                 window: nil, deadline: context.deadline, family: { surface, deadline in
@@ -5242,7 +5279,9 @@ private final class NativeStore: @unchecked Sendable {
                 target: target, changedForeground: false)
             do {
                 if let target, let window {
+                    stage = "capture_target"
                     try borrowFocus(target, window.element, context)
+                    stage = "establish_target"
                     _ = try establishFocus(target, context, changed: &changed,
                         // Choose activation by the admitted input route. An
                         // OpenPanel keyboard receiver still needs make-key;
@@ -5276,10 +5315,12 @@ private final class NativeStore: @unchecked Sendable {
             }
             executionFocus?.changedForeground = changed
             executionFocusObserver.established(epoch, pid: app.pid, window: anchor.id)
+            stage = "validate_established_target"
             let result = try validateExecutionFocus(request, context)
             return result.merging(["dispatch": "dispatched", "evidence": "unverified"]) { _, new in new }
         } catch let error as NativeFailure {
-            return error.json.merging(["dispatch": changed ? "unknown" : "not_dispatched", "evidence": "unverified",
+            return error.json.merging(["message": "Execution foreground preparation at \(stage): \(error.message)",
+                                       "dispatch": changed ? "unknown" : "not_dispatched", "evidence": "unverified",
                                        "borrowed": executionFocus?.changedForeground ?? false,
                                        "scope_active": executionFocus != nil]) { _, new in new }
         } catch {
