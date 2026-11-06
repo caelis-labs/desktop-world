@@ -8,6 +8,10 @@ static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
 // interpreters on a small Windows runner. Serialize startup only, not requests,
 // cancellation, exit or any product cleanup deadline.
 static FIXTURE_STARTUP: Mutex<()> = Mutex::new(());
+// Interpreter/DLL cold loading is test setup, not a worker request or shutdown
+// contract. A loaded Windows runner can exceed the ordinary five-second wait.
+// Keep one bounded startup attempt and fail early if the owned child exits.
+const FIXTURE_STARTUP_BUDGET: Duration = Duration::from_secs(30);
 
 struct Fixture {
     path: PathBuf,
@@ -46,8 +50,31 @@ impl Fixture {
             ],
         )
         .unwrap();
-        self.wait_file(&format!("started-{}", worker.id()));
+        self.wait_started(&worker).unwrap();
         worker
+    }
+
+    fn wait_started(&self, worker: &Worker) -> Result<(), String> {
+        let marker = self.path.join(format!("started-{}", worker.id()));
+        let deadline = Instant::now() + FIXTURE_STARTUP_BUDGET;
+        while !marker.exists() {
+            if worker.process.reap_if_exited() {
+                return Err(format!(
+                    "fixture child {} exited before startup handshake: {:?}",
+                    worker.id(),
+                    worker.cleanup_error()
+                ));
+            }
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "live fixture child {} did not reach startup handshake within {:?}",
+                    worker.id(),
+                    FIXTURE_STARTUP_BUDGET
+                ));
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        Ok(())
     }
 
     fn wait_ready(&self) {
@@ -64,6 +91,19 @@ impl Fixture {
             thread::sleep(Duration::from_millis(2));
         }
     }
+}
+
+#[test]
+fn fixture_startup_reports_owned_child_exit_without_waiting_for_a_marker() {
+    let fixture = Fixture::new();
+    let worker = fixture.worker("gated_nonzero");
+    fixture.wait_ready();
+    fs::remove_file(fixture.path.join(format!("started-{}", worker.id()))).unwrap();
+    fs::write(fixture.path.join("release"), "release").unwrap();
+    let error = fixture.wait_started(&worker).unwrap_err();
+    assert!(error.contains("exited before startup handshake"), "{error}");
+    assert!(worker.is_reaped());
+    assert_cleanup_failure_persists(&worker, "17");
 }
 
 #[cfg(unix)]
@@ -664,7 +704,7 @@ os._exit(74 if sys.argv[2]=='fail' else 0)
         ],
     )
     .unwrap();
-    fixture.wait_file(&format!("started-{}", worker.id()));
+    fixture.wait_started(&worker).unwrap();
     worker
 }
 
