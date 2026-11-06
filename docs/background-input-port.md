@@ -145,8 +145,12 @@ Foreground borrowing and explicit `app.focus()` share one execution scope. The
 scope retains the original process incarnation and exact window. Settlement
 releases owned input and restores that original window, including its order,
 only while scope ownership and original identity remain proven. External focus
-changes invalidate further input and prevent a forced return. Confirmed quit or
-anchor-window closure ends the input scope; cleanup observes any natural return.
+changes invalidate further input and prevent a forced return. Confirmed quit ends
+the input scope. After admitted input, a proved close may continue into a fully
+proved windowless state. A known modal's expired AX identity and nonvisible CG
+surface may also hand input to a previously known, live window in the same app.
+Live/minimized anchors, unavailable evidence and arbitrary new siblings cannot
+authorize these transitions. Cleanup observes any other natural return.
 See [current input routing](macos-input-routing.md) for the full lifecycle.
 
 Within an already owned foreground scope, keyboard uses the existing native

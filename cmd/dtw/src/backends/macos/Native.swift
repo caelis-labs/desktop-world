@@ -1122,8 +1122,8 @@ private func frontProcessMatch(_ result: Int32) throws -> Bool {
     case 1: return true
     case 0: return false
     case -6 ... -3:
-        // Only the existing post-activation read-only poll may recover this
-        // transient native absence. Pre-action snapshot checks still throw.
+        // Only bounded read-only snapshot/activation confirmation may recover
+        // this transient absence. It never authorizes input or another raise.
         throw failure("focus_unproven", "WindowServer foreground identity is unavailable",
                       details:["native_result":result], focusAbsence:.frontProcess)
     default:
@@ -1286,7 +1286,7 @@ private func verifyAfterRaise<T>(_ unconfirmed: AXError?, proof: () throws -> T)
     }
 }
 
-// Only used after the one issued raise/activation. These polls are read-only:
+// Used to confirm a pre-action snapshot or the one issued raise/activation. These polls are read-only:
 // missing focus or a busy AX provider cannot activate again or replay input.
 // Preserve the unresolved typed error when the readiness budget is exhausted.
 private func waitForEstablishedFocus<T>(remaining: () -> TimeInterval,
@@ -4153,6 +4153,7 @@ private final class NativeStore: @unchecked Sendable {
             try supportedRoot(element)
         })
         guard ordinary else {
+            if let candidate = try controlCandidate() { return candidate }
             throw failure("semantic_window_unavailable", "No unique supported AX window matches this system surface")
         }
         if let retained = semanticWindows[slot], !CFEqual(retained.element, element) {
@@ -5248,9 +5249,21 @@ private final class NativeStore: @unchecked Sendable {
             // App identity and the foreground snapshot must still be proven.
             try context.deadline.check()
         }
-        guard try context.startStamp(pid) == birth, try windowServerFrontmost(pid, context.deadline) else {
-            throw failure("focus_changed", "Original foreground changed during capture")
-        }
+        // Preserve this exact nominated owner. A transient PSN read gap can be
+        // re-read before any activation; a proved different app/window cannot.
+        let until = min(context.deadline.uptime, ProcessInfo.processInfo.systemUptime + 0.25)
+        let _: Bool = try waitForEstablishedFocus(remaining: { until - ProcessInfo.processInfo.systemUptime },
+            check: { try context.deadline.check() }, read: {
+                guard try context.startStamp(pid) == birth, try windowServerFrontmost(pid, context.deadline) else {
+                    throw failure("focus_changed", "Original foreground changed during capture")
+                }
+                if let window, let id {
+                    guard try self.focused(pid, window, windowID: id, context.deadline) else {
+                        throw failure("focus_changed", "Original focused window changed during capture")
+                    }
+                }
+                return true
+            }, wait: { CFRunLoopRunInMode(.defaultMode, $0, false) })
         return PriorForeground(application: application, pid: pid, generation: birth, window: window, windowID: id)
     }
 

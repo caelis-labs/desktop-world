@@ -1781,3 +1781,25 @@ surfaceCheck(!modalReturn(known: [100]))
 surfaceCheck(!modalReturn(onscreen: true))
 surfaceCheck(!modalReturn(expired: false))
 print("Controlled modal dismissal return controls passed; no desktop access")
+
+// Original-owner confirmation can re-read a typed native gap without changing
+// the nominated owner, activating anything or replaying input.
+private var originalConfirmationReads = 0
+private var originalConfirmationWaits = 0
+private let originalConfirmed: Bool = try waitForEstablishedFocus(
+    remaining: { 1 }, check: {}, read: {
+        originalConfirmationReads += 1
+        return try frontProcessMatch(originalConfirmationReads == 1 ? -3 : 1)
+    }, wait: { _ in originalConfirmationWaits += 1 })
+surfaceCheck(originalConfirmed && originalConfirmationReads == 2 && originalConfirmationWaits == 1)
+private var changedOwnerWaits = 0
+do {
+    let _: Bool = try waitForEstablishedFocus(remaining: { 1 }, check: {}, read: {
+        guard try frontProcessMatch(0) else { throw failure("focus_changed", "Original owner changed") }
+        return true
+    }, wait: { _ in changedOwnerWaits += 1 })
+    preconditionFailure("Proved external choice was retried")
+} catch let error as NativeFailure {
+    surfaceCheck(error.code == "focus_changed" && changedOwnerWaits == 0)
+}
+print("Original-owner confirmation recovers only typed read gaps; no activation/input")
