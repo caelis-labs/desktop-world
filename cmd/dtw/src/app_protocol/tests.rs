@@ -75,6 +75,8 @@ struct Model {
     cleanup_after_action: Option<Error>,
     shutdown_gate: Option<(WorkerGate, Error)>,
     windows_error: Option<Error>,
+    window_errors: std::collections::VecDeque<Error>,
+    window_error_after_action: Option<Error>,
     application_input: bool,
     inventory: Option<WindowInventory>,
     instance_inventories: HashMap<(u32, u64), WindowInventory>,
@@ -131,6 +133,8 @@ impl MockBackend {
                 cleanup_after_action: None,
                 shutdown_gate: None,
                 windows_error: None,
+                window_errors: std::collections::VecDeque::new(),
+                window_error_after_action: None,
                 application_input: false,
                 inventory: None,
                 instance_inventories: HashMap::new(),
@@ -198,6 +202,9 @@ impl MockBackend {
         }
         if let Some(error) = model.capture_error_after_action.take() {
             model.capture_errors.push_back(error);
+        }
+        if let Some(error) = model.window_error_after_action.take() {
+            model.window_errors.push_back(error);
         }
         if let Some(error) = model.cleanup_after_action.take() {
             model.cleanup_error.get_or_insert(error);
@@ -305,6 +312,9 @@ impl Backend for MockBackend {
     }
     fn windows(&self, app: &AppInstance, _: &CallContext<'_>) -> Result<WindowInventory, Error> {
         self.0.windows.fetch_add(1, Ordering::SeqCst);
+        if let Some(error) = self.0.model.lock().unwrap().window_errors.pop_front() {
+            return Err(error);
+        }
         if let Some(error) = self.0.model.lock().unwrap().windows_error.clone() {
             return Err(error);
         }

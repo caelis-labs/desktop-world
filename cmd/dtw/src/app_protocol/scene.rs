@@ -1154,7 +1154,23 @@ impl<B: Backend + 'static> Coordinator<B> {
         attempt: u8,
         deadline: Instant,
     ) -> Work {
-        let work = self.scene_look_inner(id, args, explicit_pixels, after, attempt, deadline);
+        let mut work = self.scene_look_inner(id, args, explicit_pixels, after, attempt, deadline);
+        // An app view follows its current surfaces. A menu may disappear while
+        // inventory/AX/pixels are being read after a successful selection. Renew
+        // this read once; never renew an explicitly addressed object or replay
+        // its input. Process/provider/permission failures remain terminal.
+        if attempt == 0
+            && args.get("target").is_none()
+            && work
+                .completed
+                .error
+                .as_ref()
+                .is_some_and(|e| matches!(e.code.as_str(), "target_changed" | "stale_window"))
+            && Instant::now() + Duration::from_millis(80) < deadline
+        {
+            std::thread::sleep(Duration::from_millis(80));
+            work = self.scene_look_inner(id, args, explicit_pixels, after, 1, deadline);
+        }
         if work.completed.error.is_some()
             || work.completed.value.as_ref().is_some_and(|value| {
                 value["semantics"]["reason"]

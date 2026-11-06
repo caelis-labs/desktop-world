@@ -45,6 +45,64 @@ fn scene_exec(server: &Arc<Server<SceneCatalog>>, source: &str) -> Reply {
         _ => panic!("Unexpected in-flight scene request"),
     }
 }
+
+#[test]
+fn app_view_renews_a_departing_surface_without_replaying_input() {
+    let (server, backend) = scene_agent();
+    backend
+        .base
+        .0
+        .model
+        .lock()
+        .unwrap()
+        .window_error_after_action = Some(Error::TargetChanged);
+    let reply = scene_exec(&server, "await app.capture(); await app.click({x:5,y:5});");
+    assert!(!reply.is_error, "{}", reply.data);
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
+
+    for failures in [1, 2] {
+        let (server, backend) = scene_agent();
+        for _ in 0..failures {
+            backend
+                .base
+                .0
+                .model
+                .lock()
+                .unwrap()
+                .window_errors
+                .push_back(Error::TargetChanged);
+        }
+        let reply = scene_exec(&server, "return await app.look();");
+        assert_eq!(reply.is_error, failures == 2, "{}", reply.data);
+        assert_eq!(backend.base.0.windows.load(Ordering::SeqCst), 2);
+        assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 0);
+    }
+    for cause in [
+        Error::NativeFailure {
+            code: "app_changed".into(),
+            message: "Process incarnation changed".into(),
+        },
+        Error::WrongApp,
+        Error::WrongProvider,
+        Error::NativeFailure {
+            code: "permission_denied".into(),
+            message: "Permission was revoked".into(),
+        },
+    ] {
+        let (server, backend) = scene_agent();
+        backend
+            .base
+            .0
+            .model
+            .lock()
+            .unwrap()
+            .window_errors
+            .push_back(cause);
+        let reply = scene_exec(&server, "return await app.look();");
+        assert!(reply.is_error, "{}", reply.data);
+        assert_eq!(backend.base.0.windows.load(Ordering::SeqCst), 1);
+    }
+}
 #[test]
 fn a_transient_preflight_capture_refreshes_reads_once_before_any_input() {
     for failures in [1, 2] {

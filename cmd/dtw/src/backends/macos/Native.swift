@@ -6086,6 +6086,72 @@ private final class NativeStore: @unchecked Sendable {
         }
     }
 
+    // AppKit menu tracking can commit its highlighted item even when addressed
+    // mouse events name another row (a mouseMoved primer does not fix this).
+    // A visible, freshly attributed menu permits the existing AXPress primitive
+    // at the proven pixel. Ordinary/opaque surfaces keep the CUA pointer route.
+    private func tryMenuClick(_ request: [String: Any]) -> [String: Any] {
+        var scopeFailure: NativeFailure?
+        do {
+            let context = try RequestContext(request)
+            let target = try NativeTarget(request["target"])
+            let surface = try validateSurface(target, context)
+            let root: AXUIElement?
+            do { root = try associatedClientRoot(surface, app: target.app, context) }
+            catch let error as NativeFailure where ["ax_unavailable", "association_unavailable"].contains(error.code) {
+                return ["native_menu": false]
+            }
+            guard let root, try axAttribute(root, kAXRoleAttribute, context.deadline) as? String == kAXMenuRole else {
+                return ["native_menu": false]
+            }
+            guard let x = request["screen_x"] as? Double, let y = request["screen_y"] as? Double,
+                  x.isFinite, y.isFinite, surface.bounds.contains(CGPoint(x: x, y: y)) else {
+                throw failure("invalid_point", "Menu point is outside its current surface")
+            }
+            let point = CGPoint(x: x, y: y)
+            let application = AXUIElementCreateApplication(target.app.pid)
+            try context.deadline.prepare(application)
+            var hit: AXUIElement?
+            let hitResult = AXUIElementCopyElementAtPosition(application, Float(x), Float(y), &hit)
+            try context.deadline.check()
+            guard hitResult == .success, let hit,
+                  try axPID(hit, context.deadline) == target.app.pid,
+                  try axAttribute(hit, kAXRoleAttribute, context.deadline) as? String == kAXMenuItemRole,
+                  try axAncestor(hit, is: root, context.deadline),
+                  let itemBounds = try axRect(hit, context.deadline), itemBounds.contains(point),
+                  try axAttribute(hit, kAXEnabledAttribute, context.deadline) as? Bool == true,
+                  try actions(hit, context.deadline).contains(kAXPressAction) else {
+                throw failure("element_not_pressable", "Menu pixel has no proven enabled item; no input was dispatched")
+            }
+            let current = try validateSurface(target, context)
+            guard current.bounds == surface.bounds,
+                  let currentRoot = try associatedClientRoot(current, app: target.app, context), CFEqual(root, currentRoot),
+                  try axAncestor(hit, is: currentRoot, context.deadline),
+                  try axRect(hit, context.deadline) == itemBounds else {
+                throw failure("target_changed", "Menu or item changed before its pixel action")
+            }
+            var result = try performSemanticPress(deadline: context.deadline, setTimeout: {
+                AXUIElementSetMessagingTimeout(hit, $0)
+            }, dispatch: {
+                do { try self.requireExecutionForeground(request, target, context) }
+                catch let error as NativeFailure { scopeFailure = error; return nil }
+                catch { scopeFailure = failure("execution_scope_unavailable", "Execution scope proof failed: \(error)"); return nil }
+                return dtwWithInputAdmission {
+                    self.executionFocus?.anchor.admitInput()
+                    self.backgroundWindowOrder?.admitted.insert(target.app)
+                    return AXUIElementPerformAction(hit, kAXPressAction as CFString)
+                }
+            })
+            result["native_menu"] = true
+            return result
+        } catch let error as NativeFailure {
+            return (scopeFailure ?? error).json.merging(["native_menu": true, "dispatch": "not_dispatched", "evidence": "unverified"]) { _, new in new }
+        } catch {
+            return ["native_menu": true, "dispatch": "not_dispatched", "evidence": "unverified",
+                    "error": "native_error", "message": String(describing: error)]
+        }
+    }
+
     private func press(_ request: [String: Any]) -> [String: Any] {
         var scopeFailure: NativeFailure?
         do {
@@ -6235,6 +6301,7 @@ private final class NativeStore: @unchecked Sendable {
                 return ["prepared": true]
             }
             if operation == "press" { return press(request) }
+            if operation == "try_native_menu_click" { return tryMenuClick(request) }
             if operation == "set_value" { return setValue(request) }
             if ["focus", "type_text", "keypress", "scroll"].contains(operation) { return windowInput(request) }
             let context = try RequestContext(request)

@@ -560,6 +560,32 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
         ));
     }
     if !keyboard {
+        if op == "click"
+            && before["input_framework"] == "appkit"
+            && request["button"].as_str().unwrap_or("left") == "left"
+            && request["count"].as_u64().unwrap_or(1) == 1
+        {
+            if !scene_worker {
+                return BackgroundAttempt::Completed(rejected(
+                    json!({"error":"invalid_request","message":"Pointer input needs its scene owner"}),
+                    &op,
+                ));
+            }
+            if let Err(error) = admit_scene(request, leased) {
+                return BackgroundAttempt::Completed(rejected(error, &op));
+            }
+            let mut menu = request.clone();
+            menu["operation"] = json!("try_native_menu_click");
+            menu["screen_x"] = json!(x);
+            menu["screen_y"] = json!(y);
+            let mut selected = native(&menu, true);
+            if selected["native_menu"] != false {
+                trace_route(request, "native", "menu_point_press");
+                selected["delivery"] =
+                    delivery(Some("semantic"), Some("native_menu_point"), false, None);
+                return BackgroundAttempt::Completed(selected);
+            }
+        }
         if op == "drag" && before["surface_owner"]["pid"] == request["target"]["app"]["pid"] {
             let mut movement = request.clone();
             movement["operation"] = json!("try_native_window_move");
