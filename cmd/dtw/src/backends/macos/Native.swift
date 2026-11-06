@@ -3578,6 +3578,7 @@ private final class NativeStore: @unchecked Sendable {
                 let sameProcess = record.pid == app.pid
                 if sameProcess, try axAttribute(root, kAXRoleAttribute, context.deadline) as? String != kAXMenuRole { continue }
                 let alreadyListed = candidates.contains(where: { $0.0.id == record.id })
+                if sameProcess && !alreadyListed { continue }
                 guard associated[record.id] == nil,
                       !alreadyListed || sameProcess else {
                     throw failure("target_changed", "Associated surface identity duplicated during enumeration; list windows again")
@@ -3589,7 +3590,9 @@ private final class NativeStore: @unchecked Sendable {
             }
         }
         coverage["scope"] = "application_and_proven_associated_surfaces"
-        coverage["associated_count"] = associated.count
+        // The coverage contract adds this count to the same-process inventory.
+        // A client-owned menu gains an AX root, not an additional CG row.
+        coverage["associated_count"] = associated.values.filter { $0.ownerPID != app.pid }.count
         coverage["association_complete"] = false
         coverage["association_probe_failures"] = associationErrors.count
         coverage["association_error_codes"] = associationErrors
