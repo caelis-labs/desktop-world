@@ -17,6 +17,7 @@ pub(super) struct SceneState {
     projected: Option<Value>,
     element_ids: HashMap<String, DisplayIdentity>,
     retained_ids: HashMap<String, String>,
+    retained_nodes: HashMap<String, Value>,
     next_element: u64,
     viewport: Option<([f64; 4], String, [f64; 4])>,
     window_wait_pending: bool,
@@ -320,6 +321,23 @@ fn element_priority(row: &Value) -> u8 {
 }
 
 impl<B: Backend + 'static> Coordinator<B> {
+    fn scene_target(&self, target: &Value) -> Option<(Value, bool)> {
+        let state = self.state.lock().unwrap();
+        state
+            .scene
+            .nodes
+            .iter()
+            .find(|node| node["id"] == *target)
+            .cloned()
+            .map(|node| (node, false))
+            .or_else(|| {
+                target
+                    .as_str()
+                    .and_then(|id| state.scene.retained_nodes.get(id))
+                    .cloned()
+                    .map(|node| (node, true))
+            })
+    }
     pub(super) fn scene_atomic(&self, id: &str, op: &str, args: Value, deadline: Instant) -> Work {
         let submitted = match wire::script_submit(&self.app_ref, id, op, &args) {
             Ok(v) => v,
@@ -523,19 +541,10 @@ impl<B: Backend + 'static> Coordinator<B> {
                 ));
             }
             if let Some(target) = args.get("target") {
-                let node = self
-                    .state
-                    .lock()
-                    .unwrap()
-                    .scene
-                    .nodes
-                    .iter()
-                    .find(|row| row["id"] == *target)
-                    .cloned();
-                let Some(node) = node else {
+                let Some((node, _)) = self.scene_target(target) else {
                     return failed(error(
                         "target_changed",
-                        "Target is not in the latest app observation",
+                        "Target handle is unavailable; inspect the returned view",
                     ));
                 };
                 if args.get("button").is_some() || args.get("count").is_some() {
@@ -841,21 +850,46 @@ impl<B: Backend + 'static> Coordinator<B> {
         work
     }
     fn scene_read_text(&self, id: &str, args: &Value, deadline: Instant) -> Work {
-        let node = self
-            .state
-            .lock()
-            .unwrap()
-            .scene
-            .nodes
-            .iter()
-            .find(|node| node["id"] == args["target"])
-            .cloned();
-        let Some(node) = node else {
+        let Some((mut node, cached)) = self.scene_target(&args["target"]) else {
             return failed(error(
                 "target_changed",
-                "Read text from a target in the latest look",
+                "Text source handle is unavailable; observe it again",
             ));
         };
+        // Start a fresh content observation after input consumed its binding,
+        // or when returning to an older object handle. Continuations never
+        // renew: they must keep the first page's exact native snapshot.
+        let live = {
+            let state = self.state.lock().unwrap();
+            state.observations.iter().any(|observation| {
+                observation.public == node["observation_ref"]
+                    && !observation.retired
+                    && self.runtime.retains_observation(observation.core)
+            })
+        };
+        if args["offset"].as_u64().unwrap_or(0) == 0 && (cached || !live) {
+            node = match self.scene_refresh_target(id, node, deadline) {
+                Ok(node) => node,
+                Err(error) => return failed(error),
+            };
+            let mut state = self.state.lock().unwrap();
+            if let Some(current) = state
+                .scene
+                .nodes
+                .iter_mut()
+                .find(|current| current["id"] == node["id"])
+            {
+                *current = node.clone();
+            }
+            if let Some(source) = state
+                .scene
+                .retained_nodes
+                .get_mut(node["id"].as_str().unwrap())
+            {
+                source["observation_ref"] = node["observation_ref"].clone();
+                source["element_ref"] = node["element_ref"].clone();
+            }
+        }
         // Retain this exact observation across pages. Renewing here could join
         // different text revisions or revive an ID with a reused native object.
         let mut request = json!({"window_ref":node["window_ref"],
@@ -873,6 +907,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             ) {
                 let mut state = self.state.lock().unwrap();
                 state.scene.nodes.clear();
+                state.scene.retained_nodes.clear();
                 state.scene.raster = None;
                 state.scene.observed = None;
                 state.scene.projected = None;
@@ -919,6 +954,10 @@ impl<B: Backend + 'static> Coordinator<B> {
                     .scene
                     .nodes
                     .retain(|n| n["window_ref"] != node["window_ref"]);
+                state
+                    .scene
+                    .retained_nodes
+                    .retain(|_, n| n["window_ref"] != node["window_ref"]);
                 return Err(error);
             }
             let page = work.completed.value.unwrap();
@@ -1104,25 +1143,44 @@ impl<B: Backend + 'static> Coordinator<B> {
         attempt: u8,
         deadline: Instant,
     ) -> Work {
+        let work = self.scene_look_inner(id, args, explicit_pixels, after, attempt, deadline);
+        if work.completed.error.is_some()
+            || work.completed.value.as_ref().is_some_and(|value| {
+                value["semantics"]["reason"]
+                    .as_str()
+                    .is_some_and(semantic_fallback)
+            })
+        {
+            self.state.lock().unwrap().scene.retained_nodes.clear();
+        }
+        work
+    }
+    fn scene_look_inner(
+        &self,
+        id: &str,
+        args: &Value,
+        explicit_pixels: bool,
+        after: bool,
+        attempt: u8,
+        deadline: Instant,
+    ) -> Work {
         let subtree = if let Some(target) = args.get("target") {
-            let node = self
-                .state
-                .lock()
-                .unwrap()
-                .scene
-                .nodes
-                .iter()
-                .find(|node| node["id"] == *target)
-                .cloned();
-            let Some(node) = node else {
+            let Some((node, cached)) = self.scene_target(target) else {
                 return failed(error(
                     "target_changed",
-                    "Observe a subtree from a target in the latest look",
+                    "Subtree handle is unavailable; observe it again",
                 ));
             };
-            // A read stays on its exact retained source, like readText pages.
-            // A stale subtree never triggers a broader replacement query.
-            Some(node)
+            // Historical object handles require new exact-object proof, not
+            // a selector or a replacement with the same label.
+            if cached {
+                match self.scene_refresh_target(id, node, deadline) {
+                    Ok(node) => Some(node),
+                    Err(error) => return failed(error),
+                }
+            } else {
+                Some(node)
+            }
         } else {
             None
         };
@@ -1568,6 +1626,25 @@ impl<B: Backend + 'static> Coordinator<B> {
                 .iter()
                 .any(|row| row["id"].as_str() == Some(cached.id.as_str()))
         });
+        // Cache only native-renewable handles, with bounded metadata and no
+        // value payloads. Inputs always pass scene_refresh_target again; text
+        // pages retain their original read-only content observation.
+        if state.scene.retained_nodes.len() >= 256 {
+            state.scene.retained_nodes.clear();
+        }
+        for node in &nodes {
+            if node["rebind_identity"].as_str().is_none() {
+                continue;
+            }
+            let mut retained = node.clone();
+            retained["expected"] = json!({"role":node["expected"]["role"],"name":node["expected"]["name"],"actions":node["expected"]["actions"],"enabled":node["expected"]["enabled"]});
+            if retained.to_string().len() <= 4096 {
+                state
+                    .scene
+                    .retained_nodes
+                    .insert(node["id"].as_str().unwrap().into(), retained);
+            }
+        }
         state.scene.nodes = nodes;
         drop(state);
         let mut work = data(snapshot);

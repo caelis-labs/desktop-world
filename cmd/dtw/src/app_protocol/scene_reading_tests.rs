@@ -262,9 +262,9 @@ fn failed_text_read_after_input_does_not_repeat_readback_or_the_action() {
     );
     assert!(reply.is_error, "{}", reply.data);
     assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
-    // One explicit look and one credential renewal before the press. The failed
-    // explicit text read must not trigger an implicit scene read at settlement.
-    assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 2);
+    // One look, one renewal before the press, and one fresh first-page source
+    // after input consumed its binding. Failure adds no settlement read/retry.
+    assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 3);
     let compact = crate::app_protocol::projection::execution(reply);
     assert!(compact.data.get("view").is_none());
     assert_eq!(compact.data["effects"]["dispatch"]["dispatched"], 1);
@@ -729,4 +729,172 @@ fn changing_query_publishes_a_compact_baseline_instead_of_removed_ids() {
         "await app.look({text:'Other'});",
     ));
     assert_eq!(unchanged.data["view"], json!({"changed":false}));
+}
+
+#[test]
+fn filtered_native_handle_renews_exact_object_before_single_value_write() {
+    let (server, catalog) = agent();
+    let mut field = content(77, "Native note");
+    field.role = "text_field".into();
+    field.name = Some("Native note".into());
+    field.actions = vec!["setValue".into()];
+    {
+        let mut m = catalog.backend.0.model.lock().unwrap();
+        m.filtered_observation = true;
+        m.semantic_elements = Some(vec![field, content(78, "Other")]);
+    }
+    let first = exec(&server, "first", "return await app.look();");
+    let target = first.data["value"]["view"]["elements"][0]["id"].clone();
+    exec(&server, "other", "await app.look({text:'Other'});");
+    let write = exec(
+        &server,
+        "write",
+        &format!("return await app.setValue({{target:{target},value:'fresh 中文 🌍'}});"),
+    );
+    assert!(!write.is_error, "{}", write.data);
+    assert_eq!(
+        *catalog.backend.0.set_values.lock().unwrap(),
+        vec![(ElementId(77), "fresh 中文 🌍".into())]
+    );
+    assert!(catalog.backend.0.input_targets.lock().unwrap().is_empty());
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn historical_native_handle_never_writes_removed_replaced_or_changed_meaning() {
+    for change in ["removed", "replaced", "disabled", "renamed", "actions"] {
+        let (server, catalog) = agent();
+        let mut field = content(77, "Native note");
+        field.role = "text_field".into();
+        field.name = Some("Native note".into());
+        field.actions = vec!["setValue".into()];
+        {
+            let mut m = catalog.backend.0.model.lock().unwrap();
+            m.filtered_observation = true;
+            m.semantic_elements = Some(vec![field.clone(), content(78, "Other")]);
+        }
+        let first = exec(&server, "first", "return await app.look();");
+        let target = first.data["value"]["view"]["elements"][0]["id"].clone();
+        exec(&server, "filter", "await app.look({text:'Other'});");
+        match change {
+            "replaced" => {
+                field.rebind_identity = Some("different object, same label and weak ID".into())
+            }
+            "disabled" => field.enabled = Some(false),
+            "renamed" => field.name = Some("Different meaning".into()),
+            "actions" => field.actions.clear(),
+            _ => {}
+        }
+        catalog.backend.0.model.lock().unwrap().semantic_elements = Some(if change == "removed" {
+            vec![]
+        } else {
+            vec![field]
+        });
+        let result = exec(
+            &server,
+            "write",
+            &format!("await app.setValue({{target:{target},value:'must not write'}});"),
+        );
+        assert!(result.is_error, "{change}: {}", result.data);
+        assert!(
+            catalog.backend.0.set_values.lock().unwrap().is_empty(),
+            "{change}"
+        );
+        assert_eq!(
+            catalog.backend.0.actions.load(Ordering::SeqCst),
+            0,
+            "{change}"
+        );
+    }
+}
+
+#[test]
+fn historical_subtree_obtains_fresh_source_without_input_or_pixels() {
+    let (server, catalog) = agent();
+    let mut parent = content(7, "File");
+    parent.name = Some("File".into());
+    parent.role = "menu_item".into();
+    {
+        let mut m = catalog.backend.0.model.lock().unwrap();
+        m.filtered_observation = true;
+        m.menu_scope = true;
+        m.subtree_scope = true;
+        m.semantic_elements = Some(vec![parent, content(8, "Other")]);
+    }
+    let first = exec(&server, "first", "return await app.look({scope:'menu'});");
+    let target = first.data["value"]["view"]["elements"][0]["id"].clone();
+    exec(&server, "filter", "await app.look({text:'Other'});");
+    let sub = exec(
+        &server,
+        "sub",
+        &format!("return await app.look({{target:{target}}});"),
+    );
+    assert!(!sub.is_error, "{}", sub.data);
+    let scopes = catalog.backend.0.observe_scopes.lock().unwrap();
+    assert_eq!(
+        scopes
+            .iter()
+            .filter(|s| **s == ObserveScopeKind::Menu)
+            .count(),
+        2
+    );
+    assert_eq!(scopes.last(), Some(&ObserveScopeKind::Subtree));
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+    assert_eq!(catalog.backend.0.captures.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn first_text_read_after_historical_setter_uses_new_binding_then_keeps_pages() {
+    let (server, catalog) = agent();
+    let mut field = content(77, "Native note");
+    field.role = "text_field".into();
+    field.name = Some("Native note".into());
+    field.value = Some("old".into());
+    field.actions = vec!["setValue".into()];
+    let mut changed = field.clone();
+    changed.value = Some("new 中文 🌍".into());
+    {
+        let mut m = catalog.backend.0.model.lock().unwrap();
+        m.filtered_observation = true;
+        m.semantic_elements = Some(vec![field, content(78, "Other")]);
+        m.semantics_after_action = Some(vec![changed]);
+    }
+    let first = exec(&server, "first", "return await app.look();");
+    let target = first.data["value"]["view"]["elements"][0]["id"].clone();
+    exec(&server, "filter", "await app.look({text:'Other'});");
+    let result=exec(&server,"write-read",&format!("await app.setValue({{target:{target},value:'new 中文 🌍'}}); const first=await app.readText({{target:{target},limit:4}}); const next=await app.readText({{target:{target},offset:first.next_offset}}); return {{text:first.text+next.text}};"));
+    assert!(!result.is_error, "{}", result.data);
+    assert_eq!(result.data["value"]["result"]["text"], "new 中文 🌍");
+    assert_eq!(catalog.backend.0.set_values.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn intervening_look_cannot_silently_rebind_a_text_continuation() {
+    let (server, catalog) = agent();
+    {
+        let mut m = catalog.backend.0.model.lock().unwrap();
+        m.filtered_observation = true;
+        m.semantic_elements = Some(vec![
+            content(1, "Long text to paginate"),
+            content(2, "Other"),
+        ]);
+    }
+    let first = exec(&server, "first", "return await app.look();");
+    let target = first.data["value"]["view"]["elements"][0]["id"].clone();
+    let page = exec(
+        &server,
+        "page",
+        &format!("return await app.readText({{target:{target},limit:4}});"),
+    );
+    assert!(!page.is_error, "{}", page.data);
+    exec(&server, "other", "await app.look({text:'Other'});");
+    let before = catalog.backend.0.observes.load(Ordering::SeqCst);
+    let next = exec(
+        &server,
+        "next",
+        &format!("return await app.readText({{target:{target},offset:4}});"),
+    );
+    assert!(next.is_error, "{}", next.data);
+    assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), before);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
 }

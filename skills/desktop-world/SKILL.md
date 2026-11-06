@@ -17,7 +17,7 @@ supported (without requesting foreground on macOS). App context survives between
 `exec` calls, so do not prepend a redundant look to each script. Explicit looks
 return complete snapshots inside JavaScript; tool messages show a compact baseline,
 then changes. Use semantic target IDs from a returned observation or a unique
-selector to click known controls.
+selector to click known controls. Native object handles can survive filtered reads: DTW revalidates the exact object before input, without guessing a replacement.
 Use `await app.capture()` when the UI needs visual understanding or semantics
 are unavailable, then click coordinates in the returned image. After input DTW
 returns a fresh observation automatically. Use `move({x,y})` for hover and
