@@ -1803,3 +1803,10 @@ do {
     surfaceCheck(error.code == "focus_changed" && changedOwnerWaits == 0)
 }
 print("Original-owner confirmation recovers only typed read gaps; no activation/input")
+
+for confirmed in ["quit_app", "application_exited"] {
+    surfaceCheck(confirmedExecutionTerminal(operation: confirmed, evidence: "confirmed", postcondition: "application_exited", sameApp: true, closedWindow: nil, anchorWindow: 12) == "application_exited")
+    surfaceCheck(confirmedExecutionTerminal(operation: confirmed, evidence: "unverified", postcondition: "application_exited", sameApp: true, closedWindow: nil, anchorWindow: 12) == nil)
+    surfaceCheck(confirmedExecutionTerminal(operation: confirmed, evidence: "confirmed", postcondition: "application_exited", sameApp: false, closedWindow: nil, anchorWindow: 12) == nil)
+}
+print("Exact kernel-confirmed exit and explicit quit share terminal settlement; unknown/foreign owners remain strict")

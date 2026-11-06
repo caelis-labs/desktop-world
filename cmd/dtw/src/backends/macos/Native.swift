@@ -1044,7 +1044,7 @@ private func executionRestoreIdentityCurrent(pid: Int32, generation: UInt64,
 private func confirmedExecutionTerminal(operation: String, evidence: String?, postcondition: String?,
     sameApp: Bool, closedWindow: CGWindowID?, anchorWindow: CGWindowID) -> String? {
     guard sameApp, evidence == "confirmed" else { return nil }
-    if operation == "quit_app", postcondition == "application_exited" { return postcondition }
+    if (operation == "quit_app" || operation == "application_exited"), postcondition == "application_exited" { return postcondition }
     if operation == "close_window", postcondition == "window_closed", closedWindow == anchorWindow { return postcondition }
     return nil
 }
@@ -6652,6 +6652,15 @@ private final class NativeStore: @unchecked Sendable {
                     throw failure("app_changed", "A different process incarnation occupies the original PID")
                 }
                 if !exited { try context.verify(app) }
+                if exited, let scope = executionFocus,
+                   let terminal = confirmedExecutionTerminal(operation: operation,
+                    evidence: "confirmed", postcondition: "application_exited",
+                    sameApp: scope.app == app, closedWindow: nil, anchorWindow: scope.anchor.id) {
+                    // An AX button can finish a previously pending quit. The
+                    // same positive kernel proof used by the final view ends
+                    // this exact borrow; never validate/raise its dead root.
+                    executionFocus?.terminal = terminal
+                }
                 return ["exited": exited]
             case "windows": return try listWindows(NativeApp(request["app"]), context)
             case "bind_window": return try bindWindow(request, context)
