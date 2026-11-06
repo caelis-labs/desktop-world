@@ -5347,7 +5347,8 @@ private final class NativeStore: @unchecked Sendable {
         if let previous = borrowed.pointer, let point = endpoint,
            let current = CGEvent(source: nil)?.location, !invalidated,
            abs(current.x - point.x) < 0.5, abs(current.y - point.y) < 0.5 {
-            guard CGWarpMouseCursorPosition(previous) == .success,
+            guard let placement = dtwPointerRestorationPoint(previous),
+                  CGWarpMouseCursorPosition(placement) == .success,
                   CGAssociateMouseAndMouseCursorPosition(1) == .success,
                   dtwPointerReturnConfirmed(previous, deadline: deadline.uptime,
                                             read: { CGEvent(source: nil)?.location }) else {
@@ -5567,7 +5568,8 @@ private final class NativeStore: @unchecked Sendable {
             if scope.pointerOrigin == nil { throw failure("pointer_restore_failed", "Original cursor position was unavailable") }
             return "changed_externally"
         }
-        guard CGWarpMouseCursorPosition(destination) == .success,
+        guard let placement = dtwPointerRestorationPoint(destination),
+              CGWarpMouseCursorPosition(placement) == .success,
               CGAssociateMouseAndMouseCursorPosition(1) == .success,
               dtwPointerReturnConfirmed(destination, deadline: deadline.uptime,
                 read: { CGEvent(source: nil)?.location }) else {

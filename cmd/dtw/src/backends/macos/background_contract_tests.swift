@@ -943,6 +943,24 @@ precondition(!dtwPointerReturnConfirmed(CGPoint(x: 10, y: 20), deadline: 0.01,
 precondition(pointerReturnReads == 0)
 print("Pointer return waits for observed restoration within the original cleanup budget; no warp replay")
 
+// Actual DSH failure: truncating both fractional axes exceeded the unchanged
+// Euclidean 1-unit bound and consumed the focus-return budget. Place once at
+// the nearest grid point, but confirm against the original fractional point.
+private let fractionalCursorOrigin = CGPoint(x: 290.61328125, y: 52.875)
+private let truncatedCursorOrigin = CGPoint(x: 290, y: 52)
+pointerReturnClock = 0
+precondition(!dtwPointerReturnConfirmed(fractionalCursorOrigin, deadline: 0.01,
+    read: { truncatedCursorOrigin }, now: { pointerReturnClock }, pause: { pointerReturnClock += $0 }))
+for original in [fractionalCursorOrigin, CGPoint(x: -1193.9, y: 1743.8),
+                 CGPoint(x: 1841.85, y: -92.62), CGPoint(x: 10, y: 20)] {
+    let placement = dtwPointerRestorationPoint(original)!
+    let observed = CGPoint(x: floor(placement.x), y: floor(placement.y))
+    precondition(dtwPointerReturnConfirmed(original, deadline: 0.01,
+        read: { observed }, now: { 0 }, pause: { _ in preconditionFailure("Nearest placement must confirm immediately") }))
+}
+precondition(dtwPointerRestorationPoint(CGPoint(x: Double.nan, y: 0)) == nil)
+print("Fractional cursor restoration keeps the original 1-unit bound on both positive and negative display coordinates")
+
 
 // Cold native-panel focus can be busy during cleanup. A bounded fresh proof,
 // rather than another input/activation, resolves only typed cannotComplete.

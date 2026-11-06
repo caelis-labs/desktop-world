@@ -55,6 +55,11 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
                 compact[key] = original[key].clone();
             }
         }
+        if compact["error"]["code"] == "closed" && compact["shutdown_error"].is_object() {
+            // A fenced final observation must not hide the specific cleanup
+            // failure behind its secondary closed-context error.
+            compact["error"] = compact["shutdown_error"].clone();
+        }
         if original["script"]["failure"].is_object() {
             compact["failure"] = original["script"]["failure"].clone();
         }
@@ -431,6 +436,31 @@ mod tests {
         assert_eq!(compact.data["error"], error);
         assert_eq!(compact.data["shutdown_error"], error);
         assert!(compact.data["effects"].get("focus_return").is_none());
+    }
+
+    #[test]
+    fn cleanup_failure_explains_a_secondary_closed_context_without_hiding_script_errors() {
+        for primary in ["closed", "script_exception"] {
+            let mut reply = successful_execution(vec![]);
+            reply.is_error = true;
+            reply.data["value"] = json!({"agent_protocol":true});
+            reply.data["error"] = json!({"code":primary,"message":"Original error"});
+            let cleanup =
+                json!({"code":"focus_restore_failed","message":"Original window return timed out"});
+            reply.data["shutdown_error"] = cleanup.clone();
+            let compact = execution(reply.clone());
+            assert!(compact.is_error);
+            assert_eq!(
+                compact.data["error"],
+                if primary == "closed" {
+                    cleanup.clone()
+                } else {
+                    reply.data["error"].clone()
+                }
+            );
+            assert_eq!(compact.data["shutdown_error"], cleanup);
+            assert_eq!(reply.data["error"]["code"], primary);
+        }
     }
 
     #[test]

@@ -429,6 +429,13 @@ func dtwSettleInput(seconds: TimeInterval, deadline: TimeInterval,
 
 // A successful warp only queues WindowServer work. Keep the input lease and
 // borrow trace until a fresh read confirms return; never repost a warp here.
+func dtwPointerRestorationPoint(_ original: CGPoint) -> CGPoint? {
+    guard original.x.isFinite, original.y.isFinite else { return nil }
+    // This host truncates fractional warp coordinates. Pick the nearest grid
+    // point so both-axis quantization stays inside the existing 1-unit bound.
+    return CGPoint(x: original.x.rounded(), y: original.y.rounded())
+}
+
 func dtwPointerReturnConfirmed(_ expected: CGPoint, deadline: TimeInterval,
     read: () -> CGPoint?,
     now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
