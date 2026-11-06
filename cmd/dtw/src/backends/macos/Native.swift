@@ -2326,6 +2326,7 @@ private struct SemanticTextFields {
         case (kAXButtonRole, "AXCloseButton"?): chromeName = "Close window"
         case (kAXButtonRole, "AXMinimizeButton"?): chromeName = "Minimize window"
         case (kAXButtonRole, "AXZoomButton"?): chromeName = "Zoom window"
+        case (kAXButtonRole, "AXFullScreenButton"?): chromeName = "Full screen window"
         default: chromeName = nil
         }
         let labels = [title, value, description].compactMap { $0 }.filter { !$0.isEmpty }

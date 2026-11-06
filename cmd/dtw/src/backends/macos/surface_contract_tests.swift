@@ -1483,7 +1483,8 @@ surfaceCheck(absentTextAttributes.matches("AXTextField"))
 surfaceCheck(absentTextAttributes.name == nil && absentTextAttributes.value == nil)
 
 // Unnamed standard chrome is identified by native subrole, never array order.
-for (subrole, name) in [("AXCloseButton", "Close window"), ("AXMinimizeButton", "Minimize window"), ("AXZoomButton", "Zoom window")] {
+for (subrole, name) in [("AXCloseButton", "Close window"), ("AXMinimizeButton", "Minimize window"),
+                        ("AXZoomButton", "Zoom window"), ("AXFullScreenButton", "Full screen window")] {
     let chrome = SemanticTextFields(role: kAXButtonRole, title: nil, value: nil, description: "", subrole: subrole)
     surfaceCheck(chrome.name == name && chrome.label == name && chrome.matches(name))
 }
