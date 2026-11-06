@@ -1409,29 +1409,38 @@ private func axRect(_ element: AXUIElement, _ deadline: Deadline) throws -> CGRe
 }
 
 private func standaloneTextControlIdentity(role: String?, parentRole: String?, pid: Int32,
-    owner: Int32, parentOwner: Int32, window: CGWindowID, requested: CGWindowID,
-    bounds: CGRect, surface: CGRect) -> Bool {
+    owner: Int32, parentOwner: Int32, window: CGWindowID, requested: CGWindowID) -> Bool {
     role == kAXTextFieldRole && parentRole == kAXApplicationRole && pid > 0
         && owner == pid && parentOwner == pid && window > 0 && window == requested
-        && associatedGeometry(bounds, surface)
 }
 
 // Finder's inline editor is a real CG surface and a focused AXTextField, with
 // AXApplication as its parent. It intentionally has no AXWindow/AXFocusedWindow.
 // Retain the actual keyboard receiver rather than inventing a window ancestry.
+// Its CG number is the same identity used for an ordinary CUA window. Text
+// content bounds and optional AXEnabled metadata do not grant key authority.
 private func standaloneTextControl(_ target: NativeTarget, record: CGRecord, deadline: Deadline) throws -> AXUIElement? {
+    guard record.pid == target.app.pid, record.id == target.nativeID else { return nil }
     let app = AXUIElementCreateApplication(target.app.pid)
     guard let control = axElement(try axAttribute(app, kAXFocusedUIElementAttribute, deadline)),
           try axAttribute(control, kAXRoleAttribute, deadline) as? String == kAXTextFieldRole,
           let parent = axElement(try axAttribute(control, kAXParentAttribute, deadline)),
-          let bounds = try axRect(control, deadline),
-          let enabled = try axAttribute(control, kAXEnabledAttribute, deadline) as? Bool, enabled,
           try standaloneTextControlIdentity(role: axAttribute(control, kAXRoleAttribute, deadline) as? String,
             parentRole: axAttribute(parent, kAXRoleAttribute, deadline) as? String,
             pid: target.app.pid, owner: axPID(control, deadline), parentOwner: axPID(parent, deadline),
-            window: axWindowID(control, deadline), requested: target.nativeID, bounds: bounds, surface: record.bounds),
+            window: axWindowID(control, deadline), requested: target.nativeID),
           try axAttribute(app, kAXFocusedWindowAttribute, deadline, unsupportedIsAbsent: false) == nil else { return nil }
     return control
+}
+
+private func expiredAXWindowIdentity(_ status: AXError, id: CGWindowID) -> Bool {
+    id == 0 && (status == .illegalArgument || status == .invalidUIElement)
+}
+
+private func closedModalReturnAllowed(admitted: Bool, modal: Bool, anchor: CGWindowID,
+    candidate: CGWindowID, known: Set<CGWindowID>, onscreen: Bool, expired: Bool) -> Bool {
+    admitted && modal && anchor > 0 && candidate > 0 && candidate != anchor
+        && known.contains(candidate) && !onscreen && expired
 }
 
 // Full native text is distinct from the bounded name/value summaries used by
@@ -3406,21 +3415,23 @@ private final class NativeStore: @unchecked Sendable {
         private var rootID: CGWindowID
         private var knownWindowIDs: Set<CGWindowID> = []
         private var inputAdmitted = false
+        private var modal = false
         func configure(_ ids: Set<CGWindowID>) { lock.lock(); knownWindowIDs = ids; lock.unlock() }
         func admitInput() { lock.lock(); inputAdmitted = true; lock.unlock() }
         var hasInput: Bool { lock.lock(); defer { lock.unlock() }; return inputAdmitted }
-        init(_ root: AXUIElement? = nil, id: CGWindowID = 0) { self.root = root; rootID = id }
+        init(_ root: AXUIElement? = nil, id: CGWindowID = 0, modal: Bool = false) { self.root = root; rootID = id; self.modal = modal }
         var id: CGWindowID { lock.lock(); defer { lock.unlock() }; return rootID }
         var isEmpty: Bool { lock.lock(); defer { lock.unlock() }; return root == nil }
         func admitWindowlessTransition(from closed: CGWindowID) -> Bool {
             lock.lock(); defer { lock.unlock() }
             guard inputAdmitted, rootID == closed else { return false }
-            root = nil; rootID = 0
+            root = nil; rootID = 0; modal = false
             return true
         }
         func matches(_ window: AXUIElement, pid: Int32, deadline: Deadline) throws -> Bool {
             lock.lock()
             var retained = root; var retainedID = rootID
+            let priorModal = modal; let admitted = inputAdmitted; let known = knownWindowIDs
             lock.unlock()
             if try nativeWindowlessFocusSurface(window, pid: pid, deadline: deadline) {
                 if retained == nil { return true }
@@ -3437,10 +3448,11 @@ private final class NativeStore: @unchecked Sendable {
                     parent: { axElement(try axAttribute($0, kAXParentAttribute, deadline)) }) else { return false }
                 let id = try axWindowID(initial, deadline)
                 guard id > 0 else { return false }
+                let initialModal = (try? nativeModalKeyboardReceiver(initial, deadline: deadline)) == true
                 // AX IPC is outside the lock. The observer and resident may race
                 // to discover the first window, but only one root can ever win.
                 lock.lock()
-                if root == nil { root = initial; rootID = id; knownWindowIDs.insert(id) }
+                if root == nil { root = initial; rootID = id; modal = initialModal; knownWindowIDs.insert(id) }
                 retained = root; retainedID = rootID
                 lock.unlock()
             }
@@ -3451,6 +3463,27 @@ private final class NativeStore: @unchecked Sendable {
             if try axPID(window, deadline) == pid,
                try exactFocusedSurface(requested: retained, requestedWindow: retainedID,
                     focused: window, equal: CFEqual, windowID: { try axWindowID($0, deadline) }) { return true }
+            // An admitted dismissal can close an app-modal window and reveal a
+            // pre-existing document. CUA's exact current receiver remains the
+            // destination. A live/minimized modal, a new/foreign window, or a
+            // generic unavailable AX read never authorizes this transition.
+            if admitted, priorModal, let currentID = try? axWindowID(window, deadline), known.contains(currentID),
+               try ordinaryWindow(window, pid: pid, deadline: deadline) {
+                let rows = try cgWindows(deadline)
+                if rows.contains(where: { $0.id == currentID && $0.pid == pid && $0.onscreen }) {
+                    let (status, retiredID) = try axWindowIdentity(retained, deadline)
+                    if closedModalReturnAllowed(admitted: admitted, modal: priorModal, anchor: retainedID,
+                        candidate: currentID, known: known,
+                        onscreen: rows.contains(where: { $0.id == retainedID && $0.pid == pid && $0.onscreen }),
+                        expired: expiredAXWindowIdentity(status, id: retiredID)) {
+                        let currentModal = (try? nativeModalKeyboardReceiver(window, deadline: deadline)) == true
+                        lock.lock(); defer { lock.unlock() }
+                        guard rootID == retainedID else { return false }
+                        root = window; rootID = currentID; modal = currentModal
+                        return true
+                    }
+                }
+            }
             do {
                 guard try axWindowID(retained, deadline) == retainedID else { return false }
             } catch let error as NativeFailure {
@@ -3472,9 +3505,10 @@ private final class NativeStore: @unchecked Sendable {
                 candidate: nextID, known: knownWindowIDs); lock.unlock()
             guard allowed, try ordinaryWindow(next, pid: pid, deadline: deadline),
                   try cgWindows(deadline).contains(where: { $0.id == nextID && $0.pid == pid && $0.onscreen }) else { return false }
+            let nextModal = (try? nativeModalKeyboardReceiver(next, deadline: deadline)) == true
             lock.lock()
             if inputCreatedWindowAllowed(admitted: inputAdmitted, candidate: nextID, known: knownWindowIDs) {
-                root = next; rootID = nextID; knownWindowIDs.insert(nextID)
+                root = next; rootID = nextID; modal = nextModal; knownWindowIDs.insert(nextID)
             }
             let selected = root; lock.unlock()
             guard let selected else { return false }
@@ -5406,7 +5440,8 @@ private final class NativeStore: @unchecked Sendable {
                 let candidate = try validate(selected, context, input: false)
                 let root = try activationRoot(candidate.element, pid: app.pid, deadline: context.deadline)
                 target = selected; window = candidate
-                anchor = ExecutionFocusAnchor(root, id: try axWindowID(root, context.deadline))
+                anchor = ExecutionFocusAnchor(root, id: try axWindowID(root, context.deadline),
+                    modal: (try? nativeModalKeyboardReceiver(root, deadline: context.deadline)) == true)
             } else {
                 // A missing AX attribute is not proof of a windowless app.
                 // Reuse the full owning inventory before any activation.

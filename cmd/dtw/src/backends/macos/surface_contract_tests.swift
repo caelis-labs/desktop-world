@@ -1740,12 +1740,11 @@ sheetFocusCheck(try exactFocusedSurface(requested: 1, requestedWindow: 100, focu
         guard element == 6 else { throw failure("window_unproven", "expired proxy") }
         return 100
     }))
-private let inlineBounds = CGRect(x: -300, y: 200, width: 110, height: 21)
 private func inlineIdentity(role: String? = kAXTextFieldRole, parent: String? = kAXApplicationRole,
     owner: Int32 = 10, parentOwner: Int32 = 10, window: CGWindowID = 100,
-    requested: CGWindowID = 100, bounds: CGRect = inlineBounds) -> Bool {
+    requested: CGWindowID = 100) -> Bool {
     standaloneTextControlIdentity(role: role, parentRole: parent, pid: 10, owner: owner,
-        parentOwner: parentOwner, window: window, requested: requested, bounds: bounds, surface: inlineBounds)
+        parentOwner: parentOwner, window: window, requested: requested)
 }
 surfaceCheck(inlineIdentity())
 surfaceCheck(!inlineIdentity(role: kAXButtonRole))
@@ -1756,6 +1755,29 @@ surfaceCheck(!inlineIdentity(owner: 20))
 surfaceCheck(!inlineIdentity(parentOwner: 20))
 surfaceCheck(!inlineIdentity(window: 0))
 surfaceCheck(!inlineIdentity(requested: 101))
-surfaceCheck(!inlineIdentity(bounds: inlineBounds.offsetBy(dx: 20, dy: 0)))
-surfaceCheck(!inlineIdentity(bounds: CGRect(x: -300, y: 200, width: 10, height: 21)))
 print("Standalone native text receiver controls passed; no desktop access")
+
+// Only expired modal identity plus an admitted action can return to a known
+// live app window. Missing evidence, minimization and arbitrary siblings cannot.
+surfaceCheck(expiredAXWindowIdentity(.illegalArgument, id: 0))
+surfaceCheck(expiredAXWindowIdentity(.invalidUIElement, id: 0))
+for status in [AXError.success, .cannotComplete, .apiDisabled, .failure, .noValue] {
+    surfaceCheck(!expiredAXWindowIdentity(status, id: 0))
+}
+surfaceCheck(!expiredAXWindowIdentity(.illegalArgument, id: 100))
+private func modalReturn(admitted: Bool = true, modal: Bool = true, anchor: CGWindowID = 100,
+    candidate: CGWindowID = 200, known: Set<CGWindowID> = [100, 200],
+    onscreen: Bool = false, expired: Bool = true) -> Bool {
+    closedModalReturnAllowed(admitted: admitted, modal: modal, anchor: anchor,
+        candidate: candidate, known: known, onscreen: onscreen, expired: expired)
+}
+surfaceCheck(modalReturn())
+surfaceCheck(!modalReturn(admitted: false))
+surfaceCheck(!modalReturn(modal: false))
+surfaceCheck(!modalReturn(anchor: 0))
+surfaceCheck(!modalReturn(candidate: 0))
+surfaceCheck(!modalReturn(candidate: 100))
+surfaceCheck(!modalReturn(known: [100]))
+surfaceCheck(!modalReturn(onscreen: true))
+surfaceCheck(!modalReturn(expired: false))
+print("Controlled modal dismissal return controls passed; no desktop access")
