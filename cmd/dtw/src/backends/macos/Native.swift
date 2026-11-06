@@ -2305,6 +2305,7 @@ private func semanticRole(_ role: String, subrole: String? = nil) -> String {
     switch role {
     case kAXButtonRole: return "button"
     case kAXCheckBoxRole: return "checkbox"
+    case kAXSliderRole: return "slider"
     case kAXRadioButtonRole: return "radio_button"
     case kAXTextFieldRole: return "text_field"
     case kAXTextAreaRole: return "text_area"

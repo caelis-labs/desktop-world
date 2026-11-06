@@ -1130,7 +1130,9 @@ impl<B: Backend + 'static> Coordinator<B> {
             // A coordinate selects the current top app pixel, not a semantic object.
             // Keep the original canvas and per-point instance authorization baseline.
             // Fresh native observations authorize only this dispatch.
-            self.state.lock().unwrap().scene.raster = Some(previous);
+            let mut state = self.state.lock().unwrap();
+            state.scene.raster = Some(previous);
+            state.scene.pixels = true;
             return Ok(fresh);
         }
     }
@@ -1185,14 +1187,16 @@ impl<B: Backend + 'static> Coordinator<B> {
             None
         };
         // A failed refresh cannot leave old semantic/pixel input authority.
-        // Keep identity labels and the viewport only for a successful new read.
-        let wait_for_window = {
+        // A successful semantic read can retain the script's image mapping,
+        // independently of automatic image presentation. Coordinate input still
+        // refreshes pixels and proves geometry/instance before every dispatch.
+        let (wait_for_window, previous_raster) = {
             let mut state = self.state.lock().unwrap();
             state.scene.nodes.clear();
-            state.scene.raster = None;
+            let raster = state.scene.raster.take();
             state.scene.observed = None;
             state.scene.projected = None;
-            std::mem::take(&mut state.scene.window_wait_pending)
+            (std::mem::take(&mut state.scene.window_wait_pending), raster)
         };
         let mut startup = None;
         if self.runtime.instances().is_empty() && after {
@@ -1588,7 +1592,9 @@ impl<B: Backend + 'static> Coordinator<B> {
             }
         } else {
             let mut state = self.state.lock().unwrap();
-            state.scene.raster = None;
+            if !visible.is_empty() {
+                state.scene.raster = previous_raster;
+            }
             state.scene.pixels = false;
         }
         let mut state = self.state.lock().unwrap();

@@ -137,7 +137,7 @@ Chrome 明确 copied bundle、fresh profile、PID/birth 和 argv，无法证明�
 | ID / 优先级 | 对象与自然语言任务 | 独立通过依据 | 执行边界 |
 | --- | --- | --- | --- |
 | G01 / P0 | DSH Cordis 完整插件：确认 DSH 加载预期本地候选，而非旧安装或终端副本。 | 实际 DSH-owned MCP 路径、二进制 SHA、包 ID、完整注册行与候选一致；临时握手进程不误判成重复注册。 | eligible；待测 |
-| G02 / P0 | DSH Skill 与 facade：从实际加载的 bundled Skill 发现方法并确认 focus 入口。 | Skill/API 路径和摘要属于同一包；实际发现 apps/exec 与 11 个 app 方法；不以旧会话缓存为证据。 | eligible；待测 |
+| G02 / P0 | DSH Skill 与 facade：从实际加载的 bundled Skill 发现方法并确认 focus 入口。 | Skill/API 路径和摘要属于同一包；实际发现 apps/exec 与当前 13 个 app 方法；不以旧会话缓存为证据。 | eligible；待测 |
 | G03 / P0 | DSH 工具与图片链路：枚举运行应用，观察并截图自有目标。 | 实际工具调用成功；原始 tool result 与 image attachment 可关联；模型上下文收到图像。识图正确性另由 B05 判断。 | eligible；待测 |
 | G04 / P0 | 新 DSH 会话与模型：使用当前已配置的模型和匹配 Skill 开始独立验收会话。 | 记录宿主、模型 ID、推理级别、权限和 argv；确认默认 auto；不用旧会话关于 none/前台要求的结论。 | eligible；待测 |
 

@@ -432,6 +432,24 @@ fn coordinate_gestures_renew_bindings_without_explicit_recapture() {
 }
 
 #[test]
+fn semantic_readbacks_keep_the_captured_mapping_without_automatic_images() {
+    let (server, backend) = scene_agent();
+    let capture = scene_exec(&server, "await app.capture();");
+    assert!(
+        !capture.is_error && capture.image.is_some(),
+        "{}",
+        capture.data
+    );
+    for _ in 0..2 {
+        let read = scene_exec(&server, "await app.look();");
+        assert!(!read.is_error && read.image.is_none(), "{}", read.data);
+        let input = scene_exec(&server, "await app.drag({path:[{x:4,y:5},{x:8,y:5}]});");
+        assert!(!input.is_error && input.image.is_some(), "{}", input.data);
+    }
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 2);
+}
+
+#[test]
 fn coordinate_preflight_accepts_animation_but_rejects_changed_geometry() {
     for geometry in [false, true] {
         let (server, backend) = scene_agent();
@@ -446,6 +464,8 @@ fn coordinate_preflight_accepts_animation_but_rejects_changed_geometry() {
                 model.capture_rgba = [0, 0, 0, 255];
             }
         }
+        let read = scene_exec(&server, "await app.look();");
+        assert!(!read.is_error && read.image.is_none(), "{}", read.data);
         let reply = scene_exec(&server, "await app.click({x:5,y:5});");
         assert_eq!(reply.is_error, geometry, "{}", reply.data);
         if geometry {

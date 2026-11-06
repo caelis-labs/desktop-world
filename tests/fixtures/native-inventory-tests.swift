@@ -202,6 +202,7 @@ try checkInventory()
 private func checkSemanticSerialization() throws {
     expect(semanticRole(kAXButtonRole) == "button", "native button role was not normalized")
     expect(semanticRole(kAXCheckBoxRole) == "checkbox", "native checkbox role was not normalized")
+    expect(semanticRole(kAXSliderRole) == "slider", "native slider role was not normalized")
     expect(semanticRole(kAXTextFieldRole) == "text_field", "native text field role was not normalized")
     for (native, expected) in [(NSAccessibility.Role.link.rawValue, "link"), (kAXTableRole, "table"),
                                (kAXRowRole, "row"), (kAXCellRole, "cell"), (kAXListRole, "list"),

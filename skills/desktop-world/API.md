@@ -191,7 +191,11 @@ read gaps include bounded `coverage.read_error_codes`; a gap never authorizes an
 unproven surface. `changed:false`
 compares these observed fields; visual-only changes require capture.
 An explicit `look()` uses semantics when available, ending automatic visual
-follow-ups and retiring the previous image binding; unavailable semantics still
+follow-ups while retaining a previously returned image's coordinate mapping.
+The next coordinate gesture privately refreshes pixels and verifies its original
+canvas geometry and application instance before input, then resumes visual
+follow-ups. Without a prior capture, coordinates still require `capture()`;
+unavailable semantics still
 trigger an image fallback. If any semantic continuation fails, its earlier pages
 are discarded and semantics stay explicitly incomplete; a fresh image may still
 be used. A failed refresh retires previous element and pixel input bindings;
