@@ -3741,6 +3741,27 @@ private final class NativeStore: @unchecked Sendable {
         var decorations: Set<CGWindowID> = []
         var modalReceivers: Set<CGWindowID> = []
         if !candidates.isEmpty && dtwAccessibilityGranted() {
+            // This receiver selects subsequent keyboard payloads. It is not
+            // an advisory decoration scan: sharing its former 100 ms budget
+            // could silently redirect keys to a newly opened visual overlay.
+            // Resolve focus first, with the existing bounded input-readiness
+            // budget; auxiliary AX classification keeps its own short budget.
+            let focusDeadline = context.deadline.limited(to: ProcessInfo.processInfo.systemUptime + 2)
+            let application = AXUIElementCreateApplication(app.pid)
+            do {
+                if let focused = try nativeFocusedWindow(application, pid: app.pid, deadline: focusDeadline) {
+                    let id = try axWindowID(focused, focusDeadline)
+                    if candidates.contains(where: { $0.0.id == id }) { keyboardWindow = id }
+                    else if !source.contains(where: { ($0[kCGWindowNumber as String] as? UInt32) == id }),
+                            try cgWindowRows(context.deadline, only: id).compactMap(cgRecord)
+                                .contains(where: { $0.id == id && $0.pid == app.pid }) {
+                        throw failure("window_inventory_changed", "A newly focused owned window appeared after the WindowServer snapshot")
+                    }
+                }
+            } catch let error as NativeFailure where ["ax_unavailable", "window_unproven", "focus_unproven", "deadline_exceeded"].contains(error.code) {
+                try context.deadline.check()
+                try context.verify(app)
+            }
             let hintDeadline = context.deadline.limited(to: ProcessInfo.processInfo.systemUptime + 0.1)
             do {
                 // AXWindows can retain the parent while a descendant sheet has
@@ -3749,16 +3770,6 @@ private final class NativeStore: @unchecked Sendable {
                 for (id, association) in associated {
                     if try nativeModalKeyboardReceiver(association.root, deadline: hintDeadline) {
                         modalReceivers.insert(id)
-                    }
-                }
-                let application = AXUIElementCreateApplication(app.pid)
-                if let focused = try nativeFocusedWindow(application, pid: app.pid, deadline: hintDeadline) {
-                    let id = try axWindowID(focused, hintDeadline)
-                    if candidates.contains(where: { $0.0.id == id }) { keyboardWindow = id }
-                    else if !source.contains(where: { ($0[kCGWindowNumber as String] as? UInt32) == id }),
-                            try cgWindowRows(context.deadline, only: id).compactMap(cgRecord)
-                                .contains(where: { $0.id == id && $0.pid == app.pid }) {
-                        throw failure("window_inventory_changed", "A newly focused owned window appeared after the WindowServer snapshot")
                     }
                 }
                 let roots = try semanticWindowRoots(application, hintDeadline)
