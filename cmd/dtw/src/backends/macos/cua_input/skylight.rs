@@ -614,8 +614,8 @@ pub fn make_process_front(target_pid: pid_t, target_wid: u32) -> bool {
     unsafe { set_front(target_psn.as_ptr() as *const c_void, target_wid, 0x400) == 0 }
 }
 
-/// Pinned CUA exact-window foreground primitive. DTW validates the target,
-/// raises its AX window afterwards, and proves the resulting exact focus.
+/// CUA foreground preparation: front the app, then make its exact window key.
+/// DTW validates the target, raises its AX window and proves exact focus.
 pub fn make_exact_window_key(target_pid: pid_t, target_wid: u32) -> bool {
     let Some(set_front) = set_front_process_fn() else {
         return false;
@@ -638,12 +638,13 @@ pub fn make_exact_window_key(target_pid: pid_t, target_wid: u32) -> bool {
 
 fn make_exact_window_key_with(
     target_wid: u32,
-    set_front: impl FnOnce(u32, u32) -> bool,
+    mut set_front: impl FnMut(u32, u32) -> bool,
     mut post: impl FnMut(&[u8; 0xF8]) -> bool,
 ) -> bool {
-    // kCPSUserGenerated permits the exact NSWindow to become key; 0x400 only
-    // changes the front process and can leave a sibling or no native key window.
-    if !set_front(target_wid, 0x200) {
+    // Match CUA with_foreground_hid_activation's initial sequence. App-only
+    // 0x400 cannot install the key window; 0x200 + key records alone can leave
+    // a cold AppKit application inactive when the later AXRaise is busy.
+    if !set_front(target_wid, 0x400) || !set_front(target_wid, 0x200) {
         return false;
     }
     for kind in [0x01, 0x02] {
@@ -961,17 +962,18 @@ mod tests {
     #[test]
     fn exact_foreground_sequence_targets_one_window_and_stops_on_failure() {
         use std::cell::RefCell;
-        // Each failure prefix is sent once; no second set-front, alternate
-        // window, or later record can run after a rejected native operation.
-        for reject_at in [None, Some(0), Some(1), Some(2)] {
+        // CUA fronts the application before its exact-window key sequence.
+        // Every failure stops this fixed prefix; no activation is replayed.
+        for reject_at in [None, Some(0), Some(1), Some(2), Some(3)] {
             let operations = RefCell::new(Vec::new());
             let sent = make_exact_window_key_with(
                 0x12345678,
                 |window, options| {
                     assert_eq!(window, 0x12345678);
-                    assert_eq!(options, 0x200);
-                    operations.borrow_mut().push(0);
-                    reject_at != Some(0)
+                    let index = operations.borrow().len();
+                    assert_eq!(options, [0x400, 0x200][index]);
+                    operations.borrow_mut().push(index);
+                    reject_at != Some(index)
                 },
                 |record| {
                     assert_eq!(record.len(), 0xF8);
@@ -980,13 +982,14 @@ mod tests {
                     assert_eq!(&record[0x3C..0x40], &0x12345678u32.to_le_bytes());
                     assert!(record[0x20..0x30].iter().all(|byte| *byte == 0xFF));
                     let kind = record[0x08];
-                    assert_eq!(kind as usize, operations.borrow().len());
-                    operations.borrow_mut().push(kind);
-                    reject_at != Some(kind)
+                    let index = operations.borrow().len();
+                    assert_eq!(kind as usize + 1, index);
+                    operations.borrow_mut().push(index);
+                    reject_at != Some(index)
                 },
             );
             assert_eq!(sent, reject_at.is_none());
-            let last = reject_at.unwrap_or(2);
+            let last = reject_at.unwrap_or(3);
             assert_eq!(*operations.borrow(), (0..=last).collect::<Vec<_>>());
         }
     }

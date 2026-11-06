@@ -384,7 +384,7 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
 }
 /// Private foreground bridge. Swift owns target validation, the physical
 /// lease, dispatch uncertainty, and restoration around this single exact-window
-/// sequence (one front-process request followed by paired make-key records).
+/// CUA sequence (app-front, exact-window front, then paired make-key records).
 #[no_mangle]
 pub extern "C" fn dtw_set_front_process(pid: i32, window_id: u32) -> bool {
     pid > 0 && window_id > 0 && skylight::make_exact_window_key(pid, window_id)

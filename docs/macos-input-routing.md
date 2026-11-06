@@ -54,10 +54,11 @@ frameworks / AppKit 元数据，不按 Telegram、fixture bundle ID 或应用名
 不代表远程按钮收到有效点击。该已知形状在任何点击派发前选择物理路径，不能等无效果后再点一次。
 普通原生窗口的后台点击和文字录入不要求目标无遮挡；物理回退仍须即时证明可见命中点。
 缺权限、进程变化、几何过期、遮挡、取消、超时、连接失败和任意 provider 错误均不是借用依据。
-resident 建立视觉 scope 时必须使用调用方的 `visual` 分类。视觉输入及标准 Open 面板
-使用不注入 AX-style make-key records 的 WindowServer 前台序列；随后仍以 AXRaise、
-AppKit activation 和精确聚焦窗口回读证明目标。后台语义 key-window 准备记录不能当作
-物理输入的前台激活；先前忽略 `visual` 会破坏原生远程面板的事件处理。
+resident 建立 scope 时保留调用方的 `visual` 分类；但持有 AXWindow 的路径始终使用
+CUA 的完整前台准备序列：先以 `0x400` 转换应用，再以 `0x200` 和 make-key records
+准备精确窗口，之后执行 AXRaise 和只读聚焦证明。单独 make-key 在冷启动 AppKit、
+AXRaise cannotComplete 时可能没有完成应用激活。这个固定准备序列不是失败后重投。
+纯像素表面仍由 `establishVisualFocus` 使用不注入 AX-style records 的应用前台序列。
 
 物理光标与应用前台分别准入：只有上述已知能力与干净预检可发起脚本级前台借用，
 普通鼠标错误不授权激活。未知 AX/modal 错误保留原因，不能当作已证明的 modal 能力。
