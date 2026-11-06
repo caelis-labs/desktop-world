@@ -913,7 +913,9 @@ print("System AX/WindowServer disagreement retains typed mismatch evidence")
 
 backgroundCheck(nativeRemoteFilePanel(role: kAXWindowRole, identifier: "open-panel"))
 backgroundCheck(nativeRemoteFilePanel(role: kAXSheetRole, identifier: "open-panel"))
-for identifier in [nil, "save-panel", "custom-modal"] as [String?] {
+backgroundCheck(nativeRemoteFilePanel(role: kAXWindowRole, identifier: "save-panel"))
+backgroundCheck(nativeRemoteFilePanel(role: kAXSheetRole, identifier: "save-panel"))
+for identifier in [nil, "custom-modal"] as [String?] {
     backgroundCheck(!nativeRemoteFilePanel(role: kAXWindowRole, identifier: identifier))
 }
 backgroundCheck(!nativeRemoteFilePanel(role: kAXGroupRole, identifier: "open-panel"))

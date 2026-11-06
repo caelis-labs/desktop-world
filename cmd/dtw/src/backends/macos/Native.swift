@@ -1076,13 +1076,13 @@ private func modalInputRequiresForeground(role: String?, modal: () throws -> Boo
     return value
 }
 
-// NSOpenPanel embeds an NSRemoteView. Addressed pointer and keyboard events
+// NSOpenPanel/NSSavePanel embed an NSRemoteView. Addressed pointer and keyboard events
 // reach its host window but do not invoke the remote controls, even when the
 // host is already active. Select the existing HID route before any payload.
-// This exact native identifier/role is established by the real document probe;
+// These native identifier/role pairs are established by real document probes;
 // ordinary modal windows, unknown AX and other frameworks keep directed input.
 private func nativeRemoteFilePanel(role: String?, identifier: String?) -> Bool {
-    [kAXWindowRole, kAXSheetRole].contains(role ?? "") && identifier == "open-panel"
+    [kAXWindowRole, kAXSheetRole].contains(role ?? "") && ["open-panel", "save-panel"].contains(identifier ?? "")
 }
 
 private func backgroundRequiresForeground(_ window: AXUIElement?, deadline: Deadline) throws -> Bool {
