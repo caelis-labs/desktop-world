@@ -4,6 +4,14 @@ final class FlippedFixtureView: NSView { override var isFlipped: Bool { true } }
 final class GestureFixtureView: NSView {
     weak var owner: ComputerUseDelegate?
     var tracking: NSTrackingArea?
+    var gestureStatus: String {
+        let counts = owner?.gestures ?? [:]
+        return "Hover: \(counts["hover", default: 0])  Click: \(counts["click", default: 0])  Double-click: \(counts["double_click", default: 0])  Right: \(counts["right_click", default: 0])  Drag: \(counts["drag", default: 0])  Up: \(counts["up", default: 0])"
+    }
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .group }
+    override func accessibilityLabel() -> String? { "Gesture desk" }
+    override func accessibilityValue() -> Any? { gestureStatus }
     override func updateTrackingAreas() {
         if let tracking { removeTrackingArea(tracking) }
         let area = NSTrackingArea(rect: .zero, options: [.activeAlways, .inVisibleRect, .mouseEnteredAndExited], owner: self, userInfo: nil)
@@ -11,7 +19,9 @@ final class GestureFixtureView: NSView {
     }
     override func draw(_ dirtyRect: NSRect) {
         NSColor.systemTeal.withAlphaComponent(0.25).setFill(); bounds.fill()
-        ("Gesture desk — hover, double-click or right-click" as NSString).draw(at: NSPoint(x: 12, y: 20), withAttributes: [.font: NSFont.systemFont(ofSize: 14)])
+        let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.labelColor]
+        ("Gesture desk — hover, double-click or right-click" as NSString).draw(at: NSPoint(x: 12, y: 34), withAttributes: attributes)
+        (gestureStatus as NSString).draw(at: NSPoint(x: 12, y: 10), withAttributes: attributes)
     }
     override func mouseEntered(with event: NSEvent) { owner?.gesture("hover", event) }
     override func mouseDown(with event: NSEvent) { owner?.gesture(event.clickCount == 2 ? "double_click" : "click", event) }
@@ -74,6 +84,10 @@ extension ComputerUseDelegate {
     @objc func audit(_ sender: NSButton) { auditIndex = sender.tag; auditCount += 1; event("audit", ["index": sender.tag, "count": auditCount]); publish() }
     func gesture(_ kind: String, _ input: NSEvent) {
         gestures[kind, default: 0] += 1
+        if let pad = namedViews["gesture-desk"] {
+            pad.needsDisplay = true
+            NSAccessibility.post(element: pad, notification: .valueChanged)
+        }
         var fields: [String: Any] = ["phase": kind, "click_count": input.clickCount]
         if let window = input.window {
             let screen = window.convertPoint(toScreen: input.locationInWindow)
