@@ -1,8 +1,10 @@
 # macOS 输入路由与真实光标
 
 Agent 仍只调用 `apps`、`exec` 和 `app` 方法。输入路由是实现细节，脚本不选择
-虚拟/物理光标、不维护 Session，也不根据内部投递方式安排重试。正常脚本回执不暴露
-`delivery`；私有执行账本保留原始投递证据及派发不确定性。虚拟光标反馈覆盖坐标 click/move/drag/scroll；语义 AXPress、键盘和 AXPosition 不伪造鼠标轨迹。
+虚拟/物理光标、不维护 Session，也不根据内部投递方式安排重试。正常脚本回执通过
+`effects.delivery` 汇总已报告的路线和借用动作数，通过 `effects.focus_return` 单列脚本结算；
+私有执行账本保留原始投递证据及派发不确定性。汇总动作数不是激活次数。
+虚拟光标反馈覆盖坐标 click/move/drag/scroll；语义 AXPress、键盘和 AXPosition 不伪造鼠标轨迹。
 
 本实现接续[逐操作历史审查](macos-ax-cursor-audit-2026-11-03.md)。历史失败记录保留，
 其“当前产品”描述只对应当时的二进制，不代表下述当前源码合同。
@@ -65,8 +67,9 @@ AppKit activation 和精确聚焦窗口回读证明目标。后台语义 key-win
 选择器不会为 `content_unproven` 或菜单自动聚焦；只读语义启用继续不激活应用。
 `fallback_allowed:true` 单独不能改路：还必须是精确的已知能力证据、`not_dispatched`、
 预检能力错误，且没有 cleanup error。若依据为 `native_keyboard_semantics`，还必须携带已识别的 `capability_detail`：
-`chromium_command_a`、`chromium_supplementary_unicode`、`appkit_command_w`、`appkit_multiline_text`；
-这四项只限制 `native_keyboard_semantics`，不是全部前台借用条件。
+`chromium_command_chord`、`native_modal_command_chord`、`native_menu_disabled`、
+`native_menu_window_unbound`、`native_menu_unavailable`、`chromium_supplementary_unicode`、
+`appkit_multiline_text`。这些能力类别只限制 `native_keyboard_semantics`，不是全部前台借用条件。
 泛化的 `native_keyboard_semantics` 单独不够，实际框架不能从“不是 Chromium”推断为 AppKit。
 内部 `foreground_plan` 还必须匹配当前操作及 visual 分类，且无 error、cleanup error、
 focus preparation 或 interruption。已准备、已投递或 `unknown` 的输入不换路重放。
