@@ -153,6 +153,25 @@ sheetFocusCheck(try !dialogFocused(2, 3)) // A new nested sheet is a distinct ta
 sheetFocusCheck(try !dialogFocused(2, 4))
 sheetFocusCheck(try !exactFocusedSurface(requested: 2, requestedWindow: 200,
                                     focused: 2, equal: ==, windowID: { _ in 201 }))
+private func desktopFocus(_ current: Int, windows: [Int], foreign: Int? = nil) throws -> Bool {
+    try windowlessFocusSurface(current, pid: 10, windows: windows,
+        owner: { $0 == foreign ? 20 : 10 },
+        role: { $0 == 1 || $0 == 2 ? kAXScrollAreaRole : kAXWindowRole }, equal: ==)
+}
+sheetFocusCheck(try desktopFocus(1, windows: [1]))
+sheetFocusCheck(try desktopFocus(1, windows: [1, 2]))
+sheetFocusCheck(try !desktopFocus(1, windows: []))
+sheetFocusCheck(try !desktopFocus(1, windows: [2]))
+sheetFocusCheck(try !desktopFocus(1, windows: [1, 3]))
+sheetFocusCheck(try !desktopFocus(3, windows: [3]))
+sheetFocusCheck(try !desktopFocus(1, windows: [1], foreign: 1))
+sheetFocusCheck(try !desktopFocus(1, windows: [1, 2], foreign: 2))
+sheetFocusCheck(try !desktopFocus(1, windows: Array(repeating: 1, count: 129)))
+do {
+    _ = try windowlessFocusSurface(1, pid: 10, windows: [1], owner: { _ in 10 },
+        role: { _ -> String? in throw failure("ax_unavailable", "unreadable desktop") }, equal: ==)
+    preconditionFailure("Unreadable desktop was accepted")
+} catch let error as NativeFailure { sheetFocusCheck(error.code == "ax_unavailable") }
 private let foreignActivation = try resolveActivationWindow(2, pid: 10,
     owner: { $0 == 1 ? 20 : 10 }, role: { dialogRoles[$0] }, parent: { dialogParents[$0] })
 sheetFocusCheck(foreignActivation == nil)

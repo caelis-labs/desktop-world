@@ -967,6 +967,24 @@ private func exactFocusedSurface<Element>(requested: Element, requestedWindow: C
     try equal(requested, focused) && windowID(focused) == requestedWindow
 }
 
+// Finder publishes its desktop scroll area as AXFocusedWindow/AXWindows while
+// it has no document windows. Prove that exact local non-window surface; it
+// grants application commands only, never a window or text/pointer target.
+private func windowlessFocusSurface<Element>(_ current: Element, pid: Int32, windows: [Element],
+    owner: (Element) throws -> Int32, role: (Element) throws -> String?,
+    equal: (Element, Element) -> Bool) throws -> Bool {
+    guard !windows.isEmpty, windows.count < 129, windows.contains(where: { equal($0, current) }),
+          try owner(current) == pid, try role(current) == kAXScrollAreaRole else { return false }
+    return try windows.allSatisfy { try owner($0) == pid && role($0) == kAXScrollAreaRole }
+}
+
+private func nativeWindowlessFocusSurface(_ current: AXUIElement, pid: Int32, deadline: Deadline) throws -> Bool {
+    guard try axAttribute(current, kAXRoleAttribute, deadline) as? String == kAXScrollAreaRole else { return false }
+    let windows = try axList(AXUIElementCreateApplication(pid), kAXWindowsAttribute, limit: 129, deadline, required: true)
+    return try windowlessFocusSurface(current, pid: pid, windows: windows,
+        owner: { try axPID($0, deadline) }, role: { try axAttribute($0, kAXRoleAttribute, deadline) as? String }, equal: CFEqual)
+}
+
 // Background menus may own accessibility focus while keyboard foreground stays
 // with the user. Passive AXRaise restores only order, so use the real front
 // process and that app's exact local focused window, not global AX focus. This
@@ -3368,10 +3386,24 @@ private final class NativeStore: @unchecked Sendable {
         init(_ root: AXUIElement? = nil, id: CGWindowID = 0) { self.root = root; rootID = id }
         var id: CGWindowID { lock.lock(); defer { lock.unlock() }; return rootID }
         var isEmpty: Bool { lock.lock(); defer { lock.unlock() }; return root == nil }
+        func admitWindowlessTransition(from closed: CGWindowID) -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            guard inputAdmitted, rootID == closed else { return false }
+            root = nil; rootID = 0
+            return true
+        }
         func matches(_ window: AXUIElement, pid: Int32, deadline: Deadline) throws -> Bool {
             lock.lock()
             var retained = root; var retainedID = rootID
             lock.unlock()
+            if try nativeWindowlessFocusSurface(window, pid: pid, deadline: deadline) {
+                if retained == nil { return true }
+                // A submitted close may return to the already-proved desktop.
+                // A live/minimized document or a foreign/sibling window cannot.
+                guard hasInput else { return false }
+                guard try !cgWindows(deadline).contains(where: { $0.id == retainedID && $0.pid == pid && $0.onscreen }) else { return false }
+                return admitWindowlessTransition(from: retainedID)
+            }
             if retained == nil {
                 guard let initial = try resolveActivationWindow(window, pid: pid,
                     owner: { try axPID($0, deadline) },
@@ -5134,11 +5166,12 @@ private final class NativeStore: @unchecked Sendable {
         try scope.anchor.matches(window, pid: scope.app.pid, deadline: deadline)
     }
 
-    // A destroyed anchor never authorizes another input. After an admitted
-    // payload, restoration may follow a proved close that reveals another
-    // window in this same app. A live-anchor sibling selection and app
-    // leave/return still invalidate ownership.
-    private func closedAnchorRestorationOwnership(_ scope: ExecutionFocus, _ context: RequestContext) throws -> Bool? {
+    // A destroyed anchor does not authorize another window. Restoration may
+    // follow a proved close; application commands may also continue in the
+    // fully proved windowless state after an admitted close. A live-anchor
+    // sibling selection and app leave/return still invalidate ownership.
+    private func closedAnchorRestorationOwnership(_ scope: ExecutionFocus, _ context: RequestContext,
+                                                  requireWindowless: Bool = false) throws -> Bool? {
         guard scope.anchor.id > 0 else { return nil }
         let rows = try cgWindows(context.deadline)
         let oldOnscreen = rows.contains(where: { $0.id == scope.anchor.id && $0.pid == scope.app.pid && $0.onscreen })
@@ -5154,6 +5187,7 @@ private final class NativeStore: @unchecked Sendable {
         guard let inventory = try listWindows(scope.app, context)["windows"] as? [[String: Any]] else {
             throw failure("focus_unproven", "Closed-anchor inventory is unavailable")
         }
+        if requireWindowless, !scope.anchor.hasInput || !inventory.isEmpty { return false }
         let liveIDs = try inventory.map { try NativeTarget($0["target"]).nativeID }
         traceSemanticFailure(["operation":"closed_anchor_restoration", "stage":"live_inventory",
             "anchor":scope.anchor.id, "live_ids":liveIDs, "initial_ids":Array(scope.initialWindowIDs)])
@@ -5163,10 +5197,14 @@ private final class NativeStore: @unchecked Sendable {
         guard let app = try nativeFocusedApplication(expectedPID: scope.app.pid, deadline: context.deadline),
               app.pid == scope.app.pid, app.generation == scope.app.generation else { return false }
         if let window = try nativeFocusedWindow(app.element, pid: scope.app.pid, deadline: context.deadline) {
-            let root = try activationRoot(window, pid: scope.app.pid, deadline: context.deadline)
-            let id = try axWindowID(root, context.deadline)
-            guard (scope.closedPanelRestorationAllowed && !scope.initialWindowIDs.contains(id)) || scope.anchor.hasInput,
-                  rows.contains(where: { $0.id == id && $0.pid == scope.app.pid }) else { return false }
+            if inventory.isEmpty, try nativeWindowlessFocusSurface(window, pid: scope.app.pid, deadline: context.deadline) {
+                // Exact local desktop focus is the windowless state, not a window ID.
+            } else {
+                let root = try activationRoot(window, pid: scope.app.pid, deadline: context.deadline)
+                let id = try axWindowID(root, context.deadline)
+                guard (scope.closedPanelRestorationAllowed && !scope.initialWindowIDs.contains(id)) || scope.anchor.hasInput,
+                      rows.contains(where: { $0.id == id && $0.pid == scope.app.pid }) else { return false }
+            }
         } else {
             guard inventory.isEmpty else { return false }
         }
@@ -5196,6 +5234,11 @@ private final class NativeStore: @unchecked Sendable {
         }, windowMatches: { application in
             guard let current = try nativeFocusedWindow(application, pid: scope.app.pid, deadline: context.deadline) else {
                 if scope.anchor.isEmpty { return true }
+                let closedID = scope.anchor.id
+                if scope.anchor.hasInput,
+                   try self.closedAnchorRestorationOwnership(scope, context, requireWindowless: true) == true {
+                    return scope.anchor.admitWindowlessTransition(from: closedID)
+                }
                 throw missingFocus(.window)
             }
             return try self.executionFamily(current, scope, context.deadline)
@@ -6238,8 +6281,9 @@ private final class NativeStore: @unchecked Sendable {
                     guard let value = (raw as? String) ?? (raw as? NSNumber)?.stringValue else { return nil }
                     return String(String.UnicodeScalarView(value.unicodeScalars.prefix(256)))
                 }
+                let description = try optionalDescription(alreadyMatched: true) { try preview(kAXDescriptionAttribute) }
                 let fields = try SemanticTextFields(role: role, title: preview(kAXTitleAttribute),
-                    value: preview(kAXValueAttribute), description: preview(kAXDescriptionAttribute))
+                    value: preview(kAXValueAttribute), description: description.text)
                 guard semanticRole(role) == element.role, fields.name == element.name, fields.value == element.value else {
                     throw failure("target_changed", "Editable control changed before semantic focus")
                 }
