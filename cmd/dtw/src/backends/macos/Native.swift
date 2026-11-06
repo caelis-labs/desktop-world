@@ -1408,6 +1408,32 @@ private func axRect(_ element: AXUIElement, _ deadline: Deadline) throws -> CGRe
     return CGRect(origin: point, size: extent)
 }
 
+private func standaloneTextControlIdentity(role: String?, parentRole: String?, pid: Int32,
+    owner: Int32, parentOwner: Int32, window: CGWindowID, requested: CGWindowID,
+    bounds: CGRect, surface: CGRect) -> Bool {
+    role == kAXTextFieldRole && parentRole == kAXApplicationRole && pid > 0
+        && owner == pid && parentOwner == pid && window > 0 && window == requested
+        && associatedGeometry(bounds, surface)
+}
+
+// Finder's inline editor is a real CG surface and a focused AXTextField, with
+// AXApplication as its parent. It intentionally has no AXWindow/AXFocusedWindow.
+// Retain the actual keyboard receiver rather than inventing a window ancestry.
+private func standaloneTextControl(_ target: NativeTarget, record: CGRecord, deadline: Deadline) throws -> AXUIElement? {
+    let app = AXUIElementCreateApplication(target.app.pid)
+    guard let control = axElement(try axAttribute(app, kAXFocusedUIElementAttribute, deadline)),
+          try axAttribute(control, kAXRoleAttribute, deadline) as? String == kAXTextFieldRole,
+          let parent = axElement(try axAttribute(control, kAXParentAttribute, deadline)),
+          let bounds = try axRect(control, deadline),
+          let enabled = try axAttribute(control, kAXEnabledAttribute, deadline) as? Bool, enabled,
+          try standaloneTextControlIdentity(role: axAttribute(control, kAXRoleAttribute, deadline) as? String,
+            parentRole: axAttribute(parent, kAXRoleAttribute, deadline) as? String,
+            pid: target.app.pid, owner: axPID(control, deadline), parentOwner: axPID(parent, deadline),
+            window: axWindowID(control, deadline), requested: target.nativeID, bounds: bounds, surface: record.bounds),
+          try axAttribute(app, kAXFocusedWindowAttribute, deadline, unsupportedIsAbsent: false) == nil else { return nil }
+    return control
+}
+
 // Full native text is distinct from the bounded name/value summaries used by
 // discovery. AXStringForRange is the platform fallback when AXValue is absent.
 private func nativeText(_ element: AXUIElement, _ deadline: Deadline) throws -> String {
@@ -3418,7 +3444,20 @@ private final class NativeStore: @unchecked Sendable {
                 retained = root; retainedID = rootID
                 lock.unlock()
             }
-            guard let retained, try axWindowID(retained, deadline) == retainedID else { return false }
+            guard let retained else { return false }
+            // A sheet can hand back an equivalent live AX alias after its own
+            // proxy expires. Check the exact live identity first; do not query
+            // the retired proxy before accepting its equivalent focused root.
+            if try axPID(window, deadline) == pid,
+               try exactFocusedSurface(requested: retained, requestedWindow: retainedID,
+                    focused: window, equal: CFEqual, windowID: { try axWindowID($0, deadline) }) { return true }
+            do {
+                guard try axWindowID(retained, deadline) == retainedID else { return false }
+            } catch let error as NativeFailure {
+                let currentID = try? axWindowID(window, deadline)
+                throw failure(error.code, "Execution anchor \(retainedID), focused surface \(currentID ?? 0): \(error.message)",
+                    attributeFailure: error.attributeFailure)
+            }
             if try executionFocusFamilyMatches(window, anchor: retained, pid: pid,
                 equal: CFEqual, owner: { try axPID($0, deadline) },
                 parent: { axElement(try axAttribute($0, kAXParentAttribute, deadline)) }) { return true }
@@ -4014,7 +4053,25 @@ private final class NativeStore: @unchecked Sendable {
         guard dtwAccessibilityGranted(request: true) else { let error = dtwPermissionError("accessibility")
             throw failure("permission_required", error["message"] as! String, details: error["details"] as? [String: Any]) }
         let associated = associatedSurfaces[slot]
-        var current = try semanticWindowRoots(AXUIElementCreateApplication(target.app.pid), context.deadline, requestedID: target.nativeID)
+        func controlCandidate() throws -> CandidateWindow? {
+            guard associated == nil,
+                  let control = try standaloneTextControl(target, record: record, deadline: context.deadline) else { return nil }
+            if let retained = semanticWindows[slot], !CFEqual(retained.element, control) {
+                throw failure("stale_observation", "Focused native text control changed; observe again")
+            }
+            try context.verify(target.app)
+            semanticWindows[slot] = RegisteredWindow(target: target, element: control)
+            return CandidateWindow(cg: record, element: control, title: "")
+        }
+        var current: [AXUIElement]
+        do { current = try semanticWindowRoots(AXUIElementCreateApplication(target.app.pid), context.deadline, requestedID: target.nativeID) }
+        catch let original as NativeFailure {
+            if original.attributeFailure?.name == kAXWindowsAttribute,
+               let error = original.attributeFailure?.error,
+               [AXError.cannotComplete, .attributeUnsupported, .noValue].contains(error),
+               let candidate = try controlCandidate() { return candidate }
+            throw original
+        }
         if let associated, !current.contains(where: { CFEqual($0, associated.root) }) {
             current.append(associated.root)
         }
@@ -4055,6 +4112,7 @@ private final class NativeStore: @unchecked Sendable {
             } catch let error as NativeFailure where error.code == "window_unproven" { continue }
         }
         guard matched.count == 1, let element = matched.first else {
+            if let candidate = try controlCandidate() { return candidate }
             throw failure("semantic_window_unavailable", "No unique supported AX window matches this system surface")
         }
         let ordinary = try readModalSnapshot(phase: phase, scope: .targetRoot, isTarget: true, read: {

@@ -1731,3 +1731,31 @@ for phase in ["already_expired", "timeout_configuration", "expired_during_config
     }
 }
 print("Semantic AXPress uses one bounded action reply and preserves unknown/late provider evidence; no AX or GUI reads")
+
+// A live equivalent alias proves the retained surface without reading an
+// expired sheet-parent proxy. A different native surface still fails closed.
+sheetFocusCheck(try exactFocusedSurface(requested: 1, requestedWindow: 100, focused: 6,
+    equal: { ($0 == 1 || $0 == 6) && ($1 == 1 || $1 == 6) },
+    windowID: { element in
+        guard element == 6 else { throw failure("window_unproven", "expired proxy") }
+        return 100
+    }))
+private let inlineBounds = CGRect(x: -300, y: 200, width: 110, height: 21)
+private func inlineIdentity(role: String? = kAXTextFieldRole, parent: String? = kAXApplicationRole,
+    owner: Int32 = 10, parentOwner: Int32 = 10, window: CGWindowID = 100,
+    requested: CGWindowID = 100, bounds: CGRect = inlineBounds) -> Bool {
+    standaloneTextControlIdentity(role: role, parentRole: parent, pid: 10, owner: owner,
+        parentOwner: parentOwner, window: window, requested: requested, bounds: bounds, surface: inlineBounds)
+}
+surfaceCheck(inlineIdentity())
+surfaceCheck(!inlineIdentity(role: kAXButtonRole))
+surfaceCheck(!inlineIdentity(role: nil))
+surfaceCheck(!inlineIdentity(parent: kAXWindowRole))
+surfaceCheck(!inlineIdentity(parent: nil))
+surfaceCheck(!inlineIdentity(owner: 20))
+surfaceCheck(!inlineIdentity(parentOwner: 20))
+surfaceCheck(!inlineIdentity(window: 0))
+surfaceCheck(!inlineIdentity(requested: 101))
+surfaceCheck(!inlineIdentity(bounds: inlineBounds.offsetBy(dx: 20, dy: 0)))
+surfaceCheck(!inlineIdentity(bounds: CGRect(x: -300, y: 200, width: 10, height: 21)))
+print("Standalone native text receiver controls passed; no desktop access")

@@ -248,7 +248,10 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
     // Pointer events address their own window and do not borrow a sibling's
     // key window. Requiring AX restoration here blocked sparse-AX apps and
     // turned a successful popup-closing click into an unrelated cleanup error.
-    if request.keyboard() && ax::focused_window_absent(request.pid) {
+    if request.keyboard()
+        && ax::focused_window_absent(request.pid)
+        && ax::focused_top_level_text_control_id(request.pid) != Some(request.window_id)
+    {
         let mut result = session.finish(
             Err(anyhow::anyhow!(
                 "Application has no background key window to retain"

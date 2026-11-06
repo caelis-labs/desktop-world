@@ -35,6 +35,7 @@ extern "C" {
     ) -> AXError;
     fn AXUIElementSetMessagingTimeout(element: AXUIElementRef, seconds: f32) -> AXError;
     fn AXUIElementGetTypeID() -> CFTypeID;
+    fn AXUIElementGetPid(element: AXUIElementRef, pid: *mut i32) -> AXError;
     fn AXUIElementCopyActionNames(element: AXUIElementRef, names: *mut CFTypeRef) -> AXError;
     fn AXUIElementPerformAction(element: AXUIElementRef, action: CFStringRef) -> AXError;
     fn _AXUIElementGetWindow(element: AXUIElementRef, wid: *mut u32) -> AXError;
@@ -304,7 +305,9 @@ pub fn focused_window_id_of_pid(pid: i32) -> Option<u32> {
         }
         let window = copy_element_attr(app, "AXFocusedWindow");
         CFRelease(app as CFTypeRef);
-        let window = window?;
+        let Some(window) = window else {
+            return focused_top_level_text_control_id(pid);
+        };
         let window_id = ax_get_window_id(window);
         CFRelease(window as CFTypeRef);
         window_id
@@ -322,11 +325,58 @@ pub fn focused_element_window_id_of_pid(pid: i32) -> Option<u32> {
         let element = element?;
         let window = copy_element_attr(element, "AXWindow");
         CFRelease(element as CFTypeRef);
-        let window = window?;
+        let Some(window) = window else {
+            return focused_top_level_text_control_id(pid);
+        };
         let window_id = ax_get_window_id(window);
         CFRelease(window as CFTypeRef);
         window_id
     }
+}
+
+fn top_level_text_control_matches(
+    pid: i32,
+    owner: Option<i32>,
+    parent_owner: Option<i32>,
+    role: &str,
+    parent_role: &str,
+    window: Option<u32>,
+) -> bool {
+    pid > 0
+        && owner == Some(pid)
+        && parent_owner == Some(pid)
+        && role == "AXTextField"
+        && parent_role == "AXApplication"
+        && window.is_some_and(|id| id > 0)
+}
+
+// A standalone inline editor can be the actual key receiver without publishing
+// AXFocusedWindow (Finder). Never override a real focused window: VCL can keep
+// stale field focus after its document has become key (CUA-1767).
+fn focused_top_level_text_control(pid: i32) -> Option<Element> {
+    if !focused_window_absent(pid) {
+        return None;
+    }
+    let app = Element::application(pid).ok()?;
+    let control = app.element("AXFocusedUIElement").ok()??;
+    let parent = control.element("AXParent").ok()??;
+    let owner = |element: &Element| {
+        let mut owner = 0;
+        (unsafe { AXUIElementGetPid(element.0, &mut owner) } == 0).then_some(owner)
+    };
+    top_level_text_control_matches(
+        pid,
+        owner(&control),
+        owner(&parent),
+        &control.string("AXRole").ok()??,
+        &parent.string("AXRole").ok()??,
+        control.window_id(),
+    )
+    .then_some(control)
+}
+
+pub fn focused_top_level_text_control_id(pid: i32) -> Option<u32> {
+    focused_top_level_text_control(pid)?.window_id()
 }
 
 pub unsafe fn copy_element_attr(
@@ -414,6 +464,16 @@ impl WindowEvidence {
                 CFRelease(app as _);
                 return found;
             }
+            if let Some(control) = focused_top_level_text_control(pid)
+                .filter(|control| control.window_id() == Some(id))
+            {
+                CFRetain(control.0 as _);
+                CFRelease(app as _);
+                return Some(Self {
+                    element: control.0,
+                    id,
+                });
+            }
             for window in copy_ax_windows(app) {
                 if found.is_none() && ax_get_window_id(window) == Some(id) {
                     found = Some(Self {
@@ -448,5 +508,75 @@ impl WindowEvidence {
 impl Drop for WindowEvidence {
     fn drop(&mut self) {
         unsafe { CFRelease(self.element as _) }
+    }
+}
+
+#[cfg(test)]
+mod standalone_text_control_tests {
+    use super::top_level_text_control_matches as accepts;
+    #[test]
+    fn standalone_editor_requires_exact_local_application_and_native_surface() {
+        assert!(accepts(
+            10,
+            Some(10),
+            Some(10),
+            "AXTextField",
+            "AXApplication",
+            Some(100)
+        ));
+        for (pid, owner, parent, role, parent_role, window) in [
+            (
+                0,
+                Some(0),
+                Some(0),
+                "AXTextField",
+                "AXApplication",
+                Some(100),
+            ),
+            (
+                10,
+                None,
+                Some(10),
+                "AXTextField",
+                "AXApplication",
+                Some(100),
+            ),
+            (
+                10,
+                Some(20),
+                Some(10),
+                "AXTextField",
+                "AXApplication",
+                Some(100),
+            ),
+            (
+                10,
+                Some(10),
+                Some(20),
+                "AXTextField",
+                "AXApplication",
+                Some(100),
+            ),
+            (
+                10,
+                Some(10),
+                Some(10),
+                "AXButton",
+                "AXApplication",
+                Some(100),
+            ),
+            (10, Some(10), Some(10), "AXTextField", "AXWindow", Some(100)),
+            (10, Some(10), Some(10), "AXTextField", "AXApplication", None),
+            (
+                10,
+                Some(10),
+                Some(10),
+                "AXTextField",
+                "AXApplication",
+                Some(0),
+            ),
+        ] {
+            assert!(!accepts(pid, owner, parent, role, parent_role, window));
+        }
     }
 }
