@@ -202,7 +202,7 @@ namespace DtwWindowsCursorAcceptance {
             Thread.CurrentThread.Priority=ThreadPriority.Highest;
             // Prime CLR reflection/JSON and Win32 imports before publishing
             // readiness. The probe starts only after the first flushed sample;
-            // every sample from that point remains in the strict gap check.
+            // every sample from that point remains in the gap diagnostics.
             long warmupStart=Stopwatch.GetTimestamp();Sample(warmupStart,0);
             double warmupMs=(Stopwatch.GetTimestamp()-warmupStart)*1000.0/Stopwatch.Frequency;
             var rows=new BlockingCollection<string>(8192);

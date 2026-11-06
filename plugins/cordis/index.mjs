@@ -6,6 +6,30 @@ export const inject = ['loader', 'tools', 'skills'];
 
 export async function apply(ctx) {
   const children = [];
+  // The host MCP client can reject with the caller's raw abort object. Its
+  // generic renderer turns that into "[object Object]", losing the only known
+  // fact: this call was interrupted. Use the public presentation seam only;
+  // neither this hook nor the host receipt proves native dispatch or cleanup.
+  ctx.on('tools/post-execute', async (exec, result, next) => {
+    const decision = await next();
+    if (decision.kind !== 'accept' || decision.content !== undefined ||
+        decision.value !== undefined || !exec.signal?.aborted ||
+        !['mcp__desktop-world__apps', 'mcp__desktop-world__exec'].includes(exec.name) ||
+        result.isError !== true || result.error?.message !== '[object Object]' ||
+        result.content?.length !== 1 || result.content[0].type !== 'text' ||
+        result.content[0].text !== 'Error: [object Object]') return decision;
+    return {
+      ...decision,
+      content: [{ type: 'text', text: 'Error: ' + JSON.stringify({
+        status: 'interrupted',
+        error: {
+          code: 'execution_interrupted',
+          message: 'Tool execution was interrupted. This host receipt does not confirm native dispatch or cleanup. Do not replay the action; inspect target state before new input.',
+        },
+        original_host_error: result.content[0].text,
+      }) }],
+    };
+  });
   let stopping;
   const stopChildren = () => stopping ??= Promise.allSettled(
     children.map(child => Promise.resolve().then(() => child.dispose())),

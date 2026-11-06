@@ -1,4 +1,4 @@
-"""Strict native sample evaluation controls; no desktop input or Windows APIs."""
+"""Native sample evidence controls; no desktop input or Windows APIs."""
 import copy
 import importlib.util
 from pathlib import Path
@@ -32,11 +32,38 @@ class NativeSamplingTests(unittest.TestCase):
             mutate(rows)
             self.assertFalse(observer.check_intervals(rows, [self.interval])[0]['passed'])
 
-    def test_actual_large_gap_fails_despite_unchanged_endpoints(self):
+    def test_actual_large_gap_is_retained_without_changing_observed_effects(self):
         self.rows[2]['unix_ms'] = 71
         self.rows[3]['unix_ms'] = 80
         interval = dict(self.interval, end_ms=75)
-        self.assertFalse(observer.check_intervals(self.rows, [interval])[0]['passed'])
+        result = observer.check_intervals(self.rows, [interval])[0]
+        self.assertTrue(result['passed'])
+        self.assertEqual(result['max_gap_ms'], 61)
+        self.assertEqual(result['sampling_status'], 'observed')
+        self.assertTrue(result['sample_gaps_are_diagnostic'])
+
+    def test_missing_boundaries_are_unknown_not_preserved(self):
+        result = observer.check_intervals([], [self.interval])[0]
+        self.assertFalse(result['passed'])
+        self.assertEqual(result['sampling_status'], 'unknown')
+        self.assertNotIn('cursor_preserved', result)
+
+    def test_invalid_clocks_are_not_diagnosed_as_quiet(self):
+        for frequency in (0, -1):
+            rows = [dict(row, timestamp=index, frequency=frequency) for index, row in enumerate(self.rows)]
+            result = observer.check_intervals(rows, [self.interval])[0]
+            self.assertFalse(result['passed'])
+            self.assertEqual(result['error'], 'invalid_sample_clock')
+        rows = copy.deepcopy(self.rows)
+        rows[2]['unix_ms'] = 5
+        self.assertIsNone(observer.sample_gaps(rows))
+
+    def test_monotonic_gap_retained_and_foreign_sample_still_fails(self):
+        rows = [dict(row, timestamp=index * 200, frequency=1000) for index, row in enumerate(self.rows)]
+        rows[1]['foreground_pid'] = 99
+        result = observer.check_intervals(rows, [self.interval])[0]
+        self.assertEqual(result['max_gap_ms'], 200)
+        self.assertFalse(result['passed'])
 
     def test_missing_call_times_do_not_create_sampling_success(self):
         self.assertFalse(observer.check_intervals(self.rows, [{'name': 'missing'}])[0]['passed'])
