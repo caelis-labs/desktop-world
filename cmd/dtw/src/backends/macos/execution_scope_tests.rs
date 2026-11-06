@@ -331,3 +331,29 @@ fn losing_the_preparation_reply_does_not_claim_a_key_payload_was_sent() {
         assert!(backend.shutdown().is_err());
     }
 }
+
+#[test]
+fn native_pointer_receiver_preparation_keeps_the_real_cursor_out_of_the_borrow() {
+    let code = CONTROL
+        .replace("background_key_window_absent", "native_pointer_key_window")
+        .replace(
+            "active=True; begins+=1",
+            "assert r['visual'] is False\n  active=True; begins+=1",
+        );
+    let backend = backend(&code);
+    let poll = || Ok(Duration::from_secs(3));
+    let call = CallContext { poll: &poll };
+    let mut request = input(true);
+    request["operation"] = json!("drag");
+    let reply = backend.execution_input_rpc(request, &call, |request| backend.rpc(request, &call));
+    assert_eq!(reply.unwrap()["dispatch"], "dispatched");
+    let stats = backend
+        .read_rpc(json!({"operation":"stats"}), &call)
+        .unwrap();
+    assert_eq!(stats["begins"], 1);
+    assert_eq!(stats["payloads"], 1);
+    assert_eq!(stats["background"], 0);
+    assert_eq!(backend.finish_execution(), Ok(Some(FocusReturn::Restored)));
+    assert_eq!(backend.cleanup_error(), None);
+    backend.shutdown().unwrap();
+}

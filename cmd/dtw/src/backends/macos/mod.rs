@@ -700,7 +700,7 @@ impl NativeBackend {
             let mut begun = self
                 .rpc(
                     json!({"operation":"begin_execution_focus","target":target,
-                "visual":input_route::visual_focus(&operation),"reason":reason}),
+                "visual":input_route::plan_visual(reason, &operation),"reason":reason}),
                     call,
                 )
                 .map_err(|(error, _)| (error, preparation_is_action))?;
