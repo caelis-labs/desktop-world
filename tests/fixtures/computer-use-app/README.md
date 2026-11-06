@@ -34,6 +34,8 @@ python3 tests/fixtures/computer-use-app/run.py \
 
 程序编译并以不主动激活的方式启动唯一 bundle，同时启动两个仅监听 loopback 的自有服务。手工查看时可显式传 `--foreground-preview`；自动验收默认保持目标后台。首行 JSON 给出 app 路径和页面 URL。使用 shell 顶部的 Native controls / Web workspace / Canvas chat 切换；Web 页导航可进入原有 Inventory / Reliability / Workbench vision。
 
+AppKit `config.json` 可在启动前设置 `file_panel_delay_ms`（0–5000，默认 0），在 Open/Save 回调内模拟冷启动的同步初始化。用于验证一次 AX 动作能在调用期限内等待面板，不能据此重放超时动作；日志 `file-panel-initializing` 记录独立调用次数。
+
 只运行 Web 页，在普通浏览器或独立 Chromium profile 中打开返回的 URL：
 
 ```sh

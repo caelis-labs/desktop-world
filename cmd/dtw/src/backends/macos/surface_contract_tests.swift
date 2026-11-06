@@ -1646,10 +1646,11 @@ private let modalPressReply = try performSemanticPress(deadline: pressDeadline, 
     pressTimeouts.append($0); return .success
 }, dispatch: {
     pressDispatches += 1
-    pressClock += 0.35 // A modal callback exceeding the old 200 ms read budget.
-    return .success
+    let modalInitialization = 3.2 // Cold Open/Save initialization exceeded the old 2 s cap in DSH.
+    pressClock += modalInitialization
+    return Double(pressTimeouts.last!) > modalInitialization ? .success : .cannotComplete
 })
-surfaceCheck(pressTimeouts == [2] && pressDispatches == 1)
+surfaceCheck(pressTimeouts == [10] && pressDispatches == 1)
 surfaceCheck(modalPressReply["dispatch"] as? String == "dispatched")
 surfaceCheck(modalPressReply["evidence"] as? String == "unverified" && modalPressReply["error"] == nil)
 

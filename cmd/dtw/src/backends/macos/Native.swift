@@ -1484,17 +1484,18 @@ private func actions(_ element: AXUIElement, _ deadline: Deadline) throws -> [St
     return names as? [String] ?? []
 }
 
-// AXPress callbacks may synchronously enter modal processing. The 200 ms
-// attribute-read timeout can expire after delivery but before their reply (see
-// AXUIElementPerformAction's SDK contract). Allow one bounded action reply;
-// neither a timeout nor another AX error permits replay or proves acceptance.
+// AXPress callbacks may synchronously enter modal processing. Read timeouts and
+// a separate short action cap can expire after delivery but before the reply
+// (see AXUIElementPerformAction's SDK contract). Use the caller's remaining
+// action budget for one reply; the parent also bounds and cancels the worker.
+// Neither a timeout nor another AX error permits replay or proves acceptance.
 private func performSemanticPress(deadline: Deadline, actionName: String = "AXPress",
                                   now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
                                   setTimeout: (Float) -> AXError,
                                   dispatch: () -> AXError?) throws -> [String: Any] {
     let remaining = deadline.uptime - now()
     guard remaining > 0.001 else { throw failure("deadline_exceeded", "No AX action budget remains") }
-    let configured = setTimeout(Float(min(2, remaining)))
+    let configured = setTimeout(Float(remaining))
     guard configured == .success else {
         throw failure("ax_unavailable", "Cannot set AX action messaging deadline: \(configured.rawValue)",
                       attributeFailure: AXAttributeFailure(name: "AXMessagingTimeout", error: configured))
