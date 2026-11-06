@@ -911,6 +911,27 @@ backgroundCheck(typedSnapshotMismatch.foregroundSnapshotMismatch)
 backgroundCheck(typedSnapshotMismatch.details?["ax_pid"] as? Int32 == 10)
 print("System AX/WindowServer disagreement retains typed mismatch evidence")
 
+// First-mouse policy needs an owned, window-rooted receiver. Native sliders
+// retain background drag; custom AppKit views need only key focus.
+backgroundCheck(nativePointerReceiverNeedsKeyWindow(operation: "drag", button: nil,
+    roles: [kAXStaticTextRole, kAXGroupRole, kAXWindowRole]))
+backgroundCheck(nativePointerReceiverNeedsKeyWindow(operation: "click", button: "left",
+    roles: [kAXGroupRole, kAXWindowRole]))
+for operation in ["move", "scroll", "keypress"] {
+    backgroundCheck(!nativePointerReceiverNeedsKeyWindow(operation: operation, button: nil,
+        roles: [kAXGroupRole, kAXWindowRole]))
+}
+backgroundCheck(!nativePointerReceiverNeedsKeyWindow(operation: "click", button: "right",
+    roles: [kAXGroupRole, kAXWindowRole]))
+backgroundCheck(!nativePointerReceiverNeedsKeyWindow(operation: "drag", button: nil,
+    roles: [kAXSliderRole, kAXWindowRole]))
+backgroundCheck(!nativePointerReceiverNeedsKeyWindow(operation: "click", button: "left",
+    roles: [kAXStaticTextRole, kAXButtonRole, kAXWindowRole]))
+backgroundCheck(!nativePointerReceiverNeedsKeyWindow(operation: "drag", button: nil, roles: nil))
+backgroundCheck(!nativePointerReceiverNeedsKeyWindow(operation: "drag", button: nil, roles: [kAXGroupRole]))
+backgroundCheck(nativePointerReceiverNeedsKeyWindow(operation: "drag", button: nil,
+    roles: [kAXButtonRole, "AXWebArea", kAXWindowRole]))
+
 backgroundCheck(nativeRemoteFilePanel(role: kAXWindowRole, identifier: "open-panel"))
 backgroundCheck(nativeRemoteFilePanel(role: kAXSheetRole, identifier: "open-panel"))
 backgroundCheck(nativeRemoteFilePanel(role: kAXWindowRole, identifier: "save-panel"))

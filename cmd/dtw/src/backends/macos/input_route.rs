@@ -42,6 +42,11 @@ pub(super) fn pointer_reason(operation: &str, framework: &str) -> Option<Physica
         .then_some(PhysicalReason::NativeHoverTracking)
 }
 
+/// Native first-mouse preparation changes key focus, not pointer transport.
+pub(super) fn plan_visual(reason: &str, operation: &str) -> bool {
+    reason != "native_pointer_key_window" && visual_focus(operation)
+}
+
 /// Only established capability limits can start a script's foreground borrow.
 /// Pointer transport remains independent: later supported input stays addressed.
 pub(super) fn allows_activation(reason: &str) -> bool {
@@ -56,6 +61,7 @@ pub(super) fn allows_activation(reason: &str) -> bool {
             | "background_key_window_absent"
             | "windowless_application"
             | "native_open_panel_click"
+            | "native_pointer_key_window"
             | "semantic_text_focus"
             | "semantic_value_focus"
             | "native_modal_press"
@@ -68,17 +74,17 @@ pub(super) fn foreground_plan<'a>(
     operation: &str,
 ) -> Option<&'a str> {
     let plan = reply.get("foreground_plan")?;
+    let reason = plan["reason"].as_str()?;
     if reply["dispatch"] != "not_dispatched"
         || reply["evidence"] != "unverified"
         || reply.get("error").is_some()
         || reply.get("cleanup_error").is_some()
         || reply.get("focus_preparation").is_some()
         || reply.get("interruption").is_some()
-        || plan["visual"].as_bool()? != visual_focus(operation)
+        || plan["visual"].as_bool()? != plan_visual(reason, operation)
     {
         return None;
     }
-    let reason = plan["reason"].as_str()?;
     let keyboard = matches!(operation, "keypress" | "type_text");
     let valid = match reason {
         "explicit_focus" => matches!(operation, "focus" | "focus_app"),
@@ -86,6 +92,7 @@ pub(super) fn foreground_plan<'a>(
         "background_key_window_absent" => keyboard,
         "native_hover_tracking" => operation == "move",
         "native_open_panel_click" => operation == "click",
+        "native_pointer_key_window" => matches!(operation, "click" | "drag"),
         "semantic_value_focus" => operation == "set_value" && plan["visual"] == false,
         "semantic_text_focus" | "native_modal_press" | "native_menu_press" => {
             operation == "press" && plan["visual"] == false
@@ -380,5 +387,28 @@ mod tests {
         );
         proven["dispatch"] = json!("unknown");
         assert_eq!(fallback_reason(&proven), None);
+    }
+    #[test]
+    fn native_receiver_preparation_borrows_only_focus_before_one_addressed_payload() {
+        let mut reply = json!({"dispatch":"not_dispatched","evidence":"unverified",
+            "foreground_plan":{"reason":"native_pointer_key_window","visual":false}});
+        assert!(allows_activation("native_pointer_key_window"));
+        for operation in ["click", "drag"] {
+            assert_eq!(
+                foreground_plan(&reply, operation),
+                Some("native_pointer_key_window")
+            );
+            assert!(!plan_visual("native_pointer_key_window", operation));
+        }
+        for operation in ["move", "scroll", "keypress", "type_text", "focus"] {
+            assert_eq!(foreground_plan(&reply, operation), None);
+        }
+        reply["foreground_plan"]["visual"] = json!(true);
+        assert_eq!(foreground_plan(&reply, "drag"), None);
+        reply["foreground_plan"]["visual"] = json!(false);
+        for dispatch in ["dispatched", "unknown"] {
+            reply["dispatch"] = json!(dispatch);
+            assert_eq!(foreground_plan(&reply, "drag"), None);
+        }
     }
 }

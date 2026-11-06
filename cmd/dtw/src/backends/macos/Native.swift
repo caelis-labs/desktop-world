@@ -1066,6 +1066,34 @@ private func coordinateMenuSurface(role: String?, associated: Bool) -> Bool {
     associated && role == kAXMenuRole
 }
 
+// AppKit discards a non-key window's first down for ordinary custom NSViews.
+// Preserve directed input for native controls that accept first mouse. A proved
+// custom receiver needs only a key window, not a physical pointer or a replay.
+private func nativePointerReceiverNeedsKeyWindow(operation: String, button: String?, roles: [String]?) -> Bool {
+    guard operation == "drag" || (operation == "click" && (button ?? "left") == "left"),
+          let roles, roles.contains(kAXWindowRole) || roles.contains(kAXSheetRole) else { return false }
+    if roles.contains("AXWebArea") { return true }
+    let controls = [kAXButtonRole, kAXCheckBoxRole, kAXRadioButtonRole, kAXPopUpButtonRole,
+                    kAXSliderRole, kAXScrollBarRole]
+    return !roles.contains(where: { controls.contains($0) })
+}
+
+private func ownedPointerReceiverRoles(_ hit: AXUIElement, root: AXUIElement,
+                                       pid: pid_t, deadline: Deadline) throws -> [String]? {
+    var current: AXUIElement? = hit
+    var roles: [String] = []
+    for _ in 0..<32 {
+        guard let element = current else { return nil }
+        var owner: pid_t = 0
+        guard AXUIElementGetPid(element, &owner) == .success, owner == pid,
+              let role = try axAttribute(element, kAXRoleAttribute, deadline) as? String else { return nil }
+        roles.append(role)
+        if CFEqual(element, root) { return roles }
+        current = axElement(try axAttribute(element, kAXParentAttribute, deadline))
+    }
+    return nil
+}
+
 // Modal keyboard delivery is not proven by a matching key window. Keep this
 // restriction distinct from permission to activate; the worker rejects the
 // unproven route before preparation. Pointer input does not use this gate.
@@ -6682,10 +6710,28 @@ private final class NativeStore: @unchecked Sendable {
                     // native Open panel selects its separately verified route.
                     let framework = try inputFramework(target, context)
                     var openPanel = false
+                    var pointerKeyWindow = false
                     if framework == "appkit", let window = try? validate(target, context, input: false) {
                         openPanel = nativeRemoteFilePanel(
                             role: (try? axAttribute(window.element, kAXRoleAttribute, context.deadline)) as? String,
                             identifier: (try? axAttribute(window.element, kAXIdentifierAttribute, context.deadline)) as? String)
+                        if request["_execution_foreground"] as? Bool != true,
+                           let operation = request["pointer_operation"] as? String,
+                           operation == "drag" || (operation == "click" && (request["pointer_button"] as? String ?? "left") == "left"),
+                           let point = request["pointer_point"] as? [Double], point.count == 2,
+                           point.allSatisfy({ $0.isFinite }), current.bounds.contains(CGPoint(x: point[0], y: point[1])) {
+                            var hit: AXUIElement?
+                            try context.deadline.prepare(AXUIElementCreateApplication(target.app.pid))
+                            if AXUIElementCopyElementAtPosition(AXUIElementCreateApplication(target.app.pid),
+                                Float(point[0]), Float(point[1]), &hit) == .success, let hit,
+                               let roles = try? ownedPointerReceiverRoles(hit, root: window.element,
+                                    pid: target.app.pid, deadline: context.deadline),
+                               nativePointerReceiverNeedsKeyWindow(operation: operation,
+                                    button: request["pointer_button"] as? String, roles: roles) {
+                                pointerKeyWindow = try !(windowServerFrontmost(target.app.pid, context.deadline)
+                                    && focused(target, window.element, context.deadline))
+                            }
+                        }
                     }
                     try requireExecutionForeground(request, target, context)
                     if request["consume"] as? Bool == true {
@@ -6694,6 +6740,7 @@ private final class NativeStore: @unchecked Sendable {
                     }
                     return ["target":target.json,"bounds":current.coordinates,"surface_owner":surfaceOwner(target),
                             "input_framework":framework,"native_open_panel":openPanel,
+                            "pointer_key_window_required":pointerKeyWindow,
                             "chromium":framework == "chromium"]
                 }
                 // Missing or unreadable AX/modal proof stays an error. It cannot

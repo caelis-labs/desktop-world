@@ -543,6 +543,9 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
     }
     let check = json!({"operation":"validate_background","target":request["target"],
         "keyboard":keyboard,"consume":true,"_execution_foreground":request["_execution_foreground"] == true,
+        "pointer_operation":op,"pointer_button":request["button"],
+        "pointer_point":if op == "drag" { json!([request["path"][0]["x"],request["path"][0]["y"]]) }
+            else { json!([request["screen_x"],request["screen_y"]]) },
         "deadline_unix_ms":request["deadline_unix_ms"]});
     let before = native(&check, false);
     if let Err(error) = validate_reply(&before, &request["target"]) {
@@ -647,6 +650,12 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
             && request["count"].as_u64().unwrap_or(1) == 1
         {
             return BackgroundAttempt::Declined("native_open_panel_click".into());
+        }
+        if before["pointer_key_window_required"] == true && request["_execution_foreground"] != true
+        {
+            // Clean preflight only. Once the script owns its key window, retry
+            // the original CUA addressed payload without a real-pointer warp.
+            return BackgroundAttempt::Declined("native_pointer_key_window".into());
         }
         if let Some(reason) = super::input_route::pointer_reason(
             &op,
@@ -955,7 +964,7 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
     if request["_defer_foreground"] == true && request["_execution_foreground"] != true {
         if let Some(reason) = &foreground_reason {
             return json!({"dispatch":"not_dispatched","evidence":"unverified",
-                "foreground_plan":{"reason":reason,"visual":super::input_route::visual_focus(op),
+                "foreground_plan":{"reason":reason,"visual":super::input_route::plan_visual(reason, op),
                     "capability_detail":request["_keyboard_capability"]}});
         }
     }
