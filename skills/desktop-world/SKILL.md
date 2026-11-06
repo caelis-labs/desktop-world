@@ -41,9 +41,9 @@ Read native textual content on demand with `return await app.readText('w1.e12')`
 continue with `{target:'w1.e12',offset:page.next_offset}` without a new look.
 Text offsets are UTF-16; a fresh look starts a new content observation.
 
-Use `await app.focus()` when the task explicitly needs the app foreground. On macOS,
-keep related input in that same script: focus is borrowed and returned at settlement.
-Normal input still chooses its route automatically.
+Use `await app.focus()` when the task explicitly asks to focus the app/window.
+Keep related input in the same script. Ordinary input prepares its destination
+automatically; no separate focus sequence is needed.
 
 After a New/Open action, use `await app.waitForNewWindow()` before typing in the new
 window. It waits without repeating the action; `wait_timeout` means no new window appeared.

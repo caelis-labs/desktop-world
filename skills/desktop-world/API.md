@@ -42,7 +42,7 @@
   preserves dispatch/effect uncertainty; it does not prove the task succeeded.
   DTW handles input readiness internally. Verify the requested effect from the
   returned view or an explicit readback; dispatch alone is not effect confirmation.
-  If automatic foreground preparation fails before payload delivery, the requested
+  If automatic input preparation fails before payload delivery, the requested
   input is `not_dispatched`; preparation may still have changed focus. Its error
   identifies that stage. Cleanup failures remain explicit errors.
   An explicit `focus()` asks for that focus effect itself, so an uncertain focus
@@ -66,7 +66,7 @@
 | Method | Arguments | Behavior |
 | --- | --- | --- |
 | `await app.look(options?)` | `{full?:boolean,role?:string,text?:string,scope?:'window'\|'menu',target?:string}` | Start/reuse the app where supported (nonactivating by default on macOS); observe visible window layering and up to 80 semantic elements in the top surface. Optional role (1–64 characters) and text (1–256) filter the native traversal, so relevant content beyond the default preview can be reached. `scope:'menu'` reads the selected window's app menu through the native menu scope without activating it; the default is window content. It requires a proven app window and does not expose Dock roots or menu extras. `target` observes the exact retained subtree of a previously observed ID (for example, File from a menu look); it cannot be combined with `scope`. It does not activate or expand menus. Unsupported/stale subtree reads fail without broadening to the window or a screenshot. `semantics.query` identifies the filtered scope; completeness and absence apply only within it. JavaScript always receives the full snapshot. Tool output compares with the previous published view. Window metadata is bounded to 32 entries. `full:true` forces a tool-output baseline, not continuation. |
-| `await app.waitForNewWindow(options?)` | `{timeout_ms?:number}` (default 2000, max 10000) | Wait for a new content window or menu surface since the latest dispatched click/keypress, including one in the preceding exec. Returns a full snapshot. Read-only; never repeats input. `wait_timeout` means the expected surface did not appear within the budget. Use after New/Open commands before typing, or after opening a popup before selecting its item; no hand-written polling loop is needed. |
+| `await app.waitForNewWindow(options?)` | `{timeout_ms?:number}` (default 2000, max 10000) | Wait for a new content window or menu surface after the latest dispatched click/keypress, including one in the preceding exec. Returns a full snapshot when that new surface appears; throws `wait_timeout` if it does not. Read-only; never repeats input. Use after New/Open or opening a popup. After Save/Cancel/Close dismisses a surface, use `look()` to verify the resulting view instead. |
 | `await app.capture(options?)` | `{full?:boolean}` | Return a full snapshot, including `windows`, and a PNG of the authorized app's visible stacked surfaces. Establishes the internal coordinate binding; later input returns an updated visual observation while in visual mode. |
 | `await app.readText(target)` | observed ID string OR `{target:string,offset?:number,limit?:number}` | Read native textual content of an observed element. Returns `{text,offset,next_offset,total_length,unit:'utf16'}` inside JavaScript; use `return` or `print` for requested tool output. Offset defaults to 0; limit defaults to 4096, from 2–16384 UTF-16 units. Reuse `next_offset` and the same target without a new look to continue one retained text revision. This read does not refresh the scene or request a PNG. A fresh look/input can retire its source; stale reads fail instead of joining revisions. Titles/descriptions are not substituted for document text. Unsupported native text remains explicit. |
 | `await app.click(target)` | string OR `{target:string}` OR `{selector:{role?:string,text?:string,scope?:'window'\|'menu'}}` OR `{x:number,y:number,button?:'left'\|'right',count?:1\|2}` | Semantic target ID from the latest look or a unique selector, for controls advertising `press`. Editable text controls can advertise this action to focus the control without changing its text. Unsupported controls use screenshot coordinates. `app.click('w1.e12')` uses a target ID; other strings such as `app.click('Continue')` are text selectors. Never mix target forms. Mouse options apply only to coordinates. |
@@ -76,7 +76,7 @@
 | `await app.typeText(text)` | string, or `{text:string}` | Unicode keyboard input into the active editing control. It may invoke application editing behavior. It does not replace a field value implicitly. |
 | `await app.keypress(keys)` | chord string, string array, or `{keys:string[]}` | One press/release chord; on macOS this also works for a running app with no window (e.g. New). Native app/window focus is verified before key downs. E.g. `'META+A'`, `'ENTER'`, `['META','A']` or `['ESC']`. Use an array/object for key names containing a literal `+`. `META` means Command on macOS and Windows key on Windows. |
 | `await app.scroll(options)` | `{delta_y:number,delta_x?:number,x?:number,y?:number}` | Integer wheel steps in [-100,100] per axis, positive down/right; these are not pixels. Supply both x/y from the current screenshot to target a pane. Without x/y DTW captures the active surface and anchors at its center. |
-| `await app.focus()` | none | Focus the current authorized app/window. On macOS `auto`, borrow foreground for this script and restore its original owner at settlement while ownership remains valid; `background_only` refuses. A windowless macOS app is supported, and its first focused window becomes the script anchor. Use related input in the same `exec`. |
+| `await app.focus()` | none | Focus the authorized app/current window for this script. Keep related input in the same `exec`. A supported windowless app can create its first window within that script. Normal input prepares its destination automatically; an extra `focus()` is not required. |
 | `await app.quit()` | none | Request normal quit of the active app instance. A save dialog remains observable. No forced termination. |
 
 `look`/`capture` accept no native refs. Input routes within the selected app.
@@ -108,32 +108,16 @@ can still be used once. Labels and positions never retarget an ID. A missing or 
 of the returned view before choosing new input. Dispatched/unknown input is never
 replayed to renew a binding.
 
-Keyboard input prefers a proven native modal receiver, then the app-local
-keyboard window, within the selected process instance. Tooltips and completion
-surfaces do not automatically receive keys. A background dialog can override a
-stale document focus hint. Focus and app identity checks still apply. On macOS
-startup neither activates nor hides the app; an app may activate itself.
-Under `auto`, ordinary text, plain/Shift keys, Control/Option editing chords and
-supported pointer actions keep background delivery. Native Command shortcuts
-use matching enabled menu commands when their exact destination is bound,
-without opening menus or sending keys. A disabled or unbound menu command borrows foreground before dispatch.
-Chromium Command chords and native modal Command shortcuts also borrow before
-dispatch; this is a capability class, not a list of individual shortcuts.
-A proved missing keyboard receiver, associated-process receiver or retained
-text-input limit can borrow before input. The scope lasts for
-the rest of the script. Remaining actions require the owned foreground; supported pointer actions
-can still use addressed events. At script end DTW releases held input and restores
-the original app instance and exact window, raising that original window when one was captured, only while
-foreground ownership and the original identity remain proven. A new owned
-window created during admitted input stays in the scope. Selecting an already
-existing sibling window or an external app permanently invalidates this borrow, even if focus later
-returns: DTW stops further input, does not reacquire focus, and does not force a
-restore. Confirmed quit or closure of the borrowed anchor ends its input scope.
-For a proved closure that leaves the same live app windowless or reveals another
-owned window, cleanup may restore the original foreground while ownership still holds.
-This does not admit further input after the close. Other terminal cases only
-observe whether the original foreground returned. An unconfirmed lifecycle
-effect does not establish this terminal case.
+Input uses the current authorized app/window and prepares its destination
+internally. Use an observed editable control before typing. After an action that
+creates a window or popup, use `waitForNewWindow()` before acting in it; after
+Save/Cancel/Close dismisses a surface, inspect `look()` instead.
+
+Keep related input in one `exec`, including input following an explicit `focus()`.
+If the user changes the selected app/window during execution, DTW stops further
+input. Inspect the new state in a later execution; never replay an unknown input.
+Confirmed quit or closure of the current window ends its input scope. A save
+prompt or unconfirmed close is not proof of termination.
 
 ## View
 
@@ -157,7 +141,7 @@ Images preserve authorized windows' positions, z-order and alpha, including
 same-app overlays and proven associated surfaces. Empty space is transparent and
 cannot receive input. Coordinate hit-testing selects the top nontransparent app
 surface. macOS addressed input ignores unrelated-app coverage; same-app layers still block it.
-Physical pointer routes require the target point visible after foreground preparation.
+DTW prepares required visibility before pointer input; a point must still belong to the current authorized surface.
 Windows input can still be blocked by unrelated-app coverage. If geometry or layer membership changes during capture,
 no coordinate binding is published. A transient capture/layer disappearance gets
 one bounded read-only refresh, including during coordinate preflight before input;
@@ -247,27 +231,15 @@ their own live target proof; a rejected semantic action is never replayed as a
 mouse click. Process identity, visible-hit, geometry and input-release checks
 continue to apply when no semantic elements are available.
 
-macOS preserves background reads and supported pointer input. Reads and selectors do not activate an app to
-materialize semantics or run a menu command. Menu actions require their exact
-native destination already focused. Known foreground-borrow capabilities include
-AppKit/Chromium native hover tracking, an unavailable required addressed-event
-API, native modal/service keyboard receivers and semantic focus of editable controls.
-Ordinary single-line text, including Chinese, retains its background route.
-Retained text-specific boundaries are AppKit line breaks and Chromium supplementary
-Unicode; these do not classify keyboard chords. Borrowing requires a
-proven exact logical window anchor and original foreground identity. Unknown AX
-or modal state, stale geometry, permissions, timeouts and arbitrary errors never
-authorize activation or replay. `background_only` refuses a required borrow with
-`foreground_required`. `app.focus()` explicitly borrows foreground under the same
-script lifecycle. Known absent background key windows and windowless application
-shortcuts also enter this scope automatically. Missing or unreadable AX evidence
-is not the same as a proven absent key window.
+macOS input readiness is handled internally, including app-menu commands. A menu
+action needs a live enabled target and a proven destination in the authorized
+app. Reading menus does not itself prepare input. Models need no delivery-mode
+arguments or separate focus sequence for ordinary actions.
 
-A semantic `AXPress` gets a reply budget of at most 2 seconds, capped by the
-remaining request deadline. After dispatch, a timeout or AX error means unknown
-effect, never success or permission to retry. A positive AX acknowledgement is
-dispatch evidence, not proof of the UI effect; inspect the returned view before
-choosing a new action.
+Native AX actions use the remaining caller deadline for one provider reply.
+After dispatch, a timeout or AX error means unknown effect, never success or
+permission to retry. A positive AX acknowledgement is dispatch evidence, not
+proof of the UI effect; inspect the returned view before choosing a new action.
 
 Windows records physical DWM-visible bounds and global window order, and renders
 exact HWNDs for app composition. Covered reads do not relax input visibility or

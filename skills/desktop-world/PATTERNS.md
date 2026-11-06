@@ -74,11 +74,11 @@ permission/identity failures require recovery before more work.
 await app.look({scope:'menu',text:'File'});
 ```
 
-Menu inspection uses the native app-menu scope without preparing focus. A known
-menu command can use `click({selector:{scope:'menu',text:'Open…'}})` when its exact
-native destination is already focused. DTW checks uniqueness and returns
-`foreground_required` rather than implicitly activating an inactive app. This scope
-still needs a proven app window. Windowless menu extras and Dock roots are separate capabilities.
+Menu inspection uses the native app-menu scope without preparing input. Filter
+by menu/command name, then click a freshly returned exact ID. Normal actions
+prepare the authorized destination automatically. A command still needs a live,
+enabled, app-owned target; incomplete discovery does not prove uniqueness.
+Windowless menu extras and Dock roots are separate capabilities.
 
 ## Dialogs and application lifecycle
 
@@ -90,39 +90,20 @@ still settling; avoid repeated typing into unproven targets.
 Popovers, menus and save sheets are app scene layers. Use their current semantic
 target or capture coordinates. Normal quit can leave a save sheet; inspect that
 fresh view. Closing a native window is distinct from quitting an app; use its
-ordinary close UI or the platform's close-window chord when appropriate. Prefer
-the close control for macOS background work: an unavailable or disabled close-menu command can require
-foreground borrowing. An unavailable background route does not justify repeating
-an action with unknown effects.
+ordinary close UI or the platform's close-window chord when appropriate. Use an observed close control or the standard close-window chord.
+Do not repeat an action with unknown effects.
 
-## macOS foreground borrowing
+## Input readiness
 
-Under `auto`, reads, ordinary text, plain/Shift keys, Control/Option editing
-chords and supported pointer actions keep background delivery. Native Command
-shortcuts use enabled, exactly bound AX menu equivalents where available.
-Disabled/unbound menu commands, Chromium Command chords and native modal Command
-shortcuts borrow before dispatch. Keep dialog navigation and subsequent input in
-one script so they share one borrow. Missing key receivers, associated-process
-receivers, retained text-input limits, hover and missing addressed APIs can also
-borrow. No individual shortcut whitelist is required.
-Borrowing requires
-a proven original foreground identity and an exact logical window anchor when
-a window exists. A proven windowless shortcut starts an app scope and binds its
-first focused window once. A known absent background key window may also borrow;
-unreadable AX proof does not authorize it. `await app.focus()` explicitly starts
-the same scope. Keep its follow-up input in the same script.
-Remaining actions require the owned foreground, while supported pointer transport
-can remain addressed. `background_only` refuses actions requiring a borrow.
+Keep related input in one script. Normal actions prepare the authorized
+app/window automatically. Use `app.focus()` only when explicit focus is part of
+the task, with follow-up input in the same `exec`.
 
-Keep related hover, inspection and follow-up input in one script when appropriate.
-At script end DTW restores the original app instance and exact captured window
-only if ownership and original identity still hold. Following a proven descendant
-sheet or popup is allowed; choosing a sibling window or another app invalidates
-the scope permanently. Further input stops, even if focus returns, and DTW neither
-reacquires focus nor forces restoration. Confirmed quit or anchor-window closure
-ends the scope: cleanup only observes whether the original foreground returned,
-and never activates a third app. A save prompt or unknown close effect does not
-establish confirmed termination.
+DTW checks identity, destination and input cleanup internally. If the user
+switches the selected app/window during a script, further input stops. Inspect
+the new state in a later execution; never replay an unknown input. A confirmed
+quit or current-window closure ends that script's input scope; an unresolved
+save prompt does not establish termination.
 
 ## Errors and interruption
 

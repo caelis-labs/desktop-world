@@ -50,6 +50,15 @@ cancellation and the existing input gate precede its one AX dispatch. Errors
 after entry stay non-replayable. Unrelated unreadable menu branches do not abort
 a discovered match; incomplete no-match searches cannot authorize a key payload.
 
+Semantic app-menu presses use that same exact local key/main-window contract.
+When it holds, the retained AX item can run without activating the app. Otherwise
+`auto` uses the existing pre-payload focus scope; the private preparation plan
+authorizes only `press`, never keys or pointer input. The destination is checked
+again immediately before the single action. A changed/unknown receiver does not
+authorize replay. AX action replies use the remaining caller budget, rather than
+a separate two-second cap; read budgets, cancellation and worker deadlines remain
+independent.
+
 DTW intentionally declines disabled/unbound menu commands before preparation,
 allowing one foreground delivery under `auto`. It does not copy CUA's
 Save-specific scripting fallback. Control/Option editing stays PID-addressed.

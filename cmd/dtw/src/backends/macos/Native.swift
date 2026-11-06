@@ -134,6 +134,12 @@ private struct NativeApp: Equatable, Hashable {
     var json: [String: Any] { ["identity": identity, "pid": pid, "generation": generation] }
 }
 
+// CUA-1767: background app-menu actions need both local key and main windows
+// bound to the requested destination (cua_input/menu_equivalent.rs).
+private func menuDestinationMatches(requested: CGWindowID, focused: CGWindowID?, main: CGWindowID?) -> Bool {
+    requested != 0 && focused == requested && main == requested
+}
+
 private struct NativeTarget: Equatable {
     let app: NativeApp
     let nativeID: CGWindowID
@@ -4067,6 +4073,19 @@ private final class NativeStore: @unchecked Sendable {
         return false
     }
 
+    private func menuDestinationBound(_ target: NativeTarget, deadline: Deadline) throws -> Bool {
+        let application = AXUIElementCreateApplication(target.app.pid)
+        func windowID(_ attribute: String) throws -> CGWindowID? {
+            guard let raw = try axAttribute(application, attribute, deadline) else { return nil }
+            guard let window = axElement(raw), try axPID(window, deadline) == target.app.pid else {
+                throw failure("focus_unproven", "App menu destination is not an owned AX window")
+            }
+            return try axWindowID(window, deadline)
+        }
+        return try menuDestinationMatches(requested: target.nativeID,
+            focused: windowID(kAXFocusedWindowAttribute), main: windowID(kAXMainWindowAttribute))
+    }
+
     private func menuOwned(_ element: AXUIElement, target: NativeTarget, deadline: Deadline) throws -> Bool {
         let application = AXUIElementCreateApplication(target.app.pid)
         guard let bar = axElement(try axAttribute(application, kAXMenuBarAttribute, deadline)) else { return false }
@@ -6196,10 +6215,7 @@ private final class NativeStore: @unchecked Sendable {
             }
             let role = try axAttribute(element.element, kAXRoleAttribute, context.deadline) as? String ?? ""
             let enabled = try axAttribute(element.element, kAXEnabledAttribute, context.deadline) as? Bool
-            if try menuOwned(element.element, target: target, deadline: context.deadline),
-               try !focused(target, window.element, context.deadline) {
-                throw failure("foreground_required", "App menu actions require the exact destination window already focused")
-            }
+            let menuAction = try menuOwned(element.element, target: target, deadline: context.deadline)
             guard let capability = try pressCapability(element.element, role: role, enabled: enabled, window: window.element,
                                                        target: target, deadline: context.deadline) else {
                 throw failure("element_not_pressable", "Current role, enabled state, ancestry or AXPress support changed")
@@ -6229,16 +6245,17 @@ private final class NativeStore: @unchecked Sendable {
                 }
             }
             let modalPress = try selection == nil && backgroundRequiresForeground(window.element, deadline: context.deadline)
-            if focusText || modalPress {
+            let menuNeedsForeground = try menuAction && !menuDestinationBound(target, deadline: context.deadline)
+            if focusText || modalPress || menuNeedsForeground {
                 if try !focused(target, window.element, context.deadline) {
                     guard request["input_policy"] as? String == "auto" else {
-                        throw failure("foreground_required", "Semantic text focus or modal press requires a foreground borrow")
+                        throw failure("foreground_required", "This action needs focus preparation that the current input policy does not allow")
                     }
                     // This entire preflight is read-only. Retain just this exact
                     // credential for the one post-activation action.
                     observations[binding] = observation
                     return ["dispatch":"not_dispatched", "evidence":"unverified",
-                            "foreground_plan":["reason":focusText ? "semantic_text_focus" : "native_modal_press", "visual":false]]
+                            "foreground_plan":["reason":focusText ? "semantic_text_focus" : menuNeedsForeground ? "native_menu_press" : "native_modal_press", "visual":false]]
                 }
             }
             let finalWindow = try validate(target, context)
@@ -6255,7 +6272,15 @@ private final class NativeStore: @unchecked Sendable {
                 actionName: selection != nil ? "AXSelected" : focusText ? "AXFocus" : "AXPress", setTimeout: {
                 AXUIElementSetMessagingTimeout(actionElement, $0)
             }, dispatch: {
-                do { try self.requireExecutionForeground(request, target, context) }
+                do {
+                    try self.requireExecutionForeground(request, target, context)
+                    if menuAction {
+                        let ready = try menuNeedsForeground
+                            ? self.focused(target, finalWindow.element, context.deadline)
+                            : self.menuDestinationBound(target, deadline: context.deadline)
+                        guard ready else { throw failure("target_changed", "App menu destination changed before dispatch") }
+                    }
+                }
                 catch let error as NativeFailure { scopeFailure = error; return nil }
                 catch { scopeFailure = failure("execution_scope_unavailable", "Execution scope proof failed: \(error)"); return nil }
                 // The gate refuses before entry. Once entered, AX may already

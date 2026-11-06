@@ -25,6 +25,14 @@ private func backgroundCheck(_ value: @autoclosure () -> Bool,
                              file: StaticString = #file, line: UInt = #line) {
     precondition(value(), file: file, line: line)
 }
+// Same receiver contract as CUA's menu equivalents: a sibling, absent receiver
+// or a different main window cannot authorize a background app-menu action.
+backgroundCheck(menuDestinationMatches(requested: 41, focused: 41, main: 41))
+private let unboundAppMenuDestinations: [(CGWindowID?, CGWindowID?)] = [(nil, nil), (nil, 41), (41, nil), (42, 41), (41, 42), (42, 42)]
+for pair in unboundAppMenuDestinations {
+    backgroundCheck(!menuDestinationMatches(requested: 41, focused: pair.0, main: pair.1))
+}
+backgroundCheck(!menuDestinationMatches(requested: 0, focused: 0, main: 0))
 private func busyAttribute(_ name: String = "AXModal") -> NativeFailure {
     failure("ax_unavailable", "busy \(name)", details:["attribute":name, "ax_error":AXError.cannotComplete.rawValue],
             attributeFailure:AXAttributeFailure(name:name,error:.cannotComplete))

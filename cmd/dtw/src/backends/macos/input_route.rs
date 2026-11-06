@@ -58,6 +58,7 @@ pub(super) fn allows_activation(reason: &str) -> bool {
             | "native_open_panel_click"
             | "semantic_text_focus"
             | "native_modal_press"
+            | "native_menu_press"
     )
 }
 
@@ -84,7 +85,7 @@ pub(super) fn foreground_plan<'a>(
         "background_key_window_absent" => keyboard,
         "native_hover_tracking" => operation == "move",
         "native_open_panel_click" => operation == "click",
-        "semantic_text_focus" | "native_modal_press" => {
+        "semantic_text_focus" | "native_modal_press" | "native_menu_press" => {
             operation == "press" && plan["visual"] == false
         }
         "addressed_event_api_unavailable" => visual_focus(operation) || keyboard,
@@ -241,6 +242,21 @@ mod tests {
             "native_modal_keyboard",
         ] {
             assert!(allows_activation(reason), "{reason}");
+        }
+    }
+
+    #[test]
+    fn app_menu_preparation_only_authorizes_one_undispatched_semantic_press() {
+        let mut reply = json!({"dispatch":"not_dispatched","evidence":"unverified",
+            "foreground_plan":{"reason":"native_menu_press","visual":false}});
+        assert!(allows_activation("native_menu_press"));
+        assert_eq!(foreground_plan(&reply, "press"), Some("native_menu_press"));
+        for operation in ["click", "move", "keypress", "type_text", "focus"] {
+            assert_eq!(foreground_plan(&reply, operation), None, "{operation}");
+        }
+        for dispatch in ["dispatched", "unknown"] {
+            reply["dispatch"] = json!(dispatch);
+            assert_eq!(foreground_plan(&reply, "press"), None);
         }
     }
 
