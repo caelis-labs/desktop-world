@@ -175,28 +175,74 @@ fn ordinary_unknown_action_is_not_an_unsupported_capability() {
 
 #[test]
 fn uncertain_focus_preparation_prevents_the_original_input_and_is_cleaned_once() {
-    let backend = backend(
-        r#"import json,sys
+    for explicit_focus in [false, true] {
+        let backend = backend(
+            r#"import json,sys
 for line in sys.stdin:
  r=json.loads(line)
  if r['operation']=='release_focus': v={'focus':'restored'}
- else: v={'dispatch':'unknown','evidence':'unverified','error':'focus_failed','message':'Activation did not settle'}
+ else: v={'dispatch':'unknown','evidence':'unverified','error':'focus_failed','message':'Activation did not settle','borrowed':True,'scope_active':True}
  print(json.dumps({'request_id':r['request_id'],'result':v}),flush=True)
 "#,
-    );
-    let poll = || Ok(Duration::from_secs(3));
-    let call = CallContext { poll: &poll };
-    let mut calls = 0;
-    let reply = backend
-        .execution_input_rpc(input(true), &call, |_| {
+        );
+        let poll = || Ok(Duration::from_secs(3));
+        let call = CallContext { poll: &poll };
+        let mut calls = 0;
+        let mut request = input(true);
+        if explicit_focus {
+            request["operation"] = json!("focus");
+        }
+        let reply = backend
+        .execution_input_rpc(request, &call, |_| {
             calls += 1;
             Ok(json!({"dispatch":"not_dispatched","evidence":"unverified",
-            "foreground_plan":{"reason":"background_key_window_absent","visual":false}}))
+            "foreground_plan":{"reason":if explicit_focus {"explicit_focus"} else {"background_key_window_absent"},"visual":false}}))
         })
         .unwrap();
-    assert_eq!(action_reply(&reply).dispatch, DispatchState::Unknown);
-    assert_eq!(calls, 1);
-    assert!(backend.focus_pending.load(Ordering::Acquire));
-    assert_eq!(backend.finish_execution(), Ok(Some(FocusReturn::Restored)));
-    backend.shutdown().unwrap();
+        let outcome = action_reply(&reply);
+        assert_eq!(
+            outcome.dispatch,
+            if explicit_focus {
+                DispatchState::Unknown
+            } else {
+                DispatchState::NotDispatched
+            }
+        );
+        assert!(
+            matches!(outcome.error, Some(Error::NativeFailure { ref code, .. }) if code == "focus_failed")
+        );
+        if !explicit_focus {
+            assert!(reply["message"]
+                .as_str()
+                .unwrap()
+                .contains("no payload was sent"));
+            assert!(outcome.delivery.unwrap().foreground_borrowed);
+        }
+        assert_eq!(calls, 1);
+        assert!(backend.focus_pending.load(Ordering::Acquire));
+        assert_eq!(backend.finish_execution(), Ok(Some(FocusReturn::Restored)));
+        backend.shutdown().unwrap();
+    }
+}
+
+#[test]
+fn losing_the_preparation_reply_does_not_claim_a_key_payload_was_sent() {
+    for explicit_focus in [false, true] {
+        let backend = backend("import sys,os\nsys.stdin.readline()\nos._exit(17)\n");
+        let poll = || Ok(Duration::from_secs(3));
+        let call = CallContext { poll: &poll };
+        let mut request = input(true);
+        if explicit_focus {
+            request["operation"] = json!("focus");
+        }
+        let mut calls = 0;
+        let error = backend.execution_input_rpc(request, &call, |_| {
+            calls += 1;
+            Ok(json!({"dispatch":"not_dispatched","evidence":"unverified",
+                "foreground_plan":{"reason":if explicit_focus {"explicit_focus"} else {"background_key_window_absent"},"visual":false}}))
+        }).unwrap_err();
+        assert_eq!(error.1, explicit_focus);
+        assert_eq!(calls, 1);
+        assert!(backend.shutdown().is_err());
+    }
 }

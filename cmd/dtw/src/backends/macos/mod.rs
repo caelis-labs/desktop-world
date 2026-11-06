@@ -641,6 +641,9 @@ impl NativeBackend {
         mut send: impl FnMut(Value) -> Result<Value, (Error, bool)>,
     ) -> Result<Value, (Error, bool)> {
         let operation = request["operation"].as_str().unwrap_or("").to_owned();
+        // A focus request asks for the preparation effect itself. For other
+        // operations, begin_execution_focus receives no key/text/pointer payload.
+        let preparation_is_action = operation == "focus";
         let target = request["target"].clone();
         let mut scope = if self.focus_pending.load(Ordering::Acquire) {
             match self.validate_execution_focus(&target, call, false, Some(&operation)) {
@@ -670,19 +673,38 @@ impl NativeBackend {
             // The first attempt proved no preparation or payload was sent. Its
             // short-lived scene has already exited before this resident borrow.
             self.focus_pending.store(true, Ordering::Release);
-            let begun = self.rpc(
-                json!({"operation":"begin_execution_focus","target":target,
+            let mut begun = self
+                .rpc(
+                    json!({"operation":"begin_execution_focus","target":target,
                 "visual":input_route::visual_focus(&operation),"reason":reason}),
-                call,
-            )?;
+                    call,
+                )
+                .map_err(|(error, _)| (error, preparation_is_action))?;
             if begun.get("error").is_some() {
-                // Preserve preparation uncertainty; the original input is not resent.
+                if !preparation_is_action {
+                    // Activation may have happened, but send() has not received
+                    // the requested payload again. Keep that distinction even
+                    // when preparation or its transport reports uncertainty.
+                    begun["dispatch"] = json!("not_dispatched");
+                    if let Some(message) = begun["message"].as_str() {
+                        begun["message"] = json!(format!(
+                            "Foreground preparation failed before requested input; no payload was sent. {message}"
+                        ));
+                    }
+                    if let Some(borrowed) = begun["borrowed"].as_bool() {
+                        begun["delivery"] = json!({"route":"foreground", "reason":"execution_scope_preparation",
+                            "foreground_borrowed":borrowed, "focus_return":"pending"});
+                    }
+                }
                 return Ok(begun);
             }
             if begun["scope_active"] != true || begun["dispatch"] != "dispatched" {
-                return Err((Error::InvalidObservation, true));
+                return Err((Error::InvalidObservation, preparation_is_action));
             }
-            scope = Some(self.validate_execution_focus(&target, call, false, Some(&operation))?);
+            scope = Some(
+                self.validate_execution_focus(&target, call, false, Some(&operation))
+                    .map_err(|(error, sent)| (error, sent || preparation_is_action))?,
+            );
             request["_execution_foreground"] = json!(true);
             reply = send(request)?;
             if reply.get("foreground_plan").is_some() {

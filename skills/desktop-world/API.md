@@ -48,6 +48,12 @@
   Confirmed focus means the destination was proven at that action; later
   `focus_return` describes settlement, not persistent target focus.
   Missing fields mean no evidence was reported, not zero disturbance.
+  If automatic foreground preparation fails before payload delivery, the requested
+  input is `not_dispatched`; preparation may still have changed focus. Its error
+  identifies that stage, and delivery/settlement evidence remains separate.
+  An explicit `focus()` asks for that focus effect itself, so an uncertain focus
+  attempt remains `unknown`. A later execution is new work; inspect the current
+  state before deciding how to continue after any preparation failure.
   Selector focus preparation has a separate `effects.focus_preparation` summary
   and is not counted again as target dispatch.
   A returned value identical to the final script snapshot is coalesced into `view`, rather

@@ -958,3 +958,45 @@ let cleanupFocusOwned: Bool = try retryCompleteAXRead(original: focusBusy,
     }, wait: { cleanupFocusClock += $0 })
 precondition(cleanupFocusOwned && cleanupFocusReads == 2 && cleanupFocusClock <= 0.1)
 print("Cold focus cleanup retries only complete read-only AX busy proof, under the original deadline")
+
+// The prior app can already be frontmost while its AXFocusedWindow is still
+// busy. Read-only confirmation must survive that transition beyond 250 ms.
+var restoredClock: TimeInterval = 0
+var restoredReads = 0
+try confirmRestoredForeground(remaining: { 0.5 - restoredClock }, check: {},
+    frontmost: { true }, windowMatches: {
+        restoredReads += 1
+        if restoredClock < 0.32 { throw focusBusy }
+        return true
+    }, wait: { restoredClock += $0 })
+precondition(restoredReads > 1 && restoredClock >= 0.32 && restoredClock < 0.5)
+
+// A known wrong window, cancellation and an exhausted AX provider are still
+// failures; confirmation never guesses a window or permits another activation.
+restoredClock = 0
+restoredReads = 0
+do {
+    try confirmRestoredForeground(remaining: { 0.5 }, check: {}, frontmost: { true },
+        windowMatches: { restoredReads += 1; return false }, wait: { _ in
+            preconditionFailure("A known wrong window must not be polled")
+        })
+    preconditionFailure("Wrong original window cannot be restored")
+} catch let error as NativeFailure { precondition(error.code == "focus_restore_failed") }
+precondition(restoredReads == 1)
+restoredReads = 0
+do {
+    try confirmRestoredForeground(remaining: { 0.5 }, check: {
+        throw failure("app_changed", "Original PID changed")
+    }, frontmost: { restoredReads += 1; return true }, windowMatches: { true },
+       wait: { _ in preconditionFailure("Changed identity cannot wait") })
+    preconditionFailure("Changed original PID cannot confirm restoration")
+} catch let error as NativeFailure { precondition(error.code == "app_changed") }
+precondition(restoredReads == 0)
+do {
+    try confirmRestoredForeground(remaining: { 0.05 - restoredClock }, check: {},
+        frontmost: { true }, windowMatches: { throw focusBusy }, wait: { restoredClock += $0 })
+    preconditionFailure("Persistently unreadable AX focus cannot be called restored")
+} catch let error as NativeFailure {
+    precondition(error.attributeFailure?.error == .cannotComplete && restoredClock == 0.05)
+}
+print("Foreground return waits for exact AX readiness within cleanup; mismatch, identity change and busy expiry remain strict")

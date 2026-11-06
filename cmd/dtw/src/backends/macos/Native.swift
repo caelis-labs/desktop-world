@@ -1278,6 +1278,21 @@ private func waitForEstablishedFocus<T>(remaining: () -> TimeInterval,
     throw failure("focus_unproven", "The exact requested window did not become the focused window")
 }
 
+// Activation returning to the original app can precede its AX provider becoming
+// ready. Confirm the whole exact-window proof under the existing cleanup budget;
+// these callbacks only read state and never repeat activation or raise a window.
+private func confirmRestoredForeground(remaining: () -> TimeInterval,
+    check: () throws -> Void, frontmost: () throws -> Bool,
+    windowMatches: () throws -> Bool, wait: (TimeInterval) -> Void) throws {
+    let _: Bool = try waitForEstablishedFocus(remaining: remaining, check: check, read: {
+        guard try frontmost() else { return nil }
+        guard try windowMatches() else {
+            throw failure("focus_restore_failed", "Original exact focused window was not restored")
+        }
+        return try frontmost() ? true : nil
+    }, wait: wait)
+}
+
 private func axWindowIdentity(_ element: AXUIElement, _ deadline: Deadline,
                               traceStage: String? = nil) throws -> (AXError, CGWindowID) {
     guard let function = exactWindowSymbol.function else {
@@ -5324,43 +5339,39 @@ private final class NativeStore: @unchecked Sendable {
                 throw failure("focus_restore_failed", "Original application restoration was not accepted")
             }
         }
-        let until = min(deadline.uptime, ProcessInfo.processInfo.systemUptime + 0.25)
-        while true {
-            try deadline.check()
-            guard try context.startStamp(original.pid) == original.generation else {
-                throw failure("focus_restore_failed", "Original application identity changed during restoration")
-            }
-            if try windowServerFrontmost(original.pid, deadline) {
-                if let window = original.window, let id = original.windowID {
-                    guard try focused(original.pid, window, windowID: id, deadline) else {
-                        throw failure("focus_restore_failed", "Original exact focused window was not restored")
-                    }
-                    // Make-key/activation can restore keyboard ownership while
-                    // leaving our dialog above the original window. Raise only
-                    // that proven original window, once, after focus settles.
-                    // A layering issue must not retire otherwise usable input.
-                    do {
-                        try deadline.prepare(window)
-                        guard try windowServerFrontmost(original.pid, deadline),
-                              try context.startStamp(original.pid) == original.generation else {
-                            return "changed_externally"
-                        }
-                        let raised = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
-                        traceSemanticFailure(["operation":"foreground_window_order_return",
-                            "pid":original.pid, "window":id, "ax_error":raised.rawValue])
-                    } catch {
-                        traceSemanticFailure(["operation":"foreground_window_order_return",
-                            "pid":original.pid, "window":id, "status":"unverified",
-                            "error":(error as? NativeFailure)?.code ?? "native_error"])
-                    }
+        try confirmRestoredForeground(remaining: { deadline.uptime - ProcessInfo.processInfo.systemUptime },
+            check: {
+                try deadline.check()
+                guard try context.startStamp(original.pid) == original.generation,
+                      !original.application.isTerminated else {
+                    throw failure("focus_restore_failed", "Original application identity changed during restoration")
                 }
-                return "restored"
+            }, frontmost: { try windowServerFrontmost(original.pid, deadline) },
+            windowMatches: {
+                guard let window = original.window, let id = original.windowID else { return true }
+                return try self.focused(original.pid, window, windowID: id, deadline)
+            }, wait: { CFRunLoopRunInMode(.defaultMode, $0, false) })
+        if let window = original.window, let id = original.windowID {
+            // Make-key/activation can restore keyboard ownership while
+            // leaving our dialog above the original window. Raise only
+            // that proven original window, once, after focus settles.
+            // A layering issue must not retire otherwise usable input.
+            do {
+                try deadline.prepare(window)
+                guard try windowServerFrontmost(original.pid, deadline),
+                      try context.startStamp(original.pid) == original.generation else {
+                    return "changed_externally"
+                }
+                let raised = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+                traceSemanticFailure(["operation":"foreground_window_order_return",
+                    "pid":original.pid, "window":id, "ax_error":raised.rawValue])
+            } catch {
+                traceSemanticFailure(["operation":"foreground_window_order_return",
+                    "pid":original.pid, "window":id, "status":"unverified",
+                    "error":(error as? NativeFailure)?.code ?? "native_error"])
             }
-            guard ProcessInfo.processInfo.systemUptime < until else {
-                throw failure("focus_restore_failed", "Original foreground restoration could not be confirmed")
-            }
-            CFRunLoopRunInMode(.defaultMode, 0.005, false)
         }
+        return "restored"
     }
 
     fileprivate func releaseFocus(_ deadline: Deadline) throws -> [String: Any] {
