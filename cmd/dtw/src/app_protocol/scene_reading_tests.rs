@@ -16,6 +16,32 @@ fn content(id: u64, value: &str) -> Element {
 }
 
 #[test]
+fn unsupported_text_read_explains_control_values_without_synthesizing_text() {
+    let (server, catalog) = agent();
+    let mut slider = content(1, "25");
+    slider.role = "slider".into();
+    catalog.backend.0.model.lock().unwrap().semantic_elements = Some(vec![slider]);
+    let looked = exec(
+        &server,
+        "slider_value",
+        "return (await app.look()).elements[0].value;",
+    );
+    assert_eq!(looked.data["value"]["result"], "25");
+    catalog.backend.0.model.lock().unwrap().text_error = Some(Error::UnsupportedCapability);
+    let failed = crate::app_protocol::projection::execution(exec(
+        &server,
+        "slider_text",
+        "return await app.readText('w1.e1');",
+    ));
+    assert!(failed.is_error);
+    assert_eq!(failed.data["error"]["code"], "unsupported_capability");
+    let message = failed.data["error"]["message"].as_str().unwrap();
+    assert!(message.contains("role slider") && message.contains("look().elements[].value"));
+    assert!(failed.data.get("result").is_none());
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn omitted_text_is_explicit_and_tail_only_edits_change_the_view() {
     let (server, catalog) = agent();
     let prefix = "文😀".repeat(125);

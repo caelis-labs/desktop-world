@@ -35,13 +35,6 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
         if let Some(summary) = summary {
             if summary["actions"].is_object() {
                 compact["effects"] = json!({"dispatch":summary["actions"]["dispatch"],"evidence":summary["actions"]["evidence"],"interrupted":summary["actions"]["interrupted"]});
-                if summary["actions"]["delivery"].is_object() {
-                    let delivery = &summary["actions"]["delivery"];
-                    compact["effects"]["delivery"] = json!({
-                        "reported":delivery["reported"], "routes":delivery["routes"],
-                        "foreground_borrowed":delivery["foreground_borrowed"],
-                        "focus_returns":delivery["focus_returns"]});
-                }
             }
             if summary["focus_preparation"].is_object() {
                 if !compact["effects"].is_object() {
@@ -50,14 +43,8 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
                 compact["effects"]["focus_preparation"] = summary["focus_preparation"].clone();
             }
         }
-        // Settlement happens after the action receipt. Preserve that later
-        // fact separately; a pending loan is not proof that focus returned.
-        if original["script"]["focus_return"].is_string() {
-            if !compact["effects"].is_object() {
-                compact["effects"] = json!({});
-            }
-            compact["effects"]["focus_return"] = original["script"]["focus_return"].clone();
-        }
+        // Routes and borrow settlement remain in the retained diagnostic
+        // ledger. Errors below still expose an unconfirmed cleanup.
         for key in [
             "error",
             "shutdown_error",
@@ -400,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn public_execution_retains_reported_delivery_and_later_settlement() {
+    fn public_execution_keeps_dispatch_but_hides_borrow_and_settlement_policy() {
         let steps = vec![
             json!({"number":1,"operation":"focus","status":"completed","error":null,
             "receipt":{"outcome":{"dispatch":"dispatched","evidence":{"kind":"unverified"},
@@ -410,20 +397,15 @@ mod tests {
         let mut reply = successful_execution(steps);
         reply.data["value"] = json!({"agent_protocol":true});
         reply.data["script"]["focus_return"] = json!("restored");
-        let projected = execution(reply);
+        let projected = execution(reply.clone());
+        assert_eq!(projected.data["effects"]["dispatch"]["dispatched"], 1);
+        assert!(projected.data["effects"].get("delivery").is_none());
+        assert!(projected.data["effects"].get("focus_return").is_none());
+        assert_eq!(reply.data["script"]["focus_return"], "restored");
         assert_eq!(
-            projected.data["effects"]["delivery"]["routes"],
-            json!({"foreground":1})
+            reply.data["script"]["steps"][0]["receipt"]["outcome"]["delivery"]["focus_return"],
+            "pending"
         );
-        assert_eq!(
-            projected.data["effects"]["delivery"]["foreground_borrowed"],
-            1
-        );
-        assert_eq!(
-            projected.data["effects"]["delivery"]["focus_returns"],
-            json!({"pending":1})
-        );
-        assert_eq!(projected.data["effects"]["focus_return"], "restored");
         assert_eq!(
             projected.data["effects"]["evidence"],
             json!({"unverified":1})
@@ -432,6 +414,23 @@ mod tests {
         let mut read = successful_execution(vec![]);
         read.data["value"] = json!({"agent_protocol":true});
         assert!(execution(read).data.get("effects").is_none());
+    }
+
+    #[test]
+    fn hiding_borrow_policy_never_hides_a_cleanup_failure() {
+        let mut reply = successful_execution(vec![]);
+        reply.is_error = true;
+        reply.data["value"] = json!({"agent_protocol":true});
+        reply.data["script"]["focus_return"] = json!("unconfirmed");
+        let error =
+            json!({"code":"focus_restore_failed","message":"Return could not be confirmed"});
+        reply.data["error"] = error.clone();
+        reply.data["shutdown_error"] = error.clone();
+        let compact = execution(reply);
+        assert!(compact.is_error);
+        assert_eq!(compact.data["error"], error);
+        assert_eq!(compact.data["shutdown_error"], error);
+        assert!(compact.data["effects"].get("focus_return").is_none());
     }
 
     #[test]

@@ -899,7 +899,16 @@ impl<B: Backend + 'static> Coordinator<B> {
                 request[key] = value.clone();
             }
         }
-        let work = self.scene_atomic(id, "readText", request, deadline);
+        let mut work = self.scene_atomic(id, "readText", request, deadline);
+        if let Some(error) = work.completed.error.as_mut() {
+            if error.code == "unsupported_capability" {
+                error.message = format!(
+                    "{}; readText requires native text content (target {}, role {}). Read control values from look().elements[].value",
+                    error.message, node["id"].as_str().unwrap_or("unknown"),
+                    node["expected"]["role"].as_str().unwrap_or("unknown")
+                );
+            }
+        }
         if let Some(error) = &work.completed.error {
             if !matches!(
                 error.code.as_str(),

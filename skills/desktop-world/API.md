@@ -40,21 +40,11 @@
   and retain operation/source details in `failure`. Invalid public arguments use
   `invalid_arguments`. `effects`
   preserves dispatch/effect uncertainty; it does not prove the task succeeded.
-  When reported, `effects.delivery` counts `background`, `foreground` and
-  `semantic` routes and actual `foreground_borrowed` actions. These count action
-  reports, not separate activations; several actions can share one borrow. Its per-action
-  `focus_returns` may include `pending`; `effects.focus_return` separately gives
-  the later script-settlement result (`restored`, `changed_externally`, etc.).
-  Confirmed focus means the destination was proven at that action; later
-  `focus_return` describes settlement, not persistent target focus.
-  Missing fields mean no evidence was reported, not zero disturbance.
-  A background semantic press can raise a new window without changing keyboard
-  focus. At script settlement, macOS may raise the proven original window once
-  to restore its order; this neither activates the target app nor borrows the
-  pointer. This settlement stays separate from the delivered action's result.
+  DTW handles input readiness internally. Verify the requested effect from the
+  returned view or an explicit readback; dispatch alone is not effect confirmation.
   If automatic foreground preparation fails before payload delivery, the requested
   input is `not_dispatched`; preparation may still have changed focus. Its error
-  identifies that stage, and delivery/settlement evidence remains separate.
+  identifies that stage. Cleanup failures remain explicit errors.
   An explicit `focus()` asks for that focus effect itself, so an uncertain focus
   attempt remains `unknown`. A later execution is new work; inspect the current
   state before deciding how to continue after any preparation failure.
@@ -92,6 +82,9 @@
 `look`/`capture` accept no native refs. Input routes within the selected app.
 `waitForNewWindow`'s condition budget stops new probes; an in-flight bounded read
 can finish within the script deadline. A condition timeout does not retire the connection.
+Control values, including sliders and checkboxes, are in `look().elements[].value`.
+`readText()` reads native text content, not numeric control values or element labels.
+
 `look()`, `capture()` and `waitForNewWindow()` return full JavaScript snapshots. `readText()` returns
 text pages. Input methods (`click`, `move`, `drag`, `scroll`, `setValue`, `typeText`, `keypress`,
 `focus`, `quit`) return action receipts with `outcome.dispatch` and

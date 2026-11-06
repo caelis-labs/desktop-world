@@ -142,6 +142,42 @@ fn borrow_starts_only_at_capability_limit_and_survives_until_script_finish() {
 }
 
 #[test]
+fn a_borrowed_scope_preserves_each_actions_actual_delivery_route() {
+    let backend = backend(CONTROL);
+    let poll = || Ok(Duration::from_secs(3));
+    let call = CallContext { poll: &poll };
+    assert_eq!(
+        backend.action(input(true), &call).dispatch,
+        DispatchState::Dispatched
+    );
+    for route in ["background", "semantic", "foreground"] {
+        let mut sends = 0;
+        let reply = backend.execution_input_rpc(input(false), &call, |request| {
+            assert_eq!(request["_execution_foreground"], true);
+            sends += 1;
+            Ok(json!({"dispatch":"dispatched","evidence":"unverified",
+                "delivery":{"route":route,"reason":"actual_transport","foreground_borrowed":false}}))
+        }).unwrap();
+        assert_eq!(sends, 1);
+        let outcome = action_reply(&reply);
+        assert_eq!(outcome.dispatch, DispatchState::Dispatched);
+        let delivery = outcome.delivery.unwrap();
+        assert_eq!(delivery.route.unwrap().as_str(), route);
+        assert_eq!(delivery.reason.as_deref(), Some("actual_transport"));
+        assert!(delivery.foreground_borrowed);
+        assert_eq!(delivery.focus_return, Some(FocusReturn::Pending));
+    }
+    assert_eq!(
+        backend
+            .read_rpc(json!({"operation":"stats"}), &call)
+            .unwrap()["begins"],
+        1
+    );
+    assert_eq!(backend.finish_execution(), Ok(Some(FocusReturn::Restored)));
+    backend.shutdown().unwrap();
+}
+
+#[test]
 fn external_focus_choice_stops_following_inputs_without_reactivation() {
     let backend = backend(CONTROL);
     let poll = || Ok(Duration::from_secs(3));

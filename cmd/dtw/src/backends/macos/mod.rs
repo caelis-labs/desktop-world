@@ -288,12 +288,10 @@ const COVERAGE: &str =
 const CONDITIONS: &[&str] = &[
     "semantic and input operations require macOS Accessibility permission",
     "capture and pixel pointer gestures require macOS Screen Recording permission",
-    "ordinary text and editing keys prefer directed background delivery; enabled native menu key equivalents use semantic delivery; known capability limits may borrow foreground before payload",
-    "foreground coordinate fallback requires a visible, unobstructed point in the captured window",
+    "DTW handles input readiness internally; inspect the returned state to verify the requested effect",
     "semantic scopes include retained subtrees, capture-pixel regions and the app menu; region geometry does not prove pixel visibility",
     "readText requires native textual content and preserves one content revision across UTF-16 pages; titles and descriptions are not document text",
-    "input requires an exact app-associated AX surface and current modal target; proven cross-process service surfaces use foreground input",
-    "foreground borrowing lasts within one exec; settlement restores the proven original foreground and window order while ownership holds; user focus changes are respected; uncertain input is never rerouted or replayed",
+    "input requires the authorized app's current target; uncertain input is never replayed",
 ];
 impl NativeBackend {
     fn supports_capability(capability: Capability) -> bool {
@@ -712,8 +710,13 @@ impl NativeBackend {
             }
         }
         if let Some(scope) = scope {
-            reply["delivery"] = json!({"route":"foreground", "reason":"execution_scope",
-                "foreground_borrowed":scope["borrowed"], "focus_return":"pending"});
+            // Foreground ownership lasts for the script. It does not turn a
+            // later addressed pointer action into physical cursor input.
+            if !reply["delivery"].is_object() {
+                reply["delivery"] = json!({"route":"foreground", "reason":"execution_scope"});
+            }
+            reply["delivery"]["foreground_borrowed"] = scope["borrowed"].clone();
+            reply["delivery"]["focus_return"] = json!("pending");
         }
         Ok(reply)
     }
@@ -1623,7 +1626,7 @@ fn parse_delivery(value: Option<&Value>) -> Result<Option<InputDelivery>, ()> {
         None if value["focus_return"].is_null() => None,
         _ => return Err(()),
     };
-    if (foreground_borrowed || focus_return.is_some()) && route != Some(InputRoute::Foreground) {
+    if (foreground_borrowed || focus_return.is_some()) && route.is_none() {
         return Err(());
     }
     Ok(Some(InputDelivery {
@@ -2225,6 +2228,9 @@ for line in sys.stdin:
         for (route, borrowed, returned) in [
             ("semantic", false, None),
             ("background", false, None),
+            ("background", true, Some("pending")),
+            ("semantic", true, Some("pending")),
+            ("semantic", false, Some("restored")),
             ("foreground", true, Some("retained")),
             ("foreground", true, Some("restored")),
             ("foreground", true, Some("changed_externally")),
@@ -2252,8 +2258,8 @@ for line in sys.stdin:
     fn malformed_route_metadata_never_fabricates_delivery() {
         for delivery in [
             json!({"route":"guessed","foreground_borrowed":false}),
-            json!({"route":"background","foreground_borrowed":true}),
-            json!({"route":"semantic","foreground_borrowed":false,"focus_return":"restored"}),
+            json!({"route":null,"foreground_borrowed":true}),
+            json!({"route":null,"foreground_borrowed":false,"focus_return":"restored"}),
             json!({"route":"foreground","foreground_borrowed":true,"focus_return":"success"}),
         ] {
             let result = action_reply(

@@ -36,7 +36,8 @@ Use `setValue({selector:{role:'text_field',text:'Field name'},value:'replacement
 
 For crowded pages, use `look({role:'static_text',text:'relevant phrase'})` to
 query native semantics beyond the default preview. `look({target:id})` narrows to an observed subtree, such as the File menu, without activating it. Truncated fields are explicit.
-Read textual content on demand with `return await app.readText('w1.e12')`;
+Read control values (including sliders and checkboxes) from `look().elements[].value`.
+Read native textual content on demand with `return await app.readText('w1.e12')`;
 continue with `{target:'w1.e12',offset:page.next_offset}` without a new look.
 Text offsets are UTF-16; a fresh look starts a new content observation.
 

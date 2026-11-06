@@ -116,6 +116,7 @@ impl FocusReturn {
 /// Provider-reported routing evidence, independent of effect confirmation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InputDelivery {
+    /// Action transport, independent of an already owned foreground scope.
     pub route: Option<InputRoute>,
     pub reason: Option<String>,
     pub foreground_borrowed: bool,

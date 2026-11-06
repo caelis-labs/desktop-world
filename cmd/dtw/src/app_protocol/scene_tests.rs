@@ -113,7 +113,7 @@ fn compact_scene_output_has_no_native_refs_or_session_ledger() {
     assert!(r.data["output"].is_array());
 }
 #[test]
-fn app_actions_report_delivery_counts_without_leaking_private_native_reasons() {
+fn app_actions_keep_delivery_and_borrow_policy_out_of_the_model_protocol() {
     let (server, catalog) = agent();
     catalog.backend.0.model.lock().unwrap().outcome.delivery = Some(InputDelivery {
         route: Some(InputRoute::Foreground),
@@ -142,14 +142,8 @@ fn app_actions_report_delivery_counts_without_leaking_private_native_reasons() {
         .to_string()
         .contains("classified_internal_capability"));
     assert_eq!(compact.data["effects"]["dispatch"]["dispatched"], 1);
-    assert_eq!(
-        compact.data["effects"]["delivery"]["routes"]["foreground"],
-        1
-    );
-    assert_eq!(
-        compact.data["effects"]["delivery"]["foreground_borrowed"],
-        1
-    );
+    assert!(compact.data["effects"].get("delivery").is_none());
+    assert!(compact.data["effects"].get("focus_return").is_none());
 }
 #[test]
 fn application_search_is_bounded_and_does_not_connect() {
