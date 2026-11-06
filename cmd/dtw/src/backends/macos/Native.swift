@@ -4922,7 +4922,7 @@ private final class NativeStore: @unchecked Sendable {
     }
 
     private func establishFocus(_ target: NativeTarget, _ context: RequestContext, changed: inout Bool,
-                                allowActivation: Bool = true, visualActivation: Bool = false) throws -> CandidateWindow {
+                                allowActivation: Bool = true) throws -> CandidateWindow {
         let window = try validate(target, context, phase: .preRaise)
         if try coordinateMenuSurface(role: axAttribute(window.element, kAXRoleAttribute, context.deadline) as? String,
             associated: associatedSurfaces[WindowSlot(app: target.app, id: target.nativeID)] != nil) {
@@ -4988,13 +4988,11 @@ private final class NativeStore: @unchecked Sendable {
             // after background delivery is not WindowServer activation; AppKit
             // activate() may accept that already-active state without fronting it.
             trace("front_process_requested")
-            // Physical pointer/remote-view clicks must not receive AX-style synthetic
-            // make-key records. AXRaise + AppKit activation below still have to
-            // establish the exact retained window before any payload is admitted.
-            let fronted = visualActivation
-                ? dtwSetVisualFrontProcess(target.app.pid, focusID)
-                : dtwSetFrontProcess(target.app.pid, focusID)
-            guard fronted else {
+            // This path requires exact AX window focus, including for a physical
+            // pointer payload. App-only activation can leave a never-key window
+            // without AXFocusedWindow. Reuse CUA's exact-window preparation;
+            // pixel-only surfaces retain establishVisualFocus without key records.
+            guard dtwSetFrontProcess(target.app.pid, focusID) else {
                 throw failure("focus_failed", "WindowServer did not accept exact foreground activation")
             }
             trace("front_process_returned")
@@ -5287,11 +5285,7 @@ private final class NativeStore: @unchecked Sendable {
                     stage = "capture_target"
                     try borrowFocus(target, window.element, context)
                     stage = "establish_target"
-                    _ = try establishFocus(target, context, changed: &changed,
-                        // Choose activation by the admitted input route. An
-                        // OpenPanel keyboard receiver still needs make-key;
-                        // its surface kind alone cannot select pointer activation.
-                        visualActivation: request["visual"] as? Bool == true)
+                    _ = try establishFocus(target, context, changed: &changed)
                 } else {
                     guard !executionFocusObserver.invalidated(epoch) else {
                         throw failure("focus_changed", "Foreground changed before windowless activation")
