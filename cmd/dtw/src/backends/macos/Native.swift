@@ -6645,6 +6645,14 @@ private final class NativeStore: @unchecked Sendable {
             case "keypress_app", "focus_app": return appKeypress(request)
             case "catalog": return try context.catalog()
             case "discover_apps": return try context.discoverApplications()
+            case "application_exited":
+                let app = try NativeApp(request["app"])
+                let exited = try context.hasExited(app)
+                if exited, try context.startStamp(app.pid) != nil {
+                    throw failure("app_changed", "A different process incarnation occupies the original PID")
+                }
+                if !exited { try context.verify(app) }
+                return ["exited": exited]
             case "windows": return try listWindows(NativeApp(request["app"]), context)
             case "bind_window": return try bindWindow(request, context)
             case "probe_window_state": return try probeWindowState(request, context)

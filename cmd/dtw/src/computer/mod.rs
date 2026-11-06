@@ -803,6 +803,16 @@ pub trait Backend: Send + Sync {
     fn quit_application(&self, _app: &AppInstance, _call: &CallContext<'_>) -> ActionOutcome {
         ActionOutcome::rejected(Error::UnsupportedCapability)
     }
+    /// Read-only proof that this exact native incarnation has exited. Missing
+    /// window/AX metadata is not exit evidence. Unknown/unsupported providers
+    /// return an error, preserving the original failed observation.
+    fn application_exited(
+        &self,
+        _app: &AppInstance,
+        _call: &CallContext<'_>,
+    ) -> Result<bool, Error> {
+        Err(Error::UnsupportedCapability)
+    }
     fn close_window(&self, _target: &WindowTarget, _call: &CallContext<'_>) -> ActionOutcome {
         ActionOutcome::rejected(Error::UnsupportedCapability)
     }

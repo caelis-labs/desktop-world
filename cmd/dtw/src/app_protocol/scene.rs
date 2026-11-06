@@ -1257,6 +1257,23 @@ impl<B: Backend + 'static> Coordinator<B> {
         let inventory = loop {
             let work = self.scene_atomic(id, "windows", json!({}), deadline);
             if work.completed.error.is_some() {
+                // A dialog button can terminate its app successfully. Only a
+                // separate native incarnation-exit proof can convert that
+                // final read into a stopped view; other identity errors remain.
+                if after
+                    && attempt == 0
+                    && work
+                        .completed
+                        .error
+                        .as_ref()
+                        .is_some_and(|e| e.code == "app_changed")
+                    && self
+                        .runtime
+                        .retire_exited_instances_until(deadline)
+                        .is_ok_and(|count| count > 0)
+                {
+                    return self.scene_look_inner(id, args, explicit_pixels, after, 1, deadline);
+                }
                 return work;
             }
             let value = work.completed.value.unwrap();

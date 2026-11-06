@@ -10,6 +10,10 @@ struct Life {
     quit_pending: bool,
     omit_launch_identity: bool,
     unverified_launch: bool,
+    exit_on_press: bool,
+    exit_probe_live: bool,
+    exit_probe_error: bool,
+    presses: usize,
 }
 #[derive(Clone)]
 struct Provider {
@@ -92,6 +96,12 @@ impl Backend for Provider {
         let inventory = self.mock.windows(app, call)?;
         let life = self.life.lock().unwrap();
         if !life.instances.contains(app) {
+            if life.exit_on_press {
+                return Err(Error::NativeFailure {
+                    code: "app_changed".into(),
+                    message: "Exact process identity disappeared".into(),
+                });
+            }
             return Err(Error::TargetChanged);
         }
         Ok(test_inventory(
@@ -123,7 +133,20 @@ impl Backend for Provider {
         element: ElementId,
         call: &CallContext<'_>,
     ) -> ActionOutcome {
-        self.mock.press(target, binding, element, call)
+        let outcome = self.mock.press(target, binding, element, call);
+        let mut life = self.life.lock().unwrap();
+        life.presses += 1;
+        if life.exit_on_press && outcome.dispatch == DispatchState::Dispatched {
+            life.instances.clear();
+        }
+        outcome
+    }
+    fn application_exited(&self, app: &AppInstance, _: &CallContext<'_>) -> Result<bool, Error> {
+        let life = self.life.lock().unwrap();
+        if life.exit_probe_error {
+            return Err(Error::BackendFailed("Exit metadata unavailable".into()));
+        }
+        Ok(!life.exit_probe_live && !life.instances.contains(app))
     }
 }
 #[derive(Clone)]
@@ -337,4 +360,49 @@ fn launch_ack_without_native_identity_is_unknown_and_does_not_authorize_input() 
     assert_eq!(life.lock().unwrap().launches, 1);
     success(&run(&server, "await app.quit();"));
     server.close().unwrap();
+}
+
+#[test]
+fn final_view_after_self_terminating_button_requires_separate_exit_proof_and_never_replays() {
+    for (live, unreadable) in [(false, false), (true, false), (false, true)] {
+        let life = Arc::new(Mutex::new(Life {
+            exit_on_press: true,
+            exit_probe_live: live,
+            exit_probe_error: unreadable,
+            ..Life::default()
+        }));
+        let server = Server::new(Installed {
+            provider: Provider {
+                life: life.clone(),
+                mock: MockBackend::new(),
+            },
+        });
+        let result = run(
+            &server,
+            "await app.look(); await app.click('w1.e1'); return {clicked:true};",
+        );
+        if !live && !unreadable {
+            assert!(!result.is_error, "{}", result.data);
+            assert_eq!(result.data["value"]["view"]["running"], false);
+            assert_eq!(
+                result.data["value"]["view"]["semantics"]["reason"],
+                "app_stopped"
+            );
+            let reopened = run(&server, "await app.look();");
+            assert!(!reopened.is_error, "{}", reopened.data);
+            assert!(reopened.data["value"]["view"]["windows"]
+                .as_array()
+                .is_some_and(|windows| !windows.is_empty()));
+            assert_eq!(life.lock().unwrap().launches, 2);
+        } else {
+            assert!(result.is_error, "{}", result.data);
+            assert_eq!(result.data["error"]["code"], "app_changed");
+        }
+        let life = life.lock().unwrap();
+        assert_eq!(life.presses, 1);
+        assert_eq!(
+            life.quits, 0,
+            "Final observation must never repeat termination"
+        );
+    }
 }

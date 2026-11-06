@@ -1,6 +1,52 @@
 use super::*;
 
 impl<B: Backend, C: Clock> Runtime<B, C> {
+    /// Retire only positively exited incarnations after a failed final read.
+    /// This never launches, quits, adopts a replacement or repeats any input.
+    pub fn retire_exited_instances_until(&self, deadline: Instant) -> Result<usize, Error> {
+        let deadline = self
+            .bounded_deadline(Some(deadline))
+            .expect("bounded deadline");
+        let (flight, apps, provider) = {
+            let mut state = self.state();
+            self.live_context(&state)?;
+            if state.busy {
+                return Err(Error::Busy);
+            }
+            self.check_deadline(Some(deadline))?;
+            state.busy = true;
+            (
+                Flight::new(&self.state),
+                state.apps.clone(),
+                self.backend.stamp(),
+            )
+        };
+        let poll = || self.remaining(deadline, Some(deadline));
+        let call = CallContext { poll: &poll };
+        let mut exited = Vec::new();
+        for app in apps {
+            call.remaining()?;
+            if self.backend.application_exited(&app, &call)? {
+                exited.push(app);
+            }
+        }
+        let retired = {
+            let mut state = self.state();
+            self.live_context(&state)?;
+            self.check_deadline(Some(deadline))?;
+            if self.backend.stamp() != provider {
+                return Err(Error::WrongProvider);
+            }
+            state.apps.retain(|app| !exited.contains(app));
+            take_observations(&mut state, |observation| {
+                exited.contains(&observation.target.app)
+            })
+        };
+        drop(retired);
+        let state = flight.finish();
+        self.live_context(&state)?;
+        self.backend.cleanup_error().map_or(Ok(exited.len()), Err)
+    }
     pub fn launch_until(&self, deadline: Instant) -> ActionReceipt {
         let Some(app_id) = &self.application_id else {
             return ActionReceipt::rejected(Error::UnsupportedCapability);

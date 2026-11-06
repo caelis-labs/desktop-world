@@ -40,6 +40,8 @@
   and retain operation/source details in `failure`. Invalid public arguments use
   `invalid_arguments`. `effects`
   preserves dispatch/effect uncertainty; it does not prove the task succeeded.
+  A rejected payload counts as `not_dispatched` without an `unverified` action
+  effect; confirmed no-op postconditions and dispatched/unknown effects remain.
   DTW handles input readiness internally. Verify the requested effect from the
   returned view or an explicit readback; dispatch alone is not effect confirmation.
   If automatic input preparation fails before payload delivery, the requested
@@ -48,6 +50,8 @@
   An explicit `focus()` asks for that focus effect itself, so an uncertain focus
   attempt remains `unknown`. A later execution is new work; inspect the current
   state before deciding how to continue after any preparation failure.
+  If the app exits, a separately proved final `running:false` view concludes the
+  old instance without relaunching it. A later explicit `look()` can launch it.
   Selector focus preparation has a separate `effects.focus_preparation` summary
   and is not counted again as target dispatch.
   A returned value identical to the final script snapshot is coalesced into `view`, rather

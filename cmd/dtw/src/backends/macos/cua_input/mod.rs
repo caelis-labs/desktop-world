@@ -193,9 +193,18 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
     if let Err(error) = control::check() {
         return session.finish(Err(error), false);
     }
-    // A sheet/dialog receives window-local shortcuts, not its parent
-    // document's menu commands. Never dispatch that sibling's menu on its behalf.
-    let combo = if request.operation == "keypress" && !request.chromium() && !request.native_modal {
+    // A sheet/dialog or proved standalone text receiver receives its own keys,
+    // not its parent's document-menu commands. Keep every chord on CUA's
+    // existing addressed keyboard path; no shortcut-name whitelist is involved.
+    let standalone_receiver = request.operation == "keypress"
+        && !request.chromium()
+        && !request.native_modal
+        && ax::focused_top_level_text_control_id(request.pid) == Some(request.window_id);
+    let combo = if request.operation == "keypress"
+        && !request.chromium()
+        && !request.native_modal
+        && !standalone_receiver
+    {
         let (key, modifiers) = request.key_chord().expect("validated chord");
         menu_equivalent::Combo::parse(
             &modifiers.iter().map(|m| m.to_string()).collect::<Vec<_>>(),

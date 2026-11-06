@@ -1161,6 +1161,15 @@ impl Backend for NativeBackend {
             Err((error, false)) => ActionOutcome::rejected(error),
         }
     }
+    fn application_exited(&self, app: &AppInstance, call: &CallContext<'_>) -> Result<bool, Error> {
+        self.rpc(
+            json!({"operation":"application_exited","app":app_json(app)}),
+            call,
+        )
+        .map_err(|(error, _)| error)?["exited"]
+            .as_bool()
+            .ok_or(Error::InvalidObservation)
+    }
     fn close_window(&self, target: &WindowTarget, call: &CallContext<'_>) -> ActionOutcome {
         match self.execution_input_rpc(
             json!({"operation":"close_window","target":target_json(target)}),

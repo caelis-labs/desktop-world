@@ -185,7 +185,14 @@ fn summarize(steps: &[Value]) -> Value {
         }
         if receipt.is_object() {
             count(&mut dispatch, &receipt["outcome"]["dispatch"]);
-            count(&mut evidence, &receipt["outcome"]["evidence"]["kind"]);
+            // A refused payload has no uncertain action effect. Keep confirmed
+            // no-op postconditions, and all dispatched/unknown evidence. The
+            // original unmodified receipt remains in the diagnostic ledger.
+            if receipt["outcome"]["dispatch"] != "not_dispatched"
+                || receipt["outcome"]["evidence"]["kind"] != "unverified"
+            {
+                count(&mut evidence, &receipt["outcome"]["evidence"]["kind"]);
+            }
             if receipt["provider_outcome"].is_object() {
                 count(
                     &mut provider_dispatch,
@@ -353,6 +360,26 @@ fn outcome_issue(outcome: &Value) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn refused_payload_has_no_unknown_action_effect_but_confirmed_noop_is_kept() {
+        let steps: Vec<_> = [("not_dispatched", "unverified"), ("dispatched", "unverified"),
+            ("unknown", "unverified"), ("not_dispatched", "confirmed")].into_iter().map(|(dispatch,evidence)|
+            serde_json::json!({"status":"completed","operation":"press","error":null,
+                "receipt":{"outcome":{"dispatch":dispatch,"evidence":{"kind":evidence}},"interruption":null}})).collect();
+        let value = super::summarize(&steps);
+        assert_eq!(
+            value["actions"]["dispatch"],
+            serde_json::json!({"not_dispatched":2,"dispatched":1,"unknown":1})
+        );
+        assert_eq!(
+            value["actions"]["evidence"],
+            serde_json::json!({"unverified":2,"confirmed":1})
+        );
+        assert_eq!(
+            steps[0]["receipt"]["outcome"]["evidence"]["kind"],
+            "unverified"
+        );
+    }
     use super::*;
     use std::sync::Arc;
 
