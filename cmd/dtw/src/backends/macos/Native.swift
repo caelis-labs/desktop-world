@@ -3313,8 +3313,10 @@ private final class NativeStore: @unchecked Sendable {
         let pointer: CGPoint?
         var inputPoint: CGPoint?
         var executionScoped = false
+        var pointerHandoff = false
     }
     private var borrowedFocus: BorrowedFocus?
+    private var releasedExecutionPointer: CGPoint?
     private struct PriorForeground {
         let application: NSRunningApplication
         let pid: Int32
@@ -3399,6 +3401,8 @@ private final class NativeStore: @unchecked Sendable {
         var closedPanelRestorationAllowed: Bool
         var target: NativeTarget?
         var changedForeground: Bool
+        let pointerOrigin: CGPoint?
+        var pointerEndpoint: CGPoint?
         var invalidated = false
         var terminal: String?
     }
@@ -4862,6 +4866,7 @@ private final class NativeStore: @unchecked Sendable {
         }
         let epoch = try focusObserver.begin(initialPID: initialPID, targetPID: target.app.pid,
                                             window: window == nil ? nil : focusID, deadline: context.deadline)
+        _ = dtwTakePostedPointerPosition() // A prior action never owns this borrow's pointer.
         borrowedFocus = BorrowedFocus(activationEpoch: epoch, changedForeground: !alreadyFocused,
                                       target: target, window: window, focusWindowID: focusID,
                                       pointer: CGEvent(source: nil)?.location, inputPoint: inputPoint,
@@ -5276,7 +5281,7 @@ private final class NativeStore: @unchecked Sendable {
             executionFocus = ExecutionFocus(activationEpoch: epoch, app: app, original: original,
                 anchor: anchor, initialWindowIDs: initialWindowIDs, nativeOpenPanel: nativeOpenPanel,
                 closedPanelRestorationAllowed: allowPanelRestoration,
-                target: target, changedForeground: false)
+                target: target, changedForeground: false, pointerOrigin: CGEvent(source: nil)?.location)
             do {
                 if let target, let window {
                     stage = "capture_target"
@@ -5330,11 +5335,21 @@ private final class NativeStore: @unchecked Sendable {
         }
     }
 
-    private func releaseLocalFocus(_ deadline: Deadline) throws -> Bool {
-        guard let borrowed = borrowedFocus else { return false }
-        defer { borrowedFocus = nil; focusObserver.end(borrowed.activationEpoch) }
+    private func releaseLocalFocus(_ deadline: Deadline, handoff: Bool = false) throws -> Bool {
+        guard var borrowed = borrowedFocus else { return false }
         let invalidated = focusObserver.invalidated(borrowed.activationEpoch)
-        if let previous = borrowed.pointer, let point = borrowed.inputPoint,
+        let posted = dtwTakePostedPointerPosition()
+        releasedExecutionPointer = nil
+        if handoff, borrowed.executionScoped, let posted {
+            // Keep fallback ownership until the permanent owner acknowledges.
+            // EOF/cancellation before acknowledgement returns locally instead.
+            borrowed.inputPoint = posted; borrowed.pointerHandoff = true
+            borrowedFocus = borrowed; releasedExecutionPointer = posted
+            return invalidated
+        }
+        defer { borrowedFocus = nil; focusObserver.end(borrowed.activationEpoch) }
+        let endpoint = posted ?? (borrowed.pointerHandoff ? borrowed.inputPoint : nil)
+        if let previous = borrowed.pointer, let point = endpoint,
            let current = CGEvent(source: nil)?.location, !invalidated,
            abs(current.x - point.x) < 0.5, abs(current.y - point.y) < 0.5 {
             guard CGWarpMouseCursorPosition(previous) == .success,
@@ -5543,6 +5558,29 @@ private final class NativeStore: @unchecked Sendable {
         return "restored"
     }
 
+    private func returnExecutionPointer(_ scope: ExecutionFocus, _ deadline: Deadline) throws -> String {
+        guard let endpoint = scope.pointerEndpoint else { return "unchanged" }
+        let context = RequestContext(deadline: deadline)
+        let owned = try scope.terminal == nil
+            ? restorationOwnership(scope, context)
+            : priorForegroundIsCurrent(scope.original, context)
+        guard owned else { return "changed_externally" }
+        guard let current = CGEvent(source: nil)?.location else {
+            throw failure("pointer_restore_failed", "Cannot read the borrowed cursor during return")
+        }
+        guard let destination = dtwPointerReturnDestination(original: scope.pointerOrigin, posted: endpoint, current: current) else {
+            if scope.pointerOrigin == nil { throw failure("pointer_restore_failed", "Original cursor position was unavailable") }
+            return "changed_externally"
+        }
+        guard CGWarpMouseCursorPosition(destination) == .success,
+              CGAssociateMouseAndMouseCursorPosition(1) == .success,
+              dtwPointerReturnConfirmed(destination, deadline: deadline.uptime,
+                read: { CGEvent(source: nil)?.location }) else {
+            throw failure("pointer_restore_failed", "Script cursor return could not be confirmed")
+        }
+        return "restored"
+    }
+
     fileprivate func releaseFocus(_ deadline: Deadline) throws -> [String: Any] {
         if let focusCleanupFailure { throw focusCleanupFailure }
         let localInvalidated = try releaseLocalFocus(deadline)
@@ -5553,16 +5591,26 @@ private final class NativeStore: @unchecked Sendable {
         // Only the execution finalizer consumes the durable borrow. Per-input
         // cleanup has its own release_input_focus operation.
         defer { executionFocus = nil; executionFocusObserver.end(scope.activationEpoch) }
+        var pointerStatus = "unchanged"
+        var pointerError: NativeFailure?
+        do { pointerStatus = try returnExecutionPointer(scope, deadline) }
+        catch let error as NativeFailure { pointerStatus = "unconfirmed"; pointerError = error }
+        // Pointer failure must not prevent the independently owed focus return.
+        func settled(_ value: [String: Any]) -> [String: Any] {
+            var value = value; value["pointer_return"] = pointerStatus
+            if let pointerError { value["cleanup_error"] = pointerError.json }
+            return value
+        }
         if let terminal = scope.terminal {
             // A positively confirmed quit/root close may have destroyed anchor.
             // Observe only the original foreground; never activate after closure.
-            return settledExecutionTerminal(terminal) {
+            return settled(settledExecutionTerminal(terminal) {
                 try self.priorForegroundIsCurrent(scope.original, RequestContext(deadline: deadline))
-            }
+            })
         }
         do {
             let status = try restorePriorForeground(scope, deadline)
-            return ["released": true, "focus": status]
+            return settled(["released": true, "focus": status])
         } catch let error as NativeFailure {
             let sticky = failure("focus_restore_failed", "Execution foreground cleanup failed: \(error.message)")
             focusCleanupFailure = sticky
@@ -6184,7 +6232,31 @@ private final class NativeStore: @unchecked Sendable {
                         "target": target.json, "bounds": surface.coordinates, "surface_owner": surfaceOwner(target)]
             case "validate_execution_focus": return try validateExecutionFocus(request, context)
             case "release_input_focus":
-                return ["released": true, "focus": try releaseLocalFocus(context.deadline) ? "changed_externally" : "unchanged"]
+                let invalidated = try releaseLocalFocus(context.deadline, handoff: true)
+                var result: [String: Any] = ["released": true, "focus": invalidated ? "changed_externally" : "unchanged"]
+                if let point = releasedExecutionPointer { result["execution_pointer"] = [Double(point.x), Double(point.y)] }
+                releasedExecutionPointer = nil
+                return result
+            case "ack_execution_pointer":
+                let target = try NativeTarget(request["target"])
+                guard let borrowed = borrowedFocus, borrowed.target == target, borrowed.pointerHandoff,
+                      let point = request["point"] as? [Double], point.count == 2,
+                      borrowed.inputPoint == CGPoint(x: point[0], y: point[1]) else {
+                    throw failure("invalid_request", "Pointer acknowledgement does not match the pending exact handoff")
+                }
+                borrowedFocus = nil; releasedExecutionPointer = nil
+                focusObserver.end(borrowed.activationEpoch)
+                return ["acknowledged": true]
+            case "note_execution_pointer":
+                let target = try NativeTarget(request["target"])
+                try context.verify(target.app)
+                guard var scope = executionFocus, scope.app == target.app, scope.target == target, scope.pointerOrigin != nil,
+                      let point = request["point"] as? [Double], point.count == 2, point.allSatisfy({ $0.isFinite }) else {
+                    throw failure("invalid_request", "Pointer return requires the exact owned execution target and a finite endpoint")
+                }
+                scope.pointerEndpoint = CGPoint(x: point[0], y: point[1])
+                executionFocus = scope
+                return ["recorded": true]
             case "release_focus": return try releaseFocus(context.deadline)
             case "validate_background":
                 let target = try NativeTarget(request["target"])

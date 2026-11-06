@@ -19,6 +19,27 @@ private final class PointerPresenter: @unchecked Sendable {
 }
 private let pointerPresenter = PointerPresenter()
 
+// Critical pointer ownership is independent of the optional visual presenter.
+// Only successful physical posts/warps call this path; observations never do.
+private final class PostedPointerPosition: @unchecked Sendable {
+    private let lock = NSLock()
+    private var point: CGPoint?
+    func record(_ point: CGPoint) { lock.lock(); self.point = point; lock.unlock() }
+    func take() -> CGPoint? { lock.lock(); defer { lock.unlock() }; let result = point; point = nil; return result }
+}
+private let postedPointerPosition = PostedPointerPosition()
+func dtwTakePostedPointerPosition() -> CGPoint? { postedPointerPosition.take() }
+
+// The last posted endpoint proves only our cursor position. A user's subsequent
+// movement revokes return; it never becomes permission to warp their cursor.
+func dtwPointerReturnDestination(original: CGPoint?, posted: CGPoint?, current: CGPoint?) -> CGPoint? {
+    guard let original, let posted, let current,
+          [original.x, original.y, posted.x, posted.y, current.x, current.y].allSatisfy({ $0.isFinite }),
+          abs(current.x - posted.x) < 0.5, abs(current.y - posted.y) < 0.5 else { return nil }
+    return original
+}
+
+
 @_cdecl("dtw_set_pointer_presenter")
 public func dtwSetPointerPresenter(_ callback: (@convention(c) (Double, Double, Int32) -> Void)?) {
     pointerPresenter.set(callback)
@@ -26,6 +47,7 @@ public func dtwSetPointerPresenter(_ callback: (@convention(c) (Double, Double, 
 
 // 0: successful warp, 1: posted press, 2: posted release, 3: posted wheel.
 func dtwPresentPostedPointer(_ point: CGPoint, kind: Int32) {
+    if point.x.isFinite && point.y.isFinite { postedPointerPosition.record(point) }
     pointerPresenter.posted(point, kind: kind)
 }
 

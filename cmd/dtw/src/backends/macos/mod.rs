@@ -818,12 +818,45 @@ impl NativeBackend {
                 .validate_window(&original, call)
                 .map_err(|error| (error, false))?;
             request["target"] = local.clone();
-            let reply = self.rpc_on_guarded(
+            let mut reply = self.rpc_on_guarded(
                 &scene.worker,
                 request,
                 call,
                 guard.as_ref().zip(validation.as_ref()),
             )?;
+            if let Some(point) = reply
+                .as_object_mut()
+                .and_then(|r| r.remove("execution_pointer"))
+            {
+                // Register with the permanent owner before allowing this scene
+                // to discard its fallback. Neither metadata RPC posts input.
+                let cleanup_until = Instant::now() + Duration::from_millis(750);
+                let cleanup_poll = || {
+                    let left = cleanup_until.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        Err(Error::TimedOut)
+                    } else {
+                        Ok(left)
+                    }
+                };
+                let cleanup_call = CallContext {
+                    poll: &cleanup_poll,
+                };
+                let note = handoff_execution_pointer(
+                    point,
+                    &original,
+                    &local,
+                    |request| self.read_rpc(request, &cleanup_call),
+                    |request| {
+                        self.rpc_on(&scene.worker, request, &cleanup_call)
+                            .map_err(|(error, _)| error)
+                            .and_then(|reply| reply_error(&reply).map_or(Ok(reply), Err))
+                    },
+                );
+                if let Err(error) = note {
+                    self.cleanup_failure.lock().unwrap().get_or_insert(error);
+                }
+            }
             Ok((reply, local, before))
         })();
         // SCK can live until process exit, even after its reply. Resident
@@ -975,6 +1008,9 @@ impl Backend for NativeBackend {
         let reply = envelope_reply(&envelope, request_id)?;
         if let Some(error) = reply_error(&reply) {
             return Err(error);
+        }
+        if let Some(error) = native_cleanup_error(&reply) {
+            self.cleanup_failure.lock().unwrap().get_or_insert(error);
         }
         self.focus_pending.store(false, Ordering::Release);
         // No outstanding borrow is not a new restoration claim.
@@ -1505,6 +1541,35 @@ fn bound_pixel_point(
         return Err(Error::InvalidPoint);
     }
     Ok((x, y))
+}
+fn execution_pointer_note(point: Value, target: &Value) -> Result<Value, Error> {
+    let values = point.as_array().ok_or(Error::InvalidObservation)?;
+    if values.len() != 2
+        || !values
+            .iter()
+            .all(|v| v.as_f64().is_some_and(f64::is_finite))
+    {
+        return Err(Error::InvalidObservation);
+    }
+    Ok(json!({"operation":"note_execution_pointer", "target":target, "point":point}))
+}
+fn handoff_execution_pointer(
+    point: Value,
+    resident: &Value,
+    scene: &Value,
+    mut record: impl FnMut(Value) -> Result<Value, Error>,
+    mut acknowledge: impl FnMut(Value) -> Result<Value, Error>,
+) -> Result<(), Error> {
+    let request = execution_pointer_note(point.clone(), resident)?;
+    if record(request)?["recorded"] != true {
+        return Err(Error::InvalidObservation);
+    }
+    let reply =
+        acknowledge(json!({"operation":"ack_execution_pointer", "target":scene, "point":point}))?;
+    if reply["acknowledged"] != true {
+        return Err(Error::InvalidObservation);
+    }
+    Ok(())
 }
 fn native_cleanup_error(reply: &Value) -> Option<Error> {
     let cleanup = reply.get("cleanup_error")?;
@@ -3516,6 +3581,91 @@ fn confirmed_actions_keep_delivery_and_reject_unrelated_postconditions() {
             assert_eq!(
                 confirmed_action_reply(&invalid, expected).dispatch,
                 DispatchState::Unknown
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod pointer_return_tests {
+    use super::*;
+
+    #[test]
+    fn physical_endpoint_handoff_keeps_the_exact_resident_target() {
+        let target = json!({"app":{"pid":7,"generation":8},"native_id":9,"generation":10});
+        let request = execution_pointer_note(json!([-800.25, 125.5]), &target).unwrap();
+        assert_eq!(request["operation"], "note_execution_pointer");
+        assert_eq!(request["target"], target);
+        assert_eq!(request["point"], json!([-800.25, 125.5]));
+    }
+
+    #[test]
+    fn handoff_records_the_resident_before_releasing_the_scene_fallback() {
+        use std::cell::Cell;
+        let recorded = Cell::new(false);
+        handoff_execution_pointer(
+            json!([10, 20]),
+            &json!({"owner":"resident"}),
+            &json!({"owner":"scene"}),
+            |r| {
+                assert_eq!(r["target"]["owner"], "resident");
+                recorded.set(true);
+                Ok(json!({"recorded":true}))
+            },
+            |r| {
+                assert!(recorded.get());
+                assert_eq!(r["target"]["owner"], "scene");
+                Ok(json!({"acknowledged":true}))
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn failed_or_unconfirmed_recording_never_discards_the_fallback() {
+        for response in [
+            Err(Error::TimedOut),
+            Ok(json!({})),
+            Ok(json!({"recorded":false})),
+        ] {
+            assert!(handoff_execution_pointer(
+                json!([10, 20]),
+                &json!({}),
+                &json!({}),
+                |_| response.clone(),
+                |_| panic!("Do not acknowledge before permanent ownership is confirmed")
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn an_unconfirmed_acknowledgement_stays_a_cleanup_failure() {
+        assert_eq!(
+            handoff_execution_pointer(
+                json!([10, 20]),
+                &json!({}),
+                &json!({}),
+                |_| Ok(json!({"recorded":true})),
+                |_| Ok(json!({}))
+            ),
+            Err(Error::InvalidObservation)
+        );
+    }
+
+    #[test]
+    fn malformed_pointer_handoff_cannot_choose_a_return_destination() {
+        for value in [
+            json!(null),
+            json!([]),
+            json!([1]),
+            json!([1, 2, 3]),
+            json!([1, "2"]),
+            json!([null, 2]),
+        ] {
+            assert_eq!(
+                execution_pointer_note(value, &json!({})),
+                Err(Error::InvalidObservation)
             );
         }
     }

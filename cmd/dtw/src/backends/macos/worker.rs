@@ -428,6 +428,9 @@ fn foreground_delivery(
 }
 
 fn record_foreground_cleanup(result: &mut Value, cleanup: Value) {
+    if let Some(point) = cleanup.get("execution_pointer") {
+        result["execution_pointer"] = point.clone();
+    }
     result["delivery"]["focus_return"] = if cleanup.get("error").is_some() {
         json!("unconfirmed")
     } else {
@@ -439,6 +442,19 @@ fn record_foreground_cleanup(result: &mut Value, cleanup: Value) {
         // known dispatch or replacing the original action failure.
         result["cleanup_error"] = cleanup;
     }
+}
+
+#[cfg(test)]
+#[test]
+fn pointer_handoff_preserves_known_dispatch_and_primary_failure() {
+    let mut result = json!({"dispatch":"dispatched", "error":"original", "delivery":{}});
+    record_foreground_cleanup(
+        &mut result,
+        json!({"focus":"unchanged", "execution_pointer":[-800.25,125.5]}),
+    );
+    assert_eq!(result["dispatch"], "dispatched");
+    assert_eq!(result["error"], "original");
+    assert_eq!(result["execution_pointer"], json!([-800.25, 125.5]));
 }
 
 fn click_can_follow_focus(result: &Value) -> bool {

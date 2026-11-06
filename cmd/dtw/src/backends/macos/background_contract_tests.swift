@@ -1054,3 +1054,31 @@ _ = expectedBackgroundError("ax_unavailable") {
     }, wait: { _ in preconditionFailure("Invalid objects never authorize a retry") })
 }
 backgroundCheck(focusProofApps == 1)
+
+// Cursor return follows actual physical posts, not optional overlay rendering.
+_ = dtwTakePostedPointerPosition()
+backgroundCheck(dtwTakePostedPointerPosition() == nil)
+private let scriptCursorOrigin = CGPoint(x: 1405.30078125, y: 1757.75390625)
+private let hoverCursorPoint = CGPoint(x: 282.5, y: 297.70977783203125)
+private let nextCursorPoint = CGPoint(x: -800.25, y: 125.5)
+dtwPresentPostedPointer(hoverCursorPoint, kind: 0)
+backgroundCheck(dtwTakePostedPointerPosition() == hoverCursorPoint)
+backgroundCheck(dtwTakePostedPointerPosition() == nil)
+backgroundCheck(dtwPointerReturnDestination(original: scriptCursorOrigin,
+    posted: hoverCursorPoint, current: hoverCursorPoint) == scriptCursorOrigin)
+// A later physical click/move replaces only the endpoint, never the origin.
+dtwPresentPostedPointer(hoverCursorPoint, kind: 0)
+dtwPresentPostedPointer(nextCursorPoint, kind: 2)
+backgroundCheck(dtwPointerReturnDestination(original: scriptCursorOrigin,
+    posted: dtwTakePostedPointerPosition(), current: nextCursorPoint) == scriptCursorOrigin)
+// Moving the real mouse revokes the old endpoint's permission to return.
+backgroundCheck(dtwPointerReturnDestination(original: scriptCursorOrigin,
+    posted: hoverCursorPoint, current: nextCursorPoint) == nil)
+backgroundCheck(dtwPointerReturnDestination(original: nil,
+    posted: hoverCursorPoint, current: hoverCursorPoint) == nil)
+backgroundCheck(dtwPointerReturnDestination(original: scriptCursorOrigin,
+    posted: nil, current: hoverCursorPoint) == nil)
+backgroundCheck(dtwPointerReturnDestination(original: scriptCursorOrigin,
+    posted: hoverCursorPoint, current: nil) == nil)
+backgroundCheck(dtwPointerReturnDestination(original: scriptCursorOrigin,
+    posted: CGPoint(x: CGFloat.nan, y: 0), current: hoverCursorPoint) == nil)
