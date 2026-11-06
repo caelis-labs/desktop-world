@@ -10,7 +10,10 @@ use core_foundation::{
     number::CFNumber,
     string::{CFString as CFStr, CFStringRef},
 };
-use std::os::raw::{c_int, c_void};
+use std::{
+    os::raw::{c_int, c_void},
+    time::Duration,
+};
 #[repr(C)]
 pub struct __AXUIElement(c_void);
 pub type AXUIElementRef = *mut __AXUIElement;
@@ -169,16 +172,101 @@ impl Element {
         unsafe { ax_get_window_id(self.0) }
     }
     pub fn perform(&self, action: &str) -> AXError {
-        let remaining = super::control::remaining().as_secs_f32().min(2.0);
-        if remaining <= 0.001 {
-            return -25204;
-        }
-        let configured = unsafe { AXUIElementSetMessagingTimeout(self.0, remaining) };
-        if configured != 0 {
-            return configured;
-        }
         let action = CFStr::new(action);
-        unsafe { AXUIElementPerformAction(self.0, action.as_concrete_TypeRef()) }
+        action_with_reply_budget(
+            super::control::remaining(),
+            |seconds| unsafe { AXUIElementSetMessagingTimeout(self.0, seconds) },
+            || unsafe { AXUIElementPerformAction(self.0, action.as_concrete_TypeRef()) },
+        )
+    }
+}
+
+// Modal menu callbacks share the same caller budget as semantic AX presses.
+// A shorter private cap can turn an already delivered action into an unknown
+// result. Configure one bounded reply; never replay or hide a native error.
+fn action_with_reply_budget(
+    remaining: Duration,
+    configure: impl FnOnce(f32) -> AXError,
+    dispatch: impl FnOnce() -> AXError,
+) -> AXError {
+    let seconds = remaining.as_secs_f32();
+    if seconds <= 0.001 {
+        return -25204;
+    }
+    let configured = configure(seconds);
+    if configured != kAXErrorSuccess {
+        return configured;
+    }
+    dispatch()
+}
+
+#[cfg(test)]
+mod action_reply_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn modal_initialization_can_exceed_two_seconds_without_replay() {
+        let budget = Cell::new(0.0);
+        let calls = Cell::new(0);
+        let result = action_with_reply_budget(
+            Duration::from_secs(6),
+            |seconds| {
+                budget.set(seconds);
+                0
+            },
+            || {
+                calls.set(calls.get() + 1);
+                if budget.get() > 3.2 {
+                    0
+                } else {
+                    -25204
+                }
+            },
+        );
+        assert_eq!(result, 0);
+        assert_eq!(calls.get(), 1);
+        assert_eq!(budget.get(), 6.0);
+    }
+
+    #[test]
+    fn short_deadline_and_native_failure_are_preserved() {
+        for status in [-25204, -25202] {
+            let calls = Cell::new(0);
+            let result = action_with_reply_budget(
+                Duration::from_millis(75),
+                |seconds| {
+                    assert!((seconds - 0.075).abs() < 0.00001);
+                    0
+                },
+                || {
+                    calls.set(calls.get() + 1);
+                    status
+                },
+            );
+            assert_eq!(result, status);
+            assert_eq!(calls.get(), 1);
+        }
+    }
+
+    #[test]
+    fn expired_budget_or_configuration_failure_does_not_dispatch() {
+        assert_eq!(
+            action_with_reply_budget(
+                Duration::ZERO,
+                |_| panic!("expired budget configured"),
+                || panic!("expired action dispatched")
+            ),
+            -25204
+        );
+        assert_eq!(
+            action_with_reply_budget(
+                Duration::from_secs(6),
+                |_| -25202,
+                || panic!("action dispatched after configuration failed")
+            ),
+            -25202
+        );
     }
 }
 pub unsafe fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef {
