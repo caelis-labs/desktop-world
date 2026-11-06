@@ -3552,7 +3552,11 @@ private final class NativeStore: @unchecked Sendable {
         if dtwAccessibilityGranted(request: true), let firstOwned = onScreen.firstIndex(where: { $0.pid == app.pid }) {
             // Associated sheets/menus are in front of their client window. Do
             // not probe unrelated hidden windows or applications behind it.
-            for record in onScreen.prefix(firstOwned) where record.pid != app.pid {
+            // AppKit popup menus can own their CG surface in the client process
+            // without appearing in AXWindows. Reuse the live AX/pixel proof of
+            // service-owned menus for the frontmost same-process menu as well.
+            let attributionCandidates = [onScreen[firstOwned]] + onScreen.prefix(firstOwned).filter { $0.pid != app.pid }
+            for record in attributionCandidates {
                 guard let birth = try context.startStamp(record.pid) else { continue }
                 let (candidate, probeError) = try unprovenAssociationProbe(check: {
                     guard !dtwInputStopping() else { throw failure("native_stopping", "Window discovery was cancelled") }
@@ -3571,12 +3575,17 @@ private final class NativeStore: @unchecked Sendable {
                 guard let root = candidate, try context.startStamp(record.pid) == birth,
                       let live = try exactSurfaceRecord(cgWindowRows(context.deadline, only: record.id), expected: record),
                       live.bounds == record.bounds else { continue }
+                let sameProcess = record.pid == app.pid
+                if sameProcess, try axAttribute(root, kAXRoleAttribute, context.deadline) as? String != kAXMenuRole { continue }
+                let alreadyListed = candidates.contains(where: { $0.0.id == record.id })
                 guard associated[record.id] == nil,
-                      !candidates.contains(where: { $0.0.id == record.id }) else {
+                      !alreadyListed || sameProcess else {
                     throw failure("target_changed", "Associated surface identity duplicated during enumeration; list windows again")
                 }
                 associated[record.id] = SurfaceAssociation(ownerPID: record.pid, ownerBirth: birth, root: root)
-                candidates.append((live, String((source.first { ($0[kCGWindowNumber as String] as? UInt32) == record.id }?[kCGWindowName as String] as? String ?? "").prefix(512))))
+                if !alreadyListed {
+                    candidates.append((live, String((source.first { ($0[kCGWindowNumber as String] as? UInt32) == record.id }?[kCGWindowName as String] as? String ?? "").prefix(512))))
+                }
             }
         }
         coverage["scope"] = "application_and_proven_associated_surfaces"
@@ -6201,6 +6210,19 @@ private final class NativeStore: @unchecked Sendable {
                 return ["released": observations.removeValue(forKey: binding) != nil]
             }
             if operation == "begin_execution_focus" { return beginExecutionFocus(request) }
+            if operation == "prepare_background_order" || operation == "admit_background_order" {
+                let context = try RequestContext(request)
+                let target = request["target"] as? [String: Any]
+                let app = try NativeApp(target?["app"])
+                try context.verify(app)
+                if operation == "prepare_background_order" { prepareBackgroundWindowOrder(app, context) }
+                // Record only a sent/uncertain payload. Refused preparation
+                // creates no window-order obligation or input side effect.
+                else if backgroundWindowOrder?.previouslyAbove[app] != nil {
+                    backgroundWindowOrder?.admitted.insert(app)
+                }
+                return ["prepared": true]
+            }
             if operation == "press" { return press(request) }
             if operation == "set_value" { return setValue(request) }
             if ["focus", "type_text", "keypress", "scroll"].contains(operation) { return windowInput(request) }

@@ -185,6 +185,9 @@ unproven surface. `changed:false`
 compares these observed fields; visual-only changes require capture.
 An explicit `look()` uses semantics when available, ending automatic visual
 follow-ups while retaining a previously returned image's coordinate mapping.
+Within one script, a successful `look()` also preserves an earlier requested PNG
+when the window layout is unchanged; `view.image.captured_at_call` identifies its
+capture call. Input, changed surfaces and failed reads discard that pending PNG.
 The next coordinate gesture privately refreshes pixels and verifies its original
 canvas geometry and application instance before input, then resumes visual
 follow-ups. Without a prior capture, coordinates still require `capture()`;

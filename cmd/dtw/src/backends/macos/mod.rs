@@ -658,7 +658,33 @@ impl NativeBackend {
         };
         request["_defer_foreground"] = json!(true);
         request["_execution_foreground"] = json!(scope.is_some());
-        let mut reply = send(request.clone())?;
+        let background_order = scope.is_none()
+            && self.input_policy == InputPolicy::Auto
+            && !matches!(operation.as_str(), "focus" | "focus_app")
+            && target["app"].is_object();
+        if background_order {
+            // Addressed scene input can raise an AppKit window without
+            // activating its app. The resident owns return obligations across
+            // short-lived scene workers, just as it does for semantic presses.
+            // This optional layering proof never authorizes or gates payload.
+            let _ = self.rpc(
+                json!({"operation":"prepare_background_order","target":target}),
+                call,
+            );
+        }
+        let sent = send(request.clone());
+        if background_order
+            && match &sent {
+                Ok(reply) => reply["dispatch"] != "not_dispatched",
+                Err((_, sent)) => *sent,
+            }
+        {
+            let _ = self.rpc(
+                json!({"operation":"admit_background_order","target":target}),
+                call,
+            );
+        }
+        let mut reply = sent?;
         if reply.get("foreground_plan").is_some() {
             let Some(reason) = input_route::foreground_plan(&reply, &operation) else {
                 // A malformed/contradictory action reply cannot certify that no
@@ -2314,6 +2340,66 @@ for line in sys.stdin:
 
     fn scene_fixture(code: &str) -> Result<Worker, Error> {
         Worker::spawn(std::path::Path::new("python3"), &["-u", "-c", code]).map_err(transport_error)
+    }
+
+    #[test]
+    fn resident_layer_guard_precedes_background_payload_without_requiring_focus() {
+        for input_policy in [InputPolicy::Auto, InputPolicy::BackgroundOnly] {
+            for unavailable in [false, true] {
+                let code = format!(
+                    r#"import sys,json
+ops=[]
+for line in sys.stdin:
+ r=json.loads(line);op=r['operation'];ops.append(op)
+ if op in ['prepare_background_order','admit_background_order']:
+  result={{'error':'ax_unavailable','message':'optional proof unavailable'}} if {unavailable} else {{'prepared':True}}
+ elif op=='guard_log':result={{'ops':ops}}
+ elif op=='release_focus':result={{'focus':'unchanged'}}
+ else:result={{'dispatch':'dispatched','evidence':'unverified'}}
+ print(json.dumps({{'request_id':r['request_id'],'result':result}}),flush=True)
+"#,
+                    unavailable = if unavailable { "True" } else { "False" }
+                );
+                let backend = NativeBackend {
+                    worker: Arc::new(scene_fixture(&code).unwrap()),
+                    scene: SceneOwner::default(),
+                    stamp: ProviderStamp {
+                        id: "passive-layer-guard".into(),
+                        generation: 1,
+                    },
+                    cleanup_failure: Mutex::new(None),
+                    input_policy,
+                    cursor: Arc::new(CursorSession::default()),
+                    cursor_operation: AtomicU64::new(0),
+                    focus_pending: AtomicBool::new(false),
+                    permissions: Mutex::new(None),
+                };
+                let poll = || Ok(Duration::from_secs(2));
+                let call = CallContext { poll: &poll };
+                let outcome = backend.action(
+                    json!({"operation":"keypress","target":{"app":{"pid":100,"generation":1},"native_id":101,"generation":1}}),
+                    &call,
+                );
+                assert_eq!(outcome.dispatch, DispatchState::Dispatched);
+                assert!(!backend.focus_pending.load(Ordering::Acquire));
+                let log = backend
+                    .read_rpc(json!({"operation":"guard_log"}), &call)
+                    .unwrap();
+                let expected = if input_policy == InputPolicy::Auto {
+                    json!([
+                        "prepare_background_order",
+                        "keypress",
+                        "admit_background_order",
+                        "guard_log"
+                    ])
+                } else {
+                    json!(["keypress", "guard_log"])
+                };
+                assert_eq!(log["ops"], expected);
+                assert_eq!(backend.finish_execution(), Ok(None));
+                backend.shutdown().unwrap();
+            }
+        }
     }
 
     fn echo_scene() -> Result<Worker, Error> {

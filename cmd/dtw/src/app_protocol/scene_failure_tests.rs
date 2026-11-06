@@ -432,6 +432,22 @@ fn coordinate_gestures_renew_bindings_without_explicit_recapture() {
 }
 
 #[test]
+fn explicit_capture_survives_semantic_reads_in_the_same_script() {
+    let (server, backend) = scene_agent();
+    let reply = scene_exec(&server, "await app.capture(); return await app.look();");
+    assert!(!reply.is_error, "{}", reply.data);
+    assert!(
+        reply.image.is_some(),
+        "The explicitly requested PNG was discarded"
+    );
+    assert_eq!(backend.base.0.captures.load(Ordering::SeqCst), 1);
+    assert_eq!(reply.data["value"]["last_capture"]["step"], 1);
+    let compact = crate::app_protocol::projection::execution(reply);
+    assert_eq!(compact.data["view"]["image"]["captured_at_call"], 1);
+    assert!(compact.data["view"]["image"]["width"].as_u64().is_some());
+}
+
+#[test]
 fn semantic_readbacks_keep_the_captured_mapping_without_automatic_images() {
     let (server, backend) = scene_agent();
     let capture = scene_exec(&server, "await app.capture();");

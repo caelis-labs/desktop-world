@@ -519,7 +519,20 @@ impl<B: Backend + 'static> Coordinator<B> {
         } else {
             Ok(work.completed.value.clone().unwrap_or(Value::Null))
         };
+        // Semantic reads do not cancel pixels requested earlier in this script.
+        // Input, failed reads and changed surfaces still retire the old image.
+        let preserve_capture = call.op == "scene.look"
+            && work.completed.error.is_none()
+            && work.completed.image.is_none()
+            && last_image.is_some()
+            && last_capture.as_ref().is_some_and(|capture| {
+                capture["observation"]["windows"].is_array()
+                    && work.completed.value.as_ref().is_some_and(|snapshot| {
+                        capture["observation"]["windows"] == snapshot["windows"]
+                    })
+            });
         if scene_call
+            && !preserve_capture
             && matches!(
                 call.op.as_str(),
                 "scene.look" | "scene.capture" | "scene.after" | "scene.waitForNewWindow"
@@ -562,6 +575,12 @@ impl<B: Backend + 'static> Coordinator<B> {
             } else {
                 run.snapshot = work.completed.value.clone();
                 run.view = projected;
+                if preserve_capture {
+                    if let (Some(view), Some(capture)) = (&mut run.view, &last_capture) {
+                        view["image"] = capture["observation"]["image"].clone();
+                        view["image"]["captured_at_call"] = capture["step"].clone();
+                    }
+                }
             }
         }
         if text_read_failed {

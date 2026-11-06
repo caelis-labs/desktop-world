@@ -29,7 +29,10 @@ background=0
 restores=0
 for line in sys.stdin:
  r=json.loads(line); op=r['operation']
- if op=='begin_execution_focus':
+ if op in ['prepare_background_order','admit_background_order']:
+  assert not active
+  v={'prepared':True}
+ elif op=='begin_execution_focus':
   assert not active
   active=True; begins+=1
   v={'dispatch':'dispatched','evidence':'unverified','scope_active':True,'borrowed':True}
