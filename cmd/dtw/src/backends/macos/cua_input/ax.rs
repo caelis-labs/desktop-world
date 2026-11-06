@@ -306,7 +306,12 @@ pub fn focused_window_id_of_pid(pid: i32) -> Option<u32> {
         let window = copy_element_attr(app, "AXFocusedWindow");
         CFRelease(app as CFTypeRef);
         let Some(window) = window else {
-            return focused_top_level_text_control_id(pid);
+            // Preserve a real focused window (VCL can retain stale field
+            // focus). Only a proven absent window admits the existing CUA
+            // focused-control window primitive, including Chromium omniboxes.
+            return focused_window_absent(pid)
+                .then(|| focused_element_window_id_of_pid(pid))
+                .flatten();
         };
         let window_id = ax_get_window_id(window);
         CFRelease(window as CFTypeRef);
@@ -328,6 +333,11 @@ pub fn focused_element_window_id_of_pid(pid: i32) -> Option<u32> {
         let Some(window) = window else {
             return focused_top_level_text_control_id(pid);
         };
+        let mut owner = 0;
+        if AXUIElementGetPid(window, &mut owner) != kAXErrorSuccess || owner != pid {
+            CFRelease(window as CFTypeRef);
+            return None;
+        }
         let window_id = ax_get_window_id(window);
         CFRelease(window as CFTypeRef);
         window_id

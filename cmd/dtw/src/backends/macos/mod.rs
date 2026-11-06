@@ -1737,6 +1737,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_target_refusal_keeps_its_reason_and_stable_protocol_code() {
+        let native = json!({"error":"target_changed","message":"Selected window surface is no longer available"});
+        let error = reply_error(&native).unwrap();
+        assert_eq!(
+            error,
+            Error::NativeFailure {
+                code: "target_changed".into(),
+                message: native["message"].as_str().unwrap().into()
+            }
+        );
+        assert_eq!(
+            crate::app_protocol::wire::core_error(&error).code,
+            "target_changed"
+        );
+        assert_eq!(
+            reply_error(&json!({"error":"target_changed"})),
+            Some(Error::TargetChanged)
+        );
+    }
+
+    #[test]
     fn lifecycle_confirmation_requires_the_exact_native_fact() {
         for dispatch in ["dispatched", "not_dispatched"] {
             let valid =
@@ -1834,7 +1855,14 @@ mod tests {
                 )
                 .unwrap())
             });
-            assert_eq!(result, Err(Error::TargetChanged));
+            assert_eq!(
+                result,
+                Err(Error::NativeFailure {
+                    code: "target_changed".into(),
+                    message: "Window identity or surface owner changed during capture validation"
+                        .into(),
+                })
+            );
             assert_eq!(attempts, 1);
         }
     }
@@ -2601,7 +2629,10 @@ for line in sys.stdin:
             bind_scene_target(&original, |_| Ok(
                 json!({"error":"target_changed", "message":"Selected surface closed"})
             )),
-            Err(Error::TargetChanged)
+            Err(Error::NativeFailure {
+                code: "target_changed".into(),
+                message: "Selected surface closed".into()
+            })
         );
         assert_eq!(
             bind_scene_target(&original, |_| Ok(
@@ -3331,6 +3362,12 @@ fn reply_error(v: &Value) -> Option<Error> {
             match parse_inventory_report(&v["details"]["inventory"], false) {
                 Ok(report) => Error::InventoryUnproven(report),
                 Err(error) => error,
+            }
+        }
+        "target_changed" if v["message"].as_str().is_some_and(|m| !m.is_empty()) => {
+            Error::NativeFailure {
+                code: code.into(),
+                message: v["message"].as_str().unwrap().into(),
             }
         }
         "target_changed" | "app_closed" | "window_closed" => Error::TargetChanged,

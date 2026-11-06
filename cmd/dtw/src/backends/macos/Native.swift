@@ -1230,6 +1230,18 @@ private func focusedWindowValue<Element>(_ result: AXError, element: Element?) t
     return element
 }
 
+// A missing AXFocusedWindow need not mean a missing keyboard receiver (e.g.
+// Chromium's omnibox). Only an exact, same-owner focused control and AXWindow
+// can fill that absence. A real focused window always wins over stale fields.
+private func focusedWindowOrReceiver<Element>(_ primary: Element?, pid: Int32,
+    receiver: () throws -> Element?, receiverWindow: (Element) throws -> Element?,
+    owner: (Element) throws -> Int32) throws -> Element? {
+    if let primary { return primary }
+    guard let control = try receiver(), try owner(control) == pid,
+          let window = try receiverWindow(control), try owner(window) == pid else { return nil }
+    return window
+}
+
 private func nativeFocusedWindow(_ app: AXUIElement, pid: Int32,
                                   deadline: Deadline, traceStage: String? = nil) throws -> AXUIElement? {
     try deadline.prepare(app)
@@ -1248,7 +1260,10 @@ private func nativeFocusedWindow(_ app: AXUIElement, pid: Int32,
                               "ax_error":result.rawValue,
                               "elapsed_ms":Int((ProcessInfo.processInfo.systemUptime - started) * 1_000)])
     }
-    guard let window = try focusedWindowValue(result, element: axElement(value)) else { return nil }
+    guard let window = try focusedWindowOrReceiver(focusedWindowValue(result, element: axElement(value)), pid: pid,
+        receiver: { axElement(try axAttribute(app, kAXFocusedUIElementAttribute, deadline)) },
+        receiverWindow: { axElement(try axAttribute($0, kAXWindowAttribute, deadline)) },
+        owner: { try axPID($0, deadline) }) else { return nil }
     guard try axPID(window, deadline) == pid else {
         throw failure("focus_unproven", "Focused window belongs to another process")
     }

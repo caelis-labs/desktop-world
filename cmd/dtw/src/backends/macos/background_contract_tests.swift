@@ -1108,3 +1108,22 @@ backgroundCheck(dtwPointerReturnDestination(original: scriptCursorOrigin,
     posted: hoverCursorPoint, current: nil) == nil)
 backgroundCheck(dtwPointerReturnDestination(original: scriptCursorOrigin,
     posted: CGPoint(x: CGFloat.nan, y: 0), current: hoverCursorPoint) == nil)
+
+// AXFocus absence can be bridged by the exact focused receiver's owned window,
+// never by a stale field overriding a real window, a foreign owner, or AX error.
+private var fallbackReads = 0
+private let primaryFocus = try focusedWindowOrReceiver(10, pid: 7,
+    receiver: { fallbackReads += 1; return 20 }, receiverWindow: { _ in 30 }, owner: { _ in 7 })
+expect(primaryFocus == 10 && fallbackReads == 0, "Stale receiver overrode actual focused window")
+private let receiverFocus = try focusedWindowOrReceiver(Optional<Int>.none, pid: 7,
+    receiver: { 20 }, receiverWindow: { _ in 30 }, owner: { _ in 7 })
+expect(receiverFocus == 30, "Owned focused receiver did not supply missing keyboard window")
+for foreign in [20, 30] {
+    let rejected = try focusedWindowOrReceiver(Optional<Int>.none, pid: 7,
+        receiver: { 20 }, receiverWindow: { _ in 30 }, owner: { $0 == foreign ? 8 : 7 })
+    expect(rejected == nil, "Foreign focused control/window supplied a keyboard destination")
+}
+private let noReceiverWindow = try focusedWindowOrReceiver(Optional<Int>.none, pid: 7,
+    receiver: { 20 }, receiverWindow: { _ in nil }, owner: { _ in 7 })
+expect(noReceiverWindow == nil, "Missing receiver window was invented")
+print("Missing AXFocusedWindow uses only the exact owned focused receiver window; real windows keep precedence")

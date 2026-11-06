@@ -447,20 +447,34 @@ impl<B: Backend + 'static> Coordinator<B> {
                     Duration::ZERO
                 })
             .min(deadline);
-            let rows = loop {
-                let work = self.scene_atomic(id, "windows", json!({}), deadline);
-                if work.completed.error.is_some() {
-                    return work;
-                }
-                let value = work.completed.value.unwrap();
-                let rows = ordered(value["windows"].as_array().cloned().unwrap_or_default());
-                if rows.iter().any(|row| row["visible"] == true) || Instant::now() >= until {
-                    break rows;
-                }
-                std::thread::sleep(
-                    Duration::from_millis(20).min(until.saturating_duration_since(Instant::now())),
-                );
-            };
+            let rows =
+                loop {
+                    let mut work = self.scene_atomic(id, "windows", json!({}), deadline);
+                    // A transient popup can disappear during this read-only
+                    // inventory, before the requested payload has been admitted.
+                    // Use the same single complete-read renewal as look(); never
+                    // retry an input, a changed app incarnation, or a focus refusal.
+                    if work.completed.error.as_ref().is_some_and(|e| {
+                        matches!(e.code.as_str(), "target_changed" | "stale_window")
+                    }) && !self.runtime.instances().is_empty()
+                        && Instant::now() + Duration::from_millis(80) < deadline
+                    {
+                        std::thread::sleep(Duration::from_millis(80));
+                        work = self.scene_atomic(id, "windows", json!({}), deadline);
+                    }
+                    if work.completed.error.is_some() {
+                        return work;
+                    }
+                    let value = work.completed.value.unwrap();
+                    let rows = ordered(value["windows"].as_array().cloned().unwrap_or_default());
+                    if rows.iter().any(|row| row["visible"] == true) || Instant::now() >= until {
+                        break rows;
+                    }
+                    std::thread::sleep(
+                        Duration::from_millis(20)
+                            .min(until.saturating_duration_since(Instant::now())),
+                    );
+                };
             self.state.lock().unwrap().scene.window_wait_pending = false;
             let mut state = self.state.lock().unwrap();
             let instance = selected_instance.or_else(|| {

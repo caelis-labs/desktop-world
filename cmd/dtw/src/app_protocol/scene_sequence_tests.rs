@@ -84,6 +84,48 @@ fn unidentified_targets_cannot_be_rebound_by_label_or_position() {
 }
 
 #[test]
+fn implicit_keyboard_renews_only_one_transient_inventory_without_replaying_input() {
+    for (cause, failures, succeeds) in [
+        (Error::TargetChanged, 1, true),
+        (
+            Error::NativeFailure {
+                code: "target_changed".into(),
+                message: "Popup closed during inventory".into(),
+            },
+            1,
+            true,
+        ),
+        (Error::TargetChanged, 2, false),
+        (Error::WrongApp, 1, false),
+    ] {
+        let (server, catalog) = agent();
+        let gate = catalog.backend.action_gate();
+        let running = server.clone();
+        let worker = std::thread::spawn(move || {
+            exec(&running, "keyboard_inventory", "await app.look(); await app.keypress('META+L'); await app.typeText('example.com');")
+        });
+        gate.entered();
+        for _ in 0..failures {
+            catalog
+                .backend
+                .0
+                .model
+                .lock()
+                .unwrap()
+                .window_errors
+                .push_back(cause.clone());
+        }
+        gate.release();
+        let reply = worker.join().unwrap();
+        assert_eq!(!reply.is_error, succeeds, "{}", reply.data);
+        assert_eq!(
+            catalog.backend.0.actions.load(Ordering::SeqCst),
+            if succeeds { 2 } else { 1 }
+        );
+    }
+}
+
+#[test]
 fn keyboard_routes_by_native_focus_instead_of_visual_overlay_order() {
     for focused in [Some(101), Some(102), None] {
         let (server, catalog) = agent();
