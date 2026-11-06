@@ -393,12 +393,14 @@ impl<B: Backend + 'static> Coordinator<B> {
             state.scene.raster = None;
             let active = state.scene.active.clone();
             drop(state);
-            return self.scene_atomic(
+            let work = self.scene_atomic(
                 id,
                 "quit",
                 active.map(|w| json!({"window_ref":w})).unwrap_or(json!({})),
                 deadline,
             );
+            self.scene_wait_after_application_input(&work);
+            return work;
         }
         if matches!(op, "scene.move" | "scene.drag") {
             return self.scene_pointer(id, op, args, deadline);
@@ -676,7 +678,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         let Some(before) = self.state.lock().unwrap().scene.pending_new_window.take() else {
             return failed(error(
                 "input_required",
-                "waitForNewWindow requires a preceding dispatched click or keypress",
+                "waitForNewWindow requires a preceding dispatched input",
             ));
         };
         let until = (Instant::now()

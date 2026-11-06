@@ -8,6 +8,7 @@ struct Life {
     quits: usize,
     closed: Vec<u64>,
     quit_pending: bool,
+    quit_dialog: bool,
     omit_launch_identity: bool,
     unverified_launch: bool,
     exit_on_press: bool,
@@ -106,9 +107,17 @@ impl Backend for Provider {
             }
             return Err(Error::TargetChanged);
         }
+        let mut windows = inventory.windows;
+        if life.quit_dialog && life.quits > 0 {
+            let mut dialog = windows[0].clone();
+            dialog.target.native_id = 303;
+            dialog.title = "Quit confirmation".into();
+            dialog.scene = WindowLayout::new([0., 0., 500., 300.], 0);
+            dialog.scene.as_mut().unwrap().keyboard_modal = Some(true);
+            windows.push(dialog);
+        }
         Ok(test_inventory(
-            inventory
-                .windows
+            windows
                 .into_iter()
                 .filter(|w| !life.closed.contains(&w.target.native_id))
                 .collect(),
@@ -431,4 +440,51 @@ fn final_view_after_self_terminating_button_requires_separate_exit_proof_and_nev
             "Final observation must never repeat termination"
         );
     }
+}
+
+#[test]
+fn dispatched_quit_can_wait_for_confirmation_without_repeating_input() {
+    let life = Arc::new(Mutex::new(Life {
+        quit_pending: true,
+        quit_dialog: true,
+        ..Life::default()
+    }));
+    let server = Server::new(Installed {
+        provider: Provider {
+            life: life.clone(),
+            mock: MockBackend::new(),
+        },
+    });
+    let result = run(&server, "await app.look(); await app.quit(); return (await app.waitForNewWindow({timeout_ms:80})).windows;");
+    assert!(!result.is_error, "{}", result.data);
+    assert!(result.data["value"]["result"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|w| w["title"] == "Quit confirmation"));
+    let life = life.lock().unwrap();
+    assert_eq!((life.launches, life.quits), (1, 1));
+}
+
+#[test]
+fn wait_after_confirmed_quit_never_cold_starts_the_application() {
+    let life = Arc::new(Mutex::new(Life::default()));
+    let server = Server::new(Installed {
+        provider: Provider {
+            life: life.clone(),
+            mock: MockBackend::new(),
+        },
+    });
+    let result = run(
+        &server,
+        "await app.look(); await app.quit(); await app.waitForNewWindow({timeout_ms:30});",
+    );
+    assert_eq!(
+        result.data["error"]["code"], "wait_timeout",
+        "{}",
+        result.data
+    );
+    assert_eq!(result.data["value"]["view"]["running"], false);
+    let life = life.lock().unwrap();
+    assert_eq!((life.launches, life.quits), (1, 1));
 }
