@@ -158,9 +158,16 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
                     .as_u64()
                     .is_none_or(|number| number < minimum || number > maximum)
             }) {
+                let end_hint = if key == "offset" && args[key].is_null() {
+                    "; next_offset:null means the text has ended"
+                } else {
+                    ""
+                };
                 return Err(error(
                     "invalid_arguments",
-                    "Invalid readText offset or limit",
+                    &format!(
+                        "readText {key} must be an integer from {minimum} to {maximum}{end_hint}"
+                    ),
                 ));
             }
         }

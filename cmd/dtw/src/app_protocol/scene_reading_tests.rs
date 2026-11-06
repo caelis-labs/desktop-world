@@ -924,3 +924,37 @@ fn intervening_look_cannot_silently_rebind_a_text_continuation() {
     assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), before);
     assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
 }
+
+#[test]
+fn invalid_text_page_arguments_name_the_field_and_explain_the_end_marker() {
+    let (server, catalog) = agent();
+    for (argument, message) in [
+        ("offset:null", "next_offset:null means the text has ended"),
+        ("offset:-1", "readText offset must be an integer from 0"),
+        (
+            "limit:1",
+            "readText limit must be an integer from 2 to 16384",
+        ),
+    ] {
+        let result = exec(
+            &server,
+            argument,
+            &format!("await app.readText({{target:'w1.e1',{argument}}});"),
+        );
+        assert_eq!(
+            result.data["error"]["code"], "invalid_arguments",
+            "{}",
+            result.data
+        );
+        assert!(
+            result.data["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(message),
+            "{}",
+            result.data
+        );
+    }
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+    assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 0);
+}
