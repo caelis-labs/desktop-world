@@ -580,6 +580,20 @@ private struct CGRecord {
     var coordinates: [Double] { [bounds.minX, bounds.minY, bounds.width, bounds.height] }
 }
 
+// These rows must come from optionOnScreenOnly, whose order is documented.
+// Existing foreground overlays are preserved; only a target window newly
+// crossing the exact original window can require a return.
+private func targetWindowsAbove(_ rows: [CGRecord], original: CGWindowID,
+                                owner: Int32, target: Int32) -> Set<CGWindowID>? {
+    guard let index = rows.firstIndex(where: { $0.id == original && $0.pid == owner }) else { return nil }
+    return Set(rows.prefix(index).filter { $0.pid == target }.map(\.id))
+}
+
+private func originalAboveOtherApps(_ rows: [CGRecord], original: CGWindowID, owner: Int32) -> Bool {
+    guard let index = rows.firstIndex(where: { $0.id == original && $0.pid == owner }) else { return false }
+    return rows.prefix(index).allSatisfy { $0.pid == owner }
+}
+
 // Fixed counters contain only facts about the requested PID. No titles, raw AX
 // values or other applications enter the failure message. Error samples are capped.
 private struct WindowInventoryDiagnostics {
@@ -2304,10 +2318,19 @@ private struct SemanticTextFields {
     let name: String?
     let value: String?
 
-    init(role: String, title: String?, value: String?, description: String?) {
+    init(role: String, title: String?, value: String?, description: String?, subrole: String? = nil) {
+        // Standard window controls often publish no title or description. Use
+        // their native identity, never button position/order, to name them.
+        let chromeName: String?
+        switch (role, subrole) {
+        case (kAXButtonRole, "AXCloseButton"?): chromeName = "Close window"
+        case (kAXButtonRole, "AXMinimizeButton"?): chromeName = "Minimize window"
+        case (kAXButtonRole, "AXZoomButton"?): chromeName = "Zoom window"
+        default: chromeName = nil
+        }
         let labels = [title, value, description].compactMap { $0 }.filter { !$0.isEmpty }
-        label = labels.isEmpty ? String(String.UnicodeScalarView(role.unicodeScalars.prefix(256))) : labels.joined(separator: " | ")
-        name = title?.isEmpty == false ? title : description
+        label = labels.isEmpty ? chromeName ?? String(String.UnicodeScalarView(role.unicodeScalars.prefix(256))) : labels.joined(separator: " | ")
+        name = title?.isEmpty == false ? title : description?.isEmpty == false ? description : chromeName ?? description
         self.value = value
     }
 
@@ -3086,7 +3109,9 @@ private final class FocusActivationObserver: @unchecked Sendable {
                 serial &+= 1; epoch = FocusBorrowEpoch(initialPID: initialPID, targetPID: targetPID, targetWindow: window)
                 windowFamily = family; familyArmed = false
                 let token = serial; lock.unlock()
-                if window != nil || family != nil { try observeWindows(targetPID, on: loop, deadline: deadline) }
+                do {
+                    if window != nil || family != nil { try observeWindows(targetPID, on: loop, deadline: deadline) }
+                } catch { end(token); throw error }
                 CFRunLoopPerformBlock(loop, CFRunLoopMode.defaultMode.rawValue) { timer.fireDate = Date() }
                 CFRunLoopWakeUp(loop)
                 return token
@@ -3278,6 +3303,15 @@ private final class NativeStore: @unchecked Sendable {
         let window: AXUIElement?
         let windowID: CGWindowID?
     }
+    private struct BackgroundWindowOrder {
+        let epoch: UInt64
+        let original: PriorForeground
+        var previouslyAbove: [NativeApp: Set<CGWindowID>]
+        var admitted: Set<NativeApp> = []
+    }
+    // Resident semantic AXPress can create/raise windows without activating its
+    // app. This obligation lasts until script settlement, not just AX's reply.
+    private var backgroundWindowOrder: BackgroundWindowOrder?
     // Resident payloads and the observer share one monotonic window anchor.
     // A scope begun without windows binds its first concrete focused root once.
     private final class ExecutionFocusAnchor: @unchecked Sendable {
@@ -3360,12 +3394,12 @@ private final class NativeStore: @unchecked Sendable {
         // Keep an invalidated durable scope until release: repeated begin must
         // never turn a user leave/return into permission to reacquire foreground.
         if let execution = executionFocus { return execution.app }
-        guard let borrowed = borrowedFocus else { return nil }
+        guard let borrowed = borrowedFocus else { return backgroundWindowOrder?.admitted.first }
         // External focus choice ends our borrow. No physical-input lease is
         // needed to discard that ownership; no restoration will be attempted.
         if focusObserver.invalidated(borrowed.activationEpoch) {
             borrowedFocus = nil; focusObserver.end(borrowed.activationEpoch)
-            return nil
+            return backgroundWindowOrder?.admitted.first
         }
         return borrowed.target.app
     }
@@ -4214,7 +4248,8 @@ private final class NativeStore: @unchecked Sendable {
                         try text(kAXDescriptionAttribute)
                     }
                     if descriptionRead.incompleteMatch { observation.note("node_unavailable") }
-                    let fields = SemanticTextFields(role: role, title: title, value: value, description: descriptionRead.text)
+                    let fields = SemanticTextFields(role: role, title: title, value: value,
+                        description: descriptionRead.text, subrole: subrole)
                     textMatch.includePreview(fields, needle: observation.query.text)
                     guard textMatch.matched else {
                         if textMatch.incomplete { observation.note("text_limit") }
@@ -5152,6 +5187,9 @@ private final class NativeStore: @unchecked Sendable {
         var changed = false
         do {
             let context = try RequestContext(request)
+            // A real borrow supersedes the passive order guard. Settle any
+            // prior background effect before capturing this borrow's owner.
+            _ = releaseBackgroundWindowOrder(context.deadline)
             guard request["input_policy"] as? String == "auto" else {
                 throw failure("foreground_required", "Execution foreground borrow requires automatic input policy")
             }
@@ -5277,6 +5315,93 @@ private final class NativeStore: @unchecked Sendable {
             })
     }
 
+    private func visibleWindowOrder(_ deadline: Deadline) throws -> [CGRecord] {
+        try deadline.check()
+        guard let rows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], 0) as? [[String: Any]] else {
+            throw failure("windows_unavailable", "Cannot observe visible window order")
+        }
+        try deadline.check()
+        return rows.filter { $0[kCGWindowLayer as String] as? Int == 0 }.compactMap(cgRecord)
+    }
+
+    private func prepareBackgroundWindowOrder(_ app: NativeApp, _ context: RequestContext) {
+        guard executionFocus == nil, borrowedFocus == nil else { return }
+        // Optional user-friendliness proof must not consume the payload's full
+        // deadline or become another functional background-input gate.
+        let deadline = context.deadline.limited(to: ProcessInfo.processInfo.systemUptime + 0.15)
+        do {
+            if backgroundWindowOrder == nil {
+                let original = try capturePriorForeground(RequestContext(deadline: deadline))
+                guard original.pid != app.pid, let id = original.windowID, original.window != nil else { return }
+                let rows = try visibleWindowOrder(deadline)
+                // Raising cannot insert below an existing foreign overlay.
+                // Preserve that user-chosen layering instead of disturbing it.
+                guard originalAboveOtherApps(rows, original: id, owner: original.pid),
+                      let above = targetWindowsAbove(rows, original: id,
+                          owner: original.pid, target: app.pid) else { return }
+                let epoch = try executionFocusObserver.begin(initialPID: original.pid, targetPID: original.pid,
+                    window: id, deadline: deadline)
+                executionFocusObserver.established(epoch, pid: original.pid, window: id)
+                backgroundWindowOrder = BackgroundWindowOrder(epoch: epoch, original: original, previouslyAbove: [app: above])
+            } else if backgroundWindowOrder?.previouslyAbove[app] == nil,
+                      let scope = backgroundWindowOrder, let id = scope.original.windowID,
+                      let above = targetWindowsAbove(try visibleWindowOrder(deadline), original: id,
+                          owner: scope.original.pid, target: app.pid) {
+                backgroundWindowOrder?.previouslyAbove[app] = above
+            }
+        } catch {
+            traceSemanticFailure(["operation":"background_window_order_capture", "status":"unverified",
+                "error":(error as? NativeFailure)?.code ?? "native_error"])
+        }
+    }
+
+    private func releaseBackgroundWindowOrder(_ deadline: Deadline) -> String {
+        guard let scope = backgroundWindowOrder else { return "unchanged" }
+        backgroundWindowOrder = nil
+        defer { executionFocusObserver.end(scope.epoch) }
+        guard !scope.admitted.isEmpty, let id = scope.original.windowID,
+              let window = scope.original.window else { return "unchanged" }
+        do {
+            let context = RequestContext(deadline: deadline)
+            func ownerStillCurrent() throws -> Bool {
+                guard !executionFocusObserver.invalidated(scope.epoch) else { return false }
+                return try priorForegroundIsCurrent(scope.original, context)
+            }
+            guard try ownerStillCurrent() else { return "changed_externally" }
+            let rows = try visibleWindowOrder(deadline)
+            var raised: Set<CGWindowID> = []
+            for app in scope.admitted {
+                // Exited/replaced PIDs never authorize restoring over a new app.
+                guard try context.startStamp(app.pid) == app.generation else { continue }
+                guard let above = targetWindowsAbove(rows, original: id, owner: scope.original.pid, target: app.pid) else {
+                    return "unconfirmed"
+                }
+                raised.formUnion(above.subtracting(scope.previouslyAbove[app] ?? []))
+            }
+            guard !raised.isEmpty else { return "unchanged" }
+            try deadline.prepare(window)
+            guard try ownerStillCurrent() else { return "changed_externally" }
+            // Restore layering only. Do not activate, make-key, move the pointer,
+            // replay AXPress or touch windows that were already above the owner.
+            guard AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success else { return "unconfirmed" }
+            let result: Bool = try waitForEstablishedFocus(remaining: {
+                deadline.uptime - ProcessInfo.processInfo.systemUptime
+            }, check: { try deadline.check() }, read: {
+                guard try ownerStillCurrent() else { return false }
+                let current = try self.visibleWindowOrder(deadline)
+                guard let index = current.firstIndex(where: { $0.id == id && $0.pid == scope.original.pid }) else { return false }
+                return current.prefix(index).contains(where: { raised.contains($0.id) }) ? nil : true
+            }, wait: { CFRunLoopRunInMode(.defaultMode, $0, false) })
+            return result == true ? "restored" : "changed_externally"
+        } catch {
+            // A layering failure does not make the already delivered action or
+            // the keyboard cleanup unsafe. Report settlement without retiring it.
+            traceSemanticFailure(["operation":"background_window_order_return", "status":"unverified",
+                "error":(error as? NativeFailure)?.code ?? "native_error"])
+            return "unconfirmed"
+        }
+    }
+
     // A newly opened native panel can temporarily answer cannotComplete for
     // AXFocusedWindow. Re-read only the full ownership proof under the original
     // cleanup budget; no activation, payload or restoration is replayed.
@@ -5378,7 +5503,8 @@ private final class NativeStore: @unchecked Sendable {
         if let focusCleanupFailure { throw focusCleanupFailure }
         let localInvalidated = try releaseLocalFocus(deadline)
         guard let scope = executionFocus else {
-            return ["released": true, "focus": localInvalidated ? "changed_externally" : "unchanged"]
+            let order = releaseBackgroundWindowOrder(deadline)
+            return ["released": true, "focus": localInvalidated ? "changed_externally" : order]
         }
         // Only the execution finalizer consumes the durable borrow. Per-input
         // cleanup has its own release_input_focus operation.
@@ -5919,6 +6045,9 @@ private final class NativeStore: @unchecked Sendable {
             try validateRegionElement(element, root: finalWindow.element, target: target,
                                       bounds: finalWindow.cg.bounds, deadline: context.deadline)
             let actionElement = selection ?? element.element
+            if !focusText, selection == nil, request["input_policy"] as? String == "auto" {
+                prepareBackgroundWindowOrder(target.app, context)
+            }
             var result = try performSemanticPress(deadline: context.deadline,
                 actionName: selection != nil ? "AXSelected" : focusText ? "AXFocus" : "AXPress", setTimeout: {
                 AXUIElementSetMessagingTimeout(actionElement, $0)
@@ -5930,6 +6059,7 @@ private final class NativeStore: @unchecked Sendable {
                 // have delivered effects, regardless of its eventual error.
                 return dtwWithInputAdmission {
                     self.executionFocus?.anchor.admitInput()
+                    self.backgroundWindowOrder?.admitted.insert(target.app)
                     if let selection {
                         return AXUIElementSetAttributeValue(selection, kAXSelectedAttribute as CFString, kCFBooleanTrue)
                     }

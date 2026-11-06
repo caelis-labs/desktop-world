@@ -1482,6 +1482,37 @@ private let absentTextAttributes = SemanticTextFields(role: kAXTextFieldRole, ti
 surfaceCheck(absentTextAttributes.matches("AXTextField"))
 surfaceCheck(absentTextAttributes.name == nil && absentTextAttributes.value == nil)
 
+// Unnamed standard chrome is identified by native subrole, never array order.
+for (subrole, name) in [("AXCloseButton", "Close window"), ("AXMinimizeButton", "Minimize window"), ("AXZoomButton", "Zoom window")] {
+    let chrome = SemanticTextFields(role: kAXButtonRole, title: nil, value: nil, description: "", subrole: subrole)
+    surfaceCheck(chrome.name == name && chrome.label == name && chrome.matches(name))
+}
+surfaceCheck(SemanticTextFields(role: kAXButtonRole, title: "关闭", value: nil, description: nil,
+    subrole: "AXCloseButton").name == "关闭")
+surfaceCheck(SemanticTextFields(role: kAXButtonRole, title: nil, value: nil, description: "关闭窗口",
+    subrole: "AXCloseButton").name == "关闭窗口")
+surfaceCheck(SemanticTextFields(role: kAXTextFieldRole, title: nil, value: nil, description: nil,
+    subrole: "AXCloseButton").name == nil)
+surfaceCheck(SemanticTextFields(role: kAXButtonRole, title: nil, value: nil, description: nil,
+    subrole: "AXCustomButton").label == kAXButtonRole)
+
+// A new/raised target surface crossing the original is distinct from a
+// pre-existing overlay, another app's window, and a missing original owner.
+private func orderRow(_ id: CGWindowID, _ pid: Int32) -> CGRecord {
+    CGRecord(id: id, pid: pid, bounds: CGRect(x: 0, y: 0, width: 100, height: 100), onscreen: true)
+}
+private let originalOrder = [orderRow(1, 20), orderRow(2, 10), orderRow(3, 20)]
+private let alreadyAbove = targetWindowsAbove(originalOrder, original: 2, owner: 10, target: 20)!
+surfaceCheck(alreadyAbove == [1])
+surfaceCheck(targetWindowsAbove([orderRow(4, 30)] + originalOrder, original: 2, owner: 10, target: 20) == alreadyAbove)
+surfaceCheck(targetWindowsAbove([orderRow(3, 20)] + originalOrder.prefix(2), original: 2, owner: 10, target: 20)!.subtracting(alreadyAbove) == [3])
+surfaceCheck(targetWindowsAbove([orderRow(4, 20)] + originalOrder, original: 2, owner: 10, target: 20)!.subtracting(alreadyAbove) == [4])
+surfaceCheck(targetWindowsAbove(originalOrder, original: 2, owner: 99, target: 20) == nil)
+surfaceCheck(targetWindowsAbove([orderRow(3, 20)], original: 2, owner: 10, target: 20) == nil)
+surfaceCheck(!originalAboveOtherApps(originalOrder, original: 2, owner: 10))
+surfaceCheck(originalAboveOtherApps([orderRow(4, 10), orderRow(2, 10), orderRow(3, 20)], original: 2, owner: 10))
+surfaceCheck(!originalAboveOtherApps(originalOrder, original: 2, owner: 99))
+
 // Public composite labels are matchable verbatim. Separately returned fields
 // never create an implicit whitespace-joined match, nor an extra role alias.
 private let orderNumber = SemanticTextFields(role: kAXTextFieldRole, title: "Order", value: "Number", description: nil)

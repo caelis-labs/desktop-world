@@ -48,6 +48,10 @@
   Confirmed focus means the destination was proven at that action; later
   `focus_return` describes settlement, not persistent target focus.
   Missing fields mean no evidence was reported, not zero disturbance.
+  A background semantic press can raise a new window without changing keyboard
+  focus. At script settlement, macOS may raise the proven original window once
+  to restore its order; this neither activates the target app nor borrows the
+  pointer. This settlement stays separate from the delivered action's result.
   If automatic foreground preparation fails before payload delivery, the requested
   input is `not_dispatched`; preparation may still have changed focus. Its error
   identifies that stage, and delivery/settlement evidence remains separate.

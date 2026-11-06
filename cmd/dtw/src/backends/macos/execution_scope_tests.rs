@@ -59,6 +59,52 @@ fn input(need_foreground: bool) -> Value {
 }
 
 #[test]
+fn background_semantic_settlement_needs_no_borrow_and_keeps_input_usable() {
+    for (status, expected) in [
+        ("restored", FocusReturn::Restored),
+        ("unconfirmed", FocusReturn::Unconfirmed),
+        ("changed_externally", FocusReturn::ChangedExternally),
+    ] {
+        let code = r#"import json,sys
+pending=False
+payloads=0
+for line in sys.stdin:
+ r=json.loads(line); op=r['operation']
+ if op=='press':
+  assert r['_execution_foreground'] is False
+  pending=True; payloads+=1
+  v={'dispatch':'dispatched','evidence':'unverified'}
+ elif op=='release_focus':
+  v={'focus':'STATUS' if pending else 'unchanged'}; pending=False
+ elif op=='stats': v={'payloads':payloads}
+ else: raise AssertionError('Background semantic press must not request foreground: '+op)
+ print(json.dumps({'request_id':r['request_id'],'result':v}),flush=True)
+"#
+        .replace("STATUS", status);
+        let backend = backend(&code);
+        let poll = || Ok(Duration::from_secs(3));
+        let call = CallContext { poll: &poll };
+        for count in 1..=2 {
+            let action = backend.action(json!({"operation":"press"}), &call);
+            assert_eq!(action.dispatch, DispatchState::Dispatched);
+            assert!(!backend.focus_pending.load(Ordering::Acquire));
+            assert_eq!(backend.finish_execution(), Ok(Some(expected)));
+            assert_eq!(backend.finish_execution(), Ok(None));
+            assert_eq!(backend.cleanup_error(), None);
+            assert!(backend.is_available());
+            assert_eq!(
+                backend
+                    .read_rpc(json!({"operation":"stats"}), &call)
+                    .unwrap()["payloads"],
+                count
+            );
+            assert_eq!(action.dispatch, DispatchState::Dispatched);
+        }
+        backend.shutdown().unwrap();
+    }
+}
+
+#[test]
 fn borrow_starts_only_at_capability_limit_and_survives_until_script_finish() {
     let backend = backend(CONTROL);
     let poll = || Ok(Duration::from_secs(3));
