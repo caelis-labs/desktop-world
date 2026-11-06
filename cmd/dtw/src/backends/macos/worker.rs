@@ -632,6 +632,14 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
     } else {
         false
     };
+    // NSRemoteView file panels consume session keyboard events, not events
+    // addressed to their AppKit host. The real ESC regression proves that even
+    // an already-frontmost host can ACK delivery without closing the panel.
+    // Decline before CUA primes a key window or posts a payload; ordinary native
+    // dialogs and text fields retain their addressed keyboard opportunities.
+    if keyboard && before["native_open_panel"] == true {
+        return BackgroundAttempt::Declined("native_modal_keyboard".into());
+    }
     if !keyboard {
         if op == "click"
             && before["native_open_panel"] == true

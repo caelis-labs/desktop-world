@@ -1076,11 +1076,12 @@ private func modalInputRequiresForeground(role: String?, modal: () throws -> Boo
     return value
 }
 
-// NSOpenPanel embeds an NSRemoteView. Addressed events reach its host window
-// but do not invoke the remote controls, even when the host is already active.
+// NSOpenPanel embeds an NSRemoteView. Addressed pointer and keyboard events
+// reach its host window but do not invoke the remote controls, even when the
+// host is already active. Select the existing HID route before any payload.
 // This exact native identifier/role is established by the real document probe;
 // ordinary modal windows, unknown AX and other frameworks keep directed input.
-private func nativeOpenPanelClick(role: String?, identifier: String?) -> Bool {
+private func nativeRemoteFilePanel(role: String?, identifier: String?) -> Bool {
     [kAXWindowRole, kAXSheetRole].contains(role ?? "") && identifier == "open-panel"
 }
 
@@ -1100,7 +1101,7 @@ private func backgroundRequiresForeground(_ window: AXUIElement?, deadline: Dead
 private func nativeModalKeyboardReceiver(_ window: AXUIElement?, deadline: Deadline) throws -> Bool {
     guard let window else { return false }
     if try backgroundRequiresForeground(window, deadline: deadline) { return true }
-    return try nativeOpenPanelClick(
+    return try nativeRemoteFilePanel(
         role: axAttribute(window, kAXRoleAttribute, deadline) as? String,
         identifier: axAttribute(window, kAXIdentifierAttribute, deadline) as? String)
 }
@@ -5495,7 +5496,7 @@ private final class NativeStore: @unchecked Sendable {
             // The typed plan already proved this exact surface in its clean
             // background preflight. Optional metadata must not block focus.
             let nativeOpenPanel = request["reason"] as? String == "native_open_panel_click"
-                || (window.map { nativeOpenPanelClick(
+                || (window.map { nativeRemoteFilePanel(
                     role: (try? axAttribute($0.element, kAXRoleAttribute, context.deadline)) as? String,
                     identifier: (try? axAttribute($0.element, kAXIdentifierAttribute, context.deadline)) as? String) } ?? false)
             let allowPanelRestoration = nativeOpenPanel && request["reason"] as? String == "native_open_panel_click"
@@ -6682,7 +6683,7 @@ private final class NativeStore: @unchecked Sendable {
                     let framework = try inputFramework(target, context)
                     var openPanel = false
                     if framework == "appkit", let window = try? validate(target, context, input: false) {
-                        openPanel = nativeOpenPanelClick(
+                        openPanel = nativeRemoteFilePanel(
                             role: (try? axAttribute(window.element, kAXRoleAttribute, context.deadline)) as? String,
                             identifier: (try? axAttribute(window.element, kAXIdentifierAttribute, context.deadline)) as? String)
                     }
@@ -6700,8 +6701,12 @@ private final class NativeStore: @unchecked Sendable {
                 let current = try validateSurface(target, context)
                 let window = try validate(target, context).element
                 let framework = try inputFramework(target, context)
+                let openPanel = try framework == "appkit" && nativeRemoteFilePanel(
+                    role: axAttribute(window, kAXRoleAttribute, context.deadline) as? String,
+                    identifier: axAttribute(window, kAXIdentifierAttribute, context.deadline) as? String)
                 let result: [String: Any] = ["target": target.json, "bounds": current.coordinates,
                     "surface_owner": surfaceOwner(target), "input_framework": framework,
+                    "native_open_panel": openPanel,
                     "background_requires_foreground": try nativeModalKeyboardReceiver(window,
                         deadline: context.deadline)]
                 if request["consume"] as? Bool == true {

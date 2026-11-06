@@ -911,12 +911,12 @@ backgroundCheck(typedSnapshotMismatch.foregroundSnapshotMismatch)
 backgroundCheck(typedSnapshotMismatch.details?["ax_pid"] as? Int32 == 10)
 print("System AX/WindowServer disagreement retains typed mismatch evidence")
 
-backgroundCheck(nativeOpenPanelClick(role: kAXWindowRole, identifier: "open-panel"))
-backgroundCheck(nativeOpenPanelClick(role: kAXSheetRole, identifier: "open-panel"))
+backgroundCheck(nativeRemoteFilePanel(role: kAXWindowRole, identifier: "open-panel"))
+backgroundCheck(nativeRemoteFilePanel(role: kAXSheetRole, identifier: "open-panel"))
 for identifier in [nil, "save-panel", "custom-modal"] as [String?] {
-    backgroundCheck(!nativeOpenPanelClick(role: kAXWindowRole, identifier: identifier))
+    backgroundCheck(!nativeRemoteFilePanel(role: kAXWindowRole, identifier: identifier))
 }
-backgroundCheck(!nativeOpenPanelClick(role: kAXGroupRole, identifier: "open-panel"))
+backgroundCheck(!nativeRemoteFilePanel(role: kAXGroupRole, identifier: "open-panel"))
 
 // A window transition revokes input but cannot erase later app leave/return.
 var closedAnchorEpoch = FocusBorrowEpoch(initialPID: 20, targetPID: 20, targetWindow: 200)
