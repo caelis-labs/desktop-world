@@ -50,11 +50,12 @@ struct Raster {
 
 pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
     let allowed: &[&str] = match op {
-        "scene.look" => &["full", "role", "text", "scope"],
+        "scene.look" => &["full", "role", "text", "scope", "target"],
         "scene.capture" | "scene.after" => &["full"],
         "scene.readText" => &["target", "offset", "limit"],
         "scene.waitForNewWindow" => &["timeout_ms"],
         "scene.click" => &["target", "selector", "x", "y", "button", "count"],
+        "scene.setValue" => &["target", "selector", "value"],
         "scene.move" => &["x", "y"],
         "scene.drag" => &["path"],
         "scene.typeText" => &["text"],
@@ -71,6 +72,18 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
             "invalid_arguments",
             "Unknown app argument; see Skill API.md",
         ));
+    }
+    if op == "scene.setValue" {
+        let one_target = usize::from(args.get("target").is_some())
+            + usize::from(args.get("selector").is_some())
+            == 1;
+        if !one_target
+            || args["value"]
+                .as_str()
+                .is_none_or(|value| value.len() > 16_384 || value.contains('\0'))
+        {
+            return Err(error("invalid_arguments", "setValue requires one target or selector and a string value (up to 16 KiB, no NUL)"));
+        }
     }
     if op == "scene.waitForNewWindow"
         && args
@@ -91,6 +104,16 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
         }
     }
     if op == "scene.look" {
+        if args
+            .get("target")
+            .is_some_and(|target| target.as_str().is_none_or(str::is_empty))
+            || (args.get("target").is_some() && args.get("scope").is_some())
+        {
+            return Err(error(
+                "invalid_arguments",
+                "look target must be an observed ID and cannot be combined with scope",
+            ));
+        }
         if args
             .get("scope")
             .is_some_and(|scope| !matches!(scope.as_str(), Some("window" | "menu")))
@@ -362,7 +385,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         // explicit semantic IDs and pixels remain bound to what was observed.
         let implicit = matches!(op, "scene.typeText" | "scene.keypress" | "scene.focus")
             || (op == "scene.scroll" && args.get("x").is_none())
-            || (op == "scene.click" && args.get("selector").is_some());
+            || (matches!(op, "scene.click" | "scene.setValue") && args.get("selector").is_some());
         if implicit && self.runtime.instances().is_empty() {
             // Reuse the existing launch/readiness path only for stopped apps.
             // Running apps need inventory, not a redundant semantic look before
@@ -483,14 +506,15 @@ impl<B: Backend + 'static> Coordinator<B> {
         };
         let mut options = args.clone();
         let mut method = op.trim_start_matches("scene.").to_owned();
-        if op == "scene.click" {
+        if matches!(op, "scene.click" | "scene.setValue") {
+            let setter = op == "scene.setValue";
             let modes = usize::from(args.get("target").is_some())
                 + usize::from(args.get("selector").is_some())
                 + usize::from(args.get("x").is_some() || args.get("y").is_some());
             if modes != 1 {
                 return failed(error(
                     "invalid_arguments",
-                    "click requires exactly one target, selector or x/y pair",
+                    "Provide exactly one observed target or selector (click also accepts x/y)",
                 ));
             }
             if let Some(target) = args.get("target") {
@@ -519,8 +543,11 @@ impl<B: Backend + 'static> Coordinator<B> {
                     Ok(node) => node,
                     Err(error) => return failed(error),
                 };
-                method = "press".into();
+                method = if setter { "setValue" } else { "press" }.into();
                 options = json!({"window_ref":node["window_ref"],"observation_ref":node["observation_ref"],"element_ref":node["element_ref"]});
+                if setter {
+                    options["value"] = args["value"].clone();
+                }
             } else if args.get("selector").is_some() {
                 if args.get("button").is_some() || args.get("count").is_some() {
                     return failed(error(
@@ -528,7 +555,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                         "Semantic selectors do not accept mouse button/count",
                     ));
                 }
-                method = "press".into();
+                method = if setter { "setValue" } else { "press" }.into();
                 options["window_ref"] = json!(window);
             } else {
                 let frame =
@@ -581,7 +608,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         // Selector admission owns menu focus preparation after capability and
         // unique-target checks, and retains its receipt in the resolution ledger.
         let input_window = options["window_ref"].as_str().map(str::to_owned);
-        let follows_scene = method == "press"
+        let follows_scene = matches!(method.as_str(), "press" | "setValue")
             && options.get("selector").is_some()
             && options["selector"]["scope"] != "menu";
         let work = self.scene_atomic(id, &method, options, deadline);
@@ -1072,6 +1099,28 @@ impl<B: Backend + 'static> Coordinator<B> {
         attempt: u8,
         deadline: Instant,
     ) -> Work {
+        let subtree = if let Some(target) = args.get("target") {
+            let node = self
+                .state
+                .lock()
+                .unwrap()
+                .scene
+                .nodes
+                .iter()
+                .find(|node| node["id"] == *target)
+                .cloned();
+            let Some(node) = node else {
+                return failed(error(
+                    "target_changed",
+                    "Observe a subtree from a target in the latest look",
+                ));
+            };
+            // A read stays on its exact retained source, like readText pages.
+            // A stale subtree never triggers a broader replacement query.
+            Some(node)
+        } else {
+            None
+        };
         // A failed refresh cannot leave old semantic/pixel input authority.
         // Keep identity labels and the viewport only for a successful new read.
         let wait_for_window = {
@@ -1172,13 +1221,32 @@ impl<B: Backend + 'static> Coordinator<B> {
         if query.get("scope").and_then(Value::as_str) == Some("window") {
             query.remove("scope");
         }
+        // Retain the app-menu route for exact-object renewal of descendants.
+        // The native read itself uses the retained subtree, never title matching.
+        if subtree
+            .as_ref()
+            .is_some_and(|node| node["query"]["scope"] == "menu")
+        {
+            query.insert("scope".into(), json!("menu"));
+        }
         let mut nodes = Vec::new();
         let mut elements = Vec::new();
         let mut semantic_bytes = 0usize;
         let mut semantic = json!({"complete":false,"reason":"no_window"});
         let mut observation = None;
         for row in semantic_windows {
+            if subtree
+                .as_ref()
+                .is_some_and(|node| node["window_ref"] != row["window_ref"])
+            {
+                continue;
+            }
             let mut request = query.clone();
+            if let Some(node) = &subtree {
+                request.remove("scope");
+                request.insert("observation_ref".into(), node["observation_ref"].clone());
+                request.insert("element_ref".into(), node["element_ref"].clone());
+            }
             request.insert("window_ref".into(), row["window_ref"].clone());
             request.insert("limit".into(), json!(80));
             let work = self.scene_atomic(id, "observe", Value::Object(request), deadline);
@@ -1200,7 +1268,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         if let Some(row) = &active {
             let work = observation.unwrap();
             if let Some(e) = work.completed.error {
-                if !semantic_fallback(&e.code) {
+                if subtree.is_some() || !semantic_fallback(&e.code) {
                     return failed(e);
                 }
                 semantic = json!({"complete":false,"reason":e.code});
@@ -1322,12 +1390,22 @@ impl<B: Backend + 'static> Coordinator<B> {
         {
             semantic["hint"] = json!("Inspect a narrower view with look({role:'button'}) or look({text:'...'}); use returned target IDs.");
         }
-        if !query.is_empty() {
-            semantic["query"] = Value::Object(query);
+        if subtree.is_some() && active.is_none() {
+            return failed(error(
+                "target_changed",
+                "The subtree's original window is no longer available",
+            ));
+        }
+        if !query.is_empty() || subtree.is_some() {
+            let mut public_query = query;
+            if let Some(target) = args.get("target") {
+                public_query.insert("target".into(), target.clone());
+            }
+            semantic["query"] = Value::Object(public_query);
         }
         let pixel_mode = explicit_pixels
             || (after && self.state.lock().unwrap().scene.pixels)
-            || (!visible.is_empty() && elements.is_empty());
+            || (subtree.is_none() && !visible.is_empty() && elements.is_empty());
         let windows:Vec<_>=rows.iter().take(32).map(|r|json!({"id":window_ids[r["window_ref"].as_str().unwrap()],"title":r["title"].as_str().map(|s|s.chars().take(80).collect::<String>()),"title_truncated":r["title"].as_str().is_some_and(|s|s.chars().count()>80),"visible":r["visible"],"bounds":r["scene"]["bounds"]})).collect();
         let mut coverage = inventory["coverage"].clone();
         // Keep optional native read gaps visible without exposing the full

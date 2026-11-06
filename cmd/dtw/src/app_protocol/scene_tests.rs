@@ -46,7 +46,7 @@ fn agent_sees_only_app_operations_and_has_no_session_or_state() {
     let r=exec(&server,"surface","return {methods:Object.keys(app),session:typeof session,state:typeof state,host:typeof __host};");
     assert_eq!(
         *success(&r),
-        json!({"methods":["look","capture","readText","waitForNewWindow","click","move","drag","typeText","keypress","scroll","focus","quit"],"session":"undefined","state":"undefined","host":"undefined"})
+        json!({"methods":["look","capture","readText","waitForNewWindow","click","setValue","move","drag","typeText","keypress","scroll","focus","quit"],"session":"undefined","state":"undefined","host":"undefined"})
     );
 }
 #[test]

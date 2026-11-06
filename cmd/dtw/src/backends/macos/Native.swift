@@ -5866,7 +5866,12 @@ private final class NativeStore: @unchecked Sendable {
             }) else { throw failure("native_stopping", "Native input admission is closed") }
             try context.deadline.check()
             guard result == .success else { throw failure("ax_action_failed", "AXValue update returned \(result.rawValue); inspect before another action") }
-            return ["dispatch": "dispatched", "evidence": "unverified"]
+            let current = try validate(target, context)
+            guard try owned(element.element, by: current.element, target: target, deadline: context.deadline),
+                  try axAttribute(element.element, kAXValueAttribute, context.deadline) as? String == value else {
+                throw failure("value_unconfirmed", "Native value was written but exact readback did not confirm it; inspect before another action")
+            }
+            return ["dispatch": "dispatched", "evidence": "confirmed", "postcondition": "element_value_set"]
         } catch let error as NativeFailure {
             return error.json.merging(["dispatch": dispatched ? "unknown" : "not_dispatched", "evidence": "unverified"]) { _, new in new }
         } catch { return ["dispatch": dispatched ? "unknown" : "not_dispatched", "evidence": "unverified", "error": "native_error", "message": String(describing: error)] }

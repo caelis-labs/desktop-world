@@ -32,8 +32,10 @@ target or its relevant state changes. `click('w1.e12')` selects an observed ID;
 await app.click({selector:{role:'button',text:'Continue'}});
 ```
 
+Use `setValue({selector:{role:'text_field',text:'Field name'},value:'replacement'})` for a complete native text value replacement when the control advertises `setValue`. For typing events use `typeText` instead.
+
 For crowded pages, use `look({role:'static_text',text:'relevant phrase'})` to
-query native semantics beyond the default preview. Truncated fields are explicit.
+query native semantics beyond the default preview. `look({target:id})` narrows to an observed subtree, such as the File menu, without activating it. Truncated fields are explicit.
 Read textual content on demand with `return await app.readText('w1.e12')`;
 continue with `{target:'w1.e12',offset:page.next_offset}` without a new look.
 Text offsets are UTF-16; a fresh look starts a new content observation.
@@ -45,7 +47,7 @@ Normal input still chooses its route automatically.
 After a New/Open action, use `await app.waitForNewWindow()` before typing in the new
 window. It waits without repeating the action; `wait_timeout` means no new window appeared.
 
-The public methods are `look`, `capture`, `readText`, `waitForNewWindow`, `click`, `move`, `drag`, `typeText`,
+The public methods are `look`, `capture`, `readText`, `waitForNewWindow`, `click`, `setValue`, `move`, `drag`, `typeText`,
 `keypress`, `scroll`, `focus` and `quit`. Read [API.md](API.md) for exact arguments and
 output semantics;
 [PATTERNS.md](PATTERNS.md) covers visual fallback, dialogs and recovery.

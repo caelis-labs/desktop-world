@@ -55,6 +55,7 @@ struct Model {
     window_semantics: HashMap<u64, Vec<Element>>,
     filtered_observation: bool,
     menu_scope: bool,
+    subtree_scope: bool,
     text_error: Option<Error>,
     read_gate: Option<WorkerGate>,
     action_gate: Option<WorkerGate>,
@@ -90,6 +91,7 @@ struct Shared {
     anchored_scrolls: Mutex<Vec<(WindowTarget, ScrollRequest)>>,
     input_targets: Mutex<Vec<WindowTarget>>,
     press_targets: Mutex<Vec<WindowTarget>>,
+    set_values: Mutex<Vec<(ElementId, String)>>,
     shutdowns: AtomicUsize,
     finishes: AtomicUsize,
 }
@@ -104,6 +106,7 @@ impl MockBackend {
                 window_semantics: HashMap::new(),
                 filtered_observation: false,
                 menu_scope: false,
+                subtree_scope: false,
                 text_error: None,
                 read_gate: None,
                 action_gate: None,
@@ -142,6 +145,7 @@ impl MockBackend {
             anchored_scrolls: Mutex::new(Vec::new()),
             input_targets: Mutex::new(Vec::new()),
             press_targets: Mutex::new(Vec::new()),
+            set_values: Mutex::new(Vec::new()),
             shutdowns: AtomicUsize::new(0),
             finishes: AtomicUsize::new(0),
         }))
@@ -345,6 +349,7 @@ impl Backend for MockBackend {
     fn supports_observe_scope(&self, scope: ObserveScopeKind) -> bool {
         scope == ObserveScopeKind::Window
             || (scope == ObserveScopeKind::Menu && self.0.model.lock().unwrap().menu_scope)
+            || (scope == ObserveScopeKind::Subtree && self.0.model.lock().unwrap().subtree_scope)
     }
     fn observe_scoped(
         &self,
@@ -357,10 +362,15 @@ impl Backend for MockBackend {
         if scope == ObserveScope::Window {
             return self.observe_page(target, query, call);
         }
-        if scope != ObserveScope::Menu || !self.0.model.lock().unwrap().menu_scope {
+        let supported = match scope.kind() {
+            ObserveScopeKind::Menu => self.0.model.lock().unwrap().menu_scope,
+            ObserveScopeKind::Subtree => self.0.model.lock().unwrap().subtree_scope,
+            _ => false,
+        };
+        if !supported {
             return Err(Error::UnsupportedCapability);
         }
-        assert!(binding.is_none());
+        assert_eq!(binding.is_some(), scope.kind() == ObserveScopeKind::Subtree);
         self.0.observe_scopes.lock().unwrap().push(scope.kind());
         self.observe_page(target, query, call)
     }
@@ -528,10 +538,15 @@ impl Backend for MockBackend {
         &self,
         _: &WindowTarget,
         _: &(),
-        _: ElementId,
-        _: &str,
+        element: ElementId,
+        value: &str,
         call: &CallContext<'_>,
     ) -> ActionOutcome {
+        self.0
+            .set_values
+            .lock()
+            .unwrap()
+            .push((element, value.into()));
         self.act(call)
     }
     fn click_with_options(

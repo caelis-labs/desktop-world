@@ -513,3 +513,122 @@ fn filtered_look_late_page_failure_discards_candidates_and_previous_targets() {
         assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
     }
 }
+
+#[test]
+fn public_set_value_replaces_native_text_by_selector_or_id_without_keyboard_input() {
+    let (server, catalog) = agent();
+    let mut field = content(77, "old");
+    field.role = "text_field".into();
+    field.name = Some("Native note".into());
+    field.label = "Native note".into();
+    field.actions = vec!["setValue".into()];
+    {
+        let mut model = catalog.backend.0.model.lock().unwrap();
+        model.filtered_observation = true;
+        model.semantic_elements = Some(vec![field]);
+    }
+    let first = exec(&server, "replace", "return await app.setValue({selector:{role:'text_field',text:'Native note'},value:'中文 🌍 café'});");
+    assert!(!first.is_error, "{}", first.data);
+    let looked = exec(&server, "read", "return await app.look();");
+    assert!(!looked.is_error, "{}", looked.data);
+    let cleared = exec(
+        &server,
+        "clear",
+        "return await app.setValue({target:'w1.e1',value:''});",
+    );
+    assert!(!cleared.is_error, "{}", cleared.data);
+    assert_eq!(
+        *catalog.backend.0.set_values.lock().unwrap(),
+        vec![
+            (ElementId(77), "中文 🌍 café".into()),
+            (ElementId(77), "".into())
+        ]
+    );
+    assert!(catalog.backend.0.input_targets.lock().unwrap().is_empty());
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn malformed_public_set_value_has_no_native_write_or_keyboard_input() {
+    let (server, catalog) = agent();
+    for (n, args) in [
+        json!({"target":"w1.e1"}),
+        json!({"value":"x"}),
+        json!({"target":"w1.e1","value":3}),
+        json!({"target":"w1.e1","selector":{"text":"field"},"value":"x"}),
+        json!({"target":"w1.e1","value":"x\u{0000}y"}),
+        json!({"target":"w1.e1","value":"x".repeat(16385)}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let result = exec(
+            &server,
+            &format!("bad-{n}"),
+            &format!("await app.setValue({args});"),
+        );
+        assert!(result.is_error, "{}", result.data);
+    }
+    assert!(catalog.backend.0.set_values.lock().unwrap().is_empty());
+    assert!(catalog.backend.0.input_targets.lock().unwrap().is_empty());
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn public_look_subtree_uses_exact_retained_source_and_hides_native_refs() {
+    let (server, catalog) = agent();
+    {
+        let mut m = catalog.backend.0.model.lock().unwrap();
+        m.menu_scope = true;
+        m.subtree_scope = true;
+        let mut file = content(7, "File");
+        file.name = Some("File".into());
+        file.role = "menu_item".into();
+        m.semantic_elements = Some(vec![file]);
+    }
+    let menu = exec(&server, "menu", "await app.look({scope:'menu'});");
+    assert!(!menu.is_error, "{}", menu.data);
+    catalog.backend.0.model.lock().unwrap().semantic_elements =
+        Some(vec![content(8, "Open fixture")]);
+    let sub = exec(
+        &server,
+        "subtree",
+        "return await app.look({target:'w1.e1'});",
+    );
+    assert!(!sub.is_error, "{}", sub.data);
+    let projected = crate::app_protocol::projection::execution(sub);
+    assert_eq!(
+        projected.data["view"]["semantics"]["query"],
+        json!({"scope":"menu","target":"w1.e1"})
+    );
+    assert!(!projected.data.to_string().contains("observation_ref"));
+    assert_eq!(
+        *catalog.backend.0.observe_scopes.lock().unwrap(),
+        vec![ObserveScopeKind::Menu, ObserveScopeKind::Subtree]
+    );
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+    assert_eq!(catalog.backend.0.captures.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn unsupported_or_unknown_subtree_never_broadens_to_window_or_pixels() {
+    let (server, catalog) = agent();
+    let looked = exec(&server, "look", "await app.look();");
+    assert!(!looked.is_error);
+    let unsupported = exec(&server, "subtree", "await app.look({target:'w1.e1'});");
+    assert!(unsupported.is_error, "{}", unsupported.data);
+    assert_eq!(
+        unsupported.data["script"]["failure"]["code"],
+        "unsupported_capability"
+    );
+    let unknown = exec(&server, "unknown", "await app.look({target:'w1.e9999'});");
+    assert!(unknown.is_error);
+    let mixed = exec(
+        &server,
+        "mixed",
+        "await app.look({target:'w1.e1',scope:'menu'});",
+    );
+    assert!(mixed.is_error);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+    assert_eq!(catalog.backend.0.captures.load(Ordering::SeqCst), 0);
+}

@@ -288,12 +288,12 @@ const COVERAGE: &str =
 const CONDITIONS: &[&str] = &[
     "semantic and input operations require macOS Accessibility permission",
     "capture and pixel pointer gestures require macOS Screen Recording permission",
-    "ordinary text and plain keys prefer directed background delivery; modified shortcuts borrow foreground automatically",
+    "ordinary text and editing keys prefer directed background delivery; enabled native menu key equivalents use semantic delivery; known capability limits may borrow foreground before payload",
     "foreground coordinate fallback requires a visible, unobstructed point in the captured window",
     "semantic scopes include retained subtrees, capture-pixel regions and the app menu; region geometry does not prove pixel visibility",
     "readText requires native textual content and preserves one content revision across UTF-16 pages; titles and descriptions are not document text",
     "input requires an exact app-associated AX surface and current modal target; proven cross-process service surfaces use foreground input",
-    "foreground fallback leaves the selected window raised; user focus changes are respected; uncertain input is never rerouted or replayed",
+    "foreground borrowing lasts within one exec; settlement restores the proven original foreground and window order while ownership holds; user focus changes are respected; uncertain input is never rerouted or replayed",
 ];
 impl NativeBackend {
     fn supports_capability(capability: Capability) -> bool {
@@ -721,6 +721,7 @@ impl NativeBackend {
     fn action(&self, request: Value, call: &CallContext<'_>) -> ActionOutcome {
         let confirmation = match request["operation"].as_str() {
             Some("press") => Some("element_selected"),
+            Some("set_value") => Some("element_value_set"),
             Some("focus") => Some("window_focused"),
             Some("focus_app") => Some("application_focused"),
             _ => None,
@@ -3492,7 +3493,12 @@ fn parse_window_rows(
 }
 #[test]
 fn confirmed_actions_keep_delivery_and_reject_unrelated_postconditions() {
-    for expected in ["element_selected", "window_focused", "application_focused"] {
+    for expected in [
+        "element_selected",
+        "element_value_set",
+        "window_focused",
+        "application_focused",
+    ] {
         let confirmed = json!({"dispatch":"dispatched","evidence":"confirmed","postcondition":expected,
             "delivery":{"route":"foreground","reason":"execution_scope","foreground_borrowed":true,"focus_return":"pending"}});
         let outcome = confirmed_action_reply(&confirmed, expected);
