@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0](https://github.com/caelis-labs/desktop-world/compare/v0.3.6...v0.4.0) (2026-11-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* launch dtw mcp without --input-policy. Read view.kind and actionable effects acknowledgements in the app protocol.
+
+### Features
+
+* simplify desktop input and observation contracts ([324e962](https://github.com/caelis-labs/desktop-world/commit/324e9627f5a47fb3ee67a27e8e4728bd098c6a37))
+
 ## [0.3.6](https://github.com/caelis-labs/desktop-world/compare/v0.3.5...v0.3.6) (2026-11-07)
 
 
