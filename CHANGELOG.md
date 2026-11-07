@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.6](https://github.com/caelis-labs/desktop-world/compare/v0.3.5...v0.3.6) (2026-11-07)
+
+
+### Bug Fixes
+
+* stabilize desktop input and separate observation receipts ([#110](https://github.com/caelis-labs/desktop-world/issues/110)) ([e53807c](https://github.com/caelis-labs/desktop-world/commit/e53807c6398221b56b3ef7a7424ed90e20cff8c3))
+
 ## [0.3.5](https://github.com/caelis-labs/desktop-world/compare/v0.3.4...v0.3.5) (2026-11-04)
 
 
