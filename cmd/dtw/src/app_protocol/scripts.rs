@@ -326,29 +326,31 @@ impl<B: Backend + 'static> Coordinator<B> {
             }
         }
         let mut state = self.state.lock().unwrap();
-        if let Some(view) = state
+        let run = state
             .jobs
             .iter()
             .find(|j| j.submitted.request_id == *id)
             .unwrap()
             .script
             .as_ref()
-            .unwrap()
-            .view
-            .clone()
+            .unwrap();
+        if let Some(step) = run
+            .steps
+            .last()
+            .filter(|step| step.operation == "scene.after")
         {
-            value["view"] = view;
-            value["snapshot"] = state
-                .jobs
-                .iter()
-                .find(|j| j.submitted.request_id == *id)
-                .unwrap()
-                .script
-                .as_ref()
-                .unwrap()
-                .snapshot
-                .clone()
-                .unwrap_or(Value::Null);
+            value["observation"] = if let Some(error) = &step.error {
+                json!({"status":"failed","error":error_json(error)})
+            } else if let Some(error) = run.snapshot.as_ref().and_then(|v| v["image"].get("error"))
+            {
+                json!({"status":"partial","error":error})
+            } else {
+                json!({"status":"observed"})
+            };
+        }
+        if let Some(view) = &run.view {
+            value["view"] = view.clone();
+            value["snapshot"] = run.snapshot.clone().unwrap_or(Value::Null);
             if agent_surface {
                 state.scene.publish();
             }
@@ -499,11 +501,34 @@ impl<B: Backend + 'static> Coordinator<B> {
             }
         };
         let response = if let Some(error) = &work.completed.error {
-            Err(engine::HostError {
-                message: error.message.clone(),
-                code: Some(error.code.clone()),
-                details: error.details.clone(),
-            })
+            // The implicit, read-only follow-up is a separate receipt. Let
+            // the VM settle the original result even if the UI is unreadable.
+            // Interruption and a closed execution still end the whole script.
+            if call.op == "scene.after"
+                && !matches!(
+                    error.code.as_str(),
+                    "closed"
+                        | "cancelled"
+                        | "timed_out"
+                        | "timeout"
+                        | "deadline_exceeded"
+                        | "native_stopping"
+                        | "app_changed"
+                        | "wrong_app"
+                        | "wrong_provider"
+                        | "invalid_observation"
+                )
+                && Instant::now() < deadline
+                && self.state.lock().unwrap().terminal.is_none()
+            {
+                Ok(Value::Null)
+            } else {
+                Err(engine::HostError {
+                    message: error.message.clone(),
+                    code: Some(error.code.clone()),
+                    details: error.details.clone(),
+                })
+            }
         } else if let Some(receipt) = &work.completed.receipt {
             let mut receipt = wire::receipt(receipt);
             if scene_call {

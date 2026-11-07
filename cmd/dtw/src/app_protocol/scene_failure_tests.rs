@@ -408,8 +408,8 @@ fn scene_post_dispatch_read_failure_keeps_receipt_and_never_replays_input() {
                 .unwrap()
                 .extend([None, Some(ax_parent_failure())]);
         }
-        let reply = scene_exec(&server, "await app.click({x:5,y:5});");
-        assert_eq!(reply.is_error, hard, "{}", reply.data);
+        let reply = scene_exec(&server, "return await app.click({x:5,y:5});");
+        assert!(!reply.is_error, "{}", reply.data);
         assert_eq!(
             reply.data["script"]["steps"][0]["receipt"]["outcome"]["dispatch"],
             "dispatched"
@@ -419,9 +419,10 @@ fn scene_post_dispatch_read_failure_keeps_receipt_and_never_replays_input() {
         assert_eq!(backend.base.0.captures.load(Ordering::SeqCst), 3);
         if hard {
             assert_eq!(
-                reply.data["script"]["failure"]["code"],
+                reply.data["value"]["observation"]["error"]["code"],
                 "permission_required"
             );
+            assert!(reply.data["script"]["failure"].is_null());
             assert!(reply.image.is_none());
         } else {
             assert_eq!(
@@ -432,6 +433,14 @@ fn scene_post_dispatch_read_failure_keeps_receipt_and_never_replays_input() {
         }
         let projected = crate::app_protocol::projection::execution(reply);
         assert_eq!(projected.data["effects"]["dispatch"]["dispatched"], 1);
+        assert_eq!(
+            projected.data["result"]["outcome"]["dispatch"],
+            "dispatched"
+        );
+        assert_eq!(
+            projected.data["observation"]["status"],
+            if hard { "failed" } else { "observed" }
+        );
         if hard {
             backend
                 .base
@@ -452,6 +461,33 @@ fn scene_post_dispatch_read_failure_keeps_receipt_and_never_replays_input() {
             assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 2);
         }
     }
+}
+
+#[test]
+fn automatic_observation_failure_does_not_hide_a_script_error() {
+    let (server, backend) = scene_agent();
+    assert!(scene_exec(&server, "await app.capture();").image.is_some());
+    backend
+        .base
+        .0
+        .model
+        .lock()
+        .unwrap()
+        .capture_error_after_action = Some(Error::BackendFailed("render unavailable".into()));
+    let reply = scene_exec(
+        &server,
+        "await app.click({x:5,y:5}); throw Error('stop here');",
+    );
+    let projected = crate::app_protocol::projection::execution(reply);
+    assert!(projected.is_error, "{}", projected.data);
+    assert_eq!(projected.data["error"]["code"], "script_exception");
+    assert_eq!(projected.data["effects"]["dispatch"]["dispatched"], 1);
+    assert_eq!(
+        projected.data["observation"]["error"]["code"],
+        "backend_failed"
+    );
+    assert!(projected.image.is_none());
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
 }
 
 #[test]

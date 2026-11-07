@@ -18,6 +18,9 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
         if let Some(view) = value.get("view").filter(|view| !view.is_null()) {
             compact["view"] = view.clone();
         }
+        if let Some(observation) = value.get("observation") {
+            compact["observation"] = observation.clone();
+        }
         if !value["result"].is_null()
             && !same_json(
                 &value["result"],

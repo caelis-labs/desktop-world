@@ -54,6 +54,12 @@
   old instance without relaunching it. A later explicit `look()` can launch it.
   Selector focus preparation has a separate `effects.focus_preparation` summary
   and is not counted again as target dispatch.
+  When DTW automatically observes the UI after input, `observation.status` is
+  `observed`, `partial` (a view with an image error), or `failed`. Its error is
+  separate from action dispatch and the script result. If that read fails,
+  inspect the UI again with `look()` or `capture()` before choosing another
+  action. Do not repeat an action to recover the missing observation. An
+  explicit read failure, interruption or unconfirmed cleanup remains an error.
   A returned value identical to the final script snapshot is coalesced into `view`, rather
   than repeated in `result`. Task-specific JSON values remain in `result`.
   The last current explicit/fallback PNG is a separate MCP image block.

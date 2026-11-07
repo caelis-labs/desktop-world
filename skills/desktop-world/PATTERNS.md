@@ -15,6 +15,9 @@ Each action is sent once. DTW handles short native readiness checks and routes
 within the authorized app; script completion returns the latest view. UI work
 can settle asynchronously: perform another look when the expected change has
 not appeared. A successful native dispatch alone does not prove the result.
+If `observation.status` is `partial` or `failed`, the automatic follow-up read
+was incomplete. Check `effects.dispatch`, then use a read-only observation to
+verify what happened before choosing new input.
 
 `click(id)` can focus an editable text control when it advertises `press`.
 A text field without an advertised `press` action needs a visual click before
