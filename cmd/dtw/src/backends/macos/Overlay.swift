@@ -50,7 +50,7 @@ struct OverlayPresentationState {
     private(set) var pressSequence: UInt64 = 0
     private(set) var marker: OverlayPointerEvent?
     private var lastActivity: TimeInterval?
-    private static let idleHideAfter: TimeInterval = 2 // Same policy as Windows.
+    private static let idleHideAfter: TimeInterval = 60 // Same policy as Windows.
     mutating func begin(_ value: UInt64) -> Bool {
         guard !closed, value > generation else { return false }
         generation = value; active = true; sequence = 0; pressSequence = 0; marker = nil; lastActivity = nil

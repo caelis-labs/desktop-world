@@ -167,6 +167,7 @@ pub fn dispatch(
     dispatched: &mut bool,
     accepted: &mut usize,
     validate: impl FnMut(POINT) -> Result<(), Error>,
+    feedback: impl FnMut(POINT, bool),
 ) -> Result<(), Error> {
     let _mutation = input::mutation(until)?;
     input::no_held_keys()?;
@@ -199,7 +200,7 @@ pub fn dispatch(
             ))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    struct Native<'a, F> {
+    struct Native<'a, F, G> {
         plan: &'a Plan,
         moves: Vec<INPUT>,
         hwnd: HWND,
@@ -207,8 +208,9 @@ pub fn dispatch(
         dispatched: &'a mut bool,
         accepted: &'a mut usize,
         validate: F,
+        feedback: G,
     }
-    impl<F: FnMut(POINT) -> Result<(), Error>> Delivery for Native<'_, F> {
+    impl<F: FnMut(POINT) -> Result<(), Error>, G: FnMut(POINT, bool)> Delivery for Native<'_, F, G> {
         fn validate(&mut self, index: usize) -> Result<(), Error> {
             check(self.until)?;
             if input::closing() || input::cleanup_failed() {
@@ -244,11 +246,14 @@ pub fn dispatch(
             if count != 1 {
                 return Err(failed("Pointer insertion incomplete; effects unknown"));
             }
-            if matches!(event, Event::Move(_)) {
-                super::execution_scope::after_pointer_move()?;
-            }
-            if matches!(event, Event::Move(_)) {
-                std::thread::sleep(Duration::from_millis(2));
+            match event {
+                Event::Move(index) => {
+                    super::execution_scope::after_pointer_move()?;
+                    (self.feedback)(self.plan.points[index], false);
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Event::Down => (self.feedback)(self.plan.points[0], true),
+                Event::Up => (),
             }
             Ok(())
         }
@@ -267,6 +272,7 @@ pub fn dispatch(
             dispatched,
             accepted,
             validate,
+            feedback,
         },
     )?;
     check(until)?;

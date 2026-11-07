@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
-"""Opt-in Windows idle-cursor acceptance through two ordinary MCP connections.
-
-Only DTW supplies application input to an owned fixture. Independent process,
-window and physical-pointer observations prove presentation and cleanup. Packet
-replay boundaries are covered by pure Presentation tests, not a public backdoor.
-"""
+"""Opt-in Windows pointer feedback and idle acceptance through public apps/exec."""
 import argparse
-import hashlib
+import ctypes
+from ctypes import wintypes
 import json
 import os
 from pathlib import Path
@@ -14,9 +10,11 @@ import shutil
 import subprocess
 import sys
 import time
-import traceback
 
-from cursor_probe import Mcp, ProcessHandle, read, require, wait, write
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app_client import AppClient, artifact_identity, require
+from windows.app_protocol_probe import wait, wait_state
+from windows.transport import ProcessHandle, read
 
 
 def main():
@@ -24,184 +22,234 @@ def main():
     parser.add_argument('--dtw', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    require(os.name == 'nt' and sys.flags.utf8_mode, 'Use Windows and python -X utf8')
-    binary, output = args.dtw.resolve(strict=True), args.output.resolve()
-    require(not output.exists(), 'Use a new evidence directory')
-    output.mkdir(parents=True)
-    summary = {'passed': False, 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
-               'cases': [], 'cleanup': [], 'scope': 'owned Windows fixture; ordinary MCP connections; no live host config changes',
-               'late_packet_scope': 'pure authenticated Presentation state tests; no network replay injection'}
+    require(os.name == 'nt', 'Windows desktop required')
+    binary, out = args.dtw.resolve(strict=True), args.output.resolve()
+    out.mkdir(parents=True, exist_ok=False)
+    report = {'passed': False, 'artifact': artifact_identity(binary), 'cases': [], 'cleanup': []}
+    root = out / 'fixture'
+    root.mkdir()
+    child = None
     clients, handles = [], []
-    fixture = None
-    serial = 0
+    user = ctypes.WinDLL('user32', use_last_error=True)
+    user.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+    user.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+    user.IsWindowVisible.argtypes = [wintypes.HWND]
+    user.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+    require(user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4)), 'PMv2 coordinates unavailable')
+    stage = 'setup'
+
+    def record(**evidence):
+        report['cases'].append({'name': stage, **evidence})
+        print(stage + ': passed', flush=True)
+
+    def state(predicate=lambda _: True):
+        return wait_state(root, predicate)
+
+    def position():
+        point = wintypes.POINT()
+        require(user.GetCursorPos(ctypes.byref(point)), 'Physical pointer unavailable')
+        return [point.x, point.y]
+
+    def window_sample(helper):
+        hwnd = helper['hwnd']
+        rect = wintypes.RECT()
+        require(user.GetWindowRect(hwnd, ctypes.byref(rect)), 'Owned helper window disappeared')
+        hotspot = int(14 * helper['dpi'] / 96 + .5)
+        return {'visible': bool(user.IsWindowVisible(hwnd)), 'x': rect.left + hotspot, 'y': rect.top + hotspot}
+
+    def marker(client, label):
+        path = out / (label + '.json')
+        subprocess.run([str(observer), '--snapshot', str(path), initial['hwnd']],
+                       check=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        scene = read(path)
+        rows = [row for row in scene['windows'] if row['parent'] == client.transport.proc.pid]
+        require(len(rows) == 1, {'label': label, 'rows': rows})
+        helper = rows[0]
+        require(helper['visible'] and max(helper['palette_pixels']) >= 20,
+                {'label': label, 'helper': helper})
+        require(Path(helper['path']).resolve() == binary, helper)
+        require(helper['ex_style'] & 0x08080020 == 0x08080020 and not helper['ex_style'] & 8, helper)
+        require(scene['foreground_before'] and scene['foreground_after'], scene)
+        return helper
+
+    def connect(label):
+        client = AppClient(binary, out / label)
+        clients.append(client)
+        apps, _ = client.tool('apps', {'query': str(exe), 'state': 'running'})
+        require(len(apps['apps']) == 1, apps)
+        return client, apps['apps'][0]['app']
+
+    def pixel(image, point):
+        left, top, width, height = image['bounds']
+        return {'x': (point['x'] - left) * image['width'] / width,
+                'y': (point['y'] - top) * image['height'] / height}
+
+    def source(method, options):
+        return 'await app.capture();await app.' + method + '(' + json.dumps(options) + ');'
+
+    def trace(client, app, script, helper):
+        request = client.begin_execute(app, script)
+        started = time.monotonic()
+        samples = []
+        while time.monotonic() - started < 1.25:
+            samples.append({'seconds': time.monotonic() - started, **window_sample(helper)})
+            time.sleep(.008)
+        response = client.transport.receive(request, timeout=8)['result']
+        result = response['structuredContent']
+        require(not response.get('isError') and result['status'] == 'completed', result)
+        (out / (stage + '-trace.json')).write_text(json.dumps(samples, indent=2), encoding='utf-8')
+        require(all(row['visible'] for row in samples), 'Marker was hidden between accepted operations')
+        return samples
+
+    def at(point, helper):
+        row = window_sample(helper)
+        return row['visible'] and abs(row['x'] - point['x']) <= 2 and abs(row['y'] - point['y']) <= 2
+
     try:
-        here = Path(__file__).parent
-        compile_result = subprocess.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-            '-File', str(here / 'compile-cursor.ps1'), '-OutputDirectory', str(output / 'build')], capture_output=True)
-        (output / 'compile.stdout').write_bytes(compile_result.stdout)
-        (output / 'compile.stderr').write_bytes(compile_result.stderr)
-        require(compile_result.returncode == 0, 'Owned fixture compilation failed')
-        directory = output / 'A'
-        directory.mkdir()
-        executable = directory / 'Fixture.exe'
-        shutil.copy2(output / 'build/Fixture.exe', executable)
-        fixture = subprocess.Popen([str(executable), str(directory), 'A'])
+        build = subprocess.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+            '-File', str(Path(__file__).with_name('compile-cursor.ps1')), '-OutputDirectory', str(out / 'build')],
+            capture_output=True)
+        (out / 'compile.stdout').write_bytes(build.stdout)
+        (out / 'compile.stderr').write_bytes(build.stderr)
+        require(build.returncode == 0, 'Fixture compilation failed')
+        observer = out / 'build/CursorObserver.exe'
+        exe = root / 'Fixture.exe'
+        shutil.copy2(out / 'build/Fixture.exe', exe)
+        child = subprocess.Popen([str(exe), str(root), 'A'])
+        initial = state(lambda s: s['ready'] and s['bounds_ok'] and s['foreground'])
+        require(initial['pid'] == child.pid, initial)
+        first, app = connect('first')
+        image = first.capture(app, 'target')['view']['image']
+        pad = initial['pad_point']
+        first_pad = {'x': pad['x'] + 90, 'y': pad['y'] + 30}
+        original_pointer = position()
 
-        def state():
-            value = wait(lambda: read(directory / 'state.json'), timeout=1)
-            require(value is None or value['pid'] == fixture.pid, 'Fixture PID changed')
-            return value
+        stage = 'physical_hover_and_coordinate_click'
+        first.execute(app, source('move', pixel(image, first_pad)))
+        state(lambda s: s['moves'] > initial['moves'])
+        helper = marker(first, 'hover')
+        handles.append(ProcessHandle(helper['pid'], binary, birth=helper['birth']))
+        require(at(first_pad, helper), window_sample(helper))
+        first.execute(app, source('click', pixel(image, first_pad)))
+        state(lambda s: s['left_up'] == initial['left_up'] + 1)
+        require(marker(first, 'coordinate-click')['hwnd'] == helper['hwnd'], 'Marker changed HWND')
+        require(position() == original_pointer, 'Visual feedback displaced the physical pointer')
+        record(helper=helper)
 
-        wait(lambda: (s if (s := state()) and s['ready'] and s['bounds_ok'] else None))
+        stage = 'semantic_click_continuity'
+        samples = trace(first, app, "await app.click({selector:{role:'button',text:'Increment'}});", helper)
+        current = state(lambda s: s['increments'] == 1)
+        visible = marker(first, 'semantic-click')
+        require(visible['hwnd'] == helper['hwnd'], 'Semantic click changed helper HWND')
+        bounds = current['increment_bounds']
+        end = window_sample(helper)
+        require(bounds['x'] <= end['x'] < bounds['x'] + bounds['width']
+                and bounds['y'] <= end['y'] < bounds['y'] + bounds['height'], {'end': end, 'button': bounds})
+        intermediate = {(row['x'], row['y']) for row in samples if end['x'] + 8 < row['x'] < first_pad['x'] - 8}
+        require(len(intermediate) >= 4, 'Expected several visible positions between the two endpoints')
+        require(position() == original_pointer, 'UIA click moved the physical pointer')
+        record(intermediate_positions=len(intermediate), end=end)
 
-        def snapshot():
-            nonlocal serial
-            serial += 1
-            path = output / ('observer-' + str(serial) + '.json')
-            subprocess.run([str(output / 'build/CursorObserver.exe'), '--snapshot', str(path), state()['hwnd']],
-                           check=True, creationflags=subprocess.CREATE_NO_WINDOW)
-            return read(path)
+        stage = 'scroll_and_content_drag'
+        scroll = {'x': pad['x'] - 95, 'y': pad['y'] + 25}
+        first.execute(app, source('scroll', {**pixel(image, scroll), 'delta_y': 2}))
+        current = state(lambda s: s['wheel_delta'] == initial['wheel_delta'] - 240)
+        wait(lambda: at(scroll, helper), timeout=2)
+        marker(first, 'scroll')
+        corner = {'x': scroll['x'], 'y': scroll['y'] - 72}
+        end = {'x': scroll['x'] + 190, 'y': corner['y']}
+        samples = trace(first, app, source('drag', {'path': [pixel(image, p) for p in (scroll, corner, end)]}), helper)
+        state(lambda s: s['drag_moves'] > current['drag_moves'] and s['left_up'] == current['left_up'] + 1)
+        marker(first, 'drag')
+        require(at(end, helper), window_sample(helper))
+        require(any(abs(row['x'] - corner['x']) <= 2 and corner['y'] + 8 < row['y'] < scroll['y'] - 8
+                    for row in samples), 'Marker did not follow the vertical leg of the accepted drag')
+        require(any(abs(row['y'] - end['y']) <= 2 and corner['x'] + 8 < row['x'] < end['x'] - 8
+                    for row in samples), 'Marker did not follow the horizontal leg of the accepted drag')
+        record(end=end)
 
-        def marker(scene, client):
-            rows = [row for row in scene['windows'] if row['parent'] == client.proc.pid]
-            require(len(rows) <= 1, 'One MCP connection has multiple cursor windows')
-            return rows[0] if rows else None
+        stage = 'native_title_bar_drag'
+        view = first.capture(app, 'before-title-drag')['view']
+        x, y, width, _ = view['windows'][0]['bounds']
+        start = {'x': x + width // 2, 'y': y + 12}
+        end = {'x': start['x'] + 24, 'y': start['y'] + 12}
+        before = state()['bounds']
+        first.execute(app, source('drag', {'path': [pixel(view['image'], p) for p in (start, end)]}))
+        started = time.monotonic()
+        moved = state(lambda s: s['bounds']['x'] == before['x'] + 24 and s['bounds']['y'] == before['y'] + 12)
+        wait(lambda: at(end, helper), timeout=2)
+        marker(first, 'title-bar')
+        record(end=end)
 
-        def connect(label):
-            client = Mcp(binary, output / label)
-            clients.append(client)
-            apps = client.tool('apps', {})['apps']
-            app = next(row['app'] for row in apps if row['app'].casefold() == str(executable).casefold())
-            selected, _ = client.execute(app, 'select-owned-window', '''const windows=(await app.windows()).windows;
-const own=windows.filter(w=>w.title==='DTW Windows Smoke A');if(own.length!==1)throw Error('Owned window not unique');
-state.ownedWindow=own[0].window_ref;return own[0];''')
-            return client, app, selected['window_ref']
+        stage = 'one_minute_idle_and_independent_connection'
+        first.execute(app, 'await app.look();')
+        _, rejected = first.execute(app, "throw Error('owned idle exception');", allow_error=True)
+        require(rejected.get('isError'), 'Expected owned script rejection')
+        time.sleep(max(0, 3 - (time.monotonic() - started)))
+        require(window_sample(helper)['visible'], 'Marker hid at the previous two-second timeout')
+        second, second_app = connect('second')
+        moved_pad = moved['pad_point']
+        moved_image = second.capture(second_app, 'target')['view']['image']
+        second.execute(second_app, source('move', pixel(moved_image, moved_pad)))
+        second_helper = marker(second, 'second-hover')
+        require(second_helper['pid'] != helper['pid'], 'Connections shared a helper')
+        handles.append(ProcessHandle(second_helper['pid'], binary, birth=second_helper['birth']))
+        while window_sample(helper)['visible'] and time.monotonic() - started < 64:
+            time.sleep(.05)
+        elapsed = time.monotonic() - started
+        require(58 <= elapsed <= 63 and not window_sample(helper)['visible'], {'elapsed': elapsed})
+        require(window_sample(second_helper)['visible'], 'One connection expired the other connection')
+        require(handles[0].alive() and handles[1].alive(), 'Idle destroyed a live helper')
+        require(position() == original_pointer, 'Visual feedback or idle changed the physical pointer')
+        record(seconds=round(elapsed, 3))
 
-        first, app, window = connect('first')
-        second, other_app, other_window = connect('second')
-
-        def click(client, app, window, label, dx=0):
-            before = state()
-            x = before['pad_point']['x'] + dx - before['bounds']['x']
-            y = before['pad_point']['y'] - before['bounds']['y']
-            _, ledger = client.execute(app, label, f'''const window_ref={json.dumps(window)};
-await app.focus({{window_ref}});const c=await app.capture({{window_ref}});
-return await app.click({{window_ref,observation_ref:c.observation_ref,x:{x},y:{y}}});''')
-            wait(lambda: state()['left_up'] == before['left_up'] + 1)
-            def visible():
-                scene = snapshot()
-                row = marker(scene, client)
-                return (scene, row) if row and row['visible'] and max(row['palette_pixels']) >= 20 else None
-            scene, row = wait(visible, 3)
-            require(scene['foreground_before'] and scene['foreground_after'], 'Cursor changed foreground')
-            receipts = [step['receipt'] for step in ledger['script']['steps'] if step['operation'] == 'click']
-            require(len(receipts) == 1 and receipts[0]['outcome']['dispatch'] == 'dispatched', 'Original click was not dispatched')
-            require(receipts[0]['outcome']['evidence']['kind'] == 'unverified', 'Presentation verified a business effect')
-            return scene, row, ledger
-
-        def idle(client, app, window, label, before, identity, ledger):
-            started = time.monotonic()
-            samples, hidden_at = [], None
-            last_read = -1
-            while time.monotonic() - started < 3.5:
-                scene = snapshot()
-                row = marker(scene, client)
-                require(row and (row['pid'], row['hwnd'], row['birth']) ==
-                        (identity['pid'], identity['hwnd'], identity['birth']), 'Idle replaced the session cursor identity')
-                require(scene['system_cursor'] == before['system_cursor'], 'Idle moved the physical cursor')
-                require(scene['foreground_before'] and scene['foreground_after'], 'Idle stole target foreground')
-                elapsed = time.monotonic() - started
-                samples.append({'elapsed': elapsed, 'visible': row['visible'], 'system_cursor': scene['system_cursor']})
-                if not row['visible']:
-                    hidden_at = hidden_at or elapsed
-                    if elapsed - hidden_at >= .35:
-                        break
-                elif hidden_at is not None:
-                    raise AssertionError('Idle z-order maintenance revived the expired cursor')
-                if elapsed - last_read >= .3:
-                    result, _ = client.execute(app, label + '-read-only', 'return (await app.windows()).windows;')
-                    require(any(row['window_ref'] == window for row in result), 'Idle invalidated the retained window reference')
-                    last_read = elapsed
-                time.sleep(.04)
-            write(output / (label + '-samples.json'), samples)
-            require(hidden_at is not None and time.monotonic() - started - hidden_at >= .35,
-                    'Cursor did not stay hidden with its MCP connection open')
-            require(client.proc.poll() is None, 'Idle closed the MCP server')
-            require(client.tool('result', {'app': app, 'execution_id': ledger['execution_id']}) == ledger,
-                    'Idle changed the original retained receipt')
-            summary['cases'].append({'case': label, 'hidden_after_observed_seconds': hidden_at,
-                                     'connection_open': True, 'reference_and_receipt_retained': True})
-
-        scene, identity, ledger = click(first, app, window, 'first-pointer')
-        handle = ProcessHandle(identity['pid'], binary, birth=identity['birth'])
-        handles.append(handle)
-        idle(first, app, window, 'success-and-read-only-idle', scene, identity, ledger)
-        recovered, row, ledger = click(first, app, window, 'same-connection-pointer-after-idle')
-        require((row['pid'], row['hwnd'], row['birth']) == (identity['pid'], identity['hwnd'], identity['birth']),
-                'New operation lost stable helper identity after idle')
-        first.execute(app, 'owned-script-exception', "throw Error('owned idle exception control');", error='owned idle exception control')
-        idle(first, app, window, 'exception-idle', recovered, identity, ledger)
-        scene2, identity2, ledger2 = click(second, other_app, other_window, 'warm-second-helper', -120)
-        require(identity2['pid'] != identity['pid'], 'MCP connections shared a cursor process')
-        handle2 = ProcessHandle(identity2['pid'], binary, birth=identity2['birth'])
-        handles.append(handle2)
-        idle(second, other_app, other_window, 'second-connection-idle', scene2, identity2, ledger2)
-
-        click(first, app, window, 'isolation-first-fresh')
-        time.sleep(1)
-        mixed, _, _ = click(second, other_app, other_window, 'isolation-second-fresh', -120)
-        require(marker(mixed, first)['visible'] and marker(mixed, second)['visible'], 'Isolation setup missed both active markers')
-        def independent_expiry():
-            scene = snapshot()
-            one, two = marker(scene, first), marker(scene, second)
-            require(one and two, 'Idle destroyed a helper instead of hiding')
-            return scene if not one['visible'] and two['visible'] else None
-        proof = wait(independent_expiry, 2)
-        write(output / 'independent-idle-expiry.json', proof)
-        require(handle.alive() and handle2.alive(), 'Idle reclaimed a live connection helper')
-        summary['cases'].append({'case': 'independent-session-idle-clocks', 'first_hidden_second_visible': True})
-
-        click(second, other_app, other_window, 'second-before-first-eof', -120)
-        summary['cleanup'].append({'first_mcp': first.close()})
+        stage = 'same_helper_recovers_and_eof_is_isolated'
+        recovery = {'x': moved_pad['x'] - 115, 'y': moved_pad['y'] - 25}
+        first.execute(app, source('move', pixel(moved_image, recovery)))
+        recovered = marker(first, 'after-idle')
+        require((helper['pid'], helper['hwnd'], helper['birth']) ==
+                (recovered['pid'], recovered['hwnd'], recovered['birth']), recovered)
+        require(at(recovery, helper), window_sample(helper))
+        report['cleanup'].append(first.close())
         clients.remove(first)
-        require(handle.wait() == 0, 'First helper did not exit normally after EOF')
-        scene = snapshot()
-        require(marker(scene, first) is None and marker(scene, second)['visible'], 'One EOF affected the other MCP cursor')
-        summary['cases'].append({'case': 'eof-keeps-other-session-alive', 'helper_exit': 0})
-        summary['passed'] = True
-    except BaseException:
-        summary['failure'] = traceback.format_exc()
+        require(handles[0].wait() == 0, 'First helper failed to exit after EOF')
+        second.execute(second_app, source('move', pixel(moved_image, moved_pad)))
+        require(marker(second, 'after-first-eof')['hwnd'] == second_helper['hwnd'], 'EOF affected other helper')
+        record()
+        report['passed'] = True
+    except BaseException as error:
+        report.update(stage=stage, error=type(error).__name__ + ': ' + str(error))
+        raise
     finally:
         for client in clients:
             try:
-                summary['cleanup'].append({'mcp': client.close()})
-            except BaseException:
-                summary['cleanup'].append({'mcp_error': traceback.format_exc()})
-                summary['passed'] = False
+                report['cleanup'].append(client.close())
+            except BaseException as error:
+                report['cleanup'].append({'mcp_error': str(error)})
+                report['passed'] = False
         for handle in handles:
             try:
                 code = handle.wait()
-                summary['cleanup'].append({'helper_pid': handle.pid, 'exit_code': code})
-                summary['passed'] &= code == 0
-            except BaseException:
-                summary['cleanup'].append({'helper_error': traceback.format_exc()})
-                summary['passed'] = False
+                report['cleanup'].append({'helper_pid': handle.pid, 'exit_code': code})
+                report['passed'] &= code == 0
+            except BaseException as error:
+                report['cleanup'].append({'helper_error': str(error)})
+                report['passed'] = False
             finally:
                 handle.close()
-        if fixture:
-            (directory / 'stop').write_text('stop', encoding='utf-8')
+        if child:
+            (root / 'stop').write_text('owned normal close', encoding='utf-8')
             try:
-                code = fixture.wait(timeout=5)
-                summary['cleanup'].append({'fixture_exit': code, 'forced': False})
-                summary['passed'] &= code == 0
+                report['fixture_exit'] = child.wait(timeout=8)
+                report['passed'] &= child.returncode == 0
             except subprocess.TimeoutExpired:
-                fixture.kill()
-                summary['cleanup'].append({'fixture_forced': True})
-                summary['passed'] = False
-        write(output / 'summary.json', summary)
-        print(json.dumps(summary))
-    return 0 if summary['passed'] else 1
+                child.terminate()
+                child.wait(timeout=5)
+                report.update(passed=False, forced_fixture_cleanup=True)
+        (out / 'summary.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+    require(report['passed'], report)
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    main()

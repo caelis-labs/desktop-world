@@ -1979,6 +1979,14 @@ impl Store {
                 self.prepare_receiver(&target, receiver, until, &mut preparation)?;
                 observed.validate(window)?;
                 route = Some("foreground");
+                let feedback = if op == "press" {
+                    super::cursor::Emitter::new(&r["cursor_feedback"], &target).and_then(|cursor| {
+                        semantic_click_point(&uia, &element, window, target.app.pid)
+                            .map(|point| (cursor, point))
+                    })
+                } else {
+                    None
+                };
                 let mut menu_expansion = None;
                 if op == "press"
                     && unsafe { element.CurrentControlType() }.map_err(failed)?
@@ -2090,6 +2098,9 @@ impl Store {
                     }
                 } else {
                     return Err(Error::ElementNotPressable);
+                }
+                if let Some((mut cursor, point)) = feedback {
+                    cursor.posted(point.x, point.y, true);
                 }
             } else {
                 self.window_input(
@@ -2767,6 +2778,36 @@ fn verify_point(window: HWND, pid: u32, point: POINT) -> Result<(), Error> {
             Ok(())
         }
     }
+}
+fn semantic_click_point(
+    uia: &IUIAutomation,
+    element: &IUIAutomationElement,
+    window: HWND,
+    pid: u32,
+) -> Option<POINT> {
+    let mut point = POINT::default();
+    unsafe {
+        if !element
+            .GetClickablePoint(&mut point)
+            .is_ok_and(|v| v.as_bool())
+        {
+            if element.CurrentIsOffscreen().ok()?.as_bool() {
+                return None;
+            }
+            let bounds =
+                clipped_rect(element.CurrentBoundingRectangle().ok()?, rect(window).ok()?).ok()?;
+            point = POINT {
+                x: bounds.left + (bounds.right - bounds.left) / 2,
+                y: bounds.top + (bounds.bottom - bounds.top) / 2,
+            };
+            let hit = uia.ElementFromPoint(point).ok()?;
+            if !uia.CompareElements(element, &hit).ok()?.as_bool() {
+                return None;
+            }
+        }
+    }
+    verify_point(window, pid, point).ok()?;
+    Some(point)
 }
 fn absolute_move(point: POINT) -> Result<INPUT, Error> {
     let (vx, vy, vw, vh) = unsafe {

@@ -266,7 +266,7 @@ fn create_window() -> windows::core::Result<Window> {
 // Validate again at paint admission: the target may change after an idle tick.
 fn admit_paint(state: &mut Presentation, valid: impl FnOnce(&Target) -> bool) {
     if state.target.as_ref().is_some_and(|target| !valid(target)) {
-        state.hide(state.operation);
+        state.retire_visible();
     }
 }
 
@@ -337,6 +337,22 @@ fn run(expected: u32, birth: u64) -> Result<(), Box<dyn std::error::Error>> {
     let mut geometry = Instant::now();
     while !closed.load(Ordering::Acquire) {
         dirty |= state.expire_idle(Instant::now());
+        // A completed operation may have queued its last feedback before the
+        // next begin command. Consume it while its operation is still current.
+        for _ in 0..128 {
+            let mut packet = [0u8; MAX_PACKET + 1];
+            match socket.recv_from(&mut packet) {
+                Ok((n, source)) if source.ip().is_loopback() && n <= MAX_PACKET => {
+                    if let Ok(value) = serde_json::from_slice::<Value>(&packet[..n]) {
+                        if value["token"] == token && !token.is_empty() {
+                            dirty |= state.event(&value, Instant::now());
+                        }
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                _ => break,
+            }
+        }
         if let Ok(command) = rx.try_recv() {
             let mut response = json!({"ok":false});
             match command["command"].as_str() {
@@ -378,26 +394,16 @@ fn run(expected: u32, birth: u64) -> Result<(), Box<dyn std::error::Error>> {
                         command["operation"].as_u64(),
                         Target::parse(&command["target"]),
                     ) {
-                        if state.begin(operation, target) {
-                            unsafe {
-                                let _ = ShowWindow(window.as_ref().unwrap().0, SW_HIDE);
-                            }
-                            dirty = false;
-                            pulse = false;
-                            if unsafe { GetDpiForWindow(window.as_ref().unwrap().0) } != image_dpi {
-                                // A new independent action may follow a DPI
-                                // retirement. Old cached pixels must neither
-                                // retire this new operation nor be reused.
-                                image_dpi = 0;
-                                images = None;
-                                surface = None;
-                            }
+                        if target.valid() && state.begin(operation, target) {
                             response = json!({"ok":true});
                         }
                     }
                 }
                 Some("hide") => {
                     if let Some(operation) = command["operation"].as_u64() {
+                        if command["include_previous"] == true && operation == state.operation {
+                            state.retire_visible();
+                        }
                         state.hide(operation);
                         dirty = true;
                         response = json!({"ok":true});
@@ -409,37 +415,23 @@ fn run(expected: u32, birth: u64) -> Result<(), Box<dyn std::error::Error>> {
             writeln!(out, "{response}")?;
             out.flush()?;
         }
-        // Coalesce one paint after draining a bounded batch; sequence/press
-        // state retains a down pulse even when the final packet is an up.
-        for _ in 0..128 {
-            let mut packet = [0u8; MAX_PACKET + 1];
-            match socket.recv_from(&mut packet) {
-                Ok((n, source)) if source.ip().is_loopback() && n <= MAX_PACKET => {
-                    if let Ok(value) = serde_json::from_slice::<Value>(&packet[..n]) {
-                        if value["token"] == token && !token.is_empty() {
-                            dirty |= state.event(&value, Instant::now());
-                        }
-                    }
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-                _ => break,
-            }
-        }
         // Recheck before z-order maintenance and painting. A bounded packet
         // drain or control command must not keep an idle presentation visible.
         dirty |= state.expire_idle(Instant::now());
         if geometry.elapsed() >= Duration::from_millis(50) {
             geometry = Instant::now();
             if state.target.as_ref().is_some_and(|t| !t.valid()) {
-                state.hide(state.operation);
+                state.retire_visible();
                 dirty = true;
             }
-            if image_dpi != 0
+            if !dirty
+                && state.target.is_some()
+                && image_dpi != 0
                 && window
                     .as_ref()
                     .is_some_and(|w| unsafe { GetDpiForWindow(w.0) } != image_dpi)
             {
-                state.hide(state.operation);
+                state.retire_visible();
                 dirty = true;
             }
             // Reassert relative order without re-rasterizing/compositing idle pixels.
@@ -447,14 +439,15 @@ fn run(expected: u32, birth: u64) -> Result<(), Box<dyn std::error::Error>> {
                 (window.as_ref(), state.target.as_ref(), state.point)
             {
                 if !pin(window.0, target) {
-                    state.hide(state.operation);
+                    state.retire_visible();
                     dirty = true;
                 }
             }
         }
-        let now_pulse = state
-            .pulse_until
-            .is_some_and(|until| Instant::now() < until);
+        let now = Instant::now();
+        dirty |= state.advance(now);
+        let now_pulse =
+            state.travel.is_none() && state.pulse_until.is_some_and(|until| now < until);
         if pulse != now_pulse {
             dirty = true;
             pulse = now_pulse;
@@ -463,7 +456,7 @@ fn run(expected: u32, birth: u64) -> Result<(), Box<dyn std::error::Error>> {
             dirty = false;
             if let Some(window) = window.as_ref() {
                 admit_paint(&mut state, Target::valid);
-                match (state.target.as_ref(), state.point) {
+                match (state.target.as_ref(), state.display_point(now)) {
                     (Some(target), Some(point)) => {
                         // Query the DPI of our own PMv2 window, never the
                         // unaware target's 96 DPI or a rounded scale index.
@@ -520,7 +513,7 @@ fn run(expected: u32, birth: u64) -> Result<(), Box<dyn std::error::Error>> {
                             .unwrap()
                             .present(window.0, image, target, point)
                         {
-                            state.hide(state.operation);
+                            state.retire_visible();
                             unsafe {
                                 let _ = ShowWindow(window.0, SW_HIDE);
                             }
@@ -581,7 +574,7 @@ mod tests {
     fn active() -> Presentation {
         let mut state = Presentation {
             operation: 7,
-            target: Some(Target {
+            pending_target: Some(Target {
                 window: WindowTarget {
                     app: AppInstance {
                         identity: AppIdentity("not-a-live-test-target".into()),

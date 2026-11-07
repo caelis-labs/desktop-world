@@ -260,8 +260,10 @@ impl<P: Platform> NativeBackend<P> {
         #[cfg(target_os = "windows")]
         let (request, mut presentation) = {
             let mut request = request;
-            let presentation = if matches!(operation.as_str(), "click" | "scroll" | "move" | "drag")
-            {
+            let presentation = if matches!(
+                operation.as_str(),
+                "press" | "click" | "scroll" | "move" | "drag"
+            ) {
                 // Validate the native target before starting optional visuals.
                 // The eventual action repeats every ordinary admission check.
                 self.read(
@@ -400,6 +402,9 @@ impl<P: Platform> Backend for NativeBackend<P> {
     type Binding = NativeBinding;
     fn is_available(&self) -> bool {
         !self.worker.is_stopped()
+    }
+    fn is_reaped(&self) -> bool {
+        self.worker.is_reaped()
     }
     fn stamp(&self) -> ProviderStamp {
         ProviderStamp {

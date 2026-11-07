@@ -356,4 +356,28 @@ do {
     session.see(4, 1)
     check(gate.finish(wheel), "wheel ownership ends after both event counters advance")
 }
+// Real foreground delivery can finish while the session's activity counters
+// still expose the preceding publication. Preserve both acknowledgements and
+// allow one observed half-second publication interval during normal completion.
+do {
+    let gate = NativeInputGate(), source = PendingModel(), session = PendingModel()
+    let input = dualInput(source, session)
+    check(gate.register(input), "register delayed session publication")
+    input.posted(eventType: 1, key: 0); source.see(1, 1)
+    var clock: TimeInterval = 0
+    check(gate.finish(input, now: { clock }, pause: { interval in
+        clock += interval
+        if clock >= 0.5 { session.see(1, 1) }
+    }), "normal completion waits for the delayed session publication without replay")
+    check(clock >= 0.5 && !gate.isClosing, "private success does not bypass the delayed session proof")
+
+    let closing = NativeInputGate(), lateSource = PendingModel(), lateSession = PendingModel()
+    let pending = dualInput(lateSource, lateSession)
+    check(closing.register(pending), "register bounded shutdown publication control")
+    pending.posted(eventType: 1, key: 0); lateSource.see(1, 1)
+    clock = 0
+    check(!closing.quiesce(milliseconds: 400, now: { clock }, pause: { clock += $0 }),
+          "normal completion allowance does not extend the shutdown budget")
+    check(clock == 0.4 && closing.isClosing, "unproven shutdown remains bounded and closes admission")
+}
 print("Native input contracts passed: \(inputContractAssertions) assertions; dual-stage progress, lifetime, cancellation, mouse and bounded shutdown; no input posted")

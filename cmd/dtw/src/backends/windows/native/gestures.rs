@@ -113,27 +113,39 @@ impl Store {
                 return Err(Error::TargetChanged);
             }
             if let Some(cursor) = cursor.as_mut() {
-                cursor.posted(end.x, end.y, false);
+                cursor.relocated(end.x, end.y);
             }
             return Ok(());
         }
         let mut accepted = 0;
-        pointer::dispatch(&plan, window, until, dispatched, &mut accepted, |point| {
-            self.input_boundary(target, window, until)?;
-            if pixels.expires <= Instant::now()
-                || pixels.dpi != unsafe { GetDpiForWindow(window) }
-                || !equal_rect(pixels.bounds, unobstructed(window)?)
-                || pixels.render_size != render_size(window)?
-                || unsafe { MonitorFromPoint(point, MONITOR_DEFAULTTONULL) } != monitor
-            {
-                return Err(Error::StaleObservation);
-            }
-            verify_point(window, target.app.pid, point)?;
-            if let Some(cursor) = cursor.as_mut() {
-                cursor.posted(point.x, point.y, false);
-            }
-            Ok(())
-        })
+        pointer::dispatch(
+            &plan,
+            window,
+            until,
+            dispatched,
+            &mut accepted,
+            |point| {
+                self.input_boundary(target, window, until)?;
+                if pixels.expires <= Instant::now()
+                    || pixels.dpi != unsafe { GetDpiForWindow(window) }
+                    || !equal_rect(pixels.bounds, unobstructed(window)?)
+                    || pixels.render_size != render_size(window)?
+                    || unsafe { MonitorFromPoint(point, MONITOR_DEFAULTTONULL) } != monitor
+                {
+                    return Err(Error::StaleObservation);
+                }
+                verify_point(window, target.app.pid, point)
+            },
+            |point, down| {
+                if let Some(cursor) = cursor.as_mut() {
+                    if drag {
+                        cursor.sampled(point.x, point.y, down);
+                    } else {
+                        cursor.posted(point.x, point.y, down);
+                    }
+                }
+            },
+        )
     }
 }
 
