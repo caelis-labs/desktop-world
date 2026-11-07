@@ -740,6 +740,10 @@ pub trait Backend: Send + Sync {
     fn is_available(&self) -> bool {
         true
     }
+    /// Positive evidence that the exact native process has exited.
+    fn is_reaped(&self) -> bool {
+        false
+    }
 
     /// Sticky failure to settle owned native resources after an operation.
     /// Reading this never performs cleanup and never replaces the operation's

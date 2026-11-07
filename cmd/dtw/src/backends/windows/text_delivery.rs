@@ -1,5 +1,5 @@
 //! Read-only acknowledgement of focused text entry.
-//! Surrogate pairs also require consumption before releasing the input scope.
+//! Supplementary scalars are read back before sending the next scalar.
 //! A failed acknowledgement never repairs or replays text.
 use super::input;
 use crate::{backends::native_client::failed, computer::Error};
@@ -51,7 +51,6 @@ pub(super) struct TextDelivery {
     suffix: String,
     typed: String,
     pending: bool,
-    pending_surrogate: bool,
     partial: bool,
 }
 enum Reader {
@@ -145,7 +144,6 @@ impl TextDelivery {
                         suffix: normalize(&suffix),
                         typed: String::new(),
                         pending: false,
-                        pending_surrogate: false,
                         partial: false,
                     });
                 }
@@ -294,7 +292,6 @@ impl TextDelivery {
                                     suffix: String::new(),
                                     typed: String::new(),
                                     pending: false,
-                                    pending_surrogate: false,
                                     partial: false,
                                 });
                             }
@@ -348,7 +345,6 @@ impl TextDelivery {
                 suffix: normalize(&suffix),
                 typed: String::new(),
                 pending: false,
-                pending_surrogate: false,
                 partial: false,
             })
         }
@@ -359,7 +355,6 @@ impl TextDelivery {
             return;
         }
         self.pending = true;
-        self.pending_surrogate |= scalar.len_utf16() > 1;
         if inserted != total {
             self.partial = true;
         } else {
@@ -388,7 +383,6 @@ impl TextDelivery {
                 && input::no_held_keys().is_ok()
             {
                 self.pending = false;
-                self.pending_surrogate = false;
                 return Ok(());
             }
             if Instant::now() >= until {
@@ -474,16 +468,6 @@ fn selection_owned(
             owner = walker.GetParentElement(&owner).map_err(failed)?;
         }
         Err(Error::InvalidObservation)
-    }
-}
-
-impl Drop for TextDelivery {
-    fn drop(&mut self) {
-        if self.pending_surrogate {
-            // Do not release the shared input lease as clean. The worker is
-            // reaped and a queued independent owner sees the abandoned lease.
-            input::fail_delivery();
-        }
     }
 }
 

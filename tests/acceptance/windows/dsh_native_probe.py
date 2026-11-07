@@ -82,14 +82,18 @@ DSH Windows 中文🙂
             if protocol:
                 if args.mode == 'protocol-script':
                     goal = f"""仅操作自有应用 {exe}。先用 apps 找到它。
-按顺序通过三次 exec 各原样执行一个脚本，不添加动作。两项对照预期各自报错。
-每项报错后保留工具结果，结束该用例，不要重试。三个用例是独立操作。
+按顺序通过五次 exec 各原样执行一个脚本，不添加动作。三个故障对照预期各自报错。
+每项报错后保留结果，结束该用例并执行下一个脚本。最后一项从新观察开始，不重试之前的输入。
 成功脚本：
 {protocol_review.POSITIVE}
 错误字段对照：
 {protocol_review.MISMATCH}
 字符丢失对照：
-{protocol_review.FAULT}"""
+{protocol_review.FAULT}
+含表情的字符丢失对照：
+{protocol_review.SUPPLEMENTARY_FAULT}
+在同一连接观察并执行新任务：
+{protocol_review.RECOVERY}"""
                 else:
                     goal = f"""仅操作自有应用 {exe} 的普通审阅表单。
 通过键盘填写 Review code 为 {protocol_review.CODE}，提交恰好一次。
@@ -192,7 +196,10 @@ DSH Windows 中文🙂
             fault = args.mode == 'protocol-script'
             journal = out / 'dsh/acp.jsonl'
             report['metrics'] = summarize(journal)
-            protocol_review.assert_business(state, fault=fault)
+            if fault:
+                protocol_review.assert_recovery(state)
+            else:
+                protocol_review.assert_business(state)
             replies, sources = [], []
             for event in client.events:
                 update = event.get('params', {}).get('update', {})
@@ -215,14 +222,17 @@ DSH Windows 中文🙂
                 for ack in r.get('effects', {}).get('acknowledgements', []))), None)
             require(confirmed, 'DSH did not expose a confirmed text input receipt')
             if fault:
-                require(sources == [protocol_review.POSITIVE, protocol_review.MISMATCH, protocol_review.FAULT],
-                        'DSH did not execute the three fixed acceptance scripts')
+                require(sources == [protocol_review.POSITIVE, protocol_review.MISMATCH, protocol_review.FAULT,
+                                    protocol_review.SUPPLEMENTARY_FAULT, protocol_review.RECOVERY],
+                        'DSH did not execute the five fixed acceptance scripts')
                 mismatches = [r for r in replies if r.get('error', {}).get('code') == 'text_focus_mismatch']
                 require(len(mismatches) == 1, 'DSH did not expose the expected single focus mismatch')
                 protocol_review.assert_mismatch(mismatches[0])
                 failures = [r for r in replies if r.get('error', {}).get('code') == 'text_delivery_unconfirmed']
-                require(len(failures) == 1, 'DSH did not expose the expected single typed input failure')
-                protocol_review.assert_fault(failures[0])
+                require(len(failures) == 2, 'DSH did not expose both expected typed input failures')
+                for failure in failures:
+                    protocol_review.assert_fault(failure)
+                protocol_review.assert_confirmed(replies[-1])
         elif args.mode == 'parity':
             state = wait(lambda: fixture.state())
             report['final_state'] = state

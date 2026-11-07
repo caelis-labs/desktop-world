@@ -401,6 +401,9 @@ impl<P: Platform> Backend for NativeBackend<P> {
     fn is_available(&self) -> bool {
         !self.worker.is_stopped()
     }
+    fn is_reaped(&self) -> bool {
+        self.worker.is_reaped()
+    }
     fn stamp(&self) -> ProviderStamp {
         ProviderStamp {
             id: P::ID.into(),

@@ -58,6 +58,10 @@
   inspect the UI again with `look()` or `capture()` before choosing another
   action. Do not repeat an action to recover the missing observation. An
   explicit read failure, interruption or unconfirmed cleanup remains an error.
+  A readback mismatch or native cleanup failure is retained on the affected
+  execution. Later requests can observe fresh state and issue new actions.
+  DTW replaces unavailable workers and checks the current target and input
+  preconditions for each action. It does not replay earlier input.
   Return a task-specific JSON value to get just `result` alongside applicable
   receipts. Return the final snapshot or omit the return value to publish `view`.
   Errors retain any available view. A PNG is a separate MCP image block with

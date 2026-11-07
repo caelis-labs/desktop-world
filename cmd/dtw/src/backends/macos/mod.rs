@@ -991,6 +991,17 @@ impl Backend for NativeBackend {
     fn is_available(&self) -> bool {
         !self.worker.is_stopped()
     }
+    fn is_reaped(&self) -> bool {
+        self.worker.is_reaped()
+            && self
+                .scene
+                .state
+                .lock()
+                .unwrap()
+                .worker
+                .as_ref()
+                .is_none_or(|worker| worker.is_reaped())
+    }
     fn finish_execution(&self) -> Result<Option<FocusReturn>, Error> {
         let until = Instant::now() + NORMAL_FOCUS_RETURN_BUDGET + FOCUS_RETURN_TRANSPORT_MARGIN;
         let request_id = unique_generation();

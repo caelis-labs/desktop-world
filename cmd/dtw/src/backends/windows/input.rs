@@ -31,6 +31,7 @@ static GATE: MutationGate = MutationGate::new();
 // Publication is inside the mutation gate, so shutdown cannot observe an
 // acquired-but-unpublished mutex as clean. Bit 1 is held, bit 4 is uncertainty.
 static LEASE_STATE: AtomicU8 = AtomicU8::new(0);
+const SHARED_INPUT: windows::core::PCWSTR = w!("Local\\DesktopWorld.SharedInput.v1");
 pub fn close() {
     GATE.close();
 }
@@ -43,6 +44,15 @@ pub fn closing() -> bool {
 pub(super) fn fail_delivery() {
     GATE.fail_cleanup();
     GATE.close();
+}
+fn verify_abandoned_input() -> Result<(), Error> {
+    let foreground = super::desktop::keyboard_state_owner()?;
+    no_held_keys()?;
+    super::desktop::ensure_input_desktop()?;
+    if unsafe { GetForegroundWindow() } != foreground {
+        return Err(Error::TargetChanged);
+    }
+    Ok(())
 }
 pub fn mutation(until: Instant) -> Result<Mutation<'static>, Error> {
     let admission = GATE.admit_before(until).map_err(|error| match error {
@@ -95,8 +105,7 @@ pub struct Lease(HANDLE);
 impl Lease {
     pub fn acquire(until: Instant) -> Result<Self, Error> {
         unsafe {
-            let handle = CreateMutexW(None, false, w!("Local\\DesktopWorld.SharedInput.v1"))
-                .map_err(failed)?;
+            let handle = CreateMutexW(None, false, SHARED_INPUT).map_err(failed)?;
             loop {
                 if let Err(error) = check(until) {
                     let _ = CloseHandle(handle);
@@ -117,18 +126,19 @@ impl Lease {
                 };
                 let status = WaitForSingleObject(handle, 0);
                 if status == WAIT_ABANDONED {
-                    release_handle(handle);
-                    GATE.fail_cleanup();
-                    return Err(failed(
-                        "Previous input owner was abandoned; its cleanup is unconfirmed",
-                    ));
+                    // Windows granted this thread the mutex. Verify current
+                    // input under that lease. The previous action is never replayed.
+                    if let Err(error) = verify_abandoned_input() {
+                        release_handle(handle);
+                        return Err(error);
+                    }
                 }
-                if status != WAIT_OBJECT_0 && status != WAIT_TIMEOUT {
+                if status != WAIT_OBJECT_0 && status != WAIT_ABANDONED && status != WAIT_TIMEOUT {
                     let error = std::io::Error::last_os_error();
                     let _ = CloseHandle(handle);
                     return Err(failed(error));
                 }
-                if status == WAIT_OBJECT_0 {
+                if status == WAIT_OBJECT_0 || status == WAIT_ABANDONED {
                     if closing() || cleanup_failed() {
                         release_handle(handle);
                         return Err(Error::Closed);

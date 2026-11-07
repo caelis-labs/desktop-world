@@ -7,16 +7,23 @@ use windows::Win32::{
         CloseHandle, GetLastError, SetLastError, BOOL, ERROR_MORE_DATA, ERROR_SUCCESS, HANDLE,
         HWND, LPARAM,
     },
-    Security::{GetTokenInformation, TokenHasRestrictions, TokenIsAppContainer, TOKEN_QUERY},
+    Security::{
+        GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TokenHasRestrictions,
+        TokenIntegrityLevel, TokenIsAppContainer, TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
+    },
     System::{
         RemoteDesktop::ProcessIdToSessionId,
         StationsAndDesktops::{
             CloseDesktop, GetProcessWindowStation, GetThreadDesktop, GetUserObjectInformationW,
-            OpenInputDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_READOBJECTS, UOI_NAME,
+            OpenInputDesktop, DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS, DESKTOP_HOOKCONTROL,
+            DESKTOP_READOBJECTS, UOI_NAME,
         },
-        Threading::{GetCurrentProcess, GetCurrentThreadId, OpenProcessToken},
+        Threading::{
+            GetCurrentProcess, GetCurrentThreadId, OpenProcess, OpenProcessToken,
+            PROCESS_QUERY_LIMITED_INFORMATION,
+        },
     },
-    UI::WindowsAndMessaging::WNDENUMPROC,
+    UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId, WNDENUMPROC},
 };
 
 const WINDOW_LIMIT: usize = 4096;
@@ -170,6 +177,61 @@ pub(super) fn ensure_input_desktop() -> Result<(), Error> {
         })()
     };
     validate_input_desktop(names)
+}
+
+unsafe fn integrity(process: HANDLE) -> Result<u32, Error> {
+    use crate::backends::native_client::failed;
+    let mut token = HANDLE::default();
+    OpenProcessToken(process, TOKEN_QUERY, &mut token).map_err(failed)?;
+    let mut buffer = [0usize; 32];
+    let mut size = 0;
+    let result = GetTokenInformation(
+        token,
+        TokenIntegrityLevel,
+        Some(buffer.as_mut_ptr().cast()),
+        std::mem::size_of_val(&buffer) as u32,
+        &mut size,
+    );
+    let closed = CloseHandle(token);
+    result.and(closed).map_err(failed)?;
+    let label = &*buffer.as_ptr().cast::<TOKEN_MANDATORY_LABEL>();
+    let count = GetSidSubAuthorityCount(label.Label.Sid)
+        .as_ref()
+        .and_then(|count| count.checked_sub(1))
+        .ok_or(Error::InvalidObservation)?;
+    GetSidSubAuthority(label.Label.Sid, u32::from(count))
+        .as_ref()
+        .copied()
+        .ok_or(Error::InvalidObservation)
+}
+
+/// GetAsyncKeyState can report all zeros on access denial. Require access to
+/// the current desktop and a foreground process at or below our integrity.
+pub(super) fn keyboard_state_owner() -> Result<HWND, Error> {
+    use crate::backends::native_client::failed;
+    ensure_input_desktop()?;
+    unsafe {
+        let desktop = OpenInputDesktop(
+            DESKTOP_CONTROL_FLAGS(0),
+            false,
+            DESKTOP_ACCESS_FLAGS(DESKTOP_READOBJECTS.0 | DESKTOP_HOOKCONTROL.0),
+        )
+        .map_err(failed)?;
+        CloseDesktop(desktop).map_err(failed)?;
+        let foreground = GetForegroundWindow();
+        let mut pid = 0;
+        if GetWindowThreadProcessId(foreground, Some(&mut pid)) == 0 {
+            return Err(Error::TargetChanged);
+        }
+        let own = integrity(GetCurrentProcess())?;
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).map_err(failed)?;
+        let other = integrity(process);
+        CloseHandle(process).map_err(failed)?;
+        if other? > own || GetForegroundWindow() != foreground {
+            return Err(Error::TargetChanged);
+        }
+        Ok(foreground)
+    }
 }
 fn validate_input_desktop(names: windows::core::Result<(String, String)>) -> Result<(), Error> {
     let reason = match names {

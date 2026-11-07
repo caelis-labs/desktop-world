@@ -27,6 +27,8 @@ MISMATCH = (
     "await app.typeText({target:view.elements[0].id,text:'must not reach either field'}); "
     "await app.keypress('ENTER');")
 FAULT = "await app.click('Load form with input fault'); " + FILL
+SUPPLEMENTARY_FAULT = FAULT.replace(json.dumps(CODE), json.dumps("A😀"))
+RECOVERY = "await app.look(); await app.click('Load review form'); await app.typeText('implicit focus');"
 
 
 def assert_business(state, *, fault=False):
@@ -53,11 +55,21 @@ def assert_fault(result):
     require(result["effects"]["dispatch"] == {"dispatched": 2}, result)
     require(any(ack.get("error") == "text_delivery_unconfirmed"
                 for ack in result["effects"]["acknowledgements"]), result)
+    require(not result.get("shutdown_error") and not result.get("shutdown_errors"), result)
 
 
 def assert_confirmed(result):
     require(any(ack.get("confirmed") == "text_present_in_focused_control"
                 for ack in result["effects"]["acknowledgements"]), result)
+
+
+def assert_recovery(state):
+    review = state["review"]
+    require(review["loads"] == review["ready"] == 4 and review["dropped_keys"] == 2, review)
+    require(review["submissions"] == 1 and review["submitted_code"] == CODE, review)
+    require(review["visible_value"] == "implicit focus", review)
+    require(state["text"] == "" and state["commits"] == state["saves"] == state["opens"] == 0,
+            "Unrelated document effect during recovery")
 
 
 def direct(execute, state):
@@ -100,12 +112,17 @@ def direct(execute, state):
     require(pointer["effects"]["dispatch"] == {"dispatched": 1}, pointer)
     require(state()["reviewed"] and state()["checks"] == 1, state())
     assert_business(state(), fault=True)
-    implicit = execute("await app.click('Load review form'); await app.typeText('implicit focus');")
+    supplementary = execute(SUPPLEMENTARY_FAULT, True)
+    assert_fault(supplementary)
+    review = state()["review"]
+    require(review["visible_value"] == "😀" and review["dropped_keys"] == 2
+            and review["submissions"] == 1, review)
+    recovered_view = execute("await app.look();")
+    require("view" in recovered_view, recovered_view)
+    implicit = execute(RECOVERY)
     assert_confirmed(implicit)
-    final = state()
-    require(final["text"] == "" and final["review"]["visible_value"] == "implicit focus"
-            and final["review"]["loads"] == final["review"]["ready"] == 3
-            and final["review"]["submissions"] == 1, final)
+    assert_recovery(state())
     return {"full": full, "unchanged": unchanged, "small": small, "timer": timer,
             "stable": stable, "timeout": timeout, "positive": positive, "same_id": same_id, "mismatch": mismatch,
-            "negative": negative, "pointer": pointer, "implicit": implicit}
+            "negative": negative, "pointer": pointer, "supplementary_fault": supplementary,
+            "recovered_view": recovered_view, "implicit": implicit}

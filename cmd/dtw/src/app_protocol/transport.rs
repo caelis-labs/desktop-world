@@ -46,7 +46,10 @@ fn retire_unavailable_catalog<B: Backend>(catalog: &Mutex<Option<Arc<B>>>) -> Re
         .filter(|reader| !reader.is_available())
         .cloned();
     if let Some(reader) = stopped {
-        reader.shutdown()?;
+        let stopped = reader.shutdown();
+        if stopped.is_err() && !reader.is_reaped() {
+            stopped?;
+        }
         let mut slot = catalog.lock().unwrap();
         if slot
             .as_ref()
@@ -128,7 +131,10 @@ impl Factory for NativeFactory {
     fn close_catalog(&self) -> Result<(), Error> {
         let reader = self.catalog.lock().unwrap().clone();
         if let Some(reader) = reader {
-            reader.shutdown()?;
+            let stopped = reader.shutdown();
+            if stopped.is_err() && !reader.is_reaped() {
+                return stopped;
+            }
             let mut slot = self.catalog.lock().unwrap();
             if slot
                 .as_ref()
@@ -136,6 +142,7 @@ impl Factory for NativeFactory {
             {
                 *slot = None;
             }
+            return stopped;
         }
         Ok(())
     }
@@ -257,12 +264,16 @@ mod tests {
     struct CatalogReader {
         available: AtomicBool,
         cleanup_fails: bool,
+        reaped: bool,
         shutdowns: AtomicUsize,
     }
     impl Backend for CatalogReader {
         type Binding = ();
         fn is_available(&self) -> bool {
             self.available.load(Ordering::SeqCst)
+        }
+        fn is_reaped(&self) -> bool {
+            self.reaped
         }
         fn stamp(&self) -> ProviderStamp {
             ProviderStamp {
@@ -300,11 +311,12 @@ mod tests {
     }
 
     #[test]
-    fn catalog_replacement_requires_unavailable_owner_and_successful_cleanup() {
-        for cleanup_fails in [false, true] {
+    fn catalog_replacement_requires_cleanup_or_a_reaped_read_only_owner() {
+        for (cleanup_fails, reaped) in [(false, false), (true, false), (true, true)] {
             let reader = Arc::new(CatalogReader {
                 available: AtomicBool::new(true),
                 cleanup_fails,
+                reaped,
                 shutdowns: AtomicUsize::new(0),
             });
             let catalog = Mutex::new(Some(reader.clone()));
@@ -317,7 +329,7 @@ mod tests {
             reader.available.store(false, Ordering::SeqCst);
             let result = retire_unavailable_catalog(&catalog);
             assert_eq!(reader.shutdowns.load(Ordering::SeqCst), 1);
-            if cleanup_fails {
+            if cleanup_fails && !reaped {
                 assert_eq!(
                     result.unwrap_err(),
                     Error::BackendFailed("original cleanup failure".into())

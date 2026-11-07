@@ -308,7 +308,7 @@ fn standard_cancel_preserves_committed_state_and_other_app_contexts() {
 }
 
 #[test]
-fn native_cleanup_failure_closes_dispatch_for_every_app_and_keeps_original_receipts() {
+fn native_cleanup_failure_preserves_other_app_reads_and_original_receipts() {
     let (server, catalog) = server();
     add_app(&catalog, "org.example.Other", 43);
     let other = json!({"app":"org.example.Other","source":"state.kept=true;return 'peer';"});
@@ -332,19 +332,22 @@ fn native_cleanup_failure_closes_dispatch_for_every_app_and_keeps_original_recei
         "scene_cleanup_failed"
     );
     assert_eq!(original.data["script"]["state_committed"], false);
-    let blocked = call(
+    // The fake model is shared by both providers; the peer itself did not
+    // produce the failing receipt.
+    catalog.backend.0.model.lock().unwrap().cleanup_error = None;
+    let observed = call(
         &server,
         "exec",
         json!({"app":"org.example.Other","source":"return app.windows();"}),
     );
-    assert_code(&blocked, "shutdown_failed");
+    assert!(!observed.is_error, "{}", observed.data);
+    assert!(observed.data.get("shutdown_errors").is_none());
     assert_eq!(catalog.connects.load(Ordering::SeqCst), 2);
-    assert_eq!(catalog.backend.0.windows.load(Ordering::SeqCst), 1);
+    assert_eq!(catalog.backend.0.windows.load(Ordering::SeqCst), 2);
     assert_eq!(catalog.backend.0.captures.load(Ordering::SeqCst), 1);
     assert_eq!(receipt(&server, &original).data, original.data);
     assert_eq!(exec(&server, "capture-cleanup", source).data, original.data);
-    // Earlier app results retain their payload and per-job outcome; session
-    // shutdown diagnostics are appended independently by the public Server.
+    // Earlier app results retain their original receipt and diagnostics.
     let prior = call_with_rpc(&server, json!("peer-rpc"), "exec", other);
     assert_eq!(prior.data["value"], peer.data["value"]);
     assert_eq!(prior.data["script"], peer.data["script"]);
