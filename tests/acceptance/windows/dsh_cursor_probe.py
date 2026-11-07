@@ -10,7 +10,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app_client import artifact_identity, require
-from dsh_client import DshClient
+from dsh_client import DshClient, MODEL_BOUNDARY
 from windows.app_protocol_probe import wait_state
 from windows.desktop_probe import children
 from windows.transport import ProcessHandle, read
@@ -104,6 +104,7 @@ def main():
 在同一条 exec 中：对这个点 move 悬停，停留约 900ms；再次 capture 后在同一点单击一次，再停留约 900ms。
 停留可以用 Date.now 的短循环实现，整条脚本保持在 30 秒内。不要点 Increment、Save 或其他控件，不要拖动。
 最后截图并报告；派发不确定不得重放。业务应只有这一次悬停和一次单击，观察器不会发出输入。'''
+        prompt += MODEL_BOUNDARY
         (out / 'prompt.txt').write_text(prompt, encoding='utf-8')
         started = time.time() * 1000
         report['prompt_result'] = client.call('session/prompt', {'sessionId': session,

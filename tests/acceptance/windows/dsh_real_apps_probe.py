@@ -11,7 +11,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app_client import artifact_identity, require
-from dsh_client import DshClient
+from dsh_client import DshClient, MODEL_BOUNDARY
 from windows.app_protocol_probe import wait
 from windows.desktop_probe import children
 from windows.transport import ProcessHandle
@@ -127,6 +127,7 @@ Windows 实机验收 中文🙂
 3. 第一次保存成功后，只关闭这个自有记事本文档，通过新的 look 确认回到原空白 Untitled 标签，保留空白窗口。每次输入前仍需在同个 exec 核对自有窗口标题。Document 元素 ID 必须属于已核对的 windows[0].id，不得使用其他窗口的元素。本阶段结束后，监督器会另发一轮“重新打开并核对”的任务；保存前后读取不算重新打开。
 4. 回到自有 Explorer 窗口，核对新文件名存在而旧文件名消失，最后只关闭这个自有 Explorer 窗口。不要使用 app.quit() 关闭 Explorer 整个实例，因为它还管理用户其他窗口和桌面。
 若记事本出现其他用户文档或无法证明窗口归属，停止相关输入并报告。派发/消费不确定不得重放，先做新的只读观察。报告实际完成与错误。'''
+        prompt += MODEL_BOUNDARY
         (out / 'prompt.txt').write_text(prompt, encoding='utf-8')
         started = time.time() * 1000
         report['prompt_result'] = client.call('session/prompt', {'sessionId': session,
@@ -148,6 +149,7 @@ Windows 实机验收 中文🙂
 第二行 café 🚀
 Windows UIA 可能返回 CR、CRLF 或 LF，请仅在比较文本时统一换行，不得改写文件。确认没有额外尾部换行。
 不要重打、重保存或修改内容。核对后只 Ctrl+W 关闭这个自有文档，通过新的 look 确认回到原空白 Untitled 标签，保留空白窗口。不得调用 Notepad app.quit()、切换用户文档或关闭其他窗口。报告实际错误。'''
+        reopen_prompt += MODEL_BOUNDARY
         (out / 'reopen-prompt.txt').write_text(reopen_prompt, encoding='utf-8')
         started = time.time() * 1000
         report['reopen_result'] = client.call('session/prompt', {'sessionId': session,

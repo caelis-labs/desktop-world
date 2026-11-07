@@ -589,6 +589,7 @@ pub(super) fn drain_caption(window: HWND, placement: INPUT, until: Instant) -> R
             || {
                 keyboard_preflight(until, Instant::now(), closing(), cleanup_failed())?;
                 super::desktop::ensure_input_desktop()?;
+                super::execution_scope::check()?;
                 queue.validate(window)
             },
             |events| unsafe { SendInput(events, std::mem::size_of::<INPUT>() as i32) },

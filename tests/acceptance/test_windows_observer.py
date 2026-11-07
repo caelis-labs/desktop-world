@@ -68,6 +68,16 @@ class NativeSamplingTests(unittest.TestCase):
     def test_missing_call_times_do_not_create_sampling_success(self):
         self.assertFalse(observer.check_intervals(self.rows, [{'name': 'missing'}])[0]['passed'])
 
+    def test_boundary_only_interval_does_not_claim_foreground_or_cursor_preservation(self):
+        self.rows[1]['foreground_pid'] = 99
+        self.rows[1]['cursor']['x'] += 50
+        result = observer.check_intervals(self.rows, [dict(name='boundary-only', start_ms=5, end_ms=25)])[0]
+        self.assertTrue(result['passed'])
+        self.assertFalse(result['foreground_asserted'])
+        self.assertFalse(result['cursor_asserted'])
+        self.assertNotIn('foreground_preserved', result)
+        self.assertNotIn('cursor_preserved', result)
+
 
 if __name__ == '__main__':
     unittest.main()

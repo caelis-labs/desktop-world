@@ -45,9 +45,13 @@ def check_intervals(rows, intervals):
                 continue
             result.update(samples=len(samples), max_gap_ms=max(gaps, default=0),
                           sampling_status='observed',
-                          foreground_preserved=all(row['foreground_pid'] == interval['foreground_pid'] for row in samples) if 'foreground_pid' in interval else True,
-                          cursor_preserved=all(row['cursor_readable'] and row['cursor'] == interval['cursor'] for row in samples) if 'cursor' in interval else True)
-            result['passed'] = result['foreground_preserved'] and result['cursor_preserved']
+                          foreground_asserted='foreground_pid' in interval,
+                          cursor_asserted='cursor' in interval)
+            if result['foreground_asserted']:
+                result['foreground_preserved'] = all(row['foreground_pid'] == interval['foreground_pid'] for row in samples)
+            if result['cursor_asserted']:
+                result['cursor_preserved'] = all(row['cursor_readable'] and row['cursor'] == interval['cursor'] for row in samples)
+            result['passed'] = result.get('foreground_preserved', True) and result.get('cursor_preserved', True)
         else:
             result['error'] = 'missing_bracketing_samples'
         results.append(result)

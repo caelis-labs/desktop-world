@@ -16,7 +16,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app_client import artifact_identity, require
-from dsh_client import DshClient
+from dsh_client import DshClient, MODEL_BOUNDARY
 from windows.app_protocol_probe import wait, wait_state
 from windows.desktop_probe import children
 from windows.transport import ProcessHandle, read
@@ -86,6 +86,7 @@ DSH Windows 中文🙂
 禁止 shell、PowerShell、Python、文件写工具、HTTP、CDP、Playwright、其他 computer-use、读取 fixture 源码/配置/状态/事件等旁路。
 不要操作其他窗口或文件。只按实际观察到的内容执行，派发或消费不确定的动作禁止重放；先做新观察。
 工具回复只证明其声明的事实，最终结论必须保留错误和不确定项。\n'''
+        common += MODEL_BOUNDARY
         prompt = common + goal
         (out / 'prompt.txt').write_text(prompt, encoding='utf-8')
         client = DshClient(args.dsh, patch, out / 'dsh', Path.cwd())

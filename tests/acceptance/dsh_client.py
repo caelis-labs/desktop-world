@@ -12,6 +12,27 @@ import subprocess
 import threading
 import time
 
+MODEL_BOUNDARY = '''\n监督边界：禁止启用 subagent、其他 agent、另开 MCP 或委派其他模型代替本会话操作。
+若出现 shutdown_error、shutdown_failed 或清理未确认，立即停止输入并如实报告，不得换连接绕过。
+派发未知的动作不得重放；必要的新观察必须只读，不得将全局释放等同于目标消费确认。\n'''
+
+
+def native_cleanup_unconfirmed(update):
+    """A native shutdown failure must stop the model, never invite a bypass."""
+    for block in update.get('content', []):
+        content = block.get('content', {})
+        if content.get('type') != 'text':
+            continue
+        try:
+            value, _ = json.JSONDecoder().raw_decode(content.get('text', '').removeprefix('Error: ').lstrip())
+        except ValueError:
+            continue
+        error = value.get('error') if isinstance(value, dict) else None
+        if isinstance(value, dict) and (value.get('shutdown_error')
+                or isinstance(error, dict) and error.get('code') in ('shutdown_failed', 'input_cleanup_failed')):
+            return True
+    return False
+
 
 class DshClient:
     def __init__(self, command, patch, output, cwd):
@@ -21,6 +42,8 @@ class DshClient:
         self.pending = {}
         self.methods = {}
         self.owned_sessions = set()
+        self.tool_names = {}
+        self.critical_cancelled = set()
         self.controller_stop = threading.Event()
         self.events = []
         self.queue = queue.Queue()
@@ -68,6 +91,22 @@ class DshClient:
                 continue
             self._record('receive', message)
             self.queue.put(message)
+            params = message.get('params', {})
+            update = params.get('update', {})
+            key = update.get('toolCallId')
+            if update.get('sessionUpdate') == 'tool_call':
+                self.tool_names[key] = update.get('title')
+            session = params.get('sessionId')
+            if (update.get('sessionUpdate') == 'tool_call_update'
+                    and self.tool_names.get(key) in ('mcp__desktop-world__apps', 'mcp__desktop-world__exec')
+                    and session in self.owned_sessions and session not in self.critical_cancelled
+                    and native_cleanup_unconfirmed(update)):
+                self.critical_cancelled.add(session)
+                self._record('critical_cleanup_cancel', {'sessionId': session, 'toolCallId': key})
+                try:
+                    self.send({'jsonrpc': '2.0', 'method': 'session/cancel', 'params': {'sessionId': session}})
+                except OSError as error:
+                    self._record('critical_cancel_error', str(error))
         self.queue.put(EOFError('DSH ACP stdout closed'))
 
     def send(self, message):

@@ -10,7 +10,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app_client import artifact_identity, require
-from dsh_client import DshClient
+from dsh_client import DshClient, MODEL_BOUNDARY
 from windows.browser_feature_audit import owned_browser_pid, close_owned_browser
 from windows.desktop_probe import children
 from windows.transport import ProcessHandle, read
@@ -99,6 +99,7 @@ def main():
 5. 打开 Canvas chat。通过真实截图定位绘制的 Release check 137 消息，在其右键菜单中 Pin；发送一次“{message}”。不要从 AX 标签猜测 canvas 消息坐标。
 6. 打开 Image challenge，只从 DTW capture 图片读出八个图形字符，填写并 Verify image 恰好一次，不得读取图片文件或隐藏答案。
 最后捕获图片，报告完成情况、实际错误和不确定项；不要关闭其他浏览器窗口。'''
+        prompt += MODEL_BOUNDARY
         (out / 'prompt.txt').write_text(prompt, encoding='utf-8')
         started = time.time() * 1000
         report['prompt_result'] = client.call('session/prompt', {'sessionId': session,

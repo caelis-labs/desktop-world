@@ -23,7 +23,7 @@ def summarize(path):
         kind, key = update.get('sessionUpdate'), update.get('toolCallId')
         if kind == 'tool_call':
             calls[key] = {'tool': update.get('title'), 'status': update.get('status'),
-                'admitted_image_parts': 0, 'error_codes': []}
+                'admitted_image_parts': 0, 'error_codes': [], 'dispatch': {}}
         elif kind == 'tool_call_update' and key not in calls:
             unmatched_updates += 1
         elif kind == 'tool_call_update':
@@ -43,6 +43,12 @@ def summarize(path):
                         continue
                     if isinstance(result, dict) and isinstance(result.get('error'), dict):
                         call['error_codes'].append(result['error'].get('code', 'unknown'))
+                    if isinstance(result, dict):
+                        effects = result.get('effects')
+                        dispatch = effects.get('dispatch') if isinstance(effects, dict) else None
+                        dispatch = dispatch if isinstance(dispatch, dict) else {}
+                        call['dispatch'] = {key: value for key, value in dispatch.items()
+                            if key in ('dispatched', 'not_dispatched', 'unknown') and type(value) is int}
     statuses = collections.Counter(call['status'] for call in calls.values())
     return {'tool_calls': len(calls),
         'tools': dict(collections.Counter(call['tool'] for call in calls.values())),
@@ -52,6 +58,9 @@ def summarize(path):
         'admitted_image_parts': sum(call['admitted_image_parts'] for call in calls.values()),
         'journal_parse_errors': parse_errors,
         'unmatched_tool_updates': unmatched_updates,
+        'dispatch_counts': dict(sum((collections.Counter(call['dispatch'])
+            for call in calls.values()), collections.Counter())),
+        'tools_with_unknown_dispatch': sum(bool(call['dispatch'].get('unknown')) for call in calls.values()),
         'tool_error_free': bool(calls) and not parse_errors and not unmatched_updates
             and all(call['status'] == 'completed' for call in calls.values()),
         'scope': 'Public ACP tool facts only; business effects, image pixels and cleanup require independent oracles'}

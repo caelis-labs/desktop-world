@@ -1942,7 +1942,54 @@ impl Store {
                 self.consume(&target);
                 self.validate(&target)?;
                 check(until)?;
-                if op == "setValue" {
+                let mut menu_expansion = None;
+                if op == "press"
+                    && unsafe { element.CurrentControlType() }.map_err(failed)?
+                        == UIA_MenuItemControlTypeId
+                {
+                    // A background WinForms menu Invoke can fail or block in
+                    // its provider before opening the popup. Prepare its exact
+                    // owning keyboard window before the one original action.
+                    // Read-only menu discovery and ordinary buttons stay native
+                    // background operations.
+                    let receiver = keyboard_window(window, target.app.pid)?;
+                    if unsafe { GetForegroundWindow() } != receiver {
+                        if r["input_policy"] == "background_only" {
+                            return Err(Error::NativeFailure {
+                                code: "foreground_required".into(),
+                                message: "This native menu requires its owning foreground window"
+                                    .into(),
+                            });
+                        }
+                        self.focus_window(&target, receiver, until, &mut preparation)?;
+                    }
+                    route = Some("foreground");
+                    if let Some(pattern) = unsafe {
+                        optional_pattern::<IUIAutomationExpandCollapsePattern>(
+                            &element,
+                            UIA_ExpandCollapsePatternId,
+                        )
+                    }? {
+                        let state =
+                            unsafe { pattern.CurrentExpandCollapseState() }.map_err(failed)?;
+                        if state != ExpandCollapseState_LeafNode {
+                            menu_expansion = Some((pattern, state));
+                        }
+                    }
+                }
+                if let Some((pattern, state)) = menu_expansion {
+                    // Menu headers expand; leaf commands invoke. Some providers
+                    // advertise both patterns but reject or block header Invoke.
+                    // Select the operation before dispatch, never after failure.
+                    let _mutation =
+                        self.semantic_admission(&target, window, &uia, &element, &q, until)?;
+                    dispatched = true;
+                    if state == ExpandCollapseState_Expanded {
+                        unsafe { pattern.Collapse() }.map_err(failed)?;
+                    } else {
+                        unsafe { pattern.Expand() }.map_err(failed)?;
+                    }
+                } else if op == "setValue" {
                     let pattern = unsafe {
                         element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
                     }
@@ -1986,6 +2033,15 @@ impl Store {
                     if String::from_utf16_lossy(&class[..count.max(0) as usize]) == "#32770"
                         && keyboard_modal(window, target.app.pid)
                     {
+                        if r["input_policy"] == "background_only"
+                            && unsafe { GetForegroundWindow() } != window
+                        {
+                            return Err(Error::NativeFailure {
+                                code: "foreground_required".into(),
+                                message: "This native dialog requires its exact foreground window"
+                                    .into(),
+                            });
+                        }
                         self.focus_window(&target, window, until, &mut preparation)?;
                     }
                     let _mutation =

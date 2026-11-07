@@ -76,6 +76,11 @@ def main():
             report['pointer_state'] = wait_state(root, lambda value: value['moves'] > initial['moves']
                 and value['left_up'] == initial['left_up'] + 1)
             require(report['pointer_state']['increments'] == 0, 'Unexpected business button effect')
+            # The pad click legitimately focuses that non-editable pad. A new
+            # declared Increment action focuses Message before text input; it
+            # is after, and cannot mask, the already-proven cold pointer case.
+            client.execute(exe, 'await app.click({selector:{role:"button",text:"Increment"}});')
+            wait_state(root, lambda value: value['increments'] == 1 and value['editor_focused'])
         payload = 'Hidden foreground 中文🙂\r\npaired Ctrl+S café 🚀'
         result, response = client.execute(exe,
             'await app.keypress("CTRL+A");await app.typeText(' + json.dumps(payload) + ');await app.keypress("CTRL+S");', allow_error=True)
