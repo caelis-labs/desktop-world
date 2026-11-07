@@ -179,6 +179,29 @@ fn keyboard_window(window: HWND, pid: u32) -> Result<HWND, Error> {
     }
     Ok(unsafe { GetAncestor(info.hwndMenuOwner, GA_ROOT) })
 }
+fn keyboard_modal(window: HWND, pid: u32) -> bool {
+    if !visible(window) || !unsafe { IsWindowEnabled(window) }.as_bool() {
+        return false;
+    }
+    let mut owner = window;
+    for _ in 0..128 {
+        let Ok(parent) = (unsafe { GetWindow(owner, GW_OWNER) }) else {
+            return false;
+        };
+        let mut parent_pid = 0;
+        unsafe {
+            GetWindowThreadProcessId(parent, Some(&mut parent_pid));
+        }
+        if parent == owner || parent_pid != pid {
+            return false;
+        }
+        if !unsafe { IsWindowEnabled(parent) }.as_bool() {
+            return true;
+        }
+        owner = parent;
+    }
+    false
+}
 pub(super) fn user_application_window(window: HWND) -> bool {
     if !visible(window) || super::cursor::proven_overlay(window) {
         return false;
@@ -437,6 +460,8 @@ struct Pixels {
 }
 type PointerPoint = (RECT, POINT, u32, Option<Instant>, Option<(i32, i32)>);
 pub struct Store {
+    _foreground_monitor: Option<super::execution_scope::Monitor>,
+    last_caption: Option<(u64, POINT, Instant)>,
     uia: Option<IUIAutomation>,
     windows: HashMap<u64, WindowTarget>,
     queries: HashMap<String, Query>,
@@ -463,6 +488,13 @@ impl Store {
                 .map_err(failed)?;
         }
         Ok(Self {
+            last_caption: None,
+            _foreground_monitor: super::execution_scope::Monitor::start()
+                .map_err(|error| {
+                    eprintln!("DTW Windows foreground monitor: {error:?}");
+                    error
+                })
+                .ok(),
             uia: None,
             windows: HashMap::new(),
             queries: HashMap::new(),
@@ -557,7 +589,7 @@ impl Store {
             | "launch_app" | "quit_app" | "close_window" | "windows" | "observe"
             | "observe_next" | "probe_window_state" | "read_text" | "capture" | "press"
             | "setValue" | "click" | "focus" | "typeText" | "keypress" | "scroll"
-            | "move" | "drag") => op,
+            | "move" | "drag" | "finish_execution") => op,
             _ => "unknown",
         };
         if trace {
@@ -605,6 +637,9 @@ impl Store {
             let until = deadline(request)?;
             check(until)?;
             match op {
+                "finish_execution" => Ok(
+                    json!({"focus":super::execution_scope::finish()?.map(FocusReturn::as_str).unwrap_or("unchanged")}),
+                ),
                 "prepare_cursor" => {
                     let target = parse_target(&request["target"])?;
                     self.validate(&target)?;
@@ -653,6 +688,7 @@ impl Store {
                         let scene = if shown {
                             let b = rect(window)?;
                             let mut layout = json!({"bounds":[b.left,b.top,b.right-b.left,b.bottom-b.top],"rank":rank,"keyboard_focused":unsafe { GetForegroundWindow() } == window});
+                            layout["keyboard_modal"] = json!(keyboard_modal(window, app.pid));
                             let mut class = [0u16; 256];
                             let count = unsafe { GetClassNameW(window, &mut class) };
                             if decorative_window_class(&String::from_utf16_lossy(
@@ -1239,6 +1275,7 @@ impl Store {
         until: Instant,
         dispatched: &mut bool,
         route: &mut Option<&'static str>,
+        preparation: &mut bool,
     ) -> Result<(), Error> {
         input::no_held_keys()?;
         let op = string(r, "operation")?;
@@ -1299,7 +1336,7 @@ impl Store {
                         let uia = self.uia()?;
                         owned(&uia, &element, &q.root, until)?;
                         q.validate_region(window, &element, until)?;
-                        let bounds = unobstructed(window)?;
+                        let bounds = capture_bounds(window)?;
                         let clipped =
                             scroll_element_rect(&uia, &element, &q.root, bounds, q.region, until)?;
                         point = Some((
@@ -1340,6 +1377,7 @@ impl Store {
         self.validate(target)?;
         check(until)?;
         if matches!(op, "click" | "scroll") {
+            self.prepare_pointer_surface(target, window, r, until, preparation)?;
             if point.is_none() {
                 let bounds = unobstructed(window)?;
                 point = Some((
@@ -1438,7 +1476,12 @@ impl Store {
             }
         }
         *route = Some("foreground");
-        input::focus(keyboard_window(window, target.app.pid)?, until, dispatched)?;
+        let focus_receiver = keyboard_window(window, target.app.pid)?;
+        if op == "focus" {
+            self.focus_window(target, focus_receiver, until, dispatched)?;
+        } else {
+            self.focus_window(target, focus_receiver, until, preparation)?;
+        }
         self.input_boundary(target, window, until)?;
         let text_scalars: Vec<char> = if op == "typeText" {
             input_sequence::normalized_text(string(r, "text")?)
@@ -1609,7 +1652,7 @@ impl Store {
             || pixels.expires <= Instant::now()
             || pixels.dpi != unsafe { GetDpiForWindow(window) }
             || pixels.render_size != render_size(window)?
-            || !equal_rect(pixels.bounds, unobstructed(window)?)
+            || !equal_rect(pixels.bounds, capture_bounds(window)?)
         {
             return Err(Error::StaleObservation);
         }
@@ -1638,6 +1681,146 @@ impl Store {
             Some(pixels.render_size),
         ))
     }
+    fn prepare_pointer_surface(
+        &mut self,
+        target: &WindowTarget,
+        window: HWND,
+        request: &Value,
+        until: Instant,
+        dispatched: &mut bool,
+    ) -> Result<(), Error> {
+        match unobstructed(window) {
+            Ok(_) => Ok(()),
+            Err(error) if matches!(&error, Error::NativeFailure {code,..} if code == "windows_capture_occluded") =>
+            {
+                if request["input_policy"] == "background_only" {
+                    return Err(error);
+                }
+                // Only a typed pre-dispatch occlusion permits this preparation.
+                // No mouse payload has been sent. The original bound geometry,
+                // receiver and visibility are proved again before the payload.
+                self.validate(target)?;
+                self.focus_window(
+                    target,
+                    keyboard_window(window, target.app.pid)?,
+                    until,
+                    dispatched,
+                )?;
+                self.input_boundary(target, window, until)?;
+                unobstructed(window)?;
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+    fn focus_window(
+        &mut self,
+        target: &WindowTarget,
+        window: HWND,
+        until: Instant,
+        dispatched: &mut bool,
+    ) -> Result<(), Error> {
+        let original = match input::focus(window, until, dispatched) {
+            Ok(()) => return Ok(()),
+            Err(error) if matches!(&error, Error::NativeFailure {code,..} if code == "foreground_unavailable") => {
+                error
+            }
+            Err(error) => return Err(error),
+        };
+        // A keyboard payload is still forbidden. Use CUA's coordinate-routed
+        // pointer primitive only on a proven native caption, with no client
+        // control activation or synthetic business shortcut.
+        if target.native_id != id(window)
+            || unsafe { GetWindowLongW(window, GWL_STYLE) } as u32 & WS_CAPTION.0 != WS_CAPTION.0
+        {
+            return Err(original);
+        }
+        self.validate(target)?;
+        let bounds = capture_bounds(window)?;
+        let mut client = POINT::default();
+        unsafe { ClientToScreen(window, &mut client) }
+            .ok()
+            .map_err(failed)?;
+        let preferred_y = bounds.top + (client.y - bounds.top) / 3;
+        let last = self.last_caption.as_ref().filter(|(previous, _, when)| {
+            *previous == target.native_id
+                && when.elapsed() < Duration::from_millis(unsafe { GetDoubleClickTime() } as u64)
+        });
+        let mut candidates = Vec::new();
+        for y in [
+            preferred_y,
+            bounds.top + 16,
+            bounds.top + 24,
+            bounds.top + 32,
+            bounds.top + 40,
+            bounds.top + 48,
+        ] {
+            for numerator in [2, 1, 3] {
+                let point = POINT {
+                    x: bounds.left + (bounds.right - bounds.left) * numerator / 4,
+                    y,
+                };
+                if point.x <= bounds.left
+                    || point.x >= bounds.right
+                    || point.y <= bounds.top
+                    || point.y >= bounds.bottom
+                {
+                    continue;
+                }
+                if last.is_some_and(|(_, last, _)| {
+                    (point.x - last.x).abs() < 16 && (point.y - last.y).abs() < 16
+                }) {
+                    continue;
+                }
+                if gestures::caption_activation_hit(window, point, until)? {
+                    candidates.push(point);
+                }
+            }
+        }
+        let Some(point) = candidates.into_iter().next() else {
+            return Err(original);
+        };
+        if verify_point(window, target.app.pid, point).is_err() {
+            let _mutation = input::mutation(until)?;
+            self.validate(target)?;
+            check(until)?;
+            super::execution_scope::restacked();
+            *dispatched = true;
+            unsafe {
+                SetWindowPos(
+                    window,
+                    HWND_TOP,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                )
+            }
+            .map_err(failed)?;
+        }
+        self.validate(target)?;
+        if !equal_rect(bounds, capture_bounds(window)?)
+            || !gestures::caption_activation_hit(window, point, until)?
+        {
+            return Err(Error::StaleObservation);
+        }
+        verify_point(window, target.app.pid, point)?;
+        self.last_caption = Some((target.native_id, point, Instant::now()));
+        super::pointer::pen_tap(point, until, dispatched)?;
+        let settle = until.min(Instant::now() + Duration::from_millis(200));
+        while unsafe { GetForegroundWindow() } != window && Instant::now() < settle {
+            check(until)?;
+            super::execution_scope::check()?;
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        self.validate(target)?;
+        if unsafe { GetForegroundWindow() } != window {
+            return Err(original);
+        }
+        input::no_held_keys()?;
+        super::execution_scope::after_focus(window)
+    }
     fn semantic_admission(
         &self,
         target: &WindowTarget,
@@ -1665,6 +1848,7 @@ impl Store {
     }
     fn action(&mut self, r: &Value, until: Instant) -> Value {
         let mut dispatched = false;
+        let mut preparation = false;
         let mut route = None;
         let result = (|| {
             let target = parse_target(&r["target"])?;
@@ -1672,13 +1856,14 @@ impl Store {
             let op = string(r, "operation")?;
             let _lease = input::Lease::acquire(until)?;
             self.validate(&target)?;
+            super::execution_scope::admit(&target.app, window)?;
             // Disabled top-level parents cannot receive input through an open modal.
             if !unsafe { IsWindowEnabled(window) }.as_bool() {
                 return Err(failed("Target is disabled by a modal window"));
             }
             if matches!(op, "move" | "drag") {
                 route = Some("foreground");
-                self.pointer_input(&target, window, r, until, &mut dispatched)?;
+                self.pointer_input(&target, window, r, until, &mut dispatched, &mut preparation)?;
             } else if op == "press" || op == "setValue" {
                 let token = string(r, "binding")?;
                 let q = self.queries.remove(token).ok_or(Error::StaleObservation)?;
@@ -1716,7 +1901,19 @@ impl Store {
                     if !input_sequence::valid_text(value, true) {
                         return Err(failed("Value exceeds the UTF-8/encoded input contract"));
                     }
-                    let value = BSTR::from(value);
+                    let value = if value.contains('\n') {
+                        super::edit_delivery::setter_value(
+                            unsafe { element.CurrentNativeWindowHandle() }.map_err(failed)?,
+                            window,
+                            value,
+                        )?
+                    } else {
+                        value.to_owned()
+                    };
+                    if !input_sequence::valid_text(&value, true) {
+                        return Err(failed("Native value exceeds the encoded input contract"));
+                    }
+                    let value = BSTR::from(value.as_str());
                     let _mutation =
                         self.semantic_admission(&target, window, &uia, &element, &q, until)?;
                     dispatched = true;
@@ -1763,7 +1960,15 @@ impl Store {
                     return Err(Error::ElementNotPressable);
                 }
             } else {
-                self.window_input(&target, window, r, until, &mut dispatched, &mut route)?;
+                self.window_input(
+                    &target,
+                    window,
+                    r,
+                    until,
+                    &mut dispatched,
+                    &mut route,
+                    &mut preparation,
+                )?;
             }
             Ok(())
         })();
@@ -1778,6 +1983,9 @@ impl Store {
             }
         };
         reply["input_route"] = json!(route);
+        reply["focus_preparation"] =
+            json!({"attempted":preparation,"target_payload_issued":dispatched});
+        reply["foreground_borrowed"] = json!(super::execution_scope::borrowed());
         if input::cleanup_failed() {
             reply["shutdown_error"] = json!({"code":"input_cleanup_failed","message":"Paired input, accepted text delivery or transaction lease cleanup is unconfirmed"});
         }
@@ -2491,6 +2699,8 @@ mod pending_quit_tests {
             CoInitializeEx(None, COINIT_MULTITHREADED).ok().unwrap();
         }
         let mut store = Store {
+            _foreground_monitor: None,
+            last_caption: None,
             uia: None,
             windows: HashMap::new(),
             queries: HashMap::new(),
@@ -2532,6 +2742,8 @@ mod pending_quit_tests {
             CoInitializeEx(None, COINIT_MULTITHREADED).ok().unwrap();
         }
         let mut store = Store {
+            _foreground_monitor: None,
+            last_caption: None,
             uia: None,
             windows: HashMap::new(),
             queries: HashMap::new(),

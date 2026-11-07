@@ -4,6 +4,38 @@ use crate::{backends::native_client::failed, computer::Error};
 use windows::Win32::{Foundation::*, UI::WindowsAndMessaging::*};
 
 pub(super) struct Edit(HWND, HWND, bool);
+/// Standard multiline Edit renders line breaks as CRLF. UIA's setter accepts
+/// lone LF verbatim but can leave the visible document on one line. Preserve
+/// other providers' literal values; this is limited to a proven native child.
+pub(super) fn setter_value(child: HWND, root: HWND, value: &str) -> Result<String, Error> {
+    if child.0.is_null() || !value.contains('\n') {
+        return Ok(value.into());
+    }
+    let mut name = [0u16; 256];
+    let len = unsafe { GetClassNameW(child, &mut name) };
+    let name = String::from_utf16_lossy(&name[..len.max(0) as usize]);
+    if !(name.eq_ignore_ascii_case("Edit") || name.starts_with("WindowsForms10.EDIT."))
+        || unsafe { GetWindowLongW(child, GWL_STYLE) } & 4 == 0
+    {
+        return Ok(value.into());
+    }
+    let (mut child_pid, mut root_pid) = (0, 0);
+    unsafe {
+        GetWindowThreadProcessId(child, Some(&mut child_pid));
+        GetWindowThreadProcessId(root, Some(&mut root_pid));
+    }
+    if child_pid == 0
+        || child_pid != root_pid
+        || unsafe { GetAncestor(child, GA_ROOT) } != root
+        || !unsafe { IsWindowUnicode(child) }.as_bool()
+    {
+        return Err(Error::TargetChanged);
+    }
+    Ok(multiline_setter_value(value))
+}
+fn multiline_setter_value(value: &str) -> String {
+    value.replace("\r\n", "\n").replace('\n', "\r\n")
+}
 impl Edit {
     pub(super) fn new(window: HWND) -> Result<Self, Error> {
         let mut gui = GUITHREADINFO {
@@ -142,6 +174,15 @@ fn selection_parts(full: &str, start: usize, end: usize) -> Result<(String, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn multiline_setter_uses_native_line_breaks_without_doubling_crlf_or_losing_unicode() {
+        assert_eq!(
+            multiline_setter_value("中文🙂\nsecond café 🚀"),
+            "中文🙂\r\nsecond café 🚀"
+        );
+        assert_eq!(multiline_setter_value("a\r\nb\nc"), "a\r\nb\r\nc");
+        assert_eq!(multiline_setter_value("a\r\n\r\nb\n"), "a\r\n\r\nb\r\n");
+    }
     #[test]
     fn selection_uses_utf16_offsets_without_splitting_existing_scalars() {
         assert_eq!(

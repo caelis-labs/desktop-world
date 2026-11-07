@@ -132,6 +132,7 @@ impl Store {
                         }
                         return Err(Error::NativeFailure {code:"modal_state_unproven".into(),message:"Close the selected instance's existing modal before requesting quit".into()});
                     }
+                    super::super::execution_scope::admit(&app, window)?;
                     let _mutation = input::mutation(until)?;
                     self.validate(target)?;
                     check(until)?;

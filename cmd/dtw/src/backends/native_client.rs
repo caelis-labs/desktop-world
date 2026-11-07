@@ -35,6 +35,8 @@ pub struct NativeBackend<P: Platform> {
     cursor: Arc<super::windows::CursorSession>,
     #[cfg(target_os = "windows")]
     cursor_operation: std::sync::atomic::AtomicU64,
+    #[cfg(target_os = "windows")]
+    execution_pending: std::sync::atomic::AtomicBool,
     platform: PhantomData<P>,
 }
 pub struct NativeBinding {
@@ -72,6 +74,8 @@ impl<P: Platform> NativeBackend<P> {
             cursor: Arc::new(super::windows::CursorSession::default()),
             #[cfg(target_os = "windows")]
             cursor_operation: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(target_os = "windows")]
+            execution_pending: std::sync::atomic::AtomicBool::new(false),
             platform: PhantomData,
         })
     }
@@ -262,6 +266,9 @@ impl<P: Platform> NativeBackend<P> {
             return rejected;
         }
         #[cfg(target_os = "windows")]
+        self.execution_pending
+            .store(true, std::sync::atomic::Ordering::Release);
+        #[cfg(target_os = "windows")]
         let (request, mut presentation) = {
             let mut request = request;
             request["input_policy"] = json!(self.input_policy.as_str());
@@ -323,8 +330,9 @@ impl<P: Platform> NativeBackend<P> {
                     outcome.delivery = route.map(|route| InputDelivery {
                         route: Some(route),
                         reason: None,
-                        foreground_borrowed: false,
-                        focus_return: None,
+                        foreground_borrowed: reply["foreground_borrowed"] == true,
+                        focus_return: (reply["foreground_borrowed"] == true)
+                            .then_some(FocusReturn::Pending),
                     });
                 }
                 outcome
@@ -410,6 +418,39 @@ impl<P: Platform> Backend for NativeBackend<P> {
             .clone()
             .or_else(|| self.worker.cleanup_error().map(transport_error))
     }
+    #[cfg(target_os = "windows")]
+    fn finish_execution(&self) -> Result<Option<FocusReturn>, Error> {
+        if !self
+            .execution_pending
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            return Ok(None);
+        }
+        if self.worker.is_stopped() || self.cleanup.lock().unwrap().is_some() {
+            return Ok(Some(FocusReturn::Unconfirmed));
+        }
+        let until = Instant::now() + Duration::from_millis(600);
+        let poll = || {
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                Err(Error::TimedOut)
+            } else {
+                Ok(left)
+            }
+        };
+        let reply = self.read(
+            json!({"operation":"finish_execution"}),
+            &CallContext { poll: &poll },
+        )?;
+        match reply["focus"].as_str() {
+            Some("unchanged") => Ok(None),
+            Some("restored") => Ok(Some(FocusReturn::Restored)),
+            Some("changed_externally") => Ok(Some(FocusReturn::ChangedExternally)),
+            Some("previous_app_closed") => Ok(Some(FocusReturn::PreviousAppClosed)),
+            Some("unconfirmed") => Ok(Some(FocusReturn::Unconfirmed)),
+            _ => Err(Error::InvalidObservation),
+        }
+    }
     fn shutdown(&self) -> Result<(), Error> {
         let stopped = self.worker.stop().map_err(transport_error);
         #[cfg(target_os = "windows")]
@@ -487,6 +528,8 @@ impl<P: Platform> Backend for NativeBackend<P> {
     }
     #[cfg(target_os = "windows")]
     fn quit_application(&self, app: &AppInstance, call: &CallContext<'_>) -> ActionOutcome {
+        self.execution_pending
+            .store(true, std::sync::atomic::Ordering::Release);
         match self.rpc(
             json!({"operation":"quit_app","target":{"app":app_json(app)}}),
             call,
@@ -519,6 +562,8 @@ impl<P: Platform> Backend for NativeBackend<P> {
     }
     #[cfg(target_os = "windows")]
     fn close_window(&self, target: &WindowTarget, call: &CallContext<'_>) -> ActionOutcome {
+        self.execution_pending
+            .store(true, std::sync::atomic::Ordering::Release);
         match self.rpc(
             json!({"operation":"close_window","target":target_json(target)}),
             call,

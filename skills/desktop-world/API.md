@@ -118,6 +118,8 @@ creates a window or popup, use `waitForNewWindow()` before acting in it; after
 Save/Cancel/Close dismisses a surface, inspect `look()` instead.
 
 Keep related input in one `exec`, including input following an explicit `focus()`.
+On Windows, open a native menu and choose its item in that same `exec`: returning
+the original foreground at the script boundary can normally dismiss the menu.
 If the user changes the selected app/window during execution, DTW stops further
 input. Inspect the new state in a later execution; never replay an unknown input.
 Confirmed quit or closure of the current window ends its input scope. A save
@@ -261,7 +263,14 @@ Windows UIA patterns execute provider code: an Invoke provider can activate its
 window or move the physical pointer. UIA dispatch does not promise background
 execution. Supported posted client-area clicks/wheels avoid those changes;
 keyboard and other pointer routes can require foreground coordination. Windows
-does not implement the macOS script-level foreground borrowing/restoration scope.
+keeps necessary borrowing within one script and observes intermediate visible
+external handoffs; returning later does not rearm that script. Settlement returns
+the original exact window/order and borrowed physical pointer while their proofs
+remain valid. If Windows reports an unreadable hidden service as its original
+foreground, DTW prepares the selected visible target internally; it does not guess
+another app as a return destination. An unconfirmed return retains the visible
+active target and remains distinct from the business result. No business keyboard
+payload is sent until the exact receiver is foreground.
 
 For native Unicode Win32/WinForms Edit controls, Windows `readText` reads the
 exact UIA-advertised child HWND with bounded read-only system messages. This
@@ -269,3 +278,5 @@ avoids truncated UIA proxy text being reported as a complete document. Ownership
 root, native handle, password state, length and retained revision are checked;
 the read does not focus the editor. Other controls use native UIA text/value
 patterns. A short provider preview is not proof of full document content.
+Native multiline Win32/WinForms Edit setters use CRLF line breaks so their visible
+document agrees with the logical text; other UIA providers keep their own values.

@@ -147,9 +147,10 @@ def main():
 
         stage = 'native_menu'
         before = state()['saves']
-        execute('await app.look();await app.click({selector:{scope:"menu",text:"Audit File"}});')
-        wait_state(root, lambda s: s['menu_open'])
-        record(stage, effect('await app.click({selector:{scope:"menu",text:"Commit audit document"}});', lambda s: s['saves'] == before + 1, allow_error=True))
+        # Foreground return at the exec boundary normally dismisses a Win32
+        # native menu. Select its item within that same owned execution.
+        record(stage, effect('await app.look();await app.click({selector:{scope:"menu",text:"Audit File"}});'
+            'await app.click({selector:{scope:"menu",text:"Commit audit document"}});', lambda s: s['saves'] == before + 1))
         stage = 'modal_composition'
         effect('await app.look();await app.click({selector:{role:"button",text:"Show owned dialog"}});', lambda s: s['modal_open'])
         modal = capture('modal-stack')

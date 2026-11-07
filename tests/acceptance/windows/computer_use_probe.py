@@ -148,8 +148,10 @@ def main():
                        if row['role'] == 'button' and row['name'] in ('No', '否(N)', '&No')), None)
         require(reject, confirm)
         execute('await app.click(' + json.dumps(reject['id']) + ');')
-        save_panel = execute('await app.look({full:true});')
-        require(save_panel['view']['windows'][0]['title'] == 'Save owned document', save_panel)
+        # Invoke is dispatch evidence. The dialog processes its close on its
+        # own UI thread, so inspect until that transition is independently seen.
+        save_panel = wait(lambda: (lambda view: view if view['view']['windows'][0]['title'] == 'Save owned document' else None)(
+            execute('await app.look({full:true});')))
         execute('await app.keypress("ESC");')
         wait(lambda: not state()['modal'])
         require(state()['saves'] == 1 and destination.read_bytes().decode('utf-8') == payload, state())

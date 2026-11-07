@@ -87,7 +87,10 @@ def main():
         require(client.metrics[-1]['json_bytes'] <= 512, client.metrics[-1])
         record('returned_view_dedup_and_bounded_unchanged_delta')
         client.execute(app, "await app.click({selector:{role:'button',text:'Increment'}});")
-        wait_state(root, lambda snapshot: snapshot['increments'] == 1 and snapshot['editor_focused'])
+        # Script settlement can return the original foreground owner. The
+        # counter proves this action; the next script must prepare its own
+        # keyboard receiver and the exact saved text below proves consumption.
+        wait_state(root, lambda snapshot: snapshot['increments'] == 1)
         payload = 'DTW 中文 😀\r\nowned protocol'
         client.execute(app, "await app.keypress(['CTRL','A']);await app.typeText(" + json.dumps(payload) + ');')
         wait_state(root, lambda snapshot: snapshot['text'] == payload)
