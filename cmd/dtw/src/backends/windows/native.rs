@@ -1696,8 +1696,9 @@ impl Store {
             *previous == target.native_id
                 && when.elapsed() < Duration::from_millis(unsafe { GetDoubleClickTime() } as u64)
         });
-        let mut candidates = Vec::new();
-        for y in [
+        // A caption hit must already be exposed on the desktop.
+        let mut candidate = None;
+        'caption: for y in [
             preferred_y,
             bounds.top + 16,
             bounds.top + 24,
@@ -1722,33 +1723,17 @@ impl Store {
                 }) {
                     continue;
                 }
-                if gestures::caption_activation_hit(window, point, until)? {
-                    candidates.push(point);
+                if verify_point(window, target.app.pid, point).is_ok()
+                    && gestures::caption_activation_hit(window, point, until)?
+                {
+                    candidate = Some(point);
+                    break 'caption;
                 }
             }
         }
-        let Some(point) = candidates.into_iter().next() else {
+        let Some(point) = candidate else {
             return Err(original);
         };
-        if verify_point(window, target.app.pid, point).is_err() {
-            let _mutation = input::mutation(until)?;
-            self.validate(target)?;
-            check(until)?;
-            super::execution_scope::restacked();
-            *dispatched = true;
-            unsafe {
-                SetWindowPos(
-                    window,
-                    HWND_TOP,
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                )
-            }
-            .map_err(failed)?;
-        }
         self.validate(target)?;
         if !equal_rect(bounds, capture_bounds(window)?)
             || !gestures::caption_activation_hit(window, point, until)?

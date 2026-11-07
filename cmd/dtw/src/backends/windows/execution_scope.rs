@@ -110,11 +110,6 @@ fn transition(
     }
 }
 
-struct Order {
-    window: Identity,
-    previous: Option<Identity>,
-    topmost: bool,
-}
 struct Scope {
     app: AppInstance,
     original: Identity,
@@ -131,9 +126,6 @@ struct Scope {
     cursor_original: (i32, i32),
     cursor_last: (i32, i32),
     pointer_borrowed: bool,
-    order: Vec<Order>,
-    order_complete: bool,
-    restacked: bool,
     evidence_lost: bool,
     last_hidden: Option<usize>,
 }
@@ -161,30 +153,13 @@ impl Scope {
             owner = parent;
         }
     }
-    fn remember_order(&mut self, window: HWND) -> Result<(), Error> {
+    fn expect_receiver(&mut self, window: HWND) -> Result<(), Error> {
         let identity = Identity::read(window)?;
         if identity.app != self.app || self.destroyed.contains(&identity.hwnd) {
             return Err(Error::TargetChanged);
         }
-        self.next = Some(identity.clone());
+        self.next = Some(identity);
         self.remember_parents(window);
-        if window != hwnd(self.original.hwnd)
-            && !self
-                .order
-                .iter()
-                .any(|entry| entry.window.hwnd == identity.hwnd)
-        {
-            let previous = unsafe { GetWindow(window, GW_HWNDPREV) }.ok();
-            let previous_identity = previous.and_then(|previous| Identity::read(previous).ok());
-            self.order_complete &= previous.is_none() || previous_identity.is_some();
-            self.order.push(Order {
-                window: identity,
-                previous: previous_identity,
-                topmost: unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) }
-                    & WS_EX_TOPMOST.0 as isize
-                    != 0,
-            });
-        }
         Ok(())
     }
     fn observe(&mut self, window: HWND) {
@@ -424,7 +399,7 @@ pub fn admit(app: &AppInstance, window: HWND) -> Result<(), Error> {
         return if scope.external {
             Err(handoff_error())
         } else {
-            scope.remember_order(window)
+            scope.expect_receiver(window)
         };
     }
     if !MONITOR_READY.load(Ordering::Acquire) {
@@ -433,8 +408,8 @@ pub fn admit(app: &AppInstance, window: HWND) -> Result<(), Error> {
         ));
     }
     let start_tick = unsafe { GetTickCount() };
-    // An unreadable/hidden foreign owner does not disable eligible background
-    // input. It cannot be used as a proven destination for foreground return.
+    // A hidden foreign owner does not disable preparation of a visible
+    // receiver. Returning focus still requires proof of the original owner.
     let original = Identity::original(foreground());
     if std::env::var("DTW_INPUT_TRACE").ok().as_deref() == Some("1") {
         eprintln!(
@@ -463,13 +438,10 @@ pub fn admit(app: &AppInstance, window: HWND) -> Result<(), Error> {
         cursor_original: position,
         cursor_last: position,
         pointer_borrowed: false,
-        order: vec![],
-        order_complete: true,
-        restacked: false,
         evidence_lost: false,
         last_hidden: None,
     });
-    active.as_mut().unwrap().remember_order(window)
+    active.as_mut().unwrap().expect_receiver(window)
 }
 pub fn check() -> Result<(), Error> {
     let mut active = ACTIVE.lock().unwrap();
@@ -489,7 +461,7 @@ pub fn before_focus(window: HWND) -> Result<(), Error> {
     check()?;
     let mut active = ACTIVE.lock().unwrap();
     if let Some(scope) = active.as_mut() {
-        scope.remember_order(window)?;
+        scope.expect_receiver(window)?;
     }
     Ok(())
 }
@@ -527,11 +499,6 @@ pub fn borrowed() -> bool {
         .as_ref()
         .is_some_and(|scope| scope.borrowed)
 }
-pub fn restacked() {
-    if let Some(scope) = ACTIVE.lock().unwrap().as_mut() {
-        scope.restacked = true;
-    }
-}
 pub fn finish() -> Result<Option<FocusReturn>, Error> {
     let _settlement = SETTLEMENT.lock().unwrap();
     let _ = check();
@@ -557,70 +524,22 @@ pub fn finish() -> Result<Option<FocusReturn>, Error> {
                 .map_err(failed)?;
             clean &= cursor()? == scope.cursor_original;
         }
-        if !scope.borrowed && !scope.restacked {
+        if !scope.borrowed {
             return Ok(None);
         }
-        // An inaccessible hidden service is not a usable return destination.
-        // Keep the exact active target visible rather than putting keyboard
-        // focus behind a different visible application. Report the missing proof.
-        if scope.borrowed && !scope.original.proven {
+        // Return keyboard focus only. Window stacking is left to the OS.
+        if !scope.original.proven {
             return Ok(Some(FocusReturn::Unconfirmed));
         }
-        let previous_closed = scope.original.proven
-            && (scope.destroyed.contains(&scope.original.hwnd) || !scope.original.live());
-        let until = Instant::now() + Duration::from_millis(250);
-        if scope.borrowed && previous_closed {
+        if scope.destroyed.contains(&scope.original.hwnd) || !scope.original.live() {
             return Ok(Some(FocusReturn::PreviousAppClosed));
         }
-        if scope.borrowed && scope.original.proven && !previous_closed {
-            if input::return_focus(hwnd(scope.original.hwnd), until).is_err() {
-                return Ok(Some(FocusReturn::Unconfirmed));
-            }
-        }
-        for order in scope.order.iter().rev() {
-            if scope.borrowed && foreground() != hwnd(scope.original.hwnd) {
-                return Ok(Some(FocusReturn::ChangedExternally));
-            }
-            if scope.destroyed.contains(&order.window.hwnd) || !order.window.live() {
-                continue;
-            }
-            if let Some(previous) = &order.previous {
-                if scope.destroyed.contains(&previous.hwnd) || !previous.live() {
-                    clean = false;
-                    continue;
-                }
-                let window = hwnd(order.window.hwnd);
-                if (unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) } & WS_EX_TOPMOST.0 as isize
-                    != 0)
-                    != order.topmost
-                {
-                    clean = false;
-                    continue;
-                }
-                clean &= unsafe {
-                    SetWindowPos(
-                        window,
-                        hwnd(previous.hwnd),
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                    )
-                }
-                .is_ok();
-                clean &= unsafe { GetWindow(window, GW_HWNDPREV) }
-                    .is_ok_and(|value| value == hwnd(previous.hwnd));
-            }
-        }
-        clean &= scope.original.live()
+        let until = Instant::now() + Duration::from_millis(250);
+        if input::return_focus(hwnd(scope.original.hwnd), until).is_ok()
+            && scope.original.live()
             && foreground() == hwnd(scope.original.hwnd)
-            && scope.order_complete;
-        if previous_closed {
-            FocusReturn::PreviousAppClosed
-        } else if !scope.original.proven {
-            FocusReturn::Unconfirmed
-        } else if clean {
+            && clean
+        {
             FocusReturn::Restored
         } else {
             FocusReturn::Unconfirmed

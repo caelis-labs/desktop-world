@@ -45,8 +45,9 @@ finds additional Windows routes:
 The current Windows interaction path prepares the exact foreground receiver.
 Semantic controls use UIA and pointer gestures use shared physical input with
 verified geometry and hit testing. The input scope pairs releases and settles
-owned foreground and pointer resources. DTW uses synthetic pen only to activate
-a proven native caption when ordinary foreground coordination is refused.
+owned focus and pointer resources. Windows owns window stacking. If ordinary
+foreground coordination is refused, the synthetic pen fallback requires a
+visible point in a proven native caption.
 
 ## Source comparison and attribution
 

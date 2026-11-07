@@ -281,10 +281,10 @@ Windows prepares the exact foreground receiver for interaction. Semantic actions
 use UIA; pointer actions require a visible, unobstructed hit. If the target
 remains covered after preparation, uncover it and capture it again. Related
 actions in one script reuse its foreground scope. A visible user handoff stops
-input for that script. Settlement returns the original exact foreground and
-borrowed physical pointer while their proofs remain valid. If the original
-foreground is an unreadable hidden service, the prepared visible target can
-remain active.
+input for that script. Settlement returns proven original focus and the owned
+physical pointer. Windows controls window stacking through its normal activation
+behavior. If the original foreground is an unreadable hidden service, the
+prepared visible target can remain active.
 
 On Windows, a readable focused edit can confirm `text_present_in_focused_control`
 for ASCII and Unicode. A failure to verify accepted text stops the script at
