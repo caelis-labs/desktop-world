@@ -248,7 +248,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
     pub fn provider_available(&self) -> bool {
         self.backend.is_available()
     }
-    pub(crate) fn provider_reaped(&self) -> bool {
+    pub fn provider_reaped(&self) -> bool {
         self.backend.is_reaped()
     }
 
