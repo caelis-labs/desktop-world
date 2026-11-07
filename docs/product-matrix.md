@@ -13,7 +13,7 @@
 | 菜单与对话框 | `look({scope:'menu'})` 通过已有应用窗口读取原生菜单；macOS sheet、dialog 及有正向归属证明的关联 surface；Windows 当前窗口内的原生菜单和已证明窗口归属的 modal | 无窗口应用根、Dock 和 menu extras 尚无操作合同；能发现不代表可输入；Windows 弹出菜单键盘路由需原生 menu-owner 证明；helper 按平台证据处理 |
 | 多 app 与多会话 | DTW 维护各 app 的观察状态及回执；跨连接原生资源协调 | 同连接单执行槽；原生上下文更换重置观察；Agent 无 Session 或游标管理；连接不隔离物理桌面 |
 | macOS 输入 | `auto` 每段 exec 从后台开始；已知能力缺口且干净 `not_dispatched` 可借用一次前台至脚本结束，余下动作验证前台所有权；虚拟光标覆盖 click/move/drag/scroll | 借用包括已识别 hover、标准 Open 面板坐标点击、必要定向 API 缺失、后台 key window 缺失及已证明的键盘形状；唯一无窗口应用可自动借用接收快捷键或 focus，首个实际聚焦窗口只绑定一次。脚本结束按原身份/所有权归还，外切永久失效；窗口关闭后不授权新输入，仅严格证明的 windowless/Open→文稿转换可继续归还。unknown 不重投。当前定向结果见[修复回归](dsh-v035-input-regression-2026-11-05.md)，精确合同见[输入路由](macos-input-routing.md) |
-| Windows 输入 | 支持的 HWND 客户区定向左键/滚轮；其他鼠标、手势及键盘由 DTW 自动准备前台；UIA、DPI、Unicode 和正常关闭 | UIA provider 可自行激活窗口/移动指针；不承诺后台键盘/独立物理指针或 macOS 脚本级前台借用；保护保存提示；安全桌面、提权与 mixed-DPI 环境需分别验证 |
+| Windows 输入 | 支持的 HWND 客户区定向左键/滚轮；其他鼠标、手势及键盘由 DTW 自动准备精确前台。脚本结束只归还仍可证明归属的前台、层序和光标状态；用户切走后当前脚本停止输入。支持 UIA、Unicode 和正常关闭 | UIA provider 可自行激活窗口或移动指针；后台键盘和独立物理指针没有通用支持。保护保存提示；安全桌面、提权与 mixed-DPI 环境需分别验证 |
 | Agent 光标 | macOS/Windows 按会话颜色显示动作位置和点击反馈；不显示内部身份编号 | 视觉反馈不代表业务完成；只有经证明属于 DTW 的辅助窗口可从截图排除 |
 | 取消与资源回收 | 标准 MCP cancellation、EOF/父进程退出收尾、配对释放、原回执；Windows 新输入前复核当前输入桌面，失败返回 desktop_unavailable | 已排队输入不可撤回；配对释放不被新输入禁令阻止；桌面恢复后重新观察；Windows 已验证真实非 input desktop 准入与四类 held drag 中断，未诱发锁屏、安全桌面或中途 desktop 切换 |
 | 浏览器 | 原生窗口、AX/UIA 与像素路线，支持复杂网页通用交互 | DOM、CDP、profile、exact-tab provider 未接入 |

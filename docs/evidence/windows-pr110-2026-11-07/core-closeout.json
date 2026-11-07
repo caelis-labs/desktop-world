@@ -1,0 +1,294 @@
+{
+  "date": "2026-11-07",
+  "scope": "Windows 11 23H2 single screen 125% DPI, supported ordinary desktop",
+  "candidate": {
+    "source": "e9bd234a6058460a2dd5abbc341dd080981d4d31",
+    "package_id": "7529ae014f473668ab277a2a0b8abcdc85f73fa7cc7b98e2da9e264577e66ba9",
+    "archive_sha256": "f78ad1fca203405a7c7be6da430c971d2864fb1e6eac03ad404d8105c4d4c3e0",
+    "binary_sha256": "06aea9135fe47c6fd09efb87e31029fc611524f09b11b09c8401dd1f659f360d"
+  },
+  "dsh": {
+    "installed_version": "0.2.2-rc.1",
+    "model": "DeepSeek Flash High",
+    "core_tasks_profile": "shipped ACP",
+    "stop_profile": "actual Windows Desktop"
+  },
+  "core_runs": [
+    {
+      "run": "dsh-core-c08-document-scripted-a02",
+      "task": "document",
+      "mode": "scripted",
+      "passed": true,
+      "source_report_sha256": "157e43a42318211e969884aa56d7b767acb67c9bfddaf044e02073ae9c4e15b2",
+      "exact_scripts_each_once": true,
+      "prompt_seconds": 28.8,
+      "tool_calls": 6,
+      "tool_failures": 0,
+      "dispatched_unknown_calls": 0,
+      "outcomes": [],
+      "independent_effects": {
+        "saved_bytes": 47,
+        "saved_exact": true,
+        "readback_after_reopen": true
+      },
+      "dsh_exit": 0,
+      "mcp_exits": [
+        0
+      ],
+      "observer": {
+        "sampling_status": "observed",
+        "maximum_gap_ms": 8.3421,
+        "prompt_bracketed": true
+      }
+    },
+    {
+      "run": "dsh-core-c08-document-goal-a01",
+      "task": "document",
+      "mode": "goal",
+      "passed": true,
+      "source_report_sha256": "84e40c3ec4ffddbc1911e0e9c7ccf74623de410cf09f6b049110b9653db1588d",
+      "exact_scripts_each_once": null,
+      "prompt_seconds": 87.462,
+      "tool_calls": 21,
+      "tool_failures": 1,
+      "dispatched_unknown_calls": 0,
+      "outcomes": [
+        {
+          "error": "target_changed",
+          "observation": "observed",
+          "observation_error": null,
+          "dispatch": {
+            "dispatched": 1
+          }
+        }
+      ],
+      "independent_effects": {
+        "saved_bytes": 47,
+        "saved_exact": true,
+        "readback_after_reopen": true
+      },
+      "dsh_exit": 0,
+      "mcp_exits": [
+        0
+      ],
+      "observer": {
+        "sampling_status": "observed",
+        "maximum_gap_ms": 10.489,
+        "prompt_bracketed": true
+      }
+    },
+    {
+      "run": "dsh-core-c08-rename-scripted-a01",
+      "task": "rename",
+      "mode": "scripted",
+      "passed": true,
+      "source_report_sha256": "4a03e40e4854aab1a89b96e760b025d52d9c051b8cd5f41c8c5ea8b3c3c2d06b",
+      "exact_scripts_each_once": true,
+      "prompt_seconds": 28.708,
+      "tool_calls": 4,
+      "tool_failures": 0,
+      "dispatched_unknown_calls": 0,
+      "outcomes": [],
+      "independent_effects": {
+        "exact_rename": true,
+        "neighbour_unchanged": true
+      },
+      "dsh_exit": 0,
+      "mcp_exits": [
+        0
+      ],
+      "observer": {
+        "sampling_status": "observed",
+        "maximum_gap_ms": 11.1945,
+        "prompt_bracketed": true
+      }
+    },
+    {
+      "run": "dsh-core-c08-rename-goal-a01",
+      "task": "rename",
+      "mode": "goal",
+      "passed": true,
+      "source_report_sha256": "ba2d2452fc76ddc680c44f86a59ab3c880f52a6417699d2fb1e1ecbcbdc04199",
+      "exact_scripts_each_once": null,
+      "prompt_seconds": 108.28,
+      "tool_calls": 18,
+      "tool_failures": 1,
+      "dispatched_unknown_calls": 0,
+      "outcomes": [
+        {
+          "error": "invalid_observation",
+          "observation": "failed",
+          "observation_error": "invalid_observation",
+          "dispatch": {
+            "dispatched": 1
+          }
+        }
+      ],
+      "independent_effects": {
+        "exact_rename": true,
+        "neighbour_unchanged": true
+      },
+      "dsh_exit": 0,
+      "mcp_exits": [
+        0
+      ],
+      "observer": {
+        "sampling_status": "observed",
+        "maximum_gap_ms": 10.5136,
+        "prompt_bracketed": true
+      }
+    },
+    {
+      "run": "dsh-core-c08-browser-scripted-a03",
+      "task": "browser",
+      "mode": "scripted",
+      "passed": true,
+      "source_report_sha256": "8109b6c71af2e74ee541bc00bc48475f5882cc8233aa3ba9080bd59594bc907f",
+      "exact_scripts_each_once": true,
+      "prompt_seconds": 30.19,
+      "tool_calls": 7,
+      "tool_failures": 0,
+      "dispatched_unknown_calls": 0,
+      "outcomes": [
+        {
+          "error": null,
+          "observation": "failed",
+          "observation_error": "backend_failed",
+          "dispatch": {
+            "dispatched": 1
+          }
+        }
+      ],
+      "independent_effects": {
+        "records": [
+          {
+            "title": [
+              "核心验收 café"
+            ],
+            "code": [
+              "DTW-137"
+            ]
+          }
+        ],
+        "navigation": [
+          "/",
+          "/form",
+          "/done"
+        ]
+      },
+      "dsh_exit": 0,
+      "mcp_exits": [
+        0
+      ],
+      "observer": {
+        "sampling_status": "observed",
+        "maximum_gap_ms": 11.1612,
+        "prompt_bracketed": true
+      }
+    },
+    {
+      "run": "dsh-core-c08-browser-goal-a01",
+      "task": "browser",
+      "mode": "goal",
+      "passed": true,
+      "source_report_sha256": "e95f52e2fcc3e29a790f2209da4858f26f3e752bf96f0c03cae460e6799f3725",
+      "exact_scripts_each_once": null,
+      "prompt_seconds": 94.364,
+      "tool_calls": 18,
+      "tool_failures": 4,
+      "dispatched_unknown_calls": 0,
+      "outcomes": [
+        {
+          "error": "target_changed",
+          "observation": null,
+          "observation_error": null,
+          "dispatch": {}
+        },
+        {
+          "error": "windows_capture_occluded",
+          "observation": "observed",
+          "observation_error": null,
+          "dispatch": {
+            "not_dispatched": 1
+          }
+        },
+        {
+          "error": "backend_failed",
+          "observation": null,
+          "observation_error": null,
+          "dispatch": {
+            "dispatched": 1
+          }
+        },
+        {
+          "error": "target_changed",
+          "observation": "observed",
+          "observation_error": null,
+          "dispatch": {
+            "dispatched": 1
+          }
+        }
+      ],
+      "independent_effects": {
+        "records": [
+          {
+            "title": [
+              "核心验收 café"
+            ],
+            "code": [
+              "DTW-137"
+            ]
+          }
+        ],
+        "navigation": [
+          "/",
+          "/form",
+          "/done"
+        ]
+      },
+      "dsh_exit": 0,
+      "mcp_exits": [
+        0
+      ],
+      "observer": {
+        "sampling_status": "observed",
+        "maximum_gap_ms": 9.0034,
+        "prompt_bracketed": true
+      }
+    }
+  ],
+  "desktop_stop": {
+    "run": "dsh-c08-desktop-stop-a04",
+    "passed": true,
+    "click_started_while_held": true,
+    "click_start_ms_after_held_witness": 12.737,
+    "release_ms_after_click_started": 226.462,
+    "desktop_button_down_ms_after_native_release": 70.727,
+    "causality_boundary": "UI controller started while native input held; physical release preceded the Desktop button down. Native release is not attributed solely to the button callback.",
+    "drag_moves": 11,
+    "fixture_left_up": 1,
+    "old_suffix_increment": 0,
+    "dsh_first_turn": "user abort; execution_interrupted; original host error retained",
+    "dsh_recovery_turn": "completed after a fresh read; same exact MCP PID/birth/path was independently verified",
+    "new_saves": 1,
+    "keys_held_after_recovery": [],
+    "fixture_exit": 0,
+    "archive_projection_sha256": "7064bdfe2e33c30b3da0a093f27293fe367fea10205bf17fd0b49bf001a9992e",
+    "native_witness_sha256": "096482823ac3bca84f1628593fb7cc8bba42e618e0fa835d633360d481d814ce"
+  },
+  "restoration": {
+    "original_desktop_profile_bytes": true,
+    "original_package_live": true,
+    "original_binding_preserved": true,
+    "owned_notepad_closed": true
+  },
+  "retained_attempts": {
+    "browser_scripted_a01": "local supervisor import failure before DSH launch",
+    "browser_scripted_a02": "unexpected owned translation popup; exact-title guard stopped before business input; browser subsequently closed normally",
+    "document_scripted_a01": "test script escape error repaired by the model; business effects recorded but exact-script grade failed",
+    "desktop_stop_a01": "occlusion refusals while controller overlay present, then ordinary drag and suffix completed after reset; Stop only after release",
+    "desktop_stop_a02": "provided path exceeded facade sample bound and model accessed admitted attachment via disallowed shell; no native drag",
+    "desktop_stop_a03": "ordinary full drag completed before controller was armed"
+  },
+  "ci_for_candidate_source": "https://github.com/caelis-labs/desktop-world/actions/runs/42339406902"
+}
