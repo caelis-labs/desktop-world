@@ -170,7 +170,11 @@ final class NativeInputGate: @unchecked Sendable {
         lock.lock(); closing = true; lock.unlock()
     }
 
-    func finish(_ input: NativePendingInput, timeout: TimeInterval = 0.2,
+    // Session activity counters can publish in half-second batches even when
+    // the private source and released key state are already current. Keep both
+    // proofs, allowing one publication interval during normal completion.
+    // Cancellation/shutdown still uses its separate caller-supplied budget.
+    func finish(_ input: NativePendingInput, timeout: TimeInterval = 0.6,
                 now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
                 pause: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }) -> Bool {
         drain([input], until: now() + timeout, now: now, pause: pause)
