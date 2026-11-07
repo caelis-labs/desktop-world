@@ -38,7 +38,7 @@ They do not automate an existing user's browser document.
 | `app_protocol_probe.py` | App admission, current app methods and compact observation, complete fixture semantics, returned-view deduplication, bounded unchanged delta, semantic action, Unicode/keyboard/save bytes, native modal bounds/order and covered opaque-window composition |
 | `execution_scope_probe.py` | Exact foreground and cursor return, OS-owned window stacking, external focus change, and recovery in a fresh execution |
 | `feature_audit.py` | Installed/running discovery and coverage; semantic IDs and selectors; left/right/double click; hover/content/title-bar drag; vertical/horizontal/default wheel effects; stale geometry; native menu; modal keyboard routing; rejected selector foreground invariants; two-instance continuity and overlapping pixels; global layered alpha; normal quit/save cancellation; cancellation/retransmission; stopped executable startup |
-| `browser_feature_audit.py` | Empty-field Unicode, selection replacement, terminal caret, literal label/U+FFFC content, multiline text, semantic save/click, both wheel axes, independently owned native Open dialog, Escape and normal browser quit |
+| `browser_feature_audit.py` | Delayed navigation readback, element IDs across filters, guarded typing, empty-field Unicode, selection replacement, terminal caret, literal label/U+FFFC content, multiline text, semantic save/click, both wheel axes, independently owned native Open dialog, Escape and normal browser quit |
 
 The WinForms fixture publishes atomic state and an event journal; the observer
 shares deletion so reading does not interfere with replacement. Business effects
@@ -71,7 +71,7 @@ python -X utf8 tests/acceptance/windows/observe_run.py --observer C:\Temp\dtw-ob
 ```
 
 Use `computer_use_probe.py --protocol-only` for the delayed native form.
-It checks view shapes, IDs across filtered reads, delayed readback, a title
+It checks view shapes, reuse of IDs after filtered reads, delayed readback, a title
 wait with an owned titleless overlay, and one independent submission. Separate
 wrong-field and dropped-character cases must both stop before Enter. A fixture
 checkbox verifies image fractions through physical

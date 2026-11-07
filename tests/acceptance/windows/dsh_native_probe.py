@@ -91,9 +91,9 @@ DSH Windows 中文🙂
 字符丢失对照：
 {protocol_review.FAULT}"""
                 else:
-                    goal = f"""仅操作自有应用 {exe}。打开普通审阅表单，等它可用后，
+                    goal = f"""仅操作自有应用 {exe} 的普通审阅表单。
 通过键盘填写 Review code 为 {protocol_review.CODE}，提交恰好一次。
-无需测试故障注入、修改文档或关闭应用。"""
+任务范围只有审阅表单。不要打开或修改文档、触发故障注入或关闭应用。"""
             if args.mode == 'parity':
                 goal = f'''仅操作自有应用 {exe}，标题 DTW Computer Use Windows。
 本轮只验证原生拖拽、相邻分区滚动和同进程 peer 生命周期，不要修改文档、提交、勾选或打开文件面板。
@@ -190,9 +190,9 @@ DSH Windows 中文🙂
             state = wait(lambda: fixture.state())
             report['final_state'] = state
             fault = args.mode == 'protocol-script'
-            protocol_review.assert_business(state, fault=fault)
             journal = out / 'dsh/acp.jsonl'
             report['metrics'] = summarize(journal)
+            protocol_review.assert_business(state, fault=fault)
             replies, sources = [], []
             for event in client.events:
                 update = event.get('params', {}).get('update', {})

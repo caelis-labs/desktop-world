@@ -35,8 +35,9 @@ def assert_business(state, *, fault=False):
     require(review["submissions"] == 1 and review["submitted_code"] == CODE, review)
     require(review["dropped_keys"] == int(fault), review)
     require(review["visible_value"] == (CODE[1:] if fault else CODE), review)
-    require(state["commits"] == state["saves"] == state["opens"] == 0, state)
-    require(state["text"] == "", state)
+    document_effects = {key: state[key] for key in ("commits", "saves", "opens")}
+    require(not any(document_effects.values()), {"unexpected_document_effects": document_effects})
+    require(state["text"] == "", "Document editor changed during the review task")
 
 
 def assert_mismatch(result):
