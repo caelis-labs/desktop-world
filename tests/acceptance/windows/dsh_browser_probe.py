@@ -112,9 +112,20 @@ def main():
         require(len(state['records']) == 1 and state['records'][0]['note'] == 'Windows 验收137'
             and state['records'][0]['number'] == 137 and state['records'][0]['approved'] is True
             and state['records'][0]['priority'] == 'Urgent' and state['records'][0]['date'] == '2026-11-07', 'Review record differs')
+        events = [json.loads(line) for line in (fixture.output / 'web/events.jsonl').read_text(encoding='utf-8').splitlines()]
+        saved_event = next(row for row in events if row['type'] == '/api/record' and not row['error'])
+        observations = [row for row in events if row['type'] == '/api/observation' and not row['error']]
+        require(any(row['seq'] < saved_event['seq'] and row['data']['review']['invalid'] > 0
+            for row in observations), 'Actual empty-form validation not observed before the save')
+        reopened = next((row for row in observations if row['seq'] > saved_event['seq']
+            and row['data']['review']['open']), None)
+        require(reopened and any(row['seq'] > reopened['seq'] and not row['data']['review']['open']
+            for row in observations), 'Reopened form and later cancellation not observed')
         release = next(row for row in state['chat']['messages'] if row['id'] == 'release-137')
         require(release['pinned'], 'Canvas release was not pinned')
         require(sum(row['text'] == message for row in state['chat']['messages']) == 1, 'Canvas message count differs')
+        require(state['chat']['actions'] == [{'action':'pin','id':'release-137'}, {'action':'send','text':message}],
+            'Canvas action journal differs or contains duplicate effects')
         require(len(state['vision']['attempts']) == 1 and state['vision']['attempts'][0].get('passed'), 'Image challenge did not pass exactly once')
         paths = [row['path'] for row in navigation]
         require(any(paths[index:index + 4] == ['/canvas', '/', '/vision', '/'] for index in range(len(paths))),
