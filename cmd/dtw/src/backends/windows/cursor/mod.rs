@@ -13,6 +13,7 @@ use super::native;
 use crate::backends::native_client::{parse_target, target_json};
 use crate::computer::WindowTarget;
 use serde_json::{json, Value};
+use std::time::{Duration, Instant};
 use windows::Win32::{
     Foundation::HWND,
     UI::{
@@ -22,7 +23,9 @@ use windows::Win32::{
 
 const CLASS: &str = "DesktopWorld.SessionCursor.v1";
 const MAX_PACKET: usize = 4096;
-const IDLE_HIDE_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
+const IDLE_HIDE_AFTER: Duration = Duration::from_secs(60);
+const TRAVEL_TIME: Duration = Duration::from_millis(220);
+const PULSE_TIME: Duration = Duration::from_millis(200);
 
 #[derive(Clone, Debug, PartialEq)]
 struct Target {
@@ -67,6 +70,9 @@ impl Target {
     }
     fn contains(&self, x: i32, y: i32) -> bool {
         x >= self.bounds[0] && y >= self.bounds[1] && x < self.bounds[2] && y < self.bounds[3]
+    }
+    fn same_surface(&self, other: &Self) -> bool {
+        self.window == other.window && self.dpi == other.dpi && self.displays == other.displays
     }
     fn json(&self) -> Value {
         json!({"window":target_json(&self.window),"bounds":self.bounds,
@@ -123,55 +129,82 @@ struct Presentation {
     retired: u64,
     sequence: u64,
     press: u64,
+    pending_target: Option<Target>,
+    shown_operation: u64,
     target: Option<Target>,
     point: Option<(i32, i32)>,
-    pulse_until: Option<std::time::Instant>,
-    last_activity: Option<std::time::Instant>,
+    travel: Option<((i32, i32), Instant)>,
+    pulse_until: Option<Instant>,
+    last_activity: Option<Instant>,
 }
 impl Presentation {
     fn begin(&mut self, operation: u64, target: Target) -> bool {
-        if operation <= self.operation || operation <= self.retired || !target.valid() {
+        if operation <= self.operation || operation <= self.retired {
             return false;
         }
         self.operation = operation;
         self.sequence = 0;
         self.press = 0;
-        self.target = Some(target);
-        self.point = None;
-        self.pulse_until = None;
-        self.last_activity = None;
+        // Admission by itself must not clear or refresh the last visible mark.
+        self.pending_target = Some(target);
         true
     }
     fn hide(&mut self, operation: u64) {
         self.retired = self.retired.max(operation);
-        if operation >= self.operation {
+        if operation == self.operation {
+            self.pending_target = None;
+        }
+        if operation == self.shown_operation {
             self.target = None;
             self.point = None;
+            self.travel = None;
             self.pulse_until = None;
             self.last_activity = None;
         }
     }
-    fn idle_expired(&self, now: std::time::Instant) -> bool {
+    fn retire_visible(&mut self) {
+        if self.target.is_some() {
+            self.hide(self.shown_operation);
+        }
+    }
+    fn idle_expired(&self, now: Instant) -> bool {
         self.point.is_some()
             && self
                 .last_activity
                 .is_some_and(|last| now.saturating_duration_since(last) >= IDLE_HIDE_AFTER)
     }
-    fn expire_idle(&mut self, now: std::time::Instant) -> bool {
+    fn expire_idle(&mut self, now: Instant) -> bool {
         if !self.idle_expired(now) {
             return false;
         }
         // Retire the operation as well as hiding it: late packets and the idle
         // z-order maintenance must not bring an old pointer presentation back.
-        self.hide(self.operation);
+        self.retire_visible();
         true
     }
-    fn event(&mut self, value: &Value, now: std::time::Instant) -> bool {
-        // A delayed packet cannot extend an already elapsed lifetime even if
-        // the renderer has not reached its next idle tick yet.
-        if self.idle_expired(now) {
+    fn display_point(&self, now: Instant) -> Option<(i32, i32)> {
+        let to = self.point?;
+        let Some((from, started)) = self.travel else {
+            return Some(to);
+        };
+        let t = (now.saturating_duration_since(started).as_secs_f64() / TRAVEL_TIME.as_secs_f64())
+            .min(1.0);
+        let t = t * t * (3.0 - 2.0 * t);
+        let axis = |from: i32, to: i32| {
+            (f64::from(from) + (f64::from(to) - f64::from(from)) * t).round() as i32
+        };
+        Some((axis(from.0, to.0), axis(from.1, to.1)))
+    }
+    fn advance(&mut self, now: Instant) -> bool {
+        let Some((_, started)) = self.travel else {
             return false;
+        };
+        if now.saturating_duration_since(started) >= TRAVEL_TIME {
+            self.travel = None;
         }
+        true
+    }
+    fn event(&mut self, value: &Value, now: Instant) -> bool {
         let (Some(operation), Some(sequence), Some(press), Some(x), Some(y)) = (
             value["operation"].as_u64(),
             value["sequence"].as_u64(),
@@ -181,27 +214,63 @@ impl Presentation {
         ) else {
             return false;
         };
-        if operation != self.operation || operation <= self.retired || sequence <= self.sequence {
+        if operation != self.operation
+            || operation <= self.retired
+            || sequence <= self.sequence
+            || press > sequence
+            || (operation == self.shown_operation && self.idle_expired(now))
+        {
             return false;
         }
-        let Some(target) = self.target.as_ref() else {
+        let Some(mut target) = self.pending_target.clone() else {
             return false;
         };
+        if let Some(geometry) = value.get("geometry") {
+            let Some(moved) = Target::parse(geometry) else {
+                return false;
+            };
+            if !target.same_surface(&moved) || !moved.valid() {
+                return false;
+            }
+            target = moved;
+            self.pending_target = Some(target.clone());
+        }
         // Native identity/geometry is re-proven once before the coalesced paint
         // and on idle ticks, rather than once for every queued mouse packet.
         if !target.contains(x, y) {
-            self.hide(operation);
             return false;
         }
-        if press > sequence {
-            return false;
+        let point = (x, y);
+        if self.target.as_ref() != Some(&target) || self.point != Some(point) {
+            self.travel = if value["sampled"] == true
+                || self.idle_expired(now)
+                || !self
+                    .target
+                    .as_ref()
+                    .is_some_and(|shown| shown.same_surface(&target))
+            {
+                None
+            } else {
+                self.display_point(now)
+                    .filter(|&(sx, sy)| (sx, sy) != point && target.contains(sx, sy))
+                    .map(|from| (from, now))
+            };
+            if operation != self.shown_operation {
+                self.pulse_until = None;
+            }
         }
         self.sequence = sequence;
-        self.point = Some((x, y));
+        self.shown_operation = operation;
+        self.target = Some(target);
+        self.point = Some(point);
         self.last_activity = Some(now);
         if press > self.press {
             self.press = press;
-            self.pulse_until = Some(now + std::time::Duration::from_millis(200));
+            self.pulse_until = Some(
+                self.travel
+                    .map_or(now, |(_, started)| started + TRAVEL_TIME)
+                    + PULSE_TIME,
+            );
         }
         true
     }
@@ -222,7 +291,7 @@ mod tests {
     fn state() -> Presentation {
         Presentation {
             operation: 2,
-            target: Some(Target {
+            pending_target: Some(Target {
                 window: WindowTarget {
                     app: AppInstance {
                         identity: AppIdentity("not-a-live-test-target".into()),
@@ -269,11 +338,53 @@ mod tests {
         assert!(!s.event(&event(2, 4, 5, -20), now));
         assert_eq!(s.sequence, 3);
         assert!(!s.event(&event(2, 4, 1, 100), now));
-        assert_eq!(s.point, None);
+        assert_eq!(s.point, Some((-10, -10)));
+    }
+    #[test]
+    fn the_previous_marker_survives_admission_and_travels_to_the_next_click() {
+        let mut s = state();
+        let now = Instant::now();
+        let target = s.pending_target.clone().unwrap();
+        assert!(s.event(&event(2, 1, 0, -60), now));
+        assert!(s.begin(3, target.clone()));
+        s.hide(3);
+        assert_eq!(s.display_point(now), Some((-60, -10)));
+        assert_eq!(s.last_activity, Some(now));
+
+        let next = now + Duration::from_secs(5);
+        assert!(s.begin(4, target));
+        assert!(s.event(&event(4, 1, 1, 60), next));
+        assert_eq!(s.display_point(next), Some((-60, -10)));
+        assert_eq!(s.display_point(next + TRAVEL_TIME / 2), Some((0, -10)));
+        assert!(s.advance(next + TRAVEL_TIME));
+        assert!(s.travel.is_none());
+        assert_eq!(s.display_point(next + TRAVEL_TIME), Some((60, -10)));
+        assert_eq!(s.pulse_until, Some(next + TRAVEL_TIME + PULSE_TIME));
+    }
+    #[test]
+    fn a_pending_operation_can_present_after_the_older_marker_expires() {
+        let mut s = state();
+        let now = Instant::now();
+        assert!(s.event(&event(2, 1, 0, -60), now));
+        assert!(s.begin(3, s.pending_target.clone().unwrap()));
+        assert!(s.expire_idle(now + IDLE_HIDE_AFTER));
+        assert!(s.event(&event(3, 1, 0, 60), now + IDLE_HIDE_AFTER));
+        assert_eq!(s.display_point(now + IDLE_HIDE_AFTER), Some((60, -10)));
+    }
+    #[test]
+    fn native_drag_samples_follow_the_accepted_path_without_interpolation() {
+        let mut s = state();
+        let now = Instant::now();
+        assert!(s.event(&event(2, 1, 0, -60), now));
+        let mut sample = event(2, 2, 1, 60);
+        sample["sampled"] = json!(true);
+        assert!(s.event(&sample, now));
+        assert_eq!(s.display_point(now), Some((60, -10)));
+        assert!(s.travel.is_none());
     }
     #[test]
     fn bootstrap_geometry_cannot_truncate_or_wrap_native_values() {
-        let target = state().target.unwrap();
+        let target = state().pending_target.unwrap();
         assert_eq!(Target::parse(&target.json()), Some(target.clone()));
         let mut v = target.json();
         v["bounds"][0] = json!(i64::MAX);
@@ -284,13 +395,13 @@ mod tests {
         assert!(identity::Identity::parse(&json!({"pid":0,"birth":1,"hwnd":1})).is_none());
     }
     #[test]
-    fn idle_expiry_hides_and_retires_exactly_at_two_seconds() {
+    fn idle_expiry_hides_and_retires_exactly_at_sixty_seconds() {
         let mut s = state();
         let now = std::time::Instant::now();
         assert!(!s.expire_idle(now + IDLE_HIDE_AFTER));
         assert!(s.event(&event(2, 1, 1, -20), now));
-        assert!(!s.expire_idle(now + IDLE_HIDE_AFTER - std::time::Duration::from_nanos(1)));
-        assert!(s.expire_idle(now + IDLE_HIDE_AFTER));
+        assert!(!s.expire_idle(now + Duration::from_millis(59_999)));
+        assert!(s.expire_idle(now + Duration::from_secs(60)));
         assert_eq!(s.retired, 2);
         assert!(
             s.point.is_none()

@@ -90,9 +90,11 @@ impl Owner {
         result["target"] = target.clone();
         Ok(result)
     }
-    fn hide(&self, operation: u64) {
+    fn hide(&self, operation: u64, include_previous: bool) {
         let deadline = Instant::now() + Duration::from_millis(200);
-        if let Err(error) = self.command(json!({"command":"hide","operation":operation}), &|| {
+        let command =
+            json!({"command":"hide","operation":operation,"include_previous":include_previous});
+        if let Err(error) = self.command(command, &|| {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 Err(StopReason::TimedOut)
@@ -203,7 +205,7 @@ impl CursorSession {
         }
         let owner = self.state.lock().unwrap().owner.clone();
         if let Some(owner) = owner {
-            owner.hide(operation)
+            owner.hide(operation, true)
         }
     }
     pub fn close(&self) -> io::Result<()> {
@@ -236,7 +238,7 @@ impl Action {
 impl Drop for Action {
     fn drop(&mut self) {
         if !self.keep {
-            self.owner.hide(self.operation)
+            self.owner.hide(self.operation, false)
         }
     }
 }
@@ -285,6 +287,21 @@ impl Emitter {
         })
     }
     pub(in crate::backends::windows) fn posted(&mut self, x: i32, y: i32, down: bool) {
+        self.emit(x, y, down, false, None);
+    }
+    pub(in crate::backends::windows) fn sampled(&mut self, x: i32, y: i32, down: bool) {
+        self.emit(x, y, down, true, None);
+    }
+    pub(in crate::backends::windows) fn relocated(&mut self, x: i32, y: i32) {
+        if let Some(target) = Target::read(self.target.window.clone()) {
+            if self.target.same_surface(&target) {
+                let geometry = target.json();
+                self.target = target;
+                self.emit(x, y, false, false, Some(geometry));
+            }
+        }
+    }
+    fn emit(&mut self, x: i32, y: i32, down: bool, sampled: bool, geometry: Option<Value>) {
         if !self.target.contains(x, y) {
             return;
         }
@@ -295,7 +312,11 @@ impl Emitter {
         if down {
             self.press = sequence
         }
-        let value = json!({"token":self.token,"operation":self.operation,"sequence":sequence,"press":self.press,"x":x,"y":y});
+        let mut value = json!({"token":self.token,"operation":self.operation,"sequence":sequence,
+            "press":self.press,"x":x,"y":y,"sampled":sampled});
+        if let Some(geometry) = geometry {
+            value["geometry"] = geometry;
+        }
         let bytes = value.to_string();
         if bytes.len() <= MAX_PACKET {
             let _ = self.socket.send(bytes.as_bytes());
