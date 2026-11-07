@@ -64,7 +64,7 @@ impl Store {
         let plan = pointer::plan(&points, drag, info.rcMonitor)?;
         input::no_held_keys()?;
         self.consume(target);
-        self.focus_window(target, window, until, preparation)?;
+        self.prepare_receiver(target, window, until, preparation)?;
         self.prepare_pointer_surface(target, window, until)?;
         for point in plan.points() {
             verify_point(window, target.app.pid, *point)?;

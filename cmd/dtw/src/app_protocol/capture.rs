@@ -52,13 +52,10 @@ impl<B: Backend + 'static> Coordinator<B> {
             .map(wire::receipt)
             .unwrap_or(Value::Null);
         if !ready {
-            let error = focus.completed.error.unwrap_or_else(|| WireError {
-                code: "focus_preparation_unproven".into(),
-                message:
-                    "Capture focus preparation was not proven; no second capture was attempted"
-                        .into(),
-                details: None,
-            });
+            let error = focus
+                .completed
+                .error
+                .unwrap_or_else(|| wire::core_error(&error));
             progress["status"] = json!("focus_failed");
             progress["error"] = error_json(&error);
             self.record_resolution(&submitted.request_id, progress);

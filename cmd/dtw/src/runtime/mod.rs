@@ -1016,6 +1016,21 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             Some(deadline),
         )
     }
+    pub fn type_text_at_until(
+        &self,
+        target: &WindowTarget,
+        reference: ObservationRef,
+        element: ElementId,
+        text: &str,
+        deadline: Instant,
+    ) -> ActionReceipt {
+        self.act(
+            target,
+            reference,
+            Action::TypeText(element, text),
+            Some(deadline),
+        )
+    }
 
     pub fn click_with_options_until(
         &self,
@@ -1146,6 +1161,10 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                     self.backend
                         .set_value(target, &observation.native, element, value, &call)
                 }
+                Action::TypeText(element, text) => {
+                    self.backend
+                        .type_text_at(target, &observation.native, element, text, &call)
+                }
                 Action::Click(point, options) => self.backend.click_with_options(
                     target,
                     &observation.native,
@@ -1192,10 +1211,14 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             Action::Press(_) => (Capability::Press, ObservationKind::Semantic),
             Action::Click(_, _) => (Capability::Click, ObservationKind::Pixels),
             Action::SetValue(_, _) => (Capability::SetValue, ObservationKind::Semantic),
+            Action::TypeText(_, _) => (Capability::TypeText, ObservationKind::Semantic),
             Action::Scroll(scroll) => (Capability::Scroll, scroll.anchor.kind()),
         };
         self.validate_target(state, &target.app, capability)?;
         if matches!(action, Action::Scroll(_)) && !self.backend.supports_scroll_anchor(kind) {
+            return Err(Error::UnsupportedCapability);
+        }
+        if matches!(action, Action::TypeText(_, _)) && !self.backend.supports_type_text_target() {
             return Err(Error::UnsupportedCapability);
         }
         self.check_deadline(deadline)?;
@@ -1236,6 +1259,15 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                     .ok_or(Error::ElementNotFound)?;
                 if !found.actions.iter().any(|action| action == "setValue") {
                     return Err(Error::UnsupportedCapability);
+                }
+            }
+            Action::TypeText(element, _) => {
+                if !live
+                    .elements
+                    .iter()
+                    .any(|candidate| candidate.id == element)
+                {
+                    return Err(Error::ElementNotFound);
                 }
             }
             Action::Scroll(scroll) => match scroll.anchor {
@@ -1476,6 +1508,7 @@ fn observation_bytes<B>(state: &State<B>) -> usize {
 enum Action<'a> {
     Press(ElementId),
     SetValue(ElementId, &'a str),
+    TypeText(ElementId, &'a str),
     Click(PixelPoint, ClickOptions),
     Pointer(&'a PointerGesture),
     Scroll(ScrollRequest),

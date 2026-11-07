@@ -47,13 +47,11 @@
   If automatic input preparation fails before payload delivery, the requested
   input is `not_dispatched`; preparation may still have changed focus. Its error
   identifies that stage. Cleanup failures remain explicit errors.
-  An explicit `focus()` asks for that focus effect itself, so an uncertain focus
-  attempt remains `unknown`. A later execution is new work; inspect the current
-  state before deciding how to continue after any preparation failure.
+  On Windows, optional focus preparation and return are handled by DTW.
+  An action that cannot establish its required receiver is refused before its
+  payload. Inspect the current state before deciding how to continue.
   If the app exits, a separately proved final `running:false` view concludes the
   old instance without relaunching it. A later explicit `look()` can launch it.
-  Selector focus preparation has a separate `effects.focus_preparation` summary
-  and is not counted again as target dispatch.
   When DTW automatically observes the UI after input, `observation.status` is
   `observed`, `partial` (a view with an image error), or `failed`. Its error is
   separate from action dispatch and the script result. If that read fails,
@@ -77,7 +75,7 @@
 | Method | Arguments | Behavior |
 | --- | --- | --- |
 | `await app.look(options?)` | `{full?:boolean,role?:string,text?:string,scope?:'window'\|'menu',target?:string}` | Start/reuse the app where supported (nonactivating by default on macOS); observe visible window layering and up to 80 semantic elements in the top surface. Optional role (1–64 characters) and text (1–256) filter the native traversal, so relevant content beyond the default preview can be reached. `scope:'menu'` reads the selected window's app menu through the native menu scope without activating it; the default is window content. It requires a proven app window and does not expose Dock roots or menu extras. `target` observes the exact retained subtree of a previously observed ID (for example, File from a menu look); it cannot be combined with `scope`. It does not activate or expand menus. Unsupported/stale subtree reads fail without broadening to the window or a screenshot. `semantics.query` identifies the filtered scope; completeness and absence apply only within it. JavaScript always receives the full snapshot. Tool output compares with the previous published view. Window metadata is bounded to 32 entries. `full:true` forces a tool-output baseline, not continuation. |
-| `await app.wait(msOrCondition)` | milliseconds (1–10000) OR `{window?:'stable',title?:string,role?:string,text?:string,timeout_ms?:number}` | A number pauses without reading, launching or focusing. A condition returns a snapshot when a visible window matches the title (case-insensitive substring) and contains a matching element if role/text is supplied. `window:'stable'` also requires the same visible window metadata on consecutive samples at least 150 ms apart. Supply at least one condition. Default timeout is 2000 ms, maximum 10000 ms. Use the expected destination title or control after navigation. |
+| `await app.wait(msOrCondition)` | milliseconds (1–10000) OR `{window?:'stable',title?:string,role?:string,text?:string,timeout_ms?:number}` | A number pauses without reading, launching or focusing. A title (case-insensitive substring) selects a visible window. The matching window is first in `windows`, and `elements` comes from that window. Role/text also requires a matching element. `window:'stable'` requires the same window metadata on consecutive samples at least 150 ms apart. Supply at least one condition. Default timeout is 2000 ms, maximum 10000 ms. Use the expected destination title or control after navigation. |
 | `await app.waitForNewWindow(options?)` | `{timeout_ms?:number}` (default 2000, max 10000) | Wait for a new content window or menu surface after the latest dispatched input, even from the preceding exec. This includes `quit` opening a save-confirmation dialog. Returns a full snapshot when that new surface appears; throws `wait_timeout` if it does not, or `input_required` when no dispatched input precedes it. Read-only; never repeats input. Use after New/Open or opening a popup. After Save/Cancel/Close dismisses a surface, use `look()` to verify the resulting view instead. |
 | `await app.capture(options?)` | `{full?:boolean}` | Return a full snapshot, including `windows`, and a PNG of the authorized app's visible stacked surfaces. Establishes the internal coordinate binding; later input returns an updated visual observation while in visual mode. |
 | `await app.readText(target)` | observed ID string OR `{target:string,offset?:number,limit?:number}` | Read native textual content of an observed element. Returns `{text,offset,next_offset,total_length,unit:'utf16'}` inside JavaScript; use `return` or `print` for requested tool output. Offset defaults to 0; limit defaults to 4096, from 2–16384 UTF-16 units. `next_offset:null` marks the end; stop there. Otherwise reuse `next_offset` and the same target without a new look to continue one retained text revision. This read does not refresh the scene or request a PNG. A fresh look/input can retire its source; stale reads fail instead of joining revisions. Titles/descriptions are not substituted for document text. Unsupported native text remains explicit. |
@@ -85,10 +83,10 @@
 | `await app.move(point)` | `{x:number,y:number,unit?:'fraction'}` | Hover over a visible point in the current app image, enabling hover UI. |
 | `await app.drag(options)` | `{path:[{x:number,y:number},...],unit?:'fraction'}` | Content drag uses one left-button press, bounded path and paired release. 2–64 supplied points with movement, internally at most 256 samples. The entire path must stay within one observed window. A proven standard macOS or Windows title bar moves its window via native position, with the destination fully on one display. Other paths drag content. Unsupported provider/display boundaries are explicit. No held button survives a call. |
 | `await app.setValue(options)` | `{target:string,value:string}` OR `{selector:{role?:string,text?:string,scope?:'window'\|'menu'},value:string}` | Replace the complete native value of an editable text control advertising `setValue`, including clearing with an empty string. At most 16 KiB UTF-8, no NUL. Uses the existing native setter without clicking or selecting text first. DTW prepares and verifies the intended control internally; an extra `click` or `focus` is not required. It may not emit keyboard/DOM input events; use `typeText` for application typing behavior. `element_value_set` confirms immediate native readback when available. Verify saves and submissions separately. |
-| `await app.typeText(text)` | string, or `{text:string}` | Unicode keyboard input into the active editing control. It may invoke application editing behavior. It does not replace a field value implicitly. |
+| `await app.typeText(text)` | string, or `{text:string,target?:string}` | Unicode keyboard input into the active editing control. On Windows, pass an observed editable field ID as `target` to require that field to hold focus before and during typing. A mismatch stops input and reports the focused control when available. Typing may invoke application editing behavior and does not implicitly replace the field value. |
 | `await app.keypress(keys)` | chord string, string array, or `{keys:string[]}` | One press/release chord; on macOS this also works for a running app with no window (e.g. New). Native app/window focus is verified before key downs. E.g. `'META+A'`, `'ENTER'`, `['META','A']` or `['ESC']`. Use an array/object for key names containing a literal `+`. `META` means Command on macOS and Windows key on Windows. |
 | `await app.scroll(options)` | `{delta_y:number,delta_x?:number,x?:number,y?:number,unit?:'fraction'}` | Integer wheel steps in [-100,100] per axis, positive down/right; these are not pixels. Supply both x/y from the current screenshot to target a pane. Without x/y DTW captures the active surface and anchors at its center. |
-| `await app.focus()` | none | Focus the authorized app/current window for this script. Keep related input in the same `exec`. A supported windowless app can create its first window within that script. Normal input prepares its destination automatically; an extra `focus()` is not required. |
+| `await app.focus()` | none | Request focus for the authorized app/current window. Windows skips the request if it cannot safely prepare the window. A supported windowless app can create its first window within that script. Normal input prepares its destination automatically. |
 | `await app.quit()` | none | Request normal quit of the active app instance. A save dialog remains observable. No forced termination. |
 
 `look`/`capture` accept no native refs. Input routes within the selected app.
@@ -100,6 +98,10 @@ When Windows confirms keyboard focus on a returned editable element it adds
 `readText()` reads native text content, not numeric control values or element labels.
 
 Scene reads and successful condition waits return full JavaScript snapshots.
+After a click or keypress, the next scene read or untargeted typing allows up to
+1.2 seconds for UI updates, including time already spent in the script. When
+the destination is known, use a condition wait. A numeric wait can give slower
+UI more time.
 Semantic completeness applies to the queried tree. A stable window sample covers
 visible window metadata, so prefer a destination title or control for async loads.
 For a new surface use `waitForNewWindow()`. A condition wait times out with
@@ -114,7 +116,10 @@ effect has not been established. Dispatch itself is not unknown in this case.
 Known selectors, keyboard input and default scrolling can begin an `exec`
 directly. DTW prepares the app/current receiver on demand and returns observation
 after input; no initial or per-script `look` is required. Context persists within
-the MCP connection. Explicit IDs still require an observed target, and coordinates
+the MCP connection. Elements with a stable native identity keep their IDs across
+filtered views of the same window. Windows controls with a proven native window
+identity can reuse an ID after a different filter. Other Windows controls may
+require a current observation before input. Coordinates
 require a returned capture; new unknown controls require inspection. Known actions
 can run sequentially without an explicit observation after each step. DTW renews
 single-use native bindings before the next requested action.

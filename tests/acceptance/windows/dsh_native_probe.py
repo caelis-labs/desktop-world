@@ -82,11 +82,13 @@ DSH Windows 中文🙂
             if protocol:
                 if args.mode == 'protocol-script':
                     goal = f"""仅操作自有应用 {exe}。先用 apps 找到它。
-通过一次 exec 原样执行下列脚本（不添加动作），然后再通过一次 exec 原样执行故障对照。
-如果故障对照报错，保留工具结果，停止输入，不重试。两个用例是不同的业务操作。
+按顺序通过三次 exec 各原样执行一个脚本，不添加动作。两项对照预期各自报错。
+每项报错后保留工具结果，结束该用例，不要重试。三个用例是独立操作。
 成功脚本：
 {protocol_review.POSITIVE}
-故障对照：
+错误字段对照：
+{protocol_review.MISMATCH}
+字符丢失对照：
 {protocol_review.FAULT}"""
                 else:
                     goal = f"""仅操作自有应用 {exe}。打开普通审阅表单，等它可用后，
@@ -213,8 +215,11 @@ DSH Windows 中文🙂
                 for ack in r.get('effects', {}).get('acknowledgements', []))), None)
             require(confirmed, 'DSH did not expose a confirmed text input receipt')
             if fault:
-                require(sources == [protocol_review.POSITIVE, protocol_review.FAULT],
-                        'DSH did not execute the two fixed acceptance scripts')
+                require(sources == [protocol_review.POSITIVE, protocol_review.MISMATCH, protocol_review.FAULT],
+                        'DSH did not execute the three fixed acceptance scripts')
+                mismatches = [r for r in replies if r.get('error', {}).get('code') == 'text_focus_mismatch']
+                require(len(mismatches) == 1, 'DSH did not expose the expected single focus mismatch')
+                protocol_review.assert_mismatch(mismatches[0])
                 failures = [r for r in replies if r.get('error', {}).get('code') == 'text_delivery_unconfirmed']
                 require(len(failures) == 1, 'DSH did not expose the expected single typed input failure')
                 protocol_review.assert_fault(failures[0])

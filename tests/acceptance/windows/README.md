@@ -71,10 +71,10 @@ python -X utf8 tests/acceptance/windows/observe_run.py --observer C:\Temp\dtw-ob
 ```
 
 Use `computer_use_probe.py --protocol-only` for the delayed native form.
-It checks view shapes and custom-result size, timer and stable-window waiting,
-exact ASCII readback, one independent submission and an injected dropped first
-character. The fault arm must report text delivery failure and stop before
-Enter. A separate fixture checkbox verifies image fractions through physical
+It checks view shapes, IDs across filtered reads, delayed readback, a title
+wait with an owned titleless overlay, and one independent submission. Separate
+wrong-field and dropped-character cases must both stop before Enter. A fixture
+checkbox verifies image fractions through physical
 pointer input. The same fixture and scripts run under DSH ACP with
 `dsh_native_probe.py --mode protocol-script`. Use `--mode protocol-goal` for
 a fresh session with only the business goal. Keep both reports and classify tool

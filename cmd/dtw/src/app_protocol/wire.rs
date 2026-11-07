@@ -163,6 +163,11 @@ pub enum Command {
         element_ref: String,
         value: String,
     },
+    TypeTextAt {
+        observation_ref: String,
+        element_ref: String,
+        text: String,
+    },
     Scroll {
         observation_ref: String,
         anchor: ScrollLocation,
@@ -695,10 +700,21 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
             Ok(Command::Input(computer::WindowInput::Focus))
         }
         "typeText" => {
-            fields(command, &["kind", "text"], "command")?;
-            Ok(Command::Input(computer::WindowInput::TypeText {
-                text: text_value(command, "text", false)?,
-            }))
+            fields(
+                command,
+                &["kind", "text", "observation_ref", "element_ref"],
+                "command",
+            )?;
+            let text = text_value(command, "text", false)?;
+            if command.contains_key("observation_ref") || command.contains_key("element_ref") {
+                Ok(Command::TypeTextAt {
+                    observation_ref: string(command, "observation_ref", "command")?,
+                    element_ref: string(command, "element_ref", "command")?,
+                    text,
+                })
+            } else {
+                Ok(Command::Input(computer::WindowInput::TypeText { text }))
+            }
         }
         "keypress" => {
             fields(command, &["kind", "keys"], "command")?;

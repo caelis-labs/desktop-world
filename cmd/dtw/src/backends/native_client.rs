@@ -307,6 +307,12 @@ impl<P: Platform> NativeBackend<P> {
                     Some("not_dispatched") if error.is_some() => {
                         ActionOutcome::rejected(error.unwrap())
                     }
+                    Some("not_dispatched") if operation == "focus" => ActionOutcome {
+                        delivery: None,
+                        dispatch: DispatchState::NotDispatched,
+                        evidence: EffectEvidence::Unverified,
+                        error: None,
+                    },
                     Some("unknown") => ActionOutcome::unknown(
                         error.unwrap_or_else(|| failed("Native action outcome is unknown")),
                     ),
@@ -760,6 +766,21 @@ impl<P: Platform> Backend for NativeBackend<P> {
         call: &CallContext<'_>,
     ) -> ActionOutcome {
         self.action(json!({"operation":"setValue","target":target_json(target),"binding":binding.token,"element":element.0,"value":value}),call)
+    }
+    #[cfg(target_os = "windows")]
+    fn supports_type_text_target(&self) -> bool {
+        true
+    }
+    #[cfg(target_os = "windows")]
+    fn type_text_at(
+        &self,
+        target: &WindowTarget,
+        binding: &Self::Binding,
+        element: ElementId,
+        text: &str,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        self.action(json!({"operation":"typeText","target":target_json(target),"binding":binding.token,"element":element.0,"text":text}),call)
     }
     fn click(
         &self,

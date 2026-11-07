@@ -104,6 +104,10 @@ Keep related input in one script. Normal actions prepare the authorized
 app/window automatically. Use `app.focus()` only when explicit focus is part of
 the task, with follow-up input in the same `exec`.
 
+On Windows, after a click opens a form, observe the intended field and pass its
+ID as `target` in `typeText({target,text})`. The script stops on a focus mismatch
+before it can submit to the wrong field.
+
 DTW checks identity, destination and input cleanup internally. If the user
 switches the selected app/window during a script, further input stops. Inspect
 the new state in a later execution; never replay an unknown input. A confirmed

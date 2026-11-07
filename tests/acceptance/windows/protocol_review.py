@@ -5,11 +5,27 @@ import time
 from app_client import require
 
 CODE = "org:workspace is:open"
-READY = "{title:'Review form ready',role:'text_field',text:'Review code',timeout_ms:4000}"
+READY = "{title:'Review form ready',window:'stable',role:'text_field',text:'Review code',timeout_ms:4000}"
 FILL = (f"const ready=await app.wait({READY}); "
-        "if (!ready.elements.some(e => e.focused === true)) throw Error('Review code is not focused'); "
-        f"await app.typeText({json.dumps(CODE)}); await app.keypress('ENTER');")
-POSITIVE = "await app.click('Load review form'); " + FILL
+        "const field=ready.elements.find(e=>e.name==='Review code'); "
+        "if (!ready.windows[0].title.includes('Review form ready') || "
+        "!field || !field.id.startsWith(ready.windows[0].id+'.')) throw Error('Wait returned the wrong window'); "
+        "await app.wait({title:'Review form ready',role:'button',text:'Submit review'}); "
+        f"await app.typeText({{target:field.id,text:{json.dumps(CODE)}}}); await app.keypress('ENTER');")
+POSITIVE = (
+    "const filter={role:'button',text:'Load review form'}; "
+    "const first=(await app.look(filter)).elements[0].id; "
+    "await app.look({role:'text_field',text:'Document editor'}); "
+    "const second=(await app.look(filter)).elements[0].id; "
+    "if (first!==second) throw Error('Element ID changed across filtered views'); "
+    "await app.click(first); const after=await app.look(); "
+    "if (!after.windows.some(w=>w.title?.includes('Review form ready'))) throw Error('Readback preceded the ready form'); "
+    "if (!after.windows.some(w=>w.title==='')) throw Error('Fixture overlay was not observed'); "
+    + FILL + " return {id:first,destination:ready.windows[0].title};")
+MISMATCH = (
+    "const view=await app.wait({title:'Review form ready',role:'text_field',text:'Document editor'}); "
+    "await app.typeText({target:view.elements[0].id,text:'must not reach either field'}); "
+    "await app.keypress('ENTER');")
 FAULT = "await app.click('Load form with input fault'); " + FILL
 
 
@@ -20,6 +36,14 @@ def assert_business(state, *, fault=False):
     require(review["dropped_keys"] == int(fault), review)
     require(review["visible_value"] == (CODE[1:] if fault else CODE), review)
     require(state["commits"] == state["saves"] == state["opens"] == 0, state)
+    require(state["text"] == "", state)
+
+
+def assert_mismatch(result):
+    require(result["error"]["code"] == "text_focus_mismatch", result)
+    require("Review code" in result["error"]["message"], result)
+    require(result["failure"]["operation"] == "scene.typeText", result)
+    require(result["effects"]["dispatch"] == {"not_dispatched": 1}, result)
 
 
 def assert_fault(result):
@@ -55,6 +79,12 @@ def direct(execute, state):
     positive = execute(POSITIVE)
     assert_confirmed(positive)
     assert_business(state())
+    same_id = execute("const v=await app.wait({title:'Review form ready',role:'button',text:'Load review form'});"
+                      "return v.elements[0].id;")
+    require(same_id["result"] == positive["result"]["id"], same_id)
+    mismatch = execute(MISMATCH, True)
+    assert_mismatch(mismatch)
+    assert_business(state())
     negative = execute(FAULT, True)
     assert_fault(negative)
     assert_business(state(), fault=True)
@@ -69,5 +99,12 @@ def direct(execute, state):
     require(pointer["effects"]["dispatch"] == {"dispatched": 1}, pointer)
     require(state()["reviewed"] and state()["checks"] == 1, state())
     assert_business(state(), fault=True)
+    implicit = execute("await app.click('Load review form'); await app.typeText('implicit focus');")
+    assert_confirmed(implicit)
+    final = state()
+    require(final["text"] == "" and final["review"]["visible_value"] == "implicit focus"
+            and final["review"]["loads"] == final["review"]["ready"] == 3
+            and final["review"]["submissions"] == 1, final)
     return {"full": full, "unchanged": unchanged, "small": small, "timer": timer,
-            "stable": stable, "timeout": timeout, "positive": positive, "negative": negative, "pointer": pointer}
+            "stable": stable, "timeout": timeout, "positive": positive, "same_id": same_id, "mismatch": mismatch,
+            "negative": negative, "pointer": pointer, "implicit": implicit}
