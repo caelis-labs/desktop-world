@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/caelis-labs/desktop-world/compare/v0.4.1...v0.4.2) (2026-11-07)
+
+
+### Bug Fixes
+
+* isolate native input failures and improve virtual cursor feedback ([#119](https://github.com/caelis-labs/desktop-world/issues/119)) ([c3f5fc7](https://github.com/caelis-labs/desktop-world/commit/c3f5fc701954f12fee7d00c6cfd6e0a216ea4f38))
+
 ## [0.4.1](https://github.com/caelis-labs/desktop-world/compare/v0.4.0...v0.4.1) (2026-11-07)
 
 
