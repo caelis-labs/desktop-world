@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/caelis-labs/desktop-world/compare/v0.4.0...v0.4.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* stabilize Windows focus and scene readback ([#117](https://github.com/caelis-labs/desktop-world/issues/117)) ([d13cbd0](https://github.com/caelis-labs/desktop-world/commit/d13cbd0e18d419ac8c2765eb46770b3bcc6e29c0))
+
 ## [0.4.0](https://github.com/caelis-labs/desktop-world/compare/v0.3.6...v0.4.0) (2026-11-07)
 
 
