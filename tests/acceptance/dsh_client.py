@@ -19,6 +19,9 @@ class DshClient:
         self.output.mkdir(parents=True, exist_ok=False)
         self.counter = 0
         self.pending = {}
+        self.methods = {}
+        self.owned_sessions = set()
+        self.controller_stop = threading.Event()
         self.events = []
         self.queue = queue.Queue()
         self.lock = threading.Lock()
@@ -29,6 +32,25 @@ class DshClient:
             env={**os.environ, 'DTW_INPUT_TRACE': '1'})
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
+        self.controller = threading.Thread(target=self._control, daemon=True)
+        self.controller.start()
+
+    def _control(self):
+        # A supervisor can stop this exact owned session through the public ACP
+        # method without terminating the host or discovering a private RPC.
+        marker = self.output / 'cancel-session'
+        while not self.controller_stop.wait(.05):
+            if not marker.exists():
+                continue
+            try:
+                session = marker.read_text(encoding='utf-8-sig').strip()
+                if session not in self.owned_sessions:
+                    continue
+                self.send({'jsonrpc': '2.0', 'method': 'session/cancel', 'params': {'sessionId': session}})
+                return
+            except (OSError, ValueError) as error:
+                self._record('controller_error', str(error))
+                return
 
     def _record(self, direction, value):
         with self.lock:
@@ -55,6 +77,7 @@ class DshClient:
 
     def begin(self, method, params):
         self.counter += 1
+        self.methods[self.counter] = method
         self.send({'jsonrpc': '2.0', 'id': self.counter, 'method': method, 'params': params})
         return self.counter
 
@@ -81,13 +104,24 @@ class DshClient:
         response = self.pending.pop(request)
         if 'error' in response:
             raise RuntimeError(response['error'])
-        return response['result']
+        result = response['result']
+        if self.methods.pop(request, None) in ('session/new', 'session/resume'):
+            self.owned_sessions.add(result['sessionId'])
+        return result
 
     def call(self, method, params, timeout=30):
         return self.receive(self.begin(method, params), timeout)
 
     def close(self):
-        self.process.stdin.close()
+        self.controller_stop.set()
+        self.controller.join(timeout=2)
+        input_error = None
+        try:
+            self.process.stdin.close()
+        except OSError as error:
+            # An externally stopped owned host can leave a broken pipe. Still
+            # join its reader and record the real process exit, never success.
+            input_error = str(error)
         forced = False
         try:
             result = self.process.wait(timeout=20)
@@ -98,4 +132,6 @@ class DshClient:
         self.reader.join(timeout=2)
         self.stderr.close()
         self.log.close()
-        return {'pid': self.process.pid, 'exit_code': result, 'forced': forced}
+        return {'pid': self.process.pid, 'exit_code': result, 'forced': forced,
+            'reader_joined': not self.reader.is_alive(), 'controller_joined': not self.controller.is_alive(),
+            'stdin_close_error': input_error}

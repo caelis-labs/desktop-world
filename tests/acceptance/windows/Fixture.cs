@@ -79,6 +79,10 @@ namespace DtwWindowsSmoke {
         bool modalOpen, menuOpen;
         bool ready, closed;
 
+        protected override bool ShowWithoutActivation {
+            get { return !String.IsNullOrEmpty(root) && File.Exists(Path.Combine(root,"show-without-activation")); }
+        }
+
         Fixture(string directory, string instance, bool awarenessSet) {
             root = directory; label = instance; dpiSet = awarenessSet;
             Text = "DTW Windows Smoke " + label;

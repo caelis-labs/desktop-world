@@ -158,6 +158,20 @@ fn decorative_window_class(class: &str) -> bool {
     // menus (#32768) and custom popup classes can still be interactive.
     class.eq_ignore_ascii_case("tooltips_class32") || class.eq_ignore_ascii_case("SysShadow")
 }
+fn shell_auxiliary_surface(app: &AppInstance, class: &str) -> bool {
+    app.identity
+        .0
+        .to_ascii_lowercase()
+        .ends_with("\\explorer.exe")
+        && matches!(
+            class,
+            "Shell_TrayWnd"
+                | "Shell_SecondaryTrayWnd"
+                | "Progman"
+                | "WorkerW"
+                | "ThumbnailDeviceHelperWnd"
+        )
+}
 fn keyboard_window(window: HWND, pid: u32) -> Result<HWND, Error> {
     let mut class = [0u16; 256];
     let len = unsafe { GetClassNameW(window, &mut class) };
@@ -677,6 +691,15 @@ impl Store {
                         if pid != app.pid || !unsafe { IsWindowVisible(window) }.as_bool() {
                             continue;
                         }
+                        let mut class = [0u16; 256];
+                        let count = unsafe { GetClassNameW(window, &mut class) };
+                        let class = String::from_utf16_lossy(&class[..count.max(0) as usize]);
+                        // Explorer shares its executable with the taskbar and
+                        // desktop. These system surfaces are not file-manager
+                        // content and must not become the default input root.
+                        if shell_auxiliary_surface(&app, &class) {
+                            continue;
+                        }
                         let target = WindowTarget {
                             app: app.clone(),
                             native_id: id(window),
@@ -689,11 +712,7 @@ impl Store {
                             let b = rect(window)?;
                             let mut layout = json!({"bounds":[b.left,b.top,b.right-b.left,b.bottom-b.top],"rank":rank,"keyboard_focused":unsafe { GetForegroundWindow() } == window});
                             layout["keyboard_modal"] = json!(keyboard_modal(window, app.pid));
-                            let mut class = [0u16; 256];
-                            let count = unsafe { GetClassNameW(window, &mut class) };
-                            if decorative_window_class(&String::from_utf16_lossy(
-                                &class[..count.max(0) as usize],
-                            )) {
+                            if decorative_window_class(&class) {
                                 layout["semantic_candidate"] = json!(false);
                             }
                             Some(layout)

@@ -131,21 +131,29 @@ def main():
                 except BaseException as error:
                     report.update(passed=False, session_close_error=str(error))
             report['dsh_cleanup'] = client.close()
-            report['passed'] &= report['dsh_cleanup']['exit_code'] == 0 and not report['dsh_cleanup']['forced']
+            report['passed'] &= report['dsh_cleanup']['exit_code'] == 0 and not report['dsh_cleanup']['forced'] and report['dsh_cleanup']['reader_joined']
         report['dtw_cleanup'] = []
         for handle in handles:
             try:
-                report['dtw_cleanup'].append({'pid': handle.pid, 'exit': handle.wait(timeout=8)})
+                code = handle.wait(timeout=8)
+                report['dtw_cleanup'].append({'pid': handle.pid, 'exit': code})
+                report['passed'] &= code == 0
             except BaseException as error:
                 report.update(passed=False, dtw_cleanup_error=str(error))
             finally:
                 handle.close()
         if browser_handle:
             # Normal close of only the kernel-proven disposable browser process.
-            close_owned_browser(browser_pid, browser, browser_handle.birth,
-                ('Release operations desk', 'Canvas release chat', 'Image verification'))
-            report['browser_cleanup'] = {'pid': browser_pid, 'exit': browser_handle.wait(timeout=8)}
-            browser_handle.close()
+            try:
+                close_owned_browser(browser_pid, browser, browser_handle.birth,
+                    ('Release operations desk', 'Canvas release chat', 'Image verification'))
+                code = browser_handle.wait(timeout=8)
+                report['browser_cleanup'] = {'pid': browser_pid, 'exit': code}
+                report['passed'] &= code == 0
+            except BaseException as error:
+                report.update(passed=False, browser_cleanup_error=str(error))
+            finally:
+                browser_handle.close()
         if launcher:
             launcher.close()
         report['fixture_cleanup'] = fixture.close()

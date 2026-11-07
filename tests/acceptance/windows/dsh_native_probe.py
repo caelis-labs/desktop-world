@@ -179,11 +179,13 @@ DSH Windows 中文🙂
                 except BaseException as error:
                     report.update(passed=False, session_close_error=str(error))
             report['dsh_cleanup'] = client.close()
-            report['passed'] &= not report['dsh_cleanup']['forced'] and report['dsh_cleanup']['exit_code'] == 0
+            report['passed'] &= not report['dsh_cleanup']['forced'] and report['dsh_cleanup']['exit_code'] == 0 and report['dsh_cleanup']['reader_joined']
         report['dtw_cleanup'] = []
         for handle in handles:
             try:
-                report['dtw_cleanup'].append({'pid': handle.pid, 'exit': handle.wait(timeout=8)})
+                code = handle.wait(timeout=8)
+                report['dtw_cleanup'].append({'pid': handle.pid, 'exit': code})
+                report['passed'] &= code == 0
             except BaseException as error:
                 report.update(passed=False, dtw_cleanup_error=str(error))
             finally:

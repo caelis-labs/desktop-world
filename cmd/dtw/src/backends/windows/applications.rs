@@ -29,7 +29,7 @@ use windows::{
             SHCreateItemInKnownFolder, SHGetKnownFolderPath, ShellLink, AO_NONE, KF_FLAG_DEFAULT,
             SIGDN_NORMALDISPLAY,
         },
-        UI::WindowsAndMessaging::GetWindowThreadProcessId,
+        UI::WindowsAndMessaging::{GetClassNameW, GetWindowThreadProcessId},
     },
 };
 
@@ -520,6 +520,7 @@ pub(super) fn running_instances(
     // path. Window-owning children are real application instances even when
     // their same-image parent is still alive (e.g. a separate user window).
     let mut owners = HashSet::new();
+    let mut file_manager_owners = HashSet::new();
     for window in super::native::all_windows()? {
         check()?;
         if super::native::user_application_window(window) {
@@ -528,9 +529,24 @@ pub(super) fn running_instances(
                 GetWindowThreadProcessId(window, Some(&mut pid));
             }
             owners.insert(pid);
+            let mut class = [0u16; 256];
+            let count = unsafe { GetClassNameW(window, &mut class) };
+            if matches!(
+                String::from_utf16_lossy(&class[..count.max(0) as usize]).as_ref(),
+                "CabinetWClass" | "ExploreWClass"
+            ) {
+                file_manager_owners.insert(pid);
+            }
         }
     }
-    Ok(application_members(candidates, &owners))
+    let mut members = application_members(candidates, &owners);
+    if identity.to_ascii_lowercase().ends_with("\\explorer.exe") {
+        // The persistent shell process is not a running file-manager window.
+        // Keeping it as an instance prevents cold launch and selects taskbar/
+        // desktop roots instead of the actual document window.
+        members.retain(|app| file_manager_owners.contains(&app.pid));
+    }
+    Ok(members)
 }
 pub(super) fn resolve(
     app_id: &str,
