@@ -28,7 +28,7 @@ def main():
     parser.add_argument('--package', type=Path, required=True)
     parser.add_argument('--fixture-binary', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--mode', choices=('native', 'stop'), required=True)
+    parser.add_argument('--mode', choices=('native', 'stop', 'parity'), required=True)
     args = parser.parse_args()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -48,15 +48,19 @@ def main():
     cancel_done = threading.Event()
     stop_errors = []
     try:
-        if args.mode == 'native':
+        if args.mode in ('native', 'parity'):
             path = Path(__file__).resolve().parents[2] / 'fixtures/computer-use-app/fixture.py'
             spec = importlib.util.spec_from_file_location('dsh_owned_fixture', path)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             fixture = module.ComputerUseFixture(out / 'fixture', 'dsh-native')
             fixture.prepare(build=False)
+            if args.mode == 'parity':
+                (fixture.output / 'extended-parity').write_text('owned native parity setup', encoding='utf-8')
             fixture.build(compiled_native=args.fixture_binary)
             fixture.start()
+            if args.mode == 'parity':
+                report['initial_parity_state'] = wait(lambda: fixture.state())
             exe = fixture.bundle
             payload = 'DSH Windows 中文🙂\n第二行 café 🚀'
             destination = fixture.output / 'dsh-owned-document.txt'
@@ -70,6 +74,13 @@ DSH Windows 中文🙂
 再通过 Save document as 的原生面板保存到 {destination}，打开该文件，核验两行文字。
 再次另存为同一路径，在覆盖确认中选择否，然后取消 Save 面板；最终成功保存和成功打开应各为一次。
 最后捕获图片，依据图片核对两行排版，并报告实际完成情况与遇到的错误。'''
+            if args.mode == 'parity':
+                goal = f'''仅操作自有应用 {exe}，标题 DTW Computer Use Windows。
+本轮只验证原生拖拽、相邻分区滚动和同进程 peer 生命周期，不要修改文档、提交、勾选或打开文件面板。
+1. 先实际截图，定位 Native slider / Parity slider，从滑块当前位置拖到最右端（至少 180 / 200）。必须有真实按下、移动和配对释放，不能用键盘或 setter 代替拖拽。
+2. 在绿色 Left scroll region 内向下滚动，使可见 Row 编号离开顶部；紫色 Right scroll region 保持 Row 001 顶部。滚动点必须在左区域内，不要滚整个窗口、右邻区域或 Long native reference。
+3. 点击 Open peer window 一次，等新的 Owned parity peer 出现。在 peer 中点击 Peer increment 恰好一次，再点击 Close peer；回到主窗口，只读核对 peer 已关闭。不要把用户的其他窗口当作 peer。
+4. 最后截图核对滑杆、左右滚动区域及 peer 关闭状态，报告实际错误和不确定项。不要调用 app.quit()，监督器会正常关闭这个自有应用。'''
         else:
             root = out / 'fixture'
             root.mkdir()
@@ -155,6 +166,23 @@ DSH Windows 中文🙂
             report['recovery_state'] = wait_state(root, lambda value: value['saves'] == 1
                 and value['saved'] == 'fresh after DSH user cancel')
             require(report['recovery_state']['increments'] == 0, 'old suffix was replayed during recovery')
+        elif args.mode == 'parity':
+            state = wait(lambda: fixture.state())
+            report['final_state'] = state
+            parity = state['parity']
+            require(parity['slider'] >= 180 and parity['slider_down'] > 0
+                and parity['slider_down'] == parity['slider_up'] and parity['slider_drag_moves'] > 0,
+                'Native slider drag and paired release not independently observed')
+            require(parity['left_scroll'] > 0 and parity['left_wheels'] > 0
+                and parity['right_scroll'] == 0 and parity['right_wheels'] == 0,
+                'Left-only native scrolling differs')
+            require(parity['peer_opens'] == parity['peer_increments'] == parity['peer_closes'] == 1
+                and not parity['peer_open'], 'Owned peer lifecycle differs')
+            require(not parity['global_left_held'], 'Global left button remained held')
+            require(state['commits'] == state['checks'] == state['opens'] == state['saves'] == 0,
+                'Unrelated native business effect')
+            require(state['text'] == report['initial_parity_state']['text'] and not state['reviewed']
+                and state['checkpoint'] == 0, 'Unrelated document, checkbox or checkpoint change')
         else:
             state = wait(lambda: fixture.state())
             report['final_state'] = state
