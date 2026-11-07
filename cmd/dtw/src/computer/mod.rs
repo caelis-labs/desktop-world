@@ -55,22 +55,6 @@ pub struct WindowTarget {
     pub generation: u64,
 }
 
-/// Service launch policy; callers cannot override it in individual scripts.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum InputPolicy {
-    #[default]
-    Auto,
-    BackgroundOnly,
-}
-impl InputPolicy {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::BackgroundOnly => "background_only",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputRoute {
     Semantic,
@@ -216,6 +200,7 @@ pub struct Element {
     pub value: Option<String>,
     /// None means the provider did not expose a readable enabled state.
     pub enabled: Option<bool>,
+    pub focused: bool,
     /// DTW operations available on this element, not unimplemented native actions.
     pub actions: Vec<String>,
     pub can_press: bool,

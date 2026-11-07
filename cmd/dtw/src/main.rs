@@ -7,14 +7,14 @@ DTW — app-scoped desktop operations
 
 Usage:
   dtw app catalog
-  dtw mcp [--input-policy auto|background-only]
+  dtw mcp
   dtw package import|bind|activate|unbind|status|gc [--store <absolute-directory>]
   dtw --help
   dtw --version
 
 Every execution names an app identifier, such as com.google.Chrome.
 Native providers: macOS, Windows, and experimental Linux X11.
-Use apps to inspect current platform conditions; Linux desktop support is unverified.";
+See the installed Skill for platform behavior; Linux desktop support is unverified.";
 
 fn run(args: &[String]) -> Result<(), WireError> {
     match args
@@ -26,10 +26,10 @@ fn run(args: &[String]) -> Result<(), WireError> {
         [] | ["--help" | "-h"] | ["app"] | ["app", "--help" | "-h"] => println!("{HELP}"),
         ["--version" | "-V"] => println!("dtw {}", env!("CARGO_PKG_VERSION")),
         ["package", ..] => {
-            let value = desktop_world::package::run(&args[1..]).map_err(|message| WireError {
+            let value = desktop_world::package::run(&args[1..]).map_err(|error| WireError {
                 code: "package_error".into(),
-                message,
-                details: None,
+                message: error.message,
+                details: error.details.map(|details| *details),
             })?;
             println!("{value}");
         }
@@ -51,13 +51,13 @@ fn main() -> ExitCode {
     // immutable package independently of its supervisor's lifetime.
     let _package_lease = match desktop_world::package::runtime_lease() {
         Ok(lease) => lease,
-        Err(message) => {
+        Err(error) => {
             eprintln!(
                 "{}",
                 Reply::error(WireError {
                     code: "package_unavailable".into(),
-                    message,
-                    details: None
+                    message: error.message,
+                    details: error.details.map(|details| *details)
                 })
                 .data
             );

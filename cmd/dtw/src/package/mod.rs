@@ -9,6 +9,43 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[derive(Debug)]
+pub struct PackageError {
+    pub message: String,
+    os_error: Option<i32>,
+    pub details: Option<Box<Value>>,
+}
+impl From<String> for PackageError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            os_error: None,
+            details: None,
+        }
+    }
+}
+impl From<&str> for PackageError {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+impl PackageError {
+    fn context(mut self, phase: &str, command: &str, store: &Path, source: Option<&str>) -> Self {
+        let mut details = json!({"phase":phase,"command":command,"store":store.to_string_lossy()});
+        if let Some(code) = self.os_error {
+            details["os_error"] = json!(code);
+        }
+        if let Ok(executable) = std::env::current_exe() {
+            details["executable"] = json!(executable.to_string_lossy());
+        }
+        if let Some(source) = source {
+            details["source"] = json!(source);
+        }
+        self.details = Some(Box::new(details));
+        self
+    }
+}
+
 const SCHEMA: u64 = 1;
 fn now() -> u64 {
     SystemTime::now()
@@ -49,7 +86,8 @@ fn lock(path: &Path) -> Result<File> {
             Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < until => {
                 std::thread::sleep(std::time::Duration::from_millis(10))
             }
-            Err(error) => return Err(format!("Package store busy or lock unavailable: {error}")),
+            Err(std::fs::TryLockError::Error(error)) => return Err(io_error(error)),
+            Err(std::fs::TryLockError::WouldBlock) => return Err("Package store busy".into()),
         }
     }
 }
@@ -246,7 +284,7 @@ impl Store {
         row["updated_at"] = json!(now());
         self.update_host(name, &row)?;
         Ok(
-            json!({"binding":row,"collection":self.gc(true,7).unwrap_or_else(|error|json!({"error":error}))}),
+            json!({"binding":row,"collection":self.gc(true,7).unwrap_or_else(|error|json!({"error":error.message}))}),
         )
     }
     fn gc(&self, apply: bool, days: u64) -> Result<Value> {
@@ -273,7 +311,7 @@ impl Store {
                         .modified()
                         .map_err(io_error)?
                         .duration_since(UNIX_EPOCH)
-                        .map_err(io_error)?
+                        .map_err(|e| e.to_string())?
                         .as_secs(),
                 );
                 if age < days.max(7).saturating_mul(86400) {
@@ -329,7 +367,7 @@ impl Store {
                 } else {
                     None
                 };
-                temporary.push(json!({"path":text(&path)?,"action":if error.is_some(){"blocked"}else if apply{"removed"}else{"would_remove"},"error":error.map(|e|e.to_string())}));
+                temporary.push(json!({"path":text(&path)?,"action":if error.is_some(){"blocked"}else if apply{"removed"}else{"would_remove"},"error":error.map(|e|e.message)}));
             }
         }
         for entry in fs::read_dir(self.root.join("packages")).map_err(io_error)? {
@@ -355,7 +393,7 @@ impl Store {
                 match lease.try_lock() {
                     Ok(()) => None,
                     Err(std::fs::TryLockError::WouldBlock) => Some("running"),
-                    Err(e) => return Err(io_error(e)),
+                    Err(std::fs::TryLockError::Error(e)) => return Err(io_error(e)),
                 }
             };
             let mut removal_error = None;
@@ -372,7 +410,7 @@ impl Store {
             if reason.is_none() && apply && removal_error.is_none() {
                 let _ = fs::remove_file(&lease_path);
             }
-            rows.push(json!({"package_id":id,"retained_by":reason,"action":if removal_error.is_some(){"blocked"}else if reason.is_some(){"keep"}else if apply{"removed"}else{"would_remove"},"error":removal_error}));
+            rows.push(json!({"package_id":id,"retained_by":reason,"action":if removal_error.is_some(){"blocked"}else if reason.is_some(){"keep"}else if apply{"removed"}else{"would_remove"},"error":removal_error.map(|error| error.message)}));
         }
         Ok(
             json!({"apply":apply,"packages":rows,"temporary":temporary,"scope":"managed package store only; unmanaged installations and Core bundles are untouched"}),
@@ -416,7 +454,10 @@ pub fn runtime_lease() -> Result<Option<File>> {
     }
     let lease_path = store.root.join("leases").join(format!("{id}.lock"));
     let lease = open_lock_file(&lease_path)?;
-    lease.try_lock_shared().map_err(io_error)?;
+    lease.try_lock_shared().map_err(|error| match error {
+        std::fs::TryLockError::Error(error) => io_error(error),
+        std::fs::TryLockError::WouldBlock => "Package runtime lease is busy".into(),
+    })?;
     Ok(Some(lease))
 }
 
@@ -455,11 +496,14 @@ pub fn run(args: &[String]) -> Result<Value> {
         ["status"] | ["gc"] | ["gc", "--apply"] => {}
         _ => return Err(USAGE.into()),
     }
-    let store = Store::open(&match store {
+    let root = match store {
         Some(path) => path,
         None => default_store()?,
-    })?;
-    let result: Result<Value> = match parts.as_slice() {
+    };
+    let command = parts[0];
+    let source = (command == "import").then(|| parts[1]);
+    let store = Store::open(&root).map_err(|e| e.context("open_store", command, &root, source))?;
+    let result: Result<Value> = (|| match parts.as_slice() {
         ["import", source] => store.import(Path::new(source)),
         ["bind", host, id] => store.bind(host, id),
         ["activate", host] => store.activate(host),
@@ -486,12 +530,14 @@ pub fn run(args: &[String]) -> Result<Value> {
         ["gc"] => store.gc(false, 7),
         ["gc", "--apply"] => store.gc(true, 7),
         _ => unreachable!("package arguments validated before opening the store"),
-    };
-    result.map(|mut value| {
-        value["manager_version"] = json!(env!("CARGO_PKG_VERSION"));
-        value["store_schema"] = json!(SCHEMA);
-        value
-    })
+    })();
+    result
+        .map_err(|e| e.context("run_command", command, &root, source))
+        .map(|mut value| {
+            value["manager_version"] = json!(env!("CARGO_PKG_VERSION"));
+            value["store_schema"] = json!(SCHEMA);
+            value
+        })
 }
 
 #[cfg(test)]

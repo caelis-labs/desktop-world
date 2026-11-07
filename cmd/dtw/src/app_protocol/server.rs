@@ -4,7 +4,7 @@ use super::{
     wire::{self, Command, Request, Submit, Target, WireError},
     Coordinator, Reply,
 };
-use crate::computer::{AppInstance, ApplicationTarget, Backend, Error, InputPolicy};
+use crate::computer::{AppInstance, ApplicationTarget, Backend, Error};
 use serde_json::{json, Value};
 use std::{
     collections::VecDeque,
@@ -59,9 +59,6 @@ pub trait Factory: Send + Sync + 'static {
     }
     fn permissions(&self) -> Option<Value> {
         None
-    }
-    fn input_policy(&self) -> InputPolicy {
-        InputPolicy::Auto
     }
     fn description(&self) -> Value {
         json!({"coverage":"Provider-defined application window subset","conditions":[]})
@@ -386,6 +383,11 @@ impl<F: Factory> Server<F> {
         }
         append_shutdown_errors(reply, &state.shutdown_errors);
     }
+    pub(super) fn provider_id(&self) -> Option<String> {
+        self.factory.description()["provider"]
+            .as_str()
+            .map(str::to_owned)
+    }
     fn apps(
         &self,
         call: &Call<F::Provider>,
@@ -421,22 +423,7 @@ impl<F: Factory> Server<F> {
                 let page: Vec<_> = rows.into_iter().skip(offset).take(limit).collect();
                 let next =
                     (offset.saturating_add(page.len()) < total).then_some(offset + page.len());
-                let description = self.factory.description();
-                let mut provider = json!({});
-                for key in [
-                    "provider",
-                    "coverage",
-                    "conditions",
-                    "supported_capabilities",
-                    "supported_observe_scopes",
-                ] {
-                    if let Some(value) = description.get(key) {
-                        provider[key] = value.clone();
-                    }
-                }
-                Reply::plain(
-                    json!({"apps":page,"next":next,"coverage":catalog["coverage"],"provider":provider}),
-                )
+                Reply::plain(json!({"apps":page,"next":next,"coverage":catalog["coverage"]}))
             }
             Ok(_) => problem("cancelled", "Application discovery was cancelled"),
             Err(e) => Reply::error(wire::core_error(&e)),
@@ -1329,6 +1316,7 @@ mod lifecycle_tests {
                     value: None,
                     enabled: Some(true),
                     actions: vec!["press".into()],
+                    focused: false,
                     can_press: true,
                 }],
             })

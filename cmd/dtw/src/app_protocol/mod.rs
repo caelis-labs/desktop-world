@@ -1182,7 +1182,10 @@ impl<B: Backend + 'static> Coordinator<B> {
                 Ok(key) => key,
                 Err(error) => return Work::read_error(error),
             };
-            let row = json!({"element_ref":id,"identity":element.identity,"rebind_identity":element.rebind_identity,"label":element.label,"can_press":element.can_press,"role":element.role,"name":element.name,"value":element.value,"enabled":element.enabled,"actions":element.actions});
+            let mut row = json!({"element_ref":id,"identity":element.identity,"rebind_identity":element.rebind_identity,"label":element.label,"can_press":element.can_press,"role":element.role,"name":element.name,"value":element.value,"enabled":element.enabled,"actions":element.actions});
+            if element.focused {
+                row["focused"] = json!(true);
+            }
             snapshot.elements.insert(id, element.id);
             rows.push(row);
         }

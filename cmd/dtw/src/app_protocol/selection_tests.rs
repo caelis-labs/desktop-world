@@ -30,6 +30,7 @@ fn element(id: u64, pressable: bool) -> Element {
         name: Some("Save".into()),
         value: Some("summary".into()),
         enabled: Some(true),
+        focused: false,
         can_press: pressable,
         actions: if pressable {
             vec!["press".into(), "setValue".into()]

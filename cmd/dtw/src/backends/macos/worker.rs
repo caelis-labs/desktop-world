@@ -461,16 +461,6 @@ fn click_can_follow_focus(result: &Value) -> bool {
     result["dispatch"] == "dispatched" && result.get("error").is_none()
 }
 
-fn foreground_required(reason: &str) -> Value {
-    let mut result = rejected(
-        json!({"error":"foreground_required",
-        "message":"This action requires foreground input; the service is configured for background_only"}),
-        "focus",
-    );
-    result["delivery"] = delivery(None, Some(reason), false, None);
-    result
-}
-
 /// A decline is an explicit, side-effect-free preflight result. An unknown or
 /// dispatched result never selects another route, even with a malformed flag.
 fn background_result(mut result: Value) -> BackgroundAttempt {
@@ -763,11 +753,7 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
             );
         };
         let _coordination = match scene_lease::lock_coordination(
-            if request["input_policy"] == "auto" {
-                scene_lease::InputCoordination::Foreground
-            } else {
-                scene_lease::InputCoordination::Background
-            },
+            scene_lease::InputCoordination::Foreground,
             remaining(&request),
         ) {
             Ok(lease) => lease,
@@ -790,9 +776,6 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
         return native(&request, false);
     }
     if matches!(op, "keypress_app" | "focus_app") {
-        if request["input_policy"] != "auto" {
-            return foreground_required("windowless_app_shortcut");
-        }
         let (Some(pid), Some(birth)) = (
             request["target"]["app"]["pid"]
                 .as_u64()
@@ -843,19 +826,6 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
         // This private read uses exact request identity and geometry directly;
         // it never inventories windows or recursively starts another helper.
         return native(&request, true);
-    }
-    let background_only = match request["input_policy"].as_str() {
-        Some("background_only") => true,
-        None | Some("auto") => false,
-        _ => {
-            return rejected(
-                json!({"error":"invalid_request","message":"Unknown service input policy"}),
-                op,
-            )
-        }
-    };
-    if background_only && op == "focus" {
-        return foreground_required("explicit_focus");
     }
     if matches!(op, "capture" | "click" | "move" | "drag" | "scroll") && !scene_worker {
         return rejected(
@@ -939,9 +909,6 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
         );
     }
     if op == "begin_execution_focus" {
-        if background_only {
-            return foreground_required("execution_scope");
-        }
         let _input = match scene_lease::lock_input(remaining(&request)) {
             Ok(lease) => lease,
             Err(message) => {
@@ -956,11 +923,6 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
         BackgroundAttempt::NotApplicable if op == "focus" => Some("explicit_focus".to_owned()),
         BackgroundAttempt::NotApplicable => None,
     };
-    if background_only {
-        if let Some(reason) = &foreground_reason {
-            return foreground_required(reason);
-        }
-    }
     if request["_defer_foreground"] == true && request["_execution_foreground"] != true {
         if let Some(reason) = &foreground_reason {
             return json!({"dispatch":"not_dispatched","evidence":"unverified",
@@ -1466,24 +1428,7 @@ mod tests {
     }
 
     #[test]
-    fn strict_focus_rejects_before_any_native_target_read_or_preparation() {
-        // Deliberately no native target: this must not call AX, take a lease,
-        // prepare foreground, or dispatch an event even without GUI permissions.
-        let mut leased = false;
-        let reply = dispatch(
-            json!({"operation":"focus","input_policy":"background_only"}),
-            &mut leased,
-            false,
-        );
-        assert_eq!(reply["dispatch"], "not_dispatched");
-        assert_eq!(reply["error"], "foreground_required");
-        assert_eq!(reply["delivery"]["foreground_borrowed"], false);
-        assert!(reply["delivery"]["route"].is_null());
-        assert!(!leased);
-    }
-
-    #[test]
-    fn modal_input_preflight_is_typed_and_strict_policy_never_borrows_foreground() {
+    fn modal_input_preflight_is_typed() {
         let modal = json!({"background_requires_foreground":true});
         assert_eq!(native_modal_input(&modal), Ok(true));
         assert_eq!(
@@ -1501,15 +1446,6 @@ mod tests {
                 "invalid_response"
             );
         }
-        let rejected = foreground_required("modal_input_requires_foreground");
-        assert_eq!(rejected["dispatch"], "not_dispatched");
-        assert_eq!(rejected["error"], "foreground_required");
-        assert_eq!(
-            rejected["delivery"]["reason"],
-            "modal_input_requires_foreground"
-        );
-        assert_eq!(rejected["delivery"]["foreground_borrowed"], false);
-        assert!(rejected["delivery"]["route"].is_null());
     }
 
     #[test]

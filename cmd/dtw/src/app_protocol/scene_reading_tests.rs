@@ -11,6 +11,7 @@ fn content(id: u64, value: &str) -> Element {
         value: Some(value.into()),
         enabled: Some(true),
         actions: vec![],
+        focused: false,
         can_press: false,
     }
 }
@@ -62,14 +63,14 @@ fn omitted_text_is_explicit_and_tail_only_edits_change_the_view() {
         Some(vec![content(1, &format!("{prefix}other"))]);
     let changed = exec(&server, "tail_edit", "await app.look();");
     let view = &changed.data["value"]["view"];
-    assert_eq!(view["changed"], true);
+    assert_eq!(view["kind"], "delta");
     let updated = &view["elements"]["changed"][0];
     assert_eq!(updated["value"], preview["value"]);
     assert_eq!(updated["value_length"], preview["value_length"]);
     assert_ne!(updated["value_revision"], revision);
     let unchanged =
         crate::app_protocol::projection::execution(exec(&server, "unchanged", "await app.look();"));
-    assert_eq!(unchanged.data["view"], json!({"changed":false}));
+    assert_eq!(unchanged.data["view"], json!({"kind":"unchanged"}));
 }
 
 #[test]
@@ -742,7 +743,7 @@ fn changing_query_publishes_a_compact_baseline_instead_of_removed_ids() {
         "filter",
         "await app.look({text:'Other'});",
     ));
-    assert_eq!(filtered.data["view"]["reset"], true);
+    assert_eq!(filtered.data["view"]["kind"], "full");
     assert!(filtered.data["view"]["elements"].is_array());
     assert_eq!(
         filtered.data["view"]["elements"].as_array().unwrap().len(),
@@ -754,7 +755,7 @@ fn changing_query_publishes_a_compact_baseline_instead_of_removed_ids() {
         "same",
         "await app.look({text:'Other'});",
     ));
-    assert_eq!(unchanged.data["view"], json!({"changed":false}));
+    assert_eq!(unchanged.data["view"], json!({"kind":"unchanged"}));
 }
 
 #[test]

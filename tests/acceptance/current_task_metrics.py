@@ -73,7 +73,7 @@ def metrics(calls, name, *, allowed_apps):
             elif method == 'apps':
                 require(isinstance(arguments, dict) and set(arguments) <= {'query', 'state', 'offset', 'limit'}, 'Invalid apps arguments')
                 require('version' not in data and isinstance(data.get('apps'), list)
-                        and isinstance(data.get('coverage'), dict) and isinstance(data.get('provider'), dict)
+                        and isinstance(data.get('coverage'), dict)
                         and 'next' in data, 'Current application catalog missing')
                 for app in data['apps']:
                     require(isinstance(app, dict) and isinstance(app.get('app'), str)

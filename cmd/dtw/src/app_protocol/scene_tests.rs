@@ -46,7 +46,7 @@ fn agent_sees_only_app_operations_and_has_no_session_or_state() {
     let r=exec(&server,"surface","return {methods:Object.keys(app),session:typeof session,state:typeof state,host:typeof __host};");
     assert_eq!(
         *success(&r),
-        json!({"methods":["look","capture","readText","waitForNewWindow","click","setValue","move","drag","typeText","keypress","scroll","focus","quit"],"session":"undefined","state":"undefined","host":"undefined"})
+        json!({"methods":["look","capture","readText","wait","waitForNewWindow","click","setValue","move","drag","typeText","keypress","scroll","focus","quit"],"session":"undefined","state":"undefined","host":"undefined"})
     );
 }
 #[test]
@@ -54,10 +54,10 @@ fn look_returns_baseline_then_small_delta_and_refreshes_after_click() {
     let (server, catalog) = agent();
     let first = exec(&server, "first", "await app.look();");
     assert!(!first.is_error, "{:?}", first.data);
-    assert_eq!(first.data["value"]["view"]["reset"], true);
+    assert_eq!(first.data["value"]["view"]["kind"], "full");
     assert_eq!(first.data["value"]["view"]["elements"][0]["id"], "w1.e1");
     let next = exec(&server, "next", "await app.look();");
-    assert_eq!(next.data["value"]["view"], json!({"changed":false}));
+    assert_eq!(next.data["value"]["view"], json!({"kind":"unchanged"}));
     let action = exec(&server, "click", "await app.click({target:'w1.e1'});");
     assert!(!action.is_error, "{:?}", action.data);
     assert!(action.data["value"]["view"].is_object());
@@ -72,7 +72,7 @@ fn intermediate_reads_do_not_hide_the_first_published_baseline() {
         "await app.look(); await app.click({target:'w1.e1'});",
     );
     assert!(!first.is_error, "{:?}", first.data);
-    assert_eq!(first.data["value"]["view"]["reset"], true);
+    assert_eq!(first.data["value"]["view"]["kind"], "full");
     assert!(first.data["value"]["view"]["windows"].is_array());
     assert!(first.data["value"]["view"]["elements"].is_array());
     assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
@@ -81,7 +81,7 @@ fn intermediate_reads_do_not_hide_the_first_published_baseline() {
         "published_delta",
         "await app.look(); await app.look();",
     );
-    assert_eq!(next.data["value"]["view"], json!({"changed":false}));
+    assert_eq!(next.data["value"]["view"], json!({"kind":"unchanged"}));
 }
 #[test]
 fn invalid_and_unbound_coordinate_input_never_dispatch_and_keeps_rejection() {
@@ -186,7 +186,7 @@ fn direct_return_of_view_is_not_duplicated_and_unchanged_output_is_bounded() {
         "returned_view",
         "return await app.look();",
     ));
-    assert!(first.data["view"]["reset"] == true);
+    assert!(first.data["view"]["kind"] == "full");
     assert_eq!(
         first.data["view"]["windows"][0]["bounds"],
         json!([16.0, 16.0, 416.0, 469.0])
@@ -197,7 +197,7 @@ fn direct_return_of_view_is_not_duplicated_and_unchanged_output_is_bounded() {
         "small_delta",
         "return await app.look();",
     ));
-    assert_eq!(unchanged.data["view"], json!({"changed":false}));
+    assert_eq!(unchanged.data["view"], json!({"kind":"unchanged"}));
     assert!(
         unchanged.data.to_string().len() <= 512,
         "{:?}",
@@ -229,9 +229,9 @@ fn public_print_budget_keeps_its_truncation_signal() {
 fn script_observations_are_snapshots_while_tool_messages_stay_incremental() {
     let (server, _) = agent();
     let first = exec(&server, "baseline", "await app.look();");
-    assert_eq!(first.data["value"]["view"]["reset"], true);
+    assert_eq!(first.data["value"]["view"]["kind"], "full");
     let second=exec(&server,"snapshot","const a=await app.look(); const b=await app.look(); return {windows:a.windows.length, elements:b.elements.length, hasBounds:'bounds' in a.windows[0]};");
-    assert_eq!(second.data["value"]["view"], json!({"changed":false}));
+    assert_eq!(second.data["value"]["view"], json!({"kind":"unchanged"}));
     assert_eq!(
         *success(&second),
         json!({"windows":2,"elements":1,"hasBounds":true})
@@ -240,7 +240,7 @@ fn script_observations_are_snapshots_while_tool_messages_stay_incremental() {
     let projected = crate::app_protocol::projection::execution(returned).mcp();
     let text = projected["content"][0]["text"].as_str().unwrap();
     let body: Value = serde_json::from_str(text).unwrap();
-    assert_eq!(body["view"], json!({"changed":false}));
+    assert_eq!(body["view"], json!({"kind":"unchanged"}));
     assert!(body.get("result").is_none(), "{body}");
 }
 #[test]
@@ -287,6 +287,7 @@ fn native_identity_survives_insertion_but_removed_targets_never_retarget() {
         value: None,
         enabled: Some(true),
         actions: vec!["press".into()],
+        focused: false,
         can_press: true,
     };
     let mut added = original.clone();

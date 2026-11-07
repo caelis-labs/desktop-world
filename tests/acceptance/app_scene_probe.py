@@ -144,21 +144,7 @@ def main():
             observed,response=m.tool('exec',{'app':str(bundle),'source':'await app.capture({full:true});'})
             if observed.get('error',{}).get('code')=='busy':return None
             require(not response.get('isError'),observed);require('error' not in observed.get('view',{}).get('image',{}),observed);return observed
-        recovered=wait_until(read_after_cancel);require(recovered['view'].get('reset') is True,recovered);record('cancelled_drag_releases_and_ordinary_read_recovers',events=events)
-        strict_dir=out/'strict-pointer';strict_dir.mkdir();strict=Mcp(args.dtw.resolve(),strict_dir,mcp_args=('--input-policy','background-only'))
-        try:
-            strict.rpc('initialize',{'protocolVersion':'2025-06-18','capabilities':{},'clientInfo':{'name':'scene-strict-pointer','version':'1'}});strict.notify('notifications/initialized')
-            shot,_=strict.tool('exec',{'app':str(bundle),'source':'await app.capture({full:true});'});p=point(shot['view'],'gesture-start');offset=len(state()['gestures'])
-            accepted,response=strict.tool('exec',{'app':str(bundle),'source':'await app.move('+json.dumps(p)+');'})
-            if response.get('isError'):
-                require(accepted.get('failure',{}).get('code')=='foreground_required',accepted)
-                require(accepted.get('effects',{}).get('dispatch',{}).get('not_dispatched')==1,accepted)
-                require(not any(e['kind']=='move' for e in state()['gestures'][offset:]),state())
-                record('known_hover_limit_respects_background_only')
-            else:hover_effect(offset,'independent_hover_under_background_only')
-            offset=len(state()['gestures']);accepted,response=strict.tool('exec',{'app':str(bundle),'source':'await app.click('+json.dumps(p)+');'})
-            require(not response.get('isError'),accepted);wait_until(lambda:any(e['kind']=='up' for e in state()['gestures'][offset:]));record('addressed_pixel_click_works_under_background_only')
-        finally:strict.close()
+        recovered=wait_until(read_after_cancel);require(recovered['view'].get('kind') == 'full',recovered);record('cancelled_drag_releases_and_ordinary_read_recovers',events=events)
         image=capture('before-window-move');main=next(w for w in image['view']['windows'] if w['title'].endswith('main'));x,y,width,height=main['bounds'];canvas=image['view']['image'];ox,oy,cw,ch=canvas['bounds']
         start={'x':(x+width/2-ox)/cw*canvas['width'],'y':(y+12-oy)/ch*canvas['height']};end={'x':start['x']+35/cw*canvas['width'],'y':start['y']+45/ch*canvas['height']}
         offset=len(state()['gestures'])
@@ -173,13 +159,6 @@ def main():
         require(snapshots['result']['lookWindows']>=1 and snapshots['result']['captureWindows']>=1,snapshots);record('script_look_and_capture_always_include_windows')
         image=capture('close-last');p=point(image['view'],'Close DTW Scene main');run('await app.click('+json.dumps(p)+');');wait_until(lambda:not state()['windows'])
         empty,_=run('await app.look({full:true});');require(empty['view']['running'] and not empty['view']['windows'],empty);record('running_app_without_windows')
-        strict_dir=out/'strict';strict_dir.mkdir();strict=Mcp(args.dtw.resolve(),strict_dir,mcp_args=('--input-policy','background-only'))
-        try:
-            strict.rpc('initialize',{'protocolVersion':'2025-06-18','capabilities':{},'clientInfo':{'name':'scene-strict','version':'1'}});strict.notify('notifications/initialized')
-            strict.tool('exec',{'app':str(bundle),'source':'await app.look();'})
-            rejected,response=strict.tool('exec',{'app':str(bundle),'source':"await app.keypress(['META','N']);"})
-            require(response.get('isError') and rejected.get('failure',{}).get('code')=='foreground_required',rejected);require(state()['new_requests']==0,state());record('windowless_shortcut_respects_background_only')
-        finally:strict.close()
         run("await app.keypress(['META','N']);");wait_until(lambda:state()['new_requests']==1 and state()['windows']);record('windowless_app_shortcut_creates_window',state=state())
         before=state()['inputs']['DTW Scene main']
         rejected,response=m.tool('exec',{'app':str(bundle),'source':"await app.click({selector:{role:'text_field'}});"})
@@ -195,7 +174,7 @@ def main():
         run('await app.quit();')
         pid=state()['pid'];wait_until(lambda:subprocess.run(['kill','-0',str(pid)],capture_output=True).returncode!=0)
         time.sleep(.2);require(subprocess.run(['kill','-0',str(pid)],capture_output=True).returncode!=0,'quit auto-relaunched');record('quit_does_not_auto_relaunch')
-        restarted,_=run('await app.look();');require(state()['pid']!=pid,state());require(restarted['view'].get('reset') is True,restarted);require(restarted['view']['running'] is True,restarted);record('restart_resets_baseline',view=restarted['view'])
+        restarted,_=run('await app.look();');require(state()['pid']!=pid,state());require(restarted['view'].get('kind') == 'full',restarted);require(restarted['view']['running'] is True,restarted);record('restart_resets_baseline',view=restarted['view'])
         run('await app.quit();');report['passed']=all(c['passed'] for c in report['cases'])
     except BaseException as error:
         report['passed']=False;report['failure']=str(error);raise

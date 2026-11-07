@@ -112,7 +112,7 @@ focused window binds that anchor once, plus a snapshot of the original foregroun
 app instance and window. Remaining
 actions validate that foreground scope, including proven descendant surfaces;
 supported pointer transport can remain addressed. Once preparation or dispatch
-begins, errors do not reroute or replay input. `background_only` refuses borrowing.
+begins, errors do not reroute or replay input.
 
 At script settlement the resident finalizer releases held input and restores the
 original app and exact captured window only while scope ownership and original

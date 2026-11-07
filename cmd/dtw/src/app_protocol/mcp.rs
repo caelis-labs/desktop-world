@@ -27,9 +27,11 @@ pub(super) struct Handler<F: Factory> {
 
 impl<F: Factory> ServerHandler for Handler<F> {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+        let mut config = ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("desktop-world", env!("CARGO_PKG_VERSION")))
-            .with_instructions("Load the installed desktop-world Skill and its API.md reference. apps searches running and installed applications without reading their contents. exec requires one explicit app authorization identity and an async JavaScript body. DTW owns application startup, window routing and observation state. Use look, then input, then look; screenshots provide a fallback when semantics are incomplete. Never repeat input whose effects are unknown. Standard MCP cancellation stops the matching call.")
+            .with_instructions("Load the installed desktop-world Skill and its API.md reference. apps searches running and installed applications without reading their contents. exec requires one explicit app authorization identity and an async JavaScript body. DTW owns application startup, window routing and observation state. Use look, then input, then look; screenshots provide a fallback when semantics are incomplete. Never repeat input whose effects are unknown. Standard MCP cancellation stops the matching call.");
+        config.server_info.description = self.server.provider_id();
+        config
     }
 
     async fn list_tools(
@@ -190,7 +192,7 @@ pub fn tools() -> Value {
     let read = json!({"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true});
     json!([
         {"name":"apps","description":"Find installed and running user applications. Search by name or identifier; filter running/stopped/all. Returns authorization identities and running status, with bounded pages and explicit coverage. Reads no window contents.","inputSchema":{"type":"object","properties":{"query":{"type":"string","maxLength":256},"state":{"type":"string","enum":["all","running","stopped"]},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":100}},"additionalProperties":false},"annotations":read},
-        {"name":"exec","description":"Execute an async JavaScript body inside one explicitly authorized app. DTW starts the app when required and handles window routing and input readiness. Use app.look(), app.capture(), app.readText(), app.waitForNewWindow(), app.click(), app.setValue(), app.move(), app.drag(), app.typeText(), app.keypress(), app.scroll(), app.focus() and app.quit(); see the installed Skill API.md. print emits optional bounded output. No Session management. New calls execute new work; never replay unknown effects.",
+        {"name":"exec","description":"Execute an async JavaScript body inside one explicitly authorized app. DTW starts the app when required and handles window routing and input readiness. Use app.look(), app.capture(), app.readText(), app.wait(), app.waitForNewWindow(), app.click(), app.setValue(), app.move(), app.drag(), app.typeText(), app.keypress(), app.scroll(), app.focus() and app.quit(); see the installed Skill API.md. print emits optional bounded output. No Session management. New calls execute new work; never replay unknown effects.",
             "inputSchema":{"type":"object","additionalProperties":false,"properties":{"app":app_id::schema(),"source":{"type":"string","minLength":1,"maxLength":65536,"description":"Async JavaScript function body; await app operations sequentially. No imports, filesystem, network or process APIs."}},"required":["app","source"]},
             "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}}
     ])

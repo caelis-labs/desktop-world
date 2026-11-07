@@ -14,9 +14,14 @@ Use the host's supported executable-launch path and permissions for installation
 as well as the later MCP process. Download and extract the verified complete
 package to a host-approved temporary directory **outside the session workspace**
 (and outside the source checkout) before invoking its `bin/dtw.exe package import`.
-The common Windows recipe uses the system temporary directory; confirm its
-resolved path satisfies those conditions first. `%TEMP%` is an example location,
-not a guarantee of host permission.
+The common Windows recipe uses a unique child under the user's Local Application
+Data `dtw-stage` directory. A host-approved absolute `DTW_STAGING_DIR` can
+override it. Confirm permission for the resolved path before running it.
+
+[Issue #112](https://github.com/caelis-labs/desktop-world/issues/112) records
+DSH Desktop 0.2.2-rc.1 redirecting TEMP under workspace-write. The same verified
+CLI could print its version from that directory but failed to open the managed
+store. The approved external launch of the same bytes could open the store.
 
 [Issue #104](https://github.com/caelis-labs/desktop-world/issues/104) reports an A/B
 check on Windows 11 with DSH Desktop 0.2.1-rc.5 and DTW 0.3.3: identical executable

@@ -14,12 +14,11 @@ It also needs the standard ComputerUse fixture and focus observer binaries.
 Use a fresh output directory for every attempt. Inspect `mcp/open-panel.png`, then
 write `point.json` with the actual button's `x`, `y` image coordinates and the
 `capture_sha256` from `handoff.json`. There is no automatic screenshot-coordinate
-oracle. Cases cover automatic borrow, explicit focus followed by click, and
-`background-only` refusal. Input uses only the advertised `apps`/`exec` tools.
+oracle. Cases cover automatic borrow, and explicit focus followed by click. Input uses only the advertised `apps`/`exec` tools.
 
 `macos_input_recovery_probe.py` covers fully occluded ordinary AppKit controls,
 background text, `app.focus`, windowless shortcuts and subsequent text, closure
-restoration and strict policy refusal. Its optional `--new-window-no-key` control
+and restoration. Its optional `--new-window-no-key` control
 requires the first text to be refused without poisoning cleanup, then explicitly
 focuses and edits that window in the following exec. Its coordinates come from
 owned fixture geometry and do not claim model vision evidence.

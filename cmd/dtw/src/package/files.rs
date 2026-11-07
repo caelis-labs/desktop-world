@@ -8,9 +8,12 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-pub(super) type Result<T> = std::result::Result<T, String>;
-pub(super) fn io_error(error: impl std::fmt::Display) -> String {
-    error.to_string()
+pub(super) type Result<T> = std::result::Result<T, super::PackageError>;
+pub(super) fn io_error(error: io::Error) -> super::PackageError {
+    super::PackageError {
+        os_error: error.raw_os_error(),
+        ..error.to_string().into()
+    }
 }
 pub(super) fn text(path: &Path) -> Result<&str> {
     path.to_str()
@@ -27,7 +30,7 @@ pub(super) fn json(path: &Path) -> Result<Value> {
     if data.len() > 2 * 1024 * 1024 {
         return Err("Metadata exceeds 2 MiB".into());
     }
-    serde_json::from_slice(&data).map_err(io_error)
+    serde_json::from_slice(&data).map_err(|e| e.to_string().into())
 }
 pub(super) fn digest(path: &Path) -> Result<String> {
     let mut file = fs::File::open(path).map_err(io_error)?;
@@ -68,7 +71,8 @@ pub(super) fn regular(path: &Path, directory: bool) -> Result<()> {
             "Expected an owned regular {}: {}",
             if directory { "directory" } else { "file" },
             path.display()
-        ));
+        )
+        .into());
     }
     Ok(())
 }
@@ -111,15 +115,15 @@ pub(super) fn inventory(root: &Path) -> Result<BTreeMap<String, PathBuf>> {
             }
             let metadata = fs::symlink_metadata(&path).map_err(io_error)?;
             if linked(&metadata) {
-                return Err(format!(
-                    "Package contains a link/reparse point: {}",
-                    path.display()
-                ));
+                return Err(
+                    format!("Package contains a link/reparse point: {}", path.display()).into(),
+                );
             }
             if metadata.is_dir() {
                 pending.push(path);
             } else if metadata.is_file() {
-                let name = text(path.strip_prefix(root).map_err(io_error)?)?.replace('\\', "/");
+                let name =
+                    text(path.strip_prefix(root).map_err(|e| e.to_string())?)?.replace('\\', "/");
                 files.insert(name, path);
             } else {
                 return Err("Package contains a special file".into());
@@ -196,7 +200,7 @@ pub(super) fn verify(root: &Path) -> Result<Verified> {
             .get(name)
             .ok_or_else(|| format!("Missing package member: {name}"))?;
         if digest(path)? != expected {
-            return Err(format!("Package checksum mismatch: {name}"));
+            return Err(format!("Package checksum mismatch: {name}").into());
         }
     }
     if seen.len() + 1 != files.len() {
@@ -272,7 +276,7 @@ pub(super) fn write(path: &Path, value: &Value) -> Result<()> {
         .create_new(true)
         .open(path)
         .map_err(io_error)?;
-    let data = serde_json::to_vec_pretty(value).map_err(io_error)?;
+    let data = serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?;
     file.write_all(&data)
         .and_then(|_| file.write_all(b"\n"))
         .and_then(|_| file.sync_all())

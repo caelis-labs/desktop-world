@@ -75,11 +75,12 @@ draft/prerelease flags to determine release status.
 Run this whole block in one Windows PowerShell 5.1 or PowerShell 7 invocation.
 It resolves the official latest stable release once, downloads its exact Windows
 ZIP and adjacent checksum, and verifies the archive. Native import verifies every
-packaged file and the exact inventory. It downloads into a new temporary directory, imports verified bytes into the
-managed store, then returns the permanent package recipe. A failure preserves
-its temporary directory for inspection. Before running it, confirm that the
-system temporary directory is outside the session workspace and is an approved
-execution location for this host. The host must also allow the packaged CLI to
+packaged file and the exact inventory. It downloads into a unique child of the user's Local Application Data
+`dtw-stage` directory, then returns the permanent package recipe. A failure
+preserves the child for inspection. Confirm that the resolved staging directory
+is outside the workspace and that your host permits executing the verified CLI
+there. Set `DTW_STAGING_DIR` to an absolute host-approved directory if required.
+The recipe does not use the host's redirected `TEMP` or `TMP` for staging. The host must also allow the packaged CLI to
 access the default `%LOCALAPPDATA%\DesktopWorld` store. Do not run a workspace-local
 copy and assume a host's broad permission label authorizes that child process.
 If either path is denied, request normal host authorization before proceeding.
@@ -102,6 +103,16 @@ function Get-DtwFileSha256 {
     $dtwHasher.Dispose()
   }
 }
+$dtwStage = $env:DTW_STAGING_DIR
+if ([string]::IsNullOrWhiteSpace($dtwStage)) {
+  $dtwLocal = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+  if (!$dtwLocal) { throw 'Local Application Data is unavailable. Set DTW_STAGING_DIR to an approved absolute path.' }
+  $dtwStage = Join-Path $dtwLocal 'dtw-stage'
+}
+if ($dtwStage -notmatch '^(?:[A-Za-z]:[\\/]|\\\\[^\\]+\\[^\\]+\\?)') {
+  throw 'DTW_STAGING_DIR must be an absolute Windows path.'
+}
+$dtwStage = [IO.Path]::GetFullPath($dtwStage)
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $dtwApi = 'https://api.github.com/repos/caelis-labs/desktop-world/releases/latest'
 $dtwRelease = Invoke-RestMethod -Uri $dtwApi -Headers @{ 'User-Agent' = 'desktop-world-install' }
@@ -117,8 +128,9 @@ if ($dtwZipAsset.Count -ne 1 -or $dtwShaAsset.Count -ne 1) { throw 'Missing or d
 $dtwBase = "https://github.com/caelis-labs/desktop-world/releases/download/$dtwTag/"
 if ($dtwZipAsset[0].browser_download_url -cne "$dtwBase$dtwName" -or
     $dtwShaAsset[0].browser_download_url -cne "$dtwBase$dtwName.sha256") { throw 'Unexpected release asset URL.' }
-$dtwRoot = Join-Path ([IO.Path]::GetTempPath()) ('dtw-download-' + [guid]::NewGuid().ToString('N'))
-[void](New-Item -ItemType Directory -Path $dtwRoot)
+$dtwRoot = Join-Path $dtwStage ('dtw-download-' + [guid]::NewGuid().ToString('N'))
+try { [void](New-Item -ItemType Directory -Path $dtwRoot -Force) }
+catch { throw "DTW staging failed at '$dtwRoot': $($_.Exception.GetBaseException().Message)" }
 Write-Host "DTW download directory: $dtwRoot"
 $dtwZip = Join-Path $dtwRoot $dtwName
 $dtwSha = Join-Path $dtwRoot "$dtwName.sha256"
@@ -135,9 +147,33 @@ if ($dtwZipAsset[0].digest -and $dtwZipAsset[0].digest -cne "sha256:$dtwArchiveS
 $dtwExpanded = Join-Path $dtwRoot 'expanded'
 Expand-Archive -LiteralPath $dtwZip -DestinationPath $dtwExpanded
 $dtwPackage = Join-Path $dtwExpanded "desktop-world-$dtwVersion-x86_64-pc-windows-msvc"
-$dtwImport = & (Join-Path $dtwPackage 'bin\dtw.exe') package import $dtwPackage
-if ($LASTEXITCODE -ne 0) { throw "DTW package import failed; inspect $dtwRoot" }
-$dtwRecipe = ($dtwImport -join "`n") | ConvertFrom-Json
+$dtwExe = Join-Path $dtwPackage 'bin\dtw.exe'
+$dtwStore = Join-Path $env:LOCALAPPDATA 'DesktopWorld'
+$dtwStart = New-Object Diagnostics.ProcessStartInfo
+$dtwStart.FileName = $dtwExe
+$dtwStart.Arguments = 'package import "' + $dtwPackage + '"'
+$dtwStart.UseShellExecute = $false
+$dtwStart.RedirectStandardOutput = $true
+$dtwStart.RedirectStandardError = $true
+$dtwStart.StandardOutputEncoding = [Text.Encoding]::UTF8
+$dtwStart.StandardErrorEncoding = [Text.Encoding]::UTF8
+try { $dtwChild = [Diagnostics.Process]::Start($dtwStart) }
+catch {
+  $dtwError = $_.Exception.GetBaseException()
+  $dtwCode = if ($dtwError -is [ComponentModel.Win32Exception]) { $dtwError.NativeErrorCode } else { $dtwError.HResult }
+  throw "DTW launch failed ($dtwCode) for '$dtwExe'; store '$dtwStore'; staging '$dtwRoot'. $($dtwError.Message)"
+}
+try {
+  $dtwStdout = $dtwChild.StandardOutput.ReadToEndAsync()
+  $dtwStderr = $dtwChild.StandardError.ReadToEndAsync()
+  $dtwChild.WaitForExit()
+  if ($dtwChild.ExitCode -ne 0) {
+    throw "DTW import exited $($dtwChild.ExitCode) from '$dtwExe'; store '$dtwStore'; staging '$dtwRoot'. $($dtwStderr.Result.Trim())"
+  }
+  $dtwRecipe = $dtwStdout.Result | ConvertFrom-Json
+} finally {
+  $dtwChild.Dispose()
+}
 if ($dtwRecipe.version -cne $dtwVersion -or $dtwRecipe.manager_version -cne $dtwVersion -or
     $dtwRecipe.target -cne 'x86_64-pc-windows-msvc' -or $dtwRecipe.store_schema -ne 1) {
   throw 'Imported package/manager identity differs from the selected release.'
@@ -145,7 +181,15 @@ if ($dtwRecipe.version -cne $dtwVersion -or $dtwRecipe.manager_version -cne $dtw
 $dtwRecipe | Add-Member -NotePropertyName archive_url -NotePropertyValue $dtwZipAsset[0].browser_download_url
 $dtwRecipe | Add-Member -NotePropertyName archive_sha256 -NotePropertyValue $dtwArchiveSha
 $dtwRecipe | ConvertTo-Json -Depth 12
-try { Remove-Item -LiteralPath $dtwRoot -Recurse -Force }
+try {
+  $dtwOwned = Get-Item -LiteralPath $dtwRoot
+  if ($dtwOwned.Parent.FullName.TrimEnd('\') -ne $dtwStage.TrimEnd('\') -or
+      $dtwOwned.Name -notmatch '^dtw-download-[0-9a-f]{32}$' -or
+      ($dtwOwned.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw 'Staging directory identity changed.'
+  }
+  Remove-Item -LiteralPath $dtwOwned.FullName -Recurse -Force
+}
 catch { Write-Warning "Verified import succeeded; retry cleanup of this owned download directory: $dtwRoot" }
 ```
 

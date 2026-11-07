@@ -114,7 +114,7 @@ python3 tests/acceptance/app_scene_probe.py \
 
 It checks discovery/admission, stopped-app startup, overlapping surfaces, popup
 hit-testing, stale geometry rejection, normal window close, save sheets, a running
-app without windows, application shortcuts, background-only refusal and restart.
+app without windows, application shortcuts and restart.
 Its independent AppKit state records actual events. It never retries input.
 The separate `app_scene_readonly_probe.py` reads already-running Finder, Chrome
 and WPS, redacting UI payloads; absence/unsupported coverage stays explicit.

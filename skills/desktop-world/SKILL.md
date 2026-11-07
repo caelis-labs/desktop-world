@@ -19,8 +19,8 @@ return complete snapshots inside JavaScript; tool messages show a compact baseli
 then changes. Use semantic target IDs from a returned observation or a unique
 selector to click known controls. Native object handles can survive filtered reads: DTW revalidates the exact object before input, without guessing a replacement.
 Use `await app.capture()` when the UI needs visual understanding or semantics
-are unavailable, then click coordinates in the returned image. After input DTW
-returns a fresh observation automatically. Use `move({x,y})` for hover and
+are unavailable, then click coordinates in the returned image. For a scaled
+preview use `unit:'fraction'`. Automatic readback has its own observation status. Use `move({x,y})` for hover and
 `drag({path:[{x,y},...]})` for one drag within one window on one display; standard macOS/Windows title bars can
 move their window when its native position is writable;
 the runtime pairs releases. Group known sequential steps in one script without
@@ -49,7 +49,13 @@ automatically; no separate focus sequence is needed.
 After a New/Open action, use `await app.waitForNewWindow()` before typing in the new
 window. It waits without repeating the action; `wait_timeout` means no new window appeared.
 
-The public methods are `look`, `capture`, `readText`, `waitForNewWindow`, `click`, `setValue`, `move`, `drag`, `typeText`,
+For delayed content in the same window, use `app.wait({title,role,text})` with
+the expected title or control. Use only the condition fields you need. On
+Windows, `focused:true` identifies an editable control with keyboard focus.
+Use `typeText` for keyboard input there. Read
+dispatch and any specific acknowledgements separately from the observation.
+
+The public methods are `look`, `capture`, `readText`, `wait`, `waitForNewWindow`, `click`, `setValue`, `move`, `drag`, `typeText`,
 `keypress`, `scroll`, `focus` and `quit`. Read [API.md](API.md) for exact arguments and
 output semantics;
 [PATTERNS.md](PATTERNS.md) covers visual fallback, dialogs and recovery.

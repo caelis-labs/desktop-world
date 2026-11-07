@@ -20,6 +20,8 @@ was incomplete. Check `effects.dispatch`, then use a read-only observation to
 verify what happened before choosing new input.
 
 `click(id)` can focus an editable text control when it advertises `press`.
+On Windows a field with `focused:true` can take keyboard input. To focus a field
+without `press`, use a coordinate click from the current capture.
 A text field without an advertised `press` action needs a visual click before
 `typeText`. A proven undelivered semantic rejection can return an image for this
 fallback; it never repeats a potentially delivered action.
@@ -146,7 +148,7 @@ print(view.windows.map(w => ({id:w.id, bounds:w.bounds})));
 ```
 
 `look()` also returns all current metadata inside the script, even when its tool
-message is `{changed:false}`. Request `full:true` only to republish a tool baseline.
+message is `{kind:"unchanged"}`. Request `full:true` only to republish a tool baseline.
 
 ```javascript
 await app.scroll({delta_y:80});

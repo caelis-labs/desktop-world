@@ -220,14 +220,11 @@ def _image_point(view, screen):
     return {'x': x, 'y': y}
 
 
-def run_background_contract(target_fixture, binary, observer_binary, output: Path, *, case='focus', input_policy='auto'):
-    if input_policy not in ('auto', 'background-only'):
-        raise ValueError('Focus contract requires auto or background-only input policy')
+def run_background_contract(target_fixture, binary, observer_binary, output: Path, *, case='focus'):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
     proof = {'schema_version': 1, 'case': case, 'passed': False, 'cases': [],
-             'evidence_class': 'direct-script/current-MCP/' + input_policy,
-             'input_policy': input_policy,
+             'evidence_class': 'direct-script/current-MCP',
              'artifacts': {'focus': 'focus.jsonl', 'transcript': 'mcp/mcp.jsonl'},
              'focus': {'passed': False, 'intervals': [], 'failures': [], 'max_sample_gap_ms': None},
              'witness_no_input': False, 'cleanup': {'passed': False, 'errors': []}}
@@ -249,8 +246,7 @@ def run_background_contract(target_fixture, binary, observer_binary, output: Pat
         observer = subprocess.Popen([str(observer_binary), str(focus_path)], stdin=subprocess.PIPE,
                                     stdout=subprocess.PIPE, stderr=observer_log)
         _ready(observer)
-        client = AppClient(binary, output / 'mcp',
-                           mcp_args=() if input_policy == 'auto' else ('--input-policy', input_policy))
+        client = AppClient(binary, output / 'mcp')
 
         def step(name, source=None, *, capture=None, expected_rejection=None, verify=None):
             _require(witness.state()['environment']['frontmost_pid'] == expected_pid,
@@ -287,11 +283,7 @@ def run_background_contract(target_fixture, binary, observer_binary, output: Pat
         step('exact_unicode_replace', 'await app.typeText(' + json.dumps(NOTE) + ');',
              verify=lambda: _wait(lambda: target_fixture.state()['native']['note'] == NOTE))
         step('readonly_look', "await app.look({role:'text_field',text:'Native note'});")
-        captured = step('readonly_capture', capture='native-readonly')
-        if input_policy == 'background-only':
-            hover = _image_point(captured['view'], target_fixture.state()['anchors']['gesture-desk'])
-            step('inactive_hover_rejected', 'await app.move(' + json.dumps(hover) + ');',
-                 expected_rejection='foreground_required')
+        step('readonly_capture', capture='native-readonly')
         # Automatic hover borrowing has its own exec-wide lifecycle acceptance
         # in computer_use_scope.py; this probe proves background-supported work.
         # Wait for independent publications and a post-response focus sample;
@@ -401,15 +393,13 @@ def main():
     parser.add_argument('--dtw', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--observer', type=Path, required=True)
-    parser.add_argument('--input-policy', choices=('auto', 'background-only'), default='auto')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     target = _fixture_class()(args.output / 'target', 'focus-target')
     proof = {'passed': False}
     try:
         target.prepare(activate=False).start()
-        proof = run_background_contract(target, args.dtw, args.observer, args.output / 'background',
-                                        input_policy=args.input_policy)
+        proof = run_background_contract(target, args.dtw, args.observer, args.output / 'background')
         proof.update(artifact_identity(args.dtw))
         proof['helper_sha256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         proof['observer_sha256'] = hashlib.sha256(args.observer.read_bytes()).hexdigest()

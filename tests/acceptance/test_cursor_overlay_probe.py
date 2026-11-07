@@ -117,17 +117,6 @@ class ProbeControls(unittest.TestCase):
         record['script']['steps'][0]['receipt']['provider_outcome']['delivery']['foreground_borrowed'] = True
         with self.assertRaises(AssertionError): probe.require_route(record, 'click', 'background')
 
-    def test_strict_focus_error_and_route_reason_are_distinct(self):
-        outcome = {'dispatch': 'not_dispatched', 'error': {'code': 'foreground_required'},
-                   'delivery': {'route': None, 'reason': 'explicit_focus', 'foreground_borrowed': False}}
-        probe.require_strict_focus_rejection(outcome)
-        for section, key, value in [('error', 'code', 'explicit_focus'),
-                                    ('delivery', 'reason', 'foreground_required'),
-                                    ('delivery', 'route', 'foreground'),
-                                    ('delivery', 'foreground_borrowed', True)]:
-            bad = copy.deepcopy(outcome); bad[section][key] = value
-            with self.assertRaises(AssertionError): probe.require_strict_focus_rejection(bad)
-
     def test_cancel_uses_original_terminal_ledger_without_waiting_for_rpc_response(self):
         record = {'execution_id': 'original', 'status': 'completed', 'error': {'kind': 'cancelled'},
                   'script': {'failure': {'kind': 'cancelled'}, 'state_committed': False,

@@ -214,6 +214,7 @@ impl Backend for TestBackend {
                     value: None,
                     enabled: Some(true),
                     actions: vec!["press".into()],
+                    focused: false,
                     can_press: true,
                 }]
             });
@@ -547,6 +548,7 @@ fn element_validation_rejects_before_dispatch_without_consuming_reference() {
                 value: None,
                 enabled: Some(true),
                 actions: vec!["press".into()],
+                focused: false,
                 can_press: true,
             },
             Element {
@@ -559,6 +561,7 @@ fn element_validation_rejects_before_dispatch_without_consuming_reference() {
                 value: None,
                 enabled: None,
                 actions: vec![],
+                focused: false,
                 can_press: false,
             },
         ]);
@@ -598,6 +601,7 @@ fn invalid_backend_observations_are_not_published_and_bindings_are_released() {
                     value: None,
                     enabled: Some(true),
                     actions: vec!["press".into()],
+                    focused: false,
                     can_press: true,
                 };
                 model.elements = Some(vec![element.clone(), element]);
@@ -1372,6 +1376,7 @@ fn page(id: u64, visited: u32, has_more: bool) -> BackendObservationPage {
             value: None,
             enabled: Some(true),
             actions: vec!["press".into()],
+            focused: false,
             can_press: true,
         }],
         discovery: DiscoveryPage {

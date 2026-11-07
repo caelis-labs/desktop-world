@@ -23,6 +23,11 @@ python -X utf8 tests/fixtures/computer-use-app/run.py --output C:\Temp\dtw-super
 
 Windows 启动普通自有 WinForms 窗口，会按系统正常规则取得前台；不继承 macOS 的后台启动或脚本级前台归还承诺。关闭窗口或创建 `stop` 文件正常收尾。Windows 直接脚本核心入口是 `tests/acceptance/windows/computer_use_probe.py`，与三项原有回归探针互补；报告保留全部 42 个目标，未执行项仍为 `not_run`。本轮整合没有宣称 Windows 已实现 AppKit 自绘消息页、原生 WebKit、Dock 或无窗口系统根。
 
+Windows 的 `computer_use_probe.py --protocol-only` 在同一 Workbench 启用延迟审阅表单。
+正常和故障路径共用同一个 UI，独立日志记录加载、就绪、丢字、提交次数与实际内容。
+DSH 用 `dsh_native_probe.py --mode protocol-script` 和 `--mode protocol-goal`
+分别验收固定脚本与业务目标。运行方式见 [Windows 验收](../../acceptance/windows/README.md)。
+
 ## 手工运行
 
 macOS 14.2+、Xcode/Swift、Python 3.11+，不需要 npm 依赖或联网加载脚本：
@@ -73,7 +78,7 @@ python3 tests/acceptance/review_computer_use_capture.py \
 
 复核绑定原 PNG 的 SHA-256；图像被替换时拒绝。复核失败和后续复核都保留，不能将未检查图像直接标为通过。自动 runner 在仍待复核时返回非零，报告区分 `core_automation_passed`、`core_passed`、`acceptance_passed` 与 `target_baseline_passed`。恢复后的业务效果可通过，但原始工具错误会保留并使 `clean_run:false`，不能通过严格 core/acceptance。
 
-P03 使用一个独立的自有小窗口作为前台见证者，另开采用默认 `auto` 策略的当前 MCP 连接操作后台目标；独立焦点入口可传 `--input-policy background-only` 作严格策略对照。测试准备阶段只显式激活见证者，目标保持后台。它核对实际 UTF-16 全选范围、Unicode 替换、见证者零按键/修饰键事件，并连续采样前台 PID 与激活通知；失去见证前台条件就停止，不重新抢回前台。普通 AX 错误、未证明的快捷键、菜单/内容读取不完整不会触发焦点准备；未验证的后台 hover 干净拒绝。
+P03 使用一个独立的自有小窗口作为前台见证者，另开当前 MCP 连接操作后台目标。测试准备阶段只显式激活见证者，目标保持后台。它核对实际 UTF-16 全选范围、Unicode 替换、见证者零按键/修饰键事件，并连续采样前台 PID 与激活通知；失去见证前台条件就停止，不重新抢回前台。普通 AX 错误、未证明的快捷键、菜单/内容读取不完整不会触发焦点准备；hover 借用单独由脚本级生命周期验收覆盖。
 
 标准入口使用 [cursor_audit](../../acceptance/cursor_audit.py) 的 `--assert-policy` 验证有界借用；更严格的 `--assert-independent` 另行要求没有真实光标位移。复用已编译的观察器可传 `--observer`、`--overlay-observer` 和 `--focus-observer`；通用独立探针用法见 [构建文档](../../../docs/building.md#current-external-client-gui-probe)。采样必须保留实际间隙；前后台的两个端点不证明全程焦点稳定。P03 覆盖受控见证条件下的后台合约；R04 的更多应用/动作与并发用户键盘目的地仍是单独目标。
 

@@ -164,7 +164,7 @@ fn corrupt_or_unlisted_files_and_unsafe_members_are_rejected() {
     let t = Temp::new();
     let p = fixture(&t.0, "0.3.1");
     fs::write(p.join("skills/desktop-world/API.md"), "wrong").unwrap();
-    assert!(verify(&p).unwrap_err().contains("checksum"));
+    assert!(verify(&p).unwrap_err().message.contains("checksum"));
     for path in [
         "../other",
         "/absolute",
@@ -258,4 +258,22 @@ fn dangling_locks_and_payload_links_never_create_or_remove_external_data() {
     assert!(remove_owned_tree(&stage).is_err());
     assert!(stage.join("STAGE.json").exists());
     assert!(!outside.exists());
+}
+
+#[test]
+fn store_io_error_reports_raw_code_and_execution_context() {
+    let store = std::env::temp_dir().join("denied");
+    let error = io_error(std::io::Error::from_raw_os_error(5)).context(
+        "open_store",
+        "import",
+        &store,
+        Some("verified"),
+    );
+    let details = error.details.unwrap();
+    assert_eq!(details["phase"], "open_store");
+    assert_eq!(details["command"], "import");
+    assert_eq!(details["store"], json!(store));
+    assert_eq!(details["source"], "verified");
+    assert_eq!(details["os_error"], 5);
+    assert!(details["executable"].is_string());
 }

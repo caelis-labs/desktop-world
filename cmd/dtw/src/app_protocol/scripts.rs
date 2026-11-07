@@ -351,7 +351,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         if let Some(view) = &run.view {
             value["view"] = view.clone();
             value["snapshot"] = run.snapshot.clone().unwrap_or(Value::Null);
-            if agent_surface {
+            if agent_surface && super::projection::shows_view(&value, completed.error.is_some()) {
                 state.scene.publish();
             }
         }
@@ -362,6 +362,23 @@ impl<B: Backend + 'static> Coordinator<B> {
             publication: Publication::None,
             state_update,
         }
+    }
+
+    pub(super) fn check_script_wait(&self, id: &str, deadline: Instant) -> Result<(), Error> {
+        let state = self.state.lock().unwrap();
+        if state
+            .jobs
+            .iter()
+            .find(|job| job.submitted.request_id == id)
+            .and_then(|job| job.script.as_ref())
+            .is_some_and(|script| script.cancel.load(Ordering::Acquire))
+        {
+            return Err(Error::Cancelled);
+        }
+        if Instant::now() >= deadline {
+            return Err(Error::TimedOut);
+        }
+        Ok(())
     }
 
     fn script_host_call(
@@ -383,6 +400,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                     | "scene.after"
                     | "scene.readText"
                     | "scene.waitForNewWindow"
+                    | "scene.wait"
             )
         } else {
             parsed.as_ref().is_ok_and(|s| is_action(&s.command))
@@ -544,9 +562,10 @@ impl<B: Backend + 'static> Coordinator<B> {
         } else {
             Ok(work.completed.value.clone().unwrap_or(Value::Null))
         };
+        let condition_wait = call.op == "scene.wait" && call.args.get("ms").is_none();
         // Semantic reads do not cancel pixels requested earlier in this script.
         // Input, failed reads and changed surfaces still retire the old image.
-        let preserve_capture = call.op == "scene.look"
+        let preserve_capture = (call.op == "scene.look" || condition_wait)
             && work.completed.error.is_none()
             && work.completed.image.is_none()
             && last_image.is_some()
@@ -558,10 +577,11 @@ impl<B: Backend + 'static> Coordinator<B> {
             });
         if scene_call
             && !preserve_capture
-            && matches!(
-                call.op.as_str(),
-                "scene.look" | "scene.capture" | "scene.after" | "scene.waitForNewWindow"
-            )
+            && (condition_wait
+                || matches!(
+                    call.op.as_str(),
+                    "scene.look" | "scene.capture" | "scene.after" | "scene.waitForNewWindow"
+                ))
         {
             *last_image = None;
             *last_capture = None;
@@ -583,12 +603,13 @@ impl<B: Backend + 'static> Coordinator<B> {
             .as_mut()
             .unwrap();
         if scene_call
-            && matches!(
-                call.op.as_str(),
-                "scene.look" | "scene.capture" | "scene.after" | "scene.waitForNewWindow"
-            )
+            && (condition_wait
+                || matches!(
+                    call.op.as_str(),
+                    "scene.look" | "scene.capture" | "scene.after" | "scene.waitForNewWindow"
+                ))
         {
-            let wait_timeout = call.op == "scene.waitForNewWindow"
+            let wait_timeout = (call.op == "scene.waitForNewWindow" || condition_wait)
                 && work
                     .completed
                     .error
