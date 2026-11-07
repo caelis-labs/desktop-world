@@ -1074,7 +1074,7 @@ private func nativePointerReceiverNeedsKeyWindow(operation: String, button: Stri
           let roles, roles.contains(kAXWindowRole) || roles.contains(kAXSheetRole) else { return false }
     if roles.contains("AXWebArea") { return true }
     let controls = [kAXButtonRole, kAXCheckBoxRole, kAXRadioButtonRole, kAXPopUpButtonRole,
-                    kAXSliderRole, kAXScrollBarRole]
+                    kAXSliderRole, kAXScrollBarRole, kAXTextFieldRole]
     return !roles.contains(where: { controls.contains($0) })
 }
 
