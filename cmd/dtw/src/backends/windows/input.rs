@@ -567,6 +567,49 @@ pub fn terminal_keypress_boundary(until: Instant) -> Result<(), Error> {
 // It produces no character. A changed toggle bit plus key-up proves only that
 // the attached target queue read the tail, never that Save/another action worked.
 const DRAIN_KEY: u16 = 0xe8;
+/// Settle CUA caption pen preparation before a later mouse move or foreground
+/// return. Pen-up can enqueue a promoted mouse move after foreground activation.
+/// A read tail on the exact receiver queue is required; no business key is sent.
+pub(super) fn drain_caption(window: HWND, placement: INPUT, until: Instant) -> Result<(), Error> {
+    if unsafe { GetForegroundWindow() } != window {
+        return Err(failed("Caption receiver changed before preparation drain"));
+    }
+    let mutation = mutation(until)?;
+    let mut queue = KeyboardQueue::attach(window)?;
+    let inserted = (|| {
+        no_held_keys()?;
+        queue.validate(window)?;
+        // Resume the mouse at the same already-proven caption point. Windows
+        // can defer the pen's promoted move until mouse input resumes. Both
+        // preparations now have the same endpoint, before the queue tail.
+        let events = keyboard_drain_batch(&[placement]);
+        let insertion = checked_insert(
+            &events,
+            0,
+            || {
+                keyboard_preflight(until, Instant::now(), closing(), cleanup_failed())?;
+                super::desktop::ensure_input_desktop()?;
+                queue.validate(window)
+            },
+            |events| unsafe { SendInput(events, std::mem::size_of::<INPUT>() as i32) },
+        )?;
+        if !insertion.complete {
+            // This is preparation only, but an incomplete marker still cannot
+            // release the shared lease as a confirmed input boundary.
+            fail_delivery();
+            return Err(failed("Caption preparation drain insertion is unconfirmed"));
+        }
+        Ok(())
+    })();
+    drop(mutation);
+    let read = inserted.and_then(|()| queue.await_read(window, until, None));
+    let detached = queue.finish();
+    read.and(detached)?;
+    if unsafe { GetForegroundWindow() } != window {
+        return Err(failed("Caption receiver changed during preparation drain"));
+    }
+    Ok(())
+}
 fn keyboard_drain_batch(batch: &[INPUT]) -> Vec<INPUT> {
     batch
         .iter()

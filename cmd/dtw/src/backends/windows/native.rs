@@ -1837,6 +1837,43 @@ impl Store {
         if unsafe { GetForegroundWindow() } != window {
             return Err(original);
         }
+        // Foreground activation alone does not settle synthetic pen-up. Its
+        // delayed promoted move must not follow the business mouse placement.
+        // Reuse CUA's exact receiver queue tail, then acknowledge its real point.
+        if !equal_rect(bounds, capture_bounds(window)?)
+            || !gestures::caption_activation_hit(window, point, until)?
+        {
+            return Err(Error::StaleObservation);
+        }
+        verify_point(window, target.app.pid, point)?;
+        input::drain_caption(window, absolute_move(point)?, until)?;
+        let end = until.min(Instant::now() + Duration::from_millis(200));
+        loop {
+            check(until)?;
+            super::execution_scope::check()?;
+            self.validate(target)?;
+            if unsafe { GetForegroundWindow() } != window {
+                return Err(failed("Caption receiver changed before pointer settlement"));
+            }
+            let mut actual = POINT::default();
+            unsafe { GetCursorPos(&mut actual) }.map_err(failed)?;
+            if (actual.x - point.x).abs() <= 1 && (actual.y - point.y).abs() <= 1 {
+                super::execution_scope::after_pointer_move()?;
+                if std::env::var("DTW_INPUT_TRACE").ok().as_deref() == Some("1") {
+                    eprintln!(
+                        "DTW_WINDOWS_CAPTION_SETTLED expected={},{} actual={},{} queue_tail=read",
+                        point.x, point.y, actual.x, actual.y
+                    );
+                }
+                break;
+            }
+            if Instant::now() >= end {
+                return Err(failed(
+                    "Caption pointer preparation delivery is unconfirmed",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
         input::no_held_keys()?;
         super::execution_scope::after_focus(window)
     }

@@ -38,12 +38,15 @@ def main():
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--installed-package', type=Path)
     parser.add_argument('--release-control', action='store_true')
+    parser.add_argument('--pointer-first', action='store_true',
+        help='Start with a physical hover and click, without an earlier keyboard/focus preparation')
     args = parser.parse_args()
+    require(not (args.release_control and args.pointer_first), 'Release control is the original cold keyboard case')
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     report = {'passed': False, 'status': 'not_run', 'artifact': artifact_identity(args.dtw, args.installed_package),
         'scope': 'direct cold keyboard diagnostic, separate from DSH model acceptance',
-        'before': foreground()}
+        'before': foreground(), 'pointer_first': args.pointer_first}
     child = client = None
     handles = []
     root = out / 'fixture'
@@ -60,6 +63,19 @@ def main():
         report['before_input'] = foreground()
         require(report['before_input'] == report['before'] and not initial['foreground'], 'Owned fixture masked the hidden-foreground precondition')
         client = AppClient(args.dtw.resolve(), out / 'protocol')
+        if args.pointer_first:
+            image = client.capture(exe, 'cold-pointer-read-only')['view']['image']
+            bounds = image['bounds']
+            physical = initial['pad_point']
+            point = {'x': (physical['x'] - bounds[0]) * image['width'] / bounds[2],
+                'y': (physical['y'] - bounds[1]) * image['height'] / bounds[3]}
+            pointer, response = client.execute(exe,
+                'await app.move(' + json.dumps(point) + ');await app.click(' + json.dumps(point) + ');', allow_error=True)
+            report['pointer_response'] = pointer
+            require(not response.get('isError'), pointer)
+            report['pointer_state'] = wait_state(root, lambda value: value['moves'] > initial['moves']
+                and value['left_up'] == initial['left_up'] + 1)
+            require(report['pointer_state']['increments'] == 0, 'Unexpected business button effect')
         payload = 'Hidden foreground 中文🙂\r\npaired Ctrl+S café 🚀'
         result, response = client.execute(exe,
             'await app.keypress("CTRL+A");await app.typeText(' + json.dumps(payload) + ');await app.keypress("CTRL+S");', allow_error=True)
@@ -75,7 +91,8 @@ def main():
             state = wait_state(root, lambda value: value['saves'] == 1 and value['text'] == payload)
             require((root/'saved.txt').read_bytes().decode('utf-8') == payload, 'Saved bytes differ')
             require(not state['keys_down_global'], 'Global release not proven by fixture')
-            report['status'] = 'keyboard_consumption_and_release_proven'
+            report['status'] = ('cold_pointer_then_keyboard_consumption_and_release_proven'
+                if args.pointer_first else 'keyboard_consumption_and_release_proven')
         report['final_state'] = state
         pending = [client.transport.proc.pid]
         while pending:
