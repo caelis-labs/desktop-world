@@ -18,6 +18,9 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
         if let Some(view) = value.get("view").filter(|view| !view.is_null()) {
             compact["view"] = view.clone();
         }
+        if let Some(observation) = value.get("observation") {
+            compact["observation"] = observation.clone();
+        }
         if !value["result"].is_null()
             && !same_json(
                 &value["result"],
@@ -43,6 +46,8 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
                 compact["effects"]["focus_preparation"] = summary["focus_preparation"].clone();
             }
         }
+        // Routes and borrow settlement remain in the retained diagnostic
+        // ledger. Errors below still expose an unconfirmed cleanup.
         for key in [
             "error",
             "shutdown_error",
@@ -52,6 +57,11 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
             if original.get(key).is_some_and(|v| !v.is_null()) {
                 compact[key] = original[key].clone();
             }
+        }
+        if compact["error"]["code"] == "closed" && compact["shutdown_error"].is_object() {
+            // A fenced final observation must not hide the specific cleanup
+            // failure behind its secondary closed-context error.
+            compact["error"] = compact["shutdown_error"].clone();
         }
         if original["script"]["failure"].is_object() {
             compact["failure"] = original["script"]["failure"].clone();
@@ -178,7 +188,14 @@ fn summarize(steps: &[Value]) -> Value {
         }
         if receipt.is_object() {
             count(&mut dispatch, &receipt["outcome"]["dispatch"]);
-            count(&mut evidence, &receipt["outcome"]["evidence"]["kind"]);
+            // A refused payload has no uncertain action effect. Keep confirmed
+            // no-op postconditions, and all dispatched/unknown evidence. The
+            // original unmodified receipt remains in the diagnostic ledger.
+            if receipt["outcome"]["dispatch"] != "not_dispatched"
+                || receipt["outcome"]["evidence"]["kind"] != "unverified"
+            {
+                count(&mut evidence, &receipt["outcome"]["evidence"]["kind"]);
+            }
             if receipt["provider_outcome"].is_object() {
                 count(
                     &mut provider_dispatch,
@@ -346,6 +363,26 @@ fn outcome_issue(outcome: &Value) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn refused_payload_has_no_unknown_action_effect_but_confirmed_noop_is_kept() {
+        let steps: Vec<_> = [("not_dispatched", "unverified"), ("dispatched", "unverified"),
+            ("unknown", "unverified"), ("not_dispatched", "confirmed")].into_iter().map(|(dispatch,evidence)|
+            serde_json::json!({"status":"completed","operation":"press","error":null,
+                "receipt":{"outcome":{"dispatch":dispatch,"evidence":{"kind":evidence}},"interruption":null}})).collect();
+        let value = super::summarize(&steps);
+        assert_eq!(
+            value["actions"]["dispatch"],
+            serde_json::json!({"not_dispatched":2,"dispatched":1,"unknown":1})
+        );
+        assert_eq!(
+            value["actions"]["evidence"],
+            serde_json::json!({"unverified":2,"confirmed":1})
+        );
+        assert_eq!(
+            steps[0]["receipt"]["outcome"]["evidence"]["kind"],
+            "unverified"
+        );
+    }
     use super::*;
     use std::sync::Arc;
 
@@ -381,6 +418,78 @@ mod tests {
             if !coalesced {
                 assert_eq!(projected.data["result"], result);
             }
+        }
+    }
+
+    #[test]
+    fn public_execution_keeps_dispatch_but_hides_borrow_and_settlement_policy() {
+        let steps = vec![
+            json!({"number":1,"operation":"focus","status":"completed","error":null,
+            "receipt":{"outcome":{"dispatch":"dispatched","evidence":{"kind":"unverified"},
+                "delivery":{"route":"foreground","reason":"execution_scope","foreground_borrowed":true,"focus_return":"pending"}},
+                "interruption":null}}),
+        ];
+        let mut reply = successful_execution(steps);
+        reply.data["value"] = json!({"agent_protocol":true});
+        reply.data["script"]["focus_return"] = json!("restored");
+        let projected = execution(reply.clone());
+        assert_eq!(projected.data["effects"]["dispatch"]["dispatched"], 1);
+        assert!(projected.data["effects"].get("delivery").is_none());
+        assert!(projected.data["effects"].get("focus_return").is_none());
+        assert_eq!(reply.data["script"]["focus_return"], "restored");
+        assert_eq!(
+            reply.data["script"]["steps"][0]["receipt"]["outcome"]["delivery"]["focus_return"],
+            "pending"
+        );
+        assert_eq!(
+            projected.data["effects"]["evidence"],
+            json!({"unverified":1})
+        );
+
+        let mut read = successful_execution(vec![]);
+        read.data["value"] = json!({"agent_protocol":true});
+        assert!(execution(read).data.get("effects").is_none());
+    }
+
+    #[test]
+    fn hiding_borrow_policy_never_hides_a_cleanup_failure() {
+        let mut reply = successful_execution(vec![]);
+        reply.is_error = true;
+        reply.data["value"] = json!({"agent_protocol":true});
+        reply.data["script"]["focus_return"] = json!("unconfirmed");
+        let error =
+            json!({"code":"focus_restore_failed","message":"Return could not be confirmed"});
+        reply.data["error"] = error.clone();
+        reply.data["shutdown_error"] = error.clone();
+        let compact = execution(reply);
+        assert!(compact.is_error);
+        assert_eq!(compact.data["error"], error);
+        assert_eq!(compact.data["shutdown_error"], error);
+        assert!(compact.data["effects"].get("focus_return").is_none());
+    }
+
+    #[test]
+    fn cleanup_failure_explains_a_secondary_closed_context_without_hiding_script_errors() {
+        for primary in ["closed", "script_exception"] {
+            let mut reply = successful_execution(vec![]);
+            reply.is_error = true;
+            reply.data["value"] = json!({"agent_protocol":true});
+            reply.data["error"] = json!({"code":primary,"message":"Original error"});
+            let cleanup =
+                json!({"code":"focus_restore_failed","message":"Original window return timed out"});
+            reply.data["shutdown_error"] = cleanup.clone();
+            let compact = execution(reply.clone());
+            assert!(compact.is_error);
+            assert_eq!(
+                compact.data["error"],
+                if primary == "closed" {
+                    cleanup.clone()
+                } else {
+                    reply.data["error"].clone()
+                }
+            );
+            assert_eq!(compact.data["shutdown_error"], cleanup);
+            assert_eq!(reply.data["error"]["code"], primary);
         }
     }
 

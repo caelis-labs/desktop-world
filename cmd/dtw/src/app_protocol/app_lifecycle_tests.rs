@@ -8,8 +8,15 @@ struct Life {
     quits: usize,
     closed: Vec<u64>,
     quit_pending: bool,
+    quit_dialog: bool,
     omit_launch_identity: bool,
     unverified_launch: bool,
+    exit_on_press: bool,
+    exit_probe_live: bool,
+    exit_probe_error: bool,
+    exit_probe_gaps: usize,
+    exit_reads: usize,
+    presses: usize,
 }
 #[derive(Clone)]
 struct Provider {
@@ -92,11 +99,25 @@ impl Backend for Provider {
         let inventory = self.mock.windows(app, call)?;
         let life = self.life.lock().unwrap();
         if !life.instances.contains(app) {
+            if life.exit_on_press {
+                return Err(Error::NativeFailure {
+                    code: "app_changed".into(),
+                    message: "Exact process identity disappeared".into(),
+                });
+            }
             return Err(Error::TargetChanged);
         }
+        let mut windows = inventory.windows;
+        if life.quit_dialog && life.quits > 0 {
+            let mut dialog = windows[0].clone();
+            dialog.target.native_id = 303;
+            dialog.title = "Quit confirmation".into();
+            dialog.scene = WindowLayout::new([0., 0., 500., 300.], 0);
+            dialog.scene.as_mut().unwrap().keyboard_modal = Some(true);
+            windows.push(dialog);
+        }
         Ok(test_inventory(
-            inventory
-                .windows
+            windows
                 .into_iter()
                 .filter(|w| !life.closed.contains(&w.target.native_id))
                 .collect(),
@@ -123,7 +144,27 @@ impl Backend for Provider {
         element: ElementId,
         call: &CallContext<'_>,
     ) -> ActionOutcome {
-        self.mock.press(target, binding, element, call)
+        let outcome = self.mock.press(target, binding, element, call);
+        let mut life = self.life.lock().unwrap();
+        life.presses += 1;
+        if life.exit_on_press && outcome.dispatch == DispatchState::Dispatched {
+            life.instances.clear();
+        }
+        outcome
+    }
+    fn application_exited(&self, app: &AppInstance, _: &CallContext<'_>) -> Result<bool, Error> {
+        let mut life = self.life.lock().unwrap();
+        life.exit_reads += 1;
+        if life.exit_reads <= life.exit_probe_gaps {
+            return Err(Error::NativeFailure {
+                code: "app_changed".into(),
+                message: "Terminating process metadata is transitional".into(),
+            });
+        }
+        if life.exit_probe_error {
+            return Err(Error::BackendFailed("Exit metadata unavailable".into()));
+        }
+        Ok(!life.exit_probe_live && !life.instances.contains(app))
     }
 }
 #[derive(Clone)]
@@ -337,4 +378,113 @@ fn launch_ack_without_native_identity_is_unknown_and_does_not_authorize_input() 
     assert_eq!(life.lock().unwrap().launches, 1);
     success(&run(&server, "await app.quit();"));
     server.close().unwrap();
+}
+
+#[test]
+fn final_view_after_self_terminating_button_requires_separate_exit_proof_and_never_replays() {
+    for (live, unreadable, gaps) in [
+        (false, false, 0),
+        (false, false, 2),
+        (true, false, 0),
+        (false, true, 0),
+    ] {
+        let life = Arc::new(Mutex::new(Life {
+            exit_on_press: true,
+            exit_probe_live: live,
+            exit_probe_error: unreadable,
+            exit_probe_gaps: gaps,
+            ..Life::default()
+        }));
+        let server = Server::new(Installed {
+            provider: Provider {
+                life: life.clone(),
+                mock: MockBackend::new(),
+            },
+        });
+        let result = run(
+            &server,
+            "await app.look(); await app.click('w1.e1'); return {clicked:true};",
+        );
+        if !live && !unreadable {
+            assert!(!result.is_error, "{}", result.data);
+            assert_eq!(result.data["value"]["view"]["running"], false);
+            assert_eq!(
+                result.data["value"]["view"]["semantics"]["reason"],
+                "app_stopped"
+            );
+            let reopened = run(&server, "await app.look();");
+            assert!(!reopened.is_error, "{}", reopened.data);
+            assert!(reopened.data["value"]["view"]["windows"]
+                .as_array()
+                .is_some_and(|windows| !windows.is_empty()));
+            assert_eq!(life.lock().unwrap().launches, 2);
+        } else {
+            assert!(result.is_error, "{}", result.data);
+            assert_eq!(result.data["error"]["code"], "app_changed");
+            {
+                let mut life = life.lock().unwrap();
+                life.exit_probe_live = false;
+                life.exit_probe_error = false;
+            }
+            let reopened = run(&server, "await app.look();");
+            assert!(
+                !reopened.is_error,
+                "An ordinary failed exit read must not seal the context: {}",
+                reopened.data
+            );
+        }
+        let life = life.lock().unwrap();
+        assert_eq!(life.presses, 1);
+        assert_eq!(
+            life.quits, 0,
+            "Final observation must never repeat termination"
+        );
+    }
+}
+
+#[test]
+fn dispatched_quit_can_wait_for_confirmation_without_repeating_input() {
+    let life = Arc::new(Mutex::new(Life {
+        quit_pending: true,
+        quit_dialog: true,
+        ..Life::default()
+    }));
+    let server = Server::new(Installed {
+        provider: Provider {
+            life: life.clone(),
+            mock: MockBackend::new(),
+        },
+    });
+    let result = run(&server, "await app.look(); await app.quit(); return (await app.waitForNewWindow({timeout_ms:80})).windows;");
+    assert!(!result.is_error, "{}", result.data);
+    assert!(result.data["value"]["result"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|w| w["title"] == "Quit confirmation"));
+    let life = life.lock().unwrap();
+    assert_eq!((life.launches, life.quits), (1, 1));
+}
+
+#[test]
+fn wait_after_confirmed_quit_never_cold_starts_the_application() {
+    let life = Arc::new(Mutex::new(Life::default()));
+    let server = Server::new(Installed {
+        provider: Provider {
+            life: life.clone(),
+            mock: MockBackend::new(),
+        },
+    });
+    let result = run(
+        &server,
+        "await app.look(); await app.quit(); await app.waitForNewWindow({timeout_ms:30});",
+    );
+    assert_eq!(
+        result.data["error"]["code"], "wait_timeout",
+        "{}",
+        result.data
+    );
+    assert_eq!(result.data["value"]["view"]["running"], false);
+    let life = life.lock().unwrap();
+    assert_eq!((life.launches, life.quits), (1, 1));
 }

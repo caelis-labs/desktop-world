@@ -12,6 +12,66 @@ use windows::Win32::{
 
 const MAX_MOVES: usize = 1024;
 const STEP: i64 = 8;
+/// Pinned CUA 0.38.0 input/inject.rs pen_taps primitive. Coordinate routing
+/// proves the receiver before dispatch; it does not depend on foreground-lock.
+/// The admitted down attempt always gets one paired up, including cancellation.
+pub(super) fn pen_tap(point: POINT, until: Instant, dispatched: &mut bool) -> Result<(), Error> {
+    use windows::Win32::UI::{Controls::*, Input::Pointer::*};
+    let device = unsafe { CreateSyntheticPointerDevice(PT_PEN, 1, POINTER_FEEDBACK_DEFAULT) }
+        .map_err(failed)?;
+    struct Device(HSYNTHETICPOINTERDEVICE);
+    impl Drop for Device {
+        fn drop(&mut self) {
+            unsafe { DestroySyntheticPointerDevice(self.0) };
+        }
+    }
+    let device = Device(device);
+    let packet = |flags| POINTER_TYPE_INFO {
+        r#type: PT_PEN,
+        Anonymous: POINTER_TYPE_INFO_0 {
+            penInfo: POINTER_PEN_INFO {
+                pointerInfo: POINTER_INFO {
+                    pointerType: PT_PEN,
+                    pointerId: 0,
+                    pointerFlags: flags,
+                    ptPixelLocation: point,
+                    ..Default::default()
+                },
+                pressure: 512,
+                ..Default::default()
+            },
+        },
+    };
+    let _mutation = input::mutation(until)?;
+    input::no_held_keys()?;
+    super::execution_scope::before_pointer()?;
+    check(until)?;
+    *dispatched = true;
+    let down = unsafe {
+        InjectSyntheticPointerInput(
+            device.0,
+            &[packet(
+                POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
+            )],
+        )
+    }
+    .map_err(failed);
+    let positioned = super::execution_scope::after_pointer_move();
+    std::thread::sleep(Duration::from_millis(25));
+    // Cleanup is not another payload; cancellation never suppresses this up.
+    let up = unsafe { InjectSyntheticPointerInput(device.0, &[packet(POINTER_FLAG_UP)]) }
+        .map_err(failed);
+    if up.is_err() {
+        input::fail_delivery();
+    }
+    if std::env::var("DTW_INPUT_TRACE").ok().as_deref() == Some("1") {
+        eprintln!(
+            "DTW_WINDOWS_CAPTION_TAP down={down:?} up={up:?} x={} y={}",
+            point.x, point.y
+        );
+    }
+    down.and(positioned).and(up)
+}
 pub struct Plan {
     points: Vec<POINT>,
     drag: bool,
@@ -176,12 +236,16 @@ pub fn dispatch(
             };
             if !matches!(event, Event::Up) {
                 super::desktop::ensure_input_desktop()?;
+                super::execution_scope::before_pointer()?;
             }
             *self.dispatched = true;
             let count = unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
             *self.accepted += count as usize;
             if count != 1 {
                 return Err(failed("Pointer insertion incomplete; effects unknown"));
+            }
+            if matches!(event, Event::Move(_)) {
+                super::execution_scope::after_pointer_move()?;
             }
             if matches!(event, Event::Move(_)) {
                 std::thread::sleep(Duration::from_millis(2));

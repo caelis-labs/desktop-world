@@ -755,6 +755,9 @@ impl<B: Backend + 'static> Coordinator<B> {
                             if let Some(focused) = scene.keyboard_focused {
                                 row["scene"]["keyboard_focused"] = json!(focused);
                             }
+                            if let Some(modal) = scene.keyboard_modal {
+                                row["scene"]["keyboard_modal"] = json!(modal);
+                            }
                             if let Some(candidate) = scene.semantic_candidate {
                                 row["scene"]["semantic_candidate"] = json!(candidate);
                             }

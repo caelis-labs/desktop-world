@@ -1,0 +1,1455 @@
+{
+  "schema": 1,
+  "date": "2026-11-07",
+  "scope": "selected real-machine Windows acceptance",
+  "environment": {
+    "os": "Windows 11 23H2",
+    "build": 22631,
+    "resolution": [
+      2560,
+      1440
+    ],
+    "dpi": 120,
+    "monitors": 1,
+    "desktop": "Default",
+    "elevation": "ordinary user",
+    "dsh_installed_version": "0.2.2-rc.1",
+    "profile": "bundled public ACP",
+    "provider": "deepseek-account",
+    "model": "deepseek-flash",
+    "reasoning_effort": "high"
+  },
+  "package": {
+    "candidate": "C07",
+    "native_and_skill_source": "9314a3554627c7f001fcf117ad164ed6794962c0",
+    "package_id": "0d6eb1a4bafc30ea9f248af9fe338f6e296481d4c02c3d6fe702cf6d35f59261",
+    "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+    "archive_sha256": "59eca5f0365a4349741affeff0b028c8da2902fe15812eb5e784b9fbdc7b9d04",
+    "unsigned_development_candidate": true,
+    "skill_files": {
+      "SKILL.md": "aae8cbb2bf15d59533fdbe073dcde3af58dde8985f94a6fe724446a77ee4f002",
+      "API.md": "cfe443d2b0d52a83d6724139c4171b9c7a229bf311038a54b8fa819026030294",
+      "PATTERNS.md": "889f51f347cd0d14031ac9f0b98363f76cbe003dc47e3281891e3c9dbb427b11"
+    }
+  },
+  "observer_provenance": {
+    "a03": {
+      "tests/acceptance/windows/Fixture.cs": "e90ab7b47b2c4b7437b885539d4a2aa9b014c0f73f0acad757ae894030c7740d",
+      "tests/acceptance/windows/CursorObserver.cs": "6cda6948b5a01a9acad4f1df37d979c12af1efdfb875391444e0306db9743a42",
+      "artifacts/pr110/observer-a03/Fixture.exe": "fbb5a9e2526a4397f347109b283bd443c0322fdeddb5425ed03f4139ec7476fc",
+      "artifacts/pr110/observer-a03/CursorObserver.exe": "99e13035ee7d0d3a7f8a21fdde76c056a709b97e9a9047d4832987d67e76da04"
+    },
+    "a04": {
+      "tests/acceptance/windows/Fixture.cs": "6d6e95087efa9972091e26ae687774fc9afff18f1f79d9980892c858eba54791",
+      "tests/acceptance/windows/CursorObserver.cs": "6cda6948b5a01a9acad4f1df37d979c12af1efdfb875391444e0306db9743a42",
+      "artifacts/pr110/observer-a04/Fixture.exe": "986efe79c2691c8781f2465b1972d527ab20e1e8a3ce9884d46dd06dc615308a",
+      "artifacts/pr110/observer-a04/CursorObserver.exe": "13b2b7d41c1675d4e64bd55197604708d7152fb1af1e5ec2a505b6dc8d09e4ef"
+    }
+  },
+  "runs": [
+    {
+      "run": "release-control-a03",
+      "report_sha256": "18cfdb5ceaea0b90519e145e7dcf8c66189e4d41146c3d301be6aa424ea3d9e9",
+      "functional_passed": false,
+      "binary_sha256": "6ad7c80851dd240499e9c446dcbaf8bf426c84acc6b0fe1572a2773f4c11e159",
+      "actor": "direct diagnostic",
+      "cleanup": {
+        "mcp_cleanup": {
+          "exit_code": 0,
+          "forced": false
+        },
+        "fixture_exit": 0
+      },
+      "observer": {
+        "functional_status": "failed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 2611,
+          "max_gap_ms": 7.4469,
+          "warmup_ms": 47.2695,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 7,
+        "all_recorded_intervals_bracketed": true
+      },
+      "case_outcomes": {
+        "passed": 2
+      },
+      "failed_cases": []
+    },
+    {
+      "run": "candidate07-hidden-keyboard-a01",
+      "report_sha256": "1c4754d78812bd8e739da9860faecf0c835aed8f820371efdd0162b3d04890f1",
+      "functional_passed": true,
+      "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+      "actor": "direct diagnostic",
+      "cleanup": {
+        "mcp_cleanup": {
+          "exit_code": 0,
+          "forced": false
+        },
+        "workers": [
+          {
+            "exit": 0
+          },
+          {
+            "exit": 0
+          }
+        ],
+        "fixture_exit": 0
+      },
+      "observer": {
+        "functional_status": "passed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 792,
+          "max_gap_ms": 13.1534,
+          "warmup_ms": 47.7965,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 1,
+        "all_recorded_intervals_bracketed": true
+      },
+      "status": "keyboard_consumption_and_release_proven",
+      "effects": {
+        "same_hidden_foreground_before_and_after_showing_fixture": true,
+        "reported_class": "GameInputServiceWindow",
+        "saved_bytes": 54,
+        "saved_sha256": "88b3cc6607b5ce5711a5f6f7ac799157e099d42d421dd36f83a799b1da8459c6",
+        "saves": 1,
+        "keys_down_global": []
+      }
+    },
+    {
+      "run": "candidate07-hidden-pointer-a01",
+      "report_sha256": "ea662098b6b7e6af255985c3210bf704169b96b4c042aa70cc25cf6104974522",
+      "functional_passed": true,
+      "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+      "actor": "direct diagnostic",
+      "cleanup": {
+        "mcp_cleanup": {
+          "exit_code": 0,
+          "forced": false
+        },
+        "workers": [
+          {
+            "exit": 0
+          },
+          {
+            "exit": 0
+          },
+          {
+            "exit": 0
+          }
+        ],
+        "fixture_exit": 0
+      },
+      "observer": {
+        "functional_status": "passed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 1943,
+          "max_gap_ms": 10.7182,
+          "warmup_ms": 47.3679,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 4,
+        "all_recorded_intervals_bracketed": true
+      },
+      "status": "cold_pointer_then_keyboard_consumption_and_release_proven",
+      "effects": {
+        "same_hidden_foreground_before_and_after_showing_fixture": true,
+        "reported_class": "GameInputServiceWindow",
+        "saved_bytes": 54,
+        "saved_sha256": "88b3cc6607b5ce5711a5f6f7ac799157e099d42d421dd36f83a799b1da8459c6",
+        "saves": 1,
+        "keys_down_global": [],
+        "before_any_semantic_action": {
+          "moves": 11,
+          "left_up": 1,
+          "increments": 0
+        }
+      }
+    },
+    {
+      "run": "dsh-native-c07-a01",
+      "report_sha256": "fa650832ab1073f91f2a2b74d49b3500c96322d83bb6b88623f3c439eb82af60",
+      "functional_passed": true,
+      "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+      "actor": "installed DSH via bundled ACP and full Cordis package",
+      "cleanup": {
+        "dsh_cleanup": {
+          "exit_code": 0,
+          "forced": false,
+          "reader_joined": true,
+          "controller_joined": true
+        },
+        "dtw_cleanup": [
+          {
+            "exit": 0
+          }
+        ],
+        "fixture_cleanup": {
+          "passed": true,
+          "native": {
+            "started": true,
+            "returncode": 0,
+            "forced_count": 0
+          },
+          "servers_stopped": [
+            true,
+            true
+          ]
+        }
+      },
+      "observer": {
+        "functional_status": "passed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 97306,
+          "max_gap_ms": 22.6192,
+          "warmup_ms": 46.8701,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 1,
+        "all_recorded_intervals_bracketed": true
+      },
+      "tools": {
+        "tool_calls": 37,
+        "tools": {
+          "skill": 1,
+          "read": 1,
+          "mcp__desktop-world__apps": 1,
+          "mcp__desktop-world__exec": 34
+        },
+        "statuses": {
+          "completed": 33,
+          "failed": 4
+        },
+        "failed_error_codes": {
+          "target_changed": 3,
+          "backend_failed": 1
+        },
+        "admitted_image_parts": 5,
+        "journal_parse_errors": 0,
+        "unmatched_tool_updates": 0,
+        "dispatch_counts": {
+          "dispatched": 19,
+          "not_dispatched": 1
+        },
+        "tools_with_unknown_dispatch": 0,
+        "tool_error_free": false,
+        "scope": "Public ACP tool facts only; business effects, image pixels and cleanup require independent oracles"
+      },
+      "prompt_seconds": 275.678,
+      "usage": {
+        "usage": {
+          "inputTokens": 78672,
+          "outputTokens": 20957,
+          "cacheReadTokens": 1804416,
+          "cacheWriteTokens": 0,
+          "totalTokens": 1904045
+        },
+        "configs": [
+          {
+            "provider": "deepseek-account",
+            "model": "deepseek-flash",
+            "reasoningEffort": "high",
+            "maxTokens": 256000
+          }
+        ],
+        "meaning": "Usage sums every assistant response, including cache reads; this is not the last context size and no monetary cost is inferred.",
+        "archive_sha256": "8368680e8a25e86a487e32422073b85feb02978deb5a8a260b80ac5f483f647a"
+      },
+      "effects": {
+        "text": "DSH Windows 中文🙂\r\n第二行 café 🚀",
+        "saved": "DSH Windows 中文🙂\r\n第二行 café 🚀",
+        "commits": 1,
+        "checkpoint": 137,
+        "reviewed": true,
+        "checks": 1,
+        "opens": 1,
+        "saves": 1,
+        "modal": false,
+        "reference_utf16": 28029,
+        "reference_pages": 2,
+        "reference_tail": "END-OF-NATIVE-REFERENCE-137🚀",
+        "final_fixture_capture_sha256": "0b9c2afff5805477ca70ffe6795326c787e198c21120264981dbbc098912c9b0"
+      }
+    },
+    {
+      "run": "dsh-parity-c07-a01",
+      "report_sha256": "25d2fc073991f9f1d7daa798ab26417baf766d1ae0970b170402d4e9c77a725b",
+      "functional_passed": true,
+      "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+      "actor": "installed DSH via bundled ACP and full Cordis package",
+      "cleanup": {
+        "dsh_cleanup": {
+          "exit_code": 0,
+          "forced": false,
+          "reader_joined": true,
+          "controller_joined": true
+        },
+        "dtw_cleanup": [
+          {
+            "exit": 0
+          }
+        ],
+        "fixture_cleanup": {
+          "passed": true,
+          "native": {
+            "started": true,
+            "returncode": 0,
+            "forced_count": 0
+          },
+          "servers_stopped": [
+            true,
+            true
+          ]
+        }
+      },
+      "observer": {
+        "functional_status": "passed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 63206,
+          "max_gap_ms": 10.7116,
+          "warmup_ms": 47.8335,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 1,
+        "all_recorded_intervals_bracketed": true
+      },
+      "tools": {
+        "tool_calls": 21,
+        "tools": {
+          "skill": 1,
+          "read": 1,
+          "mcp__desktop-world__apps": 2,
+          "mcp__desktop-world__exec": 16,
+          "read_image": 1
+        },
+        "statuses": {
+          "completed": 21
+        },
+        "failed_error_codes": {},
+        "admitted_image_parts": 7,
+        "journal_parse_errors": 0,
+        "unmatched_tool_updates": 0,
+        "dispatch_counts": {
+          "dispatched": 7
+        },
+        "tools_with_unknown_dispatch": 0,
+        "tool_error_free": true,
+        "scope": "Public ACP tool facts only; business effects, image pixels and cleanup require independent oracles"
+      },
+      "prompt_seconds": 173.465,
+      "usage": {
+        "usage": {
+          "inputTokens": 50758,
+          "outputTokens": 15381,
+          "cacheReadTokens": 736768,
+          "cacheWriteTokens": 0,
+          "totalTokens": 802907
+        },
+        "configs": [
+          {
+            "provider": "deepseek-account",
+            "model": "deepseek-flash",
+            "reasoningEffort": "high",
+            "maxTokens": 256000
+          }
+        ],
+        "meaning": "Usage sums every assistant response, including cache reads; this is not the last context size and no monetary cost is inferred.",
+        "archive_sha256": "81cbc39cf6ada6a3037480f29a1a321287fa58d9a39e91d25c956e031233f798"
+      },
+      "effects": {
+        "slider": 200,
+        "slider_down": 1,
+        "slider_up": 1,
+        "slider_drag_moves": 33,
+        "left_scroll": 360,
+        "right_scroll": 0,
+        "left_wheels": 6,
+        "right_wheels": 0,
+        "peer_opens": 1,
+        "peer_increments": 1,
+        "peer_closes": 1,
+        "peer_open": false,
+        "global_left_held": false,
+        "reinspection": {
+          "proofs": [
+            {
+              "attachment_sha256": "25695d9cc63c2512d85981df63f85fe3f9c4e4726c1a8fcf3ee6dc20e2e2bcdf",
+              "matches_prior_mcp_capture": true
+            }
+          ],
+          "mcp_image_parts": 6,
+          "scope": "DSH attachment reinspection only; no fixture source, hidden state or alternate screenshot read"
+        }
+      }
+    },
+    {
+      "run": "dsh-browser-c07-a01",
+      "report_sha256": "6fd71c42a2c50ba92bcb6c278d5013b56d4651ad48905c5a35bf3dd75148288d",
+      "functional_passed": true,
+      "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+      "actor": "installed DSH via bundled ACP and full Cordis package",
+      "cleanup": {
+        "dsh_cleanup": {
+          "exit_code": 0,
+          "forced": false,
+          "reader_joined": true,
+          "controller_joined": true
+        },
+        "dtw_cleanup": [
+          {
+            "exit": 0
+          }
+        ],
+        "browser_cleanup": {
+          "exit": 0
+        },
+        "fixture_cleanup": {
+          "passed": true,
+          "native": {
+            "started": false,
+            "forced_count": 0
+          },
+          "servers_stopped": [
+            true,
+            true
+          ]
+        }
+      },
+      "observer": {
+        "functional_status": "passed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 196252,
+          "max_gap_ms": 26.6539,
+          "warmup_ms": 47.8423,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 1,
+        "all_recorded_intervals_bracketed": true
+      },
+      "tools": {
+        "tool_calls": 77,
+        "tools": {
+          "skill": 1,
+          "read": 2,
+          "mcp__desktop-world__apps": 1,
+          "mcp__desktop-world__exec": 73
+        },
+        "statuses": {
+          "completed": 63,
+          "failed": 14
+        },
+        "failed_error_codes": {
+          "foreground_unavailable": 1,
+          "element_not_pressable": 2,
+          "script_exception": 1,
+          "windows_capture_occluded": 1,
+          "target_changed": 2,
+          "backend_failed": 6,
+          "invalid_arguments": 1
+        },
+        "admitted_image_parts": 23,
+        "journal_parse_errors": 0,
+        "unmatched_tool_updates": 0,
+        "dispatch_counts": {
+          "not_dispatched": 4,
+          "dispatched": 45
+        },
+        "tools_with_unknown_dispatch": 0,
+        "tool_error_free": false,
+        "scope": "Public ACP tool facts only; business effects, image pixels and cleanup require independent oracles"
+      },
+      "prompt_seconds": 548.407,
+      "usage": {
+        "usage": {
+          "inputTokens": 133954,
+          "outputTokens": 34341,
+          "cacheReadTokens": 6754432,
+          "cacheWriteTokens": 0,
+          "totalTokens": 6922727
+        },
+        "configs": [
+          {
+            "provider": "deepseek-account",
+            "model": "deepseek-flash",
+            "reasoningEffort": "high",
+            "maxTokens": 256000
+          }
+        ],
+        "meaning": "Usage sums every assistant response, including cache reads; this is not the last context size and no monetary cost is inferred.",
+        "archive_sha256": "72bd805c33ae0d80d8579a9cec1493eed7d83a3759d3c1e8583d95199c2089ba"
+      },
+      "effects": {
+        "note": "DSH Browser 中文🙂 café 🚀",
+        "saves": [
+          {
+            "note": "DSH Browser 中文🙂 café 🚀",
+            "activation": 1
+          }
+        ],
+        "checkpoint_hits": [
+          {
+            "id": 137,
+            "activation": 1
+          }
+        ],
+        "records": [
+          {
+            "note": "Windows 验收137",
+            "number": 137,
+            "approved": true,
+            "priority": "Urgent",
+            "date": "2026-11-07"
+          }
+        ],
+        "invalid_before_save": true,
+        "reopened_then_cancelled": true,
+        "navigation_paths": [
+          "/",
+          "/canvas",
+          "/",
+          "/vision",
+          "/",
+          "/canvas",
+          "/",
+          "/vision"
+        ],
+        "canvas_actions": [
+          {
+            "action": "pin",
+            "id": "release-137"
+          },
+          {
+            "action": "send",
+            "text": "交付确认 中文🙂"
+          }
+        ],
+        "vision_attempt_passed": [
+          true
+        ],
+        "reference_utf16": 11516,
+        "reference_pages": [
+          4096,
+          4096,
+          3324
+        ],
+        "reference_tail": "WEB-END-137-中文🙂"
+      }
+    },
+    {
+      "run": "dsh-cursor-c07-a01",
+      "report_sha256": "93b5959c1f1cfd7ebe57a1e256d629f28e45d944c0478ff90edf3cef71034e42",
+      "functional_passed": true,
+      "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+      "actor": "installed DSH via bundled ACP and full Cordis package",
+      "cleanup": {
+        "dsh_cleanup": {
+          "exit_code": 0,
+          "forced": false,
+          "reader_joined": true,
+          "controller_joined": true
+        },
+        "dtw_cleanup": [
+          {
+            "exit": 0
+          }
+        ],
+        "fixture_exit": 0
+      },
+      "observer": {
+        "functional_status": "passed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 11875,
+          "max_gap_ms": 10.7302,
+          "warmup_ms": 47.1179,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 1,
+        "all_recorded_intervals_bracketed": true
+      },
+      "tools": {
+        "tool_calls": 5,
+        "tools": {
+          "skill": 1,
+          "read": 1,
+          "mcp__desktop-world__apps": 1,
+          "mcp__desktop-world__exec": 2
+        },
+        "statuses": {
+          "completed": 5
+        },
+        "failed_error_codes": {},
+        "admitted_image_parts": 2,
+        "journal_parse_errors": 0,
+        "unmatched_tool_updates": 0,
+        "dispatch_counts": {
+          "dispatched": 2
+        },
+        "tools_with_unknown_dispatch": 0,
+        "tool_error_free": true,
+        "scope": "Public ACP tool facts only; business effects, image pixels and cleanup require independent oracles"
+      },
+      "prompt_seconds": 29.479,
+      "usage": {
+        "usage": {
+          "inputTokens": 13322,
+          "outputTokens": 3300,
+          "cacheReadTokens": 72064,
+          "cacheWriteTokens": 0,
+          "totalTokens": 88686
+        },
+        "configs": [
+          {
+            "provider": "deepseek-account",
+            "model": "deepseek-flash",
+            "reasoningEffort": "high",
+            "maxTokens": 256000
+          }
+        ],
+        "meaning": "Usage sums every assistant response, including cache reads; this is not the last context size and no monetary cost is inferred.",
+        "archive_sha256": "7e99fee4817ca1640d277a1b7f8be6378032a650d3b620bf6912acb53a518ec5"
+      },
+      "effects": {
+        "left_up": 1,
+        "increments": 0,
+        "saves": 0,
+        "keys_down_global": [],
+        "pulse_ring_matching_points": 9,
+        "separate_witness": "actual native cursor helper; not an assertion about public MCP PNG pixels"
+      }
+    },
+    {
+      "run": "dsh-stop-c07-a01",
+      "report_sha256": "535671607d5497f02bd6e39a65a43f1ea367df7c965a79ebccd0dd4abc41c6bd",
+      "functional_passed": true,
+      "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+      "actor": "installed DSH via bundled ACP and full Cordis package",
+      "cleanup": {
+        "dsh_cleanup": {
+          "exit_code": 0,
+          "forced": false,
+          "reader_joined": true,
+          "controller_joined": true
+        },
+        "dtw_cleanup": [
+          {
+            "exit": 0
+          }
+        ],
+        "fixture_exit": 0
+      },
+      "observer": {
+        "functional_status": "passed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 14617,
+          "max_gap_ms": 24.6635,
+          "warmup_ms": 48.2348,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 2,
+        "all_recorded_intervals_bracketed": true
+      },
+      "tools": {
+        "tool_calls": 9,
+        "tools": {
+          "skill": 1,
+          "read": 1,
+          "mcp__desktop-world__apps": 2,
+          "mcp__desktop-world__exec": 5
+        },
+        "statuses": {
+          "completed": 8,
+          "failed": 1
+        },
+        "failed_error_codes": {
+          "execution_interrupted": 1
+        },
+        "admitted_image_parts": 3,
+        "journal_parse_errors": 0,
+        "unmatched_tool_updates": 0,
+        "dispatch_counts": {
+          "dispatched": 2
+        },
+        "tools_with_unknown_dispatch": 0,
+        "tool_error_free": false,
+        "scope": "Public ACP tool facts only; business effects, image pixels and cleanup require independent oracles"
+      },
+      "prompt_seconds": 37.006,
+      "usage": {
+        "usage": {
+          "inputTokens": 15680,
+          "outputTokens": 4140,
+          "cacheReadTokens": 154112,
+          "cacheWriteTokens": 0,
+          "totalTokens": 173932
+        },
+        "configs": [
+          {
+            "provider": "deepseek-account",
+            "model": "deepseek-flash",
+            "reasoningEffort": "high",
+            "maxTokens": 256000
+          }
+        ],
+        "meaning": "Usage sums every assistant response, including cache reads; this is not the last context size and no monetary cost is inferred.",
+        "archive_sha256": "20720a4044974102e80f8809b4c283524f6214d442c6b7f3781d9f83c9744f39"
+      },
+      "effects": {
+        "held_at_cancel": {
+          "drag_moves": 1,
+          "left_up": 0,
+          "keys_down_global": [
+            1
+          ]
+        },
+        "after_cancel": {
+          "drag_moves": 3,
+          "left_up": 1,
+          "increments": 0,
+          "keys_down_global": []
+        },
+        "same_mcp_live_after_cancel": true,
+        "recovery": {
+          "saved": "fresh after DSH user cancel",
+          "saves": 1,
+          "increments": 0
+        },
+        "cancel_source": "public ACP session/cancel"
+      }
+    },
+    {
+      "run": "dsh-real-apps-c05-a03",
+      "report_sha256": "9c2cc88f885e42d6afcf178191eacaeddb3839e028b473cabb42f2db55e4826c",
+      "functional_passed": true,
+      "binary_sha256": "3f66889c4fcd8b57b72c53b03daa7765b288bfab519b810959d655c5b73f4b36",
+      "actor": "installed DSH via bundled ACP and full Cordis package",
+      "cleanup": {
+        "dsh_cleanup": {
+          "exit_code": 0,
+          "forced": false,
+          "reader_joined": true,
+          "controller_joined": true
+        },
+        "dtw_cleanup": [
+          {
+            "exit": 0
+          }
+        ]
+      },
+      "observer": {
+        "functional_status": "passed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 68446,
+          "max_gap_ms": 9.0864,
+          "warmup_ms": 49.1907,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 2,
+        "all_recorded_intervals_bracketed": true
+      },
+      "tools": {
+        "tool_calls": 22,
+        "tools": {
+          "skill": 1,
+          "list_mcp_resources": 1,
+          "list_mcp_resource_templates": 1,
+          "read": 2,
+          "mcp__desktop-world__apps": 2,
+          "mcp__desktop-world__exec": 15
+        },
+        "statuses": {
+          "completed": 22
+        },
+        "failed_error_codes": {},
+        "admitted_image_parts": 1,
+        "journal_parse_errors": 0,
+        "unmatched_tool_updates": 0,
+        "dispatch_counts": {
+          "dispatched": 17
+        },
+        "tools_with_unknown_dispatch": 0,
+        "tool_error_free": true,
+        "scope": "Public ACP tool facts only; business effects, image pixels and cleanup require independent oracles"
+      },
+      "prompt_seconds": 189.181,
+      "usage": {
+        "usage": {
+          "inputTokens": 57287,
+          "outputTokens": 21755,
+          "cacheReadTokens": 899584,
+          "cacheWriteTokens": 0,
+          "totalTokens": 978626
+        },
+        "configs": [
+          {
+            "provider": "deepseek-account",
+            "model": "deepseek-flash",
+            "reasoningEffort": "high",
+            "maxTokens": 256000
+          }
+        ],
+        "meaning": "Usage sums every assistant response, including cache reads; this is not the last context size and no monetary cost is inferred.",
+        "archive_sha256": "25514b8ccc906ac4fb74bee8900ff0d71b34b08486f6c7091c5b82f968893b6a"
+      },
+      "effects": {
+        "saved_bytes": 53,
+        "saved_sha256": "13b9621cfb75f1665dd65b990b619330dd8cccb63c765b9067f68e474ee2cba8",
+        "owned_document_window_titles": [
+          "Untitled - Notepad",
+          "验收-137.txt - Notepad",
+          "*验收-137.txt - Notepad",
+          "验收-137.txt - Notepad",
+          "Untitled - Notepad",
+          "验收-137.txt - Notepad",
+          "Untitled - Notepad"
+        ],
+        "title_witness_joined": true,
+        "other_notepad_windows_preserved": 3
+      }
+    },
+    {
+      "run": "dsh-real-apps-c07-a01",
+      "report_sha256": "ac3618bf9de69ac60c07bddd515a86ba42bf3c52672c611bb3c2626b2f4f5638",
+      "functional_passed": true,
+      "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+      "actor": "installed DSH via bundled ACP and full Cordis package",
+      "cleanup": {
+        "dsh_cleanup": {
+          "exit_code": 0,
+          "forced": false,
+          "reader_joined": true,
+          "controller_joined": true
+        },
+        "dtw_cleanup": [
+          {
+            "exit": 0
+          }
+        ]
+      },
+      "observer": {
+        "functional_status": "passed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 165714,
+          "max_gap_ms": 10.7819,
+          "warmup_ms": 47.1076,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 2,
+        "all_recorded_intervals_bracketed": true
+      },
+      "tools": {
+        "tool_calls": 44,
+        "tools": {
+          "skill": 1,
+          "list_mcp_resources": 1,
+          "read": 2,
+          "mcp__desktop-world__apps": 2,
+          "mcp__desktop-world__exec": 38
+        },
+        "statuses": {
+          "completed": 38,
+          "failed": 6
+        },
+        "failed_error_codes": {
+          "script_exception": 2,
+          "foreground_unavailable": 1,
+          "target_changed": 1,
+          "windows_capture_occluded": 1,
+          "selector_not_found": 1
+        },
+        "admitted_image_parts": 5,
+        "journal_parse_errors": 0,
+        "unmatched_tool_updates": 0,
+        "dispatch_counts": {
+          "dispatched": 21,
+          "not_dispatched": 3
+        },
+        "tools_with_unknown_dispatch": 0,
+        "tool_error_free": false,
+        "scope": "Public ACP tool facts only; business effects, image pixels and cleanup require independent oracles"
+      },
+      "prompt_seconds": 460.277,
+      "usage": {
+        "usage": {
+          "inputTokens": 98165,
+          "outputTokens": 53237,
+          "cacheReadTokens": 3707520,
+          "cacheWriteTokens": 0,
+          "totalTokens": 3858922
+        },
+        "configs": [
+          {
+            "provider": "deepseek-account",
+            "model": "deepseek-flash",
+            "reasoningEffort": "high",
+            "maxTokens": 256000
+          }
+        ],
+        "meaning": "Usage sums every assistant response, including cache reads; this is not the last context size and no monetary cost is inferred.",
+        "archive_sha256": "ec77e141211babab30895a2451174b1c018b49eff8efd471f9389c170861801c"
+      },
+      "effects": {
+        "saved_bytes": 53,
+        "saved_sha256": "13b9621cfb75f1665dd65b990b619330dd8cccb63c765b9067f68e474ee2cba8",
+        "owned_document_window_titles": [
+          "Untitled - Notepad",
+          "验收-137.txt - Notepad",
+          "*验收-137.txt - Notepad",
+          "验收-137.txt - Notepad",
+          "Untitled - Notepad",
+          "验收-137.txt - Notepad",
+          "Untitled - Notepad"
+        ],
+        "title_witness_joined": true,
+        "other_notepad_windows_preserved": 2
+      }
+    },
+    {
+      "run": "candidate07-final-background-a01",
+      "report_sha256": "6501abf90a7fe7ddb2699fc4777c4a109d98f482c0310f1236cc6679d4503db9",
+      "functional_passed": true,
+      "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+      "actor": "direct diagnostic",
+      "cleanup": {},
+      "observer": {
+        "functional_status": "passed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 9902,
+          "max_gap_ms": 9.1192,
+          "warmup_ms": 48.691,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 9,
+        "all_recorded_intervals_bracketed": true
+      },
+      "case_outcomes": {
+        "passed": 5
+      },
+      "failed_cases": []
+    },
+    {
+      "run": "candidate07-final-baseline-a01",
+      "report_sha256": "5baf2e429eb573e234ea8ab05b79d12c31a167a6f91b2ae39b1f08bc85d30fca",
+      "functional_passed": true,
+      "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+      "actor": "direct diagnostic",
+      "cleanup": {
+        "mcp_cleanup": {
+          "exit_code": 0,
+          "forced": false
+        },
+        "fixture_exit": 0
+      },
+      "observer": {
+        "functional_status": "passed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 4538,
+          "max_gap_ms": 11.0163,
+          "warmup_ms": 47.2288,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 14,
+        "all_recorded_intervals_bracketed": true
+      },
+      "case_outcomes": {
+        "passed": 5
+      },
+      "failed_cases": []
+    },
+    {
+      "run": "candidate07-final-cancel-a01",
+      "report_sha256": "468d0e7da89c82f589f6ba96dd3fc42624c8357eeba07953210bcfad469fd620",
+      "functional_passed": true,
+      "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+      "actor": "direct diagnostic",
+      "cleanup": {
+        "mcp_cleanup": {
+          "exit_code": 0,
+          "forced": false
+        },
+        "workers": [
+          {
+            "exit": 0
+          },
+          {
+            "exit": 0
+          },
+          {
+            "exit": 0
+          }
+        ],
+        "fixture_exit": 0
+      },
+      "observer": {
+        "functional_status": "passed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 2876,
+          "max_gap_ms": 9.2729,
+          "warmup_ms": 46.3707,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 3,
+        "all_recorded_intervals_bracketed": true
+      }
+    },
+    {
+      "run": "candidate07-final-chrome-a01",
+      "report_sha256": "803ddf4dabfe865e78870eb33b4e2cccb7f9e7c6cca9a19b4356236a1c48ee36",
+      "functional_passed": false,
+      "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+      "actor": "direct diagnostic",
+      "cleanup": {
+        "mcp_cleanup": {
+          "exit_code": 0,
+          "forced": false
+        },
+        "ui_process_exit": 0,
+        "browser_exit": 0,
+        "neighbour_exit": 0,
+        "neighbour_launcher_exit": 0
+      },
+      "observer": {
+        "functional_status": "failed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 20369,
+          "max_gap_ms": 10.6871,
+          "warmup_ms": 48.1184,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 22,
+        "all_recorded_intervals_bracketed": true
+      },
+      "case_outcomes": {
+        "passed": 13,
+        "not_passed": 1
+      },
+      "failed_cases": [
+        "chrome_empty_unicode_typing"
+      ]
+    },
+    {
+      "run": "candidate07-final-chrome-a02",
+      "report_sha256": "f83a64b7b7807159a75db9928ab88f71d8d37fe6a12a5951926d7421785f9e01",
+      "functional_passed": true,
+      "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+      "actor": "direct diagnostic",
+      "cleanup": {
+        "mcp_cleanup": {
+          "exit_code": 0,
+          "forced": false
+        },
+        "ui_process_exit": 0,
+        "browser_exit": 0,
+        "neighbour_exit": 0,
+        "neighbour_launcher_exit": 0
+      },
+      "case_outcomes": {
+        "passed": 14
+      },
+      "failed_cases": []
+    },
+    {
+      "run": "candidate07-final-deadline-a01",
+      "report_sha256": "bbf2d673f69e893b004aa3bb44c2da4a861cc2bd42a8c31df4cb4a5b1abcea2f",
+      "functional_passed": true,
+      "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+      "actor": "direct diagnostic",
+      "cleanup": {
+        "mcp_cleanup": {
+          "exit_code": 0,
+          "forced": false
+        },
+        "workers": [
+          {
+            "exit": 0
+          },
+          {
+            "exit": 0
+          },
+          {
+            "exit": 0
+          }
+        ],
+        "fixture_exit": 0
+      },
+      "observer": {
+        "functional_status": "passed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 11769,
+          "max_gap_ms": 10.3119,
+          "warmup_ms": 47.5319,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 3,
+        "all_recorded_intervals_bracketed": true
+      }
+    },
+    {
+      "run": "candidate07-final-edge-a01",
+      "report_sha256": "5b9b5c31260fb3c6b3a087417fa4f1132785d41abe10e676ef5d4cd8c0f2589e",
+      "functional_passed": true,
+      "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+      "actor": "direct diagnostic",
+      "cleanup": {
+        "mcp_cleanup": {
+          "exit_code": 0,
+          "forced": false
+        },
+        "ui_process_exit": 0,
+        "browser_exit": 0,
+        "neighbour_exit": 0,
+        "neighbour_launcher_exit": 0
+      },
+      "observer": {
+        "functional_status": "passed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 22685,
+          "max_gap_ms": 12.3803,
+          "warmup_ms": 46.0624,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 22,
+        "all_recorded_intervals_bracketed": true
+      },
+      "case_outcomes": {
+        "passed": 14
+      },
+      "failed_cases": []
+    },
+    {
+      "run": "candidate07-final-eof-a01",
+      "report_sha256": "6633cb2d84c908d4a5df1f492dd7283c9357ae4afb1330b702908834f461863a",
+      "functional_passed": true,
+      "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+      "actor": "direct diagnostic",
+      "cleanup": {
+        "mcp_cleanup": {
+          "exit_code": 0,
+          "forced": false
+        },
+        "workers": [
+          {
+            "exit": 0
+          },
+          {
+            "exit": 0
+          },
+          {
+            "exit": 0
+          }
+        ],
+        "fixture_exit": 0
+      },
+      "observer": {
+        "functional_status": "passed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 822,
+          "max_gap_ms": 10.0961,
+          "warmup_ms": 46.8184,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 2,
+        "all_recorded_intervals_bracketed": true
+      }
+    },
+    {
+      "run": "candidate07-final-features-a01",
+      "report_sha256": "8ea072cf57ac77268b9b6113768d331a1680e19e1359cf6704fe821f862e1565",
+      "functional_passed": true,
+      "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+      "actor": "direct diagnostic",
+      "cleanup": {},
+      "observer": {
+        "functional_status": "passed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 19941,
+          "max_gap_ms": 12.5568,
+          "warmup_ms": 47.7605,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 68,
+        "all_recorded_intervals_bracketed": true
+      },
+      "case_outcomes": {
+        "passed": 26
+      },
+      "failed_cases": []
+    },
+    {
+      "run": "candidate07-final-host-death-a01",
+      "report_sha256": "2ddcfa457bce1e6d02ea78ee9999b638ead173df7075ecaa093464bebf3b2882",
+      "functional_passed": true,
+      "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+      "actor": "direct diagnostic",
+      "cleanup": {
+        "mcp_cleanup": {
+          "exit_code": 1,
+          "forced": false
+        },
+        "workers": [
+          {
+            "exit": 0
+          },
+          {
+            "exit": 0
+          },
+          {
+            "exit": 0
+          }
+        ],
+        "injected_host_exit": 1,
+        "fixture_exit": 0
+      },
+      "observer": {
+        "functional_status": "passed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 837,
+          "max_gap_ms": 8.5892,
+          "warmup_ms": 47.2728,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 1,
+        "all_recorded_intervals_bracketed": true
+      }
+    },
+    {
+      "run": "candidate07-final-input-desktop-a01",
+      "report_sha256": "ac0229a0be66b67eab31adbe690e2e180a4844b5a9ef46ee447839a86c9f5ff6",
+      "functional_passed": true,
+      "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+      "actor": "direct diagnostic",
+      "cleanup": {
+        "worker_exit": 0,
+        "fixture_exit": 0
+      },
+      "observer": {
+        "functional_status": "passed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 422,
+          "max_gap_ms": 6.0212,
+          "warmup_ms": 47.1463,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 0,
+        "all_recorded_intervals_bracketed": null
+      },
+      "case_outcomes": {
+        "passed": 9
+      },
+      "failed_cases": []
+    },
+    {
+      "run": "candidate07-final-scope-a01",
+      "report_sha256": "37a5b3fdc6f631b801cbed81e3b81b591369118fe4907f6cd5184eabbcc70c87",
+      "functional_passed": true,
+      "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+      "actor": "direct diagnostic",
+      "cleanup": {},
+      "observer": {
+        "functional_status": "passed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 9842,
+          "max_gap_ms": 9.267,
+          "warmup_ms": 46.4055,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 7,
+        "all_recorded_intervals_bracketed": true
+      },
+      "case_outcomes": {
+        "passed": 4
+      },
+      "failed_cases": []
+    },
+    {
+      "run": "candidate07-final-workbench-a01",
+      "report_sha256": "06bca76c480b93c3cdb926fac1401c234639e83d8bcea45b0654ad7a4c4a9081",
+      "functional_passed": true,
+      "binary_sha256": "df04b7c575ad47f5c6a1ee76969a4533f4112b29dc0627ae5b8acf3ec7d99da4",
+      "actor": "direct diagnostic",
+      "cleanup": {
+        "mcp_cleanup": {
+          "exit_code": 0,
+          "forced": false
+        },
+        "fixture_cleanup": {
+          "passed": true,
+          "native": {
+            "started": true,
+            "returncode": 0,
+            "forced_count": 0
+          },
+          "servers_stopped": [
+            true,
+            true
+          ]
+        }
+      },
+      "observer": {
+        "functional_status": "passed",
+        "sampling_status": "observed",
+        "cursor_readable": true,
+        "sampling": {
+          "samples": 28759,
+          "max_gap_ms": 11.6068,
+          "warmup_ms": 47.5141,
+          "timer_resolution_acquired": true,
+          "period_released": true,
+          "writer_stopped": true,
+          "write_error": null
+        },
+        "recorded_intervals": 32,
+        "all_recorded_intervals_bracketed": true
+      },
+      "case_outcomes": {
+        "passed": 9,
+        "not_run": 33
+      },
+      "failed_cases": []
+    }
+  ],
+  "retained_outcomes": {
+    "original_issue_109_a01": "keyboard consumption and cleanup remain unknown",
+    "release_control_a03": "foreground preparation failed on naturally hidden owner, before business keyboard; original tool receipt retained",
+    "c05_native_late_caption": "pointer position changed after placement; unknown receipt retained, no replay",
+    "c06_native_menu": "menu did not commit; worker termination, MCP exit 2, separate from final C07",
+    "c06_pointer_a02": "first pointer passed; after the pad took focus, following text rejected before dispatch",
+    "early_cancel": "four preflight sample-limit rejections precede actual held cancel",
+    "c05_real_apps_a01": "incorrect old tab targeted; stopped and verified restored; uncertainty retained",
+    "c05_real_apps_a02": "incomplete because no independent reopening, despite earlier weaker grade",
+    "c07_direct_chrome_a01": "13/14, initial empty-field Unicode rejected before dispatch, fresh traced a02 14/14; cause not asserted"
+  },
+  "sampling_policy": "Only explicit foreground/cursor constraints assert preservation. Other intervals are boundary-only. Keep maximum gaps and missing boundaries; no 50ms threshold.",
+  "ci_for_acceptance_code": {
+    "head": "815a203ad5425eda68d03a3ed92b2bdc3c5cd2bc",
+    "run_id": 42334266878,
+    "jobs_passed": 5,
+    "windows_ci_runs_gui": false
+  },
+  "not_claimed": [
+    "all 42 original matrix cases",
+    "mixed DPI/multiple monitors",
+    "other Windows builds",
+    "elevated/protected applications",
+    "all tooltip/shadow combinations",
+    "Desktop UI Stop click",
+    "whole Notepad app quit with unrelated user documents open"
+  ],
+  "desktop_restoration": {
+    "profile_original_bytes_match": true,
+    "current_original_package": "e1a6a123d61181400b8ad1aa2c8d1f4a55047f2394d62eb9ede177aac631e1a9",
+    "original_pending": null,
+    "original_rollback": null,
+    "unrelated_bindings_unchanged": true,
+    "package_inventory_unchanged": true,
+    "packages_kept": 7,
+    "normal_restart_with_original_package_mcp": true,
+    "owned_notepad_closed_existing_windows_preserved": true
+  }
+}

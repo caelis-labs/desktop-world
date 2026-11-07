@@ -9,6 +9,7 @@ pub(super) enum PhysicalReason {
     NativeHoverTracking,
     MissingAddressedApi,
     KeyboardSemantics,
+    KeyboardFocusAbsent,
 }
 impl PhysicalReason {
     pub(super) fn code(self) -> &'static str {
@@ -16,8 +17,15 @@ impl PhysicalReason {
             Self::NativeHoverTracking => "native_hover_tracking",
             Self::MissingAddressedApi => "addressed_event_api_unavailable",
             Self::KeyboardSemantics => "native_keyboard_semantics",
+            Self::KeyboardFocusAbsent => "background_key_window_absent",
         }
     }
+}
+
+/// Foreground ownership is already proven by the execution scope; only keyboard
+/// transport changes. Pointer operations keep their addressed route where supported.
+pub(super) fn owned_foreground_keyboard(operation: &str, owned: bool) -> bool {
+    owned && matches!(operation, "type_text" | "keypress")
 }
 
 /// Coordinate input can prove its surface without AX. Keyboard fallback still
@@ -34,6 +42,11 @@ pub(super) fn pointer_reason(operation: &str, framework: &str) -> Option<Physica
         .then_some(PhysicalReason::NativeHoverTracking)
 }
 
+/// Native first-mouse preparation changes key focus, not pointer transport.
+pub(super) fn plan_visual(reason: &str, operation: &str) -> bool {
+    reason != "native_pointer_key_window" && visual_focus(operation)
+}
+
 /// Only established capability limits can start a script's foreground borrow.
 /// Pointer transport remains independent: later supported input stays addressed.
 pub(super) fn allows_activation(reason: &str) -> bool {
@@ -45,6 +58,14 @@ pub(super) fn allows_activation(reason: &str) -> bool {
             | "addressed_event_api_unavailable"
             | "associated_process_keyboard"
             | "native_modal_keyboard"
+            | "background_key_window_absent"
+            | "windowless_application"
+            | "native_open_panel_click"
+            | "native_pointer_key_window"
+            | "semantic_text_focus"
+            | "semantic_value_focus"
+            | "native_modal_press"
+            | "native_menu_press"
     )
 }
 
@@ -53,34 +74,48 @@ pub(super) fn foreground_plan<'a>(
     operation: &str,
 ) -> Option<&'a str> {
     let plan = reply.get("foreground_plan")?;
+    let reason = plan["reason"].as_str()?;
     if reply["dispatch"] != "not_dispatched"
         || reply["evidence"] != "unverified"
         || reply.get("error").is_some()
         || reply.get("cleanup_error").is_some()
         || reply.get("focus_preparation").is_some()
         || reply.get("interruption").is_some()
-        || plan["visual"].as_bool()? != visual_focus(operation)
+        || plan["visual"].as_bool()? != plan_visual(reason, operation)
     {
         return None;
     }
-    let reason = plan["reason"].as_str()?;
     let keyboard = matches!(operation, "keypress" | "type_text");
     let valid = match reason {
-        "explicit_focus" => operation == "focus",
+        "explicit_focus" => matches!(operation, "focus" | "focus_app"),
+        "windowless_application" => operation == "keypress_app",
+        "background_key_window_absent" => keyboard,
         "native_hover_tracking" => operation == "move",
+        "native_open_panel_click" => operation == "click",
+        "native_pointer_key_window" => matches!(operation, "click" | "drag"),
+        "semantic_value_focus" => operation == "set_value" && plan["visual"] == false,
+        "semantic_text_focus" | "native_modal_press" | "native_menu_press" => {
+            operation == "press" && plan["visual"] == false
+        }
         "addressed_event_api_unavailable" => visual_focus(operation) || keyboard,
         "native_modal_keyboard" | "associated_process_keyboard" => keyboard,
         "native_keyboard_semantics" => {
-            keyboard
+            (operation == "keypress"
                 && matches!(
                     plan["capability_detail"].as_str(),
                     Some(
-                        "chromium_command_a"
-                            | "chromium_supplementary_unicode"
-                            | "appkit_command_w"
-                            | "appkit_multiline_text"
+                        "chromium_command_chord"
+                            | "native_modal_command_chord"
+                            | "native_menu_disabled"
+                            | "native_menu_window_unbound"
+                            | "native_menu_unavailable"
                     )
-                )
+                ))
+                || operation == "type_text"
+                    && matches!(
+                        plan["capability_detail"].as_str(),
+                        Some("chromium_supplementary_unicode" | "appkit_multiline_text")
+                    )
         }
         _ => false,
     };
@@ -98,14 +133,18 @@ pub(super) fn fallback_reason(result: &serde_json::Value) -> Option<PhysicalReas
         return None;
     }
     match result["capability_evidence"].as_str()? {
+        "background_key_window_absent" => Some(PhysicalReason::KeyboardFocusAbsent),
         "addressed_event_api_unavailable" => Some(PhysicalReason::MissingAddressedApi),
         "native_keyboard_semantics"
             if matches!(
                 result["capability_detail"].as_str(),
                 Some(
-                    "chromium_command_a"
+                    "chromium_command_chord"
+                        | "native_modal_command_chord"
+                        | "native_menu_disabled"
+                        | "native_menu_window_unbound"
+                        | "native_menu_unavailable"
                         | "chromium_supplementary_unicode"
-                        | "appkit_command_w"
                         | "appkit_multiline_text"
                 )
             ) =>
@@ -118,8 +157,52 @@ pub(super) fn fallback_reason(result: &serde_json::Value) -> Option<PhysicalReas
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn owned_scope_uses_foreground_keyboard_without_broadening_other_actions() {
+        for op in [
+            "keypress",
+            "type_text",
+            "press",
+            "click",
+            "move",
+            "drag",
+            "scroll",
+            "focus",
+        ] {
+            assert_eq!(
+                super::owned_foreground_keyboard(op, true),
+                matches!(op, "keypress" | "type_text")
+            );
+            assert!(!super::owned_foreground_keyboard(op, false));
+        }
+        assert!(!super::allows_activation("owned_foreground_keyboard"));
+    }
+
     use super::*;
     use serde_json::json;
+    #[test]
+    fn absent_background_key_window_and_windowless_shortcuts_have_exact_plans() {
+        for (operation, reason) in [
+            ("keypress", "background_key_window_absent"),
+            ("type_text", "background_key_window_absent"),
+            ("keypress_app", "windowless_application"),
+            ("focus_app", "explicit_focus"),
+        ] {
+            let mut reply = json!({"dispatch":"not_dispatched","evidence":"unverified",
+                "foreground_plan":{"reason":reason,"visual":false}});
+            assert_eq!(foreground_plan(&reply, operation), Some(reason));
+            assert!(allows_activation(reason));
+            reply["dispatch"] = json!("unknown");
+            assert_eq!(foreground_plan(&reply, operation), None);
+        }
+        let absent = json!({"dispatch":"not_dispatched","fallback_allowed":true,
+            "error":{"code":"background_unavailable"},"capability_evidence":"background_key_window_absent"});
+        assert_eq!(
+            fallback_reason(&absent),
+            Some(PhysicalReason::KeyboardFocusAbsent)
+        );
+    }
+
     #[test]
     fn visual_pointer_admission_never_bypasses_keyboard_focus_checks() {
         for operation in ["click", "move", "drag", "scroll"] {
@@ -172,6 +255,42 @@ mod tests {
     }
 
     #[test]
+    fn app_menu_preparation_only_authorizes_one_undispatched_semantic_press() {
+        let mut reply = json!({"dispatch":"not_dispatched","evidence":"unverified",
+            "foreground_plan":{"reason":"native_menu_press","visual":false}});
+        assert!(allows_activation("native_menu_press"));
+        assert_eq!(foreground_plan(&reply, "press"), Some("native_menu_press"));
+        for operation in ["click", "move", "keypress", "type_text", "focus"] {
+            assert_eq!(foreground_plan(&reply, operation), None, "{operation}");
+        }
+        for dispatch in ["dispatched", "unknown"] {
+            reply["dispatch"] = json!(dispatch);
+            assert_eq!(foreground_plan(&reply, "press"), None);
+        }
+    }
+
+    #[test]
+    fn native_value_receiver_preparation_cannot_replay_an_acknowledged_setter() {
+        let mut reply = json!({"dispatch":"not_dispatched","evidence":"unverified",
+            "foreground_plan":{"reason":"semantic_value_focus","visual":false}});
+        assert!(allows_activation("semantic_value_focus"));
+        assert_eq!(
+            foreground_plan(&reply, "set_value"),
+            Some("semantic_value_focus")
+        );
+        for operation in ["press", "click", "keypress", "type_text"] {
+            assert_eq!(foreground_plan(&reply, operation), None);
+        }
+        for dispatch in ["dispatched", "unknown"] {
+            reply["dispatch"] = json!(dispatch);
+            assert_eq!(foreground_plan(&reply, "set_value"), None);
+        }
+        reply["dispatch"] = json!("not_dispatched");
+        reply["focus_preparation"] = json!({"dispatch":"dispatched"});
+        assert_eq!(foreground_plan(&reply, "set_value"), None);
+    }
+
+    #[test]
     fn foreground_plans_require_clean_exact_operation_capability() {
         let base = json!({"dispatch":"not_dispatched","evidence":"unverified",
             "foreground_plan":{"reason":"native_hover_tracking","visual":true}});
@@ -198,9 +317,9 @@ mod tests {
         let mut keyboard = json!({"dispatch":"not_dispatched","evidence":"unverified",
             "foreground_plan":{"reason":"native_keyboard_semantics","visual":false}});
         assert_eq!(foreground_plan(&keyboard, "keypress"), None);
-        keyboard["foreground_plan"]["capability_detail"] = json!("chromium_command_a");
+        keyboard["foreground_plan"]["capability_detail"] = json!("chromium_supplementary_unicode");
         assert_eq!(
-            foreground_plan(&keyboard, "keypress"),
+            foreground_plan(&keyboard, "type_text"),
             Some("native_keyboard_semantics")
         );
         assert_eq!(foreground_plan(&keyboard, "move"), None);
@@ -227,9 +346,12 @@ mod tests {
             assert_eq!(fallback_reason(&result), None);
         }
         for detail in [
-            "chromium_command_a",
+            "chromium_command_chord",
+            "native_modal_command_chord",
+            "native_menu_disabled",
+            "native_menu_window_unbound",
+            "native_menu_unavailable",
             "chromium_supplementary_unicode",
-            "appkit_command_w",
             "appkit_multiline_text",
         ] {
             result["capability_detail"] = json!(detail);
@@ -265,5 +387,28 @@ mod tests {
         );
         proven["dispatch"] = json!("unknown");
         assert_eq!(fallback_reason(&proven), None);
+    }
+    #[test]
+    fn native_receiver_preparation_borrows_only_focus_before_one_addressed_payload() {
+        let mut reply = json!({"dispatch":"not_dispatched","evidence":"unverified",
+            "foreground_plan":{"reason":"native_pointer_key_window","visual":false}});
+        assert!(allows_activation("native_pointer_key_window"));
+        for operation in ["click", "drag"] {
+            assert_eq!(
+                foreground_plan(&reply, operation),
+                Some("native_pointer_key_window")
+            );
+            assert!(!plan_visual("native_pointer_key_window", operation));
+        }
+        for operation in ["move", "scroll", "keypress", "type_text", "focus"] {
+            assert_eq!(foreground_plan(&reply, operation), None);
+        }
+        reply["foreground_plan"]["visual"] = json!(true);
+        assert_eq!(foreground_plan(&reply, "drag"), None);
+        reply["foreground_plan"]["visual"] = json!(false);
+        for dispatch in ["dispatched", "unknown"] {
+            reply["dispatch"] = json!(dispatch);
+            assert_eq!(foreground_plan(&reply, "drag"), None);
+        }
     }
 }

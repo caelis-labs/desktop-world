@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 
-from cursor_audit import MAX_SAMPLE_GAP_MS, POLICY_VERSION, attach_routes, borrow_intervals, independence_violation, summarize, trace
+from cursor_audit import RESTORE_TOLERANCE_POINTS, POLICY_VERSION, attach_routes, borrow_intervals, independence_violation, summarize, trace, movement_assessment
 
 
 class CursorOracleTests(unittest.TestCase):
@@ -48,12 +48,13 @@ class CursorOracleTests(unittest.TestCase):
         row['borrow_intervals'] = [self.borrowed()]
         row['routes'] = [{'operation': 'click', 'route': 'addressed'}]
         row['methods'] = ['move', 'click']
-        self.assertIn('outside', independence_violation(row))
+        self.assertIsNotNone(independence_violation(row))
 
-    def test_transition_must_be_fully_bracketed_inside_borrow(self):
-        row = self.audited((0, 20, 20, 20, 20, 20))
+    def test_transition_crossing_a_borrow_boundary_records_timing_uncertainty(self):
+        row = self.audited((0, 20, 20, 20, 0, 0))
         row['borrow_intervals'] = [self.borrowed()]
-        self.assertIn('outside', independence_violation(row))
+        self.assertIsNone(independence_violation(row))
+        self.assertTrue(movement_assessment(row)['boundary_uncertainty'])
 
     def test_forbidden_reason_and_operation_never_waive_motion(self):
         for change in [{'reason': 'children_unavailable'}, {'operation': 'click'},
@@ -65,6 +66,24 @@ class CursorOracleTests(unittest.TestCase):
                 self.assertIsNotNone(independence_violation(row))
         row['borrow_intervals'] = [self.borrowed(reason='addressed_event_api_unavailable', operation='drag')]
         self.assertIsNone(independence_violation(row))
+
+    def test_native_open_panel_only_authorizes_its_click_interval(self):
+        row = self.audited()
+        row['borrow_intervals'] = [self.borrowed(reason='native_open_panel_click', operation='click')]
+        self.assertIsNone(independence_violation(row))
+        for op in ('move', 'drag', 'scroll', 'keypress'):
+            row['borrow_intervals'] = [self.borrowed(reason='native_open_panel_click', operation=op)]
+            self.assertIsNotNone(independence_violation(row))
+
+    def test_classified_movement_without_return_is_not_independent_or_acceptable(self):
+        row = self.audited((0, 0, 20, 20, 20, 20))
+        row['borrow_intervals'] = [self.borrowed()]
+        self.assertIn('not restored', independence_violation(row))
+        self.assertFalse(movement_assessment(row)['fully_independent'])
+        restored = self.audited((0, 0, 20, 20, 0, 0))
+        restored['borrow_intervals'] = [self.borrowed()]
+        self.assertEqual(movement_assessment(restored)['classification'], 'borrowed_and_restored')
+        self.assertFalse(movement_assessment(restored)['fully_independent'])
 
     def test_legacy_borrow_event_is_readable_but_insufficient(self):
         row = self.audited()
@@ -122,25 +141,21 @@ class CursorOracleTests(unittest.TestCase):
             row['cursor'] = trace(samples)
             self.assertIsNotNone(independence_violation(row))
 
-    def test_maximum_sample_gap_policy_is_finite_positive_and_versioned(self):
-        self.assertEqual(POLICY_VERSION, 'bounded-pointer-borrow-v3')
-        self.assertEqual(MAX_SAMPLE_GAP_MS, 50)
+    def test_pointer_policy_is_versioned_and_return_tolerance_is_explicit(self):
+        self.assertEqual(POLICY_VERSION, 'observed-pointer-borrow-v5')
+        self.assertEqual(RESTORE_TOLERANCE_POINTS, 1)
 
     def test_sample_gap_boundary_and_stable_stalls(self):
-        for gap, accepted in [(49.999, True), (50, True), (50.0001, False), (60000, False)]:
+        for gap in (49.999, 50, 50.0001, 60000):
             with self.subTest(gap=gap):
                 row = {'start_unix_ms': 0, 'end_unix_ms': gap,
                        'cursor': trace([{'unix_ms': 0, 'x': 0, 'y': 0},
                                         {'unix_ms': gap, 'x': 0, 'y': 0}])}
                 self.assertEqual(row['cursor']['status'], 'stable')
                 self.assertEqual(row['cursor']['max_sample_gap_ms'], gap)
-                issue = independence_violation(row)
-                if accepted:
-                    self.assertIsNone(issue)
-                else:
-                    self.assertIn('sample gap', issue)
+                self.assertIsNone(independence_violation(row))
 
-    def test_allowed_borrow_cannot_waive_an_excessive_sample_gap(self):
+    def test_unrestored_pointer_fails_even_across_a_long_gap(self):
         row = {'start_unix_ms': 0, 'end_unix_ms': 60004,
                'cursor': trace([{'unix_ms': 0, 'x': 0, 'y': 0},
                                 {'unix_ms': 2, 'x': 0, 'y': 0},
@@ -148,17 +163,17 @@ class CursorOracleTests(unittest.TestCase):
                                 {'unix_ms': 60004, 'x': 20, 'y': 0}]),
                'borrow_intervals': [self.borrowed(start_unix_ms=2, end_unix_ms=60002)]}
         self.assertEqual(row['cursor']['status'], 'moved')
-        self.assertIn('sample gap', independence_violation(row))
+        self.assertIn('not restored', independence_violation(row))
 
-    def test_missing_or_invalid_sample_gaps_fail_closed(self):
+    def test_missing_or_invalid_gap_metadata_is_diagnostic_only(self):
         for gap in [None, float('nan'), float('inf'), -1, '2', True]:
             with self.subTest(gap=gap):
                 row = self.audited()
                 row['cursor']['max_sample_gap_ms'] = gap
-                self.assertIn('sample gap', independence_violation(row))
+                self.assertIsNone(independence_violation(row))
         row = self.audited()
         del row['cursor']['max_sample_gap_ms']
-        self.assertIn('sample gap', independence_violation(row))
+        self.assertIsNone(independence_violation(row))
 
     def test_interval_pairing_rejects_incomplete_invalid_and_mismatched_records(self):
         base = {k: v for k, v in self.borrowed().items() if k not in ('start_unix_ms', 'end_unix_ms')}
@@ -274,9 +289,10 @@ class EofRecoveryTests(unittest.TestCase):
                                     'start_unix_ms': 2, 'end_unix_ms': 8}]
         self.assertIsNone(independence_violation(row))
         row['borrow_intervals'][0]['start_unix_ms'] = 3
-        self.assertIn('outside', independence_violation(row))
+        self.assertIsNone(independence_violation(row))
+        self.assertTrue(movement_assessment(row)['boundary_uncertainty'])
         row['cursor']['max_sample_gap_ms'] = 51
-        self.assertIn('sample gap', independence_violation(row))
+        self.assertIsNone(independence_violation(row))
 
     def test_unverified_sidecars_preserve_incomplete_request(self):
         changes = [

@@ -20,8 +20,9 @@ use windows::{
         UI::{
             Input::KeyboardAndMouse::*,
             WindowsAndMessaging::{
-                GetAncestor, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId,
-                PeekMessageW, SetForegroundWindow, GA_ROOT, GUITHREADINFO, MSG, PM_NOREMOVE,
+                GetAncestor, GetClassNameW, GetForegroundWindow, GetGUIThreadInfo,
+                GetWindowThreadProcessId, IsWindowVisible, PeekMessageW, SetForegroundWindow,
+                GA_ROOT, GUITHREADINFO, MSG, PM_NOREMOVE,
             },
         },
     },
@@ -51,6 +52,7 @@ pub fn mutation(until: Instant) -> Result<Mutation<'static>, Error> {
     // Shared by foreground preparation, UIA actions and posted input. Paired
     // releases retain their original admission and bypass this new-input gate.
     super::desktop::ensure_input_desktop()?;
+    super::execution_scope::check()?;
     Ok(admission)
 }
 pub fn quiesce(budget: Duration) -> bool {
@@ -236,12 +238,44 @@ fn detach_all(threads: &[u32], mut detach: impl FnMut(u32) -> bool) -> bool {
     clean
 }
 pub fn focus(hwnd: HWND, until: Instant, dispatched: &mut bool) -> Result<(), Error> {
+    super::execution_scope::before_focus(hwnd)?;
+    focus_inner(hwnd, until, dispatched, false)?;
+    super::execution_scope::after_focus(hwnd)
+}
+pub fn foreground_diagnostics(target: HWND) -> serde_json::Value {
+    fn window(window: HWND) -> serde_json::Value {
+        let mut pid = 0;
+        let thread = unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+        let mut class = [0u16; 256];
+        let length = unsafe { GetClassNameW(window, &mut class) };
+        json!({"hwnd":window.0 as usize,"pid":pid,"thread":thread,"visible":unsafe {IsWindowVisible(window)}.as_bool(),"class":String::from_utf16_lossy(&class[..length.max(0) as usize])})
+    }
+    json!({"target":window(target),"foreground":window(unsafe {GetForegroundWindow()}),"desktop":super::desktop::context()})
+}
+pub fn return_focus(hwnd: HWND, until: Instant) -> Result<(), Error> {
+    // Foreground return releases an existing script resource. It generates no
+    // keyboard/mouse payload and remains possible after new-input admission closes.
+    super::desktop::ensure_input_desktop()?;
+    focus_inner(hwnd, until, &mut false, true)
+}
+fn focus_inner(
+    hwnd: HWND,
+    until: Instant,
+    dispatched: &mut bool,
+    returning: bool,
+) -> Result<(), Error> {
     unsafe {
         let mut activation = None;
         if GetForegroundWindow() != hwnd {
-            let _mutation = mutation(until)?;
+            let _mutation = if returning {
+                None
+            } else {
+                Some(mutation(until)?)
+            };
             let attachment = ForegroundAttachment::acquire(hwnd);
-            check(until)?;
+            if !returning {
+                check(until)?;
+            }
             no_held_keys()?;
             super::desktop::ensure_input_desktop()?;
             *dispatched = true;
@@ -258,18 +292,17 @@ pub fn focus(hwnd: HWND, until: Instant, dispatched: &mut bool) -> Result<(), Er
         // before the exact HWND is foreground. Waiting owns no mutation gate.
         let settle = until.min(Instant::now() + Duration::from_millis(200));
         while GetForegroundWindow() != hwnd && Instant::now() < settle {
-            check(until)?;
-            if closing() {
+            if !returning {
+                check(until)?;
+            }
+            if !returning && closing() {
                 return Err(Error::Closed);
             }
             std::thread::sleep(Duration::from_millis(5));
         }
         if GetForegroundWindow() != hwnd {
-            return Err(failed(format!(
-                "Target did not become foreground; no keyboard input issued (target={}, actual={}, activation={activation:?})",
-                hwnd.0 as usize,
-                GetForegroundWindow().0 as usize,
-            )));
+            return Err(Error::NativeFailure { code:"foreground_unavailable".into(), message:format!(
+                "Target did not become foreground; no target keyboard or mouse payload was issued. Windows declined this foreground transition; inspect current desktop state before a fresh request. activation={activation:?}; diagnostics={}",foreground_diagnostics(hwnd)) });
         }
         Ok(())
     }
@@ -426,6 +459,14 @@ pub fn send(
         return Err(failed("Foreground changed before dispatch"));
     }
     let keyboard = batch.iter().any(|event| event.r#type == INPUT_KEYBOARD);
+    let pointer = batch.iter().any(|event| event.r#type == INPUT_MOUSE);
+    let pointer_move = batch.iter().any(|event| {
+        event.r#type == INPUT_MOUSE
+            && unsafe { event.Anonymous.mi.dwFlags.contains(MOUSEEVENTF_MOVE) }
+    });
+    if pointer {
+        super::execution_scope::before_pointer()?;
+    }
     let mut queue = None;
     {
         let _mutation = mutation(until)?;
@@ -455,6 +496,9 @@ pub fn send(
             |events| unsafe { SendInput(events, std::mem::size_of::<INPUT>() as i32) },
         )?;
         *accepted = insertion.accepted;
+        if pointer_move && insertion.accepted > 0 {
+            super::execution_scope::after_pointer_move()?;
+        }
         if !insertion.complete {
             if !insertion.cleanup_complete {
                 GATE.fail_cleanup();
@@ -523,6 +567,50 @@ pub fn terminal_keypress_boundary(until: Instant) -> Result<(), Error> {
 // It produces no character. A changed toggle bit plus key-up proves only that
 // the attached target queue read the tail, never that Save/another action worked.
 const DRAIN_KEY: u16 = 0xe8;
+/// Settle CUA caption pen preparation before a later mouse move or foreground
+/// return. Pen-up can enqueue a promoted mouse move after foreground activation.
+/// A read tail on the exact receiver queue is required; no business key is sent.
+pub(super) fn drain_caption(window: HWND, placement: INPUT, until: Instant) -> Result<(), Error> {
+    if unsafe { GetForegroundWindow() } != window {
+        return Err(failed("Caption receiver changed before preparation drain"));
+    }
+    let mutation = mutation(until)?;
+    let mut queue = KeyboardQueue::attach(window)?;
+    let inserted = (|| {
+        no_held_keys()?;
+        queue.validate(window)?;
+        // Resume the mouse at the same already-proven caption point. Windows
+        // can defer the pen's promoted move until mouse input resumes. Both
+        // preparations now have the same endpoint, before the queue tail.
+        let events = keyboard_drain_batch(&[placement]);
+        let insertion = checked_insert(
+            &events,
+            0,
+            || {
+                keyboard_preflight(until, Instant::now(), closing(), cleanup_failed())?;
+                super::desktop::ensure_input_desktop()?;
+                super::execution_scope::check()?;
+                queue.validate(window)
+            },
+            |events| unsafe { SendInput(events, std::mem::size_of::<INPUT>() as i32) },
+        )?;
+        if !insertion.complete {
+            // This is preparation only, but an incomplete marker still cannot
+            // release the shared lease as a confirmed input boundary.
+            fail_delivery();
+            return Err(failed("Caption preparation drain insertion is unconfirmed"));
+        }
+        Ok(())
+    })();
+    drop(mutation);
+    let read = inserted.and_then(|()| queue.await_read(window, until, None));
+    let detached = queue.finish();
+    read.and(detached)?;
+    if unsafe { GetForegroundWindow() } != window {
+        return Err(failed("Caption receiver changed during preparation drain"));
+    }
+    Ok(())
+}
 fn keyboard_drain_batch(batch: &[INPUT]) -> Vec<INPUT> {
     batch
         .iter()

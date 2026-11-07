@@ -1,6 +1,83 @@
 use super::*;
 
 impl<B: Backend, C: Clock> Runtime<B, C> {
+    /// Retire only positively exited incarnations after a failed final read.
+    /// This never launches, quits, adopts a replacement or repeats any input.
+    pub fn retire_exited_instances_until(&self, deadline: Instant) -> Result<usize, Error> {
+        let deadline = self
+            .bounded_deadline(Some(deadline))
+            .expect("bounded deadline");
+        let (flight, apps, provider) = {
+            let mut state = self.state();
+            self.live_context(&state)?;
+            if state.busy {
+                return Err(Error::Busy);
+            }
+            self.check_deadline(Some(deadline))?;
+            state.busy = true;
+            (
+                Flight::new(&self.state),
+                state.apps.clone(),
+                self.backend.stamp(),
+            )
+        };
+        let poll = || self.remaining(deadline, Some(deadline));
+        let call = CallContext { poll: &poll };
+        // Exit is asynchronous: the first failed inventory can precede kernel
+        // process death. Retry only this read-only proof, under one shared cap.
+        let result = (|| {
+            let until = deadline.min(Instant::now() + Duration::from_millis(500));
+            let mut exited = Vec::new();
+            loop {
+                exited.clear();
+                let mut identity_gap = None;
+                for app in &apps {
+                    call.remaining()?;
+                    match self.backend.application_exited(app, &call) {
+                        Ok(true) => exited.push(app.clone()),
+                        Ok(false) => {}
+                        Err(error) if matches!(&error, Error::NativeFailure { code, .. } if code == "app_changed") => {
+                            identity_gap = Some(error)
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                if identity_gap.is_none() && !exited.is_empty() {
+                    break;
+                }
+                if Instant::now() >= until {
+                    if let Some(error) = identity_gap {
+                        return Err(error);
+                    }
+                    break;
+                }
+                std::thread::sleep(
+                    Duration::from_millis(10).min(until.saturating_duration_since(Instant::now())),
+                );
+            }
+            let retired = {
+                let mut state = self.state();
+                self.live_context(&state)?;
+                self.check_deadline(Some(deadline))?;
+                if self.backend.stamp() != provider {
+                    return Err(Error::WrongProvider);
+                }
+                state.apps.retain(|app| !exited.contains(app));
+                take_observations(&mut state, |observation| {
+                    exited.contains(&observation.target.app)
+                })
+            };
+            drop(retired);
+            Ok(exited.len())
+        })();
+        // A read failure is not an unwound native operation. Always complete
+        // this flight; dropping an unfinished flight seals the whole context.
+        let state = flight.finish();
+        self.live_context(&state)?;
+        let count = result?;
+        self.backend.cleanup_error().map_or(Ok(count), Err)
+    }
+
     pub fn launch_until(&self, deadline: Instant) -> ActionReceipt {
         let Some(app_id) = &self.application_id else {
             return ActionReceipt::rejected(Error::UnsupportedCapability);
@@ -73,6 +150,14 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
     /// Menu shortcuts for a proven app with no addressable window. The backend
     /// must independently prove foreground ownership before every key down.
     pub fn app_keypress_until(&self, keys: &[String], deadline: Instant) -> ActionReceipt {
+        self.application_input_until(Some(keys), deadline)
+    }
+
+    pub fn app_focus_until(&self, deadline: Instant) -> ActionReceipt {
+        self.application_input_until(None, deadline)
+    }
+
+    fn application_input_until(&self, keys: Option<&[String]>, deadline: Instant) -> ActionReceipt {
         let deadline = self.bounded_deadline(Some(deadline));
         let prepared = (|| {
             let mut state = self.state();
@@ -87,7 +172,15 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                 });
             }
             let app = state.apps[0].clone();
-            self.validate_target(&state, &app, Capability::Keypress)?;
+            self.validate_target(
+                &state,
+                &app,
+                if keys.is_some() {
+                    Capability::Keypress
+                } else {
+                    Capability::Focus
+                },
+            )?;
             self.check_deadline(deadline)?;
             let retired = take_observations(&mut state, |o| o.target.app == app);
             state.busy = true;
@@ -103,9 +196,15 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             Ok(_) if self.backend.stamp() != provider => {
                 ActionOutcome::rejected(Error::WrongProvider)
             }
-            Ok(_) => self
-                .backend
-                .keypress_application(&app, keys, &CallContext { poll: &poll }),
+            Ok(_) => match keys {
+                Some(keys) => {
+                    self.backend
+                        .keypress_application(&app, keys, &CallContext { poll: &poll })
+                }
+                None => self
+                    .backend
+                    .focus_application(&app, &CallContext { poll: &poll }),
+            },
             Err(e) => ActionOutcome::rejected(e),
         };
         let state = flight.finish();

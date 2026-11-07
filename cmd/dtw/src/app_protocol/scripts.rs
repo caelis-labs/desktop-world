@@ -326,29 +326,31 @@ impl<B: Backend + 'static> Coordinator<B> {
             }
         }
         let mut state = self.state.lock().unwrap();
-        if let Some(view) = state
+        let run = state
             .jobs
             .iter()
             .find(|j| j.submitted.request_id == *id)
             .unwrap()
             .script
             .as_ref()
-            .unwrap()
-            .view
-            .clone()
+            .unwrap();
+        if let Some(step) = run
+            .steps
+            .last()
+            .filter(|step| step.operation == "scene.after")
         {
-            value["view"] = view;
-            value["snapshot"] = state
-                .jobs
-                .iter()
-                .find(|j| j.submitted.request_id == *id)
-                .unwrap()
-                .script
-                .as_ref()
-                .unwrap()
-                .snapshot
-                .clone()
-                .unwrap_or(Value::Null);
+            value["observation"] = if let Some(error) = &step.error {
+                json!({"status":"failed","error":error_json(error)})
+            } else if let Some(error) = run.snapshot.as_ref().and_then(|v| v["image"].get("error"))
+            {
+                json!({"status":"partial","error":error})
+            } else {
+                json!({"status":"observed"})
+            };
+        }
+        if let Some(view) = &run.view {
+            value["view"] = view.clone();
+            value["snapshot"] = run.snapshot.clone().unwrap_or(Value::Null);
             if agent_surface {
                 state.scene.publish();
             }
@@ -376,7 +378,11 @@ impl<B: Backend + 'static> Coordinator<B> {
         let action = if scene_call {
             !matches!(
                 call.op.as_str(),
-                "scene.look" | "scene.capture" | "scene.after" | "scene.readText"
+                "scene.look"
+                    | "scene.capture"
+                    | "scene.after"
+                    | "scene.readText"
+                    | "scene.waitForNewWindow"
             )
         } else {
             parsed.as_ref().is_ok_and(|s| is_action(&s.command))
@@ -495,11 +501,34 @@ impl<B: Backend + 'static> Coordinator<B> {
             }
         };
         let response = if let Some(error) = &work.completed.error {
-            Err(engine::HostError {
-                message: error.message.clone(),
-                code: Some(error.code.clone()),
-                details: error.details.clone(),
-            })
+            // The implicit, read-only follow-up is a separate receipt. Let
+            // the VM settle the original result even if the UI is unreadable.
+            // Interruption and a closed execution still end the whole script.
+            if call.op == "scene.after"
+                && !matches!(
+                    error.code.as_str(),
+                    "closed"
+                        | "cancelled"
+                        | "timed_out"
+                        | "timeout"
+                        | "deadline_exceeded"
+                        | "native_stopping"
+                        | "app_changed"
+                        | "wrong_app"
+                        | "wrong_provider"
+                        | "invalid_observation"
+                )
+                && Instant::now() < deadline
+                && self.state.lock().unwrap().terminal.is_none()
+            {
+                Ok(Value::Null)
+            } else {
+                Err(engine::HostError {
+                    message: error.message.clone(),
+                    code: Some(error.code.clone()),
+                    details: error.details.clone(),
+                })
+            }
         } else if let Some(receipt) = &work.completed.receipt {
             let mut receipt = wire::receipt(receipt);
             if scene_call {
@@ -515,10 +544,23 @@ impl<B: Backend + 'static> Coordinator<B> {
         } else {
             Ok(work.completed.value.clone().unwrap_or(Value::Null))
         };
+        // Semantic reads do not cancel pixels requested earlier in this script.
+        // Input, failed reads and changed surfaces still retire the old image.
+        let preserve_capture = call.op == "scene.look"
+            && work.completed.error.is_none()
+            && work.completed.image.is_none()
+            && last_image.is_some()
+            && last_capture.as_ref().is_some_and(|capture| {
+                capture["observation"]["windows"].is_array()
+                    && work.completed.value.as_ref().is_some_and(|snapshot| {
+                        capture["observation"]["windows"] == snapshot["windows"]
+                    })
+            });
         if scene_call
+            && !preserve_capture
             && matches!(
                 call.op.as_str(),
-                "scene.look" | "scene.capture" | "scene.after"
+                "scene.look" | "scene.capture" | "scene.after" | "scene.waitForNewWindow"
             )
         {
             *last_image = None;
@@ -543,15 +585,27 @@ impl<B: Backend + 'static> Coordinator<B> {
         if scene_call
             && matches!(
                 call.op.as_str(),
-                "scene.look" | "scene.capture" | "scene.after"
+                "scene.look" | "scene.capture" | "scene.after" | "scene.waitForNewWindow"
             )
         {
-            if work.completed.error.is_some() {
+            let wait_timeout = call.op == "scene.waitForNewWindow"
+                && work
+                    .completed
+                    .error
+                    .as_ref()
+                    .is_some_and(|e| e.code == "wait_timeout");
+            if work.completed.error.is_some() && !wait_timeout {
                 run.snapshot = None;
                 run.view = None;
             } else {
                 run.snapshot = work.completed.value.clone();
                 run.view = projected;
+                if preserve_capture {
+                    if let (Some(view), Some(capture)) = (&mut run.view, &last_capture) {
+                        view["image"] = capture["observation"]["image"].clone();
+                        view["image"]["captured_at_call"] = capture["step"].clone();
+                    }
+                }
             }
         }
         if text_read_failed {

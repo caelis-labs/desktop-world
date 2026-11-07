@@ -28,10 +28,12 @@ final class ComputerUseDelegate: NSObject, NSApplicationDelegate, WKNavigationDe
     var configuredWindowX: CGFloat?
     var configuredWindowY: CGFloat?
     var writeError = ""
+    var filePanelDelaySeconds: TimeInterval = 0
     var mainWindow: NSWindow!
     var peers: [NSWindow] = []
     var peerFields: [NSTextField] = []
     var peerCounts: [Int] = []
+    var peerCounterLabels: [NSTextField] = []
     var body: NSView!
     var nativeView: NSView!
     var chat: ChatCanvas!
@@ -79,6 +81,9 @@ final class ComputerUseDelegate: NSObject, NSApplicationDelegate, WKNavigationDe
             caseName = name; webURL = url
             activateOnPresentation = config?["activate"] as? Bool ?? false
             initialMultilineFocus = config?["initial_multiline_focus"] as? Bool ?? false
+            if let delay = config?["file_panel_delay_ms"] as? Int, (0...5_000).contains(delay) {
+                filePanelDelaySeconds = Double(delay) / 1_000
+            }
             configuredWindowX = (config?["window_x"] as? NSNumber).map { CGFloat(truncating: $0) }
             configuredWindowY = (config?["window_y"] as? NSNumber).map { CGFloat(truncating: $0) }
         } catch { writeError = "configuration: \(error.localizedDescription)" }
@@ -156,28 +161,42 @@ final class ComputerUseDelegate: NSObject, NSApplicationDelegate, WKNavigationDe
         window.title = "DTW Computer Use — \(caseName) — Peer \(index + 1)"; window.isReleasedWhenClosed = false
         let field = NSTextField(frame: NSRect(x: 20, y: 100, width: 390, height: 28)); field.setAccessibilityLabel("Peer note"); window.contentView!.addSubview(field)
         let b = button("Increment peer counter", NSRect(x: 20, y: 40, width: 230, height: 32), #selector(incrementPeer(_:)), in: window.contentView!); b.tag = index
-        peers.append(window); peerFields.append(field); peerCounts.append(0); present(window, firstResponder: field); event("new-peer", ["index": index]); publish()
+        let count = NSTextField(labelWithString: "Peer counter: 0"); count.frame = NSRect(x: 270, y: 44, width: 160, height: 22); count.setAccessibilityLabel("Peer counter"); window.contentView!.addSubview(count)
+        peers.append(window); peerFields.append(field); peerCounts.append(0); peerCounterLabels.append(count); present(window, firstResponder: field); event("new-peer", ["index": index]); publish()
     }
-    @objc func incrementPeer(_ sender: NSButton) { peerCounts[sender.tag] += 1; event("peer-increment", ["index": sender.tag, "count": peerCounts[sender.tag]]); publish() }
+    @objc func incrementPeer(_ sender: NSButton) { peerCounts[sender.tag] += 1; peerCounterLabels[sender.tag].stringValue = "Peer counter: \(peerCounts[sender.tag])"; event("peer-increment", ["index": sender.tag, "count": peerCounts[sender.tag]]); publish() }
     func owned(_ url: URL) -> Bool { url.resolvingSymlinksInPath().deletingLastPathComponent() == root.resolvingSymlinksInPath() }
+    func initializeFilePanel(_ kind: String) {
+        event("file-panel-initializing", ["kind": kind, "delay_ms": filePanelDelaySeconds * 1_000])
+        // Optional deterministic stand-in for synchronous cold AppKit/service
+        // initialization inside the AX action callback. Never an input retry.
+        if filePanelDelaySeconds > 0 { Thread.sleep(forTimeInterval: filePanelDelaySeconds) }
+    }
     @objc func openFile() {
+        initializeFilePanel("open")
         let open = NSOpenPanel(); open.directoryURL = root; open.canChooseDirectories = false; open.allowsMultipleSelection = false
         panel = open; panelKind = "open"; panelResult = "pending"; fileError = ""
         open.beginSheetModal(for: mainWindow) { [weak self] response in
             guard let self else { return }; self.panelResult = response == .OK ? "ok" : "cancel"
             if response == .OK, let url = open.url {
-                do { guard self.owned(url) else { throw CocoaError(.fileReadNoPermission) }; self.openedText = try String(contentsOf: url, encoding: .utf8) } catch { self.fileError = error.localizedDescription; self.panelResult = "error" }
+                do {
+                    guard self.owned(url) else { throw CocoaError(.fileReadNoPermission) }
+                    self.openedText = try String(contentsOf: url, encoding: .utf8)
+                    self.mainWindow.endEditing(for: nil)
+                    self.note.stringValue = self.openedText; self.cleanNote = self.openedText
+                } catch { self.fileError = error.localizedDescription; self.panelResult = "error" }
             }
             self.event("open-file", ["result": self.panelResult, "error": self.fileError]); self.publish()
         }; publish()
     }
     @objc func saveFile() {
+        initializeFilePanel("save")
         let save = NSSavePanel(); save.directoryURL = root; save.nameFieldStringValue = "owned-note.txt"; save.canCreateDirectories = false; save.allowedContentTypes = [.plainText]; save.isExtensionHidden = false
         panel = save; panelKind = "save"; panelResult = "pending"; fileError = ""
         save.beginSheetModal(for: mainWindow) { [weak self] response in
             guard let self else { return }; self.panelResult = response == .OK ? "ok" : "cancel"
             if response == .OK, let url = save.url {
-                do { guard self.owned(url), url.lastPathComponent == "owned-note.txt" else { throw CocoaError(.fileWriteNoPermission) }; try self.noteText.write(to: url, atomically: true, encoding: .utf8); self.fileSaves += 1 } catch { self.fileError = error.localizedDescription; self.panelResult = "error" }
+                do { guard self.owned(url), url.lastPathComponent == "owned-note.txt" else { throw CocoaError(.fileWriteNoPermission) }; try self.noteText.write(to: url, atomically: true, encoding: .utf8); self.cleanNote = self.noteText; self.fileSaves += 1 } catch { self.fileError = error.localizedDescription; self.panelResult = "error" }
             }
             self.event("save-file", ["result": self.panelResult, "error": self.fileError]); self.publish()
         }; publish()
@@ -237,7 +256,13 @@ final class ComputerUseDelegate: NSObject, NSApplicationDelegate, WKNavigationDe
         let noteSelection = (note.currentEditor() as? NSTextView)?.selectedRange()
         let native: [String: Any] = ["counter": counter, "multiline_note": multilineNote.string, "multiline_focused": mainWindow.firstResponder === multilineNote, "note": noteText, "dirty": noteText != cleanNote, "quit": ["visible": quitConfirmation != nil, "requests": quitRequests, "cancellations": quitCancellations], "note_selection": noteSelection.map { ["location": $0.location, "length": $0.length, "unit": "utf16"] as [String: Any] } as Any? ?? NSNull(), "saved_note": savedNote, "saves": saves, "reviewed": reviewed.state == .on, "selection": choice.titleOfSelectedItem ?? "", "slider": slider.doubleValue, "slider_changes": sliderChanges, "audit_index": auditIndex, "audit_count": auditCount, "gestures": gestures, "left_scroll_y": leftScroll.contentView.bounds.origin.y, "right_scroll_y": rightScroll.contentView.bounds.origin.y, "peers": peers.enumerated().map { index, window in ["title": window.title, "counter": peerCounts[index], "note": peerFields[index].currentEditor()?.string ?? peerFields[index].stringValue] as [String: Any] }, "panel": ["kind": panelKind, "result": panelResult, "visible": panel?.isVisible ?? false, "opened_text": openedText, "error": fileError, "file_saves": fileSaves]]
         var chatState = chat.state; chatState["pins"] = chat.pinCount
-        let state: [String: Any] = ["schema_version": 1, "case": caseName, "pid": ProcessInfo.processInfo.processIdentifier, "process_birth": fixtureProcessBirth() as Any? ?? NSNull(), "pressed_mouse_buttons": NSEvent.pressedMouseButtons, "mode": mode, "ready": mainWindow.isVisible, "write_error": writeError, "environment": ["pointer_screen": pointer.map { [finite($0.x), finite($0.y)] } as Any? ?? NSNull(), "frontmost_pid": NSWorkspace.shared.frontmostApplication?.processIdentifier as Any? ?? NSNull()], "windows": rows, "anchors": anchors, "native": native, "chat": chatState, "web": ["url": webView.url?.absoluteString ?? webURL, "loaded": loaded, "error": webError]]
+        let environment: [String: Any] = [
+            "pointer_screen": pointer.map { [finite($0.x), finite($0.y)] } as Any? ?? NSNull(),
+            "frontmost_pid": NSWorkspace.shared.frontmostApplication?.processIdentifier as Any? ?? NSNull(),
+            "application_active": NSApp.isActive,
+            "key_window_id": NSApp.keyWindow?.windowNumber as Any? ?? NSNull(),
+        ]
+        let state: [String: Any] = ["schema_version": 1, "case": caseName, "pid": ProcessInfo.processInfo.processIdentifier, "process_birth": fixtureProcessBirth() as Any? ?? NSNull(), "pressed_mouse_buttons": NSEvent.pressedMouseButtons, "mode": mode, "ready": mainWindow.isVisible, "write_error": writeError, "environment": environment, "windows": rows, "anchors": anchors, "native": native, "chat": chatState, "web": ["url": webView.url?.absoluteString ?? webURL, "loaded": loaded, "error": webError]]
         do { let data = try JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]); try data.write(to: root.appendingPathComponent("native-state.json"), options: .atomic) } catch { failIO("publish state", error) }
     }
     func tick() { if let command = try? String(contentsOf: root.appendingPathComponent("command"), encoding: .utf8), command.trimmingCharacters(in: .whitespacesAndNewlines) == "quit" { cleanupRequested = true; NSApp.terminate(nil); return }; publish() }

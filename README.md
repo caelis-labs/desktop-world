@@ -52,8 +52,9 @@ and pixel fallback. DTW prepares receivers and returns observations after input.
 acceptance boundaries. The bundled Skill teaches the Agent the available operations. Your Agent handles
 approvals. On macOS, relevant operations require Accessibility and Screen Recording
 permissions. Keep the desktop unlocked. When foreground interaction is needed,
-DTW brings the target window forward and leaves it there; you can switch away
-when you choose.
+DTW brings the verified target forward for the script and restores the previous
+foreground when it can still prove ownership. Switching away stops further input
+from the current script.
 
 ## Current availability
 

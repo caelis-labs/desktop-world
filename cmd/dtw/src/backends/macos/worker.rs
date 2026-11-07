@@ -145,6 +145,7 @@ fn input_operation(op: &str) -> bool {
             | "type_text"
             | "keypress"
             | "keypress_app"
+            | "focus_app"
             | "scroll"
             | "click"
             | "move"
@@ -160,8 +161,15 @@ fn now_ms() -> u64 {
         .unwrap_or_default()
         .as_millis() as u64
 }
+fn trace_now_ms() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+        * 1_000.0
+}
 fn route_trace(request: &Value, route: &str, reason: &str) -> Value {
-    let mut record = json!({"at_unix_ms":now_ms(),"pid":std::process::id(),
+    let mut record = json!({"at_unix_ms":trace_now_ms(),"pid":std::process::id(),
         "operation":request["operation"],"window":request["target"]["native_id"],"route":route,"reason":reason});
     if reason == "native_keyboard_semantics" {
         record["capability_detail"] = request["_keyboard_capability"].clone();
@@ -170,14 +178,34 @@ fn route_trace(request: &Value, route: &str, reason: &str) -> Value {
 }
 fn trace_route(request: &Value, route: &str, reason: &str) {
     if std::env::var("DTW_INPUT_TRACE").ok().as_deref() == Some("1") {
-        eprintln!("dtw_input {}", route_trace(request, route, reason));
+        emit_input_trace("dtw_input", &route_trace(request, route, reason));
+    }
+}
+fn emit_input_trace(kind: &str, record: &Value) {
+    let line = format!("{kind} {record}\n");
+    eprint!("{line}");
+    // Some hosts discard child stderr on failed tools. An opt-in private file
+    // keeps the same bounded, payload-free records independently of the host.
+    if let Some(path) = std::env::var_os("DTW_INPUT_TRACE_FILE") {
+        use std::os::unix::fs::OpenOptionsExt;
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(path)
+        {
+            if file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+                let _ = file.write_all(line.as_bytes());
+            }
+        }
     }
 }
 pub(super) fn trace_execution_refusal(request: &Value) {
     if std::env::var("DTW_INPUT_TRACE").ok().as_deref() == Some("1") {
         let mut record = route_trace(request, "refused", "execution_scope_preflight");
         record["dispatch"] = json!("not_dispatched");
-        eprintln!("dtw_input {record}");
+        emit_input_trace("dtw_input", &record);
     }
 }
 // Owned metadata survives dispatch_owned consuming the request. Drop closes even
@@ -202,8 +230,8 @@ impl PointerBorrowTrace {
     fn emit(&self, phase: &str) {
         let mut record = self.0.clone();
         record["phase"] = json!(phase);
-        record["at_unix_ms"] = json!(now_ms());
-        eprintln!("dtw_input_interval {}", record);
+        record["at_unix_ms"] = json!(trace_now_ms());
+        emit_input_trace("dtw_input_interval", &record);
     }
 }
 impl Drop for PointerBorrowTrace {
@@ -226,6 +254,7 @@ struct BackgroundTarget {
     surface_owner: Value,
     bounds: Value,
     keyboard: bool,
+    native_modal: bool,
     foreground: bool,
     deadline: u64,
     failures: RefCell<BackgroundValidationFailures>,
@@ -344,12 +373,12 @@ fn background_validation(
             json!({"error":"target_changed","message":"Addressed surface owner incarnation changed"}),
         );
     }
-    if phase == 0 && modal_input_requires_foreground(reply)? {
+    if phase == 0 && target.keyboard && native_modal_input(reply)? != target.native_modal {
         // The initial side-effect-free preflight has already selected a route.
         // A later modal transition stops this sequence; it cannot replay input
         // through the foreground route. Paired cleanup uses phases 1/2.
         return Err(json!({"error":"background_route_changed",
-            "message":"The target became modal during background input; refresh before new work"}));
+            "message":"The modal keyboard context changed during background input; inspect before new work"}));
     }
     if phase == 0 && !target.keyboard && reply["bounds"] != target.bounds {
         return Err(
@@ -399,6 +428,9 @@ fn foreground_delivery(
 }
 
 fn record_foreground_cleanup(result: &mut Value, cleanup: Value) {
+    if let Some(point) = cleanup.get("execution_pointer") {
+        result["execution_pointer"] = point.clone();
+    }
     result["delivery"]["focus_return"] = if cleanup.get("error").is_some() {
         json!("unconfirmed")
     } else {
@@ -410,6 +442,19 @@ fn record_foreground_cleanup(result: &mut Value, cleanup: Value) {
         // known dispatch or replacing the original action failure.
         result["cleanup_error"] = cleanup;
     }
+}
+
+#[cfg(test)]
+#[test]
+fn pointer_handoff_preserves_known_dispatch_and_primary_failure() {
+    let mut result = json!({"dispatch":"dispatched", "error":"original", "delivery":{}});
+    record_foreground_cleanup(
+        &mut result,
+        json!({"focus":"unchanged", "execution_pointer":[-800.25,125.5]}),
+    );
+    assert_eq!(result["dispatch"], "dispatched");
+    assert_eq!(result["error"], "original");
+    assert_eq!(result["execution_pointer"], json!([-800.25, 125.5]));
 }
 
 fn click_can_follow_focus(result: &Value) -> bool {
@@ -437,22 +482,47 @@ fn background_result(mut result: Value) -> BackgroundAttempt {
         result["error"] = result["error"]["code"].clone();
     }
     result["evidence"] = json!("unverified");
-    result["route"] = json!("cua_pid_window");
+    let menu = result["transport"] == "ax_menu_equivalent";
+    result["route"] = json!(if menu {
+        "cua_ax_menu"
+    } else {
+        "cua_pid_window"
+    });
     result["delivery"] = delivery(
         Some("background"),
-        Some("background_supported"),
+        Some(if menu {
+            "native_menu_equivalent"
+        } else {
+            "background_supported"
+        }),
         false,
         None,
     );
     BackgroundAttempt::Completed(result)
 }
 
-fn modal_input_requires_foreground(validation: &Value) -> Result<bool, Value> {
+fn native_modal_input(validation: &Value) -> Result<bool, Value> {
     validation["background_requires_foreground"]
         .as_bool()
         .ok_or_else(
             || json!({"error":"invalid_response","message":"Missing native modal input preflight"}),
         )
+        .map(|modal| modal || validation["native_open_panel"] == true)
+}
+
+fn native_menu_click(
+    request: &Value,
+    x: f64,
+    y: f64,
+    send: impl FnOnce(&Value, bool) -> Value,
+) -> Value {
+    let mut menu = request.clone();
+    menu["operation"] = json!("try_native_menu_click");
+    menu["screen_x"] = json!(x);
+    menu["screen_y"] = json!(y);
+    // NativeStore owns AX actions and this process's bound target. The scene
+    // extension is a separate entry point for SCK and pointer presentation.
+    send(&menu, false)
 }
 
 fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> BackgroundAttempt {
@@ -464,8 +534,18 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
         return BackgroundAttempt::NotApplicable;
     }
     let keyboard = matches!(op.as_str(), "type_text" | "keypress");
+    // Once a script owns foreground, keep its keyboard on the existing native
+    // foreground route. PID events can still be ignored by remote/modal views
+    // even while their app is active. This grants no activation or reacquisition.
+    if super::input_route::owned_foreground_keyboard(&op, request["_execution_foreground"] == true)
+    {
+        return BackgroundAttempt::Declined("owned_foreground_keyboard".into());
+    }
     let check = json!({"operation":"validate_background","target":request["target"],
         "keyboard":keyboard,"consume":true,"_execution_foreground":request["_execution_foreground"] == true,
+        "pointer_operation":op,"pointer_button":request["button"],
+        "pointer_point":if op == "drag" { json!([request["path"][0]["x"],request["path"][0]["y"]]) }
+            else { json!([request["screen_x"],request["screen_y"]]) },
         "deadline_unix_ms":request["deadline_unix_ms"]});
     let before = native(&check, false);
     if let Err(error) = validate_reply(&before, &request["target"]) {
@@ -498,6 +578,28 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
         ));
     }
     if !keyboard {
+        if op == "click"
+            && before["input_framework"] == "appkit"
+            && request["button"].as_str().unwrap_or("left") == "left"
+            && request["count"].as_u64().unwrap_or(1) == 1
+        {
+            if !scene_worker {
+                return BackgroundAttempt::Completed(rejected(
+                    json!({"error":"invalid_request","message":"Pointer input needs its scene owner"}),
+                    &op,
+                ));
+            }
+            if let Err(error) = admit_scene(request, leased) {
+                return BackgroundAttempt::Completed(rejected(error, &op));
+            }
+            let mut selected = native_menu_click(request, x, y, native);
+            if selected["native_menu"] != false {
+                trace_route(request, "native", "menu_point_press");
+                selected["delivery"] =
+                    delivery(Some("semantic"), Some("native_menu_point"), false, None);
+                return BackgroundAttempt::Completed(selected);
+            }
+        }
         if op == "drag" && before["surface_owner"]["pid"] == request["target"]["app"]["pid"] {
             let mut movement = request.clone();
             movement["operation"] = json!("try_native_window_move");
@@ -525,14 +627,36 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
         // CUA cannot direct input to a different process on this app's behalf.
         return BackgroundAttempt::Declined("associated_process_keyboard".into());
     }
-    if keyboard {
-        match modal_input_requires_foreground(&before) {
-            Ok(true) => return BackgroundAttempt::Declined("native_modal_keyboard".into()),
-            Ok(false) => (),
+    let native_modal = if keyboard {
+        match native_modal_input(&before) {
+            Ok(modal) => modal,
             Err(error) => return BackgroundAttempt::Completed(rejected(error, &op)),
         }
+    } else {
+        false
+    };
+    // NSRemoteView file panels consume session keyboard events, not events
+    // addressed to their AppKit host. The real ESC regression proves that even
+    // an already-frontmost host can ACK delivery without closing the panel.
+    // Decline before CUA primes a key window or posts a payload; ordinary native
+    // dialogs and text fields retain their addressed keyboard opportunities.
+    if keyboard && before["native_open_panel"] == true {
+        return BackgroundAttempt::Declined("native_modal_keyboard".into());
     }
     if !keyboard {
+        if op == "click"
+            && before["native_open_panel"] == true
+            && request["button"].as_str().unwrap_or("left") == "left"
+            && request["count"].as_u64().unwrap_or(1) == 1
+        {
+            return BackgroundAttempt::Declined("native_open_panel_click".into());
+        }
+        if before["pointer_key_window_required"] == true && request["_execution_foreground"] != true
+        {
+            // Clean preflight only. Once the script owns its key window, retry
+            // the original CUA addressed payload without a real-pointer warp.
+            return BackgroundAttempt::Declined("native_pointer_key_window".into());
+        }
         if let Some(reason) = super::input_route::pointer_reason(
             &op,
             before["input_framework"].as_str().unwrap_or("unknown"),
@@ -558,7 +682,7 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
     }
     let mut input = json!({"operation":op,"pid":if keyboard {request["target"]["app"]["pid"].clone()} else {before["surface_owner"]["pid"].clone()},
         "window_id":request["target"]["native_id"],"deadline_unix_ms":request["deadline_unix_ms"],
-        "input_framework":before["input_framework"].as_str().unwrap_or("unknown"),
+        "input_framework":before["input_framework"].as_str().unwrap_or("unknown"),"native_modal":native_modal,
         "screen_x":x,"screen_y":y,"window_x":x-left,"window_y":y-top});
     for key in ["count", "button", "delta_x", "delta_y", "text", "keys"] {
         if let Some(value) = request.get(key) {
@@ -573,6 +697,7 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
         surface_owner: before["surface_owner"].clone(),
         bounds: before["bounds"].clone(),
         keyboard,
+        native_modal,
         foreground: request["_execution_foreground"] == true,
         deadline: request["deadline_unix_ms"].as_u64().unwrap_or(0),
         failures: RefCell::default(),
@@ -590,6 +715,9 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
         (&mut target as *mut BackgroundTarget).cast(),
         validate_background,
     );
+    if result["transport"] == "ax_menu_equivalent" {
+        trace_route(request, "native", "ax_menu_equivalent");
+    }
     target.failures.borrow().apply(&mut result);
     if result["capability_evidence"] == "native_keyboard_semantics" {
         request["_keyboard_capability"] = result["capability_detail"].clone();
@@ -661,7 +789,7 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
         }
         return native(&request, false);
     }
-    if op == "keypress_app" {
+    if matches!(op, "keypress_app" | "focus_app") {
         if request["input_policy"] != "auto" {
             return foreground_required("windowless_app_shortcut");
         }
@@ -836,7 +964,7 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
     if request["_defer_foreground"] == true && request["_execution_foreground"] != true {
         if let Some(reason) = &foreground_reason {
             return json!({"dispatch":"not_dispatched","evidence":"unverified",
-                "foreground_plan":{"reason":reason,"visual":super::input_route::visual_focus(op),
+                "foreground_plan":{"reason":reason,"visual":super::input_route::plan_visual(reason, op),
                     "capability_detail":request["_keyboard_capability"]}});
         }
     }
@@ -1157,11 +1285,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn menu_pixels_use_the_bound_native_action_bridge_once() {
+        let request = json!({"operation":"click", "target":{"app":{"pid":7,"generation":8},"native_id":9},
+            "deadline_unix_ms":123456,"screen_x":1,"screen_y":2});
+        for reply in [
+            json!({"native_menu":false}),
+            json!({"native_menu":true,"dispatch":"dispatched","evidence":"unverified"}),
+            json!({"native_menu":true,"dispatch":"unknown","evidence":"unverified","error":"ax_action_failed"}),
+        ] {
+            let calls = std::cell::Cell::new(0);
+            let result = native_menu_click(&request, 42.5, -71.25, |sent, scene| {
+                calls.set(calls.get() + 1);
+                assert!(
+                    !scene,
+                    "AX menu actions belong to NativeStore, not the SCK extension"
+                );
+                assert_eq!(sent["operation"], "try_native_menu_click");
+                assert_eq!(sent["target"], request["target"]);
+                assert_eq!(sent["deadline_unix_ms"], request["deadline_unix_ms"]);
+                assert_eq!(sent["screen_x"], 42.5);
+                assert_eq!(sent["screen_y"], -71.25);
+                reply.clone()
+            });
+            assert_eq!(
+                result, reply,
+                "No synthetic acknowledgement or replay after an AX result"
+            );
+            assert_eq!(calls.get(), 1);
+        }
+        assert_eq!(request["operation"], "click");
+    }
+
+    #[test]
     fn keyboard_trace_identifies_the_capability_without_text_or_key_payloads() {
         let request = json!({"operation":"keypress", "target":{"native_id":42},
-            "_keyboard_capability":"appkit_command_w", "text":"private note", "keys":["META","W"]});
+            "_keyboard_capability":"appkit_multiline_text", "text":"private note", "keys":["META","W"]});
         let trace = route_trace(&request, "activated", "native_keyboard_semantics");
-        assert_eq!(trace["capability_detail"], "appkit_command_w");
+        assert_eq!(trace["capability_detail"], "appkit_multiline_text");
         assert_eq!(trace["operation"], "keypress");
         assert!(trace.get("text").is_none());
         assert!(trace.get("keys").is_none());
@@ -1325,9 +1485,9 @@ mod tests {
     #[test]
     fn modal_input_preflight_is_typed_and_strict_policy_never_borrows_foreground() {
         let modal = json!({"background_requires_foreground":true});
-        assert_eq!(modal_input_requires_foreground(&modal), Ok(true));
+        assert_eq!(native_modal_input(&modal), Ok(true));
         assert_eq!(
-            modal_input_requires_foreground(&json!({"background_requires_foreground":false})),
+            native_modal_input(&json!({"background_requires_foreground":false})),
             Ok(false)
         );
         for malformed in [
@@ -1337,7 +1497,7 @@ mod tests {
             json!({"background_requires_foreground":"false"}),
         ] {
             assert_eq!(
-                modal_input_requires_foreground(&malformed).unwrap_err()["error"],
+                native_modal_input(&malformed).unwrap_err()["error"],
                 "invalid_response"
             );
         }
@@ -1357,7 +1517,7 @@ mod tests {
         let reason = "native_keyboard_semantics";
         let declined =
             background_result(json!({"dispatch":"not_dispatched","fallback_allowed":true,
-            "capability_evidence":reason,"capability_detail":"chromium_command_a",
+            "capability_evidence":reason,"capability_detail":"chromium_supplementary_unicode",
             "error":{"code":"background_unavailable","message":reason}}));
         assert!(matches!(declined, BackgroundAttempt::Declined(value) if value == reason));
         for dispatch in ["dispatched", "unknown"] {
@@ -1429,6 +1589,7 @@ mod tests {
             surface_owner: json!({"pid":7,"generation":1}),
             bounds: json!([10, 20, 300, 400]),
             keyboard: true,
+            native_modal: false,
             foreground: false,
             deadline: 0,
             failures: RefCell::default(),
@@ -1454,19 +1615,24 @@ mod tests {
             surface_owner: json!({"pid":7,"generation":1}),
             bounds: json!([0, 0, 100, 100]),
             keyboard: true,
+            native_modal: false,
             foreground: false,
             deadline: 0,
             failures: RefCell::default(),
         };
         let modal = json!({"target":identity,"bounds":target.bounds,
             "surface_owner":{"pid":7,"generation":1},"background_requires_foreground":true});
-        for keyboard in [false, true] {
-            target.keyboard = keyboard;
-            let error = background_validation(&modal, &target, 0).unwrap_err();
+        for initially_modal in [false, true] {
+            target.native_modal = initially_modal;
+            let mut initial = modal.clone();
+            initial["background_requires_foreground"] = json!(initially_modal);
+            assert!(background_validation(&initial, &target, 0).is_ok());
+            let mut changed = initial.clone();
+            changed["background_requires_foreground"] = json!(!initially_modal);
+            let error = background_validation(&changed, &target, 0).unwrap_err();
             assert_eq!(error["error"], "background_route_changed");
-            assert!(background_validation(&modal, &target, 1).is_ok());
-            let mut clear = modal.clone();
-            clear["background_requires_foreground"] = json!(false);
+            assert!(background_validation(&changed, &target, 1).is_ok());
+            let mut clear = initial.clone();
             assert!(background_validation(&clear, &target, 0).is_ok());
             clear
                 .as_object_mut()
@@ -1477,6 +1643,9 @@ mod tests {
                 "invalid_response"
             );
             assert!(background_validation(&clear, &target, 1).is_ok());
+            target.keyboard = false;
+            assert!(background_validation(&clear, &target, 0).is_ok());
+            target.keyboard = true;
             for dispatch in ["not_dispatched", "unknown"] {
                 let attempt = background_result(json!({"error":error, "dispatch":dispatch,
                     "fallback_allowed":false}));
@@ -1546,6 +1715,50 @@ mod tests {
         }
     }
 }
+// Keep blocking pipe reads off the Cocoa main thread. Otherwise an activation
+// notification can sit behind stdin and invalidate a later execution epoch.
+fn read_requests(input: &mut impl BufRead, mut publish: impl FnMut(Vec<u8>) -> bool) {
+    loop {
+        let mut bytes = Vec::new();
+        let size = (&mut *input)
+            .take(64 * 1024 + 2)
+            .read_until(b'\n', &mut bytes)
+            .unwrap_or(0);
+        if size == 0 || size > 64 * 1024 + 1 || bytes.last() != Some(&b'\n') || !publish(bytes) {
+            break;
+        }
+    }
+}
+fn next_request(
+    requests: &std::sync::mpsc::Receiver<Vec<u8>>,
+    mut pump: impl FnMut(),
+    stopped: impl Fn() -> bool,
+) -> Option<Vec<u8>> {
+    loop {
+        if stopped() {
+            return None;
+        }
+        pump();
+        match requests.recv_timeout(Duration::from_millis(20)) {
+            Ok(bytes) => {
+                // Drain already queued workspace history before arming or
+                // validating an execution, even when another frame is ready.
+                pump();
+                return Some(bytes);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return None,
+        }
+    }
+}
+fn pump_workspace_notifications() {
+    core_foundation::runloop::CFRunLoop::run_in_mode(
+        unsafe { core_foundation::runloop::kCFRunLoopDefaultMode },
+        Duration::from_millis(1),
+        false,
+    );
+}
+
 /// Called at executable startup on its main thread for private worker processes.
 pub fn worker_entry() -> bool {
     let scene_worker = match std::env::args().nth(1).as_deref() {
@@ -1573,27 +1786,14 @@ pub fn worker_entry() -> bool {
         }
         std::thread::sleep(Duration::from_millis(10));
     });
-    let stdin = std::io::stdin();
-    let mut input = stdin.lock();
+    let (publish, requests) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        read_requests(&mut stdin.lock(), |bytes| publish.send(bytes).is_ok());
+    });
     let mut output = std::io::stdout().lock();
     let mut leased = false;
-    loop {
-        // Cancellation can arrive during dispatch. Reach the shutdown run loop
-        // before blocking on another request, even while the parent retains stdin.
-        if TERMINATING.load(Ordering::Relaxed) {
-            break;
-        }
-        let mut bytes = Vec::new();
-        let size = (&mut input)
-            .take(64 * 1024 + 2)
-            .read_until(b'\n', &mut bytes)
-            .unwrap_or(0);
-        if size == 0 {
-            break;
-        }
-        if size > 64 * 1024 + 1 || bytes.last() != Some(&b'\n') {
-            break;
-        }
+    while let Some(bytes) = next_request(&requests, pump_workspace_notifications, stopping) {
         let request: Value = match serde_json::from_slice(&bytes) {
             Ok(v) => v,
             Err(_) => break,
@@ -1614,4 +1814,62 @@ pub fn worker_entry() -> bool {
     // EOF, malformed input and broken output use the same closed admission and
     // input drain as SIGTERM and parent death.
     shutdown_worker()
+}
+
+#[cfg(test)]
+mod workspace_dispatch_tests {
+    use super::*;
+    #[test]
+    fn idle_notifications_are_serviced_before_the_next_request() {
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        let mut pumps = 0;
+        let until = Instant::now() + Duration::from_secs(1);
+        let frame = next_request(
+            &receive,
+            || {
+                pumps += 1;
+                if pumps == 3 {
+                    send.send(b"ready\n".to_vec()).unwrap();
+                }
+            },
+            || Instant::now() > until,
+        );
+        assert_eq!(frame, Some(b"ready\n".to_vec()));
+        assert!(
+            pumps >= 3,
+            "No new request may be needed to deliver pending history"
+        );
+    }
+    #[test]
+    fn request_reader_preserves_frame_bounds_eof_and_backpressure() {
+        for (input, expected) in [
+            (b"one\ntwo\n".to_vec(), 2),
+            (b"incomplete".to_vec(), 0),
+            ([vec![b'x'; 64 * 1024 + 1], vec![b'\n']].concat(), 0),
+        ] {
+            let mut frames = Vec::new();
+            read_requests(&mut std::io::Cursor::new(input), |frame| {
+                frames.push(frame);
+                true
+            });
+            assert_eq!(frames.len(), expected);
+        }
+        let mut count = 0;
+        read_requests(&mut std::io::Cursor::new(b"one\ntwo\n"), |_| {
+            count += 1;
+            false
+        });
+        assert_eq!(count, 1);
+    }
+    #[test]
+    fn stopped_request_wait_never_admits_a_ready_frame() {
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        send.send(vec![1]).unwrap();
+        assert!(next_request(
+            &receive,
+            || panic!("stopping does not dispatch callbacks"),
+            || true
+        )
+        .is_none());
+    }
 }

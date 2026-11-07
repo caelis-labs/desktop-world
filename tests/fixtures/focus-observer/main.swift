@@ -3,8 +3,42 @@ import Foundation
 import CoreFoundation
 import Darwin
 
+// Same read-only PSN/PID/PSN proof as DTW's skylight::front_process_pid.
+// NSWorkspace.frontmostApplication can still contain the previous app while
+// didActivate callbacks run; it is not a live oracle for these transitions.
+private final class WindowServerForegroundReader {
+    typealias Front = @convention(c) (UnsafeMutableRawPointer) -> Int32
+    typealias PID = @convention(c) (UnsafeRawPointer, UnsafeMutablePointer<Int32>) -> Int32
+    typealias PSN = @convention(c) (Int32, UnsafeMutableRawPointer) -> Int32
+    let front: Front?
+    let pid: PID?
+    let psn: PSN?
+    init() {
+        _ = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY | RTLD_GLOBAL)
+        func symbol<T>(_ name: String, _ type: T.Type) -> T? {
+            guard let pointer = dlsym(UnsafeMutableRawPointer(bitPattern: -2), name) else { return nil }
+            return unsafeBitCast(pointer, to: type)
+        }
+        front = symbol("_SLPSGetFrontProcess", Front.self)
+        pid = symbol("GetProcessPID", PID.self)
+        psn = symbol("GetProcessForPID", PSN.self)
+    }
+    func current() -> Int32? {
+        guard let front, let pid, let psn else { return nil }
+        var before: [UInt32] = [0, 0], after: [UInt32] = [0, 0], resolved: [UInt32] = [0, 0]
+        var process: Int32 = 0
+        guard before.withUnsafeMutableBytes({ front($0.baseAddress!) }) == 0, before != [0, 0],
+              before.withUnsafeBytes({ pid($0.baseAddress!, &process) }) == 0, process > 0,
+              resolved.withUnsafeMutableBytes({ psn(process, $0.baseAddress!) }) == 0,
+              after.withUnsafeMutableBytes({ front($0.baseAddress!) }) == 0,
+              before == after, before == resolved else { return nil }
+        return process
+    }
+}
+
 // Read-only console observer: no NSApplication, windows, activation or input.
 final class FocusObserver {
+    private let foreground = WindowServerForegroundReader()
     let output: FileHandle
     var timer: Timer?
     var activationObserver: NSObjectProtocol?
@@ -18,10 +52,10 @@ final class FocusObserver {
     }
     func record(_ kind: String, activation: NSRunningApplication? = nil) {
         guard !stopped else { return }
-        let observedPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let observedPID = foreground.current()
         let pid = activation?.processIdentifier ?? observedPID
-        var row: [String: Any] = ["unix_ms": Date().timeIntervalSince1970 * 1_000, "kind": kind, "frontmost_pid": pid as Any? ?? NSNull()]
-        if kind == "activation" { row["observed_frontmost_pid"] = observedPID as Any? ?? NSNull() }
+        var row: [String: Any] = ["unix_ms": Date().timeIntervalSince1970 * 1_000, "kind": kind, "focus_source": "window_server_psn", "frontmost_pid": observedPID as Any? ?? NSNull()]
+        if kind == "activation" { row["observed_frontmost_pid"] = observedPID as Any? ?? NSNull(); row["activation_pid"] = pid as Any? ?? NSNull() }
         if observedPID == nil { row["error"] = "frontmost_application_unavailable" }
         else if kind == "activation", activation == nil { row["error"] = "activation_application_unavailable" }
         do { try output.write(contentsOf: JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]) + Data("\n".utf8)) }
@@ -60,6 +94,12 @@ final class FocusObserver {
     func close() {
         do { try output.close() } catch { fail(error) }
     }
+}
+
+if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--current" {
+    guard let pid = WindowServerForegroundReader().current() else { exit(1) }
+    print(pid)
+    exit(0)
 }
 
 guard CommandLine.arguments.count == 2 else {

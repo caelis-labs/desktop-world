@@ -10,6 +10,7 @@ impl Store {
         r: &Value,
         until: Instant,
         dispatched: &mut bool,
+        preparation: &mut bool,
     ) -> Result<(), Error> {
         if r["input_policy"] == "background_only" {
             return Err(Error::NativeFailure {
@@ -25,7 +26,7 @@ impl Store {
             || pixels.expires <= Instant::now()
             || pixels.dpi != unsafe { GetDpiForWindow(window) }
             || pixels.render_size != render_size(window)?
-            || !equal_rect(pixels.bounds, unobstructed(window)?)
+            || !equal_rect(pixels.bounds, capture_bounds(window)?)
         {
             return Err(Error::StaleObservation);
         }
@@ -67,12 +68,13 @@ impl Store {
         }
         let drag = r["operation"] == "drag";
         let plan = pointer::plan(&points, drag, info.rcMonitor)?;
+        self.prepare_pointer_surface(target, window, r, until, preparation)?;
         for point in plan.points() {
             verify_point(window, target.app.pid, *point)?;
         }
         input::no_held_keys()?;
         self.consume(target);
-        input::focus(window, until, dispatched)?;
+        self.focus_window(target, window, until, preparation)?;
         self.input_boundary(target, window, until)?;
         if !equal_rect(pixels.bounds, unobstructed(window)?)
             || pixels.dpi != unsafe { GetDpiForWindow(window) }
@@ -148,10 +150,25 @@ fn contains_rect(outer: RECT, inner: RECT) -> bool {
         && inner.right <= outer.right
         && inner.bottom <= outer.bottom
 }
-fn native_caption(window: HWND, point: POINT, until: Instant) -> Result<bool, Error> {
+pub(super) fn native_caption(window: HWND, point: POINT, until: Instant) -> Result<bool, Error> {
+    caption_hit(window, point, until, false)
+}
+pub(super) fn caption_activation_hit(
+    window: HWND,
+    point: POINT,
+    until: Instant,
+) -> Result<bool, Error> {
+    caption_hit(window, point, until, true)
+}
+fn caption_hit(
+    window: HWND,
+    point: POINT,
+    until: Instant,
+    allow_maximized: bool,
+) -> Result<bool, Error> {
     check(until)?;
     if unsafe { GetWindowLongW(window, GWL_STYLE) } as u32 & WS_CAPTION.0 != WS_CAPTION.0
-        || unsafe { IsZoomed(window) }.as_bool()
+        || (!allow_maximized && unsafe { IsZoomed(window) }.as_bool())
     {
         return Ok(false);
     }

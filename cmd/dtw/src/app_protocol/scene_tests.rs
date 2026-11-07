@@ -46,7 +46,7 @@ fn agent_sees_only_app_operations_and_has_no_session_or_state() {
     let r=exec(&server,"surface","return {methods:Object.keys(app),session:typeof session,state:typeof state,host:typeof __host};");
     assert_eq!(
         *success(&r),
-        json!({"methods":["look","capture","readText","click","move","drag","typeText","keypress","scroll","quit"],"session":"undefined","state":"undefined","host":"undefined"})
+        json!({"methods":["look","capture","readText","waitForNewWindow","click","setValue","move","drag","typeText","keypress","scroll","focus","quit"],"session":"undefined","state":"undefined","host":"undefined"})
     );
 }
 #[test]
@@ -113,7 +113,7 @@ fn compact_scene_output_has_no_native_refs_or_session_ledger() {
     assert!(r.data["output"].is_array());
 }
 #[test]
-fn app_actions_hide_delivery_routing_but_retain_dispatch_and_private_evidence() {
+fn app_actions_keep_delivery_and_borrow_policy_out_of_the_model_protocol() {
     let (server, catalog) = agent();
     catalog.backend.0.model.lock().unwrap().outcome.delivery = Some(InputDelivery {
         route: Some(InputRoute::Foreground),
@@ -142,6 +142,8 @@ fn app_actions_hide_delivery_routing_but_retain_dispatch_and_private_evidence() 
         .to_string()
         .contains("classified_internal_capability"));
     assert_eq!(compact.data["effects"]["dispatch"]["dispatched"], 1);
+    assert!(compact.data["effects"].get("delivery").is_none());
+    assert!(compact.data["effects"].get("focus_return").is_none());
 }
 #[test]
 fn application_search_is_bounded_and_does_not_connect() {

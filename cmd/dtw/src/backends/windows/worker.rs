@@ -148,6 +148,9 @@ pub fn worker_entry() -> bool {
             }
             if requested || input::closing() {
                 let clean = input::quiesce(Duration::from_millis(400));
+                // New input is sealed and paired releases have settled. Return
+                // only still-owned script resources; external choices win.
+                let _ = super::execution_scope::finish();
                 std::process::exit(exit_status(
                     clean,
                     stopping.load(Ordering::Acquire),

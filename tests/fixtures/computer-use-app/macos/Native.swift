@@ -1,9 +1,20 @@
 import AppKit
 
 final class FlippedFixtureView: NSView { override var isFlipped: Bool { true } }
+final class GestureStatusLabel: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
 final class GestureFixtureView: NSView {
     weak var owner: ComputerUseDelegate?
     var tracking: NSTrackingArea?
+    let statusLabel = GestureStatusLabel(labelWithString: "")
+    var gestureStatus: String {
+        let counts = owner?.gestures ?? [:]
+        return "Hover: \(counts["hover", default: 0])  Click: \(counts["click", default: 0])  Double-click: \(counts["double_click", default: 0])  Right: \(counts["right_click", default: 0])  Drag: \(counts["drag", default: 0])  Up: \(counts["up", default: 0])"
+    }
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .group }
+    override func accessibilityLabel() -> String? { "Gesture desk" }
     override func updateTrackingAreas() {
         if let tracking { removeTrackingArea(tracking) }
         let area = NSTrackingArea(rect: .zero, options: [.activeAlways, .inVisibleRect, .mouseEnteredAndExited], owner: self, userInfo: nil)
@@ -11,7 +22,8 @@ final class GestureFixtureView: NSView {
     }
     override func draw(_ dirtyRect: NSRect) {
         NSColor.systemTeal.withAlphaComponent(0.25).setFill(); bounds.fill()
-        ("Gesture desk — hover, double-click or right-click" as NSString).draw(at: NSPoint(x: 12, y: 20), withAttributes: [.font: NSFont.systemFont(ofSize: 14)])
+        let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.labelColor]
+        ("Gesture desk — hover, double-click or right-click" as NSString).draw(at: NSPoint(x: 12, y: 34), withAttributes: attributes)
     }
     override func mouseEntered(with event: NSEvent) { owner?.gesture("hover", event) }
     override func mouseDown(with event: NSEvent) { owner?.gesture(event.clickCount == 2 ? "double_click" : "click", event) }
@@ -34,6 +46,11 @@ extension ComputerUseDelegate {
         choice.frame = NSRect(x: 160, y: 103, width: 160, height: 30); choice.addItems(withTitles: ["Draft", "Review", "Approved"]); choice.setAccessibilityLabel("Workflow status"); choice.target = self; choice.action = #selector(changeChoice); surface.addSubview(choice)
         slider.frame = NSRect(x: 345, y: 104, width: 300, height: 28); slider.setAccessibilityLabel("Priority slider"); slider.target = self; slider.action = #selector(changeSlider); slider.isContinuous = true; surface.addSubview(slider)
         let pad = GestureFixtureView(frame: NSRect(x: 20, y: 148, width: 625, height: 60)); pad.owner = self; surface.addSubview(pad); namedViews["gesture-desk"] = pad
+        pad.statusLabel.frame = NSRect(x: 12, y: 6, width: 601, height: 22)
+        pad.statusLabel.font = NSFont.systemFont(ofSize: 14)
+        pad.statusLabel.stringValue = pad.gestureStatus
+        pad.statusLabel.setAccessibilityLabel("Gesture status")
+        pad.addSubview(pad.statusLabel)
         let multilineScroll = NSScrollView(frame: NSRect(x: 665, y: 62, width: max(260, frame.width - 685), height: 146))
         multilineScroll.borderType = .bezelBorder; multilineScroll.hasVerticalScroller = true
         multilineNote.frame = NSRect(origin: .zero, size: multilineScroll.contentSize)
@@ -74,6 +91,10 @@ extension ComputerUseDelegate {
     @objc func audit(_ sender: NSButton) { auditIndex = sender.tag; auditCount += 1; event("audit", ["index": sender.tag, "count": auditCount]); publish() }
     func gesture(_ kind: String, _ input: NSEvent) {
         gestures[kind, default: 0] += 1
+        if let pad = namedViews["gesture-desk"] as? GestureFixtureView {
+            pad.statusLabel.stringValue = pad.gestureStatus
+            NSAccessibility.post(element: pad.statusLabel, notification: .valueChanged)
+        }
         var fields: [String: Any] = ["phase": kind, "click_count": input.clickCount]
         if let window = input.window {
             let screen = window.convertPoint(toScreen: input.locationInWindow)

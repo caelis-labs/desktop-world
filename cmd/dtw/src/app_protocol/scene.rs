@@ -15,9 +15,17 @@ pub(super) struct SceneState {
     raster: Option<Raster>,
     pixels: bool,
     projected: Option<Value>,
-    element_ids: HashMap<String, String>,
+    element_ids: HashMap<String, DisplayIdentity>,
+    retained_ids: HashMap<String, String>,
+    retained_nodes: HashMap<String, Value>,
     next_element: u64,
     viewport: Option<([f64; 4], String, [f64; 4])>,
+    window_wait_pending: bool,
+    pending_new_window: Option<std::collections::HashSet<String>>,
+}
+struct DisplayIdentity {
+    id: String,
+    retained_identity: Option<String>,
 }
 impl SceneState {
     pub(super) fn projection(&self) -> Option<Value> {
@@ -48,16 +56,18 @@ struct Raster {
 
 pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
     let allowed: &[&str] = match op {
-        "scene.look" => &["full", "role", "text", "scope"],
+        "scene.look" => &["full", "role", "text", "scope", "target"],
         "scene.capture" | "scene.after" => &["full"],
         "scene.readText" => &["target", "offset", "limit"],
+        "scene.waitForNewWindow" => &["timeout_ms"],
         "scene.click" => &["target", "selector", "x", "y", "button", "count"],
+        "scene.setValue" => &["target", "selector", "value"],
         "scene.move" => &["x", "y"],
         "scene.drag" => &["path"],
         "scene.typeText" => &["text"],
         "scene.keypress" => &["keys"],
         "scene.scroll" => &["delta_y", "delta_x", "x", "y"],
-        "scene.quit" => &[],
+        "scene.quit" | "scene.focus" => &[],
         _ => return Err(error("invalid_arguments", "Unknown app operation")),
     };
     let object = args
@@ -69,6 +79,28 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
             "Unknown app argument; see Skill API.md",
         ));
     }
+    if op == "scene.setValue" {
+        let one_target = usize::from(args.get("target").is_some())
+            + usize::from(args.get("selector").is_some())
+            == 1;
+        if !one_target
+            || args["value"]
+                .as_str()
+                .is_none_or(|value| value.len() > 16_384 || value.contains('\0'))
+        {
+            return Err(error("invalid_arguments", "setValue requires one target or selector and a string value (up to 16 KiB, no NUL)"));
+        }
+    }
+    if op == "scene.waitForNewWindow"
+        && args
+            .get("timeout_ms")
+            .is_some_and(|v| v.as_u64().is_none_or(|ms| !(1..=10_000).contains(&ms)))
+    {
+        return Err(error(
+            "invalid_arguments",
+            "timeout_ms must be an integer from 1 to 10000",
+        ));
+    }
     for key in ["full"] {
         if args.get(key).is_some_and(|v| !v.is_boolean()) {
             return Err(error(
@@ -78,6 +110,16 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
         }
     }
     if op == "scene.look" {
+        if args
+            .get("target")
+            .is_some_and(|target| target.as_str().is_none_or(str::is_empty))
+            || (args.get("target").is_some() && args.get("scope").is_some())
+        {
+            return Err(error(
+                "invalid_arguments",
+                "look target must be an observed ID and cannot be combined with scope",
+            ));
+        }
         if args
             .get("scope")
             .is_some_and(|scope| !matches!(scope.as_str(), Some("window" | "menu")))
@@ -116,9 +158,16 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
                     .as_u64()
                     .is_none_or(|number| number < minimum || number > maximum)
             }) {
+                let end_hint = if key == "offset" && args[key].is_null() {
+                    "; next_offset:null means the text has ended"
+                } else {
+                    ""
+                };
                 return Err(error(
                     "invalid_arguments",
-                    "Invalid readText offset or limit",
+                    &format!(
+                        "readText {key} must be an integer from {minimum} to {maximum}{end_hint}"
+                    ),
                 ));
             }
         }
@@ -279,6 +328,23 @@ fn element_priority(row: &Value) -> u8 {
 }
 
 impl<B: Backend + 'static> Coordinator<B> {
+    fn scene_target(&self, target: &Value) -> Option<(Value, bool)> {
+        let state = self.state.lock().unwrap();
+        state
+            .scene
+            .nodes
+            .iter()
+            .find(|node| node["id"] == *target)
+            .cloned()
+            .map(|node| (node, false))
+            .or_else(|| {
+                target
+                    .as_str()
+                    .and_then(|id| state.scene.retained_nodes.get(id))
+                    .cloned()
+                    .map(|node| (node, true))
+            })
+    }
     pub(super) fn scene_atomic(&self, id: &str, op: &str, args: Value, deadline: Instant) -> Work {
         let submitted = match wire::script_submit(&self.app_ref, id, op, &args) {
             Ok(v) => v,
@@ -297,6 +363,18 @@ impl<B: Backend + 'static> Coordinator<B> {
         apply_publication(&mut self.state.lock().unwrap(), publication);
         work
     }
+    fn scene_wait_after_application_input(&self, work: &Work) {
+        if work
+            .completed
+            .receipt
+            .as_ref()
+            .is_some_and(|r| r.outcome.dispatch == DispatchState::Dispatched)
+        {
+            let mut state = self.state.lock().unwrap();
+            state.scene.window_wait_pending = true;
+            state.scene.pending_new_window = Some(state.windows.keys().cloned().collect());
+        }
+    }
     pub(super) fn scene_call(&self, id: &str, op: &str, args: &Value, deadline: Instant) -> Work {
         if let Err(e) = validate(op, args) {
             return failed(e);
@@ -311,6 +389,9 @@ impl<B: Backend + 'static> Coordinator<B> {
                 deadline,
             );
         }
+        if op == "scene.waitForNewWindow" {
+            return self.scene_wait_for_new_window(id, args, deadline);
+        }
         if op == "scene.readText" {
             return self.scene_read_text(id, args, deadline);
         }
@@ -319,12 +400,14 @@ impl<B: Backend + 'static> Coordinator<B> {
             state.scene.raster = None;
             let active = state.scene.active.clone();
             drop(state);
-            return self.scene_atomic(
+            let work = self.scene_atomic(
                 id,
                 "quit",
                 active.map(|w| json!({"window_ref":w})).unwrap_or(json!({})),
                 deadline,
             );
+            self.scene_wait_after_application_input(&work);
+            return work;
         }
         if matches!(op, "scene.move" | "scene.drag") {
             return self.scene_pointer(id, op, args, deadline);
@@ -332,9 +415,9 @@ impl<B: Backend + 'static> Coordinator<B> {
         // Known sequential steps can open a new dialog/window in the same
         // script. Resolve implicit input routing from a fresh app inventory;
         // explicit semantic IDs and pixels remain bound to what was observed.
-        let implicit = matches!(op, "scene.typeText" | "scene.keypress")
+        let implicit = matches!(op, "scene.typeText" | "scene.keypress" | "scene.focus")
             || (op == "scene.scroll" && args.get("x").is_none())
-            || (op == "scene.click" && args.get("selector").is_some());
+            || (matches!(op, "scene.click" | "scene.setValue") && args.get("selector").is_some());
         if implicit && self.runtime.instances().is_empty() {
             // Reuse the existing launch/readiness path only for stopped apps.
             // Running apps need inventory, not a redundant semantic look before
@@ -356,12 +439,43 @@ impl<B: Backend + 'static> Coordinator<B> {
                     .and_then(|w| state.windows.get(w))
                     .map(|target| target.app.clone())
             };
-            let work = self.scene_atomic(id, "windows", json!({}), deadline);
-            if work.completed.error.is_some() {
-                return work;
-            }
-            let value = work.completed.value.unwrap();
-            let rows = ordered(value["windows"].as_array().cloned().unwrap_or_default());
+            let wait = self.state.lock().unwrap().scene.window_wait_pending;
+            let until = (Instant::now()
+                + if wait {
+                    Duration::from_secs(2)
+                } else {
+                    Duration::ZERO
+                })
+            .min(deadline);
+            let rows =
+                loop {
+                    let mut work = self.scene_atomic(id, "windows", json!({}), deadline);
+                    // A transient popup can disappear during this read-only
+                    // inventory, before the requested payload has been admitted.
+                    // Use the same single complete-read renewal as look(); never
+                    // retry an input, a changed app incarnation, or a focus refusal.
+                    if work.completed.error.as_ref().is_some_and(|e| {
+                        matches!(e.code.as_str(), "target_changed" | "stale_window")
+                    }) && !self.runtime.instances().is_empty()
+                        && Instant::now() + Duration::from_millis(80) < deadline
+                    {
+                        std::thread::sleep(Duration::from_millis(80));
+                        work = self.scene_atomic(id, "windows", json!({}), deadline);
+                    }
+                    if work.completed.error.is_some() {
+                        return work;
+                    }
+                    let value = work.completed.value.unwrap();
+                    let rows = ordered(value["windows"].as_array().cloned().unwrap_or_default());
+                    if rows.iter().any(|row| row["visible"] == true) || Instant::now() >= until {
+                        break rows;
+                    }
+                    std::thread::sleep(
+                        Duration::from_millis(20)
+                            .min(until.saturating_duration_since(Instant::now())),
+                    );
+                };
+            self.state.lock().unwrap().scene.window_wait_pending = false;
             let mut state = self.state.lock().unwrap();
             let instance = selected_instance.or_else(|| {
                 rows.iter()
@@ -379,19 +493,29 @@ impl<B: Backend + 'static> Coordinator<B> {
                             .is_some_and(|target| Some(&target.app) == instance.as_ref())
                 })
                 .collect();
+            let keyboard = matches!(op, "scene.typeText" | "scene.keypress");
+            // Background AppKit dialogs can own input while AXFocusedWindow
+            // still names their parent document. Modal proof wins over that
+            // stale hint; ordinary overlays preserve the native focus route.
             let selected = candidates
                 .iter()
                 .find(|row| {
-                    if matches!(op, "scene.typeText" | "scene.keypress") {
-                        row["scene"]["keyboard_focused"] == true
-                    } else {
-                        row["scene"]["semantic_candidate"] != false
-                    }
+                    row["scene"]["keyboard_modal"] == true
+                        && row["scene"]["semantic_candidate"] != false
                 })
                 .or_else(|| {
-                    matches!(op, "scene.typeText" | "scene.keypress")
-                        .then(|| candidates.first())
+                    keyboard
+                        .then(|| {
+                            candidates
+                                .iter()
+                                .find(|row| row["scene"]["keyboard_focused"] == true)
+                        })
                         .flatten()
+                })
+                .or_else(|| {
+                    candidates
+                        .iter()
+                        .find(|row| row["scene"]["semantic_candidate"] != false)
                 });
             if selected.is_none() && rows.iter().any(|row| row["visible"] == true) {
                 return failed(error(
@@ -405,6 +529,9 @@ impl<B: Backend + 'static> Coordinator<B> {
         }
         let active = self.state.lock().unwrap().scene.active.clone();
         let Some(window) = active else {
+            if op == "scene.focus" && !self.runtime.instances().is_empty() {
+                return Work::action(self.runtime.app_focus_until(deadline));
+            }
             if op == "scene.keypress" && !self.runtime.instances().is_empty() {
                 let mut options = args.clone();
                 options["window_ref"] = json!("internal-app-shortcut");
@@ -413,7 +540,9 @@ impl<B: Backend + 'static> Coordinator<B> {
                     Err(e) => return failed(e),
                 };
                 if let Command::Input(WindowInput::Keypress { keys }) = parsed.command {
-                    return Work::action(self.runtime.app_keypress_until(&keys, deadline));
+                    let work = Work::action(self.runtime.app_keypress_until(&keys, deadline));
+                    self.scene_wait_after_application_input(&work);
+                    return work;
                 }
             }
             return failed(error(
@@ -423,30 +552,22 @@ impl<B: Backend + 'static> Coordinator<B> {
         };
         let mut options = args.clone();
         let mut method = op.trim_start_matches("scene.").to_owned();
-        if op == "scene.click" {
+        if matches!(op, "scene.click" | "scene.setValue") {
+            let setter = op == "scene.setValue";
             let modes = usize::from(args.get("target").is_some())
                 + usize::from(args.get("selector").is_some())
                 + usize::from(args.get("x").is_some() || args.get("y").is_some());
             if modes != 1 {
                 return failed(error(
                     "invalid_arguments",
-                    "click requires exactly one target, selector or x/y pair",
+                    "Provide exactly one observed target or selector (click also accepts x/y)",
                 ));
             }
             if let Some(target) = args.get("target") {
-                let node = self
-                    .state
-                    .lock()
-                    .unwrap()
-                    .scene
-                    .nodes
-                    .iter()
-                    .find(|row| row["id"] == *target)
-                    .cloned();
-                let Some(node) = node else {
+                let Some((node, _)) = self.scene_target(target) else {
                     return failed(error(
                         "target_changed",
-                        "Target is not in the latest app observation",
+                        "Target handle is unavailable; inspect the returned view",
                     ));
                 };
                 if args.get("button").is_some() || args.get("count").is_some() {
@@ -459,8 +580,11 @@ impl<B: Backend + 'static> Coordinator<B> {
                     Ok(node) => node,
                     Err(error) => return failed(error),
                 };
-                method = "press".into();
+                method = if setter { "setValue" } else { "press" }.into();
                 options = json!({"window_ref":node["window_ref"],"observation_ref":node["observation_ref"],"element_ref":node["element_ref"]});
+                if setter {
+                    options["value"] = args["value"].clone();
+                }
             } else if args.get("selector").is_some() {
                 if args.get("button").is_some() || args.get("count").is_some() {
                     return failed(error(
@@ -468,7 +592,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                         "Semantic selectors do not accept mouse button/count",
                     ));
                 }
-                method = "press".into();
+                method = if setter { "setValue" } else { "press" }.into();
                 options["window_ref"] = json!(window);
             } else {
                 let frame =
@@ -521,13 +645,22 @@ impl<B: Backend + 'static> Coordinator<B> {
         // Selector admission owns menu focus preparation after capability and
         // unique-target checks, and retains its receipt in the resolution ledger.
         let input_window = options["window_ref"].as_str().map(str::to_owned);
-        let follows_scene = method == "press"
+        let follows_scene = matches!(method.as_str(), "press" | "setValue")
             && options.get("selector").is_some()
             && options["selector"]["scope"] != "menu";
         let work = self.scene_atomic(id, &method, options, deadline);
         // Keep the scene mapping for the next requested action. Its native
         // binding is consumed; preflight renews it without replaying this input.
         let mut state = self.state.lock().unwrap();
+        if matches!(method.as_str(), "press" | "click" | "keypress")
+            && work
+                .completed
+                .receipt
+                .as_ref()
+                .is_some_and(|r| r.outcome.dispatch != DispatchState::NotDispatched)
+        {
+            state.scene.pending_new_window = Some(state.windows.keys().cloned().collect());
+        }
         if !follows_scene
             && work
                 .completed
@@ -562,6 +695,71 @@ impl<B: Backend + 'static> Coordinator<B> {
         }
         work
     }
+    fn scene_wait_for_new_window(&self, id: &str, args: &Value, deadline: Instant) -> Work {
+        let Some(before) = self.state.lock().unwrap().scene.pending_new_window.take() else {
+            return failed(error(
+                "input_required",
+                "waitForNewWindow requires a preceding dispatched input",
+            ));
+        };
+        let until = (Instant::now()
+            + Duration::from_millis(args["timeout_ms"].as_u64().unwrap_or(2_000)))
+        .min(deadline);
+        let previous = self.state.lock().unwrap().scene.observed.clone();
+        let mut last_projection = self.state.lock().unwrap().scene.projection();
+        let timeout = |last: Option<Work>, projection: Option<Value>| {
+            if until == deadline {
+                return failed(error("timed_out", "Execution deadline exceeded"));
+            }
+            let mut result = failed(error(
+                "wait_timeout",
+                "No new content window appeared before the deadline; input was not repeated",
+            ));
+            if let Some(last) = last {
+                result.completed.value = last.completed.value;
+                result.completed.image = last.completed.image;
+            } else {
+                result.completed.value = previous.clone();
+            }
+            // The last attempted refresh can clear projection before its local
+            // deadline expires. Preserve display evidence, never stale input
+            // credentials: nodes and raster remain retired by that refresh.
+            let mut state = self.state.lock().unwrap();
+            state.scene.observed = result.completed.value.clone();
+            state.scene.projected = projection;
+            result
+        };
+        let mut last = None;
+        loop {
+            if Instant::now() >= until {
+                return timeout(last, last_projection);
+            }
+            // A condition budget stops new probes; it is not the transport
+            // deadline of an in-flight native read. Match Runtime's window-wait
+            // contract, preserving the caller budget and original read errors.
+            let work = self.scene_look(id, &json!({}), false, true, 0, deadline);
+            if work.completed.error.is_some() {
+                return work;
+            }
+            let matched = self
+                .state
+                .lock()
+                .unwrap()
+                .scene
+                .active
+                .as_ref()
+                .is_some_and(|window| !before.contains(window));
+            if matched {
+                return work;
+            }
+            last_projection = self.state.lock().unwrap().scene.projection();
+            last = Some(work);
+            std::thread::sleep(
+                Duration::from_millis(20).min(until.saturating_duration_since(Instant::now())),
+            );
+        }
+    }
+
     fn scene_pointer(&self, id: &str, op: &str, args: &Value, deadline: Instant) -> Work {
         let prepared = (|| {
             let supplied = if op == "scene.move" {
@@ -675,21 +873,46 @@ impl<B: Backend + 'static> Coordinator<B> {
         work
     }
     fn scene_read_text(&self, id: &str, args: &Value, deadline: Instant) -> Work {
-        let node = self
-            .state
-            .lock()
-            .unwrap()
-            .scene
-            .nodes
-            .iter()
-            .find(|node| node["id"] == args["target"])
-            .cloned();
-        let Some(node) = node else {
+        let Some((mut node, cached)) = self.scene_target(&args["target"]) else {
             return failed(error(
                 "target_changed",
-                "Read text from a target in the latest look",
+                "Text source handle is unavailable; observe it again",
             ));
         };
+        // Start a fresh content observation after input consumed its binding,
+        // or when returning to an older object handle. Continuations never
+        // renew: they must keep the first page's exact native snapshot.
+        let live = {
+            let state = self.state.lock().unwrap();
+            state.observations.iter().any(|observation| {
+                observation.public == node["observation_ref"]
+                    && !observation.retired
+                    && self.runtime.retains_observation(observation.core)
+            })
+        };
+        if args["offset"].as_u64().unwrap_or(0) == 0 && (cached || !live) {
+            node = match self.scene_refresh_target(id, node, deadline) {
+                Ok(node) => node,
+                Err(error) => return failed(error),
+            };
+            let mut state = self.state.lock().unwrap();
+            if let Some(current) = state
+                .scene
+                .nodes
+                .iter_mut()
+                .find(|current| current["id"] == node["id"])
+            {
+                *current = node.clone();
+            }
+            if let Some(source) = state
+                .scene
+                .retained_nodes
+                .get_mut(node["id"].as_str().unwrap())
+            {
+                source["observation_ref"] = node["observation_ref"].clone();
+                source["element_ref"] = node["element_ref"].clone();
+            }
+        }
         // Retain this exact observation across pages. Renewing here could join
         // different text revisions or revive an ID with a reused native object.
         let mut request = json!({"window_ref":node["window_ref"],
@@ -699,7 +922,16 @@ impl<B: Backend + 'static> Coordinator<B> {
                 request[key] = value.clone();
             }
         }
-        let work = self.scene_atomic(id, "readText", request, deadline);
+        let mut work = self.scene_atomic(id, "readText", request, deadline);
+        if let Some(error) = work.completed.error.as_mut() {
+            if error.code == "unsupported_capability" {
+                error.message = format!(
+                    "{}; readText requires native text content (target {}, role {}). Read control values from look().elements[].value",
+                    error.message, node["id"].as_str().unwrap_or("unknown"),
+                    node["expected"]["role"].as_str().unwrap_or("unknown")
+                );
+            }
+        }
         if let Some(error) = &work.completed.error {
             if !matches!(
                 error.code.as_str(),
@@ -707,6 +939,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             ) {
                 let mut state = self.state.lock().unwrap();
                 state.scene.nodes.clear();
+                state.scene.retained_nodes.clear();
                 state.scene.raster = None;
                 state.scene.observed = None;
                 state.scene.projected = None;
@@ -753,6 +986,10 @@ impl<B: Backend + 'static> Coordinator<B> {
                     .scene
                     .nodes
                     .retain(|n| n["window_ref"] != node["window_ref"]);
+                state
+                    .scene
+                    .retained_nodes
+                    .retain(|_, n| n["window_ref"] != node["window_ref"]);
                 return Err(error);
             }
             let page = work.completed.value.unwrap();
@@ -925,7 +1162,9 @@ impl<B: Backend + 'static> Coordinator<B> {
             // A coordinate selects the current top app pixel, not a semantic object.
             // Keep the original canvas and per-point instance authorization baseline.
             // Fresh native observations authorize only this dispatch.
-            self.state.lock().unwrap().scene.raster = Some(previous);
+            let mut state = self.state.lock().unwrap();
+            state.scene.raster = Some(previous);
+            state.scene.pixels = true;
             return Ok(fresh);
         }
     }
@@ -938,15 +1177,75 @@ impl<B: Backend + 'static> Coordinator<B> {
         attempt: u8,
         deadline: Instant,
     ) -> Work {
-        // A failed refresh cannot leave old semantic/pixel input authority.
-        // Keep identity labels and the viewport only for a successful new read.
+        let mut work = self.scene_look_inner(id, args, explicit_pixels, after, attempt, deadline);
+        // An app view follows its current surfaces. A menu may disappear while
+        // inventory/AX/pixels are being read after a successful selection. Renew
+        // this read once; never renew an explicitly addressed object or replay
+        // its input. Process/provider/permission failures remain terminal.
+        if attempt == 0
+            && args.get("target").is_none()
+            && work
+                .completed
+                .error
+                .as_ref()
+                .is_some_and(|e| matches!(e.code.as_str(), "target_changed" | "stale_window"))
+            && Instant::now() + Duration::from_millis(80) < deadline
         {
+            std::thread::sleep(Duration::from_millis(80));
+            work = self.scene_look_inner(id, args, explicit_pixels, after, 1, deadline);
+        }
+        if work.completed.error.is_some()
+            || work.completed.value.as_ref().is_some_and(|value| {
+                value["semantics"]["reason"]
+                    .as_str()
+                    .is_some_and(semantic_fallback)
+            })
+        {
+            self.state.lock().unwrap().scene.retained_nodes.clear();
+        }
+        work
+    }
+    fn scene_look_inner(
+        &self,
+        id: &str,
+        args: &Value,
+        explicit_pixels: bool,
+        after: bool,
+        attempt: u8,
+        deadline: Instant,
+    ) -> Work {
+        let subtree = if let Some(target) = args.get("target") {
+            let Some((node, cached)) = self.scene_target(target) else {
+                return failed(error(
+                    "target_changed",
+                    "Subtree handle is unavailable; observe it again",
+                ));
+            };
+            // Historical object handles require new exact-object proof, not
+            // a selector or a replacement with the same label.
+            if cached {
+                match self.scene_refresh_target(id, node, deadline) {
+                    Ok(node) => Some(node),
+                    Err(error) => return failed(error),
+                }
+            } else {
+                Some(node)
+            }
+        } else {
+            None
+        };
+        // A failed refresh cannot leave old semantic/pixel input authority.
+        // A successful semantic read can retain the script's image mapping,
+        // independently of automatic image presentation. Coordinate input still
+        // refreshes pixels and proves geometry/instance before every dispatch.
+        let (wait_for_window, previous_raster) = {
             let mut state = self.state.lock().unwrap();
             state.scene.nodes.clear();
-            state.scene.raster = None;
+            let raster = state.scene.raster.take();
             state.scene.observed = None;
             state.scene.projected = None;
-        }
+            (std::mem::take(&mut state.scene.window_wait_pending), raster)
+        };
         let mut startup = None;
         if self.runtime.instances().is_empty() && after {
             let current = json!({"running":false,"windows":[],"elements":[],"semantics":{"complete":true,"reason":"app_stopped"},"coverage":{"complete_within_scope":true}});
@@ -972,7 +1271,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             self.state.lock().unwrap().scene = SceneState::default();
         }
         let until = (Instant::now()
-            + if startup.is_some() || after {
+            + if startup.is_some() || after || wait_for_window {
                 Duration::from_secs(2)
             } else {
                 Duration::ZERO
@@ -981,6 +1280,23 @@ impl<B: Backend + 'static> Coordinator<B> {
         let inventory = loop {
             let work = self.scene_atomic(id, "windows", json!({}), deadline);
             if work.completed.error.is_some() {
+                // A dialog button can terminate its app successfully. Only a
+                // separate native incarnation-exit proof can convert that
+                // final read into a stopped view; other identity errors remain.
+                if after
+                    && attempt == 0
+                    && work
+                        .completed
+                        .error
+                        .as_ref()
+                        .is_some_and(|e| e.code == "app_changed")
+                    && self
+                        .runtime
+                        .retire_exited_instances_until(deadline)
+                        .is_ok_and(|count| count > 0)
+                {
+                    return self.scene_look_inner(id, args, explicit_pixels, after, 1, deadline);
+                }
                 return work;
             }
             let value = work.completed.value.unwrap();
@@ -1002,14 +1318,20 @@ impl<B: Backend + 'static> Coordinator<B> {
         // A native decoration can be a real composited surface without being
         // the active semantic window. Do not substitute keyboard focus here:
         // menus/dropdowns may be interactive above their focused owner.
-        let active = visible
+        let semantic_windows: Vec<_> = visible
             .iter()
-            .find(|row| row["scene"]["semantic_candidate"] != false)
-            .or_else(|| {
-                rows.iter()
-                    .find(|row| row["scene"]["semantic_candidate"] != false)
-            })
-            .cloned();
+            .filter(|row| row["scene"]["keyboard_modal"] == true)
+            .chain(
+                visible
+                    .iter()
+                    .filter(|row| row["scene"]["keyboard_modal"] != true),
+            )
+            .chain(rows.iter().filter(|row| row["visible"] != true))
+            .filter(|row| row["scene"]["semantic_candidate"] != false)
+            .take(32)
+            .cloned()
+            .collect();
+        let mut active = None;
         let window_ids = {
             let mut state = self.state.lock().unwrap();
             if state.scene.window_ids.len() > 4096 {
@@ -1031,17 +1353,54 @@ impl<B: Backend + 'static> Coordinator<B> {
         if query.get("scope").and_then(Value::as_str) == Some("window") {
             query.remove("scope");
         }
+        // Retain the app-menu route for exact-object renewal of descendants.
+        // The native read itself uses the retained subtree, never title matching.
+        if subtree
+            .as_ref()
+            .is_some_and(|node| node["query"]["scope"] == "menu")
+        {
+            query.insert("scope".into(), json!("menu"));
+        }
         let mut nodes = Vec::new();
         let mut elements = Vec::new();
         let mut semantic_bytes = 0usize;
         let mut semantic = json!({"complete":false,"reason":"no_window"});
-        if let Some(row) = &active {
+        let mut observation = None;
+        for row in semantic_windows {
+            if subtree
+                .as_ref()
+                .is_some_and(|node| node["window_ref"] != row["window_ref"])
+            {
+                continue;
+            }
             let mut request = query.clone();
+            if let Some(node) = &subtree {
+                request.remove("scope");
+                request.insert("observation_ref".into(), node["observation_ref"].clone());
+                request.insert("element_ref".into(), node["element_ref"].clone());
+            }
             request.insert("window_ref".into(), row["window_ref"].clone());
             request.insert("limit".into(), json!(80));
             let work = self.scene_atomic(id, "observe", Value::Object(request), deadline);
+            // Optional window metadata can miss a newly materialized system
+            // decoration. Only exact read-time proof permits choosing another
+            // content window; arbitrary AX errors keep the original target.
+            if work
+                .completed
+                .error
+                .as_ref()
+                .is_some_and(|e| e.code == "non_content_surface")
+            {
+                continue;
+            }
+            active = Some(row);
+            observation = Some(work);
+            break;
+        }
+        if let Some(row) = &active {
+            let work = observation.unwrap();
             if let Some(e) = work.completed.error {
-                if !semantic_fallback(&e.code) {
+                if subtree.is_some() || !semantic_fallback(&e.code) {
                     return failed(e);
                 }
                 semantic = json!({"complete":false,"reason":e.code});
@@ -1091,8 +1450,8 @@ impl<B: Backend + 'static> Coordinator<B> {
                 }
 
                 let mut state = self.state.lock().unwrap();
-                if state.scene.element_ids.len() > 4096 {
-                    state.scene.element_ids.clear();
+                if state.scene.retained_ids.len() > 4096 {
+                    state.scene.retained_ids.clear();
                 }
                 for (element, observation) in candidates {
                     if elements.len() >= 80 {
@@ -1101,6 +1460,17 @@ impl<B: Backend + 'static> Coordinator<B> {
                         semantic["has_more"] = json!(true);
                         break;
                     }
+                    let retained = element["rebind_identity"]
+                        .as_str()
+                        .filter(|credential| rebinds.get(*credential) == Some(&1));
+                    let retained_key = retained.map(|credential| {
+                        format!(
+                            "{}\0{}\0{}",
+                            row["window_ref"].as_str().unwrap(),
+                            credential,
+                            element["role"]
+                        )
+                    });
                     let key = element["identity"]
                         .as_str()
                         .filter(|identity| identities.get(*identity) == Some(&1))
@@ -1112,10 +1482,23 @@ impl<B: Backend + 'static> Coordinator<B> {
                                 element["role"]
                             )
                         });
-                    let existing = key
+                    let existing = retained_key
                         .as_ref()
-                        .and_then(|k| state.scene.element_ids.get(k))
-                        .cloned();
+                        .and_then(|key| state.scene.retained_ids.get(key))
+                        .cloned()
+                        .or_else(|| {
+                            key.as_ref()
+                                .and_then(|key| state.scene.element_ids.get(key))
+                                .filter(|old| {
+                                    // A changed exact-object credential overrides a reused
+                                    // weaker identity, even on consecutive observations.
+                                    old.retained_identity
+                                        .as_deref()
+                                        .zip(retained)
+                                        .is_none_or(|(old, new)| old == new)
+                                })
+                                .map(|old| old.id.clone())
+                        });
                     let target = existing.unwrap_or_else(|| {
                         state.scene.next_element += 1;
                         let target = format!(
@@ -1123,11 +1506,28 @@ impl<B: Backend + 'static> Coordinator<B> {
                             window_ids[row["window_ref"].as_str().unwrap()],
                             state.scene.next_element
                         );
-                        if let Some(key) = &key {
-                            state.scene.element_ids.insert(key.clone(), target.clone());
-                        }
                         target
                     });
+                    if let Some(key) = key {
+                        let retained_identity = retained.map(str::to_owned).or_else(|| {
+                            state
+                                .scene
+                                .element_ids
+                                .get(&key)
+                                .filter(|old| old.id == target)
+                                .and_then(|old| old.retained_identity.clone())
+                        });
+                        state.scene.element_ids.insert(
+                            key,
+                            DisplayIdentity {
+                                id: target.clone(),
+                                retained_identity,
+                            },
+                        );
+                    }
+                    if let Some(key) = retained_key {
+                        state.scene.retained_ids.insert(key, target.clone());
+                    }
                     let mut entry = json!({"id":target,"role":element["role"],"enabled":element["enabled"],"actions":element["actions"]});
                     let name_truncated = project_text(&mut entry, "name", &element["name"]);
                     let value_truncated = project_text(&mut entry, "value", &element["value"]);
@@ -1152,12 +1552,35 @@ impl<B: Backend + 'static> Coordinator<B> {
                 }
             }
         }
-        if !query.is_empty() {
-            semantic["query"] = Value::Object(query);
+        if query.is_empty()
+            && semantic["complete"] == false
+            && (semantic["has_more"] == true
+                || (!elements.is_empty()
+                    && matches!(
+                        semantic["reason"].as_str(),
+                        Some("node_unavailable" | "ownership_unproven" | "children_unavailable")
+                    )))
+        {
+            semantic["hint"] = json!("Inspect a narrower view with look({role:'button'}) or look({text:'...'}); use returned target IDs.");
+        }
+        if subtree.is_some() && active.is_none() {
+            return failed(error(
+                "target_changed",
+                "The subtree's original window is no longer available",
+            ));
+        }
+        let semantic_empty =
+            elements.is_empty() && (query.is_empty() || semantic["complete"] != true);
+        if !query.is_empty() || subtree.is_some() {
+            let mut public_query = query;
+            if let Some(target) = args.get("target") {
+                public_query.insert("target".into(), target.clone());
+            }
+            semantic["query"] = Value::Object(public_query);
         }
         let pixel_mode = explicit_pixels
             || (after && self.state.lock().unwrap().scene.pixels)
-            || (!visible.is_empty() && elements.is_empty());
+            || (subtree.is_none() && !visible.is_empty() && semantic_empty);
         let windows:Vec<_>=rows.iter().take(32).map(|r|json!({"id":window_ids[r["window_ref"].as_str().unwrap()],"title":r["title"].as_str().map(|s|s.chars().take(80).collect::<String>()),"title_truncated":r["title"].as_str().is_some_and(|s|s.chars().count()>80),"visible":r["visible"],"bounds":r["scene"]["bounds"]})).collect();
         let mut coverage = inventory["coverage"].clone();
         // Keep optional native read gaps visible without exposing the full
@@ -1234,11 +1657,17 @@ impl<B: Backend + 'static> Coordinator<B> {
             }
         } else {
             let mut state = self.state.lock().unwrap();
-            state.scene.raster = None;
+            if !visible.is_empty() {
+                state.scene.raster = previous_raster;
+            }
             state.scene.pixels = false;
         }
         let mut state = self.state.lock().unwrap();
-        let reset = state.scene.baseline.is_none() || args["full"] == true;
+        let reset = state.scene.baseline.is_none()
+            || args["full"] == true
+            || state.scene.baseline.as_ref().is_some_and(|previous| {
+                previous["semantics"]["query"] != current["semantics"]["query"]
+            });
         let mut view = if reset {
             let mut v = current.clone();
             v["reset"] = json!(true);
@@ -1259,12 +1688,34 @@ impl<B: Backend + 'static> Coordinator<B> {
         state.scene.observed = Some(current);
         state.scene.projected = Some(view);
         state.scene.active = active.and_then(|r| r["window_ref"].as_str().map(str::to_owned));
-        // A disappeared or omitted control never resurrects an old public ID.
-        state.scene.element_ids.retain(|_, id| {
+        // This bounded label cache carries no input authority. Exact native
+        // object credentials can retain their display IDs across filters;
+        // omitted nodes themselves are still retired below. Weak identities
+        // require continuous observation and cannot revive a removed target.
+        state.scene.element_ids.retain(|_, cached| {
             nodes
                 .iter()
-                .any(|row| row["id"].as_str() == Some(id.as_str()))
+                .any(|row| row["id"].as_str() == Some(cached.id.as_str()))
         });
+        // Cache only native-renewable handles, with bounded metadata and no
+        // value payloads. Inputs always pass scene_refresh_target again; text
+        // pages retain their original read-only content observation.
+        if state.scene.retained_nodes.len() >= 256 {
+            state.scene.retained_nodes.clear();
+        }
+        for node in &nodes {
+            if node["rebind_identity"].as_str().is_none() {
+                continue;
+            }
+            let mut retained = node.clone();
+            retained["expected"] = json!({"role":node["expected"]["role"],"name":node["expected"]["name"],"actions":node["expected"]["actions"],"enabled":node["expected"]["enabled"]});
+            if retained.to_string().len() <= 4096 {
+                state
+                    .scene
+                    .retained_nodes
+                    .insert(node["id"].as_str().unwrap().into(), retained);
+            }
+        }
         state.scene.nodes = nodes;
         drop(state);
         let mut work = data(snapshot);

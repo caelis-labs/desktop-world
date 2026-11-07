@@ -153,6 +153,25 @@ sheetFocusCheck(try !dialogFocused(2, 3)) // A new nested sheet is a distinct ta
 sheetFocusCheck(try !dialogFocused(2, 4))
 sheetFocusCheck(try !exactFocusedSurface(requested: 2, requestedWindow: 200,
                                     focused: 2, equal: ==, windowID: { _ in 201 }))
+private func desktopFocus(_ current: Int, windows: [Int], foreign: Int? = nil) throws -> Bool {
+    try windowlessFocusSurface(current, pid: 10, windows: windows,
+        owner: { $0 == foreign ? 20 : 10 },
+        role: { $0 == 1 || $0 == 2 ? kAXScrollAreaRole : kAXWindowRole }, equal: ==)
+}
+sheetFocusCheck(try desktopFocus(1, windows: [1]))
+sheetFocusCheck(try desktopFocus(1, windows: [1, 2]))
+sheetFocusCheck(try !desktopFocus(1, windows: []))
+sheetFocusCheck(try !desktopFocus(1, windows: [2]))
+sheetFocusCheck(try !desktopFocus(1, windows: [1, 3]))
+sheetFocusCheck(try !desktopFocus(3, windows: [3]))
+sheetFocusCheck(try !desktopFocus(1, windows: [1], foreign: 1))
+sheetFocusCheck(try !desktopFocus(1, windows: [1, 2], foreign: 2))
+sheetFocusCheck(try !desktopFocus(1, windows: Array(repeating: 1, count: 129)))
+do {
+    _ = try windowlessFocusSurface(1, pid: 10, windows: [1], owner: { _ in 10 },
+        role: { _ -> String? in throw failure("ax_unavailable", "unreadable desktop") }, equal: ==)
+    preconditionFailure("Unreadable desktop was accepted")
+} catch let error as NativeFailure { sheetFocusCheck(error.code == "ax_unavailable") }
 private let foreignActivation = try resolveActivationWindow(2, pid: 10,
     owner: { $0 == 1 ? 20 : 10 }, role: { dialogRoles[$0] }, parent: { dialogParents[$0] })
 sheetFocusCheck(foreignActivation == nil)
@@ -839,7 +858,7 @@ private let inventoryBusy = failure("ax_unavailable", "original AXRole busy",
     attributeFailure: AXAttributeFailure(name: kAXRoleAttribute, error: .cannotComplete))
 private var inventoryTime = 0.0
 private var inventoryReads = 0
-private let recoveredInventory: [Int] = try retryCompleteInventory(original: inventoryBusy,
+private let recoveredInventory: [Int] = try retryCompleteAXRead(original: inventoryBusy,
     remaining: { 0.75 - inventoryTime }, check: {}, read: {
         inventoryReads += 1
         if inventoryReads == 1 {
@@ -852,7 +871,7 @@ surfaceCheck(recoveredInventory == [3, 4] && inventoryReads == 2)
 inventoryTime = 0
 private var lastInventoryError = ""
 do {
-    let _: [Int] = try retryCompleteInventory(original: inventoryBusy,
+    let _: [Int] = try retryCompleteAXRead(original: inventoryBusy,
         remaining: { 0.25 - inventoryTime }, check: {}, read: {
             inventoryTime += 0.1
             lastInventoryError = "AXWindows busy at \(inventoryTime)"
@@ -865,7 +884,7 @@ do {
 }
 for code in ["native_stopping", "deadline_exceeded", "app_changed"] {
     do {
-        let _: [Int] = try retryCompleteInventory(original: inventoryBusy, remaining: { 0.75 },
+        let _: [Int] = try retryCompleteAXRead(original: inventoryBusy, remaining: { 0.75 },
             check: { throw failure(code, "caller cause") },
             read: { preconditionFailure("Read continued after caller stop") }, wait: { _ in })
         preconditionFailure("Caller error lost")
@@ -874,14 +893,14 @@ for code in ["native_stopping", "deadline_exceeded", "app_changed"] {
 for original in [failure("ax_unavailable", "target object expired", attributeFailure: AXAttributeFailure(name: kAXRoleAttribute, error: .invalidUIElement)),
                  failure("ax_unavailable", "untyped failure"), failure("target_changed", "target changed")] {
     do {
-        let _: [Int] = try retryCompleteInventory(original: inventoryBusy, remaining: { 0.75 },
+        let _: [Int] = try retryCompleteAXRead(original: inventoryBusy, remaining: { 0.75 },
             check: {}, read: { throw original }, wait: { _ in })
         preconditionFailure("A non-busy error was retried")
     } catch let error as NativeFailure { surfaceCheck(error.code == original.code && error.message == original.message) }
 }
 inventoryTime = 0
 do {
-    let _: [Int] = try retryCompleteInventory(original: inventoryBusy,
+    let _: [Int] = try retryCompleteAXRead(original: inventoryBusy,
         remaining: { 0.25 - inventoryTime }, check: {}, read: {
             inventoryTime = 0.25
             throw failure("deadline_exceeded", "local read window expired")
@@ -890,7 +909,7 @@ do {
 } catch let error as NativeFailure { surfaceCheck(error.message == inventoryBusy.message) }
 private var inventoryChecks = 0
 do {
-    let _: [Int] = try retryCompleteInventory(original: inventoryBusy, remaining: { 0.75 }, check: {
+    let _: [Int] = try retryCompleteAXRead(original: inventoryBusy, remaining: { 0.75 }, check: {
         inventoryChecks += 1
         if inventoryChecks == 3 { throw failure("app_changed", "after fresh snapshot") }
     }, read: { [7] }, wait: { _ in })
@@ -1482,6 +1501,64 @@ private let absentTextAttributes = SemanticTextFields(role: kAXTextFieldRole, ti
 surfaceCheck(absentTextAttributes.matches("AXTextField"))
 surfaceCheck(absentTextAttributes.name == nil && absentTextAttributes.value == nil)
 
+// Unnamed standard chrome is identified by native subrole, never array order.
+for (subrole, name) in [("AXCloseButton", "Close window"), ("AXMinimizeButton", "Minimize window"),
+                        ("AXZoomButton", "Zoom window"), ("AXFullScreenButton", "Full screen window")] {
+    let chrome = SemanticTextFields(role: kAXButtonRole, title: nil, value: nil, description: "", subrole: subrole)
+    surfaceCheck(chrome.name == name && chrome.label == name && chrome.matches(name))
+}
+surfaceCheck(SemanticTextFields(role: kAXButtonRole, title: "关闭", value: nil, description: nil,
+    subrole: "AXCloseButton").name == "关闭")
+surfaceCheck(SemanticTextFields(role: kAXButtonRole, title: nil, value: nil, description: "关闭窗口",
+    subrole: "AXCloseButton").name == "关闭窗口")
+surfaceCheck(SemanticTextFields(role: kAXTextFieldRole, title: nil, value: nil, description: nil,
+    subrole: "AXCloseButton").name == nil)
+surfaceCheck(SemanticTextFields(role: kAXButtonRole, title: nil, value: nil, description: nil,
+    subrole: "AXCustomButton").label == kAXButtonRole)
+
+// A new/raised target surface crossing the original is distinct from a
+// pre-existing overlay, another app's window, and a missing original owner.
+private func orderRow(_ id: CGWindowID, _ pid: Int32) -> CGRecord {
+    CGRecord(id: id, pid: pid, bounds: CGRect(x: 0, y: 0, width: 100, height: 100), onscreen: true)
+}
+private let originalOrder = [orderRow(1, 20), orderRow(2, 10), orderRow(3, 20)]
+private let alreadyAbove = targetWindowsAbove(originalOrder, original: 2, owner: 10, target: 20)!
+surfaceCheck(alreadyAbove == [1])
+surfaceCheck(targetWindowsAbove([orderRow(4, 30)] + originalOrder, original: 2, owner: 10, target: 20) == alreadyAbove)
+surfaceCheck(targetWindowsAbove([orderRow(3, 20)] + originalOrder.prefix(2), original: 2, owner: 10, target: 20)!.subtracting(alreadyAbove) == [3])
+surfaceCheck(targetWindowsAbove([orderRow(4, 20)] + originalOrder, original: 2, owner: 10, target: 20)!.subtracting(alreadyAbove) == [4])
+surfaceCheck(targetWindowsAbove(originalOrder, original: 2, owner: 99, target: 20) == nil)
+surfaceCheck(targetWindowsAbove([orderRow(3, 20)], original: 2, owner: 10, target: 20) == nil)
+surfaceCheck(!originalAboveOtherApps(originalOrder, original: 2, owner: 10))
+surfaceCheck(originalAboveOtherApps([orderRow(4, 10), orderRow(2, 10), orderRow(3, 20)], original: 2, owner: 10))
+surfaceCheck(!originalAboveOtherApps(originalOrder, original: 2, owner: 99))
+
+// A menu's accessibility focus is not keyboard foreground. Passive order return
+// needs the original actual foreground and exact local window, including a
+// second foreground proof after the potentially blocking AX read.
+private var passiveFrontReads = 0
+private let passiveSameOwner = try passiveOrderOwner(requested: 42, requestedWindow: 42,
+    frontmost: { passiveFrontReads += 1; return true }, focusedWindow: { 42 },
+    equal: ==, windowID: { CGWindowID($0) })
+surfaceCheck(passiveSameOwner)
+surfaceCheck(passiveFrontReads == 2)
+private let passiveOtherForeground = try passiveOrderOwner(requested: 42, requestedWindow: 42,
+    frontmost: { false }, focusedWindow: { preconditionFailure("Do not query a different foreground owner") },
+    equal: ==, windowID: { CGWindowID($0) })
+surfaceCheck(!passiveOtherForeground)
+private let passiveOtherWindow = try passiveOrderOwner(requested: 42, requestedWindow: 42,
+    frontmost: { true }, focusedWindow: { 43 }, equal: ==, windowID: { CGWindowID($0) })
+surfaceCheck(!passiveOtherWindow)
+private let passiveMissingWindow = try passiveOrderOwner(requested: 42, requestedWindow: 42,
+    frontmost: { true }, focusedWindow: { nil }, equal: ==, windowID: { CGWindowID($0) })
+surfaceCheck(!passiveMissingWindow)
+passiveFrontReads = 0
+private let passiveOwnerChangedDuringRead = try passiveOrderOwner(requested: 42, requestedWindow: 42,
+    frontmost: { passiveFrontReads += 1; return passiveFrontReads == 1 }, focusedWindow: { 42 },
+    equal: ==, windowID: { CGWindowID($0) })
+surfaceCheck(!passiveOwnerChangedDuringRead)
+surfaceCheck(passiveFrontReads == 2)
+
 // Public composite labels are matchable verbatim. Separately returned fields
 // never create an implicit whitespace-joined match, nor an extra role alias.
 private let orderNumber = SemanticTextFields(role: kAXTextFieldRole, title: "Order", value: "Number", description: nil)
@@ -1588,10 +1665,11 @@ private let modalPressReply = try performSemanticPress(deadline: pressDeadline, 
     pressTimeouts.append($0); return .success
 }, dispatch: {
     pressDispatches += 1
-    pressClock += 0.35 // A modal callback exceeding the old 200 ms read budget.
-    return .success
+    let modalInitialization = 3.2 // Cold Open/Save initialization exceeded the old 2 s cap in DSH.
+    pressClock += modalInitialization
+    return Double(pressTimeouts.last!) > modalInitialization ? .success : .cannotComplete
 })
-surfaceCheck(pressTimeouts == [2] && pressDispatches == 1)
+surfaceCheck(pressTimeouts == [10] && pressDispatches == 1)
 surfaceCheck(modalPressReply["dispatch"] as? String == "dispatched")
 surfaceCheck(modalPressReply["evidence"] as? String == "unverified" && modalPressReply["error"] == nil)
 
@@ -1653,3 +1731,82 @@ for phase in ["already_expired", "timeout_configuration", "expired_during_config
     }
 }
 print("Semantic AXPress uses one bounded action reply and preserves unknown/late provider evidence; no AX or GUI reads")
+
+// A live equivalent alias proves the retained surface without reading an
+// expired sheet-parent proxy. A different native surface still fails closed.
+sheetFocusCheck(try exactFocusedSurface(requested: 1, requestedWindow: 100, focused: 6,
+    equal: { ($0 == 1 || $0 == 6) && ($1 == 1 || $1 == 6) },
+    windowID: { element in
+        guard element == 6 else { throw failure("window_unproven", "expired proxy") }
+        return 100
+    }))
+private func inlineIdentity(role: String? = kAXTextFieldRole, parent: String? = kAXApplicationRole,
+    owner: Int32 = 10, parentOwner: Int32 = 10, window: CGWindowID = 100,
+    requested: CGWindowID = 100) -> Bool {
+    standaloneTextControlIdentity(role: role, parentRole: parent, pid: 10, owner: owner,
+        parentOwner: parentOwner, window: window, requested: requested)
+}
+surfaceCheck(inlineIdentity())
+surfaceCheck(!inlineIdentity(role: kAXButtonRole))
+surfaceCheck(!inlineIdentity(role: nil))
+surfaceCheck(!inlineIdentity(parent: kAXWindowRole))
+surfaceCheck(!inlineIdentity(parent: nil))
+surfaceCheck(!inlineIdentity(owner: 20))
+surfaceCheck(!inlineIdentity(parentOwner: 20))
+surfaceCheck(!inlineIdentity(window: 0))
+surfaceCheck(!inlineIdentity(requested: 101))
+print("Standalone native text receiver controls passed; no desktop access")
+
+// Only expired modal identity plus an admitted action can return to a known
+// live app window. Missing evidence, minimization and arbitrary siblings cannot.
+surfaceCheck(expiredAXWindowIdentity(.illegalArgument, id: 0))
+surfaceCheck(expiredAXWindowIdentity(.invalidUIElement, id: 0))
+for status in [AXError.success, .cannotComplete, .apiDisabled, .failure, .noValue] {
+    surfaceCheck(!expiredAXWindowIdentity(status, id: 0))
+}
+surfaceCheck(!expiredAXWindowIdentity(.illegalArgument, id: 100))
+private func modalReturn(admitted: Bool = true, modal: Bool = true, anchor: CGWindowID = 100,
+    candidate: CGWindowID = 200, known: Set<CGWindowID> = [100, 200],
+    onscreen: Bool = false, expired: Bool = true) -> Bool {
+    closedModalReturnAllowed(admitted: admitted, modal: modal, anchor: anchor,
+        candidate: candidate, known: known, onscreen: onscreen, expired: expired)
+}
+surfaceCheck(modalReturn())
+surfaceCheck(!modalReturn(admitted: false))
+surfaceCheck(!modalReturn(modal: false))
+surfaceCheck(!modalReturn(anchor: 0))
+surfaceCheck(!modalReturn(candidate: 0))
+surfaceCheck(!modalReturn(candidate: 100))
+surfaceCheck(!modalReturn(known: [100]))
+surfaceCheck(!modalReturn(onscreen: true))
+surfaceCheck(!modalReturn(expired: false))
+print("Controlled modal dismissal return controls passed; no desktop access")
+
+// Original-owner confirmation can re-read a typed native gap without changing
+// the nominated owner, activating anything or replaying input.
+private var originalConfirmationReads = 0
+private var originalConfirmationWaits = 0
+private let originalConfirmed: Bool = try waitForEstablishedFocus(
+    remaining: { 1 }, check: {}, read: {
+        originalConfirmationReads += 1
+        return try frontProcessMatch(originalConfirmationReads == 1 ? -3 : 1)
+    }, wait: { _ in originalConfirmationWaits += 1 })
+surfaceCheck(originalConfirmed && originalConfirmationReads == 2 && originalConfirmationWaits == 1)
+private var changedOwnerWaits = 0
+do {
+    let _: Bool = try waitForEstablishedFocus(remaining: { 1 }, check: {}, read: {
+        guard try frontProcessMatch(0) else { throw failure("focus_changed", "Original owner changed") }
+        return true
+    }, wait: { _ in changedOwnerWaits += 1 })
+    preconditionFailure("Proved external choice was retried")
+} catch let error as NativeFailure {
+    surfaceCheck(error.code == "focus_changed" && changedOwnerWaits == 0)
+}
+print("Original-owner confirmation recovers only typed read gaps; no activation/input")
+
+for confirmed in ["quit_app", "application_exited"] {
+    surfaceCheck(confirmedExecutionTerminal(operation: confirmed, evidence: "confirmed", postcondition: "application_exited", sameApp: true, closedWindow: nil, anchorWindow: 12) == "application_exited")
+    surfaceCheck(confirmedExecutionTerminal(operation: confirmed, evidence: "unverified", postcondition: "application_exited", sameApp: true, closedWindow: nil, anchorWindow: 12) == nil)
+    surfaceCheck(confirmedExecutionTerminal(operation: confirmed, evidence: "confirmed", postcondition: "application_exited", sameApp: false, closedWindow: nil, anchorWindow: 12) == nil)
+}
+print("Exact kernel-confirmed exit and explicit quit share terminal settlement; unknown/foreign owners remain strict")

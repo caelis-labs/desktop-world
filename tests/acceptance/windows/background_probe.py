@@ -25,6 +25,7 @@ def main():
     report = {'passed': False, 'artifact': artifact_identity(args.dtw), 'cases': [],
               'scope': 'Windows UIA/posted input and clean background-only refusals; no background keyboard claim'}
     children, clients, intervals = [], [], []
+    holder = holder_request = None
     user = ctypes.WinDLL('user32')
     # Read in the same physical coordinate space as the native observer.
     # On this host GetPhysicalCursorPos is also virtualized for unaware Python.
@@ -45,6 +46,13 @@ def main():
             children.append((child, root))
             wait_state(root, lambda state: state['ready'])
         target, witness = out / 'A', out / 'B'
+        # A new Form.Activate can legitimately lose foreground locking to a
+        # hidden Windows service. A declared actor prepares only our witness
+        # and keeps its execution alive while background behavior is measured.
+        holder = AppClient(args.dtw.resolve(), out / 'foreground-actor')
+        clients.append(holder)
+        holder_request = holder.begin_execute(out / 'Witness.exe',
+            'await app.focus();const end=Date.now()+25000;while(Date.now()<end){};')
         wait_state(witness, lambda state: state['foreground'])
         require(not state(target)['foreground'], 'owned target is not background')
         client = AppClient(args.dtw.resolve(), out / 'protocol')
@@ -84,7 +92,6 @@ def main():
                                          'background_guarantee': False}
         # Ordinary Form.Activate can be refused by Windows foreground locking.
         # An explicit DTW request prepares our own witness before measurement.
-        report['witness_setup'] = client.execute(out / 'Witness.exe', 'await app.keypress("F24");')[0]
         wait_state(witness, lambda state: state['foreground'])
         image = client.capture(app, 'after-uia-provider')['view']['image']
         point = state(target)['pad_point']
@@ -108,6 +115,14 @@ def main():
         raise
     finally:
         report['cleanup'] = []
+        if holder_request is not None:
+            try:
+                response = holder.transport.receive(holder_request, timeout=30)['result']
+                report['witness_setup'] = response.get('structuredContent')
+                require(not response.get('isError'), response)
+            except BaseException as error:
+                report['passed'] = False
+                report['cleanup'].append({'foreground_setup_error': str(error)})
         for client in clients:
             try:
                 report['cleanup'].append({'mcp': client.close()})

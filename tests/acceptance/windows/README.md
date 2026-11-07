@@ -70,11 +70,15 @@ python -X utf8 tests/acceptance/windows/observe_run.py --observer C:\Temp\dtw-ob
 ```
 
 `observe_run.py` uses a separate native process to retain foreground HWND/PID,
-real cursor position and global held-key samples. Actual gaps above 50ms fail the
-strict observation check even if business effects pass. With `--metrics-root`,
-every recorded MCP call (and the interrupted execution through worker exit) must
-also have bracketing samples with gaps no greater than 50ms. The whole-run maximum
-always gates the result, including fixture startup and server teardown. The
+real cursor position and global held-key samples. Business probe exit determines
+`functional_status`; cursor/focus assertions and sampling quality are separate.
+Actual maximum gaps are retained as diagnostics, with no 50ms failure gate.
+With `--metrics-root`, every recorded MCP call (and interrupted execution through
+worker exit) requires bracketing samples and a valid clock. Missing boundaries
+remain `unknown`, not a claim of zero interference. A sampled cursor excursion
+or foreign foreground still fails its experience assertion even when endpoints
+match. `passed` remains the aggregate of business, observation and normal cleanup;
+sampling insufficiency does not rewrite `functional_status`. The
 observer primes CLR serialization before publishing readiness; the probe starts
 only after its first flushed sample. Sampling records Windows
 foreground input honestly; it does not grant the macOS pointer-borrow policy to

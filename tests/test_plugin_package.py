@@ -166,6 +166,60 @@ console.log('Cordis startup and disposal contracts passed');
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Cordis startup and disposal contracts passed", result.stdout)
 
+    @unittest.skipUnless(shutil.which("node"), "Cordis adapter runs inside the DSH Node host")
+    def test_cordis_only_clarifies_opaque_interruption_without_overriding_policy_or_native_evidence(self):
+        script = r"""
+import assert from 'node:assert/strict';
+import { pathToFileURL } from 'node:url';
+const adapter = await import(pathToFileURL(process.argv[1]).href);
+let present;
+await adapter.apply({
+  fiber: { uid: 1 },
+  on: (name, callback) => { if (name === 'tools/post-execute') present = callback; },
+  loader: { import: async name => ({ name }), unwrapExports: x => x },
+  plugin: () => Object.assign(Promise.resolve(), { dispose: async () => {} }),
+});
+assert.equal(typeof present, 'function');
+const controller = new AbortController();
+controller.abort({ type: 'user_interrupted' });
+const exec = { name: 'mcp__desktop-world__exec', signal: controller.signal };
+const result = Object.freeze({ isError: true, error: { message: '[object Object]' },
+  content: Object.freeze([{ type: 'text', text: 'Error: [object Object]' }]) });
+const accept = { kind: 'accept', additionalContexts: [{ type: 'text', text: 'keep policy context' }] };
+for (const name of ['mcp__desktop-world__exec', 'mcp__desktop-world__apps']) {
+  const decision = await present({ ...exec, name }, result, async () => accept);
+  const value = JSON.parse(decision.content[0].text.slice('Error: '.length));
+  assert.equal(value.status, 'interrupted');
+  assert.equal(value.error.code, 'execution_interrupted');
+  assert.match(value.error.message, /does not confirm native dispatch or cleanup/);
+  assert.match(value.error.message, /Do not replay/);
+  assert.equal(value.original_host_error, 'Error: [object Object]');
+  assert.deepEqual(decision.additionalContexts, accept.additionalContexts);
+  assert.equal(decision.value, undefined);
+  assert.equal(result.isError, true);
+  assert.equal(result.error.message, '[object Object]');
+}
+for (const [e, r] of [
+  [{ ...exec, name: 'mcp__other__exec' }, result],
+  [{ ...exec, signal: new AbortController().signal }, result],
+  [exec, { ...result, isError: false }],
+  [exec, { ...result, error: { message: 'Native cleanup not confirmed' } }],
+  [exec, { ...result, content: [{ type: 'text', text: 'Native receipt retained' }] }],
+]) assert.equal(await present(e, r, async () => accept), accept);
+for (const policy of [
+  { kind: 'block', feedback: [{ type: 'text', text: 'policy denied' }] },
+  { kind: 'accept', content: [{ type: 'text', text: 'policy presentation' }] },
+  { kind: 'accept', value: null },
+]) assert.equal(await present(exec, result, async () => policy), policy);
+await assert.rejects(present(exec, result, async () => { throw new Error('policy failed'); }), /policy failed/);
+console.log('Cordis interruption presentation contracts passed');
+"""
+        result = subprocess.run([shutil.which("node"), "--input-type=module", "-e", script,
+                                 str(ROOT / "plugins/cordis/index.mjs")], stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, encoding="utf-8", timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Cordis interruption presentation contracts passed", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

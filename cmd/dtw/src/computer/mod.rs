@@ -116,6 +116,7 @@ impl FocusReturn {
 /// Provider-reported routing evidence, independent of effect confirmation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InputDelivery {
+    /// Action transport, independent of an already owned foreground scope.
     pub route: Option<InputRoute>,
     pub reason: Option<String>,
     pub foreground_borrowed: bool,
@@ -433,6 +434,8 @@ pub struct WindowLayout {
     pub rank: u32,
     /// Optional native keyboard receiver, independent of visual z-order.
     pub keyboard_focused: Option<bool>,
+    /// A proven modal receiver overrides its parent's stale focus hint.
+    pub keyboard_modal: Option<bool>,
     /// Explicit native exclusion from active semantics, never from pixels or
     /// pointer hit testing. Unknown providers preserve z-order selection.
     pub semantic_candidate: Option<bool>,
@@ -445,6 +448,7 @@ impl WindowLayout {
                 bounds,
                 rank,
                 keyboard_focused: None,
+                keyboard_modal: None,
                 semantic_candidate: None,
             },
         )
@@ -785,6 +789,9 @@ pub trait Backend: Send + Sync {
             instances: Vec::new(),
         }
     }
+    fn focus_application(&self, _app: &AppInstance, _call: &CallContext<'_>) -> ActionOutcome {
+        ActionOutcome::rejected(Error::UnsupportedCapability)
+    }
     fn keypress_application(
         &self,
         _app: &AppInstance,
@@ -795,6 +802,16 @@ pub trait Backend: Send + Sync {
     }
     fn quit_application(&self, _app: &AppInstance, _call: &CallContext<'_>) -> ActionOutcome {
         ActionOutcome::rejected(Error::UnsupportedCapability)
+    }
+    /// Read-only proof that this exact native incarnation has exited. Missing
+    /// window/AX metadata is not exit evidence. Unknown/unsupported providers
+    /// return an error, preserving the original failed observation.
+    fn application_exited(
+        &self,
+        _app: &AppInstance,
+        _call: &CallContext<'_>,
+    ) -> Result<bool, Error> {
+        Err(Error::UnsupportedCapability)
     }
     fn close_window(&self, _target: &WindowTarget, _call: &CallContext<'_>) -> ActionOutcome {
         ActionOutcome::rejected(Error::UnsupportedCapability)

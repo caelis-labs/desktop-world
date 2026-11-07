@@ -55,6 +55,7 @@ struct Model {
     window_semantics: HashMap<u64, Vec<Element>>,
     filtered_observation: bool,
     menu_scope: bool,
+    subtree_scope: bool,
     text_error: Option<Error>,
     read_gate: Option<WorkerGate>,
     action_gate: Option<WorkerGate>,
@@ -74,6 +75,9 @@ struct Model {
     cleanup_after_action: Option<Error>,
     shutdown_gate: Option<(WorkerGate, Error)>,
     windows_error: Option<Error>,
+    window_errors: std::collections::VecDeque<Error>,
+    window_error_after_action: Option<Error>,
+    application_input: bool,
     inventory: Option<WindowInventory>,
     instance_inventories: HashMap<(u32, u64), WindowInventory>,
     semantics_after_action: Option<Vec<Element>>,
@@ -89,6 +93,7 @@ struct Shared {
     anchored_scrolls: Mutex<Vec<(WindowTarget, ScrollRequest)>>,
     input_targets: Mutex<Vec<WindowTarget>>,
     press_targets: Mutex<Vec<WindowTarget>>,
+    set_values: Mutex<Vec<(ElementId, String)>>,
     shutdowns: AtomicUsize,
     finishes: AtomicUsize,
 }
@@ -103,6 +108,7 @@ impl MockBackend {
                 window_semantics: HashMap::new(),
                 filtered_observation: false,
                 menu_scope: false,
+                subtree_scope: false,
                 text_error: None,
                 read_gate: None,
                 action_gate: None,
@@ -127,6 +133,9 @@ impl MockBackend {
                 cleanup_after_action: None,
                 shutdown_gate: None,
                 windows_error: None,
+                window_errors: std::collections::VecDeque::new(),
+                window_error_after_action: None,
+                application_input: false,
                 inventory: None,
                 instance_inventories: HashMap::new(),
                 semantics_after_action: None,
@@ -140,6 +149,7 @@ impl MockBackend {
             anchored_scrolls: Mutex::new(Vec::new()),
             input_targets: Mutex::new(Vec::new()),
             press_targets: Mutex::new(Vec::new()),
+            set_values: Mutex::new(Vec::new()),
             shutdowns: AtomicUsize::new(0),
             finishes: AtomicUsize::new(0),
         }))
@@ -192,6 +202,9 @@ impl MockBackend {
         }
         if let Some(error) = model.capture_error_after_action.take() {
             model.capture_errors.push_back(error);
+        }
+        if let Some(error) = model.window_error_after_action.take() {
+            model.window_errors.push_back(error);
         }
         if let Some(error) = model.cleanup_after_action.take() {
             model.cleanup_error.get_or_insert(error);
@@ -286,8 +299,22 @@ impl Backend for MockBackend {
             .clone()
             .map_or(Ok(()), Err)
     }
+    fn keypress_application(
+        &self,
+        _: &AppInstance,
+        _: &[String],
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        if !self.0.model.lock().unwrap().application_input {
+            return ActionOutcome::rejected(Error::UnsupportedCapability);
+        }
+        self.act(call)
+    }
     fn windows(&self, app: &AppInstance, _: &CallContext<'_>) -> Result<WindowInventory, Error> {
         self.0.windows.fetch_add(1, Ordering::SeqCst);
+        if let Some(error) = self.0.model.lock().unwrap().window_errors.pop_front() {
+            return Err(error);
+        }
         if let Some(error) = self.0.model.lock().unwrap().windows_error.clone() {
             return Err(error);
         }
@@ -332,6 +359,7 @@ impl Backend for MockBackend {
     fn supports_observe_scope(&self, scope: ObserveScopeKind) -> bool {
         scope == ObserveScopeKind::Window
             || (scope == ObserveScopeKind::Menu && self.0.model.lock().unwrap().menu_scope)
+            || (scope == ObserveScopeKind::Subtree && self.0.model.lock().unwrap().subtree_scope)
     }
     fn observe_scoped(
         &self,
@@ -344,10 +372,15 @@ impl Backend for MockBackend {
         if scope == ObserveScope::Window {
             return self.observe_page(target, query, call);
         }
-        if scope != ObserveScope::Menu || !self.0.model.lock().unwrap().menu_scope {
+        let supported = match scope.kind() {
+            ObserveScopeKind::Menu => self.0.model.lock().unwrap().menu_scope,
+            ObserveScopeKind::Subtree => self.0.model.lock().unwrap().subtree_scope,
+            _ => false,
+        };
+        if !supported {
             return Err(Error::UnsupportedCapability);
         }
-        assert!(binding.is_none());
+        assert_eq!(binding.is_some(), scope.kind() == ObserveScopeKind::Subtree);
         self.0.observe_scopes.lock().unwrap().push(scope.kind());
         self.observe_page(target, query, call)
     }
@@ -515,10 +548,15 @@ impl Backend for MockBackend {
         &self,
         _: &WindowTarget,
         _: &(),
-        _: ElementId,
-        _: &str,
+        element: ElementId,
+        value: &str,
         call: &CallContext<'_>,
     ) -> ActionOutcome {
+        self.0
+            .set_values
+            .lock()
+            .unwrap()
+            .push((element, value.into()));
         self.act(call)
     }
     fn click_with_options(

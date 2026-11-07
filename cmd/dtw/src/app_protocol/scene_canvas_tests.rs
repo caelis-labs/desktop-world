@@ -72,7 +72,13 @@ fn current_canvas_receiver_cannot_switch_to_sibling_process_instance() {
             (a.pid, a.generation),
             test_inventory(vec![row(&a, 101, [0., 0., 20., 10.], 2)]),
         );
-    // Refreshing an unrelated point must not authorize a sibling at a later
+    let reread = exec(&server, "semantic_reread", "await app.look();");
+    assert!(
+        !reread.is_error && reread.image.is_none(),
+        "{}",
+        reread.data
+    );
+    // A semantic read and refreshing an unrelated point must not authorize a sibling at a later
     // point that originally belonged to the selected base instance.
     let reply = exec(
         &server,

@@ -15,7 +15,11 @@ Each action is sent once. DTW handles short native readiness checks and routes
 within the authorized app; script completion returns the latest view. UI work
 can settle asynchronously: perform another look when the expected change has
 not appeared. A successful native dispatch alone does not prove the result.
+If `observation.status` is `partial` or `failed`, the automatic follow-up read
+was incomplete. Check `effects.dispatch`, then use a read-only observation to
+verify what happened before choosing new input.
 
+`click(id)` can focus an editable text control when it advertises `press`.
 A text field without an advertised `press` action needs a visual click before
 `typeText`. A proven undelivered semantic rejection can return an image for this
 fallback; it never repeats a potentially delivered action.
@@ -73,11 +77,11 @@ permission/identity failures require recovery before more work.
 await app.look({scope:'menu',text:'File'});
 ```
 
-Menu inspection uses the native app-menu scope without preparing focus. A known
-menu command can use `click({selector:{scope:'menu',text:'Open…'}})` when its exact
-native destination is already focused. DTW checks uniqueness and returns
-`foreground_required` rather than implicitly activating an inactive app. This scope
-still needs a proven app window. Windowless menu extras and Dock roots are separate capabilities.
+Menu inspection uses the native app-menu scope without preparing input. Filter
+by menu/command name, then click a freshly returned exact ID. Normal actions
+prepare the authorized destination automatically. A command still needs a live,
+enabled, app-owned target; incomplete discovery does not prove uniqueness.
+Windowless menu extras and Dock roots are separate capabilities.
 
 ## Dialogs and application lifecycle
 
@@ -89,31 +93,20 @@ still settling; avoid repeated typing into unproven targets.
 Popovers, menus and save sheets are app scene layers. Use their current semantic
 target or capture coordinates. Normal quit can leave a save sheet; inspect that
 fresh view. Closing a native window is distinct from quitting an app; use its
-ordinary close UI or the platform's close-window chord when appropriate. Prefer
-the close control for macOS background work: AppKit Command+W has a verified
-foreground limitation. An unavailable background route does not justify repeating
-an action with unknown effects.
+ordinary close UI or the platform's close-window chord when appropriate. Use an observed close control or the standard close-window chord.
+Do not repeat an action with unknown effects.
 
-## macOS foreground borrowing
+## Input readiness
 
-Under `auto`, an `exec` starts with background delivery. A known unsupported
-capability with a clean `not_dispatched` preflight can borrow foreground once for
-the rest of that script. This includes AppKit/Chromium hover, a required addressed
-API being unavailable, proven modal/sheet or associated-process keyboard routing,
-and the documented framework-specific keyboard exceptions. Borrowing requires
-an exact logical window anchor and a proven original foreground identity.
-Remaining actions require the owned foreground, while supported pointer transport
-can remain addressed. `background_only` refuses actions that require borrowing.
+Keep related input in one script. Normal actions prepare the authorized
+app/window automatically. Use `app.focus()` only when explicit focus is part of
+the task, with follow-up input in the same `exec`.
 
-Keep related hover, inspection and follow-up input in one script when appropriate.
-At script end DTW restores the original app instance and exact captured window
-only if ownership and original identity still hold. Following a proven descendant
-sheet or popup is allowed; choosing a sibling window or another app invalidates
-the scope permanently. Further input stops, even if focus returns, and DTW neither
-reacquires focus nor forces restoration. Confirmed quit or anchor-window closure
-ends the scope: cleanup only observes whether the original foreground returned,
-and never activates a third app. A save prompt or unknown close effect does not
-establish confirmed termination.
+DTW checks identity, destination and input cleanup internally. If the user
+switches the selected app/window during a script, further input stops. Inspect
+the new state in a later execution; never replay an unknown input. A confirmed
+quit or current-window closure ends that script's input scope; an unresolved
+save prompt does not establish termination.
 
 ## Errors and interruption
 
@@ -167,3 +160,17 @@ A standard macOS/Windows title-bar drag uses native window position when proven 
 writable. Use a current image, start in empty title-bar space away from buttons,
 and keep the supplied path inside that window. The destination must fit one
 display. Inspect fresh bounds/image afterward; moving a window resets coordinates.
+
+## New document windows
+
+Wait for a new window after an input that should create one. A delivered chord
+alone does not prove that the app has finished creating the window.
+
+```javascript
+await app.keypress('META+N');
+await app.waitForNewWindow();
+await app.typeText('New document text');
+```
+
+The wait also works in the next exec. A timeout stops with the latest view;
+it does not resend the shortcut.

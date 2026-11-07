@@ -45,6 +45,64 @@ fn scene_exec(server: &Arc<Server<SceneCatalog>>, source: &str) -> Reply {
         _ => panic!("Unexpected in-flight scene request"),
     }
 }
+
+#[test]
+fn app_view_renews_a_departing_surface_without_replaying_input() {
+    let (server, backend) = scene_agent();
+    backend
+        .base
+        .0
+        .model
+        .lock()
+        .unwrap()
+        .window_error_after_action = Some(Error::TargetChanged);
+    let reply = scene_exec(&server, "await app.capture(); await app.click({x:5,y:5});");
+    assert!(!reply.is_error, "{}", reply.data);
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
+
+    for failures in [1, 2] {
+        let (server, backend) = scene_agent();
+        for _ in 0..failures {
+            backend
+                .base
+                .0
+                .model
+                .lock()
+                .unwrap()
+                .window_errors
+                .push_back(Error::TargetChanged);
+        }
+        let reply = scene_exec(&server, "return await app.look();");
+        assert_eq!(reply.is_error, failures == 2, "{}", reply.data);
+        assert_eq!(backend.base.0.windows.load(Ordering::SeqCst), 2);
+        assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 0);
+    }
+    for cause in [
+        Error::NativeFailure {
+            code: "app_changed".into(),
+            message: "Process incarnation changed".into(),
+        },
+        Error::WrongApp,
+        Error::WrongProvider,
+        Error::NativeFailure {
+            code: "permission_denied".into(),
+            message: "Permission was revoked".into(),
+        },
+    ] {
+        let (server, backend) = scene_agent();
+        backend
+            .base
+            .0
+            .model
+            .lock()
+            .unwrap()
+            .window_errors
+            .push_back(cause);
+        let reply = scene_exec(&server, "return await app.look();");
+        assert!(reply.is_error, "{}", reply.data);
+        assert_eq!(backend.base.0.windows.load(Ordering::SeqCst), 1);
+    }
+}
 #[test]
 fn a_transient_preflight_capture_refreshes_reads_once_before_any_input() {
     for failures in [1, 2] {
@@ -350,8 +408,8 @@ fn scene_post_dispatch_read_failure_keeps_receipt_and_never_replays_input() {
                 .unwrap()
                 .extend([None, Some(ax_parent_failure())]);
         }
-        let reply = scene_exec(&server, "await app.click({x:5,y:5});");
-        assert_eq!(reply.is_error, hard, "{}", reply.data);
+        let reply = scene_exec(&server, "return await app.click({x:5,y:5});");
+        assert!(!reply.is_error, "{}", reply.data);
         assert_eq!(
             reply.data["script"]["steps"][0]["receipt"]["outcome"]["dispatch"],
             "dispatched"
@@ -361,9 +419,10 @@ fn scene_post_dispatch_read_failure_keeps_receipt_and_never_replays_input() {
         assert_eq!(backend.base.0.captures.load(Ordering::SeqCst), 3);
         if hard {
             assert_eq!(
-                reply.data["script"]["failure"]["code"],
+                reply.data["value"]["observation"]["error"]["code"],
                 "permission_required"
             );
+            assert!(reply.data["script"]["failure"].is_null());
             assert!(reply.image.is_none());
         } else {
             assert_eq!(
@@ -374,6 +433,14 @@ fn scene_post_dispatch_read_failure_keeps_receipt_and_never_replays_input() {
         }
         let projected = crate::app_protocol::projection::execution(reply);
         assert_eq!(projected.data["effects"]["dispatch"]["dispatched"], 1);
+        assert_eq!(
+            projected.data["result"]["outcome"]["dispatch"],
+            "dispatched"
+        );
+        assert_eq!(
+            projected.data["observation"]["status"],
+            if hard { "failed" } else { "observed" }
+        );
         if hard {
             backend
                 .base
@@ -394,6 +461,33 @@ fn scene_post_dispatch_read_failure_keeps_receipt_and_never_replays_input() {
             assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 2);
         }
     }
+}
+
+#[test]
+fn automatic_observation_failure_does_not_hide_a_script_error() {
+    let (server, backend) = scene_agent();
+    assert!(scene_exec(&server, "await app.capture();").image.is_some());
+    backend
+        .base
+        .0
+        .model
+        .lock()
+        .unwrap()
+        .capture_error_after_action = Some(Error::BackendFailed("render unavailable".into()));
+    let reply = scene_exec(
+        &server,
+        "await app.click({x:5,y:5}); throw Error('stop here');",
+    );
+    let projected = crate::app_protocol::projection::execution(reply);
+    assert!(projected.is_error, "{}", projected.data);
+    assert_eq!(projected.data["error"]["code"], "script_exception");
+    assert_eq!(projected.data["effects"]["dispatch"]["dispatched"], 1);
+    assert_eq!(
+        projected.data["observation"]["error"]["code"],
+        "backend_failed"
+    );
+    assert!(projected.image.is_none());
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -432,6 +526,40 @@ fn coordinate_gestures_renew_bindings_without_explicit_recapture() {
 }
 
 #[test]
+fn explicit_capture_survives_semantic_reads_in_the_same_script() {
+    let (server, backend) = scene_agent();
+    let reply = scene_exec(&server, "await app.capture(); return await app.look();");
+    assert!(!reply.is_error, "{}", reply.data);
+    assert!(
+        reply.image.is_some(),
+        "The explicitly requested PNG was discarded"
+    );
+    assert_eq!(backend.base.0.captures.load(Ordering::SeqCst), 1);
+    assert_eq!(reply.data["value"]["last_capture"]["step"], 1);
+    let compact = crate::app_protocol::projection::execution(reply);
+    assert_eq!(compact.data["view"]["image"]["captured_at_call"], 1);
+    assert!(compact.data["view"]["image"]["width"].as_u64().is_some());
+}
+
+#[test]
+fn semantic_readbacks_keep_the_captured_mapping_without_automatic_images() {
+    let (server, backend) = scene_agent();
+    let capture = scene_exec(&server, "await app.capture();");
+    assert!(
+        !capture.is_error && capture.image.is_some(),
+        "{}",
+        capture.data
+    );
+    for _ in 0..2 {
+        let read = scene_exec(&server, "await app.look();");
+        assert!(!read.is_error && read.image.is_none(), "{}", read.data);
+        let input = scene_exec(&server, "await app.drag({path:[{x:4,y:5},{x:8,y:5}]});");
+        assert!(!input.is_error && input.image.is_some(), "{}", input.data);
+    }
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 2);
+}
+
+#[test]
 fn coordinate_preflight_accepts_animation_but_rejects_changed_geometry() {
     for geometry in [false, true] {
         let (server, backend) = scene_agent();
@@ -446,6 +574,8 @@ fn coordinate_preflight_accepts_animation_but_rejects_changed_geometry() {
                 model.capture_rgba = [0, 0, 0, 255];
             }
         }
+        let read = scene_exec(&server, "await app.look();");
+        assert!(!read.is_error && read.image.is_none(), "{}", read.data);
         let reply = scene_exec(&server, "await app.click({x:5,y:5});");
         assert_eq!(reply.is_error, geometry, "{}", reply.data);
         if geometry {

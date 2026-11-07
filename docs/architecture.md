@@ -15,13 +15,27 @@ Agent / Harness policy
   → native providers: application workers and short-lived scene workers
 ```
 
+## Product and protocol priorities
+
+1. Reliable Agent functionality comes first. DTW owns known routing, preparation,
+   bounded readiness waits and cleanup. Return definite outcomes where evidence
+   permits; do not make models resolve avoidable uncertainty or invent certainty
+   after an unproven effect.
+2. With functionality established, reduce foreground occupation and real pointer
+   movement. Prefer working background delivery and return borrowed resources.
+3. Keep the public protocol small, stable and easy to use across model capability
+   levels. Each method has a clear purpose; ordinary operations must not require
+   elaborate Agent scripts, route selection or custom lifecycle orchestration.
+
 ## Identity, references and state
 
 `exec({app, source})` always binds one logical authorization target. `apps`
 searches installed/running applications; Skill API.md documents the public app
 methods. There is no public API/result tool, app-less lane or Session object.
 macOS resolves stopped bundle IDs and explicit .app paths. A look starts a stopped
-app; input readiness and native focus are internal. Process identities and all
+app; normal input readiness and focus routing are internal. `app.focus()` explicitly
+ensures foreground ownership for subsequent input in the same execution, with
+normal scoped restoration at settlement. Process identities and all
 window/observation/cursor handles remain private.
 
 A window reference binds its application instance and native owner. Semantic and
@@ -72,6 +86,11 @@ typed operations and validation, not an upstream ToolRegistry. The existing Rust
 package and Swift bridges are sufficient; capability expansion does not require
 a new plugin framework or crate per capability.
 
+The macOS worker keeps AppKit ownership on its main thread. Blocking stdin uses
+a bounded reader channel so the main run loop can deliver workspace history while
+idle and before admitting a new request. Notifications from a previous restoration
+must not be deferred until a later execution's activation.
+
 On macOS, an instance lease serializes writes to one process incarnation across
 sessions. Directed writes to independent instances can run concurrently. Shared
 physical input and ScreenCaptureKit have their own leases and cleanup boundaries.
@@ -82,11 +101,15 @@ failed cleanup must not silently reopen admission.
 Under macOS `auto`, each script starts with background delivery. A clean
 `not_dispatched` preflight for an allowlisted unsupported capability may authorize
 one resident foreground borrow for the rest of the execution. Capabilities include
-AppKit/Chromium hover tracking, a missing required addressed-event API, proven
-modal/sheet or associated-process keyboard routing, and bounded framework-specific
-keyboard exceptions. Unknown AX/modal state, incomplete semantics and menu reads
-do not authorize activation. Borrowing requires an exact logical window anchor
-and a snapshot of the original foreground app instance and window. Remaining
+AppKit/Chromium hover tracking, a missing required addressed-event API, standard
+Open-panel coordinate clicks, proven modal/sheet or associated-process keyboard
+routing, a proven absent background key window, and bounded framework-specific
+keyboard exceptions. Unique windowless applications can borrow for application
+shortcuts after a complete empty inventory proof. Unknown AX/modal state, incomplete
+semantics and menu reads do not authorize activation. Borrowing requires an exact
+logical window anchor, or a unique windowless app incarnation whose first proven
+focused window binds that anchor once, plus a snapshot of the original foreground
+app instance and window. Remaining
 actions validate that foreground scope, including proven descendant surfaces;
 supported pointer transport can remain addressed. Once preparation or dispatch
 begins, errors do not reroute or replay input. `background_only` refuses borrowing.
@@ -96,9 +119,13 @@ original app and exact captured window only while scope ownership and original
 identity remain proven. An external app or sibling-window focus change invalidates
 the scope permanently: later focus return cannot rearm it, subsequent payloads
 stop, and cleanup does not reacquire or force restoration. A positively confirmed
-quit or anchor-window close is terminal; cleanup only observes the original
-foreground and never activates a third app. Descendant closure or an unconfirmed
-lifecycle effect does not establish that terminal case. Restoration failures
+quit is terminal; cleanup only observes the original foreground and never activates
+a third app. A closed anchor cannot admit further input. Restoration-only ownership
+can survive its closure with the same foreground app incarnation, no external
+app leave/return, and a complete live inventory proving either no windows or the
+new document created by an admitted standard Open-panel click. It cannot adopt an
+existing sibling or unknown replacement window. See [macOS routing](macos-input-routing.md)
+for the exact retained-window and WindowServer proofs. Restoration failures
 remain cleanup failures and close dispatch admission. Normal focus return has a
 separate bounded 2-second cleanup budget.
 

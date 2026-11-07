@@ -202,11 +202,13 @@ try checkInventory()
 private func checkSemanticSerialization() throws {
     expect(semanticRole(kAXButtonRole) == "button", "native button role was not normalized")
     expect(semanticRole(kAXCheckBoxRole) == "checkbox", "native checkbox role was not normalized")
+    expect(semanticRole(kAXSliderRole) == "slider", "native slider role was not normalized")
     expect(semanticRole(kAXTextFieldRole) == "text_field", "native text field role was not normalized")
     for (native, expected) in [(NSAccessibility.Role.link.rawValue, "link"), (kAXTableRole, "table"),
                                (kAXRowRole, "row"), (kAXCellRole, "cell"), (kAXListRole, "list"),
                                (kAXTabGroupRole, "tab_group"), (kAXPopUpButtonRole, "pop_up_button"),
-                               (kAXMenuItemRole, "menu_item"), (kAXHeadingRole, "heading")] {
+                               (kAXMenuItemRole, "menu_item"), (kAXMenuBarItemRole, "menu_item"),
+                               (kAXMenuBarRole, "menu_bar"), (kAXMenuRole, "menu"), (kAXHeadingRole, "heading")] {
         expect(semanticRole(native) == expected, "known native role was not normalized: \(expected)")
     }
     expect(semanticRole(kAXRadioButtonRole, subrole: NSAccessibility.Subrole.tabButtonSubrole.rawValue) == "tab",
@@ -218,7 +220,7 @@ private func checkSemanticSerialization() throws {
     for enabled: Bool? in [nil, false, true] {
         let element = NativeElement(id: 1, identity: 1, element: native, label: "display-only text",
                                     role: "button", name: "Action", value: "current value",
-                                    enabled: enabled, canPress: enabled == true, canSetValue: false, regionProof: nil)
+                                    enabled: enabled, pressCapability: enabled == true ? .action : nil, canSetValue: false, regionProof: nil)
         let bytes = try JSONSerialization.data(withJSONObject: element.json)
         let wire = try JSONSerialization.jsonObject(with: bytes) as! [String: Any]
         expect(wire["role"] as? String == "button", "semantic role was derived from label")
@@ -232,7 +234,7 @@ private func checkSemanticSerialization() throws {
         expect(wire["can_press"] as? Bool == (enabled == true), "legacy can_press disagrees with actions")
     }
     let unnamed = NativeElement(id: 2, identity: 2, element: native, label: "AXGroup", role: "group",
-                                name: nil, value: nil, enabled: nil, canPress: false, canSetValue: false, regionProof: nil).json
+                                name: nil, value: nil, enabled: nil, pressCapability: nil, canSetValue: false, regionProof: nil).json
     expect(unnamed["name"] is NSNull && unnamed["value"] is NSNull,
            "missing semantic values must remain null, without label inference")
 }
@@ -325,4 +327,51 @@ private func checkExitedKernelProcess() {
     expect(!isExitedKernelProcess(info, pid: 123), "Empty kernel process record proved death")
 }
 checkExitedKernelProcess()
+private func checkSharingIndicatorSurface() throws {
+    struct Node { var role: String; var identity: String? = nil; var description: String? = nil; var title: String? = nil; var children: [Int] }
+    var nodes = [
+        Node(role: kAXWindowRole, children: [1]),
+        Node(role: kAXGroupRole, children: [2]),
+        Node(role: kAXButtonRole, description: "WindowSharingSessionButton", children: [])
+    ]
+    func check() throws -> Bool {
+        try sharingIndicatorSurface(0, role: { nodes[$0].role }, identifier: { nodes[$0].identity },
+            description: { nodes[$0].description }, title: { nodes[$0].title }, children: { nodes[$0].children })
+    }
+    var matched = try check()
+    expect(matched, "Native sharing indicator was treated as document content")
+    nodes[0].children = [1, 2]
+    matched = try check()
+    expect(!matched, "A real window with other content was hidden")
+    nodes[0].children = [1]; nodes[2].description = "Sharing"
+    matched = try check()
+    expect(!matched, "A label/shape heuristic excluded a normal button")
+    nodes[2].identity = "WindowSharingSessionButton"
+    matched = try check()
+    expect(matched, "Native indicator identifier was ignored")
+    nodes[2].identity = nil; nodes[2].description = nil; nodes[2].title = "WindowSharingSessionButton"
+    matched = try check()
+    expect(matched, "Real AppKit sharing control AXTitle was ignored")
+    nodes[2].title = nil; nodes[0].title = "WindowSharingSessionButton"
+    matched = try check()
+    expect(!matched, "A document title alone hid its content")
+}
+try checkSharingIndicatorSurface()
+let mergedWindows = mergeWindowInventoryRows(
+    all: [[kCGWindowNumber as String: UInt32(10), "revision":"old"], [kCGWindowNumber as String: UInt32(20)]],
+    visible: [[kCGWindowNumber as String: UInt32(30)], [kCGWindowNumber as String: UInt32(10), "revision":"new"]])
+expect(mergedWindows.compactMap { $0[kCGWindowNumber as String] as? UInt32 } == [30,10,20], "New visible window was lost or duplicated")
+expect(mergedWindows[1]["revision"] as? String == "new", "Older all-window metadata replaced visible metadata")
+expect(inputCreatedWindowAllowed(admitted:true, candidate:12, known:[10,11]), "Input-created window was rejected")
+expect(!inputCreatedWindowAllowed(admitted:false, candidate:12, known:[10,11]), "Read/focus alone authorized a new window")
+expect(!inputCreatedWindowAllowed(admitted:true, candidate:11, known:[10,11]), "Existing sibling selection was treated as input-created")
+expect(!inputCreatedWindowAllowed(admitted:true, candidate:0, known:[10,11]), "Unproven window identity was admitted")
+for (alias, expected) in [("CTRL", "control"), ("WIN", "meta"), ("FN", "fn")] {
+    expect(dtwModifier(alias)?.0 == dtwModifier(expected)?.0, "Foreground modifier alias diverged")
+}
+for (alias, expected) in [("PG_DOWN", "pagedown"), ("LEFT_ARROW", "left"),
+    ("DELETE_FORWARD", "forwarddelete"), ("BKSP", "backspace"), ("KP_ENTER", "enter"),
+    ("CAPS_LOCK", "capslock")] {
+    expect(dtwKeyCode(alias) != nil && dtwKeyCode(alias) == dtwKeyCode(expected), "Foreground key alias diverged")
+}
 print("Native inventory controls passed (\(inventoryAssertions) assertions; no GUI access)")

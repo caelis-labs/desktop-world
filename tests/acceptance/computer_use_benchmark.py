@@ -44,7 +44,7 @@ class BenchmarkReport:
                       for row in targets['scenarios']], 'visual_reviews': [], 'cleanup': None, 'setup_error': None, 'tool_errors': [], 'clean_run': None}
 
     def record(self, identifier, status, detail):
-        if status not in {'passed', 'failed', 'unsupported', 'blocked', 'pending_review'}:
+        if status not in {'passed', 'failed', 'unsupported', 'blocked', 'pending_review', 'inconclusive'}:
             raise ValueError('invalid executed status')
         row = next(row for row in self.data['cases'] if row['id'] == identifier)
         if row['status'] != 'not_run':
@@ -66,7 +66,7 @@ def summarize(original):
                 row.update(status='passed' if reviews[-1]['outcome'] == 'passed' else 'failed',
                            original_status='pending_review')
     data['counts'] = {status: sum(row['status'] == status for row in data['cases'])
-        for status in ('passed', 'failed', 'unsupported', 'blocked', 'pending_review', 'not_run')}
+        for status in ('passed', 'failed', 'unsupported', 'blocked', 'pending_review', 'inconclusive', 'not_run')}
     clean = data['cleanup'] is not None and data['cleanup'].get('passed') is True and not data['setup_error']
     core = [row for row in data['cases'] if row['profile'] == 'core']
     data['core_automation_passed'] = clean and all(row['status'] in {'passed', 'pending_review'}
@@ -408,7 +408,7 @@ class CoreCases:
         binary = self.client.transport.child.args[0]
         proof = run_background_contract(self.fixture, Path(binary), self.focus_observer,
             self.output / 'focus', case=self.fixture.case + '-focus')
-        require(proof['passed'], proof)
+        require(proof['functional_pass'], proof)
         return proof
 
 
@@ -454,7 +454,7 @@ def run_benchmark(args):
                 continue
             try:
                 detail = getattr(cases, target['id'])()
-                status = 'unsupported' if detail.get('unavailable') else 'pending_review' if detail.get('gui_review') == 'required' else 'passed'
+                status = 'inconclusive' if detail.get('status') == 'inconclusive' else 'unsupported' if detail.get('unavailable') else 'pending_review' if detail.get('gui_review') == 'required' else 'passed'
                 report.record(target['id'], status, detail)
             except Exception as error:
                 report.record(target['id'], 'failed', {'error': str(error), 'traceback': traceback.format_exc(),

@@ -134,6 +134,12 @@ private struct NativeApp: Equatable, Hashable {
     var json: [String: Any] { ["identity": identity, "pid": pid, "generation": generation] }
 }
 
+// CUA-1767: background app-menu actions need both local key and main windows
+// bound to the requested destination (cua_input/menu_equivalent.rs).
+private func menuDestinationMatches(requested: CGWindowID, focused: CGWindowID?, main: CGWindowID?) -> Bool {
+    requested != 0 && focused == requested && main == requested
+}
+
 private struct NativeTarget: Equatable {
     let app: NativeApp
     let nativeID: CGWindowID
@@ -580,6 +586,20 @@ private struct CGRecord {
     var coordinates: [Double] { [bounds.minX, bounds.minY, bounds.width, bounds.height] }
 }
 
+// These rows must come from optionOnScreenOnly, whose order is documented.
+// Existing foreground overlays are preserved; only a target window newly
+// crossing the exact original window can require a return.
+private func targetWindowsAbove(_ rows: [CGRecord], original: CGWindowID,
+                                owner: Int32, target: Int32) -> Set<CGWindowID>? {
+    guard let index = rows.firstIndex(where: { $0.id == original && $0.pid == owner }) else { return nil }
+    return Set(rows.prefix(index).filter { $0.pid == target }.map(\.id))
+}
+
+private func originalAboveOtherApps(_ rows: [CGRecord], original: CGWindowID, owner: Int32) -> Bool {
+    guard let index = rows.firstIndex(where: { $0.id == original && $0.pid == owner }) else { return false }
+    return rows.prefix(index).allSatisfy { $0.pid == owner }
+}
+
 // Fixed counters contain only facts about the requested PID. No titles, raw AX
 // values or other applications enter the failure message. Error samples are capped.
 private struct WindowInventoryDiagnostics {
@@ -947,6 +967,37 @@ private func exactFocusedSurface<Element>(requested: Element, requestedWindow: C
     try equal(requested, focused) && windowID(focused) == requestedWindow
 }
 
+// Finder publishes its desktop scroll area as AXFocusedWindow/AXWindows while
+// it has no document windows. Prove that exact local non-window surface; it
+// grants application commands only, never a window or text/pointer target.
+private func windowlessFocusSurface<Element>(_ current: Element, pid: Int32, windows: [Element],
+    owner: (Element) throws -> Int32, role: (Element) throws -> String?,
+    equal: (Element, Element) -> Bool) throws -> Bool {
+    guard !windows.isEmpty, windows.count < 129, windows.contains(where: { equal($0, current) }),
+          try owner(current) == pid, try role(current) == kAXScrollAreaRole else { return false }
+    return try windows.allSatisfy { try owner($0) == pid && role($0) == kAXScrollAreaRole }
+}
+
+private func nativeWindowlessFocusSurface(_ current: AXUIElement, pid: Int32, deadline: Deadline) throws -> Bool {
+    guard try axAttribute(current, kAXRoleAttribute, deadline) as? String == kAXScrollAreaRole else { return false }
+    let windows = try axList(AXUIElementCreateApplication(pid), kAXWindowsAttribute, limit: 129, deadline, required: true)
+    return try windowlessFocusSurface(current, pid: pid, windows: windows,
+        owner: { try axPID($0, deadline) }, role: { try axAttribute($0, kAXRoleAttribute, deadline) as? String }, equal: CFEqual)
+}
+
+// Background menus may own accessibility focus while keyboard foreground stays
+// with the user. Passive AXRaise restores only order, so use the real front
+// process and that app's exact local focused window, not global AX focus. This
+// proof grants no keyboard/pointer input or activation authority.
+private func passiveOrderOwner<Element>(requested: Element, requestedWindow: CGWindowID,
+    frontmost: () throws -> Bool, focusedWindow: () throws -> Element?,
+    equal: (Element, Element) -> Bool, windowID: (Element) throws -> CGWindowID) throws -> Bool {
+    guard try frontmost(), let current = try focusedWindow(),
+          try exactFocusedSurface(requested: requested, requestedWindow: requestedWindow,
+              focused: current, equal: equal, windowID: windowID) else { return false }
+    return try frontmost()
+}
+
 private func resolveActivationWindow<Element>(_ surface: Element, pid: Int32,
                                               owner: (Element) throws -> Int32,
                                               role: (Element) throws -> String?,
@@ -993,7 +1044,7 @@ private func executionRestoreIdentityCurrent(pid: Int32, generation: UInt64,
 private func confirmedExecutionTerminal(operation: String, evidence: String?, postcondition: String?,
     sameApp: Bool, closedWindow: CGWindowID?, anchorWindow: CGWindowID) -> String? {
     guard sameApp, evidence == "confirmed" else { return nil }
-    if operation == "quit_app", postcondition == "application_exited" { return postcondition }
+    if (operation == "quit_app" || operation == "application_exited"), postcondition == "application_exited" { return postcondition }
     if operation == "close_window", postcondition == "window_closed", closedWindow == anchorWindow { return postcondition }
     return nil
 }
@@ -1015,6 +1066,34 @@ private func coordinateMenuSurface(role: String?, associated: Bool) -> Bool {
     associated && role == kAXMenuRole
 }
 
+// AppKit discards a non-key window's first down for ordinary custom NSViews.
+// Preserve directed input for native controls that accept first mouse. A proved
+// custom receiver needs only a key window, not a physical pointer or a replay.
+private func nativePointerReceiverNeedsKeyWindow(operation: String, button: String?, roles: [String]?) -> Bool {
+    guard operation == "drag" || (operation == "click" && (button ?? "left") == "left"),
+          let roles, roles.contains(kAXWindowRole) || roles.contains(kAXSheetRole) else { return false }
+    if roles.contains("AXWebArea") { return true }
+    let controls = [kAXButtonRole, kAXCheckBoxRole, kAXRadioButtonRole, kAXPopUpButtonRole,
+                    kAXSliderRole, kAXScrollBarRole]
+    return !roles.contains(where: { controls.contains($0) })
+}
+
+private func ownedPointerReceiverRoles(_ hit: AXUIElement, root: AXUIElement,
+                                       pid: pid_t, deadline: Deadline) throws -> [String]? {
+    var current: AXUIElement? = hit
+    var roles: [String] = []
+    for _ in 0..<32 {
+        guard let element = current else { return nil }
+        var owner: pid_t = 0
+        guard AXUIElementGetPid(element, &owner) == .success, owner == pid,
+              let role = try axAttribute(element, kAXRoleAttribute, deadline) as? String else { return nil }
+        roles.append(role)
+        if CFEqual(element, root) { return roles }
+        current = axElement(try axAttribute(element, kAXParentAttribute, deadline))
+    }
+    return nil
+}
+
 // Modal keyboard delivery is not proven by a matching key window. Keep this
 // restriction distinct from permission to activate; the worker rejects the
 // unproven route before preparation. Pointer input does not use this gate.
@@ -1025,6 +1104,15 @@ private func modalInputRequiresForeground(role: String?, modal: () throws -> Boo
     return value
 }
 
+// NSOpenPanel/NSSavePanel embed an NSRemoteView. Addressed pointer and keyboard events
+// reach its host window but do not invoke the remote controls, even when the
+// host is already active. Select the existing HID route before any payload.
+// These native identifier/role pairs are established by real document probes;
+// ordinary modal windows, unknown AX and other frameworks keep directed input.
+private func nativeRemoteFilePanel(role: String?, identifier: String?) -> Bool {
+    [kAXWindowRole, kAXSheetRole].contains(role ?? "") && ["open-panel", "save-panel"].contains(identifier ?? "")
+}
+
 private func backgroundRequiresForeground(_ window: AXUIElement?, deadline: Deadline) throws -> Bool {
     guard let window else { return false }
     let role = try axAttribute(window, kAXRoleAttribute, deadline) as? String
@@ -1033,6 +1121,17 @@ private func backgroundRequiresForeground(_ window: AXUIElement?, deadline: Dead
               CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
         return value as? Bool
     }
+}
+
+// Native dialogs remain keyboard receivers even while a background app's
+// AXFocusedWindow still names its document. This is routing proof, not a grant
+// to activate the application or a claim that background delivery cannot work.
+private func nativeModalKeyboardReceiver(_ window: AXUIElement?, deadline: Deadline) throws -> Bool {
+    guard let window else { return false }
+    if try backgroundRequiresForeground(window, deadline: deadline) { return true }
+    return try nativeRemoteFilePanel(
+        role: axAttribute(window, kAXRoleAttribute, deadline) as? String,
+        identifier: axAttribute(window, kAXIdentifierAttribute, deadline) as? String)
 }
 
 // A physical pointer requirement does not itself grant activation. Recheck at
@@ -1052,8 +1151,8 @@ private func frontProcessMatch(_ result: Int32) throws -> Bool {
     case 1: return true
     case 0: return false
     case -6 ... -3:
-        // Only the existing post-activation read-only poll may recover this
-        // transient native absence. Pre-action snapshot checks still throw.
+        // Only bounded read-only snapshot/activation confirmation may recover
+        // this transient absence. It never authorizes input or another raise.
         throw failure("focus_unproven", "WindowServer foreground identity is unavailable",
                       details:["native_result":result], focusAbsence:.frontProcess)
     default:
@@ -1160,6 +1259,18 @@ private func focusedWindowValue<Element>(_ result: AXError, element: Element?) t
     return element
 }
 
+// A missing AXFocusedWindow need not mean a missing keyboard receiver (e.g.
+// Chromium's omnibox). Only an exact, same-owner focused control and AXWindow
+// can fill that absence. A real focused window always wins over stale fields.
+private func focusedWindowOrReceiver<Element>(_ primary: Element?, pid: Int32,
+    receiver: () throws -> Element?, receiverWindow: (Element) throws -> Element?,
+    owner: (Element) throws -> Int32) throws -> Element? {
+    if let primary { return primary }
+    guard let control = try receiver(), try owner(control) == pid,
+          let window = try receiverWindow(control), try owner(window) == pid else { return nil }
+    return window
+}
+
 private func nativeFocusedWindow(_ app: AXUIElement, pid: Int32,
                                   deadline: Deadline, traceStage: String? = nil) throws -> AXUIElement? {
     try deadline.prepare(app)
@@ -1178,7 +1289,10 @@ private func nativeFocusedWindow(_ app: AXUIElement, pid: Int32,
                               "ax_error":result.rawValue,
                               "elapsed_ms":Int((ProcessInfo.processInfo.systemUptime - started) * 1_000)])
     }
-    guard let window = try focusedWindowValue(result, element: axElement(value)) else { return nil }
+    guard let window = try focusedWindowOrReceiver(focusedWindowValue(result, element: axElement(value)), pid: pid,
+        receiver: { axElement(try axAttribute(app, kAXFocusedUIElementAttribute, deadline)) },
+        receiverWindow: { axElement(try axAttribute($0, kAXWindowAttribute, deadline)) },
+        owner: { try axPID($0, deadline) }) else { return nil }
     guard try axPID(window, deadline) == pid else {
         throw failure("focus_unproven", "Focused window belongs to another process")
     }
@@ -1216,7 +1330,7 @@ private func verifyAfterRaise<T>(_ unconfirmed: AXError?, proof: () throws -> T)
     }
 }
 
-// Only used after the one issued raise/activation. These polls are read-only:
+// Used to confirm a pre-action snapshot or the one issued raise/activation. These polls are read-only:
 // missing focus or a busy AX provider cannot activate again or replay input.
 // Preserve the unresolved typed error when the readiness budget is exhausted.
 private func waitForEstablishedFocus<T>(remaining: () -> TimeInterval,
@@ -1257,6 +1371,21 @@ private func waitForEstablishedFocus<T>(remaining: () -> TimeInterval,
     try check()
     if let firstTransient { throw firstTransient }
     throw failure("focus_unproven", "The exact requested window did not become the focused window")
+}
+
+// Activation returning to the original app can precede its AX provider becoming
+// ready. Confirm the whole exact-window proof under the existing cleanup budget;
+// these callbacks only read state and never repeat activation or raise a window.
+private func confirmRestoredForeground(remaining: () -> TimeInterval,
+    check: () throws -> Void, frontmost: () throws -> Bool,
+    windowMatches: () throws -> Bool, wait: (TimeInterval) -> Void) throws {
+    let _: Bool = try waitForEstablishedFocus(remaining: remaining, check: check, read: {
+        guard try frontmost() else { return nil }
+        guard try windowMatches() else {
+            throw failure("focus_restore_failed", "Original exact focused window was not restored")
+        }
+        return try frontmost() ? true : nil
+    }, wait: wait)
 }
 
 private func axWindowIdentity(_ element: AXUIElement, _ deadline: Deadline,
@@ -1321,6 +1450,41 @@ private func axRect(_ element: AXUIElement, _ deadline: Deadline) throws -> CGRe
           [point.x, point.y, extent.width, extent.height].allSatisfy(\.isFinite),
           extent.width > 0, extent.height > 0 else { return nil }
     return CGRect(origin: point, size: extent)
+}
+
+private func standaloneTextControlIdentity(role: String?, parentRole: String?, pid: Int32,
+    owner: Int32, parentOwner: Int32, window: CGWindowID, requested: CGWindowID) -> Bool {
+    role == kAXTextFieldRole && parentRole == kAXApplicationRole && pid > 0
+        && owner == pid && parentOwner == pid && window > 0 && window == requested
+}
+
+// Finder's inline editor is a real CG surface and a focused AXTextField, with
+// AXApplication as its parent. It intentionally has no AXWindow/AXFocusedWindow.
+// Retain the actual keyboard receiver rather than inventing a window ancestry.
+// Its CG number is the same identity used for an ordinary CUA window. Text
+// content bounds and optional AXEnabled metadata do not grant key authority.
+private func standaloneTextControl(_ target: NativeTarget, record: CGRecord, deadline: Deadline) throws -> AXUIElement? {
+    guard record.pid == target.app.pid, record.id == target.nativeID else { return nil }
+    let app = AXUIElementCreateApplication(target.app.pid)
+    guard let control = axElement(try axAttribute(app, kAXFocusedUIElementAttribute, deadline)),
+          try axAttribute(control, kAXRoleAttribute, deadline) as? String == kAXTextFieldRole,
+          let parent = axElement(try axAttribute(control, kAXParentAttribute, deadline)),
+          try standaloneTextControlIdentity(role: axAttribute(control, kAXRoleAttribute, deadline) as? String,
+            parentRole: axAttribute(parent, kAXRoleAttribute, deadline) as? String,
+            pid: target.app.pid, owner: axPID(control, deadline), parentOwner: axPID(parent, deadline),
+            window: axWindowID(control, deadline), requested: target.nativeID),
+          try axAttribute(app, kAXFocusedWindowAttribute, deadline, unsupportedIsAbsent: false) == nil else { return nil }
+    return control
+}
+
+private func expiredAXWindowIdentity(_ status: AXError, id: CGWindowID) -> Bool {
+    id == 0 && (status == .illegalArgument || status == .invalidUIElement)
+}
+
+private func closedModalReturnAllowed(admitted: Bool, modal: Bool, anchor: CGWindowID,
+    candidate: CGWindowID, known: Set<CGWindowID>, onscreen: Bool, expired: Bool) -> Bool {
+    admitted && modal && anchor > 0 && candidate > 0 && candidate != anchor
+        && known.contains(candidate) && !onscreen && expired
 }
 
 // Full native text is distinct from the bounded name/value summaries used by
@@ -1423,17 +1587,18 @@ private func actions(_ element: AXUIElement, _ deadline: Deadline) throws -> [St
     return names as? [String] ?? []
 }
 
-// AXPress callbacks may synchronously enter modal processing. The 200 ms
-// attribute-read timeout can expire after delivery but before their reply (see
-// AXUIElementPerformAction's SDK contract). Allow one bounded action reply;
-// neither a timeout nor another AX error permits replay or proves acceptance.
-private func performSemanticPress(deadline: Deadline,
+// AXPress callbacks may synchronously enter modal processing. Read timeouts and
+// a separate short action cap can expire after delivery but before the reply
+// (see AXUIElementPerformAction's SDK contract). Use the caller's remaining
+// action budget for one reply; the parent also bounds and cancels the worker.
+// Neither a timeout nor another AX error permits replay or proves acceptance.
+private func performSemanticPress(deadline: Deadline, actionName: String = "AXPress",
                                   now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
                                   setTimeout: (Float) -> AXError,
                                   dispatch: () -> AXError?) throws -> [String: Any] {
     let remaining = deadline.uptime - now()
     guard remaining > 0.001 else { throw failure("deadline_exceeded", "No AX action budget remains") }
-    let configured = setTimeout(Float(min(2, remaining)))
+    let configured = setTimeout(Float(remaining))
     guard configured == .success else {
         throw failure("ax_unavailable", "Cannot set AX action messaging deadline: \(configured.rawValue)",
                       attributeFailure: AXAttributeFailure(name: "AXMessagingTimeout", error: configured))
@@ -1446,10 +1611,10 @@ private func performSemanticPress(deadline: Deadline,
     if result == .success { return ["dispatch": "dispatched", "evidence": "unverified"] }
     if now() >= deadline.uptime {
         return ["dispatch": "unknown", "evidence": "unverified",
-                "error": "deadline_exceeded", "message": "AXPress returned after the request deadline"]
+            "error": "deadline_exceeded", "message": "\(actionName) returned after the request deadline"]
     }
     return ["dispatch": "unknown", "evidence": "unverified", "error": "ax_action_failed",
-            "message": "AXPress returned \(result.rawValue); inspect before another action"]
+            "message": "\(actionName) returned \(result.rawValue); inspect before another action"]
 }
 
 private func supportsStringValueEditing(_ role: String) -> Bool {
@@ -1499,7 +1664,7 @@ private func requireNonModalWindow(_ element: AXUIElement, _ deadline: Deadline)
           CFGetTypeID(value) == CFBooleanGetTypeID(), let modal = value as? Bool else {
         throw failure("modal_state_unproven", "A window does not expose a Boolean AXModal state")
     }
-    if modal { throw failure("unsupported_modal", "A modal blocks the selected window. Use app.waitForWindow({window_ref,state:'dialog'}) to look for a proven related modal; if resolved, inspect that window before deciding on new input.") }
+    if modal { throw failure("unsupported_modal", "A modal blocks the selected window. Inspect the current app.look() view before choosing input for the related modal.") }
 }
 
 private func rejectModalSurface(_ element: AXUIElement, _ context: RequestContext) throws {
@@ -1509,7 +1674,7 @@ private func rejectModalSurface(_ element: AXUIElement, _ context: RequestContex
         throw failure("modal_state_unproven", "An AX inventory element has no readable role")
     }
     if role == kAXSheetRole {
-        throw failure("unsupported_modal", "An attached sheet blocks the selected window. Use app.waitForWindow({window_ref,state:'dialog'}) to look for a proven related modal; if resolved, inspect that window before deciding on new input.")
+        throw failure("unsupported_modal", "An attached sheet blocks the selected window. Inspect the current app.look() view before choosing input for the related modal.")
     }
     if role == kAXWindowRole { try requireNonModalWindow(element, deadline) }
 }
@@ -1616,7 +1781,7 @@ private func requireWindowWithoutSheet(_ element: AXUIElement, _ context: Reques
                 throw failure("modal_state_unproven", "AXSheets is not an array")
             }
             if CFArrayGetCount((sheets as! CFArray)) > 0 {
-                throw failure("unsupported_modal", "An attached sheet blocks the selected window. Use app.waitForWindow({window_ref,state:'dialog'}) to look for a proven related modal; if resolved, inspect that window before deciding on new input.")
+                throw failure("unsupported_modal", "An attached sheet blocks the selected window. Inspect the current app.look() view before choosing input for the related modal.")
             }
         }
         try inspectModalChildren(element, context: context) { child in
@@ -1651,13 +1816,13 @@ private func axAncestor(_ element: AXUIElement, is ancestor: AXUIElement,
     }
 }
 
-private func retryableInventoryFailure(_ error: NativeFailure) -> Bool {
+private func retryableAXBusyFailure(_ error: NativeFailure) -> Bool {
     error.code == "ax_unavailable" && error.attributeFailure?.error == .cannotComplete
 }
 
-// Typed AX busy replies can restart a complete read-only inventory.
+// Typed AX busy replies can restart a complete read-only inventory or ownership proof.
 // A partial array is never resumed or merged. Cancellation, identity and the absolute caller deadline remain final.
-private func retryCompleteInventory<Value>(original: NativeFailure,
+private func retryCompleteAXRead<Value>(original: NativeFailure,
     remaining: () -> TimeInterval, check: () throws -> Void, read: () throws -> Value,
     wait: (TimeInterval) -> Void) throws -> Value {
     var latest = original
@@ -1673,12 +1838,28 @@ private func retryCompleteInventory<Value>(original: NativeFailure,
             break
         } catch let error as NativeFailure {
             if error.code == "deadline_exceeded", remaining() <= 0 { break }
-            guard retryableInventoryFailure(error) else { throw error }
+            guard retryableAXBusyFailure(error) else { throw error }
             latest = error
         }
     }
     try check()
     throw latest
+}
+
+// Focus can become AX-busy again after a successful activation poll. Restart
+// the complete read-only proof, never activation, payload, or a partial result.
+private func readFocusSnapshot<Value>(remaining: () -> TimeInterval,
+    check: () throws -> Void, read: () throws -> Value,
+    wait: (TimeInterval) -> Void) throws -> Value {
+    try check()
+    do {
+        let value = try read()
+        try check()
+        return value
+    } catch let original as NativeFailure where retryableAXBusyFailure(original) {
+        return try retryCompleteAXRead(original: original, remaining: remaining,
+            check: check, read: read, wait: wait)
+    }
 }
 
 private func readInventorySnapshot<Value>(_ app: NativeApp, _ context: RequestContext,
@@ -1693,9 +1874,9 @@ private func readInventorySnapshot<Value>(_ app: NativeApp, _ context: RequestCo
         let snapshot = try read(context)
         try check()
         return snapshot
-    } catch let original as NativeFailure where retryableInventoryFailure(original) {
+    } catch let original as NativeFailure where retryableAXBusyFailure(original) {
         let deadline = context.deadline.limited(to: ProcessInfo.processInfo.systemUptime + 0.75)
-        return try retryCompleteInventory(original: original, remaining: {
+        return try retryCompleteAXRead(original: original, remaining: {
             deadline.uptime - ProcessInfo.processInfo.systemUptime
         }, check: check, read: {
             try read(RequestContext(deadline: deadline))
@@ -1756,11 +1937,11 @@ private func permitsActiveModalSibling(targetIsModal: () throws -> Bool,
 private func permitsOtherModal(descendant: Bool, applicationModal: () throws -> Bool,
                                activeModalTarget: () throws -> Bool) throws -> Bool {
     if descendant {
-        throw failure("target_blocked_by_modal", "An attached modal blocks the selected window. Use app.waitForWindow({window_ref,state:'dialog'}) to look for a proven related modal; if resolved, inspect that window before deciding on new input.")
+        throw failure("target_blocked_by_modal", "An attached modal blocks the selected window. Inspect the current app.look() view before choosing input for the related modal.")
     }
     guard try applicationModal() else { return false }
     guard try activeModalTarget() else {
-        throw failure("target_blocked_by_modal", "An application modal blocks the selected window. Use app.waitForWindow({window_ref,state:'dialog'}) to look for a proven related modal; if resolved, inspect that window before deciding on new input.")
+        throw failure("target_blocked_by_modal", "An application modal blocks the selected window. Inspect the current app.look() view before choosing input for the related modal.")
     }
     return true
 }
@@ -2241,6 +2422,7 @@ private func semanticRole(_ role: String, subrole: String? = nil) -> String {
     switch role {
     case kAXButtonRole: return "button"
     case kAXCheckBoxRole: return "checkbox"
+    case kAXSliderRole: return "slider"
     case kAXRadioButtonRole: return "radio_button"
     case kAXTextFieldRole: return "text_field"
     case kAXTextAreaRole: return "text_area"
@@ -2257,7 +2439,9 @@ private func semanticRole(_ role: String, subrole: String? = nil) -> String {
     case kAXListRole: return "list"
     case kAXTabGroupRole: return "tab_group"
     case kAXPopUpButtonRole: return "pop_up_button"
-    case kAXMenuItemRole: return "menu_item"
+    case kAXMenuItemRole, kAXMenuBarItemRole: return "menu_item"
+    case kAXMenuBarRole: return "menu_bar"
+    case kAXMenuRole: return "menu"
     case kAXHeadingRole: return "heading"
     default: return "unknown"
     }
@@ -2270,10 +2454,20 @@ private struct SemanticTextFields {
     let name: String?
     let value: String?
 
-    init(role: String, title: String?, value: String?, description: String?) {
+    init(role: String, title: String?, value: String?, description: String?, subrole: String? = nil) {
+        // Standard window controls often publish no title or description. Use
+        // their native identity, never button position/order, to name them.
+        let chromeName: String?
+        switch (role, subrole) {
+        case (kAXButtonRole, "AXCloseButton"?): chromeName = "Close window"
+        case (kAXButtonRole, "AXMinimizeButton"?): chromeName = "Minimize window"
+        case (kAXButtonRole, "AXZoomButton"?): chromeName = "Zoom window"
+        case (kAXButtonRole, "AXFullScreenButton"?): chromeName = "Full screen window"
+        default: chromeName = nil
+        }
         let labels = [title, value, description].compactMap { $0 }.filter { !$0.isEmpty }
-        label = labels.isEmpty ? String(String.UnicodeScalarView(role.unicodeScalars.prefix(256))) : labels.joined(separator: " | ")
-        name = title?.isEmpty == false ? title : description
+        label = labels.isEmpty ? chromeName ?? String(String.UnicodeScalarView(role.unicodeScalars.prefix(256))) : labels.joined(separator: " | ")
+        name = title?.isEmpty == false ? title : description?.isEmpty == false ? description : chromeName ?? description
         self.value = value
     }
 
@@ -2370,6 +2564,11 @@ private struct RetainedSubtree<Element, Root> {
     }
 }
 
+private enum NativePressCapability {
+    case action, focus
+    case selection(AXUIElement)
+}
+
 private struct NativeElement {
     let id: UInt64
     let identity: UInt64
@@ -2379,14 +2578,19 @@ private struct NativeElement {
     let name: String?
     let value: String?
     let enabled: Bool?
-    let canPress: Bool
+    let pressCapability: NativePressCapability?
+    var canPress: Bool { pressCapability != nil }
     let canSetValue: Bool
     let regionProof: RegionElementProof<AXUIElement>?
 
     var json: [String: Any] {
-        ["id": id, "identity": "ax:\(identity)", "rebind_identity": "ax:\(identity)", "label": label, "role": role,
+        var row: [String: Any] = ["id": id, "identity": "ax:\(identity)", "rebind_identity": "ax:\(identity)", "label": label, "role": role,
          "name": name as Any? ?? NSNull(), "value": value as Any? ?? NSNull(),
          "enabled": enabled as Any? ?? NSNull(), "actions": (canPress ? ["press"] : []) + (canSetValue ? ["setValue"] : []), "can_press": canPress]
+        // Missing AXEnabled does not disable text focus. pressable() admitted
+        // this case only with owned text role and writable AXFocused proof.
+        if canPress && enabled == nil { row["native_text_focus"] = true }
+        return row
     }
 }
 
@@ -2704,10 +2908,46 @@ private func semanticMaterializationPending(until: TimeInterval?, now: TimeInter
     return !populated && now < until
 }
 
+private func mergeWindowInventoryRows(all: [[String: Any]], visible: [[String: Any]]) -> [[String: Any]] {
+    let ids = Set(visible.compactMap { $0[kCGWindowNumber as String] as? UInt32 })
+    return visible + all.filter { row in
+        guard let id = row[kCGWindowNumber as String] as? UInt32 else { return true }
+        return !ids.contains(id)
+    }
+}
+
+private func inputCreatedWindowAllowed(admitted: Bool, candidate: CGWindowID, known: Set<CGWindowID>) -> Bool {
+    admitted && candidate > 0 && !known.contains(candidate)
+}
+
 private func semanticWindowDecoration(role: String, subrole: String?) -> Bool {
     guard role == kAXButtonRole, let subrole else { return false }
     return [kAXCloseButtonSubrole, kAXMinimizeButtonSubrole, kAXZoomButtonSubrole,
             kAXFullScreenButtonSubrole].contains(subrole)
+}
+
+// ScreenCaptureKit's indicator is composited, but is not the document/receiver.
+// Require its native control identity in a single-child structural chain.
+// A document title, dimensions or z-order never establish eligibility. AppKit
+// exposes the exact internal control name as AXTitle on current macOS.
+private func sharingIndicatorSurface<Element>(_ root: Element,
+    role: (Element) throws -> String?, identifier: (Element) throws -> String?,
+    description: (Element) throws -> String?, title: (Element) throws -> String?,
+    children: (Element) throws -> [Element]) throws -> Bool {
+    var element = root
+    for _ in 0..<4 {
+        let kind = try role(element)
+        if kind == kAXButtonRole {
+            return try identifier(element) == "WindowSharingSessionButton"
+                || description(element) == "WindowSharingSessionButton"
+                || title(element) == "WindowSharingSessionButton"
+        }
+        guard kind == kAXWindowRole || kind == kAXGroupRole else { return false }
+        let next = try children(element)
+        guard next.count == 1 else { return false }
+        element = next[0]
+    }
+    return false
 }
 
 private struct SemanticReadinessSample {
@@ -2763,6 +3003,7 @@ struct FocusBorrowEpoch {
     private(set) var reachedTarget: Bool
     private(set) var reachedWindow: Bool
     private(set) var invalidated = false
+    private(set) var applicationInvalidated = false
     // Only sampled reads carry a revision. First reaching a target advances it
     // even when a notification arrives before explicit establishment. Native
     // notifications retain their ordering/evidence, including leave-return.
@@ -2776,7 +3017,7 @@ struct FocusBorrowEpoch {
         if pid == targetPID {
             if !reachedTarget { sampleRevision &+= 1 }
             reachedTarget = true
-        } else if reachedTarget || pid != initialPID { invalidated = true }
+        } else if reachedTarget || pid != initialPID { invalidated = true; applicationInvalidated = true }
     }
     mutating func focusedWindow(_ id: CGWindowID) {
         guard let targetWindow else { return }
@@ -2786,8 +3027,13 @@ struct FocusBorrowEpoch {
         } else if reachedWindow { invalidated = true }
     }
     mutating func sampled(_ pid: Int32, window: CGWindowID?, revision: UInt64) -> Bool {
-        guard !invalidated, revision == sampleRevision else { return false }
+        guard revision == sampleRevision else { return false }
+        let wasInvalidated = invalidated
         activated(pid)
+        // Continue recording app leave/return after window invalidation. A
+        // fresh sample that first invalidates this epoch is still consumed,
+        // so its caller can record the invalidation rather than hide it.
+        guard !wasInvalidated else { return false }
         if targetPID == pid, let window { focusedWindow(window) }
         return true
     }
@@ -2842,7 +3088,7 @@ private final class FocusActivationObserver: @unchecked Sendable {
     }
     private var isTracking: Bool {
         lock.lock(); defer { lock.unlock() }
-        return epoch?.invalidated == false
+        return epoch?.applicationInvalidated == false
     }
     private func activated(_ pid: Int32) {
         lock.lock(); defer { lock.unlock() }
@@ -3000,7 +3246,9 @@ private final class FocusActivationObserver: @unchecked Sendable {
                 serial &+= 1; epoch = FocusBorrowEpoch(initialPID: initialPID, targetPID: targetPID, targetWindow: window)
                 windowFamily = family; familyArmed = false
                 let token = serial; lock.unlock()
-                if window != nil || family != nil { try observeWindows(targetPID, on: loop, deadline: deadline) }
+                do {
+                    if window != nil || family != nil { try observeWindows(targetPID, on: loop, deadline: deadline) }
+                } catch { end(token); throw error }
                 CFRunLoopPerformBlock(loop, CFRunLoopMode.defaultMode.rawValue) { timer.fireDate = Date() }
                 CFRunLoopWakeUp(loop)
                 return token
@@ -3020,6 +3268,10 @@ private final class FocusActivationObserver: @unchecked Sendable {
     func invalidated(_ token: UInt64) -> Bool {
         lock.lock(); defer { lock.unlock() }
         return token != serial || epoch?.invalidated != false
+    }
+    func applicationInvalidated(_ token: UInt64) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return token != serial || epoch?.applicationInvalidated != false
     }
     func retarget(_ token: UInt64, to pid: Int32, window: CGWindowID?, deadline: Deadline) throws -> Bool {
         lock.lock(); let loop = observerRunLoop; let valid = token == serial && epoch?.invalidated == false; lock.unlock()
@@ -3122,7 +3374,7 @@ private final class BackgroundInputValidation {
                 throw failure("modal_state_unproven", "AXSheets is not an array")
             }
             guard CFArrayGetCount((sheets as! CFArray)) == 0 else {
-                throw failure("unsupported_modal", "An attached sheet blocks the selected window. Use app.waitForWindow({window_ref,state:'dialog'}) to look for a proven related modal; if resolved, inspect that window before deciding on new input.")
+                throw failure("unsupported_modal", "An attached sheet blocks the selected window. Inspect the current app.look() view before choosing input for the related modal.")
             }
         }
         // Refresh only the target's shallow child membership. Known control
@@ -3142,7 +3394,7 @@ private final class BackgroundInputValidation {
                     throw failure("modal_state_unproven", "An AX child has no readable role")
                 }
                 guard role != kAXSheetRole else {
-                    throw failure("unsupported_modal", "An attached sheet blocks the selected window. Use app.waitForWindow({window_ref,state:'dialog'}) to look for a proven related modal; if resolved, inspect that window before deciding on new input.")
+                    throw failure("unsupported_modal", "An attached sheet blocks the selected window. Inspect the current app.look() view before choosing input for the related modal.")
                 }
                 isWindow = role == kAXWindowRole
             }
@@ -3179,8 +3431,10 @@ private final class NativeStore: @unchecked Sendable {
         let pointer: CGPoint?
         var inputPoint: CGPoint?
         var executionScoped = false
+        var pointerHandoff = false
     }
     private var borrowedFocus: BorrowedFocus?
+    private var releasedExecutionPointer: CGPoint?
     private struct PriorForeground {
         let application: NSRunningApplication
         let pid: Int32
@@ -3188,14 +3442,137 @@ private final class NativeStore: @unchecked Sendable {
         let window: AXUIElement?
         let windowID: CGWindowID?
     }
+    private struct BackgroundWindowOrder {
+        let epoch: UInt64
+        let original: PriorForeground
+        var previouslyAbove: [NativeApp: Set<CGWindowID>]
+        var admitted: Set<NativeApp> = []
+    }
+    // Resident semantic AXPress can create/raise windows without activating its
+    // app. This obligation lasts until script settlement, not just AX's reply.
+    private var backgroundWindowOrder: BackgroundWindowOrder?
+    // Resident payloads and the observer share one monotonic window anchor.
+    // A scope begun without windows binds its first concrete focused root once.
+    private final class ExecutionFocusAnchor: @unchecked Sendable {
+        private let lock = NSLock()
+        private var root: AXUIElement?
+        private var rootID: CGWindowID
+        private var knownWindowIDs: Set<CGWindowID> = []
+        private var inputAdmitted = false
+        private var modal = false
+        func configure(_ ids: Set<CGWindowID>) { lock.lock(); knownWindowIDs = ids; lock.unlock() }
+        func admitInput() { lock.lock(); inputAdmitted = true; lock.unlock() }
+        var hasInput: Bool { lock.lock(); defer { lock.unlock() }; return inputAdmitted }
+        init(_ root: AXUIElement? = nil, id: CGWindowID = 0, modal: Bool = false) { self.root = root; rootID = id; self.modal = modal }
+        var id: CGWindowID { lock.lock(); defer { lock.unlock() }; return rootID }
+        var isEmpty: Bool { lock.lock(); defer { lock.unlock() }; return root == nil }
+        func admitWindowlessTransition(from closed: CGWindowID) -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            guard inputAdmitted, rootID == closed else { return false }
+            root = nil; rootID = 0; modal = false
+            return true
+        }
+        func matches(_ window: AXUIElement, pid: Int32, deadline: Deadline) throws -> Bool {
+            lock.lock()
+            var retained = root; var retainedID = rootID
+            let priorModal = modal; let admitted = inputAdmitted; let known = knownWindowIDs
+            lock.unlock()
+            if try nativeWindowlessFocusSurface(window, pid: pid, deadline: deadline) {
+                if retained == nil { return true }
+                // A submitted close may return to the already-proved desktop.
+                // A live/minimized document or a foreign/sibling window cannot.
+                guard hasInput else { return false }
+                guard try !cgWindows(deadline).contains(where: { $0.id == retainedID && $0.pid == pid && $0.onscreen }) else { return false }
+                return admitWindowlessTransition(from: retainedID)
+            }
+            if retained == nil {
+                guard let initial = try resolveActivationWindow(window, pid: pid,
+                    owner: { try axPID($0, deadline) },
+                    role: { try axAttribute($0, kAXRoleAttribute, deadline) as? String },
+                    parent: { axElement(try axAttribute($0, kAXParentAttribute, deadline)) }) else { return false }
+                let id = try axWindowID(initial, deadline)
+                guard id > 0 else { return false }
+                let initialModal = (try? nativeModalKeyboardReceiver(initial, deadline: deadline)) == true
+                // AX IPC is outside the lock. The observer and resident may race
+                // to discover the first window, but only one root can ever win.
+                lock.lock()
+                if root == nil { root = initial; rootID = id; modal = initialModal; knownWindowIDs.insert(id) }
+                retained = root; retainedID = rootID
+                lock.unlock()
+            }
+            guard let retained else { return false }
+            // A sheet can hand back an equivalent live AX alias after its own
+            // proxy expires. Check the exact live identity first; do not query
+            // the retired proxy before accepting its equivalent focused root.
+            if try axPID(window, deadline) == pid,
+               try exactFocusedSurface(requested: retained, requestedWindow: retainedID,
+                    focused: window, equal: CFEqual, windowID: { try axWindowID($0, deadline) }) { return true }
+            // An admitted dismissal can close an app-modal window and reveal a
+            // pre-existing document. CUA's exact current receiver remains the
+            // destination. A live/minimized modal, a new/foreign window, or a
+            // generic unavailable AX read never authorizes this transition.
+            if admitted, priorModal, let currentID = try? axWindowID(window, deadline), known.contains(currentID),
+               try ordinaryWindow(window, pid: pid, deadline: deadline) {
+                let rows = try cgWindows(deadline)
+                if rows.contains(where: { $0.id == currentID && $0.pid == pid && $0.onscreen }) {
+                    let (status, retiredID) = try axWindowIdentity(retained, deadline)
+                    if closedModalReturnAllowed(admitted: admitted, modal: priorModal, anchor: retainedID,
+                        candidate: currentID, known: known,
+                        onscreen: rows.contains(where: { $0.id == retainedID && $0.pid == pid && $0.onscreen }),
+                        expired: expiredAXWindowIdentity(status, id: retiredID)) {
+                        let currentModal = (try? nativeModalKeyboardReceiver(window, deadline: deadline)) == true
+                        lock.lock(); defer { lock.unlock() }
+                        guard rootID == retainedID else { return false }
+                        root = window; rootID = currentID; modal = currentModal
+                        return true
+                    }
+                }
+            }
+            do {
+                guard try axWindowID(retained, deadline) == retainedID else { return false }
+            } catch let error as NativeFailure {
+                let currentID = try? axWindowID(window, deadline)
+                throw failure(error.code, "Execution anchor \(retainedID), focused surface \(currentID ?? 0): \(error.message)",
+                    attributeFailure: error.attributeFailure)
+            }
+            if try executionFocusFamilyMatches(window, anchor: retained, pid: pid,
+                equal: CFEqual, owner: { try axPID($0, deadline) },
+                parent: { axElement(try axAttribute($0, kAXParentAttribute, deadline)) }) { return true }
+            // A submitted action can create a new top-level document. This is
+            // distinct from selecting an already existing sibling window.
+            guard let next = try resolveActivationWindow(window, pid: pid,
+                owner: { try axPID($0, deadline) },
+                role: { try axAttribute($0, kAXRoleAttribute, deadline) as? String },
+                parent: { axElement(try axAttribute($0, kAXParentAttribute, deadline)) }) else { return false }
+            let nextID = try axWindowID(next, deadline)
+            lock.lock(); let allowed = inputCreatedWindowAllowed(admitted: inputAdmitted,
+                candidate: nextID, known: knownWindowIDs); lock.unlock()
+            guard allowed, try ordinaryWindow(next, pid: pid, deadline: deadline),
+                  try cgWindows(deadline).contains(where: { $0.id == nextID && $0.pid == pid && $0.onscreen }) else { return false }
+            let nextModal = (try? nativeModalKeyboardReceiver(next, deadline: deadline)) == true
+            lock.lock()
+            if inputCreatedWindowAllowed(admitted: inputAdmitted, candidate: nextID, known: knownWindowIDs) {
+                root = next; rootID = nextID; modal = nextModal; knownWindowIDs.insert(nextID)
+            }
+            let selected = root; lock.unlock()
+            guard let selected else { return false }
+            return try executionFocusFamilyMatches(window, anchor: selected, pid: pid,
+                equal: CFEqual, owner: { try axPID($0, deadline) },
+                parent: { axElement(try axAttribute($0, kAXParentAttribute, deadline)) })
+        }
+    }
     private struct ExecutionFocus {
         let activationEpoch: UInt64
         let app: NativeApp
         let original: PriorForeground
-        let anchor: AXUIElement
-        let anchorID: CGWindowID
-        var target: NativeTarget
+        let anchor: ExecutionFocusAnchor
+        let initialWindowIDs: Set<CGWindowID>
+        let nativeOpenPanel: Bool
+        var closedPanelRestorationAllowed: Bool
+        var target: NativeTarget?
         var changedForeground: Bool
+        let pointerOrigin: CGPoint?
+        var pointerEndpoint: CGPoint?
         var invalidated = false
         var terminal: String?
     }
@@ -3210,12 +3587,12 @@ private final class NativeStore: @unchecked Sendable {
         // Keep an invalidated durable scope until release: repeated begin must
         // never turn a user leave/return into permission to reacquire foreground.
         if let execution = executionFocus { return execution.app }
-        guard let borrowed = borrowedFocus else { return nil }
+        guard let borrowed = borrowedFocus else { return backgroundWindowOrder?.admitted.first }
         // External focus choice ends our borrow. No physical-input lease is
         // needed to discard that ownership; no restoration will be attempted.
         if focusObserver.invalidated(borrowed.activationEpoch) {
             borrowedFocus = nil; focusObserver.end(borrowed.activationEpoch)
-            return nil
+            return backgroundWindowOrder?.admitted.first
         }
         return borrowed.target.app
     }
@@ -3252,7 +3629,15 @@ private final class NativeStore: @unchecked Sendable {
     // registry adds this worker's generation and the kernel app birth stamp;
     // neither title, geometry nor an AX object's availability establishes identity.
     private func listWindows(_ app: NativeApp, _ context: RequestContext) throws -> [String: Any] {
-        try readInventorySnapshot(app, context) { try listWindowsSnapshot(app, $0) }
+        for attempt in 0..<3 {
+            do { return try readInventorySnapshot(app, context) { try listWindowsSnapshot(app, $0) } }
+            catch let error as NativeFailure where error.code == "window_inventory_changed" && attempt < 2 {
+                // Only positive cross-source evidence permits repeating this
+                // read. Never replay input or guess which window is current.
+                try context.deadline.check(); try context.verify(app)
+            }
+        }
+        throw failure("window_inventory_changed", "Window inventory did not stabilize")
     }
 
     private func registerSurface(_ record: CGRecord, title: String, app: NativeApp,
@@ -3300,8 +3685,16 @@ private final class NativeStore: @unchecked Sendable {
             coverage["association_error_codes"] = [Int32]()
             try current.verify(app)
             try current.deadline.check()
-            let association = selected.association.map {
+            var association = selected.association.map {
                 SurfaceAssociation(ownerPID: selected.record.pid, ownerBirth: $0.birth, root: $0.root)
+            }
+            let slot = WindowSlot(app: app, id: id)
+            if selected.record.pid == app.pid, let retained = windows[slot],
+               let clientMenu = associatedSurfaces[slot] {
+                // A scoped bind must not erase a client menu's proven AX root
+                // merely because its backing surface has the same PID.
+                _ = try validateSurface(retained, current)
+                association = clientMenu
             }
             let row = try self.registerSurface(selected.record, title: selected.title, app: app, association: association)
             self.reconcileWindowBindings()
@@ -3317,12 +3710,15 @@ private final class NativeStore: @unchecked Sendable {
         windows = windows.filter { !departed.contains($0.key.app) }
         enabledApps = enabledApps.filter { !departed.contains($0.key) }
         if let validation = backgroundValidation, departed.contains(validation.target.app) { backgroundValidation = nil }
-        let source = try cgWindowRows(context.deadline)
+        let allSource = try cgWindowRows(context.deadline)
         // optionAll includes hidden windows but does not promise z-order.
         // Only optionOnScreenOnly documents front-to-back ordering.
         guard let visibleSource = CGWindowListCopyWindowInfo([.optionOnScreenOnly,.excludeDesktopElements],0) as? [[String:Any]] else {
             throw failure("windows_unavailable", "Cannot establish visible app layering")
         }
+        // A just-created visible window may not be in the earlier optionAll
+        // snapshot. Prefer the newer visible records without losing hidden ones.
+        let source = mergeWindowInventoryRows(all: allSource, visible: visibleSource)
         try context.deadline.check()
         var (candidates, coverage) = try surfaceInventory(source, pid: app.pid, resolve: { record in
             try exactSurfaceRecord(cgWindowRows(context.deadline, only: record.id), expected: record)
@@ -3333,7 +3729,11 @@ private final class NativeStore: @unchecked Sendable {
         if dtwAccessibilityGranted(request: true), let firstOwned = onScreen.firstIndex(where: { $0.pid == app.pid }) {
             // Associated sheets/menus are in front of their client window. Do
             // not probe unrelated hidden windows or applications behind it.
-            for record in onScreen.prefix(firstOwned) where record.pid != app.pid {
+            // AppKit popup menus can own their CG surface in the client process
+            // without appearing in AXWindows. Reuse the live AX/pixel proof of
+            // service-owned menus for the frontmost same-process menu as well.
+            let attributionCandidates = [onScreen[firstOwned]] + onScreen.prefix(firstOwned).filter { $0.pid != app.pid }
+            for record in attributionCandidates {
                 guard let birth = try context.startStamp(record.pid) else { continue }
                 let (candidate, probeError) = try unprovenAssociationProbe(check: {
                     guard !dtwInputStopping() else { throw failure("native_stopping", "Window discovery was cancelled") }
@@ -3352,16 +3752,24 @@ private final class NativeStore: @unchecked Sendable {
                 guard let root = candidate, try context.startStamp(record.pid) == birth,
                       let live = try exactSurfaceRecord(cgWindowRows(context.deadline, only: record.id), expected: record),
                       live.bounds == record.bounds else { continue }
+                let sameProcess = record.pid == app.pid
+                if sameProcess, try axAttribute(root, kAXRoleAttribute, context.deadline) as? String != kAXMenuRole { continue }
+                let alreadyListed = candidates.contains(where: { $0.0.id == record.id })
+                if sameProcess && !alreadyListed { continue }
                 guard associated[record.id] == nil,
-                      !candidates.contains(where: { $0.0.id == record.id }) else {
+                      !alreadyListed || sameProcess else {
                     throw failure("target_changed", "Associated surface identity duplicated during enumeration; list windows again")
                 }
                 associated[record.id] = SurfaceAssociation(ownerPID: record.pid, ownerBirth: birth, root: root)
-                candidates.append((live, String((source.first { ($0[kCGWindowNumber as String] as? UInt32) == record.id }?[kCGWindowName as String] as? String ?? "").prefix(512))))
+                if !alreadyListed {
+                    candidates.append((live, String((source.first { ($0[kCGWindowNumber as String] as? UInt32) == record.id }?[kCGWindowName as String] as? String ?? "").prefix(512))))
+                }
             }
         }
         coverage["scope"] = "application_and_proven_associated_surfaces"
-        coverage["associated_count"] = associated.count
+        // The coverage contract adds this count to the same-process inventory.
+        // A client-owned menu gains an AX root, not an additional CG row.
+        coverage["associated_count"] = associated.values.filter { $0.ownerPID != app.pid }.count
         coverage["association_complete"] = false
         coverage["association_probe_failures"] = associationErrors.count
         coverage["association_error_codes"] = associationErrors
@@ -3374,13 +3782,53 @@ private final class NativeStore: @unchecked Sendable {
         // AX focus is an optional routing hint, never a surface ownership proof.
         // Omnibox/tooltip surfaces can be in front without receiving keys.
         var keyboardWindow: CGWindowID?
-        if candidates.count > 1 && dtwAccessibilityGranted() {
+        var decorations: Set<CGWindowID> = []
+        var modalReceivers: Set<CGWindowID> = []
+        if !candidates.isEmpty && dtwAccessibilityGranted() {
+            // This receiver selects subsequent keyboard payloads. It is not
+            // an advisory decoration scan: sharing its former 100 ms budget
+            // could silently redirect keys to a newly opened visual overlay.
+            // Resolve focus first, with the existing bounded input-readiness
+            // budget; auxiliary AX classification keeps its own short budget.
+            let focusDeadline = context.deadline.limited(to: ProcessInfo.processInfo.systemUptime + 2)
+            let application = AXUIElementCreateApplication(app.pid)
+            do {
+                if let focused = try nativeFocusedWindow(application, pid: app.pid, deadline: focusDeadline) {
+                    let id = try axWindowID(focused, focusDeadline)
+                    if candidates.contains(where: { $0.0.id == id }) { keyboardWindow = id }
+                    else if !source.contains(where: { ($0[kCGWindowNumber as String] as? UInt32) == id }),
+                            try cgWindowRows(context.deadline, only: id).compactMap(cgRecord)
+                                .contains(where: { $0.id == id && $0.pid == app.pid }) {
+                        throw failure("window_inventory_changed", "A newly focused owned window appeared after the WindowServer snapshot")
+                    }
+                }
+            } catch let error as NativeFailure where ["ax_unavailable", "window_unproven", "focus_unproven", "deadline_exceeded"].contains(error.code) {
+                try context.deadline.check()
+                try context.verify(app)
+            }
             let hintDeadline = context.deadline.limited(to: ProcessInfo.processInfo.systemUptime + 0.1)
             do {
-                let application = AXUIElementCreateApplication(app.pid)
-                if let focused = try nativeFocusedWindow(application, pid: app.pid, deadline: hintDeadline) {
-                    let id = try axWindowID(focused, hintDeadline)
-                    if candidates.contains(where: { $0.0.id == id }) { keyboardWindow = id }
+                // AXWindows can retain the parent while a descendant sheet has
+                // its own CG surface. Its existing ancestry/owner proof also
+                // supplies the routing hint; do not hide it behind its parent.
+                for (id, association) in associated {
+                    if try nativeModalKeyboardReceiver(association.root, deadline: hintDeadline) {
+                        modalReceivers.insert(id)
+                    }
+                }
+                let roots = try semanticWindowRoots(application, hintDeadline)
+                for root in roots.prefix(128) {
+                    guard let id = try? axWindowID(root, hintDeadline),
+                          candidates.contains(where: { $0.0.id == id && $0.0.pid == app.pid }) else { continue }
+                    if try nativeModalKeyboardReceiver(root, deadline: hintDeadline) { modalReceivers.insert(id) }
+                    if try sharingIndicatorSurface(root,
+                        role: { try axAttribute($0, kAXRoleAttribute, hintDeadline) as? String },
+                        identifier: { try axAttribute($0, kAXIdentifierAttribute, hintDeadline) as? String },
+                        description: { try axAttribute($0, kAXDescriptionAttribute, hintDeadline) as? String },
+                        title: { try axAttribute($0, kAXTitleAttribute, hintDeadline) as? String },
+                        children: { try axList($0, kAXChildrenAttribute, limit: 2, hintDeadline) }) {
+                        decorations.insert(id)
+                    }
                 }
             } catch let error as NativeFailure where ["ax_unavailable", "window_unproven", "focus_unproven", "deadline_exceeded"].contains(error.code) {
                 // A local hint timeout or unreadable AX must not poison CG reads.
@@ -3396,6 +3844,17 @@ private final class NativeStore: @unchecked Sendable {
             if let keyboardWindow {
                 var scene = row["scene"] as! [String: Any]
                 scene["keyboard_focused"] = record.id == keyboardWindow
+                row["scene"] = scene
+            }
+            if modalReceivers.contains(record.id) {
+                var scene = row["scene"] as! [String: Any]
+                scene["keyboard_modal"] = true
+                row["scene"] = scene
+            }
+            if decorations.contains(record.id) {
+                var scene = row["scene"] as! [String: Any]
+                scene["semantic_candidate"] = false
+                scene["keyboard_focused"] = false
                 row["scene"] = scene
             }
             rows.append(row)
@@ -3683,7 +4142,25 @@ private final class NativeStore: @unchecked Sendable {
         guard dtwAccessibilityGranted(request: true) else { let error = dtwPermissionError("accessibility")
             throw failure("permission_required", error["message"] as! String, details: error["details"] as? [String: Any]) }
         let associated = associatedSurfaces[slot]
-        var current = try semanticWindowRoots(AXUIElementCreateApplication(target.app.pid), context.deadline, requestedID: target.nativeID)
+        func controlCandidate() throws -> CandidateWindow? {
+            guard associated == nil,
+                  let control = try standaloneTextControl(target, record: record, deadline: context.deadline) else { return nil }
+            if let retained = semanticWindows[slot], !CFEqual(retained.element, control) {
+                throw failure("stale_observation", "Focused native text control changed; observe again")
+            }
+            try context.verify(target.app)
+            semanticWindows[slot] = RegisteredWindow(target: target, element: control)
+            return CandidateWindow(cg: record, element: control, title: "")
+        }
+        var current: [AXUIElement]
+        do { current = try semanticWindowRoots(AXUIElementCreateApplication(target.app.pid), context.deadline, requestedID: target.nativeID) }
+        catch let original as NativeFailure {
+            if original.attributeFailure?.name == kAXWindowsAttribute,
+               let error = original.attributeFailure?.error,
+               [AXError.cannotComplete, .attributeUnsupported, .noValue].contains(error),
+               let candidate = try controlCandidate() { return candidate }
+            throw original
+        }
         if let associated, !current.contains(where: { CFEqual($0, associated.root) }) {
             current.append(associated.root)
         }
@@ -3724,12 +4201,14 @@ private final class NativeStore: @unchecked Sendable {
             } catch let error as NativeFailure where error.code == "window_unproven" { continue }
         }
         guard matched.count == 1, let element = matched.first else {
+            if let candidate = try controlCandidate() { return candidate }
             throw failure("semantic_window_unavailable", "No unique supported AX window matches this system surface")
         }
         let ordinary = try readModalSnapshot(phase: phase, scope: .targetRoot, isTarget: true, read: {
             try supportedRoot(element)
         })
         guard ordinary else {
+            if let candidate = try controlCandidate() { return candidate }
             throw failure("semantic_window_unavailable", "No unique supported AX window matches this system surface")
         }
         if let retained = semanticWindows[slot], !CFEqual(retained.element, element) {
@@ -3774,6 +4253,19 @@ private final class NativeStore: @unchecked Sendable {
         return false
     }
 
+    private func menuDestinationBound(_ target: NativeTarget, deadline: Deadline) throws -> Bool {
+        let application = AXUIElementCreateApplication(target.app.pid)
+        func windowID(_ attribute: String) throws -> CGWindowID? {
+            guard let raw = try axAttribute(application, attribute, deadline) else { return nil }
+            guard let window = axElement(raw), try axPID(window, deadline) == target.app.pid else {
+                throw failure("focus_unproven", "App menu destination is not an owned AX window")
+            }
+            return try axWindowID(window, deadline)
+        }
+        return try menuDestinationMatches(requested: target.nativeID,
+            focused: windowID(kAXFocusedWindowAttribute), main: windowID(kAXMainWindowAttribute))
+    }
+
     private func menuOwned(_ element: AXUIElement, target: NativeTarget, deadline: Deadline) throws -> Bool {
         let application = AXUIElementCreateApplication(target.app.pid)
         guard let bar = axElement(try axAttribute(application, kAXMenuBarAttribute, deadline)) else { return false }
@@ -3790,11 +4282,60 @@ private final class NativeStore: @unchecked Sendable {
     }
 
 
-    private func pressable(_ element: AXUIElement, role: String, enabled: Bool, window: AXUIElement,
-                           target: NativeTarget, deadline: Deadline) throws -> Bool {
-        guard ![kAXWindowRole, kAXApplicationRole].contains(role), enabled,
-              try actions(element, deadline).contains(kAXPressAction) else { return false }
-        return try owned(element, by: window, target: target, deadline: deadline)
+    // CUA input/ax_actions.rs (96b18ccd): select the nearest collection
+    // container, not its label. Copyright (c) 2026 Cua AI, Inc., MIT.
+    // DTW additionally requires writable selection and retains the exact
+    // container with the observed label; no pointer fallback follows a write.
+    private func selectionContainer(_ element: AXUIElement, role: String, window: AXUIElement,
+                                    target: NativeTarget, deadline: Deadline) throws -> AXUIElement? {
+        let containers = ["AXRow", "AXCell", "AXListItem", "AXImage"]
+        guard (containers + [kAXTextFieldRole, kAXStaticTextRole]).contains(role) else { return nil }
+        var cursor = element
+        var seen: [AXUIElement] = []
+        for _ in 0..<8 {
+            guard !seen.contains(where: { CFEqual($0, cursor) }) else { return nil }
+            seen.append(cursor)
+            let currentRole = try axAttribute(cursor, kAXRoleAttribute, deadline) as? String ?? ""
+            if containers.contains(currentRole),
+               try axAttribute(cursor, kAXSelectedAttribute, deadline) is Bool {
+                try deadline.prepare(cursor)
+                var writable = DarwinBoolean(false)
+                let status = AXUIElementIsAttributeSettable(cursor, kAXSelectedAttribute as CFString, &writable)
+                try deadline.check()
+                if status == .success && writable.boolValue,
+                   try owned(cursor, by: window, target: target, deadline: deadline) { return cursor }
+                if ![.success, .attributeUnsupported, .noValue].contains(status) {
+                    throw failure("ax_unavailable", "Collection selection writability unavailable",
+                                  attributeFailure: AXAttributeFailure(name: kAXSelectedAttribute, error: status))
+                }
+            }
+            if CFEqual(cursor, window) { return nil }
+            guard let parent = axElement(try axAttribute(cursor, kAXParentAttribute, deadline)) else { return nil }
+            cursor = parent
+        }
+        return nil
+    }
+
+    private func pressCapability(_ element: AXUIElement, role: String, enabled: Bool?, window: AXUIElement,
+                                 target: NativeTarget, deadline: Deadline) throws -> NativePressCapability? {
+        guard ![kAXWindowRole, kAXApplicationRole].contains(role), enabled != false,
+              try owned(element, by: window, target: target, deadline: deadline) else { return nil }
+        if enabled == true,
+           let container = try selectionContainer(element, role: role, window: window, target: target, deadline: deadline) {
+            return .selection(container)
+        }
+        if try actions(element, deadline).contains(kAXPressAction) { return enabled == true ? .action : nil }
+        guard supportsStringValueEditing(role) else { return nil }
+        try deadline.prepare(element)
+        var writable = DarwinBoolean(false)
+        let result = AXUIElementIsAttributeSettable(element, kAXFocusedAttribute as CFString, &writable)
+        try deadline.check()
+        if result == .attributeUnsupported || result == .noValue { return nil }
+        guard result == .success else {
+            throw failure("ax_unavailable", "Control focus writability unavailable",
+                          attributeFailure: AXAttributeFailure(name: kAXFocusedAttribute, error: result))
+        }
+        return writable.boolValue ? .focus : nil
     }
 
     private func settable(_ element: AXUIElement, role: String, enabled: Bool, window: AXUIElement,
@@ -3964,7 +4505,8 @@ private final class NativeStore: @unchecked Sendable {
                         try text(kAXDescriptionAttribute)
                     }
                     if descriptionRead.incompleteMatch { observation.note("node_unavailable") }
-                    let fields = SemanticTextFields(role: role, title: title, value: value, description: descriptionRead.text)
+                    let fields = SemanticTextFields(role: role, title: title, value: value,
+                        description: descriptionRead.text, subrole: subrole)
                     textMatch.includePreview(fields, needle: observation.query.text)
                     guard textMatch.matched else {
                         if textMatch.incomplete { observation.note("text_limit") }
@@ -3985,12 +4527,12 @@ private final class NativeStore: @unchecked Sendable {
                     }
                     // Advisory support only. Press performs full modal, current
                     // ownership and enabled-state checks immediately before input.
-                    let canPress = try pressable(element, role: role, enabled: enabled == true,
+                    let press = try pressCapability(element, role: role, enabled: enabled,
                                                  window: window.element, target: observation.target,
                                                  deadline: pageDeadline)
                     let row = NativeElement(id: UInt64(observation.elements.count + 1), identity: try semanticIdentity(element), element: element,
                                             label: fields.label, role: normalizedRole, name: fields.name,
-                                            value: fields.value, enabled: enabled, canPress: canPress,
+                                            value: fields.value, enabled: enabled, pressCapability: press,
                                             canSetValue: try settable(element, role: role, enabled: enabled == true, window: window.element, target: observation.target, deadline: pageDeadline),
                                             regionProof: regionProof)
                     let size = try rowBytes(row)
@@ -4297,6 +4839,7 @@ private final class NativeStore: @unchecked Sendable {
 
     private func observe(_ request: [String: Any], _ context: RequestContext) throws -> [String: Any] {
         let target = try NativeTarget(request["target"])
+        traceSemanticFailure(["operation":"observe_start", "window":target.nativeID])
         let query = try NativeQuery(request["query"])
         let source: RetainedSubtree<NativeElement, AXUIElement>?
         let sourceInMenu: Bool
@@ -4331,6 +4874,14 @@ private final class NativeStore: @unchecked Sendable {
             }
             root = source.element
         } else { root = window.element }
+        if try sharingIndicatorSurface(window.element,
+            role: { try axAttribute($0, kAXRoleAttribute, context.deadline) as? String },
+            identifier: { try axAttribute($0, kAXIdentifierAttribute, context.deadline) as? String },
+            description: { try axAttribute($0, kAXDescriptionAttribute, context.deadline) as? String },
+            title: { try axAttribute($0, kAXTitleAttribute, context.deadline) as? String },
+            children: { try axList($0, kAXChildrenAttribute, limit: 2, context.deadline) }) {
+            throw failure("non_content_surface", "This native sharing indicator is not application content")
+        }
         let binding = UUID().uuidString
         var observation = NativeObservation(target: target, root: window.element, query: query,
                                             discoveryRoot: CFEqual(root, window.element) ? nil : root,
@@ -4549,6 +5100,7 @@ private final class NativeStore: @unchecked Sendable {
         }
         let epoch = try focusObserver.begin(initialPID: initialPID, targetPID: target.app.pid,
                                             window: window == nil ? nil : focusID, deadline: context.deadline)
+        _ = dtwTakePostedPointerPosition() // A prior action never owns this borrow's pointer.
         borrowedFocus = BorrowedFocus(activationEpoch: epoch, changedForeground: !alreadyFocused,
                                       target: target, window: window, focusWindowID: focusID,
                                       pointer: CGEvent(source: nil)?.location, inputPoint: inputPoint,
@@ -4670,6 +5222,10 @@ private final class NativeStore: @unchecked Sendable {
             // after background delivery is not WindowServer activation; AppKit
             // activate() may accept that already-active state without fronting it.
             trace("front_process_requested")
+            // This path requires exact AX window focus, including for a physical
+            // pointer payload. App-only activation can leave a never-key window
+            // without AXFocusedWindow. Reuse CUA's exact-window preparation;
+            // pixel-only surfaces retain establishVisualFocus without key records.
             guard dtwSetFrontProcess(target.app.pid, focusID) else {
                 throw failure("focus_failed", "WindowServer did not accept exact foreground activation")
             }
@@ -4748,20 +5304,87 @@ private final class NativeStore: @unchecked Sendable {
             // App identity and the foreground snapshot must still be proven.
             try context.deadline.check()
         }
-        guard try context.startStamp(pid) == birth, try windowServerFrontmost(pid, context.deadline) else {
-            throw failure("focus_changed", "Original foreground changed during capture")
-        }
+        // Preserve this exact nominated owner. A transient PSN read gap can be
+        // re-read before any activation; a proved different app/window cannot.
+        let until = min(context.deadline.uptime, ProcessInfo.processInfo.systemUptime + 0.25)
+        let _: Bool = try waitForEstablishedFocus(remaining: { until - ProcessInfo.processInfo.systemUptime },
+            check: { try context.deadline.check() }, read: {
+                guard try context.startStamp(pid) == birth, try windowServerFrontmost(pid, context.deadline) else {
+                    throw failure("focus_changed", "Original foreground changed during capture")
+                }
+                if let window, let id {
+                    guard try self.focused(pid, window, windowID: id, context.deadline) else {
+                        throw failure("focus_changed", "Original focused window changed during capture")
+                    }
+                }
+                return true
+            }, wait: { CFRunLoopRunInMode(.defaultMode, $0, false) })
         return PriorForeground(application: application, pid: pid, generation: birth, window: window, windowID: id)
     }
 
     private func executionFamily(_ window: AXUIElement, _ scope: ExecutionFocus, _ deadline: Deadline) throws -> Bool {
-        guard try axWindowID(scope.anchor, deadline) == scope.anchorID else { return false }
-        return try executionFocusFamilyMatches(window, anchor: scope.anchor, pid: scope.app.pid,
-            equal: CFEqual, owner: { try axPID($0, deadline) },
-            parent: { axElement(try axAttribute($0, kAXParentAttribute, deadline)) })
+        try scope.anchor.matches(window, pid: scope.app.pid, deadline: deadline)
     }
 
-    private func ownsExecutionFocus(_ scope: ExecutionFocus, _ context: RequestContext) throws -> Bool {
+    // A destroyed anchor does not authorize another window. Restoration may
+    // follow a proved close; application commands may also continue in the
+    // fully proved windowless state after an admitted close. A live-anchor
+    // sibling selection and app leave/return still invalidate ownership.
+    private func closedAnchorRestorationOwnership(_ scope: ExecutionFocus, _ context: RequestContext,
+                                                  requireWindowless: Bool = false) throws -> Bool? {
+        guard scope.anchor.id > 0 else { return nil }
+        let rows = try cgWindows(context.deadline)
+        let oldOnscreen = rows.contains(where: { $0.id == scope.anchor.id && $0.pid == scope.app.pid && $0.onscreen })
+        traceSemanticFailure(["operation":"closed_anchor_restoration", "stage":"cg_liveness",
+            "anchor":scope.anchor.id, "onscreen":oldOnscreen,
+            "panel_transition":scope.closedPanelRestorationAllowed,
+            "scope_invalidated":scope.invalidated,
+            "application_invalidated":executionFocusObserver.applicationInvalidated(scope.activationEpoch)])
+        guard !oldOnscreen else { return nil }
+        // AppKit can retain a closed NSWindow and its offscreen CG record.
+        // Offscreen alone is not closure: require the complete live AX inventory
+        // to exclude the old root as well, preserving hidden/minimized windows.
+        guard let inventory = try listWindows(scope.app, context)["windows"] as? [[String: Any]] else {
+            throw failure("focus_unproven", "Closed-anchor inventory is unavailable")
+        }
+        if requireWindowless, !scope.anchor.hasInput || !inventory.isEmpty { return false }
+        let liveIDs = try inventory.map { try NativeTarget($0["target"]).nativeID }
+        traceSemanticFailure(["operation":"closed_anchor_restoration", "stage":"live_inventory",
+            "anchor":scope.anchor.id, "live_ids":liveIDs, "initial_ids":Array(scope.initialWindowIDs)])
+        guard !liveIDs.contains(scope.anchor.id) else { return nil }
+        guard !scope.invalidated, !executionFocusObserver.applicationInvalidated(scope.activationEpoch) else { return false }
+        try context.verify(scope.app)
+        guard let app = try nativeFocusedApplication(expectedPID: scope.app.pid, deadline: context.deadline),
+              app.pid == scope.app.pid, app.generation == scope.app.generation else { return false }
+        if let window = try nativeFocusedWindow(app.element, pid: scope.app.pid, deadline: context.deadline) {
+            if inventory.isEmpty, try nativeWindowlessFocusSurface(window, pid: scope.app.pid, deadline: context.deadline) {
+                // Exact local desktop focus is the windowless state, not a window ID.
+            } else {
+                let root = try activationRoot(window, pid: scope.app.pid, deadline: context.deadline)
+                let id = try axWindowID(root, context.deadline)
+                guard (scope.closedPanelRestorationAllowed && !scope.initialWindowIDs.contains(id)) || scope.anchor.hasInput,
+                      rows.contains(where: { $0.id == id && $0.pid == scope.app.pid }) else { return false }
+            }
+        } else {
+            guard inventory.isEmpty else { return false }
+        }
+        try context.verify(scope.app)
+        return try windowServerFrontmost(scope.app.pid, context.deadline)
+            && !executionFocusObserver.applicationInvalidated(scope.activationEpoch)
+    }
+
+    private func ownsExecutionFocus(_ scope: ExecutionFocus, _ context: RequestContext,
+                                    allowClosedAnchor: Bool = false) throws -> Bool {
+        let until = min(context.deadline.uptime, ProcessInfo.processInfo.systemUptime + 0.75)
+        return try readFocusSnapshot(remaining: { until - ProcessInfo.processInfo.systemUptime },
+            check: { try context.deadline.check(); try context.verify(scope.app) },
+            read: { try self.executionFocusOwnershipSnapshot(scope, context, allowClosedAnchor: allowClosedAnchor) },
+            wait: { CFRunLoopRunInMode(.defaultMode, $0, false) })
+    }
+
+    private func executionFocusOwnershipSnapshot(_ scope: ExecutionFocus, _ context: RequestContext,
+                                                allowClosedAnchor: Bool) throws -> Bool {
+        if allowClosedAnchor, let owned = try closedAnchorRestorationOwnership(scope, context) { return owned }
         guard !scope.invalidated, !executionFocusObserver.invalidated(scope.activationEpoch) else { return false }
         try context.verify(scope.app)
         let owned = try exactInputFocus(expectedPID: scope.app.pid, focusedApplication: { () throws -> FocusApplication<AXUIElement>? in
@@ -4770,6 +5393,12 @@ private final class NativeStore: @unchecked Sendable {
             return app
         }, windowMatches: { application in
             guard let current = try nativeFocusedWindow(application, pid: scope.app.pid, deadline: context.deadline) else {
+                if scope.anchor.isEmpty { return true }
+                let closedID = scope.anchor.id
+                if scope.anchor.hasInput,
+                   try self.closedAnchorRestorationOwnership(scope, context, requireWindowless: true) == true {
+                    return scope.anchor.admitWindowlessTransition(from: closedID)
+                }
                 throw missingFocus(.window)
             }
             return try self.executionFamily(current, scope, context.deadline)
@@ -4805,6 +5434,16 @@ private final class NativeStore: @unchecked Sendable {
     }
 
     private func validateExecutionFocus(_ request: [String: Any], _ context: RequestContext) throws -> [String: Any] {
+        guard let raw = request["target"] as? [String: Any] else { throw failure("invalid_request", "Missing execution focus target") }
+        let app = try NativeApp(raw["app"])
+        let until = min(context.deadline.uptime, ProcessInfo.processInfo.systemUptime + 0.75)
+        return try readFocusSnapshot(remaining: { until - ProcessInfo.processInfo.systemUptime },
+            check: { try context.deadline.check(); try context.verify(app) },
+            read: { try self.executionFocusAdmissionSnapshot(request, context) },
+            wait: { CFRunLoopRunInMode(.defaultMode, $0, false) })
+    }
+
+    private func executionFocusAdmissionSnapshot(_ request: [String: Any], _ context: RequestContext) throws -> [String: Any] {
         guard let rawTarget = request["target"] as? [String: Any] else {
             throw failure("invalid_request", "Missing execution focus target")
         }
@@ -4824,21 +5463,32 @@ private final class NativeStore: @unchecked Sendable {
         let associationScope: AssociationProofScope = request["_execution_scope_callback"] as? Bool == true
             ? .sceneScrollGuard : .full
         let window = try validate(target, context, input: false, associationScope: associationScope)
-        guard try executionFamily(window.element, scope, context.deadline),
-              try focused(target, window.element, context.deadline),
+        // A visible first window may not yet be key. Prove key focus before
+        // binding an empty anchor, so a clean refusal can still restore the app.
+        guard try focused(target, window.element, context.deadline),
+              try executionFamily(window.element, scope, context.deadline),
               try ownsExecutionFocus(scope, context) else {
             executionFocus?.invalidated = true
             throw failure("focus_changed", "Requested surface is not the exact owned execution foreground")
         }
-        scope.target = target; executionFocus = scope
+        scope.target = target
+        if request["requested_input"] as? String == "click", scope.nativeOpenPanel {
+            scope.closedPanelRestorationAllowed = true
+            scope.anchor.admitInput()
+        }
+        executionFocus = scope
         return ["scope_active": true, "borrowed": scope.changedForeground, "target": target.json,
                 "bounds": window.cg.coordinates, "surface_owner": surfaceOwner(target)]
     }
 
     private func beginExecutionFocus(_ request: [String: Any]) -> [String: Any] {
         var changed = false
+        var stage = "preflight"
         do {
             let context = try RequestContext(request)
+            // A real borrow supersedes the passive order guard. Settle any
+            // prior background effect before capturing this borrow's owner.
+            _ = releaseBackgroundWindowOrder(context.deadline)
             guard request["input_policy"] as? String == "auto" else {
                 throw failure("foreground_required", "Execution foreground borrow requires automatic input policy")
             }
@@ -4847,36 +5497,87 @@ private final class NativeStore: @unchecked Sendable {
                     ["dispatch": "dispatched", "evidence": "unverified"]) { _, new in new }
             }
             if let focusCleanupFailure { throw focusCleanupFailure }
-            let target = try NativeTarget(request["target"])
-            let window = try validate(target, context, input: false)
-            let anchor = try activationRoot(window.element, pid: target.app.pid, deadline: context.deadline)
-            let anchorID = try axWindowID(anchor, context.deadline)
+            guard let raw = request["target"] as? [String: Any] else { throw failure("invalid_request", "Missing focus target") }
+            let app = try NativeApp(raw["app"])
+            try context.verify(app)
+            let target: NativeTarget?
+            let window: CandidateWindow?
+            let anchor: ExecutionFocusAnchor
+            if raw["native_id"] != nil {
+                let selected = try NativeTarget(raw)
+                let candidate = try validate(selected, context, input: false)
+                let root = try activationRoot(candidate.element, pid: app.pid, deadline: context.deadline)
+                target = selected; window = candidate
+                anchor = ExecutionFocusAnchor(root, id: try axWindowID(root, context.deadline),
+                    modal: (try? nativeModalKeyboardReceiver(root, deadline: context.deadline)) == true)
+            } else {
+                // A missing AX attribute is not proof of a windowless app.
+                // Reuse the full owning inventory before any activation.
+                let inventory = try listWindows(app, context)
+                guard let rows = inventory["windows"] as? [[String: Any]], rows.isEmpty else {
+                    throw failure("target_changed", "Application gained a window before windowless focus; observe again")
+                }
+                target = nil; window = nil; anchor = ExecutionFocusAnchor()
+            }
+            let initialWindowIDs = Set(try cgWindows(context.deadline).filter { $0.pid == app.pid }.map(\.id))
+            anchor.configure(initialWindowIDs)
+            // The typed plan already proved this exact surface in its clean
+            // background preflight. Optional metadata must not block focus.
+            let nativeOpenPanel = request["reason"] as? String == "native_open_panel_click"
+                || (window.map { nativeRemoteFilePanel(
+                    role: (try? axAttribute($0.element, kAXRoleAttribute, context.deadline)) as? String,
+                    identifier: (try? axAttribute($0.element, kAXIdentifierAttribute, context.deadline)) as? String) } ?? false)
+            let allowPanelRestoration = nativeOpenPanel && request["reason"] as? String == "native_open_panel_click"
+            stage = "capture_original"
             let original = try capturePriorForeground(context)
-            let epoch = try executionFocusObserver.begin(initialPID: original.pid, targetPID: target.app.pid,
+            let epoch = try executionFocusObserver.begin(initialPID: original.pid, targetPID: app.pid,
                 window: nil, deadline: context.deadline, family: { surface, deadline in
-                    guard try axWindowID(anchor, deadline) == anchorID else { return false }
-                    return try executionFocusFamilyMatches(surface, anchor: anchor, pid: target.app.pid,
-                        equal: CFEqual, owner: { try axPID($0, deadline) },
-                        parent: { axElement(try axAttribute($0, kAXParentAttribute, deadline)) })
+                    try anchor.matches(surface, pid: app.pid, deadline: deadline)
                 })
-            executionFocus = ExecutionFocus(activationEpoch: epoch, app: target.app, original: original,
-                anchor: anchor, anchorID: anchorID, target: target, changedForeground: false)
+            executionFocus = ExecutionFocus(activationEpoch: epoch, app: app, original: original,
+                anchor: anchor, initialWindowIDs: initialWindowIDs, nativeOpenPanel: nativeOpenPanel,
+                closedPanelRestorationAllowed: allowPanelRestoration,
+                target: target, changedForeground: false, pointerOrigin: CGEvent(source: nil)?.location)
             do {
-                try borrowFocus(target, window.element, context)
-                // Even a visual route needs this exact logical window proof
-                // for a durable borrow. App-only activation cannot select a
-                // different window in an already-foreground application.
-                _ = try establishFocus(target, context, changed: &changed)
+                if let target, let window {
+                    stage = "capture_target"
+                    try borrowFocus(target, window.element, context)
+                    stage = "establish_target"
+                    _ = try establishFocus(target, context, changed: &changed)
+                } else {
+                    guard !executionFocusObserver.invalidated(epoch) else {
+                        throw failure("focus_changed", "Foreground changed before windowless activation")
+                    }
+                    if try !windowServerFrontmost(app.pid, context.deadline) {
+                        try context.verify(app)
+                        guard let application = NSRunningApplication(processIdentifier: app.pid), !application.isTerminated else {
+                            throw failure("app_changed", "Windowless application exited before focus")
+                        }
+                        changed = true
+                        guard application.activate(options: []) else {
+                            throw failure("focus_unproven", "Windowless application activation was not accepted")
+                        }
+                    }
+                    let until = min(context.deadline.uptime, ProcessInfo.processInfo.systemUptime + 0.5)
+                    while try !windowServerFrontmost(app.pid, context.deadline) {
+                        try context.verify(app)
+                        guard !executionFocusObserver.invalidated(epoch) else { throw failure("focus_changed", "Windowless activation lost ownership") }
+                        guard ProcessInfo.processInfo.systemUptime < until else { throw failure("focus_unproven", "Windowless application focus did not settle") }
+                        CFRunLoopRunInMode(.defaultMode, 0.005, false)
+                    }
+                }
             } catch {
                 executionFocus?.changedForeground = changed
                 throw error
             }
             executionFocus?.changedForeground = changed
-            executionFocusObserver.established(epoch, pid: target.app.pid, window: anchorID)
+            executionFocusObserver.established(epoch, pid: app.pid, window: anchor.id)
+            stage = "validate_established_target"
             let result = try validateExecutionFocus(request, context)
             return result.merging(["dispatch": "dispatched", "evidence": "unverified"]) { _, new in new }
         } catch let error as NativeFailure {
-            return error.json.merging(["dispatch": changed ? "unknown" : "not_dispatched", "evidence": "unverified",
+            return error.json.merging(["message": "Execution foreground preparation at \(stage): \(error.message)",
+                                       "dispatch": changed ? "unknown" : "not_dispatched", "evidence": "unverified",
                                        "borrowed": executionFocus?.changedForeground ?? false,
                                        "scope_active": executionFocus != nil]) { _, new in new }
         } catch {
@@ -4886,16 +5587,29 @@ private final class NativeStore: @unchecked Sendable {
         }
     }
 
-    private func releaseLocalFocus() throws -> Bool {
-        guard let borrowed = borrowedFocus else { return false }
-        defer { borrowedFocus = nil; focusObserver.end(borrowed.activationEpoch) }
+    private func releaseLocalFocus(_ deadline: Deadline, handoff: Bool = false) throws -> Bool {
+        guard var borrowed = borrowedFocus else { return false }
         let invalidated = focusObserver.invalidated(borrowed.activationEpoch)
-        if let previous = borrowed.pointer, let point = borrowed.inputPoint,
+        let posted = dtwTakePostedPointerPosition()
+        releasedExecutionPointer = nil
+        if handoff, borrowed.executionScoped, let posted {
+            // Keep fallback ownership until the permanent owner acknowledges.
+            // EOF/cancellation before acknowledgement returns locally instead.
+            borrowed.inputPoint = posted; borrowed.pointerHandoff = true
+            borrowedFocus = borrowed; releasedExecutionPointer = posted
+            return invalidated
+        }
+        defer { borrowedFocus = nil; focusObserver.end(borrowed.activationEpoch) }
+        let endpoint = posted ?? (borrowed.pointerHandoff ? borrowed.inputPoint : nil)
+        if let previous = borrowed.pointer, let point = endpoint,
            let current = CGEvent(source: nil)?.location, !invalidated,
            abs(current.x - point.x) < 0.5, abs(current.y - point.y) < 0.5 {
-            guard CGWarpMouseCursorPosition(previous) == .success,
-                  CGAssociateMouseAndMouseCursorPosition(1) == .success else {
-                let error = failure("pointer_restore_failed", "Borrowed pointer position could not be restored")
+            guard let placement = dtwPointerRestorationPoint(previous),
+                  CGWarpMouseCursorPosition(placement) == .success,
+                  CGAssociateMouseAndMouseCursorPosition(1) == .success,
+                  dtwPointerReturnConfirmed(previous, deadline: deadline.uptime,
+                                            read: { CGEvent(source: nil)?.location }) else {
+                let error = failure("pointer_restore_failed", "Borrowed pointer return could not be confirmed")
                 focusCleanupFailure = error
                 throw error
             }
@@ -4913,10 +5627,126 @@ private final class NativeStore: @unchecked Sendable {
             })
     }
 
+    private func visibleWindowOrder(_ deadline: Deadline) throws -> [CGRecord] {
+        try deadline.check()
+        guard let rows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], 0) as? [[String: Any]] else {
+            throw failure("windows_unavailable", "Cannot observe visible window order")
+        }
+        try deadline.check()
+        return rows.filter { $0[kCGWindowLayer as String] as? Int == 0 }.compactMap(cgRecord)
+    }
+
+    private func prepareBackgroundWindowOrder(_ app: NativeApp, _ context: RequestContext) {
+        guard executionFocus == nil, borrowedFocus == nil else { return }
+        // Optional user-friendliness proof must not consume the payload's full
+        // deadline or become another functional background-input gate.
+        let deadline = context.deadline.limited(to: ProcessInfo.processInfo.systemUptime + 0.15)
+        do {
+            if backgroundWindowOrder == nil {
+                let original = try capturePriorForeground(RequestContext(deadline: deadline))
+                guard original.pid != app.pid, let id = original.windowID, original.window != nil else { return }
+                let rows = try visibleWindowOrder(deadline)
+                // Raising cannot insert below an existing foreign overlay.
+                // Preserve that user-chosen layering instead of disturbing it.
+                guard originalAboveOtherApps(rows, original: id, owner: original.pid),
+                      let above = targetWindowsAbove(rows, original: id,
+                          owner: original.pid, target: app.pid) else { return }
+                let epoch = try executionFocusObserver.begin(initialPID: original.pid, targetPID: original.pid,
+                    window: id, deadline: deadline)
+                executionFocusObserver.established(epoch, pid: original.pid, window: id)
+                backgroundWindowOrder = BackgroundWindowOrder(epoch: epoch, original: original, previouslyAbove: [app: above])
+            } else if backgroundWindowOrder?.previouslyAbove[app] == nil,
+                      let scope = backgroundWindowOrder, let id = scope.original.windowID,
+                      let above = targetWindowsAbove(try visibleWindowOrder(deadline), original: id,
+                          owner: scope.original.pid, target: app.pid) {
+                backgroundWindowOrder?.previouslyAbove[app] = above
+            }
+        } catch {
+            traceSemanticFailure(["operation":"background_window_order_capture", "status":"unverified",
+                "error":(error as? NativeFailure)?.code ?? "native_error"])
+        }
+    }
+
+    private func releaseBackgroundWindowOrder(_ deadline: Deadline) -> String {
+        guard let scope = backgroundWindowOrder else { return "unchanged" }
+        backgroundWindowOrder = nil
+        defer { executionFocusObserver.end(scope.epoch) }
+        guard !scope.admitted.isEmpty, let id = scope.original.windowID,
+              let window = scope.original.window else { return "unchanged" }
+        do {
+            let context = RequestContext(deadline: deadline)
+            func ownerStillCurrent() throws -> Bool {
+                guard !executionFocusObserver.invalidated(scope.epoch) else { return false }
+                return try executionRestoreIdentityCurrent(pid: scope.original.pid, generation: scope.original.generation,
+                    birth: { try context.startStamp($0) }, windowMatches: {
+                        guard !scope.original.application.isTerminated else { return false }
+                        return try passiveOrderOwner(requested: window, requestedWindow: id,
+                            frontmost: { try windowServerFrontmost(scope.original.pid, deadline) },
+                            focusedWindow: {
+                                try nativeFocusedWindow(AXUIElementCreateApplication(scope.original.pid),
+                                    pid: scope.original.pid, deadline: deadline)
+                            }, equal: CFEqual, windowID: { try axWindowID($0, deadline) })
+                    })
+            }
+            guard try ownerStillCurrent() else { return "changed_externally" }
+            let rows = try visibleWindowOrder(deadline)
+            var raised: Set<CGWindowID> = []
+            for app in scope.admitted {
+                // Exited/replaced PIDs never authorize restoring over a new app.
+                guard try context.startStamp(app.pid) == app.generation else { continue }
+                guard let above = targetWindowsAbove(rows, original: id, owner: scope.original.pid, target: app.pid) else {
+                    return "unconfirmed"
+                }
+                raised.formUnion(above.subtracting(scope.previouslyAbove[app] ?? []))
+            }
+            guard !raised.isEmpty else { return "unchanged" }
+            try deadline.prepare(window)
+            guard try ownerStillCurrent() else { return "changed_externally" }
+            // Restore layering only. Do not activate, make-key, move the pointer,
+            // replay AXPress or touch windows that were already above the owner.
+            guard AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success else { return "unconfirmed" }
+            let result: Bool = try waitForEstablishedFocus(remaining: {
+                deadline.uptime - ProcessInfo.processInfo.systemUptime
+            }, check: { try deadline.check() }, read: {
+                guard try ownerStillCurrent() else { return false }
+                let current = try self.visibleWindowOrder(deadline)
+                guard let index = current.firstIndex(where: { $0.id == id && $0.pid == scope.original.pid }) else { return false }
+                return current.prefix(index).contains(where: { raised.contains($0.id) }) ? nil : true
+            }, wait: { CFRunLoopRunInMode(.defaultMode, $0, false) })
+            return result == true ? "restored" : "changed_externally"
+        } catch {
+            // A layering failure does not make the already delivered action or
+            // the keyboard cleanup unsafe. Report settlement without retiring it.
+            traceSemanticFailure(["operation":"background_window_order_return", "status":"unverified",
+                "error":(error as? NativeFailure)?.code ?? "native_error"])
+            return "unconfirmed"
+        }
+    }
+
+    // A newly opened native panel can temporarily answer cannotComplete for
+    // AXFocusedWindow. Re-read only the full ownership proof under the original
+    // cleanup budget; no activation, payload or restoration is replayed.
+    private func restorationOwnership(_ scope: ExecutionFocus, _ context: RequestContext) throws -> Bool {
+        do { return try ownsExecutionFocus(scope, context, allowClosedAnchor: true) }
+        catch let original as NativeFailure where retryableAXBusyFailure(original) {
+            return try retryCompleteAXRead(original: original,
+                remaining: { context.deadline.uptime - ProcessInfo.processInfo.systemUptime },
+                check: { try context.deadline.check(); try context.verify(scope.app) },
+                read: { try self.ownsExecutionFocus(scope, context, allowClosedAnchor: true) },
+                wait: { Thread.sleep(forTimeInterval: $0) })
+        }
+    }
+
     private func restorePriorForeground(_ scope: ExecutionFocus, _ deadline: Deadline) throws -> String {
         let context = RequestContext(deadline: deadline)
-        guard try ownsExecutionFocus(scope, context) else { return "changed_externally" }
-        guard scope.changedForeground else { return "unchanged" }
+        guard try restorationOwnership(scope, context) else {
+            traceSemanticFailure(["operation":"foreground_return_declined", "stage":"current_owner"])
+            return "changed_externally"
+        }
+        guard scope.changedForeground else {
+            traceSemanticFailure(["operation":"foreground_return_declined", "stage":"unchanged_owner"])
+            return "unchanged"
+        }
         let original = scope.original
         guard try executionRestoreIdentityCurrent(pid: original.pid, generation: original.generation,
             birth: { try context.startStamp($0) }, windowMatches: {
@@ -4934,8 +5764,11 @@ private final class NativeStore: @unchecked Sendable {
                                                             pid: original.pid, deadline: deadline) else { return false }
                 return try exactFocusedSurface(requested: window, requestedWindow: id, focused: current,
                     equal: CFEqual, windowID: { try axWindowID($0, deadline) })
-            }) else { return "changed_externally" }
-        guard try ownsExecutionFocus(scope, context) else { return "changed_externally" }
+            }) else {
+                traceSemanticFailure(["operation":"foreground_return_declined", "stage":"original_owner"])
+                return "changed_externally"
+            }
+        guard try restorationOwnership(scope, context) else { return "changed_externally" }
         // Cleanup runs after admission closes on EOF/cancellation. The caller
         // already owns coordination, instance and physical leases; never reopen
         // input admission merely to fulfill this restoration obligation.
@@ -4952,46 +5785,95 @@ private final class NativeStore: @unchecked Sendable {
                 throw failure("focus_restore_failed", "Original application restoration was not accepted")
             }
         }
-        let until = min(deadline.uptime, ProcessInfo.processInfo.systemUptime + 0.25)
-        while true {
-            try deadline.check()
-            guard try context.startStamp(original.pid) == original.generation else {
-                throw failure("focus_restore_failed", "Original application identity changed during restoration")
-            }
-            if try windowServerFrontmost(original.pid, deadline) {
-                if let window = original.window, let id = original.windowID {
-                    guard try focused(original.pid, window, windowID: id, deadline) else {
-                        throw failure("focus_restore_failed", "Original exact focused window was not restored")
-                    }
+        try confirmRestoredForeground(remaining: { deadline.uptime - ProcessInfo.processInfo.systemUptime },
+            check: {
+                try deadline.check()
+                guard try context.startStamp(original.pid) == original.generation,
+                      !original.application.isTerminated else {
+                    throw failure("focus_restore_failed", "Original application identity changed during restoration")
                 }
-                return "restored"
+            }, frontmost: { try windowServerFrontmost(original.pid, deadline) },
+            windowMatches: {
+                guard let window = original.window, let id = original.windowID else { return true }
+                return try self.focused(original.pid, window, windowID: id, deadline)
+            }, wait: { CFRunLoopRunInMode(.defaultMode, $0, false) })
+        if let window = original.window, let id = original.windowID {
+            // Make-key/activation can restore keyboard ownership while
+            // leaving our dialog above the original window. Raise only
+            // that proven original window, once, after focus settles.
+            // A layering issue must not retire otherwise usable input.
+            do {
+                try deadline.prepare(window)
+                guard try windowServerFrontmost(original.pid, deadline),
+                      try context.startStamp(original.pid) == original.generation else {
+                    return "changed_externally"
+                }
+                let raised = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+                traceSemanticFailure(["operation":"foreground_window_order_return",
+                    "pid":original.pid, "window":id, "ax_error":raised.rawValue])
+            } catch {
+                traceSemanticFailure(["operation":"foreground_window_order_return",
+                    "pid":original.pid, "window":id, "status":"unverified",
+                    "error":(error as? NativeFailure)?.code ?? "native_error"])
             }
-            guard ProcessInfo.processInfo.systemUptime < until else {
-                throw failure("focus_restore_failed", "Original foreground restoration could not be confirmed")
-            }
-            CFRunLoopRunInMode(.defaultMode, 0.005, false)
         }
+        return "restored"
+    }
+
+    private func returnExecutionPointer(_ scope: ExecutionFocus, _ deadline: Deadline) throws -> String {
+        guard let endpoint = scope.pointerEndpoint else { return "unchanged" }
+        let context = RequestContext(deadline: deadline)
+        let owned = try scope.terminal == nil
+            ? restorationOwnership(scope, context)
+            : priorForegroundIsCurrent(scope.original, context)
+        guard owned else { return "changed_externally" }
+        guard let current = CGEvent(source: nil)?.location else {
+            throw failure("pointer_restore_failed", "Cannot read the borrowed cursor during return")
+        }
+        guard let destination = dtwPointerReturnDestination(original: scope.pointerOrigin, posted: endpoint, current: current) else {
+            if scope.pointerOrigin == nil { throw failure("pointer_restore_failed", "Original cursor position was unavailable") }
+            return "changed_externally"
+        }
+        guard let placement = dtwPointerRestorationPoint(destination),
+              CGWarpMouseCursorPosition(placement) == .success,
+              CGAssociateMouseAndMouseCursorPosition(1) == .success,
+              dtwPointerReturnConfirmed(destination, deadline: deadline.uptime,
+                read: { CGEvent(source: nil)?.location }) else {
+            throw failure("pointer_restore_failed", "Script cursor return could not be confirmed")
+        }
+        return "restored"
     }
 
     fileprivate func releaseFocus(_ deadline: Deadline) throws -> [String: Any] {
         if let focusCleanupFailure { throw focusCleanupFailure }
-        let localInvalidated = try releaseLocalFocus()
+        let localInvalidated = try releaseLocalFocus(deadline)
         guard let scope = executionFocus else {
-            return ["released": true, "focus": localInvalidated ? "changed_externally" : "unchanged"]
+            let order = releaseBackgroundWindowOrder(deadline)
+            return ["released": true, "focus": localInvalidated ? "changed_externally" : order]
         }
         // Only the execution finalizer consumes the durable borrow. Per-input
         // cleanup has its own release_input_focus operation.
         defer { executionFocus = nil; executionFocusObserver.end(scope.activationEpoch) }
+        var pointerStatus = "unchanged"
+        var pointerError: NativeFailure?
+        do { pointerStatus = try returnExecutionPointer(scope, deadline) }
+        catch let error as NativeFailure { pointerStatus = "unconfirmed"; pointerError = error }
+        // Pointer failure must not prevent the independently owed focus return.
+        func settled(_ value: [String: Any]) -> [String: Any] {
+            var value = value; value["pointer_return"] = pointerStatus
+            if let pointerError { value["cleanup_error"] = pointerError.json }
+            return value
+        }
         if let terminal = scope.terminal {
             // A positively confirmed quit/root close may have destroyed anchor.
             // Observe only the original foreground; never activate after closure.
-            return settledExecutionTerminal(terminal) {
+            return settled(settledExecutionTerminal(terminal) {
                 try self.priorForegroundIsCurrent(scope.original, RequestContext(deadline: deadline))
-            }
+            })
         }
         do {
             let status = try restorePriorForeground(scope, deadline)
-            return ["released": true, "focus": status]
+            return settled(["released": true, "focus": status])
         } catch let error as NativeFailure {
             let sticky = failure("focus_restore_failed", "Execution foreground cleanup failed: \(error.message)")
             focusCleanupFailure = sticky
@@ -5016,10 +5898,23 @@ private final class NativeStore: @unchecked Sendable {
             try context.verify(app)
             guard request["input_policy"] as? String == "auto" else {throw failure("foreground_required","Application shortcuts require foreground delivery")}
             guard dtwAccessibilityGranted(request:true) else {let e=dtwPermissionError("accessibility");throw failure("permission_required",e["message"] as! String)}
-            guard let keys=request["keys"] as? [String],dtwChordPlan(keys) != nil else {throw failure("invalid_keys","Unsupported application shortcut")}
+            let onlyFocus = request["operation"] as? String == "focus_app"
+            let keys = request["keys"] as? [String] ?? []
+            guard onlyFocus || dtwChordPlan(keys) != nil else {throw failure("invalid_keys","Unsupported application shortcut")}
             guard CGEventSource.flagsState(.combinedSessionState).intersection([.maskCommand,.maskControl,.maskAlternate,.maskShift]).isEmpty else {throw failure("input_busy","Session modifiers are held")}
+            if request["_execution_foreground"] as? Bool != true {
+                let inventory = try listWindows(app, context)
+                guard let windows = inventory["windows"] as? [[String: Any]], windows.isEmpty else {
+                    throw failure("target_changed", "Application gained a window; observe before application input")
+                }
+                guard request["_defer_foreground"] as? Bool == true else { throw failure("foreground_required", "Application input requires a script foreground scope") }
+                return ["dispatch":"not_dispatched", "evidence":"unverified",
+                        "foreground_plan":["reason":onlyFocus ? "explicit_focus" : "windowless_application", "visual":false]]
+            }
+            try requireExecutionForeground(request, app, context)
+            guard try windowServerFrontmost(app.pid, context.deadline) else { throw failure("focus_changed", "Application foreground changed") }
+            if onlyFocus { return ["dispatch":"dispatched", "evidence":"confirmed", "postcondition":"application_focused"] }
             guard let source=CGEventSource(stateID:.privateState),let chord=dtwChord(keys,source:source) else {throw failure("input_unavailable","Cannot prepare application shortcut")}
-            _ = try activationRequired(allowed: false) { try windowServerFrontmost(app.pid, context.deadline) }
             func check() throws {
                 try context.deadline.check();try context.verify(app)
                 guard !dtwInputStopping() else {throw failure("native_stopping","Application shortcut stopped")}
@@ -5030,6 +5925,7 @@ private final class NativeStore: @unchecked Sendable {
             guard let input=dtwTrackInput(source:source,eventTypes:[.keyUp,.flagsChanged]) else {throw failure("native_stopping","Application shortcut admission closed")}
             pending=input
             guard let _:Bool=try dtwWithInputAdmission({
+                self.executionFocus?.anchor.admitInput()
                 var pressed:[NativeKeyPair]=[]
                 defer {for pair in pressed.reversed(){dtwPostKey(pair.up,input:input)}}
                 for pair in chord {try check();changed=true;dtwPostKey(pair.down,input:input);pressed.append(pair);Thread.sleep(forTimeInterval:0.005)}
@@ -5143,6 +6039,7 @@ private final class NativeStore: @unchecked Sendable {
                 // The chord is one admitted held-key interval. Its cheap budget
                 // checks do not perform AX work; release only the pressed prefix.
                 guard let _: Bool = try dtwWithInputAdmission({
+                    self.executionFocus?.anchor.admitInput()
                     var pressed: [NativeKeyPair] = []
                     defer {
                         for pair in pressed.reversed() { dtwPostKey(pair.up, input: input) }
@@ -5206,13 +6103,23 @@ private final class NativeStore: @unchecked Sendable {
                     return true
                 }) else { throw failure("native_stopping", "Native input admission is closed") }
             }
-            try check(focus: false)
+            // A completed input may have closed its window or opened a modal.
+            // Keep cancellation/deadline checks, but do not turn that effect
+            // into an error by requiring the old AX focus again. A focus-only
+            // operation still has to prove its requested focus postcondition.
+            if operation == "focus" { try check(focus: false) }
+            else {
+                try context.deadline.check()
+                if dtwInputStopping() { throw failure("native_stopping", "Input stopped after releasing admitted keys") }
+            }
             if operation == "focus", var scope = borrowedFocus, scope.target == target,
                !focusObserver.invalidated(scope.activationEpoch) {
                 scope.semanticReadiness.arm(now: ProcessInfo.processInfo.systemUptime)
                 borrowedFocus = scope
             }
-            return finished(["dispatch": "dispatched", "evidence": "unverified"])
+            return finished(operation == "focus"
+                ? ["dispatch":"dispatched", "evidence":"confirmed", "postcondition":"window_focused"]
+                : ["dispatch":"dispatched", "evidence":"unverified"])
         } catch let error as NativeFailure {
             return finished(error.json.merging(["dispatch": changed ? "unknown" : "not_dispatched", "evidence": "unverified"]) { _, new in new })
         } catch {
@@ -5284,8 +6191,44 @@ private final class NativeStore: @unchecked Sendable {
         }
     }
 
+    private func validateEditableMeaning(_ element: NativeElement, role: String, deadline: Deadline) throws {
+        func preview(_ attribute: String) throws -> String? {
+            let raw = try axAttribute(element.element, attribute, deadline)
+            guard let value = (raw as? String) ?? (raw as? NSNumber)?.stringValue else { return nil }
+            return String(String.UnicodeScalarView(value.unicodeScalars.prefix(256)))
+        }
+        let description = try optionalDescription(alreadyMatched: true) { try preview(kAXDescriptionAttribute) }
+        let fields = try SemanticTextFields(role: role, title: preview(kAXTitleAttribute),
+            value: preview(kAXValueAttribute), description: description.text)
+        guard semanticRole(role) == element.role, fields.name == element.name, fields.value == element.value else {
+            throw failure("target_changed", "Editable control changed before semantic focus")
+        }
+    }
+
+    private func webTextValueControl(_ element: AXUIElement, root: AXUIElement,
+                                     target: NativeTarget, deadline: Deadline) throws -> Bool {
+        var cursor = element
+        var web = false
+        for _ in 0..<40 {
+            guard try axPID(cursor, deadline) == target.app.pid else { break }
+            if CFEqual(cursor, root) { return web }
+            if try axAttribute(cursor, kAXRoleAttribute, deadline) as? String == "AXWebArea" { web = true }
+            guard let parent = axElement(try axAttribute(cursor, kAXParentAttribute, deadline)) else { break }
+            cursor = parent
+        }
+        throw failure("target_changed", "Text control no longer belongs to its observed root")
+    }
+
+    private func valueReceiverMatches(_ element: AXUIElement, target: NativeTarget,
+                                      deadline: Deadline) throws -> Bool {
+        let application = AXUIElementCreateApplication(target.app.pid)
+        guard let receiver = axElement(try axAttribute(application, kAXFocusedUIElementAttribute, deadline)) else { return false }
+        return try axPID(receiver, deadline) == target.app.pid && CFEqual(receiver, element)
+    }
+
     private func setValue(_ request: [String: Any]) -> [String: Any] {
         var dispatched = false
+        var setterAcknowledged = false
         do {
             guard let binding = request["binding"] as? String,
                   let observation = observations.removeValue(forKey: binding) else { throw failure("stale_observation", "Native observation was retired or consumed") }
@@ -5305,18 +6248,71 @@ private final class NativeStore: @unchecked Sendable {
             guard try settable(element.element, role: role, enabled: enabled, window: window.element, target: target, deadline: context.deadline) else { throw failure("element_not_settable", "Current AXValue writability or ownership changed") }
             try validateRegionElement(element, root: window.element, target: target,
                                       bounds: window.cg.bounds, deadline: context.deadline)
+            // Web AX setters can acknowledge a different, still-focused DOM
+            // control. Bind the exact receiver before the first value payload.
+            // Independent native controls keep their existing background setter.
+            let webControl = try webTextValueControl(element.element, root: window.element,
+                                                     target: target, deadline: context.deadline)
+            if webControl {
+                try validateEditableMeaning(element, role: role, deadline: context.deadline)
+                if try !valueReceiverMatches(element.element, target: target, deadline: context.deadline) {
+                    if try !focused(target, window.element, context.deadline) {
+                        guard request["input_policy"] as? String == "auto" else {
+                            throw failure("foreground_required", "The requested text receiver needs focus preparation")
+                        }
+                        observations[binding] = observation
+                        return ["dispatch":"not_dispatched", "evidence":"unverified",
+                                "foreground_plan":["reason":"semantic_value_focus", "visual":false]]
+                    }
+                    guard let focus = try dtwWithInputAdmission({
+                        try self.requireExecutionForeground(request, target, context)
+                        self.executionFocus?.anchor.admitInput()
+                        dispatched = true
+                        return AXUIElementSetAttributeValue(element.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+                    }), focus == .success else {
+                        throw failure("text_focus_unconfirmed", "The intended text control could not be focused; no value payload was sent")
+                    }
+                    let focusDeadline = context.deadline.limited(to: ProcessInfo.processInfo.systemUptime + 0.25)
+                    do {
+                        let _: Bool = try waitForEstablishedFocus(remaining: {
+                            focusDeadline.uptime - ProcessInfo.processInfo.systemUptime
+                        }, check: {
+                            try focusDeadline.check(); try context.verify(target.app)
+                            try self.requireExecutionForeground(request, target, context)
+                        }, read: {
+                            try self.valueReceiverMatches(element.element, target: target, deadline: focusDeadline) ? true : nil
+                        }, wait: { CFRunLoopRunInMode(.defaultMode, $0, false) })
+                    } catch let error as NativeFailure where error.code == "focus_unproven" && error.focusAbsence == nil {
+                        throw failure("text_focus_unconfirmed", "The exact intended text receiver was not confirmed; no value payload was sent")
+                    }
+                }
+            }
+            let ready = try validate(target, context)
+            guard try owned(element.element, by: ready.element, target: target, deadline: context.deadline) else {
+                throw failure("target_changed", "Text control ancestry changed before value input")
+            }
             try context.deadline.prepare(element.element)
             guard let result = try dtwWithInputAdmission({
                 try self.requireExecutionForeground(request, target, context)
+                if webControl, try !self.valueReceiverMatches(element.element, target: target, deadline: context.deadline) {
+                    throw failure("target_changed", "The exact text receiver changed before value input; no value payload was sent")
+                }
+                self.executionFocus?.anchor.admitInput()
                 dispatched = true
                 return AXUIElementSetAttributeValue(element.element, kAXValueAttribute as CFString, value as CFString)
             }) else { throw failure("native_stopping", "Native input admission is closed") }
             try context.deadline.check()
             guard result == .success else { throw failure("ax_action_failed", "AXValue update returned \(result.rawValue); inspect before another action") }
-            return ["dispatch": "dispatched", "evidence": "unverified"]
+            setterAcknowledged = true
+            let current = try validate(target, context)
+            guard try owned(element.element, by: current.element, target: target, deadline: context.deadline),
+                  try axAttribute(element.element, kAXValueAttribute, context.deadline) as? String == value else {
+                throw failure("value_unconfirmed", "Native setter returned success, but the requested value was not observed; inspect before another action")
+            }
+            return ["dispatch": "dispatched", "evidence": "confirmed", "postcondition": "element_value_set"]
         } catch let error as NativeFailure {
-            return error.json.merging(["dispatch": dispatched ? "unknown" : "not_dispatched", "evidence": "unverified"]) { _, new in new }
-        } catch { return ["dispatch": dispatched ? "unknown" : "not_dispatched", "evidence": "unverified", "error": "native_error", "message": String(describing: error)] }
+            return error.json.merging(["dispatch": setterAcknowledged ? "dispatched" : dispatched ? "unknown" : "not_dispatched", "evidence": "unverified"]) { _, new in new }
+        } catch { return ["dispatch": setterAcknowledged ? "dispatched" : dispatched ? "unknown" : "not_dispatched", "evidence": "unverified", "error": "native_error", "message": String(describing: error)] }
     }
 
     private func lifecycle(_ request: [String: Any]) -> [String: Any] {
@@ -5420,6 +6416,72 @@ private final class NativeStore: @unchecked Sendable {
         }
     }
 
+    // AppKit menu tracking can commit its highlighted item even when addressed
+    // mouse events name another row (a mouseMoved primer does not fix this).
+    // A visible, freshly attributed menu permits the existing AXPress primitive
+    // at the proven pixel. Ordinary/opaque surfaces keep the CUA pointer route.
+    private func tryMenuClick(_ request: [String: Any]) -> [String: Any] {
+        var scopeFailure: NativeFailure?
+        do {
+            let context = try RequestContext(request)
+            let target = try NativeTarget(request["target"])
+            let surface = try validateSurface(target, context)
+            let root: AXUIElement?
+            do { root = try associatedClientRoot(surface, app: target.app, context) }
+            catch let error as NativeFailure where ["ax_unavailable", "association_unavailable"].contains(error.code) {
+                return ["native_menu": false]
+            }
+            guard let root, try axAttribute(root, kAXRoleAttribute, context.deadline) as? String == kAXMenuRole else {
+                return ["native_menu": false]
+            }
+            guard let x = request["screen_x"] as? Double, let y = request["screen_y"] as? Double,
+                  x.isFinite, y.isFinite, surface.bounds.contains(CGPoint(x: x, y: y)) else {
+                throw failure("invalid_point", "Menu point is outside its current surface")
+            }
+            let point = CGPoint(x: x, y: y)
+            let application = AXUIElementCreateApplication(target.app.pid)
+            try context.deadline.prepare(application)
+            var hit: AXUIElement?
+            let hitResult = AXUIElementCopyElementAtPosition(application, Float(x), Float(y), &hit)
+            try context.deadline.check()
+            guard hitResult == .success, let hit,
+                  try axPID(hit, context.deadline) == target.app.pid,
+                  try axAttribute(hit, kAXRoleAttribute, context.deadline) as? String == kAXMenuItemRole,
+                  try axAncestor(hit, is: root, context.deadline),
+                  let itemBounds = try axRect(hit, context.deadline), itemBounds.contains(point),
+                  try axAttribute(hit, kAXEnabledAttribute, context.deadline) as? Bool == true,
+                  try actions(hit, context.deadline).contains(kAXPressAction) else {
+                throw failure("element_not_pressable", "Menu pixel has no proven enabled item; no input was dispatched")
+            }
+            let current = try validateSurface(target, context)
+            guard current.bounds == surface.bounds,
+                  let currentRoot = try associatedClientRoot(current, app: target.app, context), CFEqual(root, currentRoot),
+                  try axAncestor(hit, is: currentRoot, context.deadline),
+                  try axRect(hit, context.deadline) == itemBounds else {
+                throw failure("target_changed", "Menu or item changed before its pixel action")
+            }
+            var result = try performSemanticPress(deadline: context.deadline, setTimeout: {
+                AXUIElementSetMessagingTimeout(hit, $0)
+            }, dispatch: {
+                do { try self.requireExecutionForeground(request, target, context) }
+                catch let error as NativeFailure { scopeFailure = error; return nil }
+                catch { scopeFailure = failure("execution_scope_unavailable", "Execution scope proof failed: \(error)"); return nil }
+                return dtwWithInputAdmission {
+                    self.executionFocus?.anchor.admitInput()
+                    self.backgroundWindowOrder?.admitted.insert(target.app)
+                    return AXUIElementPerformAction(hit, kAXPressAction as CFString)
+                }
+            })
+            result["native_menu"] = true
+            return result
+        } catch let error as NativeFailure {
+            return (scopeFailure ?? error).json.merging(["native_menu": true, "dispatch": "not_dispatched", "evidence": "unverified"]) { _, new in new }
+        } catch {
+            return ["native_menu": true, "dispatch": "not_dispatched", "evidence": "unverified",
+                    "error": "native_error", "message": String(describing: error)]
+        }
+    }
+
     private func press(_ request: [String: Any]) -> [String: Any] {
         var scopeFailure: NativeFailure?
         do {
@@ -5440,14 +6502,38 @@ private final class NativeStore: @unchecked Sendable {
                 throw failure("stale_observation", "Original AX root changed before press; observe again")
             }
             let role = try axAttribute(element.element, kAXRoleAttribute, context.deadline) as? String ?? ""
-            let enabled = try axAttribute(element.element, kAXEnabledAttribute, context.deadline) as? Bool == true
-            if try menuOwned(element.element, target: target, deadline: context.deadline),
-               try !focused(target, window.element, context.deadline) {
-                throw failure("foreground_required", "App menu actions require the exact destination window already focused")
-            }
-            guard try pressable(element.element, role: role, enabled: enabled, window: window.element,
-                                target: target, deadline: context.deadline) else {
+            let enabled = try axAttribute(element.element, kAXEnabledAttribute, context.deadline) as? Bool
+            let menuAction = try menuOwned(element.element, target: target, deadline: context.deadline)
+            guard let capability = try pressCapability(element.element, role: role, enabled: enabled, window: window.element,
+                                                       target: target, deadline: context.deadline) else {
                 throw failure("element_not_pressable", "Current role, enabled state, ancestry or AXPress support changed")
+            }
+            let focusText: Bool
+            let selection: AXUIElement?
+            switch (element.pressCapability, capability) {
+            case (.action?, .action): focusText = false; selection = nil
+            case (.focus?, .focus): focusText = true; selection = nil
+            case (.selection(let observed)?, .selection(let current)):
+                guard CFEqual(observed, current) else { throw failure("target_changed", "Collection item changed before selection") }
+                focusText = false; selection = current
+            default: throw failure("target_changed", "Semantic press capability changed; observe again")
+            }
+            if focusText || selection != nil {
+                try validateEditableMeaning(element, role: role, deadline: context.deadline)
+            }
+            let modalPress = try selection == nil && backgroundRequiresForeground(window.element, deadline: context.deadline)
+            let menuNeedsForeground = try menuAction && !menuDestinationBound(target, deadline: context.deadline)
+            if focusText || modalPress || menuNeedsForeground {
+                if try !focused(target, window.element, context.deadline) {
+                    guard request["input_policy"] as? String == "auto" else {
+                        throw failure("foreground_required", "This action needs focus preparation that the current input policy does not allow")
+                    }
+                    // This entire preflight is read-only. Retain just this exact
+                    // credential for the one post-activation action.
+                    observations[binding] = observation
+                    return ["dispatch":"not_dispatched", "evidence":"unverified",
+                            "foreground_plan":["reason":focusText ? "semantic_text_focus" : menuNeedsForeground ? "native_menu_press" : "native_modal_press", "visual":false]]
+                }
             }
             let finalWindow = try validate(target, context)
             guard try owned(element.element, by: finalWindow.element, target: target, deadline: context.deadline) else {
@@ -5455,18 +6541,58 @@ private final class NativeStore: @unchecked Sendable {
             }
             try validateRegionElement(element, root: finalWindow.element, target: target,
                                       bounds: finalWindow.cg.bounds, deadline: context.deadline)
-            return try performSemanticPress(deadline: context.deadline, setTimeout: {
-                AXUIElementSetMessagingTimeout(element.element, $0)
+            let actionElement = selection ?? element.element
+            if !focusText, selection == nil, request["input_policy"] as? String == "auto" {
+                prepareBackgroundWindowOrder(target.app, context)
+            }
+            var result = try performSemanticPress(deadline: context.deadline,
+                actionName: selection != nil ? "AXSelected" : focusText ? "AXFocus" : "AXPress", setTimeout: {
+                AXUIElementSetMessagingTimeout(actionElement, $0)
             }, dispatch: {
-                do { try self.requireExecutionForeground(request, target, context) }
+                do {
+                    try self.requireExecutionForeground(request, target, context)
+                    if menuAction {
+                        let ready = try menuNeedsForeground
+                            ? self.focused(target, finalWindow.element, context.deadline)
+                            : self.menuDestinationBound(target, deadline: context.deadline)
+                        guard ready else { throw failure("target_changed", "App menu destination changed before dispatch") }
+                    }
+                }
                 catch let error as NativeFailure { scopeFailure = error; return nil }
                 catch { scopeFailure = failure("execution_scope_unavailable", "Execution scope proof failed: \(error)"); return nil }
                 // The gate refuses before entry. Once entered, AX may already
                 // have delivered effects, regardless of its eventual error.
                 return dtwWithInputAdmission {
-                    AXUIElementPerformAction(element.element, kAXPressAction as CFString)
+                    self.executionFocus?.anchor.admitInput()
+                    self.backgroundWindowOrder?.admitted.insert(target.app)
+                    if let selection {
+                        return AXUIElementSetAttributeValue(selection, kAXSelectedAttribute as CFString, kCFBooleanTrue)
+                    }
+                    if focusText {
+                        return AXUIElementSetAttributeValue(element.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+                    }
+                    return AXUIElementPerformAction(element.element, kAXPressAction as CFString)
                 }
             })
+            if let selection, result["dispatch"] as? String == "dispatched" {
+                do {
+                    let currentWindow = try validate(target, context)
+                    guard try owned(selection, by: currentWindow.element, target: target, deadline: context.deadline),
+                          try axAttribute(selection, kAXSelectedAttribute, context.deadline) as? Bool == true else {
+                        result["error"] = "selection_unconfirmed"
+                        result["message"] = "Collection selection was dispatched but its selected state was not confirmed; inspect before another action"
+                        result["dispatch"] = "unknown"
+                        return result
+                    }
+                    result["evidence"] = "confirmed"
+                    result["postcondition"] = "element_selected"
+                } catch {
+                    result["dispatch"] = "unknown"
+                    result["error"] = "selection_unconfirmed"
+                    result["message"] = "Collection selection readback failed after dispatch: \(error)"
+                }
+            }
+            return result
         } catch let error as NativeFailure {
             return (scopeFailure ?? error).json.merging(["dispatch": "not_dispatched", "evidence": "unverified"]) { _, new in new }
         } catch {
@@ -5486,7 +6612,21 @@ private final class NativeStore: @unchecked Sendable {
                 return ["released": observations.removeValue(forKey: binding) != nil]
             }
             if operation == "begin_execution_focus" { return beginExecutionFocus(request) }
+            if operation == "prepare_background_order" || operation == "admit_background_order" {
+                let context = try RequestContext(request)
+                let target = request["target"] as? [String: Any]
+                let app = try NativeApp(target?["app"])
+                try context.verify(app)
+                if operation == "prepare_background_order" { prepareBackgroundWindowOrder(app, context) }
+                // Record only a sent/uncertain payload. Refused preparation
+                // creates no window-order obligation or input side effect.
+                else if backgroundWindowOrder?.previouslyAbove[app] != nil {
+                    backgroundWindowOrder?.admitted.insert(app)
+                }
+                return ["prepared": true]
+            }
             if operation == "press" { return press(request) }
+            if operation == "try_native_menu_click" { return tryMenuClick(request) }
             if operation == "set_value" { return setValue(request) }
             if ["focus", "type_text", "keypress", "scroll"].contains(operation) { return windowInput(request) }
             let context = try RequestContext(request)
@@ -5514,7 +6654,31 @@ private final class NativeStore: @unchecked Sendable {
                         "target": target.json, "bounds": surface.coordinates, "surface_owner": surfaceOwner(target)]
             case "validate_execution_focus": return try validateExecutionFocus(request, context)
             case "release_input_focus":
-                return ["released": true, "focus": try releaseLocalFocus() ? "changed_externally" : "unchanged"]
+                let invalidated = try releaseLocalFocus(context.deadline, handoff: true)
+                var result: [String: Any] = ["released": true, "focus": invalidated ? "changed_externally" : "unchanged"]
+                if let point = releasedExecutionPointer { result["execution_pointer"] = [Double(point.x), Double(point.y)] }
+                releasedExecutionPointer = nil
+                return result
+            case "ack_execution_pointer":
+                let target = try NativeTarget(request["target"])
+                guard let borrowed = borrowedFocus, borrowed.target == target, borrowed.pointerHandoff,
+                      let point = request["point"] as? [Double], point.count == 2,
+                      borrowed.inputPoint == CGPoint(x: point[0], y: point[1]) else {
+                    throw failure("invalid_request", "Pointer acknowledgement does not match the pending exact handoff")
+                }
+                borrowedFocus = nil; releasedExecutionPointer = nil
+                focusObserver.end(borrowed.activationEpoch)
+                return ["acknowledged": true]
+            case "note_execution_pointer":
+                let target = try NativeTarget(request["target"])
+                try context.verify(target.app)
+                guard var scope = executionFocus, scope.app == target.app, scope.target == target, scope.pointerOrigin != nil,
+                      let point = request["point"] as? [Double], point.count == 2, point.allSatisfy({ $0.isFinite }) else {
+                    throw failure("invalid_request", "Pointer return requires the exact owned execution target and a finite endpoint")
+                }
+                scope.pointerEndpoint = CGPoint(x: point[0], y: point[1])
+                executionFocus = scope
+                return ["recorded": true]
             case "release_focus": return try releaseFocus(context.deadline)
             case "validate_background":
                 let target = try NativeTarget(request["target"])
@@ -5532,7 +6696,7 @@ private final class NativeStore: @unchecked Sendable {
                     try validation.context.verify(target.app)
                     try requireExecutionForeground(request, target, validation.context)
                     return ["target": target.json, "bounds": current.coordinates, "surface_owner": surfaceOwner(target),
-                            "background_requires_foreground": try backgroundRequiresForeground(validation.window,
+                            "background_requires_foreground": try nativeModalKeyboardReceiver(validation.window,
                                 deadline: validation.context.deadline)]
                 }
                 backgroundValidation = nil
@@ -5542,16 +6706,41 @@ private final class NativeStore: @unchecked Sendable {
                         let error = dtwPermissionError("accessibility")
                         throw failure("permission_required", error["message"] as! String, details:error["details"] as? [String:Any])
                     }
-                    // Modal state and AXChildren do not establish a pointer
-                    // delivery restriction. Address the captured CG surface.
+                    // AX is optional for ordinary visual input. Only a proven
+                    // native Open panel selects its separately verified route.
                     let framework = try inputFramework(target, context)
+                    var openPanel = false
+                    var pointerKeyWindow = false
+                    if framework == "appkit", let window = try? validate(target, context, input: false) {
+                        openPanel = nativeRemoteFilePanel(
+                            role: (try? axAttribute(window.element, kAXRoleAttribute, context.deadline)) as? String,
+                            identifier: (try? axAttribute(window.element, kAXIdentifierAttribute, context.deadline)) as? String)
+                        if request["_execution_foreground"] as? Bool != true,
+                           let operation = request["pointer_operation"] as? String,
+                           operation == "drag" || (operation == "click" && (request["pointer_button"] as? String ?? "left") == "left"),
+                           let point = request["pointer_point"] as? [Double], point.count == 2,
+                           point.allSatisfy({ $0.isFinite }), current.bounds.contains(CGPoint(x: point[0], y: point[1])) {
+                            var hit: AXUIElement?
+                            try context.deadline.prepare(AXUIElementCreateApplication(target.app.pid))
+                            if AXUIElementCopyElementAtPosition(AXUIElementCreateApplication(target.app.pid),
+                                Float(point[0]), Float(point[1]), &hit) == .success, let hit,
+                               let roles = try? ownedPointerReceiverRoles(hit, root: window.element,
+                                    pid: target.app.pid, deadline: context.deadline),
+                               nativePointerReceiverNeedsKeyWindow(operation: operation,
+                                    button: request["pointer_button"] as? String, roles: roles) {
+                                pointerKeyWindow = try !(windowServerFrontmost(target.app.pid, context.deadline)
+                                    && focused(target, window.element, context.deadline))
+                            }
+                        }
+                    }
                     try requireExecutionForeground(request, target, context)
                     if request["consume"] as? Bool == true {
                         backgroundValidation = BackgroundInputValidation(target:target, deadlineMilliseconds:milliseconds,
                             keyboard:false, context:context, window:nil)
                     }
                     return ["target":target.json,"bounds":current.coordinates,"surface_owner":surfaceOwner(target),
-                            "input_framework":framework,
+                            "input_framework":framework,"native_open_panel":openPanel,
+                            "pointer_key_window_required":pointerKeyWindow,
                             "chromium":framework == "chromium"]
                 }
                 // Missing or unreadable AX/modal proof stays an error. It cannot
@@ -5559,9 +6748,13 @@ private final class NativeStore: @unchecked Sendable {
                 let current = try validateSurface(target, context)
                 let window = try validate(target, context).element
                 let framework = try inputFramework(target, context)
+                let openPanel = try framework == "appkit" && nativeRemoteFilePanel(
+                    role: axAttribute(window, kAXRoleAttribute, context.deadline) as? String,
+                    identifier: axAttribute(window, kAXIdentifierAttribute, context.deadline) as? String)
                 let result: [String: Any] = ["target": target.json, "bounds": current.coordinates,
                     "surface_owner": surfaceOwner(target), "input_framework": framework,
-                    "background_requires_foreground": try backgroundRequiresForeground(window,
+                    "native_open_panel": openPanel,
+                    "background_requires_foreground": try nativeModalKeyboardReceiver(window,
                         deadline: context.deadline)]
                 if request["consume"] as? Bool == true {
                     let validation = BackgroundInputValidation(target: target, deadlineMilliseconds: milliseconds,
@@ -5594,14 +6787,31 @@ private final class NativeStore: @unchecked Sendable {
                     let closedWindow = (try? NativeTarget(rawTarget))?.nativeID
                     if let terminal = confirmedExecutionTerminal(operation: operation,
                         evidence: result["evidence"] as? String, postcondition: result["postcondition"] as? String,
-                        sameApp: scope.app == app, closedWindow: closedWindow, anchorWindow: scope.anchorID) {
+                        sameApp: scope.app == app, closedWindow: closedWindow, anchorWindow: scope.anchor.id) {
                         executionFocus?.terminal = terminal
                     }
                 }
                 return result
-            case "keypress_app": return appKeypress(request)
+            case "keypress_app", "focus_app": return appKeypress(request)
             case "catalog": return try context.catalog()
             case "discover_apps": return try context.discoverApplications()
+            case "application_exited":
+                let app = try NativeApp(request["app"])
+                let exited = try context.hasExited(app)
+                if exited, try context.startStamp(app.pid) != nil {
+                    throw failure("app_changed", "A different process incarnation occupies the original PID")
+                }
+                if !exited { try context.verify(app) }
+                if exited, let scope = executionFocus,
+                   let terminal = confirmedExecutionTerminal(operation: operation,
+                    evidence: "confirmed", postcondition: "application_exited",
+                    sameApp: scope.app == app, closedWindow: nil, anchorWindow: scope.anchor.id) {
+                    // An AX button can finish a previously pending quit. The
+                    // same positive kernel proof used by the final view ends
+                    // this exact borrow; never validate/raise its dead root.
+                    executionFocus?.terminal = terminal
+                }
+                return ["exited": exited]
             case "windows": return try listWindows(NativeApp(request["app"]), context)
             case "bind_window": return try bindWindow(request, context)
             case "probe_window_state": return try probeWindowState(request, context)

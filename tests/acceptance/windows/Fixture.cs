@@ -79,6 +79,10 @@ namespace DtwWindowsSmoke {
         bool modalOpen, menuOpen;
         bool ready, closed;
 
+        protected override bool ShowWithoutActivation {
+            get { return !String.IsNullOrEmpty(root) && File.Exists(Path.Combine(root,"show-without-activation")); }
+        }
+
         Fixture(string directory, string instance, bool awarenessSet) {
             root = directory; label = instance; dpiSet = awarenessSet;
             Text = "DTW Windows Smoke " + label;
@@ -190,7 +194,7 @@ namespace DtwWindowsSmoke {
             editor.Location = new Point(12, 12 + controlOffset);
             increment.Location = new Point(12, 145 + controlOffset);
             layoutSequence = requested;
-            if (command.ContainsKey("activate") && command["activate"] == 1) Activate();
+            if (command.ContainsKey("activate") && command["activate"] == 1) { BringToFront(); Activate(); }
             Record("supervisor_layout", command);
         }
         object ControlBounds(Control control) {
@@ -281,7 +285,29 @@ namespace DtwWindowsSmoke {
     // The Windows native shell of computer-use-app. The legacy smoke fixture,
     // dense controls, native file panels and portable web/canvas pages share one
     // source/lifecycle instead of maintaining another set of miniature apps.
+    public sealed class NativeScrollRegion : ScrollableControl {
+        public int WheelEvents;
+        public event Action Changed;
+        public NativeScrollRegion(string name, Color color) {
+            AccessibleName=name; BackColor=color; AutoScroll=true;
+            AutoScrollMinSize=new Size(100,1800); DoubleBuffered=true;
+        }
+        protected override void OnPaint(PaintEventArgs e) {
+            base.OnPaint(e);
+            for(int i=0;i<60;i++)e.Graphics.DrawString("Row "+(i+1).ToString("D3"),Font,Brushes.Black,12,AutoScrollPosition.Y+i*28);
+        }
+        protected override void WndProc(ref Message message) {
+            if(message.Msg==0x020A) {
+                int delta=(short)((long)message.WParam>>16);
+                AutoScrollPosition=new Point(0,Math.Max(0,-AutoScrollPosition.Y-delta/120*60));
+                WheelEvents++; Invalidate(); if(Changed!=null)Changed(); return;
+            }
+            base.WndProc(ref message);
+        }
+    }
+
     public sealed class Workbench : Form {
+        [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
         readonly string root;
         readonly UTF8Encoding utf8=new UTF8Encoding(false);
         readonly JavaScriptSerializer json=new JavaScriptSerializer();
@@ -290,6 +316,10 @@ namespace DtwWindowsSmoke {
         readonly CheckBox reviewed=new CheckBox();
         readonly Timer timer=new Timer();
         int commits,checkpoint,checks,opens,saves;
+        TrackBar paritySlider;
+        NativeScrollRegion parityLeft,parityRight;
+        Form peer;
+        int sliderDown,sliderUp,sliderMoves,peerOpens,peerIncrements,peerCloses;
         bool ready,modal;
         string saved="";
         static Button Button(string name,int x,int y,int width) {
@@ -339,18 +369,51 @@ namespace DtwWindowsSmoke {
             menu.MenuItems.Add(file);Menu=menu;
             var label=new Label{Text="Web / Canvas chat / Inventory use the same loopback workspace and independent journal.\nThe supervisor starts an isolated Chromium profile; no legacy WebBrowser/IE substitute.",
                 Location=new Point(12,420),Size=new Size(640,80)};Controls.Add(label);
+            if(File.Exists(Path.Combine(root,"extended-parity")))BuildParity();
             Shown+=delegate{ready=true;editor.Focus();Event("ready");Publish();};
             FormClosed+=delegate{timer.Stop();Event("quit");};
             timer.Interval=30;timer.Tick+=delegate{
                 if(File.Exists(Path.Combine(root,"stop"))||File.Exists(Path.Combine(root,"command"))){Close();return;}Publish();
             };timer.Start();
         }
+        void BuildParity() {
+            var status=new Label{Text="Native slider: 0 / 200",Location=new Point(12,500),Size=new Size(310,22)};Controls.Add(status);
+            paritySlider=new TrackBar{AccessibleName="Parity slider",Minimum=0,Maximum=200,TickFrequency=20,
+                Location=new Point(12,526),Size=new Size(640,45)};Controls.Add(paritySlider);
+            paritySlider.ValueChanged+=delegate{status.Text="Native slider: "+paritySlider.Value+" / 200";Event("slider_value");Publish();};
+            paritySlider.MouseDown+=delegate(object sender,MouseEventArgs e){if(e.Button==MouseButtons.Left){sliderDown++;Event("slider_down");Publish();}};
+            paritySlider.MouseUp+=delegate(object sender,MouseEventArgs e){if(e.Button==MouseButtons.Left){sliderUp++;Event("slider_up");Publish();}};
+            paritySlider.MouseMove+=delegate(object sender,MouseEventArgs e){if((e.Button&MouseButtons.Left)!=0){sliderMoves++;Publish();}};
+            var leftTitle=new Label{Text="Left scroll region (scroll this)",Location=new Point(12,578),Size=new Size(305,22)};Controls.Add(leftTitle);
+            var rightTitle=new Label{Text="Right scroll region (keep at top)",Location=new Point(338,578),Size=new Size(310,22)};Controls.Add(rightTitle);
+            parityLeft=new NativeScrollRegion("Left scroll region",Color.Honeydew){Location=new Point(12,605),Size=new Size(305,210)};
+            parityRight=new NativeScrollRegion("Right scroll region",Color.Lavender){Location=new Point(338,605),Size=new Size(310,210)};
+            parityLeft.Changed+=delegate{Event("left_scroll");Publish();};parityRight.Changed+=delegate{Event("right_scroll");Publish();};
+            Controls.Add(parityLeft);Controls.Add(parityRight);
+            var openPeer=Button("Open peer window",338,497,250);Controls.Add(openPeer);
+            openPeer.Click+=delegate{
+                if(peer!=null&&!peer.IsDisposed)return;
+                peer=new Form{Text="Owned parity peer",AccessibleName="Owned parity peer",ClientSize=new Size(300,140),
+                    StartPosition=FormStartPosition.Manual,Location=new Point(Left+200,Top+220),ShowInTaskbar=false};
+                var incrementPeer=Button("Peer increment",20,20,250);peer.Controls.Add(incrementPeer);
+                incrementPeer.Click+=delegate{peerIncrements++;incrementPeer.Text="Peer increment";Event("peer_increment");Publish();};
+                var closePeer=Button("Close peer",20,70,250);peer.Controls.Add(closePeer);
+                closePeer.Click+=delegate{peer.BeginInvoke((Action)delegate{peer.Close();});};
+                peer.FormClosed+=delegate{peerCloses++;Event("peer_close");Publish();};
+                peerOpens++;peer.Show(this);Event("peer_open");Publish();
+            };
+        }
         void Event(string kind) {File.AppendAllText(Path.Combine(root,"native-events.jsonl"),json.Serialize(new{kind=kind,pid=Process.GetCurrentProcess().Id,unix_ms=(DateTime.UtcNow.Ticks-621355968000000000L)/10000.0})+"\n",utf8);}
         void Publish() {
             if(IsDisposed||Disposing||!IsHandleCreated)return;
             string path=Path.Combine(root,"native-state.json"),temporary=path+".next";
             File.WriteAllText(temporary,json.Serialize(new{pid=Process.GetCurrentProcess().Id,ready=ready,modal=modal,hwnd=Handle.ToInt64(),
-                text=editor.Text,saved=saved,commits=commits,checkpoint=checkpoint,reviewed=reviewed.Checked,checks=checks,opens=opens,saves=saves}),utf8);
+                text=editor.Text,saved=saved,commits=commits,checkpoint=checkpoint,reviewed=reviewed.Checked,checks=checks,opens=opens,saves=saves,
+                parity=paritySlider==null?null:new{slider=paritySlider.Value,slider_down=sliderDown,slider_up=sliderUp,slider_drag_moves=sliderMoves,
+                    left_scroll=-parityLeft.AutoScrollPosition.Y,right_scroll=-parityRight.AutoScrollPosition.Y,
+                    left_wheels=parityLeft.WheelEvents,right_wheels=parityRight.WheelEvents,
+                    peer_opens=peerOpens,peer_increments=peerIncrements,peer_closes=peerCloses,peer_open=peer!=null&&!peer.IsDisposed,
+                    global_left_held=GetAsyncKeyState(1)<0}}),utf8);
             if(File.Exists(path))File.Replace(temporary,path,null);else File.Move(temporary,path);
         }
     }

@@ -21,7 +21,18 @@ func dtwFrontProcessPIDControlStub() -> Int32 {
 }
 
 // Pure target-read recovery controls; no desktop, AX server or input events.
-private func backgroundCheck(_ value: @autoclosure () -> Bool) { precondition(value()) }
+private func backgroundCheck(_ value: @autoclosure () -> Bool,
+                             file: StaticString = #file, line: UInt = #line) {
+    precondition(value(), file: file, line: line)
+}
+// Same receiver contract as CUA's menu equivalents: a sibling, absent receiver
+// or a different main window cannot authorize a background app-menu action.
+backgroundCheck(menuDestinationMatches(requested: 41, focused: 41, main: 41))
+private let unboundAppMenuDestinations: [(CGWindowID?, CGWindowID?)] = [(nil, nil), (nil, 41), (41, nil), (42, 41), (41, 42), (42, 42)]
+for pair in unboundAppMenuDestinations {
+    backgroundCheck(!menuDestinationMatches(requested: 41, focused: pair.0, main: pair.1))
+}
+backgroundCheck(!menuDestinationMatches(requested: 0, focused: 0, main: 0))
 private func busyAttribute(_ name: String = "AXModal") -> NativeFailure {
     failure("ax_unavailable", "busy \(name)", details:["attribute":name, "ax_error":AXError.cannotComplete.rawValue],
             attributeFailure:AXAttributeFailure(name:name,error:.cannotComplete))
@@ -899,3 +910,243 @@ private let typedSnapshotMismatch = expectedBackgroundError("focus_unproven") {
 backgroundCheck(typedSnapshotMismatch.foregroundSnapshotMismatch)
 backgroundCheck(typedSnapshotMismatch.details?["ax_pid"] as? Int32 == 10)
 print("System AX/WindowServer disagreement retains typed mismatch evidence")
+
+// First-mouse policy needs an owned, window-rooted receiver. Native sliders
+// retain background drag; custom AppKit views need only key focus.
+backgroundCheck(nativePointerReceiverNeedsKeyWindow(operation: "drag", button: nil,
+    roles: [kAXStaticTextRole, kAXGroupRole, kAXWindowRole]))
+backgroundCheck(nativePointerReceiverNeedsKeyWindow(operation: "click", button: "left",
+    roles: [kAXGroupRole, kAXWindowRole]))
+for operation in ["move", "scroll", "keypress"] {
+    backgroundCheck(!nativePointerReceiverNeedsKeyWindow(operation: operation, button: nil,
+        roles: [kAXGroupRole, kAXWindowRole]))
+}
+backgroundCheck(!nativePointerReceiverNeedsKeyWindow(operation: "click", button: "right",
+    roles: [kAXGroupRole, kAXWindowRole]))
+backgroundCheck(!nativePointerReceiverNeedsKeyWindow(operation: "drag", button: nil,
+    roles: [kAXSliderRole, kAXWindowRole]))
+backgroundCheck(!nativePointerReceiverNeedsKeyWindow(operation: "click", button: "left",
+    roles: [kAXStaticTextRole, kAXButtonRole, kAXWindowRole]))
+backgroundCheck(!nativePointerReceiverNeedsKeyWindow(operation: "drag", button: nil, roles: nil))
+backgroundCheck(!nativePointerReceiverNeedsKeyWindow(operation: "drag", button: nil, roles: [kAXGroupRole]))
+backgroundCheck(nativePointerReceiverNeedsKeyWindow(operation: "drag", button: nil,
+    roles: [kAXButtonRole, "AXWebArea", kAXWindowRole]))
+
+backgroundCheck(nativeRemoteFilePanel(role: kAXWindowRole, identifier: "open-panel"))
+backgroundCheck(nativeRemoteFilePanel(role: kAXSheetRole, identifier: "open-panel"))
+backgroundCheck(nativeRemoteFilePanel(role: kAXWindowRole, identifier: "save-panel"))
+backgroundCheck(nativeRemoteFilePanel(role: kAXSheetRole, identifier: "save-panel"))
+for identifier in [nil, "custom-modal"] as [String?] {
+    backgroundCheck(!nativeRemoteFilePanel(role: kAXWindowRole, identifier: identifier))
+}
+backgroundCheck(!nativeRemoteFilePanel(role: kAXGroupRole, identifier: "open-panel"))
+
+// A window transition revokes input but cannot erase later app leave/return.
+var closedAnchorEpoch = FocusBorrowEpoch(initialPID: 20, targetPID: 20, targetWindow: 200)
+closedAnchorEpoch.established(20, window: 200)
+closedAnchorEpoch.focusedWindow(201)
+precondition(closedAnchorEpoch.invalidated && !closedAnchorEpoch.applicationInvalidated)
+let closedRevision = closedAnchorEpoch.sampleRevision
+precondition(!closedAnchorEpoch.sampled(30, window: nil, revision: closedRevision))
+precondition(closedAnchorEpoch.applicationInvalidated)
+closedAnchorEpoch.activated(20)
+precondition(closedAnchorEpoch.applicationInvalidated)
+
+
+// Restore confirmation observes delayed WindowServer effects without replaying
+// the warp, and cannot exceed the original cleanup deadline.
+var pointerReturnClock: TimeInterval = 0
+var pointerReturnReads = 0
+precondition(dtwPointerReturnConfirmed(CGPoint(x: 10, y: 20), deadline: 0.02, read: {
+    pointerReturnReads += 1
+    return pointerReturnReads < 3 ? CGPoint(x: 100, y: 200) : CGPoint(x: 10, y: 20)
+}, now: { pointerReturnClock }, pause: { pointerReturnClock += $0 }))
+precondition(pointerReturnReads == 3 && pointerReturnClock == 0.004)
+pointerReturnClock = 0
+precondition(!dtwPointerReturnConfirmed(CGPoint(x: 10, y: 20), deadline: 0.01,
+    read: { CGPoint(x: 100, y: 200) }, now: { pointerReturnClock },
+    pause: { pointerReturnClock += $0 }))
+precondition(pointerReturnClock == 0.01)
+pointerReturnReads = 0
+precondition(!dtwPointerReturnConfirmed(CGPoint(x: 10, y: 20), deadline: 0.01,
+    read: { pointerReturnReads += 1; return nil }, now: { 0.01 },
+    pause: { _ in preconditionFailure("Expired cleanup cannot wait") }))
+precondition(pointerReturnReads == 0)
+print("Pointer return waits for observed restoration within the original cleanup budget; no warp replay")
+
+// Actual DSH failure: truncating both fractional axes exceeded the unchanged
+// Euclidean 1-unit bound and consumed the focus-return budget. Place once at
+// the nearest grid point, but confirm against the original fractional point.
+private let fractionalCursorOrigin = CGPoint(x: 290.61328125, y: 52.875)
+private let truncatedCursorOrigin = CGPoint(x: 290, y: 52)
+pointerReturnClock = 0
+precondition(!dtwPointerReturnConfirmed(fractionalCursorOrigin, deadline: 0.01,
+    read: { truncatedCursorOrigin }, now: { pointerReturnClock }, pause: { pointerReturnClock += $0 }))
+for original in [fractionalCursorOrigin, CGPoint(x: -1193.9, y: 1743.8),
+                 CGPoint(x: 1841.85, y: -92.62), CGPoint(x: 10, y: 20)] {
+    let placement = dtwPointerRestorationPoint(original)!
+    let observed = CGPoint(x: floor(placement.x), y: floor(placement.y))
+    precondition(dtwPointerReturnConfirmed(original, deadline: 0.01,
+        read: { observed }, now: { 0 }, pause: { _ in preconditionFailure("Nearest placement must confirm immediately") }))
+}
+precondition(dtwPointerRestorationPoint(CGPoint(x: Double.nan, y: 0)) == nil)
+print("Fractional cursor restoration keeps the original 1-unit bound on both positive and negative display coordinates")
+
+
+// Cold native-panel focus can be busy during cleanup. A bounded fresh proof,
+// rather than another input/activation, resolves only typed cannotComplete.
+var cleanupFocusClock: TimeInterval = 0
+var cleanupFocusReads = 0
+private let focusBusy = failure("ax_unavailable", "AXFocusedWindow busy",
+    attributeFailure: AXAttributeFailure(name: kAXFocusedWindowAttribute, error: .cannotComplete))
+let cleanupFocusOwned: Bool = try retryCompleteAXRead(original: focusBusy,
+    remaining: { 0.1 - cleanupFocusClock }, check: {}, read: {
+        cleanupFocusReads += 1
+        if cleanupFocusReads == 1 { throw focusBusy }
+        return true
+    }, wait: { cleanupFocusClock += $0 })
+precondition(cleanupFocusOwned && cleanupFocusReads == 2 && cleanupFocusClock <= 0.1)
+print("Cold focus cleanup retries only complete read-only AX busy proof, under the original deadline")
+
+// The prior app can already be frontmost while its AXFocusedWindow is still
+// busy. Read-only confirmation must survive that transition beyond 250 ms.
+var restoredClock: TimeInterval = 0
+var restoredReads = 0
+try confirmRestoredForeground(remaining: { 0.5 - restoredClock }, check: {},
+    frontmost: { true }, windowMatches: {
+        restoredReads += 1
+        if restoredClock < 0.32 { throw focusBusy }
+        return true
+    }, wait: { restoredClock += $0 })
+precondition(restoredReads > 1 && restoredClock >= 0.32 && restoredClock < 0.5)
+
+// A known wrong window, cancellation and an exhausted AX provider are still
+// failures; confirmation never guesses a window or permits another activation.
+restoredClock = 0
+restoredReads = 0
+do {
+    try confirmRestoredForeground(remaining: { 0.5 }, check: {}, frontmost: { true },
+        windowMatches: { restoredReads += 1; return false }, wait: { _ in
+            preconditionFailure("A known wrong window must not be polled")
+        })
+    preconditionFailure("Wrong original window cannot be restored")
+} catch let error as NativeFailure { precondition(error.code == "focus_restore_failed") }
+precondition(restoredReads == 1)
+restoredReads = 0
+do {
+    try confirmRestoredForeground(remaining: { 0.5 }, check: {
+        throw failure("app_changed", "Original PID changed")
+    }, frontmost: { restoredReads += 1; return true }, windowMatches: { true },
+       wait: { _ in preconditionFailure("Changed identity cannot wait") })
+    preconditionFailure("Changed original PID cannot confirm restoration")
+} catch let error as NativeFailure { precondition(error.code == "app_changed") }
+precondition(restoredReads == 0)
+do {
+    try confirmRestoredForeground(remaining: { 0.05 - restoredClock }, check: {},
+        frontmost: { true }, windowMatches: { throw focusBusy }, wait: { restoredClock += $0 })
+    preconditionFailure("Persistently unreadable AX focus cannot be called restored")
+} catch let error as NativeFailure {
+    precondition(error.attributeFailure?.error == .cannotComplete && restoredClock == 0.05)
+}
+print("Foreground return waits for exact AX readiness within cleanup; mismatch, identity change and busy expiry remain strict")
+
+// A later ownership read can become busy after activation was already proved.
+// Restart app/window/app proof together; never retry an input or cached half-proof.
+private var focusProofClock: TimeInterval = 0
+private var focusProofApps = 0
+private var focusProofWindows = 0
+private var focusProofAfter = 0
+private let laterFocus: Bool = try readFocusSnapshot(remaining: { 0.75 - focusProofClock }, check: {}, read: {
+    focusProofApps += 1
+    focusProofWindows += 1
+    if focusProofWindows == 1 { throw busyAttribute("AXFocusedWindow") }
+    focusProofAfter += 1
+    return true
+}, wait: { focusProofClock += $0 })
+backgroundCheck(laterFocus && focusProofApps == 2 && focusProofWindows == 2 && focusProofAfter == 1)
+
+// Recovery discovering an external focus choice is final, never a new activation.
+focusProofClock = 0; focusProofApps = 0
+private let noLongerOwned: Bool = try readFocusSnapshot(remaining: { 0.75 - focusProofClock }, check: {}, read: {
+    focusProofApps += 1
+    if focusProofApps == 1 { throw busyAttribute("AXFocusedWindow") }
+    return false
+}, wait: { focusProofClock += $0 })
+backgroundCheck(!noLongerOwned && focusProofApps == 2)
+
+focusProofClock = 0; focusProofApps = 0
+_ = expectedBackgroundError("ax_unavailable") {
+    let _: Bool = try readFocusSnapshot(remaining: { 0.04 - focusProofClock }, check: {}, read: {
+        focusProofApps += 1; throw busyAttribute("AXFocusedWindow")
+    }, wait: { focusProofClock += $0 })
+}
+backgroundCheck(focusProofApps == 2 && focusProofClock == 0.04)
+
+for stop in ["native_stopping", "deadline_exceeded", "app_changed"] {
+    focusProofClock = 0; focusProofApps = 0
+    _ = expectedBackgroundError(stop) {
+        let _: Bool = try readFocusSnapshot(remaining: { 0.75 - focusProofClock }, check: {
+            if focusProofClock > 0 { throw failure(stop, "proof cancelled") }
+        }, read: {
+            focusProofApps += 1; throw busyAttribute("AXFocusedWindow")
+        }, wait: { focusProofClock += $0 })
+    }
+    backgroundCheck(focusProofApps == 1)
+}
+
+focusProofApps = 0
+_ = expectedBackgroundError("ax_unavailable") {
+    let _: Bool = try readFocusSnapshot(remaining: { 1 }, check: {}, read: {
+        focusProofApps += 1
+        throw failure("ax_unavailable", "invalid focused window",
+            attributeFailure: AXAttributeFailure(name:"AXFocusedWindow",error:.invalidUIElement))
+    }, wait: { _ in preconditionFailure("Invalid objects never authorize a retry") })
+}
+backgroundCheck(focusProofApps == 1)
+
+// Cursor return follows actual physical posts, not optional overlay rendering.
+_ = dtwTakePostedPointerPosition()
+backgroundCheck(dtwTakePostedPointerPosition() == nil)
+private let scriptCursorOrigin = CGPoint(x: 1405.30078125, y: 1757.75390625)
+private let hoverCursorPoint = CGPoint(x: 282.5, y: 297.70977783203125)
+private let nextCursorPoint = CGPoint(x: -800.25, y: 125.5)
+dtwPresentPostedPointer(hoverCursorPoint, kind: 0)
+backgroundCheck(dtwTakePostedPointerPosition() == hoverCursorPoint)
+backgroundCheck(dtwTakePostedPointerPosition() == nil)
+backgroundCheck(dtwPointerReturnDestination(original: scriptCursorOrigin,
+    posted: hoverCursorPoint, current: hoverCursorPoint) == scriptCursorOrigin)
+// A later physical click/move replaces only the endpoint, never the origin.
+dtwPresentPostedPointer(hoverCursorPoint, kind: 0)
+dtwPresentPostedPointer(nextCursorPoint, kind: 2)
+backgroundCheck(dtwPointerReturnDestination(original: scriptCursorOrigin,
+    posted: dtwTakePostedPointerPosition(), current: nextCursorPoint) == scriptCursorOrigin)
+// Moving the real mouse revokes the old endpoint's permission to return.
+backgroundCheck(dtwPointerReturnDestination(original: scriptCursorOrigin,
+    posted: hoverCursorPoint, current: nextCursorPoint) == nil)
+backgroundCheck(dtwPointerReturnDestination(original: nil,
+    posted: hoverCursorPoint, current: hoverCursorPoint) == nil)
+backgroundCheck(dtwPointerReturnDestination(original: scriptCursorOrigin,
+    posted: nil, current: hoverCursorPoint) == nil)
+backgroundCheck(dtwPointerReturnDestination(original: scriptCursorOrigin,
+    posted: hoverCursorPoint, current: nil) == nil)
+backgroundCheck(dtwPointerReturnDestination(original: scriptCursorOrigin,
+    posted: CGPoint(x: CGFloat.nan, y: 0), current: hoverCursorPoint) == nil)
+
+// AXFocus absence can be bridged by the exact focused receiver's owned window,
+// never by a stale field overriding a real window, a foreign owner, or AX error.
+private var fallbackReads = 0
+private let primaryFocus = try focusedWindowOrReceiver(10, pid: 7,
+    receiver: { fallbackReads += 1; return 20 }, receiverWindow: { _ in 30 }, owner: { _ in 7 })
+expect(primaryFocus == 10 && fallbackReads == 0, "Stale receiver overrode actual focused window")
+private let receiverFocus = try focusedWindowOrReceiver(Optional<Int>.none, pid: 7,
+    receiver: { 20 }, receiverWindow: { _ in 30 }, owner: { _ in 7 })
+expect(receiverFocus == 30, "Owned focused receiver did not supply missing keyboard window")
+for foreign in [20, 30] {
+    let rejected = try focusedWindowOrReceiver(Optional<Int>.none, pid: 7,
+        receiver: { 20 }, receiverWindow: { _ in 30 }, owner: { $0 == foreign ? 8 : 7 })
+    expect(rejected == nil, "Foreign focused control/window supplied a keyboard destination")
+}
+private let noReceiverWindow = try focusedWindowOrReceiver(Optional<Int>.none, pid: 7,
+    receiver: { 20 }, receiverWindow: { _ in nil }, owner: { _ in 7 })
+expect(noReceiverWindow == nil, "Missing receiver window was invented")
+print("Missing AXFocusedWindow uses only the exact owned focused receiver window; real windows keep precedence")

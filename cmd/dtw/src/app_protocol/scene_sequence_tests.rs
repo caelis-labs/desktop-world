@@ -84,6 +84,48 @@ fn unidentified_targets_cannot_be_rebound_by_label_or_position() {
 }
 
 #[test]
+fn implicit_keyboard_renews_only_one_transient_inventory_without_replaying_input() {
+    for (cause, failures, succeeds) in [
+        (Error::TargetChanged, 1, true),
+        (
+            Error::NativeFailure {
+                code: "target_changed".into(),
+                message: "Popup closed during inventory".into(),
+            },
+            1,
+            true,
+        ),
+        (Error::TargetChanged, 2, false),
+        (Error::WrongApp, 1, false),
+    ] {
+        let (server, catalog) = agent();
+        let gate = catalog.backend.action_gate();
+        let running = server.clone();
+        let worker = std::thread::spawn(move || {
+            exec(&running, "keyboard_inventory", "await app.look(); await app.keypress('META+L'); await app.typeText('example.com');")
+        });
+        gate.entered();
+        for _ in 0..failures {
+            catalog
+                .backend
+                .0
+                .model
+                .lock()
+                .unwrap()
+                .window_errors
+                .push_back(cause.clone());
+        }
+        gate.release();
+        let reply = worker.join().unwrap();
+        assert_eq!(!reply.is_error, succeeds, "{}", reply.data);
+        assert_eq!(
+            catalog.backend.0.actions.load(Ordering::SeqCst),
+            if succeeds { 2 } else { 1 }
+        );
+    }
+}
+
+#[test]
 fn keyboard_routes_by_native_focus_instead_of_visual_overlay_order() {
     for focused in [Some(101), Some(102), None] {
         let (server, catalog) = agent();
@@ -114,6 +156,45 @@ fn keyboard_routes_by_native_focus_instead_of_visual_overlay_order() {
             .iter()
             .all(|t| t.native_id == focused.unwrap_or(102)));
         assert!(!reply.data.to_string().contains("keyboard_focused"));
+    }
+}
+
+#[test]
+fn proven_modal_receiver_overrides_stale_document_keyboard_focus() {
+    for modal in [Some(true), Some(false), None] {
+        let (server, catalog) = agent();
+        let rows = [(101, "Editing window"), (102, "Open dialog")]
+            .into_iter()
+            .enumerate()
+            .map(|(rank, (native_id, title))| {
+                let mut scene = WindowLayout::new([0., 0., 500., 400.], rank as u32).unwrap();
+                scene.keyboard_focused = Some(native_id == 101);
+                scene.keyboard_modal = if native_id == 102 { modal } else { None };
+                WindowInfo {
+                    target: WindowTarget {
+                        app: application(),
+                        native_id,
+                        generation: 3,
+                    },
+                    title: title.into(),
+                    visible: true,
+                    scene: Some(scene),
+                }
+            })
+            .collect();
+        catalog.backend.0.model.lock().unwrap().inventory = Some(test_inventory(rows));
+        let reply = exec(
+            &server,
+            "modal",
+            "await app.look(); await app.keypress('META+SHIFT+G'); await app.typeText('/tmp');",
+        );
+        assert!(!reply.is_error, "{}", reply.data);
+        let targets = catalog.backend.0.input_targets.lock().unwrap();
+        assert_eq!(targets.len(), 2);
+        assert!(targets
+            .iter()
+            .all(|t| t.native_id == if modal == Some(true) { 102 } else { 101 }));
+        assert!(!reply.data.to_string().contains("keyboard_modal"));
     }
 }
 
@@ -161,6 +242,51 @@ fn semantic_decoration_hint_does_not_replace_keyboard_focus_or_unfocused_popup_s
             101
         );
         assert!(!reply.data.to_string().contains("semantic_candidate"));
+    }
+}
+
+#[test]
+fn read_time_decoration_proof_can_choose_content_but_arbitrary_ax_errors_cannot() {
+    for code in ["non_content_surface", "ax_unavailable"] {
+        let (server, catalog) = agent();
+        let rows = [(102, "Decoration"), (101, "Document")]
+            .into_iter()
+            .enumerate()
+            .map(|(rank, (native_id, title))| WindowInfo {
+                target: WindowTarget {
+                    app: application(),
+                    native_id,
+                    generation: 3,
+                },
+                title: title.into(),
+                visible: true,
+                scene: Some(WindowLayout::new([0., 0., 500., 400.], rank as u32).unwrap()),
+            })
+            .collect();
+        {
+            let mut model = catalog.backend.0.model.lock().unwrap();
+            model.inventory = Some(test_inventory(rows));
+            model.semantic_pages.push_back(Err(Error::NativeFailure {
+                code: code.into(),
+                message: "Native read proof".into(),
+            }));
+        }
+        let reply = exec(
+            &server,
+            "read_proof",
+            "const v=await app.look(); return v.elements.map(e=>e.id);",
+        );
+        assert!(!reply.is_error, "{}", reply.data);
+        if code == "non_content_surface" {
+            assert!(reply.data["value"]["result"][0]
+                .as_str()
+                .unwrap()
+                .starts_with("w2."));
+            assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 2);
+        } else {
+            assert_eq!(reply.data["value"]["result"], json!([]));
+            assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 1);
+        }
     }
 }
 
