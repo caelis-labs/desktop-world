@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -42,6 +43,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('dsh', 'package', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
+    parser.add_argument('--owned-notepad-window', type=int, required=True,
+        help='Fresh single-tab Untitled window prepared and visually checked by the supervisor; other user windows stay open')
     args = parser.parse_args()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -55,14 +58,34 @@ def main():
         'business_actor': 'actual DSH model; supervisor only launches an owned folder and reads independent state'}
     client = session = owned = explorer_handle = None
     handles = []
+    title_events, title_errors = [], []
+    title_stop = threading.Event()
+    title_thread = None
     patch = out / 'cordis.patch.yml'
     patch.write_text("- id: acp\n  name: '@deepseek-ai/dsh-acp'\n  config:\n"
         "    provider: deepseek-account\n    model: deepseek-flash\n- insert:\n"
         "    - id: desktop-world-plugin\n      name: '" + (package / 'cordis/index.mjs').as_uri() + "'\n", encoding='utf-8')
     try:
         before = windows()
-        require(not any(row['class'].casefold() == 'notepad' for row in before),
-            'Existing Notepad document: do not mix user tabs with this owned lifecycle test')
+        owned_notepad = [row for row in before if row['hwnd'] == args.owned_notepad_window
+            and row['class'].casefold() == 'notepad' and row['title'] == 'Untitled - Notepad']
+        require(len(owned_notepad) == 1, 'Prepared owned Untitled window is absent or changed')
+        report['prepared_notepad'] = owned_notepad[0]
+        report['other_notepad_windows_before'] = [row['hwnd'] for row in before
+            if row['class'].casefold() == 'notepad' and row['hwnd'] != args.owned_notepad_window]
+        def observe_titles():
+            last = None
+            try:
+                while not title_stop.is_set():
+                    current = next((row for row in windows() if row['hwnd'] == args.owned_notepad_window), None)
+                    if current != last:
+                        title_events.append({'time_ms': time.time() * 1000, 'window': current})
+                        last = current
+                    title_stop.wait(.01)
+            except BaseException as error:
+                title_errors.append(type(error).__name__ + ': ' + str(error))
+        title_thread = threading.Thread(target=observe_titles, daemon=True)
+        title_thread.start()
         previous = {row['hwnd'] for row in before}
         explorer = Path('C:/Windows/explorer.exe')
         subprocess.Popen([str(explorer), str(folder)])
@@ -95,11 +118,13 @@ def main():
         prompt = f'''这是 Windows 真实应用验收。先加载 desktop-world Skill，并读取其安装包中的 API/相关文档。
 业务只准使用 desktop-world apps/exec。禁止 shell、文件读写工具、HTTP、CDP、其他 computer-use、脚本化文件系统或读取本轮日志/状态旁路。
 我已打开一个全新的自有 Explorer 窗口，文件夹 {folder}，其中只有 seed.txt。每次操作 Explorer 前核对当前窗口确实是这个自有文件夹；不要导航、修改或关闭其他 Explorer 窗口。
+已另外准备一个全新、只有一个空白标签的 Untitled - Notepad 窗口。其他记事本窗口及其恢复的用户标签必须保留，绝不能切入、修改、保存或关闭它们。不要调用 Notepad app.quit()。
 1. 在这个 Explorer 窗口内把 seed.txt 重命名为 验收-137.txt。
-2. 使用 Microsoft 记事本（Notepad，不是 Notepad++）打开该文件，完整替换为以下两行，保存：
+2. 使用已准备的空白 Microsoft 记事本窗口打开该文件。每个有输入的 exec 开头都先 await app.look({{full:true}})，检查 windows[0].title 是当前步骤预期的自有标题，否则立即抛错停止输入。打开文件前仅允许 Untitled - Notepad，打开后必须是 验收-137.txt - Notepad 或 *验收-137.txt - Notepad。Open 面板需等新的只读观察确认已出现，并同时核对其后是这个自有窗口；不要在被模态禁用的父窗口中继续键入。禁止 Alt+Tab、Windows 键、全局窗口切换或任何用户文档操作。
+先从当前自有 window 的 document 元素使用 setValue({{target:观察到的ID,value:''}}) 完整清空文档（本机记事本全选替换可能保留尾部真实换行，不能将该换行裁掉作成功）。在同一 exec 内使用 typeText 输入完整以下两行，再 Ctrl+S 保存。不要靠连续按 Enter 拼接两行：
 Windows 实机验收 中文🙂
 第二行 café 🚀
-3. 关闭这个记事本文档，重新打开 {destination}，通过实际原生读取及截图核对两行、中文和 emoji，随后关闭这个自有文档。
+3. 只关闭这个自有记事本文档，回到原空白 Untitled 标签，重新打开 {destination}，通过实际原生读取及截图核对恰好两行、中文和 emoji，以及没有额外尾部换行，随后只关闭这个自有文档，保留空白窗口。每次输入前仍需在同个 exec 核对自有窗口标题。Document 元素 ID 必须属于已核对的 windows[0].id，不得使用其他窗口的元素。
 4. 回到自有 Explorer 窗口，核对新文件名存在而旧文件名消失，最后只关闭这个自有 Explorer 窗口。不要使用 app.quit() 关闭 Explorer 整个实例，因为它还管理用户其他窗口和桌面。
 若记事本出现其他用户文档或无法证明窗口归属，停止相关输入并报告。派发/消费不确定不得重放，先做新的只读观察。报告实际完成与错误。'''
         (out / 'prompt.txt').write_text(prompt, encoding='utf-8')
@@ -115,11 +140,26 @@ Windows 实机验收 中文🙂
         require(not any(row['hwnd'] == owned['hwnd'] for row in after), 'Owned Explorer window was not closed by the model')
         require(not any(destination.name in row['title'] and row['class'].casefold() == 'notepad' for row in after),
             'Owned Notepad document was not closed by the model')
+        require(all(any(row['hwnd'] == hwnd for row in after)
+            for hwnd in report['other_notepad_windows_before']), 'An existing user Notepad window was closed')
+        expected_titles = iter(['Untitled - Notepad', '验收-137.txt - Notepad',
+            'Untitled - Notepad', '验收-137.txt - Notepad', 'Untitled - Notepad'])
+        expected_title = next(expected_titles)
+        for event in title_events:
+            if event['window'] and event['window']['title'] == expected_title:
+                expected_title = next(expected_titles, None)
+        require(expected_title is None, 'Independent owned window close/reopen/close sequence absent')
         report['passed'] = True
     except BaseException as error:
         report['error'] = type(error).__name__ + ': ' + str(error)
         raise
     finally:
+        title_stop.set()
+        if title_thread:
+            title_thread.join(timeout=3)
+            report['title_witness'] = {'events': title_events, 'errors': title_errors,
+                'joined': not title_thread.is_alive()}
+            report['passed'] &= not title_thread.is_alive() and not title_errors
         if client:
             if session:
                 try:
