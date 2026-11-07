@@ -78,8 +78,8 @@ DSH Windows 中文🙂
             child = subprocess.Popen([str(exe), str(root), 'A'])
             initial = wait_state(root, lambda value: value['ready'])
             goal = f'''仅操作我拥有的应用 {exe}，标题 DTW Windows Smoke A。
-先观察和截图，在蓝色 Owned pointer / wheel pad 内做一次实际按住左键的长拖拽：
-在 pad 左右两侧之间连续往返八次，每个点都留在蓝色区域内。随后再点击 Increment 一次。
+先观察和截图，在蓝色 Owned pointer / wheel pad 的中央区域内做一次实际按住左键的折线拖拽：
+规划八个交替点，每段图像距离约 150–200 像素，总路径遵守 API 的 256 样本上限，所有点留在蓝色区域内。随后再点击 Increment 一次。
 本轮评估会在实际拖拽途中由用户取消。正常开始拖拽即可，不要替用户取消，不要模拟取消结果。'''
         common = '''这是 Windows 实机验收。先加载随完整插件注册的 desktop-world Skill，并读取其安装目录中的 API。
 业务操作只能使用 desktop-world 的 apps/exec。skill/read 只准读取该安装包的 Skill/API 文档。
@@ -147,8 +147,10 @@ DSH Windows 中文🙂
             require(all(h.alive() for h in handles), 'MCP was replaced during user cancellation')
             recovery = common + f'''继续同一会话，只操作 {exe}。上次已由用户取消，禁止重放拖拽或旧点击。
 先通过新的 apps/exec 只读观察并截图当前状态。然后再开始一条新的 exec，将 Message 完整设为 fresh after DSH user cancel，点击 Save 一次，最后读取核对并捕获图片。'''
+            recovery_started = time.time() * 1000
             report['recovery_result'] = client.call('session/prompt', {'sessionId': session,
                 'prompt': [{'type': 'text', 'text': recovery}]}, timeout=360)
+            report['recovery_interval'] = {'start_ms': recovery_started, 'end_ms': time.time() * 1000}
             report['recovery_state'] = wait_state(root, lambda value: value['saves'] == 1
                 and value['saved'] == 'fresh after DSH user cancel')
             require(report['recovery_state']['increments'] == 0, 'old suffix was replayed during recovery')
@@ -199,6 +201,9 @@ DSH Windows 中文🙂
                 child.wait(timeout=5)
                 report.update(passed=False, forced_fixture_cleanup=True)
         (out / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+        (out / 'rpc-intervals.json').write_text(json.dumps([
+            {'name': 'actual-DSH-' + name, **report[name]} for name in ('prompt_interval', 'recovery_interval') if name in report
+        ], indent=2), encoding='utf-8')
         print(json.dumps({key: report.get(key) for key in ('passed', 'error', 'session', 'mode')}), flush=True)
     require(report['passed'], report)
 

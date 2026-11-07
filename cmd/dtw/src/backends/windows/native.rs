@@ -1921,6 +1921,17 @@ impl Store {
                 } else if let Ok(pattern) = unsafe {
                     element.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
                 } {
+                    // The standard dialog Button provider can acknowledge
+                    // Invoke/BM_CLICK without acting while its dialog is
+                    // inactive. Prepare only this proven owned modal before
+                    // the one original Invoke; never retry that payload.
+                    let mut class = [0u16; 256];
+                    let count = unsafe { GetClassNameW(window, &mut class) };
+                    if String::from_utf16_lossy(&class[..count.max(0) as usize]) == "#32770"
+                        && keyboard_modal(window, target.app.pid)
+                    {
+                        self.focus_window(&target, window, until, &mut preparation)?;
+                    }
                     let _mutation =
                         self.semantic_admission(&target, window, &uia, &element, &q, until)?;
                     dispatched = true;

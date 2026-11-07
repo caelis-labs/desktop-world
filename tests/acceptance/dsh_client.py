@@ -5,6 +5,7 @@ owns model requests, bundled Skills, the full Cordis plugin and MCP lifecycle.
 Raw transcripts can contain model/private data and belong in ignored artifacts.
 """
 import json
+import os
 from pathlib import Path
 import queue
 import subprocess
@@ -24,7 +25,8 @@ class DshClient:
         self.log = (self.output / 'acp.jsonl').open('w', encoding='utf-8')
         self.stderr = (self.output / 'stderr.log').open('wb')
         self.process = subprocess.Popen([str(command), '--profile', 'acp', '--patch', str(patch)],
-            cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr)
+            cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr,
+            env={**os.environ, 'DTW_INPUT_TRACE': '1'})
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
 

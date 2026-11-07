@@ -190,7 +190,7 @@ namespace DtwWindowsSmoke {
             editor.Location = new Point(12, 12 + controlOffset);
             increment.Location = new Point(12, 145 + controlOffset);
             layoutSequence = requested;
-            if (command.ContainsKey("activate") && command["activate"] == 1) Activate();
+            if (command.ContainsKey("activate") && command["activate"] == 1) { BringToFront(); Activate(); }
             Record("supervisor_layout", command);
         }
         object ControlBounds(Control control) {

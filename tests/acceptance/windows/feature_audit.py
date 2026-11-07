@@ -163,14 +163,21 @@ def main():
         blocker_exe = out / 'FixtureBlocker.exe'
         shutil.copy2(exe, blocker_exe)
         blocker_app, _ = spawn(blocker_exe, blocker_root, 'B')
-        wait_state(blocker_root, lambda s: s['foreground'])
-        require(not state()['foreground'], 'owned target was not background')
-        rejected = execute('await app.click({selector:{scope:"menu",text:"ABSENT-OWNED-CONTROL"}});', allow_error=True)
-        require(rejected.get('error', {}).get('code') == 'selector_not_found', rejected)
-        require(not state()['foreground'] and state(blocker_root)['foreground'], 'rejected menu changed foreground')
-        record(stage, rejected)
-        execute('await app.look();await app.quit();', blocker_app)
-        children[-1][0].wait(timeout=8)
+        actor = AppClient(args.dtw.resolve(), out / 'rejected-menu-foreground-actor')
+        actor_request = actor.begin_execute(blocker_app,
+            'await app.focus();const end=Date.now()+10000;while(Date.now()<end){};')
+        try:
+            wait_state(blocker_root, lambda s: s['foreground'])
+            require(not state()['foreground'], 'owned target was not background')
+            rejected = execute('await app.click({selector:{scope:"menu",text:"ABSENT-OWNED-CONTROL"}});', allow_error=True)
+            require(rejected.get('error', {}).get('code') == 'selector_not_found', rejected)
+            require(not state()['foreground'] and state(blocker_root)['foreground'], 'rejected menu changed foreground')
+            record(stage, rejected)
+            execute('await app.look();await app.quit();', blocker_app)
+            children[-1][0].wait(timeout=8)
+        finally:
+            actor.cancel(actor_request)
+            report['rejected_menu_actor_cleanup'] = actor.close()
 
         stage = 'multi_instance_continuity'
         other = out / 'B'
@@ -186,7 +193,10 @@ def main():
         stage = 'multi_instance_global_order_and_pixels'
         for directory, sequence, offset, expected in [(other,1,-246,'B'), (root,2,12,'A')]:
             (directory / 'layout.json').write_text(json.dumps({'sequence':sequence,'window_offset':offset,'control_offset':0,'activate':1}))
-            wait_state(directory, lambda s, sequence=sequence: s['layout_sequence'] == sequence and s['foreground'])
+            # This is an owned stacking setup, not business keyboard input.
+            # Form.Activate may be refused by foreground locking; the actual
+            # global order and physical/composite pixels below are the oracle.
+            setup = wait_state(directory, lambda s, sequence=sequence: s['layout_sequence'] == sequence)
             view = capture('front-' + expected)
             require(view['view']['windows'][0]['title'].endswith(expected), view)
             desktop = {'x':300, 'y':300}
@@ -194,7 +204,8 @@ def main():
             with Image.open(client.output / ('front-' + expected + '.png')) as image:
                 rgba = image.convert('RGBA').getpixel((int(pixel['x']),int(pixel['y'])))
             require(rgba[:3] == ((255,182,193) if expected == 'B' else (173,216,230)), {'front':expected,'pixel':rgba})
-            record('front_order_' + expected, {'view':view,'intersection_pixel':rgba})
+            record('front_order_' + expected, {'view':view,'intersection_pixel':rgba,
+                'setup_foreground_observed': setup['foreground']})
 
         stage = 'layered_global_alpha'
         layered_root = out / 'layered'
