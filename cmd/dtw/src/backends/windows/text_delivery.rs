@@ -407,15 +407,45 @@ impl TextDelivery {
             ));
         }
         let focused = unsafe { self.uia.GetFocusedElement() }.map_err(failed)?;
-        if !unsafe { self.uia.CompareElements(&focused, &self.element) }
-            .map_err(failed)?
-            .as_bool()
+        require_focus(&self.uia, &self.element, &focused)
+    }
+}
+
+pub(super) fn require_focus(
+    uia: &IUIAutomation,
+    expected: &IUIAutomationElement,
+    actual: &IUIAutomationElement,
+) -> Result<(), Error> {
+    unsafe {
+        if expected
+            .CurrentHasKeyboardFocus()
+            .is_ok_and(|value| value.as_bool())
+            && uia
+                .CompareElements(expected, actual)
+                .map_err(failed)?
+                .as_bool()
         {
-            return Err(failed(
-                "Focused control changed before Unicode delivery acknowledgement",
-            ));
+            return Ok(());
         }
-        Ok(())
+        let role = actual
+            .CurrentControlType()
+            .ok()
+            .map(super::native::role)
+            .unwrap_or("control");
+        let name = actual.CurrentName().ok().map(|name| {
+            name.to_string()
+                .chars()
+                .filter(|ch| !ch.is_control())
+                .take(100)
+                .collect::<String>()
+        });
+        let field = name
+            .filter(|name| !name.is_empty())
+            .map_or_else(|| role.to_owned(), |name| format!("{role} {name:?}"));
+        Err(Error::NativeFailure {
+            code: "text_focus_mismatch".into(),
+            message: format!("The intended text field was not focused. Focus was on {field}. Observe the app before continuing."),
+        })
     }
 }
 

@@ -401,6 +401,54 @@ pub(super) fn marker(window: HWND, create: bool) -> Result<u64, Error> {
         Ok(value)
     }
 }
+
+// Only an element that owns a real child HWND can be renewed this way.
+// Virtual provider nodes may share a host HWND or reuse a UIA Runtime ID.
+fn child_element_incarnation(
+    uia: &IUIAutomation,
+    element: &IUIAutomationElement,
+    window: HWND,
+    pid: u32,
+) -> Option<(HWND, u64)> {
+    unsafe {
+        let child = HWND(element.CurrentNativeWindowHandle().ok()?.0);
+        if child.0.is_null() || child == window || GetAncestor(child, GA_ROOT) != window {
+            return None;
+        }
+        let mut owner = 0;
+        GetWindowThreadProcessId(child, Some(&mut owner));
+        if owner != pid {
+            return None;
+        }
+        let root = uia.ElementFromHandle(child).ok()?;
+        if !uia.CompareElements(element, &root).ok()?.as_bool() {
+            return None;
+        }
+        let generation = marker(child, true).ok()?;
+        (GetAncestor(child, GA_ROOT) == window
+            && element.CurrentNativeWindowHandle().ok()?.0 == child.0)
+            .then_some((child, generation))
+    }
+}
+
+#[derive(Clone)]
+struct ObservedElement {
+    element: IUIAutomationElement,
+    incarnation: Option<(HWND, u64)>,
+}
+impl ObservedElement {
+    fn validate(&self, window: HWND) -> Result<(), Error> {
+        if let Some((child, generation)) = self.incarnation {
+            if marker(child, false) != Ok(generation)
+                || unsafe { GetAncestor(child, GA_ROOT) } != window
+            {
+                return Err(Error::TargetChanged);
+            }
+        }
+        Ok(())
+    }
+}
+
 struct Query {
     target: WindowTarget,
     root: IUIAutomationElement,
@@ -409,7 +457,7 @@ struct Query {
     frontier: Vec<(IUIAutomationElement, u32)>,
     visited: HashSet<Vec<i32>>,
     scanned: usize,
-    elements: HashMap<u64, IUIAutomationElement>,
+    elements: HashMap<u64, ObservedElement>,
     pending: Option<Value>,
     role: Option<String>,
     text: Option<String>,
@@ -420,6 +468,13 @@ struct Query {
     capture_bounds: Option<(RECT, u32)>,
     render_size: Option<(i32, i32)>,
     texts: HashMap<u64, String>,
+}
+impl Query {
+    fn element(&self, id: u64, window: HWND) -> Result<&ObservedElement, Error> {
+        let element = self.elements.get(&id).ok_or(Error::ElementNotFound)?;
+        element.validate(window)?;
+        Ok(element)
+    }
 }
 // Region membership is scoped to the source capture, not just the HWND. Read
 // element bounds first: a blocking UIA getter must not hide a concurrent window
@@ -876,9 +931,8 @@ impl Store {
                         return Err(Error::StaleObservation);
                     }
                     first = old
-                        .elements
-                        .get(&number(scope, "element")?)
-                        .ok_or(Error::ElementNotFound)?
+                        .element(number(scope, "element")?, window)?
+                        .element
                         .clone();
                     owned(&uia, &first, &old.root, until).map_err(retained_error)?;
                     owned(&uia, &first, &root, until).map_err(retained_error)?;
@@ -1112,7 +1166,17 @@ impl Store {
                 row["role"].as_str().unwrap_or(""),
                 row["name"].as_str().unwrap_or("")
             ));
-            q.elements.insert((q.elements.len() + 1) as u64, element);
+            let incarnation = child_element_incarnation(&uia, &element, window, target.app.pid);
+            if let Some((child, generation)) = incarnation {
+                row["rebind_identity"] = json!(format!("hwnd:{}:{generation}", id(child)));
+            }
+            q.elements.insert(
+                (q.elements.len() + 1) as u64,
+                ObservedElement {
+                    element,
+                    incarnation,
+                },
+            );
             let size = row.to_string().len();
             if bytes + size > 12 * 1024 {
                 q.pending = Some(row);
@@ -1178,7 +1242,8 @@ impl Store {
                 return Err(Error::StaleObservation);
             }
             let id = number(r, "element")?;
-            let element = q.elements.get(&id).ok_or(Error::ElementNotFound)?.clone();
+            let observed = q.element(id, window)?;
+            let element = observed.element.clone();
             let uia = self.uia()?;
             let current_root = unsafe { uia.ElementFromHandle(window) }.map_err(failed)?;
             owned(&uia, &element, &q.root, until).map_err(retained_error)?;
@@ -1191,6 +1256,7 @@ impl Store {
             owned(&uia, &element, &q.root, until).map_err(retained_error)?;
             owned(&uia, &element, &current_root, until).map_err(retained_error)?;
             q.validate_region(window, &element, until)?;
+            observed.validate(window)?;
             if let Some(previous) = q.texts.get(&id) {
                 if previous != &current {
                     return Err(Error::StaleObservation);
@@ -1304,6 +1370,7 @@ impl Store {
         let mut segments: Vec<Vec<INPUT>> = Vec::new();
         let mut point: Option<PointerPoint> = None;
         let mut scroll = None;
+        let mut text_target = None;
         let mut semantic_anchor: Option<(
             IUIAutomation,
             IUIAutomationElement,
@@ -1312,7 +1379,23 @@ impl Store {
             Option<RECT>,
         )> = None;
         match op {
-            "typeText" => segments = input::keyboard_segments(Some(string(r, "text")?), None)?,
+            "typeText" => {
+                segments = input::keyboard_segments(Some(string(r, "text")?), None)?;
+                if r.get("binding").is_some() {
+                    let query = self
+                        .queries
+                        .remove(string(r, "binding")?)
+                        .ok_or(Error::StaleObservation)?;
+                    if query.target != *target || query.expires <= Instant::now() {
+                        return Err(Error::StaleObservation);
+                    }
+                    let element = query.element(number(r, "element")?, window)?;
+                    let uia = self.uia()?;
+                    owned(&uia, &element.element, &query.root, until)?;
+                    query.validate_region(window, &element.element, until)?;
+                    text_target = Some(element.clone());
+                }
+            }
             "keypress" => {
                 let keys = r["keys"]
                     .as_array()
@@ -1351,9 +1434,8 @@ impl Store {
                             return Err(Error::StaleObservation);
                         }
                         let element = q
-                            .elements
-                            .get(&number(&r["anchor"], "element")?)
-                            .ok_or(Error::ElementNotFound)?
+                            .element(number(&r["anchor"], "element")?, window)?
+                            .element
                             .clone();
                         let uia = self.uia()?;
                         owned(&uia, &element, &q.root, until)?;
@@ -1401,10 +1483,14 @@ impl Store {
         *route = Some("foreground");
         let focus_receiver = keyboard_window(window, target.app.pid)?;
         if op == "focus" {
-            self.focus_window(target, focus_receiver, until, dispatched)?;
-            *confirmed = Some("window_focused");
+            if self.focus_window(target, focus_receiver, until, preparation)? {
+                self.input_boundary(target, window, until)?;
+                *confirmed = Some("window_focused");
+                *dispatched = *preparation;
+            }
+            return Ok(());
         } else {
-            self.focus_window(target, focus_receiver, until, preparation)?;
+            self.prepare_receiver(target, focus_receiver, until, preparation)?;
         }
         self.input_boundary(target, window, until)?;
         if matches!(op, "click" | "scroll") {
@@ -1426,6 +1512,10 @@ impl Store {
                 let root = unsafe { uia.ElementFromHandle(window) }.map_err(failed)?;
                 let focused = unsafe { uia.GetFocusedElement() }.map_err(failed)?;
                 owned(&uia, &focused, &root, until)?;
+                if let Some(expected) = &text_target {
+                    expected.validate(window)?;
+                    super::text_delivery::require_focus(&uia, &expected.element, &focused)?;
+                }
                 let guard =
                     super::text_delivery::TextDelivery::new(uia.clone(), focused.clone(), window)?;
                 owned(&uia, &focused, &root, until)?;
@@ -1435,7 +1525,7 @@ impl Store {
             self.input_boundary(target, window, until)?;
             match guard {
                 Ok(guard) => Some(guard),
-                Err(Error::UnsupportedCapability) if !must_verify => None,
+                Err(Error::UnsupportedCapability) if !must_verify && text_target.is_none() => None,
                 Err(error) => return Err(error),
             }
         };
@@ -1523,6 +1613,9 @@ impl Store {
             }
             Step::Dispatch(segment) => {
                 self.validate(target)?;
+                if let Some(expected) = &text_target {
+                    expected.validate(window)?;
+                }
                 if let Some(delivery) = &delivery {
                     delivery.focused()?;
                 }
@@ -1663,27 +1756,41 @@ impl Store {
             }
         }
     }
+    fn prepare_receiver(
+        &mut self,
+        target: &WindowTarget,
+        window: HWND,
+        until: Instant,
+        preparation: &mut bool,
+    ) -> Result<(), Error> {
+        if self.focus_window(target, window, until, preparation)? {
+            Ok(())
+        } else {
+            Err(Error::NativeFailure {
+                code: "target_unavailable".into(),
+                message: "The selected window could not receive this action. Observe the app before continuing.".into(),
+            })
+        }
+    }
     fn focus_window(
         &mut self,
         target: &WindowTarget,
         window: HWND,
         until: Instant,
         dispatched: &mut bool,
-    ) -> Result<(), Error> {
-        let original = match input::focus(window, until, dispatched) {
-            Ok(()) => return Ok(()),
-            Err(error) if matches!(&error, Error::NativeFailure {code,..} if code == "foreground_unavailable") => {
-                error
-            }
+    ) -> Result<bool, Error> {
+        match input::focus(window, until, dispatched) {
+            Ok(()) => return Ok(true),
+            Err(Error::NativeFailure { code, .. }) if code == "foreground_unavailable" => {}
             Err(error) => return Err(error),
-        };
+        }
         // A keyboard payload is still forbidden. Use CUA's coordinate-routed
         // pointer primitive only on a proven native caption, with no client
         // control activation or synthetic business shortcut.
         if target.native_id != id(window)
             || unsafe { GetWindowLongW(window, GWL_STYLE) } as u32 & WS_CAPTION.0 != WS_CAPTION.0
         {
-            return Err(original);
+            return Ok(false);
         }
         self.validate(target)?;
         let bounds = capture_bounds(window)?;
@@ -1696,8 +1803,9 @@ impl Store {
             *previous == target.native_id
                 && when.elapsed() < Duration::from_millis(unsafe { GetDoubleClickTime() } as u64)
         });
-        let mut candidates = Vec::new();
-        for y in [
+        // A caption hit must already be exposed on the desktop.
+        let mut candidate = None;
+        'caption: for y in [
             preferred_y,
             bounds.top + 16,
             bounds.top + 24,
@@ -1722,33 +1830,26 @@ impl Store {
                 }) {
                     continue;
                 }
-                if gestures::caption_activation_hit(window, point, until)? {
-                    candidates.push(point);
+                if verify_point(window, target.app.pid, point).is_err() {
+                    continue;
+                }
+                match gestures::caption_activation_hit(window, point, until) {
+                    Ok(true) => {
+                        candidate = Some(point);
+                        break 'caption;
+                    }
+                    Ok(false) => {}
+                    Err(Error::BackendFailed(_)) => {
+                        check(until)?;
+                        return Ok(false);
+                    }
+                    Err(error) => return Err(error),
                 }
             }
         }
-        let Some(point) = candidates.into_iter().next() else {
-            return Err(original);
+        let Some(point) = candidate else {
+            return Ok(false);
         };
-        if verify_point(window, target.app.pid, point).is_err() {
-            let _mutation = input::mutation(until)?;
-            self.validate(target)?;
-            check(until)?;
-            super::execution_scope::restacked();
-            *dispatched = true;
-            unsafe {
-                SetWindowPos(
-                    window,
-                    HWND_TOP,
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                )
-            }
-            .map_err(failed)?;
-        }
         self.validate(target)?;
         if !equal_rect(bounds, capture_bounds(window)?)
             || !gestures::caption_activation_hit(window, point, until)?
@@ -1766,7 +1867,7 @@ impl Store {
         }
         self.validate(target)?;
         if unsafe { GetForegroundWindow() } != window {
-            return Err(original);
+            return Ok(false);
         }
         // Foreground activation alone does not settle synthetic pen-up. Its
         // delayed promoted move must not follow the business mouse placement.
@@ -1806,7 +1907,8 @@ impl Store {
             std::thread::sleep(Duration::from_millis(2));
         }
         input::no_held_keys()?;
-        super::execution_scope::after_focus(window)
+        super::execution_scope::after_focus(window)?;
+        Ok(true)
     }
     fn semantic_admission(
         &self,
@@ -1860,11 +1962,8 @@ impl Store {
                 if q.target != target || q.expires <= Instant::now() {
                     return Err(Error::StaleObservation);
                 }
-                let element = q
-                    .elements
-                    .get(&number(r, "element")?)
-                    .ok_or(Error::ElementNotFound)?
-                    .clone();
+                let observed = q.element(number(r, "element")?, window)?;
+                let element = observed.element.clone();
                 let uia = self.uia()?;
                 owned(&uia, &element, &q.root, until)?;
                 if !unsafe { element.CurrentIsEnabled() }
@@ -1877,7 +1976,8 @@ impl Store {
                 self.validate(&target)?;
                 check(until)?;
                 let receiver = keyboard_window(window, target.app.pid)?;
-                self.focus_window(&target, receiver, until, &mut preparation)?;
+                self.prepare_receiver(&target, receiver, until, &mut preparation)?;
+                observed.validate(window)?;
                 route = Some("foreground");
                 let mut menu_expansion = None;
                 if op == "press"
@@ -2007,6 +2107,9 @@ impl Store {
             Ok(())
         })();
         let mut reply = match result {
+            Ok(()) if r["operation"] == "focus" && confirmed.is_none() => {
+                json!({"dispatch":"not_dispatched"})
+            }
             Ok(()) => json!({"dispatch":"dispatched","postcondition":confirmed}),
             Err(error) => {
                 let mut result = windows_error_reply(error, true);
@@ -2091,7 +2194,7 @@ unsafe fn runtime_id_array(
     }
     Ok(values)
 }
-fn role(id: UIA_CONTROLTYPE_ID) -> &'static str {
+pub(super) fn role(id: UIA_CONTROLTYPE_ID) -> &'static str {
     match id.0 {
         50000 => "button",
         50002 => "checkbox",

@@ -120,6 +120,7 @@ fn operation(command: &Command) -> &'static str {
         | Command::ClickWithOptions { .. }
         | Command::ClickNormalized { .. } => "click",
         Command::SetValue { .. } | Command::SetValueSelected { .. } => "setValue",
+        Command::TypeTextAt { .. } => "typeText",
         Command::Scroll { .. } => "scroll",
         Command::Input(input) => input.capability().as_str(),
     }
@@ -137,6 +138,7 @@ fn is_action(command: &Command) -> bool {
             | Command::ClickNormalized { .. }
             | Command::SetValue { .. }
             | Command::SetValueSelected { .. }
+            | Command::TypeTextAt { .. }
             | Command::Scroll { .. }
             | Command::Input(_)
     )
@@ -928,6 +930,11 @@ impl<B: Backend + 'static> Coordinator<B> {
                 observation_ref,
                 element_ref,
                 ..
+            }
+            | Command::TypeTextAt {
+                observation_ref,
+                element_ref,
+                ..
             } => {
                 let bound = {
                     let state = self.state.lock().unwrap();
@@ -956,6 +963,13 @@ impl<B: Backend + 'static> Coordinator<B> {
                             observation,
                             element,
                             value,
+                            deadline,
+                        ),
+                        Command::TypeTextAt { text, .. } => self.runtime.type_text_at_until(
+                            &target,
+                            observation,
+                            element,
+                            text,
                             deadline,
                         ),
                         _ => self

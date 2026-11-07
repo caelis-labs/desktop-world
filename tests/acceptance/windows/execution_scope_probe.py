@@ -17,7 +17,6 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app_client import AppClient, artifact_identity, require
 from windows.app_protocol_probe import wait_state
-from windows.transport import read
 
 
 def main():
@@ -35,6 +34,12 @@ def main():
     user = ctypes.WinDLL('user32', use_last_error=True)
     user.GetCursorPos.argtypes = [ctypes.POINTER(w.POINT)]
     user.GetCursorPos.restype = w.BOOL
+    user.GetTopWindow.argtypes = [w.HWND]
+    user.GetTopWindow.restype = w.HWND
+    user.GetWindow.argtypes = [w.HWND, w.UINT]
+    user.GetWindow.restype = w.HWND
+    user.GetWindowThreadProcessId.argtypes = [w.HWND, ctypes.POINTER(w.DWORD)]
+    user.GetWindowThreadProcessId.restype = w.DWORD
     user.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
     user.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
     user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
@@ -47,6 +52,19 @@ def main():
     def state(root):
         return wait_state(root, lambda value: True)
 
+    def stack(windows):
+        # Enumerate the actual desktop order, reporting only owned HWNDs.
+        order = []
+        current = user.GetTopWindow(None)
+        visited = set()
+        while current and current not in visited:
+            if current in windows:
+                order.append(windows[current])
+            visited.add(current)
+            current = user.GetWindow(current, 2)  # GW_HWNDNEXT
+        require(len(order) == len(windows), 'Owned windows missing from desktop stack')
+        return order
+
     def receive(client, request, name, started, timeout=8):
         response = client.transport.receive(request, timeout=timeout)
         intervals.append({'name': name, 'start_ms': started, 'end_ms': time.time() * 1000})
@@ -56,14 +74,20 @@ def main():
         report['cases'].append({'name': name, 'passed': True, **details})
 
     try:
-        for label in ('A', 'B'):
+        windows = {}
+        for label, name, placement in [('A', 'Target', 'A'), ('C', 'Neighbour', 'B'), ('B', 'Witness', 'B')]:
             root = out / label
             root.mkdir()
-            exe = out / ('Target.exe' if label == 'A' else 'Witness.exe')
+            exe = out / (name + '.exe')
             shutil.copy2(args.fixture_binary, exe)
-            child = subprocess.Popen([str(exe), str(root), label])
+            child = subprocess.Popen([str(exe), str(root), placement])
             children.append((child, root))
-            wait_state(root, lambda value: value['ready'])
+            snapshot = wait_state(root, lambda value: value['ready'])
+            handle = int(snapshot['hwnd'])
+            owner = w.DWORD()
+            user.GetWindowThreadProcessId(handle, ctypes.byref(owner))
+            require(owner.value == child.pid, f'Unexpected owner for {name}')
+            windows[handle] = name
         target_root, witness_root = out / 'A', out / 'B'
         target, witness = out / 'Target.exe', out / 'Witness.exe'
         holder = AppClient(args.dtw.resolve(), out / 'foreground-actor')
@@ -73,12 +97,20 @@ def main():
             'await app.focus();const end=Date.now()+25000;while(Date.now()<end){};return "owned-foreground-setup";')
         wait_state(witness_root, lambda value: value['foreground'])
         require(not state(target_root)['foreground'], 'background target setup was not established')
+        initial_order = stack(windows)
+        report['initial_stack'] = initial_order
+        require(initial_order.index('Neighbour') < initial_order.index('Target'), initial_order)
         client = AppClient(args.dtw.resolve(), out / 'target-protocol')
         clients.append(client)
+        image = client.capture(target, 'before-keyboard')['view']['image']
+        bounds, editor = image['bounds'], state(target_root)['editor_bounds']
+        editor_point = {'x': (editor['x'] + editor['width'] / 2 - bounds[0]) * image['width'] / bounds[2],
+                        'y': (editor['y'] + editor['height'] / 2 - bounds[1]) * image['height'] / bounds[3]}
         before = position()
         payload = 'Windows scope 中文🙂\r\nsecond café 🚀'
         result, _ = client.execute(target,
             'await app.click({selector:{role:"button",text:"Increment"}});'
+            'await app.click(' + json.dumps(editor_point) + ');'
             'await app.keypress("CTRL+A");await app.typeText(' + json.dumps(payload) + ');await app.keypress("CTRL+S");')
         final = wait_state(target_root, lambda value: value['increments'] == 1 and value['saves'] == 1 and value['text'] == payload)
         require((target_root / 'saved.txt').read_bytes().decode('utf-8') == payload, 'saved bytes differ')
@@ -88,6 +120,14 @@ def main():
         wait_state(target_root, lambda value: not value['foreground'])
         require(position() == before, 'keyboard script left physical cursor displaced')
         record('automatic_keyboard_script_and_exact_original_return', response=result)
+        # Normal foreground activation raises Target. Returning focus to
+        # Witness must leave Target in front of Neighbour.
+        returned_order = stack(windows)
+        report['returned_stack'] = returned_order
+        require(returned_order.index('Target') < returned_order.index('Neighbour'),
+                {'initial_stack': initial_order, 'returned_stack': returned_order})
+        record('focus_return_preserves_windows_activation_order',
+               initial_stack=initial_order, returned_stack=returned_order)
 
         view = client.capture(target, 'before-pointer')['view']['image']
         bounds, point = view['bounds'], state(target_root)['pad_point']

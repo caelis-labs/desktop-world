@@ -132,6 +132,7 @@ def main():
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     marker = 'DTW Browser Audit ' + out.name
+    destination_marker = marker + ' Destination ready'
     neighbour_marker = 'DTW Unchanged Neighbour ' + out.name
     observed = {'text': '', 'clicks': 0, 'scroll_x': 0, 'scroll_y': 0}
     neighbour_state = {'text': 'NEIGHBOUR_SENTINEL', 'clicks': 0, 'scroll_x': 0, 'scroll_y': 0, 'input_events': 0}
@@ -157,7 +158,14 @@ window.onload=()=>{e.focus();publish({ready:true,dpr:devicePixelRatio,text:e.val
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            body = (neighbour_html if self.path.startswith('/neighbour') else html).encode('utf-8')
+            if self.path == '/delayed-destination':
+                with lock:
+                    observed['destination_requests'] = observed.get('destination_requests', 0) + 1
+                time.sleep(.75)
+                page = html.replace(marker, destination_marker).replace('ready:true', 'ready:true,destination_ready:true')
+            else:
+                page = neighbour_html if self.path.startswith('/neighbour') else html
+            body = page.encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'text/html; charset=utf-8')
             self.send_header('Content-Length', str(len(body)))
@@ -283,8 +291,26 @@ window.onload=()=>{e.focus();publish({ready:true,dpr:devicePixelRatio,text:e.val
         report['browser_pid']=browser_pid
         client = AppClient(args.dtw.resolve(), out / 'protocol')
         case('chrome_look_capture', 'await app.capture({full:true});')
+        destination = f'http://127.0.0.1:{server.server_address[1]}/delayed-destination'
+        case('chrome_same_script_navigation_readback',
+             'await app.keypress("CTRL+L");await app.typeText(' + json.dumps(destination) + ');'
+             'await app.keypress("ENTER");const after=await app.look();'
+             'if(!after.windows.some(w=>w.title?.startsWith(' + json.dumps(destination_marker) + ')))'
+             'throw Error("Readback preceded the destination page");',
+             lambda s: s.get('destination_ready') and s['destination_requests'] == 1)
+        case('chrome_element_id_across_filters',
+             'const filter={role:"button",text:"Audit save"};'
+             'const first=(await app.look(filter)).elements.find(e=>e.name==="Audit save")?.id;'
+             'await app.look({text:"Audit Unicode editor"});'
+             'const next=(await app.look(filter)).elements.find(e=>e.name==="Audit save")?.id;'
+             'if(!first||first!==next)throw Error("Browser element ID changed across filters");')
         case('chrome_empty_unicode_typing', 'await app.typeText("Empty 中文 😀");', lambda s: s['text'] == 'Empty 中文 😀')
-        case('chrome_ascii_typing', 'await app.keypress("CTRL+A");await app.typeText("owned ASCII");', lambda s: s['text'] == 'owned ASCII')
+        case('chrome_guarded_ascii_typing',
+             'await app.keypress("CTRL+A");'
+             'const editor=(await app.look({text:"Audit Unicode editor"})).elements.find(e=>e.name==="Audit Unicode editor");'
+             'if(!editor)throw Error("Owned editor was not observed");'
+             'await app.typeText({target:editor.id,text:"owned ASCII"});',
+             lambda s: s['text'] == 'owned ASCII')
         payload = 'Chrome 中文 😀\nowned page'
         case('chrome_unicode_typing', 'await app.keypress("CTRL+A");await app.typeText(' + json.dumps(payload) + ');', lambda s: s['text'] == payload)
         case('chrome_terminal_caret_emoji', 'await app.keypress("END");await app.typeText("🚀");', lambda s: s['text'] == payload + '🚀')

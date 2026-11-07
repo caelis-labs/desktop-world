@@ -50,17 +50,6 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
                     compact["effects"]["acknowledgements"] = json!(acknowledgements);
                 }
             }
-            if summary["focus_preparation"].is_object() {
-                if !compact["effects"].is_object() {
-                    compact["effects"] = json!({});
-                }
-                let mut preparation = summary["focus_preparation"].clone();
-                preparation.as_object_mut().unwrap().remove("evidence");
-                if preparation["interrupted"] == 0 {
-                    preparation.as_object_mut().unwrap().remove("interrupted");
-                }
-                compact["effects"]["focus_preparation"] = preparation;
-            }
         }
         // Routes and borrow settlement remain in the retained diagnostic
         // ledger. Errors below still expose an unconfirmed cleanup.
@@ -534,7 +523,7 @@ mod tests {
     }
 
     #[test]
-    fn public_focus_preparation_counts_every_receipt_without_routing_or_double_counting() {
+    fn public_effects_include_only_the_requested_action() {
         let steps = ["dispatched", "unknown"].into_iter().enumerate().map(|(index, dispatch)| {
             json!({"number":index + 1,"operation":"scene.click","status":"completed","error":null,
                 "receipt":{"outcome":{"dispatch":"not_dispatched","evidence":{"kind":"unverified"}},"interruption":null},
@@ -546,17 +535,19 @@ mod tests {
         }).collect();
         let mut reply = successful_execution(steps);
         reply.data["value"] = json!({"agent_protocol":true});
+        let diagnostics = summarize(reply.data["script"]["steps"].as_array().unwrap());
         let projected = execution(reply);
         assert_eq!(
             projected.data["effects"]["dispatch"],
             json!({"not_dispatched":2})
         );
         assert_eq!(
-            projected.data["effects"]["focus_preparation"],
+            diagnostics["focus_preparation"],
             json!({
             "attempted":2,"dispatch":{"dispatched":1,"unknown":1},
-            "interrupted":1})
+            "evidence":{"unverified":2},"interrupted":1})
         );
+        assert!(projected.data["effects"].get("focus_preparation").is_none());
         assert!(!projected.data.to_string().contains("private_route"));
         assert!(!projected.data.to_string().contains("private_reason"));
     }

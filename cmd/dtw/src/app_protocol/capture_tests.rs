@@ -106,8 +106,15 @@ fn capture_stops_after_unproven_or_rejected_focus_without_a_second_read() {
             evidence: EffectEvidence::Unverified,
             error: None,
         },
+        ActionOutcome {
+            dispatch: DispatchState::NotDispatched,
+            delivery: None,
+            evidence: EffectEvidence::Unverified,
+            error: None,
+        },
     ] {
         let (owner, backend) = coordinator();
+        let skipped = outcome.dispatch == DispatchState::NotDispatched && outcome.error.is_none();
         {
             let mut model = backend.0.model.lock().unwrap();
             model.capture_errors.push_back(occluded());
@@ -120,6 +127,9 @@ fn capture_stops_after_unproven_or_rejected_focus_without_a_second_read() {
         let resolution = &reply.data["script"]["steps"][1]["resolution"];
         assert_eq!(resolution["status"], "focus_failed");
         assert!(resolution["focus_preparation"]["receipt"].is_object());
+        if skipped {
+            assert_eq!(resolution["error"]["code"], "windows_capture_occluded");
+        }
     }
 }
 

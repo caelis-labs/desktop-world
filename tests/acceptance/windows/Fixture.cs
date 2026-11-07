@@ -317,6 +317,15 @@ namespace DtwWindowsSmoke {
         }
     }
 
+    sealed class ReviewOverlay : Form {
+        protected override bool ShowWithoutActivation { get { return true; } }
+        public ReviewOverlay(Point location) {
+            StartPosition=FormStartPosition.Manual;Location=location;
+            FormBorderStyle=FormBorderStyle.None;ClientSize=new Size(260,28);
+            ShowInTaskbar=false;Controls.Add(new Label{Text="Review status overlay",Dock=DockStyle.Fill});
+        }
+    }
+
     public sealed class Workbench : Form {
         [StructLayout(LayoutKind.Sequential)] struct ScreenPoint { public int X, Y; }
         [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
@@ -399,7 +408,15 @@ namespace DtwWindowsSmoke {
             reviewCode=new ReviewEdit{AccessibleName="Review code",Location=new Point(12,563),Size=new Size(330,26),Visible=false};
             var submit=Button("Submit review",12,600,220);submit.Visible=false;
             var loading=new Timer{Interval=750};
+            ReviewOverlay overlay=null;
+            var overlayTimer=new Timer{Interval=5000};
+            Action clearOverlay=delegate {
+                overlayTimer.Stop();
+                if(overlay!=null){overlay.Close();overlay=null;}
+            };
+            overlayTimer.Tick+=delegate{clearOverlay();};
             Action<bool> start=delegate(bool drop) {
+                clearOverlay();
                 loading.Stop();reviewCode.Hide();submit.Hide();
                 reviewCode.Text="";reviewCode.DropNext=drop;
                 Text="DTW Computer Use Windows - Loading review";
@@ -408,6 +425,8 @@ namespace DtwWindowsSmoke {
             loading.Tick+=delegate {
                 loading.Stop();reviewCode.Show();submit.Show();reviewCode.Focus();
                 Text="DTW Computer Use Windows - Review form ready";
+                overlay=new ReviewOverlay(PointToScreen(new Point(370,635)));
+                overlay.Show(this);overlayTimer.Start();
                 formReady++;Event("review_ready");Publish();
             };
             load.Click+=delegate{start(false);};inject.Click+=delegate{start(true);};
@@ -420,7 +439,7 @@ namespace DtwWindowsSmoke {
                 if(e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;save();}
             };
             Controls.Add(load);Controls.Add(inject);Controls.Add(reviewCode);Controls.Add(submit);
-            FormClosed+=delegate{loading.Dispose();};
+            FormClosed+=delegate{loading.Dispose();overlayTimer.Dispose();};
         }
 
         void BuildParity() {

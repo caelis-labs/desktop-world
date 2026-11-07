@@ -4,6 +4,9 @@ use base64::Engine;
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
 
+const ACTION_READ_DELAY: Duration = Duration::from_millis(1_200);
+const MAX_DISPLAY_IDENTITIES: usize = 32_768;
+
 #[derive(Default)]
 pub(super) struct SceneState {
     baseline: Option<Value>,
@@ -22,6 +25,7 @@ pub(super) struct SceneState {
     viewport: Option<([f64; 4], String, [f64; 4])>,
     window_wait_pending: bool,
     pending_new_window: Option<std::collections::HashSet<String>>,
+    read_after: Option<Instant>,
 }
 struct DisplayIdentity {
     id: String,
@@ -65,7 +69,7 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
         "scene.setValue" => &["target", "selector", "value"],
         "scene.move" => &["x", "y", "unit"],
         "scene.drag" => &["path", "unit"],
-        "scene.typeText" => &["text"],
+        "scene.typeText" => &["text", "target"],
         "scene.keypress" => &["keys"],
         "scene.scroll" => &["delta_y", "delta_x", "x", "y", "unit"],
         "scene.quit" | "scene.focus" => &[],
@@ -100,6 +104,16 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
         {
             return Err(error("invalid_arguments", "setValue requires one target or selector and a string value (up to 16 KiB, no NUL)"));
         }
+    }
+    if op == "scene.typeText"
+        && args
+            .get("target")
+            .is_some_and(|target| target.as_str().is_none_or(str::is_empty))
+    {
+        return Err(error(
+            "invalid_arguments",
+            "typeText target must be an observed element ID",
+        ));
     }
     if op == "scene.wait" {
         if let Some(ms) = args.get("ms") {
@@ -416,6 +430,15 @@ impl<B: Backend + 'static> Coordinator<B> {
         if let Err(e) = validate(op, args) {
             return failed(e);
         }
+        if matches!(op, "scene.look" | "scene.capture" | "scene.after")
+            || (op == "scene.typeText" && args.get("target").is_none())
+        {
+            // An earlier click or shortcut can transfer editing focus
+            // asynchronously. Let that transition run before implicit typing.
+            if let Err(error) = self.scene_wait_for_update(id, deadline) {
+                return Work::read_error(error);
+            }
+        }
         if matches!(op, "scene.look" | "scene.capture" | "scene.after") {
             return self.scene_look(
                 id,
@@ -455,7 +478,8 @@ impl<B: Backend + 'static> Coordinator<B> {
         // Known sequential steps can open a new dialog/window in the same
         // script. Resolve implicit input routing from a fresh app inventory;
         // explicit semantic IDs and pixels remain bound to what was observed.
-        let implicit = matches!(op, "scene.typeText" | "scene.keypress" | "scene.focus")
+        let implicit = matches!(op, "scene.keypress" | "scene.focus")
+            || (op == "scene.typeText" && args.get("target").is_none())
             || (op == "scene.scroll" && args.get("x").is_none())
             || (matches!(op, "scene.click" | "scene.setValue") && args.get("selector").is_some());
         if implicit && self.runtime.instances().is_empty() {
@@ -654,6 +678,19 @@ impl<B: Backend + 'static> Coordinator<B> {
                     }
                 }
             }
+        } else if op == "scene.typeText" && args.get("target").is_some() {
+            let Some((node, _)) = self.scene_target(&args["target"]) else {
+                return failed(error(
+                    "target_changed",
+                    "Text target is unavailable; observe the field again",
+                ));
+            };
+            let node = match self.scene_refresh_target(id, node, deadline) {
+                Ok(node) => node,
+                Err(error) => return failed(error),
+            };
+            options = json!({"window_ref":node["window_ref"],"observation_ref":node["observation_ref"],
+                "element_ref":node["element_ref"],"text":args["text"]});
         } else if op == "scene.scroll" && (args.get("x").is_some() || args.get("y").is_some()) {
             let frame = match self.scene_validate_frame(
                 id,
@@ -709,6 +746,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 .is_some_and(|r| r.outcome.dispatch != DispatchState::NotDispatched)
         {
             state.scene.pending_new_window = Some(state.windows.keys().cloned().collect());
+            state.scene.read_after = Some(Instant::now() + ACTION_READ_DELAY);
         }
         if !follows_scene
             && work
@@ -744,6 +782,24 @@ impl<B: Backend + 'static> Coordinator<B> {
         }
         work
     }
+    fn scene_wait_for_update(&self, id: &str, deadline: Instant) -> Result<(), Error> {
+        let until = self.state.lock().unwrap().scene.read_after;
+        if let Some(until) = until {
+            while Instant::now() < until {
+                self.check_script_wait(id, deadline)?;
+                std::thread::sleep(
+                    Duration::from_millis(20).min(
+                        until
+                            .min(deadline)
+                            .saturating_duration_since(Instant::now()),
+                    ),
+                );
+            }
+            self.check_script_wait(id, deadline)?;
+            self.state.lock().unwrap().scene.read_after = None;
+        }
+        Ok(())
+    }
     fn scene_wait(&self, id: &str, args: &Value, deadline: Instant) -> Work {
         let delay = args["ms"].as_u64();
         let budget = delay
@@ -757,8 +813,18 @@ impl<B: Backend + 'static> Coordinator<B> {
             }
         }
         let filtered = query != json!({});
-        let title = args["title"].as_str().map(str::to_lowercase);
+        if let Some(title) = args["title"].as_str() {
+            query["_wait_title"] = json!(title.to_lowercase());
+        }
+        if delay.is_none() {
+            query["_wait_view"] = json!(true);
+        }
         let stable = args["window"] == "stable";
+        let earliest_sample = if stable && !filtered && args.get("title").is_none() {
+            self.state.lock().unwrap().scene.read_after
+        } else {
+            None
+        };
         let mut previous = None;
         let mut last: Option<Work> = None;
         loop {
@@ -776,7 +842,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 work.completed.value = last.and_then(|work| work.completed.value);
                 return work;
             }
-            if delay.is_none() {
+            if delay.is_none() && earliest_sample.is_none_or(|at| Instant::now() >= at) {
                 let work = self.scene_look(id, &query, false, false, 0, deadline);
                 if work.completed.error.is_some() {
                     return work;
@@ -791,14 +857,10 @@ impl<B: Backend + 'static> Coordinator<B> {
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .find(|row| {
+                    .next()
+                    .filter(|row| {
                         row["visible"] == true
                             && row["bounds"].is_array()
-                            && title.as_ref().is_none_or(|title| {
-                                row["title"]
-                                    .as_str()
-                                    .is_some_and(|s| s.to_lowercase().contains(title))
-                            })
                             && (!filtered
                                 || snapshot["elements"].as_array().into_iter().flatten().any(
                                     |element| {
@@ -811,11 +873,14 @@ impl<B: Backend + 'static> Coordinator<B> {
                     });
                 if let Some(row) = matched {
                     if !stable || previous.as_ref() == Some(row) {
+                        self.state.lock().unwrap().scene.read_after = None;
                         return work;
                     }
                 }
                 previous = matched.cloned();
-                last = Some(work);
+                if snapshot.get("running").is_some() {
+                    last = Some(work);
+                }
             }
             let next = if stable {
                 150
@@ -1453,6 +1518,30 @@ impl<B: Backend + 'static> Coordinator<B> {
         };
         let mut rows = inventory["windows"].as_array().cloned().unwrap_or_default();
         rows = ordered(rows);
+        let wait_view = args["_wait_view"] == true;
+        let wait_window = if let Some(title) = args["_wait_title"].as_str() {
+            let mut matches = rows.iter().filter(|row| {
+                row["visible"] == true
+                    && row["scene"]["semantic_candidate"] != false
+                    && row["title"]
+                        .as_str()
+                        .is_some_and(|name| name.to_lowercase().contains(title))
+            });
+            let Some(row) = matches.next() else {
+                // The destination does not exist yet. Avoid reading the old
+                // window's tree on every poll.
+                return data(json!({"windows":[]}));
+            };
+            if matches.next().is_some() {
+                return failed(error(
+                    "ambiguous_window",
+                    "Several visible windows match the wait title; provide a more specific title",
+                ));
+            }
+            row["window_ref"].as_str().map(str::to_owned)
+        } else {
+            None
+        };
         let visible: Vec<_> = rows
             .iter()
             .filter(|r| r["visible"] == true)
@@ -1471,6 +1560,12 @@ impl<B: Backend + 'static> Coordinator<B> {
             )
             .chain(rows.iter().filter(|row| row["visible"] != true))
             .filter(|row| row["scene"]["semantic_candidate"] != false)
+            .filter(|row| {
+                (!wait_view || row["visible"] == true)
+                    && wait_window
+                        .as_deref()
+                        .is_none_or(|window| row["window_ref"] == window)
+            })
             .take(32)
             .cloned()
             .collect();
@@ -1596,6 +1691,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 if state.scene.retained_ids.len() > 4096 {
                     state.scene.retained_ids.clear();
                 }
+                let window_ref = row["window_ref"].as_str().unwrap();
                 for (element, observation) in candidates {
                     if elements.len() >= 80 {
                         semantic["complete"] = json!(false);
@@ -1607,23 +1703,13 @@ impl<B: Backend + 'static> Coordinator<B> {
                         .as_str()
                         .filter(|credential| rebinds.get(*credential) == Some(&1));
                     let retained_key = retained.map(|credential| {
-                        format!(
-                            "{}\0{}\0{}",
-                            row["window_ref"].as_str().unwrap(),
-                            credential,
-                            element["role"]
-                        )
+                        format!("{}\0{}\0{}", window_ref, credential, element["role"])
                     });
                     let key = element["identity"]
                         .as_str()
                         .filter(|identity| identities.get(*identity) == Some(&1))
                         .map(|identity| {
-                            format!(
-                                "{}\0{}\0{}",
-                                row["window_ref"].as_str().unwrap(),
-                                identity,
-                                element["role"]
-                            )
+                            format!("{}\0{}\0{}", window_ref, identity, element["role"])
                         });
                     let existing = retained_key
                         .as_ref()
@@ -1644,14 +1730,14 @@ impl<B: Backend + 'static> Coordinator<B> {
                         });
                     let target = existing.unwrap_or_else(|| {
                         state.scene.next_element += 1;
-                        let target = format!(
-                            "{}.e{}",
-                            window_ids[row["window_ref"].as_str().unwrap()],
-                            state.scene.next_element
-                        );
+                        let target =
+                            format!("{}.e{}", window_ids[window_ref], state.scene.next_element);
                         target
                     });
-                    if let Some(key) = key {
+                    if let Some(key) = key.filter(|key| {
+                        state.scene.element_ids.len() < MAX_DISPLAY_IDENTITIES
+                            || state.scene.element_ids.contains_key(key)
+                    }) {
                         let retained_identity = retained.map(str::to_owned).or_else(|| {
                             state
                                 .scene
@@ -1723,6 +1809,17 @@ impl<B: Backend + 'static> Coordinator<B> {
                 public_query.insert("target".into(), target.clone());
             }
             semantic["query"] = Value::Object(public_query);
+        }
+        if wait_view {
+            let primary = active
+                .as_ref()
+                .and_then(|row| row["window_ref"].as_str())
+                .or(wait_window.as_deref());
+            if let Some(position) =
+                primary.and_then(|window| rows.iter().position(|row| row["window_ref"] == window))
+            {
+                rows[..=position].rotate_right(1);
+            }
         }
         let pixel_mode = explicit_pixels
             || (after && self.state.lock().unwrap().scene.pixels)
@@ -1841,15 +1938,21 @@ impl<B: Backend + 'static> Coordinator<B> {
         state.scene.observed = Some(current);
         state.scene.projected = Some(view);
         state.scene.active = active.and_then(|r| r["window_ref"].as_str().map(str::to_owned));
-        // This bounded label cache carries no input authority. Exact native
-        // object credentials can retain their display IDs across filters;
-        // omitted nodes themselves are still retired below. Weak identities
-        // require continuous observation and cannot revive a removed target.
-        state.scene.element_ids.retain(|_, cached| {
-            nodes
-                .iter()
-                .any(|row| row["id"].as_str() == Some(cached.id.as_str()))
-        });
+        // Keep display IDs across filters, partial reads and observations of
+        // other windows. A complete unfiltered read can prove which IDs left
+        // this window. The cache never supplies a native action binding.
+        if semantic["complete"] == true && semantic.get("query").is_none() {
+            if let Some(window) = state.scene.active.as_deref() {
+                let prefix = format!("{window}\0");
+                let present = nodes
+                    .iter()
+                    .filter_map(|row| row["id"].as_str())
+                    .collect::<std::collections::HashSet<_>>();
+                state.scene.element_ids.retain(|key, cached| {
+                    !key.starts_with(&prefix) || present.contains(cached.id.as_str())
+                });
+            }
+        }
         // Cache only native-renewable handles, with bounded metadata and no
         // value payloads. Inputs always pass scene_refresh_target again; text
         // pages retain their original read-only content observation.

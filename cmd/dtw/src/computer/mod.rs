@@ -926,6 +926,19 @@ pub trait Backend: Send + Sync {
     ) -> ActionOutcome {
         ActionOutcome::rejected(Error::UnsupportedCapability)
     }
+    fn supports_type_text_target(&self) -> bool {
+        false
+    }
+    fn type_text_at(
+        &self,
+        _target: &WindowTarget,
+        _binding: &Self::Binding,
+        _element: ElementId,
+        _text: &str,
+        _call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        ActionOutcome::rejected(Error::UnsupportedCapability)
+    }
     fn pointer_gesture(
         &self,
         _target: &WindowTarget,

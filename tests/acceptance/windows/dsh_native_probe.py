@@ -82,16 +82,18 @@ DSH Windows 中文🙂
             if protocol:
                 if args.mode == 'protocol-script':
                     goal = f"""仅操作自有应用 {exe}。先用 apps 找到它。
-通过一次 exec 原样执行下列脚本（不添加动作），然后再通过一次 exec 原样执行故障对照。
-如果故障对照报错，保留工具结果，停止输入，不重试。两个用例是不同的业务操作。
+按顺序通过三次 exec 各原样执行一个脚本，不添加动作。两项对照预期各自报错。
+每项报错后保留工具结果，结束该用例，不要重试。三个用例是独立操作。
 成功脚本：
 {protocol_review.POSITIVE}
-故障对照：
+错误字段对照：
+{protocol_review.MISMATCH}
+字符丢失对照：
 {protocol_review.FAULT}"""
                 else:
-                    goal = f"""仅操作自有应用 {exe}。打开普通审阅表单，等它可用后，
+                    goal = f"""仅操作自有应用 {exe} 的普通审阅表单。
 通过键盘填写 Review code 为 {protocol_review.CODE}，提交恰好一次。
-无需测试故障注入、修改文档或关闭应用。"""
+任务范围只有审阅表单。不要打开或修改文档、触发故障注入或关闭应用。"""
             if args.mode == 'parity':
                 goal = f'''仅操作自有应用 {exe}，标题 DTW Computer Use Windows。
 本轮只验证原生拖拽、相邻分区滚动和同进程 peer 生命周期，不要修改文档、提交、勾选或打开文件面板。
@@ -188,9 +190,9 @@ DSH Windows 中文🙂
             state = wait(lambda: fixture.state())
             report['final_state'] = state
             fault = args.mode == 'protocol-script'
-            protocol_review.assert_business(state, fault=fault)
             journal = out / 'dsh/acp.jsonl'
             report['metrics'] = summarize(journal)
+            protocol_review.assert_business(state, fault=fault)
             replies, sources = [], []
             for event in client.events:
                 update = event.get('params', {}).get('update', {})
@@ -213,8 +215,11 @@ DSH Windows 中文🙂
                 for ack in r.get('effects', {}).get('acknowledgements', []))), None)
             require(confirmed, 'DSH did not expose a confirmed text input receipt')
             if fault:
-                require(sources == [protocol_review.POSITIVE, protocol_review.FAULT],
-                        'DSH did not execute the two fixed acceptance scripts')
+                require(sources == [protocol_review.POSITIVE, protocol_review.MISMATCH, protocol_review.FAULT],
+                        'DSH did not execute the three fixed acceptance scripts')
+                mismatches = [r for r in replies if r.get('error', {}).get('code') == 'text_focus_mismatch']
+                require(len(mismatches) == 1, 'DSH did not expose the expected single focus mismatch')
+                protocol_review.assert_mismatch(mismatches[0])
                 failures = [r for r in replies if r.get('error', {}).get('code') == 'text_delivery_unconfirmed']
                 require(len(failures) == 1, 'DSH did not expose the expected single typed input failure')
                 protocol_review.assert_fault(failures[0])
