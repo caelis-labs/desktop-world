@@ -124,7 +124,7 @@ def main():
 先从当前自有 window 的 document 元素使用 setValue({{target:观察到的ID,value:''}}) 完整清空文档（本机记事本全选替换可能保留尾部真实换行，不能将该换行裁掉作成功）。在同一 exec 内使用 typeText 输入完整以下两行，再 Ctrl+S 保存。不要靠连续按 Enter 拼接两行：
 Windows 实机验收 中文🙂
 第二行 café 🚀
-3. 只关闭这个自有记事本文档，回到原空白 Untitled 标签，重新打开 {destination}，通过实际原生读取及截图核对恰好两行、中文和 emoji，以及没有额外尾部换行，随后只关闭这个自有文档，保留空白窗口。每次输入前仍需在同个 exec 核对自有窗口标题。Document 元素 ID 必须属于已核对的 windows[0].id，不得使用其他窗口的元素。
+3. 第一次保存成功后，只关闭这个自有记事本文档，通过新的 look 确认回到原空白 Untitled 标签，保留空白窗口。每次输入前仍需在同个 exec 核对自有窗口标题。Document 元素 ID 必须属于已核对的 windows[0].id，不得使用其他窗口的元素。本阶段结束后，监督器会另发一轮“重新打开并核对”的任务；保存前后读取不算重新打开。
 4. 回到自有 Explorer 窗口，核对新文件名存在而旧文件名消失，最后只关闭这个自有 Explorer 窗口。不要使用 app.quit() 关闭 Explorer 整个实例，因为它还管理用户其他窗口和桌面。
 若记事本出现其他用户文档或无法证明窗口归属，停止相关输入并报告。派发/消费不确定不得重放，先做新的只读观察。报告实际完成与错误。'''
         (out / 'prompt.txt').write_text(prompt, encoding='utf-8')
@@ -138,6 +138,23 @@ Windows 实机验收 中文🙂
         report['saved_bytes'] = destination.read_bytes().hex()
         after = windows()
         require(not any(row['hwnd'] == owned['hwnd'] for row in after), 'Owned Explorer window was not closed by the model')
+        require(any(row['hwnd'] == args.owned_notepad_window and row['title'] == 'Untitled - Notepad'
+            for row in after), 'First owned document close was not independently observed')
+        reopen_prompt = f'''继续同一会话，进行单独的真实重新打开验收。文件 {destination} 已由上一阶段保存且文档已关闭。
+只操作本次准备的空白 Untitled - Notepad 窗口；其他用户窗口、标签和文件必须保留。业务仍只准 desktop-world apps/exec，禁止文件系统、shell、HTTP、其他 computer-use 等旁路。
+每个有输入的 exec 开头先 await app.look({{full:true}})，核对 windows[0].title 是当前预期的自有标题，否则抛错停止。先从 Untitled - Notepad 用 Ctrl+O 打开上述文件；模态出现后先做新的只读观察核对 Open 及后面的自有 Untitled 窗口，再设置 File name 并使用观察到的 Open 按钮打开。
+等待新观察确认自有 验收-137.txt - Notepad 标题和 document。完整 readText 到 UTF-16 EOF，并 capture 通过实际图片核对恰好两行：
+Windows 实机验收 中文🙂
+第二行 café 🚀
+Windows UIA 可能返回 CR、CRLF 或 LF，请仅在比较文本时统一换行，不得改写文件。确认没有额外尾部换行。
+不要重打、重保存或修改内容。核对后只 Ctrl+W 关闭这个自有文档，通过新的 look 确认回到原空白 Untitled 标签，保留空白窗口。不得调用 Notepad app.quit()、切换用户文档或关闭其他窗口。报告实际错误。'''
+        (out / 'reopen-prompt.txt').write_text(reopen_prompt, encoding='utf-8')
+        started = time.time() * 1000
+        report['reopen_result'] = client.call('session/prompt', {'sessionId': session,
+            'prompt': [{'type': 'text', 'text': reopen_prompt}]}, timeout=600)
+        report['reopen_interval'] = {'start_ms': started, 'end_ms': time.time() * 1000}
+        require(destination.read_bytes().hex() == report['saved_bytes'], 'Read-only reopening modified saved bytes')
+        after = windows()
         require(not any(destination.name in row['title'] and row['class'].casefold() == 'notepad' for row in after),
             'Owned Notepad document was not closed by the model')
         require(all(any(row['hwnd'] == hwnd for row in after)
@@ -189,8 +206,9 @@ Windows 实机验收 中文🙂
             explorer_handle.close()
         (out / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
         (out / 'rpc-intervals.json').write_text(json.dumps([
-            {'name': 'actual-DSH-real-apps-prompt', **report['prompt_interval']}
-        ] if 'prompt_interval' in report else [], indent=2), encoding='utf-8')
+            {'name': 'actual-DSH-real-apps-' + name, **report[name]}
+            for name in ('prompt_interval', 'reopen_interval') if name in report
+        ], indent=2), encoding='utf-8')
         print(json.dumps({key: report.get(key) for key in ('passed', 'error')}), flush=True)
     require(report['passed'], report)
 
