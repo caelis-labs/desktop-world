@@ -263,7 +263,7 @@ class NativeExtendedCases:
             return state if state['pid'] != old_pid and state['ready'] else None
         state = wait_until(new_state)
         self.fixture.child = ProcessObserver(state['pid'], state.get('process_birth'), self.client, self.app)
-        require(restarted.get('view', {}).get('reset') is True, restarted)
+        require(restarted.get('view', {}).get('kind') == 'full', restarted)
         require(self.native()['note'] == 'Initial native note' and self.native()['saves'] == 0, self.native())
         self.capture('n15-restarted-baseline')
         return {'old_pid': old_pid, 'new_pid': state['pid'], 'cancelled_note': value,

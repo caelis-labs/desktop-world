@@ -93,14 +93,6 @@ def require_route(record, operation, route):
     return outcome['delivery']
 
 
-def require_strict_focus_rejection(outcome):
-    delivery = outcome.get('delivery', {})
-    require(outcome.get('dispatch') == 'not_dispatched'
-            and outcome.get('error', {}).get('code') == 'foreground_required'
-            and delivery.get('route') is None and delivery.get('reason') == 'explicit_focus'
-            and delivery.get('foreground_borrowed') is False, outcome)
-
-
 def derived_fixture(base, controls):
     marker = 'switch next.trimmingCharacters(in:.whitespacesAndNewlines) {'
     state_marker = 'try? JSONSerialization.data(withJSONObject:value,options:[.sortedKeys]).write(to:output.appendingPathComponent("state.json"),options:.atomic)'
@@ -264,9 +256,9 @@ class ChildWatch:
                 'helper_seen': any(row['helpers'] for row in self.samples)}
 
 
-def open_client(binary, output, clients, policy='auto'):
+def open_client(binary, output, clients):
     output.mkdir()
-    mcp = Mcp(binary, output, mcp_args=('--input-policy', policy)); clients.append(mcp)
+    mcp = Mcp(binary, output); clients.append(mcp)
     mcp.rpc('initialize', {'protocolVersion': '2025-06-18', 'capabilities': {},
                           'clientInfo': {'name': 'cursor-overlay-probe', 'version': '1'}})
     mcp.notify('notifications/initialized')
@@ -326,9 +318,9 @@ def background(clients, fixtures, binary, observer, evidence):
     capture_isolation(a, target, observer, [first, second], proof['first_app']['capture'], evidence)
 
 
-def strict(binary, output, clients, target, observer, evidence):
-    mcp = open_client(binary, output/'mcp-strict', clients, 'background-only')
-    proof = evidence.setdefault('semantic_and_rejected_no_new_overlay', {})
+def semantic(binary, output, clients, target, observer, evidence):
+    mcp = open_client(binary, output/'mcp-semantic', clients)
+    proof = evidence.setdefault('semantic_no_new_overlay', {})
     watcher = ChildWatch(mcp, binary)
     try:
         replacement = 'DTW overlay semantic ' + uuid.uuid4().hex[:8]
@@ -345,18 +337,12 @@ return await app.press({{window_ref,observation_ref:p.observation_ref,element_re
         proof['semantic_effect'] = wait_until(lambda: (state if (state := target.state())['saved'] == replacement else None))
         require_route(proof['semantic']['record'], 'setValue', 'semantic')
         require_route(proof['semantic']['record'], 'press', 'semantic')
-        rejected, _ = mcp.execute(target.app_id, 'strict-focus', select()+'return await app.focus({window_ref});')
-        proof['rejected'] = rejected
-        require(rejected.get('error'), 'Strict explicit focus unexpectedly completed')
-        step = [s for s in rejected['script']['steps'] if s['operation'] == 'focus'][-1]
-        outcome = step['receipt']['outcome']
-        require_strict_focus_rejection(outcome)
     finally:
         proof['helper_observation'] = watcher.finish()
     require(not proof['helper_observation']['helper_seen'] and not owned_helpers(process_table(), mcp.child.pid, binary),
-            'Semantic or rejected action spawned an overlay helper')
+            'Semantic action spawned an overlay helper')
     if proof['helper_observation']['coverage'] != 'established':
-        observer.gaps.append({'case': 'semantic-strict', 'kind': 'no_spawn_sampling_unavailable'})
+        observer.gaps.append({'case': 'semantic', 'kind': 'no_spawn_sampling_unavailable'})
 
 
 def exclusions(clients, fixtures, binary, observer, evidence):
@@ -523,7 +509,7 @@ def target_changes(clients, target, binary, observer, evidence):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dtw', type=Path, required=True); parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--case', choices=['all', 'background', 'strict', 'exclusions', 'target-change', 'lifecycle', 'helper-recovery'], default='all')
+    parser.add_argument('--case', choices=['all', 'background', 'semantic', 'exclusions', 'target-change', 'lifecycle', 'helper-recovery'], default='all')
     args = parser.parse_args(); require(sys.platform == 'darwin', 'Requires macOS GUI')
     output = args.output.absolute(); output.mkdir(mode=0o700); binary = args.dtw.resolve(strict=True)
     fixtures_root = Path(__file__).resolve().parents[1]/'fixtures'
@@ -547,7 +533,7 @@ def main():
             fixtures.append(fixture); write_json(fixture.root/'fixture.json', {'background_probe': True, 'x': x})
             fixture.start()
         for name in ('mcp-a', 'mcp-b'): open_client(binary, output/name, clients)
-        cases = {'strict': lambda: strict(binary, output, clients, fixtures[0], observer, evidence),
+        cases = {'semantic': lambda: semantic(binary, output, clients, fixtures[0], observer, evidence),
                  'background': lambda: background(clients, fixtures, binary, observer, evidence),
                  'exclusions': lambda: exclusions(clients, fixtures, binary, observer, evidence),
                  'helper-recovery': lambda: helper_recovery(binary, output, clients, fixtures[0], observer, evidence),

@@ -17,6 +17,8 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app_client import artifact_identity, require
 from dsh_client import DshClient, MODEL_BOUNDARY
+from dsh_metrics import summarize
+from windows import protocol_review
 from windows.app_protocol_probe import wait, wait_state
 from windows.desktop_probe import children
 from windows.transport import ProcessHandle, read
@@ -28,8 +30,9 @@ def main():
     parser.add_argument('--package', type=Path, required=True)
     parser.add_argument('--fixture-binary', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--mode', choices=('native', 'stop', 'parity'), required=True)
+    parser.add_argument('--mode', choices=('native', 'stop', 'parity', 'protocol-script', 'protocol-goal'), required=True)
     args = parser.parse_args()
+    protocol = args.mode.startswith('protocol-')
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     package = args.package.resolve(strict=True)
@@ -48,13 +51,15 @@ def main():
     cancel_done = threading.Event()
     stop_errors = []
     try:
-        if args.mode in ('native', 'parity'):
+        if args.mode != 'stop':
             path = Path(__file__).resolve().parents[2] / 'fixtures/computer-use-app/fixture.py'
             spec = importlib.util.spec_from_file_location('dsh_owned_fixture', path)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             fixture = module.ComputerUseFixture(out / 'fixture', 'dsh-native')
             fixture.prepare(build=False)
+            if protocol:
+                (fixture.output / 'protocol-review').touch()
             if args.mode == 'parity':
                 (fixture.output / 'extended-parity').write_text('owned native parity setup', encoding='utf-8')
             fixture.build(compiled_native=args.fixture_binary)
@@ -74,6 +79,19 @@ DSH Windows 中文🙂
 再通过 Save document as 的原生面板保存到 {destination}，打开该文件，核验两行文字。
 再次另存为同一路径，在覆盖确认中选择否，然后取消 Save 面板；最终成功保存和成功打开应各为一次。
 最后捕获图片，依据图片核对两行排版，并报告实际完成情况与遇到的错误。'''
+            if protocol:
+                if args.mode == 'protocol-script':
+                    goal = f"""仅操作自有应用 {exe}。先用 apps 找到它。
+通过一次 exec 原样执行下列脚本（不添加动作），然后再通过一次 exec 原样执行故障对照。
+如果故障对照报错，保留工具结果，停止输入，不重试。两个用例是不同的业务操作。
+成功脚本：
+{protocol_review.POSITIVE}
+故障对照：
+{protocol_review.FAULT}"""
+                else:
+                    goal = f"""仅操作自有应用 {exe}。打开普通审阅表单，等它可用后，
+通过键盘填写 Review code 为 {protocol_review.CODE}，提交恰好一次。
+无需测试故障注入、修改文档或关闭应用。"""
             if args.mode == 'parity':
                 goal = f'''仅操作自有应用 {exe}，标题 DTW Computer Use Windows。
 本轮只验证原生拖拽、相邻分区滚动和同进程 peer 生命周期，不要修改文档、提交、勾选或打开文件面板。
@@ -166,6 +184,40 @@ DSH Windows 中文🙂
             report['recovery_state'] = wait_state(root, lambda value: value['saves'] == 1
                 and value['saved'] == 'fresh after DSH user cancel')
             require(report['recovery_state']['increments'] == 0, 'old suffix was replayed during recovery')
+        elif protocol:
+            state = wait(lambda: fixture.state())
+            report['final_state'] = state
+            fault = args.mode == 'protocol-script'
+            protocol_review.assert_business(state, fault=fault)
+            journal = out / 'dsh/acp.jsonl'
+            report['metrics'] = summarize(journal)
+            replies, sources = [], []
+            for event in client.events:
+                update = event.get('params', {}).get('update', {})
+                if client.tool_names.get(update.get('toolCallId')) != 'mcp__desktop-world__exec':
+                    continue
+                if update.get('sessionUpdate') == 'tool_call':
+                    sources.append(update.get('rawInput', {}).get('source', '').strip())
+                for part in update.get('content', []):
+                    content = part.get('content', {})
+                    if content.get('type') != 'text':
+                        continue
+                    try:
+                        value, _ = json.JSONDecoder().raw_decode(content['text'].removeprefix('Error: ').lstrip())
+                    except ValueError:
+                        continue
+                    if isinstance(value, dict) and 'execution_id' in value:
+                        replies.append(value)
+            confirmed = next((r for r in replies if any(
+                ack.get('confirmed') == 'text_present_in_focused_control'
+                for ack in r.get('effects', {}).get('acknowledgements', []))), None)
+            require(confirmed, 'DSH did not expose a confirmed text input receipt')
+            if fault:
+                require(sources == [protocol_review.POSITIVE, protocol_review.FAULT],
+                        'DSH did not execute the two fixed acceptance scripts')
+                failures = [r for r in replies if r.get('error', {}).get('code') == 'text_delivery_unconfirmed']
+                require(len(failures) == 1, 'DSH did not expose the expected single typed input failure')
+                protocol_review.assert_fault(failures[0])
         elif args.mode == 'parity':
             state = wait(lambda: fixture.state())
             report['final_state'] = state

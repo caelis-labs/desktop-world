@@ -30,9 +30,8 @@ def run(args):
     def publish():
         (root / 'report.json').write_text(json.dumps(proof, ensure_ascii=False, indent=2))
 
-    def connect(directory, *, background_only=False):
-        value = AppClient(args.dtw, root / directory,
-                          mcp_args=('--input-policy', 'background-only') if background_only else ())
+    def connect(directory):
+        value = AppClient(args.dtw, root / directory)
         clients.append(value)
         return value
 
@@ -118,9 +117,6 @@ def run(args):
             row = step('explicit_recovery_after_unkey_window',
                        'await app.focus(); await app.typeText("explicit-recovery");', borrowed=True)
             require(row['target']['native']['peers'][0]['note'] == 'explicit-recovery', row)
-        close_client(client)
-        client = connect('mcp-background-only', background_only=True)
-        step('strict_focus_refusal', 'await app.focus();', rejection='foreground_required')
         proof['functional_pass'] = True
     except BaseException as error:
         proof['failure'] = {'message': str(error), 'traceback': traceback.format_exc()}

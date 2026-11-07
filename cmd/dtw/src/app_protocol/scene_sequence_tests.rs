@@ -11,6 +11,7 @@ fn button(id: u64, identity: Option<&str>, name: &str) -> Element {
         value: None,
         enabled: Some(true),
         actions: vec!["press".into()],
+        focused: false,
         can_press: true,
     }
 }

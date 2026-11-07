@@ -1078,7 +1078,8 @@ impl Store {
             } else {
                 live_metadata_nodes += 1;
             }
-            let mut row = match element_row(&element, (q.elements.len() + 1) as u64, cached) {
+            let mut row = match element_row(&element, (q.elements.len() + 1) as u64, cached, window)
+            {
                 Ok(row) => row,
                 Err(_) => {
                     q.gap.get_or_insert("native_read_gap".into());
@@ -1295,6 +1296,8 @@ impl Store {
         dispatched: &mut bool,
         route: &mut Option<&'static str>,
         preparation: &mut bool,
+        confirmed: &mut Option<&str>,
+        all_text_dispatched: &mut bool,
     ) -> Result<(), Error> {
         input::no_held_keys()?;
         let op = string(r, "operation")?;
@@ -1395,113 +1398,18 @@ impl Store {
         self.consume(target);
         self.validate(target)?;
         check(until)?;
-        if matches!(op, "click" | "scroll") {
-            self.prepare_pointer_surface(target, window, r, until, preparation)?;
-            if point.is_none() {
-                let bounds = unobstructed(window)?;
-                point = Some((
-                    bounds,
-                    POINT {
-                        x: bounds.left + (bounds.right - bounds.left) / 2,
-                        y: bounds.top + (bounds.bottom - bounds.top) / 2,
-                    },
-                    unsafe { GetDpiForWindow(window) },
-                    None,
-                    None,
-                ));
-            }
-            let (bounds, hit, dpi, expiry, rendered_size) = point.as_ref().unwrap();
-            let count = if op == "click" {
-                number(r, "count")?
-            } else {
-                1
-            };
-            let receiver = if op == "click" && r["button"] != "left" {
-                None
-            } else {
-                super::posted_mouse::Target::prepare(
-                    window,
-                    target.app.pid,
-                    *hit,
-                    op == "scroll",
-                    count,
-                )?
-            };
-            if let Some(receiver) = receiver {
-                let mut cursor = super::cursor::Emitter::new(&r["cursor_feedback"], target);
-                let verify = |state: &Self, initial_anchor: bool| -> Result<(), Error> {
-                    state.validate(target)?;
-                    check(until)?;
-                    input::no_held_keys()?;
-                    if !unsafe { IsWindowEnabled(window) }.as_bool()
-                        || expiry.is_some_and(|e| e <= Instant::now())
-                        || *dpi != unsafe { GetDpiForWindow(window) }
-                        || !equal_rect(*bounds, unobstructed(window)?)
-                        || rendered_size.is_some_and(|saved| {
-                            render_size(window).map_or(true, |now| now != saved)
-                        })
-                    {
-                        return Err(Error::StaleObservation);
-                    }
-                    if let Some((uia, element, root, before, region)) =
-                        semantic_anchor.as_ref().filter(|_| initial_anchor)
-                    {
-                        if !equal_rect(
-                            scroll_element_rect(uia, element, root, *bounds, *region, until)?,
-                            *before,
-                        ) {
-                            return Err(Error::StaleObservation);
-                        }
-                    }
-                    receiver.validate()
-                };
-                if op == "click" {
-                    for index in 0..count {
-                        verify(self, true)?;
-                        *route = Some("background");
-                        receiver.click(index == 1, until, dispatched)?;
-                        if let Some(cursor) = cursor.as_mut() {
-                            cursor.posted(hit.x, hit.y, true);
-                        }
-                        std::thread::sleep(Duration::from_millis(25));
-                    }
-                } else if let Some((x, y)) = scroll {
-                    let mut wheel_admitted = false;
-                    for (delta, horizontal, sign) in [(y, false, -1), (x, true, 1)] {
-                        for _ in 0..delta.unsigned_abs() {
-                            verify(self, !wheel_admitted)?;
-                            *route = Some("background");
-                            receiver.wheel(
-                                horizontal,
-                                delta.signum() as i32 * sign * 120,
-                                until,
-                                dispatched,
-                            )?;
-                            wheel_admitted = true;
-                            if let Some(cursor) = cursor.as_mut() {
-                                cursor.posted(hit.x, hit.y, false);
-                            }
-                            std::thread::sleep(Duration::from_millis(25));
-                        }
-                    }
-                }
-                return Ok(());
-            }
-            if r["input_policy"] == "background_only" {
-                return Err(Error::NativeFailure {
-                    code: "foreground_required".into(),
-                    message: "This mouse receiver or gesture requires foreground input".into(),
-                });
-            }
-        }
         *route = Some("foreground");
         let focus_receiver = keyboard_window(window, target.app.pid)?;
         if op == "focus" {
             self.focus_window(target, focus_receiver, until, dispatched)?;
+            *confirmed = Some("window_focused");
         } else {
             self.focus_window(target, focus_receiver, until, preparation)?;
         }
         self.input_boundary(target, window, until)?;
+        if matches!(op, "click" | "scroll") {
+            self.prepare_pointer_surface(target, window, until)?;
+        }
         let text_scalars: Vec<char> = if op == "typeText" {
             input_sequence::normalized_text(string(r, "text")?)
                 .chars()
@@ -1509,18 +1417,27 @@ impl Store {
         } else {
             Vec::new()
         };
-        let mut delivery = if text_scalars.iter().any(|scalar| scalar.len_utf16() > 1) {
-            let uia = self.uia()?;
-            let root = unsafe { uia.ElementFromHandle(window) }.map_err(failed)?;
-            let focused = unsafe { uia.GetFocusedElement() }.map_err(failed)?;
-            owned(&uia, &focused, &root, until)?;
-            let guard =
-                super::text_delivery::TextDelivery::new(uia.clone(), focused.clone(), window)?;
-            owned(&uia, &focused, &root, until)?;
-            self.input_boundary(target, window, until)?;
-            Some(guard)
-        } else {
+        let mut delivery = if text_scalars.is_empty() {
             None
+        } else {
+            let must_verify = text_scalars.iter().any(|scalar| scalar.len_utf16() > 1);
+            let guard = (|| {
+                let uia = self.uia()?;
+                let root = unsafe { uia.ElementFromHandle(window) }.map_err(failed)?;
+                let focused = unsafe { uia.GetFocusedElement() }.map_err(failed)?;
+                owned(&uia, &focused, &root, until)?;
+                let guard =
+                    super::text_delivery::TextDelivery::new(uia.clone(), focused.clone(), window)?;
+                owned(&uia, &focused, &root, until)?;
+                guard.focused()?;
+                Ok(guard)
+            })();
+            self.input_boundary(target, window, until)?;
+            match guard {
+                Ok(guard) => Some(guard),
+                Err(Error::UnsupportedCapability) if !must_verify => None,
+                Err(error) => return Err(error),
+            }
         };
         // Scroll centers are computed after activation, which may move a window.
         if let Some((x, y)) = scroll {
@@ -1551,17 +1468,23 @@ impl Store {
             .as_ref()
             .and_then(|_| super::cursor::Emitter::new(&r["cursor_feedback"], target));
         let mut placed = false;
+        let mut sent_segments = 0;
         let mut wheel_admitted = false;
         let mut text_index = 0;
         let named_keypress = op == "keypress" && segments.len() == 1;
         let mut terminal_keypress_complete = false;
         let result = input_sequence::run(&segments, |step| match step {
             Step::Verify => {
-                if terminal_keypress_complete {
-                    // A single named chord may legitimately close this HWND or
-                    // open a new foreground dialog. Its complete queue read and
-                    // detach prove delivery only; keep stop/held/cleanup checks.
+                if terminal_keypress_complete
+                    || (point.is_some() && sent_segments == segments.len())
+                {
+                    // A completed chord or pointer gesture may open a new
+                    // surface. Retain stop/release checks without making an
+                    // app transition a failure of the completed dispatch.
                     return input::terminal_keypress_boundary(until);
+                }
+                if placed && !*dispatched {
+                    self.prepare_pointer_surface(target, window, until)?;
                 }
                 self.input_boundary(target, window, until)?;
                 input::no_held_keys()?;
@@ -1600,12 +1523,21 @@ impl Store {
             }
             Step::Dispatch(segment) => {
                 self.validate(target)?;
+                if let Some(delivery) = &delivery {
+                    delivery.focused()?;
+                }
+                let positioning = point.is_some() && !placed;
+                let mut placement_attempted = false;
                 let mut accepted = 0;
                 let sent = input::send(
                     segment,
                     window,
                     until,
-                    dispatched,
+                    if positioning {
+                        &mut placement_attempted
+                    } else {
+                        dispatched
+                    },
                     &mut accepted,
                     named_keypress,
                 );
@@ -1614,9 +1546,10 @@ impl Store {
                     delivery.inserted(scalar, accepted, segment.len());
                     text_index += 1;
                     terminal_keypress_complete = sent?.terminal_keypress();
+                    *all_text_dispatched = text_index == text_scalars.len();
                     finish_delivery_read(Ok(()), input::cleanup_failed(), || {
                         if scalar.len_utf16() > 1 {
-                            delivery.settle(|| self.validate(target).map(|_| ()))?;
+                            delivery.settle(|| self.input_boundary(target, window, until))?;
                         }
                         Ok(())
                     })?;
@@ -1632,7 +1565,9 @@ impl Store {
                     // now move; exact HWND, receiver, bounds, DPI and hit checks remain.
                     wheel_admitted = true;
                 }
-                if let (Some(cursor), Some((_, hit, _, _, _))) = (cursor.as_mut(), point.as_ref()) {
+                if let (Some(cursor), Some((_, hit, _, _, _))) =
+                    (cursor.as_mut().filter(|_| !positioning), point.as_ref())
+                {
                     // Emit only after the entire native mouse segment was
                     // inserted. Partial/cleanup and keyboard events emit none.
                     let down = segment.iter().any(|event| unsafe {
@@ -1643,6 +1578,7 @@ impl Store {
                     });
                     cursor.posted(hit.x, hit.y, down);
                 }
+                sent_segments += 1;
                 if point.is_some() {
                     placed = true;
                 }
@@ -1654,7 +1590,10 @@ impl Store {
         });
         finish_delivery_read(result, input::cleanup_failed(), || {
             if let Some(delivery) = delivery.as_mut() {
-                delivery.settle(|| self.validate(target).map(|_| ()))?;
+                delivery.settle(|| self.input_boundary(target, window, until))?;
+                if *all_text_dispatched {
+                    *confirmed = Some("text_present_in_focused_control");
+                }
             }
             Ok(())
         })
@@ -1704,32 +1643,24 @@ impl Store {
         &mut self,
         target: &WindowTarget,
         window: HWND,
-        request: &Value,
         until: Instant,
-        dispatched: &mut bool,
     ) -> Result<(), Error> {
-        match unobstructed(window) {
-            Ok(_) => Ok(()),
-            Err(error) if matches!(&error, Error::NativeFailure {code,..} if code == "windows_capture_occluded") =>
-            {
-                if request["input_policy"] == "background_only" {
-                    return Err(error);
+        let ready = (Instant::now() + Duration::from_millis(250)).min(until);
+        loop {
+            self.input_boundary(target, window, until)?;
+            match unobstructed(window) {
+                Ok(_) => return Ok(()),
+                Err(Error::NativeFailure { code, .. }) if code == "windows_capture_occluded" => {
+                    if Instant::now() >= ready {
+                        return Err(Error::NativeFailure {
+                            code,
+                            message: "The target is still covered after foreground preparation. Uncover the window before taking a fresh capture and trying again.".into(),
+                        });
+                    }
+                    std::thread::sleep(Duration::from_millis(15));
                 }
-                // Only a typed pre-dispatch occlusion permits this preparation.
-                // No mouse payload has been sent. The original bound geometry,
-                // receiver and visibility are proved again before the payload.
-                self.validate(target)?;
-                self.focus_window(
-                    target,
-                    keyboard_window(window, target.app.pid)?,
-                    until,
-                    dispatched,
-                )?;
-                self.input_boundary(target, window, until)?;
-                unobstructed(window)?;
-                Ok(())
+                Err(error) => return Err(error),
             }
-            Err(error) => Err(error),
         }
     }
     fn focus_window(
@@ -1900,12 +1831,15 @@ impl Store {
         if !unsafe { IsWindowEnabled(window) }.as_bool() {
             return Err(failed("Target is disabled by a modal window"));
         }
+        self.input_boundary(target, window, until)?;
         input::mutation(until)
     }
     fn action(&mut self, r: &Value, until: Instant) -> Value {
         let mut dispatched = false;
         let mut preparation = false;
         let mut route = None;
+        let mut confirmed = None;
+        let mut all_text_dispatched = false;
         let result = (|| {
             let target = parse_target(&r["target"])?;
             let window = self.validate(&target)?;
@@ -1942,28 +1876,14 @@ impl Store {
                 self.consume(&target);
                 self.validate(&target)?;
                 check(until)?;
+                let receiver = keyboard_window(window, target.app.pid)?;
+                self.focus_window(&target, receiver, until, &mut preparation)?;
+                route = Some("foreground");
                 let mut menu_expansion = None;
                 if op == "press"
                     && unsafe { element.CurrentControlType() }.map_err(failed)?
                         == UIA_MenuItemControlTypeId
                 {
-                    // A background WinForms menu Invoke can fail or block in
-                    // its provider before opening the popup. Prepare its exact
-                    // owning keyboard window before the one original action.
-                    // Read-only menu discovery and ordinary buttons stay native
-                    // background operations.
-                    let receiver = keyboard_window(window, target.app.pid)?;
-                    if unsafe { GetForegroundWindow() } != receiver {
-                        if r["input_policy"] == "background_only" {
-                            return Err(Error::NativeFailure {
-                                code: "foreground_required".into(),
-                                message: "This native menu requires its owning foreground window"
-                                    .into(),
-                            });
-                        }
-                        self.focus_window(&target, receiver, until, &mut preparation)?;
-                    }
-                    route = Some("foreground");
                     if let Some(pattern) = unsafe {
                         optional_pattern::<IUIAutomationExpandCollapsePattern>(
                             &element,
@@ -2021,29 +1941,18 @@ impl Store {
                         self.semantic_admission(&target, window, &uia, &element, &q, until)?;
                     dispatched = true;
                     unsafe { pattern.SetValue(&value) }.map_err(failed)?;
+                    drop(_mutation);
+                    if check(until).is_ok()
+                        && unsafe { element.CurrentIsPassword() }.is_ok_and(|v| !v.as_bool())
+                        && unsafe { pattern.CurrentValue() }.is_ok_and(|actual| actual == value)
+                        && owned(&uia, &element, &q.root, until).is_ok()
+                        && self.validate(&target).is_ok()
+                    {
+                        confirmed = Some("element_value_set");
+                    }
                 } else if let Ok(pattern) = unsafe {
                     element.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
                 } {
-                    // The standard dialog Button provider can acknowledge
-                    // Invoke/BM_CLICK without acting while its dialog is
-                    // inactive. Prepare only this proven owned modal before
-                    // the one original Invoke; never retry that payload.
-                    let mut class = [0u16; 256];
-                    let count = unsafe { GetClassNameW(window, &mut class) };
-                    if String::from_utf16_lossy(&class[..count.max(0) as usize]) == "#32770"
-                        && keyboard_modal(window, target.app.pid)
-                    {
-                        if r["input_policy"] == "background_only"
-                            && unsafe { GetForegroundWindow() } != window
-                        {
-                            return Err(Error::NativeFailure {
-                                code: "foreground_required".into(),
-                                message: "This native dialog requires its exact foreground window"
-                                    .into(),
-                            });
-                        }
-                        self.focus_window(&target, window, until, &mut preparation)?;
-                    }
                     let _mutation =
                         self.semantic_admission(&target, window, &uia, &element, &q, until)?;
                     dispatched = true;
@@ -2091,15 +2000,19 @@ impl Store {
                     &mut dispatched,
                     &mut route,
                     &mut preparation,
+                    &mut confirmed,
+                    &mut all_text_dispatched,
                 )?;
             }
             Ok(())
         })();
         let mut reply = match result {
-            Ok(()) => json!({"dispatch":"dispatched","evidence":"unverified"}),
+            Ok(()) => json!({"dispatch":"dispatched","postcondition":confirmed}),
             Err(error) => {
                 let mut result = windows_error_reply(error, true);
-                if dispatched {
+                if all_text_dispatched {
+                    result["dispatch"] = json!("dispatched");
+                } else if dispatched {
                     result["dispatch"] = json!("unknown");
                 }
                 result
@@ -2274,6 +2187,7 @@ fn element_row(
     e: &IUIAutomationElement,
     id: u64,
     cached: Option<super::discovery_cache::Metadata>,
+    window: HWND,
 ) -> Result<Value, Error> {
     unsafe {
         let metadata = super::discovery_cache::metadata_or_live(cached, || {
@@ -2332,10 +2246,15 @@ fn element_row(
         } else {
             None
         };
+        let focused = matches!(role, "text_field" | "text_area" | "combo_box")
+            && GetForegroundWindow() == window
+            && e.CurrentHasKeyboardFocus()
+                .is_ok_and(|value| value.as_bool())
+            && GetForegroundWindow() == window;
         // Runtime IDs may be reused over time. They support view comparison,
         // never cross-observation action renewal; no rebind credential is issued.
         Ok(
-            json!({"id":id,"identity":runtime_id(e).ok().map(|id| format!("uia:{id:?}")).filter(|id|id.len()<=256),"label":format!("{role} {name}"),"role":role,"name":name,"value":value,"enabled":enabled,"actions":actions}),
+            json!({"id":id,"identity":runtime_id(e).ok().map(|id| format!("uia:{id:?}")).filter(|id|id.len()<=256),"label":format!("{role} {name}"),"role":role,"name":name,"value":value,"enabled":enabled,"actions":actions,"focused":focused}),
         )
     }
 }

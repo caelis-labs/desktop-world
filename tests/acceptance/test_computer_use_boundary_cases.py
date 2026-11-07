@@ -223,7 +223,6 @@ class BoundaryTests(unittest.TestCase):
         self.cases._boundary_native = Mock()
         with patch('computer_use_focus.run_background_contract', return_value={'passed': True}) as contract:
             self.cases.R04()
-        self.assertEqual(contract.call_args.kwargs['input_policy'], 'auto')
         with patch('computer_use_focus.run_background_contract', return_value={'passed': False}):
             with self.assertRaises(AssertionError):
                 self.cases.R04()

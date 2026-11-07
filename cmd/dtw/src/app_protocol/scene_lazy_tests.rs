@@ -7,7 +7,7 @@ fn known_keyboard_input_needs_no_explicit_look_and_reads_back_once_per_script() 
     assert!(!first.is_error, "{}", first.data);
     assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
     assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 1);
-    assert_eq!(first.data["value"]["view"]["reset"], true);
+    assert_eq!(first.data["value"]["view"]["kind"], "full");
     let next = exec(
         &server,
         "next_keys",
@@ -27,7 +27,7 @@ fn a_known_selector_can_start_a_script_without_publishing_a_redundant_baseline()
     assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
     // Native selector resolution plus final readback; no initial semantic look.
     assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 2);
-    assert_eq!(reply.data["value"]["view"]["reset"], true);
+    assert_eq!(reply.data["value"]["view"]["kind"], "full");
     assert!(reply.data["value"]["view"]["elements"].is_array());
 }
 
@@ -68,6 +68,7 @@ fn selector_follows_popup_after_read(read_delay: Duration) {
             value: None,
             enabled: Some(true),
             actions: vec!["press".into()],
+            focused: false,
             can_press: true,
         };
         model.window_semantics.insert(102, vec![action]);
@@ -205,7 +206,7 @@ fn explicit_window_scope_is_the_default_and_unknown_scopes_never_read() {
         .get("query")
         .is_none());
     let same = exec(&server, "default_scope", "await app.look();");
-    assert_eq!(same.data["value"]["view"], json!({"changed":false}));
+    assert_eq!(same.data["value"]["view"], json!({"kind":"unchanged"}));
     let reads = catalog.backend.0.observes.load(Ordering::SeqCst);
     let bad = exec(&server, "bad_scope", "await app.look({scope:'desktop'});");
     assert!(bad.is_error);

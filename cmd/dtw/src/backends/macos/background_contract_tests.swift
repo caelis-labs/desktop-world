@@ -927,6 +927,12 @@ backgroundCheck(!nativePointerReceiverNeedsKeyWindow(operation: "drag", button: 
     roles: [kAXSliderRole, kAXWindowRole]))
 backgroundCheck(!nativePointerReceiverNeedsKeyWindow(operation: "click", button: "left",
     roles: [kAXStaticTextRole, kAXButtonRole, kAXWindowRole]))
+backgroundCheck(!nativePointerReceiverNeedsKeyWindow(operation: "click", button: "left",
+    roles: [kAXTextFieldRole, kAXWindowRole]))
+backgroundCheck(nativePointerReceiverNeedsKeyWindow(operation: "click", button: "left",
+    roles: [kAXTextFieldRole, "AXWebArea", kAXWindowRole]))
+backgroundCheck(nativePointerReceiverNeedsKeyWindow(operation: "click", button: "left",
+    roles: [kAXTextAreaRole, kAXWindowRole]))
 backgroundCheck(!nativePointerReceiverNeedsKeyWindow(operation: "drag", button: nil, roles: nil))
 backgroundCheck(!nativePointerReceiverNeedsKeyWindow(operation: "drag", button: nil, roles: [kAXGroupRole]))
 backgroundCheck(nativePointerReceiverNeedsKeyWindow(operation: "drag", button: nil,

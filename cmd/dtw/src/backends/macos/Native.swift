@@ -1074,7 +1074,7 @@ private func nativePointerReceiverNeedsKeyWindow(operation: String, button: Stri
           let roles, roles.contains(kAXWindowRole) || roles.contains(kAXSheetRole) else { return false }
     if roles.contains("AXWebArea") { return true }
     let controls = [kAXButtonRole, kAXCheckBoxRole, kAXRadioButtonRole, kAXPopUpButtonRole,
-                    kAXSliderRole, kAXScrollBarRole]
+                    kAXSliderRole, kAXScrollBarRole, kAXTextFieldRole]
     return !roles.contains(where: { controls.contains($0) })
 }
 
@@ -5489,9 +5489,6 @@ private final class NativeStore: @unchecked Sendable {
             // A real borrow supersedes the passive order guard. Settle any
             // prior background effect before capturing this borrow's owner.
             _ = releaseBackgroundWindowOrder(context.deadline)
-            guard request["input_policy"] as? String == "auto" else {
-                throw failure("foreground_required", "Execution foreground borrow requires automatic input policy")
-            }
             if executionFocus != nil {
                 return try validateExecutionFocus(request, context).merging(
                     ["dispatch": "dispatched", "evidence": "unverified"]) { _, new in new }
@@ -5896,7 +5893,6 @@ private final class NativeStore: @unchecked Sendable {
             let context=try RequestContext(request)
             let app=try NativeApp((request["target"] as? [String:Any])?["app"])
             try context.verify(app)
-            guard request["input_policy"] as? String == "auto" else {throw failure("foreground_required","Application shortcuts require foreground delivery")}
             guard dtwAccessibilityGranted(request:true) else {let e=dtwPermissionError("accessibility");throw failure("permission_required",e["message"] as! String)}
             let onlyFocus = request["operation"] as? String == "focus_app"
             let keys = request["keys"] as? [String] ?? []
@@ -6257,9 +6253,6 @@ private final class NativeStore: @unchecked Sendable {
                 try validateEditableMeaning(element, role: role, deadline: context.deadline)
                 if try !valueReceiverMatches(element.element, target: target, deadline: context.deadline) {
                     if try !focused(target, window.element, context.deadline) {
-                        guard request["input_policy"] as? String == "auto" else {
-                            throw failure("foreground_required", "The requested text receiver needs focus preparation")
-                        }
                         observations[binding] = observation
                         return ["dispatch":"not_dispatched", "evidence":"unverified",
                                 "foreground_plan":["reason":"semantic_value_focus", "visual":false]]
@@ -6525,9 +6518,6 @@ private final class NativeStore: @unchecked Sendable {
             let menuNeedsForeground = try menuAction && !menuDestinationBound(target, deadline: context.deadline)
             if focusText || modalPress || menuNeedsForeground {
                 if try !focused(target, window.element, context.deadline) {
-                    guard request["input_policy"] as? String == "auto" else {
-                        throw failure("foreground_required", "This action needs focus preparation that the current input policy does not allow")
-                    }
                     // This entire preflight is read-only. Retain just this exact
                     // credential for the one post-activation action.
                     observations[binding] = observation
@@ -6542,7 +6532,7 @@ private final class NativeStore: @unchecked Sendable {
             try validateRegionElement(element, root: finalWindow.element, target: target,
                                       bounds: finalWindow.cg.bounds, deadline: context.deadline)
             let actionElement = selection ?? element.element
-            if !focusText, selection == nil, request["input_policy"] as? String == "auto" {
+            if !focusText, selection == nil {
                 prepareBackgroundWindowOrder(target.app, context)
             }
             var result = try performSemanticPress(deadline: context.deadline,

@@ -237,6 +237,7 @@ impl MockBackend {
                         rebind_identity: Some("retained:9007199254740993".into()),
                         identity: Some("mock:9007199254740993".into()),
                         label: "Increment".into(),
+                        focused: false,
                         can_press: true,
                         role: "button".into(),
                         name: Some("Increment".into()),

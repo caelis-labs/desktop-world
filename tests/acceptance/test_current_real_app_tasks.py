@@ -20,7 +20,7 @@ APP = historical.APPS['chrome'][0]
 
 def completed():
     return {'app': APP, 'execution_id': 'execution-current', 'status': 'completed',
-            'view': {'changed': False}, 'result': {'tail_marker': '末尾 🐦'}}
+            'view': {'kind': 'unchanged'}, 'result': {'tail_marker': '末尾 🐦'}}
 
 
 def call(data, method='exec', arguments=None):
@@ -117,7 +117,7 @@ class CurrentRunnerTests(unittest.TestCase):
         snapshot = {'task_windows': [{'title': 'Owned', 'title_truncated': False}],
                     'coverage': {'complete_within_scope': True, 'windows_truncated': False}}
         client = Mock()
-        client.execute.return_value = ({'view': {'changed': False}, 'result': snapshot}, {})
+        client.execute.return_value = ({'view': {'kind': 'unchanged'}, 'result': snapshot}, {})
         self.assertEqual(runner.inventory(client, APP)['windows'], snapshot['task_windows'])
         self.assertEqual(client.execute.call_args.args[0], APP)
         self.assertIn('app.look({full:true})', client.execute.call_args.args[1])

@@ -103,7 +103,6 @@ pub struct NativeBackend {
     scene: SceneOwner,
     stamp: ProviderStamp,
     cleanup_failure: Mutex<Option<Error>>,
-    input_policy: InputPolicy,
     focus_pending: AtomicBool,
     permissions: Mutex<Option<Value>>,
     cursor: Arc<CursorSession>,
@@ -323,17 +322,10 @@ impl NativeBackend {
     }
 
     pub fn spawn() -> Result<Self, Error> {
-        Self::spawn_with_policy(InputPolicy::Auto)
+        Self::spawn_with_cursor(Arc::new(CursorSession::default()))
     }
 
-    pub fn spawn_with_policy(input_policy: InputPolicy) -> Result<Self, Error> {
-        Self::spawn_with_cursor(input_policy, Arc::new(CursorSession::default()))
-    }
-
-    pub fn spawn_with_cursor(
-        input_policy: InputPolicy,
-        cursor: Arc<CursorSession>,
-    ) -> Result<Self, Error> {
+    pub fn spawn_with_cursor(cursor: Arc<CursorSession>) -> Result<Self, Error> {
         let exe = std::env::current_exe().map_err(failed)?;
         let worker = Worker::spawn(&exe, &["--dtw-native-worker"]).map_err(transport_error)?;
         Ok(Self {
@@ -344,7 +336,6 @@ impl NativeBackend {
             permissions: Mutex::new(None),
             cursor,
             cursor_operation: AtomicU64::new(0),
-            input_policy,
             stamp: ProviderStamp {
                 id: "dtw-macos-native".into(),
                 generation: unique_generation(),
@@ -451,7 +442,6 @@ impl NativeBackend {
         };
         let request_id = unique_generation();
         request["request_id"] = json!(request_id);
-        request["input_policy"] = json!(self.input_policy.as_str());
         if pointer_presentation::observes_operation(request["operation"].as_str()) {
             // scene_rpc already validated the retained target before this point.
             // Presentation never grants input admission or changes its outcome.
@@ -659,7 +649,6 @@ impl NativeBackend {
         request["_defer_foreground"] = json!(true);
         request["_execution_foreground"] = json!(scope.is_some());
         let background_order = scope.is_none()
-            && self.input_policy == InputPolicy::Auto
             && !matches!(operation.as_str(), "focus" | "focus_app")
             && target["app"].is_object();
         if background_order {
@@ -691,7 +680,7 @@ impl NativeBackend {
                 // input was sent, even when it resembles a private plan.
                 return Err((Error::InvalidObservation, true));
             };
-            if scope.is_some() || self.input_policy != InputPolicy::Auto {
+            if scope.is_some() {
                 return Err((Error::InvalidObservation, true));
             }
             // The first attempt proved no preparation or payload was sent. Its
@@ -2113,7 +2102,6 @@ for line in sys.stdin:
                     generation: 1,
                 },
                 cleanup_failure: Mutex::new(None),
-                input_policy: InputPolicy::Auto,
                 focus_pending: AtomicBool::new(true),
                 permissions: Mutex::new(None),
                 cursor: Arc::new(CursorSession::default()),
@@ -2184,7 +2172,6 @@ for line in sys.stdin:
                 generation: 1,
             },
             cleanup_failure: Mutex::new(None),
-            input_policy: InputPolicy::Auto,
             cursor: Arc::new(CursorSession::default()),
             cursor_operation: AtomicU64::new(0),
             focus_pending: AtomicBool::new(true),
@@ -2219,7 +2206,6 @@ for line in sys.stdin:
             scene: SceneOwner::default(),
             stamp: ProviderStamp { id: "focus-retirement".into(), generation: 1 },
             cleanup_failure: Mutex::new(None),
-            input_policy: InputPolicy::Auto,
             cursor: Arc::new(CursorSession::default()),
             cursor_operation: AtomicU64::new(0),
             focus_pending: AtomicBool::new(true),
@@ -2341,7 +2327,6 @@ for line in sys.stdin:
             cursor_operation: AtomicU64::new(0),
             focus_pending: AtomicBool::new(false),
             permissions: Mutex::new(None),
-            input_policy: InputPolicy::Auto,
             stamp: ProviderStamp { id:"cleanup-test".into(),generation:1 },
         };
         let poll = || Ok(Duration::from_secs(2));
@@ -2380,10 +2365,9 @@ for line in sys.stdin:
 
     #[test]
     fn resident_layer_guard_precedes_background_payload_without_requiring_focus() {
-        for input_policy in [InputPolicy::Auto, InputPolicy::BackgroundOnly] {
-            for unavailable in [false, true] {
-                let code = format!(
-                    r#"import sys,json
+        for unavailable in [false, true] {
+            let code = format!(
+                r#"import sys,json
 ops=[]
 for line in sys.stdin:
  r=json.loads(line);op=r['operation'];ops.append(op)
@@ -2394,47 +2378,41 @@ for line in sys.stdin:
  else:result={{'dispatch':'dispatched','evidence':'unverified'}}
  print(json.dumps({{'request_id':r['request_id'],'result':result}}),flush=True)
 "#,
-                    unavailable = if unavailable { "True" } else { "False" }
-                );
-                let backend = NativeBackend {
-                    worker: Arc::new(scene_fixture(&code).unwrap()),
-                    scene: SceneOwner::default(),
-                    stamp: ProviderStamp {
-                        id: "passive-layer-guard".into(),
-                        generation: 1,
-                    },
-                    cleanup_failure: Mutex::new(None),
-                    input_policy,
-                    cursor: Arc::new(CursorSession::default()),
-                    cursor_operation: AtomicU64::new(0),
-                    focus_pending: AtomicBool::new(false),
-                    permissions: Mutex::new(None),
-                };
-                let poll = || Ok(Duration::from_secs(2));
-                let call = CallContext { poll: &poll };
-                let outcome = backend.action(
+                unavailable = if unavailable { "True" } else { "False" }
+            );
+            let backend = NativeBackend {
+                worker: Arc::new(scene_fixture(&code).unwrap()),
+                scene: SceneOwner::default(),
+                stamp: ProviderStamp {
+                    id: "passive-layer-guard".into(),
+                    generation: 1,
+                },
+                cleanup_failure: Mutex::new(None),
+                cursor: Arc::new(CursorSession::default()),
+                cursor_operation: AtomicU64::new(0),
+                focus_pending: AtomicBool::new(false),
+                permissions: Mutex::new(None),
+            };
+            let poll = || Ok(Duration::from_secs(2));
+            let call = CallContext { poll: &poll };
+            let outcome = backend.action(
                     json!({"operation":"keypress","target":{"app":{"pid":100,"generation":1},"native_id":101,"generation":1}}),
                     &call,
                 );
-                assert_eq!(outcome.dispatch, DispatchState::Dispatched);
-                assert!(!backend.focus_pending.load(Ordering::Acquire));
-                let log = backend
-                    .read_rpc(json!({"operation":"guard_log"}), &call)
-                    .unwrap();
-                let expected = if input_policy == InputPolicy::Auto {
-                    json!([
-                        "prepare_background_order",
-                        "keypress",
-                        "admit_background_order",
-                        "guard_log"
-                    ])
-                } else {
-                    json!(["keypress", "guard_log"])
-                };
-                assert_eq!(log["ops"], expected);
-                assert_eq!(backend.finish_execution(), Ok(None));
-                backend.shutdown().unwrap();
-            }
+            assert_eq!(outcome.dispatch, DispatchState::Dispatched);
+            assert!(!backend.focus_pending.load(Ordering::Acquire));
+            let log = backend
+                .read_rpc(json!({"operation":"guard_log"}), &call)
+                .unwrap();
+            let expected = json!([
+                "prepare_background_order",
+                "keypress",
+                "admit_background_order",
+                "guard_log"
+            ]);
+            assert_eq!(log["ops"], expected);
+            assert_eq!(backend.finish_execution(), Ok(None));
+            backend.shutdown().unwrap();
         }
     }
 
@@ -2546,7 +2524,6 @@ for line in sys.stdin:
             cursor_operation: AtomicU64::new(0),
             focus_pending: AtomicBool::new(false),
             permissions: Mutex::new(None),
-            input_policy: InputPolicy::Auto,
             stamp: ProviderStamp {
                 id: "cleanup-test".into(),
                 generation: 1,
@@ -2569,7 +2546,6 @@ for line in sys.stdin:
             cursor_operation: AtomicU64::new(0),
             focus_pending: AtomicBool::new(false),
             permissions: Mutex::new(None),
-            input_policy: InputPolicy::Auto,
             stamp: ProviderStamp {
                 id: "resident-cleanup-test".into(),
                 generation: 1,
@@ -3316,6 +3292,7 @@ fn parse_element(value: &Value) -> Result<Element, Error> {
             .iter()
             .map(|action| action.as_str().unwrap().into())
             .collect(),
+        focused: false,
         can_press,
     })
 }

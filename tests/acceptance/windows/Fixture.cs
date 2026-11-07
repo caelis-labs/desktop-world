@@ -306,8 +306,21 @@ namespace DtwWindowsSmoke {
         }
     }
 
+    sealed class ReviewEdit : TextBox {
+        public Action Dropped;
+        public bool DropNext;
+        protected override void OnKeyPress(KeyPressEventArgs e) {
+            if(DropNext && !char.IsControl(e.KeyChar)) {
+                DropNext=false; e.Handled=true; if(Dropped!=null)Dropped();
+            }
+            base.OnKeyPress(e);
+        }
+    }
+
     public sealed class Workbench : Form {
+        [StructLayout(LayoutKind.Sequential)] struct ScreenPoint { public int X, Y; }
         [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
+        [DllImport("user32.dll")] static extern bool LogicalToPhysicalPointForPerMonitorDPI(IntPtr hwnd,ref ScreenPoint point);
         readonly string root;
         readonly UTF8Encoding utf8=new UTF8Encoding(false);
         readonly JavaScriptSerializer json=new JavaScriptSerializer();
@@ -319,6 +332,9 @@ namespace DtwWindowsSmoke {
         TrackBar paritySlider;
         NativeScrollRegion parityLeft,parityRight;
         Form peer;
+        ReviewEdit reviewCode;
+        int formLoads,formReady,droppedKeys,formSubmissions;
+        string submittedCode="";
         int sliderDown,sliderUp,sliderMoves,peerOpens,peerIncrements,peerCloses;
         bool ready,modal;
         string saved="";
@@ -370,12 +386,43 @@ namespace DtwWindowsSmoke {
             var label=new Label{Text="Web / Canvas chat / Inventory use the same loopback workspace and independent journal.\nThe supervisor starts an isolated Chromium profile; no legacy WebBrowser/IE substitute.",
                 Location=new Point(12,420),Size=new Size(640,80)};Controls.Add(label);
             if(File.Exists(Path.Combine(root,"extended-parity")))BuildParity();
+            if(File.Exists(Path.Combine(root,"protocol-review")))BuildProtocolReview();
             Shown+=delegate{ready=true;editor.Focus();Event("ready");Publish();};
             FormClosed+=delegate{timer.Stop();Event("quit");};
             timer.Interval=30;timer.Tick+=delegate{
                 if(File.Exists(Path.Combine(root,"stop"))||File.Exists(Path.Combine(root,"command"))){Close();return;}Publish();
             };timer.Start();
         }
+        void BuildProtocolReview() {
+            var load=Button("Load review form",12,505,220);
+            var inject=Button("Load form with input fault",260,505,250);
+            reviewCode=new ReviewEdit{AccessibleName="Review code",Location=new Point(12,563),Size=new Size(330,26),Visible=false};
+            var submit=Button("Submit review",12,600,220);submit.Visible=false;
+            var loading=new Timer{Interval=750};
+            Action<bool> start=delegate(bool drop) {
+                loading.Stop();reviewCode.Hide();submit.Hide();
+                reviewCode.Text="";reviewCode.DropNext=drop;
+                Text="DTW Computer Use Windows - Loading review";
+                formLoads++;Event("review_loading");Publish();loading.Start();
+            };
+            loading.Tick+=delegate {
+                loading.Stop();reviewCode.Show();submit.Show();reviewCode.Focus();
+                Text="DTW Computer Use Windows - Review form ready";
+                formReady++;Event("review_ready");Publish();
+            };
+            load.Click+=delegate{start(false);};inject.Click+=delegate{start(true);};
+            reviewCode.Dropped=delegate{droppedKeys++;Event("review_key_dropped");Publish();};
+            Action save=delegate {
+                submittedCode=reviewCode.Text;formSubmissions++;Event("review_submit");Publish();
+            };
+            submit.Click+=delegate{save();};
+            reviewCode.KeyDown+=delegate(object sender,KeyEventArgs e) {
+                if(e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;save();}
+            };
+            Controls.Add(load);Controls.Add(inject);Controls.Add(reviewCode);Controls.Add(submit);
+            FormClosed+=delegate{loading.Dispose();};
+        }
+
         void BuildParity() {
             var status=new Label{Text="Native slider: 0 / 200",Location=new Point(12,500),Size=new Size(310,22)};Controls.Add(status);
             paritySlider=new TrackBar{AccessibleName="Parity slider",Minimum=0,Maximum=200,TickFrequency=20,
@@ -407,8 +454,17 @@ namespace DtwWindowsSmoke {
         void Publish() {
             if(IsDisposed||Disposing||!IsHandleCreated)return;
             string path=Path.Combine(root,"native-state.json"),temporary=path+".next";
+            int[] pointer=null;
+            if(reviewCode!=null) {
+                var logical=reviewed.PointToScreen(new Point(8,reviewed.Height/2));
+                var physical=new ScreenPoint{X=logical.X,Y=logical.Y};
+                if(LogicalToPhysicalPointForPerMonitorDPI(reviewed.Handle,ref physical))
+                    pointer=new[]{physical.X,physical.Y};
+            }
             File.WriteAllText(temporary,json.Serialize(new{pid=Process.GetCurrentProcess().Id,ready=ready,modal=modal,hwnd=Handle.ToInt64(),
                 text=editor.Text,saved=saved,commits=commits,checkpoint=checkpoint,reviewed=reviewed.Checked,checks=checks,opens=opens,saves=saves,
+                review=reviewCode==null?null:new{loads=formLoads,ready=formReady,dropped_keys=droppedKeys,
+                    submissions=formSubmissions,submitted_code=submittedCode,visible_value=reviewCode.Text,pointer=pointer},
                 parity=paritySlider==null?null:new{slider=paritySlider.Value,slider_down=sliderDown,slider_up=sliderUp,slider_drag_moves=sliderMoves,
                     left_scroll=-parityLeft.AutoScrollPosition.Y,right_scroll=-parityRight.AutoScrollPosition.Y,
                     left_wheels=parityLeft.WheelEvents,right_wheels=parityRight.WheelEvents,

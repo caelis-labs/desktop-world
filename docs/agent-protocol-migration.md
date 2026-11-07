@@ -12,3 +12,9 @@ are incremental; `full:true` requests a baseline. Normal tasks are look → inpu
 effects require fresh observation before further input.
 
 Installation uses [immutable complete packages and host/profile pins](package-management.md).
+
+Current hosts launch `dtw mcp` with no input-mode arguments. Remove the retired
+`--input-policy` flag from saved commands. Default macOS routing still chooses
+its native background path when supported. Windows prepares the foreground for
+interaction. Consumers of `exec` should read `view.kind` and use
+`effects.acknowledgements` for specific postconditions when present.

@@ -35,8 +35,8 @@ They do not automate an existing user's browser document.
 
 | Entry | Independently checked contracts |
 | --- | --- |
-| `app_protocol_probe.py` | App admission, current ten-method surface (including `readText`), complete fixture semantics, returned-view deduplication, bounded unchanged delta, semantic action, Unicode/keyboard/save bytes, native modal bounds/order and covered opaque-window composition |
-| `feature_audit.py` | Installed/running discovery and provider metadata; semantic IDs and selectors; left/right/double click; hover/content/title-bar drag; vertical/horizontal/default wheel effects; stale geometry; native menu; modal keyboard routing; rejected selector foreground invariants; two-instance continuity and overlapping pixels; global layered alpha; normal quit/save cancellation; cancellation/retransmission; stopped executable startup |
+| `app_protocol_probe.py` | App admission, current app methods and compact observation, complete fixture semantics, returned-view deduplication, bounded unchanged delta, semantic action, Unicode/keyboard/save bytes, native modal bounds/order and covered opaque-window composition |
+| `feature_audit.py` | Installed/running discovery and coverage; semantic IDs and selectors; left/right/double click; hover/content/title-bar drag; vertical/horizontal/default wheel effects; stale geometry; native menu; modal keyboard routing; rejected selector foreground invariants; two-instance continuity and overlapping pixels; global layered alpha; normal quit/save cancellation; cancellation/retransmission; stopped executable startup |
 | `browser_feature_audit.py` | Empty-field Unicode, selection replacement, terminal caret, literal label/U+FFFC content, multiline text, semantic save/click, both wheel axes, independently owned native Open dialog, Escape and normal browser quit |
 
 The WinForms fixture publishes atomic state and an event journal; the observer
@@ -68,6 +68,20 @@ complete macOS benchmark or model image-channel acceptance.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/acceptance/windows/compile-cursor.ps1 -OutputDirectory C:\Temp\dtw-observer-new
 python -X utf8 tests/acceptance/windows/observe_run.py --observer C:\Temp\dtw-observer-new\CursorObserver.exe --output C:\Temp\dtw-observed-new -- python -X utf8 tests/acceptance/windows/computer_use_probe.py --dtw '<candidate>\dtw.exe' --fixture-binary C:\Temp\dtw-observer-new\Fixture.exe --output C:\Temp\dtw-core-new
 ```
+
+Use `computer_use_probe.py --protocol-only` for the delayed native form.
+It checks view shapes and custom-result size, timer and stable-window waiting,
+exact ASCII readback, one independent submission and an injected dropped first
+character. The fault arm must report text delivery failure and stop before
+Enter. A separate fixture checkbox verifies image fractions through physical
+pointer input. The same fixture and scripts run under DSH ACP with
+`dsh_native_probe.py --mode protocol-script`. Use `--mode protocol-goal` for
+a fresh session with only the business goal. Keep both reports and classify tool
+failures alongside the independent form journal.
+
+Run `install_recipe_probe.ps1 -OutputDirectory <new-directory>` to execute
+the documented Windows recipe with redirected TEMP/TMP. It imports the current
+official ZIP into its own store and verifies the chosen stage and cleanup.
 
 `observe_run.py` uses a separate native process to retain foreground HWND/PID,
 real cursor position and global held-key samples. Business probe exit determines

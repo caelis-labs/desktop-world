@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Chrome content-area click with an independent app in front and cursor fixed."""
+"""Chrome content-area click with independent foreground and pointer settlement."""
 import argparse, ctypes, hashlib, json, os, shutil, subprocess, sys, time, traceback, uuid
 from ctypes import wintypes as w
 from pathlib import Path
@@ -52,10 +52,10 @@ def main():
         phase='content-click'
         before=desktop();_,ledger=client.execute(app,'content-click',f'return await app.click({{window_ref:{wr},observation_ref:{json.dumps(capture["observation_ref"])},x:{x},y:{y}}});')
         state=wait(lambda:(s if (s:=read(web/'state.json')) and len([e for e in s['events'] if e.get('type')=='dialog_opened'])==1 else None));time.sleep(.15);after=desktop()
-        click=next(s for s in ledger['script']['steps'] if s['operation']=='click');require(click['receipt']['outcome']['delivery']['route']=='background',click);require(before[:2]==after[:2],{'before':before,'after':after})
+        click=next(s for s in ledger['script']['steps'] if s['operation']=='click');require(click['receipt']['outcome']['delivery']['route']=='foreground',click);require(before[:2]==after[:2],{'before':before,'after':after})
         foreground_pid=w.DWORD();user.GetWindowThreadProcessId(w.HWND(after[2]),ctypes.byref(foreground_pid))
         require(after[2]==before[2] or foreground_pid.value==browser.pid,'Unexpected foreground owner')
-        require(not state['saves'],'Unexpected save');summary['cases'].append({'name':'chrome-single-left-background','dialog_opened_exactly_once':True,'physical_cursor_unchanged':True,'application_activated_itself':before[2]!=after[2]})
+        require(not state['saves'],'Unexpected save');summary['cases'].append({'name':'chrome-single-left-foreground','dialog_opened_exactly_once':True,'physical_cursor_restored':True,'application_activated_itself':before[2]!=after[2]})
         # The following foreground keyboard action belongs in the same normal API
         # and must raise Chrome automatically, without asking the Agent for a mode.
         phase='automatic-foreground-followup';close_attempted=True

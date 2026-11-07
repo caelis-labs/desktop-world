@@ -245,7 +245,7 @@ class BoundaryCases:
         self._boundary_native()
         proof = run_background_contract(self.fixture, Path(self.client.transport.child.args[0]),
             self.focus_observer, self.output / 'boundary-background',
-            case=self.fixture.case + '-boundary', input_policy='auto')
+            case=self.fixture.case + '-boundary')
         require(proof['passed'], proof)
         return {'contract': proof, 'cursor_audit': 'owned by outer acceptance runner',
                 'scope': 'Supported directed click, keyboard and readonly operations; continuous focus and witness key destination'}

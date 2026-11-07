@@ -66,7 +66,7 @@ fn resolution_cancellation_preserves_diagnostic_and_never_connects_or_replays() 
 }
 
 #[test]
-fn apps_exposes_bounded_provider_capabilities_without_connecting() {
+fn apps_omits_static_provider_metadata_and_does_not_connect() {
     let (_, catalog) = agent();
     let server = Server::new(InterruptedResolver {
         catalog: catalog.clone(),
@@ -77,16 +77,8 @@ fn apps_exposes_bounded_provider_capabilities_without_connecting() {
     };
     let reply = server.run(&active);
     assert!(!reply.is_error, "{}", reply.data);
-    assert_eq!(reply.data["provider"]["provider"], "controlled");
-    assert_eq!(
-        reply.data["provider"]["supported_capabilities"],
-        json!(["observe", "press"])
-    );
-    assert_eq!(
-        reply.data["provider"]["supported_observe_scopes"],
-        json!(["window"])
-    );
-    assert!(reply.data["provider"].get("private_diagnostic").is_none());
+    assert!(reply.data.get("provider").is_none());
+    assert_eq!(server.provider_id().as_deref(), Some("controlled"));
     assert_eq!(catalog.connects.load(Ordering::SeqCst), 0);
 }
 

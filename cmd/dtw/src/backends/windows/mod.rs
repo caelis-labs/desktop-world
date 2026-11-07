@@ -12,7 +12,6 @@ mod execution_scope;
 mod input;
 mod native;
 mod pointer;
-mod posted_mouse;
 mod text_delivery;
 pub(crate) mod window_state;
 mod worker;
@@ -32,7 +31,7 @@ impl PlatformContract for Platform {
         "readText pages native UIA TextPattern, ValuePattern or static text; passwords and unsupported controls are not synthesized",
         "window waits prove same-process owned native modals with Win32 owner/disabled state and UIA IsModal; same-window web modals and cross-process dialogs are unsupported",
         "scroll anchors bind retained capture pixels or a live UIA element clipped through its ancestor rectangles; missing native geometry fails explicitly",
-        "client-area left clicks on supported HWND controls (Chromium content: single click only) and native-control wheel messages use background delivery without moving the shared pointer; other mouse gestures, keyboard input and focus prepare the exact foreground receiver internally; a proven native caption can use CUA coordinate-routed pointer activation when ordinary foreground coordination is refused; background-only rejects unsupported routes before preparation",
+        "interaction prepares the exact foreground receiver; UIA drives semantic controls and physical pointer input requires an unobstructed hit; a proven native caption can activate the receiver when ordinary foreground coordination is refused",
         "foreground and physical-pointer borrowing lasts for one script; visible external handoffs are sticky, including away-and-return; settlement restores only still-owned original resources; an unreadable hidden original cannot be guessed, and unconfirmed return retains a visible active target",
         "supplementary-plane keyboard text requires a bounded readable focused TextPattern selection or same-process Unicode Edit; protected/unreadable controls are denied before typing; unconfirmed accepted text prevents clean input handoff, without replay",
         "installed discovery reads Start Menu links, App Paths and AppsFolder identities; skipped argument-bearing links and unreadable sources remain explicit; launch executes only a resolved executable or proven packaged identity once",

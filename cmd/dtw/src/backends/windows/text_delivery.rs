@@ -1,6 +1,6 @@
-//! Read-only acknowledgement for text containing UTF-16 surrogate pairs.
-//! Queue insertion alone cannot authorize foreground handoff between their
-//! WM_CHAR deliveries. Never repair or replay text when acknowledgement fails.
+//! Read-only acknowledgement of focused text entry.
+//! Surrogate pairs also require consumption before releasing the input scope.
+//! A failed acknowledgement never repairs or replays text.
 use super::input;
 use crate::{backends::native_client::failed, computer::Error};
 use std::time::{Duration, Instant};
@@ -51,6 +51,7 @@ pub(super) struct TextDelivery {
     suffix: String,
     typed: String,
     pending: bool,
+    pending_surrogate: bool,
     partial: bool,
 }
 enum Reader {
@@ -132,28 +133,30 @@ impl TextDelivery {
                     element.CurrentProcessId(), element.CurrentControlType(), element.CurrentNativeWindowHandle()
                 );
             }
+            match super::edit_delivery::Edit::new(window) {
+                Ok(edit) => {
+                    let (prefix, suffix) = edit.selection()?;
+                    return Ok(Self {
+                        uia,
+                        element,
+                        reader: Reader::Edit(edit),
+                        window,
+                        prefix: normalize(&prefix),
+                        suffix: normalize(&suffix),
+                        typed: String::new(),
+                        pending: false,
+                        pending_surrogate: false,
+                        partial: false,
+                    });
+                }
+                Err(Error::UnsupportedCapability) => {}
+                Err(error) => return Err(error),
+            }
             let pattern = super::native::optional_pattern::<IUIAutomationTextPattern>(
                 &element,
                 UIA_TextPatternId,
-            )?;
-            let Some(pattern) = pattern else {
-                if tracing() {
-                    eprintln!("DTW_WINDOWS_TEXT_TRACE no TextPattern; native Edit admission");
-                }
-                let edit = super::edit_delivery::Edit::new(window)?;
-                let (prefix, suffix) = edit.selection()?;
-                return Ok(Self {
-                    uia,
-                    element,
-                    reader: Reader::Edit(edit),
-                    window,
-                    prefix: normalize(&prefix),
-                    suffix: normalize(&suffix),
-                    typed: String::new(),
-                    pending: false,
-                    partial: false,
-                });
-            };
+            )?
+            .ok_or(Error::UnsupportedCapability)?;
             let document = pattern.DocumentRange().map_err(failed)?;
             let full = text(&document)?;
             trace_text("document", &full);
@@ -291,6 +294,7 @@ impl TextDelivery {
                                     suffix: String::new(),
                                     typed: String::new(),
                                     pending: false,
+                                    pending_surrogate: false,
                                     partial: false,
                                 });
                             }
@@ -344,6 +348,7 @@ impl TextDelivery {
                 suffix: normalize(&suffix),
                 typed: String::new(),
                 pending: false,
+                pending_surrogate: false,
                 partial: false,
             })
         }
@@ -354,6 +359,7 @@ impl TextDelivery {
             return;
         }
         self.pending = true;
+        self.pending_surrogate |= scalar.len_utf16() > 1;
         if inserted != total {
             self.partial = true;
         } else {
@@ -382,15 +388,19 @@ impl TextDelivery {
                 && input::no_held_keys().is_ok()
             {
                 self.pending = false;
+                self.pending_surrogate = false;
                 return Ok(());
             }
             if Instant::now() >= until {
-                return Err(failed("Accepted Unicode text delivery is unconfirmed"));
+                return Err(Error::NativeFailure {
+                    code: "text_delivery_unconfirmed".into(),
+                    message: "The focused control did not confirm the exact typed text. Read the field before continuing or retrying.".into(),
+                });
             }
             std::thread::sleep(Duration::from_millis(2));
         }
     }
-    fn focused(&self) -> Result<(), Error> {
+    pub(super) fn focused(&self) -> Result<(), Error> {
         if unsafe { GetForegroundWindow() } != self.window {
             return Err(failed(
                 "Foreground changed before Unicode delivery acknowledgement",
@@ -439,7 +449,7 @@ fn selection_owned(
 
 impl Drop for TextDelivery {
     fn drop(&mut self) {
-        if self.pending {
+        if self.pending_surrogate {
             // Do not release the shared input lease as clean. The worker is
             // reaped and a queued independent owner sees the abandoned lease.
             input::fail_delivery();

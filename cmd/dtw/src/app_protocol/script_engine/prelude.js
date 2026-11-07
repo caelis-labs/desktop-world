@@ -130,7 +130,7 @@
     const encoded = encode(args, "host arguments", 65536, true);
     // A locally rejected argument never starts a read and cannot settle a
     // preceding action's readback. Clear dirty only at the host handoff.
-    if (agent) dirty = op !== "scene.look" && op !== "scene.capture" && op !== "scene.after" && op !== "scene.readText" && op !== "scene.waitForNewWindow";
+    if (agent && !(op === "scene.wait" && typeof args.ms === "number")) dirty = op !== "scene.look" && op !== "scene.capture" && op !== "scene.after" && op !== "scene.readText" && op !== "scene.waitForNewWindow" && op !== "scene.wait";
     const reply = parse(host(op, encoded, line));
     if (!reply.ok) {
       const error = new ErrorClass(`${op} failed: ${reply.error}`);
@@ -182,10 +182,11 @@
   let dirty = false;
   if (agent) {
     const surface = create(null);
-    for (const op of ["look", "capture", "readText", "waitForNewWindow", "click", "setValue", "move", "drag", "typeText", "keypress", "scroll", "focus", "quit"]) {
+    for (const op of ["look", "capture", "readText", "wait", "waitForNewWindow", "click", "setValue", "move", "drag", "typeText", "keypress", "scroll", "focus", "quit"]) {
       const method = async (...args) => {
         if (args.length > 1) fail(`app.${op} takes one argument`, "invalid_arguments");
         let options = args.length ? args[0] : {};
+        if (op === "wait" && typeof options === "number") options = {ms:options};
         if (op === "typeText" && typeof options === "string") options = {text:options};
         if (op === "readText" && typeof options === "string") options = {target:options};
         if (op === "keypress" && typeof options === "string") options = {keys:apply(split, options, ["+"])};

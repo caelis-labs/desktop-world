@@ -60,13 +60,14 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
         "scene.capture" | "scene.after" => &["full"],
         "scene.readText" => &["target", "offset", "limit"],
         "scene.waitForNewWindow" => &["timeout_ms"],
-        "scene.click" => &["target", "selector", "x", "y", "button", "count"],
+        "scene.wait" => &["ms", "window", "title", "role", "text", "timeout_ms"],
+        "scene.click" => &["target", "selector", "x", "y", "unit", "button", "count"],
         "scene.setValue" => &["target", "selector", "value"],
-        "scene.move" => &["x", "y"],
-        "scene.drag" => &["path"],
+        "scene.move" => &["x", "y", "unit"],
+        "scene.drag" => &["path", "unit"],
         "scene.typeText" => &["text"],
         "scene.keypress" => &["keys"],
-        "scene.scroll" => &["delta_y", "delta_x", "x", "y"],
+        "scene.scroll" => &["delta_y", "delta_x", "x", "y", "unit"],
         "scene.quit" | "scene.focus" => &[],
         _ => return Err(error("invalid_arguments", "Unknown app operation")),
     };
@@ -77,6 +78,15 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
         return Err(error(
             "invalid_arguments",
             "Unknown app argument; see Skill API.md",
+        ));
+    }
+    if args.get("unit").is_some_and(|unit| {
+        unit != "fraction"
+            || (op != "scene.drag" && !(args["x"].is_number() && args["y"].is_number()))
+    }) {
+        return Err(error(
+            "invalid_arguments",
+            "unit:'fraction' requires image coordinates",
         ));
     }
     if op == "scene.setValue" {
@@ -91,7 +101,34 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
             return Err(error("invalid_arguments", "setValue requires one target or selector and a string value (up to 16 KiB, no NUL)"));
         }
     }
-    if op == "scene.waitForNewWindow"
+    if op == "scene.wait" {
+        if let Some(ms) = args.get("ms") {
+            if object.len() == 1 && ms.as_u64().is_some_and(|ms| (1..=10_000).contains(&ms)) {
+                return Ok(());
+            }
+            return Err(error(
+                "invalid_arguments",
+                "wait(ms) requires 1..10000 milliseconds",
+            ));
+        }
+        if args.get("window").is_some_and(|v| v != "stable")
+            || !["window", "title", "role", "text"]
+                .iter()
+                .any(|key| args.get(key).is_some())
+            || ["title", "role", "text"].iter().any(|key| {
+                args.get(key).is_some_and(|v| {
+                    v.as_str()
+                        .is_none_or(|s| s.trim().is_empty() || s.len() > 256)
+                })
+            })
+        {
+            return Err(error(
+                "invalid_arguments",
+                "wait requires window:'stable', title, role or text",
+            ));
+        }
+    }
+    if matches!(op, "scene.wait" | "scene.waitForNewWindow")
         && args
             .get("timeout_ms")
             .is_some_and(|v| v.as_u64().is_none_or(|ms| !(1..=10_000).contains(&ms)))
@@ -389,6 +426,9 @@ impl<B: Backend + 'static> Coordinator<B> {
                 deadline,
             );
         }
+        if op == "scene.wait" {
+            return self.scene_wait(id, args, deadline);
+        }
         if op == "scene.waitForNewWindow" {
             return self.scene_wait_for_new_window(id, args, deadline);
         }
@@ -595,12 +635,16 @@ impl<B: Backend + 'static> Coordinator<B> {
                 method = if setter { "setValue" } else { "press" }.into();
                 options["window_ref"] = json!(window);
             } else {
-                let frame =
-                    match self.scene_validate_frame(id, std::slice::from_ref(args), deadline) {
-                        Ok(frame) => frame,
-                        Err(e) => return failed(e),
-                    };
-                options = match frame.point(args) {
+                let frame = match self.scene_validate_frame(
+                    id,
+                    std::slice::from_ref(args),
+                    args["unit"] == "fraction",
+                    deadline,
+                ) {
+                    Ok(frame) => frame,
+                    Err(e) => return failed(e),
+                };
+                options = match frame.point(args, args["unit"] == "fraction") {
                     Ok(v) => v,
                     Err(e) => return failed(e),
                 };
@@ -611,11 +655,16 @@ impl<B: Backend + 'static> Coordinator<B> {
                 }
             }
         } else if op == "scene.scroll" && (args.get("x").is_some() || args.get("y").is_some()) {
-            let frame = match self.scene_validate_frame(id, std::slice::from_ref(args), deadline) {
+            let frame = match self.scene_validate_frame(
+                id,
+                std::slice::from_ref(args),
+                args["unit"] == "fraction",
+                deadline,
+            ) {
                 Ok(frame) => frame,
                 Err(e) => return failed(e),
             };
-            options = match frame.point(args) {
+            options = match frame.point(args, args["unit"] == "fraction") {
                 Ok(v) => v,
                 Err(e) => return failed(e),
             };
@@ -695,6 +744,98 @@ impl<B: Backend + 'static> Coordinator<B> {
         }
         work
     }
+    fn scene_wait(&self, id: &str, args: &Value, deadline: Instant) -> Work {
+        let delay = args["ms"].as_u64();
+        let budget = delay
+            .or_else(|| args["timeout_ms"].as_u64())
+            .unwrap_or(2_000);
+        let until = (Instant::now() + Duration::from_millis(budget)).min(deadline);
+        let mut query = json!({});
+        for key in ["role", "text"] {
+            if let Some(value) = args.get(key) {
+                query[key] = value.clone();
+            }
+        }
+        let filtered = query != json!({});
+        let title = args["title"].as_str().map(str::to_lowercase);
+        let stable = args["window"] == "stable";
+        let mut previous = None;
+        let mut last: Option<Work> = None;
+        loop {
+            if let Err(reason) = self.check_script_wait(id, deadline) {
+                return Work::read_error(reason);
+            }
+            if Instant::now() >= until {
+                if delay.is_some() {
+                    return data(Value::Null);
+                }
+                let mut work = failed(error(
+                    "wait_timeout",
+                    "The requested window or element was not observed in time",
+                ));
+                work.completed.value = last.and_then(|work| work.completed.value);
+                return work;
+            }
+            if delay.is_none() {
+                let work = self.scene_look(id, &query, false, false, 0, deadline);
+                if work.completed.error.is_some() {
+                    return work;
+                }
+                let Some(snapshot) = &work.completed.value else {
+                    return failed(error(
+                        "observation_unavailable",
+                        "Wait could not read the app",
+                    ));
+                };
+                let matched = snapshot["windows"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|row| {
+                        row["visible"] == true
+                            && row["bounds"].is_array()
+                            && title.as_ref().is_none_or(|title| {
+                                row["title"]
+                                    .as_str()
+                                    .is_some_and(|s| s.to_lowercase().contains(title))
+                            })
+                            && (!filtered
+                                || snapshot["elements"].as_array().into_iter().flatten().any(
+                                    |element| {
+                                        element["id"]
+                                            .as_str()
+                                            .and_then(|id| id.split_once('.'))
+                                            .is_some_and(|(window, _)| row["id"] == window)
+                                    },
+                                ))
+                    });
+                if let Some(row) = matched {
+                    if !stable || previous.as_ref() == Some(row) {
+                        return work;
+                    }
+                }
+                previous = matched.cloned();
+                last = Some(work);
+            }
+            let next = if stable {
+                150
+            } else if delay.is_some() {
+                20
+            } else {
+                80
+            };
+            let wake = (Instant::now() + Duration::from_millis(next)).min(until);
+            while Instant::now() < wake {
+                if let Err(reason) = self.check_script_wait(id, deadline) {
+                    return Work::read_error(reason);
+                }
+                std::thread::sleep(
+                    Duration::from_millis(20).min(wake.saturating_duration_since(Instant::now())),
+                );
+            }
+        }
+    }
+
     fn scene_wait_for_new_window(&self, id: &str, args: &Value, deadline: Instant) -> Work {
         let Some(before) = self.state.lock().unwrap().scene.pending_new_window.take() else {
             return failed(error(
@@ -763,7 +904,7 @@ impl<B: Backend + 'static> Coordinator<B> {
     fn scene_pointer(&self, id: &str, op: &str, args: &Value, deadline: Instant) -> Work {
         let prepared = (|| {
             let supplied = if op == "scene.move" {
-                vec![args.clone()]
+                vec![json!({"x":args["x"],"y":args["y"]})]
             } else {
                 args["path"]
                     .as_array()
@@ -776,7 +917,8 @@ impl<B: Backend + 'static> Coordinator<B> {
                         )
                     })?
             };
-            let raster = self.scene_validate_frame(id, &supplied, deadline)?;
+            let fraction = args["unit"] == "fraction";
+            let raster = self.scene_validate_frame(id, &supplied, fraction, deadline)?;
             let mut samples = Vec::new();
             for (i, point) in supplied.iter().enumerate() {
                 if point
@@ -821,7 +963,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             let state = self.state.lock().unwrap();
             let mapped = samples
                 .iter()
-                .map(|p| raster.point(p))
+                .map(|p| raster.point(p, fraction))
                 .collect::<Result<Vec<_>, _>>()?;
             let first = &mapped[0];
             if mapped.iter().any(|p| {
@@ -1031,6 +1173,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         &self,
         id: &str,
         points: &[Value],
+        fraction: bool,
         deadline: Instant,
     ) -> Result<Raster, wire::WireError> {
         // Take the old mapping out before any read: a failed refresh cannot
@@ -1055,7 +1198,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             let instances = points
                 .iter()
                 .map(|point| {
-                    let receiver = previous.point(point)?;
+                    let receiver = previous.point(point, fraction)?;
                     previous
                         .layers
                         .iter()
@@ -1146,7 +1289,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             {
                 let state = self.state.lock().unwrap();
                 for (point, instance) in points.iter().zip(&instances) {
-                    let receiver = fresh.point(point)?;
+                    let receiver = fresh.point(point, fraction)?;
                     if !state
                         .windows
                         .get(receiver["window_ref"].as_str().unwrap())
@@ -1253,7 +1396,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             state.scene = SceneState::default();
             state.scene.observed = Some(current.clone());
             let mut view = current.clone();
-            view["reset"] = json!(true);
+            view["kind"] = json!("full");
             state.scene.projected = Some(view);
             return data(current);
         }
@@ -1529,6 +1672,9 @@ impl<B: Backend + 'static> Coordinator<B> {
                         state.scene.retained_ids.insert(key, target.clone());
                     }
                     let mut entry = json!({"id":target,"role":element["role"],"enabled":element["enabled"],"actions":element["actions"]});
+                    if element["focused"] == true {
+                        entry["focused"] = json!(true);
+                    }
                     let name_truncated = project_text(&mut entry, "name", &element["name"]);
                     let value_truncated = project_text(&mut entry, "value", &element["value"]);
                     if name_truncated || value_truncated {
@@ -1670,11 +1816,18 @@ impl<B: Backend + 'static> Coordinator<B> {
             });
         let mut view = if reset {
             let mut v = current.clone();
-            v["reset"] = json!(true);
+            v["kind"] = json!("full");
             v
         } else {
             delta(state.scene.baseline.as_ref().unwrap(), &current)
         };
+        if view["kind"] == "delta" {
+            let mut full = current.clone();
+            full["kind"] = json!("full");
+            if full.to_string().len() < view.to_string().len() {
+                view = full;
+            }
+        }
         if let Some(info) = image_info {
             view["image"] = info
         }
@@ -1854,13 +2007,18 @@ pub(super) fn ordered(mut rows: Vec<Value>) -> Vec<Value> {
     rows
 }
 impl Raster {
-    fn point(&self, args: &Value) -> Result<Value, wire::WireError> {
+    fn point(&self, args: &Value, fraction: bool) -> Result<Value, wire::WireError> {
         let frame = self;
         let (Some(x), Some(y)) = (args["x"].as_f64(), args["y"].as_f64()) else {
             return Err(error(
                 "invalid_arguments",
                 "Image coordinates require finite x and y",
             ));
+        };
+        let (x, y) = if fraction {
+            (x * f64::from(frame.width), y * f64::from(frame.height))
+        } else {
+            (x, y)
         };
         if !x.is_finite()
             || !y.is_finite()
@@ -1896,7 +2054,7 @@ impl Raster {
     }
 }
 fn delta(previous: &Value, current: &Value) -> Value {
-    let mut out = json!({"changed":previous!=current});
+    let mut out = json!({"kind":if previous == current {"unchanged"} else {"delta"}});
     for key in ["windows", "elements"] {
         let old = previous[key].as_array().unwrap();
         let new = current[key].as_array().unwrap();
@@ -2105,15 +2263,15 @@ mod tests {
             layer("base", [-2.0, -2.0, 2.0, 2.0], [0, 0, 255, 255]),
         ])
         .unwrap();
-        let point = raster.point(&json!({"x":6,"y":6})).unwrap();
+        let point = raster.point(&json!({"x":6,"y":6}), false).unwrap();
         assert_eq!(point["window_ref"], "top");
         assert_eq!(point["x"], 1.0);
         assert_eq!(
-            raster.point(&json!({"x":1,"y":6})).unwrap_err().code,
+            raster.point(&json!({"x":1,"y":6}), false).unwrap_err().code,
             "outside_app"
         );
         assert_eq!(
-            raster.point(&json!({"x":8,"y":0})).unwrap_err().code,
+            raster.point(&json!({"x":8,"y":0}), false).unwrap_err().code,
             "invalid_arguments"
         );
     }
@@ -2134,11 +2292,11 @@ mod tests {
             (after.bounds, after.width, after.height)
         );
         assert_eq!(
-            before.point(&json!({"x":2,"y":8})).unwrap(),
-            after.point(&json!({"x":2,"y":8})).unwrap()
+            before.point(&json!({"x":2,"y":8}), false).unwrap(),
+            after.point(&json!({"x":2,"y":8}), false).unwrap()
         );
         assert_eq!(
-            after.point(&json!({"x":10,"y":1})).unwrap_err().code,
+            after.point(&json!({"x":10,"y":1}), false).unwrap_err().code,
             "outside_app"
         );
     }
@@ -2185,8 +2343,8 @@ mod tests {
                             &colors[sy as usize * 2 + sx as usize],
                             "popup={popup:?}, pixel=({x},{y})"
                         );
-                        let mapped = after.point(&point).unwrap();
-                        assert_eq!(mapped, before.point(&point).unwrap());
+                        let mapped = after.point(&point, false).unwrap();
+                        assert_eq!(mapped, before.point(&point, false).unwrap());
                         assert_eq!(mapped["window_ref"], "base");
                         assert_eq!(mapped["x"], sx);
                         assert_eq!(mapped["y"], sy);
@@ -2196,7 +2354,7 @@ mod tests {
                             &[0, 0, 0, 0],
                             "vacated popup={popup:?}, pixel=({x},{y})"
                         );
-                        assert_eq!(after.point(&point).unwrap_err().code, "outside_app");
+                        assert_eq!(after.point(&point, false).unwrap_err().code, "outside_app");
                     }
                 }
             }

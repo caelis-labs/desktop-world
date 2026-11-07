@@ -86,16 +86,17 @@ def main():
         stage = 'installed_discovery_and_observation'
         catalog, _ = client.tool('apps', {'limit': 100})
         require(catalog['coverage']['installed'] is True, catalog)
-        require(catalog.get('provider', {}).get('supported_capabilities'), catalog)
+        require('provider' not in catalog, catalog)
         stopped, _ = client.tool('apps', {'state': 'stopped', 'limit': 100})
         owned, _ = client.tool('apps', {'query': str(exe).upper(), 'state': 'running', 'limit': 1})
         require(len(owned['apps']) == 1, owned)
-        record(stage, {'coverage': catalog['coverage'], 'provider': catalog['provider'], 'stopped_count': len(stopped['apps'])})
+        record(stage, {'coverage': catalog['coverage'], 'stopped_count': len(stopped['apps'])})
         full = execute('const v=await app.look({full:true});return {methods:Object.keys(app),windows:v.windows};')
         require(full['result']['methods'] == METHODS, full)
         record('public_method_surface', full)
+        execute('await app.look({full:true});')
         unchanged = execute('return await app.look();')
-        require(unchanged['view'] == {'changed': False}, unchanged)
+        require(unchanged['view'] == {'kind': 'unchanged'}, unchanged)
         record('unchanged_snapshot_delta', unchanged)
 
         stage = 'semantic_unicode_and_save'

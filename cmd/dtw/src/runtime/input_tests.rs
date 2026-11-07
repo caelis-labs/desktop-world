@@ -37,6 +37,7 @@ impl Backend for InputBackend {
                 name: Some("Title".into()),
                 value: Some("Old".into()),
                 enabled: Some(true),
+                focused: false,
                 can_press: false,
                 actions: vec!["setValue".into()],
             }],

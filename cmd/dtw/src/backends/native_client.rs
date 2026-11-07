@@ -29,7 +29,6 @@ pub struct AppInfo {
 pub struct NativeBackend<P: Platform> {
     worker: Arc<Worker>,
     generation: u64,
-    input_policy: InputPolicy,
     cleanup: Mutex<Option<Error>>,
     #[cfg(target_os = "windows")]
     cursor: Arc<super::windows::CursorSession>,
@@ -59,16 +58,12 @@ impl Drop for NativeBinding {
 }
 impl<P: Platform> NativeBackend<P> {
     pub fn spawn() -> Result<Self, Error> {
-        Self::spawn_with_policy(InputPolicy::Auto)
-    }
-    pub fn spawn_with_policy(input_policy: InputPolicy) -> Result<Self, Error> {
         let path = std::env::current_exe().map_err(failed)?;
         let args = P::worker_args()?;
         let refs: Vec<_> = args.iter().map(String::as_str).collect();
         Ok(Self {
             worker: Arc::new(Worker::spawn_cooperative(&path, &refs).map_err(transport_error)?),
             generation: nonce(),
-            input_policy,
             cleanup: Mutex::new(None),
             #[cfg(target_os = "windows")]
             cursor: Arc::new(super::windows::CursorSession::default()),
@@ -80,11 +75,8 @@ impl<P: Platform> NativeBackend<P> {
         })
     }
     #[cfg(target_os = "windows")]
-    pub fn spawn_with_cursor(
-        input_policy: InputPolicy,
-        cursor: Arc<super::windows::CursorSession>,
-    ) -> Result<Self, Error> {
-        let mut backend = Self::spawn_with_policy(input_policy)?;
+    pub fn spawn_with_cursor(cursor: Arc<super::windows::CursorSession>) -> Result<Self, Error> {
+        let mut backend = Self::spawn()?;
         backend.cursor = cursor;
         Ok(backend)
     }
@@ -262,16 +254,12 @@ impl<P: Platform> NativeBackend<P> {
     }
     fn action(&self, request: Value, call: &CallContext<'_>) -> ActionOutcome {
         let operation = request["operation"].as_str().unwrap_or("").to_owned();
-        if let Some(rejected) = policy_rejection(self.input_policy, &operation) {
-            return rejected;
-        }
         #[cfg(target_os = "windows")]
         self.execution_pending
             .store(true, std::sync::atomic::Ordering::Release);
         #[cfg(target_os = "windows")]
         let (request, mut presentation) = {
             let mut request = request;
-            request["input_policy"] = json!(self.input_policy.as_str());
             let presentation = if matches!(operation.as_str(), "click" | "scroll" | "move" | "drag")
             {
                 // Validate the native target before starting optional visuals.
@@ -301,7 +289,19 @@ impl<P: Platform> NativeBackend<P> {
                     Some("dispatched") => ActionOutcome {
                         delivery: None,
                         dispatch: DispatchState::Dispatched,
-                        evidence: EffectEvidence::Unverified,
+                        evidence: reply["postcondition"]
+                            .as_str()
+                            .filter(|condition| {
+                                matches!(
+                                    *condition,
+                                    "window_focused"
+                                        | "text_present_in_focused_control"
+                                        | "element_value_set"
+                                )
+                            })
+                            .map_or(EffectEvidence::Unverified, |condition| {
+                                EffectEvidence::Confirmed(condition.into())
+                            }),
                         error,
                     },
                     Some("not_dispatched") if error.is_some() => {
@@ -320,7 +320,6 @@ impl<P: Platform> NativeBackend<P> {
                 if outcome.dispatch != DispatchState::NotDispatched {
                     #[cfg(target_os = "windows")]
                     let route = match reply["input_route"].as_str() {
-                        Some("background") => Some(InputRoute::Background),
                         Some("foreground") => Some(InputRoute::Foreground),
                         _ if matches!(operation.as_str(), "click" | "scroll") => None,
                         _ => operation_route(&operation),
@@ -842,41 +841,13 @@ impl<P: Platform> Backend for NativeBackend<P> {
 }
 fn operation_route(operation: &str) -> Option<InputRoute> {
     match operation {
-        // Windows uses UIA Invoke/Toggle/Select and SetValue without an explicit
-        // foreground operation. X11 currently does not advertise these actions.
+        // Native semantic operations can provide a more specific route.
         "press" | "setValue" => Some(InputRoute::Semantic),
         "click" | "focus" | "typeText" | "keypress" | "scroll" | "move" | "drag" => {
             Some(InputRoute::Foreground)
         }
         _ => None,
     }
-}
-
-fn policy_rejection(policy: InputPolicy, operation: &str) -> Option<ActionOutcome> {
-    // Windows selects a targeted HWND route after proving the live receiver.
-    // Keyboard/focus and other platforms retain their existing policy gate.
-    #[cfg(target_os = "windows")]
-    if matches!(operation, "click" | "scroll") {
-        return None;
-    }
-    if policy != InputPolicy::BackgroundOnly
-        || operation_route(operation) != Some(InputRoute::Foreground)
-    {
-        return None;
-    }
-    let mut outcome = ActionOutcome::rejected(Error::NativeFailure {
-        code: "foreground_required".into(),
-        message:
-            "This platform requires foreground input; the service allows background operations only"
-                .into(),
-    });
-    outcome.delivery = Some(InputDelivery {
-        route: None,
-        reason: Some("platform_has_no_background_route".into()),
-        foreground_borrowed: false,
-        focus_return: None,
-    });
-    Some(outcome)
 }
 
 pub fn nonce() -> u64 {
@@ -1000,6 +971,7 @@ fn parse_elements(v: &Value) -> Result<Vec<Element>, Error> {
                 name: v["name"].as_str().map(str::to_owned),
                 value: v["value"].as_str().map(str::to_owned),
                 enabled: v["enabled"].as_bool(),
+                focused: v["focused"] == true,
                 can_press: actions.iter().any(|a| a == "press"),
                 actions,
             })
@@ -1131,36 +1103,6 @@ mod tests {
         assert!(
             matches!(reply_error(&encoded), Some(Error::NativeFailure { code, .. }) if code == "invalid_text_range")
         );
-    }
-
-    #[test]
-    fn background_only_rejects_foreground_paths_and_preserves_semantics() {
-        for operation in ["click", "focus", "typeText", "keypress", "scroll"] {
-            #[cfg(target_os = "windows")]
-            if matches!(operation, "click" | "scroll") {
-                assert!(policy_rejection(InputPolicy::BackgroundOnly, operation).is_none());
-                continue;
-            }
-            let rejected = policy_rejection(InputPolicy::BackgroundOnly, operation).unwrap();
-            assert_eq!(rejected.dispatch, DispatchState::NotDispatched);
-            assert_eq!(
-                rejected.delivery,
-                Some(InputDelivery {
-                    route: None,
-                    reason: Some("platform_has_no_background_route".into()),
-                    foreground_borrowed: false,
-                    focus_return: None,
-                })
-            );
-            assert!(
-                matches!(rejected.error, Some(Error::NativeFailure { code, .. }) if code == "foreground_required")
-            );
-            assert!(policy_rejection(InputPolicy::Auto, operation).is_none());
-        }
-        for operation in ["press", "setValue"] {
-            assert!(policy_rejection(InputPolicy::BackgroundOnly, operation).is_none());
-            assert_eq!(operation_route(operation), Some(InputRoute::Semantic));
-        }
     }
 
     #[test]

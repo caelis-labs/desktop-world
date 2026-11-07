@@ -10,7 +10,7 @@ use crate::backends::linux::NativeBackend;
 use crate::backends::macos::NativeBackend;
 #[cfg(target_os = "windows")]
 use crate::backends::windows::NativeBackend;
-use crate::computer::{Backend, Error, InputPolicy};
+use crate::computer::{Backend, Error};
 use serde_json::{json, Value};
 use std::{
     io::{self, Write},
@@ -22,7 +22,6 @@ use std::{
 };
 #[derive(Default)]
 struct NativeFactory {
-    input_policy: InputPolicy,
     catalog: Mutex<Option<Arc<NativeBackend>>>,
     #[cfg(target_os = "macos")]
     cursor: Arc<crate::backends::macos::CursorSession>,
@@ -34,9 +33,7 @@ impl NativeFactory {
         retire_unavailable_catalog(&self.catalog)?;
         let mut slot = self.catalog.lock().unwrap();
         if slot.is_none() {
-            *slot = Some(Arc::new(NativeBackend::spawn_with_policy(
-                self.input_policy,
-            )?));
+            *slot = Some(Arc::new(NativeBackend::spawn()?));
         }
         Ok(slot.as_ref().unwrap().clone())
     }
@@ -62,9 +59,6 @@ fn retire_unavailable_catalog<B: Backend>(catalog: &Mutex<Option<Arc<B>>>) -> Re
 }
 impl Factory for NativeFactory {
     type Provider = NativeBackend;
-    fn input_policy(&self) -> InputPolicy {
-        self.input_policy
-    }
     fn description(&self) -> Value {
         NativeBackend::description()
     }
@@ -109,15 +103,15 @@ impl Factory for NativeFactory {
     fn connect(&self) -> Result<NativeBackend, Error> {
         #[cfg(target_os = "macos")]
         {
-            NativeBackend::spawn_with_cursor(self.input_policy, self.cursor.clone())
+            NativeBackend::spawn_with_cursor(self.cursor.clone())
         }
         #[cfg(target_os = "windows")]
         {
-            NativeBackend::spawn_with_cursor(self.input_policy, self.cursor.clone())
+            NativeBackend::spawn_with_cursor(self.cursor.clone())
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            NativeBackend::spawn_with_policy(self.input_policy)
+            NativeBackend::spawn()
         }
     }
     fn close_session(&self) -> Result<(), Error> {
@@ -170,23 +164,10 @@ pub fn run(args: &[String]) -> Result<(), WireError> {
             );
             Ok(())
         }
-        ["mcp", options @ ..] => serve(Server::new(NativeFactory {
-            input_policy: input_policy(options)?,
-            ..NativeFactory::default()
-        })),
+        ["mcp"] => serve(Server::new(NativeFactory::default())),
         _ => Err(error(
             "invalid_arguments",
-            "Usage: dtw mcp [--input-policy auto|background-only] | dtw app catalog",
-        )),
-    }
-}
-fn input_policy(options: &[&str]) -> Result<InputPolicy, WireError> {
-    match options {
-        [] | ["--input-policy", "auto"] => Ok(InputPolicy::Auto),
-        ["--input-policy", "background-only"] => Ok(InputPolicy::BackgroundOnly),
-        _ => Err(error(
-            "invalid_arguments",
-            "Expected --input-policy auto|background-only",
+            "Usage: dtw mcp | dtw app catalog",
         )),
     }
 }
@@ -353,33 +334,10 @@ mod tests {
     }
 
     #[test]
-    fn service_policy_launch_options_are_exact_and_default_to_auto() {
-        assert_eq!(input_policy(&[]).unwrap(), InputPolicy::Auto);
-        assert_eq!(
-            input_policy(&["--input-policy", "auto"]).unwrap(),
-            InputPolicy::Auto
-        );
-        assert_eq!(
-            input_policy(&["--input-policy", "background-only"]).unwrap(),
-            InputPolicy::BackgroundOnly
-        );
-        for options in [
-            vec!["--input-policy"],
-            vec!["--input-policy", "background_only"],
-            vec!["--input-policy", "foreground"],
-            vec!["--input-policy=auto"],
-            vec![
-                "--input-policy",
-                "auto",
-                "--input-policy",
-                "background-only",
-            ],
-            vec!["--other", "auto"],
-        ] {
-            assert_eq!(
-                input_policy(&options).unwrap_err().code,
-                "invalid_arguments"
-            );
+    fn removed_input_modes_are_rejected_before_starting_the_service() {
+        for mode in ["auto", "background-only"] {
+            let args = ["mcp", "--input-policy", mode].map(str::to_owned);
+            assert_eq!(run(&args).unwrap_err().code, "invalid_arguments");
         }
     }
 }

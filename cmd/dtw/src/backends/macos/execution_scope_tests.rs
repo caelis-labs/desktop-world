@@ -12,7 +12,6 @@ fn backend(code: &str) -> NativeBackend {
             generation: 1,
         },
         cleanup_failure: Mutex::new(None),
-        input_policy: InputPolicy::Auto,
         focus_pending: AtomicBool::new(false),
         permissions: Mutex::new(None),
         cursor: Arc::new(CursorSession::default()),

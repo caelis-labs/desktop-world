@@ -69,8 +69,7 @@ def run(args):
         observer = subprocess.Popen([str(args.observer), str(root / 'focus.jsonl')],
                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=observer_log)
         _ready(observer)
-        client = AppClient(args.dtw, root / 'mcp', mcp_args=
-                           ('--input-policy', 'background-only') if args.case == 'background-only' else ())
+        client = AppClient(args.dtw, root / 'mcp')
         start = time.time() * 1000
         view = client.capture(bundle, 'open-panel')
         proof['capture_interval'] = [start, time.time() * 1000]
@@ -99,15 +98,9 @@ def run(args):
         proof.update(reply=data, is_error=frame.get('isError', False), action_interval=[start, time.time() * 1000])
         effects = data.get('effects', {})
         require(not effects.get('dispatch', {}).get('unknown') and not effects.get('interrupted'), data)
-        if args.case == 'background-only':
-            require(data.get('error', {}).get('code') == 'foreground_required' and frame.get('isError'), data)
-            require(effects.get('dispatch', {}).get('not_dispatched') == 1
-                    and not effects.get('dispatch', {}).get('dispatched'), data)
-            require(state()['created'] == proof['before']['created'] and len(state()['windows']) == 1, state())
-        else:
-            require(not frame.get('isError') and not data.get('error'), data)
-            wait_for(lambda: state().get('created') == proof['before']['created'] + 1 and len(state().get('windows', [])) == 1)
-            require(state()['windows'][0]['id'] != proof['before']['windows'][0]['id'], state())
+        require(not frame.get('isError') and not data.get('error'), data)
+        wait_for(lambda: state().get('created') == proof['before']['created'] + 1 and len(state().get('windows', [])) == 1)
+        require(state()['windows'][0]['id'] != proof['before']['windows'][0]['id'], state())
         wait_for(lambda: foreground() == proof['action_foreground'])
         proof['after'] = state()
         proof['pointer_after'] = cover.state()['environment']['pointer_screen']
@@ -135,7 +128,7 @@ def run(args):
         if 'action_interval' in proof:
             interval = proof['action_interval']
             proof['action_focus'] = (evaluate_focus(samples, *interval, proof['action_foreground'])
-                if args.case == 'background-only' or proof['action_foreground'] == proof['before']['pid'] else
+                if proof['action_foreground'] == proof['before']['pid'] else
                 evaluate_scope_focus(samples, *interval, proof['before']['pid'], proof['action_foreground']))
         (root / 'stop').touch()
         if child:
@@ -169,7 +162,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('dtw', 'document-binary', 'fixture-binary', 'observer', 'output'):
         parser.add_argument('--' + name, required=True, type=Path)
-    parser.add_argument('--case', choices=['auto', 'focus-first', 'background-only'], default='auto')
+    parser.add_argument('--case', choices=['default', 'focus-first'], default='default')
     args = parser.parse_args()
     proof = run(args)
     print(json.dumps({k: proof.get(k) for k in ('status', 'functional_pass', 'sampling_pass', 'failure')}))

@@ -87,6 +87,12 @@ def main():
 
     try:
         client = AppClient(args.dtw.resolve(), out / 'mcp')
+        # Launch can expose the peer before the main window finishes ordering.
+        # Wait read-only for both owned surfaces before the first raster; never
+        # retry an input or reuse a capture rejected as scene_changed.
+        client.execute(bundle,
+            "await app.wait({window:'stable',title:'DTW Scene main',timeout_ms:5000}); "
+            "await app.wait({window:'stable',title:'DTW Scene peer',timeout_ms:5000});")
         client.capture(bundle, 'initial')
         baseline = wait_until(state)
         apps, response = client.tool('apps', {'query': identifier, 'state': 'running'})

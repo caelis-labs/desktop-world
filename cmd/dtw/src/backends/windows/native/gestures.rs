@@ -12,12 +12,6 @@ impl Store {
         dispatched: &mut bool,
         preparation: &mut bool,
     ) -> Result<(), Error> {
-        if r["input_policy"] == "background_only" {
-            return Err(Error::NativeFailure {
-                code: "foreground_required".into(),
-                message: "Pointer gestures require visible foreground input".into(),
-            });
-        }
         let pixels = self
             .pixels
             .remove(string(r, "binding")?)
@@ -68,14 +62,13 @@ impl Store {
         }
         let drag = r["operation"] == "drag";
         let plan = pointer::plan(&points, drag, info.rcMonitor)?;
-        self.prepare_pointer_surface(target, window, r, until, preparation)?;
-        for point in plan.points() {
-            verify_point(window, target.app.pid, *point)?;
-        }
         input::no_held_keys()?;
         self.consume(target);
         self.focus_window(target, window, until, preparation)?;
-        self.input_boundary(target, window, until)?;
+        self.prepare_pointer_surface(target, window, until)?;
+        for point in plan.points() {
+            verify_point(window, target.app.pid, *point)?;
+        }
         if !equal_rect(pixels.bounds, unobstructed(window)?)
             || pixels.dpi != unsafe { GetDpiForWindow(window) }
         {

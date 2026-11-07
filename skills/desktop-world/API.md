@@ -7,7 +7,7 @@
 - `query`: case-insensitive name/identifier substring, up to 256 characters.
 - `state`: `all` (default), `running` or `stopped`.
 - `offset`: nonnegative integer; `limit`: 1–100 (default 30).
-- Returns `{apps:[{app,name,running,instances?}], next, coverage, provider}`. Pass `next`
+- Returns `{apps:[{app,name,running,instances?}], next, coverage}`. Pass `next`
   as the next offset with the same query/state. Coverage describes searched
   locations; an empty result does not prove the app is not installed elsewhere.
 - macOS searches standard application folders, including stopped bundles, and
@@ -18,10 +18,8 @@
   unsupported values and native read gaps remain explicit in coverage. Executable
   paths identify Win32 apps; `win:<AUMID>` identifies proven packaged apps.
 - Experimental X11 reports running-only discovery with `installed:false`.
-- `provider` describes the native provider, capabilities, observe scopes and conditions
-  before input; a public method's presence alone does not prove platform support.
-  `supported_capabilities` lists native primitives, not extra JavaScript methods.
-  Use the public methods below; `closeWindow` is not a script method.
+- Provider identity is sent once as `serverInfo.description` at MCP initialization.
+  The platform sections below describe native support.
 
 `exec({app, source})`
 
@@ -39,9 +37,11 @@
   for success. App-operation failures expose their business code in `error.code`
   and retain operation/source details in `failure`. Invalid public arguments use
   `invalid_arguments`. `effects`
-  preserves dispatch/effect uncertainty; it does not prove the task succeeded.
-  A rejected payload counts as `not_dispatched` without an `unverified` action
-  effect; confirmed no-op postconditions and dispatched/unknown effects remain.
+  separates input dispatch from any known UI effect. `effects.dispatch` counts
+  `dispatched`, `not_dispatched` and `unknown`. Optional
+  `effects.acknowledgements` identify the call, operation and confirmed
+  postcondition or specific readback error. An omitted acknowledgement gives no
+  proof of app consumption.
   DTW handles input readiness internally. Verify the requested effect from the
   returned view or an explicit readback; dispatch alone is not effect confirmation.
   If automatic input preparation fails before payload delivery, the requested
@@ -60,9 +60,10 @@
   inspect the UI again with `look()` or `capture()` before choosing another
   action. Do not repeat an action to recover the missing observation. An
   explicit read failure, interruption or unconfirmed cleanup remains an error.
-  A returned value identical to the final script snapshot is coalesced into `view`, rather
-  than repeated in `result`. Task-specific JSON values remain in `result`.
-  The last current explicit/fallback PNG is a separate MCP image block.
+  Return a task-specific JSON value to get just `result` alongside applicable
+  receipts. Return the final snapshot or omit the return value to publish `view`.
+  Errors retain any available view. A PNG is a separate MCP image block with
+  geometry in `view.image` or top-level `image` for a custom result.
 - An incomplete default semantic view can include `semantics.hint` suggesting a
   `role` or `text` filter. This preserves the original read reason and performs
   no extra observation or input; use freshly returned target IDs.
@@ -76,26 +77,33 @@
 | Method | Arguments | Behavior |
 | --- | --- | --- |
 | `await app.look(options?)` | `{full?:boolean,role?:string,text?:string,scope?:'window'\|'menu',target?:string}` | Start/reuse the app where supported (nonactivating by default on macOS); observe visible window layering and up to 80 semantic elements in the top surface. Optional role (1–64 characters) and text (1–256) filter the native traversal, so relevant content beyond the default preview can be reached. `scope:'menu'` reads the selected window's app menu through the native menu scope without activating it; the default is window content. It requires a proven app window and does not expose Dock roots or menu extras. `target` observes the exact retained subtree of a previously observed ID (for example, File from a menu look); it cannot be combined with `scope`. It does not activate or expand menus. Unsupported/stale subtree reads fail without broadening to the window or a screenshot. `semantics.query` identifies the filtered scope; completeness and absence apply only within it. JavaScript always receives the full snapshot. Tool output compares with the previous published view. Window metadata is bounded to 32 entries. `full:true` forces a tool-output baseline, not continuation. |
+| `await app.wait(msOrCondition)` | milliseconds (1–10000) OR `{window?:'stable',title?:string,role?:string,text?:string,timeout_ms?:number}` | A number pauses without reading, launching or focusing. A condition returns a snapshot when a visible window matches the title (case-insensitive substring) and contains a matching element if role/text is supplied. `window:'stable'` also requires the same visible window metadata on consecutive samples at least 150 ms apart. Supply at least one condition. Default timeout is 2000 ms, maximum 10000 ms. Use the expected destination title or control after navigation. |
 | `await app.waitForNewWindow(options?)` | `{timeout_ms?:number}` (default 2000, max 10000) | Wait for a new content window or menu surface after the latest dispatched input, even from the preceding exec. This includes `quit` opening a save-confirmation dialog. Returns a full snapshot when that new surface appears; throws `wait_timeout` if it does not, or `input_required` when no dispatched input precedes it. Read-only; never repeats input. Use after New/Open or opening a popup. After Save/Cancel/Close dismisses a surface, use `look()` to verify the resulting view instead. |
 | `await app.capture(options?)` | `{full?:boolean}` | Return a full snapshot, including `windows`, and a PNG of the authorized app's visible stacked surfaces. Establishes the internal coordinate binding; later input returns an updated visual observation while in visual mode. |
 | `await app.readText(target)` | observed ID string OR `{target:string,offset?:number,limit?:number}` | Read native textual content of an observed element. Returns `{text,offset,next_offset,total_length,unit:'utf16'}` inside JavaScript; use `return` or `print` for requested tool output. Offset defaults to 0; limit defaults to 4096, from 2–16384 UTF-16 units. `next_offset:null` marks the end; stop there. Otherwise reuse `next_offset` and the same target without a new look to continue one retained text revision. This read does not refresh the scene or request a PNG. A fresh look/input can retire its source; stale reads fail instead of joining revisions. Titles/descriptions are not substituted for document text. Unsupported native text remains explicit. |
-| `await app.click(target)` | string OR `{target:string}` OR `{selector:{role?:string,text?:string,scope?:'window'\|'menu'}}` OR `{x:number,y:number,button?:'left'\|'right',count?:1\|2}` | Semantic target ID from the latest look or a unique selector, for controls advertising `press`. Editable text controls can advertise this action to focus the control without changing its text. Unsupported controls use screenshot coordinates. `app.click('w1.e12')` uses a target ID; other strings such as `app.click('Continue')` are text selectors. Never mix target forms. Mouse options apply only to coordinates. |
-| `await app.move(point)` | `{x:number,y:number}` | Hover over a visible point in the current app image, enabling hover UI. |
-| `await app.drag(options)` | `{path:[{x:number,y:number},...]}` | Content drag uses one left-button press, bounded path and paired release. 2–64 supplied points with movement, internally at most 256 samples. The entire path must stay within one observed window. A proven standard macOS or Windows title bar moves its window via native position, with the destination fully on one display. Other paths drag content. Unsupported provider/display boundaries are explicit. No held button survives a call. |
-| `await app.setValue(options)` | `{target:string,value:string}` OR `{selector:{role?:string,text?:string,scope?:'window'\|'menu'},value:string}` | Replace the complete native value of an editable text control advertising `setValue`, including clearing with an empty string. At most 16 KiB UTF-8, no NUL. Uses the existing native setter without clicking or selecting text first. DTW prepares and verifies the intended control internally; an extra `click` or `focus` is not required. It may not emit keyboard/DOM input events; use `typeText` for application typing behavior. On macOS `element_value_set` confirms immediate native value readback, not a later save or submission. Other providers can return unverified evidence. |
+| `await app.click(target)` | string OR `{target:string}` OR `{selector:{role?:string,text?:string,scope?:'window'\|'menu'}}` OR `{x:number,y:number,unit?:'fraction',button?:'left'\|'right',count?:1\|2}` | Semantic target ID from the latest look or a unique selector, for controls advertising `press`. Editable text controls can advertise this action to focus the control without changing its text. Unsupported controls use screenshot coordinates. `app.click('w1.e12')` uses a target ID; other strings such as `app.click('Continue')` are text selectors. Never mix target forms. Mouse options apply only to coordinates. |
+| `await app.move(point)` | `{x:number,y:number,unit?:'fraction'}` | Hover over a visible point in the current app image, enabling hover UI. |
+| `await app.drag(options)` | `{path:[{x:number,y:number},...],unit?:'fraction'}` | Content drag uses one left-button press, bounded path and paired release. 2–64 supplied points with movement, internally at most 256 samples. The entire path must stay within one observed window. A proven standard macOS or Windows title bar moves its window via native position, with the destination fully on one display. Other paths drag content. Unsupported provider/display boundaries are explicit. No held button survives a call. |
+| `await app.setValue(options)` | `{target:string,value:string}` OR `{selector:{role?:string,text?:string,scope?:'window'\|'menu'},value:string}` | Replace the complete native value of an editable text control advertising `setValue`, including clearing with an empty string. At most 16 KiB UTF-8, no NUL. Uses the existing native setter without clicking or selecting text first. DTW prepares and verifies the intended control internally; an extra `click` or `focus` is not required. It may not emit keyboard/DOM input events; use `typeText` for application typing behavior. `element_value_set` confirms immediate native readback when available. Verify saves and submissions separately. |
 | `await app.typeText(text)` | string, or `{text:string}` | Unicode keyboard input into the active editing control. It may invoke application editing behavior. It does not replace a field value implicitly. |
 | `await app.keypress(keys)` | chord string, string array, or `{keys:string[]}` | One press/release chord; on macOS this also works for a running app with no window (e.g. New). Native app/window focus is verified before key downs. E.g. `'META+A'`, `'ENTER'`, `['META','A']` or `['ESC']`. Use an array/object for key names containing a literal `+`. `META` means Command on macOS and Windows key on Windows. |
-| `await app.scroll(options)` | `{delta_y:number,delta_x?:number,x?:number,y?:number}` | Integer wheel steps in [-100,100] per axis, positive down/right; these are not pixels. Supply both x/y from the current screenshot to target a pane. Without x/y DTW captures the active surface and anchors at its center. |
+| `await app.scroll(options)` | `{delta_y:number,delta_x?:number,x?:number,y?:number,unit?:'fraction'}` | Integer wheel steps in [-100,100] per axis, positive down/right; these are not pixels. Supply both x/y from the current screenshot to target a pane. Without x/y DTW captures the active surface and anchors at its center. |
 | `await app.focus()` | none | Focus the authorized app/current window for this script. Keep related input in the same `exec`. A supported windowless app can create its first window within that script. Normal input prepares its destination automatically; an extra `focus()` is not required. |
 | `await app.quit()` | none | Request normal quit of the active app instance. A save dialog remains observable. No forced termination. |
 
 `look`/`capture` accept no native refs. Input routes within the selected app.
-`waitForNewWindow`'s condition budget stops new probes; an in-flight bounded read
+The wait condition budget stops new probes. An in-flight bounded read
 can finish within the script deadline. A condition timeout does not retire the connection.
 Control values, including sliders and checkboxes, are in `look().elements[].value`.
+When Windows confirms keyboard focus on a returned editable element it adds
+`focused:true`. This is a fact about the sampled scene.
 `readText()` reads native text content, not numeric control values or element labels.
 
-`look()`, `capture()` and `waitForNewWindow()` return full JavaScript snapshots. Semantic completeness describes that snapshot's query scope; it does not promise that an asynchronous menu or window has finished appearing. Use `waitForNewWindow()` when the preceding action is expected to create a surface. `readText()` returns
+Scene reads and successful condition waits return full JavaScript snapshots.
+Semantic completeness applies to the queried tree. A stable window sample covers
+visible window metadata, so prefer a destination title or control for async loads.
+For a new surface use `waitForNewWindow()`. A condition wait times out with
+`wait_timeout` and sends no input. `readText()` returns
 text pages. Input methods (`click`, `move`, `drag`, `scroll`, `setValue`, `typeText`, `keypress`,
 `focus`, `quit`) return action receipts with `outcome.dispatch` and
 `outcome.evidence`, not snapshots. Inspect the outer tool `view` for the current
@@ -135,19 +143,23 @@ prompt or unconfirmed close is not proof of termination.
 
 Script `look()` and `capture()` always return `{running,windows,elements,coverage,...}`, even when unchanged. `windows` includes bounds and front-to-back order.
 
-The outward tool baseline has `reset:true`, windows in front-to-back order, semantic elements,
-and explicit coverage/semantic completeness. Semantic element names/values are
-bounded; truncated observations cannot prove absence. Later views use
-`{changed:false}` or added/changed/removed windows/elements and changed coverage.
-Window order is meaningful. Intermediate reads inside one script do not consume
-the baseline before its tool response. A context/process replacement resets it.
+The tool's `view.kind` is `full`, `delta` or `unchanged`. Full views replace
+the baseline and carry arrays. A delta applies to the last published view for
+the app and carries per-collection `added`, `changed`, `removed` and optional
+`order`. Missing fields retain their previous values. DTW sends a full view if
+it costs less than a delta. Use `look({full:true})` when a fresh baseline is needed.
+Truncated observations cannot prove absence. Intermediate and custom-result
+reads leave the published baseline in place.
 
 While its anchor window stays in place, a previously captured viewport is retained
 when overlays disappear, preserving origin and scale. A new canvas adds
 `image.coordinate_reset:true`; use the new image before choosing coordinates.
-`image.bounds` is the desktop canvas rectangle; width/height relative to those bounds map desktop units
-to image pixels. Input always uses image pixels. Old coordinates are not a
-semantic target guarantee.
+Default input coordinates are pixels in the original PNG. When the host scales
+the image preview, pass `unit:'fraction'` with `x` and `y` as fractions of the
+visible image width and height in [0, 1). Measure inside the image content,
+excluding viewer margins. For drag the unit applies to every path point.
+Coordinates use the latest captured canvas and must still pass current hit and
+ownership checks.
 
 Images preserve authorized windows' positions, z-order and alpha, including
 same-app overlays and proven associated surfaces. Empty space is transparent and
@@ -177,7 +189,7 @@ bounded read coverage, so a field revision does not establish document completen
 Semantic output is bounded to 80 elements / 24 KiB; window metadata to 32 rows,
 with titles bounded to 80 characters. Coverage marks omissions. Optional native
 read gaps include bounded `coverage.read_error_codes`; a gap never authorizes an
-unproven surface. `changed:false`
+unproven surface. `kind:"unchanged"`
 compares these observed fields; visual-only changes require capture.
 An explicit `look()` uses semantics when available, ending automatic visual
 follow-ups while retaining a previously returned image's coordinate mapping.
@@ -265,18 +277,21 @@ and display, with paired release on cancellation/failure. Windows GUI, applicati
 and DPI conditions require their own acceptance. Experimental X11 still requires
 an unobstructed window and does not claim multi-surface capture.
 
-Windows UIA patterns execute provider code: an Invoke provider can activate its
-window or move the physical pointer. UIA dispatch does not promise background
-execution. Supported posted client-area clicks/wheels avoid those changes;
-keyboard and other pointer routes can require foreground coordination. Windows
-keeps necessary borrowing within one script and observes intermediate visible
-external handoffs; returning later does not rearm that script. Settlement returns
-the original exact window/order and borrowed physical pointer while their proofs
-remain valid. If Windows reports an unreadable hidden service as its original
-foreground, DTW prepares the selected visible target internally; it does not guess
-another app as a return destination. An unconfirmed return retains the visible
-active target and remains distinct from the business result. No business keyboard
-payload is sent until the exact receiver is foreground.
+Windows prepares the exact foreground receiver for interaction. Semantic actions
+use UIA; pointer actions require a visible, unobstructed hit. If the target
+remains covered after preparation, uncover it and capture it again. Related
+actions in one script reuse its foreground scope. A visible user handoff stops
+input for that script. Settlement returns the original exact foreground and
+borrowed physical pointer while their proofs remain valid. If the original
+foreground is an unreadable hidden service, the prepared visible target can
+remain active.
+
+On Windows, a readable focused edit can confirm `text_present_in_focused_control`
+for ASCII and Unicode. A failure to verify accepted text stops the script at
+`typeText` with `text_delivery_unconfirmed` when exact readback differs or does
+not settle. Inspect the field before any further input. Some controls support
+typing without native text readback, so use the next relevant UI state to check
+the effect. Confirmation describes the edit at readback time.
 
 For native Unicode Win32/WinForms Edit controls, Windows `readText` reads the
 exact UIA-advertised child HWND with bounded read-only system messages. This

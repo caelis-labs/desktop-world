@@ -13,7 +13,6 @@ use crate::app_protocol::{
 const APP: &str = "org.example.Controlled";
 #[derive(Clone)]
 struct Catalog {
-    input_policy: InputPolicy,
     entries: Arc<Mutex<Vec<Application>>>,
     backend: MockBackend,
     connects: Arc<AtomicUsize>,
@@ -21,9 +20,6 @@ struct Catalog {
 }
 impl Factory for Catalog {
     type Provider = MockBackend;
-    fn input_policy(&self) -> InputPolicy {
-        self.input_policy
-    }
     fn catalog(&self) -> Result<Vec<Application>, Error> {
         Ok(self.entries.lock().unwrap().clone())
     }
@@ -41,7 +37,6 @@ impl Factory for Catalog {
 }
 fn server() -> (Arc<Server<Catalog>>, Catalog) {
     let catalog = Catalog {
-        input_policy: InputPolicy::Auto,
         entries: Arc::new(Mutex::new(vec![Application {
             app_id: APP.into(),
             app: application(),
@@ -859,10 +854,8 @@ fn unicode_and_json_expansion_are_rejected_before_input_admission() {
 }
 
 #[test]
-fn removed_api_is_rejected_even_under_restricted_service_policy() {
-    let (_, mut catalog) = server();
-    catalog.input_policy = InputPolicy::BackgroundOnly;
-    let server = Server::new_atomic_test(catalog.clone());
+fn removed_api_is_rejected_without_connecting() {
+    let (server, catalog) = server();
     assert!(call(&server, "api", json!({})).is_error);
     assert!(call(&server, "apps", json!({}))
         .data

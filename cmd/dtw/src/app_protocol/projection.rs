@@ -15,18 +15,17 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
             .as_array()
             .map(|steps| summarize(steps));
         let mut compact = json!({"app":original["app"],"execution_id":original["execution_id"],"status":original["status"]});
-        if let Some(view) = value.get("view").filter(|view| !view.is_null()) {
-            compact["view"] = view.clone();
+        let returned_scene = returns_snapshot(value);
+        if shows_view(value, reply.is_error) {
+            compact["view"] = value["view"].clone();
+        } else if reply.image.is_some() {
+            // Custom results can still attach a capture. Preserve its geometry.
+            compact["image"] = value["view"]["image"].clone();
         }
         if let Some(observation) = value.get("observation") {
             compact["observation"] = observation.clone();
         }
-        if !value["result"].is_null()
-            && !same_json(
-                &value["result"],
-                value.get("snapshot").unwrap_or(&value["view"]),
-            )
-        {
+        if !value["result"].is_null() && !returned_scene {
             compact["result"] = value["result"].clone();
         }
         if value["console"].as_array().is_some_and(|v| !v.is_empty()) {
@@ -37,13 +36,30 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
         }
         if let Some(summary) = summary {
             if summary["actions"].is_object() {
-                compact["effects"] = json!({"dispatch":summary["actions"]["dispatch"],"evidence":summary["actions"]["evidence"],"interrupted":summary["actions"]["interrupted"]});
+                compact["effects"] = json!({"dispatch":summary["actions"]["dispatch"]});
+                if summary["actions"]["interrupted"] != 0 {
+                    compact["effects"]["interrupted"] = summary["actions"]["interrupted"].clone();
+                }
+                let acknowledgements: Vec<_> = original["script"]["steps"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(action_acknowledgement)
+                    .collect();
+                if !acknowledgements.is_empty() {
+                    compact["effects"]["acknowledgements"] = json!(acknowledgements);
+                }
             }
             if summary["focus_preparation"].is_object() {
                 if !compact["effects"].is_object() {
                     compact["effects"] = json!({});
                 }
-                compact["effects"]["focus_preparation"] = summary["focus_preparation"].clone();
+                let mut preparation = summary["focus_preparation"].clone();
+                preparation.as_object_mut().unwrap().remove("evidence");
+                if preparation["interrupted"] == 0 {
+                    preparation.as_object_mut().unwrap().remove("interrupted");
+                }
+                compact["effects"]["focus_preparation"] = preparation;
             }
         }
         // Routes and borrow settlement remain in the retained diagnostic
@@ -83,6 +99,32 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
         data.remove("receipt");
     }
     reply
+}
+
+pub(super) fn shows_view(value: &Value, failed: bool) -> bool {
+    value["view"].is_object() && (failed || value["result"].is_null() || returns_snapshot(value))
+}
+
+fn returns_snapshot(value: &Value) -> bool {
+    value
+        .get("snapshot")
+        .is_some_and(|snapshot| same_json(&value["result"], snapshot))
+}
+
+fn action_acknowledgement(step: &Value) -> Option<Value> {
+    let outcome = &step["receipt"]["outcome"];
+    let evidence = &outcome["evidence"];
+    let mut acknowledgement = json!({"call":step["number"],"operation":step["operation"]});
+    if evidence["kind"] == "confirmed" {
+        acknowledgement["confirmed"] = evidence["postcondition"].clone();
+    } else if let Some(code) = outcome["error"]["code"].as_str().filter(|code| {
+        outcome["dispatch"] != "not_dispatched" && *code == "text_delivery_unconfirmed"
+    }) {
+        acknowledgement["error"] = json!(code);
+    } else {
+        return None;
+    }
+    Some(acknowledgement)
 }
 
 // JavaScript's JSON round trip changes integral floats such as window bounds
@@ -407,9 +449,10 @@ mod tests {
             let result = json!({"windows":[{"bounds":returned}]});
             let view = json!({"windows":[{"bounds":native}]});
             let mut reply = successful_execution(vec![]);
-            reply.data["value"] = json!({"agent_protocol":true,"result":result,"view":view});
+            reply.data["value"] =
+                json!({"agent_protocol":true,"result":result,"view":view,"snapshot":view});
             let projected = execution(reply);
-            assert_eq!(projected.data["view"], view);
+            assert_eq!(projected.data.get("view"), coalesced.then_some(&view));
             assert_eq!(
                 projected.data.get("result").is_none(),
                 coalesced,
@@ -441,10 +484,7 @@ mod tests {
             reply.data["script"]["steps"][0]["receipt"]["outcome"]["delivery"]["focus_return"],
             "pending"
         );
-        assert_eq!(
-            projected.data["effects"]["evidence"],
-            json!({"unverified":1})
-        );
+        assert!(projected.data["effects"].get("evidence").is_none());
 
         let mut read = successful_execution(vec![]);
         read.data["value"] = json!({"agent_protocol":true});
@@ -515,7 +555,7 @@ mod tests {
             projected.data["effects"]["focus_preparation"],
             json!({
             "attempted":2,"dispatch":{"dispatched":1,"unknown":1},
-            "evidence":{"unverified":2},"interrupted":1})
+            "interrupted":1})
         );
         assert!(!projected.data.to_string().contains("private_route"));
         assert!(!projected.data.to_string().contains("private_reason"));
