@@ -356,6 +356,9 @@ fn run_inner(
             globals
                 .set("__methods", super::methods::facade_metadata())
                 .map_err(internal)?;
+            globals
+                .set("__app_methods", super::operations::metadata())
+                .map_err(internal)?;
             let mut options = EvalOptions::default();
             options.global = true;
             options.strict = true;
@@ -617,7 +620,7 @@ fn validate_args(op: &str, args: &Value) -> Result<(), super::wire::WireError> {
     // Use the coordinator's exact parser so the VM cannot advertise a different
     // argument shape. These placeholders never resolve or dispatch a target.
     if op.starts_with("scene.") {
-        return super::scene::validate(op, args);
+        return super::scene::validate(op, args).map(|_| ());
     }
     if op == "session.result" {
         return super::session::receipt_query(args).map(|_| ());

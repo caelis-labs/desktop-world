@@ -58,172 +58,9 @@ struct Raster {
     layers: Vec<Layer>,
 }
 
-pub(super) fn validate(op: &str, args: &Value) -> Result<(), wire::WireError> {
-    let allowed: &[&str] = match op {
-        "scene.look" => &["full", "role", "text", "scope", "target"],
-        "scene.capture" | "scene.after" => &["full"],
-        "scene.readText" => &["target", "offset", "limit"],
-        "scene.waitForNewWindow" => &["timeout_ms"],
-        "scene.wait" => &["ms", "window", "title", "role", "text", "timeout_ms"],
-        "scene.click" => &["target", "selector", "x", "y", "unit", "button", "count"],
-        "scene.setValue" => &["target", "selector", "value"],
-        "scene.move" => &["x", "y", "unit"],
-        "scene.drag" => &["path", "unit"],
-        "scene.typeText" => &["text", "target"],
-        "scene.keypress" => &["keys"],
-        "scene.scroll" => &["delta_y", "delta_x", "x", "y", "unit"],
-        "scene.quit" | "scene.focus" => &[],
-        _ => return Err(error("invalid_arguments", "Unknown app operation")),
-    };
-    let object = args
-        .as_object()
-        .ok_or_else(|| error("invalid_arguments", "Expected one argument object"))?;
-    if object.keys().any(|key| !allowed.contains(&key.as_str())) {
-        return Err(error(
-            "invalid_arguments",
-            "Unknown app argument; see Skill API.md",
-        ));
-    }
-    if args.get("unit").is_some_and(|unit| {
-        unit != "fraction"
-            || (op != "scene.drag" && !(args["x"].is_number() && args["y"].is_number()))
-    }) {
-        return Err(error(
-            "invalid_arguments",
-            "unit:'fraction' requires image coordinates",
-        ));
-    }
-    if op == "scene.setValue" {
-        let one_target = usize::from(args.get("target").is_some())
-            + usize::from(args.get("selector").is_some())
-            == 1;
-        if !one_target
-            || args["value"]
-                .as_str()
-                .is_none_or(|value| value.len() > 16_384 || value.contains('\0'))
-        {
-            return Err(error("invalid_arguments", "setValue requires one target or selector and a string value (up to 16 KiB, no NUL)"));
-        }
-    }
-    if op == "scene.typeText"
-        && args
-            .get("target")
-            .is_some_and(|target| target.as_str().is_none_or(str::is_empty))
-    {
-        return Err(error(
-            "invalid_arguments",
-            "typeText target must be an observed element ID",
-        ));
-    }
-    if op == "scene.wait" {
-        if let Some(ms) = args.get("ms") {
-            if object.len() == 1 && ms.as_u64().is_some_and(|ms| (1..=10_000).contains(&ms)) {
-                return Ok(());
-            }
-            return Err(error(
-                "invalid_arguments",
-                "wait(ms) requires 1..10000 milliseconds",
-            ));
-        }
-        if args.get("window").is_some_and(|v| v != "stable")
-            || !["window", "title", "role", "text"]
-                .iter()
-                .any(|key| args.get(key).is_some())
-            || ["title", "role", "text"].iter().any(|key| {
-                args.get(key).is_some_and(|v| {
-                    v.as_str()
-                        .is_none_or(|s| s.trim().is_empty() || s.len() > 256)
-                })
-            })
-        {
-            return Err(error(
-                "invalid_arguments",
-                "wait requires window:'stable', title, role or text",
-            ));
-        }
-    }
-    if matches!(op, "scene.wait" | "scene.waitForNewWindow")
-        && args
-            .get("timeout_ms")
-            .is_some_and(|v| v.as_u64().is_none_or(|ms| !(1..=10_000).contains(&ms)))
-    {
-        return Err(error(
-            "invalid_arguments",
-            "timeout_ms must be an integer from 1 to 10000",
-        ));
-    }
-    for key in ["full"] {
-        if args.get(key).is_some_and(|v| !v.is_boolean()) {
-            return Err(error(
-                "invalid_arguments",
-                "Observation flags must be Boolean",
-            ));
-        }
-    }
-    if op == "scene.look" {
-        if args
-            .get("target")
-            .is_some_and(|target| target.as_str().is_none_or(str::is_empty))
-            || (args.get("target").is_some() && args.get("scope").is_some())
-        {
-            return Err(error(
-                "invalid_arguments",
-                "look target must be an observed ID and cannot be combined with scope",
-            ));
-        }
-        if args
-            .get("scope")
-            .is_some_and(|scope| !matches!(scope.as_str(), Some("window" | "menu")))
-        {
-            return Err(error(
-                "invalid_arguments",
-                "look scope must be window or menu",
-            ));
-        }
-        for (key, maximum) in [("role", 64), ("text", 256)] {
-            if args.get(key).is_some_and(|value| {
-                value
-                    .as_str()
-                    .is_none_or(|text| text.is_empty() || text.chars().count() > maximum)
-            }) {
-                return Err(error(
-                    "invalid_arguments",
-                    "Observation role/text must be bounded nonempty strings",
-                ));
-            }
-        }
-    }
-    if op == "scene.readText" {
-        if args["target"]
-            .as_str()
-            .is_none_or(|target| target.is_empty())
-        {
-            return Err(error(
-                "invalid_arguments",
-                "readText requires an observed target ID",
-            ));
-        }
-        for (key, minimum, maximum) in [("offset", 0, u32::MAX as u64), ("limit", 2, 16384)] {
-            if args.get(key).is_some_and(|value| {
-                value
-                    .as_u64()
-                    .is_none_or(|number| number < minimum || number > maximum)
-            }) {
-                let end_hint = if key == "offset" && args[key].is_null() {
-                    "; next_offset:null means the text has ended"
-                } else {
-                    ""
-                };
-                return Err(error(
-                    "invalid_arguments",
-                    &format!(
-                        "readText {key} must be an integer from {minimum} to {maximum}{end_hint}"
-                    ),
-                ));
-            }
-        }
-    }
-    Ok(())
+pub(super) fn validate(op: &str, args: &Value) -> Result<Value, wire::WireError> {
+    let name = op.strip_prefix("scene.").unwrap_or(op);
+    super::operations::validate(if name == "after" { "capture" } else { name }, args)
 }
 // Sparse filtered pages can spend native work without producing rows. Both
 // discovery and object renewal use this bound under their original deadline.
@@ -427,9 +264,11 @@ impl<B: Backend + 'static> Coordinator<B> {
         }
     }
     pub(super) fn scene_call(&self, id: &str, op: &str, args: &Value, deadline: Instant) -> Work {
-        if let Err(e) = validate(op, args) {
-            return failed(e);
-        }
+        let canonical = match validate(op, args) {
+            Ok(args) => args,
+            Err(error) => return failed(error),
+        };
+        let args = &canonical;
         if matches!(op, "scene.look" | "scene.capture" | "scene.after")
             || (op == "scene.typeText" && args.get("target").is_none())
         {

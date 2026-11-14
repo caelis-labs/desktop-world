@@ -19,6 +19,7 @@ mod description;
 pub mod mcp;
 mod mcp_io;
 mod methods;
+mod operations;
 mod projection;
 mod references;
 mod scene;

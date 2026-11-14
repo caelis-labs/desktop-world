@@ -19,6 +19,9 @@ if sys.argv[2]=='--version':
  print('dtw '+('1.0.0' if mode=='bad_version' else '9.8.7'))
  raise SystemExit(0)
 assert sys.argv[2]=='mcp'
+atomic=sys.argv[3:]==['--atomic']
+assert sys.argv[3:] in ([], ['--atomic'])
+operations=['look','capture','readText','wait','waitForNewWindow','click','setValue','move','drag','typeText','keypress','scroll','focus','quit']
 def reply(identifier,result=None,error=None):
  value={'jsonrpc':'2.0','id':identifier}
  value['error' if error else 'result']=error if error else result
@@ -42,9 +45,19 @@ for line in sys.stdin:
    'protocolVersion':'2025-06-18','capabilities':{'tools':{}},
    'serverInfo':{'name':'desktop-world','version':'9.8.7'}})
  elif method=='tools/list':
-  reply(request['id'],{'tools':[{'name':name,'inputSchema':{'properties':{'app':{},'source':{}},'required':['app','source'],'additionalProperties':False}} for name in ['apps','exec']]})
+  names=['apps',*operations] if atomic else ['apps','exec']
+  if atomic and mode=='old_names':names[names.index('readText')]='read_text'
+  if atomic and mode=='mixed_modes':names.append('exec')
+  tools=[]
+  for name in names:
+   schema={'type':'object','properties':{} if name=='apps' else {'app':{}},'required':[] if name=='apps' else ['app'],'additionalProperties':False}
+   if name=='exec':schema['properties']['source']={};schema['required'].append('source')
+   if atomic and mode=='missing_app':schema['required']=[]
+   if atomic and mode=='open_schema':schema['additionalProperties']=True
+   tools.append({'name':name,'inputSchema':schema})
+  reply(request['id'],{'tools':tools})
  else:
-  assert request['params']=={'name':'exec','arguments':{'source':'return 1;'}}
+  assert request['params']==({'name':'look','arguments':{}} if atomic else {'name':'exec','arguments':{'source':'return 1;'}})
   data={'error':{'code':'invalid_arguments','message':'app is required'}}
   reply(request['id'],{'isError':mode!='api_error','structuredContent':data,
    'content':[{'type':'text','text':json.dumps(data)}]})
@@ -87,10 +100,24 @@ class PackagedMcpTests(unittest.TestCase):
         self.assertEqual([request['method'] for request in sent],
                          ['initialize', 'notifications/initialized', 'tools/list', 'tools/call'])
         self.assertEqual(sent[-1]['params'], {'name': 'exec', 'arguments': {'source': 'return 1;'}})
-        self.assertEqual({row['role'] for row in report['cleanup']}, {'version', 'mcp'})
+        atomic_sent = [json.loads(line) for line in (output / 'mcp-atomic/requests.jsonl').read_text().splitlines()]
+        self.assertEqual([row['method'] for row in atomic_sent], [row['method'] for row in sent])
+        self.assertEqual(atomic_sent[-1]['params'], {'name': 'look', 'arguments': {}})
+        self.assertEqual({row['role'] for row in report['cleanup']}, {'version', 'mcp', 'mcp-atomic'})
+        self.assertEqual(self.launched[-1].args[-2:], ['mcp', '--atomic'])
         self.assertTrue(all(row['exit_code'] == 0 and not row['forced'] for row in report['cleanup']))
         self.assertIn(b'owned diagnostic', (output / 'mcp/stderr.bin').read_bytes())
-        self.assertEqual(set(report['metadata']['tools']), {'apps', 'exec'})
+        self.assertEqual(set(report['metadata']['mcp']['tools']), {'apps', 'exec'})
+        self.assertEqual(set(report['metadata']['mcp-atomic']['tools']), {'apps'} | probe.ATOMIC_TOOLS)
+
+    def test_atomic_name_mode_and_schema_drift_are_rejected(self):
+        for mode in ('old_names', 'mixed_modes', 'missing_app', 'open_schema'):
+            with self.subTest(mode=mode):
+                report, output = self.exercise(mode)
+                self.assertFalse(report['passed'], report)
+                self.assertIn('mcp', report['metadata'])
+                self.assertNotIn('mcp-atomic', report['metadata'])
+                self.assertTrue((output / 'mcp-atomic/stdout.bin').read_bytes())
 
     def test_wrong_cli_version_fails_before_mcp_is_started(self):
         report, output = self.exercise('bad_version')

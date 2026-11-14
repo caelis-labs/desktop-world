@@ -46,8 +46,9 @@ Open the application you want to use, then ask your Agent:
 
 The default MCP interface is `apps` plus app-scoped `exec({app, source})`; the bundled Skill documents
 the app script methods, including filtered observations and explicit text reading.
-The opt-in [MCP toolset PoC](poc/mcp-toolset/README.md) adds host selection of
-atomic tools through `dtw mcp --toolset atomic|all`. DTW owns window routing and observation state.
+Opt in to flat app-operation tools with `dtw mcp --atomic`; their names and object
+arguments match the script methods. Discover the connected tools before use. See
+[MCP toolsets](docs/mcp-toolsets.md) for configuration and compatibility. DTW owns window routing and observation state.
 The Agent observes when needed and batches known actions, using semantic targets
 and pixel fallback. DTW prepares receivers and returns observations after input.
 [Capabilities and limits](docs/product-matrix.md) describes current support and

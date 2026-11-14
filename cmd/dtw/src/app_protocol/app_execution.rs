@@ -118,15 +118,9 @@ pub(super) fn cancel_active(state: &State) {
 }
 
 fn scene_action(op: &str) -> bool {
-    !matches!(
-        op,
-        "scene.look"
-            | "scene.capture"
-            | "scene.after"
-            | "scene.readText"
-            | "scene.waitForNewWindow"
-            | "scene.wait"
-    )
+    op.strip_prefix("scene.")
+        .and_then(super::operations::find)
+        .is_some_and(|operation| operation.action)
 }
 
 impl<B: Backend + 'static> Coordinator<B> {

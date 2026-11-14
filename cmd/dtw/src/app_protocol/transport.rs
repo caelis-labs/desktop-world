@@ -173,15 +173,13 @@ pub fn run(args: &[String]) -> Result<(), WireError> {
             Ok(())
         }
         ["mcp"] => serve(Server::new(NativeFactory::default())),
-        ["mcp", "--toolset", value] => {
-            let toolset = Toolset::parse(value).ok_or_else(|| {
-                error("invalid_arguments", "toolset must be script, atomic or all")
-            })?;
-            serve(Server::with_toolset(NativeFactory::default(), toolset))
-        }
+        ["mcp", "--atomic"] => serve(Server::with_toolset(
+            NativeFactory::default(),
+            Toolset::Atomic,
+        )),
         _ => Err(error(
             "invalid_arguments",
-            "Usage: dtw mcp [--toolset script|atomic|all] | dtw app catalog",
+            "Usage: dtw mcp [--atomic] | dtw app catalog",
         )),
     }
 }

@@ -1,79 +1,99 @@
 ---
 name: desktop-world
-description: Control one authorized desktop application through DTW using compact semantic observations, app screenshots, mouse and keyboard scripts.
+description: Control one authorized desktop application through DTW using compact semantic observations, app screenshots, mouse and keyboard operations.
 ---
 
 # Desktop World
 
-DTW defaults to two MCP tools: `apps` and `exec`. An experimental host-selected
-`--toolset atomic` instead lists one tool per public app method; `--toolset all`
-lists both. Atomic tools require `app` beside the method's object arguments;
-use the listed schemas and [API.md](API.md). Use `apps({query})` to find an
-installed or running app and its authorization identity. Run an async JavaScript
-body with `exec({app, source})`; `app` is always required and fixes the entire
-script's authorization scope.
+Discover/list the connected MCP tools before choosing how to operate. Default
+`dtw mcp` exposes `apps` and `exec`. If `exec` is listed, use app-scoped JavaScript.
+With `dtw mcp --atomic`, invoke the listed app operation directly with an explicit
+`app`; there is no JavaScript tool. Choose from actual tool discovery, never the
+OS or a guessed operation name. Both surfaces use the same names and object fields:
+`look`, `capture`, `readText`, `wait`, `waitForNewWindow`, `click`, `setValue`,
+`move`, `drag`, `typeText`, `keypress`, `scroll`, `focus`, `quit`.
+Read [API.md](API.md) for exact parameters and outputs and
+[PATTERNS.md](PATTERNS.md) for recovery and interaction patterns.
 
-Use `await app.look()` when the task needs inspection. Known selectors, keyboard
-commands, text insertion and default scrolling can start a script directly; DTW
-prepares the app and current receiver internally. A stopped app starts where
-supported (without requesting foreground on macOS). App context survives between
-`exec` calls, so do not prepend a redundant look to each script. Explicit looks
-return complete snapshots inside JavaScript; tool messages show a compact baseline,
-then changes. Use semantic target IDs from a returned observation or a unique
-selector to click known controls. Native object handles can survive filtered reads: DTW revalidates the exact object before input, without guessing a replacement.
-Use `await app.capture()` when the UI needs visual understanding or semantics
-are unavailable, then click coordinates in the returned image. For a scaled
-preview use `unit:'fraction'`. Automatic readback has its own observation status. Use `move({x,y})` for hover and
-`drag({path:[{x,y},...]})` for one drag within one window on one display; standard macOS/Windows title bars can
-move their window when its native position is writable;
-the runtime pairs releases. Group known sequential steps in one script without
-adding a read after every action: DTW renews bindings internally and stops when a
-target or its relevant state changes. `click('w1.e12')` selects an observed ID;
-`keypress('META+L')` sends a chord. Await every app operation.
+Use `apps({query})` to find the authorization identity. Discovery reads no window
+contents and does not itself authorize an app. In script mode, `exec({app,source})`
+fixes authorization for the entire async JavaScript body. Await every operation:
 
 ```javascript
 await app.click({selector:{role:'button',text:'Continue'}});
+await app.typeText({text:'Hello'});
 ```
 
-Use `setValue({selector:{role:'text_field',text:'Field name'},value:'replacement'})` for a complete native text value replacement when the control advertises `setValue`. For typing events use `typeText` instead.
+In atomic mode, call the listed tools with argument objects, for example:
 
-For crowded pages, use `look({role:'static_text',text:'relevant phrase'})` to
-query native semantics beyond the default preview. `look({target:id})` narrows to an observed subtree, such as the File menu, without activating it. Truncated fields are explicit.
-Read control values (including sliders and checkboxes) from `look().elements[].value`.
-Read native textual content on demand with `return await app.readText('w1.e12')`;
-Continue with `{target:'w1.e12',offset:page.next_offset}` without a new look
-only while `page.next_offset !== null`. A null next offset marks the end, not zero.
-Text offsets are UTF-16; a fresh look starts a new content observation.
+```json
+{"name":"click","arguments":{"app":"<discovered identity>","selector":{"role":"button","text":"Continue"}}}
+```
 
-Use `await app.focus()` when the task explicitly asks to focus the app/window.
-Keep related input in the same script. Ordinary input prepares its destination
-automatically; no separate focus sequence is needed.
+```json
+{"name":"typeText","arguments":{"app":"<discovered identity>","text":"Hello"}}
+```
 
-After a New/Open action, use `await app.waitForNewWindow()` before typing in the new
-window. It waits without repeating the action; `wait_timeout` means no new window appeared.
+Use `look({})` when inspection is needed. Known selectors, keyboard commands,
+text insertion and default scrolling can start directly; DTW prepares the app
+and receiver internally. A stopped app starts where supported (without requesting
+foreground on macOS). Context survives between calls; do not prepend a redundant
+look. In the default mode, group known sequential actions in one script without
+reading after every step. Use observed IDs or unique selectors. DTW revalidates
+retained native objects and stops on relevant target changes instead of guessing
+replacements. There is no Agent-managed Session, window binding or native handle.
 
-For delayed content in the same window, use `app.wait({title,role,text})` with
-the expected title or control. Use only the condition fields you need. On
-Windows, `focused:true` identifies an editable control with keyboard focus.
-Use `typeText` for keyboard input there. Read
-dispatch and any specific acknowledgements separately from the observation.
+Use `capture({})` when semantics are unavailable or visual understanding is needed,
+then choose coordinates from that image. For a scaled preview use `unit:'fraction'`.
+Use `move({x,y})` for hover and `drag({path:[{x,y},...]})` for a drag within one
+window on one display. Standard macOS/Windows title bars can move their window
+when its native position is writable. DTW pairs releases.
 
-The public methods are `look`, `capture`, `readText`, `wait`, `waitForNewWindow`, `click`, `setValue`, `move`, `drag`, `typeText`,
-`keypress`, `scroll`, `focus` and `quit`. Read [API.md](API.md) for exact arguments and
-output semantics;
-[PATTERNS.md](PATTERNS.md) covers visual fallback, dialogs and recovery.
-There is no Agent-managed Session, window binding, cursor or native reference.
-Use optional `print(...)` or return a small JSON value for task-specific output.
-Ordinary variables last for one execution. Imports, filesystem, network, process
-APIs and timers are unavailable; scripts have a 30-second deadline.
+Use `setValue({selector:{role:'text_field',text:'Field name'},value:'replacement'})`
+for complete native text replacement when the control advertises `setValue`.
+Use `typeText({text:'replacement'})` for typing events.
+`keypress({keys:['META','L']})` sends one chord. Existing JS string/number shorthand
+remains a compatibility convenience; prefer the shared object form.
 
-A completed script or dispatched action does not establish the requested app
-effect. Inspect the returned changes, read back, or capture when necessary.
-Unknown/interrupted input may already have effects: inspect before new input;
-never replay a script merely because its response was lost. Native cleanup
-failure blocks further input in that connection. Standard MCP cancellation stops
-its matching call; quitting never force-kills or discards documents.
+For crowded pages, `look({role:'static_text',text:'relevant phrase'})` searches
+native semantics beyond the default preview. `look({target:'w1.e12'})` narrows to
+an observed subtree without activating it. Truncation is explicit. Control values,
+including sliders and checkboxes, are in `elements[].value`. Read native text with
+`readText({target:'w1.e12'})`; in a script, return that page to publish it. Continue
+with `{target:'w1.e12',offset:page.next_offset}` only while `next_offset !== null`,
+without a fresh look between pages. Offsets are UTF-16; a fresh look starts a new
+content observation.
 
-`permission_required` identifies missing OS access. Grant the host named by the
-OS; Screen Recording changes may require restarting that host and reconnecting.
-Discovery reads no window contents and does not itself authorize an app.
+Use `focus({})` when explicitly requested. Ordinary input needs no separate focus
+sequence. Keep related focus/input in one `exec`. On Windows, opening a native
+menu and choosing its item must share that script boundary: restoring foreground
+at settlement can dismiss the menu. Every atomic call has its own boundary; separate
+atomic calls do not preserve that focus/menu scope.
+
+After New/Open, use `waitForNewWindow({})` before typing into the new window.
+It waits without repeating input; `wait_timeout` means no new window appeared.
+For delayed content in the same window use `wait({title,role,text})` with only the
+needed conditions. `wait({ms:200})` pauses. On Windows, `focused:true` identifies
+an editable control with keyboard focus; `typeText({target,text})` can require it.
+
+Scene reads return snapshots to the method caller; `readText` returns a text page;
+input methods return receipts. The outer MCP response carries `effects`, a compact
+`view` and any image. A custom script return selects `result` instead of the normal
+view publication. Dispatch and acknowledgements are distinct from observed UI
+success. Verify the requested effect from the view or a readback. Unknown or
+interrupted input may already have effects: inspect before new input, never replay
+a script or atomic action because its response was lost. Identical MCP request-ID
+retransmission refers to retained work; a new ID is new work. Standard MCP
+cancellation stops its matching call. Native cleanup failure blocks input in that
+connection. Quit never force-kills or discards documents.
+
+Scripts can `print(...)` or return small JSON. Variables last for one execution;
+imports, filesystem, network, process APIs and timers are unavailable. The deadline
+is 30 seconds. Atomic calls execute the same native app facade without JavaScript;
+session state, stale-target checks, cancellation and result effects still apply.
+
+`permission_required` identifies missing OS access. Grant the host named by the OS;
+Screen Recording changes can require restarting it and reconnecting. macOS and
+Windows native behavior needs platform-specific evidence. Linux is experimental,
+without AT-SPI semantics; isolated X11 evidence does not establish locked-desktop
+support. Keep supported desktops unlocked.

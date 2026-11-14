@@ -7,7 +7,7 @@ DTW — app-scoped desktop operations
 
 Usage:
   dtw app catalog
-  dtw mcp [--toolset script|atomic|all]
+  dtw mcp [--atomic]
   dtw package import|bind|activate|unbind|status|gc [--store <absolute-directory>]
   dtw --help
   dtw --version

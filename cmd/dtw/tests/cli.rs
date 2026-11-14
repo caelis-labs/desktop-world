@@ -47,11 +47,16 @@ fn legacy_commands_are_rejected() {
 }
 
 #[test]
-fn invalid_toolset_is_rejected_without_native_provider() {
+fn obsolete_toolsets_and_atomic_extras_are_rejected_without_native_provider() {
     for args in [
         &["mcp", "--toolset", "unknown"][..],
         &["mcp", "--toolset"],
-        &["mcp", "--toolset", "atomic", "extra"],
+        &["mcp", "--toolset", "script"],
+        &["mcp", "--toolset", "atomic"],
+        &["mcp", "--toolset", "all"],
+        &["mcp", "--atomic", "extra"],
+        &["mcp", "--atomic", "--atomic"],
+        &["mcp", "--atomic", "--toolset", "atomic"],
     ] {
         let output = cli(args);
         assert_eq!(output.status.code(), Some(2));

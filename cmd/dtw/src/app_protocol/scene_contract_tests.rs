@@ -181,6 +181,7 @@ fn public_argument_errors_have_one_catchable_business_code() {
             () => app.look({}, {}),
             () => app.click({target:'w1.e1',x:1,y:1}),
             () => app.scroll({delta_y:101}),
+            () => app.click({x:'bad',y:1}),
             () => app.click({selector:{scope:'invalid',text:'Increment'}})
         ]) { try { await attempt(); } catch(e) { codes.push(e.code); } }
         return codes;
@@ -192,12 +193,13 @@ fn public_argument_errors_have_one_catchable_business_code() {
             "invalid_arguments",
             "invalid_arguments",
             "invalid_arguments",
+            "invalid_arguments",
             "invalid_arguments"
         ])
     );
-    // Coordinates need a retained image binding before DTW can interpret them;
-    // that contextual admission reason is not an argument-code alias.
-    let unbound = exec(&server, "unbound", "await app.click({x:'bad',y:1});");
+    // Well-formed coordinates still need a retained image binding. Malformed
+    // coordinates above fail shared argument validation before context checks.
+    let unbound = exec(&server, "unbound", "await app.click({x:1,y:1});");
     assert!(unbound.is_error);
     assert_eq!(unbound.data["error"]["code"], "capture_required");
     assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
