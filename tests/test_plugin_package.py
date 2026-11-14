@@ -42,16 +42,17 @@ class PluginStageTests(unittest.TestCase):
                     self.assertIn('Default MCP arguments ["mcp"] expose apps and exec', readme)
                     self.assertIn('["mcp", "--atomic"]', readme)
                     self.assertIn("same camelCase", readme)
-                    self.assertIn("skills/desktop-world/API.md", readme)
-                    self.assertIn("skills/desktop-world/SKILL.md", readme)
+                    self.assertIn("skills/dtw/API.md", readme)
+                    self.assertIn("skills/dtw/SKILL.md", readme)
                     verifier.plugin_package(bundled, prefix, {
-                        "target": target, "version": version,
+                        "target": target, "version": version, "package_store_schema": 2,
                         "binary": {"path": "bin/" + executable}, "plugin_package": entries,
+                        "skill_sha256": hashlib.sha256((ROOT / "skills/dtw/SKILL.md").read_bytes()).hexdigest(),
                     })
                     sums = dict(line.split("  ", 1)[::-1] for line in
                                 bundled.read(prefix + "SHA256SUMS").decode().splitlines())
                     for name in ("SKILL.md", "API.md", "PATTERNS.md"):
-                        relative = "skills/desktop-world/" + name
+                        relative = "skills/dtw/" + name
                         data = bundled.read(prefix + relative)
                         self.assertEqual(data, (ROOT / relative).read_bytes())
                         self.assertEqual(sums[relative], hashlib.sha256(data).hexdigest())
@@ -60,7 +61,7 @@ class PluginStageTests(unittest.TestCase):
                 with zipfile.ZipFile(archive) as original, zipfile.ZipFile(corrupt, "w") as changed:
                     for info in original.infolist():
                         data = original.read(info.filename)
-                        if info.filename == prefix + "skills/desktop-world/API.md":
+                        if info.filename == prefix + "skills/dtw/API.md":
                             data += b"\ncorrupt"
                         changed.writestr(info, data)
                 with self.assertRaisesRegex(ValueError, "Archive hash mismatch"):
@@ -80,19 +81,22 @@ class PluginStageTests(unittest.TestCase):
                 self.assertEqual(metadata["binary_sha256"], hashlib.sha256(binary.read_bytes()).hexdigest())
                 self.assertEqual(metadata["binary"], "bin/" + name)
                 self.assertEqual(metadata["distribution"], "local-development-stage")
-                self.assertEqual((output / "skills/desktop-world/SKILL.md").read_bytes(),
-                                 (ROOT / "skills/desktop-world/SKILL.md").read_bytes())
-                self.assertEqual((output / "skills/desktop-world/PATTERNS.md").read_bytes(),
-                                 (ROOT / "skills/desktop-world/PATTERNS.md").read_bytes())
-                self.assertEqual((output / "skills/desktop-world/API.md").read_bytes(),
-                                 (ROOT / "skills/desktop-world/API.md").read_bytes())
+                self.assertEqual(metadata["package_store_schema"], 2)
+                self.assertEqual((output / "skills/dtw/SKILL.md").read_bytes(),
+                                 (ROOT / "skills/dtw/SKILL.md").read_bytes())
+                self.assertEqual((output / "skills/dtw/PATTERNS.md").read_bytes(),
+                                 (ROOT / "skills/dtw/PATTERNS.md").read_bytes())
+                self.assertEqual((output / "skills/dtw/API.md").read_bytes(),
+                                 (ROOT / "skills/dtw/API.md").read_bytes())
                 manifests = [json.loads((output / path).read_text(encoding="utf-8")) for path in
                              ("plugin.json", ".claude-plugin/plugin.json", ".antigravity-plugin/plugin.json")]
+                self.assertFalse((output / "skills/desktop-world").exists())
+                self.assertIn("\nname: dtw\n", (output / "skills/dtw/SKILL.md").read_text())
                 self.assertEqual({manifest["name"] for manifest in manifests}, {"desktop-world"})
                 self.assertEqual({manifest["version"] for manifest in manifests}, {metadata["version"]})
                 self.assertNotEqual(manifests[0]["$schema"], manifests[2]["$schema"])
                 self.assertEqual(json.loads((output / "mcp_config.json").read_text())["mcpServers"], {
-                    "desktop-world": {"command":"./bin/" + name, "args":["mcp"], "cwd":"${PLUGIN_ROOT}"}})
+                    "dtw": {"command":"./bin/" + name, "args":["mcp"], "cwd":"${PLUGIN_ROOT}"}})
                 for guide in ("install.md", "docs/install-caelis.md", "docs/install-dsh.md", "docs/install-agy.md", "docs/package-management.md"):
                     self.assertEqual((output / guide).read_bytes(), (ROOT / guide).read_bytes())
                 before = (output / "plugin.json").read_bytes()
@@ -139,7 +143,7 @@ const mcp = children.find(x => x.name === '@deepseek-ai/dsh-mcp-client').config;
 assert.equal(mcp.command, path.join(root, 'bin', process.platform === 'win32' ? 'dtw.exe' : 'dtw'));
 assert.equal(path.resolve(mcp.cwd), root);
 assert.deepEqual(mcp.args, ['mcp']);
-assert.equal(mcp.serverName, 'desktop-world');
+assert.equal(mcp.serverName, 'dtw');
 assert.equal(mcp.failOnStartupError, true);
 assert.deepEqual(imports.sort(), ['@deepseek-ai/dsh-mcp-client', '@deepseek-ai/dsh-skill-filesystem']);
 const failedChildren = [];
@@ -230,11 +234,11 @@ await adapter.apply({
 assert.equal(typeof present, 'function');
 const controller = new AbortController();
 controller.abort({ type: 'user_interrupted' });
-const exec = { name: 'mcp__desktop-world__exec', signal: controller.signal };
+const exec = { name: 'mcp__dtw__exec', signal: controller.signal };
 const result = Object.freeze({ isError: true, error: { message: '[object Object]' },
   content: Object.freeze([{ type: 'text', text: 'Error: [object Object]' }]) });
 const accept = { kind: 'accept', additionalContexts: [{ type: 'text', text: 'keep policy context' }] };
-for (const name of ['mcp__desktop-world__exec', 'mcp__desktop-world__apps']) {
+for (const name of ['mcp__dtw__exec', 'mcp__dtw__apps']) {
   const decision = await present({ ...exec, name }, result, async () => accept);
   const value = JSON.parse(decision.content[0].text.slice('Error: '.length));
   assert.equal(value.status, 'interrupted');
@@ -249,6 +253,8 @@ for (const name of ['mcp__desktop-world__exec', 'mcp__desktop-world__apps']) {
 }
 for (const [e, r] of [
   [{ ...exec, name: 'mcp__other__exec' }, result],
+  [{ ...exec, name: 'mcp__desktop-world__exec' }, result],
+  [{ ...exec, name: 'mcp__desktop-world__apps' }, result],
   [{ ...exec, signal: new AbortController().signal }, result],
   [exec, { ...result, isError: false }],
   [exec, { ...result, error: { message: 'Native cleanup not confirmed' } }],

@@ -9,6 +9,17 @@ import json
 import shutil
 
 
+PACKAGE_STORE_SCHEMA = 2
+
+
+def package_layout(schema):
+    """Resolve an explicit BUILD package layout; storage STORE schema is separate."""
+    if type(schema) is not int or schema not in (1, 2):
+        raise ValueError(f"Unsupported package_store_schema: {schema!r}")
+    name = "desktop-world" if schema == 1 else "dtw"
+    return {"skill_dir": "skills/" + name, "mcp_server": name}
+
+
 EXECUTABLES = {
     "aarch64-apple-darwin": "dtw",
     "x86_64-pc-windows-msvc": "dtw.exe",
@@ -26,7 +37,7 @@ def write_plugin_entries(source, package, version, target):
     common = json.loads((source / "plugins/claude/.claude-plugin/plugin.json").read_text(encoding="utf-8"))
     common["version"] = version
     write_json(package / ".claude-plugin/plugin.json", common)
-    write_json(package / ".mcp.json", {"mcpServers": {"desktop-world": {
+    write_json(package / ".mcp.json", {"mcpServers": {"dtw": {
         "command": "${CLAUDE_PLUGIN_ROOT}/bin/" + executable, "args": ["mcp"]}}})
 
     standard = {key: common[key] for key in
@@ -36,7 +47,7 @@ def write_plugin_entries(source, package, version, target):
     write_json(package / "plugin.json", standard)
     write_json(package / "mcp.json", {
         "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
-        "mcpServers": {"desktop-world": {"type": "stdio", "command": "./bin/" + executable, "args": ["mcp"]}},
+        "mcpServers": {"dtw": {"type": "stdio", "command": "./bin/" + executable, "args": ["mcp"]}},
     })
 
     # Antigravity checks its specific manifest before the standard root manifest.
@@ -45,7 +56,7 @@ def write_plugin_entries(source, package, version, target):
     agy = {**standard, "$schema": "https://antigravity.google/schemas/v1/plugin.json",
            "displayName": "Desktop World"}
     write_json(package / ".antigravity-plugin/plugin.json", agy)
-    write_json(package / "mcp_config.json", {"mcpServers": {"desktop-world": {
+    write_json(package / "mcp_config.json", {"mcpServers": {"dtw": {
         "command": "./bin/" + executable, "args": ["mcp"], "cwd": "${PLUGIN_ROOT}"}}})
 
     # A dependency-free Cordis adapter asks the host loader for its own MCP and

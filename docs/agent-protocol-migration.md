@@ -6,7 +6,7 @@ Discover/list actual tools: use scripts if `exec` is present; otherwise invoke t
 listed operation directly. Both use the same object fields; atomic calls add
 required `app`, while `exec` binds `app` once for its script. The supported
 methods, input/output and limits are defined in the
-[bundled Skill API](../skills/desktop-world/API.md). Scripts use ordinary async
+[bundled Skill API](../skills/dtw/API.md). Scripts use ordinary async
 JavaScript, `print` and `return`; window routing, observations, execution history
 and session state remain internal.
 

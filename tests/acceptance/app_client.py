@@ -19,6 +19,26 @@ def require(condition, detail):
         raise AssertionError(detail)
 
 
+def package_layout(package):
+    """Select names from distribution/stage metadata, never from Skill paths."""
+    package = Path(package)
+    if (package / 'BUILD.json').is_file():
+        metadata = json.loads((package / 'BUILD.json').read_text(encoding='utf-8'))
+        require(type(metadata.get('schema')) is int and metadata['schema'] == 1
+                and metadata.get('kind') == 'unpublished-rewrite-candidate',
+                'Expected an unpublished rewrite candidate BUILD manifest')
+    else:
+        metadata = json.loads((package / 'build-info.json').read_text(encoding='utf-8'))
+        require(metadata.get('layout') == 'multi-agent-plugin'
+                and metadata.get('distribution') == 'local-development-stage',
+                'Expected local development stage metadata')
+    # Both recognized formats predate package_store_schema; their original
+    # layout is legacy 1. Explicit unknown or malformed schema values fail.
+    schema = metadata.get('package_store_schema', 1)
+    require(type(schema) is int and schema in (1, 2), 'Unsupported BUILD package_store_schema')
+    return ('desktop-world', 'desktop-world') if schema == 1 else ('dtw', 'dtw')
+
+
 def artifact_identity(binary, package=None):
     binary = Path(binary).resolve(strict=True)
     result = {'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
@@ -27,7 +47,8 @@ def artifact_identity(binary, package=None):
         package = Path(package).resolve(strict=True)
         executable = package / 'bin' / ('dtw.exe' if os.name == 'nt' else 'dtw')
         require(executable.resolve(strict=True) == binary, 'binary is not this installed package executable')
-        files = ['skills/desktop-world/' + name for name in ['SKILL.md', 'API.md', 'PATTERNS.md']]
+        skill_name, _ = package_layout(package)
+        files = ['skills/' + skill_name + '/' + name for name in ['SKILL.md', 'API.md', 'PATTERNS.md']]
         if (package / 'build-info.json').is_file():
             files.append('build-info.json')
         result.update(scope='exact installed binary/Skill bytes; signing and source receipts verified separately',

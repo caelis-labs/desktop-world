@@ -174,10 +174,10 @@ class Fixture(unittest.TestCase):
                      "docs/install-dsh.md", "docs/install-caelis.md", "docs/install-agy.md", "docs/native-source-provenance.md",
                      "docs/native-source-provenance-cross-platform.md", "docs/background-input-port.md",
                      "docs/windows-cursor-port.md", "docs/agent-protocol-migration.md", "docs/package-management.md",
-                     "skills/desktop-world/SKILL.md", "skills/desktop-world/API.md", "skills/desktop-world/PATTERNS.md"):
+                     "skills/dtw/SKILL.md", "skills/dtw/API.md", "skills/dtw/PATTERNS.md"):
             put(self.repo, name, "Original reviewed source content\n")
-        put(self.repo, "docs/examples/mcp.json", '{"mcpServers":{"desktop-world":{"command":"/absolute/path/to/dtw","args":["mcp"]}}}\n')
-        put(self.repo, "docs/examples/codex.toml", '[mcp_servers.desktop-world]\ncommand="/absolute/path/to/dtw"\nargs=["mcp"]\n')
+        put(self.repo, "docs/examples/mcp.json", '{"mcpServers":{"dtw":{"command":"/absolute/path/to/dtw","args":["mcp"]}}}\n')
+        put(self.repo, "docs/examples/codex.toml", '[mcp_servers.dtw]\ncommand="/absolute/path/to/dtw"\nargs=["mcp"]\n')
         put(self.repo, "plugins/claude/.claude-plugin/plugin.json", '{"name":"desktop-world","version":"0.1.3"}\n')
         put(self.repo, "plugins/cordis/index.mjs",
             (Path(__file__).parents[1] / "plugins/cordis/index.mjs").read_bytes())
@@ -220,7 +220,7 @@ class Fixture(unittest.TestCase):
             if args[:2] == ["git", "rev-parse"]:
                 return ({"--show-toplevel": str(self.repo), "HEAD": "a" * 40, "HEAD^{tree}": "b" * 40}[args[2]], "")
             if args[:2] == ["git", "status"]:
-                return (" M skills/desktop-world/SKILL.md\n" if dirty else "", "")
+                return (" M skills/dtw/SKILL.md\n" if dirty else "", "")
             if args[:2] == ["git", "show"]:
                 if args[-1].endswith(":cmd/dtw/Cargo.lock"):
                     return lock_blob.decode("utf-8"), ""
@@ -425,7 +425,7 @@ class BinaryAndArchiveTests(Fixture):
     def test_archive_has_exact_checksums_modes_and_rejects_tampering(self):
         package = self.root / "package"
         put(package, "bin/dtw", b"executable")
-        put(package, "skills/desktop-world/SKILL.md", "canonical skill")
+        put(package, "skills/dtw/SKILL.md", "canonical skill")
         archive = self.root / "candidate.zip"
         candidate.archive_package(package, archive, 1700000000)
         self.assertEqual((self.root / "candidate.zip.sha256").read_text().split()[0], candidate.digest(archive))
@@ -457,23 +457,25 @@ class BinaryAndArchiveTests(Fixture):
             for guide in ("install.md", "docs/install.md", "docs/install-dsh.md", "docs/install-caelis.md", "docs/install-agy.md", "docs/agent-protocol-migration.md", "docs/package-management.md"):
                 self.assertEqual((package / guide).read_bytes(), (self.repo / guide).read_bytes())
             config = json.loads((package / ".mcp.json").read_text())
-            self.assertEqual(config["mcpServers"]["desktop-world"], {"command": "${CLAUDE_PLUGIN_ROOT}/bin/" + binary, "args": ["mcp"]})
+            self.assertEqual(set(config["mcpServers"]), {"dtw"})
+            self.assertFalse((package / "skills/desktop-world").exists())
+            self.assertEqual(config["mcpServers"]["dtw"], {"command": "${CLAUDE_PLUGIN_ROOT}/bin/" + binary, "args": ["mcp"]})
             self.assertEqual(json.loads((package / ".claude-plugin/plugin.json").read_text())["version"], "0.2.0")
-            self.assertEqual((package / "skills/desktop-world/SKILL.md").read_bytes(), (self.repo / "skills/desktop-world/SKILL.md").read_bytes())
+            self.assertEqual((package / "skills/dtw/SKILL.md").read_bytes(), (self.repo / "skills/dtw/SKILL.md").read_bytes())
             self.assertIn("do not register both", (package / "README.md").read_text())
             manifest = json.loads((package / "plugin.json").read_text())
             self.assertEqual(manifest["name"], "desktop-world")
             self.assertEqual(manifest["version"], "0.2.0")
             self.assertEqual(manifest["$schema"], "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json")
             standard = json.loads((package / "mcp.json").read_text())
-            self.assertEqual(standard["mcpServers"], {"desktop-world": {
+            self.assertEqual(standard["mcpServers"], {"dtw": {
                 "type":"stdio", "command":"./bin/" + binary, "args":["mcp"]}})
             self.assertEqual(standard["$schema"], "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json")
             agy = json.loads((package / ".antigravity-plugin/plugin.json").read_text())
             self.assertEqual(agy["version"], manifest["version"])
             self.assertEqual(agy["$schema"], "https://antigravity.google/schemas/v1/plugin.json")
             self.assertEqual(json.loads((package / "mcp_config.json").read_text())["mcpServers"], {
-                "desktop-world": {"command":"./bin/" + binary, "args":["mcp"], "cwd":"${PLUGIN_ROOT}"}})
+                "dtw": {"command":"./bin/" + binary, "args":["mcp"], "cwd":"${PLUGIN_ROOT}"}})
             cordis = json.loads((package / "package.json").read_text())
             self.assertEqual(cordis["version"], manifest["version"])
             self.assertNotIn("dependencies", cordis)
@@ -501,6 +503,8 @@ class WorkflowTests(Fixture):
         output = self.root / "windows"
         manifest = json.loads(next(output.glob("desktop-world-*/BUILD.json")).read_text())
         self.assertEqual(manifest["build_environment"]["RUSTFLAGS"], "-C target-feature=+crt-static")
+        self.assertEqual(manifest["package_store_schema"], 2)
+        self.assertEqual(manifest["skill_sha256"], candidate.digest(output / "desktop-world-0.2.0-x86_64-pc-windows-msvc/skills/dtw/SKILL.md"))
         self.assertEqual(manifest["binary"]["path"], "bin/dtw.exe")
         self.assertEqual(manifest["binary"]["static_crt_import_check"], "passed")
         self.assertEqual(manifest["runtime_evidence"]["minimum_os_runtime"], "unverified")

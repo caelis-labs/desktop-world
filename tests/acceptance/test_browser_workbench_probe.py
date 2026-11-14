@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from app_client import artifact_identity, package_layout
 import browser_workbench_probe as probe
 
 
@@ -86,7 +87,7 @@ class InstalledPackageTests(unittest.TestCase):
         self.put('skills/desktop-world/SKILL.md', self.canonical_skill)
         self.put('skills/desktop-world/support.txt', 'Package-owned resource')
         self.put('.claude-plugin/plugin.json', json.dumps({'name':'desktop-world','version':'0.2.0','description':'Package metadata'}))
-        self.build = {'schema':1, 'kind':'unpublished-rewrite-candidate', 'version':'0.2.0',
+        self.build = {'schema':1, 'package_store_schema':1, 'kind':'unpublished-rewrite-candidate', 'version':'0.2.0',
                       'target':'aarch64-apple-darwin', 'binary':{'path':'bin/dtw','sha256':probe.file_sha256(self.binary)},
                       'skill_sha256':probe.file_sha256(self.package/'skills/desktop-world/SKILL.md'),
                       'source':{'commit':'a'*40,'tree':'b'*40,'cargo_lock_sha256':'c'*64},
@@ -125,6 +126,85 @@ class InstalledPackageTests(unittest.TestCase):
         self.assertEqual(identity['installed_package']['source'], self.build['source'])
         self.assertTrue(probe.recheck_installed_package(identity)['unchanged'])
 
+    def use_schema2(self):
+        (self.package/'skills/desktop-world').rename(self.package/'skills/dtw')
+        self.canonical_skill = self.canonical_skill.replace('name: desktop-world', 'name: dtw')
+        self.put('skills/dtw/SKILL.md', self.canonical_skill)
+        self.build.update(package_store_schema=2,
+                          skill_sha256=probe.file_sha256(self.package/'skills/dtw/SKILL.md'))
+        self.put('BUILD.json', json.dumps(self.build)); self.checksums()
+
+    def test_schema2_runtime_and_dynamic_skill_copy_preserve_package_identity(self):
+        self.use_schema2()
+        with patch.object(probe.subprocess, 'run', side_effect=AssertionError('No developer staging')):
+            binary, identity = probe.prepare_runtime(self.repo, self.output, self.binary, self.package)
+            stage, skill = probe.stage_agent_plugin(self.repo, self.output, binary, NAME, self.package)
+        self.assertEqual(package_layout(self.package), ('dtw', 'dtw'))
+        self.assertEqual(skill.read_text(), self.canonical_skill.replace('name: dtw', 'name: '+NAME))
+        self.assertEqual((skill.parent/'support.txt').read_text(), 'Package-owned resource')
+        self.assertEqual((self.package/'skills/dtw/SKILL.md').read_text(), self.canonical_skill)
+        self.assertFalse((stage/'skills/dtw').exists())
+        self.assertTrue(probe.recheck_installed_package(identity)['unchanged'])
+
+    def test_layout_rejects_invalid_schema_instead_of_guessing_from_existing_paths(self):
+        for schema in (None, True, '2', 3):
+            with self.subTest(schema=schema):
+                self.build['package_store_schema'] = schema
+                self.put('BUILD.json', json.dumps(self.build)); self.checksums()
+                with self.assertRaisesRegex(AssertionError, 'package_store_schema'):
+                    probe.verify_installed_package(self.package, self.binary)
+        self.build['package_store_schema'] = 2
+        self.put('BUILD.json', json.dumps(self.build)); self.checksums()
+        with self.assertRaisesRegex(AssertionError, 'required candidate assets'):
+            probe.verify_installed_package(self.package, self.binary)
+
+    def test_legacy_candidate_without_store_schema_keeps_original_layout(self):
+        del self.build['package_store_schema']
+        self.put('BUILD.json', json.dumps(self.build)); self.checksums()
+        self.assertEqual(package_layout(self.package), ('desktop-world', 'desktop-world'))
+        identity = probe.verify_installed_package(self.package, self.binary)
+        _, skill = probe.stage_agent_plugin(self.repo, self.output, self.binary, NAME, self.package)
+        self.assertEqual(skill.read_text(), self.canonical_skill.replace('name: desktop-world', 'name: '+NAME))
+        self.assertTrue(probe.recheck_installed_package(identity)['unchanged'])
+        self.build['schema'] = 2
+        self.put('BUILD.json', json.dumps(self.build))
+        with self.assertRaisesRegex(AssertionError, 'BUILD manifest'):
+            package_layout(self.package)
+
+    def test_local_stage_identity_selects_schema2_and_recognized_legacy_metadata(self):
+        (self.package/'BUILD.json').unlink()
+        metadata = {'layout':'multi-agent-plugin', 'distribution':'local-development-stage'}
+        self.put('build-info.json', json.dumps(metadata))
+        self.assertEqual(package_layout(self.package), ('desktop-world', 'desktop-world'))
+        (self.package/'skills/desktop-world').rename(self.package/'skills/dtw')
+        metadata['package_store_schema'] = 2
+        self.put('build-info.json', json.dumps(metadata))
+        for guide in ('API.md', 'PATTERNS.md'):
+            self.put('skills/dtw/'+guide, guide)
+        identity = artifact_identity(self.binary, self.package)
+        self.assertEqual(set(identity['package_files']), {
+            'skills/dtw/SKILL.md', 'skills/dtw/API.md', 'skills/dtw/PATTERNS.md', 'build-info.json'})
+        for key, value in (('layout','other'), ('distribution','other'),
+                           ('package_store_schema',None), ('package_store_schema',True),
+                           ('package_store_schema','2'), ('package_store_schema',3)):
+            with self.subTest(key=key, value=value):
+                malformed = {**metadata, key:value}
+                self.put('build-info.json', json.dumps(malformed))
+                with self.assertRaises(AssertionError):
+                    artifact_identity(self.binary, self.package)
+
+    def test_current_artifact_identity_hashes_each_schema_selected_skill(self):
+        for schema, name in ((1, 'desktop-world'), (2, 'dtw')):
+            with self.subTest(schema=schema):
+                if schema == 2:
+                    self.use_schema2()
+                for guide in ('API.md', 'PATTERNS.md'):
+                    self.put('skills/'+name+'/'+guide, guide)
+                identity = artifact_identity(self.binary, self.package)
+                expected = {'skills/'+name+'/'+guide: probe.file_sha256(self.package/'skills'/name/guide)
+                            for guide in ('SKILL.md', 'API.md', 'PATTERNS.md')}
+                self.assertEqual(identity['package_files'], expected)
+
     def test_same_bytes_at_another_path_and_output_inside_package_are_rejected(self):
         other = self.root/'same-dtw'; other.write_bytes(self.binary.read_bytes()); other.chmod(0o755)
         with self.assertRaisesRegex(AssertionError, '--dtw'):
@@ -135,7 +215,7 @@ class InstalledPackageTests(unittest.TestCase):
         self.assertEqual(list(output.iterdir()), [])
 
     def test_development_mode_still_copies_binary_and_uses_repository_skill(self):
-        skill = self.repo/'skills/desktop-world/SKILL.md'
+        skill = self.repo/'skills/dtw/SKILL.md'
         skill.parent.mkdir(parents=True); skill.write_text('Different development Skill')
         binary, identity = probe.prepare_runtime(self.repo, self.output, self.binary)
         self.assertEqual(binary, self.output/'dtw')

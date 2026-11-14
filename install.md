@@ -22,8 +22,17 @@ Resolve the official latest stable tag once and obtain its complete package.
 Runtime, Skill, plugin manifests and their API must come from that one release.
 Use the package's own management guide/CLI for package commands; an installation
 guide merged ahead of publication does not add commands to an older executable.
-The managed workflow below requires BUILD's
-`package_store_schema: 1`.
+Current source packages use BUILD's `package_store_schema: 2`: public MCP
+server/`serverInfo.name` `dtw`, Skill `dtw` at `skills/dtw`, and Caelis Skill
+identity `desktop-world:dtw`. The plugin/install ID remains `desktop-world`;
+repository, ZIP, Cargo and package-signing identities also retain their names.
+
+Already-published schema 1 packages retain their `desktop-world` server and
+`skills/desktop-world` Skill. Select names from the selected package's BUILD and
+bundled manifests, never from whichever path exists. Verify or roll back to
+those exact old bytes without rewriting them. A naming change alone does not
+rebind an existing current or pending installation. The managed store's own
+`store_schema` remains `1`; it is separate from BUILD's package layout schema.
 
 For installer Agents on Windows: use this page's recipe, then the matching host
 guide below. The official latest-release API is the source of the current
@@ -266,7 +275,7 @@ Clients accepting `mcpServers` JSON can use:
 ```json
 {
   "mcpServers": {
-    "desktop-world": {
+    "dtw": {
       "command": "/absolute/managed/package/bin/dtw",
       "args": ["mcp"]
     }
@@ -277,7 +286,7 @@ Clients accepting `mcpServers` JSON can use:
 Replace the example command with import's returned `executable` (on Windows,
 `bin/dtw.exe`) and use the same package's bundled Skill through the client's
 normal discovery directory. Codex can
-use `codex mcp add desktop-world -- /absolute/path/to/dtw mcp`. Claude Code can
+use `codex mcp add dtw -- /absolute/path/to/dtw mcp`. Claude Code can
 load the complete package with `claude --plugin-dir /absolute/path/to/package`;
 its optional layout is described in [the staging guide](https://github.com/caelis-labs/desktop-world/blob/main/plugins/claude/README.md).
 Neither client is a new required release matrix. Do not run the removed

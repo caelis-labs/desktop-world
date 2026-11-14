@@ -3,6 +3,16 @@
 The installer owns this CLI. Agent desktop tasks still use only `apps` and
 `exec({app,source})`; no package/session management appears in those tools.
 
+BUILD's `package_store_schema` selects public names: schema `2` uses MCP
+server `dtw` and Skill `dtw` at `skills/dtw`; schema `1` retains server
+`desktop-world` and Skill `desktop-world` at `skills/desktop-world`. The
+plugin/install ID stays `desktop-world` (new Caelis Skill identity:
+`desktop-world:dtw`). The store's separate `store_schema` stays `1`.
+Import and rollback preserve old package bytes and their manifests. Do not
+rename files inside a published package or repoint current/pending bindings
+merely to adopt the new public names. Update one host through the normal
+complete-package transaction below.
+
 ## Installer Agent update workflow
 
 Use the same installation/update prompt each time. Resolve the current host,

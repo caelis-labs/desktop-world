@@ -9,7 +9,7 @@ import threading
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from app_client import artifact_identity, require
+from app_client import artifact_identity, package_layout, require
 from dsh_client import DshClient, MODEL_BOUNDARY
 from windows.app_protocol_probe import wait_state
 from windows.desktop_probe import children
@@ -26,6 +26,7 @@ def main():
     root = out / 'fixture'
     root.mkdir()
     package = args.package.resolve(strict=True)
+    skill_name, server_name = package_layout(package)
     binary = package / 'bin/dtw.exe'
     exe = out / 'CursorFixture.exe'
     shutil.copy2(args.fixture_binary, exe)
@@ -46,7 +47,7 @@ def main():
     try:
         child = subprocess.Popen([str(exe), str(root), 'A'])
         initial = wait_state(root, lambda value: value['ready'])
-        client = DshClient(args.dsh, patch, out / 'dsh', Path.cwd())
+        client = DshClient(args.dsh, patch, out / 'dsh', Path.cwd(), server_name=server_name)
         client.call('initialize', {'protocolVersion': 1, 'clientCapabilities': {},
             'clientInfo': {'name': 'dtw-physical-cursor-observer', 'version': '1'}})
         report['session'] = client.call('session/new', {'cwd': str(Path.cwd()), 'mcpServers': []})
@@ -98,7 +99,7 @@ def main():
                 observer_errors.append(str(error))
         watcher = threading.Thread(target=observe, daemon=True)
         watcher.start()
-        prompt = f'''先加载本完整插件的 desktop-world Skill，读取安装包中的 API。只通过 desktop-world apps/exec 操作我拥有的 {exe}，标题 DTW Windows Smoke A。
+        prompt = f'''先加载本完整插件的 {skill_name} Skill，读取安装包中的 API。只通过 {server_name} apps/exec 操作我拥有的 {exe}，标题 DTW Windows Smoke A。
 禁止 shell、文件/HTTP/CDP 等旁路，文档之外不准读取文件；不要操作其他应用。
 这是只读观察器采集视觉反馈的任务：先观察截图，在蓝色 Owned pointer / wheel pad 中央找一个点。
 在同一条 exec 中：对这个点 move 悬停，停留约 900ms；再次 capture 后在同一点单击一次，再停留约 900ms。

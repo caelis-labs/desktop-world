@@ -365,9 +365,8 @@ pub(super) fn requested(args: &Value) -> Result<Value, super::wire::WireError> {
 #[cfg(test)]
 pub(super) fn typescript() -> String {
     let spec = super::scripts::description();
-    let mut out = String::from(
-        "// Internal atomic test protocol. Public Agent API: skills/desktop-world/API.md.\n\n",
-    );
+    let mut out =
+        String::from("// Internal atomic test protocol. Public Agent API: skills/dtw/API.md.\n\n");
     out.push_str("type Json = null | boolean | number | string | Json[] | { [key: string]: Json };\n\ninterface App {\n");
     for method in Method::ALL {
         let shape = &spec["methods"][method.name()];

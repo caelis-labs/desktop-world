@@ -10,7 +10,7 @@ import threading
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from app_client import artifact_identity, require
+from app_client import artifact_identity, package_layout, require
 from dsh_client import DshClient, MODEL_BOUNDARY
 from windows.app_protocol_probe import wait
 from windows.desktop_probe import children
@@ -53,6 +53,7 @@ def main():
     source, destination = folder / 'seed.txt', folder / '验收-137.txt'
     source.write_bytes(b'Owned initial document\r\n')
     package = args.package.resolve(strict=True)
+    skill_name, server_name = package_layout(package)
     binary = package / 'bin/dtw.exe'
     report = {'passed': False, 'artifact': artifact_identity(binary, package),
         'business_actor': 'actual DSH model; supervisor only launches an owned folder and reads independent state'}
@@ -97,7 +98,7 @@ def main():
         owned = wait(new_owned, timeout=15)
         explorer_handle = ProcessHandle(owned['pid'], explorer)
         report['owned_explorer'] = {**owned, 'birth': explorer_handle.birth}
-        client = DshClient(args.dsh, patch, out / 'dsh', Path.cwd())
+        client = DshClient(args.dsh, patch, out / 'dsh', Path.cwd(), server_name=server_name)
         client.call('initialize', {'protocolVersion': 1, 'clientCapabilities': {},
             'clientInfo': {'name': 'dtw-windows-real-apps-acceptance', 'version': '1'}})
         report['session'] = client.call('session/new', {'cwd': str(Path.cwd()), 'mcpServers': []})
@@ -115,8 +116,8 @@ def main():
         require(handles, 'Actual DSH-owned installed MCP identity absent')
         report['dsh_owned_dtw_processes'] = [{'pid': h.pid, 'birth': h.birth} for h in handles]
         payload = 'Windows 实机验收 中文🙂\n第二行 café 🚀'
-        prompt = f'''这是 Windows 真实应用验收。先加载 desktop-world Skill，并读取其安装包中的 API/相关文档。
-业务只准使用 desktop-world apps/exec。禁止 shell、文件读写工具、HTTP、CDP、其他 computer-use、脚本化文件系统或读取本轮日志/状态旁路。
+        prompt = f'''这是 Windows 真实应用验收。先加载 {skill_name} Skill，并读取其安装包中的 API/相关文档。
+业务只准使用 {server_name} apps/exec。禁止 shell、文件读写工具、HTTP、CDP、其他 computer-use、脚本化文件系统或读取本轮日志/状态旁路。
 我已打开一个全新的自有 Explorer 窗口，文件夹 {folder}，其中只有 seed.txt。每次操作 Explorer 前核对当前窗口确实是这个自有文件夹；不要导航、修改或关闭其他 Explorer 窗口。
 已另外准备一个全新、只有一个空白标签的 Untitled - Notepad 窗口。其他记事本窗口及其恢复的用户标签必须保留，绝不能切入、修改、保存或关闭它们。不要调用 Notepad app.quit()。
 1. 在这个 Explorer 窗口内把 seed.txt 重命名为 验收-137.txt。
@@ -142,7 +143,7 @@ Windows 实机验收 中文🙂
         require(any(row['hwnd'] == args.owned_notepad_window and row['title'] == 'Untitled - Notepad'
             for row in after), 'First owned document close was not independently observed')
         reopen_prompt = f'''继续同一会话，进行单独的真实重新打开验收。文件 {destination} 已由上一阶段保存且文档已关闭。
-只操作本次准备的空白 Untitled - Notepad 窗口；其他用户窗口、标签和文件必须保留。业务仍只准 desktop-world apps/exec，禁止文件系统、shell、HTTP、其他 computer-use 等旁路。
+只操作本次准备的空白 Untitled - Notepad 窗口；其他用户窗口、标签和文件必须保留。业务仍只准 {server_name} apps/exec，禁止文件系统、shell、HTTP、其他 computer-use 等旁路。
 每个有输入的 exec 开头先 await app.look({{full:true}})，核对 windows[0].title 是当前预期的自有标题，否则抛错停止。先从 Untitled - Notepad 用 Ctrl+O 打开上述文件；模态出现后先做新的只读观察核对 Open 及后面的自有 Untitled 窗口，再设置 File name 并使用观察到的 Open 按钮打开。
 等待新观察确认自有 验收-137.txt - Notepad 标题和 document。完整 readText 到 UTF-16 EOF，并 capture 通过实际图片核对恰好两行：
 Windows 实机验收 中文🙂

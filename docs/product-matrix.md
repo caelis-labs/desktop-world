@@ -23,9 +23,9 @@
 
 macOS 多屏坐标、跨屏移动和不同缩放比例依实际布局验证；单机结果不外推全部屏幕配置。Windows 已发行包的实机条件与结果保留在其 RELEASE.json。Linux 源码或类型检查不构成桌面可用性证明。
 
-使用方法见 [安装](../install.md)、[脚本参考](../skills/desktop-world/API.md) 和随包 Skill。扩展方向与边界见 [架构](architecture.md)；真实任务指标与验证方法见 [构建和验收](building.md)；底层来源见 [原生来源](native-source-provenance.md) 和 [跨平台来源](native-source-provenance-cross-platform.md)。
+使用方法见 [安装](../install.md)、[脚本参考](../skills/dtw/API.md) 和随包 Skill。扩展方向与边界见 [架构](architecture.md)；真实任务指标与验证方法见 [构建和验收](building.md)；底层来源见 [原生来源](native-source-provenance.md) 和 [跨平台来源](native-source-provenance-cross-platform.md)。
 
-现行调用合同见 [Skill API](../skills/desktop-world/API.md)；已关闭的协议迁移见 [历史收敛记录](agent-protocol-convergence-plan.md)。
+现行调用合同见 [Skill API](../skills/dtw/API.md)；已关闭的协议迁移见 [历史收敛记录](agent-protocol-convergence-plan.md)。
 统一 [Computer Use 验收 APP](../tests/fixtures/computer-use-app/README.md) 定义密集/低 AX、多窗口、文件及光标目标；[首轮基准](computer-use-benchmark-2026-11-04.md) 区分通过、失败、阻塞、未复核和未执行。目标场景不等于平台支持声明。
 合成视图目前限制 16 个可见 surface、1600px 画布、64 MiB 解码数据。
 macOS move/drag、真实系统 Open/Save 面板及单屏内手势的双屏搬移检查见

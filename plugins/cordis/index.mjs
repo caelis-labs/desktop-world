@@ -14,7 +14,7 @@ export async function apply(ctx) {
     const decision = await next();
     if (decision.kind !== 'accept' || decision.content !== undefined ||
         decision.value !== undefined || !exec.signal?.aborted ||
-        !['mcp__desktop-world__apps', 'mcp__desktop-world__exec'].includes(exec.name) ||
+        !['mcp__dtw__apps', 'mcp__dtw__exec'].includes(exec.name) ||
         result.isError !== true || result.error?.message !== '[object Object]' ||
         result.content?.length !== 1 || result.content[0].type !== 'text' ||
         result.content[0].text !== 'Error: [object Object]') return decision;
@@ -64,7 +64,7 @@ export async function apply(ctx) {
       watch: false,
     }));
     children.push(ctx.plugin(mcpClient, {
-      serverName: 'desktop-world',
+      serverName: 'dtw',
       transport: 'stdio',
       command: binary,
       args: ['mcp'],

@@ -35,6 +35,11 @@ execution path outside the session workspace; denied access requires the host's
 normal authorization process, never a sandbox-policy or ACL change. See
 [DSH Windows compatibility](docs/install-dsh.md#windows-host-execution-and-storage).
 
+Current source packages expose MCP server `dtw` and bundle Skill `dtw` at
+`skills/dtw` (Caelis identity `desktop-world:dtw`). The plugin/install ID remains
+`desktop-world`. Published schema 1 packages keep their original names and
+bytes; follow the selected package's layout as described in [installation](install.md).
+
 ## Try it
 
 Open the application you want to use, then ask your Agent:

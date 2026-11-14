@@ -35,7 +35,7 @@ def native_cleanup_unconfirmed(update):
 
 
 class DshClient:
-    def __init__(self, command, patch, output, cwd):
+    def __init__(self, command, patch, output, cwd, *, server_name='dtw'):
         self.output = Path(output).resolve()
         self.output.mkdir(parents=True, exist_ok=False)
         self.counter = 0
@@ -43,6 +43,7 @@ class DshClient:
         self.methods = {}
         self.owned_sessions = set()
         self.tool_names = {}
+        self.dtw_tools = {f'mcp__{server_name}__apps', f'mcp__{server_name}__exec'}
         self.critical_cancelled = set()
         self.controller_stop = threading.Event()
         self.events = []
@@ -98,7 +99,7 @@ class DshClient:
                 self.tool_names[key] = update.get('title')
             session = params.get('sessionId')
             if (update.get('sessionUpdate') == 'tool_call_update'
-                    and self.tool_names.get(key) in ('mcp__desktop-world__apps', 'mcp__desktop-world__exec')
+                    and self.tool_names.get(key) in self.dtw_tools
                     and session in self.owned_sessions and session not in self.critical_cancelled
                     and native_cleanup_unconfirmed(update)):
                 self.critical_cancelled.add(session)

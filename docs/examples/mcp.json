@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "desktop-world": {
+    "dtw": {
       "command": "/absolute/path/to/dtw",
       "args": [
         "mcp"

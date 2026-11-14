@@ -433,8 +433,8 @@ A standalone ZIP is not stapled; an Accepted online notarization submission is
 not proof of offline Gatekeeper or GUI acceptance. Linux is not packaged here.
 
 Operations use stable app IDs through exec({{app,source}}) by default or the
-optional flat tools selected at startup with --atomic. See skills/desktop-world/API.md
-for the canonical API and argument objects, and skills/desktop-world/SKILL.md for
+optional flat tools selected at startup with --atomic. See skills/dtw/API.md
+for the canonical API and argument objects, and skills/dtw/SKILL.md for
 pagination, input, reference lifetime, unknown-effect and no-replay behavior.
 Harness approvals remain with the Agent; no custom Host is required.
 Full dependency notices are under notices/; adapted source notices and hashes
@@ -457,7 +457,7 @@ before installing this format; preserve the package and other plugins.
 def package_assets(source, package, version, target):
     for name in ("LICENSE", "THIRD_PARTY_NOTICES.md", "install.md"):
         shutil.copy2(source / name, package / name)
-    shutil.copytree(source / "skills/desktop-world", package / "skills/desktop-world")
+    shutil.copytree(source / "skills/dtw", package / "skills/dtw")
     for relative in ("docs/native-source-provenance.md", "docs/native-source-provenance-cross-platform.md",
                      "docs/background-input-port.md", "docs/install.md", "docs/install-dsh.md",
                      "docs/install-caelis.md", "docs/install-agy.md", "docs/agent-protocol-migration.md", "docs/package-management.md"):
@@ -579,11 +579,11 @@ def build(repo, output, target, signing_identity=None, notary_profile=None, nota
         plugin_entries = package_assets(source, package, version, target)
         require(source_identity(repo, commands.run) == identity, "Source changed during candidate build")
         require(digest(source / "cmd/dtw/Cargo.lock") == identity["cargo_lock_sha256"], "Build changed the exported lockfile")
-        build_info = {"schema": 1, "package_store_schema": 1, "kind": "unpublished-rewrite-candidate", "version": version, "target": target,
+        build_info = {"schema": 1, "package_store_schema": plugin_package.PACKAGE_STORE_SCHEMA, "kind": "unpublished-rewrite-candidate", "version": version, "target": target,
                       "source": identity, "source_archive_sha256": digest(source_tar), "toolchain": toolchain,
                       "build_environment": build_env, "host": {"system": platform.system(), "release": platform.release(), "machine": platform.machine()},
                       "binary": {"path": f"bin/{binary.name}", "sha256": digest(binary), **fmt},
-                      "skill_sha256": digest(package / "skills/desktop-world/SKILL.md"),
+                      "skill_sha256": digest(package / "skills/dtw/SKILL.md"),
                       "plugin_package": plugin_entries,
                       "dependency_count": len(notices["crates"]), "dependencies_sha256": digest(package / "notices/DEPENDENCIES.json"),
                       "signing": signing, "notarization": {"requested": bool(notary_profile), "status": "unverified",

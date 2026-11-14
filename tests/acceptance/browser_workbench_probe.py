@@ -25,6 +25,7 @@ import time
 import traceback
 import uuid
 
+from app_client import package_layout
 from standard_agent_probe import Mcp, require, successful, wait_until, write_json, stop_owned
 
 REPORT = 'Inventory review\nDTW-0088 | target 37 | reviewed\nDTW-0240 | target 52 | reviewed\n备注：已核对 🐦\n下一步：安排补货\n'
@@ -62,7 +63,9 @@ def verify_installed_package(package, dtw):
     require(set(expected) == files - {'SHA256SUMS'}, 'Installed package inventory differs from SHA256SUMS')
     for name, checksum in expected.items():
         require(file_sha256(package/name) == checksum, 'Installed package hash mismatch: '+name)
-    require({'BUILD.json','bin/dtw','skills/desktop-world/SKILL.md','.claude-plugin/plugin.json'} <= files,
+    skill_name, _ = package_layout(package)
+    skill_path = 'skills/'+skill_name+'/SKILL.md'
+    require({'BUILD.json','bin/dtw',skill_path,'.claude-plugin/plugin.json'} <= files,
             'Installed package lacks required candidate assets')
     build = json_object((package/'BUILD.json').read_text(encoding='utf-8'))
     require(build.get('schema') == 1 and build.get('kind') == 'unpublished-rewrite-candidate',
@@ -70,7 +73,7 @@ def verify_installed_package(package, dtw):
     require(build.get('target') == 'aarch64-apple-darwin', 'This probe requires the macOS arm64 candidate')
     require(isinstance(build.get('binary'), dict) and build['binary'].get('path') == 'bin/dtw'
             and build['binary'].get('sha256') == expected['bin/dtw'], 'BUILD binary identity mismatch')
-    require(build.get('skill_sha256') == expected['skills/desktop-world/SKILL.md'], 'BUILD Skill identity mismatch')
+    require(build.get('skill_sha256') == expected[skill_path], 'BUILD Skill identity mismatch')
     source = build.get('source')
     require(isinstance(source, dict)
             and all(isinstance(source.get(key), str) and re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', source[key])
@@ -104,10 +107,11 @@ def prepare_runtime(repo, root, dtw, installed_package=None):
     return binary, {'artifact_kind':'local-development-artifact', 'release_artifact':False,
                     'installed_artifact':False, 'binary_path':str(binary),
                     'binary_sha256':file_sha256(binary),
-                    'skill_sha256':file_sha256(repo/'skills/desktop-world/SKILL.md')}
+                    'skill_sha256':file_sha256(repo/'skills/dtw/SKILL.md')}
 
 
 def stage_agent_plugin(repo, root, binary, name, installed_package=None):
+    skill_name = package_layout(installed_package)[0] if installed_package is not None else 'dtw'
     stage = root/'plugin'
     if installed_package is None:
         with (root/'stage.json').open('w') as log:
@@ -118,15 +122,16 @@ def stage_agent_plugin(repo, root, binary, name, installed_package=None):
         # Agents register MCP explicitly against the original installed binary.
         stage.mkdir()
         shutil.copytree(installed_package/'.claude-plugin', stage/'.claude-plugin')
-        shutil.copytree(installed_package/'skills/desktop-world', stage/'skills/desktop-world')
+        shutil.copytree(installed_package/'skills'/skill_name, stage/'skills'/skill_name)
     manifest = stage/'.claude-plugin/plugin.json'
     data = json_object(manifest.read_text()); data['name'] = name; write_json(manifest, data)
-    skill = stage/'skills/desktop-world'
+    skill = stage/'skills'/skill_name
     skill.rename(stage/'skills'/name)
     skill = stage/'skills'/name/'SKILL.md'
     text = skill.read_text()
-    require(text.count('\nname: desktop-world\n') == 1, 'Canonical Skill name is missing or ambiguous')
-    skill.write_text(text.replace('\nname: desktop-world\n', '\nname: '+name+'\n', 1))
+    canonical_name = '\nname: '+skill_name+'\n'
+    require(text.count(canonical_name) == 1, 'Canonical Skill name is missing or ambiguous')
+    skill.write_text(text.replace(canonical_name, '\nname: '+name+'\n', 1))
     return stage, skill
 
 

@@ -57,7 +57,7 @@ fn eof_after_initialize_exits_cleanly() {
     child.initialize();
     let reply: serde_json::Value =
         serde_json::from_str(&received.recv_timeout(Duration::from_secs(5)).unwrap()).unwrap();
-    assert_eq!(reply["result"]["serverInfo"]["name"], "desktop-world");
+    assert_eq!(reply["result"]["serverInfo"]["name"], "dtw");
     drop(child.0.stdin.take());
     assert!(child.wait().success());
     reader.join().unwrap();

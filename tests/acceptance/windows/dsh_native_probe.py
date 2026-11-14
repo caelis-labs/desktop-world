@@ -15,7 +15,7 @@ import threading
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from app_client import artifact_identity, require
+from app_client import artifact_identity, package_layout, require
 from dsh_client import DshClient, MODEL_BOUNDARY
 from dsh_metrics import summarize
 from windows import protocol_review
@@ -36,6 +36,7 @@ def main():
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     package = args.package.resolve(strict=True)
+    skill_name, server_name = package_layout(package)
     binary = package / 'bin/dtw.exe'
     report = {'passed': False, 'mode': args.mode, 'harness': 'installed DSH public ACP profile',
         'artifact': artifact_identity(binary, package), 'cases': [],
@@ -116,15 +117,15 @@ DSH Windows 中文🙂
 先观察和截图，在蓝色 Owned pointer / wheel pad 的中央区域内做一次实际按住左键的折线拖拽：
 规划八个交替点，每段图像距离约 150–200 像素，总路径遵守 API 的 256 样本上限，所有点留在蓝色区域内。随后再点击 Increment 一次。
 本轮评估会在实际拖拽途中由用户取消。正常开始拖拽即可，不要替用户取消，不要模拟取消结果。'''
-        common = '''这是 Windows 实机验收。先加载随完整插件注册的 desktop-world Skill，并读取其安装目录中的 API。
-业务操作只能使用 desktop-world 的 apps/exec。skill/read 只准读取该安装包的 Skill/API 文档。
+        common = f'''这是 Windows 实机验收。先加载随完整插件注册的 {skill_name} Skill，并读取其安装目录中的 API。
+业务操作只能使用 {server_name} 的 apps/exec。skill/read 只准读取该安装包的 Skill/API 文档。
 禁止 shell、PowerShell、Python、文件写工具、HTTP、CDP、Playwright、其他 computer-use、读取 fixture 源码/配置/状态/事件等旁路。
 不要操作其他窗口或文件。只按实际观察到的内容执行，派发或消费不确定的动作禁止重放；先做新观察。
 工具回复只证明其声明的事实，最终结论必须保留错误和不确定项。\n'''
         common += MODEL_BOUNDARY
         prompt = common + goal
         (out / 'prompt.txt').write_text(prompt, encoding='utf-8')
-        client = DshClient(args.dsh, patch, out / 'dsh', Path.cwd())
+        client = DshClient(args.dsh, patch, out / 'dsh', Path.cwd(), server_name=server_name)
         report['initialize'] = client.call('initialize', {'protocolVersion': 1,
             'clientCapabilities': {}, 'clientInfo': {'name': 'dtw-windows-dsh-acceptance', 'version': '1'}})
         created = client.call('session/new', {'cwd': str(Path.cwd()), 'mcpServers': []})
@@ -203,7 +204,7 @@ DSH Windows 中文🙂
             replies, sources = [], []
             for event in client.events:
                 update = event.get('params', {}).get('update', {})
-                if client.tool_names.get(update.get('toolCallId')) != 'mcp__desktop-world__exec':
+                if client.tool_names.get(update.get('toolCallId')) != f'mcp__{server_name}__exec':
                     continue
                 if update.get('sessionUpdate') == 'tool_call':
                     sources.append(update.get('rawInput', {}).get('source', '').strip())

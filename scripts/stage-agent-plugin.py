@@ -32,7 +32,7 @@ def stage(binary, output, repo, target=None):
         shutil.copy2(binary, output / "bin" / executable)
         entries = plugin_package.write_plugin_entries(repo, output, version, target)
         shutil.copy2(repo / "plugins/claude/README.md", output / "README.md")
-        shutil.copytree(repo / "skills/desktop-world", output / "skills/desktop-world")
+        shutil.copytree(repo / "skills/dtw", output / "skills/dtw")
         for name in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
             shutil.copy2(repo / name, output / name)
         (output / "docs").mkdir()
@@ -44,6 +44,7 @@ def stage(binary, output, repo, target=None):
         with (output / "bin" / executable).open("rb") as handle:
             binary_sha256 = hashlib.file_digest(handle, "sha256").hexdigest()
         metadata = {
+            "package_store_schema": plugin_package.PACKAGE_STORE_SCHEMA,
             "layout": "multi-agent-plugin",
             "version": version,
             "binary_sha256": binary_sha256,

@@ -172,6 +172,7 @@ class InstalledTaskTests(unittest.TestCase):
         self.root = fixture.root
         self.package = self.root/'installed package 中文'
         fixture.package.rename(self.package)
+        fixture.package = self.package
         self.binary = self.package/'bin/dtw'
 
     def invoke(self, task, output, attempt):
@@ -219,6 +220,22 @@ class InstalledTaskTests(unittest.TestCase):
                 self.assertTrue(integrity['ok'])
                 self.assertTrue(integrity['result']['unchanged'])
                 self.assertEqual(evidence['acceptance_status'], 'pending_gui_review')
+
+    def test_schema2_real_task_uses_new_skill_for_staging_and_evidence(self):
+        self.fixture.use_schema2()
+        def attempt(repo, root, binary, client, adapter, name, prompt, evidence, installed_package=None):
+            _, skill = tasks.stage_agent_plugin(repo, root, binary, name, installed_package)
+            self.assertEqual(skill.read_text(), self.fixture.canonical_skill.replace('name: dtw', 'name: '+name))
+            evidence['metrics'] = {'issues':[]}
+        status, evidence = self.invoke('chrome', self.root/'schema2-attempt', attempt)
+        self.assertEqual(status, 0, evidence.get('failure'))
+        source = self.package/'skills/dtw'
+        self.assertEqual(evidence['skill_files_sha256'], {
+            str(path.relative_to(source)):tasks.file_sha256(path)
+            for path in source.rglob('*') if path.is_file()})
+        integrity = next(row for row in evidence['cleanup'] if row['resource']=='installed_package_integrity')
+        self.assertTrue(integrity['ok'])
+        self.assertTrue(integrity['result']['unchanged'])
 
     def test_package_change_invalidates_attempt_without_erasing_task_result(self):
         def attempt(*args, **kwargs):

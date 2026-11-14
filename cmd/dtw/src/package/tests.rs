@@ -52,19 +52,24 @@ fn help_and_invalid_arguments_do_not_touch_store() {
 }
 
 fn fixture(root: &Path, version: &str) -> PathBuf {
+    fixture_layout(root, version, 1)
+}
+
+fn fixture_layout(root: &Path, version: &str, schema: u64) -> PathBuf {
+    let skill_dir = match schema {
+        1 => "skills/desktop-world",
+        2 => "skills/dtw",
+        _ => panic!("unsupported fixture schema"),
+    };
     let p = root.join(format!("source-{version}"));
     fs::create_dir(&p).unwrap();
     fs::create_dir(p.join("bin")).unwrap();
     fs::write(p.join("bin/dtw"), version).unwrap();
-    fs::create_dir_all(p.join("skills/desktop-world")).unwrap();
+    fs::create_dir_all(p.join(skill_dir)).unwrap();
     fs::create_dir_all(p.join("cordis")).unwrap();
     fs::write(p.join("cordis/index.mjs"), "export{}").unwrap();
     for name in ["SKILL.md", "API.md", "PATTERNS.md"] {
-        fs::write(
-            p.join("skills/desktop-world").join(name),
-            format!("{version} {name}"),
-        )
-        .unwrap();
+        fs::write(p.join(skill_dir).join(name), format!("{version} {name}")).unwrap();
     }
     for name in [
         "plugin.json",
@@ -76,15 +81,109 @@ fn fixture(root: &Path, version: &str) -> PathBuf {
         fs::create_dir_all(f.parent().unwrap()).unwrap();
         write(&f, &json!({"version":version})).unwrap();
     }
-    write(&p.join("BUILD.json"),&json!({"package_store_schema":1,"version":version,"target":"aarch64-apple-darwin","binary":{"path":"bin/dtw","sha256":digest(&p.join("bin/dtw")).unwrap()},"skill_sha256":digest(&p.join("skills/desktop-world/SKILL.md")).unwrap()})).unwrap();
-    let rows = inventory(&p)
+    write(&p.join("BUILD.json"),&json!({"package_store_schema":schema,"version":version,"target":"aarch64-apple-darwin","binary":{"path":"bin/dtw","sha256":digest(&p.join("bin/dtw")).unwrap()},"skill_sha256":digest(&p.join(skill_dir).join("SKILL.md")).unwrap()})).unwrap();
+    refresh_checksums(&p);
+    p
+}
+
+fn refresh_checksums(p: &Path) {
+    let rows = inventory(p)
         .unwrap()
         .iter()
+        .filter(|(name, _)| name.as_str() != "SHA256SUMS")
         .map(|(name, path)| format!("{}  {name}\n", digest(path).unwrap()))
         .collect::<String>();
     fs::write(p.join("SHA256SUMS"), rows).unwrap();
-    p
 }
+
+#[test]
+fn renamed_package_layout_preserves_legacy_pins_and_rollback() {
+    let t = Temp::new();
+    let old = fixture(&t.0, "0.4.2");
+    let new = fixture_layout(&t.0, "0.4.3", 2);
+    let old_id = digest(&old.join("SHA256SUMS")).unwrap();
+    let store = Store::open(&t.0.join("store")).unwrap();
+    assert_eq!(store.import(&old).unwrap()["package_id"], old_id);
+    let new_id = store.import(&new).unwrap()["package_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(old_id, new_id);
+    for host in ["dsh", "claude"] {
+        store.bind(host, &old_id).unwrap();
+        store.activate(host).unwrap();
+    }
+    store.bind("dsh", &new_id).unwrap();
+    let pending = json(&store.host("dsh").unwrap()).unwrap();
+    assert_eq!(pending["current"], old_id);
+    assert_eq!(pending["pending"], new_id);
+    store.activate("dsh").unwrap();
+    assert_eq!(
+        json(&store.host("dsh").unwrap()).unwrap()["rollback"],
+        old_id
+    );
+    assert_eq!(
+        json(&store.host("claude").unwrap()).unwrap()["current"],
+        old_id
+    );
+    store.bind("dsh", &old_id).unwrap();
+    store.activate("dsh").unwrap();
+    assert_eq!(
+        json(&store.host("dsh").unwrap()).unwrap()["current"],
+        old_id
+    );
+    assert_eq!(digest(&old.join("SHA256SUMS")).unwrap(), old_id);
+    assert!(old.join("skills/desktop-world/SKILL.md").is_file());
+    assert!(!old.join("skills/dtw").exists());
+    assert!(store.recipe(&old_id).is_ok());
+    assert!(store.recipe(&new_id).is_ok());
+}
+
+#[test]
+fn package_layout_requires_an_explicit_supported_schema_and_matching_skill() {
+    let t = Temp::new();
+    let p = fixture_layout(&t.0, "0.4.3", 2);
+    let mut build = json(&p.join("BUILD.json")).unwrap();
+    for schema in [
+        Value::Null,
+        json!(true),
+        json!("2"),
+        json!(2.0),
+        json!(3),
+        json!(1),
+    ] {
+        build["package_store_schema"] = schema;
+        fs::write(p.join("BUILD.json"), serde_json::to_vec(&build).unwrap()).unwrap();
+        refresh_checksums(&p);
+        assert!(verify(&p).is_err());
+    }
+}
+#[test]
+fn import_rejects_both_canonical_skill_roots_for_each_layout() {
+    let t = Temp::new();
+    for schema in [1, 2] {
+        let p = fixture_layout(&t.0, &format!("0.4.{schema}"), schema);
+        let other = p.join(if schema == 1 {
+            "skills/dtw"
+        } else {
+            "skills/desktop-world"
+        });
+        fs::create_dir_all(&other).unwrap();
+        fs::write(other.join("SKILL.md"), "second discoverable Skill").unwrap();
+        refresh_checksums(&p);
+        let store = Store::open(&t.0.join(format!("store-{schema}"))).unwrap();
+        assert!(store
+            .import(&p)
+            .unwrap_err()
+            .message
+            .contains("Skill layout mismatch"));
+        assert_eq!(
+            fs::read_dir(store.root.join("packages")).unwrap().count(),
+            0
+        );
+    }
+}
+
 #[test]
 fn complete_import_deduplicates_and_encodes_unicode_file_urls() {
     let t = Temp::new();

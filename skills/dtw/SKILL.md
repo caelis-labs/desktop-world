@@ -1,9 +1,12 @@
 ---
-name: desktop-world
+name: dtw
 description: Control one authorized desktop application through DTW using compact semantic observations, app screenshots, mouse and keyboard operations.
 ---
 
-# Desktop World
+# DTW
+
+The public MCP server is `dtw`. The installed plugin ID remains `desktop-world`;
+in Caelis the full Skill identity is `desktop-world:dtw`.
 
 Discover/list the connected MCP tools before choosing how to operate. Default
 `dtw mcp` exposes `apps` and `exec`. If `exec` is listed, use app-scoped JavaScript.

@@ -133,7 +133,7 @@ elevated or secure desktops, every display layout, every UIA provider or arbitra
 cross-process system helpers.
 
 Current user-facing arguments and platform conditions are defined by the bundled
-`skills/desktop-world/API.md`. Dated evidence and the earlier failure matrix are
+`skills/dtw/API.md`. Dated evidence and the earlier failure matrix are
 available in the repository's
 [Windows audit](https://github.com/caelis-labs/desktop-world/blob/main/docs/windows-feature-audit-2026-11-03.md)
 and [host acceptance history](https://github.com/caelis-labs/desktop-world/blob/main/docs/windows-host-acceptance-2026-11-01.md).
