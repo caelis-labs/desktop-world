@@ -133,11 +133,9 @@ enum ToolCall {
         offset: usize,
         limit: usize,
     },
-    Exec {
+    App {
         app: String,
-        source: String,
-        timeout_ms: u64,
-        max_calls: u32,
+        command: Command,
     },
 }
 pub enum Started<B: Backend> {
@@ -173,6 +171,10 @@ impl<F: Factory> Server<F> {
     }
     pub fn toolset(&self) -> Toolset {
         self.toolset
+    }
+    #[cfg(test)]
+    pub(super) fn watch_script_engine(&self) -> Arc<std::sync::atomic::AtomicUsize> {
+        super::script_engine::watch_session(&self.session_id)
     }
     pub fn with_toolset(factory: F, toolset: Toolset) -> Arc<Self> {
         Arc::new_cyclic(|weak| Self {
@@ -238,7 +240,7 @@ impl<F: Factory> Server<F> {
         }
         let execution_id = match &command {
             ToolCall::Apps { .. } => None,
-            ToolCall::Exec { app, .. } => {
+            ToolCall::App { app, .. } => {
                 let id = match super::reference("exe") {
                     Ok(id) => id,
                     Err(error) => return Started::Reply(Reply::error(wire::core_error(&error))),
@@ -284,20 +286,13 @@ impl<F: Factory> Server<F> {
                     offset,
                     limit,
                 } => self.apps(call, query, state, *offset, *limit),
-                ToolCall::Exec {
-                    app,
-                    source,
-                    timeout_ms,
-                    max_calls,
-                } => self.execute(
+                ToolCall::App { app, command } => self.execute(
                     call,
                     app,
                     call.execution_id
                         .as_deref()
                         .expect("accepted execution has an ID"),
-                    source,
-                    *timeout_ms,
-                    *max_calls,
+                    command,
                 ),
             })) {
                 Ok(reply) => reply,
@@ -403,7 +398,7 @@ impl<F: Factory> Server<F> {
         state.active = None;
     }
     fn annotate(&self, state: &State<F::Provider>, call: &Call<F::Provider>, reply: &mut Reply) {
-        if let ToolCall::Exec { app, .. } = &call.command {
+        if let ToolCall::App { app, .. } = &call.command {
             public_execution(reply, app, call.execution_id.as_deref().unwrap());
             reply.data["context_reset"] = json!(call.context_reset.load(Ordering::Acquire));
             reply.data["state_reset"] = json!(call.state_reset.load(Ordering::Acquire));
@@ -461,12 +456,14 @@ impl<F: Factory> Server<F> {
         call: &Call<F::Provider>,
         app_id: &str,
         id: &str,
-        source: &str,
-        timeout_ms: u64,
-        max_calls: u32,
+        command: &Command,
     ) -> Reply {
+        let timeout_ms = match command {
+            Command::App { timeout_ms, .. } | Command::Script { timeout_ms, .. } => *timeout_ms,
+            _ => unreachable!("MCP app executions have one execution budget"),
+        };
         if call.cancelled.load(Ordering::Acquire) {
-            return problem("cancelled", "Cancelled before script admission");
+            return problem("cancelled", "Cancelled before app execution admission");
         }
         let target = match self.factory.resolve(app_id) {
             Ok(target) if target.app_id == app_id => target,
@@ -495,7 +492,7 @@ impl<F: Factory> Server<F> {
             }
         }
         if call.cancelled.load(Ordering::Acquire) {
-            return problem("cancelled", "Cancelled before script admission");
+            return problem("cancelled", "Cancelled before app execution admission");
         }
         let candidate = {
             let state = self.state.lock().unwrap();
@@ -629,7 +626,7 @@ impl<F: Factory> Server<F> {
                     self.remember_shutdown(error);
                     return closed;
                 }
-                return problem("cancelled", "Stopped before script admission");
+                return problem("cancelled", "Stopped before app execution admission");
             }
             owner.handle(Request::Submit(Submit {
                 request_id: id.into(),
@@ -637,11 +634,7 @@ impl<F: Factory> Server<F> {
                     app_ref: owner.app_ref.clone(),
                     window_ref: None,
                 },
-                command: Command::Script {
-                    source: source.into(),
-                    timeout_ms,
-                    max_calls,
-                },
+                command: command.clone(),
             }))
         };
         if admitted.data["status"] != "running" {
@@ -1150,13 +1143,8 @@ fn parse_call(toolset: Toolset, name: &str, args: &Value) -> Result<ToolCall, Wi
     if !toolset.allows(name) {
         return Err(invalid("Unknown tool in the selected toolset"));
     }
-    if let Some((app, source)) = toolset.atomic_source(name, args)? {
-        return Ok(ToolCall::Exec {
-            app,
-            source,
-            timeout_ms: scripts::DEFAULT_TIMEOUT_MS,
-            max_calls: scripts::UNLIMITED_CALLS,
-        });
+    if let Some((app, command)) = toolset.atomic_call(name, args)? {
+        return Ok(ToolCall::App { app, command });
     }
     match name {
         "apps" => {
@@ -1210,11 +1198,13 @@ fn parse_call(toolset: Toolset, name: &str, args: &Value) -> Result<ToolCall, Wi
                 })?
                 .to_owned();
             let (timeout_ms, max_calls) = scripts::budgets(args.as_object().unwrap())?;
-            Ok(ToolCall::Exec {
+            Ok(ToolCall::App {
                 app,
-                source,
-                timeout_ms,
-                max_calls,
+                command: Command::Script {
+                    source,
+                    timeout_ms,
+                    max_calls,
+                },
             })
         }
         _ => Err(invalid("Unknown tool")),

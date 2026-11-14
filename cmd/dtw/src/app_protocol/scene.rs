@@ -786,7 +786,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         let until = self.state.lock().unwrap().scene.read_after;
         if let Some(until) = until {
             while Instant::now() < until {
-                self.check_script_wait(id, deadline)?;
+                self.check_execution_wait(id, deadline)?;
                 std::thread::sleep(
                     Duration::from_millis(20).min(
                         until
@@ -795,7 +795,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                     ),
                 );
             }
-            self.check_script_wait(id, deadline)?;
+            self.check_execution_wait(id, deadline)?;
             self.state.lock().unwrap().scene.read_after = None;
         }
         Ok(())
@@ -828,7 +828,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         let mut previous = None;
         let mut last: Option<Work> = None;
         loop {
-            if let Err(reason) = self.check_script_wait(id, deadline) {
+            if let Err(reason) = self.check_execution_wait(id, deadline) {
                 return Work::read_error(reason);
             }
             if Instant::now() >= until {
@@ -891,7 +891,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             };
             let wake = (Instant::now() + Duration::from_millis(next)).min(until);
             while Instant::now() < wake {
-                if let Err(reason) = self.check_script_wait(id, deadline) {
+                if let Err(reason) = self.check_execution_wait(id, deadline) {
                     return Work::read_error(reason);
                 }
                 std::thread::sleep(

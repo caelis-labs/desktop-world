@@ -43,10 +43,6 @@ async fn sdk_toolset_selection_is_enforced_before_provider_connection() {
                 assert_eq!(rejected["isError"], true, "{rejected}");
                 assert_eq!(decoded(&rejected)["error"]["code"], code);
             }
-            let oversized = client
-                .tool("type_text", json!({"app":APP,"text":"\\".repeat(20_000)}))
-                .await;
-            assert_eq!(decoded(&oversized)["error"]["code"], "invalid_arguments");
             let unavailable = decoded(
                 &client
                     .tool("look", json!({"app":"org.example.Unavailable"}))
@@ -62,8 +58,9 @@ async fn sdk_toolset_selection_is_enforced_before_provider_connection() {
 #[tokio::test]
 async fn sdk_atomic_and_exec_share_scene_context_and_automatic_readback() {
     let (server, catalog) = selected(Toolset::All);
+    let engine_entries = server.watch_script_engine();
     let mut client = Client::new(server).await;
-    let first = decoded(&client.tool("exec", input("await app.look();")).await);
+    let first = decoded(&client.tool("look", json!({"app":APP})).await);
     assert_eq!(first["view"]["kind"], "full", "{first}");
     let second = decoded(&client.tool("look", json!({"app":APP})).await);
     assert_eq!(second["view"]["kind"], "unchanged", "{second}");
@@ -75,11 +72,21 @@ async fn sdk_atomic_and_exec_share_scene_context_and_automatic_readback() {
     assert_eq!(action["effects"]["dispatch"]["dispatched"], 1, "{action}");
     assert!(action["view"].is_object(), "{action}");
     assert!(action.get("script").is_none());
-    let third = decoded(&client.tool("exec", input("await app.look();")).await);
-    assert_eq!(third["view"]["kind"], "unchanged", "{third}");
+    assert_eq!(engine_entries.load(Ordering::SeqCst), 0);
+    let third = decoded(
+        &client
+            .tool("exec", input("await app.look(); return 7;"))
+            .await,
+    );
+    assert_eq!(third["result"], 7, "{third}");
+    assert_eq!(engine_entries.load(Ordering::SeqCst), 1);
+    let fourth = client.tool("look", json!({"app":APP})).await;
+    assert_eq!(fourth["isError"], false, "{fourth}");
+    assert_eq!(decoded(&fourth)["view"]["kind"], "unchanged", "{fourth}");
+    assert_eq!(engine_entries.load(Ordering::SeqCst), 1);
     assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
     assert_eq!(catalog.connects.load(Ordering::SeqCst), 1);
-    assert_eq!(catalog.backend.0.finishes.load(Ordering::SeqCst), 4);
+    assert_eq!(catalog.backend.0.finishes.load(Ordering::SeqCst), 5);
     client.close().await;
     // Server::close retires contexts before and after waiting for active work.
     assert_eq!(catalog.backend.0.shutdowns.load(Ordering::SeqCst), 2);
@@ -136,6 +143,7 @@ async fn sdk_atomic_json_is_data_and_native_setter_receives_exact_value() {
 #[tokio::test]
 async fn sdk_atomic_rpc_identity_includes_tool_name_and_never_replays_input() {
     let (server, catalog) = selected(Toolset::Atomic);
+    let engine_entries = server.watch_script_engine();
     let mut client = Client::new(server).await;
     client.tool("look", json!({"app":APP})).await;
     let params = json!({"name":"click","arguments":{"app":APP,"target":"w1.e1"}});
@@ -154,6 +162,7 @@ async fn sdk_atomic_rpc_identity_includes_tool_name_and_never_replays_input() {
         "request_conflict"
     );
     assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+    assert_eq!(engine_entries.load(Ordering::SeqCst), 0);
     client.close().await;
 }
 
@@ -205,6 +214,11 @@ async fn sdk_atomic_capture_preserves_png_content_and_compact_view() {
     for private in ["window_ref", "observation_ref", "element_ref", "session_id"] {
         assert!(!data.to_string().contains(private));
     }
+    let read = client.tool("look", json!({"app":APP})).await;
+    assert_eq!(read["isError"], false, "{read}");
+    let clicked = client.tool("click", json!({"app":APP,"x":5,"y":4})).await;
+    assert_eq!(clicked["isError"], false, "{clicked}");
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
     client.close().await;
 }
 
@@ -216,13 +230,18 @@ async fn sdk_atomic_cancel_settles_unknown_receipt_before_recovery() {
         inner: catalog.clone(),
         close_gate: Arc::default(),
     };
-    let mut client = Client::new(Server::with_toolset(factory.clone(), Toolset::All)).await;
+    let server = Server::with_toolset(factory.clone(), Toolset::All);
+    let engine_entries = server.watch_script_engine();
+    let mut client = Client::new(server).await;
     client.tool("look", json!({"app":APP})).await;
     let action = catalog.backend.action_gate();
     let params = json!({"name":"click","arguments":{"app":APP,"target":"w1.e1"}});
     let id = client.begin("tools/call", params.clone()).await;
     let action = reached(action).await;
     let running = decoded(&client.receipt(json!({"app":APP})).await);
+    client
+        .send(json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":params}))
+        .await;
     let (gate, cleanup) = TestGate::pair();
     *factory.close_gate.lock().unwrap() = Some(gate);
     client
@@ -231,6 +250,9 @@ async fn sdk_atomic_cancel_settles_unknown_receipt_before_recovery() {
     let cleanup = reached(cleanup).await;
     let blocked = decoded(&client.tool("exec", input("return 1;")).await);
     assert_eq!(blocked["error"]["code"], "busy", "{blocked}");
+    let blocked = decoded(&client.tool("look", json!({"app":APP})).await);
+    assert_eq!(blocked["error"]["code"], "busy", "{blocked}");
+    assert_eq!(engine_entries.load(Ordering::SeqCst), 0);
     let unsettled = decoded(&client.receipt(json!({"app":APP})).await);
     assert_eq!(unsettled["status"], "running", "{unsettled}");
     cleanup.release();
@@ -262,9 +284,231 @@ async fn sdk_atomic_cancel_settles_unknown_receipt_before_recovery() {
         decoded(&retained["result"])["execution_id"],
         running["execution_id"]
     );
-    let recovered = client.tool("exec", input("await app.look();")).await;
+    assert_eq!(engine_entries.load(Ordering::SeqCst), 0);
+    let stale = client
+        .tool("click", json!({"app":APP,"target":"w1.e1"}))
+        .await;
+    assert_eq!(stale["isError"], true, "{stale}");
+    let recovered = client.tool("look", json!({"app":APP})).await;
     assert_eq!(recovered["isError"], false, "{recovered}");
     assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
     assert_eq!(catalog.connects.load(Ordering::SeqCst), 2);
+    assert_eq!(engine_entries.load(Ordering::SeqCst), 0);
+    client.close().await;
+}
+
+fn native_field(id: u64, name: &str) -> Element {
+    Element {
+        id: ElementId(id),
+        identity: Some(format!("mock:{id}")),
+        rebind_identity: Some(format!("retained:{id}")),
+        label: name.into(),
+        role: "text_field".into(),
+        name: Some(name.into()),
+        value: Some(name.into()),
+        enabled: Some(true),
+        actions: vec!["setValue".into()],
+        focused: false,
+        can_press: false,
+    }
+}
+
+#[tokio::test]
+async fn sdk_atomic_native_handles_survive_other_reads_but_reject_changed_targets() {
+    for change in ["unchanged", "removed", "replaced", "renamed"] {
+        let (server, catalog) = selected(Toolset::Atomic);
+        let engine_entries = server.watch_script_engine();
+        let mut field = native_field(77, "Native note");
+        {
+            let mut model = catalog.backend.0.model.lock().unwrap();
+            model.filtered_observation = true;
+            model.semantic_elements = Some(vec![field.clone(), native_field(78, "Other")]);
+        }
+        let mut client = Client::new(server).await;
+        let first = decoded(&client.tool("look", json!({"app":APP})).await);
+        let target = first["view"]["elements"][0]["id"].clone();
+        assert!(target.is_string(), "{first}");
+        let filtered = client.tool("look", json!({"app":APP,"text":"Other"})).await;
+        assert_eq!(filtered["isError"], false, "{filtered}");
+        let read = client
+            .tool("read_text", json!({"app":APP,"target":"w1.e2"}))
+            .await;
+        assert_eq!(read["isError"], false, "{read}");
+        match change {
+            "replaced" => field.rebind_identity = Some("different retained object".into()),
+            "renamed" => field.name = Some("Different meaning".into()),
+            _ => {}
+        }
+        catalog.backend.0.model.lock().unwrap().semantic_elements = Some(if change == "removed" {
+            vec![]
+        } else {
+            vec![field, native_field(78, "Other")]
+        });
+        let write = client
+            .tool(
+                "set_value",
+                json!({"app":APP,"target":target,"value":"fresh 中文 🌍"}),
+            )
+            .await;
+        if change == "unchanged" {
+            assert_eq!(write["isError"], false, "{write}");
+            assert_eq!(
+                *catalog.backend.0.set_values.lock().unwrap(),
+                vec![(ElementId(77), "fresh 中文 🌍".into())]
+            );
+            assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+        } else {
+            assert_eq!(write["isError"], true, "{change}: {write}");
+            assert_eq!(
+                decoded(&write)["error"]["code"],
+                "target_changed",
+                "{change}: {write}"
+            );
+            assert!(catalog.backend.0.set_values.lock().unwrap().is_empty());
+            assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+        }
+        assert_eq!(engine_entries.load(Ordering::SeqCst), 0);
+        client.close().await;
+    }
+}
+
+#[tokio::test]
+async fn sdk_atomic_validates_native_text_field_limits() {
+    let (server, catalog) = selected(Toolset::Atomic);
+    let engine_entries = server.watch_script_engine();
+    let mut client = Client::new(server).await;
+    client.tool("look", json!({"app":APP})).await;
+    let text = "\\".repeat(16 * 1024);
+    let result = client
+        .tool("type_text", json!({"app":APP,"text":text}))
+        .await;
+    assert_eq!(result["isError"], false, "{result}");
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+    let oversized = client
+        .tool(
+            "type_text",
+            json!({"app":APP,"text":"x".repeat(16 * 1024 + 1)}),
+        )
+        .await;
+    assert_eq!(oversized["isError"], true, "{oversized}");
+    assert_eq!(
+        decoded(&oversized)["error"]["code"],
+        "invalid_arguments",
+        "{oversized}"
+    );
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+    assert_eq!(engine_entries.load(Ordering::SeqCst), 0);
+    client.close().await;
+}
+
+#[tokio::test]
+async fn sdk_atomic_cleanup_failure_remains_explicit() {
+    let (server, catalog) = selected(Toolset::Atomic);
+    let engine_entries = server.watch_script_engine();
+    let mut client = Client::new(server).await;
+    client.tool("look", json!({"app":APP})).await;
+    catalog.backend.0.model.lock().unwrap().finish_error = Some(Error::NativeFailure {
+        code: "scene_cleanup_failed".into(),
+        message: "controlled atomic cleanup failure".into(),
+    });
+    let result = client
+        .tool("click", json!({"app":APP,"target":"w1.e1"}))
+        .await;
+    assert_eq!(result["isError"], true, "{result}");
+    let result = decoded(&result);
+    assert_eq!(
+        result["shutdown_error"]["code"], "scene_cleanup_failed",
+        "{result}"
+    );
+    assert_eq!(
+        result["shutdown_error"]["message"],
+        "controlled atomic cleanup failure"
+    );
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+    assert_eq!(engine_entries.load(Ordering::SeqCst), 0);
+    client.input.shutdown().await.unwrap();
+    let shutdown = tokio::time::timeout(RESPONSE_TIMEOUT, client.service)
+        .await
+        .expect("MCP service did not close")
+        .expect("MCP service panicked")
+        .expect_err("cleanup failure must remain explicit at shutdown");
+    assert_eq!(shutdown.code, "shutdown_failed");
+    assert_eq!(
+        shutdown.details.unwrap()["errors"][0]["code"],
+        "scene_cleanup_failed"
+    );
+}
+
+#[tokio::test]
+async fn sdk_atomic_cancel_after_dispatch_preserves_cancelled_completion() {
+    let (_, catalog) = selected(Toolset::Atomic);
+    let factory = CleanupCatalog {
+        inner: catalog.clone(),
+        close_gate: Arc::default(),
+    };
+    let server = Server::with_toolset(factory.clone(), Toolset::Atomic);
+    let engine_entries = server.watch_script_engine();
+    let mut client = Client::new(server).await;
+    client.tool("look", json!({"app":APP})).await;
+    let finish = catalog.backend.finish_gate();
+    let params = json!({"name":"click","arguments":{"app":APP,"target":"w1.e1"}});
+    let id = client.begin("tools/call", params.clone()).await;
+    let finish = reached(finish).await;
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+    let (gate, cleanup) = TestGate::pair();
+    *factory.close_gate.lock().unwrap() = Some(gate);
+    client
+        .send(json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":id}}))
+        .await;
+    // Catalog cleanup follows owner.cancel: this gate proves cancellation won
+    // while finish_execution still holds the dispatched operation open.
+    let cleanup = reached(cleanup).await;
+    finish.release();
+    let unsettled = tokio::time::timeout(RESPONSE_TIMEOUT, async {
+        loop {
+            let receipt = decoded(&client.receipt(json!({"app":APP})).await);
+            if receipt["error"]["code"] == "cancelled" {
+                break receipt;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("cancelled native completion was not published");
+    assert_eq!(unsettled["status"], "running", "{unsettled}");
+    let blocked = decoded(&client.tool("look", json!({"app":APP})).await);
+    assert_eq!(blocked["error"]["code"], "busy", "{blocked}");
+    cleanup.release();
+    let settled = tokio::time::timeout(RESPONSE_TIMEOUT, async {
+        loop {
+            let receipt = decoded(&client.receipt(json!({"app":APP})).await);
+            if receipt["status"] == "completed" {
+                break receipt;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("cancelled native cleanup did not settle");
+    assert_eq!(settled["execution_id"], unsettled["execution_id"]);
+    assert_eq!(settled["error"]["code"], "cancelled", "{settled}");
+    let projected = crate::app_protocol::projection::execution(Reply::plain(settled.clone()));
+    assert_eq!(
+        projected.data["effects"]["dispatch"]["dispatched"], 1,
+        "{}",
+        projected.data
+    );
+    client
+        .send(json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":params}))
+        .await;
+    let retained = decoded(&client.reply(id).await["result"]);
+    assert_eq!(retained["execution_id"], settled["execution_id"]);
+    assert_eq!(retained["error"]["code"], "cancelled", "{retained}");
+    assert_eq!(
+        retained["effects"]["dispatch"]["dispatched"], 1,
+        "{retained}"
+    );
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+    assert_eq!(engine_entries.load(Ordering::SeqCst), 0);
     client.close().await;
 }

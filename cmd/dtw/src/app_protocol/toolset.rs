@@ -1,4 +1,4 @@
-//! Selectable MCP tools; atomic calls remain ordinary public-facade scripts.
+//! Selectable MCP tools; atomic calls carry public-facade operations as data.
 use super::{app_id, mcp, scene, scripts, wire};
 use serde_json::{json, Value};
 
@@ -51,11 +51,11 @@ impl Toolset {
         tools
     }
 
-    pub(super) fn atomic_source(
+    pub(super) fn atomic_call(
         self,
         name: &str,
         args: &Value,
-    ) -> Result<Option<(String, String)>, wire::WireError> {
+    ) -> Result<Option<(String, wire::Command)>, wire::WireError> {
         let Some(tool) = TOOLS.iter().find(|tool| tool.name == name) else {
             return Ok(None);
         };
@@ -73,22 +73,14 @@ impl Toolset {
         )?;
         let options = Value::Object(options);
         scene::validate(&format!("scene.{}", tool.method), &options)?;
-        // Parse serialized JSON instead of a JS object literal: __proto__ stays
-        // an own data property, and arbitrary strings never become source code.
-        let encoded = serde_json::to_string(&options).expect("JSON arguments");
-        let literal = serde_json::to_string(&encoded).expect("JSON string");
-        // Actions publish the existing automatic view and effects summary.
-        // Only text pagination needs a custom result instead of that view.
-        let prefix = if tool.method == "readText" {
-            "return "
-        } else {
-            ""
-        };
-        let source = format!("{prefix}await app.{}(JSON.parse({literal}));", tool.method);
-        if source.len() > scripts::MAX_SOURCE_BYTES {
-            return Err(invalid("Generated source exceeds 64 KiB of UTF-8"));
-        }
-        Ok(Some((app, source)))
+        Ok(Some((
+            app,
+            wire::Command::App {
+                method: tool.method.into(),
+                args: options,
+                timeout_ms: scripts::DEFAULT_TIMEOUT_MS,
+            },
+        )))
     }
 }
 
@@ -224,33 +216,34 @@ mod tests {
         assert_eq!(Toolset::parse("Atomic"), None);
         assert!(!Toolset::All.allows("scene.click"));
         assert!(Toolset::Script
-            .atomic_source("click", &Value::Null)
+            .atomic_call("click", &Value::Null)
             .unwrap()
             .is_none());
     }
 
     #[test]
-    fn source_keeps_untrusted_text_inside_serialized_json() {
+    fn atomic_command_keeps_untrusted_text_as_data() {
         let text = "\"); app.quit(); //\n\\\"__proto__\"\u{2028}";
-        let (_, source) = Toolset::Atomic
-            .atomic_source("type_text", &json!({"app":"example.app","text":text}))
+        let (_, command) = Toolset::Atomic
+            .atomic_call("type_text", &json!({"app":"example.app","text":text}))
             .unwrap()
             .unwrap();
-        let literal = source
-            .strip_prefix("await app.typeText(JSON.parse(")
-            .unwrap()
-            .strip_suffix("));")
-            .unwrap();
-        let encoded: String = serde_json::from_str(literal).unwrap();
-        assert_eq!(
-            serde_json::from_str::<Value>(&encoded).unwrap(),
-            json!({"text":text})
-        );
+        let wire::Command::App {
+            method,
+            args,
+            timeout_ms,
+        } = command
+        else {
+            panic!("atomic tool must produce a native app command");
+        };
+        assert_eq!(method, "typeText");
+        assert_eq!(args, json!({"text":text}));
+        assert_eq!(timeout_ms, scripts::DEFAULT_TIMEOUT_MS);
         for args in [
             json!({"app":"example.app","unknown":true}),
             json!({"app":"example.app","__proto__":{}}),
         ] {
-            assert!(Toolset::Atomic.atomic_source("look", &args).is_err());
+            assert!(Toolset::Atomic.atomic_call("look", &args).is_err());
         }
     }
 }

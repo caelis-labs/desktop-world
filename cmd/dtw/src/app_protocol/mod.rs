@@ -11,6 +11,7 @@ use std::{
     sync::{Arc, Condvar, Mutex},
     time::{Duration, Instant},
 };
+mod app_execution;
 pub mod app_id;
 #[cfg(target_os = "windows")]
 mod capture;
@@ -101,6 +102,7 @@ fn problem(code: &str, message: &str) -> Reply {
 }
 fn operation(command: &Command) -> &'static str {
     match command {
+        Command::App { .. } => "app",
         Command::Script { .. } => "script",
         Command::SelectWindow { .. } => "window",
         Command::Launch => "launch",
@@ -220,7 +222,9 @@ impl Work {
 struct Job {
     submitted: Submit,
     completed: Option<Completed>,
-    script: Option<scripts::ScriptRun>,
+    // The retained receipt keeps its legacy "script" key for both entrypoints.
+    // This is a shared execution ledger, not an engine or session owner.
+    script: Option<app_execution::AppRun>,
     shutdown_error: Option<WireError>,
 }
 struct State {
@@ -522,9 +526,9 @@ impl<B: Backend + 'static> Coordinator<B> {
             completed: None,
             shutdown_error: None,
             script: match &submitted.command {
-                Command::Script { timeout_ms, .. } => Some(scripts::ScriptRun::new(
-                    Instant::now() + Duration::from_millis(*timeout_ms),
-                )),
+                Command::App { timeout_ms, .. } | Command::Script { timeout_ms, .. } => Some(
+                    app_execution::AppRun::new(Instant::now() + Duration::from_millis(*timeout_ms)),
+                ),
                 _ => None,
             },
         });
@@ -537,9 +541,12 @@ impl<B: Backend + 'static> Coordinator<B> {
                 let work = match catch_unwind(AssertUnwindSafe(|| owner.execute(&submitted))) {
                     Ok(work) => work,
                     Err(_) => {
-                        if matches!(&submitted.command, Command::Script { .. }) {
-                            owner.stop_script(&submitted.request_id, Error::Closed);
-                            owner.abandon_script_step(&submitted.request_id);
+                        if matches!(
+                            &submitted.command,
+                            Command::App { .. } | Command::Script { .. }
+                        ) {
+                            owner.stop_execution(&submitted.request_id, Error::Closed);
+                            owner.abandon_execution_step(&submitted.request_id);
                         } else {
                             let _ = owner.close();
                         }
@@ -617,10 +624,11 @@ impl<B: Backend + 'static> Coordinator<B> {
         }
     }
     fn execute(&self, submitted: &Submit) -> Work {
-        if matches!(&submitted.command, Command::Script { .. }) {
-            return self.execute_script(submitted);
+        match &submitted.command {
+            Command::App { .. } => self.execute_app(submitted),
+            Command::Script { .. } => self.execute_script(submitted),
+            _ => self.execute_atomic(submitted, Instant::now() + Duration::from_secs(15)),
         }
-        self.execute_atomic(submitted, Instant::now() + Duration::from_secs(15))
     }
     // Called under the outer job reservation, including every script Host Call.
     fn execute_atomic(&self, submitted: &Submit, deadline: Instant) -> Work {
@@ -1099,6 +1107,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             | Command::Quit { .. }
             | Command::Windows
             | Command::Script { .. }
+            | Command::App { .. }
             | Command::ContinueObservation { .. }
             | Command::Find { .. }
             | Command::Wait { .. }
@@ -1256,7 +1265,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 if state.terminal.is_none() && Instant::now() >= script.deadline {
                     drop(state);
                     let reason = Error::TimedOut;
-                    self.stop_script(id, reason.clone());
+                    self.stop_execution(id, reason.clone());
                     work.completed.error = Some(wire::core_error(&reason));
                     work.state_update = None;
                     continue;
@@ -1264,6 +1273,17 @@ impl<B: Backend + 'static> Coordinator<B> {
             }
             break state;
         };
+        // Cancellation can win during execution cleanup after native dispatch.
+        // Both entrypoints must retain that terminal cause, independently of
+        // whether JavaScript has a state update to commit.
+        if work.completed.error.is_none()
+            && state
+                .jobs
+                .iter()
+                .any(|job| job.submitted.request_id == id && job.script.is_some())
+        {
+            work.completed.error = state.terminal.as_ref().map(wire::core_error);
+        }
         if let Some(next) = work.state_update.take() {
             if state.terminal.is_none() && work.completed.error.is_none() {
                 *state.script_state.lock().unwrap() = next;
@@ -1276,8 +1296,6 @@ impl<B: Backend + 'static> Coordinator<B> {
                     .as_mut()
                     .unwrap()
                     .state_committed = true;
-            } else if work.completed.error.is_none() {
-                work.completed.error = state.terminal.as_ref().map(wire::core_error);
             }
         }
         apply_publication(&mut state, work.publication);
@@ -1331,7 +1349,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             if state.terminal.is_none() {
                 state.terminal = Some(Error::Cancelled);
             }
-            scripts::cancel_active(&state);
+            app_execution::cancel_active(&state);
             state.windows.clear();
             state.observations.clear();
         }
@@ -1351,7 +1369,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 state.terminal = Some(Error::Closed);
             }
             if !matches!(state.terminal, Some(Error::TimedOut)) {
-                scripts::cancel_active(&state);
+                app_execution::cancel_active(&state);
             }
             state.windows.clear();
             state.observations.clear();

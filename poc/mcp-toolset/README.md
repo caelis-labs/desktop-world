@@ -53,12 +53,11 @@ one public facade invocation, for example:
 {"name":"click","arguments":{"app":"<discovered identity>","target":"w1.e1"}}
 ```
 
-The generated source is equivalent to
-`await app.click(JSON.parse("{\"target\":\"w1.e1\"}"));`.
-The method comes from static metadata; arguments are serialized twice, so quotes,
-newlines, Unicode and `__proto__` remain data. No user source is accepted by atomic
-tools. A generated wrapper exceeding the existing 64 KiB UTF-8 source budget is
-rejected.
+The adapter constructs `Command::App { method, args, timeout_ms }` directly.
+The method comes from static metadata and arguments remain JSON data throughout.
+Atomic calls generate no source and do not enter QuickJS. Native argument limits
+and the MCP frame bound still apply; script source limits apply only to `exec`.
+The script entry constructs `Command::Script` and keeps its existing QuickJS path.
 
 `app` remains a required, explicit authorization identity on every call. App ID
 and shared scene argument validation happen before provider connection; detailed
@@ -67,14 +66,32 @@ approval remains the host's responsibility. Listing/discovery does not grant app
 access. All atomic operations conservatively advertise `readOnlyHint:false`,
 because even a scene read may start a stopped app. These hints are not enforcement.
 
-After translation the existing `Server::begin/run` owns admission, the 30-second
-execution deadline, QuickJS, app state, automatic readback, request-specific MCP
-cancellation, input cleanup, retained receipts and connection shutdown. Original
-MCP tool name **and original JSON arguments** identify retained executions, so a
-retransmitted request returns its receipt and a changed tool name conflicts.
-Unknown input is never replayed. Output uses the same compact view/effects/error
-projection and PNG content blocks as `exec`. Actions use the default view output;
-`read_text` returns its text page as `result`.
+The existing `Server::begin/run` owns admission and app resolution for both
+entrypoints. `Coordinator::execute` dispatches `App` directly to `execute_app` and
+`Script` to the engine driver. Both use `app_execution.rs` for facade dispatch,
+step receipts, automatic readback, native execution cleanup and view publication.
+Request-specific MCP cancellation, retained receipts and connection shutdown
+remain shared. Original MCP tool name **and original JSON arguments** identify
+retained executions, so a retransmitted request returns its receipt and a changed
+tool name conflicts. Unknown input is never replayed. Output uses the same
+compact view/effects/error projection and PNG content blocks as `exec`. Actions
+use the default view output; `read_text` returns its text page as `result`.
+
+`AppRun` is per execution. App instances, the scene baseline, decoded raster and
+coordinate bindings, semantic object credentials and stale-target checks belong
+to the retained coordinator/runtime. Successful settlement calls
+`finish_execution` without closing that owner or clearing those references.
+Releasing a completed job removes its execution record, not its session state.
+Direct operations do not read or commit JavaScript state. Actual cancellation,
+timeout, app replacement and native cleanup failure still invalidate the affected
+owner/bindings; later work must obtain fresh native evidence. Cancellation at the
+final commit boundary is reported independently of a JavaScript state update.
+
+The coordinate acceptance also exposed missing Linux window layout metadata:
+without bounds, unchanged captured coordinates always failed the existing
+`stale_scene` guard. Visible owned X11 windows now report their actual client
+root bounds and root-frame stacking rank from bounded `QueryTree` evidence.
+The geometry/ownership/occlusion checks remain in the existing input path.
 
 One atomic call is one execution boundary. On Windows, focus return at that
 boundary can dismiss a native menu; related menu/focus sequences should continue
@@ -85,26 +102,28 @@ operation or a promise of only one native event. Preparation and readback may ru
 
 ```sh
 cargo test --release --manifest-path cmd/dtw/Cargo.toml --locked
+cargo test --release --manifest-path cmd/dtw/Cargo.toml --locked --lib toolset
 cargo build --release --manifest-path cmd/dtw/Cargo.toml --locked --bin dtw
 sh scripts/check-source.sh
 ```
 
-Validation on this Linux machine: the release suite passed 548 library tests
-and 5 CLI tests; the focused toolset suite passed 8 tests. `check-source.sh`,
-formatting and `git diff --check` passed. An independent read-only review found no
-material implementation issue and verified real-process MCP initialization,
-2/15/16 tool listings and clean EOF shutdown for all modes without native app
-calls. The native-worker runner explicitly skipped because it requires macOS.
-The existing Linux dead-code warning for `encode_png_rgba` remains.
+The SDK tests exercise the real MCP byte transport with a controlled native
+backend. They cover mode enforcement, mandatory app identity, rejected arguments,
+shared context across `exec` and atomic calls, automatic readback, exact setter
+values, PNG blocks, text pagination, native text limits, completed and active
+retransmission, cancellation, cleanup failure and recovery. Capture → semantic
+read → pixel click survives execution cleanup. Retained semantic handles survive
+unrelated reads and reject removed/replaced/renamed controls before input.
 
-The SDK tests exercise the real MCP byte transport and QuickJS with a controlled
-native backend. They cover mode enforcement, mandatory app identity, rejected
-arguments, unavailable apps, shared context across `exec` and atomic calls,
-automatic readback, exact string delivery to a setter, PNG blocks, duplicate IDs,
-cross-tool conflicts, UTF-16 text pagination, generated-source byte bounds,
-cancellation during an action, busy admission until cleanup, unknown dispatch
-evidence and later recovery. These are simulated native tests,
-not GUI or host authorization approval evidence.
+The current release suite passes 552 library tests and 5 CLI tests; the focused
+toolset suite passes 12 tests. The source checks and formatting checks pass.
+Test-only counters run at the exact `run_with_session` entry, keyed by MCP
+session: atomic calls, cancellations and retransmissions keep the count at zero;
+`exec` increments the same counter and subsequent atomic calls leave it unchanged.
+This is a live engine-entry check alongside the explicit native command dispatch.
+These controlled-backend regressions do not establish native semantic GUI support.
+See the direct-call evidence report below for current test counts and native
+results. The existing Linux dead-code warning for `encode_png_rgba` remains.
 
 Use a normal MCP host launch configuration, for example:
 
@@ -133,21 +152,27 @@ For the bounded Linux experiment, while the real session remains locked:
 python3 poc/mcp-toolset/linux_locked_probe.py --session "$XDG_SESSION_ID"
 python3 poc/mcp-toolset/linux_locked_probe.py --session "$XDG_SESSION_ID" \
   --isolated --binary "$PWD/cmd/dtw/target/release/dtw" \
-  > /tmp/dtw-linux-probe.jsonl
+  --artifacts /tmp/dtw-direct-images-new \
+  > /tmp/dtw-direct-probe.jsonl
 ```
 
 The default run checks the real lock hint and X11 server extensions only. The
 isolated run creates its own Xvfb, KWin, D-Bus, configuration and uniquely
 identified Tk app, then checks actual backend behavior there. It never sends
-input or captures pixels on the real display. See
-[`linux-evidence.md`](linux-evidence.md) for observed outcomes and limits.
+input or captures pixels on the real display. The current probe verifies
+separate-call capture → pixel click → fixture counter change, then entry click →
+typing → Enter → capture with exact fixture state and retained PNGs. See
+[`direct-linux-evidence.md`](direct-linux-evidence.md) for current outcomes and
+limits; [`linux-evidence.md`](linux-evidence.md) records the historical wrapper
+PoC and its earlier, narrower experiment.
 
 ## Limits
 
 This is an opt-in PoC, with no default/plugin manifest change. No Caelis runtime
 or policy integration was changed or tested. Host approval UI and real model tool
-selection were not exercised. No performance or token-cost advantage is claimed;
-atomic calls still create the existing bounded QuickJS execution. macOS/Windows
-native behavior and menu sequences were not exercised on this Linux machine.
+selection were not exercised. No performance or token-cost advantage is claimed.
+macOS/Windows native behavior and menu sequences were not exercised on this Linux
+machine. Linux has no AT-SPI semantics; semantic lifetime regressions use a
+controlled backend and are not real semantic desktop acceptance.
 The provider has no lock-state guard: this adapter adds no locked-desktop support.
 Native X11 evidence applies only to the explicitly recorded display and fixture.

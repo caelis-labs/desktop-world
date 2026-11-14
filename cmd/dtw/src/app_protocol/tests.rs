@@ -64,6 +64,7 @@ struct Model {
     poll_action: bool,
     shutdown_error: Option<Error>,
     finish_error: Option<Error>,
+    finish_gate: Option<WorkerGate>,
     finish_focus: Option<FocusReturn>,
     cleanup_error: Option<Error>,
     cleanup_after_capture: Option<Error>,
@@ -122,6 +123,7 @@ impl MockBackend {
                 poll_action: false,
                 shutdown_error: None,
                 finish_error: None,
+                finish_gate: None,
                 finish_focus: None,
                 cleanup_error: None,
                 cleanup_after_capture: None,
@@ -153,6 +155,11 @@ impl MockBackend {
             shutdowns: AtomicUsize::new(0),
             finishes: AtomicUsize::new(0),
         }))
+    }
+    fn finish_gate(&self) -> TestGate {
+        let (worker, test) = TestGate::pair();
+        self.0.model.lock().unwrap().finish_gate = Some(worker);
+        test
     }
     fn read_gate(&self) -> TestGate {
         let (worker, test) = TestGate::pair();
@@ -279,6 +286,10 @@ impl Backend for MockBackend {
     }
     fn finish_execution(&self) -> Result<Option<FocusReturn>, Error> {
         self.0.finishes.fetch_add(1, Ordering::SeqCst);
+        let gate = self.0.model.lock().unwrap().finish_gate.take();
+        if let Some(gate) = gate {
+            gate.wait();
+        }
         let model = self.0.model.lock().unwrap();
         match model.finish_error.clone() {
             Some(error) => Err(error),

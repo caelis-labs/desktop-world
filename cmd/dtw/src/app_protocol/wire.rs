@@ -83,6 +83,12 @@ impl ElementWaitState {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
+    /// One public app-facade operation, admitted by the MCP adapter as data.
+    App {
+        method: String,
+        args: Value,
+        timeout_ms: u64,
+    },
     Script {
         source: String,
         timeout_ms: u64,

@@ -444,6 +444,18 @@ impl Store {
                         check(until)?;
                         self.owner(window)
                     })?;
+                    // QueryTree returns root frames from bottom to top. Client
+                    // membership order is not a stacking-order guarantee.
+                    let stack = self
+                        .conn
+                        .query_tree(self.root)
+                        .map_err(failed)?
+                        .reply()
+                        .map_err(failed)?
+                        .children;
+                    if stack.len() > 4096 {
+                        return Err(failed("Root stack exceeds scan budget"));
+                    }
                     let mut out = Vec::new();
                     for window in owned {
                         check(until)?;
@@ -462,8 +474,21 @@ impl Store {
                             .map_err(failed)?
                             .reply()
                             .map_err(failed)?;
+                        let visible = attrs.map_state == MapState::VIEWABLE;
+                        let scene = if visible {
+                            let bounds = self.bounds(window)?;
+                            let frame = self.frame(window)?;
+                            let index = stack
+                                .iter()
+                                .position(|id| *id == frame)
+                                .ok_or(Error::TargetChanged)?;
+                            json!({"bounds":[bounds.x,bounds.y,bounds.w,bounds.h],
+                                "rank":stack.len() - 1 - index})
+                        } else {
+                            Value::Null
+                        };
                         self.windows.insert(window as u64, target.clone());
-                        out.push(json!({"target":target_json(&target),"title":String::from_utf8_lossy(&title.value).chars().take(1024).collect::<String>(),"visible":attrs.map_state==MapState::VIEWABLE}));
+                        out.push(json!({"target":target_json(&target),"title":String::from_utf8_lossy(&title.value).chars().take(1024).collect::<String>(),"visible":visible,"scene":scene}));
                     }
                     if self.windows.len() > 512 {
                         return Err(failed("Retained window identity budget exhausted"));
