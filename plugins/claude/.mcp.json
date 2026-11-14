@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "desktop-world": {
+    "dtw": {
       "command": "${CLAUDE_PLUGIN_ROOT}/bin/dtw",
       "args": [
         "mcp"

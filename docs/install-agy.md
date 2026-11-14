@@ -83,8 +83,13 @@ complete read-only task, using the host's exposed argument schema:
 }
 ```
 
-Use its normal completion reply. In this App the exposed MCP server name is
-`desktop-world_desktop-world`, with `apps` and `exec` tools.
+Use its normal completion reply. For BUILD `package_store_schema: 2`, the
+plugin's server key is `dtw`; agy may
+qualify it as `desktop-world_dtw`, with `apps` and `exec` tools. Discover the
+actual host-exposed name. The plugin/install ID remains `desktop-world`.
+Published schema 1 packages retain their original server and Skill names
+(including the previously observed `desktop-world_desktop-world`); use those
+unchanged for old-package verification or rollback.
 The fresh verifier tests the existing installation; it does not install another
 copy or register another MCP server. Reading subagent transcript files or
 probing Language Server endpoints is not part of this check.
@@ -112,7 +117,7 @@ you use both surfaces.
 
 ## Verify the actual plugin connection
 
-1. Load the bundled `desktop-world` Skill (or invoke `/desktop-world`).
+1. Load the bundled `dtw` Skill (or invoke `/dtw`) for schema 2.
 2. Discover the plugin's `apps` and `exec` tools. agy may qualify
    their names with the plugin and server names; use the names it actually exposes.
 3. Call `apps({state:"running"})`, then `exec` with a returned app ID and
@@ -138,7 +143,8 @@ not depend on `${CLAUDE_PLUGIN_ROOT}` or a hardcoded external DTW installation.
 
 Finish active operations before changing the installation. Preserve unrelated
 plugins and settings. Remove only the previous standalone DTW MCP registration
-and copied `desktop-world` Skill, if present, before enabling the plugin route.
+and its matching copied Skill (`dtw` for schema 2, `desktop-world` for schema 1),
+if present, before enabling the plugin route.
 Do not leave workspace and global copies of the same plugin active together.
 
 For an upgrade, verify the new complete package, stop old DTW connections, replace

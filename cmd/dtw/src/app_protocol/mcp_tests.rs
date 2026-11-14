@@ -60,7 +60,11 @@ impl Client {
             )
             .await;
         assert_eq!(initialized["result"]["protocolVersion"], version);
-        assert_eq!(initialized["result"]["serverInfo"]["name"], "desktop-world");
+        assert_eq!(initialized["result"]["serverInfo"]["name"], "dtw");
+        assert!(initialized["result"]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("desktop-world:dtw"));
         client
             .send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
             .await;

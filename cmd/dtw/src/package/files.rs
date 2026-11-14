@@ -207,8 +207,13 @@ pub(super) fn verify(root: &Path) -> Result<Verified> {
         return Err("Unlisted package files".into());
     }
     let build = json(&root.join("BUILD.json"))?;
-    if build["package_store_schema"] != 1 {
-        return Err("Package does not implement managed runtime leases".into());
+    let (skill_dir, other_skill_dir) = match build["package_store_schema"].as_u64() {
+        Some(1) => ("skills/desktop-world", "skills/dtw"),
+        Some(2) => ("skills/dtw", "skills/desktop-world"),
+        _ => return Err("Unsupported managed package layout or runtime leases".into()),
+    };
+    if root.join(other_skill_dir).exists() {
+        return Err("Package Skill layout mismatch".into());
     }
     let version = build["version"].as_str().ok_or("Missing package version")?;
     if version.split('.').count() != 3
@@ -229,9 +234,9 @@ pub(super) fn verify(root: &Path) -> Result<Verified> {
         return Err("BUILD executable identity mismatch".into());
     }
     for name in ["SKILL.md", "API.md", "PATTERNS.md"] {
-        regular(&root.join("skills/desktop-world").join(name), false)?;
+        regular(&root.join(skill_dir).join(name), false)?;
     }
-    if build["skill_sha256"] != digest(&root.join("skills/desktop-world/SKILL.md"))? {
+    if build["skill_sha256"] != digest(&root.join(skill_dir).join("SKILL.md"))? {
         return Err("BUILD Skill identity mismatch".into());
     }
     for name in [

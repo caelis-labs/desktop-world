@@ -43,7 +43,7 @@ for line in sys.stdin:
    reply(request['id'],error={'code':-32603,'message':'owned failure'});continue
   reply(99 if mode=='wrong_id' else request['id'],{
    'protocolVersion':'2025-06-18','capabilities':{'tools':{}},
-   'serverInfo':{'name':'desktop-world','version':'9.8.7'}})
+   'serverInfo':{'name':'dtw','version':'9.8.7'}})
  elif method=='tools/list':
   names=['apps',*operations] if atomic else ['apps','exec']
   if atomic and mode=='old_names':names[names.index('readText')]='read_text'

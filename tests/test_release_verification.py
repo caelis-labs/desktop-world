@@ -159,24 +159,154 @@ class ReleaseVerificationTests(unittest.TestCase):
         self.write_json('RELEASE.json', self.release)
         self.resum()
 
-    def declare_multi_host_plugins(self):
+    def legacy_host_components(self, target):
+        # Historical entries are independent of the current layout generator.
+        binary = 'bin/dtw' if target == v.TARGETS[0] else 'bin/dtw.exe'
+        identity = {'name': 'desktop-world', 'version': '0.2.0'}
+        values = {
+            '.claude-plugin/plugin.json': identity,
+            'plugin.json': dict(identity, **{'$schema': 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json'}),
+            '.antigravity-plugin/plugin.json': dict(identity, **{'$schema': 'https://antigravity.google/schemas/v1/plugin.json'}),
+            '.mcp.json': {'mcpServers': {'desktop-world': {
+                'command': '${CLAUDE_PLUGIN_ROOT}/' + binary, 'args': ['mcp']}}},
+            'mcp.json': {'$schema': 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
+                         'mcpServers': {'desktop-world': {'type': 'stdio', 'command': './' + binary, 'args': ['mcp']}}},
+            'mcp_config.json': {'mcpServers': {'desktop-world': {
+                'command': './' + binary, 'args': ['mcp'], 'cwd': '${PLUGIN_ROOT}'}}},
+            'package.json': {'name': '@caelis-labs/desktop-world', 'version': '0.2.0', 'type': 'module',
+                             'main': './cordis/index.mjs', 'exports': './cordis/index.mjs'},
+        }
+        components = {name: json.dumps(value).encode() for name, value in values.items()}
+        components['cordis/index.mjs'] = b'// legacy adapter fixture'
+        entries = {'target': target, 'binary': binary,
+                   'formats': ['agent-plugins-1.0', 'claude-code', 'antigravity', 'dsh-cordis']}
+        return entries, components
+
+    def declare_multi_host_plugins(self, schema=2):
         for platform in self.release['platforms']:
-            with tempfile.TemporaryDirectory() as temporary:
-                package = Path(temporary)
-                entries = v.builder.plugin_package.write_plugin_entries(
-                    Path(__file__).parents[1], package, '0.2.0', platform['target'])
-                components = {p.relative_to(package).as_posix(): p.read_bytes()
-                              for p in package.rglob('*') if p.is_file()}
+            if schema in (None, 1):
+                entries, components = self.legacy_host_components(platform['target'])
+            else:
+                with tempfile.TemporaryDirectory() as temporary:
+                    package = Path(temporary)
+                    entries = v.builder.plugin_package.write_plugin_entries(
+                        Path(__file__).parents[1], package, '0.2.0', platform['target'])
+                    components = {p.relative_to(package).as_posix(): p.read_bytes()
+                                  for p in package.rglob('*') if p.is_file()}
             def add(files):
                 files.update(components)
                 build = json.loads(files['BUILD.json'])
                 build['plugin_package'] = entries
+                if schema is not None:
+                    build['package_store_schema'] = schema
+                if schema == 2:
+                    files['skills/dtw/SKILL.md'] = files.pop('skills/desktop-world/SKILL.md')
                 files['BUILD.json'] = json.dumps(build).encode()
             self.rewrite_package(platform, add)
 
     def test_declared_multi_host_plugins_reuse_target_and_version(self):
         self.declare_multi_host_plugins()
         self.assertEqual(self.audit()['assets_verified'], 13)
+
+    def test_schema1_multi_host_archive_remains_valid_and_unchanged(self):
+        self.declare_multi_host_plugins(schema=1)
+        before = {p.name: p.read_bytes() for p in self.root.iterdir()}
+        self.assertEqual(self.audit()['assets_verified'], 13)
+        self.assertEqual({p.name: p.read_bytes() for p in self.root.iterdir()}, before)
+
+    def test_earlier_multi_host_archive_without_layout_schema_remains_valid(self):
+        self.declare_multi_host_plugins(schema=None)
+        self.assertEqual(self.audit()['assets_verified'], 13)
+
+    def test_unknown_layout_schema_is_rejected_without_host_declaration(self):
+        for schema in (0, 3, '2', None, True, 2.0):
+            def change(files):
+                build = json.loads(files['BUILD.json'])
+                build['package_store_schema'] = schema
+                files['BUILD.json'] = json.dumps(build).encode()
+            self.rewrite_package(self.release['platforms'][0], change)
+            with self.subTest(schema=schema), self.assertRaisesRegex(ValueError, 'Unsupported package_store_schema'):
+                self.audit()
+
+    def test_schema2_cannot_use_legacy_skill_directory(self):
+        self.declare_multi_host_plugins()
+        self.rewrite_package(self.release['platforms'][0], lambda files:
+                             files.update({'skills/desktop-world/SKILL.md': files.pop('skills/dtw/SKILL.md')}))
+        with self.assertRaisesRegex(ValueError, 'Missing runtime/Skill'):
+            self.audit()
+
+    def test_schema2_cannot_bundle_both_skill_directories(self):
+        self.declare_multi_host_plugins()
+        self.rewrite_package(self.release['platforms'][0], lambda files:
+                             files.update({'skills/desktop-world/SKILL.md': b'skill'}))
+        with self.assertRaisesRegex(ValueError, 'Skill layout mismatch'):
+            self.audit()
+
+    def test_layout_schema_cannot_be_inferred_from_new_host_entries(self):
+        self.declare_multi_host_plugins()
+        def remove_schema(files):
+            build = json.loads(files['BUILD.json'])
+            build.pop('package_store_schema')
+            files['BUILD.json'] = json.dumps(build).encode()
+            files['skills/desktop-world/SKILL.md'] = files.pop('skills/dtw/SKILL.md')
+        self.rewrite_package(self.release['platforms'][0], remove_schema)
+        with self.assertRaisesRegex(ValueError, 'Agent Plugins MCP entry mismatch'):
+            self.audit()
+
+    def test_schema2_rejects_old_mcp_keys_and_dual_aliases_for_each_host(self):
+        self.declare_multi_host_plugins()
+        platform = self.release['platforms'][0]
+        for path in ('mcp.json', '.mcp.json', 'mcp_config.json'):
+            for dual in (False, True):
+                original = {}
+                def change(files):
+                    original[path] = files[path]
+                    config = json.loads(files[path])
+                    server = config['mcpServers']['dtw']
+                    config['mcpServers'] = {'desktop-world': server}
+                    if dual:
+                        config['mcpServers']['dtw'] = server
+                    files[path] = json.dumps(config).encode()
+                self.rewrite_package(platform, change)
+                with self.subTest(path=path, dual=dual), self.assertRaisesRegex(ValueError, 'MCP entry mismatch'):
+                    self.audit()
+                self.rewrite_package(platform, lambda files: files.update(original))
+
+    def test_schema2_skill_digest_is_verified_from_new_path(self):
+        self.declare_multi_host_plugins()
+        self.rewrite_package(self.release['platforms'][0], lambda files:
+                             files.update({'skills/dtw/SKILL.md': b'changed'}))
+        with self.assertRaisesRegex(ValueError, 'Skill digest mismatch'):
+            self.audit()
+
+    def test_native_candidate_accepts_schema2_layout(self):
+        self.declare_multi_host_plugins()
+        root = self.macos_candidate()
+        with patch.object(v.builder, 'binary_format'), patch.object(v, 'signature', return_value=dict(v.SIGNATURE)):
+            v.verify_macos_candidate(root)
+
+    def test_schema2_cannot_skip_host_validation_by_omitting_declaration(self):
+        self.declare_multi_host_plugins()
+        def remove_declaration(files):
+            build = json.loads(files['BUILD.json'])
+            build.pop('plugin_package')
+            files['BUILD.json'] = json.dumps(build).encode()
+        self.rewrite_package(self.release['platforms'][0], remove_declaration)
+        with self.assertRaisesRegex(ValueError, 'Missing schema 2 plugin package declaration'):
+            self.audit()
+
+    def test_native_candidate_rejects_unknown_layout_schema(self):
+        def change(files):
+            build = json.loads(files['BUILD.json'])
+            build['package_store_schema'] = 3
+            files['BUILD.json'] = json.dumps(build).encode()
+        self.rewrite_package(self.release['platforms'][0], change)
+        root = self.macos_candidate()
+        with patch.object(v.builder, 'binary_format'), patch.object(v, 'signature') as signature:
+            with self.assertRaisesRegex(ValueError, 'Unsupported package_store_schema'):
+                v.verify_macos_candidate(root)
+        signature.assert_not_called()
+        self.assertFalse((root / v.NATIVE_RECEIPT).exists())
 
     def test_declared_plugin_component_removal_is_rejected_even_after_rehashing(self):
         self.declare_multi_host_plugins()
@@ -188,7 +318,7 @@ class ReleaseVerificationTests(unittest.TestCase):
         self.declare_multi_host_plugins()
         platform = self.release['platforms'][1]
         def replace_config(files):
-            files['mcp_config.json'] = json.dumps({'mcpServers': {'desktop-world': {
+            files['mcp_config.json'] = json.dumps({'mcpServers': {'dtw': {
                 'command': 'C:/another-install/dtw.exe', 'args': ['mcp'], 'cwd': '${PLUGIN_ROOT}'}}}).encode()
         self.rewrite_package(platform, replace_config)
         with self.assertRaisesRegex(ValueError, 'Antigravity MCP entry mismatch'):

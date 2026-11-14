@@ -105,7 +105,7 @@ registration or switch installation routes merely to avoid that restart.
 
 The adapter asks the host loader for its installed
 `@deepseek-ai/dsh-mcp-client` and `@deepseek-ai/dsh-skill-filesystem` plugins. It
-mounts one `desktop-world` MCP connection and a Skill provider named
+mounts one `dtw` MCP connection and a Skill provider named
 `desktop-world`, scanning only the bundled `skills/` directory. It does not
 install a second DSH runtime or rescan all default Skill roots. Its child plugins
 are disposed with the parent by Cordis.
@@ -128,6 +128,13 @@ The Windows file-URL route supports package paths containing spaces and
 non-ASCII characters. Do not infer a Desktop reload capability from a different
 profile or platform's earlier observation.
 
+These current names apply to BUILD `package_store_schema: 2`. Published schema
+1 packages keep their `desktop-world` MCP connection and
+`skills/desktop-world` Skill. For old-package verification or rollback, use that
+package's original manifests and names; do not rewrite it or rebind an active or
+pending installation merely to change names. The internal Skill provider name
+remains `desktop-world`; the package name remains `@caelis-labs/desktop-world`.
+
 ## Manual fallback: register the MCP server
 
 In the running Desktop profile, add the following to `cordis.patch.yml` without
@@ -141,7 +148,7 @@ Back up the file before editing and keep unrelated settings intact.
     - id: mcp-desktop-world
       name: '@deepseek-ai/dsh-mcp-client'
       config:
-        serverName: desktop-world
+        serverName: dtw
         transport: stdio
         command: '/absolute/managed/package/bin/dtw'
         args: ['mcp']
@@ -158,7 +165,7 @@ backslashes literal. The command is the executable, not a shell command string;
 # An override only: ignored with a diagnostic if the id does not already exist.
 - id: mcp-desktop-world
   name: '@deepseek-ai/dsh-mcp-client'
-  config: {serverName: desktop-world, transport: stdio, command: '/path/to/dtw', args: ['mcp']}
+  config: {serverName: dtw, transport: stdio, command: '/path/to/dtw', args: ['mcp']}
 ```
 
 A bare `id` patch changes an existing row. For subsequent changes, edit the
@@ -171,16 +178,16 @@ MCP bridge fails, so a working chat does not prove DTW loaded.
 
 Use DSH's existing `@deepseek-ai/dsh-skill-filesystem` provider. Choose one route:
 
-- For one workspace, copy the entire package's `skills/desktop-world` directory
-  into `<workspace>/.agents/skills/desktop-world` and start a session there.
+- For one workspace, copy the entire package's `skills/dtw` directory
+  into `<workspace>/.agents/skills/dtw` and start a session there.
 - For all workspaces using this profile, add the package's absolute `skills`
   directory to the existing provider's `customSkillDirs`. Inspect the active
   provider's ID and preserve its other configuration and Skill roots. Do not
   guess an ID or replace its full config with only this field.
 
 The directory to add to `customSkillDirs` is the parent `skills`, not
-`skills/desktop-world`. The provider discovers immediate `<skill>/SKILL.md`
-bundles. Confirm that the Agent can load the `desktop-world` Skill and its
+`skills/dtw`. The provider discovers immediate `<skill>/SKILL.md`
+bundles. Confirm that the Agent can load the `dtw` Skill and its
 references from the same DTW version as the executable.
 
 ## Verify the running installation
@@ -205,7 +212,7 @@ process count alone does not diagnose duplicate configuration.
 In a DSH session:
 
 1. Discover the DTW tools (normally names such as
-   `mcp__desktop-world__apps`, `mcp__desktop-world__exec`).
+   `mcp__dtw__apps`, `mcp__dtw__exec`).
 2. Verify the actual host connection uses the intended package/version and its
    bundled Skill. Call `apps({state:"running"})`, choose one of its app IDs, and call `exec` with that `app` and
    `source: "await app.look();"`.

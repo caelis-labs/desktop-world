@@ -54,7 +54,7 @@ Outcomes separate `not_dispatched / dispatched / unknown` from concrete effect
 evidence. Script completion does not establish task completion. Cancellation or
 unknown effects never authorize replay. Retained identical MCP request frames
 return their original execution; new request IDs are new work. Full receipts are
-internal diagnostics, with no public query tool. See the [Agent reference](../skills/desktop-world/API.md);
+internal diagnostics, with no public query tool. See the [Agent reference](../skills/dtw/API.md);
 the [convergence acceptance snapshot](agent-protocol-convergence-acceptance.md)
 retains the state at delivery and its then-remaining gaps.
 

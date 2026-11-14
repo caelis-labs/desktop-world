@@ -52,24 +52,25 @@ def main():
         if not ok:return result.stderr
         value=json.loads(result.stdout);assert value['manager_version']==manager_version and value['store_schema']==1,value
         return value
-    def source(name,executable_source=binary):
+    def source(name,executable_source=binary,*,schema=1):
         package_version=subprocess.check_output([str(executable_source),'--version'],encoding='utf-8').strip().split()[-1]
-        root=out/('source '+name);(root/'bin').mkdir(parents=True);(root/'skills/desktop-world').mkdir(parents=True);(root/'cordis').mkdir()
+        skill_name='desktop-world' if schema==1 else 'dtw'
+        root=out/('source '+name);(root/'bin').mkdir(parents=True);(root/'skills'/skill_name).mkdir(parents=True);(root/'cordis').mkdir()
         executable='dtw.exe' if os.name=='nt' else 'dtw';shutil.copy2(executable_source,root/'bin'/executable)
-        for guide in ['SKILL.md','API.md','PATTERNS.md']:(root/'skills/desktop-world'/guide).write_text(name+' '+guide,encoding='utf-8')
+        for guide in ['SKILL.md','API.md','PATTERNS.md']:(root/'skills'/skill_name/guide).write_text(name+' '+guide,encoding='utf-8')
         for manifest in ['plugin.json','.claude-plugin/plugin.json','.antigravity-plugin/plugin.json','package.json']:
             path=root/manifest;path.parent.mkdir(parents=True,exist_ok=True);write(path,{'version':package_version})
         (root/'cordis/index.mjs').write_text('export{}',encoding='utf-8')
-        write(root/'BUILD.json',{'package_store_schema':1,'version':package_version,'target':'x86_64-pc-windows-msvc' if os.name=='nt' else 'aarch64-apple-darwin','binary':{'path':'bin/'+executable,'sha256':sha(root/'bin'/executable)},'skill_sha256':sha(root/'skills/desktop-world/SKILL.md')})
+        write(root/'BUILD.json',{'package_store_schema':schema,'version':package_version,'target':'x86_64-pc-windows-msvc' if os.name=='nt' else 'aarch64-apple-darwin','binary':{'path':'bin/'+executable,'sha256':sha(root/'bin'/executable)},'skill_sha256':sha(root/'skills'/skill_name/'SKILL.md')})
         (root/'SHA256SUMS').write_text(''.join(sha(p)+'  '+p.relative_to(root).as_posix()+'\n' for p in sorted(root.rglob('*')) if p.is_file()),encoding='utf-8')
         return cli('import',root)
-    a=source('A');b=source('B',manager);c=source('C');assert cli('import',out/'source A')['package_id']==a['package_id']
+    a=source('A');b=source('B',manager,schema=2);c=source('C');assert cli('import',out/'source A')['package_id']==a['package_id']
     cli('bind','agy',a['package_id']);cli('activate','agy');cli('bind','dsh-desktop',a['package_id']);cli('activate','dsh-desktop')
     cli('bind','dsh-desktop',b['package_id']);staged=cli('status')['bindings'];dsh=next(r for r in staged if r['host']=='dsh-desktop');assert dsh['current']==a['package_id'] and dsh['pending']==b['package_id']
     fresh=out/'fresh-version';fresh.mkdir();verified=PackageClient(Path(b['executable']),fresh)
     try:
         initialized=verified.rpc('initialize',{'protocolVersion':'2025-06-18','capabilities':{},'clientInfo':{'name':'updated-runtime-verifier','version':'1'}});verified.notify('notifications/initialized')
-        assert initialized['serverInfo']['version']==b['version'],initialized
+        assert initialized['serverInfo']['version']==b['version'] and initialized['serverInfo']['name']=='dtw',initialized
         assert [t['name'] for t in verified.rpc('tools/list',{})['tools']]==['apps','exec']
     finally:verified.close()
     cli('activate','dsh-desktop');live=out/'live';live.mkdir();m=PackageClient(Path(c['executable']),live)
@@ -105,6 +106,6 @@ def main():
     assert Path(a['package_path']).exists() and Path(b['package_path']).exists() and not Path(c['package_path']).exists()
     (out/'source A/skills/desktop-world/API.md').write_text('corrupt',encoding='utf-8');assert 'checksum' in cli('import',out/'source A',ok=False)
     cli('unbind','agy');cli('unbind','dsh-desktop');collected=cli('gc','--apply');assert not cli('status')['packages']
-    report={'passed':True,'binary_sha256':sha(binary),'manager_sha256':sha(manager),'baseline_version':a['version'],'target_version':b['version'],'scope':'synthetic complete packages + real MCP process/locks; no host configuration or GUI','cases':['Unicode/space paths','complete-package deduplication','two host pins','manager/runtime version update','fresh actual runtime version verification','pending failure protection','rollback protection','live MCP shared lease','independent native worker lease','collection after process exit','corruption rejection','owned cleanup'],'collection':collected}
+    report={'passed':True,'binary_sha256':sha(binary),'manager_sha256':sha(manager),'baseline_version':a['version'],'target_version':b['version'],'scope':'synthetic complete packages + real MCP process/locks; no host configuration or GUI','cases':['Unicode/space paths','complete-package deduplication','two host pins','schema1 baseline and schema2 upgrade','manager/runtime version update','fresh actual runtime version verification','pending failure protection','rollback protection','live MCP shared lease','independent native worker lease','collection after process exit','corruption rejection','owned cleanup'],'collection':collected}
     write(out/'report.json',report);print(json.dumps(report,ensure_ascii=True))
 if __name__=='__main__':main()

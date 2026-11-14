@@ -9,7 +9,7 @@ import threading
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from app_client import artifact_identity, require
+from app_client import artifact_identity, package_layout, require
 from dsh_client import DshClient, MODEL_BOUNDARY
 from windows.browser_feature_audit import owned_browser_pid, close_owned_browser
 from windows.desktop_probe import children
@@ -26,6 +26,7 @@ def main():
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     package = args.package.resolve(strict=True)
+    skill_name, server_name = package_layout(package)
     browser = args.browser.resolve(strict=True)
     report = {'passed': False, 'harness': 'installed DSH public ACP profile',
         'artifact': artifact_identity(package / 'bin/dtw.exe', package),
@@ -68,7 +69,7 @@ def main():
         browser_handle = ProcessHandle(browser_pid, browser)
         report['browser'] = {'path': str(browser), 'pid': browser_pid, 'birth': browser_handle.birth,
             'profile': str(out / 'browser-profile'), 'url': fixture.web_url}
-        client = DshClient(args.dsh, patch, out / 'dsh', Path.cwd())
+        client = DshClient(args.dsh, patch, out / 'dsh', Path.cwd(), server_name=server_name)
         client.call('initialize', {'protocolVersion': 1, 'clientCapabilities': {},
             'clientInfo': {'name': 'dtw-windows-browser-acceptance', 'version': '1'}})
         report['session'] = client.call('session/new', {'cwd': str(Path.cwd()), 'mcpServers': []})
@@ -87,8 +88,8 @@ def main():
         report['dsh_owned_dtw_processes'] = [{'pid': h.pid, 'birth': h.birth} for h in handles]
         payload = 'DSH Browser 中文🙂 café 🚀'
         message = '交付确认 中文🙂'
-        prompt = f'''这是 Windows 实机验收。先加载本完整插件的 desktop-world Skill，并读取安装包内 API/相关 Skill 文档。
-业务操作只能使用 desktop-world apps/exec。禁止 shell、文件读写、HTTP、CDP、Playwright、其他 computer-use 或读取 fixture 源码/状态/事件等旁路。
+        prompt = f'''这是 Windows 实机验收。先加载本完整插件的 {skill_name} Skill，并读取安装包内 API/相关 Skill 文档。
+业务操作只能使用 {server_name} apps/exec。禁止 shell、文件读写、HTTP、CDP、Playwright、其他 computer-use 或读取 fixture 源码/状态/事件等旁路。
 只操作我拥有的 {browser} 新建独立 profile 窗口，其网址为 {fixture.web_url}，起始标题 Release operations desk。
 每次输入前核对当前窗口属于这个 loopback 网站；不要操作其他浏览器窗口、用户 profile 或其他文件。遇到未知派发/消费不得重放。
 完成这些目标：

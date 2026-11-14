@@ -29,6 +29,7 @@ import zipfile
 from xml.sax.saxutils import escape
 
 from standard_agent_probe import require, successful, wait_until, write_json, stop_owned
+from app_client import package_layout
 from browser_workbench_probe import (
     NOTES, QUANTITIES, check_business_state, check_routes, check_skill_loaded,
     check_terminal, cleanup_steps, file_sha256, initialize,
@@ -373,7 +374,8 @@ def main(*, current=None):
     case = 'case-'+uuid.uuid4().hex[:10]; name = 'dtw-real-'+case
     binary, artifact = prepare_runtime(repo, root, args.dtw, args.installed_package)
     package = Path(artifact['installed_package']['path']) if args.installed_package is not None else None
-    skill_source = (package if package is not None else repo)/'skills/desktop-world'
+    skill_name = package_layout(package)[0] if package is not None else 'dtw'
+    skill_source = (package if package is not None else repo)/'skills'/skill_name
     skill_files_sha256 = {
         str(path.relative_to(skill_source)): file_sha256(path)
         for path in sorted(skill_source.rglob('*')) if path.is_file()

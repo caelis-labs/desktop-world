@@ -242,7 +242,7 @@ def check(binary, version, output, *, timeout=20, cleanup_timeout=2, popen=subpr
             initialized = active.rpc(1, 'initialize', {'protocolVersion': PROTOCOL, 'capabilities': {},
                 'clientInfo': {'name': 'dtw-packaged-headless-check', 'version': '1'}}, until)
             require(initialized.get('protocolVersion') == PROTOCOL, 'Unexpected MCP protocol negotiation')
-            require(initialized.get('serverInfo', {}).get('name') == 'desktop-world'
+            require(initialized.get('serverInfo', {}).get('name') == 'dtw'
                     and initialized['serverInfo'].get('version') == version, 'Packaged MCP identity/version mismatch')
             require(isinstance(initialized.get('capabilities', {}).get('tools'), dict), 'MCP tool capability missing')
             active.send({'jsonrpc': '2.0', 'method': 'notifications/initialized'}, until)

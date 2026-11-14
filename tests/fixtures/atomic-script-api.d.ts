@@ -1,4 +1,4 @@
-// Internal atomic test protocol. Public Agent API: skills/desktop-world/API.md.
+// Internal atomic test protocol. Public Agent API: skills/dtw/API.md.
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 

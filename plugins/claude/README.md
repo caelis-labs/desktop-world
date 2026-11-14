@@ -11,3 +11,11 @@ The bundled Skill and self-contained API.md define `look`, `capture`, `readText`
 The Harness owns tool approval. macOS 14.2+ arm64 operations need the corresponding Accessibility or Screen Recording permissions. Windows x64 uses native UIA and input delivery, with foreground access managed by DTW when needed. This development stage still needs acceptance on its exact bytes; prior release acceptance does not certify a rebuilt binary. Browser DOM and locked-session input remain outside the runtime contract. Host execution/file restrictions also apply; use a supported, authorized launch path and the host's normal approval process if access is denied. Never change sandbox policy or ACLs to make installation succeed. Switching apps retains each app’s committed state and still-valid references. References can expire or be consumed by actions; rediscover them when needed.
 
 This local stage is not a signed or notarized release package. Build identity and retained source/license notices are included alongside the executable; public distribution requires separate release validation.
+
+Current staging records `package_store_schema: 2` in `build-info.json`: MCP
+server `dtw`, Skill
+`dtw` at `skills/dtw`, and Caelis Skill identity `desktop-world:dtw`. The
+plugin/install ID remains `desktop-world`. Published schema 1 packages retain
+their original `desktop-world` server and `skills/desktop-world` layout for
+verification and rollback; do not rewrite them or rebind existing installations
+to change names.

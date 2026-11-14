@@ -113,8 +113,17 @@ def verify_macos_candidate(root):
 
 
 def plugin_package(archive, prefix, build):
-    """Audit the newly declared multi-host layout; retain historical contracts."""
+    """Audit the schema-selected Skill and declared host entries, including legacy."""
+    layout = builder.plugin_package.package_layout(build.get('package_store_schema', 1))
+    skill = layout['skill_dir'] + '/SKILL.md'
+    names = archive.namelist()
+    require(prefix + skill in names, 'Missing runtime/Skill/plugin/notices')
+    other_skill = 'skills/dtw/' if layout['mcp_server'] == 'desktop-world' else 'skills/desktop-world/'
+    require(not any(name.startswith(prefix + other_skill) for name in names), 'Skill layout mismatch')
+    require(sha(archive.read(prefix + skill)) == build.get('skill_sha256'), 'Skill digest mismatch')
+    server = layout['mcp_server']
     if 'plugin_package' not in build:
+        require(build.get('package_store_schema', 1) == 1, 'Missing schema 2 plugin package declaration')
         return  # Existing accepted archives did not declare this layout.
     target = build['target']
     binary = build['binary']['path']
@@ -141,12 +150,12 @@ def plugin_package(archive, prefix, build):
                     'Antigravity schema mismatch')
     standard = read('mcp.json')
     require(standard.get('$schema') == 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json'
-            and standard.get('mcpServers') == {'desktop-world': {
+            and standard.get('mcpServers') == {server: {
                 'type': 'stdio', 'command': './' + binary, 'args': ['mcp']}},
             'Agent Plugins MCP entry mismatch')
-    require(read('.mcp.json').get('mcpServers') == {'desktop-world': {
+    require(read('.mcp.json').get('mcpServers') == {server: {
         'command': '${CLAUDE_PLUGIN_ROOT}/' + binary, 'args': ['mcp']}}, 'Claude MCP entry mismatch')
-    require(read('mcp_config.json').get('mcpServers') == {'desktop-world': {
+    require(read('mcp_config.json').get('mcpServers') == {server: {
         'command': './' + binary, 'args': ['mcp'], 'cwd': '${PLUGIN_ROOT}'}}, 'Antigravity MCP entry mismatch')
     cordis = read('package.json')
     require(cordis.get('name') == '@caelis-labs/desktop-world' and cordis.get('version') == build['version']
@@ -201,14 +210,13 @@ def verify(root, tag, tag_commit, *, native_verification=None):
             prefix = package + '/'
             files = {n[len(prefix):] for n in z.namelist()}
             binary_name = 'bin/dtw' if target == TARGETS[0] else 'bin/dtw.exe'
-            require({binary_name, 'BUILD.json', 'skills/desktop-world/SKILL.md', '.claude-plugin/plugin.json',
+            require({binary_name, 'BUILD.json', '.claude-plugin/plugin.json',
                      'notices/DEPENDENCIES.json'} <= files, 'Missing runtime/Skill/plugin/notices')
             require(z.read(prefix + 'BUILD.json') == build_bytes, 'Embedded BUILD differs')
             binary = z.read(prefix + binary_name)
             require(build.get('binary', {}).get('path') == binary_name, 'Binary path mismatch')
             require(sha(binary) == build['binary'].get('sha256') == candidate.get('binary_sha256')
                     == platform.get('binary_sha256'), 'Binary digest mismatch')
-            require(sha(z.read(prefix + 'skills/desktop-world/SKILL.md')) == build.get('skill_sha256'), 'Skill digest mismatch')
             require(sha(z.read(prefix + 'notices/DEPENDENCIES.json')) == build.get('dependencies_sha256'), 'Notices digest mismatch')
             plugin_package(z, prefix, build)
             with tempfile.TemporaryDirectory(prefix='dtw-release-check-') as tmp:

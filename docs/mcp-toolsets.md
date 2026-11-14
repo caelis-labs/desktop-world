@@ -22,7 +22,7 @@ surface. For atomic tools, change that server's `args` to `["mcp", "--atomic"]`:
 ```json
 {
   "mcpServers": {
-    "desktop-world": {
+    "dtw": {
       "command": "/absolute/path/to/dtw",
       "args": ["mcp", "--atomic"]
     }
@@ -37,7 +37,7 @@ is required. See [installation](install.md) for host setup.
 
 ## One method contract
 
-[API.md](../skills/desktop-world/API.md) owns the exact method arguments, bounds,
+[API.md](../skills/dtw/API.md) owns the exact method arguments, bounds,
 outputs and provider limits. Both surfaces use its camelCase method names and
 canonical object fields. Atomic tools add a required `app` identity returned by
 `apps`; scripts bind that identity once through `exec`.

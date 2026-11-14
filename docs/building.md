@@ -49,7 +49,7 @@ unknown binding; it does not touch AX, screenshots or desktop input. It requires
 checks also run in CI; see [the CI/release lanes](releasing.md).
 
 The MCP product entry is `dtw mcp`; `dtw app catalog` is a diagnostic CLI.
-The public contract is the packaged `skills/desktop-world/SKILL.md` and its
+The public contract is the packaged `skills/dtw/SKILL.md` and its
 `API.md` reference. By default MCP exposes `apps` and `exec`. Start
 `dtw mcp --atomic` for `apps` plus the fourteen flat camelCase app operations;
 see [MCP toolsets](mcp-toolsets.md) for the shared contract and validation limits;
