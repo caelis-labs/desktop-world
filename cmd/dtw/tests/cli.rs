@@ -47,6 +47,21 @@ fn legacy_commands_are_rejected() {
 }
 
 #[test]
+fn invalid_toolset_is_rejected_without_native_provider() {
+    for args in [
+        &["mcp", "--toolset", "unknown"][..],
+        &["mcp", "--toolset"],
+        &["mcp", "--toolset", "atomic", "extra"],
+    ] {
+        let output = cli(args);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["error"]["code"], "invalid_arguments");
+    }
+}
+
+#[test]
 fn package_help_and_argument_errors_are_json_without_store_access() {
     let root = std::env::temp_dir().join(format!("dtw-cli-package-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&root).unwrap();

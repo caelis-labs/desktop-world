@@ -29,7 +29,7 @@ impl<F: Factory> ServerHandler for Handler<F> {
     fn get_info(&self) -> ServerConfig {
         let mut config = ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("desktop-world", env!("CARGO_PKG_VERSION")))
-            .with_instructions("Load the installed desktop-world Skill and its API.md reference. apps searches running and installed applications without reading their contents. exec requires one explicit app authorization identity and an async JavaScript body. DTW owns application startup, window routing and observation state. Use look, then input, then look; screenshots provide a fallback when semantics are incomplete. Never repeat input whose effects are unknown. Standard MCP cancellation stops the matching call.");
+            .with_instructions("Load the installed desktop-world Skill and its API.md reference. apps searches running and installed applications without reading their contents. Every application tool requires one explicit app authorization identity. When listed, exec accepts an async JavaScript body; atomic tools accept the corresponding public app method arguments as flat JSON beside app. DTW owns application startup, window routing and observation state. Inspect returned views to verify effects. Never repeat input whose effects are unknown. Standard MCP cancellation stops the matching call.");
         config.server_info.description = self.server.provider_id();
         config
     }
@@ -40,7 +40,8 @@ impl<F: Factory> ServerHandler for Handler<F> {
         _: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let mut result = ListToolsResult::default();
-        result.tools = serde_json::from_value(tools()).expect("static DTW tool definitions");
+        result.tools = serde_json::from_value(self.server.toolset().tools())
+            .expect("static DTW tool definitions");
         Ok(result)
     }
 
@@ -49,7 +50,7 @@ impl<F: Factory> ServerHandler for Handler<F> {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let compact = request.name == "exec";
+        let compact = request.name != "apps";
         if context.ct.is_cancelled() || self.lifecycle.stopped.is_cancelled() {
             return Ok(result(
                 problem("cancelled", "Call cancelled before admission"),

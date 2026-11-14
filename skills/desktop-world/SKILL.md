@@ -5,7 +5,10 @@ description: Control one authorized desktop application through DTW using compac
 
 # Desktop World
 
-DTW exposes two MCP tools: `apps` and `exec`. Use `apps({query})` to find an
+DTW defaults to two MCP tools: `apps` and `exec`. An experimental host-selected
+`--toolset atomic` instead lists one tool per public app method; `--toolset all`
+lists both. Atomic tools require `app` beside the method's object arguments;
+use the listed schemas and [API.md](API.md). Use `apps({query})` to find an
 installed or running app and its authorization identity. Run an async JavaScript
 body with `exec({app, source})`; `app` is always required and fixes the entire
 script's authorization scope.

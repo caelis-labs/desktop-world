@@ -44,8 +44,10 @@ Open the application you want to use, then ask your Agent:
 > Use Desktop World to update this document, save it under a new name, then reopen
 > it and check the changes.
 
-The MCP interface is exactly `apps` plus app-scoped `exec({app, source})`; the bundled Skill documents
-the app script methods, including filtered observations and explicit text reading. DTW owns window routing and observation state.
+The default MCP interface is `apps` plus app-scoped `exec({app, source})`; the bundled Skill documents
+the app script methods, including filtered observations and explicit text reading.
+The opt-in [MCP toolset PoC](poc/mcp-toolset/README.md) adds host selection of
+atomic tools through `dtw mcp --toolset atomic|all`. DTW owns window routing and observation state.
 The Agent observes when needed and batches known actions, using semantic targets
 and pixel fallback. DTW prepares receivers and returns observations after input.
 [Capabilities and limits](docs/product-matrix.md) describes current support and

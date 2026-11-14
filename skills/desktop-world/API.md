@@ -2,6 +2,17 @@
 
 ## Tools
 
+The default `dtw mcp` surface remains `apps` + `exec`. The experimental
+`dtw mcp --toolset atomic` exposes `apps` plus one MCP tool per public method;
+`--toolset all` exposes both. Atomic calls require `app` beside the method's
+object arguments. Tool names use snake case (`read_text`, `set_value`,
+`type_text`, `wait_for_new_window`); other names match the table below.
+`keypress` uses `{app,keys:[...]}` and numeric `wait` uses `{app,ms:...}`.
+Consult `tools/list` for the selected schemas. Each atomic call has the same
+execution/cleanup boundary as one `exec`; keep related focus/menu sequences in
+`exec` when they must share that boundary. See the source-tree PoC notes at
+`poc/mcp-toolset/README.md` for validation and limits.
+
 `apps({query?, state?, offset?, limit?})`
 
 - `query`: case-insensitive name/identifier substring, up to 256 characters.

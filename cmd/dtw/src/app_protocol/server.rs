@@ -1,6 +1,7 @@
 //! Standard-tool orchestration. Selection is explicit; approval belongs to the MCP client.
 use super::{
     app_id, problem, scripts,
+    toolset::Toolset,
     wire::{self, Command, Request, Submit, Target, WireError},
     Coordinator, Reply,
 };
@@ -74,6 +75,7 @@ struct Record {
     id: String,
     rpc_id: Value,
     app: String,
+    tool: String,
     input: Value,
     reply: Option<Reply>,
     payload_bytes: usize,
@@ -101,6 +103,7 @@ struct State<B: Backend> {
 pub struct Server<F: Factory> {
     weak_self: Weak<Self>,
     session_id: String,
+    toolset: Toolset,
     #[cfg(test)]
     atomic_test_surface: AtomicBool,
     factory: F,
@@ -166,11 +169,18 @@ impl<F: Factory> Server<F> {
         server
     }
     pub fn new(factory: F) -> Arc<Self> {
+        Self::with_toolset(factory, Toolset::default())
+    }
+    pub fn toolset(&self) -> Toolset {
+        self.toolset
+    }
+    pub fn with_toolset(factory: F, toolset: Toolset) -> Arc<Self> {
         Arc::new_cyclic(|weak| Self {
             weak_self: weak.clone(),
             #[cfg(test)]
             atomic_test_surface: AtomicBool::new(false),
             session_id: format!("session_{}", uuid::Uuid::new_v4()),
+            toolset,
             factory,
             state: Mutex::new(State {
                 contexts: VecDeque::new(),
@@ -192,7 +202,7 @@ impl<F: Factory> Server<F> {
         // while it is still running. Old IDs are not kept in an unbounded tombstone set.
         // A new RPC ID always admits new work, even for the same source text.
         if let Some(record) = state.records.iter().find(|record| record.rpc_id == rpc_id) {
-            if name != "exec" || record.input != args {
+            if name != record.tool || record.input != args {
                 return Started::Reply(problem(
                     "request_conflict",
                     "This MCP request ID already belongs to different input in this session",
@@ -207,7 +217,7 @@ impl<F: Factory> Server<F> {
             }
             return Started::Reply(self.record_reply(&state, record));
         }
-        let command = match parse_call(name, &args) {
+        let command = match parse_call(self.toolset, name, &args) {
             Ok(c) => c,
             Err(e) => return Started::Reply(Reply::error(e)),
         };
@@ -237,6 +247,7 @@ impl<F: Factory> Server<F> {
                     id: id.clone(),
                     rpc_id: rpc_id.clone(),
                     app: app.clone(),
+                    tool: name.into(),
                     input: args,
                     reply: None,
                     payload_bytes: 0,
@@ -1135,7 +1146,18 @@ fn execution_id(value: &Value) -> Result<String, WireError> {
         .map(str::to_owned)
         .ok_or_else(|| invalid("execution_id must contain 1 to 128 characters"))
 }
-fn parse_call(name: &str, args: &Value) -> Result<ToolCall, WireError> {
+fn parse_call(toolset: Toolset, name: &str, args: &Value) -> Result<ToolCall, WireError> {
+    if !toolset.allows(name) {
+        return Err(invalid("Unknown tool in the selected toolset"));
+    }
+    if let Some((app, source)) = toolset.atomic_source(name, args)? {
+        return Ok(ToolCall::Exec {
+            app,
+            source,
+            timeout_ms: scripts::DEFAULT_TIMEOUT_MS,
+            max_calls: scripts::UNLIMITED_CALLS,
+        });
+    }
     match name {
         "apps" => {
             exact_object(args, &["query", "state", "offset", "limit"])?;
