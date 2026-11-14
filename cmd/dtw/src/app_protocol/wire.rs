@@ -83,6 +83,12 @@ impl ElementWaitState {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
+    /// One public app-facade operation, admitted by the MCP adapter as data.
+    App {
+        method: String,
+        args: Value,
+        timeout_ms: u64,
+    },
     Script {
         source: String,
         timeout_ms: u64,
@@ -234,7 +240,7 @@ fn coordinate(object: &Map<String, Value>, key: &str) -> Result<f64, WireError> 
         .ok_or_else(|| invalid(format!("command.{key} must be a finite number")))
 }
 
-fn selection(command: &Map<String, Value>) -> Result<(ElementSelector, u64), WireError> {
+pub(super) fn selection(command: &Map<String, Value>) -> Result<(ElementSelector, u64), WireError> {
     let selector = object(command.get("selector").unwrap_or(&Value::Null), "selector")?;
     fields(selector, &["role", "text", "scope"], "selector")?;
     let part = |key: &str, maximum: usize| {
@@ -308,7 +314,7 @@ pub(super) fn script_submit(
     }
 }
 
-fn text_value(
+pub(super) fn text_value(
     command: &Map<String, Value>,
     key: &str,
     allow_empty: bool,
@@ -330,6 +336,67 @@ fn text_value(
                 "command.{key} must be a string of at most 16 KiB UTF-8 without NUL (48 KiB after JSON encoding)"
             ))
         })
+}
+
+pub(super) fn click_options(
+    command: &Map<String, Value>,
+) -> Result<computer::ClickOptions, WireError> {
+    let button = match command.get("button") {
+        None => computer::MouseButton::Left,
+        Some(Value::String(value)) if value == "left" => computer::MouseButton::Left,
+        Some(Value::String(value)) if value == "right" => computer::MouseButton::Right,
+        _ => return Err(invalid("command.button must be left or right")),
+    };
+    let count = match command.get("count") {
+        None => 1,
+        Some(value) => value
+            .as_u64()
+            .filter(|n| (1..=2).contains(n))
+            .ok_or_else(|| invalid("command.count must be 1 or 2"))? as u8,
+    };
+    Ok(computer::ClickOptions { button, count })
+}
+
+pub(super) fn key_names(command: &Map<String, Value>) -> Result<Vec<String>, WireError> {
+    let values = command
+        .get("keys")
+        .and_then(Value::as_array)
+        .filter(|keys| (1..=8).contains(&keys.len()))
+        .ok_or_else(|| invalid("command.keys must contain 1 to 8 key names"))?;
+    values
+        .iter()
+        .map(|key| {
+            key.as_str()
+                .filter(|key| {
+                    !key.is_empty()
+                        && key.len() <= 32
+                        && key.is_ascii()
+                        && !key.chars().any(char::is_control)
+                })
+                .map(str::to_owned)
+                .ok_or_else(|| invalid("command.keys must contain ASCII key names"))
+        })
+        .collect::<Result<Vec<_>, _>>()
+}
+
+pub(super) fn scroll_deltas(command: &Map<String, Value>) -> Result<(i32, i32), WireError> {
+    let delta = |key: &str| -> Result<i32, WireError> {
+        match command.get(key) {
+            None => Ok(0),
+            Some(value) => value
+                .as_i64()
+                .filter(|n| (-100..=100).contains(n))
+                .map(|n| n as i32)
+                .ok_or_else(|| {
+                    invalid(format!("command.{key} must be an integer from -100 to 100"))
+                }),
+        }
+    };
+    let (delta_x, delta_y) = (delta("delta_x")?, delta("delta_y")?);
+    if delta_x == 0 && delta_y == 0 {
+        return Err(invalid("scroll requires a nonzero delta"));
+    }
+    Ok((delta_x, delta_y))
 }
 
 fn parse_command(value: &Value) -> Result<Command, WireError> {
@@ -631,21 +698,7 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
             let observation_ref = string(command, "observation_ref", "command")?;
             let x = coordinate(command, "x")?;
             let y = coordinate(command, "y")?;
-            let button = match command.get("button") {
-                None => computer::MouseButton::Left,
-                Some(Value::String(value)) if value == "left" => computer::MouseButton::Left,
-                Some(Value::String(value)) if value == "right" => computer::MouseButton::Right,
-                _ => return Err(invalid("command.button must be left or right")),
-            };
-            let count = match command.get("count") {
-                None => 1,
-                Some(value) => value
-                    .as_u64()
-                    .filter(|n| (1..=2).contains(n))
-                    .ok_or_else(|| invalid("command.count must be 1 or 2"))?
-                    as u8,
-            };
-            let options = computer::ClickOptions { button, count };
+            let options = click_options(command)?;
             match command.get("coordinate_space").and_then(Value::as_str) {
                 Some("normalized_1000") => {
                     if !(0.0..1000.0).contains(&x) || !(0.0..1000.0).contains(&y) {
@@ -718,25 +771,7 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
         }
         "keypress" => {
             fields(command, &["kind", "keys"], "command")?;
-            let values = command
-                .get("keys")
-                .and_then(Value::as_array)
-                .filter(|keys| (1..=8).contains(&keys.len()))
-                .ok_or_else(|| invalid("command.keys must contain 1 to 8 key names"))?;
-            let keys = values
-                .iter()
-                .map(|key| {
-                    key.as_str()
-                        .filter(|key| {
-                            !key.is_empty()
-                                && key.len() <= 32
-                                && key.is_ascii()
-                                && !key.chars().any(char::is_control)
-                        })
-                        .map(str::to_owned)
-                        .ok_or_else(|| invalid("command.keys must contain ASCII key names"))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+            let keys = key_names(command)?;
             Ok(Command::Input(computer::WindowInput::Keypress { keys }))
         }
         "scroll" => {
@@ -753,22 +788,7 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
                 ],
                 "command",
             )?;
-            let delta = |key: &str| -> Result<i32, WireError> {
-                match command.get(key) {
-                    None => Ok(0),
-                    Some(value) => value
-                        .as_i64()
-                        .filter(|n| (-100..=100).contains(n))
-                        .map(|n| n as i32)
-                        .ok_or_else(|| {
-                            invalid(format!("command.{key} must be an integer from -100 to 100"))
-                        }),
-                }
-            };
-            let (delta_x, delta_y) = (delta("delta_x")?, delta("delta_y")?);
-            if delta_x == 0 && delta_y == 0 {
-                return Err(invalid("scroll requires a nonzero delta"));
-            }
+            let (delta_x, delta_y) = scroll_deltas(command)?;
             let shape = (
                 command.contains_key("observation_ref"),
                 command.contains_key("x"),

@@ -1,6 +1,7 @@
 //! Standard-tool orchestration. Selection is explicit; approval belongs to the MCP client.
 use super::{
     app_id, problem, scripts,
+    toolset::Toolset,
     wire::{self, Command, Request, Submit, Target, WireError},
     Coordinator, Reply,
 };
@@ -74,6 +75,7 @@ struct Record {
     id: String,
     rpc_id: Value,
     app: String,
+    tool: String,
     input: Value,
     reply: Option<Reply>,
     payload_bytes: usize,
@@ -101,6 +103,7 @@ struct State<B: Backend> {
 pub struct Server<F: Factory> {
     weak_self: Weak<Self>,
     session_id: String,
+    toolset: Toolset,
     #[cfg(test)]
     atomic_test_surface: AtomicBool,
     factory: F,
@@ -130,11 +133,9 @@ enum ToolCall {
         offset: usize,
         limit: usize,
     },
-    Exec {
+    App {
         app: String,
-        source: String,
-        timeout_ms: u64,
-        max_calls: u32,
+        command: Command,
     },
 }
 pub enum Started<B: Backend> {
@@ -166,11 +167,22 @@ impl<F: Factory> Server<F> {
         server
     }
     pub fn new(factory: F) -> Arc<Self> {
+        Self::with_toolset(factory, Toolset::default())
+    }
+    pub fn toolset(&self) -> Toolset {
+        self.toolset
+    }
+    #[cfg(test)]
+    pub(super) fn watch_script_engine(&self) -> Arc<std::sync::atomic::AtomicUsize> {
+        super::script_engine::watch_session(&self.session_id)
+    }
+    pub fn with_toolset(factory: F, toolset: Toolset) -> Arc<Self> {
         Arc::new_cyclic(|weak| Self {
             weak_self: weak.clone(),
             #[cfg(test)]
             atomic_test_surface: AtomicBool::new(false),
             session_id: format!("session_{}", uuid::Uuid::new_v4()),
+            toolset,
             factory,
             state: Mutex::new(State {
                 contexts: VecDeque::new(),
@@ -192,7 +204,7 @@ impl<F: Factory> Server<F> {
         // while it is still running. Old IDs are not kept in an unbounded tombstone set.
         // A new RPC ID always admits new work, even for the same source text.
         if let Some(record) = state.records.iter().find(|record| record.rpc_id == rpc_id) {
-            if name != "exec" || record.input != args {
+            if name != record.tool || record.input != args {
                 return Started::Reply(problem(
                     "request_conflict",
                     "This MCP request ID already belongs to different input in this session",
@@ -207,7 +219,7 @@ impl<F: Factory> Server<F> {
             }
             return Started::Reply(self.record_reply(&state, record));
         }
-        let command = match parse_call(name, &args) {
+        let command = match parse_call(self.toolset, name, &args) {
             Ok(c) => c,
             Err(e) => return Started::Reply(Reply::error(e)),
         };
@@ -228,7 +240,7 @@ impl<F: Factory> Server<F> {
         }
         let execution_id = match &command {
             ToolCall::Apps { .. } => None,
-            ToolCall::Exec { app, .. } => {
+            ToolCall::App { app, .. } => {
                 let id = match super::reference("exe") {
                     Ok(id) => id,
                     Err(error) => return Started::Reply(Reply::error(wire::core_error(&error))),
@@ -237,6 +249,7 @@ impl<F: Factory> Server<F> {
                     id: id.clone(),
                     rpc_id: rpc_id.clone(),
                     app: app.clone(),
+                    tool: name.into(),
                     input: args,
                     reply: None,
                     payload_bytes: 0,
@@ -273,20 +286,13 @@ impl<F: Factory> Server<F> {
                     offset,
                     limit,
                 } => self.apps(call, query, state, *offset, *limit),
-                ToolCall::Exec {
-                    app,
-                    source,
-                    timeout_ms,
-                    max_calls,
-                } => self.execute(
+                ToolCall::App { app, command } => self.execute(
                     call,
                     app,
                     call.execution_id
                         .as_deref()
                         .expect("accepted execution has an ID"),
-                    source,
-                    *timeout_ms,
-                    *max_calls,
+                    command,
                 ),
             })) {
                 Ok(reply) => reply,
@@ -392,7 +398,7 @@ impl<F: Factory> Server<F> {
         state.active = None;
     }
     fn annotate(&self, state: &State<F::Provider>, call: &Call<F::Provider>, reply: &mut Reply) {
-        if let ToolCall::Exec { app, .. } = &call.command {
+        if let ToolCall::App { app, .. } = &call.command {
             public_execution(reply, app, call.execution_id.as_deref().unwrap());
             reply.data["context_reset"] = json!(call.context_reset.load(Ordering::Acquire));
             reply.data["state_reset"] = json!(call.state_reset.load(Ordering::Acquire));
@@ -450,12 +456,14 @@ impl<F: Factory> Server<F> {
         call: &Call<F::Provider>,
         app_id: &str,
         id: &str,
-        source: &str,
-        timeout_ms: u64,
-        max_calls: u32,
+        command: &Command,
     ) -> Reply {
+        let timeout_ms = match command {
+            Command::App { timeout_ms, .. } | Command::Script { timeout_ms, .. } => *timeout_ms,
+            _ => unreachable!("MCP app executions have one execution budget"),
+        };
         if call.cancelled.load(Ordering::Acquire) {
-            return problem("cancelled", "Cancelled before script admission");
+            return problem("cancelled", "Cancelled before app execution admission");
         }
         let target = match self.factory.resolve(app_id) {
             Ok(target) if target.app_id == app_id => target,
@@ -484,7 +492,7 @@ impl<F: Factory> Server<F> {
             }
         }
         if call.cancelled.load(Ordering::Acquire) {
-            return problem("cancelled", "Cancelled before script admission");
+            return problem("cancelled", "Cancelled before app execution admission");
         }
         let candidate = {
             let state = self.state.lock().unwrap();
@@ -618,7 +626,7 @@ impl<F: Factory> Server<F> {
                     self.remember_shutdown(error);
                     return closed;
                 }
-                return problem("cancelled", "Stopped before script admission");
+                return problem("cancelled", "Stopped before app execution admission");
             }
             owner.handle(Request::Submit(Submit {
                 request_id: id.into(),
@@ -626,11 +634,7 @@ impl<F: Factory> Server<F> {
                     app_ref: owner.app_ref.clone(),
                     window_ref: None,
                 },
-                command: Command::Script {
-                    source: source.into(),
-                    timeout_ms,
-                    max_calls,
-                },
+                command: command.clone(),
             }))
         };
         if admitted.data["status"] != "running" {
@@ -1135,7 +1139,13 @@ fn execution_id(value: &Value) -> Result<String, WireError> {
         .map(str::to_owned)
         .ok_or_else(|| invalid("execution_id must contain 1 to 128 characters"))
 }
-fn parse_call(name: &str, args: &Value) -> Result<ToolCall, WireError> {
+fn parse_call(toolset: Toolset, name: &str, args: &Value) -> Result<ToolCall, WireError> {
+    if !toolset.allows(name) {
+        return Err(invalid("Unknown tool in the selected toolset"));
+    }
+    if let Some((app, command)) = toolset.atomic_call(name, args)? {
+        return Ok(ToolCall::App { app, command });
+    }
     match name {
         "apps" => {
             exact_object(args, &["query", "state", "offset", "limit"])?;
@@ -1188,11 +1198,13 @@ fn parse_call(name: &str, args: &Value) -> Result<ToolCall, WireError> {
                 })?
                 .to_owned();
             let (timeout_ms, max_calls) = scripts::budgets(args.as_object().unwrap())?;
-            Ok(ToolCall::Exec {
+            Ok(ToolCall::App {
                 app,
-                source,
-                timeout_ms,
-                max_calls,
+                command: Command::Script {
+                    source,
+                    timeout_ms,
+                    max_calls,
+                },
             })
         }
         _ => Err(invalid("Unknown tool")),

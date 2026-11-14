@@ -14,6 +14,10 @@ MAX_OUTPUT = 4 * 1024 * 1024
 MAX_LINE = 1024 * 1024
 PROTOCOL = '2025-06-18'
 EOF = object()
+ATOMIC_TOOLS = {
+    'look', 'capture', 'readText', 'wait', 'waitForNewWindow', 'click', 'setValue',
+    'move', 'drag', 'typeText', 'keypress', 'scroll', 'focus', 'quit',
+}
 
 
 def require(condition, message):
@@ -229,45 +233,58 @@ def check(binary, version, output, *, timeout=20, cleanup_timeout=2, popen=subpr
         report['observed_version'] = observed
         require(observed == 'dtw ' + version, 'Packaged CLI version mismatch: ' + observed)
 
-        directory = output / 'mcp'
-        directory.mkdir()
-        active = OwnedStdio([str(binary), 'mcp'], directory, rpc=True, popen=popen)
-        initialized = active.rpc(1, 'initialize', {'protocolVersion': PROTOCOL, 'capabilities': {},
-            'clientInfo': {'name': 'dtw-packaged-headless-check', 'version': '1'}}, until)
-        require(initialized.get('protocolVersion') == PROTOCOL, 'Unexpected MCP protocol negotiation')
-        require(initialized.get('serverInfo', {}).get('name') == 'desktop-world'
-                and initialized['serverInfo'].get('version') == version, 'Packaged MCP identity/version mismatch')
-        require(isinstance(initialized.get('capabilities', {}).get('tools'), dict), 'MCP tool capability missing')
-        active.send({'jsonrpc': '2.0', 'method': 'notifications/initialized'}, until)
-        listed = active.rpc(2, 'tools/list', {}, until)
-        tools = listed.get('tools')
-        require(isinstance(tools, list) and all(isinstance(tool, dict) for tool in tools), 'Invalid MCP tools list')
-        names = [tool.get('name') for tool in tools]
-        require(all(isinstance(name, str) and name for name in names) and len(names) == len(set(names))
-                and {'apps', 'exec'} == set(names) and not listed.get('nextCursor'),
-                'Missing, duplicate or incomplete packaged MCP tools')
-        schemas = {tool['name']: tool.get('inputSchema', {}) for tool in tools}
-        execution = schemas['exec']
-        require(execution.get('required') == ['app', 'source']
-                and set(execution.get('properties', {})) == {'app', 'source'}
-                and execution.get('additionalProperties') is False,
-                'Packaged exec must expose only required app/source arguments')
-        response = active.rpc(3, 'tools/call', {'name': 'exec', 'arguments': {'source': 'return 1;'}}, until)
-        require(response.get('isError') is True, 'Missing app was not rejected')
-        data = response.get('structuredContent')
-        content = response.get('content')
-        require(isinstance(data, dict) and isinstance(content, list) and len(content) == 1
-                and content[0].get('type') == 'text' and json.loads(content[0]['text']) == data,
-                'Admission text/structured projections disagree')
-        require(data.get('error', {}).get('code') == 'invalid_arguments',
-                'Missing app did not return invalid_arguments')
-        report['metadata'] = {'server': initialized['serverInfo'], 'protocol': PROTOCOL,
-                              'tools': names, 'required_app_rejected': True}
-        require(active.proc.poll() is None, 'MCP server exited before client EOF')
-        status = active.close(min(cleanup_timeout, remaining(until)))
-        active = None
-        report['cleanup'].append({'role': 'mcp', **status})
-        require(clean(status), 'Packaged MCP EOF cleanup was not clean')
+        report['metadata'] = {}
+        for role, atomic in [('mcp', False), ('mcp-atomic', True)]:
+            directory = output / role
+            directory.mkdir()
+            command = [str(binary), 'mcp'] + (['--atomic'] if atomic else [])
+            active = OwnedStdio(command, directory, rpc=True, popen=popen)
+            initialized = active.rpc(1, 'initialize', {'protocolVersion': PROTOCOL, 'capabilities': {},
+                'clientInfo': {'name': 'dtw-packaged-headless-check', 'version': '1'}}, until)
+            require(initialized.get('protocolVersion') == PROTOCOL, 'Unexpected MCP protocol negotiation')
+            require(initialized.get('serverInfo', {}).get('name') == 'desktop-world'
+                    and initialized['serverInfo'].get('version') == version, 'Packaged MCP identity/version mismatch')
+            require(isinstance(initialized.get('capabilities', {}).get('tools'), dict), 'MCP tool capability missing')
+            active.send({'jsonrpc': '2.0', 'method': 'notifications/initialized'}, until)
+            listed = active.rpc(2, 'tools/list', {}, until)
+            tools = listed.get('tools')
+            require(isinstance(tools, list) and all(isinstance(tool, dict) for tool in tools), 'Invalid MCP tools list')
+            names = [tool.get('name') for tool in tools]
+            require(all(isinstance(name, str) and name for name in names) and len(names) == len(set(names))
+                    and ({'apps'} | ATOMIC_TOOLS if atomic else {'apps', 'exec'}) == set(names) and not listed.get('nextCursor'),
+                    'Missing, duplicate or incomplete packaged MCP tools')
+            schemas = {tool['name']: tool.get('inputSchema', {}) for tool in tools}
+            for name, schema in schemas.items():
+                require(schema.get('type') == 'object'
+                        and schema.get('additionalProperties') is False,
+                        'Packaged tool must expose a closed argument object: ' + name)
+                if name != 'apps':
+                    require('app' in schema.get('required', [])
+                            and 'app' in schema.get('properties', {}),
+                            'Packaged tool must require explicit app: ' + name)
+            if not atomic:
+                execution = schemas['exec']
+                require(execution.get('required') == ['app', 'source']
+                        and set(execution.get('properties', {})) == {'app', 'source'},
+                        'Packaged exec must expose only required app/source arguments')
+            name = 'look' if atomic else 'exec'
+            arguments = {} if atomic else {'source': 'return 1;'}
+            response = active.rpc(3, 'tools/call', {'name': name, 'arguments': arguments}, until)
+            require(response.get('isError') is True, 'Missing app was not rejected')
+            data = response.get('structuredContent')
+            content = response.get('content')
+            require(isinstance(data, dict) and isinstance(content, list) and len(content) == 1
+                    and content[0].get('type') == 'text' and json.loads(content[0]['text']) == data,
+                    'Admission text/structured projections disagree')
+            require(data.get('error', {}).get('code') == 'invalid_arguments',
+                    'Missing app did not return invalid_arguments')
+            report['metadata'][role] = {'server': initialized['serverInfo'], 'protocol': PROTOCOL,
+                                  'tools': names, 'required_app_rejected': True}
+            require(active.proc.poll() is None, 'MCP server exited before client EOF')
+            status = active.close(min(cleanup_timeout, remaining(until)))
+            active = None
+            report['cleanup'].append({'role': role, **status})
+            require(clean(status), 'Packaged MCP EOF cleanup was not clean: ' + role)
         require(digest(binary) == report['binary_sha256'], 'Packaged binary changed during probe')
         report['passed'] = True
     except BaseException as error:

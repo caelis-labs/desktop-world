@@ -1,0 +1,241 @@
+{
+  "result": "pass",
+  "timestamp": "2026-11-14T10:59:11+0800",
+  "candidate": {
+    "path": "/tmp/dtw-atomic-release-check-7rqurg6d/bin/dtw",
+    "sha256": "1a44cb38a3345c144180c6ce97b19a56b8b8af0d39002aef1cc3196c24313c9d",
+    "version": "dtw 0.4.2",
+    "source_commit": "0e0f4219ee1d3fca7b7cecabc16e4ed3cb1b9f45"
+  },
+  "runner_exit": 0,
+  "headless_metadata": {
+    "passed": true,
+    "binary_sha256": "1a44cb38a3345c144180c6ce97b19a56b8b8af0d39002aef1cc3196c24313c9d",
+    "default_tools": ["apps", "exec"],
+    "atomic_tools": ["apps", "look", "capture", "readText", "wait", "waitForNewWindow", "click", "setValue", "move", "drag", "typeText", "keypress", "scroll", "focus", "quit"],
+    "missing_app_rejected": true,
+    "native_desktop_calls": false,
+    "children_exited_zero": 3,
+    "forced": false,
+    "pipe_workers_joined": true,
+    "raw_report": "/tmp/dtw-atomic-headless-formal-packaging-81968c6b/report.json"
+  },
+  "regression_tests": {
+    "release_library": 558,
+    "release_cli": 5,
+    "package_layout_archive_fixtures": 5,
+    "packaged_mcp_controls": 9,
+    "source_checks": "passed",
+    "macos_windows_native_package_qualification": "not run"
+  },
+  "modes": {
+    "script": {
+      "product_argv": [
+        "mcp"
+      ],
+      "tools": [
+        "apps",
+        "exec"
+      ],
+      "counter": 1,
+      "entry": "dtw_probe_script_731",
+      "ack": "dtw_probe_script_731",
+      "button_event": "BUTTON=1",
+      "acknowledgement": "ACK=dtw_probe_script_731",
+      "verified": true,
+      "cross_call_capture_input_readback": true,
+      "persistent_connection": true,
+      "mcp_exit": 0,
+      "lock_samples": [
+        {
+          "argv": [
+            "loginctl",
+            "show-session",
+            "7",
+            "-p",
+            "Id",
+            "-p",
+            "Type",
+            "-p",
+            "Display",
+            "-p",
+            "LockedHint"
+          ],
+          "status": 0,
+          "stdout": "Id=7\nDisplay=:0\nType=x11\nLockedHint=yes\n",
+          "stderr": ""
+        },
+        {
+          "argv": [
+            "loginctl",
+            "show-session",
+            "7",
+            "-p",
+            "Id",
+            "-p",
+            "Type",
+            "-p",
+            "Display",
+            "-p",
+            "LockedHint"
+          ],
+          "status": 0,
+          "stdout": "Id=7\nDisplay=:0\nType=x11\nLockedHint=yes\n",
+          "stderr": ""
+        }
+      ],
+      "fixture": {
+        "kind": "isolated_fixture",
+        "mode": "script",
+        "pid": 141,
+        "executable": "/tmp/dtw-locked-probe-w83ecku4/DtwLockedProbe08e4f1b649724a65853cf0613f364ba9",
+        "identity": "READY=141,Dtwlockedprobe08e4f1b649724a65853cf0613f364ba9.tcl,0x200013"
+      }
+    },
+    "atomic": {
+      "product_argv": [
+        "mcp",
+        "--atomic"
+      ],
+      "tools": [
+        "apps",
+        "look",
+        "capture",
+        "readText",
+        "wait",
+        "waitForNewWindow",
+        "click",
+        "setValue",
+        "move",
+        "drag",
+        "typeText",
+        "keypress",
+        "scroll",
+        "focus",
+        "quit"
+      ],
+      "counter": 1,
+      "entry": "dtw_probe_atomic_731",
+      "ack": "dtw_probe_atomic_731",
+      "button_event": "BUTTON=1",
+      "acknowledgement": "ACK=dtw_probe_atomic_731",
+      "verified": true,
+      "cross_call_capture_input_readback": true,
+      "persistent_connection": true,
+      "mcp_exit": 0,
+      "lock_samples": [
+        {
+          "argv": [
+            "loginctl",
+            "show-session",
+            "7",
+            "-p",
+            "Id",
+            "-p",
+            "Type",
+            "-p",
+            "Display",
+            "-p",
+            "LockedHint"
+          ],
+          "status": 0,
+          "stdout": "Id=7\nDisplay=:0\nType=x11\nLockedHint=yes\n",
+          "stderr": ""
+        },
+        {
+          "argv": [
+            "loginctl",
+            "show-session",
+            "7",
+            "-p",
+            "Id",
+            "-p",
+            "Type",
+            "-p",
+            "Display",
+            "-p",
+            "LockedHint"
+          ],
+          "status": 0,
+          "stdout": "Id=7\nDisplay=:0\nType=x11\nLockedHint=yes\n",
+          "stderr": ""
+        }
+      ],
+      "fixture": {
+        "kind": "isolated_fixture",
+        "mode": "atomic",
+        "pid": 232,
+        "executable": "/tmp/dtw-locked-probe-w83ecku4/DtwLockedProbe34c3fc5c7c3a42cdb96d5567bf737388",
+        "identity": "READY=232,Dtwlockedprobe34c3fc5c7c3a42cdb96d5567bf737388.tcl,0x200018"
+      }
+    }
+  },
+  "images": {
+    "atomic-initial.png": {
+      "sha256": "48f10485f294611c16cc3ad02cdc800250a952ca0425cf86196ee8f072e32cb8",
+      "width": 920,
+      "height": 480,
+      "raw_source": "/tmp/dtw-linux-x11-final-0e0f4219-artifacts/atomic-05-capture-1.png",
+      "visually_inspected": true
+    },
+    "atomic-final.png": {
+      "sha256": "5ccc65192769590bd19d3a64ae74a39738a6c4f443dbf1a793fb95226c13435c",
+      "width": 920,
+      "height": 480,
+      "raw_source": "/tmp/dtw-linux-x11-final-0e0f4219-artifacts/atomic-14-capture-1.png",
+      "visually_inspected": true
+    },
+    "script-final.png": {
+      "sha256": "d9a2881173ba6984a2962d356cb7829f059e7805af06f08319f0e9cdae58fda0",
+      "width": 920,
+      "height": 480,
+      "raw_source": "/tmp/dtw-linux-x11-final-0e0f4219-artifacts/script-14-exec-1.png",
+      "visually_inspected": true
+    }
+  },
+  "lock_check": {
+    "kind": "lock_check",
+    "before": true,
+    "after": true
+  },
+  "isolation": {
+    "kind": "isolated_display",
+    "display": ":1",
+    "xauthority": "fresh server default; TCP disabled",
+    "backend": "actual X11, not mock"
+  },
+  "cleanup": {
+    "process_groups": {
+      "kind": "cleanup",
+      "owned_leaders": [
+        6,
+        9,
+        141,
+        195,
+        232,
+        244
+      ],
+      "statuses": [
+        0,
+        -15,
+        -15,
+        0,
+        -15,
+        0
+      ]
+    },
+    "temporary_fixture_root_removed": true,
+    "retained_raw": "/tmp/dtw-linux-x11-final-0e0f4219.jsonl",
+    "retained_artifacts": "/tmp/dtw-linux-x11-final-0e0f4219-artifacts"
+  },
+  "failed_attempts_this_candidate": [],
+  "input_replayed": false,
+  "limits": [
+    "Linux semantics report complete:false, reason:unsupported_capability; no AT-SPI semantic evidence.",
+    "Only owned Tk fixture on isolated Xvfb/KWin X11 was exercised.",
+    "Real :0 received metadata queries only; locked-desktop app operation is not established.",
+    "Tool discovery checks all fourteen methods; GUI effects exercise look, capture, click, typeText and keypress only.",
+    "Mocked semantic tests are not GUI evidence; no macOS or Windows claim.",
+    "Raw evidence paths are local /tmp retention, not repository assets."
+  ]
+}

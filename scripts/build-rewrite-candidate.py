@@ -400,8 +400,12 @@ temporary location outside the session workspace. Register the returned managed
 executable and matching Skill, not a temporary extracted copy. Denied access
 requires normal host authorization, not a sandbox-policy or ACL change.
 Run `bin/{executable} --version`; examples/mcp.json and examples/codex.toml are
-path templates. Use MCP arguments ["mcp"]. DTW manages input routing and foreground access
-when an operation requires it; the Agent needs no extra input-mode argument.
+path templates. Default MCP arguments ["mcp"] expose apps and exec. Optional
+["mcp", "--atomic"] exposes apps and flat public app tools using the same camelCase
+operation names and argument objects as the JavaScript API, with an explicit app
+field. Select calls from the tools discovered from the running MCP server.
+DTW manages input routing and foreground access when an operation requires it;
+the Agent needs no extra input-mode argument.
 This same directory includes Agent Plugins 1.0/Caelis, Claude Code, Antigravity
 and DSH Cordis entries around the same executable and Skill. Follow install.md
 and docs/install-caelis.md, docs/install-dsh.md or docs/install-agy.md. Claude
@@ -428,9 +432,11 @@ and notarization; interactive GUI checks are optional diagnostics.
 A standalone ZIP is not stapled; an Accepted online notarization submission is
 not proof of offline Gatekeeper or GUI acceptance. Linux is not packaged here.
 
-Ordinary operations use stable app IDs and exec({{app,source}}). Harness approvals
-remain with the Agent; no custom Host is required. See the canonical Skill for
+Operations use stable app IDs through exec({{app,source}}) by default or the
+optional flat tools selected at startup with --atomic. See skills/desktop-world/API.md
+for the canonical API and argument objects, and skills/desktop-world/SKILL.md for
 pagination, input, reference lifetime, unknown-effect and no-replay behavior.
+Harness approvals remain with the Agent; no custom Host is required.
 Full dependency notices are under notices/; adapted source notices and hashes
 are in THIRD_PARTY_NOTICES.md, docs/native-source-provenance*.md and
 docs/background-input-port.md.

@@ -29,7 +29,7 @@ impl<F: Factory> ServerHandler for Handler<F> {
     fn get_info(&self) -> ServerConfig {
         let mut config = ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("desktop-world", env!("CARGO_PKG_VERSION")))
-            .with_instructions("Load the installed desktop-world Skill and its API.md reference. apps searches running and installed applications without reading their contents. exec requires one explicit app authorization identity and an async JavaScript body. DTW owns application startup, window routing and observation state. Use look, then input, then look; screenshots provide a fallback when semantics are incomplete. Never repeat input whose effects are unknown. Standard MCP cancellation stops the matching call.");
+            .with_instructions("Load the installed desktop-world Skill and API.md. Use the tools actually listed for this connection. apps discovers application authorization identities without reading contents. If exec is listed, call public app methods in an async JavaScript body; otherwise call the listed operation with the same name and object arguments, adding app. Every application call requires one explicit app identity. DTW owns startup, window routing and persistent observation state. Inspect view/effects to verify results; never replay input whose effects are unknown. Standard MCP cancellation stops its matching call.");
         config.server_info.description = self.server.provider_id();
         config
     }
@@ -40,7 +40,8 @@ impl<F: Factory> ServerHandler for Handler<F> {
         _: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let mut result = ListToolsResult::default();
-        result.tools = serde_json::from_value(tools()).expect("static DTW tool definitions");
+        result.tools = serde_json::from_value(self.server.toolset().tools())
+            .expect("static DTW tool definitions");
         Ok(result)
     }
 
@@ -49,7 +50,7 @@ impl<F: Factory> ServerHandler for Handler<F> {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let compact = request.name == "exec";
+        let compact = request.name != "apps";
         if context.ct.is_cancelled() || self.lifecycle.stopped.is_cancelled() {
             return Ok(result(
                 problem("cancelled", "Call cancelled before admission"),
@@ -189,10 +190,15 @@ fn result(reply: Reply, compact: bool) -> CallToolResponse {
 }
 
 pub fn tools() -> Value {
+    let methods = super::operations::ALL
+        .iter()
+        .map(|operation| operation.name)
+        .collect::<Vec<_>>()
+        .join(", ");
     let read = json!({"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true});
     json!([
         {"name":"apps","description":"Find installed and running user applications. Search by name or identifier; filter running/stopped/all. Returns authorization identities and running status, with bounded pages and explicit coverage. Reads no window contents.","inputSchema":{"type":"object","properties":{"query":{"type":"string","maxLength":256},"state":{"type":"string","enum":["all","running","stopped"]},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":100}},"additionalProperties":false},"annotations":read},
-        {"name":"exec","description":"Execute an async JavaScript body inside one explicitly authorized app. DTW starts the app when required and handles window routing and input readiness. Use app.look(), app.capture(), app.readText(), app.wait(), app.waitForNewWindow(), app.click(), app.setValue(), app.move(), app.drag(), app.typeText(), app.keypress(), app.scroll(), app.focus() and app.quit(); see the installed Skill API.md. print emits optional bounded output. No Session management. New calls execute new work; never replay unknown effects.",
+        {"name":"exec","description":format!("Execute an async JavaScript body inside one explicitly authorized app. Public app operations: {methods}. Use object arguments documented in Skill API.md. DTW owns startup, window routing, input readiness and observation state. print emits bounded output. New calls execute new work; never replay unknown effects."),
             "inputSchema":{"type":"object","additionalProperties":false,"properties":{"app":app_id::schema(),"source":{"type":"string","minLength":1,"maxLength":65536,"description":"Async JavaScript function body; await app operations sequentially. No imports, filesystem, network or process APIs."}},"required":["app","source"]},
             "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}}
     ])

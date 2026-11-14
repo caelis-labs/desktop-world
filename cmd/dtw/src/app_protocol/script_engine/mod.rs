@@ -17,6 +17,30 @@ use std::{
     rc::Rc,
 };
 
+#[cfg(test)]
+use std::{
+    collections::HashMap,
+    sync::{atomic::AtomicUsize, OnceLock, Weak},
+};
+
+#[cfg(test)]
+fn session_watchers() -> &'static Mutex<HashMap<String, Weak<AtomicUsize>>> {
+    static WATCHERS: OnceLock<Mutex<HashMap<String, Weak<AtomicUsize>>>> = OnceLock::new();
+    WATCHERS.get_or_init(Mutex::default)
+}
+
+#[cfg(test)]
+pub(super) fn watch_session(id: &str) -> Arc<AtomicUsize> {
+    let mut watchers = session_watchers().lock().unwrap();
+    watchers.retain(|_, counter| counter.strong_count() != 0);
+    if let Some(counter) = watchers.get(id).and_then(Weak::upgrade) {
+        return counter;
+    }
+    let counter = Arc::new(AtomicUsize::new(0));
+    watchers.insert(id.to_owned(), Arc::downgrade(&counter));
+    counter
+}
+
 const JSON_LIMIT: usize = 64 * 1024;
 const HOST_REPLY_LIMIT: usize = 1024 * 1024;
 const POLL: Duration = Duration::from_millis(5);
@@ -88,21 +112,7 @@ pub(super) struct HostCall {
     pub number: u32,
     pub reply: SyncSender<Result<Value, HostError>>,
 }
-#[derive(Debug, Clone)]
-pub(super) struct HostError {
-    pub message: String,
-    pub code: Option<String>,
-    pub details: Option<Value>,
-}
-impl HostError {
-    pub fn new(message: impl Into<String>, code: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            code: Some(code.into()),
-            details: None,
-        }
-    }
-}
+pub(super) use super::app_execution::HostError;
 #[derive(Debug, Clone)]
 pub(super) struct Failure {
     pub kind: String,
@@ -207,6 +217,16 @@ pub(super) fn run_with_session(
     cancel: Arc<AtomicBool>,
     calls: SyncSender<HostCall>,
 ) -> Outcome {
+    #[cfg(test)]
+    if let Some(counter) = session["id"].as_str().and_then(|id| {
+        session_watchers()
+            .lock()
+            .unwrap()
+            .get(id)
+            .and_then(Weak::upgrade)
+    }) {
+        counter.fetch_add(1, Ordering::SeqCst);
+    }
     let console = Arc::new(Mutex::new(Console::default()));
     let used = Arc::new(AtomicU32::new(0));
     let terminal = Arc::new(Mutex::new(None));
@@ -335,6 +355,9 @@ fn run_inner(
                 .map_err(internal)?;
             globals
                 .set("__methods", super::methods::facade_metadata())
+                .map_err(internal)?;
+            globals
+                .set("__app_methods", super::operations::metadata())
                 .map_err(internal)?;
             let mut options = EvalOptions::default();
             options.global = true;
@@ -597,7 +620,7 @@ fn validate_args(op: &str, args: &Value) -> Result<(), super::wire::WireError> {
     // Use the coordinator's exact parser so the VM cannot advertise a different
     // argument shape. These placeholders never resolve or dispatch a target.
     if op.starts_with("scene.") {
-        return super::scene::validate(op, args);
+        return super::scene::validate(op, args).map(|_| ());
     }
     if op == "session.result" {
         return super::session::receipt_query(args).map(|_| ());

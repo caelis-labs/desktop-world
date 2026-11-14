@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import zipfile
 
 
 ROOT = Path(__file__).parents[1]
@@ -18,6 +19,53 @@ SPEC.loader.exec_module(stager)
 
 
 class PluginStageTests(unittest.TestCase):
+    def test_candidate_assets_and_checksums_preserve_canonical_skill_and_default_mode(self):
+        spec = importlib.util.spec_from_file_location("verify_release", ROOT / "scripts/verify-release.py")
+        verifier = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(verifier)
+        builder = verifier.builder
+        version = (ROOT / "version.txt").read_text().strip()
+        with tempfile.TemporaryDirectory(prefix="dtw package assets ") as directory:
+            root = Path(directory)
+            for target, executable in stager.plugin_package.EXECUTABLES.items():
+                package = root / target
+                package.mkdir()
+                (package / "bin").mkdir()
+                (package / "bin" / executable).write_bytes(b"packaging fixture; not a native executable")
+                entries = builder.package_assets(ROOT, package, version, target)
+                archive = root / (target + ".zip")
+                builder.archive_package(package, archive, 1700000000)
+                builder.verify_archive(archive, package.name)
+                with zipfile.ZipFile(archive) as bundled:
+                    prefix = package.name + "/"
+                    readme = bundled.read(prefix + "README.md").decode("utf-8")
+                    self.assertIn('Default MCP arguments ["mcp"] expose apps and exec', readme)
+                    self.assertIn('["mcp", "--atomic"]', readme)
+                    self.assertIn("same camelCase", readme)
+                    self.assertIn("skills/desktop-world/API.md", readme)
+                    self.assertIn("skills/desktop-world/SKILL.md", readme)
+                    verifier.plugin_package(bundled, prefix, {
+                        "target": target, "version": version,
+                        "binary": {"path": "bin/" + executable}, "plugin_package": entries,
+                    })
+                    sums = dict(line.split("  ", 1)[::-1] for line in
+                                bundled.read(prefix + "SHA256SUMS").decode().splitlines())
+                    for name in ("SKILL.md", "API.md", "PATTERNS.md"):
+                        relative = "skills/desktop-world/" + name
+                        data = bundled.read(prefix + relative)
+                        self.assertEqual(data, (ROOT / relative).read_bytes())
+                        self.assertEqual(sums[relative], hashlib.sha256(data).hexdigest())
+                # Corruption must fail even though the original checksum inventory remains.
+                corrupt = root / (target + "-corrupt.zip")
+                with zipfile.ZipFile(archive) as original, zipfile.ZipFile(corrupt, "w") as changed:
+                    for info in original.infolist():
+                        data = original.read(info.filename)
+                        if info.filename == prefix + "skills/desktop-world/API.md":
+                            data += b"\ncorrupt"
+                        changed.writestr(info, data)
+                with self.assertRaisesRegex(ValueError, "Archive hash mismatch"):
+                    builder.verify_archive(corrupt, package.name)
+
     def test_both_targets_keep_binary_identity_and_all_hosts_use_the_same_skill(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

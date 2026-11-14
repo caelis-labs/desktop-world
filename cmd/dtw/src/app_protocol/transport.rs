@@ -2,6 +2,7 @@
 use super::{
     mcp,
     server::{Application, Factory, Server},
+    toolset::Toolset,
     wire::{self, WireError},
 };
 #[cfg(target_os = "linux")]
@@ -172,9 +173,13 @@ pub fn run(args: &[String]) -> Result<(), WireError> {
             Ok(())
         }
         ["mcp"] => serve(Server::new(NativeFactory::default())),
+        ["mcp", "--atomic"] => serve(Server::with_toolset(
+            NativeFactory::default(),
+            Toolset::Atomic,
+        )),
         _ => Err(error(
             "invalid_arguments",
-            "Usage: dtw mcp | dtw app catalog",
+            "Usage: dtw mcp [--atomic] | dtw app catalog",
         )),
     }
 }

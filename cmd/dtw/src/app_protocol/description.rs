@@ -290,7 +290,7 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
         },
         "limits":{"max_source_utf8_bytes":super::scripts::MAX_SOURCE_BYTES,"default_timeout_ms":super::scripts::DEFAULT_TIMEOUT_MS,
             "max_calls":null,
-            "step_receipt_admission_bytes":super::scripts::MAX_STEP_RECEIPT_BYTES,
+            "step_receipt_admission_bytes":super::app_execution::MAX_STEP_RECEIPT_BYTES,
             "memory_bytes":memory_bytes,"stack_bytes":stack_bytes,"max_result_bytes":65536,"max_state_bytes":65536,
             "max_unhandled_rejections":super::script_engine::MAX_UNHANDLED_REJECTIONS,"max_json_depth":64,"max_json_nodes":32768,"max_console_lines":200,"max_console_utf8_bytes":32768,
             "console_line_content_characters_before_truncation":2000},

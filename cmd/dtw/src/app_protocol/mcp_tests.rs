@@ -10,6 +10,9 @@ use tokio::io::{
     AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader, DuplexStream, ReadHalf, WriteHalf,
 };
 
+#[path = "toolset_tests.rs"]
+mod toolset_tests;
+
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct Client {

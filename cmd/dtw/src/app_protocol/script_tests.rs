@@ -256,8 +256,11 @@ fn receipt_byte_budget_stops_before_another_dispatch_without_losing_prior_steps(
     assert_eq!(recorded.len(), backend.0.windows.load(Ordering::SeqCst));
     assert!(recorded.iter().all(|step| step["status"] == "completed"));
     let bytes: usize = recorded.iter().map(|step| step.to_string().len()).sum();
-    assert!(bytes >= scripts::MAX_STEP_RECEIPT_BYTES);
-    assert!(bytes - recorded.last().unwrap().to_string().len() < scripts::MAX_STEP_RECEIPT_BYTES);
+    assert!(bytes >= super::app_execution::MAX_STEP_RECEIPT_BYTES);
+    assert!(
+        bytes - recorded.last().unwrap().to_string().len()
+            < super::app_execution::MAX_STEP_RECEIPT_BYTES
+    );
     assert_eq!(
         *owner.state.lock().unwrap().script_state.lock().unwrap(),
         json!({})

@@ -31,6 +31,10 @@
   const targetId = /^w[0-9]+\.e[0-9]+$/;
   const root = parse(globalThis.__initial_state);
   const methods = parse(globalThis.__methods);
+  const publicMethods = parse(globalThis.__app_methods);
+  const sceneActions = create(null);
+  for (const metadata of publicMethods) sceneActions[`scene.${metadata.name}`] = metadata.action;
+  delete globalThis.__app_methods;
   const sessionMetadata = parse(globalThis.__session);
   delete globalThis.__session;
   delete globalThis.__methods;
@@ -130,7 +134,7 @@
     const encoded = encode(args, "host arguments", 65536, true);
     // A locally rejected argument never starts a read and cannot settle a
     // preceding action's readback. Clear dirty only at the host handoff.
-    if (agent && !(op === "scene.wait" && typeof args.ms === "number")) dirty = op !== "scene.look" && op !== "scene.capture" && op !== "scene.after" && op !== "scene.readText" && op !== "scene.waitForNewWindow" && op !== "scene.wait";
+    if (agent && !(op === "scene.wait" && typeof args.ms === "number")) dirty = sceneActions[op] === true;
     const reply = parse(host(op, encoded, line));
     if (!reply.ok) {
       const error = new ErrorClass(`${op} failed: ${reply.error}`);
@@ -182,7 +186,8 @@
   let dirty = false;
   if (agent) {
     const surface = create(null);
-    for (const op of ["look", "capture", "readText", "wait", "waitForNewWindow", "click", "setValue", "move", "drag", "typeText", "keypress", "scroll", "focus", "quit"]) {
+    for (const metadata of publicMethods) {
+      const op = metadata.name;
       const method = async (...args) => {
         if (args.length > 1) fail(`app.${op} takes one argument`, "invalid_arguments");
         let options = args.length ? args[0] : {};

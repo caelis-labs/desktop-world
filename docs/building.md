@@ -50,8 +50,10 @@ checks also run in CI; see [the CI/release lanes](releasing.md).
 
 The MCP product entry is `dtw mcp`; `dtw app catalog` is a diagnostic CLI.
 The public contract is the packaged `skills/desktop-world/SKILL.md` and its
-`API.md` reference. MCP exposes only `apps` and `exec`; the retired `dtw api`
-command is unavailable. The private atomic DSL has a test fixture under
+`API.md` reference. By default MCP exposes `apps` and `exec`. Start
+`dtw mcp --atomic` for `apps` plus the fourteen flat camelCase app operations;
+see [MCP toolsets](mcp-toolsets.md) for the shared contract and validation limits;
+the retired `dtw api` command is unavailable. The private atomic DSL has a test fixture under
 `tests/fixtures/atomic-script-api.d.ts`; it is not an Agent interface.
 Connect it using standard Agent MCP configuration; see [installation](install.md).
 Bare `dtw` and `--help` display help instead of starting an old MCP executor.

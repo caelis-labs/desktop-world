@@ -1,5 +1,12 @@
 # Interaction patterns
 
+These patterns apply to both surfaces. Discover/list tools first: if `exec` is
+present, use the JavaScript examples; otherwise call the identically named listed
+tool with the same object fields plus `app`. For example,
+`await app.readText({target:'w1.e12'})` becomes
+`readText({app,target:'w1.e12'})`. Atomic tools execute no JavaScript. Each call
+has its own settlement boundary; related focus/menu steps may require one script.
+
 ## Observe when needed; batch known actions
 
 A script does not need an initial look when its next action is already known:
@@ -19,7 +26,7 @@ If `observation.status` is `partial` or `failed`, the automatic follow-up read
 was incomplete. Check `effects.dispatch`, then use a read-only observation to
 verify what happened before choosing new input.
 
-`click(id)` can focus an editable text control when it advertises `press`.
+`click({target:id})` can focus an editable text control when it advertises `press`.
 On Windows a field with `focused:true` can take keyboard input. To focus a field
 without `press`, use a coordinate click from the current capture.
 A text field without an advertised `press` action needs a visual click before
@@ -29,7 +36,7 @@ fallback; it never repeats a potentially delivered action.
 ## Visual fallback
 
 ```javascript
-await app.capture();
+await app.capture({});
 // Inspect the returned PNG before choosing coordinates in the next exec.
 ```
 
@@ -62,7 +69,7 @@ await app.look({role:'static_text',text:'order number'});
 Inspect the returned targets, then request only the text the task needs:
 
 ```javascript
-return await app.readText('w1.e12');
+return await app.readText({target:'w1.e12'});
 ```
 
 A page returns `text`, `next_offset`, `total_length` and `unit:'utf16'`. Continue
@@ -102,7 +109,9 @@ Do not repeat an action with unknown effects.
 
 Keep related input in one script. Normal actions prepare the authorized
 app/window automatically. Use `app.focus()` only when explicit focus is part of
-the task, with follow-up input in the same `exec`.
+the task, with follow-up input in the same `exec`. On Windows, opening a native
+menu and choosing its item must also share one `exec`: foreground restoration
+at settlement can dismiss the menu. Separate atomic calls do not share this scope.
 
 On Windows, after a click opens a form, observe the intended field and pass its
 ID as `target` in `typeText({target,text})`. The script stops on a focus mismatch
@@ -147,7 +156,7 @@ changed targets/geometry.
 ## Script snapshots and scrolling
 
 ```javascript
-const view = await app.capture();
+const view = await app.capture({});
 print(view.windows.map(w => ({id:w.id, bounds:w.bounds})));
 ```
 
@@ -173,9 +182,9 @@ Wait for a new window after an input that should create one. A delivered chord
 alone does not prove that the app has finished creating the window.
 
 ```javascript
-await app.keypress('META+N');
-await app.waitForNewWindow();
-await app.typeText('New document text');
+await app.keypress({keys:['META','N']});
+await app.waitForNewWindow({});
+await app.typeText({text:'New document text'});
 ```
 
 The wait also works in the next exec. A timeout stops with the latest view;
