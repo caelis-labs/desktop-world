@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/caelis-labs/desktop-world/compare/v0.4.2...v0.5.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* hosts must load the complete matching package, refresh their connection and discover the new dtw bindings. Existing history, grants and unknown outcomes are not remapped or replayed.
+
+### Features
+
+* add native atomic MCP tools with a shared app contract ([#121](https://github.com/caelis-labs/desktop-world/issues/121)) ([58301d6](https://github.com/caelis-labs/desktop-world/commit/58301d602021dbc17a4385e3039b4665c5da1457))
+* rename public MCP server and Skill to dtw ([c595d55](https://github.com/caelis-labs/desktop-world/commit/c595d551900566295547247e02a75f62959233f9))
+
 ## [0.4.2](https://github.com/caelis-labs/desktop-world/compare/v0.4.1...v0.4.2) (2026-11-07)
 
 
