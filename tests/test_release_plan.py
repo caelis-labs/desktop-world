@@ -67,7 +67,7 @@ class ReleasePlanTests(unittest.TestCase):
         record = {'schema': 1, 'tree': tree, 'run_id': identifier, 'attempt': attempt,
                   'event': 'push', 'checks': 'passed'}
         artifact = self.evidence(1000 + identifier, f'ci-verification-{identifier}-{attempt}', 'verified.json', record)
-        self.route(f'actions/workflows/ci.yml/runs?event=push&branch=main&head_sha={source}&status=success&per_page=100',
+        self.route(f'actions/workflows/ci.yml/runs?event=push&branch=main&head_sha={source}&per_page=100',
                    {'workflow_runs': [run(identifier, source, attempt=attempt)]})
         self.route(f'actions/runs/{identifier}/artifacts?per_page=100', {'artifacts': [artifact]})
         return record, artifact
@@ -154,10 +154,38 @@ class ReleasePlanTests(unittest.TestCase):
         for update in [{'head_sha': LATER}, {'head_branch': 'topic'},
                        {'head_repository': {'full_name': 'fork/repo'}}]:
             self.ci()
-            endpoint = f'actions/workflows/ci.yml/runs?event=push&branch=main&head_sha={SOURCE}&status=success&per_page=100'
+            endpoint = f'actions/workflows/ci.yml/runs?event=push&branch=main&head_sha={SOURCE}&per_page=100'
             self.route(endpoint, {'workflow_runs': [dict(run(), **update)]})
             with self.subTest(update=update), self.assertRaises(ValueError):
                 plan.successful_ci(REPO, SOURCE, TREE)
+
+    def test_ci_success_does_not_depend_on_github_conclusion_filter_index(self):
+        _, artifact = self.ci()
+        endpoint = f'actions/workflows/ci.yml/runs?event=push&branch=main&head_sha={SOURCE}&per_page=100'
+        # Newer unsuccessful runs must not supply evidence or hide an older
+        # completed success for the same immutable source.
+        self.route(endpoint, {'workflow_runs': [
+            dict(run(11), status='in_progress', conclusion=None),
+            dict(run(12), conclusion='failure'),
+            dict(run(13), conclusion='cancelled'),
+            run(),
+        ]})
+        result = plan.successful_ci(REPO, SOURCE, TREE)
+        self.assertEqual(result['artifact_id'], artifact['id'])
+        self.assertFalse(any('status=' in call[0][-1] for call in self.calls))
+        self.assertFalse(any(f'/runs/{identifier}/artifacts' in call[0][-1]
+                             for call in self.calls for identifier in (11, 12, 13)))
+
+    def test_non_successful_runs_never_authorize_release_or_read_receipts(self):
+        endpoint = f'actions/workflows/ci.yml/runs?event=push&branch=main&head_sha={SOURCE}&per_page=100'
+        for status, conclusion in [('queued', None), ('in_progress', None),
+                                   ('completed', 'failure'), ('completed', 'cancelled'),
+                                   ('completed', 'skipped'), ('completed', None)]:
+            self.route(endpoint, {'workflow_runs': [dict(run(), status=status, conclusion=conclusion)]})
+            before = len(self.calls)
+            with self.subTest(status=status, conclusion=conclusion), self.assertRaises(ValueError):
+                plan.successful_ci(REPO, SOURCE, TREE)
+            self.assertEqual(len(self.calls) - before, 1)
 
     def test_post_release_please_tag_source_gets_its_own_independent_ci(self):
         self.pending()
@@ -171,7 +199,7 @@ class ReleasePlanTests(unittest.TestCase):
 
     def test_unverified_new_tag_cannot_inherit_old_gate_green(self):
         self.pending()
-        self.route(f'actions/workflows/ci.yml/runs?event=push&branch=main&head_sha={LATER}&status=success&per_page=100',
+        self.route(f'actions/workflows/ci.yml/runs?event=push&branch=main&head_sha={LATER}&per_page=100',
                    {'workflow_runs': []})
         with self.assertRaises(ValueError):
             plan.pending_plan(REPO, self.gate(), 50)

@@ -50,9 +50,14 @@ def artifact_json(repository, artifact, filename, limit=16384):
 
 
 def successful_ci(repository, source, tree):
-    runs = gh('api', f'repos/{repository}/actions/workflows/ci.yml/runs?event=push&branch=main&head_sha={source}&status=success&per_page=100')
+    # GitHub's conclusion-filtered list can lag behind the completed run and
+    # its uploaded receipt. Query the exact source without that filter, then
+    # enforce success locally before reading any evidence.
+    runs = gh('api', f'repos/{repository}/actions/workflows/ci.yml/runs?event=push&branch=main&head_sha={source}&per_page=100')
     for run in runs['workflow_runs']:
         if run.get('head_sha') != source or run.get('head_branch') != 'main':
+            continue
+        if run.get('status') != 'completed' or run.get('conclusion') != 'success':
             continue
         trusted_run(run, repository, CI_WORKFLOW)
         require(run['event'] == 'push', 'Release CI must be a main push')
