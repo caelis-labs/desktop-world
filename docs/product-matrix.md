@@ -4,7 +4,7 @@
 
 | 能力 | 当前支持 | 限制 |
 | --- | --- | --- |
-| Agent 接入 | 标准本地 stdio MCP + Skill；Caelis、DSH、agy；仅 `apps` + `exec({app, source})` | Harness 自行负责审批；不要求定制 Host；远程传输尚未接入 |
+| Agent 接入 | 标准本地 stdio MCP + Skill；Caelis、DSH、agy、OpenCode、Pi、Grok Build；默认 `apps` + `exec({app, source})` | 新增三宿主仅有 [macOS 基本安装/GUI 验收](agent-install-acceptance-2026-11-17.md)；Pi 原生入口需要含适配器的新包；Harness 自行负责审批；远程传输尚未接入 |
 | 方法发现与结果 | `apps` 检索应用及运行状态；API 文档随 Skill；已知 selector、键盘及默认滚动按需准备接收者，无需每段脚本先 look；`exec` 返回界面增量、必要动作证据和按需截图；print 可选 | 显式 ID 需已有观察，坐标需已返回的 capture；未知效果不能自动重放 |
 | 应用与窗口 | 稳定平台 app ID；同 app 多实例窗口聚合、精确 owner 引用；macOS/Windows 发现安装目标、按需启动并正常 quit | Windows 读取 Start Menu、App Paths、AppsFolder，以 exe 路径或已证明的 `win:<AUMID>` 定位；跳过/不可读来源明确标记覆盖不足；Linux 仍仅发现运行目标 |
 | 基本视觉操作 | macOS/Windows 按已证明归属和全局窗口顺序合成可见 surface；原坐标可连续命中同一进程实例内出现或消失的弹层，画布锚点和映射须保持；Windows 使用精确 HWND 和 DWM 可见边框 | Windows 的 owned modal、原生 Open/Save/覆盖确认已有实机证据；全局 alpha/color-key 可读取，未证明的 per-pixel layered alpha 仍拒绝，真实 SysShadow 的本机限制见专项报告；covered capture 不放宽输入可见性 |

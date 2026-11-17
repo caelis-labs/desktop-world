@@ -1,0 +1,305 @@
+{
+  "schema": 1,
+  "date": "2026-11-17",
+  "scope": "Basic installation and GUI onboarding on macOS 27.2 arm64, existing OS permissions, default apps/exec mode; not full platform/application acceptance.",
+  "local_evidence_root": "/tmp/dtw-agent-onboarding-axBGnv",
+  "agent_launches": {
+    "acpx": "0.21.1 for installed OpenCode/Grok ACP",
+    "pi": "native Pi JSON print mode; no external ACP adapter"
+  },
+  "runtime": {
+    "official_release": "v0.5.0",
+    "source_commit": "35216aefb74145eb811a68e0140fbc947fa10adb",
+    "official_zip_sha256": "6fa2f35bca9eaf5a178c93353e570ce906fa742b27316328b6e82f78fffa74a6",
+    "binary_sha256": "39e2bb4aecb2652a1b0fd6e6ee850aff10031e8f9398decb5ce156159dd86074",
+    "skill_md_sha256": "385c2e278c17b0d62c308e81b36426b758ee7d85bf9fd844f105c027cc1c8db7",
+    "native_or_skill_source_changed": false
+  },
+  "pi_candidate": {
+    "kind": "unpublished-host-adapter-candidate",
+    "package_id": "1737c4e770107006551f0ec588eaba0595442596a331e2af628066b1b6fcb785",
+    "adapter_sha256": "faf2fe8500fac852de9e2468200fb6e35c6e5c84e833a6b33cbc5915de754750",
+    "published_v0_5_0_contains_pi_adapter": false
+  },
+  "hosts": [
+    {
+      "host": "opencode",
+      "version": "2.3.0",
+      "model": "magpie/deepseek/deepseek-flash",
+      "model_selection": {
+        "model": "magpie/deepseek/deepseek-flash"
+      },
+      "route": "native mcp.servers and skills configuration",
+      "package_id": "8c2ad64938243b34d8fd7cb272467b531c40e95451e68f1bed03074f8246cd07",
+      "official_complete_release": true,
+      "installed_skill_loaded": true,
+      "live_mcp_tools_used": [
+        "apps",
+        "exec"
+      ],
+      "mcp_injected_by_harness": false,
+      "standalone_mcp_used_in_gui_task": false,
+      "gui_input": "click field, META+A, typeText with Chinese, accented Latin and emoji",
+      "independent_effect": {
+        "committed_note": "OpenCode 安装验证 café🙂 20261117",
+        "commit_sequence": 34,
+        "commit_count": 1,
+        "saves_after": 1,
+        "counter_after": 1,
+        "increment_count": 1
+      },
+      "dtw_gui_tool_failures": 0,
+      "host_file_read_failures": 0,
+      "extra_gui_actions": [],
+      "screenshot_delivered_to_agent": true,
+      "screenshot_evidence": {
+        "capture_count": 3,
+        "transport_mime_type": "image/jpeg",
+        "final_image": {
+          "local_artifact": "opencode-capture-3.jpg",
+          "sha256": "16fdfd2c05188a262685653646ecbbd105b43a4f32b1d3835f7978cd01a6e809",
+          "bytes": 293462
+        },
+        "independent_image_review": true
+      },
+      "verification_transcript": {
+        "local_artifact": "opencode-verify.ndjson",
+        "sha256": "02cf338e4a58eb46ecde2514b374b6a854dcdcc15accbd2160b6778379c957f3",
+        "bytes": 1326986
+      },
+      "installation_transcript": {
+        "local_artifact": "opencode/install.ndjson",
+        "sha256": "ce6f13c98179df8c2688f990d80ebfdd25d757b3d6754803850669dee431ea5e",
+        "bytes": 347582
+      },
+      "installation_report": {
+        "local_artifact": "opencode/install-result.json",
+        "sha256": "a5d1f916e569877139dba5e57d8f9d5e14cd2ff8702134e10fc1a0963f2052b1",
+        "bytes": 5058
+      },
+      "agent_verification_report": {
+        "local_artifact": "opencode/verify-result.json",
+        "sha256": "015fe16860d4a3dc0b8a14e298eac1866540bfe289d77d3bb06e91e612ca82f2",
+        "bytes": 4744
+      },
+      "binding": {
+        "current": "8c2ad64938243b34d8fd7cb272467b531c40e95451e68f1bed03074f8246cd07",
+        "pending": null
+      },
+      "functional_onboarding_passed": true,
+      "clean_agent_run": true
+    },
+    {
+      "host": "grok-build",
+      "version": "1.0.77 (50ca579fa996)",
+      "model": "magpie/deepseek/deepseek-flash",
+      "model_selection": {
+        "model": "magpie/deepseek/deepseek-flash"
+      },
+      "route": "native compatible plugin copied by Grok plugin manager",
+      "package_id": "8c2ad64938243b34d8fd7cb272467b531c40e95451e68f1bed03074f8246cd07",
+      "official_complete_release": true,
+      "installed_skill_loaded": true,
+      "live_mcp_tools_used": [
+        "apps",
+        "exec"
+      ],
+      "mcp_injected_by_harness": false,
+      "standalone_mcp_used_in_gui_task": false,
+      "gui_input": "click field, META+A, typeText with Chinese, accented Latin and emoji",
+      "independent_effect": {
+        "committed_note": "Grok Build 安装验证 café🙂 20261117",
+        "commit_sequence": 69,
+        "commit_count": 1,
+        "saves_after": 2,
+        "counter_after": 2,
+        "increment_count": 1
+      },
+      "dtw_gui_tool_failures": 0,
+      "host_file_read_failures": 1,
+      "extra_gui_actions": [
+        "Reviewed checkbox toggled false to true while searching for commit confirmation"
+      ],
+      "screenshot_delivered_to_agent": true,
+      "screenshot_evidence": {
+        "capture_count": 3,
+        "acp_exposes_image_bytes": false,
+        "acp_output_marker": "[image content will be provided separately]",
+        "native_host_image_usability": "agent reported rendered image and described final content",
+        "original_capture_independent_image_review": false,
+        "final_ui_cross_review": {
+          "local_artifact": "pi-capture-1.png",
+          "sha256": "dd2cce6b2fa0174e60f53b7455464e8f86a31a0da1c4a99aa4a722ae79d3dfa1",
+          "bytes": 616478
+        },
+        "cross_review_source": "next Pi session initial capture before Pi input"
+      },
+      "verification_transcript": {
+        "local_artifact": "grok-verify.ndjson",
+        "sha256": "ec9ff980e12744a6934641faf23533bb000158b4bbcb9b93b6ed33715560a133",
+        "bytes": 2024116
+      },
+      "installation_transcript": null,
+      "installation_report": {
+        "local_artifact": "grok-build/install-result.json",
+        "sha256": "a4a6b791e3949902a17172a97696cf4f8a51c39d8eb7fde6253f20ed9211e119",
+        "bytes": 7904
+      },
+      "agent_verification_report": {
+        "local_artifact": "grok-build/verify-result.json",
+        "sha256": "e1b158ddb843dc7371af059cb3646298315e13a2f98f462cc1ac26522b15e33b",
+        "bytes": 7687
+      },
+      "binding": {
+        "current": "8c2ad64938243b34d8fd7cb272467b531c40e95451e68f1bed03074f8246cd07",
+        "pending": null
+      },
+      "functional_onboarding_passed": true,
+      "clean_agent_run": false
+    },
+    {
+      "host": "pi",
+      "version": "1.5.2",
+      "model": "magpie/deepseek/deepseek-flash",
+      "model_selection": {
+        "provider": "magpie",
+        "model": "deepseek/deepseek-flash"
+      },
+      "route": "native Pi Package with declared extension and canonical Skill",
+      "package_id": "1737c4e770107006551f0ec588eaba0595442596a331e2af628066b1b6fcb785",
+      "official_complete_release": false,
+      "installed_skill_loaded": true,
+      "live_mcp_tools_used": [
+        "apps",
+        "exec"
+      ],
+      "mcp_injected_by_harness": false,
+      "standalone_mcp_used_in_gui_task": false,
+      "gui_input": "click field, META+A, typeText with Chinese, accented Latin and emoji",
+      "independent_effect": {
+        "committed_note": "Pi 安装验证 café🙂 20261117",
+        "commit_sequence": 97,
+        "commit_count": 1,
+        "saves_after": 3,
+        "counter_after": 3,
+        "increment_count": 1
+      },
+      "dtw_gui_tool_failures": 0,
+      "host_file_read_failures": 0,
+      "extra_gui_actions": [],
+      "screenshot_delivered_to_agent": true,
+      "screenshot_evidence": {
+        "capture_count": 2,
+        "transport_mime_type": "image/png",
+        "final_image": {
+          "local_artifact": "pi-capture-2.png",
+          "sha256": "aa67b4dbb0fe53e5f7b70f2fd7cde1c51c147ea4fe18a877f12c98b421287274",
+          "bytes": 614810
+        },
+        "independent_image_review": true
+      },
+      "verification_transcript": {
+        "local_artifact": "pi-verify.ndjson",
+        "sha256": "deb5a0dd5ac7e0955dd8b392f4b09a038efcf89c8fdf3b032d402eebcc0e0b8b",
+        "bytes": 12464137
+      },
+      "installation_transcript": {
+        "local_artifact": "pi-install.ndjson",
+        "sha256": "159b621474961f1cd0f534f992ef8a9594d446fdaf24b836c9b4c89516331c15",
+        "bytes": 5167636
+      },
+      "installation_report": {
+        "local_artifact": "pi/install-result.json",
+        "sha256": "feae5a0673e9d76420509af9b28265f700f7ad10446b0ec2585c5a8ccac67f5d",
+        "bytes": 14137
+      },
+      "agent_verification_report": {
+        "local_artifact": "pi/verify-result.json",
+        "sha256": "6cdc7e280ec4656cac949d480dd0bf743139b1b88558c1fa979c2515f9724eb7",
+        "bytes": 13692
+      },
+      "binding": {
+        "current": "1737c4e770107006551f0ec588eaba0595442596a331e2af628066b1b6fcb785",
+        "pending": null
+      },
+      "functional_onboarding_passed": true,
+      "clean_agent_run": true
+    }
+  ],
+  "oracle": {
+    "commit_events": 3,
+    "increment_events": 3,
+    "unknown_input_replayed": false,
+    "source": {
+      "local_artifact": "fixture/native-events.jsonl",
+      "sha256": "21c718041815c8c9cdfc04d7488e4a1d9226bfd5785393c7d3a6a5463fda3de5",
+      "bytes": 26857
+    },
+    "final_state": {
+      "local_artifact": "final-fixture-state.json",
+      "sha256": "9164976c2c9ccec646487951849732805283696bd94068e593315c82dc6abac4",
+      "bytes": 3647
+    }
+  },
+  "cleanup": {
+    "native": {
+      "started": true,
+      "forced": [],
+      "pid": 57245,
+      "returncode": 0
+    },
+    "servers": [
+      {
+        "port": 62921,
+        "stopped": true
+      },
+      {
+        "port": 62920,
+        "stopped": true
+      }
+    ],
+    "errors": [],
+    "passed": true
+  },
+  "download_staging_cleanup": {
+    "opencode": "Installer removed its owned download/extraction staging after verified import.",
+    "grok-build": "Supervisor removed the task-owned extraction directory after confirming its package and binary hashes and live managed destination.",
+    "pi": "Installed native candidate remains protected by its managed current pin; local acceptance artifacts retained in system temporary storage."
+  },
+  "other_host_pins_unchanged": [
+    "agy",
+    "dsh-desktop"
+  ],
+  "preserved_failures_and_limits": [
+    "Sandbox startup preflights denied OpenCode log, Pi trust lock and Grok session writes; necessary commands later ran through normal host approval.",
+    "Initial sandboxed owned fixture aborted in _RegisterApplication before GUI readiness; failed cleanup record retained in fixture-attempt-01-failed.",
+    "One Pi installation approval expired without starting; the same installation was subsequently approved and run.",
+    "Grok installation transcript is unavailable; install report and CLI checks remain, and the fresh GUI transcript is retained.",
+    "Grok workspace file reader rejected the installed Skill path; ordinary host-supported shell read succeeded. Grok made one extra Reviewed checkbox probe.",
+    "The app exposes no explicit commit confirmation. Supervisor verified commits after the task with private oracle events; agent readback alone was not treated as proof.",
+    "Grok ACP omits original screenshot bytes. Its final UI was cross-reviewed through the next Pi screenshot; this is not independent review of Grok original PNG bytes."
+  ],
+  "not_verified": [
+    "Windows",
+    "Linux",
+    "fresh TCC permissions",
+    "other host versions or OpenCode derivatives",
+    "atomic tool mode",
+    "cancellation",
+    "full Computer Use baseline",
+    "real office-app workflows"
+  ],
+  "automated_checks": {
+    "suites": [
+      "test_plugin_package.py",
+      "test_release_verification.py",
+      "test_ci_plan.py"
+    ],
+    "tests_run": 45,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "passed": true
+  },
+  "publication": "No release published. Pi native support requires a subsequent complete package containing the adapter."
+}

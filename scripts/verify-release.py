@@ -124,13 +124,20 @@ def plugin_package(archive, prefix, build):
     server = layout['mcp_server']
     if 'plugin_package' not in build:
         require(build.get('package_store_schema', 1) == 1, 'Missing schema 2 plugin package declaration')
+        require(prefix + 'pi/index.mjs' not in archive.namelist(), 'Undeclared Pi package entry')
+        if prefix + 'package.json' in archive.namelist():
+            legacy_package = json.loads(archive.read(prefix + 'package.json'))
+            require(isinstance(legacy_package, dict) and 'pi' not in legacy_package,
+                    'Undeclared Pi package entry')
         return  # Existing accepted archives did not declare this layout.
     target = build['target']
     binary = build['binary']['path']
-    require(build['plugin_package'] == {
-        'target': target, 'binary': binary,
-        'formats': ['agent-plugins-1.0', 'claude-code', 'antigravity', 'dsh-cordis'],
-    }, 'Plugin package declaration mismatch')
+    formats = build['plugin_package'].get('formats')
+    previous_formats = ['agent-plugins-1.0', 'claude-code', 'antigravity', 'dsh-cordis']
+    require(formats in (previous_formats, previous_formats + ['pi-package'])
+            and build['plugin_package'] == {
+                'target': target, 'binary': binary, 'formats': formats,
+            }, 'Plugin package declaration mismatch')
 
     def read(name):
         require(prefix + name in archive.namelist(), 'Missing declared plugin component: ' + name)
@@ -163,6 +170,14 @@ def plugin_package(archive, prefix, build):
             and cordis.get('exports') == './cordis/index.mjs' and not cordis.get('dependencies')
             and not cordis.get('scripts'), 'Cordis package entry mismatch')
     require(prefix + 'cordis/index.mjs' in archive.namelist(), 'Missing declared Cordis adapter')
+    if 'pi-package' in formats:
+        require(server == 'dtw' and cordis.get('pi') == {
+            'extensions': ['./pi/index.mjs'], 'skills': ['./skills/dtw'],
+        } and cordis.get('keywords') == ['pi-package'], 'Pi package entry mismatch')
+        require(prefix + 'pi/index.mjs' in archive.namelist(), 'Missing declared Pi adapter')
+    else:
+        require('pi' not in cordis and prefix + 'pi/index.mjs' not in archive.namelist(),
+                'Undeclared Pi package entry')
 
 
 def verify(root, tag, tag_commit, *, native_verification=None):

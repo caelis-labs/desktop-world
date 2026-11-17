@@ -171,7 +171,9 @@ class Fixture(unittest.TestCase):
         put(self.repo, "cmd/dtw/Cargo.toml", '[package]\nname="desktop-world"\nversion="0.2.0"\n')
         put(self.repo, "cmd/dtw/Cargo.lock", 'version=4\n[[package]]\nname="desktop-world"\nversion="0.2.0"\n')
         for name in ("LICENSE", "THIRD_PARTY_NOTICES.md", "install.md", "docs/install.md",
-                     "docs/install-dsh.md", "docs/install-caelis.md", "docs/install-agy.md", "docs/native-source-provenance.md",
+                     "docs/install-dsh.md", "docs/install-caelis.md", "docs/install-agy.md",
+                     "docs/install-opencode.md", "docs/install-pi.md", "docs/install-grok-build.md",
+                     "docs/native-source-provenance.md",
                      "docs/native-source-provenance-cross-platform.md", "docs/background-input-port.md",
                      "docs/windows-cursor-port.md", "docs/agent-protocol-migration.md", "docs/package-management.md",
                      "skills/dtw/SKILL.md", "skills/dtw/API.md", "skills/dtw/PATTERNS.md"):
@@ -179,8 +181,9 @@ class Fixture(unittest.TestCase):
         put(self.repo, "docs/examples/mcp.json", '{"mcpServers":{"dtw":{"command":"/absolute/path/to/dtw","args":["mcp"]}}}\n')
         put(self.repo, "docs/examples/codex.toml", '[mcp_servers.dtw]\ncommand="/absolute/path/to/dtw"\nargs=["mcp"]\n')
         put(self.repo, "plugins/claude/.claude-plugin/plugin.json", '{"name":"desktop-world","version":"0.1.3"}\n')
-        put(self.repo, "plugins/cordis/index.mjs",
-            (Path(__file__).parents[1] / "plugins/cordis/index.mjs").read_bytes())
+        for adapter in ("cordis", "pi"):
+            relative = f"plugins/{adapter}/index.mjs"
+            put(self.repo, relative, (Path(__file__).parents[1] / relative).read_bytes())
         put(self.repo, "packaging/third-party/overrides.json", "{}\n")
         put(self.repo, "tests/acceptance/windows/README.md",
             (Path(__file__).parent / "acceptance/windows/README.md").read_bytes())

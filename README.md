@@ -1,8 +1,9 @@
 # Desktop World
 
 **Let your Agent use your desktop apps.** Desktop World (DTW) connects Caelis,
-DeepSeek Harness (DSH), and agy to applications such as Chrome, WPS Office,
-and Obsidian—so you can describe a task and let the Agent operate the interface.
+DeepSeek Harness (DSH), agy, OpenCode, Pi and Grok Build to applications such as
+Chrome, WPS Office and Obsidian—so you can describe a task and let the Agent
+operate the interface.
 
 ## What can it do?
 
@@ -14,7 +15,9 @@ and Obsidian—so you can describe a task and let the Agent operate the interfac
 
 ## Install with your Agent
 
-Copy this prompt into **Caelis, DSH, or agy**:
+Copy this prompt into **Caelis, DSH, agy, OpenCode, Pi or Grok Build**.
+Pi requires a package containing its native adapter; see the
+[Pi package availability](docs/install-pi.md#package-feature-gate) before installing.
 
 ```text
 Install or update Desktop World for this Agent using:

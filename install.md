@@ -1,7 +1,9 @@
 # Install Desktop World
 
 DTW is one runtime, a standard stdio MCP server and a bundled Agent Skill. Target
-Agents are **Caelis, DeepSeek Harness (DSH), and agy**. The public execution input
+Agents are **Caelis, DeepSeek Harness (DSH), agy, OpenCode, Pi and Grok Build**.
+Pi requires a package containing its native adapter; see its host guide below.
+The public execution input
 is always `exec({app, source})`. Approval belongs to the Agent/Harness; DTW does
 not require an approval token or custom Host adapter. The package includes
 standard and host-specific plugin manifests around that same executable.
@@ -221,11 +223,21 @@ and its bundled Skill through your Agent's standard extension points:
 | Caelis | [Install the package as a plugin](docs/install-caelis.md) |
 | DeepSeek Harness (DSH) | [Install the bundled Cordis plugin](docs/install-dsh.md#bundled-cordis-plugin); the tested Desktop format uses one file-URL row |
 | Antigravity App / agy CLI | [Install the package as one plugin](docs/install-agy.md) |
+| OpenCode | [Configure its native MCP and Skill entries](docs/install-opencode.md); verified on 2.3.0 |
+| Pi | [Install one native Pi Package](docs/install-pi.md); requires the bundled Pi adapter, absent from the public v0.5.0 package |
+| Grok Build | [Install the compatible plugin](docs/install-grok-build.md); verified on 1.0.77 |
+
+The added OpenCode, Pi and Grok Build routes have macOS arm64 installation and
+basic GUI evidence with DeepSeek Flash; see the
+[acceptance scope](https://github.com/caelis-labs/desktop-world/blob/main/docs/agent-install-acceptance-2026-11-17.md). Pi used a local
+packaging candidate; OpenCode and Grok Build used the official v0.5.0 package.
+For OpenCode-derived Agents, inspect the actual configuration schema, Skill
+discovery and reload support; ancestry alone does not establish compatibility.
 
 Several Agents can point to the same installed package; each MCP connection has
 its own runtime state. Do not duplicate the package for each model or register
-both plugin and manual MCP routes in one session. The optional Cordis adapter
-only composes DSH's existing MCP and Skill extensions.
+both plugin and manual MCP routes in one session. The Cordis and Pi adapters
+use their hosts' existing MCP and Skill facilities around the same runtime.
 
 ## Check the installation
 

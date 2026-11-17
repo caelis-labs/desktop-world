@@ -208,6 +208,66 @@ class ReleaseVerificationTests(unittest.TestCase):
         self.declare_multi_host_plugins()
         self.assertEqual(self.audit()['assets_verified'], 13)
 
+    def test_schema2_archive_before_pi_support_remains_valid_and_unchanged(self):
+        self.declare_multi_host_plugins()
+        def remove_pi(files):
+            build = json.loads(files['BUILD.json'])
+            build['plugin_package']['formats'].remove('pi-package')
+            files['BUILD.json'] = json.dumps(build).encode()
+            package = json.loads(files['package.json'])
+            package.pop('pi')
+            package.pop('keywords')
+            files['package.json'] = json.dumps(package).encode()
+            files.pop('pi/index.mjs')
+        for platform in self.release['platforms']:
+            self.rewrite_package(platform, remove_pi)
+        before = {p.name: p.read_bytes() for p in self.root.iterdir()}
+        self.assertEqual(self.audit()['assets_verified'], 13)
+        self.assertEqual({p.name: p.read_bytes() for p in self.root.iterdir()}, before)
+
+    def test_pi_package_cannot_redirect_skill_or_extension_after_rehashing(self):
+        self.declare_multi_host_plugins()
+        platform = self.release['platforms'][0]
+        for resource in ('skills', 'extensions'):
+            original = {}
+            def redirect(files):
+                original['package.json'] = files['package.json']
+                package = json.loads(files['package.json'])
+                package['pi'][resource] = ['../another-package']
+                files['package.json'] = json.dumps(package).encode()
+            self.rewrite_package(platform, redirect)
+            with self.subTest(resource=resource), self.assertRaisesRegex(ValueError, 'Pi package entry mismatch'):
+                self.audit()
+            self.rewrite_package(platform, lambda files: files.update(original))
+
+    def test_declared_pi_extension_is_required_even_after_rehashing(self):
+        self.declare_multi_host_plugins()
+        self.rewrite_package(self.release['platforms'][0], lambda files: files.pop('pi/index.mjs'))
+        with self.assertRaisesRegex(ValueError, 'Missing declared Pi adapter'):
+            self.audit()
+
+    def test_pi_cannot_skip_validation_by_removing_its_format_declaration(self):
+        self.declare_multi_host_plugins()
+        def remove_format(files):
+            build = json.loads(files['BUILD.json'])
+            build['plugin_package']['formats'].remove('pi-package')
+            files['BUILD.json'] = json.dumps(build).encode()
+        self.rewrite_package(self.release['platforms'][0], remove_format)
+        with self.assertRaisesRegex(ValueError, 'Undeclared Pi package entry'):
+            self.audit()
+
+    def test_schema1_without_host_declaration_cannot_add_pi_components(self):
+        platform = self.release['platforms'][0]
+        components = {
+            'package.json': json.dumps({'pi': {'extensions': ['../outside.mjs']}}).encode(),
+            'pi/index.mjs': b'// undeclared Pi extension',
+        }
+        for path, data in components.items():
+            self.rewrite_package(platform, lambda files: files.update({path: data}))
+            with self.subTest(path=path), self.assertRaisesRegex(ValueError, 'Undeclared Pi package entry'):
+                self.audit()
+            self.rewrite_package(platform, lambda files: files.pop(path))
+
     def test_schema1_multi_host_archive_remains_valid_and_unchanged(self):
         self.declare_multi_host_plugins(schema=1)
         before = {p.name: p.read_bytes() for p in self.root.iterdir()}

@@ -271,7 +271,9 @@ Separate model/network/environment failures from product defects without silentl
 removing attempts from the denominator. Native fixture, direct script and external
 Agent evidence are different classes. Never replay an action with unknown effect.
 
-Target clients are Caelis, DSH and agy; Caelis exercises deepseek-flash and
+Target clients are Caelis, DSH, agy, OpenCode, Pi and Grok Build. The added three
+hosts have [basic macOS installation/GUI acceptance](agent-install-acceptance-2026-11-17.md),
+which does not substitute for the complete real-app tasks above. Caelis exercises deepseek-flash and
 gpt-6.1-terra. Record complete tasks/attempts per application on the final installed
 candidate. agy exploration efficiency alone is not a release blocker; reproducible
 DTW defects remain actionable. Establish real-task cost baselines rather than

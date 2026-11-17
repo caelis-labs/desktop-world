@@ -41,4 +41,9 @@ observe before deciding whether another action is appropriate.
 Use ordinary tool discovery and load detailed schemas only when needed. The Skill
 is a general operation/capability manual: reusable guidance for file pickers, forms,
 dynamic controls and large trees belongs there; task-specific application recipes
-do not. Caelis, DSH and agy setup uses the linked installation guides.
+do not. Use the [host installation routes](install.md) for Caelis, DSH, agy,
+OpenCode, Pi and Grok Build. Pi packages register the MCP server through the
+host's `registerMcpServer` API and declare the canonical Skill in `package.json`;
+Grok Build consumes the existing compatible plugin, while OpenCode uses its
+native MCP/Skill configuration. The [new-host acceptance](agent-install-acceptance-2026-11-17.md)
+records the tested package and platform boundaries.
