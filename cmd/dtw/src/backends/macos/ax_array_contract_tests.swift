@@ -1,4 +1,41 @@
 // Pure AX-result controls: create references, but issue no AX/GUI requests.
+private func checkTextPressCapabilities() throws {
+    // A focusable select-only ComboBox must execute Press to open its list.
+    var expanded = false
+    var focused = false
+    let selectOnly = textInputReceiver(role: kAXComboBoxRole, editableValue: { false })
+    let capability = textPressCapability(textReceiver: selectOnly, press: true, focusWritable: { true })
+    switch capability {
+    case .action?: expanded = true
+    case .focus?: focused = true
+    default: preconditionFailure("Select-only ComboBox lost Press")
+    }
+    precondition(expanded && !focused && !selectOnly)
+    for role in [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole] {
+        let receiver = textInputReceiver(role: role, editableValue: { true })
+        precondition(receiver)
+        guard case .focus? = textPressCapability(textReceiver: receiver, press: true, focusWritable: { true }) else {
+            preconditionFailure("Editable text control did not prefer exact receiver focus")
+        }
+        guard case .action? = textPressCapability(textReceiver: receiver, press: true, focusWritable: { false }) else {
+            preconditionFailure("Unavailable focus lost the existing Press fallback")
+        }
+    }
+    let button = textInputReceiver(role: kAXButtonRole) {
+        preconditionFailure("Action roles must not query text writability")
+    }
+    precondition(!button)
+    guard case .action? = textPressCapability(textReceiver: button, press: true, focusWritable: {
+        preconditionFailure("Non-text controls must not query focus writability")
+    }) else { preconditionFailure("Action control lost Press") }
+    precondition(textPressCapability(textReceiver: false, press: false, focusWritable: { true }) == nil)
+    do {
+        _ = try textInputReceiver(role: kAXComboBoxRole) { throw failure("deadline_exceeded", "original read failure") }
+        preconditionFailure("Editable capability read error was swallowed")
+    } catch let error as NativeFailure { precondition(error.code == "deadline_exceeded") }
+}
+try checkTextPressCapabilities()
+
 private func checkAXArrayCompatibility() throws {
     let children = [AXUIElementCreateApplication(123), AXUIElementCreateApplication(456)]
     let array = children as CFArray

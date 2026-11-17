@@ -1569,6 +1569,19 @@ private func supportsStringValueEditing(_ role: String) -> Bool {
     [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role)
 }
 
+private func textInputReceiver(role: String, editableValue: () throws -> Bool) rethrows -> Bool {
+    if [kAXTextFieldRole, kAXTextAreaRole].contains(role) { return true }
+    // AXComboBox also represents select-only controls. Focusability and the
+    // role alone do not prove that this instance accepts text input.
+    return try role == kAXComboBoxRole && editableValue()
+}
+
+private func textPressCapability(textReceiver: Bool, press: Bool,
+                                 focusWritable: () throws -> Bool) rethrows -> NativePressCapability? {
+    if try textReceiver && focusWritable() { return .focus }
+    return press ? .action : nil
+}
+
 private enum WindowClassification: String {
     case supported, excluded = "excluded_scope"
     case pidUnproven = "ax_pid_unproven", roleUnproven = "ax_role_unproven", subroleUnproven = "ax_subrole_unproven"
@@ -4229,17 +4242,21 @@ private final class NativeStore: @unchecked Sendable {
             return .selection(container)
         }
         let press = try actions(element, deadline).contains(kAXPressAction) && enabled == true
-        guard supportsStringValueEditing(role) else { return press ? .action : nil }
-        try deadline.prepare(element)
-        var writable = DarwinBoolean(false)
-        let result = AXUIElementIsAttributeSettable(element, kAXFocusedAttribute as CFString, &writable)
-        try deadline.check()
-        if result == .attributeUnsupported || result == .noValue { return press ? .action : nil }
-        guard result == .success else {
-            throw failure("ax_unavailable", "Control focus writability unavailable",
-                          attributeFailure: AXAttributeFailure(name: kAXFocusedAttribute, error: result))
+        let textReceiver = try textInputReceiver(role: role) {
+            try settable(element, role: role, enabled: enabled == true, window: window, target: target, deadline: deadline)
         }
-        return writable.boolValue ? .focus : press ? .action : nil
+        return try textPressCapability(textReceiver: textReceiver, press: press) {
+            try deadline.prepare(element)
+            var writable = DarwinBoolean(false)
+            let result = AXUIElementIsAttributeSettable(element, kAXFocusedAttribute as CFString, &writable)
+            try deadline.check()
+            if result == .attributeUnsupported || result == .noValue { return false }
+            guard result == .success else {
+                throw failure("ax_unavailable", "Control focus writability unavailable",
+                              attributeFailure: AXAttributeFailure(name: kAXFocusedAttribute, error: result))
+            }
+            return writable.boolValue
+        }
     }
 
     private func settable(_ element: AXUIElement, role: String, enabled: Bool, window: AXUIElement,
@@ -6071,7 +6088,10 @@ private final class NativeStore: @unchecked Sendable {
                 focusText = false; selection = current
             default: throw failure("target_changed", "Semantic press capability changed; observe again")
             }
-            let textReceiver = selection == nil && supportsStringValueEditing(role)
+            let textReceiver = try selection == nil && textInputReceiver(role: role) {
+                try settable(element.element, role: role, enabled: enabled == true, window: window.element,
+                             target: target, deadline: context.deadline)
+            }
             if textReceiver || selection != nil {
                 try validateEditableMeaning(element, role: role, deadline: context.deadline)
             }

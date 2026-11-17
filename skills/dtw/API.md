@@ -70,7 +70,9 @@ atomic calls. See
   Windows defaults to foreground interaction; DTW prepares the exact receiver.
   macOS prefers effective background capabilities and directly uses foreground
   or the real pointer when needed. Changes remain in place after settlement.
-  `effects.delivery` reports only `route` / `reason`; no focus-return metadata.
+  Public `effects` reports dispatch and optional interruptions/acknowledgements.
+  Delivery `route` / `reason` stay in the internal diagnostic ledger; the public
+  response has no `effects.delivery` field.
   An action that cannot establish its required receiver is refused before its
   payload. Inspect the current state before deciding how to continue.
   If the app exits, a separately proved final `running:false` view concludes the

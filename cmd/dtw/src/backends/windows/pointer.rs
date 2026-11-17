@@ -127,21 +127,44 @@ enum Event {
 }
 trait Delivery {
     fn validate(&mut self, index: usize) -> Result<(), Error>;
+    fn cursor(&mut self) -> Result<POINT, Error>;
     fn insert(&mut self, event: Event) -> Result<(), Error>;
+    fn moved(&mut self, index: usize);
     fn failed_cleanup(&mut self);
+}
+fn insert_payload(
+    io: &mut impl Delivery,
+    event: Event,
+    last: &mut Option<POINT>,
+) -> Result<(), Error> {
+    let actual = io.cursor()?;
+    if last.is_some_and(|last| actual != last) {
+        return Err(failed(
+            "Pointer moved externally during gesture; further input refused",
+        ));
+    }
+    io.insert(event)?;
+    if let Event::Move(index) = event {
+        // Record the actual OS position before feedback or pacing yields to
+        // external input. This state belongs only to this gesture, not cleanup.
+        *last = Some(io.cursor()?);
+        io.moved(index);
+    }
+    Ok(())
 }
 fn execute(plan: &Plan, io: &mut impl Delivery) -> Result<(), Error> {
     let mut held = false;
+    let mut cursor_last = None;
     let result = (|| {
         io.validate(0)?;
-        io.insert(Event::Move(0))?;
+        insert_payload(io, Event::Move(0), &mut cursor_last)?;
         if plan.drag {
             io.validate(0)?;
-            io.insert(Event::Down)?;
+            insert_payload(io, Event::Down, &mut cursor_last)?;
             held = true;
             for index in 1..plan.points.len() {
                 io.validate(index)?;
-                io.insert(Event::Move(index))?;
+                insert_payload(io, Event::Move(index), &mut cursor_last)?;
             }
             io.validate(plan.points.len() - 1)?;
         }
@@ -229,16 +252,19 @@ pub fn dispatch(
             }
             Ok(())
         }
+        fn cursor(&mut self) -> Result<POINT, Error> {
+            super::desktop::ensure_input_desktop()?;
+            super::execution_scope::check()?;
+            let mut actual = POINT::default();
+            unsafe { GetCursorPos(&mut actual) }.map_err(failed)?;
+            Ok(actual)
+        }
         fn insert(&mut self, event: Event) -> Result<(), Error> {
             let input = match event {
                 Event::Move(index) => self.moves[index],
                 Event::Down => input::mouse(MOUSEEVENTF_LEFTDOWN, 0, 0, 0),
                 Event::Up => input::mouse(MOUSEEVENTF_LEFTUP, 0, 0, 0),
             };
-            if !matches!(event, Event::Up) {
-                super::desktop::ensure_input_desktop()?;
-                super::execution_scope::check()?;
-            }
             *self.dispatched = true;
             let count = unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
             *self.accepted += count as usize;
@@ -246,14 +272,15 @@ pub fn dispatch(
                 return Err(failed("Pointer insertion incomplete; effects unknown"));
             }
             match event {
-                Event::Move(index) => {
-                    (self.feedback)(self.plan.points[index], false);
-                    std::thread::sleep(Duration::from_millis(2));
-                }
+                Event::Move(_) => (),
                 Event::Down => (self.feedback)(self.plan.points[0], true),
                 Event::Up => (),
             }
             Ok(())
+        }
+        fn moved(&mut self, index: usize) {
+            (self.feedback)(self.plan.points[index], false);
+            std::thread::sleep(Duration::from_millis(2));
         }
         fn failed_cleanup(&mut self) {
             input::fail_delivery();
@@ -289,6 +316,8 @@ mod tests {
         stop: Option<usize>,
         fail: Option<Event>,
         dirty: bool,
+        cursor: POINT,
+        external_move: Option<usize>,
     }
     impl Delivery for Fake {
         fn validate(&mut self, _: usize) -> Result<(), Error> {
@@ -300,12 +329,26 @@ mod tests {
                 Ok(())
             }
         }
+        fn cursor(&mut self) -> Result<POINT, Error> {
+            Ok(self.cursor)
+        }
         fn insert(&mut self, event: Event) -> Result<(), Error> {
             self.events.push(event);
+            if let Event::Move(index) = event {
+                self.cursor = POINT {
+                    x: index as i32,
+                    y: 0,
+                };
+            }
             if self.fail == Some(event) {
                 Err(Error::InvalidObservation)
             } else {
                 Ok(())
+            }
+        }
+        fn moved(&mut self, index: usize) {
+            if self.external_move == Some(index) {
+                self.cursor.x += 100;
             }
         }
         fn failed_cleanup(&mut self) {
@@ -319,7 +362,27 @@ mod tests {
             stop: None,
             fail: None,
             dirty: false,
+            cursor: POINT::default(),
+            external_move: None,
         }
+    }
+    #[test]
+    fn external_pointer_move_before_down_refuses_without_pressing() {
+        let mut io = fake();
+        io.external_move = Some(0);
+        assert!(execute(&path(true), &mut io).is_err());
+        assert_eq!(io.events, [Event::Move(0)]);
+    }
+    #[test]
+    fn external_pointer_move_while_held_stops_payload_and_releases_once() {
+        let mut io = fake();
+        io.external_move = Some(1);
+        assert!(execute(&path(true), &mut io).is_err());
+        assert_eq!(
+            io.events,
+            [Event::Move(0), Event::Down, Event::Move(1), Event::Up]
+        );
+        assert!(!io.dirty);
     }
     fn path(drag: bool) -> Plan {
         let points = [POINT { x: 10, y: 10 }, POINT { x: 26, y: 10 }];

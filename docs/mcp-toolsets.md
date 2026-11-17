@@ -110,8 +110,9 @@ effect. Dispatch, acknowledgements and observed business success remain distinct
 `status:completed` means settlement; check MCP `isError` / `error` and
 observation status, then read back the relevant UI before declaring success.
 A complete empty AX tree does not prove an empty screen; use `capture` for
-self-drawn or low-AX interfaces. `effects.delivery` contains `route` / `reason`
-only, without borrowed-input or focus-return metadata.
+self-drawn or low-AX interfaces. Public `effects` contains dispatch and optional
+interruptions/acknowledgements. Delivery `route` / `reason` remain in the internal
+diagnostic ledger; neither public surface returns `effects.delivery`.
 
 An interrupted or missing response can leave input effects. Inspect before new
 input. Identical MCP request-ID retransmission refers to retained execution; a
