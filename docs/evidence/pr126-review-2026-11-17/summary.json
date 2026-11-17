@@ -1,0 +1,1324 @@
+{
+  "date": "2026-11-17",
+  "pull_request": "https://github.com/caelis-labs/desktop-world/pull/126",
+  "reviewed_head": "8a0ee9559cd033471ad153f8b6bef24b1bf53b14",
+  "tested_source": "038fb60b818c08ee9b75d3a8eaa4b142980295b9",
+  "binary": {
+    "binary_sha256": "81c39764f9a204dbab686c7502c998853079d2487ccfdf47fa968829711557b7",
+    "scope": "development binary; no installed-package claim"
+  },
+  "environment": {
+    "platform": "Windows x64",
+    "dpi": 120,
+    "primary_working_area": [
+      2560,
+      1380
+    ],
+    "rust": "1.98.0",
+    "profile": "release",
+    "crt": "static"
+  },
+  "rust": {
+    "library_passed": 648,
+    "cli_passed": 5
+  },
+  "direct_scope": {
+    "report_sha256": "79d08aa48938cade38d9848893339cb0c450743aac9321323630b860067f36e6",
+    "passed": true,
+    "artifact": {
+      "binary_sha256": "81c39764f9a204dbab686c7502c998853079d2487ccfdf47fa968829711557b7",
+      "scope": "development binary; no installed-package claim"
+    },
+    "cases": [
+      {
+        "name": "automatic_keyboard_script_retains_target_and_pointer",
+        "passed": true,
+        "response": {
+          "app": "D:\\WorkDir\\desktop-world\\artifacts\\pr126-review\\direct-scope-01\\Target.exe",
+          "context_reset": false,
+          "effects": {
+            "acknowledgements": [
+              {
+                "call": 4,
+                "confirmed": "text_present_in_focused_control",
+                "operation": "scene.typeText"
+              }
+            ],
+            "dispatch": {
+              "dispatched": 5
+            }
+          },
+          "execution_id": "exe_JyyLJLBjnIw_o",
+          "observation": {
+            "status": "observed"
+          },
+          "status": "completed",
+          "view": {
+            "elements": {
+              "added": [
+                {
+                  "actions": [
+                    "press"
+                  ],
+                  "enabled": true,
+                  "id": "w1.e18",
+                  "name": "系统",
+                  "role": "menu_item",
+                  "value": null
+                },
+                {
+                  "actions": [
+                    "press"
+                  ],
+                  "enabled": true,
+                  "id": "w1.e19",
+                  "name": "Audit File",
+                  "role": "menu_item",
+                  "value": null
+                }
+              ],
+              "changed": [
+                {
+                  "actions": [
+                    "setValue"
+                  ],
+                  "enabled": true,
+                  "focused": true,
+                  "id": "w1.e1",
+                  "name": "Message",
+                  "role": "text_field",
+                  "value": "Windows scope 中文🙂\r\nsecond café 🚀"
+                }
+              ],
+              "order": [
+                "w1.e1",
+                "w1.e2",
+                "w1.e3",
+                "w1.e4",
+                "w1.e5",
+                "w1.e6",
+                "w1.e7",
+                "w1.e18",
+                "w1.e9",
+                "w1.e10",
+                "w1.e11",
+                "w1.e19",
+                "w1.e13",
+                "w1.e14",
+                "w1.e15",
+                "w1.e16",
+                "w1.e17"
+              ],
+              "removed": [
+                "w1.e8",
+                "w1.e12"
+              ]
+            },
+            "image": {
+              "bounds": [
+                18.0,
+                16.0,
+                412.0,
+                538.0
+              ],
+              "coordinate_space": "image_pixels",
+              "height": 1076,
+              "width": 824
+            },
+            "kind": "delta"
+          }
+        },
+        "pointer_before": [
+          181,
+          777
+        ],
+        "pointer_after": [
+          226,
+          149
+        ]
+      },
+      {
+        "name": "settlement_preserves_windows_activation_order",
+        "passed": true,
+        "initial_stack": [
+          "Witness",
+          "Neighbour",
+          "Target"
+        ],
+        "returned_stack": [
+          "Target",
+          "Witness",
+          "Neighbour"
+        ]
+      },
+      {
+        "name": "physical_hover_retains_target_and_pointer",
+        "passed": true,
+        "response": {
+          "app": "D:\\WorkDir\\desktop-world\\artifacts\\pr126-review\\direct-scope-01\\Target.exe",
+          "context_reset": false,
+          "effects": {
+            "dispatch": {
+              "dispatched": 1
+            }
+          },
+          "execution_id": "exe_JyyLJLBjnIw_1x",
+          "observation": {
+            "status": "observed"
+          },
+          "status": "completed",
+          "view": {
+            "image": {
+              "bounds": [
+                18.0,
+                16.0,
+                412.0,
+                538.0
+              ],
+              "coordinate_space": "image_pixels",
+              "height": 1076,
+              "width": 824
+            },
+            "kind": "unchanged"
+          }
+        },
+        "pointer_before": [
+          226,
+          149
+        ],
+        "pointer_after": [
+          224,
+          363
+        ]
+      },
+      {
+        "name": "away_and_return_is_sticky_without_reacquisition",
+        "passed": true,
+        "response": {
+          "app": "D:\\WorkDir\\desktop-world\\artifacts\\pr126-review\\direct-scope-01\\Target.exe",
+          "context_reset": false,
+          "effects": {
+            "acknowledgements": [
+              {
+                "call": 1,
+                "confirmed": "window_focused",
+                "operation": "scene.focus"
+              }
+            ],
+            "dispatch": {
+              "dispatched": 1,
+              "not_dispatched": 1
+            }
+          },
+          "error": {
+            "code": "execution_focus_changed",
+            "message": "scene.keypress failed: Foreground ownership changed outside the selected application during this script; further input was refused. Observe current state and start a fresh execution."
+          },
+          "execution_id": "exe_JyyLJLBjnIw_2j",
+          "failure": {
+            "call": 2,
+            "code": "execution_focus_changed",
+            "kind": "exception",
+            "line": 1,
+            "message": "scene.keypress failed: Foreground ownership changed outside the selected application during this script; further input was refused. Observe current state and start a fresh execution.",
+            "operation": "scene.keypress"
+          },
+          "observation": {
+            "status": "observed"
+          },
+          "status": "completed",
+          "view": {
+            "image": {
+              "bounds": [
+                18.0,
+                16.0,
+                412.0,
+                538.0
+              ],
+              "coordinate_space": "image_pixels",
+              "height": 1076,
+              "width": 824
+            },
+            "kind": "unchanged"
+          }
+        },
+        "actor": {
+          "app": "D:\\WorkDir\\desktop-world\\artifacts\\pr126-review\\direct-scope-01\\Witness.exe",
+          "context_reset": false,
+          "effects": {
+            "acknowledgements": [
+              {
+                "call": 1,
+                "confirmed": "window_focused",
+                "operation": "scene.focus"
+              }
+            ],
+            "dispatch": {
+              "dispatched": 1
+            }
+          },
+          "execution_id": "exe_FOoh7d-4gv0_1",
+          "observation": {
+            "status": "observed"
+          },
+          "result": "owned-away-return",
+          "status": "completed"
+        },
+        "actor_return": {
+          "app": "D:\\WorkDir\\desktop-world\\artifacts\\pr126-review\\direct-scope-01\\Target.exe",
+          "context_reset": false,
+          "effects": {
+            "acknowledgements": [
+              {
+                "call": 1,
+                "confirmed": "window_focused",
+                "operation": "scene.focus"
+              }
+            ],
+            "dispatch": {
+              "dispatched": 1
+            }
+          },
+          "execution_id": "exe_FOoh7d-4gv0_n",
+          "observation": {
+            "status": "observed"
+          },
+          "status": "completed",
+          "view": {
+            "coverage": {
+              "candidate_count": 1,
+              "complete_within_scope": true,
+              "excluded_count": 0,
+              "excludes": [
+                "helper_processes",
+                "non_standard_windows",
+                "non_default_layers"
+              ],
+              "scope": "same_process_standard_windows",
+              "status": "available",
+              "supported_count": 1,
+              "windows_returned": 1,
+              "windows_truncated": false
+            },
+            "elements": [
+              {
+                "actions": [
+                  "setValue"
+                ],
+                "enabled": true,
+                "focused": true,
+                "id": "w1.e1",
+                "name": "Message",
+                "role": "text_field",
+                "value": "Windows scope 中文🙂\r\nsecond café 🚀"
+              },
+              {
+                "actions": [
+                  "press"
+                ],
+                "enabled": false,
+                "id": "w1.e2",
+                "name": "上一行",
+                "role": "button",
+                "value": null
+              },
+              {
+                "actions": [
+                  "press"
+                ],
+                "enabled": false,
+                "id": "w1.e3",
+                "name": "下一行",
+                "role": "button",
+                "value": null
+              },
+              {
+                "actions": [
+                  "press"
+                ],
+                "enabled": true,
+                "id": "w1.e4",
+                "name": "Increment",
+                "role": "button",
+                "value": null
+              },
+              {
+                "actions": [
+                  "press"
+                ],
+                "enabled": true,
+                "id": "w1.e5",
+                "name": "Save",
+                "role": "button",
+                "value": null
+              },
+              {
+                "actions": [
+                  "press"
+                ],
+                "enabled": true,
+                "id": "w1.e6",
+                "name": "Show owned dialog",
+                "role": "button",
+                "value": null
+              },
+              {
+                "actions": [
+                  "setValue"
+                ],
+                "enabled": true,
+                "id": "w1.e7",
+                "name": "",
+                "role": "unknown",
+                "value": "DTW Windows Smoke A"
+              },
+              {
+                "actions": [
+                  "press"
+                ],
+                "enabled": true,
+                "id": "w1.e8",
+                "name": "系统",
+                "role": "menu_item",
+                "value": null
+              },
+              {
+                "actions": [
+                  "press"
+                ],
+                "enabled": true,
+                "id": "w1.e9",
+                "name": "最小化",
+                "role": "button",
+                "value": null
+              },
+              {
+                "actions": [
+                  "press"
+                ],
+                "enabled": false,
+                "id": "w1.e10",
+                "name": "最大化",
+                "role": "button",
+                "value": null
+              },
+              {
+                "actions": [
+                  "press"
+                ],
+                "enabled": true,
+                "id": "w1.e11",
+                "name": "关闭",
+                "role": "button",
+                "value": null
+              },
+              {
+                "actions": [
+                  "press"
+                ],
+                "enabled": true,
+                "id": "w1.e12",
+                "name": "Audit File",
+                "role": "menu_item",
+                "value": null
+              },
+              {
+                "actions": [],
+                "enabled": false,
+                "id": "w1.e13",
+                "name": "垂直滚动条",
+                "role": "unknown",
+                "value": null
+              },
+              {
+                "actions": [],
+                "enabled": true,
+                "id": "w1.e14",
+                "name": "Owned pointer pad",
+                "role": "pane",
+                "value": null
+              },
+              {
+                "actions": [],
+                "enabled": true,
+                "id": "w1.e15",
+                "name": "Blocking read probe",
+                "role": "unknown",
+                "value": null
+              },
+              {
+                "actions": [],
+                "enabled": true,
+                "id": "w1.e16",
+                "name": "系统",
+                "role": "unknown",
+                "value": null
+              },
+              {
+                "actions": [],
+                "enabled": true,
+                "id": "w1.e17",
+                "name": "应用程序",
+                "role": "unknown",
+                "value": null
+              }
+            ],
+            "kind": "full",
+            "running": true,
+            "semantics": {
+              "complete": true,
+              "has_more": false,
+              "reason": null
+            },
+            "windows": [
+              {
+                "bounds": [
+                  18.0,
+                  16.0,
+                  412.0,
+                  538.0
+                ],
+                "id": "w1",
+                "title": "DTW Windows Smoke A",
+                "title_truncated": false,
+                "visible": true
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "same_connection_fresh_execution_recovers",
+        "passed": true,
+        "response": {
+          "app": "D:\\WorkDir\\desktop-world\\artifacts\\pr126-review\\direct-scope-01\\Target.exe",
+          "context_reset": false,
+          "effects": {
+            "dispatch": {
+              "dispatched": 2
+            }
+          },
+          "execution_id": "exe_JyyLJLBjnIw_34",
+          "observation": {
+            "status": "observed"
+          },
+          "status": "completed",
+          "view": {
+            "kind": "unchanged"
+          }
+        }
+      }
+    ],
+    "scope": "Owned foreground actor and native fixture; direct-script evidence, not DSH model acceptance",
+    "foreground_setup_result": {
+      "app": "D:\\WorkDir\\desktop-world\\artifacts\\pr126-review\\direct-scope-01\\Witness.exe",
+      "context_reset": false,
+      "effects": {
+        "acknowledgements": [
+          {
+            "call": 1,
+            "confirmed": "window_focused",
+            "operation": "scene.focus"
+          }
+        ],
+        "dispatch": {
+          "dispatched": 1
+        }
+      },
+      "execution_id": "exe_W9G8MYf5PB8_1",
+      "observation": {
+        "status": "observed"
+      },
+      "result": "owned-foreground-setup",
+      "status": "completed"
+    },
+    "initial_stack": [
+      "Witness",
+      "Neighbour",
+      "Target"
+    ],
+    "returned_stack": [
+      "Target",
+      "Witness",
+      "Neighbour"
+    ],
+    "target_final": {
+      "pid": 44820,
+      "label": "A",
+      "title": "DTW Windows Smoke A",
+      "sequence": 350,
+      "elapsed_ms": 16807.5487,
+      "ready": true,
+      "closed": false,
+      "hwnd": "328278",
+      "visible": true,
+      "foreground": true,
+      "dpi_awareness_set": true,
+      "dpi": 120,
+      "bounds_ok": true,
+      "bounds": {
+        "x": 16,
+        "y": 16,
+        "width": 416,
+        "height": 540
+      },
+      "pad_point": {
+        "x": 224,
+        "y": 363
+      },
+      "layout_sequence": 0,
+      "increment_bounds": {
+        "x": 31,
+        "y": 218,
+        "width": 120,
+        "height": 30
+      },
+      "editor_bounds": {
+        "x": 33,
+        "y": 87,
+        "width": 386,
+        "height": 125
+      },
+      "working_area": {
+        "x": 0,
+        "y": 0,
+        "width": 2560,
+        "height": 1380
+      },
+      "modal_open": false,
+      "editor_focused": true,
+      "text": "Windows scope 中文🙂\r\nsecond café 🚀",
+      "saved": "Windows scope 中文🙂\r\nsecond café 🚀",
+      "saves": 1,
+      "increments": 2,
+      "menu_open": false,
+      "moves": 79,
+      "drag_moves": 0,
+      "left_up": 0,
+      "right_up": 0,
+      "double_clicks": 0,
+      "wheel_delta": 0,
+      "horizontal_wheel_delta": 0,
+      "keys_down_global": []
+    },
+    "witness_final": {
+      "pid": 34596,
+      "label": "B",
+      "title": "DTW Windows Smoke B",
+      "sequence": 258,
+      "elapsed_ms": 16097.074700000001,
+      "ready": true,
+      "closed": false,
+      "hwnd": "525106",
+      "visible": true,
+      "foreground": false,
+      "dpi_awareness_set": true,
+      "dpi": 120,
+      "bounds_ok": true,
+      "bounds": {
+        "x": 462,
+        "y": 16,
+        "width": 416,
+        "height": 540
+      },
+      "pad_point": {
+        "x": 670,
+        "y": 363
+      },
+      "layout_sequence": 0,
+      "increment_bounds": {
+        "x": 477,
+        "y": 218,
+        "width": 120,
+        "height": 30
+      },
+      "editor_bounds": {
+        "x": 479,
+        "y": 87,
+        "width": 386,
+        "height": 125
+      },
+      "working_area": {
+        "x": 0,
+        "y": 0,
+        "width": 2560,
+        "height": 1380
+      },
+      "modal_open": false,
+      "editor_focused": false,
+      "text": "",
+      "saved": "",
+      "saves": 0,
+      "increments": 0,
+      "menu_open": false,
+      "moves": 0,
+      "drag_moves": 0,
+      "left_up": 0,
+      "right_up": 0,
+      "double_clicks": 0,
+      "wheel_delta": 0,
+      "horizontal_wheel_delta": 0,
+      "keys_down_global": []
+    },
+    "cleanup": [
+      {
+        "mcp": {
+          "pid": 14868,
+          "exit_code": 0,
+          "forced": false
+        }
+      },
+      {
+        "mcp": {
+          "pid": 24848,
+          "exit_code": 0,
+          "forced": false
+        }
+      },
+      {
+        "mcp": {
+          "pid": 44900,
+          "exit_code": 0,
+          "forced": false
+        }
+      },
+      {
+        "fixture_pid": 44820,
+        "exit": 0
+      },
+      {
+        "fixture_pid": 46852,
+        "exit": 0
+      },
+      {
+        "fixture_pid": 34596,
+        "exit": 0
+      }
+    ]
+  },
+  "features": {
+    "report_sha256": "1d2aa9e43a24f0b402fafd0957c592ad6eecd7a28cb850554e599b74aff8d97e",
+    "passed": true,
+    "cases": [
+      {
+        "name": "installed_discovery_and_observation",
+        "passed": true
+      },
+      {
+        "name": "public_method_surface",
+        "passed": true
+      },
+      {
+        "name": "unchanged_snapshot_delta",
+        "passed": true
+      },
+      {
+        "name": "semantic_unicode_and_save",
+        "passed": true
+      },
+      {
+        "name": "semantic_id_exact_effect",
+        "passed": true
+      },
+      {
+        "name": "left_click",
+        "passed": true
+      },
+      {
+        "name": "right_click",
+        "passed": true
+      },
+      {
+        "name": "double_click",
+        "passed": true
+      },
+      {
+        "name": "hover",
+        "passed": true
+      },
+      {
+        "name": "content_drag",
+        "passed": true
+      },
+      {
+        "name": "vertical_wheel",
+        "passed": true
+      },
+      {
+        "name": "horizontal_wheel",
+        "passed": true
+      },
+      {
+        "name": "default_center_wheel",
+        "passed": true
+      },
+      {
+        "name": "native_title_bar_drag",
+        "passed": true
+      },
+      {
+        "name": "stale_geometry",
+        "passed": true
+      },
+      {
+        "name": "native_menu",
+        "passed": true
+      },
+      {
+        "name": "modal_composition",
+        "passed": true
+      },
+      {
+        "name": "modal_escape",
+        "passed": true
+      },
+      {
+        "name": "rejected_menu_does_not_focus",
+        "passed": true
+      },
+      {
+        "name": "multi_instance_continuity",
+        "passed": true
+      },
+      {
+        "name": "front_order_B",
+        "passed": true
+      },
+      {
+        "name": "front_order_A",
+        "passed": true
+      },
+      {
+        "name": "layered_global_alpha",
+        "passed": true
+      },
+      {
+        "name": "quit_preserves_save_prompt",
+        "passed": true
+      },
+      {
+        "name": "cancellation_and_retained_reason",
+        "passed": true
+      },
+      {
+        "name": "stopped_absolute_executable_launch_and_quit",
+        "passed": true
+      }
+    ],
+    "cleanup": [
+      {
+        "fixture_pid": 21656,
+        "exit_code": 0
+      },
+      {
+        "fixture_pid": 12204,
+        "exit_code": 0
+      },
+      {
+        "fixture_pid": 25900,
+        "exit_code": 0
+      },
+      {
+        "fixture_pid": 44836,
+        "exit_code": 0
+      },
+      {
+        "fixture_pid": 35132,
+        "exit_code": 0
+      },
+      {
+        "mcp": {
+          "pid": 8092,
+          "exit_code": 0,
+          "forced": false
+        }
+      }
+    ],
+    "artifact_unchanged": true
+  },
+  "interruptions": [
+    {
+      "mode": "cancel",
+      "report_sha256": "a5fda49f31a5f0250a923abe276f3405cb7a1cf89ee693c296b56d293e39b565",
+      "passed": true,
+      "artifact": {
+        "binary_sha256": "81c39764f9a204dbab686c7502c998853079d2487ccfdf47fa968829711557b7",
+        "scope": "development binary; no installed-package claim"
+      },
+      "held_observed": true,
+      "effect": {
+        "pid": 39656,
+        "label": "A",
+        "title": "DTW Windows Smoke A",
+        "sequence": 39,
+        "elapsed_ms": 1849.0992,
+        "ready": true,
+        "closed": false,
+        "hwnd": "329454",
+        "visible": true,
+        "foreground": true,
+        "dpi_awareness_set": true,
+        "dpi": 120,
+        "bounds_ok": true,
+        "bounds": {
+          "x": 16,
+          "y": 16,
+          "width": 416,
+          "height": 540
+        },
+        "pad_point": {
+          "x": 224,
+          "y": 363
+        },
+        "layout_sequence": 0,
+        "increment_bounds": {
+          "x": 31,
+          "y": 218,
+          "width": 120,
+          "height": 30
+        },
+        "editor_bounds": {
+          "x": 33,
+          "y": 87,
+          "width": 386,
+          "height": 125
+        },
+        "working_area": {
+          "x": 0,
+          "y": 0,
+          "width": 2560,
+          "height": 1380
+        },
+        "modal_open": false,
+        "editor_focused": false,
+        "text": "",
+        "saved": "",
+        "saves": 0,
+        "increments": 0,
+        "menu_open": false,
+        "moves": 9,
+        "drag_moves": 5,
+        "left_up": 1,
+        "right_up": 0,
+        "double_clicks": 0,
+        "wheel_delta": 0,
+        "horizontal_wheel_delta": 0,
+        "keys_down_global": []
+      },
+      "original_response": "unknown: cancellation suppressed original reply",
+      "fresh_recovery": {
+        "app": "D:\\WorkDir\\desktop-world\\artifacts\\pr126-review\\interruption-cancel-01\\Fixture.exe",
+        "context_reset": true,
+        "execution_id": "exe_pEpuIW8HcD0_q",
+        "result": "fresh-after-interruption",
+        "status": "completed"
+      },
+      "mcp_cleanup": {
+        "pid": 42156,
+        "exit_code": 0,
+        "forced": false
+      },
+      "workers": [
+        {
+          "pid": 42532,
+          "exit": 0
+        },
+        {
+          "pid": 40700,
+          "exit": 0
+        },
+        {
+          "pid": 22920,
+          "exit": 0
+        }
+      ],
+      "fixture_exit": 0
+    },
+    {
+      "mode": "eof",
+      "report_sha256": "f06edad2fa4df30c68d21f44b11ea5da2c66528c9cec6e1539e2a15c99e5e039",
+      "passed": true,
+      "artifact": {
+        "binary_sha256": "81c39764f9a204dbab686c7502c998853079d2487ccfdf47fa968829711557b7",
+        "scope": "development binary; no installed-package claim"
+      },
+      "held_observed": true,
+      "effect": {
+        "pid": 17216,
+        "label": "A",
+        "title": "DTW Windows Smoke A",
+        "sequence": 40,
+        "elapsed_ms": 1847.1547,
+        "ready": true,
+        "closed": false,
+        "hwnd": "1245440",
+        "visible": true,
+        "foreground": true,
+        "dpi_awareness_set": true,
+        "dpi": 120,
+        "bounds_ok": true,
+        "bounds": {
+          "x": 16,
+          "y": 16,
+          "width": 416,
+          "height": 540
+        },
+        "pad_point": {
+          "x": 224,
+          "y": 363
+        },
+        "layout_sequence": 0,
+        "increment_bounds": {
+          "x": 31,
+          "y": 218,
+          "width": 120,
+          "height": 30
+        },
+        "editor_bounds": {
+          "x": 33,
+          "y": 87,
+          "width": 386,
+          "height": 125
+        },
+        "working_area": {
+          "x": 0,
+          "y": 0,
+          "width": 2560,
+          "height": 1380
+        },
+        "modal_open": false,
+        "editor_focused": false,
+        "text": "",
+        "saved": "",
+        "saves": 0,
+        "increments": 0,
+        "menu_open": false,
+        "moves": 9,
+        "drag_moves": 5,
+        "left_up": 1,
+        "right_up": 0,
+        "double_clicks": 0,
+        "wheel_delta": 0,
+        "horizontal_wheel_delta": 0,
+        "keys_down_global": []
+      },
+      "mcp_cleanup": {
+        "pid": 47808,
+        "exit_code": 0,
+        "forced": false
+      },
+      "workers": [
+        {
+          "pid": 15196,
+          "exit": 0
+        },
+        {
+          "pid": 42924,
+          "exit": 0
+        },
+        {
+          "pid": 46176,
+          "exit": 0
+        }
+      ],
+      "fixture_exit": 0
+    },
+    {
+      "mode": "host-death",
+      "report_sha256": "76fc40acd53b84716e7a5686a6e77daa4d665af6a3478d81aa10c5ab75a7f790",
+      "passed": true,
+      "artifact": {
+        "binary_sha256": "81c39764f9a204dbab686c7502c998853079d2487ccfdf47fa968829711557b7",
+        "scope": "development binary; no installed-package claim"
+      },
+      "held_observed": true,
+      "injected_host_exit": 1,
+      "effect": {
+        "pid": 33484,
+        "label": "A",
+        "title": "DTW Windows Smoke A",
+        "sequence": 40,
+        "elapsed_ms": 1816.8257,
+        "ready": true,
+        "closed": false,
+        "hwnd": "591584",
+        "visible": true,
+        "foreground": true,
+        "dpi_awareness_set": true,
+        "dpi": 120,
+        "bounds_ok": true,
+        "bounds": {
+          "x": 16,
+          "y": 16,
+          "width": 416,
+          "height": 540
+        },
+        "pad_point": {
+          "x": 224,
+          "y": 363
+        },
+        "layout_sequence": 0,
+        "increment_bounds": {
+          "x": 31,
+          "y": 218,
+          "width": 120,
+          "height": 30
+        },
+        "editor_bounds": {
+          "x": 33,
+          "y": 87,
+          "width": 386,
+          "height": 125
+        },
+        "working_area": {
+          "x": 0,
+          "y": 0,
+          "width": 2560,
+          "height": 1380
+        },
+        "modal_open": false,
+        "editor_focused": false,
+        "text": "",
+        "saved": "",
+        "saves": 0,
+        "increments": 0,
+        "menu_open": false,
+        "moves": 10,
+        "drag_moves": 6,
+        "left_up": 1,
+        "right_up": 0,
+        "double_clicks": 0,
+        "wheel_delta": 0,
+        "horizontal_wheel_delta": 0,
+        "keys_down_global": []
+      },
+      "mcp_cleanup": {
+        "pid": 37772,
+        "exit_code": 1,
+        "forced": false
+      },
+      "workers": [
+        {
+          "pid": 21104,
+          "exit": 0
+        },
+        {
+          "pid": 46048,
+          "exit": 0
+        },
+        {
+          "pid": 8836,
+          "exit": 0
+        }
+      ],
+      "fixture_exit": 0
+    },
+    {
+      "mode": "deadline",
+      "report_sha256": "f397d8701d569aeb4ef0fe811341f2ce9075427a7f7b5ee99ccf997379f5d235",
+      "passed": true,
+      "artifact": {
+        "binary_sha256": "81c39764f9a204dbab686c7502c998853079d2487ccfdf47fa968829711557b7",
+        "scope": "development binary; no installed-package claim"
+      },
+      "held_observed": true,
+      "effect": {
+        "pid": 42204,
+        "label": "A",
+        "title": "DTW Windows Smoke A",
+        "sequence": 548,
+        "elapsed_ms": 31685.768,
+        "ready": true,
+        "closed": false,
+        "hwnd": "524956",
+        "visible": true,
+        "foreground": true,
+        "dpi_awareness_set": true,
+        "dpi": 120,
+        "bounds_ok": true,
+        "bounds": {
+          "x": 16,
+          "y": 16,
+          "width": 416,
+          "height": 540
+        },
+        "pad_point": {
+          "x": 224,
+          "y": 363
+        },
+        "layout_sequence": 0,
+        "increment_bounds": {
+          "x": 31,
+          "y": 218,
+          "width": 120,
+          "height": 30
+        },
+        "editor_bounds": {
+          "x": 33,
+          "y": 87,
+          "width": 386,
+          "height": 125
+        },
+        "working_area": {
+          "x": 0,
+          "y": 0,
+          "width": 2560,
+          "height": 1380
+        },
+        "modal_open": false,
+        "editor_focused": false,
+        "text": "",
+        "saved": "",
+        "saves": 0,
+        "increments": 0,
+        "menu_open": false,
+        "moves": 44,
+        "drag_moves": 40,
+        "left_up": 1,
+        "right_up": 0,
+        "double_clicks": 0,
+        "wheel_delta": 0,
+        "horizontal_wheel_delta": 0,
+        "keys_down_global": []
+      },
+      "original_response": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"app\":\"D:\\\\WorkDir\\\\desktop-world\\\\artifacts\\\\pr126-review\\\\interruption-deadline-01\\\\Fixture.exe\",\"context_reset\":false,\"effects\":{\"dispatch\":{\"unknown\":1},\"interrupted\":1},\"error\":{\"code\":\"timeout\",\"message\":\"the script's wall-time limit was reached\"},\"execution_id\":\"exe_ThaA6FjlDho_o\",\"failure\":{\"call\":2,\"code\":\"timeout\",\"kind\":\"timeout\",\"line\":1,\"message\":\"the script's wall-time limit was reached\",\"operation\":\"scene.drag\"},\"status\":\"completed\"}"
+            }
+          ],
+          "structuredContent": {
+            "app": "D:\\WorkDir\\desktop-world\\artifacts\\pr126-review\\interruption-deadline-01\\Fixture.exe",
+            "context_reset": false,
+            "effects": {
+              "dispatch": {
+                "unknown": 1
+              },
+              "interrupted": 1
+            },
+            "error": {
+              "code": "timeout",
+              "message": "the script's wall-time limit was reached"
+            },
+            "execution_id": "exe_ThaA6FjlDho_o",
+            "failure": {
+              "call": 2,
+              "code": "timeout",
+              "kind": "timeout",
+              "line": 1,
+              "message": "the script's wall-time limit was reached",
+              "operation": "scene.drag"
+            },
+            "status": "completed"
+          },
+          "isError": true
+        }
+      },
+      "fresh_recovery": {
+        "app": "D:\\WorkDir\\desktop-world\\artifacts\\pr126-review\\interruption-deadline-01\\Fixture.exe",
+        "context_reset": true,
+        "execution_id": "exe_ThaA6FjlDho_1a",
+        "result": "fresh-after-interruption",
+        "status": "completed"
+      },
+      "mcp_cleanup": {
+        "pid": 8020,
+        "exit_code": 0,
+        "forced": false
+      },
+      "workers": [
+        {
+          "pid": 18028,
+          "exit": 0
+        },
+        {
+          "pid": 21944,
+          "exit": 0
+        },
+        {
+          "pid": 18460,
+          "exit": 0
+        }
+      ],
+      "fixture_exit": 0
+    }
+  ],
+  "package_upgrade": {
+    "report_sha256": "67f346c4112f9fd4dec7204461fa181ae2cf9989ddb5c2a7fa78e2dc76f44ed6",
+    "passed": true,
+    "binary_sha256": "81c39764f9a204dbab686c7502c998853079d2487ccfdf47fa968829711557b7",
+    "manager_sha256": "e38db1ba13086bfdb7e5a02c26b84414f42f2c53b8af8b9d8c9568ab25cb1f6d",
+    "baseline_version": "0.5.1",
+    "target_version": "0.5.2",
+    "scope": "synthetic complete packages + real MCP process/locks; no host configuration or GUI",
+    "cases": [
+      "Unicode/space paths",
+      "complete-package deduplication",
+      "two host pins",
+      "schema1 baseline and schema2 upgrade",
+      "manager/runtime version update",
+      "fresh actual runtime version verification",
+      "pending failure protection",
+      "rollback protection",
+      "live MCP shared lease",
+      "independent native worker lease",
+      "collection after process exit",
+      "corruption rejection",
+      "owned cleanup"
+    ],
+    "collection": {
+      "apply": true,
+      "manager_version": "0.5.2",
+      "packages": [
+        {
+          "action": "removed",
+          "error": null,
+          "package_id": "b4bc6fecaf06341381bc2e1981eb64287129d0c70361f20c0e336a88339c62c6",
+          "retained_by": null
+        },
+        {
+          "action": "removed",
+          "error": null,
+          "package_id": "e842dd6b60a55ac8ad8aaa253303e8f465c966a230a4622bdf4db2fdbad1579e",
+          "retained_by": null
+        }
+      ],
+      "scope": "managed package store only; unmanaged installations and Core bundles are untouched",
+      "store_schema": 1,
+      "temporary": []
+    }
+  },
+  "local_evidence_root": "artifacts/pr126-review",
+  "limits": [
+    "Development binary, not the final signed release package.",
+    "Windows native fixtures/direct MCP scripts, not a model/Agent benchmark.",
+    "No local macOS GUI acceptance; new ComboBox controls are checked by native macOS CI.",
+    "No mixed-DPI/multiple-display, elevated, secure-desktop or Linux GUI claim.",
+    "Local source checks hit six existing POSIX/macOS-oriented Python suites; Linux portable CI passed."
+  ],
+  "ci": {
+    "run_id": 44074086147,
+    "url": "https://github.com/caelis-labs/desktop-world/actions/runs/44074086147",
+    "conclusion": "success",
+    "macos": {
+      "library_passed": 679,
+      "cli_passed": 6,
+      "mcp_stdio_passed": 3,
+      "native_swift": "passed",
+      "package_upgrade": "passed",
+      "worker_shutdown": "passed"
+    },
+    "windows": {
+      "library_passed": 648,
+      "cli_passed": 5,
+      "package_upgrade": "passed",
+      "fixture_compile": "passed"
+    },
+    "portable": "passed",
+    "aggregate": "passed"
+  }
+}
