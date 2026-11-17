@@ -244,47 +244,34 @@ let missingPixelTarget = dtwValidatePixelTarget([
 ])
 expect(missingPixelTarget?["error"] as? String == "invalid_request",
        "pixel guard accepted a legacy request without a typed target")
-private func checkFocusBorrowEpoch() {
-    var epoch = FocusBorrowEpoch(initialPID: 10, targetPID: 20)
+private func checkFocusEpoch() {
+    var epoch = FocusEpoch(initialPID: 10, targetPID: 20)
     epoch.activated(10)
     expect(!epoch.invalidated, "Initial foreground sample prematurely invalidated focus establishment")
     epoch.activated(20)
     expect(epoch.reachedTarget && !epoch.invalidated, "Expected activation was not recorded")
-    expect(epoch.retarget(20), "Repeated focus of the same app lost its original borrow")
+    expect(epoch.retarget(20), "Repeated focus of the same app invalidated the active epoch")
     epoch.activated(30); epoch.activated(20)
     expect(epoch.invalidated, "Leave then return incorrectly regained foreground ownership")
     expect(!epoch.retarget(20), "Repeated explicit focus revived an invalidated epoch")
-    expect(!epoch.retarget(10), "Cleanup revived an invalidated epoch")
+    expect(!epoch.retarget(10), "Retargeting to the initial app revived an invalidated epoch")
 
-    var beforeArrival = FocusBorrowEpoch(initialPID: 10, targetPID: 20)
+    var beforeArrival = FocusEpoch(initialPID: 10, targetPID: 20)
     beforeArrival.activated(30); beforeArrival.activated(20)
     expect(beforeArrival.invalidated, "External activation during establishment was forgotten")
-
-    var restored = FocusBorrowEpoch(initialPID: 10, targetPID: 20)
-    restored.activated(20)
-    expect(restored.retarget(10), "Owned restoration could not change expected foreground")
-    restored.activated(20); restored.activated(10)
-    expect(restored.reachedTarget && !restored.invalidated, "Owned restoration invalidated its own epoch")
-    restored.activated(30); restored.activated(10)
-    expect(restored.invalidated, "User activation during restoration was forgotten")
-
-    var newBorrow = FocusBorrowEpoch(initialPID: 30, targetPID: 20)
-    newBorrow.activated(20)
-    expect(newBorrow.retarget(30) && newBorrow.targetPID == 30,
-           "New explicit focus did not retain the user's new return target")
 }
-private func checkWindowFocusBorrowEpoch() {
-    var epoch = FocusBorrowEpoch(initialPID: 10, targetPID: 20, targetWindow: 100)
+private func checkWindowFocusEpoch() {
+    var epoch = FocusEpoch(initialPID: 10, targetPID: 20, targetWindow: 100)
     epoch.focusedWindow(200) // Old key window before the requested focus reaches 100.
     expect(!epoch.invalidated, "Old key window prematurely invalidated focus establishment")
     epoch.activated(20); epoch.focusedWindow(100)
     expect(epoch.reachedWindow, "Exact target arrival was not recorded")
-    expect(epoch.retarget(20, window: 100), "Repeated exact window focus ended the borrow")
+    expect(epoch.retarget(20, window: 100), "Repeated exact window focus invalidated the active epoch")
     epoch.focusedWindow(200); epoch.focusedWindow(100)
-    expect(epoch.invalidated, "Sibling window leave/return revived the borrowed foreground")
+    expect(epoch.invalidated, "Sibling window leave/return revived foreground ownership")
     expect(!epoch.retarget(20, window: 100), "Window epoch became reusable after external change")
 
-    var owned = FocusBorrowEpoch(initialPID: 10, targetPID: 20, targetWindow: 100)
+    var owned = FocusEpoch(initialPID: 10, targetPID: 20, targetWindow: 100)
     owned.activated(20); owned.focusedWindow(100)
     expect(owned.retarget(20, window: 200), "An explicit sibling focus could not update the expected window")
     owned.focusedWindow(100); owned.focusedWindow(200)
@@ -292,7 +279,7 @@ private func checkWindowFocusBorrowEpoch() {
     owned.focusedWindow(100); owned.focusedWindow(200)
     expect(owned.invalidated, "A later external sibling transition was forgotten")
 }
-checkWindowFocusBorrowEpoch()
+checkWindowFocusEpoch()
 private func checkBackgroundStepScope() throws {
     let app = NativeApp(identity: "owned", pid: 100, generation: 5)
     let target = NativeTarget(app: app, nativeID: 10, generation: 7)
@@ -312,7 +299,7 @@ private func checkBackgroundStepScope() throws {
     expect(scope.context === context && scope.context.deadline.uptime == context.deadline.uptime,
            "Background step re-created the original monotonic deadline")
 }
-checkFocusBorrowEpoch()
+checkFocusEpoch()
 try checkBackgroundStepScope()
 private func checkExitedKernelProcess() {
     var info = kinfo_proc()

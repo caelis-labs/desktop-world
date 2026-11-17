@@ -5,7 +5,7 @@ use super::{
     State, Work,
 };
 use crate::{
-    computer::{ActionOutcome, Backend, FocusReturn},
+    computer::{ActionOutcome, Backend},
     runtime::ActionReceipt,
 };
 use serde_json::{json, Value};
@@ -78,7 +78,6 @@ pub(super) struct AppRun {
     pub(super) failure: Option<Value>,
     pub state_committed: bool,
     pub(super) shutdown_error: Option<WireError>,
-    focus_return: Option<FocusReturn>,
     view: Option<Value>,
     snapshot: Option<Value>,
 }
@@ -92,17 +91,12 @@ impl AppRun {
             failure: None,
             state_committed: false,
             shutdown_error: None,
-            focus_return: None,
             view: None,
             snapshot: None,
         }
     }
     pub fn json(&self) -> Value {
-        let mut value = json!({"steps":self.steps.iter().map(Step::json).collect::<Vec<_>>(),"failure":self.failure,"state_committed":self.state_committed,"shutdown_error":self.shutdown_error.as_ref().map(error_json)});
-        if let Some(focus_return) = self.focus_return {
-            value["focus_return"] = json!(focus_return.as_str());
-        }
-        value
+        json!({"steps":self.steps.iter().map(Step::json).collect::<Vec<_>>(),"failure":self.failure,"state_committed":self.state_committed,"shutdown_error":self.shutdown_error.as_ref().map(error_json)})
     }
 }
 
@@ -228,23 +222,7 @@ impl<B: Backend + 'static> Coordinator<B> {
     }
 
     pub(super) fn settle_app_execution(&self, id: &str) {
-        let finished = self.runtime.finish_execution();
-        {
-            let mut state = self.state.lock().unwrap();
-            let run = state
-                .jobs
-                .iter_mut()
-                .find(|j| j.submitted.request_id == *id)
-                .unwrap()
-                .script
-                .as_mut()
-                .unwrap();
-            run.focus_return = match &finished {
-                Ok(status) => *status,
-                Err(_) => Some(FocusReturn::Unconfirmed),
-            };
-        }
-        if let Err(error) = finished {
+        if let Err(error) = self.runtime.finish_execution() {
             self.record_shutdown_error(Some(error), Some(id));
             self.close();
         }

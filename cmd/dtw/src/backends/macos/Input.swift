@@ -19,27 +19,6 @@ private final class PointerPresenter: @unchecked Sendable {
 }
 private let pointerPresenter = PointerPresenter()
 
-// Critical pointer ownership is independent of the optional visual presenter.
-// Only successful physical posts/warps call this path; observations never do.
-private final class PostedPointerPosition: @unchecked Sendable {
-    private let lock = NSLock()
-    private var point: CGPoint?
-    func record(_ point: CGPoint) { lock.lock(); self.point = point; lock.unlock() }
-    func take() -> CGPoint? { lock.lock(); defer { lock.unlock() }; let result = point; point = nil; return result }
-}
-private let postedPointerPosition = PostedPointerPosition()
-func dtwTakePostedPointerPosition() -> CGPoint? { postedPointerPosition.take() }
-
-// The last posted endpoint proves only our cursor position. A user's subsequent
-// movement revokes return; it never becomes permission to warp their cursor.
-func dtwPointerReturnDestination(original: CGPoint?, posted: CGPoint?, current: CGPoint?) -> CGPoint? {
-    guard let original, let posted, let current,
-          [original.x, original.y, posted.x, posted.y, current.x, current.y].allSatisfy({ $0.isFinite }),
-          abs(current.x - posted.x) < 0.5, abs(current.y - posted.y) < 0.5 else { return nil }
-    return original
-}
-
-
 @_cdecl("dtw_set_pointer_presenter")
 public func dtwSetPointerPresenter(_ callback: (@convention(c) (Double, Double, Int32) -> Void)?) {
     pointerPresenter.set(callback)
@@ -47,7 +26,6 @@ public func dtwSetPointerPresenter(_ callback: (@convention(c) (Double, Double, 
 
 // 0: successful warp, 1: posted press, 2: posted release, 3: posted wheel.
 func dtwPresentPostedPointer(_ point: CGPoint, kind: Int32) {
-    if point.x.isFinite && point.y.isFinite { postedPointerPosition.record(point) }
     pointerPresenter.posted(point, kind: kind)
 }
 
@@ -427,29 +405,6 @@ func dtwSettleInput(seconds: TimeInterval, deadline: TimeInterval,
         guard current < deadline else { return false }
         if current >= until { return true }
         pause(min(0.01, until-current, deadline-current))
-    }
-    return false
-}
-
-// A successful warp only queues WindowServer work. Keep the input lease and
-// borrow trace until a fresh read confirms return; never repost a warp here.
-func dtwPointerRestorationPoint(_ original: CGPoint) -> CGPoint? {
-    guard original.x.isFinite, original.y.isFinite else { return nil }
-    // This host truncates fractional warp coordinates. Pick the nearest grid
-    // point so both-axis quantization stays inside the existing 1-unit bound.
-    return CGPoint(x: original.x.rounded(), y: original.y.rounded())
-}
-
-func dtwPointerReturnConfirmed(_ expected: CGPoint, deadline: TimeInterval,
-    read: () -> CGPoint?,
-    now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
-    pause: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }) -> Bool {
-    guard expected.x.isFinite, expected.y.isFinite else { return false }
-    while now() < deadline {
-        if let point = read(), point.x.isFinite, point.y.isFinite,
-           hypot(point.x - expected.x, point.y - expected.y) <= 1 { return true }
-        let left = deadline - now()
-        if left > 0 { pause(min(0.002, left)) }
     }
     return false
 }

@@ -706,9 +706,10 @@ impl Store {
             let until = deadline(request)?;
             check(until)?;
             match op {
-                "finish_execution" => Ok(
-                    json!({"focus":super::execution_scope::finish()?.map(FocusReturn::as_str).unwrap_or("unchanged")}),
-                ),
+                "finish_execution" => {
+                    super::execution_scope::finish();
+                    Ok(json!({}))
+                }
                 "prepare_cursor" => {
                     let target = parse_target(&request["target"])?;
                     self.validate(&target)?;
@@ -1890,7 +1891,6 @@ impl Store {
             let mut actual = POINT::default();
             unsafe { GetCursorPos(&mut actual) }.map_err(failed)?;
             if (actual.x - point.x).abs() <= 1 && (actual.y - point.y).abs() <= 1 {
-                super::execution_scope::after_pointer_move()?;
                 if std::env::var("DTW_INPUT_TRACE").ok().as_deref() == Some("1") {
                     eprintln!(
                         "DTW_WINDOWS_CAPTION_SETTLED expected={},{} actual={},{} queue_tail=read",
@@ -2135,7 +2135,6 @@ impl Store {
         reply["input_route"] = json!(route);
         reply["focus_preparation"] =
             json!({"attempted":preparation,"target_payload_issued":dispatched});
-        reply["foreground_borrowed"] = json!(super::execution_scope::borrowed());
         if input::cleanup_failed() {
             reply["shutdown_error"] = json!({"code":"input_cleanup_failed","message":"Paired input, accepted text delivery or transaction lease cleanup is unconfirmed"});
         }

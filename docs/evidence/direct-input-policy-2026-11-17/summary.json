@@ -1,0 +1,178 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-17",
+  "platform": "macOS 27.2 arm64",
+  "source_base": "ac90e69 / 0.5.1 plus workspace changes",
+  "candidate": {
+    "path": "/tmp/dtw-direct-candidate-20261117-02/dtw",
+    "sha256": "259b92ff8a0ef14b8314844c3fd618c0a919d158443a1361ee9e31d453cb2a67",
+    "post_acceptance_source_edits": "Only obsolete comments and one diagnostic trace label were cleaned up."
+  },
+  "policy": {
+    "macos": "background capabilities first; necessary foreground/physical input is left in place",
+    "windows": "foreground interaction; no original foreground/cursor/z-order restoration",
+    "retained": [
+      "exact target proof",
+      "user-switch stops current execution",
+      "paired releases",
+      "no replay of unknown input"
+    ]
+  },
+  "native_background": {
+    "frontmost_before": 6963,
+    "frontmost_after": 6963,
+    "pointer_before": [
+      1467.390625,
+      1525.56640625
+    ],
+    "pointer_after": [
+      1467.390625,
+      1525.56640625
+    ],
+    "relative_order_before": [
+      6963,
+      6948
+    ],
+    "relative_order_after": [
+      6963,
+      6948
+    ]
+  },
+  "web": {
+    "passed": true,
+    "clean_run": true,
+    "readback": {
+      "note": "DTW direct input 中文 😀",
+      "quantity": "37"
+    },
+    "saved_record": {
+      "sku": "DTW-0137",
+      "name": "Field kit 137",
+      "warehouse": "Central",
+      "quantity": 37,
+      "reviewed": false,
+      "note": "DTW direct input 中文 😀"
+    },
+    "save_count": 1
+  },
+  "necessary_hover": {
+    "frontmost_before": 6963,
+    "frontmost_after": 6948,
+    "target_pid": 6948,
+    "pointer_before": [
+      1467.390625,
+      1525.56640625
+    ],
+    "pointer_after": [
+      516.5,
+      1377
+    ],
+    "relative_order_before": [
+      6963,
+      6948
+    ],
+    "relative_order_after": [
+      6948,
+      6963
+    ],
+    "destination_verified": true
+  },
+  "canvas": {
+    "pins": 1,
+    "pinned": "message-137",
+    "pin_count": 1,
+    "right_clicks": 1,
+    "selected_id": "message-137",
+    "selected_action": "Pin",
+    "menu_open": false
+  },
+  "ax_popup_evidence": {
+    "pid": 93778,
+    "role": "AXWindow",
+    "subrole": "AXUnknown",
+    "parent_role": "AXApplication",
+    "focus_settable": false,
+    "parent_window_proven": false
+  },
+  "cleanup": {
+    "target_running_after_quit": false,
+    "transport": {
+      "pid": 6945,
+      "returncode": 0,
+      "forced": [],
+      "native_workers": [
+        6946,
+        6947,
+        6962
+      ],
+      "native_workers_reaped": true
+    },
+    "services_passed": true,
+    "owned_apps": [
+      {
+        "app": "/tmp/dtw-direct-input-20261117/ComputerUse.app",
+        "running_after_quit": false,
+        "error": null
+      },
+      {
+        "app": "/tmp/dtw-direct-witness-20261117/ComputerUse.app",
+        "running_after_quit": false,
+        "error": null
+      },
+      {
+        "app": "/private/tmp/dtw-direct-acceptance-03/witness/ComputerUse.app",
+        "running_after_quit": false,
+        "error": null
+      }
+    ]
+  },
+  "validation": {
+    "rust_library": "678 serial tests passed; the remaining real HID event-source test passed separately on Host",
+    "cli": 6,
+    "mcp_stdio": 3,
+    "native_inventory": "passed, including AXUnknown/StandardWindow pointer classification",
+    "native_input": "passed; 115 input-contract assertions plus existing controls",
+    "windows": "x86_64-pc-windows-msvc provider production/tests type check passed; no Windows GUI run"
+  },
+  "preserved_failures": [
+    {
+      "case": "sandbox probe",
+      "result": "launch_unconfirmed and ps cleanup denied",
+      "classification": "runtime access boundary; no keyboard/mouse payload attempted"
+    },
+    {
+      "case": "first candidate",
+      "result": "Web focus postcondition failure exposed dispatched+error parser rejection",
+      "classification": "fixed by Web foreground preflight and preserving dispatch/error independently"
+    },
+    {
+      "case": "probe-02",
+      "result": "correct note/quantity readback; save wait_timeout",
+      "classification": "fixture HTTP service had exited; independent HTTP GET returned connection refused; final finite-lifecycle run passed"
+    },
+    {
+      "case": "parallel Rust run",
+      "result": "one cursor helper cleanup timing test failed",
+      "classification": "unchanged test; serial full suite passed without changing its assertion"
+    },
+    {
+      "case": "sandbox HID source test",
+      "result": "CGEventSource creation hung",
+      "classification": "separate Host exact test passed"
+    }
+  ],
+  "limits": [
+    "Endpoint observations do not prove continuous isolation.",
+    "Hover input used owned fixture geometry mapped to DTW capture, not model vision.",
+    "No Windows/Linux GUI, arbitrary app, mixed-DPI, lock-screen, or complete model/Skill task acceptance."
+  ],
+  "image_sha256": {
+    "correct-text-receiver.png": "fa5cb51a0b2ac12c3b10cd09de8e17b6980e7c8357e045deb12083474a48196e",
+    "canvas-pin.png": "7ec86d1a37a3b0ce10f12f0984df1119c45fb4198b9d2cf8ac9d50d1de6205b9"
+  },
+  "final_build": {
+    "path": "/Users/xueyongzhi/WorkDir/caelis-labs/desktop-world/cmd/dtw/target/release/dtw",
+    "sha256": "98ceae5ba271d37c73259e34769657c0873be8a92bf69bbe3c0201a3764f0378",
+    "native_source_sha256": "99e7f2e1a7685e106c4568f2fc6ae56998279e552602856120c847b820b1b5e4"
+  }
+}

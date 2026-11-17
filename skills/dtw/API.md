@@ -2,7 +2,8 @@
 
 ## Tools
 
-Default `dtw mcp` exposes `apps` + `exec`. `dtw mcp --atomic` exposes
+Default `dtw mcp` exposes two tools, `apps` + `exec`, with all 14 app operations.
+`dtw mcp --atomic` exposes 15 tools:
 `apps` plus the fourteen methods below as flat MCP tools, without `exec` or
 JavaScript. Discover/list actual tools: use scripts if `exec` is present;
 otherwise invoke the listed operation directly. Never select operations by OS.
@@ -15,8 +16,10 @@ and `{app}` as tools. Existing JS shorthand remains a compatibility convenience.
 
 Both modes use the same native app facade, retained session/handles, stale-target
 validation, cancellation, retransmission and effect reporting. Each atomic call
-settles its own execution/cleanup boundary, just as one `exec` does. Separate
-atomic calls cannot share the focus/menu scope of one script. See
+settles its own execution/cleanup boundary, just as one `exec` does. Settlement
+does not restore foreground, focus or pointer position. Scripts remain useful
+for orchestrating known sequential steps; inspect receiver/menu state between
+atomic calls. See
 [MCP toolsets](https://github.com/caelis-labs/desktop-world/blob/main/docs/mcp-toolsets.md) for startup, compatibility and limits.
 
 `apps({query?, state?, offset?, limit?})`
@@ -64,7 +67,12 @@ atomic calls cannot share the focus/menu scope of one script. See
   If automatic input preparation fails before payload delivery, the requested
   input is `not_dispatched`; preparation may still have changed focus. Its error
   identifies that stage. Cleanup failures remain explicit errors.
-  On Windows, optional focus preparation and return are handled by DTW.
+  Windows defaults to foreground interaction; DTW prepares the exact receiver.
+  macOS prefers effective background capabilities and directly uses foreground
+  or the real pointer when needed. Changes remain in place after settlement.
+  Public `effects` reports dispatch and optional interruptions/acknowledgements.
+  Delivery `route` / `reason` stay in the internal diagnostic ledger; the public
+  response has no `effects.delivery` field.
   An action that cannot establish its required receiver is refused before its
   payload. Inspect the current state before deciding how to continue.
   If the app exits, a separately proved final `running:false` view concludes the
@@ -76,7 +84,9 @@ atomic calls cannot share the focus/menu scope of one script. See
   action. Do not repeat an action to recover the missing observation. An
   explicit read failure, interruption or unconfirmed cleanup remains an error.
   A readback mismatch or native cleanup failure is retained on the affected
-  execution. Later requests can observe fresh state and issue new actions.
+  execution. Cleanup failure stops that execution and affected native context.
+  Later new requests let the service retire/recover the context and check
+  admission before observing fresh state or issuing new actions.
   DTW replaces unavailable workers and checks the current target and input
   preconditions for each action. It does not replay earlier input.
   Return a task-specific JSON value to get just `result` alongside applicable
@@ -162,9 +172,9 @@ internally. Use an observed editable control before typing. After an action that
 creates a window or popup, use `waitForNewWindow()` before acting in it; after
 Save/Cancel/Close dismisses a surface, inspect `look()` instead.
 
-Keep related input in one `exec`, including input following an explicit `focus()`.
-On Windows, open a native menu and choose its item in that same `exec`: returning
-the original foreground at the script boundary can normally dismiss the menu.
+Keep known related input in one `exec` for orchestration. Separate atomic calls
+settle independently without restoring focus or dismissing menus through a
+restoration callback; verify the actual menu and receiver before new input.
 If the user changes the selected app/window during execution, DTW stops further
 input. Inspect the new state in a later execution; never replay an unknown input.
 Confirmed quit or closure of the current window ends its input scope. A save
@@ -191,7 +201,10 @@ the baseline and carry arrays. A delta applies to the last published view for
 the app and carries per-collection `added`, `changed`, `removed` and optional
 `order`. Missing fields retain their previous values. DTW sends a full view if
 it costs less than a delta. Use `look({full:true})` when a fresh baseline is needed.
-Truncated observations cannot prove absence. Intermediate and custom-result
+Truncated observations cannot prove absence. Even `complete` with `elements:[]`
+only describes the queried AX/native tree, not all visible content. Capture
+self-drawn or low-AX interfaces before concluding the screen is empty.
+Intermediate and custom-result
 reads leave the published baseline in place.
 
 While its anchor window stays in place, a previously captured viewport is retained
@@ -290,10 +303,16 @@ acceptance does not establish Windows parity.
 
 ## Provider boundaries
 
+On macOS, editable semantic clicks confirm the exact retained native text receiver
+before sequential script input continues. Web text controls can require direct
+foreground preparation before dispatch. Receiver readback failure preserves a
+known dispatch together with its error; inspect before new input. Compatibility
+still requires evidence for each application/control.
+
 On macOS, AX tree availability is optional for app capture and coordinate input.
 An unreadable or partial tree does not block proven screenshot coordinates, drag
 or wheel input. Keyboard input still needs its exact editing destination; unknown
-AX/modal state is a refusal, not permission to activate the app. Semantic actions still need
+AX/modal state does not prove that destination or authorize input. Semantic actions still need
 their own live target proof; a rejected semantic action is never replayed as a
 mouse click. Process identity, visible-hit, geometry and input-release checks
 continue to apply when no semantic elements are available.
@@ -323,11 +342,11 @@ an unobstructed window and does not claim multi-surface capture.
 Windows prepares the exact foreground receiver for interaction. Semantic actions
 use UIA; pointer actions require a visible, unobstructed hit. If the target
 remains covered after preparation, uncover it and capture it again. Related
-actions in one script reuse its foreground scope. A visible user handoff stops
-input for that script. Settlement returns proven original focus and the owned
-physical pointer. Windows controls window stacking through its normal activation
-behavior. If the original foreground is an unreadable hidden service, the
-prepared visible target can remain active.
+actions in one script share its checked input scope. A visible user handoff stops
+input for that execution. Windows defaults to foreground input and uses normal
+activation behavior; it does not use background-directed mouse delivery.
+Settlement releases held keys/buttons and leaves foreground, focus, stacking
+and physical pointer changes in place. No original-state restoration is attempted.
 
 On Windows, a readable focused edit can confirm `text_present_in_focused_control`
 for ASCII and Unicode. A failure to verify accepted text stops the script at

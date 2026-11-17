@@ -65,7 +65,7 @@ struct Model {
     shutdown_error: Option<Error>,
     finish_error: Option<Error>,
     finish_gate: Option<WorkerGate>,
-    finish_focus: Option<FocusReturn>,
+
     cleanup_error: Option<Error>,
     cleanup_after_capture: Option<Error>,
     capture_errors: std::collections::VecDeque<Error>,
@@ -124,7 +124,6 @@ impl MockBackend {
                 shutdown_error: None,
                 finish_error: None,
                 finish_gate: None,
-                finish_focus: None,
                 cleanup_error: None,
                 cleanup_after_capture: None,
                 capture_errors: std::collections::VecDeque::new(),
@@ -284,7 +283,7 @@ impl Backend for MockBackend {
     fn cleanup_error(&self) -> Option<Error> {
         self.0.model.lock().unwrap().cleanup_error.clone()
     }
-    fn finish_execution(&self) -> Result<Option<FocusReturn>, Error> {
+    fn finish_execution(&self) -> Result<(), Error> {
         self.0.finishes.fetch_add(1, Ordering::SeqCst);
         let gate = self.0.model.lock().unwrap().finish_gate.take();
         if let Some(gate) = gate {
@@ -293,7 +292,7 @@ impl Backend for MockBackend {
         let model = self.0.model.lock().unwrap();
         match model.finish_error.clone() {
             Some(error) => Err(error),
-            None => Ok(model.finish_focus),
+            None => Ok(()),
         }
     }
     fn shutdown(&self) -> Result<(), Error> {

@@ -144,15 +144,6 @@ fn key_focus_of_pid(pid: pid_t) -> KeyFocus {
 }
 
 pub fn post_window_key_records(pid: pid_t, current: Option<u32>, target: u32) -> bool {
-    post_window_key_records_checked(pid, current, target, None)
-}
-
-fn post_window_key_records_checked(
-    pid: pid_t,
-    current: Option<u32>,
-    target: u32,
-    evidence: Option<&super::ax::WindowEvidence>,
-) -> bool {
     let Some(post) = post_event_record_to_fn() else {
         return false;
     };
@@ -161,12 +152,6 @@ fn post_window_key_records_checked(
         return false;
     }
     let send = |record: &[u8; 0xF8]| {
-        if evidence.is_some_and(|window| !window.still_matches()) {
-            super::control::preparation_failure(
-                "previous key window changed during restoration".into(),
-            );
-            return false;
-        }
         if !super::control::before_preparation() {
             return false;
         }
@@ -725,119 +710,28 @@ pub fn keyboard_available() -> bool {
 
 const WINDOWSERVER_INVALID_CONNECTION: i32 = 1002;
 
-fn should_restore_key_window(current: Option<u32>, previous: Option<u32>, target: u32) -> bool {
-    current == Some(target) && current != previous
-}
-
-/// Port of CUA's exact-window key scope with explicit, identity-checked cleanup.
-/// It restores only the retained previous window, never a newly discovered sibling.
-pub struct WindowKeyScope {
-    pid: pid_t,
-    target: u32,
-    previous: Option<u32>,
-    previous_element: Option<super::ax::WindowEvidence>,
-    finished: bool,
-}
-impl WindowKeyScope {
-    pub fn capture(pid: pid_t, target: u32) -> Self {
-        let previous = key_focus_of_pid(pid).window;
-        let previous_element = previous.and_then(|id| super::ax::WindowEvidence::retain(pid, id));
-        Self {
-            pid,
-            target,
-            previous,
-            previous_element,
-            finished: false,
-        }
-    }
-    pub fn can_restore(&self) -> bool {
-        self.previous.is_some()
-            && self
-                .previous_element
-                .as_ref()
-                .is_some_and(|w| w.still_matches())
-    }
-    pub fn prime(&mut self) -> anyhow::Result<()> {
-        prime_exact_window_key(
-            self.target,
-            || key_focus_of_pid(self.pid),
-            || {
-                let ok = post_window_key_records(self.pid, self.previous, self.target);
-                if ok {
-                    await_key_focus(self.pid, self.target, std::time::Duration::from_millis(400));
-                }
-                ok
-            },
-            || {
-                let ok = set_app_focused_window(self.pid, self.target);
-                if ok {
-                    await_key_focus(self.pid, self.target, std::time::Duration::from_millis(200));
-                }
-                ok
-            },
-        )
-        .map(|_| ())
-        .map_err(anyhow::Error::msg)
-    }
-    fn restore(&self) -> anyhow::Result<()> {
-        if !super::control::prepared() {
-            return Ok(());
-        }
-        // The target can legitimately close or lose key ownership after input.
-        // Verify the original app first, and preserve any subsequent focus choice.
-        super::control::check_input_owner()?;
-        let current = key_focus_of_pid(self.pid).window;
-        if !should_restore_key_window(current, self.previous, self.target) {
-            return Ok(());
-        }
-        // Only an owned restoration may touch windows: retain the full original
-        // target check and the original previous AX object, never a new sibling.
-        super::control::check()?;
-        let previous = self.previous.ok_or_else(|| {
-            anyhow::anyhow!("previous key window is unknown; focus cannot be restored safely")
-        })?;
-        anyhow::ensure!(
-            self.previous_element
-                .as_ref()
-                .is_some_and(|w| w.still_matches()),
-            "previous key window is no longer valid"
-        );
-        anyhow::ensure!(
-            post_window_key_records_checked(
-                self.pid,
-                Some(self.target),
-                previous,
-                self.previous_element.as_ref()
-            ),
-            "restoring previous key window failed"
-        );
-        await_key_focus(self.pid, previous, std::time::Duration::from_millis(300));
-        anyhow::ensure!(
-            key_focus_of_pid(self.pid).window == Some(previous),
-            "previous key window restoration could not be verified"
-        );
-        Ok(())
-    }
-    pub fn cleanup(&mut self) {
-        if self.finished {
-            return;
-        }
-        self.finished = true;
-        super::control::cleanup_pending();
-        if !super::control::prepared() {
-            return;
-        }
-        super::control::with_cleanup(|| {
-            if let Err(error) = self.restore() {
-                super::control::cleanup_failure(error.to_string());
+/// Prepare only the exact keyboard receiver; no prior focus is retained.
+pub fn prime_window_key(pid: pid_t, target: u32) -> anyhow::Result<()> {
+    prime_exact_window_key(
+        target,
+        || key_focus_of_pid(pid),
+        || {
+            let ok = post_window_key_records(pid, key_focus_of_pid(pid).window, target);
+            if ok {
+                await_key_focus(pid, target, std::time::Duration::from_millis(400));
             }
-        });
-    }
-}
-impl Drop for WindowKeyScope {
-    fn drop(&mut self) {
-        self.cleanup();
-    }
+            ok
+        },
+        || {
+            let ok = set_app_focused_window(pid, target);
+            if ok {
+                await_key_focus(pid, target, std::time::Duration::from_millis(200));
+            }
+            ok
+        },
+    )
+    .map(|_| ())
+    .map_err(anyhow::Error::msg)
 }
 
 #[cfg(test)]
@@ -994,14 +888,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn lost_key_ownership_preserves_current_focus() {
-        assert!(should_restore_key_window(Some(7), Some(6), 7));
-        assert!(!should_restore_key_window(Some(6), Some(6), 7));
-        assert!(!should_restore_key_window(Some(8), Some(6), 7));
-        assert!(!should_restore_key_window(None, Some(6), 7));
-        assert!(!should_restore_key_window(Some(7), Some(7), 7));
-    }
     #[test]
     fn exact_window_does_not_reprime() {
         let result = prime_exact_window_key(

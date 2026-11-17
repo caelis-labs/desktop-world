@@ -278,7 +278,7 @@ pub unsafe fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef {
     app
 }
 /// Only AXNoValue proves absence. Unsupported attributes, timeouts and invalid
-/// elements remain unknown and never authorize foreground borrowing.
+/// elements remain unknown and never authorize foreground activation.
 pub fn focused_window_absent(pid: i32) -> bool {
     unsafe {
         let app = AXUIElementCreateApplication(pid);
@@ -443,82 +443,6 @@ pub unsafe fn copy_ax_windows(element: AXUIElementRef) -> Vec<AXUIElementRef> {
             }
         })
         .collect()
-}
-
-pub struct WindowEvidence {
-    element: AXUIElementRef,
-    id: u32,
-}
-impl WindowEvidence {
-    pub fn retain(pid: i32, id: u32) -> Option<Self> {
-        unsafe {
-            let app = AXUIElementCreateApplication(pid);
-            if app.is_null() {
-                return None;
-            }
-            // AXFocusedWindow can be a real sheet absent from AXWindows.
-            // Retain that exact CUA focus source before the ordinary inventory
-            // fallback; enumerating only top-level windows rejected valid input.
-            let mut found = copy_element_attr(app, "AXFocusedWindow").and_then(|window| {
-                if ax_get_window_id(window) == Some(id) {
-                    Some(Self {
-                        element: window,
-                        id,
-                    })
-                } else {
-                    CFRelease(window as _);
-                    None
-                }
-            });
-            if found.is_some() {
-                CFRelease(app as _);
-                return found;
-            }
-            if let Some(control) = focused_top_level_text_control(pid)
-                .filter(|control| control.window_id() == Some(id))
-            {
-                CFRetain(control.0 as _);
-                CFRelease(app as _);
-                return Some(Self {
-                    element: control.0,
-                    id,
-                });
-            }
-            for window in copy_ax_windows(app) {
-                if found.is_none() && ax_get_window_id(window) == Some(id) {
-                    found = Some(Self {
-                        element: window,
-                        id,
-                    });
-                } else {
-                    CFRelease(window as _);
-                }
-            }
-            CFRelease(app as _);
-            found
-        }
-    }
-    pub fn still_matches(&self) -> bool {
-        unsafe {
-            let attribute = CFStr::new("AXRole");
-            let mut value: CFTypeRef = std::ptr::null();
-            let status = AXUIElementCopyAttributeValue(
-                self.element,
-                attribute.as_concrete_TypeRef(),
-                &mut value,
-            );
-            let live = status == 0 && !value.is_null();
-            if !value.is_null() {
-                CFRelease(value);
-            }
-            live && ax_get_window_id(self.element) == Some(self.id)
-        }
-    }
-}
-impl Drop for WindowEvidence {
-    fn drop(&mut self) {
-        unsafe { CFRelease(self.element as _) }
-    }
 }
 
 #[cfg(test)]

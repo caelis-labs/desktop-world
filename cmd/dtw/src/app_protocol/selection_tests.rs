@@ -63,7 +63,7 @@ impl SelectionBackend {
 }
 impl Backend for SelectionBackend {
     type Binding = ();
-    fn finish_execution(&self) -> Result<Option<FocusReturn>, Error> {
+    fn finish_execution(&self) -> Result<(), Error> {
         self.focus.finish_execution()
     }
     fn shutdown(&self) -> Result<(), Error> {
@@ -147,11 +147,7 @@ impl Backend for SelectionBackend {
         call: &CallContext<'_>,
     ) -> ActionOutcome {
         assert_eq!(input, &WindowInput::Focus);
-        let outcome = self.focus.act(call);
-        if outcome.dispatch == DispatchState::Dispatched {
-            self.focus.0.model.lock().unwrap().finish_focus = Some(FocusReturn::Restored);
-        }
-        outcome
+        self.focus.act(call)
     }
     fn set_value(
         &self,
@@ -282,12 +278,17 @@ fn selection_read_errors_describe_resolution_without_claiming_an_action() {
                 &owner,
                 "resolution-error",
                 &format!(
-                "return await app.{method}({{window_ref,selector:{{text:'Save'}},timeout_ms:0}});"
+                "return await app.{method}({{window_ref,selector:{{role:'button',text:'Save'}},timeout_ms:0}});"
             ),
             );
             let error = &step(&reply)["error"];
             assert_eq!(error["code"], expected);
             let message = error["message"].as_str().unwrap();
+            if matches!(expected, "selector_ambiguous" | "selector_unproven") {
+                for guidance in ["IDs", "context", "image", "role/text"] {
+                    assert!(message.contains(guidance), "{message}");
+                }
+            }
             if method == "find" {
                 assert!(message.contains("No unique element reference"), "{message}");
                 assert!(!message.contains("action"), "{message}");
@@ -327,7 +328,7 @@ fn selection_content_can_become_readable_without_preparing_focus() {
         assert_eq!(backend.queries.lock().unwrap().len(), 2);
         assert_eq!(backend.advances.load(Ordering::SeqCst), 1);
         assert!(step(&reply)["resolution"]["focus_preparation"].is_null());
-        assert!(reply.data["script"]["focus_return"].is_null());
+        assert!(reply.data["script"].get("focus_return").is_none());
     }
 }
 
@@ -495,7 +496,7 @@ fn selection_explicit_focus_remains_an_explicit_action() {
     assert!(!reply.is_error, "{}", reply.data);
     assert_eq!(backend.focus.0.actions.load(Ordering::SeqCst), 1);
     assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
-    assert_eq!(reply.data["script"]["focus_return"], "restored");
+    assert_eq!(backend.focus.0.finishes.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -896,7 +897,7 @@ fn menu_selection_dispatches_once_without_preparing_focus() {
         assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
         assert_eq!(*backend.selected_elements.lock().unwrap(), vec![ElementId(1)]);
         assert!(step(&reply)["resolution"]["focus_preparation"].is_null());
-        assert!(reply.data["script"]["focus_return"].is_null());
+        assert!(reply.data["script"].get("focus_return").is_none());
     }
 }
 
@@ -1035,7 +1036,7 @@ fn selection_menu_scope_wire_and_missing_menu_hint_are_explicit() {
 }
 
 #[test]
-fn menu_selection_unsupported_action_does_not_borrow_focus_and_unknown_is_not_replayed() {
+fn menu_selection_unsupported_action_does_not_prepare_focus_and_unknown_is_not_replayed() {
     let (owner, backend) = setup(vec![Ok(page(vec![element(1, false)], false, true, 1))]);
     let rejected = script(
         &owner,
@@ -1088,7 +1089,7 @@ fn menu_selection_waits_for_readiness_using_reads_without_focus() {
         *backend.selected_elements.lock().unwrap(),
         vec![ElementId(3)]
     );
-    assert!(reply.data["script"]["focus_return"].is_null());
+    assert!(reply.data["script"].get("focus_return").is_none());
 }
 
 #[test]

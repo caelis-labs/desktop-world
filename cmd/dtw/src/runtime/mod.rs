@@ -252,7 +252,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         self.backend.is_reaped()
     }
 
-    pub fn finish_execution(&self) -> Result<Option<FocusReturn>, Error> {
+    pub fn finish_execution(&self) -> Result<(), Error> {
         self.backend.finish_execution()
     }
 

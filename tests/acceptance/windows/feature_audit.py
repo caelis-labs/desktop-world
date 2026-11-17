@@ -148,8 +148,7 @@ def main():
 
         stage = 'native_menu'
         before = state()['saves']
-        # Foreground return at the exec boundary normally dismisses a Win32
-        # native menu. Select its item within that same owned execution.
+        # Batch this known menu sequence within one owned execution.
         record(stage, effect('await app.look();await app.click({selector:{scope:"menu",text:"Audit File"}});'
             'await app.click({selector:{scope:"menu",text:"Commit audit document"}});', lambda s: s['saves'] == before + 1))
         stage = 'modal_composition'

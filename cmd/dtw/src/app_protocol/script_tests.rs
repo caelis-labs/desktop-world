@@ -142,7 +142,7 @@ state.invalid=true;return 'pretend success';
 }
 
 #[test]
-fn inline_focus_cleanup_failure_preserves_action_and_stops_before_another_input() {
+fn inline_cleanup_failure_preserves_action_and_stops_before_another_input() {
     for mut provider in [
         ActionOutcome {
             delivery: None,
@@ -160,15 +160,13 @@ fn inline_focus_cleanup_failure_preserves_action_and_stops_before_another_input(
         provider.delivery = Some(InputDelivery {
             route: Some(InputRoute::Foreground),
             reason: Some("menu_key_equivalent".into()),
-            foreground_borrowed: true,
-            focus_return: Some(FocusReturn::Unconfirmed),
         });
         {
             let mut model = backend.0.model.lock().unwrap();
             model.outcome = provider.clone();
             let cleanup = Error::NativeFailure {
                 code: "deadline_exceeded".into(),
-                message: "original focus return deadline".into(),
+                message: "original resource cleanup deadline".into(),
             };
             model.cleanup_after_action = Some(cleanup.clone());
             model.finish_error = Some(cleanup);
@@ -192,9 +190,8 @@ return 'pretend success';
         );
         assert_eq!(
             completed.data["shutdown_error"]["message"],
-            "original focus return deadline"
+            "original resource cleanup deadline"
         );
-        assert_eq!(completed.data["script"]["focus_return"], "unconfirmed");
         assert_eq!(completed.data["script"]["state_committed"], false);
         assert_eq!(
             *owner.state.lock().unwrap().script_state.lock().unwrap(),
@@ -825,7 +822,6 @@ fn execution_finish_failure_preserves_action_receipt_and_prevents_state_commit()
     );
     assert!(completed.is_error, "{}", completed.data);
     assert_eq!(completed.data["shutdown_error"]["code"], "finish_failed");
-    assert_eq!(completed.data["script"]["focus_return"], "unconfirmed");
     assert_eq!(completed.data["script"]["state_committed"], false);
     assert_eq!(
         *owner.state.lock().unwrap().script_state.lock().unwrap(),
@@ -846,34 +842,30 @@ fn execution_finish_failure_preserves_action_receipt_and_prevents_state_commit()
 }
 
 #[test]
-fn final_focus_return_is_separate_from_the_original_focus_receipt() {
+fn execution_cleanup_preserves_original_delivery_receipt() {
     let (owner, backend) = coordinator();
-    {
-        let mut model = backend.0.model.lock().unwrap();
-        model.outcome.delivery = Some(InputDelivery {
-            route: Some(InputRoute::Foreground),
-            reason: None,
-            foreground_borrowed: true,
-            focus_return: Some(FocusReturn::Pending),
-        });
-        model.finish_focus = Some(FocusReturn::Restored);
-    }
-    let completed = run_script(&owner, "focus-return", "const w=(await app.windows()).windows[0].window_ref;return await app.focus({window_ref:w});");
+    backend.0.model.lock().unwrap().outcome.delivery = Some(InputDelivery {
+        route: Some(InputRoute::Foreground),
+        reason: None,
+    });
+    let completed = run_script(&owner, "focus", "const w=(await app.windows()).windows[0].window_ref;return await app.focus({window_ref:w});");
     assert!(!completed.is_error, "{}", completed.data);
-    assert_eq!(completed.data["script"]["focus_return"], "restored");
     assert_eq!(
-        steps(&completed)[1]["receipt"]["outcome"]["delivery"]["focus_return"],
-        "pending"
+        steps(&completed)[1]["receipt"]["outcome"]["delivery"],
+        json!({"route":"foreground","reason":null})
     );
-    assert_eq!(result(&owner, "focus-return").data, completed.data);
-    backend.0.model.lock().unwrap().finish_focus = None;
-    let next = run_script(&owner, "no-focus-return", "return 1;");
-    assert!(next.data["script"].get("focus_return").is_none());
+    assert!(completed.data["script"].get("focus_return").is_none());
+    assert_eq!(backend.0.finishes.load(Ordering::SeqCst), 1);
+    assert_eq!(result(&owner, "focus").data, completed.data);
+    assert_eq!(backend.0.finishes.load(Ordering::SeqCst), 1);
+    let next = run_script(&owner, "next", "return 1;");
+    assert!(!next.is_error);
+    assert_eq!(backend.0.finishes.load(Ordering::SeqCst), 2);
     owner.close();
 }
 
 #[test]
-fn retired_unconfirmed_focus_keeps_receipts_and_allows_fresh_reads() {
+fn execution_cleanup_keeps_receipts_and_allows_fresh_reads() {
     for uncertain in [false, true] {
         let (owner, backend) = coordinator();
         run_script(&owner, "seed", "state.kept=7;");
@@ -882,24 +874,21 @@ fn retired_unconfirmed_focus_keeps_receipts_and_allows_fresh_reads() {
             if uncertain {
                 model.outcome = ActionOutcome::unknown(Error::NativeFailure {
                     code: "ax_unavailable".into(),
-                    message: "original focus preparation failed".into(),
+                    message: "original action failed".into(),
                 });
             }
-            model.finish_focus = Some(FocusReturn::Unconfirmed);
         }
         let original = run_script(
             &owner,
-            "retired-focus",
+            "action-before-cleanup",
             format!("{SETUP}{PRESS}state.kept=9;return true;"),
         );
         assert_eq!(original.is_error, uncertain, "{}", original.data);
-        assert_eq!(original.data["script"]["focus_return"], "unconfirmed");
         assert!(original.data["shutdown_error"].is_null());
         assert_eq!(
             steps(&original)[2]["receipt"]["outcome"]["dispatch"],
             if uncertain { "unknown" } else { "dispatched" }
         );
-        backend.0.model.lock().unwrap().finish_focus = None;
         let fresh = run_script(
             &owner,
             "fresh-read",
@@ -912,7 +901,7 @@ fn retired_unconfirmed_focus_keeps_receipts_and_allows_fresh_reads() {
         );
         assert_eq!(backend.0.actions.load(Ordering::SeqCst), 1);
         assert_eq!(backend.0.shutdowns.load(Ordering::SeqCst), 0);
-        assert_eq!(result(&owner, "retired-focus").data, original.data);
+        assert_eq!(result(&owner, "action-before-cleanup").data, original.data);
         owner.close();
     }
 }

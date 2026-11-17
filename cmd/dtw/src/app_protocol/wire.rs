@@ -1044,9 +1044,7 @@ fn outcome(outcome: &computer::ActionOutcome) -> Value {
     if let Some(delivery) = &outcome.delivery {
         value["delivery"] = json!({
             "route": delivery.route.map(computer::InputRoute::as_str),
-            "reason": delivery.reason,
-            "foreground_borrowed": delivery.foreground_borrowed,
-            "focus_return": delivery.focus_return.map(computer::FocusReturn::as_str)
+            "reason": delivery.reason
         });
     }
     value

@@ -341,9 +341,6 @@ pub fn set_pointer_point(screen: (f64, f64), local: (f64, f64)) {
 pub fn check_completed() -> anyhow::Result<()> {
     target_gate()?.local()
 }
-pub fn check_input_owner() -> anyhow::Result<()> {
-    owner_gate()?.validate()
-}
 pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -396,9 +393,6 @@ pub fn before_preparation() -> bool {
         }
     });
     true
-}
-pub fn prepared() -> bool {
-    CALL.with(|c| c.borrow().as_ref().is_some_and(|s| s.prepared))
 }
 pub fn with_cleanup<T>(body: impl FnOnce() -> T) -> T {
     let previous = CALL.with(|c| {
@@ -1022,7 +1016,7 @@ mod tests {
         )
         .unwrap();
         assert!(check().is_err());
-        assert!(check_input_owner().is_ok());
+        assert!(owner_gate().unwrap().validate().is_ok());
         assert!(CALL.with(|call| call.borrow().as_ref().unwrap().cleanup_deadline.is_none()));
         let gate = Gate {
             validation: Validation::InputOwner,

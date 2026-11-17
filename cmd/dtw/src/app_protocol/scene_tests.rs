@@ -113,13 +113,11 @@ fn compact_scene_output_has_no_native_refs_or_session_ledger() {
     assert!(r.data["output"].is_array());
 }
 #[test]
-fn app_actions_keep_delivery_and_borrow_policy_out_of_the_model_protocol() {
+fn app_actions_keep_delivery_diagnostics_out_of_the_model_protocol() {
     let (server, catalog) = agent();
     catalog.backend.0.model.lock().unwrap().outcome.delivery = Some(InputDelivery {
         route: Some(InputRoute::Foreground),
         reason: Some("classified_internal_capability".into()),
-        foreground_borrowed: true,
-        focus_return: Some(FocusReturn::Retained),
     });
     let response = exec(
         &server,

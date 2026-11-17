@@ -1,4 +1,4 @@
-"""Owned Windows scope/away-return acceptance; public apps/exec, no model claim.
+"""Owned Windows direct-input/away-return acceptance; public apps/exec.
 
 A separate MCP connection supplies only the declared foreground actor. All
 business effects come from the target connection and independent fixture files.
@@ -94,7 +94,11 @@ def main():
         clients.append(holder)
         holder_started = time.time() * 1000
         holder_request = holder.begin_execute(witness,
-            'await app.focus();const end=Date.now()+25000;while(Date.now()<end){};return "owned-foreground-setup";')
+            'await app.focus();return "owned-foreground-setup";')
+        setup, setup_response = receive(holder, holder_request, 'owned-foreground-setup', holder_started)
+        holder_request = None
+        require(not setup_response.get('isError'), setup)
+        report['foreground_setup_result'] = setup
         wait_state(witness_root, lambda value: value['foreground'])
         require(not state(target_root)['foreground'], 'background target setup was not established')
         initial_order = stack(windows)
@@ -116,17 +120,21 @@ def main():
         require((target_root / 'saved.txt').read_bytes().decode('utf-8') == payload, 'saved bytes differ')
         # State files are a sampled independent oracle, not a synchronous
         # response to SetForegroundWindow. Wait for their next publication.
-        wait_state(witness_root, lambda value: value['foreground'])
-        wait_state(target_root, lambda value: not value['foreground'])
-        require(position() == before, 'keyboard script left physical cursor displaced')
-        record('automatic_keyboard_script_and_exact_original_return', response=result)
-        # Normal foreground activation raises Target. Returning focus to
-        # Witness must leave Target in front of Neighbour.
+        wait_state(target_root, lambda value: value['foreground'])
+        wait_state(witness_root, lambda value: not value['foreground'])
+        expected_editor = [editor['x'] + editor['width'] / 2, editor['y'] + editor['height'] / 2]
+        after = position()
+        require(all(abs(actual - expected) <= 1 for actual, expected in zip(after, expected_editor)),
+                {'actual': after, 'expected_editor': expected_editor})
+        record('automatic_keyboard_script_retains_target_and_pointer', response=result,
+               pointer_before=before, pointer_after=after)
+        # Normal foreground activation raises Target and leaves it ahead of
+        # Neighbour; settlement must not reorder these owned windows.
         returned_order = stack(windows)
         report['returned_stack'] = returned_order
         require(returned_order.index('Target') < returned_order.index('Neighbour'),
                 {'initial_stack': initial_order, 'returned_stack': returned_order})
-        record('focus_return_preserves_windows_activation_order',
+        record('settlement_preserves_windows_activation_order',
                initial_stack=initial_order, returned_stack=returned_order)
 
         view = client.capture(target, 'before-pointer')['view']['image']
@@ -136,9 +144,12 @@ def main():
         before = position()
         result, _ = client.execute(target, 'await app.move(' + json.dumps(pixel) + ');')
         wait_state(target_root, lambda value: value['moves'] > final['moves'])
-        wait_state(witness_root, lambda value: value['foreground'])
-        require(position() == before, 'hover did not return pointer')
-        record('physical_hover_borrow_and_return', response=result)
+        wait_state(target_root, lambda value: value['foreground'])
+        after = position()
+        require(all(abs(actual - point[axis]) <= 1 for actual, axis in zip(after, ['x', 'y'])),
+                {'actual': after, 'expected_pad': point})
+        record('physical_hover_retains_target_and_pointer', response=result,
+               pointer_before=before, pointer_after=after)
 
         # One independent actor creates an actual away-and-return while the
         # target script is alive. Its focus operation is the entire actor task.
@@ -155,13 +166,17 @@ def main():
         wait_state(witness_root, lambda value: value['foreground'])
         actor_result, actor_response = receive(actor, actor_request, 'declared-away-return-actor', actor_started)
         require(not actor_response.get('isError'), actor_result)
+        # Direct-input settlement leaves Witness foreground. The independent
+        # actor explicitly returns to Target to exercise the sticky handoff.
+        actor_return, _ = actor.execute(target, 'await app.focus();')
         wait_state(target_root, lambda value: value['foreground'])
         result, response = receive(client, request, 'target-external-handoff', started)
         require(response.get('isError') and result.get('error', {}).get('code') == 'execution_focus_changed', result)
         require(state(target_root)['increments'] == 1, 'suffix after handoff was delivered')
         journal = [json.loads(line) for line in (target_root / 'events.jsonl').read_text(encoding='utf-8').splitlines()]
         require(not any(row['kind'] == 'key_down' and row['data']['key'] == 135 for row in journal), 'F24 was delivered after external handoff')
-        record('away_and_return_is_sticky_without_reacquisition', response=result, actor=actor_result)
+        record('away_and_return_is_sticky_without_reacquisition', response=result,
+               actor=actor_result, actor_return=actor_return)
 
         result, _ = client.execute(target,
             'await app.look();await app.keypress("F24");await app.click({selector:{role:"button",text:"Increment"}});')

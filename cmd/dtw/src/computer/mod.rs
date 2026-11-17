@@ -71,40 +71,12 @@ impl InputRoute {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FocusReturn {
-    Pending,
-    Retained,
-    Restored,
-    ApplicationRestored,
-    ChangedExternally,
-    PreviousAppClosed,
-    Unchanged,
-    Unconfirmed,
-}
-impl FocusReturn {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Retained => "retained",
-            Self::Restored => "restored",
-            Self::ApplicationRestored => "application_restored",
-            Self::ChangedExternally => "changed_externally",
-            Self::PreviousAppClosed => "previous_app_closed",
-            Self::Unchanged => "unchanged",
-            Self::Unconfirmed => "unconfirmed",
-        }
-    }
-}
-
 /// Provider-reported routing evidence, independent of effect confirmation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InputDelivery {
-    /// Action transport, independent of an already owned foreground scope.
+    /// Action transport used by the provider.
     pub route: Option<InputRoute>,
     pub reason: Option<String>,
-    pub foreground_borrowed: bool,
-    pub focus_return: Option<FocusReturn>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -753,10 +725,10 @@ pub trait Backend: Send + Sync {
         None
     }
 
-    /// Release temporary resources owned by one script, including foreground
-    /// focus. App state and native observations remain available to later scripts.
-    fn finish_execution(&self) -> Result<Option<FocusReturn>, Error> {
-        Ok(None)
+    /// Release temporary resources owned by one script.
+    /// App state and native observations remain available to later scripts.
+    fn finish_execution(&self) -> Result<(), Error> {
+        Ok(())
     }
 
     /// Stop and reap native resources. Failure does not reopen admission.

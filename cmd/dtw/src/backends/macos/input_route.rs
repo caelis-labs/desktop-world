@@ -47,7 +47,7 @@ pub(super) fn plan_visual(reason: &str, operation: &str) -> bool {
     reason != "native_pointer_key_window" && visual_focus(operation)
 }
 
-/// Only established capability limits can start a script's foreground borrow.
+/// Only established capability limits can start a script's foreground scope.
 /// Pointer transport remains independent: later supported input stays addressed.
 pub(super) fn allows_activation(reason: &str) -> bool {
     matches!(
@@ -389,7 +389,7 @@ mod tests {
         assert_eq!(fallback_reason(&proven), None);
     }
     #[test]
-    fn native_receiver_preparation_borrows_only_focus_before_one_addressed_payload() {
+    fn native_receiver_preparation_focuses_before_one_addressed_payload() {
         let mut reply = json!({"dispatch":"not_dispatched","evidence":"unverified",
             "foreground_plan":{"reason":"native_pointer_key_window","visual":false}});
         assert!(allows_activation("native_pointer_key_window"));

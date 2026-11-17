@@ -42,8 +42,6 @@ fn occluded_capture_prepares_focus_once_and_retains_action_evidence() {
         model.outcome.delivery = Some(InputDelivery {
             route: Some(InputRoute::Foreground),
             reason: Some("explicit_focus".into()),
-            foreground_borrowed: true,
-            focus_return: Some(FocusReturn::Pending),
         });
     }
     let reply = capture_script(&owner);
@@ -65,7 +63,7 @@ fn occluded_capture_prepares_focus_once_and_retains_action_evidence() {
 }
 
 #[test]
-fn visible_or_non_occlusion_capture_never_borrows_focus() {
+fn visible_or_non_occlusion_capture_never_prepares_focus() {
     for error in [
         None,
         Some(Error::TargetChanged),
@@ -205,8 +203,6 @@ fn capture_policy_refusal_keeps_not_dispatched_and_original_delivery() {
         model.outcome.delivery = Some(InputDelivery {
             route: None,
             reason: Some("service_input_policy".into()),
-            foreground_borrowed: false,
-            focus_return: Some(FocusReturn::Unchanged),
         });
     }
     let reply = capture_script(&owner);
@@ -223,7 +219,10 @@ fn capture_policy_refusal_keeps_not_dispatched_and_original_delivery() {
         receipt["outcome"]["delivery"]["reason"],
         "service_input_policy"
     );
-    assert_eq!(receipt["outcome"]["delivery"]["foreground_borrowed"], false);
+    assert_eq!(
+        receipt["outcome"]["delivery"],
+        json!({"route":null,"reason":"service_input_policy"})
+    );
     assert_eq!(receipt["interruption"], Value::Null);
 }
 

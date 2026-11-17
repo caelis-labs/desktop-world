@@ -52,9 +52,10 @@ Open the application you want to use, then ask your Agent:
 > Use Desktop World to update this document, save it under a new name, then reopen
 > it and check the changes.
 
-The default MCP interface is `apps` plus app-scoped `exec({app, source})`; the bundled Skill documents
+The default MCP interface has two tools, `apps` and app-scoped `exec({app, source})`,
+providing all 14 app operations; the bundled Skill documents
 the app script methods, including filtered observations and explicit text reading.
-Opt in to flat app-operation tools with `dtw mcp --atomic`; their names and object
+Opt in to 15 flat tools (including `apps`, without `exec`) with `dtw mcp --atomic`; their names and object
 arguments match the script methods. Discover the connected tools before use. See
 [MCP toolsets](docs/mcp-toolsets.md) for configuration and compatibility. DTW owns window routing and observation state.
 The Agent observes when needed and batches known actions, using semantic targets
@@ -63,9 +64,10 @@ and pixel fallback. DTW prepares receivers and returns observations after input.
 acceptance boundaries. The bundled Skill teaches the Agent the available operations. Your Agent handles
 approvals. On macOS, relevant operations require Accessibility and Screen Recording
 permissions. Keep the desktop unlocked. When foreground interaction is needed,
-DTW brings the verified target forward for the script and restores the previous
-foreground when it can still prove ownership. Switching away stops further input
-from the current script.
+DTW prepares the verified target directly. macOS prefers working background
+capabilities; Windows uses foreground interaction by default. Foreground, focus
+and real pointer changes remain in place after the call. Switching away stops
+further input from the current execution; held keys and buttons are released.
 
 ## Current availability
 

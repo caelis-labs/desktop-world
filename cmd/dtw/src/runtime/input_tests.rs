@@ -256,8 +256,6 @@ fn interruption_retains_the_provider_delivery_without_claiming_effect_success() 
             delivery: Some(InputDelivery {
                 route: Some(InputRoute::Foreground),
                 reason: Some("background_unavailable".into()),
-                foreground_borrowed: true,
-                focus_return: Some(FocusReturn::Restored),
             }),
             dispatch,
             evidence: EffectEvidence::Unverified,
