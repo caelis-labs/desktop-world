@@ -44,6 +44,9 @@ class PluginStageTests(unittest.TestCase):
                     self.assertIn("same camelCase", readme)
                     self.assertIn("skills/dtw/API.md", readme)
                     self.assertIn("skills/dtw/SKILL.md", readme)
+                    for guide in ("install-opencode.md", "install-pi.md", "install-grok-build.md"):
+                        self.assertEqual(bundled.read(prefix + "docs/" + guide),
+                                         (ROOT / "docs" / guide).read_bytes())
                     verifier.plugin_package(bundled, prefix, {
                         "target": target, "version": version, "package_store_schema": 2,
                         "binary": {"path": "bin/" + executable}, "plugin_package": entries,
@@ -82,6 +85,12 @@ class PluginStageTests(unittest.TestCase):
                 self.assertEqual(metadata["binary"], "bin/" + name)
                 self.assertEqual(metadata["distribution"], "local-development-stage")
                 self.assertEqual(metadata["package_store_schema"], 2)
+                self.assertIn("pi-package", metadata["formats"])
+                package = json.loads((output / "package.json").read_text(encoding="utf-8"))
+                self.assertEqual(package["pi"], {
+                    "extensions": ["./pi/index.mjs"], "skills": ["./skills/dtw"]})
+                self.assertIn("pi-package", package["keywords"])
+                self.assertTrue((output / package["pi"]["extensions"][0]).is_file())
                 self.assertEqual((output / "skills/dtw/SKILL.md").read_bytes(),
                                  (ROOT / "skills/dtw/SKILL.md").read_bytes())
                 self.assertEqual((output / "skills/dtw/PATTERNS.md").read_bytes(),
@@ -97,12 +106,62 @@ class PluginStageTests(unittest.TestCase):
                 self.assertNotEqual(manifests[0]["$schema"], manifests[2]["$schema"])
                 self.assertEqual(json.loads((output / "mcp_config.json").read_text())["mcpServers"], {
                     "dtw": {"command":"./bin/" + name, "args":["mcp"], "cwd":"${PLUGIN_ROOT}"}})
-                for guide in ("install.md", "docs/install-caelis.md", "docs/install-dsh.md", "docs/install-agy.md", "docs/package-management.md"):
+                for guide in ("install.md", "docs/install-caelis.md", "docs/install-dsh.md", "docs/install-agy.md",
+                              "docs/install-opencode.md", "docs/install-pi.md", "docs/install-grok-build.md",
+                              "docs/package-management.md"):
                     self.assertEqual((output / guide).read_bytes(), (ROOT / guide).read_bytes())
                 before = (output / "plugin.json").read_bytes()
                 with self.assertRaises(FileExistsError):
                     stager.stage(binary, output, ROOT, target)
                 self.assertEqual((output / "plugin.json").read_bytes(), before)
+
+    @unittest.skipUnless(shutil.which("node"), "Pi extensions run inside the Node host")
+    def test_pi_loads_manifest_extension_and_registers_the_staged_binary_and_canonical_skill(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            binary = root / "existing executable"
+            binary.write_bytes(b"packaging fixture; never execute")
+            binary.chmod(0o755)
+            output = root / "Pi 中文 package # with spaces"
+            target = stager.plugin_package.host_target("Windows" if os.name == "nt" else "Darwin")
+            stager.stage(binary, output, ROOT, target)
+            manifest = json.loads((output / "package.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["pi"]["skills"], ["./skills/dtw"])
+            skill = output / manifest["pi"]["skills"][0]
+            canonical = ROOT / "skills/dtw"
+            self.assertEqual(
+                {path.relative_to(skill): path.read_bytes() for path in skill.rglob("*") if path.is_file()},
+                {path.relative_to(canonical): path.read_bytes()
+                 for path in canonical.rglob("*") if path.is_file()})
+            script = r"""
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const root = process.argv[1];
+const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+assert.equal(manifest.pi.extensions.length, 1);
+const calls = [];
+for (const entry of manifest.pi.extensions) {
+  const extension = await import(pathToFileURL(path.resolve(root, entry)).href);
+  await extension.default({ registerMcpServer: (...args) => calls.push(args) });
+}
+assert.equal(calls.length, 1);
+const [name, config] = calls[0];
+assert.equal(name, 'dtw');
+assert.ok(path.isAbsolute(config.command));
+assert.ok(path.isAbsolute(config.cwd));
+assert.deepEqual({ ...config, cwd: path.resolve(config.cwd) }, {
+  command: path.join(root, 'bin', process.platform === 'win32' ? 'dtw.exe' : 'dtw'),
+  args: ['mcp'], cwd: root, exposure: 'direct',
+});
+console.log('Pi package contracts passed');
+"""
+            result = subprocess.run([shutil.which("node"), "--input-type=module", "-e", script, str(output)],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8", timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Pi package contracts passed", result.stdout)
+            self.assertEqual(list(output.rglob("node_modules")), [])
 
     @unittest.skipUnless(shutil.which("node"), "Cordis adapter runs inside the DSH Node host")
     def test_cordis_resolves_installed_components_and_paths_without_installing_dependencies(self):

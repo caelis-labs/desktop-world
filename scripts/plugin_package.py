@@ -61,16 +61,21 @@ def write_plugin_entries(source, package, version, target):
 
     # A dependency-free Cordis adapter asks the host loader for its own MCP and
     # Skill implementations. It does not vendor or install another DSH runtime.
+    # Pi selects its explicit extension/Skill manifest, independently of Cordis main.
     write_json(package / "package.json", {
         "name": "@caelis-labs/desktop-world", "version": version, "type": "module", "private": True,
         "description": common.get("description", "Desktop World MCP and Skill"),
         "license": common.get("license", "MIT"), "main": "./cordis/index.mjs",
         "exports": "./cordis/index.mjs",
+        "keywords": ["pi-package"],
+        "pi": {"extensions": ["./pi/index.mjs"], "skills": ["./skills/dtw"]},
     })
     (package / "cordis").mkdir()
     shutil.copy2(source / "plugins/cordis/index.mjs", package / "cordis/index.mjs")
+    (package / "pi").mkdir()
+    shutil.copy2(source / "plugins/pi/index.mjs", package / "pi/index.mjs")
     return {"target": target, "binary": "bin/" + executable,
-            "formats": ["agent-plugins-1.0", "claude-code", "antigravity", "dsh-cordis"]}
+            "formats": ["agent-plugins-1.0", "claude-code", "antigravity", "dsh-cordis", "pi-package"]}
 
 
 def host_target(system):

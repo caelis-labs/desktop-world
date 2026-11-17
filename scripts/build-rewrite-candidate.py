@@ -406,10 +406,13 @@ operation names and argument objects as the JavaScript API, with an explicit app
 field. Select calls from the tools discovered from the running MCP server.
 DTW manages input routing and foreground access when an operation requires it;
 the Agent needs no extra input-mode argument.
-This same directory includes Agent Plugins 1.0/Caelis, Claude Code, Antigravity
-and DSH Cordis entries around the same executable and Skill. Follow install.md
-and docs/install-caelis.md, docs/install-dsh.md or docs/install-agy.md. Claude
-Code can load it with `claude --plugin-dir /absolute/path/to/extracted/package`.
+This same directory includes Agent Plugins 1.0/Caelis, Claude Code, Antigravity,
+DSH Cordis and native Pi Package entries around the same executable and Skill.
+Follow install.md and docs/install.md for all host routes, including OpenCode,
+Pi and Grok Build. Pi loads its own declared extension; the root npm main/exports
+remain the DSH Cordis entry. Grok Build loads the compatible plugin; OpenCode
+uses native MCP/Skill configuration. Claude Code can load this directory with
+`claude --plugin-dir /absolute/path/to/extracted/package`.
 Choose the plugin route or ordinary MCP/Skill registration; do not register both
 copies simultaneously. Examples are templates; this archive does not install
 anything, edit Agent configuration, or grant OS permissions.
@@ -460,7 +463,9 @@ def package_assets(source, package, version, target):
     shutil.copytree(source / "skills/dtw", package / "skills/dtw")
     for relative in ("docs/native-source-provenance.md", "docs/native-source-provenance-cross-platform.md",
                      "docs/background-input-port.md", "docs/install.md", "docs/install-dsh.md",
-                     "docs/install-caelis.md", "docs/install-agy.md", "docs/agent-protocol-migration.md", "docs/package-management.md"):
+                     "docs/install-caelis.md", "docs/install-agy.md", "docs/install-opencode.md",
+                     "docs/install-pi.md", "docs/install-grok-build.md",
+                     "docs/agent-protocol-migration.md", "docs/package-management.md"):
         dest = package / relative
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source / relative, dest)
