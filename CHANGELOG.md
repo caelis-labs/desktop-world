@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/caelis-labs/desktop-world/compare/v0.5.1...v0.5.2) (2026-11-17)
+
+
+### Bug Fixes
+
+* use direct input without desktop state restoration ([#126](https://github.com/caelis-labs/desktop-world/issues/126)) ([d2166af](https://github.com/caelis-labs/desktop-world/commit/d2166afdc63428504338fdd677b1bceb9b744718))
+
 ## [0.5.1](https://github.com/caelis-labs/desktop-world/compare/v0.5.0...v0.5.1) (2026-11-17)
 
 
