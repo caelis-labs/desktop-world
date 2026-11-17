@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/caelis-labs/desktop-world/compare/v0.5.0...v0.5.1) (2026-11-17)
+
+
+### Features
+
+* support native Pi packages and OpenCode/Grok installation ([#124](https://github.com/caelis-labs/desktop-world/issues/124)) ([a36b499](https://github.com/caelis-labs/desktop-world/commit/a36b4998a5950e9ca6054bdbb4bbb0ee56d9c6c2))
+
 ## [0.5.0](https://github.com/caelis-labs/desktop-world/compare/v0.4.2...v0.5.0) (2026-11-14)
 
 
