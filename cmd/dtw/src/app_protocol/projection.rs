@@ -51,7 +51,7 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
                 }
             }
         }
-        // Routes and borrow settlement remain in the retained diagnostic
+        // Routes and delivery reasons remain in the retained diagnostic
         // ledger. Errors below still expose an unconfirmed cleanup.
         for key in [
             "error",
@@ -165,8 +165,6 @@ fn summarize(steps: &[Value]) -> Value {
     let mut interrupted = 0;
     let mut delivery_routes = Map::new();
     let mut delivery_reasons = Map::new();
-    let mut focus_returns = Map::new();
-    let mut foreground_borrowed = 0;
     let mut deliveries = 0;
     let mut preparations = 0;
     let mut preparation_dispatch = Map::new();
@@ -253,10 +251,6 @@ fn summarize(steps: &[Value]) -> Value {
                 if delivery["reason"].is_string() {
                     count(&mut delivery_reasons, &delivery["reason"]);
                 }
-                if delivery["focus_return"].is_string() {
-                    count(&mut focus_returns, &delivery["focus_return"]);
-                }
-                foreground_borrowed += usize::from(delivery["foreground_borrowed"] == true);
                 let mut sample = json!({"number":step["number"],"operation":step["operation"]});
                 for field in ["outcome", "provider_outcome"] {
                     if receipt[field]["delivery"].is_object() {
@@ -309,8 +303,7 @@ fn summarize(steps: &[Value]) -> Value {
             "interrupted":interrupted});
         if deliveries > 0 {
             summary["actions"]["delivery"] = json!({"reported":deliveries,
-                "routes":delivery_routes,"reasons":delivery_reasons,
-                "foreground_borrowed":foreground_borrowed,"focus_returns":focus_returns});
+                "routes":delivery_routes,"reasons":delivery_reasons});
         }
     }
     summary
@@ -454,24 +447,22 @@ mod tests {
     }
 
     #[test]
-    fn public_execution_keeps_dispatch_but_hides_borrow_and_settlement_policy() {
+    fn public_execution_keeps_dispatch_but_hides_delivery_diagnostics() {
         let steps = vec![
             json!({"number":1,"operation":"focus","status":"completed","error":null,
             "receipt":{"outcome":{"dispatch":"dispatched","evidence":{"kind":"unverified"},
-                "delivery":{"route":"foreground","reason":"execution_scope","foreground_borrowed":true,"focus_return":"pending"}},
+                "delivery":{"route":"foreground","reason":"explicit_focus"}},
                 "interruption":null}}),
         ];
         let mut reply = successful_execution(steps);
         reply.data["value"] = json!({"agent_protocol":true});
-        reply.data["script"]["focus_return"] = json!("restored");
         let projected = execution(reply.clone());
         assert_eq!(projected.data["effects"]["dispatch"]["dispatched"], 1);
         assert!(projected.data["effects"].get("delivery").is_none());
         assert!(projected.data["effects"].get("focus_return").is_none());
-        assert_eq!(reply.data["script"]["focus_return"], "restored");
         assert_eq!(
-            reply.data["script"]["steps"][0]["receipt"]["outcome"]["delivery"]["focus_return"],
-            "pending"
+            reply.data["script"]["steps"][0]["receipt"]["outcome"]["delivery"]["route"],
+            "foreground"
         );
         assert!(projected.data["effects"].get("evidence").is_none());
 
@@ -481,13 +472,11 @@ mod tests {
     }
 
     #[test]
-    fn hiding_borrow_policy_never_hides_a_cleanup_failure() {
+    fn public_execution_never_hides_a_cleanup_failure() {
         let mut reply = successful_execution(vec![]);
         reply.is_error = true;
         reply.data["value"] = json!({"agent_protocol":true});
-        reply.data["script"]["focus_return"] = json!("unconfirmed");
-        let error =
-            json!({"code":"focus_restore_failed","message":"Return could not be confirmed"});
+        let error = json!({"code":"execution_cleanup_failed","message":"Resource cleanup could not be confirmed"});
         reply.data["error"] = error.clone();
         reply.data["shutdown_error"] = error.clone();
         let compact = execution(reply);
@@ -504,8 +493,7 @@ mod tests {
             reply.is_error = true;
             reply.data["value"] = json!({"agent_protocol":true});
             reply.data["error"] = json!({"code":primary,"message":"Original error"});
-            let cleanup =
-                json!({"code":"focus_restore_failed","message":"Original window return timed out"});
+            let cleanup = json!({"code":"execution_cleanup_failed","message":"Original resource cleanup timed out"});
             reply.data["shutdown_error"] = cleanup.clone();
             let compact = execution(reply.clone());
             assert!(compact.is_error);
@@ -593,8 +581,7 @@ mod tests {
 
     #[test]
     fn resolution_preparation_keeps_dispatch_delivery_without_fabricating_missing_receipt() {
-        let delivery =
-            json!({"route":"foreground","foreground_borrowed":true,"focus_return":"pending"});
+        let delivery = json!({"route":"foreground","reason":null});
         let resolution = json!({"kind":"element","status":"focus_failed","candidates":[{"name":"private label"}],
             "focus_preparation":{"attempted":true,"trigger":{"reason":"content_unproven"},
                 "receipt":{"outcome":{"dispatch":"unknown","error":{"code":"cancelled","message":"long message"}},
@@ -617,27 +604,24 @@ mod tests {
 
     #[test]
     fn compact_projection_preserves_delivery_without_double_counting_or_inventing_missing_data() {
-        let delivery = json!({"route":"foreground","reason":"background_unavailable",
-            "foreground_borrowed":true,"focus_return":"pending"});
+        let delivery = json!({"route":"foreground","reason":"background_unavailable"});
         let step = json!({"number":1,"line":1,"operation":"focus","status":"completed","error":null,
             "receipt":{"outcome":{"dispatch":"unknown","error":null,"evidence":{"kind":"unverified"},"delivery":delivery},
                 "provider_outcome":{"dispatch":"dispatched","error":null,"evidence":{"kind":"unverified"},"delivery":delivery},"interruption":null}});
-        let mut original = successful_execution(vec![step]);
-        original.data["script"]["focus_return"] = json!("restored");
+        let original = successful_execution(vec![step]);
         let compact = execution(original.clone());
         let summary = &compact.data["script"]["summary"];
-        assert_eq!(summary["actions"]["delivery"]["reported"], 1);
         assert_eq!(
-            summary["actions"]["delivery"]["routes"],
-            json!({"foreground":1})
+            summary["actions"]["delivery"],
+            json!({
+                "reported":1,"routes":{"foreground":1},"reasons":{"background_unavailable":1}
+            })
         );
-        assert_eq!(summary["actions"]["delivery"]["foreground_borrowed"], 1);
         assert_eq!(summary["last_delivery"]["provider_outcome"], delivery);
         assert_eq!(summary["last_delivery"]["outcome"], delivery);
-        assert_eq!(compact.data["script"]["focus_return"], "restored");
         assert_eq!(
-            original.data["script"]["steps"][0]["receipt"]["outcome"]["delivery"]["focus_return"],
-            "pending"
+            original.data["script"]["steps"][0]["receipt"]["outcome"]["delivery"]["route"],
+            "foreground"
         );
         let plain = execution(successful_execution(vec![
             json!({"number":1,"operation":"press","status":"completed","error":null,

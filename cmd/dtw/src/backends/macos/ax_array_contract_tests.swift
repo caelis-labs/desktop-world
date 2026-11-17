@@ -47,7 +47,7 @@ private func checkAXArrayCompatibility() throws {
     for code in ["target_changed", "stale_window", "app_changed", "cancelled", "permission_required", "deadline_exceeded"] {
         precondition(!requiresVisualInput(failure(code, "original authority error")))
     }
-    var visualEpoch = FocusBorrowEpoch(initialPID: 123, targetPID: 123)
+    var visualEpoch = FocusEpoch(initialPID: 123, targetPID: 123)
     visualEpoch.focusedWindow(10); visualEpoch.focusedWindow(20)
     precondition(!visualEpoch.invalidated, "visual application scope depends on AX window callbacks")
     visualEpoch.activated(456); visualEpoch.activated(123)

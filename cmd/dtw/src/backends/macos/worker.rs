@@ -4,7 +4,7 @@ use std::{
     cell::RefCell,
     ffi::{c_void, CStr, CString},
     io::{BufRead, Read, Write},
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 #[path = "../../scene_lease.rs"]
@@ -20,8 +20,7 @@ unsafe extern "C" {
     fn dtw_scene_call(request: *const std::ffi::c_char) -> *mut std::ffi::c_char;
     fn dtw_scene_free(reply: *mut std::ffi::c_char);
     fn dtw_input_quiesce(timeout_milliseconds: u32) -> bool;
-    fn dtw_focus_quiesce(timeout_milliseconds: u32) -> bool;
-    fn dtw_focus_owner(timeout_milliseconds: u32, pid: *mut u32, generation: *mut u64) -> i32;
+    fn dtw_end_execution(timeout_milliseconds: u32) -> bool;
 }
 
 static TERMINATING: AtomicBool = AtomicBool::new(false);
@@ -51,37 +50,12 @@ fn install_termination_handler() -> std::io::Result<()> {
     }
 }
 
-fn finish_focus_shutdown(until: Instant) -> bool {
-    let left = || until.saturating_duration_since(Instant::now());
-    let (mut pid, mut generation) = (0, 0);
-    match unsafe { dtw_focus_owner(left().as_millis() as u32, &mut pid, &mut generation) } {
-        0 => unsafe { dtw_focus_quiesce(left().as_millis() as u32) },
-        1 => {
-            // Return can modify the previous app as well as the borrowed app.
-            // An in-flight action (including ours) may own a shared lease; wait
-            // before acquiring any instance/physical lock, never restore unlocked.
-            let Ok(_coordination) =
-                scene_lease::lock_coordination(scene_lease::InputCoordination::Foreground, left())
-            else {
-                return false;
-            };
-            let Ok(_instance) = scene_lease::lock_instance(pid, generation, left()) else {
-                return false;
-            };
-            let Ok(_physical) = scene_lease::lock_input(left()) else {
-                return false;
-            };
-            unsafe { dtw_focus_quiesce(left().as_millis() as u32) }
-        }
-        _ => false,
-    }
-}
 fn shutdown_worker() -> ! {
     TERMINATING.store(true, Ordering::Relaxed);
     if SHUTDOWN_STARTED.swap(true, Ordering::AcqRel) {
-        // One owner drains input and returns focus. AppKit activation on the
+        // One owner drains paired input and clears focus monitors. AppKit on the
         // watchdog can wait for the main run loop; parking that thread deadlocks
-        // restoration. Dispatch has returned and released its action leases here.
+        // teardown. Dispatch has returned and released its action leases here.
         // Service native callbacks only, without admitting requests or taking
         // cleanup ownership. The existing owner/parent deadlines still apply.
         let main_thread = unsafe { libc::pthread_main_np() } != 0;
@@ -103,7 +77,7 @@ fn shutdown_worker() -> ! {
     let remaining = || until.saturating_duration_since(Instant::now()).as_millis() as u32;
     let background = super::cua_input::quiesce(remaining());
     let input = unsafe { dtw_input_quiesce(remaining()) };
-    let focus = finish_focus_shutdown(until);
+    let focus = unsafe { dtw_end_execution(remaining()) };
     if !(background && input && focus) {
         eprintln!("dtw native input cleanup did not complete before shutdown");
     }
@@ -208,38 +182,6 @@ pub(super) fn trace_execution_refusal(request: &Value) {
         emit_input_trace("dtw_input", &record);
     }
 }
-// Owned metadata survives dispatch_owned consuming the request. Drop closes even
-// early-error paths; a killed worker leaves an incomplete interval for the audit.
-struct PointerBorrowTrace(Value);
-impl PointerBorrowTrace {
-    fn begin(request: &Value, reason: &str) -> Option<Self> {
-        if std::env::var("DTW_INPUT_TRACE").ok().as_deref() != Some("1") {
-            return None;
-        }
-        let trace = Self(Self::metadata(request, reason));
-        trace.emit("begin");
-        Some(trace)
-    }
-    fn metadata(request: &Value, reason: &str) -> Value {
-        static NEXT_TRACE: AtomicU64 = AtomicU64::new(1);
-        json!({"pid":std::process::id(),
-            "trace_id":NEXT_TRACE.fetch_add(1, Ordering::Relaxed),
-            "operation":request["operation"],"window":request["target"]["native_id"],
-            "route":"borrowed","reason":reason})
-    }
-    fn emit(&self, phase: &str) {
-        let mut record = self.0.clone();
-        record["phase"] = json!(phase);
-        record["at_unix_ms"] = json!(trace_now_ms());
-        emit_input_trace("dtw_input_interval", &record);
-    }
-}
-impl Drop for PointerBorrowTrace {
-    fn drop(&mut self) {
-        self.emit("end");
-    }
-}
-
 pub(super) fn remaining(request: &Value) -> Duration {
     Duration::from_millis(
         request["deadline_unix_ms"]
@@ -394,67 +336,21 @@ enum BackgroundAttempt {
     Completed(Value),
 }
 
-fn delivery(
-    route: Option<&str>,
-    reason: Option<&str>,
-    borrowed: bool,
-    returned: Option<&str>,
-) -> Value {
-    let mut value = json!({"route":route,"foreground_borrowed":borrowed});
+fn delivery(route: Option<&str>, reason: Option<&str>) -> Value {
+    let mut value = json!({"route":route});
     if let Some(reason) = reason {
         value["reason"] = json!(reason);
-    }
-    if let Some(returned) = returned {
-        value["focus_return"] = json!(returned);
     }
     value
 }
 
-fn foreground_delivery(
-    result: &Value,
-    operation: &str,
-    reason: Option<&str>,
-    prepared_borrowed: bool,
-) -> Value {
-    // Native focus may renew its scope after preparation. Report its actual
-    // return obligation, not just the earlier preparation snapshot.
-    let borrowed = result["borrowed"].as_bool().unwrap_or(prepared_borrowed);
-    delivery(
-        Some("foreground"),
-        reason,
-        borrowed,
-        (operation == "focus").then_some(if borrowed { "pending" } else { "unchanged" }),
-    )
-}
-
-fn record_foreground_cleanup(result: &mut Value, cleanup: Value) {
-    if let Some(point) = cleanup.get("execution_pointer") {
-        result["execution_pointer"] = point.clone();
-    }
-    result["delivery"]["focus_return"] = if cleanup.get("error").is_some() {
-        json!("unconfirmed")
-    } else {
-        cleanup["focus"].clone()
-    };
+fn record_input_scope_cleanup(result: &mut Value, cleanup: Value) {
     if cleanup.get("error").is_some() {
-        // Returning focus is separate from the already-produced input result.
-        // The provider's cleanup channel closes execution without erasing a
-        // known dispatch or replacing the original action failure.
         result["cleanup_error"] = cleanup;
+    } else if cleanup["ended"] != true {
+        result["cleanup_error"] =
+            json!({"error":"invalid_response","message":"Input scope did not end"});
     }
-}
-
-#[cfg(test)]
-#[test]
-fn pointer_handoff_preserves_known_dispatch_and_primary_failure() {
-    let mut result = json!({"dispatch":"dispatched", "error":"original", "delivery":{}});
-    record_foreground_cleanup(
-        &mut result,
-        json!({"focus":"unchanged", "execution_pointer":[-800.25,125.5]}),
-    );
-    assert_eq!(result["dispatch"], "dispatched");
-    assert_eq!(result["error"], "original");
-    assert_eq!(result["execution_pointer"], json!([-800.25, 125.5]));
 }
 
 fn click_can_follow_focus(result: &Value) -> bool {
@@ -485,8 +381,6 @@ fn background_result(mut result: Value) -> BackgroundAttempt {
         } else {
             "background_supported"
         }),
-        false,
-        None,
     );
     BackgroundAttempt::Completed(result)
 }
@@ -585,8 +479,7 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
             let mut selected = native_menu_click(request, x, y, native);
             if selected["native_menu"] != false {
                 trace_route(request, "native", "menu_point_press");
-                selected["delivery"] =
-                    delivery(Some("semantic"), Some("native_menu_point"), false, None);
+                selected["delivery"] = delivery(Some("semantic"), Some("native_menu_point"));
                 return BackgroundAttempt::Completed(selected);
             }
         }
@@ -598,12 +491,7 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
             let mut moved = native(&movement, true);
             if moved["native_move"] != false {
                 trace_route(request, "native", "window_position");
-                moved["delivery"] = delivery(
-                    Some("semantic"),
-                    Some("native_window_position"),
-                    false,
-                    None,
-                );
+                moved["delivery"] = delivery(Some("semantic"), Some("native_window_position"));
                 return BackgroundAttempt::Completed(moved);
             }
         }
@@ -833,24 +721,6 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
             op,
         );
     }
-    let focus_owner = if op == "release_focus" {
-        let (mut pid, mut generation) = (0, 0);
-        match unsafe {
-            dtw_focus_owner(
-                remaining(&request).as_millis().min(150) as u32,
-                &mut pid,
-                &mut generation,
-            )
-        } {
-            0 => None,
-            1 => Some((pid, generation)),
-            _ => {
-                return json!({"error":"focus_cleanup_unavailable","message":"Could not acquire original foreground ownership before cleanup"})
-            }
-        }
-    } else {
-        None
-    };
     let instance = if input_operation(op) {
         let (Some(pid), Some(generation)) = (
             request["target"]["app"]["pid"]
@@ -865,11 +735,11 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
         };
         Some((pid, generation))
     } else {
-        focus_owner
+        None
     };
     // A directed route first shares coordination with independent background
-    // mutations. Known foreground/return routes enter exclusively from the start.
-    let known_foreground = matches!(op, "focus" | "begin_execution_focus") || focus_owner.is_some();
+    // mutations. Known foreground routes enter exclusively from the start.
+    let known_foreground = matches!(op, "focus" | "begin_execution_focus");
     let mut coordination = if instance.is_some() {
         let mode = if known_foreground {
             scene_lease::InputCoordination::Foreground
@@ -933,7 +803,7 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
     let physical = matches!(
         op,
         "focus" | "type_text" | "keypress" | "scroll" | "click" | "move" | "drag"
-    ) || (op == "release_focus" && focus_owner.is_some());
+    );
     if physical && !known_foreground {
         // A background preflight may have inspected an associated surface in
         // its proof child. Reap that Scene owner before waiting for exclusive
@@ -989,26 +859,17 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
     } else {
         None
     };
-    let pointer_borrow = if physical && matches!(op, "click" | "move" | "drag" | "scroll") {
-        PointerBorrowTrace::begin(
-            &request,
-            foreground_reason.as_deref().unwrap_or("explicit_focus"),
-        )
-    } else {
-        None
-    };
-    let mut borrowed = false;
-    if physical && op != "release_focus" {
+    if physical {
         trace_route(
             &request,
             if matches!(op, "click" | "move" | "drag" | "scroll") {
-                "borrowed"
+                "foreground"
             } else {
                 "activated"
             },
             foreground_reason.as_deref().unwrap_or("explicit_focus"),
         );
-        // Cursor borrowing alone never grants application activation. Native
+        // Physical pointer input alone never grants application activation. Native
         // preparation and the eventual focus check both enforce this flag, so
         // losing foreground after preflight cannot turn hover into activation.
         request["_allow_activation"] = json!(
@@ -1022,9 +883,7 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
         request["visual"] = json!(super::input_route::visual_focus(op));
         let mut prepare = request.clone();
         prepare["operation"] = json!("prepare_foreground");
-        // A hover is meaningful only while its borrowed physical pointer stays
-        // on the target. Immediate restoration raced AppKit event processing
-        // and dismissed hover UI before the ordinary read.
+        // Hover leaves the pointer on its target after the event sequence.
         if op == "move" {
             prepare.as_object_mut().unwrap().remove("screen_x");
             prepare.as_object_mut().unwrap().remove("screen_y");
@@ -1032,10 +891,9 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
         let prepared = native(&prepare, false);
         if prepared.get("error").is_some() {
             let mut result = rejected(prepared, op);
-            result["delivery"] = delivery(None, foreground_reason.as_deref(), false, None);
+            result["delivery"] = delivery(None, foreground_reason.as_deref());
             return result;
         }
-        borrowed = prepared["borrowed"].as_bool().unwrap_or(false);
         if matches!(op, "click" | "move" | "drag" | "scroll") {
             // Presentation uses the most recent native proof after focus/lease
             // handover. Input still performs its own target validation below.
@@ -1050,37 +908,19 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
             super::overlay::PointerRoute::Foreground,
         )
     });
-    let call_deadline = request["deadline_unix_ms"].as_u64().unwrap_or(0);
     if matches!(op, "press" | "set_value") {
         trace_route(&request, "native", "ax_action");
     }
     let mut result = dispatch_owned(request, leased, scene_worker);
-    if physical && op != "release_focus" {
-        result["delivery"] =
-            foreground_delivery(&result, op, foreground_reason.as_deref(), borrowed);
+    if physical {
+        result["delivery"] = delivery(Some("foreground"), foreground_reason.as_deref());
     } else if matches!(op, "press" | "set_value") {
-        result["delivery"] = delivery(
-            Some("semantic"),
-            Some("native_semantic_action"),
-            false,
-            None,
-        );
+        result["delivery"] = delivery(Some("semantic"), Some("native_semantic_action"));
     }
-    if physical && op != "focus" && op != "release_focus" {
-        let cleanup = native(
-            &json!({"operation":"release_input_focus",
-                "deadline_unix_ms":super::focus_return_deadline_ms(now_ms(), Some(call_deadline))}),
-            false,
-        );
-        record_foreground_cleanup(&mut result, cleanup);
+    if physical && op != "focus" {
+        let cleanup = native(&json!({"operation":"end_input_scope"}), false);
+        record_input_scope_cleanup(&mut result, cleanup);
     }
-    // Explicit focus is an operation, not a script-wide lease: a later pixel
-    // action runs in a sibling scene worker. Its final release_focus acquires
-    // exclusive coordination anew. If another background operation outlives the
-    // cleanup budget, cleanup stays unconfirmed rather than interrupting it.
-    // Includes dispatch, paired input release, and foreground-return cleanup;
-    // close before releasing the HID lease so a peer cannot enter this interval.
-    drop(pointer_borrow);
     drop(_input);
     drop(instance_lease);
     drop(coordination);
@@ -1112,12 +952,10 @@ fn dispatch_owned(mut request: Value, leased: &mut bool, scene_worker: bool) -> 
     request["pid"] = before["surface_owner"]["pid"].clone();
     request["surface_owner"] = before["surface_owner"].clone();
     request["window_id"] = request["target"]["native_id"].clone();
-    let mut click_borrowed = None;
     if matches!(op.as_str(), "click" | "move" | "drag") {
         let mut focus = request.clone();
         focus["operation"] = json!("focus");
         let raised = native(&focus, false);
-        click_borrowed = raised["borrowed"].as_bool();
         // This physical focus path proves process/CG ownership without needing
         // AX children. Failed or uncertain activation never becomes a click.
         if !click_can_follow_focus(&raised) {
@@ -1128,9 +966,6 @@ fn dispatch_owned(mut request: Value, leased: &mut bool, scene_worker: bool) -> 
     // transaction, but shares Scene.swift's SCK transparency proof. Keep SCK
     // in this short-lived owner and retain both scene/input leases until exit.
     let mut result = native(&request, op != "scroll");
-    if let Some(borrowed) = click_borrowed {
-        result["borrowed"] = json!(borrowed);
-    }
     if matches!(op.as_str(), "click" | "move" | "drag" | "scroll") {
         return result;
     }
@@ -1293,22 +1128,6 @@ mod tests {
     }
 
     #[test]
-    fn pointer_borrow_trace_owns_bounded_metadata_and_unique_identity() {
-        let request = json!({"operation":"move","target":{"native_id":42},
-            "text":"private payload","path":[[1,2],[3,4]]});
-        let first = PointerBorrowTrace::metadata(&request, "native_hover_tracking");
-        let second = PointerBorrowTrace::metadata(&request, "native_hover_tracking");
-        drop(request); // dispatch_owned can consume it before the end trace.
-        assert_eq!(first["operation"], "move");
-        assert_eq!(first["window"], 42);
-        assert_eq!(first["pid"], std::process::id());
-        assert_ne!(first["trace_id"], second["trace_id"]);
-        assert_eq!(first.as_object().unwrap().len(), 6);
-        assert!(first.get("text").is_none());
-        assert!(first.get("path").is_none());
-    }
-
-    #[test]
     fn association_pixels_require_scene_role_and_live_admission() {
         let mut leased = false;
         let request =
@@ -1343,61 +1162,30 @@ mod tests {
     }
 
     #[test]
-    fn foreground_route_reports_actual_return_obligation() {
-        for operation in ["focus", "click", "keypress", "scroll"] {
-            for (prepared, actual) in [(false, false), (false, true), (true, true)] {
-                let result = foreground_delivery(
-                    &json!({"borrowed": actual}),
-                    operation,
-                    Some("native_preflight"),
-                    prepared,
-                );
-                assert_eq!(result["route"], "foreground");
-                assert_eq!(result["foreground_borrowed"], actual);
-                assert_eq!(result["reason"], "native_preflight");
-                if operation == "focus" {
-                    assert_eq!(
-                        result["focus_return"],
-                        if actual { "pending" } else { "unchanged" }
-                    );
-                } else {
-                    assert!(result.get("focus_return").is_none());
-                }
-            }
-        }
-        assert_eq!(
-            foreground_delivery(&json!({}), "click", None, true)["foreground_borrowed"],
-            true
-        );
-    }
-
-    #[test]
-    fn unchanged_cleanup_preserves_input_outcome_and_primary_errors() {
+    fn ending_input_scope_preserves_input_outcome_and_primary_errors() {
         let mut result = json!({"dispatch":"dispatched","evidence":"unverified",
-            "delivery":foreground_delivery(&json!({"borrowed":false}), "click", None, false)});
-        record_foreground_cleanup(&mut result, json!({"released":true,"focus":"unchanged"}));
+            "delivery":delivery(Some("foreground"), None)});
+        record_input_scope_cleanup(&mut result, json!({"ended":true}));
         assert_eq!(result["dispatch"], "dispatched");
-        assert_eq!(result["delivery"]["foreground_borrowed"], false);
-        assert_eq!(result["delivery"]["focus_return"], "unchanged");
         assert!(result.get("error").is_none());
         assert!(result.get("cleanup_error").is_none());
 
         result["error"] = json!("input_failed");
         result["message"] = json!("original input error");
         result["dispatch"] = json!("unknown");
-        record_foreground_cleanup(
+        record_input_scope_cleanup(
             &mut result,
-            json!({"error":"return_failed","message":"cleanup failed"}),
+            json!({"error":"scope_end_failed","message":"cleanup failed"}),
         );
         assert_eq!(result["error"], "input_failed");
         assert_eq!(result["message"], "original input error");
-        assert_eq!(result["cleanup_error"]["error"], "return_failed");
-        assert_eq!(result["delivery"]["focus_return"], "unconfirmed");
+        assert_eq!(result["cleanup_error"]["error"], "scope_end_failed");
     }
 
     #[test]
     fn foreground_cleanup_failure_preserves_the_original_action_receipt() {
-        let cleanup = json!({"error":"deadline_exceeded","message":"Return deadline elapsed"});
+        let cleanup =
+            json!({"error":"deadline_exceeded","message":"Scope cleanup deadline elapsed"});
         for mut result in [
             json!({"dispatch":"dispatched","evidence":"unverified"}),
             json!({"dispatch":"unknown","evidence":"unverified",
@@ -1405,16 +1193,15 @@ mod tests {
             json!({"dispatch":"not_dispatched","evidence":"unverified",
                 "error":"focus_changed","message":"Original admission rejection"}),
         ] {
-            result["delivery"] = foreground_delivery(&result, "keypress", None, true);
+            result["delivery"] = delivery(Some("foreground"), None);
             let original = result.clone();
             let original_outcome = super::super::action_reply(&original);
-            record_foreground_cleanup(&mut result, cleanup.clone());
+            record_input_scope_cleanup(&mut result, cleanup.clone());
 
             assert_eq!(result["dispatch"], original["dispatch"]);
             assert_eq!(result.get("error"), original.get("error"));
             assert_eq!(result.get("message"), original.get("message"));
             assert_eq!(result["cleanup_error"], cleanup);
-            assert_eq!(result["delivery"]["focus_return"], "unconfirmed");
             let outcome = super::super::action_reply(&result);
             assert_eq!(outcome.dispatch, original_outcome.dispatch);
             assert_eq!(outcome.error, original_outcome.error);
@@ -1422,7 +1209,7 @@ mod tests {
             assert!(matches!(
                 super::super::native_cleanup_error(&result),
                 Some(crate::computer::Error::NativeFailure { code, message })
-                    if code == "deadline_exceeded" && message == "Return deadline elapsed"
+                    if code == "deadline_exceeded" && message == "Scope cleanup deadline elapsed"
             ));
         }
     }
@@ -1463,7 +1250,6 @@ mod tests {
             };
             assert_eq!(result["dispatch"], dispatch);
             assert_eq!(result["delivery"]["route"], "background");
-            assert_eq!(result["delivery"]["foreground_borrowed"], false);
         }
     }
 

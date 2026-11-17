@@ -254,36 +254,21 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
             false,
         );
     }
-    // Pointer events address their own window and do not borrow a sibling's
-    // key window. Requiring AX restoration here blocked sparse-AX apps and
-    // turned a successful popup-closing click into an unrelated cleanup error.
+    // Keyboard input requires an exact receiver before key preparation.
     if request.keyboard()
         && ax::focused_window_absent(request.pid)
         && ax::focused_top_level_text_control_id(request.pid) != Some(request.window_id)
     {
         let mut result = session.finish(
-            Err(anyhow::anyhow!(
-                "Application has no background key window to retain"
-            )),
+            Err(anyhow::anyhow!("Application has no background key window")),
             true,
         );
         result["capability_evidence"] = serde_json::json!("background_key_window_absent");
         return result;
     }
-    let mut scope = request
-        .keyboard()
-        .then(|| skylight::WindowKeyScope::capture(request.pid, request.window_id));
-    if scope.as_ref().is_some_and(|scope| !scope.can_restore()) {
-        return session.finish(
-            Err(anyhow::anyhow!(
-                "previous key window could not be retained for background cleanup"
-            )),
-            false,
-        );
-    }
     let result = (|| {
         if request.keyboard() {
-            scope.as_mut().unwrap().prime()?;
+            skylight::prime_window_key(request.pid, request.window_id)?;
             control::arm_keyboard(request.window_id);
         } else {
             anyhow::ensure!(
@@ -385,9 +370,6 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
         }
         control::check_completed()
     })();
-    if let Some(scope) = scope.as_mut() {
-        scope.cleanup();
-    }
     let mut result = session.finish(result, false);
     if menu.is_some() {
         result["transport"] = serde_json::json!("ax_menu_equivalent");
@@ -395,7 +377,7 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
     result
 }
 /// Private foreground bridge. Swift owns target validation, the physical
-/// lease, dispatch uncertainty, and restoration around this single exact-window
+/// lease and dispatch uncertainty around this single exact-window
 /// CUA sequence (app-front, exact-window front, then paired make-key records).
 #[no_mangle]
 pub extern "C" fn dtw_set_front_process(pid: i32, window_id: u32) -> bool {

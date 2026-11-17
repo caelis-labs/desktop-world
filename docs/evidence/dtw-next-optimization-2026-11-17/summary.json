@@ -1,0 +1,408 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-17",
+  "host": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "os": "macOS 27.2 (26B123)"
+  },
+  "installed": {
+    "version": "0.5.0",
+    "sha256": "39e2bb4aecb2652a1b0fd6e6ee850aff10031e8f9398decb5ce156159dd86074",
+    "toolset": [
+      "apps",
+      "exec"
+    ]
+  },
+  "source": {
+    "revision": "ac90e69",
+    "version": "0.5.1",
+    "core_and_skill_delta_from_v0_5_0": false
+  },
+  "skill_files_equal": {
+    "SKILL.md": true,
+    "API.md": true,
+    "PATTERNS.md": true
+  },
+  "recorded_execs": 47,
+  "native": {
+    "saved_note": "DTW audit 中文 English 😀",
+    "saves": 1,
+    "reviewed": true,
+    "audit_index": 137,
+    "audit_count": 1,
+    "peers": [
+      {
+        "counter": 1,
+        "note": "Peer only 中文",
+        "title": "DTW Computer Use — next-audit — Peer 1"
+      }
+    ],
+    "slider": 90.25000435965401,
+    "slider_changes": 4,
+    "gestures": {
+      "click": 2,
+      "double_click": 1,
+      "drag": 2,
+      "hover": 3,
+      "up": 3
+    },
+    "left_scroll_y": 40,
+    "right_scroll_y": 0
+  },
+  "file": {
+    "saves": 1,
+    "result": "ok",
+    "content": "DTW saved 中文 😀",
+    "initial_invalid_name_is_fixture_contract_error": true
+  },
+  "long_text": {
+    "pages": 6,
+    "utf16_units": 20971,
+    "equal_to_oracle": true,
+    "sha256": "e7caebb3160819e0ff9c837bbec2f0afa2047203c6efd5492b60f5a602f0ace2",
+    "preview_value_length": 256
+  },
+  "web": {
+    "record": {
+      "sku": "DTW-0137",
+      "name": "Field kit 137",
+      "warehouse": "Central",
+      "quantity": 37,
+      "reviewed": true,
+      "note": "DTW web audit 中文 😀"
+    },
+    "saves": [
+      {
+        "sku": "DTW-0137",
+        "name": "Field kit 137",
+        "warehouse": "Central",
+        "quantity": 37,
+        "reviewed": true,
+        "note": "",
+        "unix_ms": 1794899823849
+      },
+      {
+        "sku": "DTW-0137",
+        "name": "Field kit 137",
+        "warehouse": "Central",
+        "quantity": 37,
+        "reviewed": true,
+        "note": "DTW web audit 中文 😀",
+        "unix_ms": 1794900353486
+      }
+    ],
+    "result": "recovered_after_wrong_receiver",
+    "clean_run": false
+  },
+  "canvas": {
+    "selected_id": "message-137",
+    "right_clicks": 2,
+    "pins": 0,
+    "result": "blocked_focus_unproven_in_split_and_single_exec"
+  },
+  "pressed_mouse_buttons": 0,
+  "response_utf8_bytes": {
+    "native_default": 9642,
+    "dense_filtered": 898,
+    "custom_readback": 282
+  },
+  "cleanup": {
+    "fixture_quit": "application_exited acknowledgement",
+    "textedit_created_empty_window_closed": true,
+    "loopback_server_exit_code": 0
+  },
+  "limitations": [
+    "No Windows or Linux GUI test",
+    "No atomic GUI task",
+    "No continuous foreground/cursor observer",
+    "Chrome launch failed before browser tasks",
+    "Fixture runner exited -6 when launched from sandbox; compiled app was subsequently launched through DTW",
+    "Initial multiline JS syntax error was test-author escaping, not a DTW regression",
+    "PNG attachments inspected live but not archived in this evidence directory"
+  ],
+  "calls": [
+    {
+      "label": "chrome-start",
+      "execution_id": "exe_V_QWUeeTihU_1h",
+      "error": "launch_unconfirmed",
+      "duration_ms": 4581
+    },
+    {
+      "label": "textedit-unicode",
+      "execution_id": "exe_V_QWUeeTihU_1j",
+      "error": "script_syntax",
+      "duration_ms": 404
+    },
+    {
+      "label": "textedit-unicode-fixed",
+      "execution_id": "exe_V_QWUeeTihU_1k",
+      "error": "target_changed",
+      "duration_ms": 1018
+    },
+    {
+      "label": "textedit-new-window",
+      "execution_id": "exe_V_QWUeeTihU_4d",
+      "error": null,
+      "duration_ms": 1815
+    },
+    {
+      "label": "fixture-start",
+      "execution_id": "exe_V_QWUeeTihU_5r",
+      "error": null,
+      "duration_ms": 8396
+    },
+    {
+      "label": "native-edit-submit",
+      "execution_id": "exe_V_QWUeeTihU_8x",
+      "error": null,
+      "duration_ms": 2819
+    },
+    {
+      "label": "duplicate-selector",
+      "execution_id": "exe_V_QWUeeTihU_97",
+      "error": "selector_ambiguous",
+      "duration_ms": 1001
+    },
+    {
+      "label": "longtext-filter",
+      "execution_id": "exe_V_QWUeeTihU_cf",
+      "error": null,
+      "duration_ms": 620
+    },
+    {
+      "label": "longtext-pagination",
+      "execution_id": "exe_V_QWUeeTihU_cj",
+      "error": null,
+      "duration_ms": 514
+    },
+    {
+      "label": "dense-checkpoint",
+      "execution_id": "exe_V_QWUeeTihU_cn",
+      "error": null,
+      "duration_ms": 625
+    },
+    {
+      "label": "native-controls",
+      "execution_id": "exe_V_QWUeeTihU_cr",
+      "error": null,
+      "duration_ms": 2730
+    },
+    {
+      "label": "native-menu-read",
+      "execution_id": "exe_V_QWUeeTihU_d1",
+      "error": null,
+      "duration_ms": 627
+    },
+    {
+      "label": "open-panel",
+      "execution_id": "exe_V_QWUeeTihU_d6",
+      "error": null,
+      "duration_ms": 1844
+    },
+    {
+      "label": "open-go-path",
+      "execution_id": "exe_V_QWUeeTihU_js",
+      "error": null,
+      "duration_ms": 1989
+    },
+    {
+      "label": "open-owned-file",
+      "execution_id": "exe_V_QWUeeTihU_kb",
+      "error": null,
+      "duration_ms": 2996
+    },
+    {
+      "label": "open-panel-readback",
+      "execution_id": "exe_V_QWUeeTihU_ku",
+      "error": null,
+      "duration_ms": 629
+    },
+    {
+      "label": "open-path-typing",
+      "execution_id": "exe_V_QWUeeTihU_ld",
+      "error": null,
+      "duration_ms": 5492
+    },
+    {
+      "label": "open-commit-file",
+      "execution_id": "exe_V_QWUeeTihU_p9",
+      "error": "selector_unproven",
+      "duration_ms": 3710
+    },
+    {
+      "label": "open-pixel-confirm",
+      "execution_id": "exe_V_QWUeeTihU_wh",
+      "error": null,
+      "duration_ms": 3817
+    },
+    {
+      "label": "native-reset-and-save",
+      "execution_id": "exe_V_QWUeeTihU_wn",
+      "error": null,
+      "duration_ms": 1940
+    },
+    {
+      "label": "save-owned-file",
+      "execution_id": "exe_V_QWUeeTihU_x7",
+      "error": null,
+      "duration_ms": 2284
+    },
+    {
+      "label": "peer-window",
+      "execution_id": "exe_V_QWUeeTihU_xz",
+      "error": null,
+      "duration_ms": 1377
+    },
+    {
+      "label": "peer-edit-close",
+      "execution_id": "exe_V_QWUeeTihU_ye",
+      "error": null,
+      "duration_ms": 2076
+    },
+    {
+      "label": "web-workspace",
+      "execution_id": "exe_V_QWUeeTihU_zf",
+      "error": null,
+      "duration_ms": 1550
+    },
+    {
+      "label": "web-search-typing",
+      "execution_id": "exe_V_QWUeeTihU_106",
+      "error": null,
+      "duration_ms": 2722
+    },
+    {
+      "label": "web-controls",
+      "execution_id": "exe_V_QWUeeTihU_10g",
+      "error": null,
+      "duration_ms": 590
+    },
+    {
+      "label": "web-edit-open",
+      "execution_id": "exe_V_QWUeeTihU_12m",
+      "error": null,
+      "duration_ms": 2341
+    },
+    {
+      "label": "web-edit-save",
+      "execution_id": "exe_V_QWUeeTihU_13m",
+      "error": null,
+      "duration_ms": 2646
+    },
+    {
+      "label": "canvas-switch",
+      "execution_id": "exe_V_QWUeeTihU_17e",
+      "error": null,
+      "duration_ms": 2958
+    },
+    {
+      "label": "canvas-context-menu",
+      "execution_id": "exe_V_QWUeeTihU_18f",
+      "error": null,
+      "duration_ms": 3317
+    },
+    {
+      "label": "canvas-pin",
+      "execution_id": "exe_V_QWUeeTihU_18m",
+      "error": "focus_unproven",
+      "duration_ms": 3058
+    },
+    {
+      "label": "canvas-dismiss-menu",
+      "execution_id": "exe_V_QWUeeTihU_18t",
+      "error": null,
+      "duration_ms": 2955
+    },
+    {
+      "label": "canvas-pin-single-exec",
+      "execution_id": "exe_V_QWUeeTihU_18z",
+      "error": "focus_unproven",
+      "duration_ms": 6275
+    },
+    {
+      "label": "save-fixed-contract",
+      "execution_id": "exe_V_QWUeeTihU_19s",
+      "error": "selector_unproven",
+      "duration_ms": 6348
+    },
+    {
+      "label": "save-fixed-id",
+      "execution_id": "exe_V_QWUeeTihU_1b3",
+      "error": null,
+      "duration_ms": 2025
+    },
+    {
+      "label": "native-gesture-capture",
+      "execution_id": "exe_V_QWUeeTihU_1bj",
+      "error": null,
+      "duration_ms": 1110
+    },
+    {
+      "label": "pointer-gestures",
+      "execution_id": "exe_V_QWUeeTihU_1eo",
+      "error": null,
+      "duration_ms": 5753
+    },
+    {
+      "label": "wait-timeout",
+      "execution_id": "exe_V_QWUeeTihU_1ex",
+      "error": "wait_timeout",
+      "duration_ms": 671
+    },
+    {
+      "label": "custom-readback",
+      "execution_id": "exe_V_QWUeeTihU_1f2",
+      "error": null,
+      "duration_ms": 1978
+    },
+    {
+      "label": "web-note-reinspect",
+      "execution_id": "exe_V_QWUeeTihU_1f9",
+      "error": null,
+      "duration_ms": 2007
+    },
+    {
+      "label": "web-note-typed-readback",
+      "execution_id": "exe_V_QWUeeTihU_1fh",
+      "error": null,
+      "duration_ms": 2672
+    },
+    {
+      "label": "web-note-capture",
+      "execution_id": "exe_V_QWUeeTihU_1fm",
+      "error": null,
+      "duration_ms": 733
+    },
+    {
+      "label": "web-note-pixel-recovery",
+      "execution_id": "exe_V_QWUeeTihU_1gl",
+      "error": null,
+      "duration_ms": 3236
+    },
+    {
+      "label": "web-corrected-save",
+      "execution_id": "exe_V_QWUeeTihU_1hm",
+      "error": null,
+      "duration_ms": 1253
+    },
+    {
+      "label": "textedit-cleanup-inspect",
+      "execution_id": "exe_V_QWUeeTihU_1hr",
+      "error": null,
+      "duration_ms": 502
+    },
+    {
+      "label": "textedit-close-owned-window",
+      "execution_id": "exe_V_QWUeeTihU_1hu",
+      "error": null,
+      "duration_ms": 1797
+    },
+    {
+      "label": "fixture-normal-quit",
+      "execution_id": "exe_V_QWUeeTihU_1j7",
+      "error": null,
+      "duration_ms": 458
+    }
+  ]
+}

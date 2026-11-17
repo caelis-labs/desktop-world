@@ -189,7 +189,7 @@ let sheetParentRaise = try dialogActivation(2)
 let requestedSheetExact = try dialogFocused(2, 2)
 sheetFocusCheck(sheetParentRaise == 1 && requestedSheetExact)
 sheetFocusCheck(try !dialogFocused(2, sheetParentRaise!))
-private var sheetEpoch = FocusBorrowEpoch(initialPID: 10, targetPID: 10, targetWindow: 200)
+private var sheetEpoch = FocusEpoch(initialPID: 10, targetPID: 10, targetWindow: 200)
 sheetEpoch.established(10, window: 200)
 func sheetNotification(_ name: String, objectID: CGWindowID, sampledID: CGWindowID) {
     if notificationNamesFocusedWindow(name) { sheetEpoch.focusedWindow(objectID) }
@@ -205,7 +205,7 @@ print("Sheet activation, exact focus and main-window notification controls passe
 
 // The resident execution epoch follows app activation, while exact logical
 // ancestry permits sheets/popups and rejects an unrelated same-app window.
-private var executionEpoch = FocusBorrowEpoch(initialPID: 20, targetPID: 10)
+private var executionEpoch = FocusEpoch(initialPID: 20, targetPID: 10)
 executionEpoch.established(10, window: 100)
 executionEpoch.focusedWindow(200)
 surfaceCheck(!executionEpoch.invalidated)
@@ -233,34 +233,14 @@ for code in ["native_stopping", "deadline_exceeded", "ax_unavailable"] {
 executionEpoch.activated(20)
 executionEpoch.activated(10)
 surfaceCheck(executionEpoch.invalidated)
-surfaceCheck(!executionEpoch.retarget(10)) // Leave/return cannot create another borrow.
-private var siblingEpoch = FocusBorrowEpoch(initialPID: 20, targetPID: 10)
+surfaceCheck(!executionEpoch.retarget(10)) // Leave/return cannot rearm the foreground epoch.
+private var siblingEpoch = FocusEpoch(initialPID: 20, targetPID: 10)
 siblingEpoch.established(10, window: 100)
 if try !executionFamily(4) { siblingEpoch.invalidate() }
 siblingEpoch.established(10, window: 100)
 surfaceCheck(siblingEpoch.invalidated) // Same-app sibling leave/return is sticky too.
 
-// Restoration validates birth before and after the exact retained window read.
-// Reused PIDs and changed roots never reach the activation boundary.
-private var restoreWindowReads = 0
-sheetFocusCheck(try !executionRestoreIdentityCurrent(pid: 20, generation: 700,
-    birth: { _ in 701 }, windowMatches: { restoreWindowReads += 1; return true }))
-surfaceCheck(restoreWindowReads == 0)
-sheetFocusCheck(try !executionRestoreIdentityCurrent(pid: 20, generation: 700,
-    birth: { _ in 700 }, windowMatches: { false }))
-private var restoreBirthReads = 0
-sheetFocusCheck(try !executionRestoreIdentityCurrent(pid: 20, generation: 700, birth: { _ in
-    restoreBirthReads += 1; return restoreBirthReads == 1 ? 700 : 701
-}, windowMatches: { true }))
-surfaceCheck(restoreBirthReads == 2)
-sheetFocusCheck(try executionRestoreIdentityCurrent(pid: 20, generation: 700,
-    birth: { _ in 700 }, windowMatches: { true }))
-do {
-    _ = try executionRestoreIdentityCurrent(pid: 20, generation: 700, birth: { _ in 700 },
-        windowMatches: { throw failure("ax_unavailable", "Original exact root cannot be proven") })
-    preconditionFailure("Unknown prior window permitted restoration")
-} catch let error as NativeFailure { surfaceCheck(error.code == "ax_unavailable") }
-print("Execution focus modal family, irreversible external invalidation and PID-birth restoration controls passed")
+print("Execution focus modal family and irreversible external invalidation controls passed")
 
 // Each payload guard reads anew, preserving denial details and freeing every
 // producer-owned JSON response. Unknown/malformed proof cannot authorize input.
@@ -303,15 +283,6 @@ surfaceCheck(confirmedExecutionTerminal(operation: "close_window", evidence: "co
     sameApp: true, closedWindow: 200, anchorWindow: 100) == nil)
 surfaceCheck(confirmedExecutionTerminal(operation: "quit_app", evidence: "confirmed", postcondition: "application_running",
     sameApp: true, closedWindow: nil, anchorWindow: 100) == nil)
-private let terminalRestored = settledExecutionTerminal("application_exited", originalCurrent: { true })
-surfaceCheck(terminalRestored["focus"] as? String == "restored" && terminalRestored["error"] == nil)
-private let terminalForeign = settledExecutionTerminal("window_closed", originalCurrent: { false })
-surfaceCheck(terminalForeign["focus"] as? String == "changed_externally" && terminalForeign["terminal"] as? String == "window_closed")
-private let terminalUnknown = settledExecutionTerminal("application_exited", originalCurrent: {
-    throw failure("focus_unproven", "Original exact focus cannot be proven")
-})
-surfaceCheck(terminalUnknown["focus"] as? String == "changed_externally" && terminalUnknown["error"] == nil)
-surfaceCheck(terminalUnknown["terminal_focus"] as? String == "unproven")
 print("Execution payload guard replies and confirmed quit/root-close settlement passed; no AX or GUI reads")
 
 // Readiness distinguishes a temporal web stub from persistent custom decoration.
@@ -1515,49 +1486,6 @@ surfaceCheck(SemanticTextFields(role: kAXTextFieldRole, title: nil, value: nil, 
     subrole: "AXCloseButton").name == nil)
 surfaceCheck(SemanticTextFields(role: kAXButtonRole, title: nil, value: nil, description: nil,
     subrole: "AXCustomButton").label == kAXButtonRole)
-
-// A new/raised target surface crossing the original is distinct from a
-// pre-existing overlay, another app's window, and a missing original owner.
-private func orderRow(_ id: CGWindowID, _ pid: Int32) -> CGRecord {
-    CGRecord(id: id, pid: pid, bounds: CGRect(x: 0, y: 0, width: 100, height: 100), onscreen: true)
-}
-private let originalOrder = [orderRow(1, 20), orderRow(2, 10), orderRow(3, 20)]
-private let alreadyAbove = targetWindowsAbove(originalOrder, original: 2, owner: 10, target: 20)!
-surfaceCheck(alreadyAbove == [1])
-surfaceCheck(targetWindowsAbove([orderRow(4, 30)] + originalOrder, original: 2, owner: 10, target: 20) == alreadyAbove)
-surfaceCheck(targetWindowsAbove([orderRow(3, 20)] + originalOrder.prefix(2), original: 2, owner: 10, target: 20)!.subtracting(alreadyAbove) == [3])
-surfaceCheck(targetWindowsAbove([orderRow(4, 20)] + originalOrder, original: 2, owner: 10, target: 20)!.subtracting(alreadyAbove) == [4])
-surfaceCheck(targetWindowsAbove(originalOrder, original: 2, owner: 99, target: 20) == nil)
-surfaceCheck(targetWindowsAbove([orderRow(3, 20)], original: 2, owner: 10, target: 20) == nil)
-surfaceCheck(!originalAboveOtherApps(originalOrder, original: 2, owner: 10))
-surfaceCheck(originalAboveOtherApps([orderRow(4, 10), orderRow(2, 10), orderRow(3, 20)], original: 2, owner: 10))
-surfaceCheck(!originalAboveOtherApps(originalOrder, original: 2, owner: 99))
-
-// A menu's accessibility focus is not keyboard foreground. Passive order return
-// needs the original actual foreground and exact local window, including a
-// second foreground proof after the potentially blocking AX read.
-private var passiveFrontReads = 0
-private let passiveSameOwner = try passiveOrderOwner(requested: 42, requestedWindow: 42,
-    frontmost: { passiveFrontReads += 1; return true }, focusedWindow: { 42 },
-    equal: ==, windowID: { CGWindowID($0) })
-surfaceCheck(passiveSameOwner)
-surfaceCheck(passiveFrontReads == 2)
-private let passiveOtherForeground = try passiveOrderOwner(requested: 42, requestedWindow: 42,
-    frontmost: { false }, focusedWindow: { preconditionFailure("Do not query a different foreground owner") },
-    equal: ==, windowID: { CGWindowID($0) })
-surfaceCheck(!passiveOtherForeground)
-private let passiveOtherWindow = try passiveOrderOwner(requested: 42, requestedWindow: 42,
-    frontmost: { true }, focusedWindow: { 43 }, equal: ==, windowID: { CGWindowID($0) })
-surfaceCheck(!passiveOtherWindow)
-private let passiveMissingWindow = try passiveOrderOwner(requested: 42, requestedWindow: 42,
-    frontmost: { true }, focusedWindow: { nil }, equal: ==, windowID: { CGWindowID($0) })
-surfaceCheck(!passiveMissingWindow)
-passiveFrontReads = 0
-private let passiveOwnerChangedDuringRead = try passiveOrderOwner(requested: 42, requestedWindow: 42,
-    frontmost: { passiveFrontReads += 1; return passiveFrontReads == 1 }, focusedWindow: { 42 },
-    equal: ==, windowID: { CGWindowID($0) })
-surfaceCheck(!passiveOwnerChangedDuringRead)
-surfaceCheck(passiveFrontReads == 2)
 
 // Public composite labels are matchable verbatim. Separately returned fields
 // never create an implicit whitespace-joined match, nor an extra role alias.

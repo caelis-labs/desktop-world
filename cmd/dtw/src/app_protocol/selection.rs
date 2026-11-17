@@ -194,7 +194,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                         selection_resolution_error(
                             &submitted.command,
                             "selector_ambiguous",
-                            "The selector matches multiple elements; narrow role or text",
+                            "The selector matches multiple elements; inspect candidate IDs and surrounding context, or capture an image to identify the intended element. Repeated role/text needs an element ID or a narrower observation scope",
                             &progress,
                         ),
                     );
@@ -379,7 +379,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                     (
                         "selector_unproven",
                         "unproven",
-                        "Discovery remained incomplete; uniqueness is unproven",
+                        "Discovery remained incomplete; uniqueness is unproven. Inspect candidate IDs and surrounding context, or capture an image to identify the intended element; repeated role/text cannot prove uniqueness",
                     )
                 };
                 progress["status"] = json!(status);

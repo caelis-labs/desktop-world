@@ -22,7 +22,9 @@ Agent / Harness policy
    permits; do not make models resolve avoidable uncertainty or invent certainty
    after an unproven effect.
 2. With functionality established, reduce foreground occupation and real pointer
-   movement. Prefer working background delivery and return borrowed resources.
+   movement on macOS through working background capabilities. Use foreground or
+   real pointer input directly when necessary; Windows defaults to foreground
+   operation. Leave resulting foreground, focus and pointer state in place.
 3. Keep the public protocol small, stable and easy to use across model capability
    levels. Each method has a clear purpose; ordinary operations must not require
    elaborate Agent scripts, route selection or custom lifecycle orchestration.
@@ -34,8 +36,8 @@ searches installed/running applications; Skill API.md documents the public app
 methods. There is no public API/result tool, app-less lane or Session object.
 macOS resolves stopped bundle IDs and explicit .app paths. A look starts a stopped
 app; normal input readiness and focus routing are internal. `app.focus()` explicitly
-ensures foreground ownership for subsequent input in the same execution, with
-normal scoped restoration at settlement. Process identities and all
+prepares the authorized foreground receiver without restoring prior state at
+settlement. Process identities and all
 window/observation/cursor handles remain private.
 
 A window reference binds its application instance and native owner. Semantic and
@@ -88,8 +90,8 @@ a new plugin framework or crate per capability.
 
 The macOS worker keeps AppKit ownership on its main thread. Blocking stdin uses
 a bounded reader channel so the main run loop can deliver workspace history while
-idle and before admitting a new request. Notifications from a previous restoration
-must not be deferred until a later execution's activation.
+idle and before admitting a new request. User-switch history must be available
+before admitting subsequent input.
 
 On macOS, an instance lease serializes writes to one process incarnation across
 sessions. Directed writes to independent instances can run concurrently. Shared
@@ -98,36 +100,25 @@ The scheduler serializes conflicting resources, not unrelated apps by default.
 Closing an owner must settle its native resources before releasing ownership;
 failed cleanup must not silently reopen admission.
 
-Under macOS `auto`, each script starts with background delivery. A clean
-`not_dispatched` preflight for an allowlisted unsupported capability may authorize
-one resident foreground borrow for the rest of the execution. Capabilities include
-AppKit/Chromium hover tracking, a missing required addressed-event API, standard
-Open-panel coordinate clicks, proven modal/sheet or associated-process keyboard
-routing, a proven absent background key window, and bounded framework-specific
-keyboard exceptions. Unique windowless applications can borrow for application
-shortcuts after a complete empty inventory proof. Unknown AX/modal state, incomplete
-semantics and menu reads do not authorize activation. Borrowing requires an exact
-logical window anchor, or a unique windowless app incarnation whose first proven
-focused window binds that anchor once, plus a snapshot of the original foreground
-app instance and window. Remaining
-actions validate that foreground scope, including proven descendant surfaces;
-supported pointer transport can remain addressed. Once preparation or dispatch
-begins, errors do not reroute or replay input.
+macOS prefers effective background delivery. Known capability boundaries can
+select foreground preparation or real pointer input before payload dispatch;
+unknown AX/modal state does not establish an input receiver. Identity, exact
+window/control ownership and relevant geometry remain required. Windowless
+shortcuts need a unique app incarnation and complete empty window inventory.
+No previous foreground, focus, stacking or pointer state is saved for restoration.
+Delivery summaries expose only `route` / `reason`, with no borrow counters or
+focus-return result.
 
-At script settlement the resident finalizer releases held input and restores the
-original app and exact captured window only while scope ownership and original
-identity remain proven. An external app or sibling-window focus change invalidates
-the scope permanently: later focus return cannot rearm it, subsequent payloads
-stop, and cleanup does not reacquire or force restoration. A positively confirmed
-quit is terminal; cleanup only observes the original foreground and never activates
-a third app. A closed anchor cannot admit further input. Restoration-only ownership
-can survive its closure with the same foreground app incarnation, no external
-app leave/return, and a complete live inventory proving either no windows or the
-new document created by an admitted standard Open-panel click. It cannot adopt an
-existing sibling or unknown replacement window. See [macOS routing](macos-input-routing.md)
-for the exact retained-window and WindowServer proofs. Restoration failures
-remain cleanup failures and close dispatch admission. Normal focus return has a
-separate bounded 2-second cleanup budget.
+Each new input validates its receiver and any foreground ownership it requires.
+An external app or sibling-window switch stops further input in that execution;
+later focus return does not rearm it. A closed target cannot authorize input to
+an unproven replacement. Settlement releases held keys/buttons on their original
+owner and transport, including after target closure, without restoring UI state.
+Cleanup failure stops the execution and affected native context. Later new
+requests let the service retire/recover that context and recheck admission;
+unsettled cleanup never authorizes a replacement owner or replay. See
+[macOS routing](macos-input-routing.md). Exact text-receiver repairs and
+compatibility validation remain in progress.
 
 Semantic AXPress has its own reply timeout of at most 2 seconds within the remaining
 request deadline. Post-dispatch AX errors/timeouts retain unknown effect; positive
@@ -135,13 +126,13 @@ acknowledgement establishes dispatch, not the UI postcondition. This contract is
 grounded in source; historical GUI evidence does not validate the current scope
 lifecycle.
 
-Windows selects supported client-area mouse messages and otherwise raises the
-exact target for foreground input; Agents do not select routes. Background input,
-a stationary user pointer and locked-session operation are distinct capabilities.
-Windows validates the worker/current input desktop before preparation and each new
-input payload. Desktop loss prevents new input while the original receiver's paired
-releases retain their cleanup route; restoration requires fresh observation. This
-admission does not establish locked-session support.
+Windows defaults to foreground operation and prepares the exact receiver;
+background-directed mouse delivery is not part of the current input strategy.
+It validates the worker/current input desktop before preparation and each new
+payload. Desktop loss prevents new input while the original receiver's paired
+releases retain their cleanup route. Settlement leaves foreground, focus,
+stacking and pointer changes in place. This admission does not establish
+locked-session support.
 
 ## Window and semantic paths
 
@@ -161,7 +152,9 @@ conditions for their selected delivery route.
 Semantic discovery is filtered by role/text and bounded by region/subtree where
 supported. Native traversal retains a continuation frontier rather than rescanning
 a truncated prefix. Matching count, visited nodes, time and output bytes are
-separate budgets. Partial coverage with no matches does not establish absence. Public `look({role,text})`
+separate budgets. Partial coverage with no matches does not establish absence. Even a complete
+empty AX tree describes only the queried semantics; self-drawn visible content
+requires capture. Public `look({role,text})`
 reuses this native query path without exposing its native cursors. Truncated preview
 fields retain a content revision so omitted changes remain observable; the revision
 does not prove textual readback. Explicit `readText` maps an observed app target to

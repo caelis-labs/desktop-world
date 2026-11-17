@@ -1,7 +1,8 @@
 # MCP toolsets
 
-DTW offers two startup surfaces over the same native app operations. The default
-remains unchanged. Choose the surface in the MCP server launch configuration,
+DTW offers two startup surfaces over the same 14 native app operations. The
+default has two MCP tools (`apps` + `exec`); atomic has 15 including `apps`,
+without `exec`. Choose the surface in the MCP server launch configuration,
 restart/reconnect the server, and discover/list its actual tools before use.
 
 | Startup | Listed tools | Execution |
@@ -84,11 +85,13 @@ start directly. Do not prepend a redundant `look` to each default script. Batch
 known sequential actions in one script and observe when a decision or verification
 requires it. Atomic mode requires separate calls for those operations.
 
-Each call settles its own execution scope. Explicit focus and related input can
-share one `exec`; separate atomic calls cannot share that scope. On Windows,
-foreground restoration at settlement can dismiss a native menu, so opening the
-menu and choosing its item must stay in one script. Retained app context does
-not imply retained foreground or an open menu across atomic calls.
+Each call settles its own execution scope. One `exec` is useful for orchestrating
+known sequential steps. Atomic settlement does not restore focus or dismiss
+menus through a restoration callback. Across calls, verify the actual menu and
+receiver state; retained context alone is not receiver proof. macOS prefers
+working background capabilities and directly uses foreground/real mouse input
+when needed. Windows defaults to foreground operation. Neither restores prior
+foreground, focus, stacking or pointer position; user handoff still stops input.
 
 ## Results and uncertainty
 
@@ -104,13 +107,20 @@ A script can return a small custom JSON value to select `result`, or omit its
 return/return its final snapshot to publish `view`. This selection does not change
 what the individual methods return or establish that an input had its intended
 effect. Dispatch, acknowledgements and observed business success remain distinct.
-Check errors and read back the relevant UI before declaring success.
+`status:completed` means settlement; check MCP `isError` / `error` and
+observation status, then read back the relevant UI before declaring success.
+A complete empty AX tree does not prove an empty screen; use `capture` for
+self-drawn or low-AX interfaces. `effects.delivery` contains `route` / `reason`
+only, without borrowed-input or focus-return metadata.
 
 An interrupted or missing response can leave input effects. Inspect before new
 input. Identical MCP request-ID retransmission refers to retained execution; a
 new request ID executes new work. Neither surface replays input to recover an
 observation or renew a stale target. Standard MCP cancellation stops its matching
-call, with partial effects and cleanup failures reported explicitly.
+call, with partial effects and cleanup failures reported explicitly. Cleanup
+failure stops the current execution and affected native context; later new
+requests let DTW retire/recover that context and check admission again. Old
+input is never replayed.
 
 ## Compatibility and validation
 

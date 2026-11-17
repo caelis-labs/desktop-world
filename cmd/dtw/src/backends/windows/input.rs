@@ -59,7 +59,7 @@ pub fn mutation(until: Instant) -> Result<Mutation<'static>, Error> {
         AdmissionError::Expired => Error::TimedOut,
         AdmissionError::Closed => Error::Closed,
     })?;
-    // Shared by foreground preparation, UIA actions and posted input. Paired
+    // Shared by foreground preparation, UIA actions and physical input. Paired
     // releases retain their original admission and bypass this new-input gate.
     super::desktop::ensure_input_desktop()?;
     super::execution_scope::check()?;
@@ -249,7 +249,7 @@ fn detach_all(threads: &[u32], mut detach: impl FnMut(u32) -> bool) -> bool {
 }
 pub fn focus(hwnd: HWND, until: Instant, dispatched: &mut bool) -> Result<(), Error> {
     super::execution_scope::before_focus(hwnd)?;
-    focus_inner(hwnd, until, dispatched, false)?;
+    focus_inner(hwnd, until, dispatched)?;
     super::execution_scope::after_focus(hwnd)
 }
 pub fn foreground_diagnostics(target: HWND) -> serde_json::Value {
@@ -262,32 +262,16 @@ pub fn foreground_diagnostics(target: HWND) -> serde_json::Value {
     }
     json!({"target":window(target),"foreground":window(unsafe {GetForegroundWindow()}),"desktop":super::desktop::context()})
 }
-pub fn return_focus(hwnd: HWND, until: Instant) -> Result<(), Error> {
-    // Foreground return releases an existing script resource. It generates no
-    // keyboard/mouse payload and remains possible after new-input admission closes.
-    super::desktop::ensure_input_desktop()?;
-    focus_inner(hwnd, until, &mut false, true)
-}
-fn focus_inner(
-    hwnd: HWND,
-    until: Instant,
-    dispatched: &mut bool,
-    returning: bool,
-) -> Result<(), Error> {
+fn focus_inner(hwnd: HWND, until: Instant, dispatched: &mut bool) -> Result<(), Error> {
     unsafe {
         let mut activation = None;
         if GetForegroundWindow() != hwnd {
-            let _mutation = if returning {
-                None
-            } else {
-                Some(mutation(until)?)
-            };
+            let _mutation = mutation(until)?;
             let attachment = ForegroundAttachment::acquire(hwnd);
-            if !returning {
-                check(until)?;
-            }
+            check(until)?;
             no_held_keys()?;
             super::desktop::ensure_input_desktop()?;
+            super::execution_scope::check()?;
             *dispatched = true;
             let before = GetForegroundWindow();
             let accepted = SetForegroundWindow(hwnd).as_bool();
@@ -302,10 +286,9 @@ fn focus_inner(
         // before the exact HWND is foreground. Waiting owns no mutation gate.
         let settle = until.min(Instant::now() + Duration::from_millis(200));
         while GetForegroundWindow() != hwnd && Instant::now() < settle {
-            if !returning {
-                check(until)?;
-            }
-            if !returning && closing() {
+            check(until)?;
+            super::execution_scope::check()?;
+            if closing() {
                 return Err(Error::Closed);
             }
             std::thread::sleep(Duration::from_millis(5));
@@ -469,14 +452,6 @@ pub fn send(
         return Err(failed("Foreground changed before dispatch"));
     }
     let keyboard = batch.iter().any(|event| event.r#type == INPUT_KEYBOARD);
-    let pointer = batch.iter().any(|event| event.r#type == INPUT_MOUSE);
-    let pointer_move = batch.iter().any(|event| {
-        event.r#type == INPUT_MOUSE
-            && unsafe { event.Anonymous.mi.dwFlags.contains(MOUSEEVENTF_MOVE) }
-    });
-    if pointer {
-        super::execution_scope::before_pointer()?;
-    }
     let mut queue = None;
     {
         let _mutation = mutation(until)?;
@@ -500,15 +475,13 @@ pub fn send(
                     keyboard_preflight(until, Instant::now(), closing(), cleanup_failed())?;
                 }
                 super::desktop::ensure_input_desktop()?;
+                super::execution_scope::check()?;
                 *dispatched = true;
                 Ok(())
             },
             |events| unsafe { SendInput(events, std::mem::size_of::<INPUT>() as i32) },
         )?;
         *accepted = insertion.accepted;
-        if pointer_move && insertion.accepted > 0 {
-            super::execution_scope::after_pointer_move()?;
-        }
         if !insertion.complete {
             if !insertion.cleanup_complete {
                 GATE.fail_cleanup();
@@ -577,8 +550,8 @@ pub fn terminal_keypress_boundary(until: Instant) -> Result<(), Error> {
 // It produces no character. A changed toggle bit plus key-up proves only that
 // the attached target queue read the tail, never that Save/another action worked.
 const DRAIN_KEY: u16 = 0xe8;
-/// Settle CUA caption pen preparation before a later mouse move or foreground
-/// return. Pen-up can enqueue a promoted mouse move after foreground activation.
+/// Settle CUA caption pen preparation before a later mouse move.
+/// Pen-up can enqueue a promoted mouse move after foreground activation.
 /// A read tail on the exact receiver queue is required; no business key is sent.
 pub(super) fn drain_caption(window: HWND, placement: INPUT, until: Instant) -> Result<(), Error> {
     if unsafe { GetForegroundWindow() } != window {

@@ -26,20 +26,6 @@ mod execution_scope_tests;
 mod worker;
 pub use worker::worker_entry;
 
-// A script's single foreground borrow is returned after its engine settles.
-// Emergency shutdown retains its separate bounded drain budget.
-const NORMAL_FOCUS_RETURN_BUDGET: Duration = Duration::from_secs(2);
-const FOCUS_RETURN_TRANSPORT_MARGIN: Duration = Duration::from_millis(100);
-
-fn focus_return_deadline_ms(now: u64, call_deadline: Option<u64>) -> u64 {
-    let capped = now.saturating_add(NORMAL_FOCUS_RETURN_BUDGET.as_millis() as u64);
-    call_deadline.map_or(capped, |deadline| deadline.min(capped))
-}
-
-fn focus_return_request(now: u64, call_deadline: Option<u64>) -> Value {
-    json!({"operation":"release_focus", "deadline_unix_ms":focus_return_deadline_ms(now, call_deadline)})
-}
-
 // Private capture-only classification. Neither stale references nor arbitrary
 // native errors are eligible for another read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,7 +89,7 @@ pub struct NativeBackend {
     scene: SceneOwner,
     stamp: ProviderStamp,
     cleanup_failure: Mutex<Option<Error>>,
-    focus_pending: AtomicBool,
+    foreground_active: AtomicBool,
     permissions: Mutex<Option<Value>>,
     cursor: Arc<CursorSession>,
     cursor_operation: AtomicU64,
@@ -332,7 +318,7 @@ impl NativeBackend {
             worker: Arc::new(worker),
             scene: SceneOwner::default(),
             cleanup_failure: Mutex::new(None),
-            focus_pending: AtomicBool::new(false),
+            foreground_active: AtomicBool::new(false),
             permissions: Mutex::new(None),
             cursor,
             cursor_operation: AtomicU64::new(0),
@@ -616,7 +602,7 @@ impl NativeBackend {
         if let Some(error) = reply_error(&proof) {
             return Err((error, false));
         }
-        if proof["scope_active"] != true || !proof["borrowed"].is_boolean() {
+        if proof["scope_active"] != true {
             return Err((Error::InvalidObservation, false));
         }
         Ok(proof)
@@ -633,7 +619,7 @@ impl NativeBackend {
         // operations, begin_execution_focus receives no key/text/pointer payload.
         let preparation_is_action = operation == "focus";
         let target = request["target"].clone();
-        let mut scope = if self.focus_pending.load(Ordering::Acquire) {
+        let mut scope = if self.foreground_active.load(Ordering::Acquire) {
             match self.validate_execution_focus(&target, call, false, Some(&operation)) {
                 Ok(scope) => Some(scope),
                 Err(error) => {
@@ -648,32 +634,7 @@ impl NativeBackend {
         };
         request["_defer_foreground"] = json!(true);
         request["_execution_foreground"] = json!(scope.is_some());
-        let background_order = scope.is_none()
-            && !matches!(operation.as_str(), "focus" | "focus_app")
-            && target["app"].is_object();
-        if background_order {
-            // Addressed scene input can raise an AppKit window without
-            // activating its app. The resident owns return obligations across
-            // short-lived scene workers, just as it does for semantic presses.
-            // This optional layering proof never authorizes or gates payload.
-            let _ = self.rpc(
-                json!({"operation":"prepare_background_order","target":target}),
-                call,
-            );
-        }
-        let sent = send(request.clone());
-        if background_order
-            && match &sent {
-                Ok(reply) => reply["dispatch"] != "not_dispatched",
-                Err((_, sent)) => *sent,
-            }
-        {
-            let _ = self.rpc(
-                json!({"operation":"admit_background_order","target":target}),
-                call,
-            );
-        }
-        let mut reply = sent?;
+        let mut reply = send(request.clone())?;
         if reply.get("foreground_plan").is_some() {
             let Some(reason) = input_route::foreground_plan(&reply, &operation) else {
                 // A malformed/contradictory action reply cannot certify that no
@@ -684,8 +645,8 @@ impl NativeBackend {
                 return Err((Error::InvalidObservation, true));
             }
             // The first attempt proved no preparation or payload was sent. Its
-            // short-lived scene has already exited before this resident borrow.
-            self.focus_pending.store(true, Ordering::Release);
+            // short-lived scene has already exited before this resident foreground scope.
+            self.foreground_active.store(true, Ordering::Release);
             let mut begun = self
                 .rpc(
                     json!({"operation":"begin_execution_focus","target":target,
@@ -704,10 +665,8 @@ impl NativeBackend {
                             "Foreground preparation failed before requested input; no payload was sent. {message}"
                         ));
                     }
-                    if let Some(borrowed) = begun["borrowed"].as_bool() {
-                        begun["delivery"] = json!({"route":"foreground", "reason":"execution_scope_preparation",
-                            "foreground_borrowed":borrowed, "focus_return":"pending"});
-                    }
+                    begun["delivery"] =
+                        json!({"route":"foreground", "reason":"execution_scope_preparation"});
                 }
                 return Ok(begun);
             }
@@ -724,24 +683,22 @@ impl NativeBackend {
                 return Err((Error::InvalidObservation, true));
             }
         }
-        if let Some(scope) = scope {
+        if scope.is_some() {
             // Foreground ownership lasts for the script. It does not turn a
             // later addressed pointer action into physical cursor input.
             if !reply["delivery"].is_object() {
                 reply["delivery"] = json!({"route":"foreground", "reason":"execution_scope"});
             }
-            reply["delivery"]["foreground_borrowed"] = scope["borrowed"].clone();
-            reply["delivery"]["focus_return"] = json!("pending");
         }
         Ok(reply)
     }
 
     fn action(&self, request: Value, call: &CallContext<'_>) -> ActionOutcome {
-        let confirmation = match request["operation"].as_str() {
-            Some("press") => Some("element_selected"),
-            Some("set_value") => Some("element_value_set"),
-            Some("focus") => Some("window_focused"),
-            Some("focus_app") => Some("application_focused"),
+        let confirmation: Option<&[&str]> = match request["operation"].as_str() {
+            Some("press") => Some(&["element_selected", "element_focused"]),
+            Some("set_value") => Some(&["element_value_set"]),
+            Some("focus") => Some(&["window_focused"]),
+            Some("focus_app") => Some(&["application_focused"]),
             _ => None,
         };
         let reply = match self.execution_input_rpc(request, call, |request| self.rpc(request, call))
@@ -836,45 +793,12 @@ impl NativeBackend {
                 .validate_window(&original, call)
                 .map_err(|error| (error, false))?;
             request["target"] = local.clone();
-            let mut reply = self.rpc_on_guarded(
+            let reply = self.rpc_on_guarded(
                 &scene.worker,
                 request,
                 call,
                 guard.as_ref().zip(validation.as_ref()),
             )?;
-            if let Some(point) = reply
-                .as_object_mut()
-                .and_then(|r| r.remove("execution_pointer"))
-            {
-                // Register with the permanent owner before allowing this scene
-                // to discard its fallback. Neither metadata RPC posts input.
-                let cleanup_until = Instant::now() + Duration::from_millis(750);
-                let cleanup_poll = || {
-                    let left = cleanup_until.saturating_duration_since(Instant::now());
-                    if left.is_zero() {
-                        Err(Error::TimedOut)
-                    } else {
-                        Ok(left)
-                    }
-                };
-                let cleanup_call = CallContext {
-                    poll: &cleanup_poll,
-                };
-                let note = handoff_execution_pointer(
-                    point,
-                    &original,
-                    &local,
-                    |request| self.read_rpc(request, &cleanup_call),
-                    |request| {
-                        self.rpc_on(&scene.worker, request, &cleanup_call)
-                            .map_err(|(error, _)| error)
-                            .and_then(|reply| reply_error(&reply).map_or(Ok(reply), Err))
-                    },
-                );
-                if let Err(error) = note {
-                    self.cleanup_failure.lock().unwrap().get_or_insert(error);
-                }
-            }
             Ok((reply, local, before))
         })();
         // SCK can live until process exit, even after its reply. Resident
@@ -1002,15 +926,15 @@ impl Backend for NativeBackend {
                 .as_ref()
                 .is_none_or(|worker| worker.is_reaped())
     }
-    fn finish_execution(&self) -> Result<Option<FocusReturn>, Error> {
-        let until = Instant::now() + NORMAL_FOCUS_RETURN_BUDGET + FOCUS_RETURN_TRANSPORT_MARGIN;
+    fn finish_execution(&self) -> Result<(), Error> {
+        let until = Instant::now() + Duration::from_millis(500);
         let request_id = unique_generation();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        let mut request = focus_return_request(now, None);
-        request["request_id"] = json!(request_id);
+        let request = json!({"operation":"end_execution", "request_id":request_id,
+            "deadline_unix_ms":now.saturating_add(500)});
         let bytes = match self.worker.call(request.to_string().as_bytes(), || {
             let left = until.saturating_duration_since(Instant::now());
             if left.is_zero() {
@@ -1021,15 +945,11 @@ impl Backend for NativeBackend {
         }) {
             Ok(bytes) => bytes,
             Err(error) if error.kind == TransportErrorKind::Stopped => {
-                return self.worker.cleanup_error().map_or_else(
-                    || {
-                        Ok(self
-                            .focus_pending
-                            .load(Ordering::Acquire)
-                            .then_some(FocusReturn::Unconfirmed))
-                    },
-                    |error| Err(transport_error(error)),
-                );
+                self.foreground_active.store(false, Ordering::Release);
+                return self
+                    .worker
+                    .cleanup_error()
+                    .map_or(Ok(()), |error| Err(transport_error(error)));
             }
             Err(error) => return Err(transport_error(error)),
         };
@@ -1038,21 +958,11 @@ impl Backend for NativeBackend {
         if let Some(error) = reply_error(&reply) {
             return Err(error);
         }
-        if let Some(error) = native_cleanup_error(&reply) {
-            self.cleanup_failure.lock().unwrap().get_or_insert(error);
+        if reply["ended"] != true {
+            return Err(Error::InvalidObservation);
         }
-        self.focus_pending.store(false, Ordering::Release);
-        // No outstanding borrow is not a new restoration claim.
-        match reply["focus"].as_str() {
-            Some("unchanged") => Ok(None),
-            Some("retained") => Ok(Some(FocusReturn::Retained)),
-            Some("restored") => Ok(Some(FocusReturn::Restored)),
-            Some("application_restored") => Ok(Some(FocusReturn::ApplicationRestored)),
-            Some("changed_externally") => Ok(Some(FocusReturn::ChangedExternally)),
-            Some("previous_app_closed") => Ok(Some(FocusReturn::PreviousAppClosed)),
-            Some("unconfirmed") => Ok(Some(FocusReturn::Unconfirmed)),
-            _ => Err(Error::InvalidObservation),
-        }
+        self.foreground_active.store(false, Ordering::Release);
+        Ok(())
     }
     fn cleanup_error(&self) -> Option<Error> {
         self.cleanup_failure
@@ -1579,35 +1489,6 @@ fn bound_pixel_point(
     }
     Ok((x, y))
 }
-fn execution_pointer_note(point: Value, target: &Value) -> Result<Value, Error> {
-    let values = point.as_array().ok_or(Error::InvalidObservation)?;
-    if values.len() != 2
-        || !values
-            .iter()
-            .all(|v| v.as_f64().is_some_and(f64::is_finite))
-    {
-        return Err(Error::InvalidObservation);
-    }
-    Ok(json!({"operation":"note_execution_pointer", "target":target, "point":point}))
-}
-fn handoff_execution_pointer(
-    point: Value,
-    resident: &Value,
-    scene: &Value,
-    mut record: impl FnMut(Value) -> Result<Value, Error>,
-    mut acknowledge: impl FnMut(Value) -> Result<Value, Error>,
-) -> Result<(), Error> {
-    let request = execution_pointer_note(point.clone(), resident)?;
-    if record(request)?["recorded"] != true {
-        return Err(Error::InvalidObservation);
-    }
-    let reply =
-        acknowledge(json!({"operation":"ack_execution_pointer", "target":scene, "point":point}))?;
-    if reply["acknowledged"] != true {
-        return Err(Error::InvalidObservation);
-    }
-    Ok(())
-}
 fn native_cleanup_error(reply: &Value) -> Option<Error> {
     let cleanup = reply.get("cleanup_error")?;
     if cleanup["error"] == "permission_required" {
@@ -1647,28 +1528,7 @@ fn parse_delivery(value: Option<&Value>) -> Result<Option<InputDelivery>, ()> {
         None | Some(Value::Null) => None,
         _ => return Err(()),
     };
-    let foreground_borrowed = value["foreground_borrowed"].as_bool().ok_or(())?;
-    let focus_return = match object.get("focus_return").and_then(Value::as_str) {
-        Some("pending") => Some(FocusReturn::Pending),
-        Some("retained") => Some(FocusReturn::Retained),
-        Some("restored") => Some(FocusReturn::Restored),
-        Some("application_restored") => Some(FocusReturn::ApplicationRestored),
-        Some("changed_externally") => Some(FocusReturn::ChangedExternally),
-        Some("previous_app_closed") => Some(FocusReturn::PreviousAppClosed),
-        Some("unchanged") => Some(FocusReturn::Unchanged),
-        Some("unconfirmed") => Some(FocusReturn::Unconfirmed),
-        None if value["focus_return"].is_null() => None,
-        _ => return Err(()),
-    };
-    if (foreground_borrowed || focus_return.is_some()) && route.is_none() {
-        return Err(());
-    }
-    Ok(Some(InputDelivery {
-        route,
-        reason,
-        foreground_borrowed,
-        focus_return,
-    }))
+    Ok(Some(InputDelivery { route, reason }))
 }
 
 fn lifecycle_reply(reply: &Value, expected: &str) -> ActionOutcome {
@@ -1690,18 +1550,19 @@ fn lifecycle_reply(reply: &Value, expected: &str) -> ActionOutcome {
     }
     action_reply(reply)
 }
-fn confirmed_action_reply(reply: &Value, expected: &str) -> ActionOutcome {
+fn confirmed_action_reply(reply: &Value, expected: &[&str]) -> ActionOutcome {
     if reply["evidence"] != "confirmed" {
         return action_reply(reply);
     }
-    if reply["postcondition"] != expected || reply["dispatch"] != "dispatched" {
+    let postcondition = reply["postcondition"].as_str().unwrap_or("");
+    if !expected.contains(&postcondition) || reply["dispatch"] != "dispatched" {
         return ActionOutcome::unknown(Error::InvalidObservation);
     }
     let mut dispatch = reply.clone();
     dispatch["evidence"] = json!("unverified");
     let mut outcome = action_reply(&dispatch);
     if outcome.dispatch == DispatchState::Dispatched && outcome.error.is_none() {
-        outcome.evidence = EffectEvidence::Confirmed(expected.into());
+        outcome.evidence = EffectEvidence::Confirmed(postcondition.into());
     }
     outcome
 }
@@ -1717,7 +1578,6 @@ fn action_reply(reply: &Value) -> ActionOutcome {
     if reply["evidence"] != "unverified"
         || reply.get("error").is_some_and(|e| !e.is_string())
         || (dispatch == DispatchState::NotDispatched && error.is_none())
-        || (dispatch == DispatchState::Dispatched && error.is_some())
     {
         return ActionOutcome::unknown(Error::InvalidObservation);
     }
@@ -2004,27 +1864,6 @@ mod tests {
     }
 
     #[test]
-    fn normal_focus_return_budget_respects_the_original_call_deadline() {
-        assert_eq!(focus_return_deadline_ms(1_000, None), 3_000);
-        assert_eq!(focus_return_deadline_ms(1_000, Some(20_000)), 3_000);
-        assert_eq!(focus_return_deadline_ms(1_000, Some(1_175)), 1_175);
-        assert_eq!(focus_return_deadline_ms(1_000, Some(1_000)), 1_000);
-        assert_eq!(focus_return_deadline_ms(1_000, Some(900)), 900);
-        assert_eq!(focus_return_deadline_ms(u64::MAX - 50, None), u64::MAX);
-        let short = focus_return_request(1_000, Some(1_175));
-        assert_eq!(short["deadline_unix_ms"], 1_175);
-        let long = focus_return_request(1_000, Some(20_000));
-        assert_eq!(long["deadline_unix_ms"], 3_000);
-        assert!(focus_return_request(1_000, None)
-            .get("caller_deadline_unix_ms")
-            .is_none());
-        assert_eq!(
-            NORMAL_FOCUS_RETURN_BUDGET + FOCUS_RETURN_TRANSPORT_MARGIN,
-            Duration::from_millis(2_100)
-        );
-    }
-
-    #[test]
     fn scroll_pixel_binding_uses_image_scale_and_negative_screen_origin() {
         let bounds = json!([-1200.0, -100.0, 800.0, 600.0]);
         assert_eq!(
@@ -2054,10 +1893,9 @@ mod tests {
     }
 
     #[test]
-    fn scroll_guard_cancel_releases_scene_before_old_explicit_focus_owner() {
-        // The scene holds the same kind of exclusion an old resident focus
-        // cleanup needs. Nested polling must stop that scene first, even when
-        // its exit reports cleanup failure after being conclusively reaped.
+    fn scroll_guard_cancel_releases_scene_before_resident_shutdown() {
+        // Nested polling must stop the Scene before the resident, even when
+        // paired input cleanup reports failure after the Scene is reaped.
         for cleanup_fails in [false, true] {
             let path = std::env::temp_dir().join(format!(
                 "dtw-scroll-order-{}",
@@ -2096,7 +1934,7 @@ for line in sys.stdin:
 def stop(signum,frame):
  note('resident-stopping')
  fcntl.flock(lock,fcntl.LOCK_EX)
- note('resident-restored')
+ note('resident-ended')
  sys.exit({})
 signal.signal(signal.SIGTERM,stop)
 for line in sys.stdin:
@@ -2113,7 +1951,7 @@ for line in sys.stdin:
                     generation: 1,
                 },
                 cleanup_failure: Mutex::new(None),
-                focus_pending: AtomicBool::new(true),
+                foreground_active: AtomicBool::new(true),
                 permissions: Mutex::new(None),
                 cursor: Arc::new(CursorSession::default()),
                 cursor_operation: AtomicU64::new(0),
@@ -2161,7 +1999,7 @@ for line in sys.stdin:
                     "resident-reading",
                     "scene-released",
                     "resident-stopping",
-                    "resident-restored"
+                    "resident-ended"
                 ]
             );
             assert_eq!(scene.finish().is_err(), cleanup_fails);
@@ -2174,7 +2012,7 @@ for line in sys.stdin:
     }
 
     #[test]
-    fn stopped_focus_owner_keeps_unconfirmed_terminal_evidence() {
+    fn stopped_execution_owner_clears_local_monitor_state() {
         let backend = NativeBackend {
             worker: Arc::new(scene_fixture("import sys\nfor line in sys.stdin: pass\n").unwrap()),
             scene: SceneOwner::default(),
@@ -2185,31 +2023,28 @@ for line in sys.stdin:
             cleanup_failure: Mutex::new(None),
             cursor: Arc::new(CursorSession::default()),
             cursor_operation: AtomicU64::new(0),
-            focus_pending: AtomicBool::new(true),
+            foreground_active: AtomicBool::new(true),
             permissions: Mutex::new(None),
         };
         backend.worker.stop().unwrap();
-        assert_eq!(
-            backend.finish_execution(),
-            Ok(Some(FocusReturn::Unconfirmed))
-        );
-        backend.focus_pending.store(false, Ordering::Release);
-        assert_eq!(backend.finish_execution(), Ok(None));
+        assert_eq!(backend.finish_execution(), Ok(()));
+        backend.foreground_active.store(false, Ordering::Release);
+        assert_eq!(backend.finish_execution(), Ok(()));
     }
 
     #[test]
-    fn unconfirmed_focus_retirement_preserves_original_error_and_read_access() {
+    fn ending_execution_preserves_original_error_and_read_access() {
         let backend = NativeBackend {
             worker: Arc::new(scene_fixture(r#"import sys,json
 for line in sys.stdin:
  r=json.loads(line)
- if r['operation']=='release_focus':
+ if r['operation']=='end_execution':
   assert 'ownership_cap_unix_ms' not in r
-  result={'focus':'unconfirmed'}
+  result={'ended':True}
  elif r['operation']=='validate_execution_focus':
-  result={'scope_active':True,'borrowed':True}
+  result={'scope_active':True}
  elif r['operation']=='keypress':
-  result={'dispatch':'unknown','evidence':'unverified','error':'ax_unavailable','message':'AXWindows busy','delivery':{'route':'foreground','foreground_borrowed':True,'focus_return':'pending'}}
+  result={'dispatch':'unknown','evidence':'unverified','error':'ax_unavailable','message':'AXWindows busy','delivery':{'route':'foreground'}}
  else:
   result={'fresh_read':True}
  print(json.dumps({'request_id':r['request_id'],'result':result}),flush=True)
@@ -2219,7 +2054,7 @@ for line in sys.stdin:
             cleanup_failure: Mutex::new(None),
             cursor: Arc::new(CursorSession::default()),
             cursor_operation: AtomicU64::new(0),
-            focus_pending: AtomicBool::new(true),
+            foreground_active: AtomicBool::new(true),
             permissions: Mutex::new(None),
         };
         let poll = || Ok(Duration::from_secs(2));
@@ -2233,11 +2068,8 @@ for line in sys.stdin:
                 message: "AXWindows busy".into()
             })
         );
-        assert_eq!(
-            backend.finish_execution(),
-            Ok(Some(FocusReturn::Unconfirmed))
-        );
-        assert!(!backend.focus_pending.load(Ordering::Acquire));
+        assert_eq!(backend.finish_execution(), Ok(()));
+        assert!(!backend.foreground_active.load(Ordering::Acquire));
         assert_eq!(backend.cleanup_error(), None);
         assert!(backend.is_available());
         assert_eq!(
@@ -2247,6 +2079,61 @@ for line in sys.stdin:
             true
         );
         assert_eq!(original.dispatch, DispatchState::Unknown);
+        backend.shutdown().unwrap();
+    }
+
+    #[test]
+    fn dispatched_postcondition_failure_preserves_receipt_and_keeps_worker_usable() {
+        let backend = NativeBackend {
+            worker: Arc::new(scene_fixture(r#"import json,sys
+presses=0
+for line in sys.stdin:
+ r=json.loads(line)
+ if r['operation']=='press':
+  presses+=1
+  assert presses==1, 'Never replay an acknowledged focus action'
+  result={'dispatch':'dispatched','evidence':'unverified','error':'text_focus_unconfirmed','message':'Exact text receiver was not proven','delivery':{'route':'semantic','reason':'native_semantic_action'}}
+ elif r['operation']=='stats':
+  result={'presses':presses}
+ elif r['operation']=='end_execution':
+  result={'ended':True}
+ else: raise AssertionError('Unexpected operation: '+r['operation'])
+ print(json.dumps({'request_id':r['request_id'],'result':result}),flush=True)
+"#).unwrap()),
+            scene: SceneOwner::default(),
+            stamp: ProviderStamp { id: "positive-focus-receipt".into(), generation: 1 },
+            cleanup_failure: Mutex::new(None),
+            cursor: Arc::new(CursorSession::default()),
+            cursor_operation: AtomicU64::new(0),
+            foreground_active: AtomicBool::new(false),
+            permissions: Mutex::new(None),
+        };
+        let poll = || Ok(Duration::from_secs(2));
+        let call = CallContext { poll: &poll };
+        let outcome = backend.action(json!({"operation":"press"}), &call);
+        assert_eq!(outcome.dispatch, DispatchState::Dispatched);
+        assert_eq!(outcome.evidence, EffectEvidence::Unverified);
+        assert_eq!(
+            outcome.error,
+            Some(Error::NativeFailure {
+                code: "text_focus_unconfirmed".into(),
+                message: "Exact text receiver was not proven".into(),
+            })
+        );
+        let delivery = outcome.delivery.unwrap();
+        assert_eq!(delivery.route, Some(InputRoute::Semantic));
+        assert_eq!(delivery.reason.as_deref(), Some("native_semantic_action"));
+        assert!(backend.is_available());
+        assert!(!backend.worker.is_reaped());
+        assert_eq!(backend.cleanup_error(), None);
+        assert_eq!(
+            backend
+                .read_rpc(json!({"operation":"stats"}), &call)
+                .unwrap()["presses"],
+            1
+        );
+        assert_eq!(backend.finish_execution(), Ok(()));
+        assert!(backend.is_available());
         backend.shutdown().unwrap();
     }
 
@@ -2283,43 +2170,25 @@ for line in sys.stdin:
     }
 
     #[test]
-    fn action_keeps_native_route_and_return_without_claiming_effect() {
-        for (route, borrowed, returned) in [
-            ("semantic", false, None),
-            ("background", false, None),
-            ("background", true, Some("pending")),
-            ("semantic", true, Some("pending")),
-            ("semantic", false, Some("restored")),
-            ("foreground", true, Some("retained")),
-            ("foreground", true, Some("restored")),
-            ("foreground", true, Some("changed_externally")),
-            ("foreground", true, Some("pending")),
-            ("foreground", false, Some("unchanged")),
-        ] {
+    fn action_keeps_native_route_without_claiming_effect() {
+        for route in ["semantic", "background", "foreground"] {
             let reply = json!({"dispatch":"dispatched","evidence":"unverified",
-                "delivery":{"route":route,"reason":"test_reason","foreground_borrowed":borrowed,"focus_return":returned}});
+                "delivery":{"route":route,"reason":"test_reason"}});
             let result = action_reply(&reply);
             assert_eq!(result.dispatch, DispatchState::Dispatched);
             assert_eq!(result.evidence, EffectEvidence::Unverified);
             let delivery = result.delivery.unwrap();
             assert_eq!(delivery.route.unwrap().as_str(), route);
-            assert_eq!(delivery.foreground_borrowed, borrowed);
-            assert_eq!(delivery.focus_return.map(|value| value.as_str()), returned);
+            assert_eq!(delivery.reason.as_deref(), Some("test_reason"));
         }
-        let rejected = action_reply(&json!({"dispatch":"not_dispatched","evidence":"unverified",
-            "error":"foreground_required","message":"strict service", "delivery":{
-                "route":null,"reason":"explicit_focus","foreground_borrowed":false}}));
-        assert_eq!(rejected.dispatch, DispatchState::NotDispatched);
-        assert_eq!(rejected.delivery.unwrap().route, None);
     }
 
     #[test]
     fn malformed_route_metadata_never_fabricates_delivery() {
         for delivery in [
-            json!({"route":"guessed","foreground_borrowed":false}),
-            json!({"route":null,"foreground_borrowed":true}),
-            json!({"route":null,"foreground_borrowed":false,"focus_return":"restored"}),
-            json!({"route":"foreground","foreground_borrowed":true,"focus_return":"success"}),
+            json!({"route":"guessed"}),
+            json!({"route":true}),
+            json!({"route":"foreground","reason":false}),
         ] {
             let result = action_reply(
                 &json!({"dispatch":"dispatched","evidence":"unverified","delivery":delivery}),
@@ -2331,12 +2200,12 @@ for line in sys.stdin:
     #[test]
     fn cleanup_failure_survives_an_independent_primary_action_error() {
         let backend = NativeBackend {
-            worker: Arc::new(scene_fixture("import sys,json\nfor line in sys.stdin:\n r=json.loads(line);print(json.dumps({'request_id':r['request_id'],'result':{'dispatch':'unknown','evidence':'unverified','error':'input_failed','message':'original action error','cleanup_error':{'error':'focus_restore_failed','message':'restore failed'}}}),flush=True)").unwrap()),
+            worker: Arc::new(scene_fixture("import sys,json\nfor line in sys.stdin:\n r=json.loads(line);print(json.dumps({'request_id':r['request_id'],'result':{'dispatch':'unknown','evidence':'unverified','error':'input_failed','message':'original action error','cleanup_error':{'error':'input_release_failed','message':'release failed'}}}),flush=True)").unwrap()),
             scene: SceneOwner::default(),
             cleanup_failure: Mutex::new(None),
             cursor: Arc::new(CursorSession::default()),
             cursor_operation: AtomicU64::new(0),
-            focus_pending: AtomicBool::new(false),
+            foreground_active: AtomicBool::new(false),
             permissions: Mutex::new(None),
             stamp: ProviderStamp { id:"cleanup-test".into(),generation:1 },
         };
@@ -2355,8 +2224,8 @@ for line in sys.stdin:
         assert_eq!(
             backend.cleanup_error(),
             Some(Error::NativeFailure {
-                code: "focus_restore_failed".into(),
-                message: "restore failed".into()
+                code: "input_release_failed".into(),
+                message: "release failed".into()
             })
         );
         assert_eq!(
@@ -2372,59 +2241,6 @@ for line in sys.stdin:
 
     fn scene_fixture(code: &str) -> Result<Worker, Error> {
         Worker::spawn(std::path::Path::new("python3"), &["-u", "-c", code]).map_err(transport_error)
-    }
-
-    #[test]
-    fn resident_layer_guard_precedes_background_payload_without_requiring_focus() {
-        for unavailable in [false, true] {
-            let code = format!(
-                r#"import sys,json
-ops=[]
-for line in sys.stdin:
- r=json.loads(line);op=r['operation'];ops.append(op)
- if op in ['prepare_background_order','admit_background_order']:
-  result={{'error':'ax_unavailable','message':'optional proof unavailable'}} if {unavailable} else {{'prepared':True}}
- elif op=='guard_log':result={{'ops':ops}}
- elif op=='release_focus':result={{'focus':'unchanged'}}
- else:result={{'dispatch':'dispatched','evidence':'unverified'}}
- print(json.dumps({{'request_id':r['request_id'],'result':result}}),flush=True)
-"#,
-                unavailable = if unavailable { "True" } else { "False" }
-            );
-            let backend = NativeBackend {
-                worker: Arc::new(scene_fixture(&code).unwrap()),
-                scene: SceneOwner::default(),
-                stamp: ProviderStamp {
-                    id: "passive-layer-guard".into(),
-                    generation: 1,
-                },
-                cleanup_failure: Mutex::new(None),
-                cursor: Arc::new(CursorSession::default()),
-                cursor_operation: AtomicU64::new(0),
-                focus_pending: AtomicBool::new(false),
-                permissions: Mutex::new(None),
-            };
-            let poll = || Ok(Duration::from_secs(2));
-            let call = CallContext { poll: &poll };
-            let outcome = backend.action(
-                    json!({"operation":"keypress","target":{"app":{"pid":100,"generation":1},"native_id":101,"generation":1}}),
-                    &call,
-                );
-            assert_eq!(outcome.dispatch, DispatchState::Dispatched);
-            assert!(!backend.focus_pending.load(Ordering::Acquire));
-            let log = backend
-                .read_rpc(json!({"operation":"guard_log"}), &call)
-                .unwrap();
-            let expected = json!([
-                "prepare_background_order",
-                "keypress",
-                "admit_background_order",
-                "guard_log"
-            ]);
-            assert_eq!(log["ops"], expected);
-            assert_eq!(backend.finish_execution(), Ok(None));
-            backend.shutdown().unwrap();
-        }
     }
 
     fn echo_scene() -> Result<Worker, Error> {
@@ -2533,7 +2349,7 @@ for line in sys.stdin:
             cleanup_failure: Mutex::new(None),
             cursor: Arc::new(CursorSession::default()),
             cursor_operation: AtomicU64::new(0),
-            focus_pending: AtomicBool::new(false),
+            foreground_active: AtomicBool::new(false),
             permissions: Mutex::new(None),
             stamp: ProviderStamp {
                 id: "cleanup-test".into(),
@@ -2555,7 +2371,7 @@ for line in sys.stdin:
             cleanup_failure: Mutex::new(None),
             cursor: Arc::new(CursorSession::default()),
             cursor_operation: AtomicU64::new(0),
-            focus_pending: AtomicBool::new(false),
+            foreground_active: AtomicBool::new(false),
             permissions: Mutex::new(None),
             stamp: ProviderStamp {
                 id: "resident-cleanup-test".into(),
@@ -3140,7 +2956,9 @@ for line in sys.stdin:
             json!({}),
             json!({"dispatch":"not_dispatched"}),
             json!({"dispatch":"not_dispatched","evidence":"unverified","error":12}),
-            json!({"dispatch":"dispatched","evidence":"unverified","error":"timeout"}),
+            json!({"dispatch":"dispatched","evidence":"unverified","error":12}),
+            json!({"dispatch":"dispatched","evidence":"confirmed","error":"timeout"}),
+            json!({"dispatch":"dispatched","evidence":"unverified","error":"timeout","delivery":{"route":"guessed"}}),
         ] {
             assert_eq!(
                 action_reply(&reply),
@@ -3690,107 +3508,29 @@ fn confirmed_actions_keep_delivery_and_reject_unrelated_postconditions() {
         "application_focused",
     ] {
         let confirmed = json!({"dispatch":"dispatched","evidence":"confirmed","postcondition":expected,
-            "delivery":{"route":"foreground","reason":"execution_scope","foreground_borrowed":true,"focus_return":"pending"}});
-        let outcome = confirmed_action_reply(&confirmed, expected);
+            "delivery":{"route":"foreground","reason":"execution_scope"}});
+        let outcome = confirmed_action_reply(&confirmed, &[expected]);
         assert_eq!(outcome.evidence, EffectEvidence::Confirmed(expected.into()));
         assert_eq!(
-            outcome.delivery.unwrap().focus_return,
-            Some(FocusReturn::Pending)
+            outcome.delivery.unwrap().route,
+            Some(InputRoute::Foreground)
         );
         assert_eq!(action_reply(&confirmed).dispatch, DispatchState::Unknown);
+        let mut failed_postcondition = confirmed.clone();
+        failed_postcondition["error"] = json!("postcondition_unconfirmed");
+        let failed = confirmed_action_reply(&failed_postcondition, &[expected]);
+        assert_eq!(failed.dispatch, DispatchState::Dispatched);
+        assert_eq!(failed.evidence, EffectEvidence::Unverified);
+        assert!(
+            matches!(failed.error, Some(Error::NativeFailure { ref code, .. }) if code == "postcondition_unconfirmed")
+        );
         for invalid in [
             json!({"dispatch":"not_dispatched","evidence":"confirmed","postcondition":expected}),
             json!({"dispatch":"dispatched","evidence":"confirmed","postcondition":"window_closed"}),
-            json!({"dispatch":"dispatched","evidence":"confirmed","postcondition":expected,"error":"postcondition_unconfirmed"}),
         ] {
             assert_eq!(
-                confirmed_action_reply(&invalid, expected).dispatch,
+                confirmed_action_reply(&invalid, &[expected]).dispatch,
                 DispatchState::Unknown
-            );
-        }
-    }
-}
-
-#[cfg(test)]
-mod pointer_return_tests {
-    use super::*;
-
-    #[test]
-    fn physical_endpoint_handoff_keeps_the_exact_resident_target() {
-        let target = json!({"app":{"pid":7,"generation":8},"native_id":9,"generation":10});
-        let request = execution_pointer_note(json!([-800.25, 125.5]), &target).unwrap();
-        assert_eq!(request["operation"], "note_execution_pointer");
-        assert_eq!(request["target"], target);
-        assert_eq!(request["point"], json!([-800.25, 125.5]));
-    }
-
-    #[test]
-    fn handoff_records_the_resident_before_releasing_the_scene_fallback() {
-        use std::cell::Cell;
-        let recorded = Cell::new(false);
-        handoff_execution_pointer(
-            json!([10, 20]),
-            &json!({"owner":"resident"}),
-            &json!({"owner":"scene"}),
-            |r| {
-                assert_eq!(r["target"]["owner"], "resident");
-                recorded.set(true);
-                Ok(json!({"recorded":true}))
-            },
-            |r| {
-                assert!(recorded.get());
-                assert_eq!(r["target"]["owner"], "scene");
-                Ok(json!({"acknowledged":true}))
-            },
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn failed_or_unconfirmed_recording_never_discards_the_fallback() {
-        for response in [
-            Err(Error::TimedOut),
-            Ok(json!({})),
-            Ok(json!({"recorded":false})),
-        ] {
-            assert!(handoff_execution_pointer(
-                json!([10, 20]),
-                &json!({}),
-                &json!({}),
-                |_| response.clone(),
-                |_| panic!("Do not acknowledge before permanent ownership is confirmed")
-            )
-            .is_err());
-        }
-    }
-
-    #[test]
-    fn an_unconfirmed_acknowledgement_stays_a_cleanup_failure() {
-        assert_eq!(
-            handoff_execution_pointer(
-                json!([10, 20]),
-                &json!({}),
-                &json!({}),
-                |_| Ok(json!({"recorded":true})),
-                |_| Ok(json!({}))
-            ),
-            Err(Error::InvalidObservation)
-        );
-    }
-
-    #[test]
-    fn malformed_pointer_handoff_cannot_choose_a_return_destination() {
-        for value in [
-            json!(null),
-            json!([]),
-            json!([1]),
-            json!([1, 2, 3]),
-            json!([1, "2"]),
-            json!([null, 2]),
-        ] {
-            assert_eq!(
-                execution_pointer_note(value, &json!({})),
-                Err(Error::InvalidObservation)
             );
         }
     }

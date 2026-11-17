@@ -406,7 +406,7 @@ mod tests {
     fn later_proof_cleanup_never_rewrites_the_original_input_outcome() {
         for dispatch in ["not_dispatched", "dispatched", "unknown"] {
             let mut result = json!({"dispatch":dispatch,"error":"original_error","message":"original receipt",
-                "delivery":{"route":"foreground","foreground_borrowed":true}});
+                "delivery":{"route":"foreground"}});
             let original = result.clone();
             let cleanup = unavailable("proof child shutdown failed");
             append_cleanup(&mut result, cleanup.clone());
@@ -414,7 +414,7 @@ mod tests {
             result.as_object_mut().unwrap().remove("cleanup_error");
             assert_eq!(result, original);
         }
-        let original_cleanup = json!({"error":"focus_restore_failed"});
+        let original_cleanup = json!({"error":"input_release_failed"});
         let mut result = json!({"cleanup_error":original_cleanup});
         let proof_cleanup = unavailable("proof cleanup failed");
         append_cleanup(&mut result, proof_cleanup.clone());

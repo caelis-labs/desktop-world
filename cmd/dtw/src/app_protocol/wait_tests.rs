@@ -143,7 +143,7 @@ fn wait_never_filters_duplicates_by_requested_enabled_state() {
 }
 
 #[test]
-fn wait_zero_is_one_traversal_and_does_not_borrow_focus_for_content_gaps() {
+fn wait_zero_is_one_traversal_and_does_not_prepare_focus_for_content_gaps() {
     let mut unknown = element(1, false);
     unknown.enabled = None;
     for (state, sample) in [

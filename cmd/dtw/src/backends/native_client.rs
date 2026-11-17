@@ -337,9 +337,6 @@ impl<P: Platform> NativeBackend<P> {
                     outcome.delivery = route.map(|route| InputDelivery {
                         route: Some(route),
                         reason: None,
-                        foreground_borrowed: reply["foreground_borrowed"] == true,
-                        focus_return: (reply["foreground_borrowed"] == true)
-                            .then_some(FocusReturn::Pending),
                     });
                 }
                 outcome
@@ -429,15 +426,15 @@ impl<P: Platform> Backend for NativeBackend<P> {
             .or_else(|| self.worker.cleanup_error().map(transport_error))
     }
     #[cfg(target_os = "windows")]
-    fn finish_execution(&self) -> Result<Option<FocusReturn>, Error> {
+    fn finish_execution(&self) -> Result<(), Error> {
         if !self
             .execution_pending
             .swap(false, std::sync::atomic::Ordering::AcqRel)
         {
-            return Ok(None);
+            return Ok(());
         }
-        if self.worker.is_stopped() || self.cleanup.lock().unwrap().is_some() {
-            return Ok(Some(FocusReturn::Unconfirmed));
+        if self.worker.is_stopped() {
+            return self.cleanup_error().map_or(Ok(()), Err);
         }
         let until = Instant::now() + Duration::from_millis(600);
         let poll = || {
@@ -448,18 +445,11 @@ impl<P: Platform> Backend for NativeBackend<P> {
                 Ok(left)
             }
         };
-        let reply = self.read(
+        self.read(
             json!({"operation":"finish_execution"}),
             &CallContext { poll: &poll },
-        )?;
-        match reply["focus"].as_str() {
-            Some("unchanged") => Ok(None),
-            Some("restored") => Ok(Some(FocusReturn::Restored)),
-            Some("changed_externally") => Ok(Some(FocusReturn::ChangedExternally)),
-            Some("previous_app_closed") => Ok(Some(FocusReturn::PreviousAppClosed)),
-            Some("unconfirmed") => Ok(Some(FocusReturn::Unconfirmed)),
-            _ => Err(Error::InvalidObservation),
-        }
+        )
+        .map(|_| ())
     }
     fn shutdown(&self) -> Result<(), Error> {
         let stopped = self.worker.stop().map_err(transport_error);

@@ -1,9 +1,9 @@
-//! Script-owned foreground/cursor borrowing. The WinEvent listener observes
+//! Script-scoped foreground admission. The WinEvent listener observes
 //! intermediate handoffs independently of worker IO; it never generates input.
-use super::{input, native::process_stamp};
+use super::native::process_stamp;
 use crate::{
     backends::native_client::failed,
-    computer::{AppIdentity, AppInstance, Error, FocusReturn},
+    computer::{AppInstance, Error},
 };
 use std::{
     collections::HashSet,
@@ -12,16 +12,15 @@ use std::{
         Mutex,
     },
     thread::JoinHandle,
-    time::{Duration, Instant},
+    time::Duration,
 };
 use windows::Win32::{
-    Foundation::{HMODULE, HWND, LPARAM, POINT, WPARAM},
+    Foundation::{HMODULE, HWND, LPARAM, WPARAM},
     System::{SystemInformation::GetTickCount, Threading::GetCurrentThreadId},
     UI::{Accessibility::*, WindowsAndMessaging::*},
 };
 
 static ACTIVE: Mutex<Option<Scope>> = Mutex::new(None);
-static SETTLEMENT: Mutex<()> = Mutex::new(());
 static MONITOR_READY: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone)]
@@ -29,7 +28,6 @@ struct Identity {
     hwnd: usize,
     thread: u32,
     app: AppInstance,
-    proven: bool,
 }
 impl Identity {
     fn read(window: HWND) -> Result<Self, Error> {
@@ -42,29 +40,11 @@ impl Identity {
             hwnd: window.0 as usize,
             thread,
             app: process_stamp(pid)?,
-            proven: true,
         })
     }
     fn live(&self) -> bool {
-        self.proven
-            && Self::read(hwnd(self.hwnd))
-                .is_ok_and(|now| now.thread == self.thread && now.app == self.app)
-    }
-    fn original(window: HWND) -> Self {
-        Self::read(window).unwrap_or_else(|_| {
-            let mut pid = 0;
-            let thread = unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
-            Self {
-                hwnd: window.0 as usize,
-                thread,
-                app: AppInstance {
-                    identity: AppIdentity(String::new()),
-                    pid,
-                    generation: 0,
-                },
-                proven: false,
-            }
-        })
+        Self::read(hwnd(self.hwnd))
+            .is_ok_and(|now| now.thread == self.thread && now.app == self.app)
     }
 }
 fn hwnd(value: usize) -> HWND {
@@ -81,11 +61,6 @@ fn root(window: HWND) -> HWND {
 fn foreground() -> HWND {
     root(unsafe { GetForegroundWindow() })
 }
-fn cursor() -> Result<(i32, i32), Error> {
-    let mut point = POINT::default();
-    unsafe { GetCursorPos(&mut point) }.map_err(failed)?;
-    Ok((point.x, point.y))
-}
 fn handoff_error() -> Error {
     Error::NativeFailure { code:"execution_focus_changed".into(), message:"Foreground ownership changed outside the selected application during this script; further input was refused. Observe current state and start a fresh execution.".into() }
 }
@@ -93,26 +68,29 @@ fn observation_error() -> Error {
     Error::NativeFailure {code:"execution_scope_unproven".into(),message:"Windows input-scope observation became unavailable; no new payload was issued. Inspect state in a fresh execution before new input.".into()}
 }
 fn transition(
-    borrowed: &mut bool,
+    preparation_foreground: &mut Option<usize>,
     external: &mut bool,
+    window: usize,
     target: bool,
-    original: bool,
-    last_closed: bool,
     actual_target: bool,
 ) {
     if *external {
         return;
     }
     if target {
-        *borrowed |= !original && actual_target;
-    } else if !original || (*borrowed && !last_closed) {
+        if actual_target {
+            *preparation_foreground = None;
+        }
+    } else if *preparation_foreground != Some(window) {
         *external = true;
     }
 }
 
 struct Scope {
     app: AppInstance,
-    original: Identity,
+    // Only permits the current foreground while the first activation is pending.
+    // Cleared once the selected receiver is foreground; never a return destination.
+    preparation_foreground: Option<usize>,
     start_tick: u32,
     last_foreground: Option<Identity>,
     expected: Identity,
@@ -121,11 +99,7 @@ struct Scope {
     destroyed: HashSet<usize>,
     parents: HashSet<usize>,
     modal_returns: HashSet<(usize, usize)>,
-    borrowed: bool,
     external: bool,
-    cursor_original: (i32, i32),
-    cursor_last: (i32, i32),
-    pointer_borrowed: bool,
     evidence_lost: bool,
     last_hidden: Option<usize>,
 }
@@ -208,18 +182,21 @@ impl Scope {
                     || modal_return
                     || !self.initial_windows.contains(&value))
         });
-        // Closing the exact last receiver can let Windows return to the
-        // original window. This permits settlement, never a different owner.
         transition(
-            &mut self.borrowed,
+            &mut self.preparation_foreground,
             &mut self.external,
+            value,
             target,
-            value == self.original.hwnd,
-            last_closed,
             foreground() == window,
         );
         if self.external && std::env::var("DTW_INPUT_TRACE").ok().as_deref() == Some("1") {
-            eprintln!("DTW_WINDOWS_SCOPE external actual={} original={} expected={} target_pid={} actual_pid={:?}",value,self.original.hwnd,self.expected.hwnd,self.app.pid,identity.as_ref().map(|identity|identity.app.pid));
+            eprintln!(
+                "DTW_WINDOWS_SCOPE external actual={} expected={} target_pid={} actual_pid={:?}",
+                value,
+                self.expected.hwnd,
+                self.app.pid,
+                identity.as_ref().map(|identity| identity.app.pid)
+            );
         }
         if target && !self.external {
             self.remember_parents(window);
@@ -236,48 +213,41 @@ impl Scope {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const INITIAL: usize = 1;
+    const TARGET: usize = 2;
+    const OTHER: usize = 3;
+
     #[test]
     fn away_and_return_never_reacquires_an_execution() {
-        let (mut borrowed, mut external) = (false, false);
-        transition(&mut borrowed, &mut external, false, true, false, false);
+        let (mut preparing, mut external) = (Some(INITIAL), false);
+        transition(&mut preparing, &mut external, INITIAL, false, false);
         assert!(!external);
-        transition(&mut borrowed, &mut external, true, false, false, true);
-        assert!(borrowed);
-        transition(&mut borrowed, &mut external, false, false, false, false);
-        transition(&mut borrowed, &mut external, true, false, false, true);
+        transition(&mut preparing, &mut external, TARGET, true, true);
+        assert_eq!(preparing, None);
+        transition(&mut preparing, &mut external, OTHER, false, false);
+        transition(&mut preparing, &mut external, TARGET, true, true);
         assert!(external);
     }
     #[test]
-    fn original_window_is_external_after_borrow_unless_exact_receiver_closed() {
-        for last_closed in [false, true] {
-            let (mut borrowed, mut external) = (true, false);
-            transition(
-                &mut borrowed,
-                &mut external,
-                false,
-                true,
-                last_closed,
-                false,
-            );
-            assert_eq!(external, !last_closed);
-            transition(&mut borrowed, &mut external, false, false, true, false);
-            assert!(external, "a closed target cannot authorize a foreign owner");
-        }
-    }
-    #[test]
-    fn no_borrow_never_authorizes_a_new_foreign_foreground() {
-        let (mut borrowed, mut external) = (false, false);
-        transition(&mut borrowed, &mut external, false, false, false, false);
-        transition(&mut borrowed, &mut external, false, true, false, false);
+    fn initial_foreground_is_external_after_target_activation() {
+        let (mut preparing, mut external) = (Some(INITIAL), false);
+        transition(&mut preparing, &mut external, TARGET, true, true);
+        transition(&mut preparing, &mut external, INITIAL, false, false);
         assert!(external);
-        assert!(!borrowed);
     }
     #[test]
-    fn provider_notification_alone_does_not_prove_a_foreground_borrow() {
-        let (mut borrowed, mut external) = (false, false);
-        transition(&mut borrowed, &mut external, true, false, false, false);
-        transition(&mut borrowed, &mut external, false, true, false, false);
-        assert!(!borrowed);
+    fn user_switch_during_preparation_stops_activation() {
+        let (mut preparing, mut external) = (Some(INITIAL), false);
+        transition(&mut preparing, &mut external, OTHER, false, false);
+        transition(&mut preparing, &mut external, INITIAL, false, false);
+        assert!(external);
+    }
+    #[test]
+    fn provider_notification_alone_does_not_end_preparation() {
+        let (mut preparing, mut external) = (Some(INITIAL), false);
+        transition(&mut preparing, &mut external, TARGET, true, false);
+        transition(&mut preparing, &mut external, INITIAL, false, false);
+        assert_eq!(preparing, Some(INITIAL));
         assert!(!external);
     }
 }
@@ -389,7 +359,6 @@ impl Drop for Monitor {
     }
 }
 pub fn admit(app: &AppInstance, window: HWND) -> Result<(), Error> {
-    let _settlement = SETTLEMENT.lock().unwrap();
     let mut active = ACTIVE.lock().unwrap();
     if let Some(scope) = active.as_mut() {
         if scope.app != *app {
@@ -408,24 +377,25 @@ pub fn admit(app: &AppInstance, window: HWND) -> Result<(), Error> {
         ));
     }
     let start_tick = unsafe { GetTickCount() };
-    // A hidden foreign owner does not disable preparation of a visible
-    // receiver. Returning focus still requires proof of the original owner.
-    let original = Identity::original(foreground());
+    let expected = Identity::read(window)?;
+    if expected.app != *app {
+        return Err(Error::TargetChanged);
+    }
+    let preparation_foreground = Some(foreground().0 as usize);
     if std::env::var("DTW_INPUT_TRACE").ok().as_deref() == Some("1") {
         eprintln!(
-            "DTW_WINDOWS_SCOPE admit target={} original={} tick={}",
-            window.0 as usize, original.hwnd, start_tick
+            "DTW_WINDOWS_SCOPE admit target={} tick={}",
+            window.0 as usize, start_tick
         );
     }
-    let position = cursor()?;
     let initial_windows = super::native::all_windows()?
         .into_iter()
         .map(|window| window.0 as usize)
         .collect();
     *active = Some(Scope {
         app: app.clone(),
-        expected: original.clone(),
-        original,
+        expected,
+        preparation_foreground,
         start_tick,
         last_foreground: None,
         next: None,
@@ -433,11 +403,7 @@ pub fn admit(app: &AppInstance, window: HWND) -> Result<(), Error> {
         destroyed: HashSet::new(),
         parents: HashSet::new(),
         modal_returns: HashSet::new(),
-        borrowed: false,
         external: false,
-        cursor_original: position,
-        cursor_last: position,
-        pointer_borrowed: false,
         evidence_lost: false,
         last_hidden: None,
     });
@@ -475,82 +441,6 @@ pub fn after_focus(window: HWND) -> Result<(), Error> {
     }
     Ok(())
 }
-pub fn before_pointer() -> Result<(), Error> {
-    check()?;
-    if let Some(scope) = ACTIVE.lock().unwrap().as_mut() {
-        if cursor()? != scope.cursor_last {
-            scope.external = true;
-            return Err(handoff_error());
-        }
-    }
-    Ok(())
-}
-pub fn after_pointer_move() -> Result<(), Error> {
-    if let Some(scope) = ACTIVE.lock().unwrap().as_mut() {
-        scope.cursor_last = cursor()?;
-        scope.pointer_borrowed = true;
-    }
-    Ok(())
-}
-pub fn borrowed() -> bool {
-    ACTIVE
-        .lock()
-        .unwrap()
-        .as_ref()
-        .is_some_and(|scope| scope.borrowed)
-}
-pub fn finish() -> Result<Option<FocusReturn>, Error> {
-    let _settlement = SETTLEMENT.lock().unwrap();
-    let _ = check();
-    let Some(mut scope) = ACTIVE.lock().unwrap().take() else {
-        return Ok(None);
-    };
-    // Never replace the user's last choice, including an away-and-return event.
-    scope.observe(unsafe { GetForegroundWindow() });
-    let result = if scope.evidence_lost {
-        FocusReturn::Unconfirmed
-    } else if scope.external {
-        FocusReturn::ChangedExternally
-    } else if input::cleanup_failed() {
-        FocusReturn::Unconfirmed
-    } else {
-        let mut clean = true;
-        if scope.pointer_borrowed {
-            if cursor()? != scope.cursor_last {
-                return Ok(Some(FocusReturn::ChangedExternally));
-            }
-            super::desktop::ensure_input_desktop()?;
-            unsafe { SetCursorPos(scope.cursor_original.0, scope.cursor_original.1) }
-                .map_err(failed)?;
-            clean &= cursor()? == scope.cursor_original;
-        }
-        if !scope.borrowed {
-            return Ok(None);
-        }
-        // Return keyboard focus only. Window stacking is left to the OS.
-        if !scope.original.proven {
-            return Ok(Some(FocusReturn::Unconfirmed));
-        }
-        if scope.destroyed.contains(&scope.original.hwnd) || !scope.original.live() {
-            return Ok(Some(FocusReturn::PreviousAppClosed));
-        }
-        let until = Instant::now() + Duration::from_millis(250);
-        if input::return_focus(hwnd(scope.original.hwnd), until).is_ok()
-            && scope.original.live()
-            && foreground() == hwnd(scope.original.hwnd)
-            && clean
-        {
-            FocusReturn::Restored
-        } else {
-            FocusReturn::Unconfirmed
-        }
-    };
-    if std::env::var("DTW_INPUT_TRACE").ok().as_deref() == Some("1") {
-        eprintln!(
-            "DTW_WINDOWS_SCOPE finish focus={} pointer_borrowed={}",
-            result.as_str(),
-            scope.pointer_borrowed
-        );
-    }
-    Ok(Some(result))
+pub fn finish() {
+    ACTIVE.lock().unwrap().take();
 }

@@ -5,7 +5,8 @@ present, use the JavaScript examples; otherwise call the identically named liste
 tool with the same object fields plus `app`. For example,
 `await app.readText({target:'w1.e12'})` becomes
 `readText({app,target:'w1.e12'})`. Atomic tools execute no JavaScript. Each call
-has its own settlement boundary; related focus/menu steps may require one script.
+has its own settlement boundary. One script is useful for orchestrating known
+steps; settlement does not restore foreground, focus or pointer position.
 
 ## Observe when needed; batch known actions
 
@@ -33,6 +34,49 @@ A text field without an advertised `press` action needs a visual click before
 `typeText`. A proven undelivered semantic rejection can return an image for this
 fallback; it never repeats a potentially delivered action.
 
+## Replace a value or trigger typing behavior
+
+After `apps({query:'app name'})`, use the discovered identity in `exec` or each
+atomic call. Inspect with `look` to identify the field and advertised actions.
+For a field advertising `setValue`, this script replaces and reads its value:
+
+```javascript
+await app.setValue({target:'w1.e12',value:'Updated name'});
+return await app.readText({target:'w1.e12'});
+```
+
+The outer response publishes that page as `result`. Check operation errors and
+compare the text with the requested value; saving still needs separate proof.
+For an ordinary action, omit a custom return and inspect the automatic outer
+`view`. If the script needs to evaluate UI contents, read a snapshot explicitly:
+
+```javascript
+await app.click({selector:{role:'button',text:'Save'}});
+const view = await app.look({});
+return view.elements;
+```
+
+For a search field, Go to Folder path completion, or a Web form whose Submit
+button reacts to input events, click the proven editable receiver and type:
+
+```javascript
+await app.click({target:'w1.e12'}); // Requires advertised press; otherwise capture/click.
+await app.typeText({text:'example'});
+```
+
+Inspect completion/results or the Submit state before continuing. A setter can
+read back the correct value while those application behaviors never ran.
+Atomic replacement is the complete call below, followed by a separate
+`readText({app:'<discovered identity>',target:'w1.e12'})` for readback:
+
+```json
+{"name":"setValue","arguments":{"app":"<discovered identity>","target":"w1.e12","value":"Updated name"}}
+```
+
+Targets in examples stand for IDs from the actual observation. Build the
+`exec` argument object with a JSON serializer when embedding user text in
+`source`; do not interpolate unescaped text into JavaScript.
+
 ## Visual fallback
 
 ```javascript
@@ -53,6 +97,9 @@ capture between every step. Points hit the current top surface of their original
 app instance while the canvas mapping remains valid. Coordinates do not identify
 a control: inspect newly revealed UI when the next action is not already known.
 Semantic IDs still identify their original object and never become a popup target.
+
+A complete AX query with no elements does not prove an empty screen: capture
+self-drawn or low-AX content before deciding it is absent.
 
 Semantic failure can trigger a screenshot fallback. An image error is explicit;
 a partially observed semantic tree cannot prove absence or unique targeting.
@@ -109,9 +156,10 @@ Do not repeat an action with unknown effects.
 
 Keep related input in one script. Normal actions prepare the authorized
 app/window automatically. Use `app.focus()` only when explicit focus is part of
-the task, with follow-up input in the same `exec`. On Windows, opening a native
-menu and choosing its item must also share one `exec`: foreground restoration
-at settlement can dismiss the menu. Separate atomic calls do not share this scope.
+the task. macOS prefers working background capabilities; when needed it uses
+the foreground/real mouse directly. Windows defaults to foreground operation.
+No call restores the previous foreground, focus or pointer position. Atomic calls
+settle independently; verify actual menu and receiver state across calls.
 
 On Windows, after a click opens a form, observe the intended field and pass its
 ID as `target` in `typeText({target,text})`. The script stops on a focus mismatch
@@ -130,8 +178,9 @@ belong to DTW. Standard MCP cancellation preserves its original execution's
 identity. Identical request retransmission does not replay retained work; new
 requests are new work. After an unknown effect, inspect current state before
 new input. Missing history never proves an action had no effect. A native
-cleanup failure closes desktop dispatch in that connection; reconnect only
-after the host has settled it, then perform a fresh look rather than replaying.
+cleanup failure stops the current execution and affected native context. Later
+new requests let the service retire/recover that context and recheck admission;
+cleanup fencing remains until settled. Observe fresh state rather than replaying.
 On macOS, semantic `AXPress` allows up to 2 seconds for its reply within the
 remaining request deadline. An AX error or timeout after dispatch has unknown
 effect; a positive acknowledgement alone does not prove the UI change.

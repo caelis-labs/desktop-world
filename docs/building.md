@@ -70,13 +70,13 @@ Release-mode tests match candidate builds; unoptimized QuickJS can exhaust its
 stack before deep-JSON contract checks finish. Debug builds remain useful for
 local iteration, but are not the recommended full-contract test lane.
 
-## Current external-client GUI probe
+## External-client GUI probes and historical assertions
 
 The unified [Computer Use Workbench](../tests/fixtures/computer-use-app/README.md)
 combines an AppKit shell, dense native AX, a sparse drawn message feed, embedded
 WebKit, portable HTML/Canvas pages and the existing browser-workbench fixtures.
 Its [target manifest](../tests/fixtures/computer-use-app/scenarios.json) defines 42
-baseline scenarios. The current macOS entry runs 16 core business targets through
+baseline scenarios. The macOS entry runs 16 core business targets through
 `apps`/`exec`, plus virtual-cursor rendering, strict physical-cursor auditing and a background-focus witness:
 
 ```sh
@@ -90,9 +90,14 @@ business counters, full-text fingerprints, screenshots and cleanup. Sparse-image
 review remains pending until explicit review of the hash-bound original PNG.
 `core_automation_passed`, `core_passed`, `acceptance_passed` and
 `target_baseline_passed` describe different completion levels. Standard acceptance
-requires the bounded physical-borrow policy, real helper-window position/pixels and
-a continuous foreground-witness check; raw business-runner success cannot substitute
-for these observations. Unrun platform/model/system targets never pass by omission.
+historically required a bounded physical-borrow policy, real helper-window
+position/pixels and a continuous foreground witness. The old borrow/restore
+assertions are not current policy: macOS prefers background capabilities and
+uses foreground/real pointer input directly when necessary; Windows defaults to
+foreground input. Neither restores prior foreground, focus, stacking or pointer
+state. Check runner compatibility before using its aggregate pass flags for the
+new policy; business readback alone does not verify receiver correctness,
+user-switch stopping, no replay or paired release. Unrun platform/model/system targets never pass by omission.
 See the [first baseline and repair record](computer-use-benchmark-2026-11-04.md)
 and the [remaining-target acceptance record](computer-use-extended-acceptance-2026-11-04.md).
 These direct-client runs do not establish a real DSH model/Skill/plugin path.
@@ -104,6 +109,28 @@ Use `--scenario C04` with a fresh output directory to verify one target independ
 an exact-PNG answer handoff; inspect that capture before supplying an answer as
 described in the fixture README. Repeated attempts preserve all earlier failures.
 The fixture README also documents a manual app and portable `--web-only` entry.
+
+The direct-input regression can attach to an owned ComputerUse fixture whose Web
+workspace loads the browser-workbench Inventory page. Keep its loopback services
+alive for the entire run; `--fixture-output` supplies the matching independent
+`workbench/state.json` oracle. Optional `--witness-app` is another owned fixture
+configured with `role:'witness'`; `--window-order-observer` accepts the compiled
+read-only observer from `tests/fixtures/window-order-observer/main.swift`.
+
+```sh
+python3 tests/acceptance/direct_input_probe.py \
+  --dtw /absolute/path/to/frozen/dtw --app /tmp/owned-case/ComputerUse.app \
+  --fixture-output /tmp/owned-case --output /tmp/direct-input-new-run \
+  --witness-app /tmp/owned-witness/ComputerUse.app \
+  --window-order-observer /tmp/window-order-observer --quit
+```
+
+It checks semantic textarea focus followed by typing, unchanged neighboring fields,
+one persisted save, native background endpoints, and the retained foreground/pointer
+endpoint after necessary hover. Hover coordinates come from owned fixture geometry
+mapped into the returned DTW capture, not model vision. Endpoints do not prove
+continuous isolation. See [direct-input acceptance](direct-input-policy-acceptance-2026-11-17.md)
+for the frozen candidate, failures and actual observations.
 
 On a macOS test desktop, the current app-scene probe builds a uniquely identified
 owned application and exercises the two advertised tools through real stdio:
@@ -176,7 +203,8 @@ shorter excursions or attribute ambient user motion by itself. Match each
 detected change to native delivery code and fixture effects.
 The assertion additionally requires classified private native route evidence for
 each observed input. See [input routing](macos-input-routing.md) for the permitted
-borrowing reasons and its evidence limits. For owned Chrome protocol coverage,
+route selection and its evidence limits. Historical borrow/restore assertions
+must be checked separately against the current no-restoration policy. For owned Chrome protocol coverage,
 wrap `directed_chromium_probe.py --dtw /absolute/path/to/frozen/dtw` the same way;
 it creates a fresh browser profile and verifies DOM hover, click and text selection.
 

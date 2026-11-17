@@ -44,7 +44,7 @@ pub(super) fn pen_tap(point: POINT, until: Instant, dispatched: &mut bool) -> Re
     };
     let _mutation = input::mutation(until)?;
     input::no_held_keys()?;
-    super::execution_scope::before_pointer()?;
+    super::execution_scope::check()?;
     check(until)?;
     *dispatched = true;
     let down = unsafe {
@@ -56,7 +56,6 @@ pub(super) fn pen_tap(point: POINT, until: Instant, dispatched: &mut bool) -> Re
         )
     }
     .map_err(failed);
-    let positioned = super::execution_scope::after_pointer_move();
     std::thread::sleep(Duration::from_millis(25));
     // Cleanup is not another payload; cancellation never suppresses this up.
     let up = unsafe { InjectSyntheticPointerInput(device.0, &[packet(POINTER_FLAG_UP)]) }
@@ -70,7 +69,7 @@ pub(super) fn pen_tap(point: POINT, until: Instant, dispatched: &mut bool) -> Re
             point.x, point.y
         );
     }
-    down.and(positioned).and(up)
+    down.and(up)
 }
 pub struct Plan {
     points: Vec<POINT>,
@@ -238,7 +237,7 @@ pub fn dispatch(
             };
             if !matches!(event, Event::Up) {
                 super::desktop::ensure_input_desktop()?;
-                super::execution_scope::before_pointer()?;
+                super::execution_scope::check()?;
             }
             *self.dispatched = true;
             let count = unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
@@ -248,7 +247,6 @@ pub fn dispatch(
             }
             match event {
                 Event::Move(index) => {
-                    super::execution_scope::after_pointer_move()?;
                     (self.feedback)(self.plan.points[index], false);
                     std::thread::sleep(Duration::from_millis(2));
                 }

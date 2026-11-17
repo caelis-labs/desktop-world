@@ -609,31 +609,24 @@ fn scripts_are_app_bound_with_caller_selected_execution_budgets() {
 }
 
 #[test]
-fn delivery_is_optional_and_preserves_typed_route_and_focus_evidence() {
-    use crate::computer::{FocusReturn, InputDelivery, InputRoute};
+fn delivery_is_optional_and_preserves_typed_route_and_reason() {
+    use crate::computer::{InputDelivery, InputRoute};
     let mut native = ActionOutcome::unknown(Error::Cancelled);
-    let missing = super::outcome(&native);
-    assert!(missing.get("delivery").is_none());
-    for (status, name) in [
-        (FocusReturn::Pending, "pending"),
-        (FocusReturn::Restored, "restored"),
-        (FocusReturn::ApplicationRestored, "application_restored"),
-        (FocusReturn::ChangedExternally, "changed_externally"),
-        (FocusReturn::PreviousAppClosed, "previous_app_closed"),
-        (FocusReturn::Unchanged, "unchanged"),
-        (FocusReturn::Unconfirmed, "unconfirmed"),
+    assert!(super::outcome(&native).get("delivery").is_none());
+    for (route, name) in [
+        (Some(InputRoute::Semantic), json!("semantic")),
+        (Some(InputRoute::Background), json!("background")),
+        (Some(InputRoute::Foreground), json!("foreground")),
+        (None, Value::Null),
     ] {
         native.delivery = Some(InputDelivery {
-            route: Some(InputRoute::Foreground),
+            route,
             reason: Some("background_unavailable".into()),
-            foreground_borrowed: true,
-            focus_return: Some(status),
         });
         let value = super::outcome(&native);
         assert_eq!(
             value["delivery"],
-            json!({"route":"foreground","reason":"background_unavailable",
-            "foreground_borrowed":true,"focus_return":name})
+            json!({"route":name,"reason":"background_unavailable"})
         );
         assert_eq!(value["dispatch"], "unknown");
     }
