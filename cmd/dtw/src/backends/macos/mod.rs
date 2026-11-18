@@ -678,6 +678,9 @@ impl NativeBackend {
                     .map_err(|(error, sent)| (error, sent || preparation_is_action))?,
             );
             request["_execution_foreground"] = json!(true);
+            if reason == input_route::CHROME_HOVER_FOCUS {
+                request["_require_directed_chrome_hover"] = json!(true);
+            }
             reply = send(request)?;
             if reply.get("foreground_plan").is_some() {
                 return Err((Error::InvalidObservation, true));
