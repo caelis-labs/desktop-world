@@ -359,9 +359,11 @@ fn click_can_follow_focus(result: &Value) -> bool {
 
 /// A decline is an explicit, side-effect-free preflight result. An unknown or
 /// dispatched result never selects another route, even with a malformed flag.
-fn background_result(mut result: Value) -> BackgroundAttempt {
-    if let Some(reason) = super::input_route::fallback_reason(&result) {
-        return BackgroundAttempt::Declined(reason.code().into());
+fn background_result(mut result: Value, allow_fallback: bool) -> BackgroundAttempt {
+    if allow_fallback {
+        if let Some(reason) = super::input_route::fallback_reason(&result) {
+            return BackgroundAttempt::Declined(reason.code().into());
+        }
     }
     if result["error"].is_object() {
         result["message"] = result["error"]["message"].clone();
@@ -521,6 +523,7 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
     if keyboard && before["native_open_panel"] == true {
         return BackgroundAttempt::Declined("native_modal_keyboard".into());
     }
+    let mut directed_chrome_hover = false;
     if !keyboard {
         if op == "click"
             && before["native_open_panel"] == true
@@ -535,13 +538,31 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
             // the original CUA addressed payload without a real-pointer warp.
             return BackgroundAttempt::Declined("native_pointer_key_window".into());
         }
-        if let Some(reason) = super::input_route::pointer_reason(
-            &op,
-            before["input_framework"].as_str().unwrap_or("unknown"),
-        ) {
-            return BackgroundAttempt::Declined(reason.code().into());
+        let framework = before["input_framework"].as_str().unwrap_or("unknown");
+        let pointer_available = super::cua_input::pointer_available();
+        let chrome_hover = (op == "move" && framework == "chromium")
+            .then(|| before["chrome_web_hover"].as_str())
+            .flatten();
+        directed_chrome_hover = chrome_hover == Some("directed") && pointer_available;
+        if request["_require_directed_chrome_hover"] == true && !directed_chrome_hover {
+            return BackgroundAttempt::Completed(rejected(
+                json!({"error":"target_changed","message":"Directed Chrome hover is no longer available after focus preparation"}),
+                &op,
+            ));
         }
-        if !super::cua_input::pointer_available() {
+        if !directed_chrome_hover {
+            if chrome_hover == Some("needs_focus")
+                && pointer_available
+                && request["_defer_foreground"] == true
+                && request["_execution_foreground"] != true
+            {
+                return BackgroundAttempt::Declined(super::input_route::CHROME_HOVER_FOCUS.into());
+            }
+            if let Some(reason) = super::input_route::pointer_reason(&op, framework) {
+                return BackgroundAttempt::Declined(reason.code().into());
+            }
+        }
+        if !pointer_available {
             return BackgroundAttempt::Declined(
                 super::input_route::PhysicalReason::MissingAddressedApi
                     .code()
@@ -587,7 +608,15 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
             super::overlay::PointerRoute::Background,
         )
     });
-    trace_route(request, "addressed", "pid_window_event");
+    trace_route(
+        request,
+        "addressed",
+        if directed_chrome_hover {
+            "focused_chrome_web_hover"
+        } else {
+            "pid_window_event"
+        },
+    );
     let mut result = super::cua_input::call(
         &input.to_string(),
         (&mut target as *mut BackgroundTarget).cast(),
@@ -607,7 +636,7 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
             result["anchor_error"] = error;
         }
     }
-    background_result(result)
+    background_result(result, !directed_chrome_hover)
 }
 
 fn dispatch(request: Value, leased: &mut bool, scene_worker: bool) -> Value {
@@ -1236,15 +1265,30 @@ mod tests {
     }
 
     #[test]
+    fn directed_chrome_hover_never_switches_to_physical_input_after_admission() {
+        let result = json!({"dispatch":"not_dispatched","fallback_allowed":true,
+            "capability_evidence":"addressed_event_api_unavailable",
+            "error":{"code":"background_unavailable","message":"Addressed input unavailable"}});
+        let BackgroundAttempt::Completed(result) = background_result(result, false) else {
+            panic!("an admitted directed hover selected a second route");
+        };
+        assert_eq!(result["dispatch"], "not_dispatched");
+        assert_eq!(result["error"], "background_unavailable");
+    }
+
+    #[test]
     fn only_undispatched_preflight_declines_allow_another_route() {
         let reason = "native_keyboard_semantics";
-        let declined =
-            background_result(json!({"dispatch":"not_dispatched","fallback_allowed":true,
+        let declined = background_result(
+            json!({"dispatch":"not_dispatched","fallback_allowed":true,
             "capability_evidence":reason,"capability_detail":"chromium_supplementary_unicode",
-            "error":{"code":"background_unavailable","message":reason}}));
+            "error":{"code":"background_unavailable","message":reason}}),
+            true,
+        );
         assert!(matches!(declined, BackgroundAttempt::Declined(value) if value == reason));
         for dispatch in ["dispatched", "unknown"] {
-            let attempt = background_result(json!({"dispatch":dispatch,"fallback_allowed":true}));
+            let attempt =
+                background_result(json!({"dispatch":dispatch,"fallback_allowed":true}), true);
             let BackgroundAttempt::Completed(result) = attempt else {
                 panic!("uncertain input selected a second route")
             };
@@ -1369,8 +1413,11 @@ mod tests {
             assert!(background_validation(&clear, &target, 0).is_ok());
             target.keyboard = true;
             for dispatch in ["not_dispatched", "unknown"] {
-                let attempt = background_result(json!({"error":error, "dispatch":dispatch,
-                    "fallback_allowed":false}));
+                let attempt = background_result(
+                    json!({"error":error, "dispatch":dispatch,
+                    "fallback_allowed":false}),
+                    true,
+                );
                 let BackgroundAttempt::Completed(result) = attempt else {
                     panic!(
                         "a modal transition after route selection must not select a second route"

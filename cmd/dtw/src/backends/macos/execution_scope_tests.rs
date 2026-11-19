@@ -327,6 +327,45 @@ fn native_pointer_receiver_preparation_keeps_the_real_cursor_out_of_foreground_p
 }
 
 #[test]
+fn chrome_hover_focus_preparation_resubmits_only_on_the_directed_route() {
+    let code = CONTROL
+        .replace(
+            "background_key_window_absent",
+            input_route::CHROME_HOVER_FOCUS,
+        )
+        .replace(
+            "active=True; begins+=1",
+            "assert r['visual'] is False and 'screen_x' not in r\n  active=True; begins+=1",
+        );
+    let backend = backend(&code);
+    let poll = || Ok(Duration::from_secs(3));
+    let call = CallContext { poll: &poll };
+    let mut request = input(true);
+    request["operation"] = json!("move");
+    request["screen_x"] = json!(56.0);
+    let mut attempts = 0;
+    let reply = backend.execution_input_rpc(request, &call, |request| {
+        assert_eq!(
+            request["_require_directed_chrome_hover"] == true,
+            attempts == 1
+        );
+        attempts += 1;
+        backend.rpc(request, &call)
+    });
+    assert_eq!(reply.unwrap()["dispatch"], "dispatched");
+    assert_eq!(attempts, 2);
+    let stats = backend
+        .read_rpc(json!({"operation":"stats"}), &call)
+        .unwrap();
+    assert_eq!(
+        stats,
+        json!({"begins":1,"payloads":1,"background":0,"ends":0})
+    );
+    assert_eq!(backend.finish_execution(), Ok(()));
+    backend.shutdown().unwrap();
+}
+
+#[test]
 fn press_accepts_only_selected_or_focused_confirmation() {
     for postcondition in [
         "element_selected",

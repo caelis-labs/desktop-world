@@ -34,9 +34,10 @@ pub(super) fn visual_focus(operation: &str) -> bool {
     matches!(operation, "click" | "move" | "drag" | "scroll")
 }
 
-/// The all-addressed acceptance has effects for every other mouse operation,
-/// but no hover callbacks in AppKit/Chromium. Do not generalize this exception
-/// to their clicks, modal input, scroll or drag. Unknown frameworks stay addressed.
+pub(super) const CHROME_HOVER_FOCUS: &str = "native_chrome_hover_focus";
+
+/// AppKit and Chromium may require native tracking for hover. The worker
+/// checks for a proven directed Chrome web hover before reaching this fallback.
 pub(super) fn pointer_reason(operation: &str, framework: &str) -> Option<PhysicalReason> {
     (operation == "move" && matches!(framework, "appkit" | "chromium"))
         .then_some(PhysicalReason::NativeHoverTracking)
@@ -44,7 +45,7 @@ pub(super) fn pointer_reason(operation: &str, framework: &str) -> Option<Physica
 
 /// Native first-mouse preparation changes key focus, not pointer transport.
 pub(super) fn plan_visual(reason: &str, operation: &str) -> bool {
-    reason != "native_pointer_key_window" && visual_focus(operation)
+    !matches!(reason, "native_pointer_key_window" | CHROME_HOVER_FOCUS) && visual_focus(operation)
 }
 
 /// Only established capability limits can start a script's foreground scope.
@@ -62,6 +63,7 @@ pub(super) fn allows_activation(reason: &str) -> bool {
             | "windowless_application"
             | "native_open_panel_click"
             | "native_pointer_key_window"
+            | CHROME_HOVER_FOCUS
             | "semantic_text_focus"
             | "semantic_value_focus"
             | "native_modal_press"
@@ -90,7 +92,7 @@ pub(super) fn foreground_plan<'a>(
         "explicit_focus" => matches!(operation, "focus" | "focus_app"),
         "windowless_application" => operation == "keypress_app",
         "background_key_window_absent" => keyboard,
-        "native_hover_tracking" => operation == "move",
+        "native_hover_tracking" | CHROME_HOVER_FOCUS => operation == "move",
         "native_open_panel_click" => operation == "click",
         "native_pointer_key_window" => matches!(operation, "click" | "drag"),
         "semantic_value_focus" => operation == "set_value" && plan["visual"] == false,
@@ -288,6 +290,19 @@ mod tests {
         reply["dispatch"] = json!("not_dispatched");
         reply["focus_preparation"] = json!({"dispatch":"dispatched"});
         assert_eq!(foreground_plan(&reply, "set_value"), None);
+    }
+
+    #[test]
+    fn chrome_hover_focus_plan_prepares_only_an_exact_window_for_move() {
+        let mut reply = json!({"dispatch":"not_dispatched","evidence":"unverified",
+            "foreground_plan":{"reason":CHROME_HOVER_FOCUS,"visual":false}});
+        assert!(allows_activation(CHROME_HOVER_FOCUS));
+        assert_eq!(foreground_plan(&reply, "move"), Some(CHROME_HOVER_FOCUS));
+        for operation in ["click", "drag", "scroll", "focus", "keypress"] {
+            assert_eq!(foreground_plan(&reply, operation), None);
+        }
+        reply["foreground_plan"]["visual"] = json!(true);
+        assert_eq!(foreground_plan(&reply, "move"), None);
     }
 
     #[test]

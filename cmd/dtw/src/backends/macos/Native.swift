@@ -1039,17 +1039,17 @@ private func nativePointerReceiverNeedsKeyWindow(operation: String, button: Stri
     return !roles.contains(where: { controls.contains($0) })
 }
 
-private func ownedPointerReceiverRoles(_ hit: AXUIElement, root: AXUIElement,
-                                       pid: pid_t, deadline: Deadline) throws -> [String]? {
+private func ownedPointerReceiverPath(_ hit: AXUIElement, root: AXUIElement, pid: pid_t,
+                                      deadline: Deadline) throws -> [(element: AXUIElement, role: String)]? {
     var current: AXUIElement? = hit
-    var roles: [String] = []
+    var path: [(element: AXUIElement, role: String)] = []
     for _ in 0..<32 {
         guard let element = current else { return nil }
         var owner: pid_t = 0
         guard AXUIElementGetPid(element, &owner) == .success, owner == pid,
               let role = try axAttribute(element, kAXRoleAttribute, deadline) as? String else { return nil }
-        roles.append(role)
-        if CFEqual(element, root) { return roles }
+        path.append((element, role))
+        if CFEqual(element, root) { return path }
         current = axElement(try axAttribute(element, kAXParentAttribute, deadline))
     }
     return nil
@@ -3247,6 +3247,12 @@ private final class FocusActivationObserver: @unchecked Sendable {
     }
 }
 
+private struct ChromeWebHover {
+    let point: CGPoint
+    let area: AXUIElement
+    let focused: Bool
+}
+
 // One in-flight CUA action owns this cache. Its original monotonic deadline is
 // reused for every callback; a step can never establish or extend an admission.
 private final class BackgroundInputValidation {
@@ -3255,10 +3261,12 @@ private final class BackgroundInputValidation {
     let keyboard: Bool
     let context: RequestContext
     let window: AXUIElement?
+    let chromeHover: ChromeWebHover?
     private var children: [(element: AXUIElement, isWindow: Bool)] = []
 
     init(target: NativeTarget, deadlineMilliseconds: UInt64, keyboard: Bool,
-         context: RequestContext, window: AXUIElement?) {
+         context: RequestContext, window: AXUIElement?, chromeHover: ChromeWebHover? = nil) {
+        self.chromeHover = chromeHover
         self.target = target; self.deadlineMilliseconds = deadlineMilliseconds
         self.keyboard = keyboard; self.context = context; self.window = window
     }
@@ -4890,6 +4898,33 @@ private final class NativeStore: @unchecked Sendable {
         return page
     }
 
+    // Chrome's macOS renderer can track a different point inside the current
+    // foreground document while the real cursor stays over that document.
+    private func chromeWebHover(_ target: NativeTarget, point: CGPoint,
+                                context: RequestContext) throws -> ChromeWebHover? {
+        guard let cursor = CGEvent(source: nil)?.location else { return nil }
+        let window = try validate(target, context, input: false)
+        guard window.cg.pid == target.app.pid, window.cg.bounds.contains(point),
+              window.cg.bounds.contains(cursor),
+              try axAttribute(window.element, kAXSubroleAttribute, context.deadline) as? String == kAXStandardWindowSubrole else {
+            return nil
+        }
+        let desktop = AXUIElementCreateSystemWide()
+        try context.deadline.prepare(desktop)
+        func webArea(at point: CGPoint) throws -> AXUIElement? {
+            var hit: AXUIElement?
+            guard AXUIElementCopyElementAtPosition(desktop, Float(point.x), Float(point.y), &hit) == .success,
+                  let hit else { return nil }
+            return try ownedPointerReceiverPath(hit, root: window.element, pid: target.app.pid, deadline: context.deadline)?
+                .first(where: { $0.role == "AXWebArea" })?.element
+        }
+        guard let cursorArea = try webArea(at: cursor), let area = try webArea(at: point),
+              CFEqual(cursorArea, area) else { return nil }
+        let hasFocus = try windowServerFrontmost(target.app.pid, context.deadline) &&
+            focused(target, window.element, context.deadline)
+        return ChromeWebHover(point: point, area: area, focused: hasFocus)
+    }
+
     private func focused(_ target: NativeTarget, _ root: AXUIElement, _ deadline: Deadline,
                          traceStage: String? = nil) throws -> Bool {
         try focused(target.app.pid, root,
@@ -6249,6 +6284,12 @@ private final class NativeStore: @unchecked Sendable {
                     }
                     let current = try validateSurface(target, validation.context)
                     guard dtwAccessibilityGranted() else {throw failure("permission_required","Accessibility access is no longer granted")}
+                    if let admitted = validation.chromeHover {
+                        guard let live = try chromeWebHover(target, point: admitted.point, context: validation.context),
+                              live.focused, CFEqual(admitted.area, live.area) else {
+                            throw failure("target_changed", "Chrome hover lost its focused web area or the cursor left that area")
+                        }
+                    }
                     try validation.checkModalState { _ = try self.validateSurface(target, validation.context) }
                     try validation.context.verify(target.app)
                     try requireExecutionForeground(request, target, validation.context)
@@ -6281,24 +6322,34 @@ private final class NativeStore: @unchecked Sendable {
                             try context.deadline.prepare(AXUIElementCreateApplication(target.app.pid))
                             if AXUIElementCopyElementAtPosition(AXUIElementCreateApplication(target.app.pid),
                                 Float(point[0]), Float(point[1]), &hit) == .success, let hit,
-                               let roles = try? ownedPointerReceiverRoles(hit, root: window.element,
+                               let path = try? ownedPointerReceiverPath(hit, root: window.element,
                                     pid: target.app.pid, deadline: context.deadline),
                                nativePointerReceiverNeedsKeyWindow(operation: operation,
-                                    button: request["pointer_button"] as? String, roles: roles,
+                                    button: request["pointer_button"] as? String, roles: path.map { $0.role },
                                     windowSubrole: (try? axAttribute(window.element, kAXSubroleAttribute, context.deadline)) as? String) {
                                 pointerKeyWindow = try !(windowServerFrontmost(target.app.pid, context.deadline)
                                     && focused(target, window.element, context.deadline))
                             }
                         }
                     }
+                    var hover: ChromeWebHover?
+                    if framework == "chromium", request["pointer_operation"] as? String == "move",
+                       try context.app(target.app.pid)?.metadata.identifier == "com.google.Chrome",
+                       let xy = request["pointer_point"] as? [Double], xy.count == 2,
+                       xy.allSatisfy({ $0.isFinite }) {
+                        hover = try? chromeWebHover(target, point: CGPoint(x: xy[0], y: xy[1]), context: context)
+                    }
+                    try context.deadline.check()
                     try requireExecutionForeground(request, target, context)
                     if request["consume"] as? Bool == true {
                         backgroundValidation = BackgroundInputValidation(target:target, deadlineMilliseconds:milliseconds,
-                            keyboard:false, context:context, window:nil)
+                            keyboard:false, context:context, window:nil,
+                            chromeHover: hover.flatMap { $0.focused ? $0 : nil })
                     }
                     return ["target":target.json,"bounds":current.coordinates,"surface_owner":surfaceOwner(target),
                             "input_framework":framework,"native_open_panel":openPanel,
                             "pointer_key_window_required":pointerKeyWindow,
+                            "chrome_web_hover":hover.map { $0.focused ? "directed" : "needs_focus" } as Any? ?? NSNull(),
                             "chromium":framework == "chromium"]
                 }
                 // Missing or unreadable AX/modal proof stays an error. It cannot
