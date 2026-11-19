@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.3](https://github.com/caelis-labs/desktop-world/compare/v0.5.2...v0.5.3) (2026-11-19)
+
+
+### Bug Fixes
+
+* **macos:** route eligible Chrome web hover without moving the cursor ([#129](https://github.com/caelis-labs/desktop-world/issues/129)) ([28e21f4](https://github.com/caelis-labs/desktop-world/commit/28e21f41bb92fa3dfb2155f2bb1b229a32deb7cc))
+
 ## [0.5.2](https://github.com/caelis-labs/desktop-world/compare/v0.5.1...v0.5.2) (2026-11-17)
 
 
