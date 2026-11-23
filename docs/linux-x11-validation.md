@@ -68,14 +68,16 @@ Both runs check the authorized window title and screenshot geometry, reject
 invalid coordinates, read back button, entry, wheel, hover and drag events from
 Tk, and require clean MCP EOF. Initial and final PNG hashes record the visual
 change. Xvfb exercises the actual X11 protocol on a private virtual display.
-It does not establish physical desktop, lock-screen, Wayland, or other
-architecture behavior. No ordinary CI step injects desktop input.
+This evidence applies to the tested architecture and private display. Physical
+desktop, lock-screen and Wayland behavior require separate evidence.
 
 ## Semantics and application startup
 
-Run the opt-in probes on the managed executable. AT-SPI uses GTK 3, Python GI,
-D-Bus and the installed registry. Startup compiles a small native X11 fixture
-and registers it in a private XDG directory. Both use private Xvfb/KWin displays.
+Run the probes on the managed executable. Use the Python interpreter with the
+distribution's GTK 3 GI bindings. AT-SPI also needs D-Bus, its activation
+environment helper and the installed registry. The lifecycle probe compiles a
+small native X11 fixture and registers it in a private XDG directory. Both use
+private Xvfb/KWin displays.
 
 ```sh
 python3 tests/acceptance/linux_atspi_probe.py \

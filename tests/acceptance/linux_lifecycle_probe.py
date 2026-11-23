@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import time
 
@@ -15,9 +16,16 @@ FIXTURE = r'''
 #include <X11/Xatom.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <limits.h>
-int main(void) {
+#include <sys/prctl.h>
+int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "--protected-control") == 0) {
+        if (prctl(PR_SET_DUMPABLE, 0) != 0) return 5;
+        puts("READY"); fflush(stdout);
+        for (;;) pause();
+    }
     char self[PATH_MAX], state[PATH_MAX + 16], stop[PATH_MAX + 16];
     ssize_t n = readlink("/proc/self/exe", self, sizeof(self)-1);
     if (n < 0) return 2;
@@ -37,7 +45,7 @@ int main(void) {
     while (access(stop,F_OK) != 0) { while(XPending(d)) { XEvent e; XNextEvent(d,&e); } usleep(20000); }
     XDestroyWindow(d,w); XCloseDisplay(d); return 0;
 }
-'''.replace('#include <stdio.h>', '#include <stdio.h>\n#include <string.h>')
+'''
 
 
 def lifecycle_round(binary, root, env, children, log, mode, artifacts):
@@ -48,6 +56,22 @@ def lifecycle_round(binary, root, env, children, log, mode, artifacts):
     source = root / "fixture.c"
     source.write_text(FIXTURE)
     subprocess.run(["cc", "-Wall", "-Werror", str(source), "-o", str(executable), "-lX11"], check=True)
+    if os.geteuid() != 0:
+        protected = root / "DtwUnrelatedProtectedControl"
+        shutil.copy2(executable, protected)
+        control = children.start([str(protected), "--protected-control"], env,
+                                 stdout=subprocess.PIPE, stderr=log("protected-process.log"), text=True)
+        if x11.next_line(x11.lines(control.stdout), 5).strip() != "READY":
+            raise RuntimeError("protected process did not start")
+        proc = Path(f"/proc/{control.pid}")
+        assert proc.stat().st_uid == os.geteuid(), "expected same user process directory"
+        assert (proc / "exe").lstat().st_uid != os.geteuid(), "expected kernel-protected executable link"
+        try:
+            (proc / "exe").readlink()
+        except PermissionError:
+            x11.emit("protected_process_control", pid=control.pid, executable_read="denied")
+        else:
+            raise RuntimeError("expected unrelated executable link to be unreadable")
     entry = f"[Desktop Entry]\nType=Application\nName=DTW Lifecycle Fixture\nExec={executable}\nTerminal=false\n"
     (applications / "fixture.desktop").write_text(entry)
     # Every unsafe/unsupported form uses a unique name, so discovery can assert

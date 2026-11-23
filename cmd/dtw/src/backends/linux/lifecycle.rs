@@ -248,6 +248,10 @@ impl Store {
                 );
             }
             // A windowless instance cannot be safely reactivated by this subset.
+            // The kernel can keep /proc/PID owned by this user while assigning
+            // /proc/PID/exe to root for a protected process. Scope the duplicate
+            // check to user-owned executable links, like X11 discovery.
+            let uid = unsafe { libc::geteuid() };
             for process in std::fs::read_dir("/proc").map_err(failed)? {
                 check(until)?;
                 let process = process.map_err(failed)?;
@@ -259,21 +263,32 @@ impl Store {
                 {
                     continue;
                 }
-                let metadata = match process.metadata() {
+                let executable_link = process.path().join("exe");
+                let metadata = match std::fs::symlink_metadata(&executable_link) {
                     Ok(m) => m,
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(e) => return Err(failed(e)),
+                    Err(e) => {
+                        return Err(failed(format!(
+                            "Inspecting {}: {e}",
+                            executable_link.display()
+                        )))
+                    }
                 };
-                if metadata.uid() != unsafe { libc::geteuid() } {
+                if metadata.uid() != uid {
                     continue;
                 }
-                match std::fs::read_link(process.path().join("exe")) {
+                match std::fs::read_link(&executable_link) {
                     Ok(path) if path == entry.executable => {
                         return Err(Error::UnsupportedCapability)
                     }
                     Ok(_) => {}
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => return Err(failed(e)),
+                    Err(e) => {
+                        return Err(failed(format!(
+                            "Resolving {}: {e}",
+                            executable_link.display()
+                        )))
+                    }
                 }
             }
             check(until)?;
