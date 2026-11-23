@@ -27,7 +27,7 @@ guide merged ahead of publication does not add commands to an older executable.
 Current source packages use BUILD's `package_store_schema: 2`: public MCP
 server/`serverInfo.name` `dtw`, Skill `dtw` at `skills/dtw`, and Caelis Skill
 identity `desktop-world:dtw`. The plugin/install ID remains `desktop-world`;
-repository, ZIP, Cargo and package-signing identities also retain their names.
+repository, archive, Cargo and package-signing identities also retain their names.
 
 Already-published schema 1 packages retain their `desktop-world` server and
 `skills/desktop-world` Skill. Select names from the selected package's BUILD and
@@ -49,11 +49,17 @@ Download the **latest stable** package from [Releases](https://github.com/caelis
 
 - macOS (Apple Silicon): `desktop-world-<version>-aarch64-apple-darwin.zip`.
 - Windows x64: `desktop-world-<version>-x86_64-pc-windows-msvc.zip`.
+- Linux x86_64: `desktop-world-<version>-x86_64-unknown-linux-gnu.tar.gz`.
+- Linux arm64: `desktop-world-<version>-aarch64-unknown-linux-gnu.tar.gz`.
 
-Use the adjacent `.sha256` for the selected ZIP. Linux desktop support is experimental.
+Select a Linux archive with `uname -m` (`x86_64` or `aarch64`). The Linux assets
+start with the release that includes both targets. They require glibc 2.39 or later.
+Desktop operations require an unlocked local native X11 session with an EWMH
+window manager and XRes 1.2, XInput 2 and XTest. Wayland and XWayland are unsupported.
+Use the adjacent `.sha256` for the selected archive.
 Release notes identify the exact platform sources, accepted bytes and test scope.
 
-Verify the ZIP's adjacent `.sha256`, then extract the complete directory to a
+Verify the archive's adjacent `.sha256`, then extract the complete directory to a
 temporary location outside both the source checkout and the Agent's session
 workspace, using the host's supported download and executable-launch route.
 On Windows, `%TEMP%` is suitable only when it is outside that workspace and the
@@ -62,7 +68,10 @@ is not itself an authorization. If policy denies the operation, use the host's
 normal approval process or stop and report the required authorization; do not
 change sandbox policy or filesystem ACLs. See [DSH Windows compatibility](docs/install-dsh.md#windows-host-execution-and-storage).
 On macOS, use
-`shasum -a 256 <archive.zip>`. The verified package's native import below verifies
+`shasum -a 256 <archive.zip>`. On Linux, in the download directory, verify the
+sidecar with `sha256sum -c "${archive}.sha256"` and extract the checked archive
+with `tar -xzf "$archive" -C "$staging"`.
+The verified package's native import below verifies
 every entry and the exact inventory in `SHA256SUMS`; do not first run a second
 per-file shell verifier or print hundreds of successful checksum rows.
 

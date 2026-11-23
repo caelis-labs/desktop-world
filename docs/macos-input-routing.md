@@ -2,7 +2,7 @@
 
 DTW 尽可能使用可证明有效的后台能力直接输入；确有必要时直接准备精确前台接收者或使用真实鼠标，完成后保留其状态。没有前台、焦点或鼠标的借用／归还生命周期，也不记录原状态用于恢复。Agent 不选择路线、不维护 Session。
 
-默认 `apps` + `exec` 两个 MCP 工具包含全部 14 个 app 操作；`--atomic` 将它们展开为 15 个工具（含 `apps`，无 `exec`）。两种接口使用同一输入合同。原生 action receipt／内部诊断的 `delivery` 只保留 `route` / `reason`；公开 `effects` 发布派发计数和已确认后置条件，不提供借用计数或焦点归还元数据。虚拟光标反馈覆盖坐标 click/move/drag/scroll；语义操作、键盘和原生窗口移动不伪造鼠标轨迹。
+`apps` 和 `exec` 是公开 MCP 工具。原生 action receipt／内部诊断的 `delivery` 只保留 `route` / `reason`；公开 `effects` 发布派发计数和已确认后置条件，不提供借用计数或焦点归还元数据。虚拟光标反馈覆盖坐标 click/move/drag/scroll；语义操作、键盘和原生窗口移动不伪造鼠标轨迹。
 
 ## 路线选择
 

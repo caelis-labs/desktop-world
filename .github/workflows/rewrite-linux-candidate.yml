@@ -1,0 +1,88 @@
+name: Rewrite Linux candidate
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      target:
+        required: true
+        type: string
+      runner:
+        required: true
+        type: string
+    outputs:
+      artifact_id:
+        value: ${{ jobs.linux-candidate.outputs.artifact_id }}
+  workflow_dispatch:
+    inputs:
+      target:
+        type: choice
+        options: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+        default: x86_64-unknown-linux-gnu
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rewrite-linux-candidate-${{ inputs.target }}-${{ github.ref }}
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  linux-candidate:
+    runs-on: ${{ inputs.runner || (inputs.target == 'aarch64-unknown-linux-gnu' && 'ubuntu-24.04-arm' || 'ubuntu-24.04') }}
+    timeout-minutes: 30
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+    env:
+      DTW_TARGET: ${{ inputs.target }}
+      DTW_CARGO_TARGET_DIR: ${{ github.workspace }}/../dtw-candidate-release-target
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+          components: rust-docs
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          prefix-key: dtw-candidate-release-v1
+          key: ${{ inputs.target }}-ubuntu-24.04
+          workspaces: cmd/dtw -> ../../../dtw-candidate-release-target
+          cache-bin: false
+      - name: Build fixed native Linux package and exercise source contracts
+        run: |
+          python3 scripts/build-rewrite-candidate.py --target "$DTW_TARGET" --output "$RUNNER_TEMP/dtw-rewrite-candidate" --cargo-target-dir "$DTW_CARGO_TARGET_DIR"
+          export CARGO_TARGET_DIR="$DTW_CARGO_TARGET_DIR"
+          export RUSTC="$(rustup run 1.98.0 rustc --print sysroot)/bin/rustc"
+          rustup run 1.98.0 cargo test --release --locked --manifest-path "$RUNNER_TEMP/dtw-rewrite-candidate/source/cmd/dtw/Cargo.toml" --target "$DTW_TARGET" --lib --bins --tests
+      - name: Verify final archive, managed import, MCP and worker shutdown (no desktop)
+        run: |
+          python3 "$RUNNER_TEMP/dtw-rewrite-candidate/source/scripts/check-linux-candidate.py" --candidate "$RUNNER_TEMP/dtw-rewrite-candidate" --output "$RUNNER_TEMP/dtw-rewrite-candidate/package-check"
+      - name: Retain immutable package and original construction evidence
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dtw-linux-${{ inputs.target }}-candidate-${{ inputs.source_sha || github.sha }}-attempt-${{ github.run_attempt }}
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/dtw-rewrite-candidate/*.tar.gz
+            ${{ runner.temp }}/dtw-rewrite-candidate/*.sha256
+            ${{ runner.temp }}/dtw-rewrite-candidate/CANDIDATE.json
+            ${{ runner.temp }}/dtw-rewrite-candidate/FAILURE.json
+            ${{ runner.temp }}/dtw-rewrite-candidate/commands.json
+            ${{ runner.temp }}/dtw-rewrite-candidate/logs
+            ${{ runner.temp }}/dtw-rewrite-candidate/package-check/report.json
+            ${{ runner.temp }}/dtw-rewrite-candidate/package-check/import.json
+            ${{ runner.temp }}/dtw-rewrite-candidate/package-check/worker-*.stderr
+            ${{ runner.temp }}/dtw-rewrite-candidate/package-check/packaged-mcp

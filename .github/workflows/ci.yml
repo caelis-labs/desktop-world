@@ -25,6 +25,7 @@ jobs:
       source: ${{ steps.plan.outputs.source }}
       macos: ${{ steps.plan.outputs.macos }}
       windows: ${{ steps.plan.outputs.windows }}
+      linux: ${{ steps.plan.outputs.linux }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -155,11 +156,45 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/acceptance/windows/compile-cursor.ps1 -OutputDirectory "$env:RUNNER_TEMP/dtw-cursor"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+  linux:
+    name: Linux contracts (${{ matrix.target }})
+    needs: plan
+    if: needs.plan.outputs.linux == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target-ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          workspaces: cmd/dtw -> ../../target-ci
+          key: ${{ matrix.target }}-runtime-release
+      - name: Native Linux, script, MCP and CLI contracts (headless)
+        run: cargo test --release --locked --manifest-path cmd/dtw/Cargo.toml --lib --bins --tests
+      - name: Managed packages and live MCP leases (no GUI)
+        run: python3 tests/ci/check_package_upgrade.py --dtw "$CARGO_TARGET_DIR/release/dtw" --output "$RUNNER_TEMP/dtw-package-store"
+
   source:
     # Keep the protected status name; unlike a skipped platform job this gate
     # fails if any selected check failed, was cancelled, or was unexpectedly skipped.
     name: Source checks
-    needs: [plan, portable, macos-inventory, windows]
+    needs: [plan, portable, macos-inventory, windows, linux]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -174,10 +209,10 @@ jobs:
           assert needs['plan']['result'] == 'success', 'CI planning failed'
           plan = needs['plan']['outputs']
           assert re.fullmatch(r'[0-9a-f]{40}', plan['tree']), 'Invalid verified tree'
-          assert all(plan.get(key) in ('true', 'false') for key in ('source', 'macos', 'windows')), 'Invalid check selection'
+          assert all(plan.get(key) in ('true', 'false') for key in ('source', 'macos', 'windows', 'linux')), 'Invalid check selection'
           if plan['source'] == 'false':
               assert os.environ['GITHUB_EVENT_NAME'] == 'push' and plan['reused_run'].isdigit(), 'Missing reuse evidence'
-          for job, selected in [('portable', 'source'), ('macos-inventory', 'macos'), ('windows', 'windows')]:
+          for job, selected in [('portable', 'source'), ('macos-inventory', 'macos'), ('windows', 'windows'), ('linux', 'linux')]:
               expected = 'success' if plan[selected] == 'true' else 'skipped'
               assert needs[job]['result'] == expected, f'{job}: {needs[job]["result"]}, expected {expected}'
           PY

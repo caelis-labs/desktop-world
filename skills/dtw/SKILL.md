@@ -1,6 +1,6 @@
 ---
 name: dtw
-description: "Operate desktop app interfaces through DTW: discover apps, inspect UI or screenshots, edit text, and use menus, file dialogs, mouse and keyboard. Default apps+exec provides all 14 app operations; atomic exposes them separately."
+description: "Operate desktop app interfaces through DTW: discover apps, inspect UI or screenshots, edit text, and use menus, file dialogs, mouse and keyboard. Use apps and app-scoped exec."
 ---
 
 # DTW
@@ -8,19 +8,15 @@ description: "Operate desktop app interfaces through DTW: discover apps, inspect
 The public MCP server is `dtw`. The installed plugin ID remains `desktop-world`;
 in Caelis the full Skill identity is `desktop-world:dtw`.
 
-Discover/list the connected MCP tools before choosing how to operate. Default
-`dtw mcp` exposes two tools, `apps` and `exec`, with all 14 app operations.
-If `exec` is listed, use app-scoped JavaScript.
-With `dtw mcp --atomic` (15 tools including `apps`, no `exec`), invoke the listed app operation directly with an explicit
-`app`; there is no JavaScript tool. Choose from actual tool discovery, never the
-OS or a guessed operation name. Both surfaces use the same names and object fields:
+Discover the connected MCP tools. `dtw mcp` exposes `apps` and `exec`.
+`exec` runs app-scoped JavaScript with these operations:
 `look`, `capture`, `readText`, `wait`, `waitForNewWindow`, `click`, `setValue`,
 `move`, `drag`, `typeText`, `keypress`, `scroll`, `focus`, `quit`.
 Read [API.md](API.md) for exact parameters and outputs and
 [PATTERNS.md](PATTERNS.md) for recovery and interaction patterns.
 
 Use `apps({query})` to find the authorization identity. Discovery reads no window
-contents and does not itself authorize an app. In script mode, `exec({app,source})`
+contents and does not itself authorize an app. `exec({app,source})`
 fixes authorization for the entire async JavaScript body. Await every operation:
 
 ```javascript
@@ -28,21 +24,11 @@ await app.click({selector:{role:'button',text:'Continue'}});
 await app.typeText({text:'Hello'});
 ```
 
-In atomic mode, call the listed tools with argument objects, for example:
-
-```json
-{"name":"click","arguments":{"app":"<discovered identity>","selector":{"role":"button","text":"Continue"}}}
-```
-
-```json
-{"name":"typeText","arguments":{"app":"<discovered identity>","text":"Hello"}}
-```
-
 Use `look({})` when inspection is needed. Known selectors, keyboard commands,
 text insertion and default scrolling can start directly; DTW prepares the app
 and receiver internally. A stopped app starts where supported (without requesting
 foreground on macOS). Context survives between calls; do not prepend a redundant
-look. In the default mode, group known sequential actions in one script without
+look. Group known sequential actions in one script without
 reading after every step. Use observed IDs or unique selectors. DTW revalidates
 retained native objects and stops on relevant target changes instead of guessing
 replacements. There is no Agent-managed Session, window binding or native handle.
@@ -76,8 +62,7 @@ Use `focus({})` when explicitly requested. Ordinary input prepares its receiver
 automatically. macOS prefers working background capabilities and directly uses
 foreground/real mouse input when necessary; Windows defaults to foreground input.
 DTW leaves foreground, focus and pointer changes in place. Group known related
-steps in one `exec` for orchestration. Atomic calls settle independently without
-restoring focus; inspect actual menu/receiver state across calls.
+steps in one `exec` and inspect the current menu and receiver before further input.
 
 After New/Open, use `waitForNewWindow({})` before typing into the new window.
 It waits without repeating input; `wait_timeout` means no new window appeared.
@@ -95,7 +80,7 @@ not verification. `status:completed` means settlement; check MCP `isError` /
 `error` and observation status first. Dispatch and acknowledgements are distinct from observed UI
 success. Verify the requested effect from the view or a readback. Unknown or
 interrupted input may already have effects: inspect before new input, never replay
-a script or atomic action because its response was lost. Identical MCP request-ID
+a script because its response was lost. Identical MCP request-ID
 retransmission refers to retained work; a new ID is new work. Standard MCP
 cancellation stops its matching call. Native cleanup failure stops the current
 execution and affected native context. Later new requests let DTW retire/recover
@@ -104,11 +89,12 @@ force-kills or discards documents.
 
 Scripts can `print(...)` or return small JSON. Variables last for one execution;
 imports, filesystem, network, process APIs and timers are unavailable. The deadline
-is 30 seconds. Atomic calls execute the same native app facade without JavaScript;
-session state, stale-target checks, cancellation and result effects still apply.
+is 30 seconds.
 
 `permission_required` identifies missing OS access. Grant the host named by the OS;
 Screen Recording changes can require restarting it and reconnecting. macOS and
-Windows native behavior needs platform-specific evidence. Linux is experimental,
-without AT-SPI semantics; isolated X11 evidence does not establish locked-desktop
-support. Keep supported desktops unlocked.
+Windows native behavior needs platform-specific evidence. Linux X11 discovers running
+apps and reads window metadata and unobstructed client pixels. Use screenshot
+coordinates for click, move, drag and scroll, and use mapped keyboard input. Linux
+has no AT-SPI semantics, native `readText`, or installed-app launch/quit. Keep the
+local X11 desktop unlocked. Wayland and XWayland are unsupported.

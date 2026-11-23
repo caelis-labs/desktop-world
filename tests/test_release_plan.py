@@ -251,7 +251,7 @@ class ReleasePlanTests(unittest.TestCase):
             plan.pending_plan(REPO, self.gate(), 50)
 
     def platform(self, target, identifier, attempt):
-        prefix = 'dtw-macos-candidate-' if target == plan.TARGETS[0] else 'dtw-windows-candidate-'
+        prefix = plan.artifact_prefix(target)
         return self.route(f'actions/artifacts/{identifier}',
                           {'id': identifier, 'name': prefix + SOURCE + f'-attempt-{attempt}',
                            'digest': 'sha256:' + str(identifier % 10) * 64, 'expired': False,
@@ -260,8 +260,10 @@ class ReleasePlanTests(unittest.TestCase):
     def test_collect_accepts_mixed_successful_job_attempts_with_exact_artifact_ids(self):
         mac = self.platform(plan.TARGETS[0], 101, 2)
         win = self.platform(plan.TARGETS[1], 102, 1)
+        linux = {target: self.platform(target, 103 + index, 1)['id']
+                 for index, target in enumerate(plan.TARGETS[2:])}
         result = plan.collect(REPO, self.complete_plan(), 50, 2,
-                              {plan.TARGETS[0]: mac['id'], plan.TARGETS[1]: win['id']})
+                              {plan.TARGETS[0]: mac['id'], plan.TARGETS[1]: win['id'], **linux})
         self.assertEqual(result['build_attempt'], 2)
         self.assertEqual(result['artifacts'][plan.TARGETS[0]], {key: mac[key] for key in ('id', 'name', 'digest')})
         self.assertEqual(result['artifacts'][plan.TARGETS[1]], {key: win[key] for key in ('id', 'name', 'digest')})
@@ -271,8 +273,10 @@ class ReleasePlanTests(unittest.TestCase):
                        {'name': 'dtw-macos-candidate-' + LATER + '-attempt-2'}]:
             self.platform(plan.TARGETS[0], 101, 2).update(update)
             self.platform(plan.TARGETS[1], 102, 1)
+            for index, target in enumerate(plan.TARGETS[2:]):
+                self.platform(target, 103 + index, 1)
             with self.subTest(update=update), self.assertRaises(ValueError):
-                plan.collect(REPO, self.complete_plan(), 50, 2, dict(zip(plan.TARGETS, [101, 102])))
+                plan.collect(REPO, self.complete_plan(), 50, 2, dict(zip(plan.TARGETS, [101, 102, 103, 104])))
 
     def test_load_requires_successful_same_repository_main_build_workflow(self):
         self.install_plan()

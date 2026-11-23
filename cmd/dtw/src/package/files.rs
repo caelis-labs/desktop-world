@@ -225,7 +225,9 @@ pub(super) fn verify(root: &Path) -> Result<Verified> {
     }
     let target = build["target"].as_str().ok_or("Missing package target")?;
     let binary = match target {
-        "aarch64-apple-darwin" => "bin/dtw",
+        "aarch64-apple-darwin" | "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu" => {
+            "bin/dtw"
+        }
         "x86_64-pc-windows-msvc" => "bin/dtw.exe",
         _ => return Err("Unsupported package target".into()),
     };

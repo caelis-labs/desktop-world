@@ -1,12 +1,7 @@
 # Interaction patterns
 
-These patterns apply to both surfaces. Discover/list tools first: if `exec` is
-present, use the JavaScript examples; otherwise call the identically named listed
-tool with the same object fields plus `app`. For example,
-`await app.readText({target:'w1.e12'})` becomes
-`readText({app,target:'w1.e12'})`. Atomic tools execute no JavaScript. Each call
-has its own settlement boundary. One script is useful for orchestrating known
-steps; settlement does not restore foreground, focus or pointer position.
+Use `exec` to run the JavaScript examples in the discovered application.
+Settlement leaves foreground, focus and pointer changes in place.
 
 ## Observe when needed; batch known actions
 
@@ -36,8 +31,7 @@ fallback; it never repeats a potentially delivered action.
 
 ## Replace a value or trigger typing behavior
 
-After `apps({query:'app name'})`, use the discovered identity in `exec` or each
-atomic call. Inspect with `look` to identify the field and advertised actions.
+After `apps({query:'app name'})`, use the discovered identity in `exec`. Inspect with `look` to identify the field and advertised actions.
 For a field advertising `setValue`, this script replaces and reads its value:
 
 ```javascript
@@ -66,13 +60,6 @@ await app.typeText({text:'example'});
 
 Inspect completion/results or the Submit state before continuing. A setter can
 read back the correct value while those application behaviors never ran.
-Atomic replacement is the complete call below, followed by a separate
-`readText({app:'<discovered identity>',target:'w1.e12'})` for readback:
-
-```json
-{"name":"setValue","arguments":{"app":"<discovered identity>","target":"w1.e12","value":"Updated name"}}
-```
-
 Targets in examples stand for IDs from the actual observation. Build the
 `exec` argument object with a JSON serializer when embedding user text in
 `source`; do not interpolate unescaped text into JavaScript.
@@ -158,8 +145,8 @@ Keep related input in one script. Normal actions prepare the authorized
 app/window automatically. Use `app.focus()` only when explicit focus is part of
 the task. macOS prefers working background capabilities; when needed it uses
 the foreground/real mouse directly. Windows defaults to foreground operation.
-No call restores the previous foreground, focus or pointer position. Atomic calls
-settle independently; verify actual menu and receiver state across calls.
+Foreground, focus and pointer changes stay in place. Verify menu and receiver state
+before further input.
 
 On Windows, after a click opens a form, observe the intended field and pass its
 ID as `target` in `typeText({target,text})`. The script stops on a focus mismatch

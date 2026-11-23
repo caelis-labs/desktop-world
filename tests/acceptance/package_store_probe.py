@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Cross-platform package CLI/real MCP lease acceptance; no desktop interaction."""
-import argparse, hashlib, json, os, queue, shutil, subprocess, threading, time, uuid
+import argparse, hashlib, json, os, queue, shutil, subprocess, sys, threading, time, uuid
 from pathlib import Path
 from standard_agent_probe import Mcp, stop_owned
 
@@ -37,7 +37,15 @@ def native_worker_command(executable):
             raise ctypes.WinError(ctypes.get_last_error())
         birth=(created.dwHighDateTime<<32)|created.dwLowDateTime
         command.extend([str(os.getpid()),str(birth)])
+    elif sys.platform=='linux':
+        command.append(str(os.getpid()))
     return command
+
+def host_target():
+    if sys.platform=='linux':
+        import platform
+        return {'x86_64':'x86_64-unknown-linux-gnu','aarch64':'aarch64-unknown-linux-gnu'}[platform.machine().lower()]
+    return 'x86_64-pc-windows-msvc' if os.name=='nt' else 'aarch64-apple-darwin'
 
 def sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()
 def write(path,value): path.write_text(json.dumps(value,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
@@ -61,7 +69,7 @@ def main():
         for manifest in ['plugin.json','.claude-plugin/plugin.json','.antigravity-plugin/plugin.json','package.json']:
             path=root/manifest;path.parent.mkdir(parents=True,exist_ok=True);write(path,{'version':package_version})
         (root/'cordis/index.mjs').write_text('export{}',encoding='utf-8')
-        write(root/'BUILD.json',{'package_store_schema':schema,'version':package_version,'target':'x86_64-pc-windows-msvc' if os.name=='nt' else 'aarch64-apple-darwin','binary':{'path':'bin/'+executable,'sha256':sha(root/'bin'/executable)},'skill_sha256':sha(root/'skills'/skill_name/'SKILL.md')})
+        write(root/'BUILD.json',{'package_store_schema':schema,'version':package_version,'target':host_target(),'binary':{'path':'bin/'+executable,'sha256':sha(root/'bin'/executable)},'skill_sha256':sha(root/'skills'/skill_name/'SKILL.md')})
         (root/'SHA256SUMS').write_text(''.join(sha(p)+'  '+p.relative_to(root).as_posix()+'\n' for p in sorted(root.rglob('*')) if p.is_file()),encoding='utf-8')
         return cli('import',root)
     a=source('A');b=source('B',manager,schema=2);c=source('C');assert cli('import',out/'source A')['package_id']==a['package_id']
@@ -86,14 +94,20 @@ def main():
     # A worker protects itself after the MCP supervisor is already gone. Release
     # of a nonexistent binding performs no AX/SCK/input/desktop operation.
     with (out/'worker-stderr.log').open('w',encoding='utf-8') as error:
-        worker=subprocess.Popen(native_worker_command(c['executable']),stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=error,text=True,encoding='utf-8')
+        worker_env=os.environ.copy()
+        if sys.platform=='linux':
+            for key in ('DISPLAY','WAYLAND_DISPLAY','XDG_SESSION_TYPE'):worker_env.pop(key,None)
+        worker=subprocess.Popen(native_worker_command(c['executable']),stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=error,text=True,encoding='utf-8',env=worker_env)
         try:
             request_id=str(uuid.uuid4());worker.stdin.write(json.dumps({'request_id':request_id,'operation':'release','binding':'never-created-'+str(uuid.uuid4())})+'\n');worker.stdin.flush()
             messages=queue.Queue();output_reader=threading.Thread(target=lambda:messages.put(worker.stdout.readline()),daemon=True);output_reader.start()
             line=messages.get(timeout=5);output_reader.join(timeout=2)
             if not line:
                 worker.wait(timeout=5);error.flush();raise AssertionError({'exit':worker.returncode,'stderr':Path(error.name).read_text(encoding='utf-8',errors='replace')[-4096:]})
-            assert json.loads(line)=={'request_id':request_id,'result':{'released':False}}
+            reply=json.loads(line)
+            if sys.platform=='linux':
+                assert reply.get('request_id')==request_id and reply.get('result',{}).get('error')=='display_unavailable' and reply['result'].get('message'),reply
+            else:assert reply=={'request_id':request_id,'result':{'released':False}}
             rows=cli('gc','--apply')['packages'];assert next(r for r in rows if r['package_id']==c['package_id'])['retained_by']=='running',rows
         finally:
             worker.stdin.close()

@@ -13,7 +13,8 @@ import zipfile
 _spec = importlib.util.spec_from_file_location('candidate_builder', Path(__file__).with_name('build-rewrite-candidate.py'))
 builder = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(builder)
-TARGETS = ('aarch64-apple-darwin', 'x86_64-pc-windows-msvc')
+TARGETS = ('aarch64-apple-darwin', 'x86_64-pc-windows-msvc',
+           'x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu')
 TEAM = '64KZ67PM5J'
 RECEIPTS = ('notarization-submit.json', 'notarization-wait.json', 'notarization-info.json')
 NATIVE_RECEIPT = 'NATIVE-VERIFICATION.json'
@@ -185,22 +186,28 @@ def verify(root, tag, tag_commit, *, native_verification=None):
     require(re.fullmatch(r'v\d+\.\d+\.\d+', tag), 'Expected stable release tag')
     version = tag[1:]
     require(re.fullmatch(r'[0-9a-f]{40}', tag_commit), 'Invalid tag commit')
-    names = {'RELEASE.json', 'SHA256SUMS', *RECEIPTS}
-    for target in TARGETS:
-        names.update({f'BUILD-{target}.json', f'CANDIDATE-{target}.json',
-                      f'desktop-world-{version}-{target}.zip', f'desktop-world-{version}-{target}.zip.sha256'})
     require(all(p.is_file() and not p.is_symlink() for p in root.iterdir()), 'Nonregular release asset')
-    require({p.name for p in root.iterdir()} == names, 'Unexpected or missing release asset')
     sums = checksums((root / 'SHA256SUMS').read_bytes())
-    require(set(sums) == names - {'SHA256SUMS'}, 'Release checksum inventory mismatch')
+    require(set(sums) == {p.name for p in root.iterdir()} - {'SHA256SUMS'}, 'Unexpected or missing release asset; checksum inventory mismatch')
     for name, digest in sums.items():
         require(sha((root / name).read_bytes()) == digest, f'Release checksum mismatch: {name}')
+    require((root / 'RELEASE.json').is_file() and not (root / 'RELEASE.json').is_symlink(), 'Missing regular release manifest')
+    release = json.loads((root / 'RELEASE.json').read_text(encoding='utf-8'))
+    platforms = release.get('platforms', [])
+    targets = [p.get('target') for p in platforms]
+    # Existing published releases have the original two-platform matrix. The
+    # construction/promotion plan independently requires all current targets.
+    require(len(targets) == len(set(targets)) and set(targets) in (set(TARGETS[:2]), set(TARGETS)),
+            'Release platform matrix mismatch')
+    names = {'RELEASE.json', 'SHA256SUMS', *RECEIPTS}
+    for target in targets:
+        names.update({f'BUILD-{target}.json', f'CANDIDATE-{target}.json',
+                      f'desktop-world-{version}-{target}' + builder.archive_suffix(target),
+                      f'desktop-world-{version}-{target}' + builder.archive_suffix(target) + '.sha256'})
+    require({p.name for p in root.iterdir()} == names, 'Unexpected or missing release asset')
     read = lambda name: json.loads((root / name).read_text(encoding='utf-8'))
-    release = read('RELEASE.json')
     require(release.get('version') == version and release.get('tag') == tag
             and release.get('tag_commit') == tag_commit, 'Release version/tag identity mismatch')
-    platforms = release.get('platforms', [])
-    require(len(platforms) == 2 and {p.get('target') for p in platforms} == set(TARGETS), 'Release platform matrix mismatch')
     for platform in platforms:
         target = platform['target']
         candidate = read(f'CANDIDATE-{target}.json')
@@ -210,21 +217,27 @@ def verify(root, tag, tag_commit, *, native_verification=None):
             require(record.get('schema') == 1 and record.get('kind') == 'unpublished-rewrite-candidate', 'Unsupported candidate schema')
             require(record.get('version') == version and record.get('target') == target, 'Candidate version/target mismatch')
             require(record.get('source') == platform.get('source'), 'Candidate source mismatch')
+        if target.endswith('linux-gnu'):
+            distro = build.get('toolchain', {}).get('linux_distribution', {})
+            require(distro.get('ID') == 'ubuntu' and distro.get('VERSION_ID') == '24.04'
+                    and build.get('toolchain', {}).get('linux_glibc') == '2.39'
+                    and build.get('binary', {}).get('supported_glibc_floor') == '2.39',
+                    'Linux release must use the Ubuntu 24.04 / glibc 2.39 baseline')
         source = platform['source']
         require(all(re.fullmatch(r'[0-9a-f]{40}', source.get(k, '')) for k in ('commit', 'tree'))
                 and re.fullmatch(r'[0-9a-f]{64}', source.get('cargo_lock_sha256', '')), 'Invalid source identity')
         package = f'desktop-world-{version}-{target}'
-        archive = package + '.zip'
+        archive = package + builder.archive_suffix(target)
         require(candidate.get('archive') == platform.get('archive') == archive, 'Archive name mismatch')
         archive_sha = sha((root / archive).read_bytes())
         require(candidate.get('archive_sha256') == platform.get('archive_sha256') == archive_sha, 'Archive digest mismatch')
         require(checksums((root / (archive + '.sha256')).read_bytes()) == {archive: archive_sha}, 'Archive sidecar mismatch')
         require(candidate.get('build_manifest_sha256') == sha(build_bytes), 'BUILD digest mismatch')
         builder.verify_archive(root / archive, package)
-        with zipfile.ZipFile(root / archive) as z:
+        with builder.open_package(root / archive, target) as z:
             prefix = package + '/'
             files = {n[len(prefix):] for n in z.namelist()}
-            binary_name = 'bin/dtw' if target == TARGETS[0] else 'bin/dtw.exe'
+            binary_name = 'bin/' + builder.TARGETS[target][2]
             require({binary_name, 'BUILD.json', '.claude-plugin/plugin.json',
                      'notices/DEPENDENCIES.json'} <= files, 'Missing runtime/Skill/plugin/notices')
             require(z.read(prefix + 'BUILD.json') == build_bytes, 'Embedded BUILD differs')
@@ -255,7 +268,7 @@ def verify(root, tag, tag_commit, *, native_verification=None):
                 if name != RECEIPTS[0]:
                     require(receipt.get('status') == 'Accepted', 'Notarization not accepted')
             require(read(RECEIPTS[2]).get('name') == archive, 'Notarization archive mismatch')
-    return {'tag': tag, 'assets_verified': len(names), 'platforms': list(TARGETS),
+    return {'tag': tag, 'assets_verified': len(names), 'platforms': targets,
             'macos_signature': 'native_codesign' if native_verification is None else 'immutable_native_build_receipt',
             'gui_acceptance': 'not inferred; asset integrity and signature audit only'}
 

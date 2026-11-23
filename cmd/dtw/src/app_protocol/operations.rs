@@ -4,7 +4,6 @@ use serde_json::{json, Value};
 
 pub(super) struct Operation {
     pub name: &'static str,
-    pub description: &'static str,
     pub action: bool,
     schema: fn() -> Value,
     pub required: &'static [&'static str],
@@ -35,36 +34,38 @@ pub(super) fn metadata() -> String {
 
 pub(super) const ALL: &[Operation] = &[
     Operation {
-        name: "look", action: false,
-        description: "Inspect the app scene, optionally filtering by role/text, scope or observed target. DTW starts the app when needed.",
+        name: "look",
+        action: false,
         schema: || json!({"properties":{"full":{"type":"boolean"},"role":{"type":"string","minLength":1,"maxLength":64},"text":{"type":"string","minLength":1,"maxLength":256},"scope":{"enum":["window","menu"]},"target":{"type":"string","minLength":1}},"not":{"required":["target","scope"]}}),
         required: &[],
     },
     Operation {
-        name: "capture", action: false,
-        description: "Capture the app scene as an image. DTW starts the app when needed.",
-        schema: || json!({"properties":{"full":{"type":"boolean"}}}), required: &[],
+        name: "capture",
+        action: false,
+        schema: || json!({"properties":{"full":{"type":"boolean"}}}),
+        required: &[],
     },
     Operation {
-        name: "readText", action: false,
-        description: "Read a bounded text page from an observed target ID.",
+        name: "readText",
+        action: false,
         schema: || json!({"properties":{"target":{"type":"string","minLength":1},"offset":{"type":"integer","minimum":0,"maximum":4294967295u64},"limit":{"type":"integer","minimum":2,"maximum":16384}}}),
         required: &["target"],
     },
     Operation {
-        name: "wait", action: false,
-        description: "Wait 1..10000 ms, or wait for a stable window or matching title/role/text. Do not combine ms with conditions.",
+        name: "wait",
+        action: false,
         schema: || json!({"properties":{"ms":{"type":"integer","minimum":1,"maximum":10000},"window":{"enum":["stable"]},"title":{"type":"string","minLength":1,"maxLength":256},"role":{"type":"string","minLength":1,"maxLength":256},"text":{"type":"string","minLength":1,"maxLength":256},"timeout_ms":timeout_schema()},"oneOf":[{"required":["ms"],"not":{"anyOf":[{"required":["window"]},{"required":["title"]},{"required":["role"]},{"required":["text"]},{"required":["timeout_ms"]}]}},{"not":{"required":["ms"]},"anyOf":[{"required":["window"]},{"required":["title"]},{"required":["role"]},{"required":["text"]}]}]}),
         required: &[],
     },
     Operation {
-        name: "waitForNewWindow", action: false,
-        description: "Wait for a new app window following input, using DTW window routing.",
-        schema: || json!({"properties":{"timeout_ms":timeout_schema()}}), required: &[],
+        name: "waitForNewWindow",
+        action: false,
+        schema: || json!({"properties":{"timeout_ms":timeout_schema()}}),
+        required: &[],
     },
     Operation {
-        name: "click", action: true,
-        description: "Click one observed target, semantic selector, or image x/y pair. Button/count apply only to image coordinates. Standard readback follows input.",
+        name: "click",
+        action: true,
         schema: || {
             let mut schema = json!({"properties":{"target":{"type":"string","minLength":1},"selector":selector_schema(),"x":{"type":"number","minimum":0},"y":{"type":"number","minimum":0},"unit":{"enum":["fraction"]},"button":{"enum":["left","right"]},"count":{"type":"integer","enum":[1,2]}}});
             schema["oneOf"] = json!([
@@ -73,48 +74,56 @@ pub(super) const ALL: &[Operation] = &[
                 {"required":["x","y"],"not":{"anyOf":[{"required":["target"]},{"required":["selector"]}]}}
             ]);
             schema
-        }, required: &[],
+        },
+        required: &[],
     },
     Operation {
-        name: "setValue", action: true,
-        description: "Set a string value (at most 16 KiB UTF-8, no NUL; at most 48 KiB JSON encoded) on one observed target or semantic selector. Schema maxLength counts Unicode characters. Standard readback follows input.",
+        name: "setValue",
+        action: true,
         schema: || json!({"properties":{"target":{"type":"string","minLength":1},"selector":selector_schema(),"value":{"type":"string","maxLength":16384}},"oneOf":[{"required":["target"],"not":{"required":["selector"]}},{"required":["selector"],"not":{"required":["target"]}}]}),
         required: &["value"],
     },
     Operation {
-        name: "move", action: true,
-        description: "Move the pointer to image coordinates. unit fraction uses coordinates from 0 inclusive to 1 exclusive.",
-        schema: || json!({"properties":{"x":{"type":"number","minimum":0},"y":{"type":"number","minimum":0},"unit":{"enum":["fraction"]}}}), required: &["x","y"],
+        name: "move",
+        action: true,
+        schema: || json!({"properties":{"x":{"type":"number","minimum":0},"y":{"type":"number","minimum":0},"unit":{"enum":["fraction"]}}}),
+        required: &["x", "y"],
     },
     Operation {
-        name: "drag", action: true,
-        description: "Drag along 2..64 image points within one observed window. Standard readback follows input.",
-        schema: || json!({"properties":{"path":{"type":"array","minItems":2,"maxItems":64,"items":{"type":"object","properties":{"x":{"type":"number","minimum":0},"y":{"type":"number","minimum":0}},"required":["x","y"],"additionalProperties":false}},"unit":{"enum":["fraction"]}}}), required: &["path"],
+        name: "drag",
+        action: true,
+        schema: || json!({"properties":{"path":{"type":"array","minItems":2,"maxItems":64,"items":{"type":"object","properties":{"x":{"type":"number","minimum":0},"y":{"type":"number","minimum":0}},"required":["x","y"],"additionalProperties":false}},"unit":{"enum":["fraction"]}}}),
+        required: &["path"],
     },
     Operation {
-        name: "typeText", action: true,
-        description: "Type nonempty text (at most 16 KiB UTF-8, no NUL; at most 48 KiB JSON encoded) into the current editing surface or an observed target. Schema maxLength counts Unicode characters. Standard readback follows input.",
-        schema: || json!({"properties":{"text":{"type":"string","minLength":1,"maxLength":16384},"target":{"type":"string","minLength":1}}}), required: &["text"],
+        name: "typeText",
+        action: true,
+        schema: || json!({"properties":{"text":{"type":"string","minLength":1,"maxLength":16384},"target":{"type":"string","minLength":1}}}),
+        required: &["text"],
     },
     Operation {
-        name: "keypress", action: true,
-        description: "Press a chord of 1..8 ASCII key names on the app. Standard readback follows input.",
-        schema: || json!({"properties":{"keys":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"string","minLength":1,"maxLength":32,"pattern":"^[ -~]+$"}}}}), required: &["keys"],
+        name: "keypress",
+        action: true,
+        schema: || json!({"properties":{"keys":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"string","minLength":1,"maxLength":32,"pattern":"^[ -~]+$"}}}}),
+        required: &["keys"],
     },
     Operation {
-        name: "scroll", action: true,
-        description: "Scroll by bounded integer deltas at the active window center or an image x/y pair. At least one delta must be nonzero. Standard readback follows input.",
-        schema: || json!({"properties":{"delta_y":{"type":"integer","minimum":-100,"maximum":100},"delta_x":{"type":"integer","minimum":-100,"maximum":100},"x":{"type":"number","minimum":0},"y":{"type":"number","minimum":0},"unit":{"enum":["fraction"]}},"dependentRequired":{"x":["y"],"y":["x"],"unit":["x","y"]},"anyOf":[{"required":["delta_y"],"properties":{"delta_y":{"not":{"const":0}}}},{"required":["delta_x"],"properties":{"delta_x":{"not":{"const":0}}}}]}), required: &["delta_y"],
+        name: "scroll",
+        action: true,
+        schema: || json!({"properties":{"delta_y":{"type":"integer","minimum":-100,"maximum":100},"delta_x":{"type":"integer","minimum":-100,"maximum":100},"x":{"type":"number","minimum":0},"y":{"type":"number","minimum":0},"unit":{"enum":["fraction"]}},"dependentRequired":{"x":["y"],"y":["x"],"unit":["x","y"]},"anyOf":[{"required":["delta_y"],"properties":{"delta_y":{"not":{"const":0}}}},{"required":["delta_x"],"properties":{"delta_x":{"not":{"const":0}}}}]}),
+        required: &["delta_y"],
     },
     Operation {
-        name: "focus", action: true,
-        description: "Focus the app, starting it when required. Standard readback follows the operation.",
-        schema: || json!({"properties":{}}), required: &[],
+        name: "focus",
+        action: true,
+        schema: || json!({"properties":{}}),
+        required: &[],
     },
     Operation {
-        name: "quit", action: true,
-        description: "Quit the authorized application through the public app facade.",
-        schema: || json!({"properties":{}}), required: &[],
+        name: "quit",
+        action: true,
+        schema: || json!({"properties":{}}),
+        required: &[],
     },
 ];
 

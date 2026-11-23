@@ -10,8 +10,8 @@ use tokio::io::{
     AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader, DuplexStream, ReadHalf, WriteHalf,
 };
 
-#[path = "toolset_tests.rs"]
-mod toolset_tests;
+#[path = "script_mcp_tests.rs"]
+mod script_mcp_tests;
 
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 

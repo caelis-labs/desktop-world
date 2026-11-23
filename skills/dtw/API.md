@@ -2,25 +2,8 @@
 
 ## Tools
 
-Default `dtw mcp` exposes two tools, `apps` + `exec`, with all 14 app operations.
-`dtw mcp --atomic` exposes 15 tools:
-`apps` plus the fourteen methods below as flat MCP tools, without `exec` or
-JavaScript. Discover/list actual tools: use scripts if `exec` is present;
-otherwise invoke the listed operation directly. Never select operations by OS.
-Method and tool names are identical, including camelCase names. Each atomic call
-uses the method's canonical argument object plus required `app` authorization
-identity. For example, JS `await app.keypress({keys:['META','L']})` corresponds to
-atomic `keypress({app,keys:['META','L']})`; JS `await app.wait({ms:200})`
-corresponds to atomic `wait({app,ms:200})`. No-argument methods accept `{}` in JS
-and `{app}` as tools. Existing JS shorthand remains a compatibility convenience.
-
-Both modes use the same native app facade, retained session/handles, stale-target
-validation, cancellation, retransmission and effect reporting. Each atomic call
-settles its own execution/cleanup boundary, just as one `exec` does. Settlement
-does not restore foreground, focus or pointer position. Scripts remain useful
-for orchestrating known sequential steps; inspect receiver/menu state between
-atomic calls. See
-[MCP toolsets](https://github.com/caelis-labs/desktop-world/blob/main/docs/mcp-toolsets.md) for startup, compatibility and limits.
+`dtw mcp` exposes `apps` and `exec`. `exec` runs the methods below in an
+app-scoped JavaScript execution.
 
 `apps({query?, state?, offset?, limit?})`
 
@@ -37,7 +20,7 @@ atomic calls. See
   identities, and merges running user applications. Argument-bearing shortcuts,
   unsupported values and native read gaps remain explicit in coverage. Executable
   paths identify Win32 apps; `win:<AUMID>` identifies proven packaged apps.
-- Experimental X11 reports running-only discovery with `installed:false`.
+- Linux X11 reports running-only discovery with `installed:false`.
 - Provider identity is sent once as `serverInfo.description` at MCP initialization.
   The platform sections below describe native support.
 
@@ -103,9 +86,8 @@ atomic calls. See
 
 ## Methods
 
-The arguments column defines the canonical object fields for both surfaces;
-atomic tools add `app` to that object. JavaScript also accepts the shorthand
-forms noted below. Examples use the shared object form.
+The arguments column defines the canonical object fields. JavaScript also accepts
+the shorthand forms noted below.
 
 | Method | Arguments | Behavior |
 | --- | --- | --- |
@@ -172,25 +154,12 @@ internally. Use an observed editable control before typing. After an action that
 creates a window or popup, use `waitForNewWindow()` before acting in it; after
 Save/Cancel/Close dismisses a surface, inspect `look()` instead.
 
-Keep known related input in one `exec` for orchestration. Separate atomic calls
-settle independently without restoring focus or dismissing menus through a
-restoration callback; verify the actual menu and receiver before new input.
+Keep known related input in one `exec`. Verify the active menu and receiver before
+new input.
 If the user changes the selected app/window during execution, DTW stops further
 input. Inspect the new state in a later execution; never replay an unknown input.
 Confirmed quit or closure of the current window ends its input scope. A save
 prompt or unconfirmed close is not proof of termination.
-
-## Atomic results
-
-Atomic calls use the same outer execution response described for `exec`, including
-`app`, `execution_id`, `status`, optional `view`, `result`, `effects`, errors and
-image blocks. They provide no custom script return selection. Scene operations
-publish the compact `view`; `readText` publishes its page as `result`. Input
-methods return receipts to JavaScript; atomic input publishes accumulated
-`effects` and the automatic observation in the outer response rather than exposing
-a custom method-return `result`. A method receipt is not a scene snapshot,
-and an outer `view` is not proof of the requested business effect. Inspect both
-operation errors and observation status before continuing.
 
 ## View
 
@@ -275,7 +244,7 @@ errors remain operation failures, including when they occur during capture. Mult
 space keeps its relative geometry. Offscreen/minimized surfaces are listed where
 available but are not invented in the visible canvas.
 
-`move` and `drag` are implemented on macOS and Windows. They reject stale geometry, unavailable
+`move` and `drag` are implemented on macOS, Windows and native Linux X11. They reject stale geometry, unavailable
 images and paths across windows/transparent gaps before input. DTW selects the
 native delivery automatically; scripts do not select or manage input routes.
 During a drag, a changed/occluded application surface or cancellation
@@ -297,9 +266,8 @@ invalidate a coordinate mapping. A point does not establish semantic identity or
 prove that app content is unchanged; inspect new views when the task needs it.
 The final tool view supplies a fresh image while in visual mode. Cross-window/app
 drag, window resizing, off-canvas drag endpoints, held
-buttons/keys and clipboard are not public capabilities. Experimental X11 rejects
-these gestures. Each platform requires its own native/GUI evidence; macOS
-acceptance does not establish Windows parity.
+buttons/keys and clipboard are not public capabilities. On X11, drag covers client
+content only.
 
 ## Provider boundaries
 
@@ -336,8 +304,7 @@ scope stays within its selected window; a popup's keyboard receiver requires
 native owner proof. Normal quit requests close on the selected process instance,
 leaving save prompts observable. Pointer paths remain within one visible window
 and display, with paired release on cancellation/failure. Windows GUI, application
-and DPI conditions require their own acceptance. Experimental X11 still requires
-an unobstructed window and does not claim multi-surface capture.
+and DPI conditions require their own acceptance.
 
 Windows prepares the exact foreground receiver for interaction. Semantic actions
 use UIA; pointer actions require a visible, unobstructed hit. If the target
@@ -364,6 +331,11 @@ patterns. A short provider preview is not proof of full document content.
 Native multiline Win32/WinForms Edit setters use CRLF line breaks so their visible
 document agrees with the logical text; other UIA providers keep their own values.
 
-Linux remains experimental, has no AT-SPI semantics and requires its own X11
-evidence. Isolated X11 tests do not establish lock-screen support. Native Windows
-and macOS behavior was not tested by the toolset formalization work.
+Linux requires a local native X11 server with an EWMH window manager, XRes 1.2,
+XInput 2 and XTest. Wayland and XWayland are unsupported. Discovery covers running
+applications with an attributable X11 window. `look` reads window metadata and
+`capture` requires unobstructed supported client pixels. Linux provides foreground
+focus, coordinate click, hover, same-window content drag, wheel input and keyboard
+chords. Text is limited to the active group-zero keymap. AT-SPI selectors, native
+`readText`/`setValue` and app launch/quit are unavailable. Verify effects by looking
+at the returned image or by using independent app state.

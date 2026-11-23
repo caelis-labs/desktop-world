@@ -9,19 +9,18 @@ import zipfile
 
 
 def native_checks(paths):
-    macos = windows = False
+    macos = windows = linux = False
     for path in paths:
         if (path.startswith('cmd/dtw/src/backends/macos/') or path.endswith('.swift')
                 or path == 'tests/fixtures/app-scene/test_telemetry.py'):
             macos = True
         elif path.startswith(('cmd/dtw/src/backends/windows/', 'tests/acceptance/windows/')):
             windows = True
-        elif path.startswith('cmd/dtw/src/backends/linux/'):
-            # The dependency-free source checkpoint covers Linux inventory.
-            continue
-        elif path.startswith(('cmd/dtw/', '.github/workflows/', '.github/actions/', 'tests/ci/', 'tests/acceptance/package_store_probe.py', '.cargo/', 'Cargo.', 'rust-toolchain')):
-            macos = windows = True
-    return macos, windows
+        elif path.startswith(('cmd/dtw/src/backends/linux/', 'cmd/dtw/src/x11/', 'tests/acceptance/linux_x11_probe.py')):
+            linux = True
+        elif path.startswith(('cmd/dtw/', '.github/workflows/', '.github/actions/', 'tests/ci/', 'scripts/', 'packaging/', 'tests/acceptance/package_store_probe.py', '.cargo/', 'Cargo.', 'rust-toolchain')):
+            macos = windows = linux = True
+    return macos, windows, linux
 
 
 def gh(path, raw=False):
@@ -72,14 +71,14 @@ def main():
             reused = reusable_run(os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_SHA'], tree)
         except (OSError, ValueError, KeyError, zipfile.BadZipFile, subprocess.SubprocessError) as error:
             print(f'PR evidence unavailable ({type(error).__name__}); running fresh checks.')
-    macos = windows = not bool(reused)
+    macos = windows = linux = not bool(reused)
     if event == 'pull_request':
         payload = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text(encoding='utf-8'))
         base = payload['pull_request']['base']['sha']
         subprocess.run(['git', 'fetch', '--no-tags', '--depth=1', 'origin', base], check=True)
         changed = subprocess.check_output(['git', 'diff', '--no-renames', '--name-only', '-z', base, 'HEAD'])
-        macos, windows = native_checks(changed.decode('utf-8').rstrip('\0').split('\0'))
-    values = {'tree': tree, 'reused_run': reused, 'source': not bool(reused), 'macos': macos, 'windows': windows}
+        macos, windows, linux = native_checks(changed.decode('utf-8').rstrip('\0').split('\0'))
+    values = {'tree': tree, 'reused_run': reused, 'source': not bool(reused), 'macos': macos, 'windows': windows, 'linux': linux}
     with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
         for key, value in values.items():
             output.write(f'{key}={str(value).lower() if isinstance(value, bool) else value}\n')

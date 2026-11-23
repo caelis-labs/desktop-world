@@ -33,7 +33,7 @@ def gh(*args, binary=False):
 def asset_names(tag):
     names = {'RELEASE.json', 'SHA256SUMS', *verifier.RECEIPTS}
     for target in verifier.TARGETS:
-        archive = f'desktop-world-{tag[1:]}-{target}.zip'
+        archive = f'desktop-world-{tag[1:]}-{target}' + verifier.builder.archive_suffix(target)
         names.update({archive, archive + '.sha256', f'CANDIDATE-{target}.json', f'BUILD-{target}.json'})
     return names
 
@@ -59,12 +59,15 @@ def stage_candidate(data, artifact_digest, source, tag, target, output):
         candidate = json.loads(manifest)
         require(candidate.get('version') == tag[1:] and candidate.get('target') == target
                 and candidate.get('source', {}).get('commit') == source, 'Candidate version, target or source mismatch')
-        name = f'desktop-world-{tag[1:]}-{target}.zip'
+        name = f'desktop-world-{tag[1:]}-{target}' + verifier.builder.archive_suffix(target)
         require(candidate.get('archive') == name, 'Candidate archive name mismatch')
         package = member(outer, prefix + name)
         require(digest(package) == candidate.get('archive_sha256'), 'Candidate archive digest mismatch')
-        with zipfile.ZipFile(io.BytesIO(package)) as inner:
-            build = member(inner, name[:-4] + '/BUILD.json')
+        with verifier.builder.open_package(io.BytesIO(package), target) as inner:
+            build_name = f'desktop-world-{tag[1:]}-{target}/BUILD.json'
+            require(inner.namelist().count(build_name) == 1
+                    and inner.getinfo(build_name).file_size <= MAX_FILE, 'Missing, duplicate or oversized embedded BUILD')
+            build = inner.read(build_name)
         require(digest(build) == candidate.get('build_manifest_sha256'), 'Candidate BUILD digest mismatch')
         files = {name: package, name + '.sha256': member(outer, prefix + name + '.sha256'),
                  f'CANDIDATE-{target}.json': manifest, f'BUILD-{target}.json': build}
@@ -86,7 +89,7 @@ def fetch_candidate(repository, plan, tag, target, output):
     require(all(artifact.get(key) == expected[key] for key in ('id', 'name', 'digest'))
             and not artifact['expired'] and artifact['workflow_run']['id'] == plan['build_run_id'],
             'Candidate artifact no longer matches its successful construction')
-    prefix = 'dtw-macos-candidate-' if target == verifier.TARGETS[0] else 'dtw-windows-candidate-'
+    prefix = planner.artifact_prefix(target)
     require(re.fullmatch(re.escape(prefix + plan['source']) + r'-attempt-[1-9]\d*', artifact['name']), 'Wrong candidate artifact source')
     data = gh('api', f'repos/{repository}/actions/artifacts/{artifact["id"]}/zip', binary=True)
     candidate, native = stage_candidate(data, artifact.get('digest'), plan['source'], tag, target, output)
@@ -147,7 +150,7 @@ def prepare_release(output, existing, tag, commit, candidates, origins, ci, acto
         require(saved.get('version') == tag[1:] and saved.get('tag') == tag
                 and saved.get('tag_commit') == commit, 'Existing release identity mismatch')
         saved_platforms = saved.get('platforms', [])
-        require(len(saved_platforms) == 2, 'Existing platform matrix mismatch')
+        require(len(saved_platforms) == len(verifier.TARGETS), 'Existing platform matrix mismatch')
         for expected in platforms:
             rows = [p for p in saved_platforms if p.get('target') == expected['target']]
             require(len(rows) == 1 and all(rows[0].get(k) == v for k, v in expected.items()),

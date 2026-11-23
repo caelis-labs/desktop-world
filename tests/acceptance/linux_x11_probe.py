@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded Linux evidence probe. Real DISPLAY: metadata only; input only fresh Xvfb.
-
-Run with --isolated --binary /absolute/path/to/candidate/dtw --sha256 HASH
-for actual backend checks. No unlock, real-display fixture, real-display DTW, or root capture exists.
-Owned process groups and scratch data are cleaned; PNG evidence is retained.
-Requires Python 3,
-wish, Xvfb, kwin_x11, dbus-run-session, xprop, xdpyinfo, and loginctl.
-"""
+"""Exercise one owned Tk window through the shipped Linux apps/exec path."""
 import argparse
 import base64
 import hashlib
@@ -31,12 +24,6 @@ def emit(kind, **values):
 def command(args, env=None, timeout=10):
     p = subprocess.run(args, env=env, capture_output=True, text=True, timeout=timeout)
     return {"argv": args, "status": p.returncode, "stdout": p.stdout, "stderr": p.stderr}
-
-
-def lock_state(session):
-    result = command(["loginctl", "show-session", session, "-p", "Id", "-p", "Type", "-p", "Display", "-p", "LockedHint"])
-    emit("real_session_lock", **result)
-    return result["status"] == 0 and "LockedHint=yes" in result["stdout"].splitlines()
 
 
 def lines(pipe, transcript=None):
@@ -113,7 +100,7 @@ class MCP:
                 return row
         raise TimeoutError(method)
 
-    def tool(self, name, args):
+    def tool(self, name, args, *, error_code=None):
         reply = self.rpc("tools/call", {"name": name, "arguments": args})
         result = reply.get("result", {})
         self.last_images = []
@@ -129,187 +116,184 @@ class MCP:
             path = self.artifacts / f"{self.mode}-{self.serial:02d}-{name}-{index}.png"
             path.write_bytes(data)
             self.last_images.append({"path": str(path), "sha256": hashlib.sha256(data).hexdigest(), "width": width, "height": height})
-        emit("isolated_mcp", mode=self.mode, call_id=self.serial, tool=name, args=args, structured=result.get("structuredContent"), is_error=result.get("isError"), error=reply.get("error"), images=self.last_images)
-        if reply.get("error") or result.get("isError") or not result:
+        emit("mcp", mode=self.mode, call_id=self.serial, tool=name, args=args, structured=result.get("structuredContent"), is_error=result.get("isError"), error=reply.get("error"), images=self.last_images)
+        if error_code is not None:
+            actual = result.get("structuredContent", {}).get("error", {}).get("code")
+            if not result.get("isError") or actual != error_code:
+                raise RuntimeError(f"expected {error_code}, got {actual or reply.get('error')}")
+        elif reply.get("error") or result.get("isError") or not result:
             raise RuntimeError(f"MCP call {self.serial} failed; no input replay")
         return result
 
 
-def fixture_state(path, mode, stage):
-    rows = path.read_text().splitlines()
-    if len(rows) != 3:
-        raise RuntimeError("incomplete owned fixture state")
-    state = {"counter": int(rows[0]), "entry": rows[1], "ack": rows[2]}
-    emit("isolated_fixture_state", mode=mode, stage=stage, **state)
-    return state
+def fraction(geometry, x, y):
+    return {"x": x / geometry["width"], "y": y / geometry["height"], "unit": "fraction"}
 
 
-def pixel_point(result, images, geometry, widget, mode):
-    if len(images) != 1:
-        raise RuntimeError("capture must return exactly one PNG")
-    image = images[0]
-    view_image = result.get("structuredContent", {}).get("view", {}).get("image", {})
-    if (view_image.get("width"), view_image.get("height")) != (image["width"], image["height"]):
-        raise RuntimeError("PNG and coordinate canvas dimensions differ")
-    if view_image.get("bounds") != [geometry["x"], geometry["y"], geometry["width"], geometry["height"]]:
-        raise RuntimeError("capture bounds do not match fixture client geometry")
-    x, y, width, height = geometry[widget]
-    point = {"x": (x + width / 2) * image["width"] / geometry["width"],
-             "y": (y + height / 2) * image["height"] / geometry["height"]}
-    emit("isolated_pixel_mapping", mode=mode, widget=widget, geometry=geometry, image=image, point=point)
-    return point
+def point(geometry, name):
+    x, y, width, height = geometry[name]
+    return fraction(geometry, x + width / 2, y + height / 2)
 
 
 def fixture_round(binary, root, env, children, log, mode, artifacts):
-    fixture_class = "DtwLockedProbe" + uuid.uuid4().hex
-    executable = root / fixture_class
-    shutil.copy2(shutil.which("wish"), executable)
-    # wish derives its root WM_CLASS from the script basename.
-    tcl = root / (fixture_class + ".tcl")
-    state_path = root / (mode + "-state.txt")
-    tcl.write_text("set state_path " + json.dumps(str(state_path)) + "\n" + r'''wm title . "DTW owned Linux fixture"
-wm geometry . 460x240+50+50
-set counter 0
+    marker = "DtwX11Probe" + uuid.uuid4().hex
+    executable = root / marker
+    wish = Path(shutil.which("wish")).resolve()
+    shutil.copy2(wish, executable)
+    state = artifacts / "fixture-state.txt"
+    tcl = root / "fixture.tcl"
+    tcl.write_text("set state " + json.dumps(str(state)) + "\n" + r'''wm title . "DTW owned X11 fixture"
+wm geometry . 460x300+80+80
+wm attributes . -topmost 1
+set count 0
 set ack ""
-proc save_state {} {
-    global state_path counter ack
-    set f [open "$state_path.tmp" w]
-    puts $f $counter
-    puts $f [.entry get]
-    puts $f $ack
+set hover 0
+set wheel 0
+set drag 0
+set held 0
+proc save {} {
+    global state count ack hover wheel drag held
+    set f [open "$state.tmp" w]
+    foreach value [list $count [.entry get] $ack $hover $wheel $drag $held] { puts $f $value }
     close $f
-    file rename -force "$state_path.tmp" $state_path
+    file rename -force "$state.tmp" $state
 }
-label .label -text "Owned DTW fixture: isolated Xvfb only"
-entry .entry -width 40
-button .button -text "Increment once" -command {
-    incr counter
-    .count configure -text "Count=$counter"
-    save_state
-    puts "BUTTON=$counter"; flush stdout
+entry .entry -width 38
+button .button -text "Increment" -command {
+    .button configure -text "Count=[incr count]"
+    save
 }
-label .count -text "Count=0"
-label .ack -text "ACK pending"
-pack .label .entry .button .count .ack -padx 12 -pady 6
-bind .entry <Return> {
-    set ack [.entry get]
-    .ack configure -text "ACK=$ack"
-    save_state
-    puts "ACK=$ack"; flush stdout
+canvas .pad -width 340 -height 130 -background #274f76 -highlightthickness 0
+.pad create rectangle 18 18 145 104 -fill #537da5 -tags start
+.pad create rectangle 195 18 320 104 -fill #658f4c -tags finish
+pack .entry .button .pad -padx 10 -pady 8
+bind .entry <Return> { set ack [.entry get]; . configure -background #adc4a0; save }
+bind .pad <Motion> { set hover 1; save }
+if {[package vcompare [package present Tk] 9.0] >= 0} {
+    bind .pad <MouseWheel> { incr wheel; save }
+} else {
+    bind .pad <Button-4> { incr wheel; save }
+    bind .pad <Button-5> { incr wheel; save }
+}
+bind .pad <ButtonPress-1> { set held 1; save }
+bind .pad <ButtonRelease-1> {
+    if {$held && %x > 195 && %x < 320} { incr drag; .pad configure -background #375b46 }
+    set held 0
+    save
 }
 after 500 {
-    save_state
-    puts "READY=[pid],[winfo class .],[wm frame .]"
-    puts [format {GEOMETRY={"x":%d,"y":%d,"width":%d,"height":%d,"button":[%d,%d,%d,%d],"entry":[%d,%d,%d,%d]}} [winfo rootx .] [winfo rooty .] [winfo width .] [winfo height .] [winfo x .button] [winfo y .button] [winfo width .button] [winfo height .button] [winfo x .entry] [winfo y .entry] [winfo width .entry] [winfo height .entry]]
+    save
+    puts "READY=[pid]"
+    puts [format {GEOMETRY={"x":%d,"y":%d,"width":%d,"height":%d,"button":[%d,%d,%d,%d],"entry":[%d,%d,%d,%d],"pad":[%d,%d,%d,%d]}} [winfo rootx .] [winfo rooty .] [winfo width .] [winfo height .] [winfo x .button] [winfo y .button] [winfo width .button] [winfo height .button] [winfo x .entry] [winfo y .entry] [winfo width .entry] [winfo height .entry] [winfo x .pad] [winfo y .pad] [winfo width .pad] [winfo height .pad]]
     flush stdout
 }
 ''')
     fixture_env = dict(env)
-    # Supply the matching distribution libraries explicitly for copied wish.
-    # Startup failures remain errors; no alternate launch/input is retried.
-    wish_name = Path(shutil.which("wish")).resolve().name
-    version = wish_name.removeprefix("wish")
-    for variable, prefix, marker in (("TCL_LIBRARY", "tcl", "init.tcl"), ("TK_LIBRARY", "tk", "tk.tcl")):
+    version = wish.name.removeprefix("wish")
+    for variable, prefix, marker_file in (("TCL_LIBRARY", "tcl", "init.tcl"), ("TK_LIBRARY", "tk", "tk.tcl")):
         library = Path("/usr/share") / (prefix + version)
-        if (library / marker).is_file():
+        if (library / marker_file).is_file():
             fixture_env[variable] = str(library)
-    emit("isolated_fixture_libraries", mode=mode, tcl=fixture_env.get("TCL_LIBRARY"), tk=fixture_env.get("TK_LIBRARY"))
-    fixture = children.start([str(executable), str(tcl)], fixture_env, stdout=subprocess.PIPE, stderr=log(mode + "-fixture-errors.log"), text=True)
-    server = None
-    try:
-        fixture_output = lines(fixture.stdout, artifacts / (mode + "-fixture-stdout.log"))
-        ready = next_line(fixture_output, 10).strip()
-        if not ready.startswith("READY=" + str(fixture.pid) + "," + (fixture_class + ".tcl").capitalize() + ","):
-            raise RuntimeError("fixture identity mismatch: " + ready)
-        emit("isolated_fixture", mode=mode, pid=fixture.pid, executable=str(executable), identity=ready)
-        geometry_line = next_line(fixture_output, 5).strip()
-        if not geometry_line.startswith("GEOMETRY="):
-            raise RuntimeError("missing fixture geometry")
-        geometry = json.loads(geometry_line.removeprefix("GEOMETRY="))
-        server = children.start([str(binary), "mcp"] + (["--atomic"] if mode == "atomic" else []), env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log(mode + "-mcp-errors.log"), text=True, bufsize=1)
-        client = MCP(server, artifacts, mode)
-        emit("isolated_initialize", mode=mode, reply=client.rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "linux-x11-acceptance", "version": "1"}}))
-        client.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
-        listing = client.rpc("tools/list", {})
-        emit("isolated_tools", mode=mode, reply=listing)
-        methods = {"look", "capture", "readText", "wait", "waitForNewWindow", "click", "setValue", "move", "drag", "typeText", "keypress", "scroll", "focus", "quit"}
-        expected = {"apps", "exec"} if mode == "script" else {"apps", *methods}
-        actual = [tool["name"] for tool in listing.get("result", {}).get("tools", [])]
-        if set(actual) != expected or len(actual) != len(expected):
-            raise RuntimeError("unexpected public tools: " + repr(actual))
-        apps = client.tool("apps", {"query": fixture_class, "state": "running"}).get("structuredContent", {}).get("apps", [])
-        if len(apps) != 1 or apps[0].get("app") != str(executable):
-            raise RuntimeError("scoped fixture discovery failed: " + repr(apps))
-        app = apps[0]["app"]
-        token = "dtw_probe_" + mode + "_731"
+    fixture = children.start([str(executable), str(tcl)], fixture_env, stdout=subprocess.PIPE,
+                             stderr=log("fixture-stderr.log"), text=True)
+    output = lines(fixture.stdout, artifacts / "fixture-stdout.log")
+    if next_line(output, 10).strip() != f"READY={fixture.pid}":
+        raise RuntimeError("fixture identity mismatch")
+    geometry = json.loads(next_line(output, 5).removeprefix("GEOMETRY="))
+    emit("fixture", pid=fixture.pid, app=str(executable), geometry=geometry)
 
-        def call(method, args=None):
-            args = args or {}
-            if mode == "script":
-                prefix = "return " if method == "readText" else ""
-                source = prefix + "await app." + method + "(" + json.dumps(args) + ");"
-                return client.tool("exec", {"app": app, "source": source})
-            return client.tool(method, {"app": app, **args})
+    def readback(expected):
+        deadline = time.monotonic() + 2
+        while True:
+            actual = state.read_text().splitlines()
+            if actual == expected:
+                emit("fixture_effect", state=actual)
+                return
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"fixture expected {expected}, got {actual}")
+            time.sleep(.05)
 
-        initial = fixture_state(state_path, mode, "initial")
-        if initial != {"counter": 0, "entry": "", "ack": ""}:
-            raise RuntimeError("fixture did not start empty")
-        call("look")
-        before = call("capture")
-        before_hash = client.last_images[0]["sha256"]
-        point = pixel_point(before, client.last_images, geometry, "button", mode)
-        call("click", point)
-        button = next_line(fixture_output, 5).strip()
-        if button != "BUTTON=1":
-            raise RuntimeError("expected exactly one button increment: " + button)
-        call("look")
-        call("capture")
-        if client.last_images[0]["sha256"] == before_hash:
-            raise RuntimeError("button effect did not change captured image")
-        after_button = fixture_state(state_path, mode, "after_button")
-        if after_button != {"counter": 1, "entry": "", "ack": ""}:
-            raise RuntimeError("button readback mismatch")
+    client = connect(binary, env, children, log, artifacts, mode)
+    apps = client.tool("apps", {"query": marker, "state": "running"})["structuredContent"]
+    if [app["app"] for app in apps["apps"]] != [str(executable)] or apps["coverage"]["installed"]:
+        raise RuntimeError(f"expected one matching running app, got {apps}")
 
-        entry_capture = call("capture")
-        entry_hash = client.last_images[0]["sha256"]
-        point = pixel_point(entry_capture, client.last_images, geometry, "entry", mode)
-        call("click", point)
-        call("typeText", {"text": token})
-        call("keypress", {"keys": ["ENTER"]})
-        ack = next_line(fixture_output, 5).strip()
-        if ack != "ACK=" + token:
-            raise RuntimeError("owned fixture acknowledgement mismatch: " + ack)
-        call("look")
-        call("capture")
-        changed = client.last_images[0]["sha256"] != entry_hash
-        final = fixture_state(state_path, mode, "final")
-        verified = final == {"counter": 1, "entry": token, "ack": token} and changed
-        emit("isolated_effect", mode=mode, verified=verified, acknowledgement=ack, button_event=button, image_changed=changed, no_replay=True)
-        if not verified:
-            raise RuntimeError("fixture final state/image mismatch")
-        server.stdin.close()
-        server.wait(timeout=10)
-        emit("isolated_mcp_exit", mode=mode, status=server.returncode)
-        if server.returncode != 0:
-            raise RuntimeError("isolated MCP server exited with status " + str(server.returncode))
-    finally:
-        if state_path.is_file():
-            # Preserve independent state even when a call fails; never retry input.
-            try:
-                final_state = fixture_state(state_path, mode, "round_end")
-                (artifacts / (mode + "-fixture-state.json")).write_text(json.dumps(final_state) + "\n")
-            except Exception as exc:
-                emit("isolated_fixture_readback_error", mode=mode, message=str(exc))
-        # End this fixture before the independent second round. Group cleanup
-        # below also covers timed-out MCP workers and private WM descendants.
-        fixture.terminate()
-        fixture.wait(timeout=3)
-        if server is not None and server.poll() is None:
-            server.terminate()
-            server.wait(timeout=3)
+    def execute(source, **kwargs):
+        return client.tool("exec", {"app": str(executable), "source": source}, **kwargs)["structuredContent"]
+
+    def operation(method, args=None):
+        return execute(f"await app.{method}({json.dumps(args or {})});")
+
+    def capture():
+        result = operation("capture", {"full": True})
+        image = result["view"]["image"]
+        expected = [geometry[k] for k in ("x", "y", "width", "height")]
+        if image["bounds"] != expected or len(client.last_images) != 1:
+            raise RuntimeError(f"fixture/image geometry mismatch: {image}, {expected}")
+        png = client.last_images[0]
+        if (png["width"], png["height"]) != (image["width"], image["height"]):
+            raise RuntimeError(f"PNG and coordinate canvas size mismatch: {png}, {image}")
+        return png["sha256"]
+
+    readback(["0", "", "", "0", "0", "0", "0"])
+    looked = operation("look", {"full": True})["view"]
+    if ([w["title"] for w in looked["windows"]] != ["DTW owned X11 fixture"]
+            or looked["elements"] or looked["semantics"].get("reason") != "unsupported_capability"):
+        raise RuntimeError(f"unexpected X11 metadata: {looked}")
+    initial = capture()
+    execute("await app.move({x:-1,y:0});", error_code="invalid_arguments")
+    execute("await app.move({x:99999,y:0});", error_code="invalid_arguments")
+    readback(["0", "", "", "0", "0", "0", "0"])
+    operation("focus")
+    operation("click", point(geometry, "button"))
+    readback(["1", "", "", "0", "0", "0", "0"])
+    operation("click", point(geometry, "entry"))
+    token = "DTW_X11_731"
+    operation("typeText", {"text": token})
+    operation("keypress", {"keys": ["ENTER"]})
+    readback(["1", token, token, "0", "0", "0", "0"])
+    x, y, _, _ = geometry["pad"]
+    path = [fraction(geometry, x + offset, y + 60) for offset in (70, 160, 260)]
+    operation("move", path[0])
+    readback(["1", token, token, "1", "0", "0", "0"])
+    operation("drag", {"path": [{"x": p["x"], "y": p["y"]} for p in path], "unit": "fraction"})
+    readback(["1", token, token, "1", "0", "1", "0"])
+    operation("scroll", {**path[0], "delta_y": 1})
+    operation("scroll", {"delta_y": 1})
+    readback(["1", token, token, "1", "2", "1", "0"])
+    final = capture()
+    if initial == final:
+        raise RuntimeError("fixture changed but capture did not")
+    finish(client)
+    emit("effect", initial_png=initial, final_png=final, verified=True)
 
 
-def isolated(binary, modes, artifacts):
+def connect(binary, env, children, log, artifacts, label):
+    server = children.start([str(binary), "mcp"], env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=log(label + "-stderr.log"), text=True, bufsize=1)
+    client = MCP(server, artifacts, label)
+    reply = client.rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                    "clientInfo": {"name": "linux-x11-acceptance", "version": "1"}})
+    if reply.get("result", {}).get("serverInfo", {}).get("name") != "dtw":
+        raise RuntimeError(f"unexpected initialize reply: {reply}")
+    emit("initialize", **reply)
+    client.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    listing = client.rpc("tools/list", {})
+    actual = sorted(tool["name"] for tool in listing.get("result", {}).get("tools", []))
+    if actual != ["apps", "exec"]:
+        raise RuntimeError(f"unexpected public tools: {actual}")
+    emit("tools", names=actual)
+    return client
+
+
+def finish(client):
+    client.p.stdin.close()
+    if client.p.wait(timeout=10) != 0:
+        raise RuntimeError(f"MCP server exited with {client.p.returncode}")
+    emit("mcp_exit", label=client.mode, status=client.p.returncode)
+
+
+def isolated(binary, artifacts):
     if not binary.is_file():
         raise RuntimeError("candidate binary missing: " + str(binary))
     children = Children()
@@ -353,15 +337,7 @@ def isolated(binary, modes, artifacts):
                 time.sleep(.15)
             emit("binary_version", **command([str(binary), "--version"], env))
             emit("binary_sha256", sha256=hashlib.sha256(binary.read_bytes()).hexdigest())
-            failures = []
-            for mode in modes:
-                try:
-                    fixture_round(binary, root, env, children, log, mode, artifacts)
-                except Exception as exc:
-                    failures.append(mode)
-                    emit("isolated_round_error", mode=mode, type=type(exc).__name__, message=str(exc), replayed=False)
-            if failures:
-                raise RuntimeError("isolated rounds failed: " + ", ".join(failures))
+            fixture_round(binary, root, env, children, log, "xvfb", artifacts)
         finally:
             children.close()
             for name, f in logs:
@@ -373,46 +349,55 @@ def isolated(binary, modes, artifacts):
                 f.close()
 
 
+def real_session(binary, session, artifacts):
+    env = dict(os.environ)
+    session_info = command(["loginctl", "show-session", session, "-p", "Display", "-p", "Type",
+                            "-p", "Active", "-p", "LockedHint"])
+    required = {"Type=x11", "Active=yes", "LockedHint=no", f"Display={env.get('DISPLAY')}"}
+    if session_info["status"] != 0 or not required.issubset(session_info["stdout"].splitlines()):
+        raise RuntimeError(f"expected an active unlocked X11 desktop matching DISPLAY: {session_info}")
+    emit("real_session", **session_info)
+    children = Children()
+    with tempfile.TemporaryDirectory(prefix="dtw-real-x11-") as temp:
+        logs = []
+        def log(name):
+            file = (artifacts / name).open("w")
+            logs.append(file)
+            return file
+        try:
+            fixture_round(binary, Path(temp), env, children, log, "real", artifacts)
+        finally:
+            children.close()
+            for file in logs:
+                file.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--session", default="7")
-    parser.add_argument("--isolated", action="store_true")
-    parser.add_argument("--binary", type=Path)
-    parser.add_argument("--artifacts", type=Path, help="new directory for retained PNGs and child logs")
-    parser.add_argument("--mode", choices=("script", "atomic"), action="append", help="repeat to select rounds; default: script then atomic")
-    parser.add_argument("--sha256", help="expected frozen candidate SHA256; required with --isolated")
+    display = parser.add_mutually_exclusive_group(required=True)
+    display.add_argument("--real-session", metavar="ID", help="run against this unlocked logind X11 session")
+    display.add_argument("--isolated", action="store_true", help="start a private Xvfb and KWin")
+    parser.add_argument("--binary", type=Path, required=True)
+    parser.add_argument("--artifacts", type=Path, required=True, help="new private evidence directory")
+    parser.add_argument("--sha256", required=True, help="expected frozen executable SHA-256")
     args = parser.parse_args()
-    emit("environment", display=os.environ.get("DISPLAY"), session_type=os.environ.get("XDG_SESSION_TYPE"), session_id=args.session, timestamp=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
-    before = lock_state(args.session)
-    status = 0
+    binary = args.binary.resolve()
+    digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+    if digest != args.sha256.lower():
+        parser.error("frozen executable SHA-256 mismatch")
+    artifacts = args.artifacts.resolve()
+    artifacts.mkdir(mode=0o700, parents=True, exist_ok=False)
+    emit("environment", executable=str(binary), sha256=digest, machine=os.uname().machine,
+         display=os.environ.get("DISPLAY"), session_type=os.environ.get("XDG_SESSION_TYPE"))
     try:
-        if not before:
-            raise RuntimeError("real session is not proven locked; stopping")
-        result = command(["xdpyinfo", "-display", ":0", "-queryExtensions"])
-        # Server/extension metadata only; no client properties/titles/pixels.
-        result["stdout"] = "\n".join(line for line in result["stdout"].splitlines() if any(s in line for s in ("name of display", "version number", "vendor string", "vendor release", "XTEST", "X-Resource", "XInputExtension", "dimensions:")))
-        emit("real_display_readonly_extensions", **result)
-        emit("real_display_boundary", fixture_mapped=False, discovery=False, capture=False, input=False, reason="ordinary mapping safety under this locker not proven; no locked-session app operation claimed")
-        if args.isolated:
-            if args.binary is None or args.sha256 is None:
-                raise RuntimeError("--isolated requires --binary and --sha256")
-            actual_sha256 = hashlib.sha256(args.binary.read_bytes()).hexdigest()
-            if actual_sha256 != args.sha256.lower():
-                raise RuntimeError("frozen candidate SHA256 mismatch")
-            artifacts = args.artifacts.resolve() if args.artifacts else Path(tempfile.mkdtemp(prefix="dtw-direct-evidence-"))
-            if args.artifacts:
-                artifacts.mkdir(parents=True, exist_ok=False)
-            emit("evidence_directory", path=str(artifacts))
-            isolated(args.binary.resolve(), args.mode or ("script", "atomic"), artifacts)
+        if args.real_session:
+            real_session(binary, args.real_session, artifacts)
+        else:
+            isolated(binary, artifacts)
     except Exception as exc:
-        status = 1
         emit("error", type=type(exc).__name__, message=str(exc))
-    finally:
-        after = lock_state(args.session)
-        emit("lock_check", before=before, after=after)
-        if not after:
-            status = 1
-    return status
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

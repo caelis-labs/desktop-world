@@ -1,7 +1,6 @@
 //! Standard-tool orchestration. Selection is explicit; approval belongs to the MCP client.
 use super::{
     app_id, problem, scripts,
-    toolset::Toolset,
     wire::{self, Command, Request, Submit, Target, WireError},
     Coordinator, Reply,
 };
@@ -103,7 +102,6 @@ struct State<B: Backend> {
 pub struct Server<F: Factory> {
     weak_self: Weak<Self>,
     session_id: String,
-    toolset: Toolset,
     #[cfg(test)]
     atomic_test_surface: AtomicBool,
     factory: F,
@@ -166,23 +164,16 @@ impl<F: Factory> Server<F> {
         server.atomic_test_surface.store(true, Ordering::Release);
         server
     }
-    pub fn new(factory: F) -> Arc<Self> {
-        Self::with_toolset(factory, Toolset::default())
-    }
-    pub fn toolset(&self) -> Toolset {
-        self.toolset
-    }
     #[cfg(test)]
     pub(super) fn watch_script_engine(&self) -> Arc<std::sync::atomic::AtomicUsize> {
         super::script_engine::watch_session(&self.session_id)
     }
-    pub fn with_toolset(factory: F, toolset: Toolset) -> Arc<Self> {
+    pub fn new(factory: F) -> Arc<Self> {
         Arc::new_cyclic(|weak| Self {
             weak_self: weak.clone(),
             #[cfg(test)]
             atomic_test_surface: AtomicBool::new(false),
             session_id: format!("session_{}", uuid::Uuid::new_v4()),
-            toolset,
             factory,
             state: Mutex::new(State {
                 contexts: VecDeque::new(),
@@ -219,7 +210,7 @@ impl<F: Factory> Server<F> {
             }
             return Started::Reply(self.record_reply(&state, record));
         }
-        let command = match parse_call(self.toolset, name, &args) {
+        let command = match parse_call(name, &args) {
             Ok(c) => c,
             Err(e) => return Started::Reply(Reply::error(e)),
         };
@@ -1139,13 +1130,7 @@ fn execution_id(value: &Value) -> Result<String, WireError> {
         .map(str::to_owned)
         .ok_or_else(|| invalid("execution_id must contain 1 to 128 characters"))
 }
-fn parse_call(toolset: Toolset, name: &str, args: &Value) -> Result<ToolCall, WireError> {
-    if !toolset.allows(name) {
-        return Err(invalid("Unknown tool in the selected toolset"));
-    }
-    if let Some((app, command)) = toolset.atomic_call(name, args)? {
-        return Ok(ToolCall::App { app, command });
-    }
+fn parse_call(name: &str, args: &Value) -> Result<ToolCall, WireError> {
     match name {
         "apps" => {
             exact_object(args, &["query", "state", "offset", "limit"])?;

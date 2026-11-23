@@ -7,14 +7,14 @@ DTW — app-scoped desktop operations
 
 Usage:
   dtw app catalog
-  dtw mcp [--atomic]
+  dtw mcp
   dtw package import|bind|activate|unbind|status|gc [--store <absolute-directory>]
   dtw --help
   dtw --version
 
 Every execution names an app identifier, such as com.google.Chrome.
-Native providers: macOS, Windows, and experimental Linux X11.
-See the installed Skill for platform behavior; Linux desktop support is unverified.";
+Native providers: macOS, Windows, and Linux X11.
+Linux requires a local X11 session (Wayland and XWayland are unsupported).";
 
 fn run(args: &[String]) -> Result<(), WireError> {
     match args

@@ -796,7 +796,7 @@ impl<P: Platform> Backend for NativeBackend<P> {
     ) -> ActionOutcome {
         self.action(json!({"operation":"click","target":target_json(target),"binding":binding.token,"x":point.x,"y":point.y,"button":if options.button==MouseButton::Left{"left"}else{"right"},"count":options.count}),call)
     }
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn pointer_gesture(
         &self,
         target: &WindowTarget,
@@ -832,11 +832,10 @@ impl<P: Platform> Backend for NativeBackend<P> {
         request["target"] = target_json(target);
         self.action(request, call)
     }
-    #[cfg(target_os = "windows")]
     fn supports_scroll_anchor(&self, kind: ObservationKind) -> bool {
-        matches!(kind, ObservationKind::Pixels | ObservationKind::Semantic)
+        kind == ObservationKind::Pixels
+            || (cfg!(target_os = "windows") && kind == ObservationKind::Semantic)
     }
-    #[cfg(target_os = "windows")]
     fn scroll_at(
         &self,
         target: &WindowTarget,

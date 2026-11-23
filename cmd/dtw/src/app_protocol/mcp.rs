@@ -40,8 +40,7 @@ impl<F: Factory> ServerHandler for Handler<F> {
         _: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let mut result = ListToolsResult::default();
-        result.tools = serde_json::from_value(self.server.toolset().tools())
-            .expect("static DTW tool definitions");
+        result.tools = serde_json::from_value(tools()).expect("static DTW tool definitions");
         Ok(result)
     }
 
