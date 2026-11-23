@@ -91,6 +91,11 @@ def acceptance(binary, output, root):
     try:
         env["DISPLAY"] = x11.start_xvfb(owned, env, log("xvfb.log"))
         x11.emit("display", display=env["DISPLAY"], wm="KWin X11", toolkit="GTK 3")
+        # The private bus was started before Xvfb chose its display. KWin's
+        # D-Bus-activated helpers need the same display as KWin itself.
+        activation = x11.command(["dbus-update-activation-environment", "DISPLAY"], env)
+        if activation["status"] != 0:
+            raise RuntimeError(f"Could not set the private bus display: {activation}")
         owned.start(["kwin_x11"], env, stdout=log("kwin.log"), stderr=subprocess.STDOUT)
         poll(lambda: x11.command(["xprop", "-root", "_NET_SUPPORTING_WM_CHECK"], env),
              lambda data: data["status"] == 0 and "window id #" in data["stdout"], "EWMH window manager")

@@ -74,7 +74,7 @@ jobs:
         run: |
           sudo apt-get update -o Acquire::Retries=3
           sudo apt-get install -y --no-install-recommends xvfb x11-utils kwin-x11 tk \
-            libx11-dev dbus-daemon libglib2.0-bin at-spi2-core python3-gi gir1.2-gtk-3.0
+            libx11-dev dbus-bin dbus-daemon libglib2.0-bin at-spi2-core python3-gi gir1.2-gtk-3.0
       - name: Exercise the installed archive in private Xvfb, KWin and GTK/AT-SPI sessions
         run: |
           candidate="$RUNNER_TEMP/dtw-rewrite-candidate"
@@ -83,12 +83,14 @@ jobs:
           dtw=$(jq -er '.executable' "$candidate/package-check/import.json")
           sha=$(jq -er '.binary_sha256' "$candidate/CANDIDATE.json")
           probes="$candidate/source/tests/acceptance"
+          status=0
           /usr/bin/python3 "$probes/linux_x11_probe.py" --isolated --binary "$dtw" \
-            --sha256 "$sha" --artifacts "$evidence/x11" | tee "$evidence/x11.jsonl"
+            --sha256 "$sha" --artifacts "$evidence/x11" | tee "$evidence/x11.jsonl" || status=1
           /usr/bin/python3 "$probes/linux_atspi_probe.py" --binary "$dtw" \
-            --output "$evidence/atspi" | tee "$evidence/atspi.jsonl"
+            --output "$evidence/atspi" | tee "$evidence/atspi.jsonl" || status=1
           /usr/bin/python3 "$probes/linux_lifecycle_probe.py" --binary "$dtw" \
-            --artifacts "$evidence/lifecycle" | tee "$evidence/lifecycle.jsonl"
+            --artifacts "$evidence/lifecycle" | tee "$evidence/lifecycle.jsonl" || status=1
+          exit "$status"
         shell: bash
       - name: Managed package upgrade and live MCP leases (no GUI)
         if: inputs.check_upgrade
